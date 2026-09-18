@@ -3673,7 +3673,8 @@ def changed_files(worktree: Path) -> list[str]:
     return files
 
 
-def resume_context(worktree: Path, steering_comments: list[dict] | None = None) -> str | None:
+def resume_context(worktree: Path, steering_comments: list[dict] | None = None,
+                   body_revision: dict | None = None) -> str | None:
     """The resume context for a continued run, or None.
 
     A worktree without uncommitted changes and without a previous
@@ -3683,10 +3684,15 @@ def resume_context(worktree: Path, steering_comments: list[dict] | None = None) 
     to continue (never redo, never discard), the previous session's
     progress and the list of changed files — the agent inspects the
     actual diff itself, it runs inside the worktree.
+
+    `body_revision` is a steering correction carried as an edited
+    Issue body (Issue #1094; keys `issue`, `body`): it renders under
+    the 「正文已更新」 header before the steering comments' 「新评论」 block.
     """
     files = changed_files(worktree)
     snapshot = activity_snapshot(worktree / ".pi-session")
-    if not files and snapshot is None and not steering_comments:
+    if (not files and snapshot is None and not steering_comments
+            and not body_revision):
         return None
     lines = [
         "Resume context (Issue #219): this worktree already carries "
@@ -3709,15 +3715,22 @@ def resume_context(worktree: Path, steering_comments: list[dict] | None = None) 
             f"Uncommitted changed files ({len(files)}):"
         )
         lines.extend(f"- {path}" for path in files)
-    if steering_comments:
-        lines.append(
-            f"[方向修正 · 来自 Issue #{steering_comments[0].get('issue', '-') } 的新评论 · "
-            f"{time.strftime('%Y-%m-%d %H:%M:%S')} local time]"
-        )
-        for comment in steering_comments:
-            author = comment.get("author")
-            login = author.get("login") if isinstance(author, dict) else "unknown"
-            lines.append(f"{login}: {str(comment.get('body') or '').rstrip()}")
+    if steering_comments or body_revision:
+        if body_revision:
+            lines.append(
+                f"[方向修正 · 来自 Issue #{body_revision.get('issue', '-')} 的正文已更新 · "
+                f"{time.strftime('%Y-%m-%d %H:%M:%S')} local time]"
+            )
+            lines.append(str(body_revision.get("body") or "").rstrip())
+        if steering_comments:
+            lines.append(
+                f"[方向修正 · 来自 Issue #{steering_comments[0].get('issue', '-') } 的新评论 · "
+                f"{time.strftime('%Y-%m-%d %H:%M:%S')} local time]"
+            )
+            for comment in steering_comments:
+                author = comment.get("author")
+                login = author.get("login") if isinstance(author, dict) else "unknown"
+                lines.append(f"{login}: {str(comment.get('body') or '').rstrip()}")
         lines.append(
             "以上是在你开始这轮工作之后补充的说明，你的上一个会话没有看到它。"
         )
@@ -4207,12 +4220,17 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
     steering_rounds = 0
     steering_started = time.time()
     steering_limit_logged = False
+    # The body this run started from (Issue #1094): the exact text the
+    # prompt above embeds. The steering poll compares the live body
+    # against it — a maintainer rewrite of the Issue body steers like a
+    # new comment.
+    steering_body = issue.get("body", "")
     # `resume_context` is also the public parameter name of this function;
     # keep an unshadowed reference for the restart callback below.
     build_resume_context = globals()["resume_context"]
 
     def check_steering() -> SteeringRequest | None:
-        nonlocal steering_rounds, steering_limit_logged
+        nonlocal steering_rounds, steering_limit_logged, steering_body
         if steering_rounds >= config.steering_max_rounds:
             if not steering_limit_logged:
                 steering_limit_logged = True
@@ -4223,7 +4241,16 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
                 )
             return None
         try:
-            comments = issue_comments(int(issue["number"]), repo=source_repo)
+            # ONE request per poll (Issue #1094): the same `gh issue
+            # view` that lists the comments also returns the body, so a
+            # body rewrite needs no second call and no new poll.
+            snapshot = issue_view(
+                int(issue["number"]), "comments,body",
+                repo=source_repo, timeout=30,
+            )
+            comments = snapshot.get("comments")
+            if not isinstance(comments, list):
+                raise ValueError("issue comments must be a JSON array")
         except Exception as exc:
             event(
                 "steering_poll_failed", level=logging.WARNING,
@@ -4231,6 +4258,12 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
                 reason=type(exc).__name__,
             )
             return None
+        # A str-only compare: an absent body field cannot prove an edit
+        # and leaves body steering inert for the poll (the bypass shape).
+        current_body = snapshot.get("body")
+        body_changed = (
+            isinstance(current_body, str) and current_body != steering_body
+        )
         fresh: list[dict] = []
         # GitHub exposes comment timestamps only to whole seconds. Round
         # the boundary up so a comment created in the startup second is not
@@ -4249,18 +4282,29 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
                 item = dict(comment)
                 item["issue"] = issue["number"]
                 fresh.append(item)
-        if not fresh:
+        if not fresh and not body_changed:
             return None
         steering_rounds += 1
         authors = []
         for comment in fresh:
             author = comment.get("author")
             authors.append(author.get("login") if isinstance(author, dict) else "unknown")
-        resume = build_resume_context(worktree, fresh) or ""
+        if body_changed:
+            # The recorded body becomes the edited one, so the SAME edit
+            # never triggers a second restart (Issue #1094).
+            steering_body = current_body
+        resume = build_resume_context(
+            worktree, fresh,
+            body_revision=(
+                {"issue": issue["number"], "body": current_body}
+                if body_changed else None
+            ),
+        ) or ""
         return SteeringRequest(
             context=f"{context}\n{resume}",
             comment_ids=tuple(str(item["id"]) for item in fresh),
             author=", ".join(authors),
+            body_revision=body_changed,
         )
     command = [
         "pi", *_pi_extension_args(config),
