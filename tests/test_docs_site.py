@@ -180,12 +180,40 @@ def navigation_languages(config: dict) -> list[dict]:
     return languages
 
 
+def flatten_group_pages(group_pages: list, group_name: object) -> list[str]:
+    """Flatten a group's `pages` list, recursing into nested groups.
+
+    Issue #1096: a nested group object (a collapsed subgroup) carries its
+    own `pages`; the exact-parity tests must see its entries too.
+    """
+    flat: list[str] = []
+    for entry in group_pages:
+        if isinstance(entry, dict):
+            assert entry.get("group"), (
+                f"nested group without a name inside {group_name!r}: {entry!r}"
+            )
+            nested = entry.get("pages")
+            assert isinstance(nested, list) and nested, (
+                f"nested group {entry.get('group')!r} has no pages"
+            )
+            flat.extend(flatten_group_pages(nested, entry.get("group")))
+        else:
+            assert isinstance(entry, str), (
+                f"entry that is neither a page nor a nested group inside "
+                f"{group_name!r}: {entry!r}"
+            )
+            flat.append(entry)
+    return flat
+
+
 def language_page_entries(config: dict) -> list[tuple[str, list[str]]]:
     """(language code, page paths) for every navigation language entry.
 
     The default language lists its pages without a prefix (files at the
     docs root); every other language prefixes its page paths with the
-    language directory (e.g. `zh/index` -> `docs/zh/index.mdx`).
+    language directory (e.g. `zh/index` -> `docs/zh/index.mdx`). Nested
+    groups (Issue #1096: collapsed subgroups) are flattened, so the
+    exact-parity tests cover the collapsed entries too.
     """
     entries: list[tuple[str, list[str]]] = []
     for lang in navigation_languages(config):
@@ -206,7 +234,7 @@ def language_page_entries(config: dict) -> list[tuple[str, list[str]]]:
             assert isinstance(group_pages, list) and group_pages, (
                 f"navigation group {group.get('group')!r} has no pages"
             )
-            pages.extend(group_pages)
+            pages.extend(flatten_group_pages(group_pages, group.get("group")))
         entries.append((code, pages))
     return entries
 
@@ -309,6 +337,160 @@ def test_docs_navigation_matches_the_actual_pages_exactly():
 def test_docs_ship_every_required_topic_page():
     for slug in REQUIRED_PAGES:
         assert (DOCS_DIR / f"{slug}.mdx").is_file(), f"missing docs page: {slug}.mdx"
+
+
+def test_docs_navigation_is_task_ordered_with_icons_and_collapsed_releases():
+    """Issue #1096: the sidebar is a short, task-ordered map of the
+    product, not a release log. Every group object at any depth carries
+    an `icon`; the `Releases`/`发布` group shows exactly the three newest
+    releases plus ONE collapsed subgroup (`Earlier releases`/`历史版本`)
+    holding every remaining release page; and the visible content-row
+    budget stays at 25 or fewer per language (a collapsed subgroup counts
+    as one row, its children zero; top-level group headers are chrome,
+    not content rows)."""
+    config = load_docs_config()
+    for lang in navigation_languages(config):
+        code = str(lang["language"])
+        groups = lang["groups"]
+
+        def walk(entries: list, top_level: bool) -> tuple[int, int]:
+            """(content rows, nested group objects) below one pages list."""
+            rows = nested_groups = 0
+            for entry in entries:
+                if isinstance(entry, dict):
+                    assert entry.get("icon"), (
+                        f"{code} group {entry.get('group')!r} has no icon"
+                    )
+                    if not top_level:
+                        # Mintlify collapses only a nested group; a
+                        # top-level group cannot be collapsed at all.
+                        assert entry.get("expanded") is False, (
+                            f"{code} nested group {entry.get('group')!r} "
+                            "must be collapsed by default"
+                        )
+                    child_rows, child_groups = walk(entry["pages"], False)
+                    if top_level:
+                        rows += child_rows  # a group header is chrome, not a content row
+                    else:
+                        rows += 1  # collapsed subgroup = one row, its children zero
+                    nested_groups += 1 + child_groups
+                else:
+                    rows += 1
+            return rows, nested_groups
+
+        rows, _ = walk(groups, True)
+        assert rows <= 25, (
+            f"{code} sidebar shows {rows} content rows (budget 25, "
+            "Issue #1096: release pages must not crowd out the product)"
+        )
+
+        release_groups = [
+            group for group in groups
+            if group.get("group") in ("Releases", "发布")
+        ]
+        assert len(release_groups) == 1, (
+            f"{code} navigation must carry exactly one release group"
+        )
+        pages = release_groups[0]["pages"]
+        visible = [entry for entry in pages if isinstance(entry, str)]
+        subgroups = [entry for entry in pages if isinstance(entry, dict)]
+        assert len(visible) == 3, (
+            f"{code} release group must show exactly the three newest "
+            f"releases, got {visible!r}"
+        )
+        assert len(subgroups) == 1, (
+            f"{code} release group must nest exactly one collapsed "
+            f"subgroup, got {subgroups!r}"
+        )
+        directory = DOCS_DIR / "zh" if code == "zh" else DOCS_DIR
+        prefix = "" if code == "en" else "zh/"
+        release_files = {
+            f"{prefix}{path.stem}" for path in directory.glob("release-v*.mdx")
+        }
+        earlier = subgroups[0]["pages"]
+        assert set(visible) | set(earlier) == release_files, (
+            f"{code} release navigation must cover every release page "
+            "exactly (three visible, the rest in the collapsed subgroup)"
+        )
+
+
+def test_docs_installation_chooser_covers_the_four_ways_to_run():
+    """Issue #1096: the chooser page presents Managed Cloud plus the
+    three self-hosted paths as one four-row choice, routes each row to
+    the page that owns the detail, and keeps the caveats that make the
+    choice honest — cloud and a self-hosted runner never serve the same
+    task pool, PyPI ships the `orbi` command only, and Docker is the
+    community-maintained unofficial wrapper."""
+    for slug in ("installation", "zh/installation"):
+        text = page_text(slug)
+        for marker in (
+            "https://orbi.build/cloud/",
+            "uv tool install orbi-cli",
+            "ghcr.io/orbi-build/orbi:latest",
+            "curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh",
+        ):
+            assert marker in text, f"{slug} misses a chooser row: {marker}"
+        assert "/getting-started" in text, f"{slug} must route to getting-started"
+        assert "/docker" in text, f"{slug} must route to the Docker page"
+        assert "never both" in text or "二选一" in text, (
+            f"{slug} must carry the pick-one-per-task-pool caveat"
+        )
+        assert "command only" in text or "只提供" in text, (
+            f"{slug} must carry the PyPI-is-CLI-only caveat"
+        )
+        assert "community-maintained" in text or "社区维护" in text, (
+            f"{slug} must carry the Docker-is-unofficial caveat"
+        )
+
+
+def test_docs_document_the_different_model_review():
+    """Issue #1096: the independent review can run on a different model
+    than the implementation. The workflow page documents the capability
+    in prose — a `Reviewing with a different model` subsection naming
+    all three `review_pi_*` keys, the per-key independent fallback, and
+    one worked `orbi.toml` example with the fail-fast validation
+    signature — and the configuration-reference key rows link to it."""
+    for slug in ("workflow", "zh/workflow"):
+        text = page_text(slug)
+        assert "Reviewing with a different model" in text, (
+            f"{slug} must carry the different-model review subsection"
+        )
+        assert text.count("review_pi_") >= 3, (
+            f"{slug} must name the three review_pi_* keys"
+        )
+        for key in ("review_pi_provider", "review_pi_model", "review_pi_thinking"):
+            assert key in text, f"{slug} must name {key}"
+        blocks = re.findall(r"```toml\n(.*?)```", text, re.DOTALL)
+        assert any("review_pi_" in block for block in blocks), (
+            f"{slug} must carry a worked orbi.toml example"
+        )
+        assert "review provider selection invalid" in text, (
+            f"{slug} must carry the startup fail-fast signature"
+        )
+    for slug in ("configuration", "zh/configuration"):
+        text = page_text(slug)
+        expected = (
+            "/zh/workflow#reviewing-with-a-different-model"
+            if slug.startswith("zh/")
+            else "/workflow#reviewing-with-a-different-model"
+        )
+        assert expected in text, (
+            f"{slug} must link the review_pi_* rows to the workflow subsection"
+        )
+
+
+def test_release_docs_note_the_earlier_releases_cleanup_step():
+    """Issue #1096: the automated release docs sync inserts a new release
+    at the head of the visible `Releases`/`发布` pages only; the recorded
+    release checklist carries the follow-up docs edit that moves the
+    then-fourth-newest entry into the collapsed `Earlier releases`
+    subgroup, keeping the visible group at the three newest releases."""
+    english = page_text("workflow")
+    assert "Earlier releases" in english
+    assert "fourth-newest" in english
+    chinese = (DOCS_DIR / "zh" / "workflow.mdx").read_text(encoding="utf-8")
+    assert "历史版本" in chinese
+    assert "第四新" in chinese
 
 
 def test_docs_describe_problem_scenarios_and_mvp_boundary():

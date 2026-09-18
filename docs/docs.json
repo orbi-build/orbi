@@ -12,90 +12,124 @@
         "default": true,
         "groups": [
           {
-            "group": "Getting Started",
+            "group": "Start here",
+            "icon": "rocket",
             "pages": [
               "index",
               "quickstart",
-              "getting-started",
-              "configuration",
-              "providers",
-              "opencode",
-              "zai-glm-5-3-flash",
-              "ollama-pro",
-              "setup"
+              "installation"
             ]
           },
           {
-            "group": "Core Concepts",
+            "group": "Concepts",
+            "icon": "compass",
             "pages": [
               "workflow",
+              "security"
+            ]
+          },
+          {
+            "group": "Model providers",
+            "icon": "plug",
+            "pages": [
+              "providers",
+              {
+                "group": "Provider guides",
+                "icon": "book-open",
+                "expanded": false,
+                "pages": [
+                  "zai-glm-5-3-flash",
+                  "opencode",
+                  "ollama-pro"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "Configure & run",
+            "icon": "sliders",
+            "pages": [
+              "getting-started",
+              "configuration",
+              "setup",
               "operations"
             ]
           },
           {
-            "group": "Guides",
+            "group": "Contribute",
+            "icon": "code-pull-request",
             "pages": [
-              "security",
-              "testing",
-              "contributing"
+              "contributing",
+              "testing"
             ]
           },
           {
-            "group": "Notes",
+            "group": "Reference",
+            "icon": "book",
             "pages": [
-              "notes/macos-six-defects"
-            ]
-          },
-          {
-            "group": "Optional Components",
-            "pages": [
+              "docker",
               "optional-kv-cache",
-              "docker"
+              {
+                "group": "Engineering notes",
+                "icon": "notebook-pen",
+                "expanded": false,
+                "pages": [
+                  "notes/macos-six-defects"
+                ]
+              }
             ]
           },
           {
             "group": "Releases",
+            "icon": "tag",
             "pages": [
               "release-v0.5.22",
               "release-v0.5.21",
               "release-v0.5.20",
-              "release-v0.5.19",
-              "release-v0.5.18",
-              "release-v0.5.17",
-              "release-v0.5.16",
-              "release-v0.5.15",
-              "release-v0.5.14",
-              "release-v0.5.13",
-              "release-v0.5.12",
-              "release-v0.5.11",
-              "release-v0.5.10",
-              "release-v0.5.9",
-              "release-v0.5.8",
-              "release-v0.5.7",
-              "release-v0.5.6",
-              "release-v0.5.5",
-              "release-v0.5.4",
-              "release-v0.5.3",
-              "release-v0.5.2",
-              "release-v0.5.0",
-              "release-v0.4.10",
-              "release-v0.4.9",
-              "release-v0.4.8",
-              "release-v0.4.7",
-              "release-v0.4.6",
-              "release-v0.4.5",
-              "release-v0.4.4",
-              "release-v0.4.3",
-              "release-v0.4.2",
-              "release-v0.4.1",
-              "release-v0.4.0",
-              "release-v0.3.4",
-              "release-v0.3.3",
-              "release-v0.3.2",
-              "release-v0.3.1",
-              "release-v0.3.0",
-              "release-v0.2.0",
-              "release-v0.1.2"
+              {
+                "group": "Earlier releases",
+                "icon": "history",
+                "expanded": false,
+                "pages": [
+                  "release-v0.5.19",
+                  "release-v0.5.18",
+                  "release-v0.5.17",
+                  "release-v0.5.16",
+                  "release-v0.5.15",
+                  "release-v0.5.14",
+                  "release-v0.5.13",
+                  "release-v0.5.12",
+                  "release-v0.5.11",
+                  "release-v0.5.10",
+                  "release-v0.5.9",
+                  "release-v0.5.8",
+                  "release-v0.5.7",
+                  "release-v0.5.6",
+                  "release-v0.5.5",
+                  "release-v0.5.4",
+                  "release-v0.5.3",
+                  "release-v0.5.2",
+                  "release-v0.5.0",
+                  "release-v0.4.10",
+                  "release-v0.4.9",
+                  "release-v0.4.8",
+                  "release-v0.4.7",
+                  "release-v0.4.6",
+                  "release-v0.4.5",
+                  "release-v0.4.4",
+                  "release-v0.4.3",
+                  "release-v0.4.2",
+                  "release-v0.4.1",
+                  "release-v0.4.0",
+                  "release-v0.3.4",
+                  "release-v0.3.3",
+                  "release-v0.3.2",
+                  "release-v0.3.1",
+                  "release-v0.3.0",
+                  "release-v0.2.0",
+                  "release-v0.1.2"
+                ]
+              }
             ]
           }
         ]
@@ -104,90 +138,124 @@
         "language": "zh",
         "groups": [
           {
-            "group": "快速开始",
+            "group": "从这里开始",
+            "icon": "rocket",
             "pages": [
               "zh/index",
               "zh/quickstart",
-              "zh/getting-started",
-              "zh/configuration",
-              "zh/providers",
-              "zh/opencode",
-              "zh/zai-glm-5-3-flash",
-              "zh/ollama-pro",
-              "zh/setup"
+              "zh/installation"
             ]
           },
           {
             "group": "核心概念",
+            "icon": "compass",
             "pages": [
               "zh/workflow",
+              "zh/security"
+            ]
+          },
+          {
+            "group": "模型 Provider",
+            "icon": "plug",
+            "pages": [
+              "zh/providers",
+              {
+                "group": "Provider 指南",
+                "icon": "book-open",
+                "expanded": false,
+                "pages": [
+                  "zh/zai-glm-5-3-flash",
+                  "zh/opencode",
+                  "zh/ollama-pro"
+                ]
+              }
+            ]
+          },
+          {
+            "group": "配置与运行",
+            "icon": "sliders",
+            "pages": [
+              "zh/getting-started",
+              "zh/configuration",
+              "zh/setup",
               "zh/operations"
             ]
           },
           {
-            "group": "指南",
+            "group": "参与贡献",
+            "icon": "code-pull-request",
             "pages": [
-              "zh/security",
-              "zh/testing",
-              "zh/contributing"
+              "zh/contributing",
+              "zh/testing"
             ]
           },
           {
-            "group": "笔记",
+            "group": "参考",
+            "icon": "book",
             "pages": [
-              "zh/notes/macos-six-defects"
-            ]
-          },
-          {
-            "group": "可选组件",
-            "pages": [
+              "zh/docker",
               "zh/optional-kv-cache",
-              "zh/docker"
+              {
+                "group": "工程笔记",
+                "icon": "notebook-pen",
+                "expanded": false,
+                "pages": [
+                  "zh/notes/macos-six-defects"
+                ]
+              }
             ]
           },
           {
             "group": "发布",
+            "icon": "tag",
             "pages": [
               "zh/release-v0.5.22",
               "zh/release-v0.5.21",
               "zh/release-v0.5.20",
-              "zh/release-v0.5.19",
-              "zh/release-v0.5.18",
-              "zh/release-v0.5.17",
-              "zh/release-v0.5.16",
-              "zh/release-v0.5.15",
-              "zh/release-v0.5.14",
-              "zh/release-v0.5.13",
-              "zh/release-v0.5.12",
-              "zh/release-v0.5.11",
-              "zh/release-v0.5.10",
-              "zh/release-v0.5.9",
-              "zh/release-v0.5.8",
-              "zh/release-v0.5.7",
-              "zh/release-v0.5.6",
-              "zh/release-v0.5.5",
-              "zh/release-v0.5.4",
-              "zh/release-v0.5.3",
-              "zh/release-v0.5.2",
-              "zh/release-v0.5.0",
-              "zh/release-v0.4.10",
-              "zh/release-v0.4.9",
-              "zh/release-v0.4.8",
-              "zh/release-v0.4.7",
-              "zh/release-v0.4.6",
-              "zh/release-v0.4.5",
-              "zh/release-v0.4.4",
-              "zh/release-v0.4.3",
-              "zh/release-v0.4.2",
-              "zh/release-v0.4.1",
-              "zh/release-v0.4.0",
-              "zh/release-v0.3.4",
-              "zh/release-v0.3.3",
-              "zh/release-v0.3.2",
-              "zh/release-v0.3.1",
-              "zh/release-v0.3.0",
-              "zh/release-v0.2.0",
-              "zh/release-v0.1.2"
+              {
+                "group": "历史版本",
+                "icon": "history",
+                "expanded": false,
+                "pages": [
+                  "zh/release-v0.5.19",
+                  "zh/release-v0.5.18",
+                  "zh/release-v0.5.17",
+                  "zh/release-v0.5.16",
+                  "zh/release-v0.5.15",
+                  "zh/release-v0.5.14",
+                  "zh/release-v0.5.13",
+                  "zh/release-v0.5.12",
+                  "zh/release-v0.5.11",
+                  "zh/release-v0.5.10",
+                  "zh/release-v0.5.9",
+                  "zh/release-v0.5.8",
+                  "zh/release-v0.5.7",
+                  "zh/release-v0.5.6",
+                  "zh/release-v0.5.5",
+                  "zh/release-v0.5.4",
+                  "zh/release-v0.5.3",
+                  "zh/release-v0.5.2",
+                  "zh/release-v0.5.0",
+                  "zh/release-v0.4.10",
+                  "zh/release-v0.4.9",
+                  "zh/release-v0.4.8",
+                  "zh/release-v0.4.7",
+                  "zh/release-v0.4.6",
+                  "zh/release-v0.4.5",
+                  "zh/release-v0.4.4",
+                  "zh/release-v0.4.3",
+                  "zh/release-v0.4.2",
+                  "zh/release-v0.4.1",
+                  "zh/release-v0.4.0",
+                  "zh/release-v0.3.4",
+                  "zh/release-v0.3.3",
+                  "zh/release-v0.3.2",
+                  "zh/release-v0.3.1",
+                  "zh/release-v0.3.0",
+                  "zh/release-v0.2.0",
+                  "zh/release-v0.1.2"
+                ]
+              }
             ]
           }
         ]
