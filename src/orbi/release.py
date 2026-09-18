@@ -2439,12 +2439,19 @@ def process_release(issue: dict, config: RunnerConfig,
                 config.repo_dir, tag, release_commit,
             )
         try:
+            # A page already in the frozen base can come from an older,
+            # interrupted release run whose first docs commit was marker-free.
+            # Preserve that compatibility path so post-publication promotion
+            # can finish it; fresh runs establish the invariant atomically.
+            docs_page_preexists = (
+                worktree / "docs" / f"release-{tag}.mdx"
+            ).is_file()
             docs_evidence = sync_release_docs(
                 source_repo=source_repo, repo_dir=config.repo_dir,
                 worktree=worktree, base_branch=base_branch, tag=tag,
                 release_commit=release_commit, issue_number=number,
                 changelog=changelog,
-                latest=False,
+                latest=not docs_page_preexists,
             )
         except Exception:
             # The tag is intentionally local until docs are on the base
