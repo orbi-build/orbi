@@ -68,6 +68,7 @@ ENTRYPOINT_TEST_OVERRIDES = frozenset({
     "ORBI_WORKSPACE",
     "ORBI_SYSTEMD_BIN",
     "ORBI_UV_BIN",
+    "ORBI_SETUP_LOG",
 })
 
 VAR_PATTERN = re.compile(r"ORBI_[A-Z_]+")
