@@ -131,7 +131,9 @@ pi_model = "deepseek-chat"
 ## First delivery
 
 1. In the task pool repo, open an Issue stating ONE runtime outcome in
-   the shape `when X, should Y, actually Z`.
+   one of the two shapes: a fix (`when X, should Y, actually Z`) or a
+   change (`when X, the user should be able to Y; today they cannot
+   because Z`).
 2. Add the `ai-ready` label (the first start created the twelve
    platform labels).
 3. Follow the tick log:
@@ -152,10 +154,12 @@ required is a docs or entrypoint defect.
 The delivery vocabulary in one place; the full reference lives in the
 [workflow docs](https://docs.orbi.build/workflow).
 
-- **The task** — an Issue stating ONE runtime outcome in the shape
-  `when X, should Y, actually Z`, plus a short acceptance list: the
-  user journey as precondition → command/configuration → the success
-  the user sees → the failure path with its repair.
+- **The task** — an Issue stating ONE runtime outcome in one of the
+  two shapes: a fix (`when X, should Y, actually Z`) or a change
+  (`when X, the user should be able to Y; today they cannot because
+  Z`), plus a short acceptance list: the user journey as precondition
+  → command/configuration → the success the user sees → the failure
+  path with its repair.
 - **The labels** — `ai-ready` is the execution switch: the runner only
   picks up labelled Issues (pickup order: `p0` first, then `bug`, then
   plain). A claimed Issue walks `ai-in-progress` → `ai-pr-opened` →

@@ -41,7 +41,7 @@ contradiction in place for the next delivery to rediscover.
 
 ## Issue granularity
 
-- One Issue is **one runtime outcome** (when X, should Y, actually Z): one observable behavior, a handful of related files, tests included.
+- One Issue is **one runtime outcome**, in one of two shapes: a **fix** (when X, should Y, actually Z) or a **change** (when X, the user should be able to Y; today they cannot because Z) — one observable behavior, a handful of related files, tests included.
 - Open the Issue once the root cause is pinned.
 
 ## Language contract

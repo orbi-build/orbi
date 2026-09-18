@@ -5,7 +5,17 @@ description: "Issue 如何经过领取、开 PR、独立审查、合并和发布
 
 Orbi 会领取符合条件的 Issue，在 worktree 中实现，开 PR，独立审查，合并并记录结果。
 
-一个 Orbi 任务是一个 runtime outcome：当 X，应该 Y，实际 Z。
+一个 Orbi 任务是一个 runtime outcome，二选一形状：
+
+- **修复** — 当 X，应该 Y，实际 Z。示例：
+  [#1074](https://github.com/orbi-build/orbi/issues/1074) — 当
+  `gh auth status` 退出码为 1 且当前账号有效时，Runner 应该解析出该
+  账号；实际却因退出码让交付失败。
+- **变更** — 当 X，用户应该能够 Y；今天不能，因为 Z。示例：
+  [#1048](https://github.com/orbi-build/orbi/issues/1048) — 用户从
+  发布镜像启动 runner 时，应该得到一个配好模型 provider 的
+  runner；当时还没有任何代码读取 `ORBI_PI_*` 变量。
+
 任务从一个 GitHub Issue 开始，以一个已合并的 PR 结束（或一个需要人工
 的 `ai-blocked` 现场）。这一页覆盖完整的自动链路和项目的 GitHub 工作流
 词汇。

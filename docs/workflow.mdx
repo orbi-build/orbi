@@ -5,7 +5,17 @@ description: "How does an Issue move through claim, PR, independent review, merg
 
 Orbi claims an eligible Issue, implements it in a worktree, opens a PR, independently reviews it, merges it, and records the result.
 
-One Orbi task is one runtime outcome: when X, should Y, actually Z.
+One Orbi task is one runtime outcome, in one of two shapes:
+
+- **Fix** — when X, should Y, actually Z. Example:
+  [#1074](https://github.com/orbi-build/orbi/issues/1074) — when
+  `gh auth status` exits 1 while the active account is valid, the
+  Runner should resolve it; actually the exit code failed the delivery.
+- **Change** — when X, the user should be able to Y; today they
+  cannot because Z. Example: [#1048](https://github.com/orbi-build/orbi/issues/1048) —
+  when a user starts the runner from the published image, they should
+  get a working model provider; nothing read the `ORBI_PI_*` variables yet.
+
 A task starts as a GitHub Issue and ends as a merged PR (or an
 `ai-blocked` scene that needs a human). This page covers the complete
 automatic chain and the project's GitHub workflow vocabulary.
