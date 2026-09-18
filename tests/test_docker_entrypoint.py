@@ -119,22 +119,21 @@ def run_setup_script(tmp_path: Path, setup_status: int = 0) -> subprocess.Comple
         "#!/bin/sh\nif [ \"$1\" = start ]; then exit 0; fi\nexit 0\n",
         encoding="utf-8",
     )
-    (bin_dir / "install").write_text(
-        "#!/bin/sh\nfor arg; do last=\"$arg\"; done\nmkdir -p \"$last\"\n", encoding="utf-8"
-    )
+    (bin_dir / "install").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     (bin_dir / "runuser").write_text(
-        "#!/bin/sh\nshift 3\nexec \"$@\"\n", encoding="utf-8"
-    )
-    (bin_dir / "env").write_text(
-        "#!/bin/sh\nwhile case \"$1\" in *=*) true;; *) false;; esac; do shift; done\nexec \"$@\"\n",
+        "#!/bin/sh\n"
+        "case \" $* \" in\n"
+        "  *' orbi setup '*)\n"
+        "    printf 'setup=ok\\n'\n"
+        "    printf 'setup_failed reason=test\\n' >&2\n"
+        "    exit \"$FAKE_SETUP_STATUS\"\n"
+        "    ;;\n"
+        "esac\n"
+        "exit 0\n",
         encoding="utf-8",
     )
     (bin_dir / "id").write_text(
         "#!/bin/sh\nprintf '1000\\n'\n", encoding="utf-8"
-    )
-    (bin_dir / "orbi").write_text(
-        f"#!/bin/sh\nprintf 'setup=ok\\n'\nprintf 'setup_failed reason=test\\n' >&2\nexit {setup_status}\n",
-        encoding="utf-8",
     )
     for path in bin_dir.iterdir():
         path.chmod(0o755)
@@ -144,6 +143,7 @@ def run_setup_script(tmp_path: Path, setup_status: int = 0) -> subprocess.Comple
         "PATH": f"{bin_dir}:/usr/bin:/bin",
         "ORBI_CONTAINER_STDOUT": str(output),
         "ORBI_CONTAINER_STDERR": str(error),
+        "FAKE_SETUP_STATUS": str(setup_status),
     }
     return subprocess.run(
         ["/bin/bash", str(SETUP_SCRIPT)],
