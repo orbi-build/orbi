@@ -863,14 +863,11 @@ any of them must be called out in the release notes so downstream automation
 can migrate deliberately:
 
 - **CLI:** the bare `orbi` tick and the `add`, `status`, `doctor`, `setup`,
-  `install-units`, `session`, and `milestone set` subcommands, including
-  `--config` and the `ORBI_CONFIG` environment variable.
-- **Configuration:** `orbi.toml` fields (`source_repos`, `repo_dir`,
-  `deploy_home`, `workspace_root`, `prompt`, `prompt_review`, `base_branch`,
-  `git_transport`, `active_milestone`, `max_concurrency`, `allow_stale_runner`,
-  `model_wait_dead_seconds`, `model_wait_probe_url`,
-  `model_wait_probe_seconds`, `skills`, `context_files`, `pi_provider`,
-  `pi_model`, `pi_thinking`, and `pi_providers`), plus the gitignored
+  `install-units`, `session`, `milestone set`, `check`, and
+  `sync-engine-source` subcommands, including `--config` and the `ORBI_CONFIG`
+  environment variable.
+- **Configuration:** every key in the [Configuration
+  reference](/configuration) is public surface, plus the gitignored
   `.orbi/env` file loaded by the systemd `EnvironmentFile`.
 - **Deployment:** the `systemd/orbi@.service` and `systemd/orbi@.timer`
   templates and their `orbi@1..N` instances (N = `max_concurrency`,
@@ -1010,5 +1007,6 @@ releases it when the process exits, however it exits. A Runner that
 cannot take a slot logs `capacity_full` and exits without claiming an
 Issue. At `max_concurrency = 2`, both timer instances may start two Runner
 instances in the same tick; at `1`, only `@1.timer` is enabled. They compete
-for the SAME slots — the capacity and enabled timer count are both
-`max_concurrency` (the fixed template permits `1` or `2`).
+for the SAME slots. `max_concurrency` ranges from `1` to
+`MAX_RUNNER_INSTANCES = 5`; the capacity and enabled timer count are both
+`max_concurrency`.
