@@ -1,0 +1,85 @@
+---
+title: 配置参考
+description: "每个 orbi.toml 设置的作用和默认值是什么?"
+---
+
+# 配置参考
+
+Orbi 从部署 home 读取 `orbi.toml`；设置 `ORBI_CONFIG` 可选择其他文件。相对路径相对该文件解析。启动 tick 前运行 `orbi check` 校验配置。
+
+## 仓库与路径
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `source_repos` | 字符串列表 | 必填 | 非空 `owner/repo` | 每个 tick 扫描的任务仓库；当前执行层只接受一个。 |
+| `repo_dir` | 路径 | `.` | 任意路径 | 交付 checkout 和 Issue/PR 仓库。 |
+| `deploy_home` | 路径 | `repo_dir` | 任意路径，必须存在 | Orbi 源码、unit、标签和 prompt 默认所在的 checkout。 |
+| `workspace_root` | 路径 | `..` | 任意路径 | 任务 worktree 所在目录。 |
+| `base_branch` | 字符串 | `main` | 任意非空字符串 | 交付冻结远程 SHA 所在的分支。 |
+| `git_transport` | 字符串 | `ssh` | `ssh \| https` | Git 数据传输方式；GitHub API 仍使用 `gh`。 |
+| `engine_source_track` | 字符串 | `main` | `main`、`branch:<name>`、`release`、`tag:<name>` 或 `sha:<40-hex>` | 部署 checkout 跟随的源码通道；`stable` 会规范化为 `release`。 |
+| `allow_stale_runner` | 布尔值 | `false` | `true \| false` | 将无法证明 Runner 源码新鲜度降级为告警。 |
+
+## 调度
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `max_concurrency` | 整数 | `1` | `1`–`5` | 最大并发任务/timer 数。 |
+| `unit_name` | 字符串或空 | 未设置 | 字母、数字、`-`、`_` | 可选的部署专用 systemd unit 前缀。 |
+| `active_milestone` | 字符串或空 | 未设置 | 任意非空字符串 | 将新的领取限制在指定 GitHub Milestone。 |
+| `auto_next_milestone` | 布尔值 | `true` | `true \| false` | 是否自动推进已关闭且空闲的 Milestone。 |
+| `worktree_retain_hours` | 数字 | `72` | 有限正数 | 已关闭任务 worktree 的保留小时数。 |
+
+## 模型 provider
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `pi_providers` | 路径或空 | 未设置 | provider JSON 文件路径 | 为每个 run 添加/覆盖 Pi provider。 |
+| `pi_provider` | 字符串或空 | 未设置 | 任意非空字符串 | 实现阶段选择的 provider。 |
+| `pi_model` | 字符串或空 | 未设置 | 任意非空字符串 | provider 中选择的实现模型。 |
+| `pi_thinking` | 字符串或空 | 未设置 | `off \| minimal \| low \| medium \| high \| xhigh \| max` | 传给 Pi 的实现思考级别。 |
+| `pi_extensions` | 表列表 | `[]` | 锁定的 `npm:`/git 来源或已有本地路径 | Pi 子进程加载的扩展。 |
+| `review_pi_provider` | 字符串或空 | 未设置 | 任意非空字符串 | review provider 覆盖；否则使用 `pi_provider`。 |
+| `review_pi_model` | 字符串或空 | 未设置 | 任意非空字符串 | review 模型覆盖；否则使用 `pi_model`。 |
+| `review_pi_thinking` | 字符串或空 | 未设置 | 同 `pi_thinking` | review 思考级别覆盖；否则使用 `pi_thinking`。 |
+| `model_wait_probe_url` | URL 或空 | 未设置 | 非空 `http://` 或 `https://` URL | 检测模型吞请求的可选 `/slots` 探针。 |
+| `model_wait_probe_seconds` | 数字 | `60` | 有限正数 | 模型探针持续空闲宽限。 |
+| `model_wait_dead_seconds` | 数字 | `1800` | 有限正数 | 模型请求挂死的静默阈值。 |
+
+## Prompt 与上下文
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `prompt` | 路径 | `prompts/prompt.md` | 任意路径 | 实现者 prompt 模板。 |
+| `prompt_review` | 路径 | `prompts/prompt_review.md` | 任意路径 | 独立 review prompt 模板。 |
+| `skills` | 路径列表 | `[]` | 绝对、`~` 或相对配置文件路径 | 可选 Pi skills。 |
+| `context_files` | 路径列表 | `[]` | 路径 | 注入 prompt 的 Markdown 上下文文件。 |
+| `attribution_footer` | 布尔值 | `true` | `true \| false` | 在生成的 PR 和 release 中添加 Orbi 回链。 |
+
+## 交付行为
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `dispatch_label` | 字符串或空 | 未设置 → `ai-ready` | 任意非空字符串 | 仓库策略使用的 ready 标签，见[仓库配置](/zh/workflow#repository-level-delivery-policy-githuborbitoml)。 |
+| `human_review_gate` | 布尔值 | `false` | `true \| false` | 机器证据不完整时要求人工验收。 |
+| `issue_comments_limit` | 整数 | `20` | 正整数 | 注入任务上下文的受信任 Issue 评论上限。 |
+| `release_ci_wait_seconds` | 数字 | `1800` | 有限正数 | release pending CI 检查的上限。 |
+| `release_deliveries_wait_seconds` | 数字 | `1800` | 有限正数 | release 等待未完成交付的上限。 |
+
+## Steering
+
+Steering 让 Runner 轮询 Issue 中的受信任修正，并带着修正重启正在进行的交付。`steering_max_rounds` 限制重启次数，避免交付被无限重定向。轮询失败属于纯旁路：会记录日志，但绝不会让交付失败。
+
+详见 Operations 中的 [`delivery_steered`、`steering_limit_reached`、`steering_poll_failed`](/zh/operations#journal-events) 行。
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `steering_enabled` | 布尔值 | `true` | `true \| false` | 启用受信任的 Issue 修正轮询。 |
+| `steering_poll_seconds` | 数字 | `60.0` | 有限正数 | Steering 轮询间隔。 |
+| `steering_max_rounds` | 整数 | `3` | 非负整数 | 每个交付最多重启的 Steering 次数。 |
+
+## Health
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `health_alert_repo` | 字符串或空 | 未设置 | 任意非空 `owner/repo` | 接收 Runner crash-loop/stale-pickup 健康 Issue；未设置时从 deploy-home origin 推导。 |

@@ -1,0 +1,85 @@
+---
+title: Configuration reference
+description: "What does every orbi.toml setting do, and what is its default?"
+---
+
+# Configuration reference
+
+Orbi reads `orbi.toml` from the deployment home; set `ORBI_CONFIG` to select another file. Relative paths are resolved from that file. Run `orbi check` to validate it before starting a tick.
+
+## Repositories and paths
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `source_repos` | list of strings | required | non-empty `owner/repo` names | Task-pool repositories; the current execution layer accepts one. |
+| `repo_dir` | path | `.` | any path | Delivery checkout and Issue/PR repository. |
+| `deploy_home` | path | `repo_dir` | any path; must exist | Orbi source checkout, units, labels, and prompt defaults. |
+| `workspace_root` | path | `..` | any path | Directory containing task worktrees. |
+| `base_branch` | string | `main` | any non-empty string | Branch whose remote SHA is frozen for a delivery. |
+| `git_transport` | string | `ssh` | `ssh \| https` | Git data transport; GitHub API calls still use `gh`. |
+| `engine_source_track` | string | `main` | `main`, `branch:<name>`, `release`, `tag:<name>`, or `sha:<40-hex>` | Source channel followed by the deployment checkout. `stable` normalizes to `release`. |
+| `allow_stale_runner` | boolean | `false` | `true \| false` | Downgrades an unverifiable runner-source check to a warning. |
+
+## Scheduling
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `max_concurrency` | integer | `1` | `1`–`5` | Maximum concurrent tasks/timer instances. |
+| `unit_name` | string or null | unset | letters, numbers, `-`, `_` | Optional deployment-specific systemd unit prefix. |
+| `active_milestone` | string or null | unset | any non-empty string | Limits fresh claims to this GitHub Milestone. |
+| `auto_next_milestone` | boolean | `true` | `true \| false` | Whether an idle closed milestone may advance automatically. |
+| `worktree_retain_hours` | number | `72` | finite positive number | How long closed task worktrees remain inspectable. |
+
+## Model provider
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `pi_providers` | path or null | unset | any path to a providers JSON file | Adds/overrides Pi providers for each run. |
+| `pi_provider` | string or null | unset | any non-empty string | Provider selected for implementation. |
+| `pi_model` | string or null | unset | any non-empty string | Implementation model selected within the provider. |
+| `pi_thinking` | string or null | unset | `off \| minimal \| low \| medium \| high \| xhigh \| max` | Implementation thinking level passed to Pi. |
+| `pi_extensions` | list of tables | `[]` | pinned `npm:`/git source or existing local path | Extensions loaded for the Pi child. |
+| `review_pi_provider` | string or null | unset | any non-empty string | Review provider override; otherwise `pi_provider`. |
+| `review_pi_model` | string or null | unset | any non-empty string | Review model override; otherwise `pi_model`. |
+| `review_pi_thinking` | string or null | unset | same thinking levels as `pi_thinking` | Review thinking override; otherwise `pi_thinking`. |
+| `model_wait_probe_url` | URL or null | unset | non-empty `http://` or `https://` URL | Optional `/slots` probe for swallowed model requests. |
+| `model_wait_probe_seconds` | number | `60` | finite positive number | Sustained idle grace for the model probe. |
+| `model_wait_dead_seconds` | number | `1800` | finite positive number | Silence threshold for a hung model request. |
+
+## Prompts and context
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `prompt` | path | `prompts/prompt.md` | any path | Implementer prompt template. |
+| `prompt_review` | path | `prompts/prompt_review.md` | any path | Independent review prompt template. |
+| `skills` | list of paths | `[]` | absolute, `~`, or config-relative paths | Optional Pi skills. |
+| `context_files` | list of paths | `[]` | paths | Markdown context files injected into prompts. |
+| `attribution_footer` | boolean | `true` | `true \| false` | Adds the Orbi backlink to generated PRs and releases. |
+
+## Delivery behaviour
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `dispatch_label` | string or null | unset → `ai-ready` | any non-empty string | Ready label for repository policy; see the [repository configuration](/workflow#repository-level-delivery-policy-githuborbitoml) table. |
+| `human_review_gate` | boolean | `false` | `true \| false` | Requires human acceptance when machine evidence is incomplete. |
+| `issue_comments_limit` | integer | `20` | positive integer | Maximum trusted Issue comments injected into the task context. |
+| `release_ci_wait_seconds` | number | `1800` | finite positive number | Release CI pending-check upper bound. |
+| `release_deliveries_wait_seconds` | number | `1800` | finite positive number | Release wait bound for open delivery Issues. |
+
+## Steering
+
+Steering lets the Runner poll the Issue for a trusted correction and restart the active delivery with that correction. `steering_max_rounds` bounds those restarts so an active delivery cannot be redirected forever. A polling failure is a pure bypass: it is logged, but never makes the delivery fail.
+
+See the [`delivery_steered`, `steering_limit_reached`, and `steering_poll_failed`](/operations#journal-events) rows in Operations.
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `steering_enabled` | boolean | `true` | `true \| false` | Enables trusted Issue correction polling. |
+| `steering_poll_seconds` | number | `60.0` | finite positive number | Interval between steering polls. |
+| `steering_max_rounds` | integer | `3` | non-negative integer | Maximum steering restarts per delivery. |
+
+## Health
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `health_alert_repo` | string or null | unset | any non-empty `owner/repo` string | Repository receiving Runner crash-loop and stale-pickup health Issues; unset derives it from the deploy-home origin. |
