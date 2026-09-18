@@ -553,18 +553,17 @@ def test_docs_document_the_different_model_review():
         )
 
 
-def test_release_docs_note_the_earlier_releases_cleanup_step():
-    """Issue #1096: the automated release docs sync inserts a new release
-    at the head of the visible `Releases`/`发布` pages only; the recorded
-    release checklist carries the follow-up docs edit that moves the
-    then-fourth-newest entry into the collapsed `Earlier releases`
-    subgroup, keeping the visible group at the three newest releases."""
+def test_release_docs_note_automatic_earlier_releases_cleanup():
+    """Issue #1096: the automated release docs sync keeps three visible
+    releases and moves older entries into the collapsed subgroup itself."""
     english = page_text("workflow")
     assert "Earlier releases" in english
-    assert "fourth-newest" in english
+    assert "automated sync" in english
+    assert "follow-up docs edit" not in english
     chinese = (DOCS_DIR / "zh" / "workflow.mdx").read_text(encoding="utf-8")
     assert "历史版本" in chinese
-    assert "第四新" in chinese
+    assert "自动同步" in chinese
+    assert "follow-up 文档改动" not in chinese
 
 
 def test_docs_describe_problem_scenarios_and_mvp_boundary():

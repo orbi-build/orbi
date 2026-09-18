@@ -20236,6 +20236,48 @@ def test_update_release_navigation_inserts_the_new_version_first_in_both_groups(
     ]
 
 
+def test_update_release_navigation_demotes_older_visible_releases_in_both_groups():
+    config = json.loads(release_docs_fixture_config())
+    en_group = config["navigation"]["languages"][0]["groups"][1]
+    zh_group = config["navigation"]["languages"][1]["groups"][1]
+    for group, prefix in ((en_group, ""), (zh_group, "zh/")):
+        group["pages"].append(f"{prefix}release-v0.1.0")
+        group["pages"].append({
+            "group": "Earlier releases" if not prefix else "历史版本",
+            "icon": "history",
+            "expanded": False,
+            "pages": [f"{prefix}release-v0.0.9"],
+        })
+    config_text = json.dumps(config, indent=2, ensure_ascii=False) + "\n"
+
+    new_text, changed = release.update_release_navigation(
+        config_text, "release-v0.4.0",
+    )
+    assert changed is True
+    result = json.loads(new_text)
+    assert result["navigation"]["languages"][0]["groups"][1]["pages"] == [
+        "release-v0.4.0", "release-v0.1.2", "release-v0.1.1",
+        {
+            "group": "Earlier releases", "icon": "history",
+            "expanded": False,
+            "pages": ["release-v0.1.0", "release-v0.0.9"],
+        },
+    ]
+    assert result["navigation"]["languages"][1]["groups"][1]["pages"] == [
+        "zh/release-v0.4.0", "zh/release-v0.1.2", "zh/release-v0.1.1",
+        {
+            "group": "历史版本", "icon": "history",
+            "expanded": False,
+            "pages": ["zh/release-v0.1.0", "zh/release-v0.0.9"],
+        },
+    ]
+    second_text, second_changed = release.update_release_navigation(
+        new_text, "release-v0.4.0",
+    )
+    assert second_changed is False
+    assert second_text == new_text
+
+
 def test_update_release_navigation_is_idempotent_when_already_listed():
     config_text = release_docs_fixture_config("release-v0.4.0")
     new_text, changed = release.update_release_navigation(
@@ -20894,6 +20936,23 @@ def test_update_release_navigation_fails_fast_when_only_one_group_exists():
         config["navigation"]["languages"][0],
     ]
     with pytest.raises(RuntimeError, match="expected exactly two release"):
+        release.update_release_navigation(
+            json.dumps(config), "release-v0.4.0",
+        )
+
+
+def test_update_release_navigation_fails_fast_without_collapsed_subgroup():
+    config = json.loads(release_docs_fixture_config())
+    for language in config["navigation"]["languages"]:
+        language["groups"][1]["pages"].append(
+            "zh/release-v0.1.0" if language["language"] == "zh"
+            else "release-v0.1.0"
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match="more than three visible pages but no collapsed subgroup",
+    ):
         release.update_release_navigation(
             json.dumps(config), "release-v0.4.0",
         )
