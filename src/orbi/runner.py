@@ -1862,7 +1862,13 @@ def sync_active_milestone_variable(
     command_runner = run_command or globals()["run_command"]
     endpoint = f"repos/{repo}/actions/variables/ORBI_ACTIVE_MILESTONE"
     try:
-        raw = command_runner(["gh", "api", endpoint], timeout=30)
+        # The read's 404 is the designed absent branch (a repo without the
+        # variable is the normal state), so its generic command_failed line
+        # stays at DEBUG — same contract as the repo_config contents read.
+        raw = command_runner(
+            ["gh", "api", endpoint], timeout=30,
+            failure_log_level=logging.DEBUG,
+        )
         current = json.loads(raw)
         if not isinstance(current, dict):
             raise ValueError("variable response is not an object")
