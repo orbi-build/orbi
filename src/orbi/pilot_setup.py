@@ -91,7 +91,10 @@ PROVIDER_STARTER = {
         },
     },
 }
-PROVIDER_GUIDE = "See /getting-started#configure-the-model-provider"
+PROVIDER_GUIDE = (
+    "See https://docs.orbi.build/getting-started"
+    "#4-configure-the-model-provider"
+)
 
 # The repo-managed single source of truth for the platform labels.
 LABELS_FILE = "labels.toml"
@@ -230,7 +233,7 @@ DOCS_LINKS = {
     "config": "https://docs.orbi.build/getting-started",
     "provider": (
         "https://docs.orbi.build/getting-started"
-        "#configure-the-model-provider"
+        "#4-configure-the-model-provider"
     ),
 }
 

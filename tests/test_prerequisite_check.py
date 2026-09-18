@@ -498,7 +498,22 @@ def test_unconfigured_provider_fails_without_leaking_secrets(tmp_path):
     assert failure.check == "model_provider"
     assert "supersecret-value" not in failure.reason
     assert "supersecret-value" not in failure.fix
-    assert failure.docs.endswith("#configure-the-model-provider")
+    provider_heading = next(
+        (
+            line.removeprefix("## ").strip()
+            for line in (REPO_ROOT / "docs" / "getting-started.mdx")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.startswith("## ")
+            and line.removeprefix("## ").strip()
+            == "4. Configure the model provider"
+        ),
+        None,
+    )
+    assert provider_heading is not None
+    github_slug = re.sub(r"[^\w\s-]", "", provider_heading.lower())
+    github_slug = re.sub(r"[\s-]+", "-", github_slug).strip("-")
+    assert failure.docs.rsplit("#", 1)[-1] == github_slug
 
 
 # --- the success path ----------------------------------------------------------
