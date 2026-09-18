@@ -139,11 +139,17 @@ PI_IDLE_WAIT_MAX_SECONDS = 3600.0
 
 @dataclasses.dataclass(frozen=True)
 class SteeringRequest:
-    """A trusted Issue correction discovered during an active session."""
+    """A trusted Issue correction discovered during an active session.
+
+    `body_revision` marks a correction that comes from an edited Issue
+    body rather than a new comment (Issue #1094) — the journal event
+    names the difference.
+    """
 
     context: str
     comment_ids: tuple[str, ...]
     author: str
+    body_revision: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -177,6 +183,7 @@ class SteeringRequested(RuntimeError):
         self.context = request.context
         self.comment_ids = request.comment_ids
         self.author = request.author
+        self.body_revision = request.body_revision
         self.round = round
         self.killed_phase = phase
 
@@ -1146,6 +1153,7 @@ def stream_pi(
             event(
                 "delivery_steered", issue=issue_ref, role=role,
                 comment_ids=exc.comment_ids, author=exc.author,
+                body_revision=exc.body_revision,
                 round=exc.round, killed_phase=exc.killed_phase,
             )
             continue

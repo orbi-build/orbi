@@ -460,9 +460,9 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `pi_idle_kill` | 向 TERM 后仍存活的进程发送 SIGKILL |
 | `model_wait_dead` | 冻结的 model_wait 越过死亡阈值；已杀死 Pi session |
 | `model_wait_swallowed` | /slots 探针证实模型请求被吞；已杀死 Pi session |
-| `delivery_steered` | 活跃交付因可信 Issue 评论而重启 |
+| `delivery_steered` | 活跃交付因可信 Issue 修正而重启 |
 | `steering_limit_reached` | 活跃交付达到 steering 轮数上限 |
-| `steering_poll_failed` | steering 评论拉取失败（纯旁路） |
+| `steering_poll_failed` | steering 拉取失败（纯旁路） |
 | `pi_retry_429` | provider 429 触发 run 内退避重试 |
 | `pi_429_attempts_reset` | 持久化的 429 重试计数被重置 |
 | `pi_429_attempts_write_failed` | 持久化 429 重试计数失败 |
