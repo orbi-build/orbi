@@ -922,6 +922,10 @@ def test_installed_unit_config_scan_ignores_directories_and_unconfigured_units(
 def test_check_reports_missing_config_when_no_unit_is_available(
     tmp_path, monkeypatch, capsys,
 ):
+    # These tests exercise the IMPLICIT config path, so an ambient
+    # ORBI_CONFIG (every deployment host exports one) must not leak in:
+    # it flips main() to the explicit-config behavior under test's nose.
+    monkeypatch.delenv("ORBI_CONFIG", raising=False)
     installed = tmp_path / "absent-units"
     fake = SimpleNamespace(
         installed_unit_dir=lambda: installed,
@@ -936,6 +940,7 @@ def test_check_reports_missing_config_when_no_unit_is_available(
 def test_check_resolves_the_single_existing_installed_unit_config(
     tmp_path, monkeypatch, capsys,
 ):
+    monkeypatch.delenv("ORBI_CONFIG", raising=False)
     config = tmp_path / "deployment.toml"
     config.write_text('source_repos = ["owner/repo"]\nrepo_dir = "."\n', encoding="utf-8")
     _write_prompts(tmp_path)
@@ -1004,6 +1009,7 @@ def test_runner_reports_missing_config_without_traceback(tmp_path, caplog):
 def test_status_resolves_the_single_existing_installed_unit_config(
     tmp_path, monkeypatch, caplog,
 ):
+    monkeypatch.delenv("ORBI_CONFIG", raising=False)
     config = tmp_path / "deployment.toml"
     config.write_text('source_repos = ["owner/repo"]\nrepo_dir = "."\n', encoding="utf-8")
     _write_prompts(tmp_path)
@@ -1043,6 +1049,7 @@ def test_unit_scan_ignores_unrelated_scheduler_files(
 def test_status_does_not_guess_between_installed_unit_configs(
     tmp_path, monkeypatch, caplog,
 ):
+    monkeypatch.delenv("ORBI_CONFIG", raising=False)
     configs = [tmp_path / "one.toml", tmp_path / "two.toml"]
     for config in configs:
         config.write_text('source_repos = ["owner/repo"]\nrepo_dir = "."\n', encoding="utf-8")
@@ -1065,6 +1072,7 @@ def test_status_does_not_guess_between_installed_unit_configs(
 def test_mutating_command_lists_a_unit_config_without_using_it(
     tmp_path, monkeypatch, caplog,
 ):
+    monkeypatch.delenv("ORBI_CONFIG", raising=False)
     config = tmp_path / "deployment.toml"
     config.write_text('source_repos = ["owner/repo"]\nrepo_dir = "."\n', encoding="utf-8")
     installed = tmp_path / "units"
