@@ -209,9 +209,9 @@ checkout 根目录**没有** `orbi.py`（与 package 同名的 flat 文件
 
 ## 3. 创建配置
 
-仓库带一份提交的 example；真实配置是本地状态（gitignored）。复制并编辑：
+仓库带一份提交的 example；真实配置是本地状态（gitignored）。
 
-`orbi setup` 会在配置缺失时自动创建 `orbi.toml`。
+`orbi setup` 会在配置缺失时从仓库提供的 example 创建 `orbi.toml`。
 
 配置保存在 `orbi.toml`（相对路径相对配置文件目录解析）。`ORBI_CONFIG`
 可选择其他文件，`orbi check` 会校验它。完整参考见[配置参考](/zh/configuration)。
@@ -228,7 +228,6 @@ base_branch = "main"
 max_concurrency = 1
 ```
 
-`orbi setup` 在配置不存在时从仓库提供的 example 创建 `orbi.toml`。
 外部单仓库部署请将 `deploy_home` 设为 Orbi checkout，并参阅[配置参考](/zh/configuration)。
 
 ### 外部单仓库模式（deploy_home）
@@ -422,7 +421,6 @@ pi_model = "groq/compound"
 上——它的 TPM 同样偏低，仍然只适合短小、边界清晰的 coding Issue，
 不适合长上下文仓库分析。这些是账号限额，不是 Orbi 承诺；真实的
 Groq 请求、usage 计量与 429 响应在本文中仍未实测。
-```
 
 #### 让 API key 不进仓库、不进文档
 

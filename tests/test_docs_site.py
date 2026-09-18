@@ -126,6 +126,28 @@ def page_text(slug: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def test_mdx_fences_are_balanced_and_closers_are_bare():
+    """Every MDX page must keep fenced code blocks unambiguous.
+
+    Mint validate accepts an unbalanced fence, but Markdown renderers then
+    reinterpret later fences and headings. An info string opens a block;
+    only a bare fence closes one.
+    """
+    for path in sorted(DOCS_DIR.rglob("*.mdx")):
+        depth = 0
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), 1
+        ):
+            if line == "```":
+                depth = 1 - depth
+            elif line.startswith("```"):
+                assert depth == 0, (
+                    f"closing fence must be bare: {path}:{line_number}: {line!r}"
+                )
+                depth = 1
+        assert depth == 0, f"unclosed fence at end of file: {path}"
+
+
 def test_non_release_docs_have_question_metadata_and_answer_opening():
     """Issue #1028: searchable pages open with a question and its answer.
 
