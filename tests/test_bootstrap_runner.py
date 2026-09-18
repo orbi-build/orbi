@@ -9905,6 +9905,73 @@ def test_idle_recovery_tracker_wait_decision_logged_once_then_flip(
     assert "deadline=" in waits[0]
 
 
+def test_idle_recovery_tracker_wait_holds_exhaustion(monkeypatch):
+    """Issue #1089: while a pre-idle descendant is inside its `timeout`
+    deadline the idle windows pass but the session is NOT exhausted —
+    the wait pauses the exhaustion counter too, not only the signals.
+    A review tool wrapped in `timeout 1200` (longer than
+    `PI_IDLE_RECOVERY_CYCLES` windows) must survive every one of them."""
+    target = {"pid": 9,
+              "cmdline": "timeout 1200 go test -c ./pkg/cli/server/",
+              "start_epoch": 1.0}
+    pending = [(target, 9999999999.0)]  # inside the deadline
+    state = make_idle_recovery_tracker(
+        monkeypatch, targets=[target], pending=pending,
+    )
+    tracker = state["tracker"]
+    tracker.open_window()
+    for _ in range(2 * pi_process.PI_IDLE_RECOVERY_CYCLES):
+        state["mono"] += 0.31  # a hair past one window (see the pacing test)
+        tracker.escalate(7)
+        assert tracker.state == "wait"
+        assert state["signals"] == []
+        assert tracker.exhausted is False
+
+
+def test_idle_recovery_tracker_wait_releases_to_escalation(monkeypatch):
+    """Issue #1089: when the `timeout` deadline passes and the
+    descendant is still alive, the evidence flip is unchanged — the
+    grace window records it, one full window later the TERM lands, the
+    next window the KILL lands and `exhausted` flips (the slot is never
+    held past the wrapper deadline + two windows)."""
+    target = {"pid": 9,
+              "cmdline": "timeout 1200 go test -c ./pkg/cli/server/",
+              "start_epoch": 1.0}
+    pending = [(target, 9999999999.0)]  # inside the deadline
+    state = make_idle_recovery_tracker(
+        monkeypatch, targets=[target], pending=pending,
+    )
+    tracker = state["tracker"]
+    tracker.open_window()
+    # Three full windows inside the deadline: wait, no signal, no kill.
+    for _ in range(3):
+        state["mono"] += 0.31
+        tracker.escalate(7)
+        assert tracker.state == "wait"
+        assert state["signals"] == []
+        assert tracker.exhausted is False
+    # The deadline passes, the tool is still alive: the grace window
+    # (recorded, nothing signaled, still no exhaustion).
+    pending.clear()
+    state["mono"] += 0.31
+    tracker.escalate(7)
+    assert tracker.state == "wait"
+    assert state["signals"] == []
+    assert tracker.exhausted is False
+    # One full window later: the evidence flips — the TERM.
+    state["mono"] += 0.31
+    tracker.escalate(7)
+    assert tracker.state == "term"
+    assert state["signals"] == [(9, signal.SIGTERM)]
+    # The next window: the KILL, and the same exhausted decision — the
+    # loop kills the Pi session.
+    state["mono"] += 0.31
+    tracker.escalate(7)
+    assert tracker.state == "kill"
+    assert state["signals"][-1] == (9, signal.SIGKILL)
+    assert tracker.exhausted is True
+
+
 def test_idle_recovery_tracker_no_target_clears_state(monkeypatch, caplog):
     """Issue #287: with NO pre-idle descendants (Pi itself is stuck)
     the TERM step logs `result=no_target` without a pid, the displayed

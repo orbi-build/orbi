@@ -464,7 +464,10 @@ Stable `key=value` lines you will see:
   Runner logs one `pi_idle_wait` line per stall (run id, pid, cmdline,
   deadline) and reports `recovery=wait` in the progress comment; one
   full idle window of grace passes before escalation, and every later
-  window re-evaluates;
+  window re-evaluates. While the wait is active it also pauses the
+  session-kill exhaustion counter (Issue #1089): the kill is bounded
+  by the wrapper's own deadline, never by `PI_IDLE_RECOVERY_CYCLES`
+  idle windows;
 - `pi_idle_term` / `pi_idle_kill` — the idle-stall recovery (Issue
   #94): while the session stays stalled the Runner SIGTERMs the Pi
   descendants that already existed before the idle window (the hung
@@ -501,7 +504,9 @@ Stable `key=value` lines you will see:
   configured `model_wait_dead_seconds` (default 1800 s, Issue #228)
   declares the model request hung, `idle_recovery_stale_...s` when
   the session stayed idle for `PI_IDLE_RECOVERY_CYCLES` (default 3)
-  consecutive idle windows and the Runner kills the Pi session itself,
+  consecutive idle windows with no descendant inside its `timeout`
+  deadline (Issue #1089: an active wait pauses the counter) and the
+  Runner kills the Pi session itself,
   or `provider_rate_limited` when a provider 429 survived every
   in-run backoff retry (Issue #321)).
 
@@ -727,7 +732,10 @@ log/health thresholds — they are not the 5-minute schedule and not a
 business task timeout. The idle recovery never holds the slot forever:
 a stalled session either resumes (the failure signal reached the model
 and the first new event resets the recovery state) or the run fails
-fast through the normal `ai-blocked` path.
+fast through the normal `ai-blocked` path — after
+`PI_IDLE_RECOVERY_CYCLES` idle windows for an ordinary stall, or at
+the wrapper's own deadline (plus the TERM/KILL windows) when the stall
+is a bounded `timeout` tool that outlived it (Issue #1089).
 
 ## The CLI (`orbi`)
 
