@@ -156,7 +156,7 @@ state machine) and [Operations](/operations) (observability, journal).
 
 | Command | What it does |
 | --- | --- |
-| `docker logs -f orbi` | setup output + systemd console |
+| `docker logs -f orbi` | setup result (`setup=ok` or `setup_failed ...`) + systemd console |
 | `docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi journalctl --user -u orbi@1.service -n 50 --no-pager` | the runner tick logs |
 | `docker exec -u orbi -w /orbi orbi bash -c '~/.local/bin/orbi status'` | queue and current task (a debug attachment) |
 | `docker exec -u orbi -w /orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi bash -c '~/.local/bin/orbi doctor'` | deployment health check |

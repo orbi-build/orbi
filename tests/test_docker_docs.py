@@ -29,6 +29,8 @@ DOC_FILES = (
     REPO_ROOT / "3rd" / "docker" / "README.md",
 )
 DOCS_PAGE = DOC_FILES[0]
+ZH_DOC = REPO_ROOT / "docs" / "zh" / "docker.mdx"
+SETUP_ENTRYPOINT = REPO_ROOT / "3rd" / "docker" / "docker-entrypoint.sh"
 HUB_README = REPO_ROOT / "3rd" / "docker" / "README.dockerhub.md"
 
 # The registries the image publish workflow pushes to; both carry `latest`
@@ -301,6 +303,18 @@ GUIDE_LABELS = (
     "ai-blocked",
     "ai-release",
 )
+
+
+def test_setup_result_command_is_shared_by_docs_and_entrypoint():
+    """The no-TTY setup result contract stays aligned across the English,
+    Chinese, and community Docker documentation and the handover message."""
+    command = "docker logs -f orbi"
+    for path in (*DOC_FILES, ZH_DOC):
+        assert command in path.read_text(encoding="utf-8"), path.name
+    assert command in SETUP_ENTRYPOINT.read_text(encoding="utf-8")
+    for path in (*DOC_FILES, ZH_DOC):
+        text = path.read_text(encoding="utf-8")
+        assert "setup=ok" in text and "setup_failed" in text, path.name
 
 
 def test_orbi_quick_guide_is_selfcontained():
