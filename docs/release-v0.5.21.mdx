@@ -1,0 +1,30 @@
+# v0.5.21 release
+
+`v0.5.21` release notes for the GitHub Release [v0.5.21](https://github.com/orbi-build/orbi/releases/tag/v0.5.21) (release task: Issue #1084).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.5.21` | annotated tag `ec39947d4db86ae709ffff7b7e6cd80a4e4f50c7` | commit `91b1a896f99b93375cbad8ea12a0ba63d5082835` |
+
+## Release notes
+
+## Changelog
+
+### Deployment and operations
+
+- Pi has no install instruction and no stated Node floor: npm install succeeds on Node 20 and every pi call then crashes ([Issue #1079](https://github.com/orbi-build/orbi/issues/1079); [PR #1083](https://github.com/orbi-build/orbi/pull/1083))
+- install.sh does not install Pi: the install reports success and every tick then fails at the first Pi call ([Issue #1080](https://github.com/orbi-build/orbi/issues/1080); [PR #1082](https://github.com/orbi-build/orbi/pull/1082))
+
+### Documentation
+
+- Docs state only the bug shape for a ticket: a first-time user adding a feature has no stated form ([Issue #1078](https://github.com/orbi-build/orbi/issues/1078); [PR #1081](https://github.com/orbi-build/orbi/pull/1081))
+
+### Bug fixes
+
+- Runner logs ERROR command_failed on every tick when ORBI_ACTIVE_MILESTONE is absent (expected 404 logged at ERROR) ([Issue #1085](https://github.com/orbi-build/orbi/issues/1085); [PR #1086](https://github.com/orbi-build/orbi/pull/1086))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>
