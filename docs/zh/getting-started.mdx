@@ -249,6 +249,8 @@ checkout 根目录**没有** `orbi.py`（与 package 同名的 flat 文件
 | `review_pi_thinking` | 否 | 未设置 | 评审会话的思考级别覆盖；未设置时回落到 `pi_thinking` |
 | `pi_extensions` | 否 | `[]` | 可重复的 extension 表：`source` 必须是锁定版本的 `npm:`/git 来源或配置文件相对的现有本地路径；`enabled` 默认开启，`env` 只注入当前 Pi 子进程。每次运行都传入 `--no-extensions`，不会发现全局 Pi extension。 |
 
+这三行 `review_pi_*` 配置让独立评审运行在与实现不同的模型上——见 [Reviewing with a different model](/zh/workflow#reviewing-with-a-different-model)。
+
 最小示例：
 
 ```toml

@@ -1,0 +1,21 @@
+---
+description: "如何安装运行 Orbi?"
+---
+# 运行 Orbi 的方式
+
+Orbi 可以运行在 Managed Cloud 上，也可以从三条自托管安装路径中选一条自行安装运行。
+
+自托管 runner 是开源核心，运行在你自己的机器上、面向你自己的 GitHub 仓库。Orbi Managed Cloud 是运行在同一 GitHub 账本上的商业托管控制平面。
+
+| 方式 | 适用场景 | 操作 | 详情 |
+| --- | --- | --- | --- |
+| Managed Cloud | 不想自己维护一台 runner 机器 | 在 <https://orbi.build/cloud/> 登录使用 | [orbi.build/cloud](https://orbi.build/cloud/) |
+| 安装脚本（推荐的自托管路径） | 有 systemd user session 的 Linux/macOS | `curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh \| bash` | [上手指南](/zh/getting-started) |
+| PyPI（`orbi-cli`） | 只想要 `orbi` 命令，Python ≥ 3.14 | `uv tool install orbi-cli` | [上手指南](/zh/getting-started) |
+| Docker（社区维护） | 宿主机没有 systemd user session | `docker pull ghcr.io/orbi-build/orbi:latest` | [Docker](/zh/docker) |
+
+三条注意事项让这个选择保持诚实：
+
+- Managed Cloud 与自托管 runner 不得服务同一个任务池——二选一，绝不两者都用。
+- PyPI 只提供 `orbi` 命令本身；运行 Orbi 要用安装脚本或 editable checkout 安装。
+- Docker 是社区维护、非官方支持的封装；宿主机有 systemd user session 时优先走官方安装脚本——两条路径二选一，同一个任务池绝不两者都用。

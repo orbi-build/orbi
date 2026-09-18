@@ -144,6 +144,27 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
   `gh` token 上——完整的双通道边界与启动前检查见[运维](/zh/operations)；
   凭据见[安全](/zh/security)。
 
+### Reviewing with a different model（用不同的模型评审）
+
+独立评审不必运行在写代码的同一个模型上：`review_pi_provider`、
+`review_pi_model`、`review_pi_thinking` 为评审会话单独选择
+provider/模型/思考级别，评审者因此不会继承实现者的盲区。每个键独立
+回落到实现侧的对应值（`review_pi_provider` → `pi_provider`、
+`review_pi_model` → `pi_model`、`review_pi_thinking` →
+`pi_thinking`），只覆盖其中一个也有效。两个选择都必须存在于配置的
+`pi_providers` 目录中，并在启动时分别校验——评审选择非法会以
+`review provider selection invalid` fail fast。本文不推荐也未实测
+任何具体配对；能力与回落机制才是契约。
+
+```toml
+# 实现运行在一个模型上，独立评审运行在另一个模型上。
+pi_provider = "z-ai"
+pi_model = "glm-5.3-flash"
+
+review_pi_provider = "groq"
+review_pi_model = "groq/compound"
+```
+
 ## 合并账本：`external_commits` 与 `commits`
 
 Runner 合并交付 PR 时，`Orbi merged PR:` Issue 评论与 `Orbi: merged`
@@ -371,7 +392,11 @@ PR 验收时校验该关键词，缺失即 fail fast。
      （不重复实现 changelog 生成——#204 已完成那部分），补上现有
      release 页共有的元信息：tag/release commit 对应关系、发布时间、
      release task 的 Issue 编号；在 `docs/docs.json` 的 `Releases`/
-     `发布` 导航分组首位插入新版本（中英文两处，最新在前）；把
+     `发布` 导航分组首位插入新版本（中英文两处，最新在前）；自
+     Issue #1096 起两个分组各嵌套一个折叠的 `Earlier releases`
+     （历史版本）子分组——自动同步只把新版本插到可见页首位，随后由
+     一次 follow-up 文档改动把当时的第四新条目移入该子分组，让可见
+     分组始终保持最新三个版本；把
      `(latest)` 标题标记从上一版页面转移到新版本页面（只有最新页面
      带该标记）。这些文件改动直接提交进 base 分支（release 路径无
      PR）并普通 push。幂等：已有页面内容一致时不重复生成、不覆盖，

@@ -289,6 +289,8 @@ directory):
 | `review_pi_thinking` | no | unset | Thinking-level override for review sessions; unset falls back to `pi_thinking` |
 | `pi_extensions` | no | `[]` | Repeatable extension tables: `source` is a pinned `npm:`/git source or an existing config-relative local path; `enabled` defaults to true and `env` is injected only into that Pi child. Every run passes `--no-extensions`, so global Pi extensions are never discovered. |
 
+The three `review_pi_*` rows let the independent review run on a different model than the implementation — see [Reviewing with a different model](/workflow#reviewing-with-a-different-model).
+
 Minimal example:
 
 ```toml
