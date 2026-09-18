@@ -116,25 +116,20 @@ PI_MODEL_WAIT_DEAD_SECONDS = 1800.0
 PI_MODEL_WAIT_PROBE_SECONDS = 60.0
 
 
-# Idle-stall recovery: a stalled (non-model_wait) session
-# is recovered automatically instead of only warning. Measured in idle
-# windows of `idle_warn_seconds`: at the first window the pre-idle
-# descendants (the hung tools) get SIGTERM (the failure signal reaches
-# the model), at the second window a target that survived gets
-# SIGKILL, and after `PI_IDLE_RECOVERY_CYCLES` consecutive idle windows
-# the Pi session itself is killed and the run fails fast through the
-# normal `ai-blocked` path — the slot is never held forever.
-PI_IDLE_RECOVERY_CYCLES = 3
-
-
-# The bounded deadline wait (Issue #1089): a pre-idle descendant
-# inside its coreutils `timeout` deadline is legitimately running and
-# the escalation waits — but only up to this many seconds since the
-# wait for the stall began. A declared deadline longer than the cap
-# escalates anyway (the grace window, then TERM → KILL → session
-# kill), so a wrapper like `timeout 86400` can never hold the
-# concurrency slot for a day.
+# The absolute cap and the single knob for how long one stall may hold
+# a slot (Issue #1089). A declared deadline longer than this cap
+# escalates anyway, so a wrapper like `timeout 86400` can never hold
+# the concurrency slot for a day.
 PI_IDLE_WAIT_MAX_SECONDS = 3600.0
+
+
+# Idle-stall recovery: a stalled (non-model_wait) session is recovered
+# automatically instead of only warning. The exhaustion window is the
+# absolute cap expressed in idle windows, so the same bound governs
+# declared deadlines and an undeclared slow command.
+PI_IDLE_RECOVERY_CYCLES = int(
+    PI_IDLE_WAIT_MAX_SECONDS / PI_IDLE_WARN_SECONDS
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -733,8 +728,9 @@ class IdleRecoveryTracker:
                 a non-zero exit and the failure signal reaches the
                 model;
       window 2: SIGKILL a TERMed target that survived;
-      window `PI_IDLE_RECOVERY_CYCLES` (default 3): `exhausted` flips
-                — the loop kills the Pi session itself and fails fast
+      window `PI_IDLE_RECOVERY_CYCLES` (the absolute cap expressed in
+                idle windows): `exhausted` flips — the loop kills the Pi
+                session itself and fails fast
                 through the normal `ai-blocked` path (the slot is
                 never held forever).
 
@@ -1099,7 +1095,7 @@ def stream_pi(
     `/proc/<pid>/stat` plus their start time, never a name guess) so
     the tool gets a non-zero exit and the failure signal reaches the
     model; window 2 SIGKILLs a target that survived; after
-    `PI_IDLE_RECOVERY_CYCLES` (default 3) consecutive idle windows the
+    `PI_IDLE_RECOVERY_CYCLES` consecutive idle windows the
     Pi session itself is killed and the run fails fast through the
     normal failure path (`ai-blocked`, the slot released) — the slot
     is never held forever. Every step logs a `pi_idle_term` /
@@ -1497,7 +1493,7 @@ def _stream_pi_once(
             # warning. Escalation, one step per idle window: window 1
             # SIGTERMs the pre-idle descendants (the hung tools),
             # window 2 SIGKILLs a TERMed target that survived, and
-            # after `PI_IDLE_RECOVERY_CYCLES` (default 3) consecutive
+            # after `PI_IDLE_RECOVERY_CYCLES` consecutive
             # idle windows the tracker reports `exhausted` — the loop
             # kills the Pi session itself and fails fast through the
             # normal `ai-blocked` path (the slot is never held

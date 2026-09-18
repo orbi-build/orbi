@@ -9746,13 +9746,20 @@ def make_idle_recovery_tracker(monkeypatch, *, window=0.3, targets=None,
     return state
 
 
+def test_idle_recovery_cycles_match_absolute_cap():
+    """The watchdog exhaustion window and declared deadline share one cap."""
+    assert (pi_process.PI_IDLE_RECOVERY_CYCLES
+            * pi_process.PI_IDLE_WARN_SECONDS
+            == pi_process.PI_IDLE_WAIT_MAX_SECONDS)
+
+
 def test_idle_recovery_tracker_escalation_pacing(monkeypatch, caplog):
     """Issue #287 (the extracted strategy, window pacing): a surviving
     target's first observation is the grace window (recorded, nothing
     signaled — Issue #181), the flip window TERMs it, the SAME window
     never escalates further, the next window SIGKILLs it, and the
-    `PI_IDLE_RECOVERY_CYCLES`-th window flips `exhausted` — the loop's
-    signal to kill the Pi session."""
+    absolute-cap window flips `exhausted` — the loop's signal to kill
+    the Pi session."""
     state = make_idle_recovery_tracker(monkeypatch)
     tracker = state["tracker"]
     with caplog.at_level("WARNING"):
@@ -9776,15 +9783,18 @@ def test_idle_recovery_tracker_escalation_pacing(monkeypatch, caplog):
         tracker.escalate(7)
         assert tracker.state == "term"
         assert state["signals"] == [(4242, signal.SIGTERM)]
-        # Window 3 (PI_IDLE_RECOVERY_CYCLES): the KILL, and the same
-        # exhausted decision — the loop kills the Pi session; the
-        # tracker only reports it. The clock moves a hair past one
+        # Window 3: the KILL; exhaustion remains false until the
+        # absolute-cap window. The clock moves a hair past one
         # window: an exact `+0.3` floors back into window 1 after the
         # floating-point subtraction in `escalate`.
         state["mono"] += 0.31
         tracker.escalate(7)
         assert tracker.state == "kill"
         assert state["signals"][-1] == (4242, signal.SIGKILL)
+        assert tracker.exhausted is False
+        for _ in range(pi_process.PI_IDLE_RECOVERY_CYCLES - 3):
+            state["mono"] += 0.31
+            tracker.escalate(7)
         assert tracker.exhausted is True
     # The journal lines carry the run correlation fields.
     term = [line for line in caplog.text.splitlines()
@@ -9833,6 +9843,10 @@ def test_idle_recovery_tracker_kill_reports_already_dead(
         state["mono"] += 0.3
         tracker.escalate(7)  # window 3: the KILL step
         assert tracker.state == "kill"
+        assert tracker.exhausted is False
+        for _ in range(pi_process.PI_IDLE_RECOVERY_CYCLES - 3):
+            state["mono"] += 0.31
+            tracker.escalate(7)
         assert tracker.exhausted is True
     assert state["signals"] == [(4242, signal.SIGTERM)]
     kill = [line for line in caplog.text.splitlines()
@@ -9851,10 +9865,15 @@ def test_idle_recovery_tracker_reset_clears_state(monkeypatch):
     tracker.open_window()
     state["mono"] += 0.9  # straight to cycle 3
     tracker.escalate(7)
+    assert tracker.exhausted is False
+    for _ in range(pi_process.PI_IDLE_RECOVERY_CYCLES - 3):
+        state["mono"] += 0.31
+        tracker.escalate(7)
     assert tracker.exhausted is True
     tracker.reset()
     assert tracker.state is None
     assert tracker.exhausted is False
+    state["signals"].clear()
     # A fresh window escalates from the grace window again (no signal
     # — the old escalation left no residue).
     tracker.open_window()
@@ -9969,6 +9988,10 @@ def test_idle_recovery_tracker_wait_releases_to_escalation(monkeypatch):
     tracker.escalate(7)
     assert tracker.state == "kill"
     assert state["signals"][-1] == (9, signal.SIGKILL)
+    assert tracker.exhausted is False
+    for _ in range(pi_process.PI_IDLE_RECOVERY_CYCLES - 3):
+        state["mono"] += 0.31
+        tracker.escalate(7)
     assert tracker.exhausted is True
 
 
@@ -10015,6 +10038,10 @@ def test_idle_recovery_tracker_wait_capped(monkeypatch):
     tracker.escalate(7)
     assert tracker.state == "kill"
     assert state["signals"][-1] == (11, signal.SIGKILL)
+    assert tracker.exhausted is False
+    for _ in range(pi_process.PI_IDLE_RECOVERY_CYCLES - 6):
+        state["mono"] += 0.31
+        tracker.escalate(7)
     assert tracker.exhausted is True
 
 
@@ -10035,6 +10062,10 @@ def test_idle_recovery_tracker_no_target_clears_state(monkeypatch, caplog):
         assert tracker.state == "kill"
         state["mono"] += 0.31
         tracker.escalate(7)
+        assert tracker.exhausted is False
+        for _ in range(pi_process.PI_IDLE_RECOVERY_CYCLES - 2):
+            state["mono"] += 0.31
+            tracker.escalate(7)
         assert tracker.exhausted is True
     terms = [line for line in caplog.text.splitlines()
              if " pi_idle_term " in line]
