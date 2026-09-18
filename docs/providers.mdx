@@ -130,7 +130,7 @@ Use Google's [AI Studio API key page](https://aistudio.google.com/app/apikey) to
    chmod 600 .orbi/env
    ```
 
-   The installed systemd unit loads `.orbi/env`. For a manual tick, export it first as described in [Getting started](/getting-started#path-b-a-pi_providers-file-orbi).
+   The installed systemd unit loads `.orbi/env`. For a manual tick, export it first as described in [Getting started](/getting-started#path-b-a-pi_providers-file-orbi-manages-the-selection).
 2. Copy [`templates/pi-providers/gemini.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/gemini.json) to `.orbi/pi-providers.json`. Its complete selected entry is:
 
    ```json
@@ -414,4 +414,4 @@ A quota hit is returned upstream as HTTP `429`; Orbi never switches provider mid
 
 A model can also be present in Groq's live catalog but blocked by an organization policy. In that case a real request returns HTTP `403` with `model_permission_blocked_org` (not `429`): an organization administrator must enable the model at [Groq organization limits](https://console.groq.com/settings/limits), or you must select another configured provider. HTTP `429` means the account quota/rate limit was reached; follow the separate quota troubleshooting path above.
 
-See [Getting started](/getting-started#path-b-a-pi_providers-file-orbi) for the existing OpenAI-compatible setup and [Issue #305](https://github.com/orbi-build/orbi/issues/305) for the provider article series.
+See [Getting started](/getting-started#path-b-a-pi_providers-file-orbi-manages-the-selection) for the existing OpenAI-compatible setup and [Issue #305](https://github.com/orbi-build/orbi/issues/305) for the provider article series.
