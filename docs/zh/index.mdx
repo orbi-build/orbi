@@ -7,7 +7,7 @@ description: "Orbi 是什么，它能从 GitHub Issue 交付什么?"
 
 Orbi 会把 GitHub Issue 转化为经过测试、独立审查并合并的拉取请求。
 
-Orbi 是一个本地 AI 开发 Worker：把任务放进 GitHub Issue，它自动领取 `ai-ready` Issue，在隔离 worktree 中开发、运行真实测试套件、创建 PR，随后完成独立审查（会话内修复）并合并干净的 PR——整个交付过程记录在 GitHub Issue、评论和 PR 本身中。审查会话可以使用与实现会话**不同的模型**（different model）（见[工作流](/zh/workflow)；不同模型审查小节将单独加入）。这个 MVP 只在 GitHub 中保存状态，而不是使用数据库或队列；每个 tick 运行一个 Issue，而不是 daemon；它不会自动发现仓库，也不会自行 push 保护分支。完整边界见[/zh/security](/zh/security)。
+Orbi 是一个本地 AI 开发 Worker：把任务放进 GitHub Issue，它自动领取 `ai-ready` Issue，在隔离 worktree 中开发、运行真实测试套件、创建 PR，随后完成独立审查（会话内修复）并合并干净的 PR——整个交付过程记录在 GitHub Issue、评论和 PR 本身中。审查会话可以使用与实现会话**不同的模型**（different model）（见[工作流](/zh/workflow)）。这个 MVP 只在 GitHub 中保存状态，而不是使用数据库或队列；每个 tick 运行一个 Issue，而不是 daemon；它不会自动发现仓库，也不会自行 push 保护分支。完整边界见[/zh/security](/zh/security)。
 
 ## 它有什么不同
 
@@ -19,7 +19,7 @@ Orbi 是一个本地 AI 开发 Worker：把任务放进 GitHub Issue，它自动
     没有编写代码的第二个会话会审查 PR，并在会话内修复 findings。`review_pi_*` 允许该会话使用另一个模型。
   </Card>
   <Card title="你可以 steer 正在运行的交付" href="/operations#event-reference">
-    Issue 上可信任的修正会让运行重新带上这条修正。这样可以在交付运行时纠正它（steering）。
+    Issue 上可信任的修正会让运行重新带上这条修正。
   </Card>
   <Card title="Release 也是交付" href="/zh/workflow#epicrelease-task-与-p0-优先级">
     Release task 会运行发布状态机：等待 CI、打 tag 和写 notes。发布工作使用同一份 GitHub 交付记录。

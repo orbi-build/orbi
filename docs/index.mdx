@@ -5,7 +5,7 @@ description: "What is Orbi and what does it deliver from a GitHub Issue?"
 
 Orbi turns a GitHub Issue into a tested, independently reviewed, and merged pull request.
 
-Orbi is a local AI development worker. You put work into GitHub Issues; it automatically claims an `ai-ready` Issue, develops it in an isolated worktree, runs the real test suite, opens a PR, then completes an independent review (with in-session fixes) and merges a clean PR — with the whole delivery recorded in GitHub Issues, comments and the PR itself. The reviewing session can run on a **different model** than the implementing session ([learn how](/workflow); the different-model review subsection is being added separately). This MVP keeps state only in GitHub rather than a database or queue, runs one Issue per tick rather than a daemon, and does not discover repositories or push to protected branches itself. See [/security](/security) for the full boundary list.
+Orbi is a local AI development worker. You put work into GitHub Issues; it automatically claims an `ai-ready` Issue, develops it in an isolated worktree, runs the real test suite, opens a PR, then completes an independent review (with in-session fixes) and merges a clean PR — with the whole delivery recorded in GitHub Issues, comments and the PR itself. The reviewing session can run on a **different model** than the implementing session ([learn how](/workflow#reviewing-with-a-different-model)). This MVP keeps state only in GitHub rather than a database or queue, runs one Issue per tick rather than a daemon, and does not discover repositories or push to protected branches itself. See [/security](/security) for the full boundary list.
 
 ## What makes it different
 
@@ -13,11 +13,11 @@ Orbi is a local AI development worker. You put work into GitHub Issues; it autom
   <Card title="GitHub is the whole ledger" href="/workflow">
     Issues, labels, comments and the PR are the complete delivery record. Orbi uses no database or second task system.
   </Card>
-  <Card title="Independent review, optionally on a different model" href="/workflow">
+  <Card title="Independent review, optionally on a different model" href="/workflow#reviewing-with-a-different-model">
     A second session that did not write the code reviews the PR and fixes findings in-session. `review_pi_*` lets that session run on another model.
   </Card>
   <Card title="You can steer a running delivery" href="/operations#event-reference">
-    A trusted correction on the Issue restarts the run with it. This lets you correct a delivery while it is running.
+    A trusted correction on the Issue restarts the run with it.
   </Card>
   <Card title="Releases are deliveries too" href="/workflow#epics-release-tasks-and-p0-priority">
     A Release task runs the release state machine: CI wait, tag, and notes. Release work follows the same GitHub delivery record.
