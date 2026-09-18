@@ -78,14 +78,16 @@ non-zero exit code.
      create+delete label probe (`gh api`) and reports
      `permission=INSTALLATION`; a user token keeps the plain
      permission requirement;
-   - the eight platform labels are aligned **declaratively** from the
-     deployment home's `labels.toml` (`<deploy_home>/labels.toml`,
-     Issue #330) — the single source of truth for label name, color and
-     description: a missing label is created, a drifted label is
-     updated, nothing is deleted, and business labels (`bug`,
-     `enhancement`, ...) are never touched. In the external single-repo
-     mode the labels come from the orbi checkout, never from the
-     delivery checkout X.
+   - the twelve platform labels (`ai-ready`, `ai-in-progress`,
+     `ai-pr-opened`, `ai-fix-needed`, `ai-merged`, `ai-blocked`, `p0`,
+     `ai-epic`, `ai-release`, `ai-content-only`, `ai-ops-only`,
+     `ai-human-review`) are aligned **declaratively** from the deployment
+     home's `labels.toml` (`<deploy_home>/labels.toml`, Issue #330) — the
+     single source of truth for label name, color and description: a missing
+     label is created, a drifted label is updated, nothing is deleted, and
+     business labels (`bug`, `enhancement`, ...) are never touched. In the
+     external single-repo mode the labels come from the orbi checkout, never
+     from the delivery checkout X.
 5. **Systemd units** — the deployment home's templates
    (`<deploy_home>/systemd/orbi@.service`,
    `<deploy_home>/systemd/orbi@.timer`; in bootstrap mode the orbi
@@ -169,29 +171,31 @@ The default output is stable `key=value` lines (one per concern; values
 containing spaces are quoted), so agents and scripts can parse it:
 
 ```text
-setup=ok version=2 base_branch=main
+setup=ok version=4 base_branch=main
 cli=verified source=/path/to/checkout/src/orbi/__init__.py
-repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8
+repo=orbi-build/orbi permission=ADMIN default_branch=main labels=12/12
 service=installed path=~/.config/systemd/user/orbi@.service sha256=9f2c...
-timer=orbi@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
-timer=orbi@2.timer disabled active=false next="-"
-checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:orbi-build/orbi.git protocol=ssh migrated=false ssh_reachable=true transport_reachable=true
-model_endpoint=optional optional_proxy=healthy url=http://127.0.0.1:18082/health
+timer=orbi@1.timer enabled active=true next="Fri 2026-09-18 16:45:00 UTC"
+checkout=remote=origin branch=main clean=true base_fresh=true remote_url=https://github.com/orbi-build/orbi.git protocol=https migrated=false ssh_reachable=- transport_reachable=true
+model_provider=NOT CONFIGURED — edit orbi.toml (pi_providers/pi_provider/pi_model), fill /path/to/checkout/.orbi/pi-providers.json and put the key in /path/to/checkout/.orbi/env (PROVIDER_API_KEY)
+model_provider_guide=See /getting-started#configure-the-model-provider
+model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/health
 ```
 
 `cli=verified` means the running CLI already imports `orbi`
 from the deployment checkout (the editable install is in place);
-`cli=installed` means the force editable reinstall ran. `labels=8/8`
-means all eight platform labels match `labels.toml`;
-there is one `timer=` line per timer instance and its `next` is that
-instance's next trigger time (`-` when it has none);
-`optional_proxy` is `healthy`, `unhealthy` or `unavailable` and never
-changes the exit code. `migrated=true` means setup rewrote an
-`origin` on the opposite transport to the configured transport's URL
-(a re-run then reports `migrated=false`); `ssh_reachable` is the SSH
-`git ls-remote` probe result (`-` in https mode — no SSH probe runs
-there) and `transport_reachable` is the probe result of the ACTIVE
-transport (Issue #580).
+`cli=installed` means the force editable reinstall ran. `labels=12/12`
+means all twelve platform labels match `labels.toml`. There is one
+`timer=` line per timer instance and its `next` is that instance's next
+trigger time (`-` when it has none). `model_provider=NOT CONFIGURED`
+is a warning: it never changes the setup exit code; the following
+`model_provider_guide` line tells you where to configure it. `optional_proxy`
+is `healthy`, `unhealthy` or `unavailable` and never changes the exit code.
+`migrated=true` means setup rewrote an `origin` on the opposite transport
+to the configured transport's URL (a re-run then reports `migrated=false`);
+`ssh_reachable` is the SSH `git ls-remote` probe result (`-` in https mode
+— no SSH probe runs there) and `transport_reachable` is the probe result
+of the ACTIVE transport (Issue #580).
 
 `--json` prints the equivalent JSON document:
 
@@ -205,13 +209,14 @@ Success (exit code `0`):
 
 ```bash
 $ orbi setup
-setup=ok version=2 base_branch=main
+setup=ok version=4 base_branch=main
 cli=verified source=/path/to/checkout/src/orbi/__init__.py
-repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8
+repo=orbi-build/orbi permission=ADMIN default_branch=main labels=12/12
 service=installed path=~/.config/systemd/user/orbi@.service sha256=9f2c...
-timer=orbi@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
-timer=orbi@2.timer disabled active=false next="-"
-checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:orbi-build/orbi.git protocol=ssh migrated=false ssh_reachable=true transport_reachable=true
+timer=orbi@1.timer enabled active=true next="Fri 2026-09-18 16:45:00 UTC"
+checkout=remote=origin branch=main clean=true base_fresh=true remote_url=https://github.com/orbi-build/orbi.git protocol=https migrated=false ssh_reachable=- transport_reachable=true
+model_provider=NOT CONFIGURED — edit orbi.toml (pi_providers/pi_provider/pi_model), fill /path/to/checkout/.orbi/pi-providers.json and put the key in /path/to/checkout/.orbi/env (PROVIDER_API_KEY)
+model_provider_guide=See /getting-started#configure-the-model-provider
 model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/health
 ```
 
