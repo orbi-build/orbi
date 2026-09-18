@@ -23,6 +23,8 @@ import re
 import unicodedata
 from pathlib import Path
 
+import pytest
+
 import orbi.runner as runner
 import orbi.release as release
 
@@ -157,6 +159,23 @@ def test_internal_fragment_links_target_existing_heading():
             if fragment not in headings:
                 failures.append(f"{source}:{link} (missing heading in {target})")
     assert not failures, "invalid internal fragment links:\n" + "\n".join(failures)
+
+
+def test_internal_fragment_links_report_missing_page_and_heading(tmp_path, monkeypatch):
+    """A broken link identifies both the source link and its missing target."""
+    (tmp_path / "source.mdx").write_text(
+        "[missing](/missing#gone)\n[wrong](/target#gone)\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "target.mdx").write_text("# Present\n", encoding="utf-8")
+    monkeypatch.setitem(globals(), "DOCS_DIR", tmp_path)
+
+    with pytest.raises(AssertionError) as exc_info:
+        test_internal_fragment_links_target_existing_heading()
+
+    message = str(exc_info.value)
+    assert "/missing#gone" in message and "missing.mdx" in message
+    assert "/target#gone" in message and "missing heading" in message
 
 
 def test_non_release_docs_have_question_metadata_and_answer_opening():
