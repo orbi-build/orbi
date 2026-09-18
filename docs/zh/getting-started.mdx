@@ -28,7 +28,11 @@ bash install.sh
 ```
 
 安装器需要 `git`、`gh` 和调度器 user session（Linux 为 systemd，macOS
-为 launchd）；uv 会在需要时提供 Python 3.14。
+为 launchd）；uv 会在需要时提供 Python 3.14。安装器还会替你安装
+[Pi](https://github.com/earendil-works/pi) CLI（通过
+`npm install -g --ignore-scripts @earendil-works/pi-coding-agent`）——
+Node ≥ 22.19（npm 随附其中）是它唯一不替你安装的前提：请从
+[官方下载页](https://nodejs.org/en/download)自行安装 Node，安装器会校验版本。
 手动安装时，`orbi setup` 找不到 `orbi.toml` 会生成一个：相邻存在
 `.orbi.example.toml` 就用它，否则用 CLI 包内自带的示例——且不会覆盖已有配置。
 
@@ -75,7 +79,7 @@ provider——失败即快速退出，并给出原因、修复动作和官方文
 |---|---|---|
 | Python 3.14 | Runner 和测试契约（CI 固定同一 minor 版本） | 由 `uv` 提供 |
 | [uv](https://docs.astral.sh/uv/) | 把 `orbi` CLI 装进隔离的 tool 环境（setup 的 CLI editable 步骤会调 `uv tool install`） | `uv --version` |
-| [Pi](https://github.com/earendil-works/pi) CLI，需 Node ≥ 22.19.0 | 开发 agent；每个任务一个完整 session——安装命令：`npm install -g --ignore-scripts @earendil-works/pi-coding-agent` | `pi --version` |
+| [Pi](https://github.com/earendil-works/pi) CLI，需 Node ≥ 22.19.0 | 开发 agent；每个任务一个完整 session——由一键安装器安装（经 npm）；手动安装命令：`npm install -g --ignore-scripts @earendil-works/pi-coding-agent` | `pi --version` |
 | Git | worktree、分支、base 新鲜度 | `git --version` |
 | [GitHub CLI（`gh`）≥ 2.94](https://github.com/cli/cli/blob/trunk/docs/install_linux.md) | Issue、标签、PR、merge | `gh --version`，再 `gh auth status` |
 | systemd user session（Linux） | 每 5 分钟触发一个 tick 的用户级 timer | `systemctl --user status` |

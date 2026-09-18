@@ -143,7 +143,9 @@ jobs:
           probe=$(mktemp -d)
           stubs=$(mktemp -d)
           printf '#!/bin/sh\necho reached > %s/git-reached\nexit 1\n' "$probe" > "$stubs/git"
-          for tool in gh curl uv; do
+          # pi rides along so the installer's Pi step (Issue #1080)
+          # takes the skip branch: the sandbox never installs for real.
+          for tool in gh curl uv pi; do
             printf '#!/bin/sh\nexit 0\n' > "$stubs/$tool"
           done
           chmod +x "$stubs"/*

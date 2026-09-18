@@ -14,11 +14,10 @@ description: "如何让 AI agent 把我的第一个 GitHub Issue 交付为已合
 
 ## 1. 安装 Orbi
 
-安装器不提供全部前提：Runner 驱动的是 **Pi** CLI，而 Pi 需要
-**Node ≥ 22.19.0**——请自行执行
-`npm install -g --ignore-scripts @earendil-works/pi-coding-agent` 安装
-（在更旧的 Node 上安装仍会报告成功，但之后每一次 `pi` 调用都会崩溃）。
-完整清单见上手文档的[前提（Prerequisites）一节](/zh/getting-started)。
+安装器会替你安装 **Pi** CLI，但 **Node ≥ 22.19.0** 是它唯一不替你
+安装的前提——请先自行安装 Node（在更旧的 Node 上安装 Pi 仍会报告
+成功，但之后每一次 `pi` 调用都会崩溃）。完整清单见上手文档的
+[前提（Prerequisites）一节](/zh/getting-started)。
 
 运行这条命令。安装器询问 GitHub 仓库时，填入你希望 Orbi 交付其 Issue 的
 仓库。

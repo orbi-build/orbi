@@ -76,6 +76,17 @@ def run_install(tmp_path: Path, bin_dir: Path) -> subprocess.CompletedProcess:
     )
 
 
+# The Pi step contract (Issue #1080). Pi is the uv-shaped case: a single
+# user-scope CLI the installer provides when missing. Node is its engine
+# and stays the user's prerequisite (the way gh is), floor 22.19.0 —
+# verified against the real npm registry on 2026-09-18:
+# `engines = { node: '>=22.19.0' }` for @earendil-works/pi-coding-agent.
+PI_INSTALL_CMD = "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+PI_REPO_URL = "https://github.com/earendil-works/pi"
+NODE_FLOOR = "22.19.0"
+NODE_INSTALL_URL = "https://nodejs.org/en/download"
+
+
 def pass_stubs() -> dict[str, str]:
     """The commands before the scheduler gate must be present."""
     return {
@@ -83,6 +94,10 @@ def pass_stubs() -> dict[str, str]:
         "gh": "#!/bin/sh\nexit 0\n",
         "curl": "#!/bin/sh\nexit 0\n",
         "uv": "#!/bin/sh\nexit 0\n",
+        # The installer provides pi itself (Issue #1080): a working
+        # `pi --version` is the skip condition, so the pre-existing
+        # scheduler/clone tests carry the stub to keep walking past it.
+        "pi": "#!/bin/sh\nexit 0\n",
     }
 
 
@@ -168,6 +183,9 @@ def test_macos_without_timeout_reaches_the_clone_step(tmp_path):
         "launchctl": "#!/bin/sh\nexit 0\n",
         "gh": "#!/bin/sh\nexit 0\n",
         "curl": "#!/bin/sh\nexit 0\n",
+        # A working pi skips the Pi step (Issue #1080) — this scene is
+        # about the timeout walk, not the Pi gate.
+        "pi": "#!/bin/sh\nexit 0\n",
         # The stub installer provides uv the way the real one does.
         "sh": (
             "#!/bin/sh\n"
@@ -212,6 +230,197 @@ def test_sed_in_place_uses_the_bsd_compatible_form():
     assert 'sed -i "' not in body
     assert "sed -i.bak" in body
     assert "rm -f orbi.toml.bak" in body
+
+
+# ---------------------------------------------------------------------------
+# The Pi step (Issue #1080). Pi is the uv-shaped case: the installer
+# provides it when missing and names the prerequisite when it cannot.
+# The behavioral tests run the real script on the stub PATH above, so a
+# "reachable clone" marker doubles as the proof that the Pi step let the
+# flow through (the Pi step sits before the clone, and the clone is the
+# first step after it that the stubs stop).
+# ---------------------------------------------------------------------------
+
+
+def test_install_sh_declares_the_pi_step_contract():
+    # Acceptance 5: the Pi install command string is present, the Node
+    # floor 22.19.0 appears with a comparison, and the Pi step precedes
+    # the `uv tool install` line. Text contract — no network.
+    body = INSTALL_SH.read_text(encoding="utf-8")
+    assert PI_INSTALL_CMD in body
+    assert f'"{NODE_FLOOR}"' in body, (
+        f"the Node floor {NODE_FLOOR} must appear as a quoted constant"
+    )
+    assert " -lt " in body, (
+        "the floor must be enforced by a numeric comparison (the "
+        "equal and above branches are behavior-locked by the "
+        "exact-floor and above-floor tests)"
+    )
+    assert body.index(PI_INSTALL_CMD) < body.index("uv tool install"), (
+        "the Pi step must precede the `uv tool install` line"
+    )
+
+
+def reached_clone_stubs(
+    tmp_path: Path, extra: dict[str, str], with_pi: bool = False
+) -> tuple[dict, Path]:
+    """pass_stubs (pi removed unless with_pi), plus a git stub marking
+    the clone step.
+
+    The platform is pinned to a Linux host WITH systemd (the same uname
+    shim pattern as the scheduler-gate tests) so the walk to the clone
+    never depends on the machine running the tests.
+    """
+    marker = tmp_path / "git-reached"
+    stubs = pass_stubs()
+    if not with_pi:
+        del stubs["pi"]  # the caller decides whether pi exists
+    stubs["uname"] = "#!/bin/sh\necho Linux\n"
+    stubs["systemctl"] = "#!/bin/sh\nexit 0\n"
+    stubs["git"] = (
+        "#!/bin/sh\n"
+        f"echo reached > {marker}\n"
+        "exit 1\n"
+    )
+    stubs.update(extra)
+    return stubs, marker
+
+
+def test_pi_step_skipped_when_pi_already_executes(tmp_path):
+    # Acceptance 4: reruns stay idempotent — a working `pi --version`
+    # prints a skip line and npm is never invoked.
+    npm_called = tmp_path / "npm-called"
+    stubs, marker = reached_clone_stubs(
+        tmp_path, {"npm": f"#!/bin/sh\necho called > {npm_called}\nexit 1\n"},
+        with_pi=True,
+    )
+    bin_dir = make_stub_dir(tmp_path, stubs)
+    result = run_install(tmp_path, bin_dir)
+    assert marker.exists(), (
+        f"the installer never passed the Pi step: rc={result.returncode} "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "skip" in result.stderr
+    assert not npm_called.exists(), "a working pi must not invoke npm"
+
+
+def test_pi_installed_with_npm_when_missing(tmp_path):
+    # Acceptance 1: pi absent → the exact npm command → re-verified
+    # `pi --version` → the flow continues to the clone. node here is
+    # ABOVE the floor (26.8.1), covering the greater-than branch of the
+    # version gate; the exact-floor case has its own test below.
+    stubs, marker = reached_clone_stubs(tmp_path, {})
+    stubs["node"] = "#!/bin/sh\necho v26.8.1\n"
+    npm_args = tmp_path / "npm-args"
+    bin_dir = tmp_path / "stubbin"
+    stubs["npm"] = (
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$@\" > {npm_args}\n"
+        # The global install provides pi the way the real npm would.
+        f"printf '#!/bin/sh\\nexit 0\\n' > {bin_dir}/pi\n"
+        f"chmod 755 {bin_dir}/pi\n"
+        "exit 0\n"
+    )
+    bin_dir = make_stub_dir(tmp_path, stubs)
+    result = run_install(tmp_path, bin_dir)
+    assert marker.exists(), (
+        f"the installer never passed the Pi step: rc={result.returncode} "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    args = npm_args.read_text(encoding="utf-8")
+    # `npm` itself is argv[0] and never part of "$@" — the tokens that
+    # matter are the install flags and the package.
+    for token in ("install", "-g", "--ignore-scripts",
+                  "@earendil-works/pi-coding-agent"):
+        assert token in args, f"npm must be called with {token!r}, got {args!r}"
+
+
+def test_node_at_the_exact_floor_passes_the_gate(tmp_path):
+    # v22.19.0 itself satisfies `>= 22.19.0`: the gate must let the
+    # install through to npm (the equality branch of the comparison).
+    # The npm stub provides pi so the flow continues to the clone.
+    npm_called = tmp_path / "npm-called"
+    stubs, marker = reached_clone_stubs(tmp_path, {})
+    bin_dir = tmp_path / "stubbin"
+    stubs["node"] = f"#!/bin/sh\necho v{NODE_FLOOR}\n"
+    stubs["npm"] = (
+        "#!/bin/sh\n"
+        f"echo called > {npm_called}\n"
+        f"printf '#!/bin/sh\\nexit 0\\n' > {bin_dir}/pi\n"
+        f"chmod 755 {bin_dir}/pi\n"
+        "exit 0\n"
+    )
+    bin_dir = make_stub_dir(tmp_path, stubs)
+    result = run_install(tmp_path, bin_dir)
+    assert marker.exists(), (
+        f"node at the exact floor was rejected: rc={result.returncode} "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert npm_called.exists()
+
+
+def test_node_missing_stops_before_any_configuration(tmp_path):
+    # Acceptance 2 + the failure path: no node → named exit carrying the
+    # floor and the official Node link; the clone (and everything after
+    # it, up to the unit-enabling setup) never runs.
+    stubs, marker = reached_clone_stubs(tmp_path, {})
+    bin_dir = make_stub_dir(tmp_path, stubs)
+    result = run_install(tmp_path, bin_dir)
+    assert result.returncode == 1
+    assert "node" in result.stderr
+    assert NODE_FLOOR in result.stderr
+    assert NODE_INSTALL_URL in result.stderr
+    assert not marker.exists(), "a missing node must stop before the clone"
+
+
+def test_node_too_old_prints_found_and_required_versions(tmp_path):
+    # The debian:trixie scene: distro node 20 installs Pi without error
+    # and every later pi call crashes. The gate must exit with BOTH
+    # versions before anything is configured.
+    stubs, marker = reached_clone_stubs(
+        tmp_path, {"node": "#!/bin/sh\necho v20.19.0\n"}
+    )
+    bin_dir = make_stub_dir(tmp_path, stubs)
+    result = run_install(tmp_path, bin_dir)
+    assert result.returncode == 1
+    assert "20.19.0" in result.stderr, "the found version must be printed"
+    assert NODE_FLOOR in result.stderr, "the required version must be printed"
+    assert NODE_INSTALL_URL in result.stderr
+    assert not marker.exists()
+
+
+def test_npm_missing_names_npm_and_the_pi_repository(tmp_path):
+    # Acceptance 3: npm absent → exit naming npm and the Pi repository
+    # link, never a package-manager install attempt.
+    stubs, marker = reached_clone_stubs(
+        tmp_path, {"node": f"#!/bin/sh\necho v{NODE_FLOOR}\n"}
+    )
+    bin_dir = make_stub_dir(tmp_path, stubs)
+    result = run_install(tmp_path, bin_dir)
+    assert result.returncode == 1
+    assert "npm" in result.stderr
+    assert PI_REPO_URL in result.stderr
+    assert not marker.exists()
+
+
+def test_pi_install_failure_fails_fast_before_the_clone(tmp_path):
+    # Acceptance 1's re-verify: an npm "success" that does not produce a
+    # working `pi --version` must stop the install (the Debian Node-20
+    # trap installs fine and crashes on every call — the re-verify is
+    # the guard), not walk into the clone with a broken agent.
+    stubs, marker = reached_clone_stubs(
+        tmp_path,
+        {
+            "node": f"#!/bin/sh\necho v{NODE_FLOOR}\n",
+            "npm": "#!/bin/sh\nexit 0\n",  # "succeeds", no working pi
+        },
+    )
+    bin_dir = make_stub_dir(tmp_path, stubs)
+    result = run_install(tmp_path, bin_dir)
+    assert result.returncode == 1
+    assert "pi --version" in result.stderr
+    assert PI_REPO_URL in result.stderr
+    assert not marker.exists()
 
 
 @pytest.mark.parametrize("name", ["install.sh"])

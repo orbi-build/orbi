@@ -13,6 +13,22 @@ require_command() {
   fi
 }
 
+# `sort -V` is not portable across the BSD/GNU split this script must
+# live on, so compare dotted version triples component by component in
+# pure bash. Only Node's plain `vMAJOR.MINOR.PATCH` output is expected.
+node_version_at_least() {
+  local have want i
+  local IFS=.
+  read -r -a have <<<"${1#v}"
+  read -r -a want <<<"$2"
+  for i in 0 1 2; do
+    [ "${have[i]:-0}" -eq "${want[i]:-0}" ] && continue
+    [ "${have[i]:-0}" -lt "${want[i]:-0}" ] && return 1
+    return 0
+  done
+  return 0
+}
+
 # A vanilla macOS has no `timeout` (coreutils ships only via Homebrew,
 # as gtimeout — Issue #868), so a bare `timeout N …` aborts the whole
 # install with `command not found` under set -e. When `timeout` exists
@@ -78,6 +94,51 @@ if ! command -v uv >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 fi
 require_command uv
+
+# Pi is the coding agent the Runner drives. Like uv it is a single
+# user-scope CLI with an official install command, so the installer
+# provides it (Issue #1080) instead of leaving the install "successful"
+# with every later tick failing at the first Pi call. Node is Pi's
+# engine and stays the user's prerequisite, the way gh is: a Node
+# toolchain is a system-level decision this script does not make. The
+# floor is Pi's own `engines` requirement.
+PI_NODE_FLOOR="22.19.0"
+PI_PACKAGE="@earendil-works/pi-coding-agent"
+PI_REPO_URL="https://github.com/earendil-works/pi"
+NODE_INSTALL_URL="https://nodejs.org/en/download"
+
+if pi --version >/dev/null 2>&1; then
+  printf 'orbi install: pi already installed; skipping\n' >&2
+else
+  if ! command -v node >/dev/null 2>&1; then
+    printf 'orbi install: required command missing: node\n' >&2
+    printf 'Pi needs Node >= %s; install Node first: %s\n' \
+      "$PI_NODE_FLOOR" "$NODE_INSTALL_URL" >&2
+    printf 'Node is a system-level prerequisite this installer leaves to you.\n' >&2
+    exit 1
+  fi
+  node_version="$(node --version)"
+  if ! node_version_at_least "$node_version" "$PI_NODE_FLOOR"; then
+    printf 'orbi install: node %s found; Pi needs Node >= %s\n' \
+      "$node_version" "$PI_NODE_FLOOR" >&2
+    printf 'Install Node from %s and run this script again.\n' "$NODE_INSTALL_URL" >&2
+    exit 1
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    printf 'orbi install: required command missing: npm (it ships with Node)\n' >&2
+    printf 'npm is what installs Pi (%s); Pi details: %s\n' \
+      "$PI_PACKAGE" "$PI_REPO_URL" >&2
+    exit 1
+  fi
+  printf 'orbi install: pi not found; installing it with npm\n' >&2
+  with_timeout 300 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+  if ! pi --version >/dev/null 2>&1; then
+    printf 'orbi install: the pi install did not produce a working `pi --version`\n' >&2
+    printf 'a broken or too-old Node is the usual cause; Pi details: %s\n' \
+      "$PI_REPO_URL" >&2
+    exit 1
+  fi
+fi
 
 mkdir -p "$ORBI_HOME"
 if [ -e "$ORBI_SRC/.git" ]; then
