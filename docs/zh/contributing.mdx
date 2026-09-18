@@ -10,8 +10,10 @@ PR，仓库契约（`AGENTS.md`）同样适用于人类贡献者。
 
 ## Issue 粒度
 
-一个 Issue 是**一个 runtime outcome**（当 X，应该 Y，实际 Z）：一个
-可观测行为、一小批相关文件、含测试。标题应该能当测试名用。根因或期望
+一个 Issue 是**一个 runtime outcome**，二选一形状：
+**修复**（当 X，应该 Y，实际 Z）或
+**变更**（当 X，用户应该能够 Y；今天不能，因为 Z）：
+一个可观测行为、一小批相关文件、含测试。标题应该能当测试名用。根因或期望
 行为确定后再开 Issue——不要作为模糊愿望。
 
 - Issue 之间的依赖用 GitHub 原生 `blockedBy` 关系（`gh issue edit N
