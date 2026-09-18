@@ -747,7 +747,8 @@ orbi milestone set v0.9.9 --config orbi.toml
 - **配置：**[配置参考](/zh/configuration)中的每个 key 都是公开表面，
   另加由 systemd `EnvironmentFile` 加载的 gitignored `.orbi/env` 文件。
 - **部署：**`systemd/orbi@.service` 和 `systemd/orbi@.timer` 模板，及其
-  `orbi@1`/`orbi@2` 实例。
+  `orbi@1..N` 实例（N = `max_concurrency`，上限为
+  `MAX_RUNNER_INSTANCES = 5`）。
 - **标签和生命周期：**`labels.toml` 与 `src/orbi/delivery_labels.py`，
   以及 `ai-ready`、`ai-in-progress`、`ai-pr-opened`、`ai-fix-needed`、
   `ai-merged`、`ai-blocked` 状态机。
