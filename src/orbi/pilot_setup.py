@@ -916,22 +916,51 @@ def check_python_version() -> None:
         )
 
 
-def check_pi_command() -> None:
-    """The `pi` CLI (one Pi session per task) is on the PATH.
+# Pi's Node floor (Issue #1079): declared in Pi's `engines` but NOT
+# enforced by npm — an `npm install` on an older Node reports success
+# and every `pi` invocation then crashes with a bundle-level SyntaxError.
+# The docs state the floor; the check names it in `fix=` when the
+# version probe fails.
+PI_NODE_FLOOR = "22.19.0"
+PI_INSTALL_COMMAND = (
+    "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+)
+
+
+def check_pi_command(run_command) -> None:
+    """The `pi` CLI (one Pi session per task) is on the PATH and executes.
 
     Deliberately NOT part of the setup ``REQUIRED_COMMANDS`` gate: setup
     provisions GitHub and the scheduler state, while Pi is the model-facing
-    runtime the prerequisite gate verifies.
+    runtime the prerequisite gate verifies. A PATH hit alone is not
+    enough (Issue #1079): npm does not enforce Pi's ``engines`` floor,
+    so the probe executes ``pi --version``; a failure names the Node
+    floor in the fix.
     """
     if shutil.which("pi") is None:
         raise CheckError(
             "pi",
             "required command missing: pi (not on PATH) — the Runner "
             "starts one Pi session per task",
-            "install the Pi CLI (see the linked repository) and put it "
-            "on the PATH",
+            f"install Node >= {PI_NODE_FLOOR}, then {PI_INSTALL_COMMAND} "
+            "and put it on the PATH (see the linked repository)",
             DOCS_LINKS["pi"],
         )
+    try:
+        run_command(["pi", "--version"], timeout=30)
+    except Exception as exc:
+        stderr = (getattr(exc, "stderr", None) or "").strip()
+        detail = " ".join(stderr.split()) or str(exc)
+        raise CheckError(
+            "pi",
+            f"pi --version failed: {detail}",
+            f"Pi needs Node >= {PI_NODE_FLOOR} and npm does not enforce "
+            "that floor: an install on an older Node reports success "
+            "but every pi call then crashes with a bundle SyntaxError — "
+            f"install Node >= {PI_NODE_FLOOR} and reinstall with "
+            f"{PI_INSTALL_COMMAND}",
+            DOCS_LINKS["pi"],
+        ) from exc
 
 
 def run_machine_checks(*, run_command, collect_failures: bool = False) -> tuple[list[str], list[CheckError]]:
@@ -1010,7 +1039,7 @@ def run_machine_checks(*, run_command, collect_failures: bool = False) -> tuple[
 
     if record(check_gh_auth):
         lines.append("check=gh_auth ok")
-    if record(check_pi_command):
+    if record(lambda: check_pi_command(run_command)):
         lines.append("check=pi ok")
     return lines, failures
 

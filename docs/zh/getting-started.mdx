@@ -79,7 +79,7 @@ provider——失败即快速退出，并给出原因、修复动作和官方文
 |---|---|---|
 | Python 3.14 | Runner 和测试契约（CI 固定同一 minor 版本） | 由 `uv` 提供 |
 | [uv](https://docs.astral.sh/uv/) | 把 `orbi` CLI 装进隔离的 tool 环境（setup 的 CLI editable 步骤会调 `uv tool install`） | `uv --version` |
-| [Pi](https://github.com/earendil-works/pi) CLI | 开发 agent；每个任务一个完整 session——由一键安装器安装（经 npm）；需要 Node ≥ 22.19，由你自备 | `pi --version` |
+| [Pi](https://github.com/earendil-works/pi) CLI，需 Node ≥ 22.19.0 | 开发 agent；每个任务一个完整 session——由一键安装器安装（经 npm）；手动安装命令：`npm install -g --ignore-scripts @earendil-works/pi-coding-agent` | `pi --version` |
 | Git | worktree、分支、base 新鲜度 | `git --version` |
 | [GitHub CLI（`gh`）≥ 2.94](https://github.com/cli/cli/blob/trunk/docs/install_linux.md) | Issue、标签、PR、merge | `gh --version`，再 `gh auth status` |
 | systemd user session（Linux） | 每 5 分钟触发一个 tick 的用户级 timer | `systemctl --user status` |
@@ -115,6 +115,14 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 用 `gh --version` 验证。
+
+Pi 的 npm 包在 `engines` 里声明了 **Node ≥ 22.19.0** 的下限，但 npm 并不
+强制执行：在更旧的 Node 上，上面的 `npm install` 仍然报告成功，随后每一次
+`pi` 调用都会因 bundle 里的 `SyntaxError` 崩溃——这是安装路径上最难诊断的
+故障。Debian trixie 和 Ubuntu 24.04 的发行版默认 Node 都低于该下限。修复
+方法：安装 Node ≥ 22.19，再用上面的命令重装 Pi。`orbi check` 会真实执行
+`pi --version`（只在 PATH 上找到并不算通过），探针失败时会在 `fix=` 里
+给出这个下限。
 
 Pi 必须配置一个能稳定服务 coding agent 的 provider（system prompt +
 tool schemas + 长 session）。派活之前先用一次真实调用验证 endpoint——

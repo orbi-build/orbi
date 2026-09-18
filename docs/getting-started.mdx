@@ -95,7 +95,7 @@ reason, the repair action and the official docs link.
 |---|---|---|
 | Python 3.14 | The Runner and the test contract (CI pins the same minor version) | provisioned by `uv` |
 | [uv](https://docs.astral.sh/uv/) | Installs the `orbi` CLI into an isolated tool environment (setup's CLI editable step calls `uv tool install`) | `uv --version` |
-| [Pi](https://github.com/earendil-works/pi) CLI | The development agent; one full session per task — installed by the one-line installer (via npm); needs Node ≥ 22.19, which you provide | `pi --version` |
+| [Pi](https://github.com/earendil-works/pi) CLI on Node ≥ 22.19.0 | The development agent; one full session per task — installed by the one-line installer (via npm); to install it manually: `npm install -g --ignore-scripts @earendil-works/pi-coding-agent` | `pi --version` |
 | Git | Worktrees, branches, base freshness | `git --version` |
 | [GitHub CLI (`gh`) ≥ 2.94](https://github.com/cli/cli/blob/trunk/docs/install_linux.md) | Issues, labels, PRs, merge | `gh --version`, then `gh auth status` |
 | systemd user session (Linux) | The user timer that triggers one tick every 5 minutes | `systemctl --user status` |
@@ -133,6 +133,15 @@ instructions](https://github.com/cli/cli/blob/trunk/docs/install_linux.md)):
 ```
 
 Verify with `gh --version`.
+
+Pi's npm package declares a **Node ≥ 22.19.0** floor in its `engines`, but
+npm does not enforce it: on an older Node the `npm install` above still
+reports success, and then every `pi` invocation crashes with a bundle-level
+`SyntaxError` — the hardest-to-diagnose failure on the install path. Debian
+trixie and Ubuntu 24.04 ship distro-default Node versions older than that
+floor. The repair is to install Node ≥ 22.19 and reinstall Pi with the
+command above; `orbi check` executes `pi --version` (a PATH hit alone is
+not enough) and names this floor in its `fix=` when the probe fails.
 
 Pi must be configured with a provider that can serve a coding agent
 stably (system prompt + tool schemas + long sessions). Verify the endpoint
