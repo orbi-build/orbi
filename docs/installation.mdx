@@ -3,13 +3,11 @@ description: "How do I install Orbi?"
 ---
 # Ways to run Orbi
 
-You can run Orbi on Managed Cloud or self-host it through one of three install paths.
-
 The self-hosted runner is the open-source core and runs on your own machine against your own GitHub repositories. Orbi Managed Cloud is the commercial hosted control plane on the same GitHub ledger.
 
 | Path | Use when | Action | Detail |
 | --- | --- | --- | --- |
-| Managed Cloud | You want deliveries running without operating a runner machine yourself | Sign in at <https://orbi.build/cloud/> | [orbi.build/cloud](https://orbi.build/cloud/) |
+| Managed Cloud | You want deliveries running without operating a runner machine yourself | Sign in at [orbi.build/cloud](https://orbi.build/cloud/) | [orbi.build/cloud](https://orbi.build/cloud/) |
 | Installer (recommended self-hosted path) | Linux/macOS with a systemd user session | `curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh \| bash` | [Getting started](/getting-started) |
 | PyPI (`orbi-cli`) | You only want the `orbi` CLI, Python ≥ 3.14 | `uv tool install orbi-cli` | [Getting started](/getting-started#pypi-installation) |
 | Docker (community) | Host has no systemd user session | `docker pull ghcr.io/orbi-build/orbi:latest` | [Docker](/docker) |
