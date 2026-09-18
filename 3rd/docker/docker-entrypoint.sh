@@ -32,6 +32,7 @@ DEPLOY_HOME="${ORBI_DEPLOY_HOME:-/orbi}"
 WORKSPACE="${ORBI_WORKSPACE:-/work}"
 SYSTEMD_BIN="${ORBI_SYSTEMD_BIN:-/usr/lib/systemd/systemd}"
 UV_BIN="${ORBI_UV_BIN:-uv}"
+SETUP_LOG="${ORBI_SETUP_LOG:-/run/orbi-setup.log}"
 
 msg() { printf 'docker-entrypoint: %s\n' "$*"; }
 fail() { printf 'docker-entrypoint: %s\n' "$*" >&2; exit 1; }
@@ -186,4 +187,8 @@ runuser -u orbi -- env HOME=/home/orbi PATH="/home/orbi/.local/bin:/usr/local/bi
   || fail "the editable uv tool install of /orbi failed"
 
 msg "handing over to systemd (setup runs as a oneshot; logs: docker logs -f orbi)"
+# Keep a process holding the inherited Docker stdout pipe open: systemd
+# reopens PID 1's stdio to /dev/null, so /proc/1/fd/1 is not usable here.
+: > "$SETUP_LOG"
+( exec tail -n +1 -F "$SETUP_LOG" ) &
 exec "$SYSTEMD_BIN"

@@ -22,6 +22,7 @@ def stub_path(tmp_path: Path) -> tuple[Path, Path]:
         "runuser": "#!/bin/sh\nshift 3\nexec \"$@\"\n",
         "install": "#!/bin/sh\npath=\"${@: -1}\"\nmkdir -p \"$path\"\n",
         "systemd": "#!/bin/sh\nprintf systemd-started > \"$SYSTEMD_MARKER\"\n",
+        "tail": "#!/bin/sh\nexit 0\n",
     }
     for name, body in stubs.items():
         path = bin_dir / name
@@ -55,6 +56,7 @@ def run_entrypoint(tmp_path: Path, **extra_env: str) -> subprocess.CompletedProc
         "ORBI_WORKSPACE": str(work),
         "ORBI_SYSTEMD_BIN": str(bin_dir / "systemd"),
         "ORBI_UV_BIN": str(bin_dir / "uv"),
+        "ORBI_SETUP_LOG": str(tmp_path / "setup.log"),
         "SYSTEMD_MARKER": str(marker),
         **extra_env,
     }
@@ -137,12 +139,10 @@ def run_setup_script(tmp_path: Path, setup_status: int = 0) -> subprocess.Comple
     )
     for path in bin_dir.iterdir():
         path.chmod(0o755)
-    output = tmp_path / "container.stdout"
-    error = tmp_path / "container.stderr"
+    setup_log = tmp_path / "setup.log"
     env = {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
-        "ORBI_CONTAINER_STDOUT": str(output),
-        "ORBI_CONTAINER_STDERR": str(error),
+        "ORBI_SETUP_LOG": str(setup_log),
         "FAKE_SETUP_STATUS": str(setup_status),
     }
     return subprocess.run(
@@ -151,19 +151,39 @@ def run_setup_script(tmp_path: Path, setup_status: int = 0) -> subprocess.Comple
     )
 
 
+def test_entrypoint_starts_stdout_follower_before_systemd():
+    text = ENTRYPOINT.read_text(encoding="utf-8")
+    follower = '( exec tail -n +1 -F "$SETUP_LOG" ) &'
+    assert follower in text
+    assert text.index(follower) < text.index('exec "$SYSTEMD_BIN"')
+
+
 def test_setup_result_is_replayed_to_journal_and_docker_streams(tmp_path):
     result = run_setup_script(tmp_path)
+    setup_log = tmp_path / "setup.log"
     assert result.returncode == 0
     assert "setup=ok" in result.stdout
-    assert "setup=ok" in (tmp_path / "container.stdout").read_text()
+    assert "setup=ok" in setup_log.read_text()
     assert "setup_failed reason=test" in result.stderr
-    assert "setup_failed reason=test" in (tmp_path / "container.stderr").read_text()
+    assert "setup_failed reason=test" in setup_log.read_text()
+    setup_log.unlink(missing_ok=True)
 
 
 def test_failed_setup_status_and_error_are_visible_to_docker_logs(tmp_path):
     result = run_setup_script(tmp_path, setup_status=1)
+    setup_log = tmp_path / "setup.log"
     assert result.returncode == 1
-    assert "setup_failed reason=test" in (tmp_path / "container.stderr").read_text()
+    assert "setup_failed reason=test" in setup_log.read_text()
+    setup_log.unlink(missing_ok=True)
+
+
+def test_setup_appends_to_the_fixed_log_path():
+    text = SETUP_SCRIPT.read_text(encoding="utf-8")
+    assert 'SETUP_LOG="${ORBI_SETUP_LOG:-/run/orbi-setup.log}"' in text
+    assert '>> "$SETUP_LOG"' in text
+    assert "/proc/1/fd/" not in text
+    assert "ORBI_CONTAINER_STDOUT" not in text
+    assert "ORBI_CONTAINER_STDERR" not in text
 
 
 def test_existing_config_and_provider_are_not_overwritten(tmp_path):
