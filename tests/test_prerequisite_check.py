@@ -109,6 +109,13 @@ def fake_run_factory(state: dict):
                     stderr="git@github.com: Permission denied (publickey).",
                 )
             return "abc\tHEAD"
+        if head[:2] == ["pi", "--version"]:
+            if state.get("pi_broken"):
+                raise subprocess.CalledProcessError(
+                    1, command,
+                    stderr="SyntaxError: Unexpected token 'export'",
+                )
+            return "0.85.1"
         raise AssertionError(f"unexpected command in check world: {command}")
 
     return fake_run
@@ -173,6 +180,54 @@ def test_python_version_fails_fast_with_official_link(monkeypatch):
     assert failure.docs == "https://www.python.org/downloads/"
 
 
+# --- the pi probe (Issue #1079) -------------------------------------------------
+
+
+def test_pi_check_executes_the_version_probe_and_names_the_node_floor():
+    """Pi on the PATH is not enough (Issue #1079): npm does not enforce
+    Pi's `engines` floor, so an install on a distro-default Node reports
+    success and then every `pi` invocation crashes with a bundle-level
+    SyntaxError. The check must execute `pi --version` and its fix must
+    name the Node >= 22.19 floor."""
+    calls: list[list[str]] = []
+
+    def broken(command, **kwargs):
+        calls.append(list(command))
+        raise subprocess.CalledProcessError(
+            1, command,
+            stderr="/usr/lib/node_modules/@earendil-works/pi/dist/"
+                   "bundle.js:1\nSyntaxError: Unexpected token 'export'",
+        )
+
+    with pytest.raises(pilot_setup.CheckError) as excinfo:
+        pilot_setup.check_pi_command(broken)
+    assert calls == [["pi", "--version"]]
+    failure = excinfo.value
+    assert failure.check == "pi"
+    assert "22.19" in failure.fix
+
+
+def test_pi_check_ok_when_the_probe_succeeds():
+    assert pilot_setup.check_pi_command(
+        lambda command, **kwargs: "0.85.1"
+    ) is None
+
+
+def test_gate_reports_a_broken_pi_with_the_node_floor_in_the_fix_line():
+    """The failure path: pi present but not executable → the structured
+    `check_failed check=pi` line carries the Node floor in `fix=`."""
+    with pytest.raises(pilot_setup.CheckError) as excinfo:
+        pilot_setup.run_machine_checks(
+            run_command=fake_run_factory({"pi_broken": True}),
+        )
+    failure = excinfo.value
+    assert failure.check == "pi"
+    assert "22.19" in failure.fix
+    line = pilot_setup.format_check_failure(failure)
+    assert line.startswith("check_failed check=pi ")
+    assert "22.19" in line
+
+
 def test_machine_collection_reports_all_independent_failures(monkeypatch):
     """The missing-config path must not stop at the first machine defect."""
     from orbi import scheduler
@@ -216,10 +271,15 @@ def test_machine_collection_reports_scheduler_session_failure(monkeypatch):
     monkeypatch.setattr(pilot_setup.shutil, "which", lambda _name: "/bin/tool")
     monkeypatch.setattr(pilot_setup, "check_auth", lambda _run: None)
 
+    # Only the scheduler probe fails; the pi version probe (Issue #1079)
+    # is a separate check and succeeds here.
+    def run(command, **_kwargs):
+        if list(command) == ["pi", "--version"]:
+            return "0.85.1"
+        raise RuntimeError("user bus unavailable")
+
     _, failures = pilot_setup.run_machine_checks(
-        run_command=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("user bus unavailable")
-        ),
+        run_command=run,
         collect_failures=True,
     )
 

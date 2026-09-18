@@ -16,6 +16,13 @@ replaced by this page.
 
 ## 1. Install Orbi
 
+The installer does not provide every prerequisite: the Runner drives the
+**Pi** CLI, which needs **Node ≥ 22.19.0** — install Pi yourself with
+`npm install -g --ignore-scripts @earendil-works/pi-coding-agent` (on an
+older Node the install still reports success, and every `pi` call then
+crashes). The full list lives in the
+[prerequisites table](/getting-started#prerequisites).
+
 Run this command. When the installer asks for a GitHub repository, enter the
 repository whose Issues Orbi should deliver.
 
