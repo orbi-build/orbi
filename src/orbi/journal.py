@@ -161,6 +161,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "pi_429_attempts_reset": "the persisted 429 attempt counter was reset",
     "pi_429_attempts_write_failed": "persisting the 429 attempt counter failed",
     "pi_429_attempts_clear_failed": "clearing the 429 attempt counter failed",
+    # Command deadline (Issue #1093).
+    "command_deadline_extension_missing": "the shipped command-deadline extension is absent (pure bypass)",
     # Bypass publishing.
     "progress_publish_failed": "the progress comment could not be published (pure bypass)",
     "progress_comment_failed": "a post-delivery notification comment could not be published (pure bypass)",

@@ -26,7 +26,7 @@ from tests.test_progress_wiring import make_fake_gh
 import orbi.journal as journal
 from seam import seam
 from orbi.delivery_scene import RunContext
-from orbi.pi_process import PiWatchOptions
+from orbi.pi_process import PI_IDLE_WAIT_MAX_SECONDS, PiWatchOptions
 
 # Hosted-macOS boundaries; the Ubuntu CI keeps every scene here
 # authoritative. The idle-recovery scenes discover hung tools via
@@ -4461,18 +4461,19 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
     config = runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), workspace_root=tmp_path, context_files=("context.md",), skills=("skill.md",), base_branch="main", base_sha="abc123def456", run_id="run1")
     assert runner.run_pi(issue, RunContext(run_id=config.run_id, issue=issue["number"], branch="orbi/owner-repo-issue-4", worktree=tmp_path, source_repo="owner/repo"), config) == "done"
     command, kwargs = calls[0]
-    assert command[:5] == ["pi", "--no-extensions", "--skill", "skill.md", "--print"]
-    assert "owner/repo" in command[8]
-    assert " 4 " in command[8]
-    assert "Fix title" in command[8]
-    assert "Fix body" in command[8]
-    assert "context.md" in command[8]
-    assert "skill.md" in command[8]
-    assert command[8].endswith(
+    deadline_ext = ["--extension", str(runner.command_deadline_extension())]
+    assert command[:7] == ["pi", "--no-extensions", *deadline_ext, "--skill", "skill.md", "--print"]
+    assert "owner/repo" in command[10]
+    assert " 4 " in command[10]
+    assert "Fix title" in command[10]
+    assert "Fix body" in command[10]
+    assert "context.md" in command[10]
+    assert "skill.md" in command[10]
+    assert command[10].endswith(
         "main abc123def456 run1 "
         + str(tmp_path / "checkout" / ".orbi" / "base-sync.lock"),
     )
-    assert command[9] == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
+    assert command[11] == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
     assert kwargs["cwd"] == tmp_path
     assert kwargs["timeout"] is None
     assert kwargs["ctx"].run_id == "run1"
@@ -4501,10 +4502,12 @@ def test_run_pi_redacts_prompt_and_issue_from_command_log(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: calls.append((command, kwargs)) or "done")
     runner.run_pi({"number": 5, "title": "secret", "body": "token"}, RunContext(run_id=runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1").run_id, issue={"number": 5, "title": "secret", "body": "token"}["number"], branch="orbi/owner-repo-issue-5", worktree=tmp_path, source_repo="owner/repo"), runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1"))
     command, kwargs = calls[0]
-    assert "PRIVATE SYSTEM" in command[6]
-    assert "token" in command[6]
+    assert "PRIVATE SYSTEM" in command[8]
+    assert "token" in command[8]
     assert kwargs["log_command"] == [
-        "pi", "--no-extensions", "--print", "--session-dir",
+        "pi", "--no-extensions", "--extension",
+        str(runner.command_deadline_extension()),
+        "--print", "--session-dir",
         str(tmp_path / ".pi-session"),
         "--system-prompt", "<redacted>", "<issue-context-redacted>",
     ]
@@ -13376,9 +13379,15 @@ def test_run_pi_omits_model_args_when_not_configured(monkeypatch, tmp_path):
     assert "--provider" not in command
     assert "--model" not in command
     assert "--thinking" not in command
-    assert command[:4] == ["pi", "--no-extensions", "--print", "--session-dir"]
+    assert command[:6] == [
+        "pi", "--no-extensions", "--extension",
+        str(runner.command_deadline_extension()),
+        "--print", "--session-dir",
+    ]
     assert kwargs["log_command"] == [
-        "pi", "--no-extensions", "--print", "--session-dir", str(tmp_path / ".pi-session"),
+        "pi", "--no-extensions", "--extension",
+        str(runner.command_deadline_extension()),
+        "--print", "--session-dir", str(tmp_path / ".pi-session"),
         "--system-prompt", "<redacted>", "<issue-context-redacted>",
     ]
 
@@ -13453,7 +13462,9 @@ def test_run_review_omits_model_args_when_not_configured(monkeypatch, tmp_path):
     assert "--model" not in command
     assert "--thinking" not in command
     assert kwargs["log_command"] == [
-        "pi", "--no-extensions", "--print", "--session-dir", str(tmp_path / ".pi-session"),
+        "pi", "--no-extensions", "--extension",
+        str(runner.command_deadline_extension()),
+        "--print", "--session-dir", str(tmp_path / ".pi-session"),
         "--system-prompt", "<redacted>", "<review-context-redacted>",
     ]
 
@@ -14353,7 +14364,10 @@ def test_run_pi_materializes_provider_dir_and_env(monkeypatch, tmp_path):
     runner.run_pi({"number": 4, "title": "t", "body": "b"}, RunContext(run_id=config.run_id, issue={"number": 4, "title": "t", "body": "b"}["number"], branch="orbi/owner-repo-issue-4", worktree=tmp_path, source_repo="owner/repo"), config)
     kwargs = calls[0]
     agent_dir = tmp_path / ".orbi" / "pi-agent"
-    assert kwargs["pi_env"] == {"PI_CODING_AGENT_DIR": str(agent_dir)}
+    assert kwargs["pi_env"] == {
+        "PI_CODING_AGENT_DIR": str(agent_dir),
+        "ORBI_COMMAND_DEADLINE_SECONDS": str(int(PI_IDLE_WAIT_MAX_SECONDS)),
+    }
     assert (agent_dir / "models.json").is_file()
     # The redacted command is unchanged: no baseUrl, no apiKey, no dir.
     assert "https://api.groq.com/openai/v1" not in " ".join(
@@ -14363,7 +14377,8 @@ def test_run_pi_materializes_provider_dir_and_env(monkeypatch, tmp_path):
 
 
 def test_run_pi_without_providers_keeps_pre_157_env(monkeypatch, tmp_path):
-    """No provider file: no materialization, no pi_env (pre-#157)."""
+    """No provider file: no materialization, no PI_CODING_AGENT_DIR
+    (pre-#157); the command deadline env rides alone (Issue #1093)."""
     (tmp_path / "prompt.md").write_text("SYSTEM", encoding="utf-8")
     calls = []
     monkeypatch.setattr(
@@ -14373,7 +14388,9 @@ def test_run_pi_without_providers_keeps_pre_157_env(monkeypatch, tmp_path):
     config = _model_config(tmp_path)
     runner.run_pi({"number": 4, "title": "t", "body": "b"}, RunContext(run_id=config.run_id, issue={"number": 4, "title": "t", "body": "b"}["number"], branch="orbi/owner-repo-issue-4", worktree=tmp_path, source_repo="owner/repo"), config)
     kwargs = calls[0]
-    assert "pi_env" not in kwargs
+    assert kwargs["pi_env"] == {
+        "ORBI_COMMAND_DEADLINE_SECONDS": str(int(PI_IDLE_WAIT_MAX_SECONDS)),
+    }
     assert not (tmp_path / ".orbi" / "pi-agent").exists()
 
 
@@ -14396,7 +14413,10 @@ def test_run_review_materializes_provider_dir_and_env(monkeypatch, tmp_path):
          "head_oid": "h1", "head_ref": "h"}, config, 1)
     kwargs = calls[0]
     agent_dir = tmp_path / ".orbi" / "pi-agent"
-    assert kwargs["pi_env"] == {"PI_CODING_AGENT_DIR": str(agent_dir)}
+    assert kwargs["pi_env"] == {
+        "PI_CODING_AGENT_DIR": str(agent_dir),
+        "ORBI_COMMAND_DEADLINE_SECONDS": str(int(PI_IDLE_WAIT_MAX_SECONDS)),
+    }
     merged = json.loads(
         (agent_dir / "models.json").read_text(encoding="utf-8"),
     )

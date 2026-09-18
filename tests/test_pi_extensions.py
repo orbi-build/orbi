@@ -1,7 +1,10 @@
+import logging
+
 import pytest
 
 from orbi import runner
 from orbi.delivery_scene import RunContext
+from orbi.pi_process import PI_IDLE_WAIT_MAX_SECONDS
 
 
 def test_load_config_pi_extensions_normalizes_enabled_and_local_source(tmp_path):
@@ -68,9 +71,52 @@ def test_pi_extension_args_and_env_isolate_disabled_and_secrets():
         {"source": "/tmp/disabled.mjs", "enabled": False,
          "env": {"DISABLED": "no"}},))
     args = runner._pi_extension_args(config)
-    assert args == ["--no-extensions", "--extension", "npm:fixture@1.2.3"]
-    assert runner._pi_extension_env(config) == {"FIXTURE_TOKEN": "secret"}
+    assert args[:3] == ["--no-extensions", "--extension", "npm:fixture@1.2.3"]
+    assert runner._pi_extension_env(config) == {
+        "FIXTURE_TOKEN": "secret",
+        "ORBI_COMMAND_DEADLINE_SECONDS": str(int(PI_IDLE_WAIT_MAX_SECONDS)),
+    }
     assert "secret" not in " ".join(args)
+
+
+def test_command_deadline_extension_ships_with_the_engine():
+    extension = runner.command_deadline_extension()
+    assert extension is not None
+    assert extension.is_file()
+    assert extension.name == "command_deadline.ts"
+
+
+def test_command_deadline_extension_rides_every_pi_role():
+    args = runner._pi_extension_args(runner.RunnerConfig())
+    extension = runner.command_deadline_extension()
+    assert args == ["--no-extensions", "--extension", str(extension)]
+    env = runner._pi_extension_env(runner.RunnerConfig())
+    # One value governs both places (the extension cap and the wrapper
+    # the rewrite writes): the escalation-wait constant itself.
+    assert env == {"ORBI_COMMAND_DEADLINE_SECONDS": str(int(PI_IDLE_WAIT_MAX_SECONDS))}
+
+
+def test_missing_command_deadline_extension_is_a_pure_bypass(tmp_path, caplog):
+    # The shipped file is absent (a broken install): no flag, no env
+    # var, one WARNING — the session keeps the pre-#1093 behavior
+    # (pure bypass, Issue #79). The injected package_dir avoids a
+    # module patch (the #789 ratchet forbids new ones).
+    missing_dir = tmp_path / "pi_extensions"
+    with caplog.at_level(logging.WARNING):
+        args = runner._pi_extension_args(
+            runner.RunnerConfig(), package_dir=missing_dir,
+        )
+        env = runner._pi_extension_env(
+            runner.RunnerConfig(), package_dir=missing_dir,
+        )
+    assert runner.command_deadline_extension(package_dir=missing_dir) is None
+    assert args == ["--no-extensions"]
+    assert env == {}
+    assert any(
+        "command_deadline_extension_missing" in record.message
+        and record.levelno == logging.WARNING
+        for record in caplog.records
+    )
 
 
 def test_run_pi_and_review_share_extension_contract(monkeypatch, tmp_path):
@@ -83,6 +129,13 @@ def test_run_pi_and_review_share_extension_contract(monkeypatch, tmp_path):
     runner.run_review(RunContext(run_id=config.run_id, issue=1, branch="b", worktree=tmp_path, source_repo="owner/repo"), {"number": 1, "url": "u", "base_oid": "b", "head_oid": "h", "head_ref": "r"}, config, 1)
     for command, kwargs in calls:
         assert command[1:4] == ["--no-extensions", "--extension", "npm:fixture@1.2.3"]
-        assert kwargs["pi_env"] == {"FIXTURE_TOKEN": "secret"}
+        # The engine-shipped command-deadline extension rides both roles
+        # (Issue #1093) — right after the configured ones.
+        extension = runner.command_deadline_extension()
+        assert command[4:6] == ["--extension", str(extension)]
+        assert kwargs["pi_env"] == {
+            "FIXTURE_TOKEN": "secret",
+            "ORBI_COMMAND_DEADLINE_SECONDS": str(int(PI_IDLE_WAIT_MAX_SECONDS)),
+        }
         assert "secret" not in " ".join(kwargs["log_command"])
         assert kwargs["log_command"][1:4] == command[1:4]

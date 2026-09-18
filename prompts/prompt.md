@@ -93,11 +93,18 @@ Hard rules for external behavior (Issue #73):
 
 Hard rules for blocking commands (Issue #95):
 
-- Any shell command that can block — running tests, generator or polling
-  verification, network waits, interactive tools — must be wrapped in
-  `timeout <seconds> ...`. A timeout is the signal that the path needs a
-  fix (a missing termination guard, a wrong mock); it is never ignorable
-  noise and never a reason to rerun the same command unchanged.
+- The platform bounds every shell command (Issue #1093): a Pi tool_call
+  extension wraps any command that does not already start with a
+  `timeout <seconds> ...` wrapper at the engine deadline
+  (`ORBI_COMMAND_DEADLINE_SECONDS`, default 3600 s) and caps the bash
+  tool's own timeout at it, so a blocking command — running tests,
+  generator or polling verification, network waits, interactive tools —
+  is killed at that deadline (exit 124) with its own output instead of
+  the session being SIGTERMed. Declare a shorter `timeout <seconds>`
+  when a command should fail sooner. A command killed at its deadline
+  is the signal that the path needs a fix (a missing termination guard,
+  a wrong mock); it is never ignorable noise and never a reason to
+  rerun the same command unchanged.
 - Testing an unbounded-loop function (a `while True` poller such as
   `wait_for_delivery`) requires a termination guard: monkeypatch
   `time.sleep` to raise on the Nth call, inject an iteration cap

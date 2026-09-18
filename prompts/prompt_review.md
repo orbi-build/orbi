@@ -111,12 +111,15 @@ compaction.
 - Bypass failures must only log (Issue #73/#79): a bypass (progress comments,
   notifications, log enhancements) whose failure can decide the main delivery
   outcome is a finding.
-- Blocking commands (Issue #95): a diff that drives a shell command which can
-  block (running tests, generator/polling verification, network waits,
-  interactive tools) without a `timeout <seconds>` wrapper, or that tests an
-  unbounded-loop function (`while True` poller) without a termination guard
-  (monkeypatched `time.sleep` raising on the Nth call, an injected iteration
-  cap, or pytest-timeout), is a **Blocker** — the red phase must fail fast,
+- Blocking commands (Issue #95, #1093): the platform bounds every shell
+  command — the engine-shipped command-deadline extension wraps any
+  unwrapped command at `ORBI_COMMAND_DEADLINE_SECONDS` (default 3600 s)
+  — so an unwrapped blocking command is not a finding; a diff should
+  still declare a shorter `timeout <seconds>` when a command should
+  fail sooner. A diff that tests an unbounded-loop function (`while
+  True` poller) without a termination guard (monkeypatched `time.sleep`
+  raising on the Nth call, an injected iteration cap, or
+  pytest-timeout), is a **Blocker** — the red phase must fail fast,
   never hang (the 99% CPU spin / forever `next(g)` class of hang must be
   caught here, not shipped).
 - Out-of-scope and over-engineering (R8, Issue #118): the diff may only

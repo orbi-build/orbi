@@ -68,8 +68,11 @@ where = ["src"]
 # Issue #163: the example config ships INSIDE the wheel/sdist so a PyPI
 # install can create an orbi.toml without any checkout-adjacent file
 # (pilot_setup.ensure_config falls back to it).
+# Issue #1093: the command-deadline Pi extension ships the same way —
+# the runner locates it inside the package and passes it to every Pi
+# session as `--extension`.
 [tool.setuptools.package-data]
-orbi = ["example_config.toml"]
+orbi = ["example_config.toml", "pi_extensions/*.ts"]
 
 # The contract test command (`python3 -m coverage run --branch -m pytest
 # tests/ -q`) runs WITHOUT installing the package: pytest puts `src/` on

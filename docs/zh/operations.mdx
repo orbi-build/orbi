@@ -392,6 +392,16 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
   的 deadline——自等待开始起以 `PI_IDLE_WAIT_MAX_SECONDS`（默认
   3600 秒）封顶，超过上限的声明 deadline 照常升级——而不是
   `PI_IDLE_RECOVERY_CYCLES` 个 idle 窗口；
+- `command_deadline_extension_missing` — 命令 deadline 契约的纯直通
+  （Issue #1093）：引擎随包发布一个 Pi 扩展
+  （`pi_extensions/command_deadline.ts`），把每个 bash tool call 约束在
+  `ORBI_COMMAND_DEADLINE_SECONDS`（Runner 设为
+  `PI_IDLE_WAIT_MAX_SECONDS`，唯一的绝对超时常数），并把未包裹的命令
+  改写为 `timeout <deadline> bash -c '<original>'`，于是每条命令的进程
+  命令行都带声明 deadline，`pi_idle_wait` 宽限随之生效；超过 deadline
+  的命令以 124 退出并保留自己的输出，而不是被 idle 升级 SIGTERM 掉。
+  找不到随包文件（安装损坏）时记录这条 WARNING，会话按 #1093 之前的
+  行为继续；扩展缺失永不失败交付；
 - `pi_retry_429` — provider 限流重试每次一次 WARNING（Issue #321）：
   Pi 非零退出且 stderr 带 429 标记（`429` / `quota` /
   `RESOURCE_EXHAUSTED` / `retry in`）——这是瞬时限流，不是任务失败。
@@ -467,6 +477,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `pi_429_attempts_reset` | 持久化的 429 重试计数被重置 |
 | `pi_429_attempts_write_failed` | 持久化 429 重试计数失败 |
 | `pi_429_attempts_clear_failed` | 清除 429 重试计数失败 |
+| `command_deadline_extension_missing` | 随包发布的命令 deadline 扩展缺失（纯直通） |
 | `progress_publish_failed` | 进度评论发布失败（纯旁路） |
 | `progress_comment_failed` | 交付后通知评论发布失败（纯旁路） |
 | `progress_finish_missing_next_step` | 终态进度场景缺少下一步 |

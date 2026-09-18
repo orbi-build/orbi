@@ -628,6 +628,18 @@ def test_timeout_duration_plain_seconds(tmp_path):
     assert pi_recovery.timeout_duration("timeout 240 pytest tests/") == 240.0
 
 
+def test_timeout_duration_reads_the_rewritten_command_deadline_shape(tmp_path):
+    # Issue #1093 regression pin: the exact command shape the
+    # command-deadline extension writes for the beta-failure scene
+    # (`bash sleep 740; cat x`, unwrapped) — the /proc cmdline of the
+    # spawned wrapper carries the deadline as shape 1, so
+    # `_pending_timeout_targets` waits inside it (`pi_idle_wait`)
+    # instead of the 15-minute escalation TERMed the session.
+    assert pi_recovery.timeout_duration(
+        "timeout 3600 bash -c sleep 740; cat x",
+    ) == 3600.0
+
+
 def test_timeout_duration_after_bash_c_prefix(tmp_path):
     # The Pi bash tool spawns `bash -c <command>`: the wrapper word is
     # found wherever it stands in the command line.

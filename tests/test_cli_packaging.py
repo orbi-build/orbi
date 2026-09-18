@@ -191,15 +191,22 @@ def test_pyproject_discovers_the_src_package():
 
 def test_example_config_ships_inside_the_package():
     """Issue #163: the example config is packaged data (`package-data`
-    declares exactly the one shipped file) so a PyPI install can create
+    declares exactly the shipped files) so a PyPI install can create
     an orbi.toml without any checkout-adjacent file. Single source: the
-    checkout-root copy is gone with the move into `src/orbi/`."""
+    checkout-root copy is gone with the move into `src/orbi/`.
+    Issue #1093 adds the command-deadline Pi extension to the same
+    declaration — the runner passes it to every session from inside
+    the installed package."""
     data = load_pyproject()
     package_data = data["tool"]["setuptools"].get("package-data")
     assert package_data is not None, "no package-data declared"
-    assert package_data.get("orbi") == ["example_config.toml"]
+    assert package_data.get("orbi") == [
+        "example_config.toml", "pi_extensions/*.ts",
+    ]
     packaged = REPO_ROOT / "src" / "orbi" / "example_config.toml"
     assert packaged.is_file(), f"missing packaged example: {packaged}"
+    extension = REPO_ROOT / "src" / "orbi" / "pi_extensions" / "command_deadline.ts"
+    assert extension.is_file(), f"missing packaged extension: {extension}"
     assert not (REPO_ROOT / ".orbi.example.toml").exists(), (
         "the checkout-root example copy must stay removed (single source)"
     )

@@ -470,6 +470,19 @@ Stable `key=value` lines you will see:
   (default 3600 s) since the wait began, so a declared deadline longer
   than the cap escalates anyway — never by `PI_IDLE_RECOVERY_CYCLES`
   idle windows;
+- `command_deadline_extension_missing` — the pure bypass of the
+  command-deadline contract (Issue #1093): the engine ships a Pi
+  extension (`pi_extensions/command_deadline.ts`) that bounds every
+  bash tool call at `ORBI_COMMAND_DEADLINE_SECONDS` (the Runner sets it
+  to `PI_IDLE_WAIT_MAX_SECONDS`, the single absolute-timeout constant)
+  and rewrites an unwrapped command to
+  `timeout <deadline> bash -c '<original>'`, so every command carries a
+  declared deadline on its process command line and the
+  `pi_idle_wait` grace applies to it; a command past the deadline exits
+  124 with its own output instead of the session being SIGTERMed by the
+  idle escalation. The WARNING logs when the shipped file cannot be
+  found (a broken install) and the session continues with the
+  pre-#1093 behavior; a missing extension never fails a delivery;
 - `pi_idle_term` / `pi_idle_kill` — the idle-stall recovery (Issue
   #94): while the session stays stalled the Runner SIGTERMs the Pi
   descendants that already existed before the idle window (the hung
@@ -562,6 +575,7 @@ registry — in both directions (a name only in code or only in docs fails
 | `pi_429_attempts_reset` | the persisted 429 attempt counter was reset |
 | `pi_429_attempts_write_failed` | persisting the 429 attempt counter failed |
 | `pi_429_attempts_clear_failed` | clearing the 429 attempt counter failed |
+| `command_deadline_extension_missing` | the shipped command-deadline extension is absent (pure bypass) |
 | `progress_publish_failed` | the progress comment could not be published (pure bypass) |
 | `progress_comment_failed` | a post-delivery notification comment could not be published (pure bypass) |
 | `progress_finish_missing_next_step` | a terminal progress scene had no next step |

@@ -134,6 +134,13 @@ PI_IDLE_RECOVERY_CYCLES = 3
 # escalates anyway (the grace window, then TERM → KILL → session
 # kill), so a wrapper like `timeout 86400` can never hold the
 # concurrency slot for a day.
+#
+# This is ALSO the single absolute-timeout constant (Issue #1093): the
+# runner passes it to every Pi session as `ORBI_COMMAND_DEADLINE_SECONDS`
+# and the shipped command-deadline extension bounds every bash tool call
+# at it, so every command carries a declared deadline (the no-output
+# watchdog keeps its own `PI_IDLE_WARN_SECONDS` meaning and never fires
+# for a command inside its deadline).
 PI_IDLE_WAIT_MAX_SECONDS = 3600.0
 
 

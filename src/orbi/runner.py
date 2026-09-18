@@ -145,6 +145,7 @@ from orbi.scheduler import (
 from orbi import pi_process
 from orbi.pi_process import (
     PI_IDLE_RECOVERY_CYCLES,
+    PI_IDLE_WAIT_MAX_SECONDS,
     PI_IDLE_WARN_SECONDS,
     PI_MODEL_WAIT_DEAD_SECONDS,
     PI_MODEL_WAIT_PROBE_SECONDS,
@@ -972,6 +973,40 @@ def _optional_pi_string(data: dict, key: str) -> str | None:
     return value
 
 
+# The engine-shipped Pi extension that enforces the command-deadline
+# contract in the execution layer (Issue #1093): every bash tool call is
+# bounded at `ORBI_COMMAND_DEADLINE_SECONDS` and unwrapped commands gain
+# a `timeout <deadline> bash -c ...` wrapper, so the 15-minute no-output
+# idle escalation stops killing legitimately slow commands.
+COMMAND_DEADLINE_EXTENSION_FILENAME = "command_deadline.ts"
+
+
+def command_deadline_extension(*, package_dir: Path | None = None) -> Path | None:
+    """The shipped command-deadline extension file, or None when the
+    install does not carry it.
+
+    `package_dir` overrides the shipped `pi_extensions/` directory
+    (tests inject one; production passes nothing). None is a pure
+    bypass (Issue #79): one WARNING
+    (`command_deadline_extension_missing`) and the session runs with the
+    pre-#1093 behavior — the flag is not passed and Pi is never handed a
+    missing path (a load failure of an EXISTING file would be Pi's own
+    startup error, so the existence check is the bypass boundary).
+    """
+    path = (
+        (package_dir or Path(__file__).resolve().parent / "pi_extensions")
+        / COMMAND_DEADLINE_EXTENSION_FILENAME
+    )
+    if not path.is_file():
+        event(
+            "command_deadline_extension_missing",
+            level=logging.WARNING,
+            path=str(path),
+        )
+        return None
+    return path
+
+
 def _load_pi_extensions(value: object, base: Path) -> list[dict]:
     """Validate the extensions owned by an Orbi Pi run.
 
@@ -1039,21 +1074,33 @@ def _load_pi_extensions(value: object, base: Path) -> list[dict]:
     return result
 
 
-def _pi_extension_args(config: RunnerConfig) -> list[str]:
+def _pi_extension_args(config: RunnerConfig, *,
+                       package_dir: Path | None = None) -> list[str]:
     """Return the isolated extension flags for every Pi role."""
     args = ["--no-extensions"]
     for extension in config.pi_extensions:
         if extension["enabled"]:
             args.extend(("--extension", extension["source"]))
+    extension = command_deadline_extension(package_dir=package_dir)
+    if extension is not None:
+        args.extend(("--extension", str(extension)))
     return args
 
 
-def _pi_extension_env(config: RunnerConfig) -> dict[str, str]:
+def _pi_extension_env(config: RunnerConfig, *,
+                      package_dir: Path | None = None) -> dict[str, str]:
     """Return extension variables for the Pi child only; never log them."""
     values: dict[str, str] = {}
     for extension in config.pi_extensions:
         if extension["enabled"]:
             values.update(extension["env"])
+    if command_deadline_extension(package_dir=package_dir) is not None:
+        # One value governs both places (Issue #1093): the extension
+        # caps every bash tool call at it and writes the same number
+        # into the `timeout` wrapper it adds to unwrapped commands.
+        values["ORBI_COMMAND_DEADLINE_SECONDS"] = str(
+            int(PI_IDLE_WAIT_MAX_SECONDS),
+        )
     return values
 
 
