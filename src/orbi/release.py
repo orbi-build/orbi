@@ -2444,7 +2444,7 @@ def process_release(issue: dict, config: RunnerConfig,
                 worktree=worktree, base_branch=base_branch, tag=tag,
                 release_commit=release_commit, issue_number=number,
                 changelog=changelog,
-                latest=False,
+                latest=True,
             )
         except Exception:
             # The tag is intentionally local until docs are on the base

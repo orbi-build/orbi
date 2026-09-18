@@ -18428,6 +18428,9 @@ def test_process_release_success_end_to_end(monkeypatch):
         "release_commit": "abc123", "issue_number": 99,
     }
     assert sync_call["changelog"].startswith("## Changelog")
+    # The docs commit must already establish the latest-marker invariant;
+    # publication promotion is only a no-op/resume compatibility step.
+    assert sync_call["latest"] is True
     # The success comment carries the run marker and the release URL.
     (comment_number, comment_kwargs), = state["comments"]
     assert comment_number == 99
@@ -20469,12 +20472,17 @@ def test_sync_release_docs_generates_pages_navigation_marker_and_commits(
     assert "(latest)" not in old_en
     assert "（最新）" not in old_zh
     assert old_en.startswith("# v0.1.2 release\n")
-    # The change was committed to the base branch and pushed.
+    # The change was committed to the base branch and pushed. The docs
+    # invariant is complete in this one commit, rather than waiting for a
+    # second promotion commit.
     remote_head = git_out(
         work, "ls-remote", "origin", "refs/heads/main",
     ).split()[0]
     assert remote_head == git_out(work, "rev-parse", "HEAD")
     assert remote_head != head
+    assert git_out(work, "rev-list", "--count", f"{head}..HEAD") == "1"
+    assert "(latest)" in en.splitlines()[0]
+    assert "（最新）" in zh.splitlines()[0]
     message = git_out(work, "log", "-1", "--format=%s")
     assert "v0.4.0" in message and "#77" in message
     committed = git_out(work, "show", "--name-only", "--format=", "HEAD")
