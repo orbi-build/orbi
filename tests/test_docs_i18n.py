@@ -15,6 +15,8 @@ when the README stops pointing at the Chinese docs entry.
 import re
 from pathlib import Path
 
+import pytest
+
 import orbi.runner as runner
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -202,6 +204,19 @@ def test_non_release_chinese_pages_match_english_document_structure():
     assert not mismatches, (
         "EN/ZH document structure differs:\n" + "\n".join(mismatches)
     )
+
+
+def test_document_structure_mismatch_names_the_page(monkeypatch, tmp_path):
+    """A parity failure tells the translator which page needs repair."""
+    zh_dir = tmp_path / "zh"
+    zh_dir.mkdir()
+    (tmp_path / "sample.mdx").write_text("## Shared\n```bash\n```\n", encoding="utf-8")
+    (zh_dir / "sample.mdx").write_text("## Shared\n", encoding="utf-8")
+    monkeypatch.setattr(__import__(__name__), "DOCS_DIR", tmp_path)
+    monkeypatch.setattr(__import__(__name__), "ZH_DIR", zh_dir)
+
+    with pytest.raises(AssertionError, match=r"sample: en=\(1, 1, \['bash'\]\), zh=\(1, 0, \[\]\)"):
+        test_non_release_chinese_pages_match_english_document_structure()
 
 
 def test_chinese_homepage_carries_a_real_frontmatter_title():
