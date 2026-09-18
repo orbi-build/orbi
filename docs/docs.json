@@ -50,6 +50,7 @@
             "icon": "sliders",
             "pages": [
               "getting-started",
+              "configuration",
               "setup",
               "operations"
             ]
@@ -175,6 +176,7 @@
             "icon": "sliders",
             "pages": [
               "zh/getting-started",
+              "zh/configuration",
               "zh/setup",
               "zh/operations"
             ]

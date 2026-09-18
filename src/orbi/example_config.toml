@@ -124,6 +124,8 @@ engine_source_track = "release"
 # CPU-only) survives a 10-minute complete message. Must
 # be a finite positive number; anything else fails the start fast.
 # model_wait_dead_seconds = 1800
+# Maximum trusted Issue comments injected into the task context. Default: 20.
+# issue_comments_limit = 20
 # Swallowed-model-request probe: the model's /slots
 # endpoint (the agent-facing port — the local-llm-kv-cache proxy passes
 # it through from llama.cpp). While Pi is frozen in model_wait the
@@ -158,6 +160,11 @@ max_concurrency = 1
 # unit files: units outside every deployment's managed set are listed
 # by `orbi doctor` under unmanaged_units.
 # unit_name = "core"
+# Runner health alerts (crash_loop/stale_pickup) go here when set; absent
+# derives the Orbi repository from the deploy-home origin.
+# health_alert_repo = "OWNER/ORBI-REPO"
+# Repository policy may override the ready label for this delivery source.
+# dispatch_label = "ai-ready"
 # Task-worktree reclamation: at every tick start the Runner
 # removes the registered task worktrees whose Issue is CLOSED and has
 # been closed for at least this many hours (oldest first, at most 25 per
@@ -178,6 +185,8 @@ max_concurrency = 1
 # review_pi_provider = "deepseek"
 # review_pi_model = "deepseek-chat"
 # review_pi_thinking = "high"
+# Optional Pi extensions (repeatable [[pi_extensions]] tables).
+# pi_extensions = []
 # Optional provider file: path to a JSON file in Pi's
 # models.json shape (providers with baseUrl / api / apiKey / models).
 # The file is the ONLY place a provider endpoint (baseUrl) may be
@@ -188,7 +197,17 @@ max_concurrency = 1
 # missing env var for the selected provider's key) and passes the
 # catalog to Pi through a per-run agent dir (PI_CODING_AGENT_DIR).
 # pi_providers = ".orbi/pi-providers.json"
+# Enable trusted Issue-comment steering of an active delivery. Default: true.
+# steering_enabled = true
+# Seconds between steering polls. Default: 60.0.
+# steering_poll_seconds = 60.0
+# Maximum steering restarts per delivery. Default: 3.
+# steering_max_rounds = 3
 
+# Release gate CI pending-check bound. Default: 1800 seconds.
+# release_ci_wait_seconds = 1800
+# Release wait bound for open delivery Issues. Default: 1800 seconds.
+# release_deliveries_wait_seconds = 1800
 # Optional Pi skills. Paths may be absolute, use ~, or be relative to this file.
 skills = []
 

@@ -7,6 +7,7 @@ the config surface is pure file-driven behavior. Follow-up domains
 move to their own modules under sub-issues.
 """
 import dataclasses
+import re
 import subprocess
 from pathlib import Path
 
@@ -38,6 +39,32 @@ def test_validate_execution_source_repos_rejects_multiple_checkouts():
         runner.validate_execution_source_repos(
             ["owner/first", "owner/second"],
         )
+
+
+def test_runner_config_keys_are_documented_and_shipped():
+    """The reference and setup example must cover every user-facing field."""
+    derived = {
+        "base_sha", "config_path", "pi_provider_key_finding",
+        "pi_providers_data", "repositories", "repo_context_files", "run_id",
+        "slot_dir",
+    }
+    runner_keys = {
+        field.name for field in dataclasses.fields(runner.RunnerConfig)
+    } - derived
+    assert runner_keys
+
+    docs = (
+        Path(__file__).resolve().parent.parent / "docs" / "configuration.mdx"
+    ).read_text(encoding="utf-8")
+    documented = set(re.findall(r"^\| `([^`]+)` \|", docs, re.MULTILINE))
+    assert documented == runner_keys
+
+    example = (
+        Path(__file__).resolve().parent.parent
+        / "src" / "orbi" / "example_config.toml"
+    ).read_text(encoding="utf-8")
+    shipped = set(re.findall(r"^\s*#?\s*([a-z_]+)\s*=", example, re.MULTILINE))
+    assert shipped == runner_keys
 
 
 def test_example_config_passes_execution_source_repos_validation():
