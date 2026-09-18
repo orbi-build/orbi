@@ -9,6 +9,14 @@ Orbi runs an autonomous coding agent with a GitHub token on your
 machine. The security model is deliberately simple: hard boundaries in
 the delivery contract, local-only secrets, and no remote state store.
 
+## Delivery boundaries
+
+- GitHub Issues and labels are the only state store; Orbi has no database, message queue, or web UI.
+- The Python Runner is not a daemon: a systemd user timer starts one tick every five minutes, and each tick processes at most one Issue or resumes one opened PR before exiting.
+- Orbi has no task DAG, multi-agent parallelism, risk model, policy engine, or fallback path. Command errors fail fast and leave the scene in the journal and Issue comment.
+- There is no business task timeout: a slow model is not a failure. Command errors, an unavailable environment, or an unresolvable review fail fast.
+- Orbi does not discover repositories, merge or push protected branches itself, or run without a working model endpoint.
+
 ## The AI never merges or pushes protected branches
 
 - The implementer Pi **stops at the committed delivery**: it does not
