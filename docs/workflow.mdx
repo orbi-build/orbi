@@ -177,6 +177,30 @@ Rules of the chain:
   and the pre-start check: [Operations](/operations); the credentials:
   [Security](/security).
 
+### Reviewing with a different model
+
+The independent review does not have to run on the model that wrote the
+code: `review_pi_provider`, `review_pi_model` and `review_pi_thinking`
+select a separate provider/model/thinking level for the review session,
+so the reviewer does not inherit the author's blind spots. Each key
+falls back independently to its implementation-side value
+(`review_pi_provider` → `pi_provider`, `review_pi_model` → `pi_model`,
+`review_pi_thinking` → `pi_thinking`), so overriding only one of them is
+valid. Both selections must exist in the configured `pi_providers`
+catalog and are validated separately at startup — an invalid review
+selection fails fast with `review provider selection invalid`. No
+specific pairing is recommended or benchmarked here; the capability and
+the fallback are the contract.
+
+```toml
+# The implementation runs on one model, the independent review on another.
+pi_provider = "z-ai"
+pi_model = "glm-5.3-flash"
+
+review_pi_provider = "groq"
+review_pi_model = "groq/compound"
+```
+
 ## The merge record: `external_commits` and `commits`
 
 When the Runner merges a delivery PR, the `Orbi merged PR:` Issue
@@ -466,7 +490,12 @@ DAG, no priority numbers, no separate queues:
      the tag/release-commit mapping, the publish time and the release
      task Issue number; insert the new version at the head of the
      `Releases`/`发布` navigation groups in `docs/docs.json` (both
-     languages, latest first); move the `(latest)` title marker from
+     languages, latest first); since Issue #1096 both groups nest one
+     collapsed `Earlier releases` subgroup — the automated sync inserts
+     at the head of the visible pages only, and a follow-up docs edit
+     moves the then-fourth-newest entry into that subgroup, keeping the
+     visible group at the three newest releases; move the `(latest)`
+     title marker from
      the previous latest page to the new one (only the newest page may
      carry it). The file changes are committed to the base branch
      directly (the release path has no PR) and pushed with a plain
