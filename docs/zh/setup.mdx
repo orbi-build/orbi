@@ -62,11 +62,13 @@ setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下
      管理 labels（Issue #613）：setup 对空字段改用一次性 create+delete
      标签探针（`gh api`）判定，并报告 `permission=INSTALLATION`；用户
      token 保持原有的权限要求；
-   - 八个平台标签从部署 home 的 `labels.toml`
-     （`<deploy_home>/labels.toml`，Issue #330）**声明式**对齐——标签
-     名/颜色/描述的唯一事实源：缺的创建、漂移的更新、从不删除，业务
-     标签（`bug`、`enhancement`、...）从不被碰。外部单仓库模式下标签
-     来自 orbi checkout，绝不来自交付 checkout X。
+   - 十二个平台标签（`ai-ready`、`ai-in-progress`、`ai-pr-opened`、
+     `ai-fix-needed`、`ai-merged`、`ai-blocked`、`p0`、`ai-epic`、
+     `ai-release`、`ai-content-only`、`ai-ops-only`、`ai-human-review`）
+     从部署 home 的 `labels.toml`（`<deploy_home>/labels.toml`，Issue #330）
+     **声明式**对齐——标签名/颜色/描述的唯一事实源：缺的创建、漂移的更新、
+     从不删除，业务标签（`bug`、`enhancement`、...）从不被碰。外部单仓库
+     模式下标签来自 orbi checkout，绝不来自交付 checkout X。
 5. **Systemd units** — 部署 home 的模板（
    `<deploy_home>/systemd/orbi@.service`、
    `<deploy_home>/systemd/orbi@.timer`；自举模式下即 orbi checkout，
@@ -138,25 +140,28 @@ checkout）而不是 X——X 只在 Runner 创建任务 worktree 时被读取�
 agent 和脚本可以解析：
 
 ```text
-setup=ok version=2 base_branch=main
+setup=ok version=4 base_branch=main
 cli=verified source=/path/to/checkout/src/orbi/__init__.py
-repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8
+repo=orbi-build/orbi permission=ADMIN default_branch=main labels=12/12
 service=installed path=~/.config/systemd/user/orbi@.service sha256=9f2c...
-timer=orbi@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
-timer=orbi@2.timer disabled active=false next="-"
-checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:orbi-build/orbi.git protocol=ssh migrated=false ssh_reachable=true transport_reachable=true
-model_endpoint=optional optional_proxy=healthy url=http://127.0.0.1:18082/health
+timer=orbi@1.timer enabled active=true next="Fri 2026-09-18 16:45:00 UTC"
+checkout=remote=origin branch=main clean=true base_fresh=true remote_url=https://github.com/orbi-build/orbi.git protocol=https migrated=false ssh_reachable=- transport_reachable=true
+model_provider=NOT CONFIGURED — edit orbi.toml (pi_providers/pi_provider/pi_model), fill /path/to/checkout/.orbi/pi-providers.json and put the key in /path/to/checkout/.orbi/env (PROVIDER_API_KEY)
+model_provider_guide=See https://docs.orbi.build/getting-started#4-configure-the-model-provider
+model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/health
 ```
 
 `cli=verified` 表示运行中的 CLI 已经从部署 checkout 导入 `orbi`
 （editable 安装就位）；`cli=installed` 表示 force editable 重装已执行。
-`labels=8/8` 表示八个平台标签都与 `labels.toml` 一致；`next` 是 timer
-的下次触发时间（没有时为 `-`）；`optional_proxy` 是 `healthy`、
-`unhealthy` 或 `unavailable`，从不改变退出码。`migrated=true` 表示
-setup 把处于相反传输的 `origin` 改写成了配置传输的 URL（重跑后报告
-`migrated=false`）；`ssh_reachable` 是 SSH `git ls-remote` 探测结果
-（https 模式下为 `-`——不做 SSH 探测），`transport_reachable` 是当前
-生效传输的探测结果（Issue #580）。
+`labels=12/12` 表示十二个平台标签都与 `labels.toml` 一致；`next` 是
+timer 的下次触发时间（没有时为 `-`）。`model_provider=NOT CONFIGURED`
+是 warning，从不改变 setup 退出码；下一行的 `model_provider_guide` 会
+告诉你在哪里配置。`optional_proxy` 是 `healthy`、`unhealthy` 或
+`unavailable`，从不改变退出码。`migrated=true` 表示 setup 把处于相反
+传输的 `origin` 改写成了配置传输的 URL（重跑后报告 `migrated=false`）；
+`ssh_reachable` 是 SSH `git ls-remote` 探测结果（https 模式下为 `-`——
+不做 SSH 探测），`transport_reachable` 是当前生效传输的探测结果
+（Issue #580）。
 
 `--json` 输出等价的 JSON 文档：
 
@@ -170,13 +175,14 @@ orbi setup --config orbi.toml --json
 
 ```bash
 $ orbi setup
-setup=ok version=2 base_branch=main
+setup=ok version=4 base_branch=main
 cli=verified source=/path/to/checkout/src/orbi/__init__.py
-repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8
+repo=orbi-build/orbi permission=ADMIN default_branch=main labels=12/12
 service=installed path=~/.config/systemd/user/orbi@.service sha256=9f2c...
-timer=orbi@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
-timer=orbi@2.timer disabled active=false next="-"
-checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:orbi-build/orbi.git protocol=ssh migrated=false ssh_reachable=true transport_reachable=true
+timer=orbi@1.timer enabled active=true next="Fri 2026-09-18 16:45:00 UTC"
+checkout=remote=origin branch=main clean=true base_fresh=true remote_url=https://github.com/orbi-build/orbi.git protocol=https migrated=false ssh_reachable=- transport_reachable=true
+model_provider=NOT CONFIGURED — edit orbi.toml (pi_providers/pi_provider/pi_model), fill /path/to/checkout/.orbi/pi-providers.json and put the key in /path/to/checkout/.orbi/env (PROVIDER_API_KEY)
+model_provider_guide=See https://docs.orbi.build/getting-started#4-configure-the-model-provider
 model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/health
 ```
 
