@@ -513,7 +513,13 @@ def test_unconfigured_provider_fails_without_leaking_secrets(tmp_path):
     assert provider_heading is not None
     github_slug = re.sub(r"[^\w\s-]", "", provider_heading.lower())
     github_slug = re.sub(r"[\s-]+", "-", github_slug).strip("-")
-    assert failure.docs.rsplit("#", 1)[-1] == github_slug
+    expected_docs = (
+        "https://docs.orbi.build/getting-started#" + github_slug
+    )
+    assert failure.docs == expected_docs
+    assert pilot_setup.format_check_failure(failure).endswith(
+        f"docs={expected_docs}"
+    )
 
 
 # --- the success path ----------------------------------------------------------

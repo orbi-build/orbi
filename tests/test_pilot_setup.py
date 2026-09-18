@@ -2036,6 +2036,11 @@ def test_format_setup_reports_model_provider_pointer(tmp_path):
     assert "orbi.toml" in line
     assert "PROVIDER_API_KEY" in line
     assert str(tmp_path / ".orbi" / "env") in line
+    assert (
+        "model_provider_guide=See "
+        "https://docs.orbi.build/getting-started"
+        "#4-configure-the-model-provider"
+    ) in lines
 
 
 def test_scaffold_model_config_preserves_existing_content_without_newline(tmp_path):
