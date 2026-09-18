@@ -246,9 +246,9 @@ development/compatibility path.
 ## 3. Create the configuration
 
 The repository ships a committed example; the real config is local state
-(gitignored). Copy it and edit it:
+(gitignored).
 
-`orbi setup` creates `orbi.toml` automatically when it is absent.
+`orbi setup` creates `orbi.toml` from the shipped example when it is absent.
 
 Configuration is kept in `orbi.toml` (relative paths resolve from the
 config file directory). `ORBI_CONFIG` selects another file, and `orbi check`
@@ -266,7 +266,6 @@ base_branch = "main"
 max_concurrency = 1
 ```
 
-`orbi setup` creates `orbi.toml` from the shipped example when it is absent.
 For external single-repo deployments, set `deploy_home` to the Orbi checkout
 and follow the [configuration reference](/configuration).
 
@@ -489,7 +488,6 @@ is why the higher RPD never helps. The template, the
 Issues a better fit than long-context repository analysis. These are
 account limits, not an Orbi guarantee; real Groq requests, usage
 metering, and 429 responses remain untested here.
-```
 
 #### Keeping the API key out of the repo and the docs
 
