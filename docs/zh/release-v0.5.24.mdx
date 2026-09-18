@@ -1,0 +1,29 @@
+# v0.5.24 发布
+
+`v0.5.24` 的 GitHub Release 发布说明：[v0.5.24](https://github.com/orbi-build/orbi/releases/tag/v0.5.24)（release task：Issue #1131）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.5.24` | 注解 tag `ba78e285f72f96748c3955daf4fa9bc6c683cd19` | 提交 `568007cbaa9b11d9a58d5039e4f43ead2e1fdfa0` |
+
+## Release notes
+
+## Changelog
+
+### Reliability and recovery
+
+- Two runner instances open two identical milestone-advance confirmation Issues in the same second (#1125/#1126); the fingerprint dedupe is a check-then-act without the lock ([Issue #1130](https://github.com/orbi-build/orbi/issues/1130); [PR #1133](https://github.com/orbi-build/orbi/pull/1133))
+
+### Deployment and operations
+
+- Docker: after #1111 docker logs still lacks the orbi setup result; the mirror targets /proc/1/fd/1 which systemd (PID 1) reopened to /dev/null ([Issue #1124](https://github.com/orbi-build/orbi/issues/1124); [PR #1132](https://github.com/orbi-build/orbi/pull/1132))
+
+### Documentation
+
+- Release docs sync leaves four visible releases in docs.json, so every release turns main red against the #1096 navigation test (v0.5.23: run 35387645427, #1127) ([Issue #1129](https://github.com/orbi-build/orbi/issues/1129); [PR #1134](https://github.com/orbi-build/orbi/pull/1134))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>
