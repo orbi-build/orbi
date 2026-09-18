@@ -158,6 +158,52 @@ def test_chinese_and_english_page_sets_stay_the_same_source_of_truth():
     )
 
 
+FENCE_PATTERN = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+
+
+def docs_structure(text: str) -> tuple[int, int, list[str]]:
+    """Return level-two headings and fenced code-block shape outside fences."""
+    headings = 0
+    languages: list[str] = []
+    fence: tuple[str, int] | None = None
+    for line in text.splitlines():
+        match = FENCE_PATTERN.match(line)
+        if fence is not None:
+            if (
+                match
+                and match.group(1)[0] == fence[0]
+                and len(match.group(1)) >= fence[1]
+            ):
+                fence = None
+            continue
+        if match:
+            marker, info = match.groups()
+            languages.append(info.strip().split(maxsplit=1)[0] if info.strip() else "")
+            fence = (marker[0], len(marker))
+        elif line.startswith("## "):
+            headings += 1
+    return headings, len(languages), languages
+
+
+def test_non_release_chinese_pages_match_english_document_structure():
+    """EN/ZH parity includes headings and ordered fenced-code languages."""
+    mismatches: list[str] = []
+    for slug in sorted(en_page_stems() & zh_page_stems()):
+        if slug.startswith("release-"):
+            continue
+        english = (DOCS_DIR / f"{slug}.mdx").read_text(encoding="utf-8")
+        chinese = zh_page_text(slug)
+        en_structure = docs_structure(english)
+        zh_structure = docs_structure(chinese)
+        if en_structure != zh_structure:
+            mismatches.append(
+                f"{slug}: en={en_structure}, zh={zh_structure}"
+            )
+    assert not mismatches, (
+        "EN/ZH document structure differs:\n" + "\n".join(mismatches)
+    )
+
+
 def test_chinese_homepage_carries_a_real_frontmatter_title():
     """Issue #128: the zh language index page has no filename-derived
     title the renderer can use, so without a frontmatter `title` the
