@@ -120,8 +120,9 @@ pi_model = "deepseek-chat"
 
 ## 第一次交付
 
-1. 在任务池仓库开一个 Issue，用 `when X, should Y, actually Z` 的形状
-   陈述一个可观测的运行时结果。
+1. 在任务池仓库开一个 Issue，用两种形状之一陈述一个可观测的运行时
+   结果：修复（`when X, should Y, actually Z`）或变更（`when X, the
+   user should be able to Y; today they cannot because Z`）。
 2. 打上 `ai-ready` label（首次启动已创建十二个平台 label）。
 3. 跟踪 tick 日志：
 
@@ -140,9 +141,11 @@ docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi \
 交付所需的基本概念集中在一页；完整参考见
 [workflow 文档](https://docs.orbi.build/zh/workflow)。
 
-- **任务长什么样** — 一个 Issue 用 `when X, should Y, actually Z` 的
-  形状陈述一个可观测的运行时结果，附一小份验收清单：用户旅程按
-  前置条件 → 命令/配置 → 用户看到的成功结果 → 失败路径与修复展开。
+- **任务长什么样** — 一个 Issue 用两种形状之一陈述一个可观测的运行
+  时结果：修复（`when X, should Y, actually Z`）或变更（`when X, the
+  user should be able to Y; today they cannot because Z`），附一小份
+  验收清单：用户旅程按前置条件 → 命令/配置 → 用户看到的成功结果 →
+  失败路径与修复展开。
 - **label 含义** — `ai-ready` 是执行开关：runner 只认领带这个 label
   的 Issue（认领顺序：`p0` 优先，其次 `bug`，再普通 Issue）。被认领
   后走 `ai-in-progress` → `ai-pr-opened` → `ai-merged`（终态；PR 描述
