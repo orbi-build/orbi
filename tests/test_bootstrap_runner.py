@@ -6225,6 +6225,7 @@ def test_pending_milestone_issue_deduplicates_after_search_lag(
 ):
     candidates = [{"title": "v0.3.1", "open_issues": 2}]
     created = []
+    open_issues = []
     closed = []
 
     def fake_list(repo, *, state, **kwargs):
@@ -6232,20 +6233,18 @@ def test_pending_milestone_issue_deduplicates_after_search_lag(
             # Model GitHub's search lag: neither initial check sees a
             # just-created Issue, while the post-create check sees both.
             return []
-        return [
-            {"number": number}
-            for number in created
-        ]
+        return [{"number": number} for number in open_issues]
 
     def fake_run(command, **kwargs):
         if (command[0], command[1], command[2]) == ("gh", "issue", "create"):
             number = 100 + len(created)
             created.append(number)
+            open_issues.append(number)
             return f"https://github.com/owner/repo/issues/{number}"
-        if (command[0], command[1], command[2]) == ("gh", "issue", "close"):
-            closed.append(command)
-            return ""
-        raise AssertionError(command)
+        assert (command[0], command[1], command[2]) == ("gh", "issue", "close")
+        closed.append(command)
+        open_issues.remove(int(command[3]))
+        return ""
 
     monkeypatch.setattr(seam, "list_issues", fake_list)
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -6258,9 +6257,10 @@ def test_pending_milestone_issue_deduplicates_after_search_lag(
         )
 
     assert created == [100, 101]
+    assert open_issues == [100]
     assert len(closed) == 1
     assert closed[0][-1] == "duplicate of #100"
-    assert "pending_milestone_issue_deduplicated" in caplog.text
+    assert caplog.text.count("pending_milestone_issue_deduplicated") == 1
 
 
 def test_advance_active_milestone_pending_is_idempotent(
