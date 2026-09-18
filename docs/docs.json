@@ -83,6 +83,7 @@
             "group": "Releases",
             "icon": "tag",
             "pages": [
+              "release-v0.5.23",
               "release-v0.5.22",
               "release-v0.5.21",
               "release-v0.5.20",
@@ -209,6 +210,7 @@
             "group": "发布",
             "icon": "tag",
             "pages": [
+              "zh/release-v0.5.23",
               "zh/release-v0.5.22",
               "zh/release-v0.5.21",
               "zh/release-v0.5.20",

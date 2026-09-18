@@ -1,0 +1,39 @@
+# v0.5.23 release
+
+`v0.5.23` release notes for the GitHub Release [v0.5.23](https://github.com/orbi-build/orbi/releases/tag/v0.5.23) (release task: Issue #1117).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.5.23` | annotated tag `6e29788d53da62634f7db56a330501af614cbae9` | commit `96dae1e4e72b6ddfdb1c66475edf23f4421f987f` |
+
+## Release notes
+
+## Changelog
+
+### Deployment and operations
+
+- orbi setup/check print a provider-guide link with a dead anchor (#configure-the-model-provider; real slug 4-configure-the-model-provider) and the test pins the wrong one ([Issue #1110](https://github.com/orbi-build/orbi/issues/1110); [PR #1113](https://github.com/orbi-build/orbi/pull/1113))
+
+### Documentation
+
+- Docs navigation: 35 release pages crowd out the product; no install chooser; different-model review is undocumented ([Issue #1096](https://github.com/orbi-build/orbi/issues/1096); [PR #1101](https://github.com/orbi-build/orbi/pull/1101))
+- Docs: no standalone configuration reference; five runner keys (steering_*, health_alert_repo, dispatch_label) missing from both the docs table and example_config.toml ([Issue #1098](https://github.com/orbi-build/orbi/issues/1098); [PR #1102](https://github.com/orbi-build/orbi/pull/1102))
+- Docs: index.mdx undersells the product (leads with an 'MVP boundary' of eleven negatives, never mentions Managed Cloud, steering, or different-model review) ([Issue #1099](https://github.com/orbi-build/orbi/issues/1099); [PR #1100](https://github.com/orbi-build/orbi/pull/1100))
+- Docs: a stray closing fence at getting-started.mdx:492 (zh:425) renders sections 4-8 inside a code block; mint validate cannot catch it ([Issue #1104](https://github.com/orbi-build/orbi/issues/1104); [PR #1123](https://github.com/orbi-build/orbi/pull/1123))
+- Docs: nine in-page anchor links point at slugs no heading generates (providers, configuration, zh pages); mint broken-links ignores fragments ([Issue #1105](https://github.com/orbi-build/orbi/issues/1105); [PR #1122](https://github.com/orbi-build/orbi/pull/1122))
+- Docs: index/installation/quickstart leftovers: 'subsection is being added separately', card links without the anchor, 'macOS with a systemd user session', no hosted option on quickstart ([Issue #1106](https://github.com/orbi-build/orbi/issues/1106); [PR #1121](https://github.com/orbi-build/orbi/pull/1121))
+- Docs: zh/security lacks the Delivery boundaries section and zh/opencode keeps a removed model snapshot; the EN/ZH parity test compares file sets only ([Issue #1107](https://github.com/orbi-build/orbi/issues/1107); [PR #1120](https://github.com/orbi-build/orbi/pull/1120))
+- Docs: operations.mdx Public surface lists 19 of 38 config keys and 7 of 9 subcommands, and says max_concurrency permits 1 or 2 while the same page says 5 ([Issue #1108](https://github.com/orbi-build/orbi/issues/1108); [PR #1119](https://github.com/orbi-build/orbi/pull/1119))
+- Docs: setup.mdx shows version=2, labels=8/8 and 'eight platform labels'; orbi setup prints version=4, labels=12/12 and two model_provider lines ([Issue #1109](https://github.com/orbi-build/orbi/issues/1109); [PR #1118](https://github.com/orbi-build/orbi/pull/1118))
+- Docker: docker logs never carries the orbi setup result although the docs and the entrypoint say it does (journal+console without a TTY) ([Issue #1111](https://github.com/orbi-build/orbi/issues/1111); [PR #1112](https://github.com/orbi-build/orbi/pull/1112))
+
+### Bug fixes
+
+- 15-minute session kill fires for legitimately slow commands: make the watchdog's exhaustion window equal the existing absolute cap (1 hour) ([Issue #1093](https://github.com/orbi-build/orbi/issues/1093); [PR #1103](https://github.com/orbi-build/orbi/pull/1103))
+- Steering misses body edits: a correction written in the Issue body never reaches the running delivery (only new comments do) ([Issue #1094](https://github.com/orbi-build/orbi/issues/1094); [PR #1097](https://github.com/orbi-build/orbi/pull/1097))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>
