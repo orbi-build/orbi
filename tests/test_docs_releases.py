@@ -43,7 +43,13 @@ def release_version(slug: str) -> tuple[int, int, int]:
 
 
 def release_group_pages(language_code: str) -> list[str]:
-    """Return the release group pages for one navigation language."""
+    """Return the flattened release group pages for one navigation
+    language.
+
+    Issue #1096: the release group nests one collapsed subgroup
+    (`Earlier releases`/`历史版本`); its pages are flattened so the
+    parity and order checks cover the collapsed entries too.
+    """
     assert DOCS_CONFIG.is_file(), f"missing Mintlify config: {DOCS_CONFIG}"
     config = json.loads(DOCS_CONFIG.read_text(encoding="utf-8"))
     navigation = config.get("navigation")
@@ -73,7 +79,17 @@ def release_group_pages(language_code: str) -> list[str]:
             assert isinstance(pages, list) and pages, (
                 f"release group of {language_code!r} has no pages"
             )
-            return list(pages)
+            flat: list[str] = []
+            for entry in pages:
+                if isinstance(entry, dict):
+                    nested = entry.get("pages")
+                    assert isinstance(nested, list) and nested, (
+                        f"release subgroup of {language_code!r} has no pages"
+                    )
+                    flat.extend(nested)
+                else:
+                    flat.append(entry)
+            return flat
     raise AssertionError(f"{language_code} navigation has no release group")
 
 
