@@ -8,6 +8,14 @@ Orbi 将密钥保留在本地，把保护分支操作限制给 Runner，并要�
 Orbi 在你的机器上运行一个带 GitHub token 的自主 coding agent。
 安全模型刻意简单：交付契约里的硬边界、本地密钥、没有远端状态存储。
 
+## 交付边界
+
+- GitHub Issue 和 label 是唯一的状态存储；Orbi 没有数据库、消息队列或 Web UI。
+- Python Runner 不是 daemon：systemd 用户 timer 每五分钟启动一个 tick，每个 tick 最多处理一个 Issue，或恢复一个已打开的 PR，然后退出。
+- Orbi 没有任务 DAG、多 agent 并行、风险模型、策略引擎或 fallback path。命令错误会快速失败，并把现场记录在 journal 和 Issue 评论中。
+- 没有业务任务超时：模型缓慢不代表失败。命令错误、环境不可用或无法解决的审查会快速失败。
+- Orbi 不会发现仓库，不会自行合并或 push 保护分支，也不会在没有可用模型端点时运行。
+
 ## AI 从不 merge 或 push 保护分支
 
 - 实现者 Pi **在提交的交付处停止**：不 fetch base、不 push、不创建
