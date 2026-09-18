@@ -7154,19 +7154,32 @@ def _publish_plan_milestone(publisher: ProgressPublisher, worktree: Path) -> Non
         publisher.milestone("plan ready")
 
 
+_TEST_EXIT_RE = re.compile(r"\bexit\s*[:=]\s*(-?\d+)\b", re.IGNORECASE)
+_TEST_OUTCOME_COUNT_RE = re.compile(
+    r"\b(\d+)\s+(?:failed|failures?|errors?)\b", re.IGNORECASE,
+)
+_TEST_FAILURE_EVIDENCE_RE = re.compile(r"^\s*FAILED\b", re.IGNORECASE)
+
+
+def _test_result_failed(result: str) -> bool:
+    """Classify a test result without treating prose or zero counts as errors."""
+    exits = [int(value) for value in _TEST_EXIT_RE.findall(result)]
+    if exits:
+        return any(value != 0 for value in exits)
+
+    counts = _TEST_OUTCOME_COUNT_RE.findall(result)
+    if any(int(count) > 0 for count in counts):
+        return True
+    return bool(_TEST_FAILURE_EVIDENCE_RE.search(result))
+
+
 def _publish_test_milestone(publisher: ProgressPublisher,
                             worktree: Path) -> None:
-    """Post `tests passed` / `tests failed` from the worktree's test.log.
-
-    The failure check is case-insensitive: pytest evidence lines carry
-    uppercase markers (`FAILED`, `FAILURES`) that a lowercase-only check
-    would misreport as a pass (review round 2, PR #42).
-    """
+    """Post `tests passed` / `tests failed` from the worktree's test.log."""
     result = read_test_result(worktree)
     if result is None:
         return
-    lowered = result.lower()
-    if "fail" in lowered or "error" in lowered:
+    if _test_result_failed(result):
         publisher.milestone(f"tests failed: {result}")
     else:
         publisher.milestone(f"tests passed: {result}")

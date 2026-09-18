@@ -384,6 +384,39 @@ def test_publish_test_milestone_posts_passed_or_failed(tmp_path):
     assert posted == ["tests failed: 1 failed, 155 passed in 4.43s"]
 
 
+@pytest.mark.parametrize(
+    ("result", "milestone"),
+    [
+        (
+            "RESULT: check exit=0, build exit=0, served-homepage H1 "
+            "assertion PASSED (2 pages built, 0 errors)",
+            "tests passed",
+        ),
+        ("RESULT: 0 errors", "tests passed"),
+        ("RESULT: 0 failures", "tests passed"),
+        ("RESULT: 0 failed", "tests passed"),
+        ("1 failed, 155 passed in 4.43s", "tests failed"),
+        ("FAILED tests/x.py::test_y", "tests failed"),
+        ("exit=0: error handling completed", "tests passed"),
+        ("exit=1: all checks passed", "tests failed"),
+    ],
+)
+def test_publish_test_milestone_classifies_results_by_verdict(
+    tmp_path, result, milestone,
+):
+    posted = []
+    publisher = Mock()
+    publisher.milestone = Mock(side_effect=lambda text: posted.append(text))
+    (tmp_path / ".orbi").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".orbi" / "test.log").write_text(
+        result + "\n", encoding="utf-8",
+    )
+
+    runner._publish_test_milestone(publisher, tmp_path)
+
+    assert posted == [f"{milestone}: {result}"]
+
+
 def test_publish_test_milestone_detects_failure_case_insensitively(
     tmp_path,
 ):
