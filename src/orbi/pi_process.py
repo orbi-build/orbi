@@ -127,6 +127,16 @@ PI_MODEL_WAIT_PROBE_SECONDS = 60.0
 PI_IDLE_RECOVERY_CYCLES = 3
 
 
+# The bounded deadline wait (Issue #1089): a pre-idle descendant
+# inside its coreutils `timeout` deadline is legitimately running and
+# the escalation waits — but only up to this many seconds since the
+# wait for the stall began. A declared deadline longer than the cap
+# escalates anyway (the grace window, then TERM → KILL → session
+# kill), so a wrapper like `timeout 86400` can never hold the
+# concurrency slot for a day.
+PI_IDLE_WAIT_MAX_SECONDS = 3600.0
+
+
 @dataclasses.dataclass(frozen=True)
 class SteeringRequest:
     """A trusted Issue correction discovered during an active session."""
@@ -727,7 +737,12 @@ class IdleRecoveryTracker:
     (Issues #105/#169/#181) are part of the strategy: a pre-idle
     descendant inside a coreutils `timeout` deadline is a legitimately
     running tool — the escalation waits (`pi_idle_wait` logged once
-    per stall) and re-evaluates every window; a target first observed
+    per stall) and re-evaluates every window, and the wait pauses the
+    session-kill exhaustion counter too (Issue #1089): the kill is
+    bounded by the wrapper's own deadline (only up to the
+    `PI_IDLE_WAIT_MAX_SECONDS` cap — a declared deadline longer than
+    the cap escalates anyway), never by the idle windows;
+    a target first observed
     PAST its nominal deadline (or with no deadline of its own) gets
     one full idle window of grace before the TERM — one "still alive"
     observation is not evidence the tool is hung, the wrapper's own
@@ -774,6 +789,11 @@ class IdleRecoveryTracker:
         # tool is inside its `timeout` deadline, but the journal
         # carries one decision line.
         self._wait_logged = False
+        # The monotonic moment the deadline wait for THIS stall began:
+        # the wait is capped at `PI_IDLE_WAIT_MAX_SECONDS` since it
+        # (Issue #1089) — a declared deadline longer than the cap
+        # escalates anyway.
+        self._wait_started_mono: float | None = None
         self._exhausted = False
 
     def reset(self) -> None:
@@ -795,8 +815,10 @@ class IdleRecoveryTracker:
     @property
     def exhausted(self) -> bool:
         """True once `PI_IDLE_RECOVERY_CYCLES` idle windows have passed
-        with the session still stalled: the loop must kill the Pi
-        session and fail fast (the slot is never held forever)."""
+        with the session still stalled AND the escalation is not paused
+        waiting for a legitimately running tool (Issue #1089): the loop
+        must kill the Pi session and fail fast (the slot is never held
+        forever)."""
         return self._exhausted
 
     def escalate(self, pid: int) -> None:
@@ -805,6 +827,21 @@ class IdleRecoveryTracker:
         process)."""
         silence = time.monotonic() - self._window_monotonic
         cycle = int(silence // self._window_seconds) + 1
+        # The exhaustion decision at the end of this method must not run
+        # while the escalation is paused on a legitimately running tool
+        # (Issue #1089): the `wait` state the PREVIOUS windows left
+        # (inside a `timeout` deadline, or the past-deadline grace
+        # window) holds the pause, and a deadline wait decided in THIS
+        # poll holds it too. Captured BEFORE the branches run so the
+        # TERM/KILL steps themselves stay paced exactly as before (the
+        # exhaustion still lands one window after the TERM — the same
+        # relative ordering as the no-wait escalation). Only the
+        # evidence flip or a poll with no paused descendant lets the
+        # cycle counter exhaust the session again: the wait is bounded
+        # by the wrapper's own deadline (capped at
+        # `PI_IDLE_WAIT_MAX_SECONDS`, Issue #1089), never by the idle
+        # windows.
+        waiting = self._state == "wait"
         if self._step == 0:
             targets = find_idle_descendants(pid, self._window_epoch)
             # Evidence-based wait: a
@@ -820,6 +857,21 @@ class IdleRecoveryTracker:
             # forever).
             pending = _pending_timeout_targets(targets)
             if pending:
+                if self._wait_started_mono is None:
+                    # The wait for this stall begins now; the cap is
+                    # measured from here (Issue #1089).
+                    self._wait_started_mono = time.monotonic()
+                elif (time.monotonic() - self._wait_started_mono
+                        >= PI_IDLE_WAIT_MAX_SECONDS):
+                    # The bounded wait (Issue #1089): the declared
+                    # deadline is honored only up to the cap — a
+                    # `timeout 86400` wrapper never holds the slot for
+                    # a day. Past the cap the target escalates exactly
+                    # like one whose declared deadline passed (the
+                    # grace window below, then TERM → KILL → session
+                    # kill).
+                    pending = []
+            if pending:
                 if not self._wait_logged:
                     for target, deadline in pending:
                         event(
@@ -834,6 +886,7 @@ class IdleRecoveryTracker:
                         )
                     self._wait_logged = True
                 self._state = "wait"
+                waiting = True
             else:
                 # Past-deadline grace: a target whose
                 # nominal `timeout` deadline passed is NOT escalated in
@@ -948,7 +1001,7 @@ class IdleRecoveryTracker:
                 )
             self._state = "kill"
             self._step = 2
-        if cycle >= PI_IDLE_RECOVERY_CYCLES:
+        if cycle >= PI_IDLE_RECOVERY_CYCLES and not waiting:
             self._exhausted = True
 
 
