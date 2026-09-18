@@ -9,6 +9,7 @@ set -euo pipefail
 
 UID_ORBI=$(id -u orbi)
 RUNTIME_DIR="/run/user/$UID_ORBI"
+SETUP_LOG="${ORBI_SETUP_LOG:-/run/orbi-setup.log}"
 
 install -d -m 700 -o orbi -g orbi "$RUNTIME_DIR"
 systemctl start "user@$UID_ORBI.service"
@@ -29,14 +30,12 @@ done
 echo "orbi-container-setup: running orbi setup (official idempotent initialization)"
 # systemd's `journal+console` sends the console half to /dev/console, which
 # is not the container stdout when Docker runs without a TTY. Capture setup's
-# two streams, replay them to the journal through this service, and mirror
-# them to PID 1's inherited container streams for `docker logs`.
+# two streams, replay them to the journal through this service, and append
+# them to the log follower started by the entrypoint for `docker logs`.
 SETUP_OUTPUT_DIR=$(mktemp -d)
 trap 'rm -rf "$SETUP_OUTPUT_DIR"' EXIT
 SETUP_STDOUT="$SETUP_OUTPUT_DIR/stdout"
 SETUP_STDERR="$SETUP_OUTPUT_DIR/stderr"
-CONTAINER_STDOUT="${ORBI_CONTAINER_STDOUT:-/proc/1/fd/1}"
-CONTAINER_STDERR="${ORBI_CONTAINER_STDERR:-/proc/1/fd/2}"
 set +e
 runuser -u orbi -- env \
   HOME=/home/orbi \
@@ -46,7 +45,7 @@ runuser -u orbi -- env \
 SETUP_STATUS=$?
 set -e
 cat "$SETUP_STDOUT"
-cat "$SETUP_STDOUT" > "$CONTAINER_STDOUT"
+cat "$SETUP_STDOUT" >> "$SETUP_LOG"
 cat "$SETUP_STDERR" >&2
-cat "$SETUP_STDERR" > "$CONTAINER_STDERR"
+cat "$SETUP_STDERR" >> "$SETUP_LOG"
 exit "$SETUP_STATUS"
