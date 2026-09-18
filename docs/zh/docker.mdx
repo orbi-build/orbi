@@ -141,7 +141,7 @@ docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi \
 
 | 命令 | 用途 |
 | --- | --- |
-| `docker logs -f orbi` | setup 输出 + systemd 控制台 |
+| `docker logs -f orbi` | setup 结果（`setup=ok` 或 `setup_failed ...`）+ systemd 控制台 |
 | `docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi journalctl --user -u orbi@1.service -n 50 --no-pager` | tick 日志 |
 | `docker exec -u orbi -w /orbi orbi bash -c '~/.local/bin/orbi status'` | 队列与当前任务（调试附件） |
 | `docker exec -u orbi -w /orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi bash -c '~/.local/bin/orbi doctor'` | 部署体检 |

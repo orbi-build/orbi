@@ -185,5 +185,5 @@ runuser -u orbi -- env HOME=/home/orbi PATH="/home/orbi/.local/bin:/usr/local/bi
   "$UV_BIN" tool install --force --reinstall --editable --python python3 "$DEPLOY_HOME" >/dev/null \
   || fail "the editable uv tool install of /orbi failed"
 
-msg "handing over to systemd (setup runs as a oneshot; logs: docker logs -f)"
+msg "handing over to systemd (setup runs as a oneshot; logs: docker logs -f orbi)"
 exec "$SYSTEMD_BIN"

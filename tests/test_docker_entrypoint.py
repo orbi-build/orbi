@@ -6,6 +6,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENTRYPOINT = REPO_ROOT / "3rd/docker/docker-entrypoint.sh"
+SETUP_SCRIPT = REPO_ROOT / "3rd/docker/orbi-container-setup.sh"
 
 
 def stub_path(tmp_path: Path) -> tuple[Path, Path]:
@@ -109,6 +110,60 @@ def test_missing_provider_environment_prints_hint_and_writes_no_file(tmp_path):
     assert "model delivery is not configured" in result.stdout
     assert not (tmp_path / "orbi/.orbi/pi-providers.json").exists()
     assert "pi_provider" not in (tmp_path / "orbi/orbi.toml").read_text()
+
+
+def run_setup_script(tmp_path: Path, setup_status: int = 0) -> subprocess.CompletedProcess:
+    bin_dir = tmp_path / "setup-bin"
+    bin_dir.mkdir()
+    (bin_dir / "systemctl").write_text(
+        "#!/bin/sh\nif [ \"$1\" = start ]; then exit 0; fi\nexit 0\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "install").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (bin_dir / "runuser").write_text(
+        "#!/bin/sh\n"
+        "case \" $* \" in\n"
+        "  *' orbi setup '*)\n"
+        "    printf 'setup=ok\\n'\n"
+        "    printf 'setup_failed reason=test\\n' >&2\n"
+        "    exit \"$FAKE_SETUP_STATUS\"\n"
+        "    ;;\n"
+        "esac\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "id").write_text(
+        "#!/bin/sh\nprintf '1000\\n'\n", encoding="utf-8"
+    )
+    for path in bin_dir.iterdir():
+        path.chmod(0o755)
+    output = tmp_path / "container.stdout"
+    error = tmp_path / "container.stderr"
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "ORBI_CONTAINER_STDOUT": str(output),
+        "ORBI_CONTAINER_STDERR": str(error),
+        "FAKE_SETUP_STATUS": str(setup_status),
+    }
+    return subprocess.run(
+        ["/bin/bash", str(SETUP_SCRIPT)],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+
+
+def test_setup_result_is_replayed_to_journal_and_docker_streams(tmp_path):
+    result = run_setup_script(tmp_path)
+    assert result.returncode == 0
+    assert "setup=ok" in result.stdout
+    assert "setup=ok" in (tmp_path / "container.stdout").read_text()
+    assert "setup_failed reason=test" in result.stderr
+    assert "setup_failed reason=test" in (tmp_path / "container.stderr").read_text()
+
+
+def test_failed_setup_status_and_error_are_visible_to_docker_logs(tmp_path):
+    result = run_setup_script(tmp_path, setup_status=1)
+    assert result.returncode == 1
+    assert "setup_failed reason=test" in (tmp_path / "container.stderr").read_text()
 
 
 def test_existing_config_and_provider_are_not_overwritten(tmp_path):
