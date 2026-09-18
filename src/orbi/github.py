@@ -746,6 +746,16 @@ def _authenticated_github_login() -> str:
         status = run_gh_read_command([
             "gh", "auth", "status", "--hostname", "github.com",
         ])
+    except subprocess.CalledProcessError as exc:
+        # `gh auth status` exits 1 whenever ANY configured account fails
+        # to authenticate, even when the active account is valid (the
+        # stale secondary account of Issue #1074), and on that path it
+        # prints the report to stderr. The parsed report below — not the
+        # exit status — decides, so the captured streams are the status
+        # text; no active account in them raises the same error as an
+        # empty report.
+        status = "\n".join(
+            part.strip() for part in (exc.stdout or "", exc.stderr or ""))
     except Exception as exc:
         raise ValueError(
             "GitHub identity resolution failed: `gh auth status` could not "
