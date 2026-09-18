@@ -459,6 +459,47 @@ def test_authenticated_github_login_rejects_missing_active_account(monkeypatch):
         github._authenticated_github_login()
 
 
+def test_authenticated_github_login_resolves_despite_a_failed_inactive_account(
+        monkeypatch):
+    # Issue #1074: `gh auth status` exits 1 whenever ANY configured
+    # account fails, even when the active account is valid — the
+    # measured production report (stderr, run 27d71eef) must resolve
+    # to the active account, not block the delivery.
+    measured_report = (
+        "github.com\n"
+        "  ✓ Logged in to github.com account orbi-build[bot] (…/hosts.yml)\n"
+        "  - Active account: true\n"
+        "  - Git operations protocol: https\n"
+        "  - Token: ghs_***\n"
+        "  X Failed to log in to github.com account orbi-dev-test[bot]"
+        " (…/hosts.yml)\n"
+        "  - Active account: false\n"
+    )
+
+    def exit_one(command):
+        raise subprocess.CalledProcessError(
+            1, command, output="", stderr=measured_report)
+
+    monkeypatch.setattr(seam, "run_command", exit_one)
+    assert github._authenticated_github_login() == "orbi-build[bot]"
+
+
+def test_authenticated_github_login_exit_one_without_an_active_account_fails(
+        monkeypatch):
+    # The real exit-1 no-account shape (isolated empty GH_CONFIG_DIR):
+    # the report carries no `Active account: true` line, so the
+    # existing error stays.
+    def exit_one(command):
+        raise subprocess.CalledProcessError(
+            1, command, output="",
+            stderr="You are not logged into any GitHub hosts. "
+                   "To log in, run: gh auth login\n")
+
+    monkeypatch.setattr(seam, "run_command", exit_one)
+    with pytest.raises(ValueError, match="did not report an active account"):
+        github._authenticated_github_login()
+
+
 def test_resume_scene_accepts_the_authenticated_runner_app_bot(monkeypatch):
     comments = [{
         "body": opened_pr_comment(),
