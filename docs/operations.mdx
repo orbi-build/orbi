@@ -466,7 +466,9 @@ Stable `key=value` lines you will see:
   full idle window of grace passes before escalation, and every later
   window re-evaluates. While the wait is active it also pauses the
   session-kill exhaustion counter (Issue #1089): the kill is bounded
-  by the wrapper's own deadline, never by `PI_IDLE_RECOVERY_CYCLES`
+  by the wrapper's own deadline — capped at `PI_IDLE_WAIT_MAX_SECONDS`
+  (default 3600 s) since the wait began, so a declared deadline longer
+  than the cap escalates anyway — never by `PI_IDLE_RECOVERY_CYCLES`
   idle windows;
 - `pi_idle_term` / `pi_idle_kill` — the idle-stall recovery (Issue
   #94): while the session stays stalled the Runner SIGTERMs the Pi
@@ -734,7 +736,8 @@ a stalled session either resumes (the failure signal reached the model
 and the first new event resets the recovery state) or the run fails
 fast through the normal `ai-blocked` path — after
 `PI_IDLE_RECOVERY_CYCLES` idle windows for an ordinary stall, or at
-the wrapper's own deadline (plus the TERM/KILL windows) when the stall
+the wrapper's own deadline, capped at `PI_IDLE_WAIT_MAX_SECONDS`
+(default 3600 s), plus the TERM/KILL windows, when the stall
 is a bounded `timeout` tool that outlived it (Issue #1089).
 
 ## The CLI (`orbi`)

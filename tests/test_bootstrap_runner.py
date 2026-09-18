@@ -9972,6 +9972,52 @@ def test_idle_recovery_tracker_wait_releases_to_escalation(monkeypatch):
     assert tracker.exhausted is True
 
 
+def test_idle_recovery_tracker_wait_capped(monkeypatch):
+    """Issue #1089: the wait is bounded — a declared `timeout` longer
+    than `PI_IDLE_WAIT_MAX_SECONDS` is honored only up to the cap since
+    the wait began, then the existing grace → TERM → KILL escalation
+    runs unchanged: a wrapper like `timeout 86400` can never hold the
+    concurrency slot for a day."""
+    target = {"pid": 11,
+              "cmdline": "timeout 86400 sleep 300",
+              "start_epoch": 1.0}
+    pending = [(target, 9999999999.0)]  # the declared deadline: far out
+    state = make_idle_recovery_tracker(
+        monkeypatch, targets=[target], pending=pending,
+    )
+    monkeypatch.setattr(pi_process, "PI_IDLE_WAIT_MAX_SECONDS", 0.9)
+    tracker = state["tracker"]
+    tracker.open_window()
+    # Inside the cap: the wait holds — no signal, no exhaustion.
+    for _ in range(3):
+        state["mono"] += 0.31
+        tracker.escalate(7)
+        assert tracker.state == "wait"
+        assert state["signals"] == []
+        assert tracker.exhausted is False
+    # The cap is consumed: the declared deadline is no longer honored —
+    # the grace window records the still-alive target (nothing
+    # signaled, still no exhaustion).
+    state["mono"] += 0.31
+    tracker.escalate(7)
+    assert tracker.state == "wait"
+    assert state["signals"] == []
+    assert tracker.exhausted is False
+    # One full window later: the TERM — the wrapper failed to end the
+    # command inside the capped deadline.
+    state["mono"] += 0.31
+    tracker.escalate(7)
+    assert tracker.state == "term"
+    assert state["signals"] == [(11, signal.SIGTERM)]
+    # The next window: the KILL and the exhaustion flip — the slot is
+    # released.
+    state["mono"] += 0.31
+    tracker.escalate(7)
+    assert tracker.state == "kill"
+    assert state["signals"][-1] == (11, signal.SIGKILL)
+    assert tracker.exhausted is True
+
+
 def test_idle_recovery_tracker_no_target_clears_state(monkeypatch, caplog):
     """Issue #287: with NO pre-idle descendants (Pi itself is stuck)
     the TERM step logs `result=no_target` without a pid, the displayed
