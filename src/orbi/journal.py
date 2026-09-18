@@ -303,6 +303,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "stale_milestone_issue_closed": "a stale milestone-tracking Issue was closed",
     "stale_milestone_issue_close_failed": "closing a stale milestone-tracking Issue failed",
     "pending_milestone_issue_failed": "the pending-milestone Issue state could not be applied",
+    "pending_milestone_issue_deduplicated": "duplicate pending-milestone Issues were closed",
     "active_milestone_advanced": "the active Milestone advanced to the next pending one",
     "active_milestone_advance_none": "no pending Milestone to advance to",
     "active_milestone_advance_pending": "a pending Milestone candidate is waiting",

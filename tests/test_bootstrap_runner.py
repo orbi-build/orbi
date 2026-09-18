@@ -6220,6 +6220,49 @@ def test_advance_active_milestone_pending_issue_failure_is_bypassed(
     assert config.read_text() == 'active_milestone = "v0.3.0"\n'
 
 
+def test_pending_milestone_issue_deduplicates_after_search_lag(
+    monkeypatch, tmp_path, caplog,
+):
+    candidates = [{"title": "v0.3.1", "open_issues": 2}]
+    created = []
+    closed = []
+
+    def fake_list(repo, *, state, **kwargs):
+        if state == "all":
+            # Model GitHub's search lag: neither initial check sees a
+            # just-created Issue, while the post-create check sees both.
+            return []
+        return [
+            {"number": number}
+            for number in created
+        ]
+
+    def fake_run(command, **kwargs):
+        if (command[0], command[1], command[2]) == ("gh", "issue", "create"):
+            number = 100 + len(created)
+            created.append(number)
+            return f"https://github.com/owner/repo/issues/{number}"
+        if (command[0], command[1], command[2]) == ("gh", "issue", "close"):
+            closed.append(command)
+            return ""
+        raise AssertionError(command)
+
+    monkeypatch.setattr(seam, "list_issues", fake_list)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    with caplog.at_level(logging.INFO):
+        runner._pending_milestone_issue(
+            "owner/repo", "v0.3.0", candidates, tmp_path,
+        )
+        runner._pending_milestone_issue(
+            "owner/repo", "v0.3.0", candidates, tmp_path,
+        )
+
+    assert created == [100, 101]
+    assert len(closed) == 1
+    assert closed[0][-1] == "duplicate of #100"
+    assert "pending_milestone_issue_deduplicated" in caplog.text
+
+
 def test_advance_active_milestone_pending_is_idempotent(
     monkeypatch, tmp_path,
 ):
@@ -6570,7 +6613,7 @@ def test_main_advances_milestone_only_after_no_ready_issue(
     )
     assert runner.main(["--config", str(config)]) == 0
     assert calls == [
-        (("owner/repo", "v0.3.0", config.resolve()),
+        (("owner/repo", "v0.3.0", config.resolve(), tmp_path.resolve()),
          {"auto_next_milestone": True}),
     ]
 
