@@ -449,7 +449,7 @@ def test_docs_document_the_different_model_review():
     in prose — a `Reviewing with a different model` subsection naming
     all three `review_pi_*` keys, the per-key independent fallback, and
     one worked `orbi.toml` example with the fail-fast validation
-    signature — and the getting-started key rows link to it."""
+    signature — and the configuration-reference key rows link to it."""
     for slug in ("workflow", "zh/workflow"):
         text = page_text(slug)
         assert "Reviewing with a different model" in text, (
@@ -467,9 +467,14 @@ def test_docs_document_the_different_model_review():
         assert "review provider selection invalid" in text, (
             f"{slug} must carry the startup fail-fast signature"
         )
-    for slug in ("getting-started", "zh/getting-started"):
+    for slug in ("configuration", "zh/configuration"):
         text = page_text(slug)
-        assert "/workflow#reviewing-with-a-different-model" in text, (
+        expected = (
+            "/zh/workflow#reviewing-with-a-different-model"
+            if slug.startswith("zh/")
+            else "/workflow#reviewing-with-a-different-model"
+        )
+        assert expected in text, (
             f"{slug} must link the review_pi_* rows to the workflow subsection"
         )
 
