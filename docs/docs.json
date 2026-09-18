@@ -86,12 +86,12 @@
               "release-v0.5.23",
               "release-v0.5.22",
               "release-v0.5.21",
-              "release-v0.5.20",
               {
                 "group": "Earlier releases",
                 "icon": "history",
                 "expanded": false,
                 "pages": [
+                  "release-v0.5.20",
                   "release-v0.5.19",
                   "release-v0.5.18",
                   "release-v0.5.17",
@@ -213,12 +213,12 @@
               "zh/release-v0.5.23",
               "zh/release-v0.5.22",
               "zh/release-v0.5.21",
-              "zh/release-v0.5.20",
               {
                 "group": "历史版本",
                 "icon": "history",
                 "expanded": false,
                 "pages": [
+                  "zh/release-v0.5.20",
                   "zh/release-v0.5.19",
                   "zh/release-v0.5.18",
                   "zh/release-v0.5.17",
