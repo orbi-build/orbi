@@ -864,7 +864,9 @@ def test_docs_document_operations_commands():
     )
     assert "journalctl" in text, "operations must show the journal command"
     assert "orbi" in text, "operations must name the CLI"
-    for command in ("status", "session", "add"):
+    for command in (
+        "status", "session", "add", "check", "sync-engine-source"
+    ):
         assert command in text, f"operations must document the {command} command"
     assert "worktree" in text.lower(), "operations must explain the task worktree"
     assert "ai-blocked" in text, "operations must document failure recovery (ai-blocked)"
