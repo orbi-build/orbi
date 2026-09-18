@@ -1660,13 +1660,13 @@ def current_latest_release_slug(config_text: str) -> str:
 
 
 def update_release_navigation(config_text: str, slug: str) -> tuple[str, bool]:
-    """Insert `slug` at the head of both release navigation groups.
+    """Insert a release and keep only the three newest pages visible.
 
-     The `Releases` (en) and `发布` (zh) groups list the
-    releases latest-first; a new release goes FIRST in both (the zh
-    entries carry the `zh/` prefix). A slug already listed in both
-    groups leaves the config untouched (idempotent). Exactly one group
-    updated means a broken config — fail fast, never guess.
+    The `Releases` (en) and `发布` (zh) groups list releases latest-first.
+    Older visible pages move to the head of the existing collapsed subgroup,
+    preserving their order. A slug already listed in either group's visible
+    pages or subgroup leaves the config untouched (idempotent). Exactly one
+    group updated means a broken config — fail fast, never guess.
     """
     config = json.loads(config_text)
     updated = 0
@@ -1676,9 +1676,26 @@ def update_release_navigation(config_text: str, slug: str) -> tuple[str, bool]:
                 continue
             pages = group["pages"]
             entry = f"zh/{slug}" if group["group"] == "发布" else slug
-            if entry in pages:
+            subgroup = next(
+                (page for page in pages
+                 if isinstance(page, dict) and not page.get("expanded", True)),
+                None,
+            )
+            listed = entry in pages or (
+                subgroup is not None and entry in subgroup.get("pages", [])
+            )
+            if listed:
                 continue
             pages.insert(0, entry)
+            if len([page for page in pages if isinstance(page, str)]) > 3:
+                if subgroup is None:
+                    raise RuntimeError(
+                        "release docs sync: release navigation has more "
+                        "than three visible pages but no collapsed subgroup"
+                    )
+                visible = [page for page in pages if isinstance(page, str)]
+                subgroup["pages"] = visible[3:] + subgroup.get("pages", [])
+                pages[:] = visible[:3] + [subgroup]
             updated += 1
     if updated == 0:
         return config_text, False
