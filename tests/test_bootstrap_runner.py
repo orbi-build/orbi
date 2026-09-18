@@ -20849,6 +20849,23 @@ def test_update_release_navigation_fails_fast_when_only_one_group_exists():
         )
 
 
+def test_update_release_navigation_fails_fast_without_collapsed_subgroup():
+    config = json.loads(release_docs_fixture_config())
+    for language in config["navigation"]["languages"]:
+        language["groups"][1]["pages"].append(
+            "zh/release-v0.1.0" if language["language"] == "zh"
+            else "release-v0.1.0"
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match="more than three visible pages but no collapsed subgroup",
+    ):
+        release.update_release_navigation(
+            json.dumps(config), "release-v0.4.0",
+        )
+
+
 def test_move_latest_marker_fails_fast_on_resume_when_the_new_page_is_missing(
         tmp_path):
     """resume=True but the new page does not exist: the marker was lost,
