@@ -20,6 +20,7 @@ unimplemented feature, or the stale 15-minute timer.
 import inspect
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 import orbi.runner as runner
@@ -124,6 +125,38 @@ def page_text(slug: str) -> str:
     path = DOCS_DIR / f"{slug}.mdx"
     assert path.is_file(), f"missing docs page: {path}"
     return path.read_text(encoding="utf-8")
+
+
+INTERNAL_FRAGMENT_LINK = re.compile(r'''(?:\]\(|href=["'])([^)"']*#[^)"']+)''')
+HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*$", re.MULTILINE)
+
+
+def github_slug(heading: str) -> str:
+    """Match Mintlify's github-slugger treatment for these Markdown headings."""
+    heading = unicodedata.normalize("NFC", heading).lower()
+    heading = re.sub(r"[^\w\s-]", "", heading)
+    return re.sub(r"\s+", "-", heading)
+
+
+def test_internal_fragment_links_target_existing_heading():
+    """Every internal fragment must resolve under Mintlify's heading slug rule."""
+    failures = []
+    for source in docs_files():
+        for link in INTERNAL_FRAGMENT_LINK.findall(source.read_text(encoding="utf-8")):
+            page, fragment = link.split("#", 1)
+            target = source if not page else DOCS_DIR / page.lstrip("/")
+            if target.suffix != ".mdx":
+                target = target.with_suffix(".mdx")
+            if not target.is_file():
+                failures.append(f"{source}:{link} (missing {target})")
+                continue
+            headings = {
+                github_slug(match.group(1))
+                for match in HEADING.finditer(target.read_text(encoding="utf-8"))
+            }
+            if fragment not in headings:
+                failures.append(f"{source}:{link} (missing heading in {target})")
+    assert not failures, "invalid internal fragment links:\n" + "\n".join(failures)
 
 
 def test_non_release_docs_have_question_metadata_and_answer_opening():
@@ -470,7 +503,7 @@ def test_docs_document_the_different_model_review():
     for slug in ("configuration", "zh/configuration"):
         text = page_text(slug)
         expected = (
-            "/zh/workflow#reviewing-with-a-different-model"
+            "/zh/workflow"
             if slug.startswith("zh/")
             else "/workflow#reviewing-with-a-different-model"
         )

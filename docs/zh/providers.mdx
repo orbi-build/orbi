@@ -130,7 +130,7 @@ OpenRouter 官方[限流文档](https://openrouter.ai/docs/api/reference/limits)
    chmod 600 .orbi/env
    ```
 
-   已安装的 systemd unit 会加载 `.orbi/env`。手动 tick 时，先按[上手指南](/zh/getting-started#path-b-a-pi_providers-file-orbi)导出变量。
+   已安装的 systemd unit 会加载 `.orbi/env`。手动 tick 时，先按[上手指南](/zh/getting-started)导出变量。
 2. 将 [`templates/pi-providers/gemini.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/gemini.json) 复制为 `.orbi/pi-providers.json`。其中完整的选中条目如下：
 
    ```json
@@ -192,7 +192,7 @@ pi_model = "glm-5.3-flash"
    chmod 600 .orbi/env
    ```
 
-   systemd service 会通过 `EnvironmentFile` 加载该文件；手动 tick 不会加载。手动运行前先执行 `set -a; . .orbi/env; set +a`，再运行[上手指南的手动 tick 命令](/zh/getting-started#6-run-one-tick-manually)。
+   systemd service 会通过 `EnvironmentFile` 加载该文件；手动 tick 不会加载。手动运行前先执行 `set -a; . .orbi/env; set +a`，再运行[上手指南的手动 tick 命令](/zh/getting-started)。
 2. 将 [`templates/pi-providers/z-ai.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/z-ai.json) 复制为 `.orbi/pi-providers.json`，或复制其中的 provider 条目。选择精确的 ID：
 
    ```toml
@@ -414,4 +414,4 @@ pi_model = "groq/compound"
 
 模型即使出现在 Groq 的实时目录中，也可能被组织级策略禁用。此时真实请求会返回 HTTP `403` 和 `model_permission_blocked_org`（不是 `429`）：请让组织管理员在 [Groq 组织限额设置](https://console.groq.com/settings/limits) 中启用该模型，或改选另一家已配置的 provider。HTTP `429` 表示账号额度/速率限制已触发；排障路径与组织级 `403` 不同。
 
-完整的 OpenAI-compatible 配置见[上手指南](/zh/getting-started#path-b-a-pi_providers-file-orbi)，provider 文章系列见 [Issue #305](https://github.com/orbi-build/orbi/issues/305)。
+完整的 OpenAI-compatible 配置见[上手指南](/zh/getting-started)，provider 文章系列见 [Issue #305](https://github.com/orbi-build/orbi/issues/305)。
