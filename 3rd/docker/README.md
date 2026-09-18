@@ -254,7 +254,7 @@ session bus, which `docker exec` does not carry automatically — hence
 `/home/orbi/.local/bin/` (not on root's PATH).
 
 ```bash
-docker logs -f orbi                                   # setup output + systemd console
+docker logs -f orbi                                   # setup result (setup=ok/setup_failed) + systemd console
 docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi \
   journalctl --user -u orbi@1.service -n 50 --no-pager  # tick logs
 docker exec -u orbi -w /orbi orbi /home/orbi/.local/bin/orbi status  # queue and current task

@@ -27,8 +27,26 @@ done
   || { echo "orbi-container-setup: the user manager did not come up" >&2; exit 1; }
 
 echo "orbi-container-setup: running orbi setup (official idempotent initialization)"
-exec runuser -u orbi -- env \
+# systemd's `journal+console` sends the console half to /dev/console, which
+# is not the container stdout when Docker runs without a TTY. Capture setup's
+# two streams, replay them to the journal through this service, and mirror
+# them to PID 1's inherited container streams for `docker logs`.
+SETUP_OUTPUT_DIR=$(mktemp -d)
+trap 'rm -rf "$SETUP_OUTPUT_DIR"' EXIT
+SETUP_STDOUT="$SETUP_OUTPUT_DIR/stdout"
+SETUP_STDERR="$SETUP_OUTPUT_DIR/stderr"
+CONTAINER_STDOUT="${ORBI_CONTAINER_STDOUT:-/proc/1/fd/1}"
+CONTAINER_STDERR="${ORBI_CONTAINER_STDERR:-/proc/1/fd/2}"
+set +e
+runuser -u orbi -- env \
   HOME=/home/orbi \
   PATH="/home/orbi/.local/bin:/usr/local/bin:/usr/bin:/bin" \
   XDG_RUNTIME_DIR="$RUNTIME_DIR" \
-  orbi setup
+  orbi setup >"$SETUP_STDOUT" 2>"$SETUP_STDERR"
+SETUP_STATUS=$?
+set -e
+cat "$SETUP_STDOUT"
+cat "$SETUP_STDOUT" > "$CONTAINER_STDOUT"
+cat "$SETUP_STDERR" >&2
+cat "$SETUP_STDERR" > "$CONTAINER_STDERR"
+exit "$SETUP_STATUS"
