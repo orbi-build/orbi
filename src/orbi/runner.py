@@ -400,6 +400,10 @@ class ReviewRoundsExhausted(UnrecoverableDeliveryError):
 class HumanDecisionRequired(UnrecoverableDeliveryError):
     """The reviewer found a decision that only a maintainer can make."""
 
+    def __init__(self, message: str, *, action: str) -> None:
+        super().__init__(message)
+        self.action = action
+
 
 class ResumePrClosedError(UnrecoverableDeliveryError):
     """The resumed delivery's scene PR is no longer open.
@@ -6704,8 +6708,14 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             f"fix: {finding.get('fix', '')}"
             for finding in verdict["findings"]
         )
+        actions = "; ".join(
+            str(finding.get("fix", "")).strip()
+            for finding in verdict["findings"]
+            if str(finding.get("fix", "")).strip()
+        )
         raise HumanDecisionRequired(
-            "review requires human decision: " + decisions
+            "review requires human decision: " + decisions,
+            action=actions or "Decide how this PR should proceed.",
         )
     if review_has_findings(verdict):
         # The reviewer could not make the PR mergeable in this session
@@ -8256,16 +8266,18 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 run_id=run_id, pr_url=None,
                 worktree=worktree, branch=branch, role=ROLE_IMPLEMENT,
                 action=(
-                    "Fix the failure above and re-run this Issue "
-                    f"({run_info}); - base_branch: {base_branch}; "
-                    f"- base_sha: {base_sha}."
+                    "Fix the failure described below and re-run this Issue."
                 ),
                 reason=(
                     "The delivery stopped before it could be completed: "
-                    f"{_failure_detail(exc)} ({run_info})"
+                    f"{_failure_detail(exc)}"
                 ),
                 diagnosis=(
-                    f"{_failure_detail(exc)} ({run_info})"
+                    f"{_failure_detail(exc)}\n"
+                    f"- base_branch: {base_branch}\n"
+                    f"- base_sha: {base_sha}\n"
+                    f"run_id={run_id}\n"
+                    f"- priority: {priority}"
                 ),
                 classify=False, evidence=True,
                 current_labels=(
@@ -8382,8 +8394,6 @@ def _finish_outcome_body(*, outcome: str, detail: str,
         "waiting on a human decision" if blocked
         else "the engine will retry"
     )
-    if action is None:
-        action = next_step if blocked else ""
     if reason is None:
         reason = (
             "Orbi could not complete the delivery because a required "
@@ -8392,32 +8402,31 @@ def _finish_outcome_body(*, outcome: str, detail: str,
         )
     if diagnosis is None:
         diagnosis = detail
-    # Legacy callers did not provide named parts. Keep their old progress
-    # wording in the reason field while structured callers stay clean.
-    if legacy_action and not blocked and not next_step:
-        reason = (
-            f"{reason}\nWhat you need to do: Nothing\n"
-            "What Orbi will do next: Orbi will wait for a human"
-        )
-    elif action == "" and next_step:
-        reason = f"{reason}\nWhat Orbi will do next: {next_step}"
     paragraphs = [f"**Orbi {outcome} — {disposition}**"]
-    if action:
+    if legacy_action:
+        user_action = next_step if blocked and next_step else "Nothing"
+        paragraphs.append(f"What you need to do: {user_action}")
+    elif action:
         paragraphs.append(f"What you need to do: {action}")
-    elif legacy_action and blocked:
-        paragraphs.append("What you need to do: Nothing")
     if reason:
         paragraphs.append(f"What happened: {reason}")
-    if legacy_action or (not action and next_step):
-        if legacy_action and not blocked:
-            paragraphs.append("What you need to do: Nothing")
-        paragraphs.append(
-            "What Orbi will do next: "
-            + ("Orbi will wait for a human" if blocked
-               else "the engine will retry")
-        )
-    if pr_url and blocked and not action:
-        paragraphs.append(f"The open PR is {pr_url}.")
+    else:
+        paragraphs.append("What happened: No reason was provided.")
+    if legacy_action:
+        if blocked and pr_url:
+            engine_action = (
+                "Orbi will wait for the required action; the open PR is "
+                f"{pr_url}."
+            )
+        elif blocked:
+            engine_action = "Orbi will wait for a human to resolve this Issue."
+        else:
+            engine_action = (
+                next_step or "Orbi will wait for a human to resolve this Issue."
+            )
+        paragraphs.append(f"What Orbi will do next: {engine_action}")
+    elif not action and next_step:
+        paragraphs.append(f"What Orbi will do next: {next_step}")
     paragraphs.append(
         "<details><summary>Raw error</summary>\n"
         f"{diagnosis}\n"
@@ -8743,6 +8752,7 @@ def report_delivery_failure(
         current_labels if current_labels is not None
         else issue_labels(number, source_repo)
     )
+    evidence_detail = _failure_evidence(worktree, exc) if evidence else ""
     if blocked:
         apply_label_patch(
             number, repo=source_repo, event=EVENT_BLOCKED,
@@ -8769,6 +8779,7 @@ def report_delivery_failure(
             body += f"\n{_BLOCKED_PRECONDITION_PHRASE.lstrip('; ')}"
         if blocked_suffix:
             body += f"\n{blocked_suffix.lstrip('; ')}"
+        body += evidence_detail
         body += "\n</details>"
         outcome = "blocked"
     else:
@@ -8780,18 +8791,18 @@ def report_delivery_failure(
             "Orbi: fix needed — the engine will retry",
             *(([f"What you need to do: {action}"] if action else [])),
             f"What happened: {reason}",
-            f"Orbi needs a fix: {reason}",
         ))
-        diagnosis = f"Orbi needs a fix: {diagnosis}"
-        body += f"\n\n<details><summary>Diagnosis</summary>\n{diagnosis}\n</details>"
-        # The full scene is always appended: a recoverable failure
-        # happens after the worktree was derived.
-        body += f"\n{scene_line()}"
+        diagnostic_parts = [f"Orbi needs a fix: {diagnosis}", scene_line()]
         if review_scene_block is not None:
-            body += f"\n{review_scene_block}"
+            diagnostic_parts.append(review_scene_block)
+        if evidence_detail:
+            diagnostic_parts.append(evidence_detail.lstrip())
+        body += (
+            "\n\n<details><summary>Diagnosis</summary>\n"
+            + "\n".join(diagnostic_parts)
+            + "\n</details>"
+        )
         outcome = "fix needed"
-    if evidence:
-        body += _failure_evidence(worktree, exc)
     if len(body) > FAILURE_COMMENT_MAX_CHARS:
         # The comment body is capped; the cut preserves the
         # cause-first head and names the full session log for the part
@@ -9153,11 +9164,20 @@ def _run_review_round(
             run_id=run_id, pr_url=pr_url,
             worktree=worktree, branch=branch, role=ROLE_REVIEW,
             action=(
-                "Review the findings and decide how to proceed."
-                if isinstance(exc, (ReviewRoundsExhausted, HumanDecisionRequired))
-                else ""
+                exc.action
+                if isinstance(exc, HumanDecisionRequired)
+                else (
+                    "Review the prior findings and decide whether to continue "
+                    "this PR."
+                    if isinstance(exc, ReviewRoundsExhausted) else ""
+                )
             ),
-            reason=f"the independent review of PR {pr_url} failed: {detail}",
+            reason=(
+                f"The independent review of PR {pr_url} requires a human "
+                "decision."
+                if isinstance(exc, HumanDecisionRequired)
+                else f"the independent review of PR {pr_url} failed: {detail}"
+            ),
             diagnosis=detail,
             evidence=True,
             review_scene_block=(

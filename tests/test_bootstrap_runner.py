@@ -11770,6 +11770,15 @@ def test_terminal_failure_parts_omit_empty_action_and_show_disposition():
     assert "engine retry state" in body
 
 
+def test_terminal_failure_parts_render_missing_reason_explicitly():
+    body = runner._finish_outcome_body(
+        outcome="blocked", action="Inspect the PR.", reason="",
+        diagnosis="raw state", detail="ignored", next_step="",
+        pr_url=None, number=39, source_repo="owner/repo",
+    )
+    assert "What happened: No reason was provided." in body
+
+
 def test_finish_progress_body_uses_fixed_sections_for_blocked_error(caplog):
     body = runner._finish_progress_body(
         number=39, title="Blocked task", run_id="a1b2c3d4",
