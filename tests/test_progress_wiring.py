@@ -388,6 +388,11 @@ def test_publish_test_milestone_posts_passed_or_failed(tmp_path):
     ("result", "milestone"),
     [
         (
+            "RESULT: check exit=0, suite finished with 2 failed",
+            "tests failed",
+        ),
+        ("RESULT: exit=0, build had 3 errors", "tests failed"),
+        (
             "RESULT: check exit=0, build exit=0, served-homepage H1 "
             "assertion PASSED (2 pages built, 0 errors)",
             "tests passed",
@@ -402,7 +407,7 @@ def test_publish_test_milestone_posts_passed_or_failed(tmp_path):
             "tests failed",
         ),
         ("exit=0: error handling completed", "tests passed"),
-        ("exit=1: all checks passed", "tests failed"),
+        ("RESULT: build exit=1, everything looks clean", "tests failed"),
     ],
 )
 def test_publish_test_milestone_classifies_results_by_verdict(
