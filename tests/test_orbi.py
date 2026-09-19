@@ -1359,10 +1359,6 @@ def _fake_doctor_commands(monkeypatch, ssh_down: bool = False,
             return "git@github.com:xqliu/orbi.git"
         if command[:2] == ["git", "status"]:
             return dirty
-        if command[:2] == ["gh", "api"]:
-            # Issue #1174: the doctor merge-gate preflight uses only GET
-            # endpoints; this default world has no visible protection.
-            return "[]" if "rules/branches/" in command[-1] else "{}"
         if command[:2] == ["git", "ls-remote"]:
             if ssh_down:
                 raise subprocess.CalledProcessError(
@@ -1378,6 +1374,9 @@ def _fake_doctor_commands(monkeypatch, ssh_down: bool = False,
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(orbi, "run_command", fake_run)
+    monkeypatch.setattr(orbi, "merge_gate_preflight", lambda repo, branch: [
+        f"merge_gate: PASS repo={repo} branch={branch} protection readable",
+    ])
     return calls
 
 

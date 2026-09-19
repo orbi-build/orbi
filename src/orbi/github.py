@@ -22,6 +22,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import quote
 
 from orbi.delivery_labels import (
     IN_PROGRESS_LABEL,
@@ -74,84 +75,119 @@ def _not_found(exc: subprocess.CalledProcessError) -> bool:
 
 def _merge_gate_api(repo: str, path: str, *, timeout: int = 30) -> object:
     """Read one merge-gate endpoint through the read-only gh seam."""
-    raw = run_gh_read_command(["gh", "api", f"repos/{repo}/{path}"],
-                              timeout=timeout)
+    suffix = f"/{path}" if path else ""
+    raw = run_gh_read_command(
+        ["gh", "api", f"repos/{repo}{suffix}"], timeout=timeout,
+    )
     return json.loads(raw)
 
 
 def merge_gate_preflight(repo: str, branch: str) -> list[str]:
-    """Classify branch protection visible to the configured GitHub token.
+    """Classify protection visible to the configured GitHub token.
 
-    The classic protection endpoint and the branch-rules endpoint are both
-    required: GitHub returns an empty classic response for some ruleset-only
-    repositories.  A 404 from the classic endpoint is therefore not called
-    PASS until the rules endpoint explicitly returns an empty list.  This
-    function only emits GET requests.
+    GitHub uses the same classic-protection 404 for "not protected" and for
+    protection hidden from the token.  The branch resource's documented
+    ``protected`` boolean distinguishes those cases before the detailed read;
+    an empty branch-rules response alone is not sufficient (Issue #1174).
     """
-    classic: dict | None = None
+    encoded_branch = quote(branch, safe="")
     try:
-        value = _merge_gate_api(repo, f"branches/{branch}/protection")
-        if not isinstance(value, dict):
-            return [f"merge_gate: UNKNOWN protection response is not an object"]
-        classic = value
-    except subprocess.CalledProcessError as exc:
-        if not _not_found(exc):
-            return [f"merge_gate: UNKNOWN cannot read branch protection; "
-                    "requires repository administration permission"]
+        branch_info = _merge_gate_api(repo, f"branches/{encoded_branch}")
+    except (subprocess.CalledProcessError, json.JSONDecodeError,
+            TypeError, ValueError):
+        return ["merge_gate: UNKNOWN cannot read target branch"]
+    if (not isinstance(branch_info, dict)
+            or not isinstance(branch_info.get("protected"), bool)):
+        return ["merge_gate: UNKNOWN branch protection state is not a boolean"]
+
+    classic: dict | None = None
+    classic_unreadable = False
+    if branch_info["protected"]:
+        try:
+            value = _merge_gate_api(
+                repo, f"branches/{encoded_branch}/protection",
+            )
+            if not isinstance(value, dict):
+                return ["merge_gate: UNKNOWN protection response is not an object"]
+            classic = value
+        except subprocess.CalledProcessError as exc:
+            if not _not_found(exc):
+                return ["merge_gate: UNKNOWN cannot read branch protection; "
+                        "requires repository administration permission"]
+            classic_unreadable = True
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return ["merge_gate: UNKNOWN cannot parse branch protection response"]
 
     try:
-        rules = _merge_gate_api(repo, f"rules/branches/{branch}")
+        rules = _merge_gate_api(repo, f"rules/branches/{encoded_branch}")
     except subprocess.CalledProcessError as exc:
         if _not_found(exc):
-            return [f"merge_gate: UNKNOWN protection is unreadable; "
+            return ["merge_gate: UNKNOWN protection is unreadable; "
                     "grant the token repository administration permission"]
-        return [f"merge_gate: UNKNOWN cannot read rulesets; "
+        return ["merge_gate: UNKNOWN cannot read rulesets; "
                 "requires repository administration permission"]
-    if not isinstance(rules, list):
-        return ["merge_gate: UNKNOWN ruleset response is not an array"]
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return ["merge_gate: UNKNOWN cannot parse ruleset response"]
+    if not isinstance(rules, list) or not all(
+            isinstance(rule, dict) for rule in rules):
+        return ["merge_gate: UNKNOWN ruleset response is not an object array"]
 
     blockers: list[str] = []
     if classic is not None:
-        reviews = classic.get("required_pull_request_reviews") or {}
+        reviews = classic.get("required_pull_request_reviews")
+        if reviews is None:
+            reviews = {}
+        if not isinstance(reviews, dict):
+            return ["merge_gate: UNKNOWN review protection is not an object"]
         approvals = reviews.get("required_approving_review_count", 0)
         if isinstance(approvals, int) and approvals >= 1:
             blockers.append(
                 f"merge_gate: FAILED classic protection requires "
                 f"{approvals} approving review(s) the configured merge "
                 "identity cannot supply (self-approval is forbidden); "
-                f"repair: lower required_approving_review_count or add a "
-                f"second reviewer (gh api --method PUT repos/{repo}/branches/"
-                f"{branch}/protection)"
+                "repair: add a second reviewer or run "
+                f"gh api --method PATCH repos/{repo}/branches/"
+                f"{encoded_branch}/protection/required_pull_request_reviews "
+                "-F required_approving_review_count=0"
             )
         admins = classic.get("enforce_admins") or {}
-        if admins.get("enabled") is True:
+        if isinstance(admins, dict) and admins.get("enabled") is True:
             blockers.append(
-                f"merge_gate: FAILED classic protection enforces admins; "
+                "merge_gate: FAILED classic protection enforces admins; "
                 "repair: disable enforce_admins or use a named human/admin "
                 f"merge path (gh api --method DELETE repos/{repo}/branches/"
-                f"{branch}/protection/enforce_admins)"
+                f"{encoded_branch}/protection/enforce_admins)"
             )
 
     for rule in rules:
-        if not isinstance(rule, dict):
-            continue
-        parameters = rule.get("parameters") or {}
+        parameters = rule.get("parameters")
+        if parameters is None:
+            parameters = {}
+        if not isinstance(parameters, dict):
+            return ["merge_gate: UNKNOWN ruleset parameters are not an object"]
         approvals = parameters.get("required_approving_review_count")
         if isinstance(approvals, int) and approvals >= 1:
             source = rule.get("ruleset_source") or "ruleset"
+            ruleset_id = rule.get("ruleset_id")
+            location = (
+                f"https://github.com/{repo}/settings/rules/{ruleset_id}"
+                if isinstance(ruleset_id, int)
+                else f"https://github.com/{repo}/settings/rules"
+            )
             blockers.append(
                 f"merge_gate: FAILED {source} requires {approvals} "
                 "approving review(s) the configured merge identity cannot "
                 "supply (self-approval is forbidden); repair: add a second "
-                "reviewer or lower the required approval count in the "
-                f"ruleset (gh api repos/{repo}/rules/branches/{branch})"
+                "reviewer or lower required_approving_review_count at "
+                f"{location}"
             )
-        if rule.get("isAdminEnforced") is True or parameters.get("isAdminEnforced") is True:
-            blockers.append(
-                f"merge_gate: FAILED ruleset enforces admin review; repair: "
-                "disable admin enforcement or use a named human/admin merge "
-                f"path (gh api repos/{repo}/rules/branches/{branch})"
-            )
+
+    if classic_unreadable:
+        blockers.append(
+            "merge_gate: UNKNOWN classic protection returned 404 for a "
+            "protected branch; grant the token repository administration "
+            "permission"
+        )
 
     if blockers:
         return blockers
