@@ -11742,6 +11742,43 @@ def test_pr_delivery_status_ignores_malformed_check_entry(monkeypatch):
     assert runner.pr_delivery_status(PR_URL, "owner/repo") == ("OPEN", [])
 
 
+def test_terminal_failure_parts_render_action_before_reason_and_diagnosis():
+    body = runner._finish_outcome_body(
+        outcome="blocked", action="Approve the PR manually.",
+        reason="Branch protection requires one human approval.",
+        diagnosis="rounds=3; mergeable=CONFLICTING",
+        detail="ignored", next_step="", pr_url=None, number=39,
+        source_repo="owner/repo",
+    )
+    assert body.index("Approve the PR manually.") < body.index(
+        "Branch protection requires one human approval."
+    )
+    assert body.index("Branch protection requires one human approval.") < body.index(
+        "<details><summary>Raw error</summary>"
+    )
+    assert "rounds=3; mergeable=CONFLICTING" in body
+
+
+def test_terminal_failure_parts_omit_empty_action_and_show_disposition():
+    body = runner._finish_outcome_body(
+        outcome="blocked", action="", reason="No human action is required.",
+        diagnosis="engine retry state", detail="ignored", next_step="",
+        pr_url=None, number=39, source_repo="owner/repo",
+    )
+    assert "What you need to do:" not in body
+    assert "waiting on a human decision" in body
+    assert "engine retry state" in body
+
+
+def test_terminal_failure_parts_render_missing_reason_explicitly():
+    body = runner._finish_outcome_body(
+        outcome="blocked", action="Inspect the PR.", reason="",
+        diagnosis="raw state", detail="ignored", next_step="",
+        pr_url=None, number=39, source_repo="owner/repo",
+    )
+    assert "What happened: No reason was provided." in body
+
+
 def test_finish_progress_body_uses_fixed_sections_for_blocked_error(caplog):
     body = runner._finish_progress_body(
         number=39, title="Blocked task", run_id="a1b2c3d4",

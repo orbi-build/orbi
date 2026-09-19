@@ -1409,7 +1409,11 @@ def test_report_failure_comment_carries_unknown_head_scene(
     ))
     _report(ValueError("unknown head"),
             review_scene_block=scene_block)
-    assert scene.parse(captured["comments"][0]).verdict_head_unknown_round == 2
+    body = captured["comments"][0]
+    assert scene.parse(body).verdict_head_unknown_round == 2
+    assert body.index("<details><summary>Diagnosis</summary>") < body.index(
+        scene_block
+    ) < body.index("</details>")
 
 
 def test_report_failure_comment_carries_the_fingerprint_marker(
@@ -1591,16 +1595,23 @@ def test_human_decision_failure_is_terminal_with_decision_details(
         "review requires human decision: note: same failure repeated; "
         "fix: choose the authoritative address source"
     )
+    action = "Choose the authoritative address source."
     outcome = runner.report_delivery_failure(
-        runner.HumanDecisionRequired(decision),
+        runner.HumanDecisionRequired(decision, action=action),
         issue={"number": 39, "title": "task", "body": ""},
         source_repo="owner/repo", run_id=RUN_ID, pr_url=PR_URL,
         worktree=Path("/nonexistent"), branch=BRANCH,
-        role=runner.ROLE_REVIEW, cause=decision,
+        role=runner.ROLE_REVIEW, action=action,
+        reason="The review requires a human decision.", diagnosis=decision,
     )
     assert outcome == "blocked"
     assert captured["edits"] == [("ai-blocked", "ai-pr-opened")]
-    assert decision in captured["comments"][0]
+    body = captured["comments"][0]
+    assert body.index(action) < body.index("The review requires")
+    assert body.index("The review requires") < body.index(
+        "<details><summary>Diagnosis</summary>"
+    )
+    assert decision in body
     assert captured["pr_comments"] == []
 
 
