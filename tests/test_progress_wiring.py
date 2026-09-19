@@ -1513,7 +1513,7 @@ def test_review_and_merge_posts_review_findings_milestone(monkeypatch, tmp_path)
         final_patches[-1].index("--field") + 1
     ][len("body="):]
     assert "Orbi review findings" in last_body
-    assert "- review/fix round: 1" in last_body
+    assert "- review/fix round: 1" not in last_body
 
 
 def test_review_and_merge_posts_merged_milestone_and_final_summary(
@@ -1869,7 +1869,7 @@ def test_delivery_step_closed_unmerged_posts_blocked_milestone(
     # opened-PR states are review states, so always `review`) and the
     # completed review rounds (review round 2, PR #42).
     assert "- role: review" in blocked
-    assert "- review/fix round: 2" in blocked
+    assert "- review/fix round: 2" not in blocked
 
 
 def test_delivery_step_review_failure_finishes_progress_comment_with_blocked_scene(
@@ -1927,7 +1927,7 @@ def test_delivery_step_review_failure_finishes_progress_comment_with_blocked_sce
     # during the independent review) and the completed review rounds
     # (review round 2, PR #42) — not the hardcoded fix/0.
     assert "- role: review" in last_body
-    assert "- review/fix round: 2" in last_body
+    assert "- review/fix round: 2" not in last_body
     # No second progress comment was created.
     assert not any(
         "**Orbi progress**" in body for body in posted_bodies

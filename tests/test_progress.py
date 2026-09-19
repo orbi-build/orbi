@@ -362,7 +362,7 @@ def test_progress_body_starts_with_hidden_run_marker():
     assert "- last activity: 2026-08-25T02:30:00Z" in body
     assert "- last action: bash pytest tests/" in body
     assert "- tests: 156 passed" in body
-    assert "- review/fix round: 0" in body
+    assert "- review/fix round: 0" not in body
     assert "- branch: orbi/xqliu-orbi-issue-18" in body
     assert "- PR: -" in body
     assert "- session: sess-1" in body
@@ -391,7 +391,7 @@ def test_progress_body_marks_missing_values_as_dash():
 
 
 def test_progress_body_shows_pr_url_when_present():
-    body = progress.progress_body({
+    state = {
         "run_id": "abc12345",
         "issue": 18,
         "issue_title": "Publish progress",
@@ -405,11 +405,14 @@ def test_progress_body_shows_pr_url_when_present():
         "branch": "b",
         "pr": "https://github.com/xqliu/orbi/pull/40",
         "session": None,
-    })
+    }
+    body = progress.progress_body(state)
     assert (
         "- PR: https://github.com/xqliu/orbi/pull/40" in body
     )
-    assert "- review/fix round: 1" in body
+    assert "- review/fix round: 1" not in body
+    body = progress.progress_body({**state, "review_round": 3})
+    assert "- review/fix round: 3" in body
 
 
 def test_progress_body_shows_priority_field():
@@ -433,12 +436,52 @@ def test_progress_body_shows_priority_field():
     }
     body = progress.progress_body({**state, "priority": "p0"})
     assert "- priority: p0" in body
-    # The priority line sits between role and phase.
-    lines = body.splitlines()
-    assert lines.index("- priority: p0") == \
-        lines.index("- role: implement") + 1
+    # Priority is bookkeeping and is deliberately inside the fold.
+    assert "- priority: p0" in body
     body = progress.progress_body({**state, "priority": "normal"})
     assert "- priority: normal" in body
+
+
+def test_progress_body_assigns_status_fields_to_visible_or_folded_sections():
+    """Issue #1165: the live comment keeps the user-facing status visible
+    and folds identifiers/bookkeeping only.
+
+    The marker assertions deliberately check positions relative to the fold,
+    not merely that the marker strings occur somewhere in the body.
+    """
+    body = progress.progress_body({
+        "run_id": "abc12345", "issue": 1165,
+        "issue_title": "Progress comment fold",
+        "role": "implement", "priority": "normal", "phase": "test",
+        "elapsed": "3m", "last_activity": "now",
+        "last_action": "pytest", "tests": "10 passed",
+        "review_round": 3, "review": "pending", "pr": "-",
+        "branch": "orbi/task", "session": "sess-1", "recovery": "term",
+    })
+    open_tag = "<details><summary>Run details</summary>"
+    close_tag = "</details>"
+    open_at = body.index(open_tag)
+    close_at = body.index(close_tag)
+    assert body.index("<!-- orbi:run=") < open_at
+    assert body.index("<!-- runner=") > close_at
+    assert body[close_at + len(close_tag):].startswith("\n\n")
+
+    def field_names(text):
+        return {
+            line[2:].split(":", 1)[0].split("=", 1)[0]
+            for line in text.splitlines() if line.startswith("- ")
+        }
+
+    visible = field_names(body[:open_at])
+    folded = field_names(body[open_at:close_at])
+    assert visible == {
+        "issue", "role", "phase", "elapsed", "last activity", "tests",
+        "PR", "review", "recovery",
+    }
+    assert folded == {
+        "run_id", "priority", "last action", "review/fix round", "branch",
+        "session",
+    }
 
 
 def test_progress_body_shows_recovery_field_only_when_active():
@@ -465,12 +508,12 @@ def test_progress_body_shows_recovery_field_only_when_active():
     assert "- recovery" not in body
     body = progress.progress_body({**state, "recovery": "term"})
     assert "- recovery: term" in body
-    # The recovery line is the last field line; the hidden runner
-    # fingerprint marker (Issue #526) closes the body.
-    assert body.splitlines()[-3] == "- recovery: term"
+    # Recovery is visible before the bookkeeping fold; the hidden runner
+    # fingerprint marker (Issue #526) remains after the fold.
+    assert body.index("- recovery: term") < body.index("<details>")
     assert body.splitlines()[-1].startswith("<!-- runner=")
     body = progress.progress_body({**state, "recovery": "kill"})
-    assert body.splitlines()[-3] == "- recovery: kill"
+    assert body.index("- recovery: kill") < body.index("<details>")
 
 
 def make_publisher(run_command=None, comments=None, posted=None,
