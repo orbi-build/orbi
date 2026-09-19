@@ -6,7 +6,7 @@ English | [简体中文](README.zh-CN.md)
 
 Orbi claims an Issue from GitHub Issues, develops it in an isolated worktree, runs an independent review session, merges only the reviewed head, and lets a release Issue freeze the SHA and publish the tag. GitHub Issues are the only state store—no database, queue, or daemon.
 
-**Ledger:** [414 merged PRs](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [537 closed Issues](https://github.com/orbi-build/orbi/issues?q=is:closed) · [36 tagged releases](https://github.com/orbi-build/orbi/releases) <!-- ledger: refresh when publishing -->
+**Ledger:** [merged PRs](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [closed Issues](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged releases](https://github.com/orbi-build/orbi/releases) — the repository is the record.
 
 **Inspect one loop:** [Issue #835](https://github.com/orbi-build/orbi/issues/835) → [PR #843](https://github.com/orbi-build/orbi/pull/843) → [Release v0.5.4](https://github.com/orbi-build/orbi/releases/tag/v0.5.4)
 
