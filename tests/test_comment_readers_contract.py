@@ -96,7 +96,7 @@ def test_old_and_wrapped_comments_preserve_every_reader_contract(kind):
     ]
 
 
-def test_five_happy_path_comments_hide_debug_rows_and_show_review():
+def test_five_happy_path_comments_hide_debug_rows_and_progress_review_noise():
     comments = _comments()
     assert len(comments) == 5
     debug_rows = (
@@ -112,7 +112,7 @@ def test_five_happy_path_comments_hide_debug_rows_and_show_review():
             if f"- {key}:" in body:
                 assert f"- {key}:" in details
 
-    assert "- review: pass, no findings" in comments["progress"]
+    assert "- review:" not in comments["progress"]
     assert "\nreview: pass, no findings\n" in comments["merged PR"]
     # The result users care about remains visible; only the merge hash row moves.
     milestone_visible, milestone_details = comments["merged milestone"].split(

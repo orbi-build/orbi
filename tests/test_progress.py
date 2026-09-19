@@ -363,6 +363,7 @@ def test_progress_body_starts_with_hidden_run_marker():
     assert "- last action: bash pytest tests/" in body
     assert "- tests: 156 passed" in body
     assert "- review/fix round: 0" not in body
+    assert "- review:" not in body
     assert "- branch: orbi/xqliu-orbi-issue-18" in body
     assert "- PR: -" in body
     assert "- session: sess-1" in body
@@ -412,13 +413,11 @@ def test_progress_body_shows_pr_url_when_present():
     )
     assert "- review/fix round: 1" not in body
     body = progress.progress_body({**state, "review_round": 3})
-    assert "- review/fix round: 3" in body
+    assert body.index("- review/fix round: 3") < body.index("<details>")
 
 
 def test_progress_body_shows_priority_field():
-    """Issue #101: the live progress comment shows the pickup priority
-    (`p0` for urgent Issues, `normal` otherwise) right after the role,
-    so a mobile user sees at a glance that this run is a P0."""
+    """The progress details retain the pickup priority value."""
     state = {
         "run_id": "abc12345",
         "issue": 7,
@@ -435,9 +434,8 @@ def test_progress_body_shows_priority_field():
         "session": None,
     }
     body = progress.progress_body({**state, "priority": "p0"})
-    assert "- priority: p0" in body
     # Priority is bookkeeping and is deliberately inside the fold.
-    assert "- priority: p0" in body
+    assert body.index("- priority: p0") > body.index("<details>")
     body = progress.progress_body({**state, "priority": "normal"})
     assert "- priority: normal" in body
 
@@ -475,12 +473,12 @@ def test_progress_body_assigns_status_fields_to_visible_or_folded_sections():
     visible = field_names(body[:open_at])
     folded = field_names(body[open_at:close_at])
     assert visible == {
-        "issue", "role", "phase", "elapsed", "last activity", "tests",
-        "PR", "review", "recovery",
+        "role", "last activity", "tests", "PR", "recovery",
+        "review/fix round",
     }
     assert folded == {
-        "run_id", "priority", "last action", "review/fix round", "branch",
-        "session",
+        "issue", "run_id", "priority", "phase", "elapsed", "last action",
+        "branch", "session",
     }
 
 
@@ -507,11 +505,16 @@ def test_progress_body_shows_recovery_field_only_when_active():
     body = progress.progress_body(state)
     assert "- recovery" not in body
     body = progress.progress_body({**state, "recovery": "term"})
-    assert "- recovery: term" in body
-    # Recovery is visible before the bookkeeping fold; the hidden runner
-    # fingerprint marker (Issue #526) remains after the fold.
-    assert body.index("- recovery: term") < body.index("<details>")
-    assert body.splitlines()[-1].startswith("<!-- runner=")
+    lines = body.splitlines()
+    details_start = lines.index("<details><summary>Run details</summary>")
+    close_index = lines.index("</details>")
+    assert lines.index("- recovery: term") < details_start
+    assert lines[close_index + 1] == ""
+    for anchor in ("<!-- orbi:run=abc12345 -->", "<!-- runner="):
+        anchor_index = next(i for i, line in enumerate(lines)
+                            if line.startswith(anchor))
+        assert not details_start < anchor_index < close_index
+    assert lines[-1].startswith("<!-- runner=")
     body = progress.progress_body({**state, "recovery": "kill"})
     assert body.index("- recovery: kill") < body.index("<details>")
 

@@ -270,36 +270,30 @@ def progress_body(state: dict) -> str:
         "",
         PROGRESS_HEADER,
         "",
-        # Number AND title, one consistent format in every
-        # scene; both state keys are required (a state without the
-        # title fails fast, never a fabricated or bare number).
-        f"- issue: {issue_field(state['issue'], state['issue_title'])}",
         f"- role: {value('role')}",
-        f"- phase: {value('phase')}",
-        f"- elapsed: {value('elapsed')}",
         f"- last activity: {value('last_activity')}",
         f"- tests: {value('tests')}",
-        f"- review: {value('review')}",
         f"- PR: {value('pr')}",
     ]
-    # Recovery is meaningful only while active, and belongs with the
-    # at-a-glance status rather than the bookkeeping fold (Issue #1165).
+    # Exceptional state belongs with the at-a-glance status. A normal
+    # first or second review round carries no useful signal on its own.
     if state.get("recovery"):
         lines.append(f"- recovery: {state['recovery']}")
-    # Identifiers and bookkeeping are available on demand.  The hidden
-    # run marker above remains outside the fold because it is a resume
-    # anchor, as does the runner marker appended below.
+    if state.get("review_round", 0) >= 3:
+        lines.append(f"- review/fix round: {value('review_round')}")
+
+    # Identifiers and routine bookkeeping remain available on demand.
+    # Both hidden protocol markers stay outside this fold.
     details = [
+        f"- issue: {issue_field(state['issue'], state['issue_title'])}",
         f"- run_id={state['run_id']}",
         f"- priority: {value('priority')}",
+        f"- phase: {value('phase')}",
+        f"- elapsed: {value('elapsed')}",
         f"- last action: {value('last_action')}",
-    ]
-    if state.get("review_round", 0) >= 3:
-        details.append(f"- review/fix round: {value('review_round')}")
-    details.extend([
         f"- branch: {value('branch')}",
         f"- session: {value('session')}",
-    ])
+    ]
     lines.extend(["", "<details><summary>Run details</summary>", "", *details,
                   "", "</details>"])
     # The progress comment (and the blocked / fix-needed

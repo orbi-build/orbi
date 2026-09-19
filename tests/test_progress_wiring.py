@@ -1559,7 +1559,7 @@ def test_review_and_merge_posts_merged_milestone_and_final_summary(
     ][len("body="):]
     assert "Orbi delivered" in last_body
     assert "merge_commit=m1" in last_body
-    assert "- review: pass, no findings" in last_body
+    assert "- review:" not in last_body
 
 
 # --- Issue #79: the whole ProgressPublisher path is a bypass in the
