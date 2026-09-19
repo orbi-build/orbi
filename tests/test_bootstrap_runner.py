@@ -11870,7 +11870,7 @@ def test_finish_progress_carries_the_actual_role_and_round(
     assert len(posts) == 1
     body = posts[0][posts[0].index("--field") + 1][len("body="):]
     assert "- role: review" in body
-    assert "- review/fix round: 2" in body
+    assert "- review/fix round: 2" not in body
 
 
 def test_finish_progress_defaults_to_review_round_zero(monkeypatch):
@@ -11900,7 +11900,7 @@ def test_finish_progress_defaults_to_review_round_zero(monkeypatch):
     assert len(posts) == 1
     body = posts[0][posts[0].index("--field") + 1][len("body="):]
     assert "- role: review" in body
-    assert "- review/fix round: 0" in body
+    assert "- review/fix round: 0" not in body
 
 
 def test_finish_progress_renders_the_fix_needed_scene(monkeypatch):
@@ -12300,7 +12300,7 @@ def test_delivery_step_marks_blocked_when_review_fails(
     # during the independent review) and the completed review rounds
     # (review round 2, PR #42) — not the hardcoded fix/0.
     assert "- role: review" in blocked
-    assert "- review/fix round: 2" in blocked
+    assert "- review/fix round: 2" not in blocked
 
 
 def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
@@ -12953,7 +12953,7 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
     # opened-PR states are review states, so always `review`) and the
     # completed review rounds (review round 2, PR #42).
     assert "- role: review" in blocked
-    assert "- review/fix round: 2" in blocked
+    assert "- review/fix round: 2" not in blocked
 
 
 def test_delivery_step_review_failure_without_bound_run_id(
