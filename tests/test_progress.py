@@ -678,12 +678,14 @@ def test_publisher_milestone_omits_result_for_only_key_value_fields():
     assert "- result:" not in body
 
 
-def test_publisher_milestone_keeps_prose_with_key_value_fields():
+def test_publisher_merged_milestone_keeps_result_visible_and_hash_collapsed():
     publisher, calls = make_publisher()
     publisher.milestone("merged: https://example.test merge_commit=m1")
     body = calls[0][-1]
-    assert "- result: https://example.test merge_commit=m1" in body
-    assert "- merge_commit: m1" in body
+    visible, details = body.split("<details><summary>Run details</summary>", 1)
+    assert "- result: https://example.test" in visible
+    assert "merge_commit" not in visible
+    assert "- merge_commit: m1" in details
 
 
 def test_publisher_milestone_keeps_prose_and_key_value_fields():
@@ -709,10 +711,9 @@ def test_publisher_milestone_posts_multiline_field_block(monkeypatch):
             "--field",
             "body=<!-- orbi:run=abc12345 -->\n"
             "Orbi: tests passed\n"
+            "- result: 156 passed in 4.43s\n"
             "- run_id=abc12345\n"
-            "\n<details><summary>Run details</summary>\n"
-            "\n- result: 156 passed in 4.43s\n"
-            "\n</details>\n\n<!-- runner=8a12fb1c -->",
+            "\n<!-- runner=8a12fb1c -->",
         ],
     ]
     assert publisher.comment_id is None

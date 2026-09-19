@@ -1534,7 +1534,14 @@ def test_review_and_merge_posts_merged_milestone_and_final_summary(
                for line in body.splitlines())
     ]
     assert any("Orbi: merged" in body for body in milestones)
-    assert any("- merge_commit: m1" in body for body in milestones)
+    merged_milestone = next(
+        body for body in milestones if "Orbi: merged" in body
+    )
+    visible, details = merged_milestone.split(
+        "<details><summary>Run details</summary>", 1,
+    )
+    assert "merge_commit" not in visible
+    assert "- merge_commit: m1" in details
     # The merged-as-is fields ride the same milestone (Issue #833);
     # this fixture records no engine push, so the honest value is
     # `unknown` — the 0/K evidence lives in test_review_merge.
@@ -1552,6 +1559,7 @@ def test_review_and_merge_posts_merged_milestone_and_final_summary(
     ][len("body="):]
     assert "Orbi delivered" in last_body
     assert "merge_commit=m1" in last_body
+    assert "- review: pass, no findings" in last_body
 
 
 # --- Issue #79: the whole ProgressPublisher path is a bypass in the

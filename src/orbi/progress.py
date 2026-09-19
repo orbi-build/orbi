@@ -421,11 +421,11 @@ class ProgressPublisher:
             prose = re.sub(r"\s*\(?[A-Za-z_][\w-]*=[^\s)]+", "", detail)
             prose = prose.strip(" ()")
             if prose or len({key for key, _ in pairs}) != len(pairs):
-                fields["result"] = detail
+                fields["result"] = prose if headline == "merged" else detail
         fields["run_id"] = self.run_id
         self._post_comment(field_block(
             self.run_id, f"{MILESTONE_PREFIX} {headline}", fields,
-            detail_keys={"result"},
+            detail_keys={"merge_commit"} if headline == "merged" else set(),
         ))
 
     def failure_scene(self, body: str) -> None:

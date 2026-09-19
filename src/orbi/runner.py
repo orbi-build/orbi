@@ -2682,6 +2682,27 @@ def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
     return "\n".join(lines)
 
 
+def merged_pr_comment_body(run_id: str, pr_url: str, merge_commit: str,
+                           review_rounds: int, external_commits: object,
+                           commits: object, base_branch: str,
+                           review: str) -> str:
+    """Render the final delivery record without exposing detail rows."""
+    return (
+        f"{run_marker(run_id)}\n"
+        f"Orbi merged PR: {pr_url} "
+        f"(merge_commit={merge_commit} "
+        f"review_rounds={review_rounds} "
+        f"external_commits={external_commits} "
+        f"commits={commits} "
+        f"base_branch={base_branch} run_id={run_id})\n"
+        f"review: {review}\n\n"
+        "<details><summary>Run details</summary>\n\n"
+        f"- merge_commit: {merge_commit}\n"
+        f"- base_branch: {base_branch}\n\n"
+        "</details>"
+    )
+
+
 def parse_pr_comment(body: str) -> dict | None:
     """Parse one `Orbi opened PR:` comment into a resume scene.
 
@@ -7005,19 +7026,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     )
     comment_issue(
         number, repo=source_repo,
-        body=(
-            f"{marker}\n"
-            f"Orbi merged PR: {merged['url']} "
-            f"(merge_commit={confirmed['merge_commit']} "
-            f"review_rounds={round} "
-            f"external_commits={external_commits} "
-            f"commits={pr_commits} "
-            f"base_branch={base_branch} run_id={config.run_id})\n"
-            f"review: {review_summary}\n\n"
-            "<details><summary>Run details</summary>\n\n"
-            f"- merge_commit: {confirmed['merge_commit']}\n"
-            f"- base_branch: {base_branch}\n\n"
-            "</details>"
+        body=merged_pr_comment_body(
+            config.run_id, merged["url"], confirmed["merge_commit"], round,
+            external_commits, pr_commits, base_branch, review_summary,
         ),
     )
     try:
