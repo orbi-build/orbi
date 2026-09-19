@@ -5292,10 +5292,16 @@ def verify_resumed_pr(scene: dict, issue: dict, config: RunnerConfig,
                 exc, issue=issue, source_repo=source_repo,
                 run_id=current_run_id(), pr_url=scene["pr_url"],
                 worktree=worktree, branch=branch, role=ROLE_REVIEW,
-                cause=(
-                    f"the resume verification of PR {scene['pr_url']} "
+                action=(
+                    "Review the preserved PR and decide how to repair or "
+                    "replace its delivery state."
+                    if isinstance(exc, UnrecoverableDeliveryError) else ""
+                ),
+                reason=(
+                    f"The resume verification of PR {scene['pr_url']} "
                     f"failed: {_failure_detail(exc)}"
                 ),
+                diagnosis=_failure_detail(exc),
                 # The branch-gone scene destroyed the
                 # delivery state — nothing is left to preserve, and the
                 # preserved-objects note would contradict the reason.
@@ -8249,7 +8255,18 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 exc, issue=issue, source_repo=source_repo,
                 run_id=run_id, pr_url=None,
                 worktree=worktree, branch=branch, role=ROLE_IMPLEMENT,
-                cause=f"{_failure_detail(exc)} ({run_info})",
+                action=(
+                    "Fix the failure above and re-run this Issue "
+                    f"({run_info}); - base_branch: {base_branch}; "
+                    f"- base_sha: {base_sha}."
+                ),
+                reason=(
+                    "The delivery stopped before it could be completed: "
+                    f"{_failure_detail(exc)} ({run_info})"
+                ),
+                diagnosis=(
+                    f"{_failure_detail(exc)} ({run_info})"
+                ),
                 classify=False, evidence=True,
                 current_labels=(
                     {PR_OPENED_LABEL} if pr_opened else {IN_PROGRESS_LABEL}
@@ -8348,50 +8365,65 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
 
 def _finish_outcome_body(*, outcome: str, detail: str,
                          next_step: str, pr_url: str | None,
-                         number: int, source_repo: str) -> str:
-    """Render the user-facing, three-part terminal outcome.
-
-    ``detail`` remains available verbatim for diagnosis, but it is not a
-    suitable headline: failures often contain Python command reprs and raw
-    stderr.  The next-step argument is deliberately split into the human
-    action and Orbi's action for the two terminal scenes.
-    """
+                         number: int, source_repo: str,
+                         action: str | None = None,
+                         reason: str | None = None,
+                         diagnosis: str | None = None) -> str:
+    """Render a terminal outcome with action, reason, and diagnosis."""
     if not next_step:
         event(
             "progress_finish_missing_next_step", level=logging.WARNING,
             call_point="_finish_progress_body", issue=number,
             repo=source_repo, outcome=outcome,
         )
-    if outcome == "blocked":
-        happened = (
+    legacy_action = action is None
+    blocked = outcome == "blocked"
+    disposition = (
+        "waiting on a human decision" if blocked
+        else "the engine will retry"
+    )
+    if action is None:
+        action = next_step if blocked else ""
+    if reason is None:
+        reason = (
             "Orbi could not complete the delivery because a required "
-            "operation failed."
-        )
-        user_action = next_step or "Nothing"
-        if pr_url:
-            orbi_action = (
-                "Orbi will wait for the required action; the open PR is "
-                f"{pr_url}."
-            )
-        else:
-            orbi_action = "Orbi will wait for a human to resolve this Issue."
-    else:
-        happened = (
+            "operation failed." if blocked else
             "Orbi found a problem that must be fixed before it can continue."
         )
-        user_action = "Nothing"
-        orbi_action = (
-            next_step or "Orbi will wait for a human to resolve this Issue."
+    if diagnosis is None:
+        diagnosis = detail
+    # Legacy callers did not provide named parts. Keep their old progress
+    # wording in the reason field while structured callers stay clean.
+    if legacy_action and not blocked and not next_step:
+        reason = (
+            f"{reason}\nWhat you need to do: Nothing\n"
+            "What Orbi will do next: Orbi will wait for a human"
         )
-    return (
-        f"**Orbi {outcome}**\n\n"
-        f"What happened: {happened}\n"
-        f"What you need to do: {user_action}\n"
-        f"What Orbi will do next: {orbi_action}\n\n"
+    elif action == "" and next_step:
+        reason = f"{reason}\nWhat Orbi will do next: {next_step}"
+    paragraphs = [f"**Orbi {outcome} — {disposition}**"]
+    if action:
+        paragraphs.append(f"What you need to do: {action}")
+    elif legacy_action and blocked:
+        paragraphs.append("What you need to do: Nothing")
+    if reason:
+        paragraphs.append(f"What happened: {reason}")
+    if legacy_action or (not action and next_step):
+        if legacy_action and not blocked:
+            paragraphs.append("What you need to do: Nothing")
+        paragraphs.append(
+            "What Orbi will do next: "
+            + ("Orbi will wait for a human" if blocked
+               else "the engine will retry")
+        )
+    if pr_url and blocked and not action:
+        paragraphs.append(f"The open PR is {pr_url}.")
+    paragraphs.append(
         "<details><summary>Raw error</summary>\n"
-        f"{detail}\n"
+        f"{diagnosis}\n"
         "</details>"
     )
+    return "\n\n".join(paragraphs)
 
 
 def _finish_progress_body(*, number: int, title: str, run_id: str,
@@ -8399,7 +8431,9 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
                           worktree: Path | None, pr_url: str | None,
                           review_round: int, priority: str, detail: str,
                           next_step: str, outcome: str,
-                          source_repo: str) -> str:
+                          source_repo: str, action: str | None = None,
+                          reason: str | None = None,
+                          diagnosis: str | None = None) -> str:
     """Render the terminal progress scene shared by every finish path."""
     return _progress_body(_progress_state(
         RunContext(
@@ -8410,7 +8444,8 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
         review_round=review_round, priority=priority,
     ), outcome=_finish_outcome_body(
         outcome=outcome, detail=detail, next_step=next_step, pr_url=pr_url,
-        number=number, source_repo=source_repo,
+        number=number, source_repo=source_repo, action=action,
+        reason=reason, diagnosis=diagnosis,
     ))
 
 
@@ -8567,7 +8602,9 @@ def _failure_streak(comments: list, run_id: str,
 def report_delivery_failure(
     exc: BaseException, *, issue: dict, source_repo: str,
     run_id: str | None, pr_url: str | None, worktree: Path | None,
-    branch: str | None, role: str, cause: str, evidence: bool = False,
+    branch: str | None, role: str, cause: str | None = None,
+    action: str = "", reason: str | None = None,
+    diagnosis: str | None = None, evidence: bool = False,
     classify: bool = True, current_labels: set[str] | None = None,
     blocked_suffix: str = "", review_round: int | None = None,
     review_scene_block: str | None = None,
@@ -8583,11 +8620,10 @@ def report_delivery_failure(
     phrase + `cause` + run scene + evidence), prefix the run marker,
     comment the Issue (the PR too on the recoverable branch — the
     terminal blocked state is Issue-only), then publish the milestone
-    and the terminal progress scene as a pure bypass. The
-    milestone text is `blocked|fix needed: {cause}` — untruncated, so
-    the concrete reason (a missing worktree path, a round-exhaustion
-    reason) stays visible in the mobile notification. Returns the
-    outcome, `"blocked"` or `"fix needed"`.
+    and the terminal progress scene as a pure bypass. The carried
+    failure is named `action`, `reason`, and `diagnosis`; the milestone
+    uses the reason so its mobile notification remains useful. Returns
+    the outcome, `"blocked"` or `"fix needed"`.
 
     `classify=False` forces the terminal branch (the implement-phase
     handler: every failure reaching it is terminal by design — the
@@ -8630,6 +8666,12 @@ def report_delivery_failure(
     number = int(issue["number"])
     title = issue["title"]
     priority = issue_priority(issue)
+    # Keep `cause` as a compatibility input for callers outside the three
+    # production paths; new callers provide the three named parts.
+    if reason is None:
+        reason = cause or _failure_detail(exc)
+    if diagnosis is None:
+        diagnosis = cause or _failure_detail(exc)
     blocked = not classify or is_unrecoverable_failure(exc)
     # The #825 dead-loop guard, recoverable failures only (blocked is
     # already terminal; `classify=False` is the implement handler's
@@ -8656,8 +8698,8 @@ def report_delivery_failure(
             streak = _failure_streak(history, run_id, fingerprint)
             if streak + 1 >= FAILURE_STREAK_LIMIT:
                 blocked = True
-                cause = (
-                    f"{cause}; the same failure has now occurred "
+                reason = (
+                    f"{reason}; the same failure has now occurred "
                     f"{streak + 1} consecutive times for run_id={run_id} "
                     f"(fingerprint {fingerprint}) with unchanged "
                     "preconditions — a dead loop, not a transient error"
@@ -8706,26 +8748,44 @@ def report_delivery_failure(
             number, repo=source_repo, event=EVENT_BLOCKED,
             current_labels=labels,
         )
-        body = f"Orbi failed: {cause}"
-        if classify:
-            body += _BLOCKED_PRECONDITION_PHRASE + blocked_suffix
-        elif worktree is not None:
+        headline = (
+            "Orbi failed: " + reason if not classify and not run_id
+            else "Orbi: blocked — waiting on a human decision"
+        )
+        paragraphs = [headline]
+        if action:
+            paragraphs.append(action)
+        paragraphs.append(reason)
+        # Keep the legacy failure label in the collapsed diagnosis while
+        # the headline carries the actionable disposition.
+        diagnosis = f"Orbi failed: {diagnosis}"
+        if worktree is not None and not classify:
             scene = scene_line()
             if scene is not None:
-                # The scene fields join the FIRST body line, where
-                # `format_status_comment` lifts them into the
-                # structured-alert field block.
-                body += f" {scene}"
+                diagnosis += f"\n{scene}"
+        body = "\n\n".join(paragraphs)
+        body += f"\n\n<details><summary>Diagnosis</summary>\n{diagnosis}"
+        if classify:
+            body += f"\n{_BLOCKED_PRECONDITION_PHRASE.lstrip('; ')}"
+        if blocked_suffix:
+            body += f"\n{blocked_suffix.lstrip('; ')}"
+        body += "\n</details>"
         outcome = "blocked"
     else:
         apply_label_patch(
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
             current_labels=labels,
         )
-        body = f"Orbi needs a fix: {cause}{_FIX_NEEDED_PHRASE}"
+        body = "\n\n".join((
+            "Orbi: fix needed — the engine will retry",
+            *(([f"What you need to do: {action}"] if action else [])),
+            f"What happened: {reason}",
+            f"Orbi needs a fix: {reason}",
+        ))
+        diagnosis = f"Orbi needs a fix: {diagnosis}"
+        body += f"\n\n<details><summary>Diagnosis</summary>\n{diagnosis}\n</details>"
         # The full scene is always appended: a recoverable failure
-        # happens after the worktree was derived (a failure before the
-        # derivation is unrecoverable and never reaches this branch).
+        # happens after the worktree was derived.
         body += f"\n{scene_line()}"
         if review_scene_block is not None:
             body += f"\n{review_scene_block}"
@@ -8803,17 +8863,17 @@ def report_delivery_failure(
         )
         if outcome == "blocked":
             publish(action=lambda: target.milestone(
-                f"blocked: {cause}",
+                f"blocked: {reason}",
             ))
             if classify:
-                finish_failure = f"{cause}{_BLOCKED_PRECONDITION_PHRASE}"
+                finish_failure = reason
                 next_step = (
                     "fix the precondition above (see the reason) and "
                     "relabel the Issue ai-fix-needed to resume this "
                     "same PR"
                 )
             else:
-                finish_failure = cause
+                finish_failure = reason
                 next_step = (
                     "fix the failure above and re-run this Issue (a "
                     "new run id is created automatically)"
@@ -8821,9 +8881,9 @@ def report_delivery_failure(
             finish_outcome = "blocked"
         else:
             publish(action=lambda: target.milestone(
-                f"fix needed: {cause}",
+                f"fix needed: {reason}",
             ))
-            finish_failure = cause
+            finish_failure = reason
             next_step = (
                 "the next tick resumes the same run, branch, worktree "
                 "and PR automatically (the Issue stays ai-fix-needed)"
@@ -8841,7 +8901,8 @@ def report_delivery_failure(
                 ),
                 priority=priority, detail=finish_failure,
                 next_step=next_step, outcome=finish_outcome,
-                source_repo=source_repo,
+                source_repo=source_repo, action=action,
+                reason=reason, diagnosis=diagnosis,
             )))
     return outcome
 
@@ -9091,7 +9152,13 @@ def _run_review_round(
             exc, issue=issue, source_repo=source_repo,
             run_id=run_id, pr_url=pr_url,
             worktree=worktree, branch=branch, role=ROLE_REVIEW,
-            cause=f"the independent review of PR {pr_url} failed: {detail}",
+            action=(
+                "Review the findings and decide how to proceed."
+                if isinstance(exc, (ReviewRoundsExhausted, HumanDecisionRequired))
+                else ""
+            ),
+            reason=f"the independent review of PR {pr_url} failed: {detail}",
+            diagnosis=detail,
             evidence=True,
             review_scene_block=(
                 _round_scene_block(
