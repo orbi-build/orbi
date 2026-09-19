@@ -1288,6 +1288,18 @@ def test_slot_lines_ignores_corrupted_slot_file(tmp_path):
     assert lines == ["slots: 0/1"]
 
 
+def test_slot_lines_reports_held_unknown_pid(monkeypatch, tmp_path):
+    """A slot whose lock is held with an unreadable PID counts as taken
+    and renders as `pid=unknown (held)` — never silently free."""
+    monkeypatch.setattr(
+        orbi, "slot_occupancy",
+        lambda state_dir, capacity: [(1, -1)],
+    )
+    assert orbi.slot_lines(tmp_path / "slots", 1) == [
+        "slots: 1/1", "  slot-1: pid=unknown (held)",
+    ]
+
+
 # --- deployment consistency (Issue #103) ------------------------------------
 
 
