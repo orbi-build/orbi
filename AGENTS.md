@@ -27,6 +27,20 @@ contradiction in place for the next delivery to rediscover.
 - **Implementer Pi**: plan, TDD, tests, commit the delivery; the Runner pushes the task branch and opens one PR.
 - **Reviewer Pi**: after the PR exists, a new `pi --print` with `prompts/prompt_review.md` and a new JSONL on the same worktree.
 - **Runner**: labels, observability, review/fix, and merge.
+- **Maintainer**: opens the Issue, decides, verifies what the sandbox cannot,
+  merges. **Never writes the delivery's code.** An Issue carrying `ai-ready`
+  belongs to the Implementer from that moment: pushing the fix yourself while a
+  run is live hands the agent a base with nothing left to change, and the
+  delivery ends `ai-blocked` on `the agent delivered no commit on the task
+  branch` — the ticket looks failed when the work was in fact done by the wrong
+  actor (orbi-website#231, 2026-09-19). Want it done by hand instead? Remove
+  `ai-ready` first, so no run is claimed against it.
+
+  What the maintainer does do by hand: deployment and secrets (`wrangler
+  secret put`, environment approval), production verification that needs real
+  credentials or a browser, and evidence the sandbox cannot produce — all of it
+  posted back onto the ticket so the Implementer's acceptance stays inside what
+  the sandbox can reach.
 
 ## Product positioning
 
