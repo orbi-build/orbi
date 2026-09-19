@@ -2637,7 +2637,10 @@ def started_pi_comment_body(ctx: RunContext, run_info: str,
         f"{key}={info[key]}" for key in ("run_id", "priority")
         if key in info
     )
-    return field_block(ctx.run_id, headline, fields)
+    return field_block(
+        ctx.run_id, headline, fields,
+        detail_keys={"base_sha", "repo_config", "branch", "worktree", "session"},
+    )
 
 
 def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
@@ -2670,7 +2673,10 @@ def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
         pr_url=pr_url,
         external="true" if external else "",
     )
-    body = field_block(run_id, headline, fields)
+    body = field_block(
+        run_id, headline, fields,
+        detail_keys={"base_sha", "repo_config", "branch", "worktree", "session"},
+    )
     lines = body.splitlines()
     lines.insert(1, scene.render(scene_record))
     return "\n".join(lines)
@@ -6654,6 +6660,12 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         ),
     )
     verdict = parse_review_verdict(output)
+    fixed_findings = len(verdict["findings"])
+    review_summary = (
+        "pass, no findings"
+        if fixed_findings == 0
+        else f"pass, {fixed_findings} findings fixed in-session"
+    )
     event(
         "review", pr=pr["number"], round=round,
         verdict=verdict["verdict"], blockers=verdict["blockers"],
@@ -6972,7 +6984,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             _progress_state(
                 ctx, title=title, role=ROLE_REVIEW, started=started,
                 pr_url=merged["url"], review_round=round,
-                priority=priority,
+                priority=priority, review=review_summary,
             ), outcome=(
                 "**Orbi delivered**\n\n"
                 f"PR {merged['url']} merged "
@@ -7000,7 +7012,12 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             f"review_rounds={round} "
             f"external_commits={external_commits} "
             f"commits={pr_commits} "
-            f"base_branch={base_branch} run_id={config.run_id})"
+            f"base_branch={base_branch} run_id={config.run_id})\n"
+            f"review: {review_summary}\n\n"
+            "<details><summary>Run details</summary>\n\n"
+            f"- merge_commit: {confirmed['merge_commit']}\n"
+            f"- base_branch: {base_branch}\n\n"
+            "</details>"
         ),
     )
     try:

@@ -709,9 +709,10 @@ def test_publisher_milestone_posts_multiline_field_block(monkeypatch):
             "--field",
             "body=<!-- orbi:run=abc12345 -->\n"
             "Orbi: tests passed\n"
-            "- result: 156 passed in 4.43s\n"
             "- run_id=abc12345\n"
-            "\n<!-- runner=8a12fb1c -->",
+            "\n<details><summary>Run details</summary>\n"
+            "\n- result: 156 passed in 4.43s\n"
+            "\n</details>\n\n<!-- runner=8a12fb1c -->",
         ],
     ]
     assert publisher.comment_id is None

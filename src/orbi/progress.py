@@ -95,13 +95,20 @@ def _without_runner_marker(body: str) -> str:
     return _RUNNER_MARKER_PATTERN.sub("", body).rstrip()
 
 
-def field_block(run_id: str, headline: str, fields: dict[str, object]) -> str:
-    """Render a marker-first status comment with one field per line."""
+def field_block(run_id: str, headline: str, fields: dict[str, object], *,
+                detail_keys: set[str] | None = None) -> str:
+    """Render a marker-first status comment with optional collapsed details."""
+    detail_keys = detail_keys or set()
     lines = [run_marker(run_id), headline]
-    lines.extend(
-        f"- {key}={value}" if key == "run_id"
-        else f"- {key}: {value}" for key, value in fields.items()
-    )
+    visible = []
+    details = []
+    for key, value in fields.items():
+        line = f"- {key}={value}" if key == "run_id" else f"- {key}: {value}"
+        (details if key in detail_keys else visible).append(line)
+    lines.extend(visible)
+    if details:
+        lines.extend(["", "<details><summary>Run details</summary>", "", *details,
+                      "", "</details>"])
     return _with_runner_marker("\n".join(lines))
 
 
@@ -281,10 +288,15 @@ def progress_body(state: dict) -> str:
         f"- last action: {value('last_action')}",
         f"- tests: {value('tests')}",
         f"- review/fix round: {value('review_round')}",
-        f"- branch: {value('branch')}",
+        f"- review: {value('review')}",
         f"- PR: {value('pr')}",
+    ]
+    details = [
+        f"- branch: {value('branch')}",
         f"- session: {value('session')}",
     ]
+    lines.extend(["", "<details><summary>Run details</summary>", "", *details,
+                  "", "</details>"])
     # Idle-stall recovery: the recovery state is shown only
     # while it is active (`term` / `kill`); an idle run keeps the
     # pre-#94 body shape exactly.
@@ -413,6 +425,7 @@ class ProgressPublisher:
         fields["run_id"] = self.run_id
         self._post_comment(field_block(
             self.run_id, f"{MILESTONE_PREFIX} {headline}", fields,
+            detail_keys={"result"},
         ))
 
     def failure_scene(self, body: str) -> None:
@@ -561,7 +574,8 @@ def _run_info_fields(run_info: str) -> dict[str, str]:
 def _progress_state(ctx: RunContext, *, title: str, role: str,
                     started: float, pr_url: str | None,
                     review_round: int, priority: str,
-                    activity: dict | None = None) -> dict:
+                    activity: dict | None = None,
+                    review: str = "pending") -> dict:
     """Collect the current run state for the GitHub progress comment.
 
     `title` is the issue's GitHub title: the progress
@@ -596,6 +610,7 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
         "last_action": (activity or {}).get("action"),
         "tests": read_test_result(ctx.worktree),
         "review_round": review_round,
+        "review": review,
         "branch": ctx.branch,
         "pr": pr_url,
         "session": (activity or {}).get("session_id"),

@@ -264,8 +264,13 @@ def test_parse_pr_comment_returns_scene_for_multiline_opened_pr_comment():
         scene_block,
         f"Orbi opened PR: {FAKE_PR_URL}",
         "- base_branch: main",
-        "- base_sha: abc123def456",
         f"- run_id={FAKE_RUN_ID}",
+        "",
+        "<details><summary>Run details</summary>",
+        "",
+        "- base_sha: abc123def456",
+        "",
+        "</details>",
         "",
         f"<!-- runner={progress.runner_fingerprint()} -->",
     ]
@@ -315,12 +320,16 @@ def test_started_pi_comment_uses_multiline_field_block():
         f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
         f"Orbi started Pi: run_id={FAKE_RUN_ID} priority=normal\n"
         "- base_branch: main\n"
-        "- base_sha: abc123def456\n"
         f"- run_id={FAKE_RUN_ID}\n"
         "- priority: normal\n"
+        "\n"
+        "<details><summary>Run details</summary>\n"
+        "\n"
+        "- base_sha: abc123def456\n"
         f"- branch: {FAKE_BRANCH}\n"
         f"- worktree: {FAKE_WORKTREE}\n"
         "\n"
+        "</details>\n\n"
         f"<!-- runner={progress.runner_fingerprint()} -->"
     )
 
