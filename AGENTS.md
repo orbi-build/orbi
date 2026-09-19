@@ -58,6 +58,48 @@ contradiction in place for the next delivery to rediscover.
 - One Issue is **one runtime outcome**, in one of two shapes: a **fix** (when X, should Y, actually Z) or a **change** (when X, the user should be able to Y; today they cannot because Z) — one observable behavior, a handful of related files, tests included.
 - Open the Issue once the root cause is pinned.
 
+## Outbound links carry their origin
+
+Every link to `orbi.build` that leaves this project — README, docs pages,
+release notes, Issue and PR comments, outreach copy, a social post — carries
+`?ref=<token>` naming **where it was published**. Without it the signup is filed
+under the referer host, and that host is the same string for every position on
+a site: a README CTA, an issue link and someone's star list all arrive as
+`github.com`, and every tweet arrives as `t.co` (X rewrites outbound links).
+Telegram, mail clients and a pasted URL send no referer at all and land as
+`direct`.
+
+The token is one flat lowercase field (`^[a-z0-9_-]{1,32}$`), layered by prefix
+rather than by extra parameters:
+
+```
+gh-readme        the repository README's CTA
+gh-issue         a link inside an Issue or Discussion
+docs-<page>      a docs.orbi.build page, e.g. docs-getting-started
+x-<yymmdd>       an X post, dated so it traces back to the one post
+hn-<postid>      Hacker News
+tg               the Telegram group
+email-<batch>    an email batch
+```
+
+The channel is read back with `substr`, so the schema never grows a column:
+
+```sql
+SELECT CASE WHEN instr(source,'-')>0
+            THEN substr(source,1,instr(source,'-')-1)
+            ELSE source END AS channel,
+       COUNT(*) FROM tenants GROUP BY channel;
+```
+
+**Links that must NOT carry it**: anything internal to a running session — the
+login bounce, status-page navigation, a redirect back from OAuth. A `ref` there
+overwrites the visitor's real first touch with a word describing our own
+plumbing, which is exactly the defect Issue #716 repaired (`source='webhook'`
+had claimed two paying tenants' rows).
+
+No UTM triple: we do not buy ads, so `utm_medium` and `utm_campaign` would be
+permanently empty columns. One field, read by prefix.
+
 ## Language contract
 
 New public delivery text is written for the project's target users, who are not
