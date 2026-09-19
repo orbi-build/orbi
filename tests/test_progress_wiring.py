@@ -397,6 +397,10 @@ def test_publish_test_milestone_posts_passed_or_failed(tmp_path):
         ("RESULT: 0 failed", "tests passed"),
         ("1 failed, 155 passed in 4.43s", "tests failed"),
         ("FAILED tests/x.py::test_y", "tests failed"),
+        (
+            "ERROR tests/test_x.py - ImportError: No module named 'foo'",
+            "tests failed",
+        ),
         ("exit=0: error handling completed", "tests passed"),
         ("exit=1: all checks passed", "tests failed"),
     ],

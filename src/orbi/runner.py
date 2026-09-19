@@ -7158,7 +7158,9 @@ _TEST_EXIT_RE = re.compile(r"\bexit\s*[:=]\s*(-?\d+)\b", re.IGNORECASE)
 _TEST_OUTCOME_COUNT_RE = re.compile(
     r"\b(\d+)\s+(?:failed|failures?|errors?)\b", re.IGNORECASE,
 )
-_TEST_FAILURE_EVIDENCE_RE = re.compile(r"^\s*FAILED\b", re.IGNORECASE)
+_TEST_FAILURE_EVIDENCE_RE = re.compile(
+    r"^\s*(?:FAILED|ERROR)\b", re.IGNORECASE,
+)
 
 
 def _test_result_failed(result: str) -> bool:
