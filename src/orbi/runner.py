@@ -7166,8 +7166,8 @@ _TEST_FAILURE_EVIDENCE_RE = re.compile(
 def _test_result_failed(result: str) -> bool:
     """Classify a test result without treating prose or zero counts as errors."""
     exits = [int(value) for value in _TEST_EXIT_RE.findall(result)]
-    if exits:
-        return any(value != 0 for value in exits)
+    if any(value != 0 for value in exits):
+        return True
 
     counts = _TEST_OUTCOME_COUNT_RE.findall(result)
     if any(int(count) > 0 for count in counts):
