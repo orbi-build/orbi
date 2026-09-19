@@ -740,6 +740,40 @@ def test_publisher_milestone_keeps_prose_and_key_value_fields():
     body = calls[0][-1]
     assert "- result: base_branch=develop base_branch=main" in body
     assert "- base_branch: main" in body
+    assert "<details>" not in body
+
+
+def test_publisher_milestone_folds_long_result_but_keeps_short_fields_visible():
+    publisher, calls = make_publisher()
+    diagnosis = "x" * 201
+    publisher.milestone(f"blocked: enabled=false {diagnosis}")
+    body = calls[0][-1]
+    visible, details = body.split(
+        "<details><summary>Run details</summary>", 1,
+    )
+    assert "- enabled: false" in visible
+    assert f"- result: enabled=false {diagnosis}" in details
+    assert "- result:" not in visible
+
+
+def test_publisher_milestone_keeps_result_inline_at_threshold():
+    publisher, calls = make_publisher()
+    diagnosis = "x" * 200
+    publisher.milestone(f"blocked: {diagnosis}")
+    body = calls[0][-1]
+    assert f"- result: {diagnosis}" in body
+    assert "<details>" not in body
+
+
+def test_publisher_milestone_folds_short_multiline_result():
+    publisher, calls = make_publisher()
+    publisher.milestone("blocked: first line\nsecond line")
+    body = calls[0][-1]
+    visible, details = body.split(
+        "<details><summary>Run details</summary>", 1,
+    )
+    assert "- result:" not in visible
+    assert "- result: first line\nsecond line" in details
 
 
 def test_publisher_milestone_posts_multiline_field_block(monkeypatch):

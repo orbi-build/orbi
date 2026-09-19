@@ -47,6 +47,8 @@ MILESTONE_PREFIX = "Orbi:"
 # marker it identifies the run's progress comment among the run's other
 # marker-carrying comments (started Pi / opened PR scenes, milestones).
 PROGRESS_HEADER = "**Orbi progress**"
+# Values this long are diagnosis/details rather than concise status fields.
+DETAIL_VALUE_LENGTH = 200
 
 
 def _checkout_root(path: Path) -> Path | None:
@@ -104,7 +106,10 @@ def field_block(run_id: str, headline: str, fields: dict[str, object], *,
     details = []
     for key, value in fields.items():
         line = f"- {key}={value}" if key == "run_id" else f"- {key}: {value}"
-        (details if key in detail_keys else visible).append(line)
+        rendered_value = str(value)
+        is_long = (len(rendered_value) > DETAIL_VALUE_LENGTH
+                   or "\n" in rendered_value)
+        (details if key in detail_keys or is_long else visible).append(line)
     lines.extend(visible)
     if details:
         lines.extend(["", "<details><summary>Run details</summary>", "", *details,
