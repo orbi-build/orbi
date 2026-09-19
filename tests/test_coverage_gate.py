@@ -408,6 +408,136 @@ def test_diff_gate_main_fails_on_uncovered_change_in_process(tmp_path,
         os.chdir(old_cwd)
 
 
+def test_diff_gate_changed_lines_reset_numbering_per_hunk(tmp_path):
+    """Two separate hunks of ONE file (an insertion in the middle and
+    one at the end): the second `@@` header must reset the new-file
+    numbering, not be consumed as a content line."""
+    module = load_gate_module("diff_coverage_gate")
+    repo = make_git_fixture(tmp_path)
+    (repo / "module.py").write_text(
+        "def existing():\n    # added middle\n    return 1\n"
+        "\n\ndef tail():\n    return 2\n",
+        encoding="utf-8",
+    )
+    git("add", "-A", cwd=repo)
+    git("commit", "-m", "two hunks", cwd=repo)
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(repo)
+        changed = module.changed_python_lines("main")
+    finally:
+        os.chdir(old_cwd)
+    # Hunk 1 adds line 2 (`# added middle`); hunk 2 adds lines 4-7.
+    assert changed == {"module.py": {2, 4, 5, 6, 7}}
+
+
+def test_diff_gate_changed_lines_ignore_no_newline_marker(tmp_path):
+    """A file whose last added line has no trailing newline carries a
+    `\\ No newline at end of file` marker inside the hunk: it is not a
+    content line and must not advance the numbering."""
+    module = load_gate_module("diff_coverage_gate")
+    repo = make_git_fixture(tmp_path)
+    (repo / "module.py").write_text(
+        DIFF_FIXTURE + "\n\ndef tail():\n    return 2",
+        encoding="utf-8",
+    )
+    git("add", "-A", cwd=repo)
+    git("commit", "-m", "no trailing newline", cwd=repo)
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(repo)
+        changed = module.changed_python_lines("main")
+    finally:
+        os.chdir(old_cwd)
+    assert changed == {"module.py": {3, 4, 5, 6}}
+
+
+def test_diff_gate_changed_lines_survive_degenerate_dev_null_hunk(
+        monkeypatch):
+    """Degenerate shapes real git never emits around a /dev/null
+    deletion hunk — a stray '+' line, a '@@'-prefixed line that is not
+    a hunk header, an unrecognized line, a no-newline marker — must
+    neither crash the parser nor invent a file entry: nothing is
+    recorded for the deleted file."""
+    module = load_gate_module("diff_coverage_gate")
+    fake = subprocess.CompletedProcess(
+        args=[], returncode=0,
+        stdout=(
+            "diff --git a/x.py b/x.py\n"
+            "deleted file mode 100644\n"
+            "--- a/x.py\n"
+            "+++ /dev/null\n"
+            "@@ -1,1 +0,0 @@\n"
+            "@@ not a hunk header\n"
+            "+stray\n"
+            " context-looking line\n"
+            "\\ No newline at end of file\n"
+        ),
+        stderr="",
+    )
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: fake)
+    assert module.changed_python_lines("main") == {}
+
+
+def test_diff_gate_changed_lines_count_plus_prefixed_content_lines(tmp_path):
+    """Added content lines that themselves start with `+` (a docstring
+    that quotes the `+++ b/...` header syntax) are CONTENT lines: git
+    marks each with a single leading `+`, so the diff text carries
+    `+++ note ...` / `+++ b/ghost.py` / `+++plain`. The parser must not
+    mistake them for file headers — the old prefix matching dropped
+    every added line after the first one (current=None) or credited
+    them to a ghost file (`ghost.py`)."""
+    module = load_gate_module("diff_coverage_gate")
+    repo = make_git_fixture(tmp_path)
+    (repo / "module.py").write_text(
+        DIFF_FIXTURE + '\n\ndef docs():\n    """\n'
+        "++ note: this line looks like a diff target header\n"
+        "++ b/ghost.py\n"
+        "++plain\n"
+        '    """\n'
+        "    return 7\n",
+        encoding="utf-8",
+    )
+    git("add", "-A", cwd=repo)
+    git("commit", "-m", "plus-prefixed content lines", cwd=repo)
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(repo)
+        changed = module.changed_python_lines("main")
+    finally:
+        os.chdir(old_cwd)
+    # Lines 3-11 are all added content; none of them is a header.
+    assert changed == {"module.py": {3, 4, 5, 6, 7, 8, 9, 10, 11}}
+
+
+def test_diff_gate_fails_when_a_poison_header_hides_an_uncovered_line(
+        tmp_path):
+    """End-to-end for the silent-pass variant: one `++ note` content
+    line makes the old parser drop every later added line of the file,
+    so an uncovered `return` after it sails through the 100% gate."""
+    repo = make_git_fixture(tmp_path)
+    (repo / "module.py").write_text(
+        DIFF_FIXTURE + '\n\ndef docs():\n    """\n'
+        "++ note: this line looks like a diff target header\n"
+        '    """\n'
+        "    return 7\n",
+        encoding="utf-8",
+    )
+    git("add", "-A", cwd=repo)
+    git("commit", "-m", "uncovered line behind a poison header", cwd=repo)
+    # Executed: lines 1-2 (base), 5 (def) and 6 (the docstring
+    # statement); line 9 (`return 7`) is missing.
+    coverage_json_for(repo, [(1, 2), (2, -1), (5, 6)])
+    result = run_gate(DIFF_GATE, "main", data_file=repo / ".coverage",
+                      cwd=repo)
+    assert result.returncode != 0, (
+        f"the diff gate must fail when an uncovered changed Python line "
+        f"hides behind a plus-prefixed content line, got exit "
+        f"{result.returncode}: {result.stdout!r} {result.stderr!r}"
+    )
+    assert "module.py:9" in result.stdout
+
+
 def test_diff_gate_changed_python_lines_parses_the_real_diff(tmp_path):
     module = load_gate_module("diff_coverage_gate")
     repo = make_git_fixture(tmp_path)
