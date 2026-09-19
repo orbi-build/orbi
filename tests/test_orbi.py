@@ -1374,6 +1374,9 @@ def _fake_doctor_commands(monkeypatch, ssh_down: bool = False,
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(orbi, "run_command", fake_run)
+    monkeypatch.setattr(orbi, "merge_gate_preflight", lambda repo, branch: [
+        f"merge_gate: PASS repo={repo} branch={branch} protection readable",
+    ])
     return calls
 
 
@@ -1790,6 +1793,7 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
     assert lines[1] == "commit: 0123456789abcdef0123456789abcdef01234567"
     assert "unit_drift: clean" in lines
     assert "deploy_home: clean" in lines
+    assert "  merge_gate: PASS repo=xqliu/orbi branch=main protection readable" in lines
     # Both units are reported with their installed hash.
     from orbi import scheduler, systemd_deploy
     status = scheduler.unit_status(config.repo_dir, installed)
