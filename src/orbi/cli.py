@@ -43,7 +43,7 @@ from orbi.delivery_labels import (
     READY_LABEL,
 )
 
-from orbi.github import list_milestones
+from orbi.github import list_milestones, merge_gate_preflight
 from orbi.runner import (
     ConfigFileMissingError,
     RunIdFilter,
@@ -600,6 +600,9 @@ def doctor_report(config: RunnerConfig, installed_dir: Path | None) -> str:
     lines.append(f"pi: {session if session else 'none'}")
     for repo in config.source_repos:
         lines.append(f"source: {repo}")
+        lines.extend(f"  {line}" for line in merge_gate_preflight(
+            repo, config.base_branch,
+        ))
         current = current_issue(repo)
         lines.append(f"  current: {format_issue(current) if current else '-'}")
     journal = "\n".join(sched.journal_lines(

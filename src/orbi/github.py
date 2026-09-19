@@ -65,6 +65,99 @@ GH_READ_SUBCOMMANDS = {
 RESUME_PR_STATE_TIMEOUT_SECONDS = 30
 
 
+def _not_found(exc: subprocess.CalledProcessError) -> bool:
+    """Whether a failed GitHub read was an HTTP 404."""
+    return re.search(r"(?:http|status) ?404|not found", " ".join(
+        str(part or "") for part in (exc.stderr, exc.stdout)
+    ), re.IGNORECASE) is not None
+
+
+def _merge_gate_api(repo: str, path: str, *, timeout: int = 30) -> object:
+    """Read one merge-gate endpoint through the read-only gh seam."""
+    raw = run_gh_read_command(["gh", "api", f"repos/{repo}/{path}"],
+                              timeout=timeout)
+    return json.loads(raw)
+
+
+def merge_gate_preflight(repo: str, branch: str) -> list[str]:
+    """Classify branch protection visible to the configured GitHub token.
+
+    The classic protection endpoint and the branch-rules endpoint are both
+    required: GitHub returns an empty classic response for some ruleset-only
+    repositories.  A 404 from the classic endpoint is therefore not called
+    PASS until the rules endpoint explicitly returns an empty list.  This
+    function only emits GET requests.
+    """
+    classic: dict | None = None
+    try:
+        value = _merge_gate_api(repo, f"branches/{branch}/protection")
+        if not isinstance(value, dict):
+            return [f"merge_gate: UNKNOWN protection response is not an object"]
+        classic = value
+    except subprocess.CalledProcessError as exc:
+        if not _not_found(exc):
+            return [f"merge_gate: UNKNOWN cannot read branch protection; "
+                    "requires repository administration permission"]
+
+    try:
+        rules = _merge_gate_api(repo, f"rules/branches/{branch}")
+    except subprocess.CalledProcessError as exc:
+        if _not_found(exc):
+            return [f"merge_gate: UNKNOWN protection is unreadable; "
+                    "grant the token repository administration permission"]
+        return [f"merge_gate: UNKNOWN cannot read rulesets; "
+                "requires repository administration permission"]
+    if not isinstance(rules, list):
+        return ["merge_gate: UNKNOWN ruleset response is not an array"]
+
+    blockers: list[str] = []
+    if classic is not None:
+        reviews = classic.get("required_pull_request_reviews") or {}
+        approvals = reviews.get("required_approving_review_count", 0)
+        if isinstance(approvals, int) and approvals >= 1:
+            blockers.append(
+                f"merge_gate: FAILED classic protection requires "
+                f"{approvals} approving review(s) the configured merge "
+                "identity cannot supply (self-approval is forbidden); "
+                f"repair: lower required_approving_review_count or add a "
+                f"second reviewer (gh api --method PUT repos/{repo}/branches/"
+                f"{branch}/protection)"
+            )
+        admins = classic.get("enforce_admins") or {}
+        if admins.get("enabled") is True:
+            blockers.append(
+                f"merge_gate: FAILED classic protection enforces admins; "
+                "repair: disable enforce_admins or use a named human/admin "
+                f"merge path (gh api --method DELETE repos/{repo}/branches/"
+                f"{branch}/protection/enforce_admins)"
+            )
+
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        parameters = rule.get("parameters") or {}
+        approvals = parameters.get("required_approving_review_count")
+        if isinstance(approvals, int) and approvals >= 1:
+            source = rule.get("ruleset_source") or "ruleset"
+            blockers.append(
+                f"merge_gate: FAILED {source} requires {approvals} "
+                "approving review(s) the configured merge identity cannot "
+                "supply (self-approval is forbidden); repair: add a second "
+                "reviewer or lower the required approval count in the "
+                f"ruleset (gh api repos/{repo}/rules/branches/{branch})"
+            )
+        if rule.get("isAdminEnforced") is True or parameters.get("isAdminEnforced") is True:
+            blockers.append(
+                f"merge_gate: FAILED ruleset enforces admin review; repair: "
+                "disable admin enforcement or use a named human/admin merge "
+                f"path (gh api repos/{repo}/rules/branches/{branch})"
+            )
+
+    if blockers:
+        return blockers
+    return [f"merge_gate: PASS repo={repo} branch={branch} protection readable"]
+
+
 def _is_readonly_gh_command(command: list[str]) -> bool:
     """Return whether a gh command is provably read-only.
 

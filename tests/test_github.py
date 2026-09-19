@@ -391,6 +391,79 @@ def test_comment_is_trusted_by_association_and_by_bot_login(monkeypatch):
     ) is False
 
 
+def test_merge_gate_preflight_reports_unreadable_protection(monkeypatch):
+    from orbi import github
+
+    def unreadable(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, command, stderr="HTTP 404: Not Found",
+        )
+
+    monkeypatch.setattr(github, "run_command", unreadable)
+    report = github.merge_gate_preflight("acme/project", "main")
+    assert report == [
+        "merge_gate: UNKNOWN protection is unreadable; grant the token "
+        "repository administration permission",
+    ]
+
+
+def test_merge_gate_preflight_reports_classic_approval_and_admin(monkeypatch):
+    from orbi import github
+
+    def fake(command, **kwargs):
+        if "protection" in command[-1]:
+            return json.dumps({
+                "required_pull_request_reviews": {
+                    "required_approving_review_count": 1,
+                },
+                "enforce_admins": {"enabled": True},
+            })
+        return "[]"
+
+    monkeypatch.setattr(github, "run_command", fake)
+    report = github.merge_gate_preflight("acme/project", "main")
+    assert any("requires 1 approving review" in line for line in report)
+    assert any("enforces admins" in line for line in report)
+
+
+def test_merge_gate_preflight_reports_ruleset_and_no_writes(monkeypatch):
+    from orbi import github
+    commands = []
+
+    def fake(command, **kwargs):
+        commands.append(command)
+        if "protection" in command[-1]:
+            raise subprocess.CalledProcessError(
+                1, command, stderr="HTTP 404: Not Found",
+            )
+        return json.dumps([{
+            "ruleset_source": "release-rules",
+            "type": "pull_request",
+            "parameters": {"required_approving_review_count": 2},
+        }])
+
+    monkeypatch.setattr(github, "run_command", fake)
+    report = github.merge_gate_preflight("acme/project", "main")
+    assert any("release-rules requires 2" in line for line in report)
+    assert all("--method" not in command for command in commands)
+
+
+def test_merge_gate_preflight_passes_when_no_protection(monkeypatch):
+    from orbi import github
+
+    def fake(command, **kwargs):
+        if "protection" in command[-1]:
+            raise subprocess.CalledProcessError(
+                1, command, stderr="HTTP 404: Not Found",
+            )
+        return "[]"
+
+    monkeypatch.setattr(github, "run_command", fake)
+    assert github.merge_gate_preflight("acme/project", "main") == [
+        "merge_gate: PASS repo=acme/project branch=main protection readable",
+    ]
+
+
 def test_authenticated_github_login_requires_an_active_account(monkeypatch):
     monkeypatch.setattr(seam, "run_gh_read_command",
         lambda c, **k: "account a\nActive account: true\n")

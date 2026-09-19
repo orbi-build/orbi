@@ -1359,6 +1359,10 @@ def _fake_doctor_commands(monkeypatch, ssh_down: bool = False,
             return "git@github.com:xqliu/orbi.git"
         if command[:2] == ["git", "status"]:
             return dirty
+        if command[:2] == ["gh", "api"]:
+            # Issue #1174: the doctor merge-gate preflight uses only GET
+            # endpoints; this default world has no visible protection.
+            return "[]" if "rules/branches/" in command[-1] else "{}"
         if command[:2] == ["git", "ls-remote"]:
             if ssh_down:
                 raise subprocess.CalledProcessError(
@@ -1790,6 +1794,7 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
     assert lines[1] == "commit: 0123456789abcdef0123456789abcdef01234567"
     assert "unit_drift: clean" in lines
     assert "deploy_home: clean" in lines
+    assert "  merge_gate: PASS repo=xqliu/orbi branch=main protection readable" in lines
     # Both units are reported with their installed hash.
     from orbi import scheduler, systemd_deploy
     status = scheduler.unit_status(config.repo_dir, installed)
