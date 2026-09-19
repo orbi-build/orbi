@@ -200,6 +200,49 @@ def test_mdx_fences_are_balanced_and_closers_are_bare():
         assert depth == 0, f"unclosed fence at end of file: {path}"
 
 
+MDX_COMPONENTS = frozenset({
+    "Note", "Warning", "Info", "Tip", "Check", "Card", "CardGroup",
+    "Accordion", "AccordionGroup", "Steps", "Step", "Tabs", "Tab",
+    "Frame", "Columns", "Expandable", "ResponseField", "ParamField",
+    "Icon", "Update", "Snippet", "Tooltip", "CodeGroup", "br", "img",
+    "a", "b", "i", "strong", "em", "sub", "sup", "p", "div", "span",
+})
+CLOSING_TAG = re.compile(r"</([A-Za-z][A-Za-z0-9.]*)\s*>")
+
+
+def mdx_prose_lines(path: Path):
+    """Yield (line_number, text) for MDX lines outside fenced code, with
+    inline code spans removed."""
+    in_fence = False
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), 1
+    ):
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        yield line_number, re.sub(r"`[^`]*`", "", line)
+
+
+def test_mdx_prose_has_no_bare_closing_tags():
+    """Issue #1168: a literal closing tag in prose breaks the build.
+
+    `mint validate` fails with "Unexpected closing slash" when `</details>`
+    is written as plain text; release notes quoting an Issue title did
+    exactly that and turned `main` red. Opening tags are tolerated (docs
+    spell placeholders like `<repo_dir>`), so this check mirrors the
+    validator and covers closing tags only: quoting one needs backticks.
+    """
+    for path in sorted(DOCS_DIR.rglob("*.mdx")):
+        for line_number, text in mdx_prose_lines(path):
+            for match in CLOSING_TAG.finditer(text):
+                assert match.group(1) in MDX_COMPONENTS, (
+                    f"bare closing tag outside code: {path}:{line_number}: "
+                    f"{match.group(0)!r} — wrap it in backticks"
+                )
+
+
 def test_non_release_docs_have_question_metadata_and_answer_opening():
     """Issue #1028: searchable pages open with a question and its answer.
 
