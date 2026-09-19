@@ -200,6 +200,59 @@ def test_mdx_fences_are_balanced_and_closers_are_bare():
         assert depth == 0, f"unclosed fence at end of file: {path}"
 
 
+MDX_TAG = re.compile(r"<(/?)([A-Za-z][A-Za-z0-9.]*)\b[^>]*>")
+
+
+def mdx_prose_lines(path: Path):
+    """Yield (line_number, text) for MDX lines outside fenced code, with
+    inline code spans removed."""
+    in_fence = False
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), 1
+    ):
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        yield line_number, re.sub(r"`[^`]*`", "", line)
+
+
+def test_mdx_prose_has_no_bare_closing_tags():
+    """Issue #1168: every closing tag must have a preceding opening tag.
+
+    `mint validate` fails with "Unexpected closing slash" when `</details>`
+    is written as plain text; release notes quoting an Issue title did
+    exactly that and turned `main` red. Unclosed opening tags remain allowed
+    because the docs legitimately spell placeholders such as `<repo_dir>`.
+    """
+    for path in sorted(DOCS_DIR.rglob("*.mdx")):
+        open_tags: dict[str, int] = {}
+        for line_number, text in mdx_prose_lines(path):
+            for match in MDX_TAG.finditer(text):
+                closing, name = match.groups()
+                if closing:
+                    assert open_tags.get(name, 0), (
+                        f"bare closing tag outside code: {path}:{line_number}: "
+                        f"{match.group(0)!r} — wrap it in backticks"
+                    )
+                    open_tags[name] -= 1
+                elif not match.group(0).rstrip().endswith("/>"):
+                    open_tags[name] = open_tags.get(name, 0) + 1
+
+
+def test_mdx_prose_rejects_known_tag_without_opener(tmp_path, monkeypatch):
+    """A valid component name alone must not disguise a bare closer."""
+    (tmp_path / "broken.mdx").write_text(
+        "A quoted title ending in </div> breaks Mintlify.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(globals(), "DOCS_DIR", tmp_path)
+
+    with pytest.raises(AssertionError, match=r"broken\.mdx:1.*wrap it in backticks"):
+        test_mdx_prose_has_no_bare_closing_tags()
+
+
 def test_non_release_docs_have_question_metadata_and_answer_opening():
     """Issue #1028: searchable pages open with a question and its answer.
 
