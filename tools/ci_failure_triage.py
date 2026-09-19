@@ -695,6 +695,22 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
         )
         match = index.get(value)
         if match is None:
+            if item.get("conclusion") == "cancelled":
+                # A cancelled job is a cancellation symptom, not a
+                # failure: a human cancelled the run (re-run
+                # management, cleanup) — often one that would have
+                # gone green. Such a ticket could never be auto-closed
+                # (a cancelled log has no failed test files for the
+                # recovery relevance check) and every later green run
+                # would only append another not-closing comment. With
+                # no prior Issue to update, record the symptom and
+                # move on; a genuinely failed job in the same run
+                # (failure/timed_out) still opens its own ticket.
+                log(
+                    f"ignored reason=cancelled_no_failure "
+                    f"job={item['name']} run_id={run.get('id')}"
+                )
+                continue
             create_issue(
                 owner, repo,
                 issue_title(run, item, pr_number),
