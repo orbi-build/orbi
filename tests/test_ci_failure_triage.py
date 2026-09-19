@@ -795,8 +795,17 @@ def test_malformed_job_entries_are_never_actionable(
 # ---------------------------------------------------------------------------
 
 
-def setup_active_pr_failure(gh, monkeypatch, tmp_path, *, body="Fixes #494", labels=None):
-    write_event(monkeypatch, tmp_path, run_event(event="pull_request", head_branch="feature"))
+def setup_active_pr_failure(
+    gh, monkeypatch, tmp_path, *, body="Fixes #494", labels=None,
+    head_branch="orbi/orbi-run-test-repo-issue-494",
+):
+    """The default head branch is the Runner's stable delivery naming,
+    so the default fixtures exercise the INTERNAL routed path; pass a
+    free-form branch name for the external-contributor scenes."""
+    write_event(
+        monkeypatch, tmp_path,
+        run_event(event="pull_request", head_branch=head_branch),
+    )
     gh.routes[ep_pulls()] = [{"number": 541, "state": "open"}]
     gh.routes[ep_pr(541)] = {"number": 541, "body": body}
     active_labels = labels or ["ai-pr-opened"]
@@ -808,6 +817,27 @@ def setup_active_pr_failure(gh, monkeypatch, tmp_path, *, body="Fixes #494", lab
         if name in active_labels:
             gh.routes[f"{ep_labels(494)}/{name}"] = {}
     gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
+
+
+def test_external_head_pr_failure_routes_evidence_but_never_flips_labels(
+    gh, monkeypatch, tmp_path, capsys
+):
+    """Any external PR body carrying `Fixes #<in-flight delivery>` plus
+    one failed CI run must not rewrite the delivery's state: the triage
+    cannot verify the contributor's PR actually belongs to that
+    delivery, and flipping ai-in-progress/ai-pr-opened to ai-fix-needed
+    makes the Runner requeue a delivery that may be alive (#608's
+    external-integration gap on the routed path — the marker only
+    guards the create path). Evidence comments still land on both the
+    Issue and the PR; a human or the Runner decides."""
+    setup_active_pr_failure(gh, monkeypatch, tmp_path, head_branch="feature")
+    mod.main()
+    assert gh.calls_to(ep_create(), "POST") == []
+    assert len(gh.calls_to(ep_comment(494), "POST")) == 1
+    assert len(gh.calls_to(ep_comment(541), "POST")) == 1
+    assert gh.calls_to(f"{ep_labels(494)}/ai-pr-opened", "DELETE") == []
+    assert gh.calls_to(ep_labels(494), "POST") == []
+    assert "external_head_no_label_flip" in capsys.readouterr().err
 
 
 def test_active_orbi_pr_routes_evidence_to_source_and_pr(gh, monkeypatch, tmp_path):
