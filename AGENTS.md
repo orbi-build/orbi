@@ -76,7 +76,8 @@ rather than by extra parameters:
 gh-readme        the repository README's CTA
 gh-issue         a link inside an Issue or Discussion
 docs-<page>      a docs.orbi.build page, e.g. docs-getting-started
-x-<yymmdd>       an X post, dated so it traces back to the one post
+x-<yymmddhhmm>   an X post, to the minute — dozens ship per day, so a date
+                 alone collides; the clock is unique without anyone counting
 hn-<postid>      Hacker News
 tg               the Telegram group
 email-<batch>    an email batch
