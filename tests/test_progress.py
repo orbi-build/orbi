@@ -464,11 +464,21 @@ def test_progress_body_shows_recovery_field_only_when_active():
     body = progress.progress_body(state)
     assert "- recovery" not in body
     body = progress.progress_body({**state, "recovery": "term"})
-    assert "- recovery: term" in body
+    lines = body.splitlines()
+    close_index = lines.index("</details>")
+    assert lines[close_index + 1] == ""
+    assert lines[close_index + 2] == "- recovery: term"
+    details_start = lines.index("<details><summary>Run details</summary>")
+    for anchor in (
+        "<!-- orbi:run=abc12345 -->", "- run_id=abc12345", "<!-- runner=",
+    ):
+        anchor_index = next(i for i, line in enumerate(lines)
+                            if line.startswith(anchor))
+        assert not details_start < anchor_index < close_index
     # The recovery line is the last field line; the hidden runner
     # fingerprint marker (Issue #526) closes the body.
-    assert body.splitlines()[-3] == "- recovery: term"
-    assert body.splitlines()[-1].startswith("<!-- runner=")
+    assert lines[-3] == "- recovery: term"
+    assert lines[-1].startswith("<!-- runner=")
     body = progress.progress_body({**state, "recovery": "kill"})
     assert body.splitlines()[-3] == "- recovery: kill"
 

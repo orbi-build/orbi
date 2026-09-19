@@ -296,7 +296,7 @@ def progress_body(state: dict) -> str:
         f"- session: {value('session')}",
     ]
     lines.extend(["", "<details><summary>Run details</summary>", "", *details,
-                  "", "</details>"])
+                  "", "</details>", ""])
     # Idle-stall recovery: the recovery state is shown only
     # while it is active (`term` / `kill`); an idle run keeps the
     # pre-#94 body shape exactly.
