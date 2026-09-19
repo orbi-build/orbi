@@ -7,7 +7,7 @@ description: "如何安装运行 Orbi?"
 
 | 方式 | 适用场景 | 操作 | 详情 |
 | --- | --- | --- | --- |
-| Managed Cloud | 不想自己维护一台 runner 机器 | 在 [orbi.build/cloud](https://orbi.build/cloud/) 登录使用 | 与同一 GitHub 账本连接的托管控制平面；无需安装 |
+| Managed Cloud | 不想自己维护一台 runner 机器 | 在 [orbi.build/cloud](https://orbi.build/cloud/?ref=docs-installation) 登录使用 | 与同一 GitHub 账本连接的托管控制平面；无需安装 |
 | 安装脚本（推荐的自托管路径） | Linux 使用 systemd user session，macOS 使用 launchd | `curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh \| bash` | [上手指南](/zh/getting-started) |
 | PyPI（`orbi-cli`） | 只想要 `orbi` 命令，Python ≥ 3.14 | `uv tool install orbi-cli` | [上手指南](/zh/getting-started) |
 | Docker（社区维护） | 宿主机没有 systemd user session | `docker pull ghcr.io/orbi-build/orbi:latest` | [Docker](/zh/docker) |

@@ -98,6 +98,17 @@ def readme_text() -> str:
     return README.read_text(encoding="utf-8")
 
 
+def test_readme_cloud_ctas_carry_attribution_ref():
+    """Every README Cloud CTA must preserve the originating surface."""
+    pattern = re.compile(r"https://orbi\.build/cloud/[^)\s\"]*")
+    for path in (README, README_ZH):
+        links = pattern.findall(path.read_text(encoding="utf-8"))
+        assert links, f"{path.name} is missing a Cloud CTA"
+        assert all("?ref=gh-readme" in link for link in links), (
+            f"{path.name} has an unattributed Cloud CTA: {links}"
+        )
+
+
 def test_readmes_provide_reciprocal_language_switchers_and_localized_docs():
     """The English README is the default, while the Chinese copy keeps
     the same content shape and points its repository docs links at docs/zh/.
