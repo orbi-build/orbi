@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from orbi.journal import quote_value
+from orbi.journal import quote_value, redact_secrets
 
 MAX_SUMMARY_LENGTH = 200
 
@@ -45,14 +45,6 @@ PHASE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bgit\s+worktree\b"), "worktree"),
     (re.compile(r"\bplaywright\b"), "ui"),
 )
-
-# Obvious token shapes that must never reach the journal or a status output.
-TOKEN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"Bearer\s+[A-Za-z0-9._\-]+"), "Bearer <redacted>"),
-    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}"), "ghp_<redacted>"),
-    (re.compile(r"\bsk-[A-Za-z0-9]{16,}"), "sk-<redacted>"),
-)
-
 
 def latest_session_file(session_dir: Path) -> Path | None:
     """Return the newest `*.jsonl` in the session dir, or None."""
@@ -113,8 +105,7 @@ def parse_iso_utc(value: str) -> float | None:
 def sanitize(text: str) -> str:
     """Single-line, truncated, token-redacted summary safe for logs."""
     text = " ".join(text.split())
-    for pattern, replacement in TOKEN_PATTERNS:
-        text = pattern.sub(replacement, text)
+    text = redact_secrets(text)
     if len(text) > MAX_SUMMARY_LENGTH:
         text = text[:MAX_SUMMARY_LENGTH].rstrip() + "..."
     return text

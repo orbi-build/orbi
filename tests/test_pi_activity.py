@@ -18,6 +18,23 @@ from orbi import pi_activity
 from orbi import progress
 
 
+@pytest.mark.parametrize(
+    "credential",
+    [
+        "sk-proj-" + "a" * 40,
+        "sk-ant-api03-" + "a" * 40,
+        "sk-or-v1-" + "a" * 40,
+        "gsk_" + "a" * 40,
+        "AIza" + "a" * 35,
+        "github_pat_" + "a" * 40,
+    ],
+)
+def test_sanitize_redacts_current_provider_formats(credential):
+    result = pi_activity.sanitize(credential)
+    assert credential not in result
+    assert "<redacted>" in result
+
+
 def write_records(path: Path, records: list[dict]) -> None:
     with path.open("w", encoding="utf-8") as handle:
         for record in records:
@@ -171,6 +188,9 @@ def test_sanitize_keeps_short_text_unchanged():
     ("gh api -H 'Authorization: token ghp_AbCdEf1234567890xyz'",
      "ghp_<redacted>"),
     ("export OPENAI_KEY=sk-AbCdEf1234567890xyz", "sk-<redacted>"),
+    ("sk-proj-" + "a" * 40, "sk-proj-<redacted>"),
+    ("sk-ant-api03-" + "a" * 40, "sk-ant-api03-<redacted>"),
+    ("sk-or-v1-" + "a" * 40, "sk-or-v1-<redacted>"),
 ])
 def test_sanitize_redacts_token_shapes(raw, needle):
     assert needle in pi_activity.sanitize(raw)

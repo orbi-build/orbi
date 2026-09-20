@@ -48,6 +48,7 @@ from orbi.runner import (
     ConfigFileMissingError,
     RunIdFilter,
     RunnerConfig,
+    configure_logging,
     freeze_base,
     list_issues,
     load_config,
@@ -880,7 +881,7 @@ def main(argv: list[str] | None = None) -> int:
         help="the exact Milestone title, e.g. v0.6.0 (must be unique)",
     )
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format=log_format())
+    configure_logging()
 
     # A missing default in a read-only command can be resolved from the
     # installed units.  Never do this for an explicit path or a mutating

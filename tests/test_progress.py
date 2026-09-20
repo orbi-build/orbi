@@ -10,7 +10,7 @@ import subprocess
 
 import pytest
 
-from orbi import progress
+from orbi import progress, scene
 from orbi.delivery_scene import RunContext
 
 
@@ -30,6 +30,23 @@ def test_quote_value_escapes_embedded_quotes():
 
 def test_format_status_comment_non_string_is_unchanged():
     assert progress.format_status_comment(None) is None
+
+
+def test_failure_comment_redacts_evidence_and_preserves_resume_scene():
+    key = "sk-ant-api03-" + "a" * 40
+    rendered = progress.format_status_comment(
+        "Orbi failed: boom\n\nstderr_tail:\n" + key,
+    )
+    assert key not in rendered
+    assert "sk-ant-api03-<redacted>" in rendered
+
+    scene_body = scene.render(scene.Scene(
+        run_id="a1b2c3d4", base_branch="main", base_sha="abc123",
+        pr_url="https://github.com/owner/repo/pull/9",
+    ))
+    comment = progress.format_status_comment(scene_body)
+    from orbi import runner
+    assert runner.parse_pr_comment(comment)["run_id"] == "a1b2c3d4"
 
 
 def test_format_status_comment_expands_marked_failure():
