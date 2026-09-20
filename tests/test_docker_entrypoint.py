@@ -13,7 +13,7 @@ def stub_path(tmp_path: Path) -> tuple[Path, Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     stubs = {
-        "git": "#!/bin/sh\nexit 0\n",
+        "git": "#!/bin/sh\nif [ \"$1\" = -C ] && [ \"$3\" = rev-parse ] && [ \"$4\" = HEAD ]; then exit \"${GIT_REV_PARSE_STATUS:-0}\"; fi\nexit 0\n",
         "gh": "#!/bin/sh\nexit 0\n",
         "uv": "#!/bin/sh\nexit 0\n",
         "useradd": "#!/bin/sh\nexit 0\n",
@@ -112,6 +112,15 @@ def test_missing_provider_environment_prints_hint_and_writes_no_file(tmp_path):
     assert "model delivery is not configured" in result.stdout
     assert not (tmp_path / "orbi/.orbi/pi-providers.json").exists()
     assert "pi_provider" not in (tmp_path / "orbi/orbi.toml").read_text()
+
+
+def test_work_checkout_without_head_fails_with_mount_guidance(tmp_path):
+    result = run_entrypoint(tmp_path, GIT_REV_PARSE_STATUS="128")
+    assert result.returncode != 0
+    assert str(tmp_path / "work") in result.stderr
+    assert "owner/repo" in result.stderr
+    assert "must be a git checkout" in result.stderr
+    assert "docker run -v <path>:/work" in result.stderr
 
 
 def run_setup_script(tmp_path: Path, setup_status: int = 0) -> subprocess.CompletedProcess:

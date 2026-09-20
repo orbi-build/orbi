@@ -168,6 +168,12 @@ if [ ! -e "$WORKSPACE/.git" ]; then
     git clone "https://github.com/$ORBI_SOURCE_REPO.git" "$WORKSPACE" \
     || fail "cloning $ORBI_SOURCE_REPO failed (does the token grant read access?)"
 fi
+# A repository can have a remote and fetched refs without having a commit
+# checked out (for example after an interrupted clone). Fail here instead of
+# exposing the raw `git rev-parse HEAD` error from `orbi setup`.
+if ! runuser -u orbi -- git -C "$WORKSPACE" rev-parse HEAD >/dev/null 2>&1; then
+  fail "$WORKSPACE must be a git checkout of $ORBI_SOURCE_REPO with a resolvable HEAD — mount the checkout with: docker run -v <path>:/work (or mount an empty volume so the task pool can be cloned)"
+fi
 # Keep the runner's runtime state out of the checkout status, with the
 # SAME local-exclude mechanism `orbi setup` uses for `.worktrees/`:
 # the slot locks live in /work/.orbi/, and a rebuilt container re-runs

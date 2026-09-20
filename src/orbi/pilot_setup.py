@@ -784,7 +784,16 @@ def check_checkout(repo_dir: Path, base_branch: str,
         runner.fetch_base_ref(
             repo_dir, base_branch, command_runner=run_command,
         )
-        head = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
+        try:
+            head = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
+        except Exception as exc:
+            repositories = ", ".join(source_repos)
+            raise SetupError(
+                f"{repo_dir} must be a git checkout of {repositories} "
+                "with a resolvable HEAD — mount the checkout with: "
+                "docker run -v <path>:/work (or mount an empty volume so "
+                "the task pool can be cloned)"
+            ) from exc
         base = run_command(
             ["git", "rev-parse", f"origin/{base_branch}"], cwd=repo_dir,
         )
