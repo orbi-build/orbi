@@ -450,12 +450,23 @@ DAG, no priority numbers, no separate queues:
   human: the Runner never auto-merges and never auto-closes across a human's
   close.
 - **Release task**: an `ai-ready` Issue additionally marked with the
-  `ai-release` label (Issue #98). It is NOT a development task: the
-  Runner picks it up through the normal ready scan, but `process_issue`
-  routes it to the deterministic release state machine instead of
-  `run_pi` — no Pi session, no PR. The state machine is idempotent and
-  resumable (a restart resumes the same run id/worktree) and runs these
-  steps in order:
+  `ai-release` label (Issue #98). It is NOT a development task. The three
+  ordinary scans skip it with `release_not_claimed`; only the release fallback
+  scan uses `allow_release=True`. Before claiming it, `_pick_from_scan` applies
+  the Milestone completeness gate: while its Milestone has any other open
+  Issue (`open_issues > 1`), the Runner records
+  `release_milestone_incomplete`, leaves the release `ai-ready`, and retries on
+  a later tick. This is a recoverable wait, never `ai-blocked`. A Milestone
+  query that cannot be evaluated also skips the claim, with
+  `release_milestone_check_failed`. This claim layer runs before
+  `process_issue` and before any release-state-machine wait, so a release
+  queued behind open tickets has no `wait_started` value and accumulates zero
+  `release_waited_seconds`.
+
+  Once claimed, `process_issue` routes it to the deterministic release state
+  machine instead of `run_pi` — no Pi session, no PR. The state machine is
+  idempotent and resumable (a restart resumes the same run id/worktree) and
+  runs these steps in order:
 
   1. Strictly parse the `## Release` declaration from the Issue body:
      `version`, `base_branch`, and `scope` (a list of `#N` items) or
@@ -472,10 +483,15 @@ DAG, no priority numbers, no separate queues:
      mismatch fails fast at claim time, naming the supported ecosystem
      files that DO exist there and the `none` option, never as a late
      FileNotFoundError after the gates and the scope verification.
-  3. Enforce the pre-release gates: no leftover open `ai-in-progress` /
-     `ai-pr-opened` / `ai-fix-needed` Issues **in the release's
-     Milestone** (Issue #671; the release Issue itself excluded; without
-     a Milestone the repository-wide scan is unchanged), and CI green on
+  3. Enforce the pre-release gates. Only after the claim layer above has
+     admitted the release can the gate-layer `release_waiting_deliveries`
+     wait for open Issues carrying `ai-in-progress`, `ai-pr-opened`, or
+     `ai-fix-needed` (the release Issue itself is excluded). With a Milestone,
+     only Issues in that Milestone hold the gate (Issue #671); without one,
+     the repository-wide scan is unchanged. A bare `ai-ready` Issue does not
+     hold this gate. The bounded wait uses
+     `RELEASE_DELIVERIES_WAIT_SECONDS`; exceeding it produces a delivery wait
+     timeout and moves the release to `ai-blocked`. Then require CI green on
      the release commit (no check runs passes
      with explicit evidence; a pending check is an intermediate state —
      the gate waits for the final conclusion, one `release_waiting_ci`
@@ -493,8 +509,11 @@ DAG, no priority numbers, no separate queues:
      `COMPLETED` — a `NOT_PLANNED` closure (duplicate / won't fix) is
      annotated in the Scope evidence as excluded and never enters the
      Changelog, and a Changelog PR link is written only when its PR is
-     merged (Issue #707). Checkbox parsing
-     is forbidden — every scope item is checked against the live API.
+     merged (Issue #707). For milestone-derived scope,
+     `open_milestone_evidence` does not wait: still-open milestone Issues are
+     excluded and recorded as `NOT released (still open in milestone <name>):
+     <item>`. Checkbox parsing is forbidden — every scope item is checked
+     against the live API.
   5. Test acceptance is the CI-wait gate on the release commit: after
      the version bump the gates re-run against that exact commit
      (step 3's `release_ci_wait_seconds` wait), and a red or timed-out
