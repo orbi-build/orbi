@@ -612,6 +612,7 @@ registry — in both directions (a name only in code or only in docs fails
 | `delivery_ci_triage_lookup_failed` | the CI-failure triage Issue lookup failed |
 | `delivery_review_failed` | the review session failed |
 | `failure_comment_deduplicated` | an identical failure repeat bumped the existing comment's counter; no second comment |
+| `failure_comment_update_failed` | the existing failure comment could not be resolved or updated; the tick continues |
 | `failure_streak_escalated` | the same failure reached the consecutive limit; the Issue goes ai-blocked |
 | `failure_history_read_failed` | the failure-history read for the dead-loop guard failed (fail-open) |
 | `external_takeover` | an external PR is taken over for review |

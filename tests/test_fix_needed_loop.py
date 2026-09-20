@@ -1331,7 +1331,7 @@ def _failure_history(count, fp, *, run_id=RUN_ID, marker=None):
 
 
 def make_report_fake(monkeypatch, *, history=None, labels=("ai-fix-needed",),
-                     failing_history_read=False):
+                     failing_history_read=False, failing_comment_update=False):
     """Shared fake for the direct `report_delivery_failure` tests
     (Issue #825): a MUTABLE comment store seeded with `history` backs
     the comment-history read; posted failure comments join the store
@@ -1345,6 +1345,13 @@ def make_report_fake(monkeypatch, *, history=None, labels=("ai-fix-needed",),
 
     def fake_run(command, **kwargs):
         # Single-element dispatch — no argv-shape asserts (Issue #789).
+        if (command[0] == "gh" and command[1] == "api"
+                and "--paginate" in command):
+            return json.dumps([
+                {"id": comment.get("rest_id", comment.get("id")),
+                 "node_id": comment.get("id")}
+                for comment in store
+            ])
         if command[0] == "gh" and command[1] == "api":
             # The progress publisher (pure bypass): GET answers no
             # tracked comment, POST/PATCH answer success shapes.
@@ -1367,8 +1374,10 @@ def make_report_fake(monkeypatch, *, history=None, labels=("ai-fix-needed",),
         next_id[0] += 1
 
     def update_stored_comment(comment_id, *, repo, body):
+        if failing_comment_update:
+            raise RuntimeError("comment update unavailable")
         for comment in store:
-            if comment.get("id") == comment_id:
+            if comment.get("id") == comment_id or comment.get("rest_id") == comment_id:
                 comment["body"] = body
                 break
         else:
@@ -1684,21 +1693,70 @@ def test_streak_and_dedup_scans_skip_non_failure_noise(
                                  RUN_ID, fp) == 3
 
 
-def test_report_failure_repeat_without_comment_id_fails_fast(
+def test_report_failure_repeat_resolves_graphql_comment_id(
         monkeypatch, tmp_path):
-    """Issue #825: a matching failure comment without the integer id the
-    real API always carries can not be patched in place — the report
-    fails fast with the shape error instead of silently posting a
-    duplicate."""
+    """Issue #1217: GraphQL comment node ids are resolved to the REST id
+    before the repeat counter is patched, and the report completes."""
     exc = _failure_exc()
     fp = runner_health.failure_fingerprint(exc)
     history = [{
+        "id": "IC_kwDOUC1jsc8AAAABVrm_6w",
+        "rest_id": 900,
         "body": _failure_history(1, fp)[0]["body"],
         "authorAssociation": "OWNER",
     }]
-    make_report_fake(monkeypatch, history=history)
-    with pytest.raises(ValueError, match="must be an integer"):
-        _report(exc)
+    captured = make_report_fake(monkeypatch, history=history)
+    _report(exc)
+    assert captured["comments"] == []
+    assert captured["updates"][0][0] == 900
+    assert f"<!-- orbi:fail={fp}:2 -->" in captured["updates"][0][1]
+
+
+def test_issue_comment_rest_id_rejects_non_numeric_rest_id(monkeypatch):
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: json.dumps([[{
+            "node_id": "node-1", "id": "not-an-integer",
+        }]]),
+    )
+    with pytest.raises(ValueError, match="REST comment id not found"):
+        runner.issue_comment_rest_id(
+            39, repo="owner/repo", node_id="node-1",
+        )
+    with pytest.raises(ValueError, match="REST comment id not found"):
+        runner.issue_comment_rest_id(
+            39, repo="owner/repo", node_id="node-2",
+        )
+
+
+def test_report_failure_unsupported_comment_id_does_not_escape(
+        monkeypatch, tmp_path, caplog):
+    exc = _failure_exc()
+    fp = runner_health.failure_fingerprint(exc)
+    captured = make_report_fake(monkeypatch, history=[{
+        "id": None,
+        "body": _failure_history(1, fp)[0]["body"],
+        "authorAssociation": "OWNER",
+    }])
+    caplog.set_level("INFO")
+    _report(exc)
+    assert captured["comments"] == []
+    assert "failure_comment_update_failed" in caplog.text
+
+
+def test_report_failure_comment_update_error_does_not_escape(
+        monkeypatch, tmp_path, caplog):
+    """Issue #1217: an unavailable comment PATCH is logged and does not
+    crash the Runner tick."""
+    exc = _failure_exc()
+    fp = runner_health.failure_fingerprint(exc)
+    history = _failure_history(1, fp)
+    make_report_fake(
+        monkeypatch, history=history, failing_comment_update=True,
+    )
+    caplog.set_level("INFO")
+    assert _report(exc) is None
+    assert "failure_comment_update_failed" in caplog.text
 
 
 def test_report_fake_rejects_unexpected_commands(monkeypatch):
