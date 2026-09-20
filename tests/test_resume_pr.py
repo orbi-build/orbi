@@ -1762,10 +1762,20 @@ def test_main_continues_to_ready_delivery_after_scene_failure(
 # --------------------------- resume PR verification (Issue #89)
 
 
-def test_main_ends_cleanly_after_pr_body_contract_failure(
-    monkeypatch, tmp_path,
+@pytest.mark.parametrize(
+    "verification_error",
+    [
+        runner.ReportedMissingFixesError(
+            "PR body is missing `Fixes #9`; the keyword must point at the "
+            "source Issue so GitHub closes it natively"
+        ),
+        runner.ResumeVerificationError("reported terminal resume failure"),
+    ],
+)
+def test_main_ends_cleanly_after_reported_resume_failure(
+    monkeypatch, tmp_path, verification_error,
 ):
-    """Issue #1219: a bad PR body does not kill the Runner tick."""
+    """Issue #1219: a reported per-ticket failure does not kill the tick."""
     prompts = tmp_path / "prompts"
     prompts.mkdir()
     (prompts / "prompt.md").write_text("prompt", encoding="utf-8")
@@ -1799,12 +1809,7 @@ def test_main_ends_cleanly_after_pr_body_contract_failure(
     )
     monkeypatch.setattr(
         runner, "verify_resumed_pr",
-        lambda *a, **k: (_ for _ in ()).throw(
-            RuntimeError(
-                "PR body is missing `Fixes #9`; the keyword must point at "
-                "the source Issue so GitHub closes it natively"
-            )
-        ),
+        lambda *a, **k: (_ for _ in ()).throw(verification_error),
     )
     monkeypatch.setattr(
         runner, "delivery_step",
@@ -2531,7 +2536,7 @@ def test_verify_resumed_pr_missing_fixes_stays_fix_needed(
     )
 
     def fake_verify_pr(*args, **kwargs):
-        raise RuntimeError(
+        raise runner.MissingFixesError(
             "PR body is missing `Fixes #9`; the keyword must point at the "
             "source Issue so GitHub closes it natively when the PR merges"
         )
@@ -2545,7 +2550,10 @@ def test_verify_resumed_pr_missing_fixes_stays_fix_needed(
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
     caplog.set_level("INFO")
-    with pytest.raises(RuntimeError, match="missing `Fixes #9`"):
+    with pytest.raises(
+        runner.ReportedMissingFixesError,
+        match="missing `Fixes #9`",
+    ):
         runner.verify_resumed_pr(
             make_resume_scene(pr_url="https://github.com/owner/repo/pull/99"),
             make_resume_issue(), make_resume_config(tmp_path), "owner/repo",
@@ -2913,7 +2921,7 @@ def test_verify_resumed_pr_reraises_when_failure_reporting_fails(
     stops)."""
 
     def fake_verify_pr(*args, **kwargs):
-        raise RuntimeError("the original verification failure")
+        raise runner.MissingFixesError("the original verification failure")
 
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
     make_resume_failure_fake(monkeypatch)
@@ -2926,11 +2934,12 @@ def test_verify_resumed_pr_reraises_when_failure_reporting_fails(
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="the original verification failure",
-    ):
+    ) as excinfo:
         runner.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
+    assert type(excinfo.value) is runner.MissingFixesError
     assert "failure reporting failed" in caplog.text
 
 
