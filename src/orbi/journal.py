@@ -170,6 +170,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "config_invalid": "the runner config failed validation (no start)",
     "transport": "the pre-start git transport check passed",
     "transport_check_failed": "the pre-start git transport check failed (no start)",
+    "active_milestone_missing": "the configured active Milestone does not exist (no start)",
+    "active_milestone_closed": "the configured active Milestone is closed (informational)",
     "runner_source": "the runner source freshness gate passed",
     "runner_source_stale": "the runner source freshness gate failed (stale or unverifiable)",
     "engine_source_synced": "the deployment checkout synced to the engine source channel",
