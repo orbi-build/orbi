@@ -1929,6 +1929,60 @@ READY_SCAN_EXCLUSIONS = (
 )
 
 
+def validate_active_milestone(repo: str, active_milestone: str | None) -> None:
+    """Validate the configured Milestone before a tick can claim work.
+
+    A missing title is an unambiguous configuration error and fails fast.
+    A closed title is reported as a fact only: maintainers may intentionally
+    leave it configured during release wind-down or while preparing another
+    line of work (Issue #1185 correction).
+    """
+    if active_milestone is None:
+        return
+
+    milestones = list_milestones(repo, timeout=30)
+    matches = [
+        milestone for milestone in milestones
+        if isinstance(milestone, dict)
+        and milestone.get("title") == active_milestone
+    ]
+    if not matches:
+        open_titles = [
+            str(milestone.get("title"))
+            for milestone in milestones
+            if isinstance(milestone, dict)
+            and milestone.get("state") == "open"
+        ]
+        event(
+            "active_milestone_missing", level=logging.ERROR,
+            configured=active_milestone, repo=repo, state="absent",
+            open_milestones=", ".join(open_titles) or "(none)",
+            fix=("set active_milestone to an exact existing title, or remove "
+                 "the field"),
+        )
+        raise RuntimeError(
+            f"active_milestone_missing configured={active_milestone!r} "
+            f"repo={repo} state=absent open_milestones="
+            f"{', '.join(open_titles) or '(none)'}; "
+            "fix=set active_milestone to an exact existing title or remove it"
+        )
+
+    milestone = matches[0]
+    if milestone.get("state") != "closed":
+        return
+
+    ready_issues = list_issues(
+        repo, state="open", label=READY_LABEL,
+        milestone=active_milestone, json_fields="number", limit=1000,
+        timeout=30,
+    )
+    event(
+        "active_milestone_closed", level=logging.INFO,
+        configured=active_milestone, repo=repo, state="closed",
+        ai_ready_count=len(ready_issues),
+    )
+
+
 def ready_searches(active_milestone: str | None = None,
                    dispatch_label: str = READY_LABEL) -> tuple[str, str, str]:
     """Return the three ready scans (p0, bug, plain) in pickup order.
@@ -9511,6 +9565,13 @@ def _preflight(config: RunnerConfig) -> None:
     source-freshness gate precede the unit-drift and transport checks,
     and all of them precede any slot or claim.
     """
+    # Resolve every effective per-repository title before taking a slot. A
+    # repository policy may override the host value, so validating only the
+    # host value (or only the first source repository) can still leave a fresh
+    # claim silently scoped to a title that does not exist.
+    for repo in config.source_repos:
+        milestone, _ = _repo_scan_keys(config, repo, config.active_milestone)
+        validate_active_milestone(repo, milestone)
     # Publish the configured active milestone for the CI
     # triage workflow. This is a bypass; delivery must continue when the
     # variable API is unavailable.
