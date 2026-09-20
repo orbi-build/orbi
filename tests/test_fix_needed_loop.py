@@ -275,7 +275,12 @@ def test_delivery_step_recoverable_review_failure_stays_fix_needed(
     assert "Orbi needs a fix:" in body
     assert MARKER in body
     assert PR_URL in body
-    assert str(exc).split(" (Issue")[0] in body
+    if isinstance(exc, subprocess.CalledProcessError):
+        assert "the delivery command failed" in body
+        assert "Command [" not in body
+        assert "exit_code=1" in body
+    else:
+        assert str(exc).split(" (Issue")[0] in body
     assert f"branch: `{BRANCH}`" in body
     expected_worktree = (
         tmp_path / ".worktrees"

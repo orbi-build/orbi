@@ -4034,6 +4034,7 @@ def test_process_issue_writes_run_state_and_resume_context(
         m for m in caplog.messages if "resume_continue" in m
     ]
     assert len(lines) == 1
+    assert f"worktree={worktree}" in lines[0]
     assert "changed_files=1" in lines[0]
     assert "reused_runs=1" in lines[0]
     assert "previous_session=sess-1" in lines[0]
@@ -7113,7 +7114,7 @@ def test_process_issue_failure_without_session_still_carries_scene(
     # (worktree, branch) with '-' session fields.
     assert "worktree: `local runner worktree`" in failure_body
     assert "branch: `orbi/xqliu-orbi-backlog-issue-8`" in failure_body
-    assert "session log: `local session log`" in failure_body
+    assert "session log: `<unavailable>`" in failure_body
 
 
 def test_tail_text_strips_raw_and_caret_sgr_sequences(tmp_path):
@@ -7148,11 +7149,6 @@ def test_tail_text_preserves_non_sgr_lookalikes(tmp_path):
 
 
 def test_failure_summary_removes_command_and_stderr_duplication():
-    error = subprocess.CalledProcessError(
-        1, ["pi", "--session", "/home/runner/session"],
-        stderr="provider exploded",
-    )
-
     summary = runner._failure_summary(
         "Review failed: Command ['pi', '--session', '/home/runner/session'] "
         "returned non-zero exit status 1; stderr=provider exploded",
@@ -7163,6 +7159,26 @@ def test_failure_summary_removes_command_and_stderr_duplication():
     assert "/home/" not in summary
     assert summary.count("provider exploded") == 1
     assert "delivery command failed" in summary
+
+
+def test_failure_summary_defaults_when_reason_has_no_readable_content():
+    assert runner._failure_summary(" stderr=") == "the delivery command failed"
+
+
+def test_failure_summary_uses_concrete_final_stderr_line_and_redacts_it():
+    summary = runner._failure_summary(
+        "the independent review failed: Command ['pi', '--session-dir', "
+        "'/home/runner/session'] returned non-zero exit status 1. "
+        "stderr=mise installed 0 tools\n"
+        "provider log: /home/runner/private/session.jsonl\n"
+        "Codex error: The usage limit has been reached",
+    )
+
+    assert summary == (
+        "the independent review failed: the delivery command failed: "
+        "Codex error: The usage limit has been reached"
+    )
+    assert "/home/" not in summary
 
 
 def test_failure_scene_is_structured_and_redacts_local_paths():
@@ -7200,6 +7216,53 @@ def test_failure_comment_layout_keeps_raw_evidence_collapsed():
     assert "run_id=abcdef12" in visible
     assert "stderr_tail:" in collapsed
     assert "```" in collapsed
+    assert body.endswith("</details>")
+
+
+def test_blocked_failure_suffix_stays_inside_closed_diagnostics(
+    monkeypatch, tmp_path,
+):
+    posted = []
+    monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda number, *, repo, body: posted.append(body))
+
+    runner.report_delivery_failure(
+        runner.UnrecoverableDeliveryError("cannot recover"),
+        issue={"number": 1, "title": "t", "labels": []},
+        source_repo="owner/repo", run_id="abcdef12", pr_url=None,
+        worktree=tmp_path, branch="orbi/task", role=runner.ROLE_REVIEW,
+        classify=True, blocked_suffix="the preserved PR needs a decision",
+        current_labels=set(),
+    )
+
+    assert posted[0].count("<details>") == 1
+    assert posted[0].count("</details>") == 1
+    assert "the preserved PR needs a decision\n</details>" in posted[0]
+
+
+def test_no_run_id_failure_still_preserves_action_and_evidence(
+    monkeypatch, tmp_path,
+):
+    posted = []
+    monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda number, *, repo, body: posted.append(body))
+
+    runner.report_delivery_failure(
+        subprocess.CalledProcessError(2, ["pi"], stderr="provider failed"),
+        issue={"number": 1, "title": "t", "labels": []},
+        source_repo="owner/repo", run_id=None, pr_url=None,
+        worktree=tmp_path, branch="orbi/task", role=runner.ROLE_IMPLEMENT,
+        action="Repair provider access.", reason="delivery failed",
+        diagnosis="provider failed", classify=False, evidence=True,
+        current_labels=set(),
+    )
+
+    assert "**Action:** Repair provider access." in posted[0]
+    assert "stderr_tail:" in posted[0]
+    assert "provider failed" in posted[0]
+    assert posted[0].endswith("</details>")
 
 
 def test_failure_evidence_handles_binary_streams_and_unavailable_files(tmp_path):
@@ -7373,8 +7436,8 @@ def test_failure_evidence_truncates_oversized_segment_with_note(tmp_path):
 def test_report_delivery_failure_caps_comment_and_names_session_log(
     monkeypatch, tmp_path,
 ):
-    """Issue #775: an oversized body is cut at the cap, the cut names
-    the full session log path, and the failure reason stays first."""
+    """Issue #775 + #1221: an oversized raw cause becomes a bounded
+    visible summary while its bounded diagnostic evidence remains reachable."""
     posted = []
     monkeypatch.setattr(seam, "apply_label_patch", lambda *args, **kwargs: None)
     monkeypatch.setattr(seam, "issue_labels", lambda *args, **kwargs: set())
@@ -7397,11 +7460,11 @@ def test_report_delivery_failure_caps_comment_and_names_session_log(
 
     assert outcome == "blocked"
     body = posted[0]
-    # The cause-first head survives the cut; the oversize cause itself
-    # legitimately fills the whole window and pushes the evidence out.
-    assert body.startswith("Orbi failed:")
-    assert len(body) <= runner.FAILURE_COMMENT_MAX_CHARS + 300
-    assert "full session log: local session log" in body
+    assert body.startswith("Orbi: blocked — waiting on a human decision")
+    assert "**Reason:** " + "x" * 500 in body
+    assert len(body) < runner.FAILURE_COMMENT_MAX_CHARS
+    assert "full log: local session log" in body
+    assert body.endswith("</details>")
 
 
 def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_path):
@@ -7466,7 +7529,8 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     assert "action: `bash pytest tests/`" in failure_body
     assert "result: `ok`" in failure_body
     assert "exit_code=1" in failure_body
-    assert "stderr=boom" in failure_body
+    assert "stderr=boom" not in failure_body
+    assert "stderr_tail:\n```\nboom\n```" in failure_body
     # Issue #775: the session tail appears as its structured summary
     # line inside a fence, not as raw session text.
     assert "2026-08-25T02:30:00Z message role=assistant content=text" \
@@ -7647,7 +7711,7 @@ def test_stream_pi_logs_run_start_once_with_full_scene(tmp_path, caplog):
     assert "issue=xqliu/orbi#24" in start
     assert "role=implement" in start
     assert "branch=orbi/xqliu-orbi-issue-24" in start
-    assert "worktree=" in start
+    assert f"worktree={tmp_path}" in start
     # The session fields are part of the scene; before Pi writes its first
     # record they are '-' (the full entry reappears on run_failed).
     assert "session=-" in start
@@ -7713,7 +7777,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     assert "idle=" in line
     # No full scene on activity lines (Issue #40).
     assert "branch=" not in line
-    assert "worktree=" not in line
+    assert f"worktree={tmp_path}" not in line
     assert "session_file=" not in line
     assert "source_repo=" not in line
     # The idle tail produced heartbeats at the poll interval.
@@ -7726,7 +7790,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
         assert "elapsed=" in line
         assert "idle=" in line
         assert "branch=" not in line
-        assert "worktree" not in line
+        assert f"worktree={tmp_path}" not in line
     # The legacy verbose line is gone.
     assert "pi_activity" not in caplog.text
     assert "pi_idle" not in caplog.text
@@ -7945,7 +8009,8 @@ def test_stream_pi_logs_run_failed_with_full_scene_and_reraises(
     assert "phase=test" in failure
     assert "reason=pi_exit_3" in failure
     # The full scene is the debug entry again: worktree and session file.
-    assert "worktree=" in failure
+    assert f"worktree={tmp_path}" in failure
+    assert f"session_file={tmp_path / '.pi-session' / 'sess.jsonl'}" in failure
     assert "session=sess-1" in failure
     # The session JSONL stays in the worktree as the local record.
     session_files = list((tmp_path / ".pi-session").glob("*.jsonl"))
@@ -8682,6 +8747,7 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     assert "state=model_wait" in wait
     # The full scene never rides on the transition lines.
     assert "branch=" not in wait
+    assert f"worktree={tmp_path}" not in wait
     resume = resumed[0]
     assert "run=deadbeef" not in resume
     assert "state=resumed" in resume
@@ -8939,6 +9005,7 @@ def test_stream_pi_hung_model_request_killed_when_upstream_gone(
     assert len(failures) == 1
     assert "reason=model_wait_dead_stale_" in failures[0]
     assert "issue=xqliu/orbi#75" in failures[0]
+    assert f"worktree={tmp_path}" in failures[0]
     # The structured model_wait_dead line carries the evidence: no
     # live connection here.
     dead = [line for line in lines if " model_wait_dead " in line]
@@ -10494,6 +10561,7 @@ def test_stream_pi_idle_recovery_kills_pi_session_after_three_idle_cycles(
     assert "reason=idle_recovery_stale_" in failure
     assert "run=deadbeef" in failure
     assert "issue=xqliu/orbi#94" in failure
+    assert f"worktree={tmp_path}" in failure
 
 
 def test_stream_pi_idle_recovery_without_descendants_still_terminates(
@@ -15117,6 +15185,7 @@ def test_stop_handler_active_run_logs_stopping_then_stopped_and_exits(
     assert "phase=-" in line
     assert "session=-" in line
     assert "branch=orbi/owner-repo-issue-48" in line
+    assert f"worktree={worktree}" in line
     assert stopped[0].endswith("run_stopped issue=48 result=interrupted")
     # The live Pi child was shut down: no orphan survives the stop.
     assert child.wait(timeout=5) == -signal.SIGTERM
@@ -15401,6 +15470,7 @@ def test_real_subprocess_sigterm_logs_stop_scene_and_shuts_down_pi(
     assert "phase=test" in line
     assert "session=sess-48" in line
     assert "branch=orbi/owner-repo-issue-48" in line
+    assert f"worktree={worktree}" in line
     assert stopped[0].endswith("run_stopped issue=48 result=interrupted")
     # No orphan Pi: the stop handler waited for the child to exit
     # BEFORE the process exited (driver exit implies the child was

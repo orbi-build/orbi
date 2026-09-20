@@ -7435,16 +7435,29 @@ def _failure_summary(reason: str) -> str:
     stderr = stderr_match.group(1).strip() if stderr_match else ""
     summary = re.sub(r"\s+stderr=.*$", "", reason,
                      flags=re.IGNORECASE | re.DOTALL)
-    summary = re.sub(r"Command\s+\[[^\]]*\]", "the delivery command failed", summary)
-    summary = re.sub(r"the delivery command failed returned non-zero exit status \d+",
+    # A CalledProcessError renders the entire argv between ``Command`` and
+    # ``returned``. Match that semantic boundary rather than the first closing
+    # bracket: an argv value may itself contain ``]``.
+    summary = re.sub(
+        r"Command\s+.+?\s+returned non-zero exit status\s+\d+",
+        "the delivery command failed", summary,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    summary = re.sub(r"CalledProcessError\([^)]*\)",
                      "the delivery command failed", summary)
-    summary = re.sub(r"CalledProcessError\([^)]*\)", "the delivery command failed", summary)
     summary = _redact_local_paths(summary)
     summary = re.sub(r"\s+", " ", summary).strip(" .;:")
     if not summary:
         summary = "the delivery command failed"
-    if stderr and stderr not in summary:
-        summary = f"{summary}: {stderr.splitlines()[0]}"
+    if stderr:
+        # Setup tools often write informational lines before the provider's
+        # concrete error. The final non-empty line is the actionable result.
+        stderr_lines = [line.strip() for line in stderr.splitlines()
+                        if line.strip()]
+        stderr_summary = _redact_local_paths(stderr_lines[-1]) \
+            if stderr_lines else ""
+        if stderr_summary and stderr_summary not in summary:
+            summary = f"{summary}: {stderr_summary}"
     return summary[:500]
 
 
@@ -7590,12 +7603,17 @@ def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
         ("action", snapshot.get("action") or "-"),
         ("result", snapshot.get("result") or "-"),
     ]
-    if pr_url:
-        fields.insert(1, ("PR", f"[{pr_url}]({pr_url})"))
-    rendered = "\n".join(
+    if snapshot.get("session_file"):
+        fields[6] = ("session log", "local session log")
+    else:
+        fields[6] = ("session log", "<unavailable>")
+    rendered_fields = [
         f"- {key}: `{_redact_local_paths(str(value))}`"
         for key, value in fields
-    )
+    ]
+    if pr_url:
+        rendered_fields.insert(1, f"- PR: [{pr_url}]({pr_url})")
+    rendered = "\n".join(rendered_fields)
     return rendered + (
         "\n- legacy correlation: "
         f"`run={run_id} branch={branch} session="
@@ -7636,17 +7654,13 @@ def _failure_comment_body(*, outcome: str, action: str, reason: str,
         f"- correlation: `{correlation}`",
     ]
     if diagnosis:
-        if _failure_summary(diagnosis) == _failure_summary(reason):
+        reason_summary = _failure_summary(reason)
+        diagnosis_summary = _failure_summary(diagnosis)
+        if diagnosis_summary == reason_summary or diagnosis_summary in reason_summary:
             label = "Orbi needs a fix" if retrying else "Orbi failed"
             details.append(f"- failure detail: `{label}: see the reason above`")
         else:
-            detail = re.sub(r"\s+stderr=.*$", "", diagnosis,
-                            flags=re.IGNORECASE)
-            detail = re.sub(r"Command\s+\[[^\]]*\]",
-                            "the delivery command", detail)
-            details.append(
-                f"- failure detail: `{_redact_local_paths(detail)}`"
-            )
+            details.append(f"- failure detail: `{diagnosis_summary}`")
     if evidence:
         details.append(evidence.lstrip())
     details.append("</details>")
@@ -9069,29 +9083,25 @@ def report_delivery_failure(
             number, repo=source_repo, event=EVENT_BLOCKED,
             current_labels=labels,
         )
-        if not classify and not run_id:
-            # Preserve the historical no-run-id implement failure shape.
-            body = f"Orbi failed: {reason}"
-            outcome = "blocked"
-        else:
-            scene = scene_line() or "- run: `-`"
-            body = _failure_comment_body(
-                outcome="blocked", action=action, reason=reason,
-                diagnosis=diagnosis, scene=scene, evidence=evidence_detail,
-                pr_url=pr_url, issue=issue_context(source_repo, number),
-                run_id=run_id or "-",
+        scene = scene_line() or "- run: `-`"
+        body = _failure_comment_body(
+            outcome="blocked", action=action, reason=reason,
+            diagnosis=diagnosis, scene=scene, evidence=evidence_detail,
+            pr_url=pr_url, issue=issue_context(source_repo, number),
+            run_id=run_id or "-",
+        )
+        if classify:
+            body = body.replace(
+                "</details>",
+                f"\n{_BLOCKED_PRECONDITION_PHRASE.lstrip('; ')}\n</details>",
+                1,
             )
-            if classify:
-                body = body.replace(
-                    "</details>",
-                    f"\n{_BLOCKED_PRECONDITION_PHRASE.lstrip('; ')}",
-                    1,
-                )
-            if blocked_suffix:
-                body = body.replace(
-                    "</details>", f"\n{blocked_suffix.lstrip('; ')}", 1,
-                )
-            outcome = "blocked"
+        if blocked_suffix:
+            body = body.replace(
+                "</details>",
+                f"\n{blocked_suffix.lstrip('; ')}\n</details>", 1,
+            )
+        outcome = "blocked"
     else:
         apply_label_patch(
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
