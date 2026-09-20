@@ -7417,6 +7417,37 @@ def _failure_detail(exc: BaseException) -> str:
     return detail
 
 
+_LOCAL_PATH_RE = re.compile(
+    r"(?:/home/[^\s`),]+|/Users/[^\s`),]+|/tmp/[^\s`),]+|"
+    r"/workspace/[^\s`),]+|/workspaces/[^\s`),]+)"
+)
+
+
+def _redact_local_paths(value: str) -> str:
+    """Keep GitHub comments free of host-specific filesystem paths."""
+    return _LOCAL_PATH_RE.sub("local runner path", value)
+
+
+def _failure_summary(reason: str) -> str:
+    """Turn a runner exception description into a short reader summary."""
+    stderr_match = re.search(r"\s+stderr=(.*)$", reason,
+                             flags=re.IGNORECASE | re.DOTALL)
+    stderr = stderr_match.group(1).strip() if stderr_match else ""
+    summary = re.sub(r"\s+stderr=.*$", "", reason,
+                     flags=re.IGNORECASE | re.DOTALL)
+    summary = re.sub(r"Command\s+\[[^\]]*\]", "the delivery command failed", summary)
+    summary = re.sub(r"the delivery command failed returned non-zero exit status \d+",
+                     "the delivery command failed", summary)
+    summary = re.sub(r"CalledProcessError\([^)]*\)", "the delivery command failed", summary)
+    summary = _redact_local_paths(summary)
+    summary = re.sub(r"\s+", " ", summary).strip(" .;:")
+    if not summary:
+        summary = "the delivery command failed"
+    if stderr and stderr not in summary:
+        summary = f"{summary}: {stderr.splitlines()[0]}"
+    return summary[:500]
+
+
 _SGR_RE = re.compile(r"(?:\x1b\[[0-9;]*m|\^\[\[[0-9;]*m)")
 
 
@@ -7545,6 +7576,83 @@ def _session_summary(session_file: Path,
     return "\n".join(reversed(summary))
 
 
+def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
+                   branch: str, worktree: str, pr_url: str | None = None) -> str:
+    """Render run facts as wrapping Markdown, never as a host-path dump."""
+    fields = [
+        ("run", run_id), ("issue", issue), ("role", role),
+        ("branch", branch),
+        ("worktree", "local runner worktree"),
+        ("session", snapshot.get("session_id") or "-"),
+        ("session log", "local session log"),
+        ("phase", snapshot.get("phase") or "-"),
+        ("last activity", snapshot.get("last_activity") or "-"),
+        ("action", snapshot.get("action") or "-"),
+        ("result", snapshot.get("result") or "-"),
+    ]
+    if pr_url:
+        fields.insert(1, ("PR", f"[{pr_url}]({pr_url})"))
+    rendered = "\n".join(
+        f"- {key}: `{_redact_local_paths(str(value))}`"
+        for key, value in fields
+    )
+    return rendered + (
+        "\n- legacy correlation: "
+        f"`run={run_id} branch={branch} session="
+        f"{snapshot.get('session_id') or '-'} phase={snapshot.get('phase') or '-'} "
+        f"last_activity={snapshot.get('last_activity') or '-'}`"
+    )
+
+
+def _failure_comment_body(*, outcome: str, action: str, reason: str,
+                          diagnosis: str, scene: str, evidence: str,
+                          pr_url: str | None, issue: str, run_id: str) -> str:
+    """Build the reader-facing hierarchy shared by classified failures."""
+    retrying = outcome == "fix needed"
+    headline = (
+        "Orbi: fix needed — the engine will retry"
+        if retrying else "Orbi: blocked — waiting on a human decision"
+    )
+    parts = [headline]
+    if pr_url:
+        parts.append(f"PR: [{pr_url}]({pr_url})")
+    parts.append(f"Issue: `{issue}` · run_id={run_id}")
+    if action:
+        parts.append(f"**Action:** {_redact_local_paths(action)}")
+    parts.append(f"**Reason:** {_failure_summary(reason)}")
+    disposition = "Orbi needs a fix" if retrying else "Orbi failed"
+    branch_match = re.search(r"- branch: `([^`]+)`", scene)
+    session_match = re.search(r"- session: `([^`]+)`", scene)
+    correlation = (
+        f"run={run_id} branch={branch_match.group(1) if branch_match else '-'} "
+        f"session={session_match.group(1) if session_match else '-'}"
+    )
+    details = [
+        "<details><summary>Diagnosis</summary>",
+        f"- disposition: `{disposition}: see the reason above`",
+        scene,
+        # Stable correlation keys retain the old journal lookup shape while
+        # local path fields above remain reader-safe labels.
+        f"- correlation: `{correlation}`",
+    ]
+    if diagnosis:
+        if _failure_summary(diagnosis) == _failure_summary(reason):
+            label = "Orbi needs a fix" if retrying else "Orbi failed"
+            details.append(f"- failure detail: `{label}: see the reason above`")
+        else:
+            detail = re.sub(r"\s+stderr=.*$", "", diagnosis,
+                            flags=re.IGNORECASE)
+            detail = re.sub(r"Command\s+\[[^\]]*\]",
+                            "the delivery command", detail)
+            details.append(
+                f"- failure detail: `{_redact_local_paths(detail)}`"
+            )
+    if evidence:
+        details.append(evidence.lstrip())
+    details.append("</details>")
+    return "\n\n".join(parts + ["\n".join(details)])
+
+
 def _failure_evidence(worktree: Path | None, exc: BaseException) -> str:
     """Render the bounded evidence that survives terminal worktree cleanup.
 
@@ -7568,6 +7676,7 @@ def _failure_evidence(worktree: Path | None, exc: BaseException) -> str:
     session = (
         _session_summary(session_file) if session_file else "<unavailable>"
     )
+    session_label = "local session log" if session_file else "<unavailable>"
     test_log = "<unavailable>"
     if worktree is not None:
         test_path = worktree / ".orbi" / "test.log"
@@ -7576,12 +7685,12 @@ def _failure_evidence(worktree: Path | None, exc: BaseException) -> str:
     return (
         "\n\nFailure evidence (captured before cleanup):\n"
         f"exit_code={return_code if return_code is not None else '<unknown>'}\n"
-        f"\nstderr_tail:\n{_fenced(stderr)}\n"
-        f"\nstdout_tail:\n{_fenced(stdout)}\n"
+        f"\nstderr_tail:\n{_fenced(_redact_local_paths(stderr))}\n"
+        f"\nstdout_tail:\n{_fenced(_redact_local_paths(stdout))}\n"
         "\nsession_last_events "
         f"(last {SESSION_SUMMARY_LIMIT} records; full log: "
-        f"{session_file or '<unavailable>'}):\n{_fenced(session)}\n"
-        f"\ntest_log_tail:\n{_fenced(test_log)}"
+        f"{session_label}):\n{_fenced(_redact_local_paths(session))}\n"
+        f"\ntest_log_tail:\n{_fenced(_redact_local_paths(test_log))}"
     )
 
 
@@ -8929,10 +9038,13 @@ def report_delivery_failure(
         #256 isolation).
         """
         if classify:
-            snapshot = _snapshot_or_placeholder(
-                worktree / ".pi-session", number=number,
+            snapshot = (
+                _snapshot_or_placeholder(worktree / ".pi-session", number=number)
+                if worktree is not None else dict(_SNAPSHOT_PLACEHOLDER)
             )
         else:
+            if worktree is None:
+                return None
             try:
                 snapshot = activity_snapshot(worktree / ".pi-session")
             except Exception:
@@ -8940,11 +9052,10 @@ def report_delivery_failure(
                 return None
             if snapshot is None:
                 snapshot = dict(_SNAPSHOT_PLACEHOLDER)
-        return format_run_scene(
-            snapshot,
-            run_id=run_id or "-",
-            issue=issue_context(source_repo, number),
-            role=role, branch=branch or "-", worktree=str(worktree),
+        return _failure_scene(
+            snapshot, run_id=run_id or "-",
+            issue=issue_context(source_repo, number), role=role,
+            branch=branch or "-", worktree=str(worktree), pr_url=pr_url,
         )
 
     labels = (
@@ -8957,49 +9068,42 @@ def report_delivery_failure(
             number, repo=source_repo, event=EVENT_BLOCKED,
             current_labels=labels,
         )
-        headline = (
-            "Orbi failed: " + reason if not classify and not run_id
-            else "Orbi: blocked — waiting on a human decision"
-        )
-        paragraphs = [headline]
-        if action:
-            paragraphs.append(action)
-        paragraphs.append(reason)
-        # Keep the legacy failure label in the collapsed diagnosis while
-        # the headline carries the actionable disposition.
-        diagnosis = f"Orbi failed: {diagnosis}"
-        if worktree is not None and not classify:
-            scene = scene_line()
-            if scene is not None:
-                diagnosis += f"\n{scene}"
-        body = "\n\n".join(paragraphs)
-        body += f"\n\n<details><summary>Diagnosis</summary>\n{diagnosis}"
-        if classify:
-            body += f"\n{_BLOCKED_PRECONDITION_PHRASE.lstrip('; ')}"
-        if blocked_suffix:
-            body += f"\n{blocked_suffix.lstrip('; ')}"
-        body += evidence_detail
-        body += "\n</details>"
-        outcome = "blocked"
+        if not classify and not run_id:
+            # Preserve the historical no-run-id implement failure shape.
+            body = f"Orbi failed: {reason}"
+            outcome = "blocked"
+        else:
+            scene = scene_line() or "- run: `-`"
+            body = _failure_comment_body(
+                outcome="blocked", action=action, reason=reason,
+                diagnosis=diagnosis, scene=scene, evidence=evidence_detail,
+                pr_url=pr_url, issue=issue_context(source_repo, number),
+                run_id=run_id or "-",
+            )
+            if classify:
+                body = body.replace(
+                    "</details>",
+                    f"\n{_BLOCKED_PRECONDITION_PHRASE.lstrip('; ')}",
+                    1,
+                )
+            if blocked_suffix:
+                body = body.replace(
+                    "</details>", f"\n{blocked_suffix.lstrip('; ')}", 1,
+                )
+            outcome = "blocked"
     else:
         apply_label_patch(
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
             current_labels=labels,
         )
-        body = "\n\n".join((
-            "Orbi: fix needed — the engine will retry",
-            *(([f"What you need to do: {action}"] if action else [])),
-            f"What happened: {reason}",
-        ))
-        diagnostic_parts = [f"Orbi needs a fix: {diagnosis}", scene_line()]
+        scene = scene_line() or "- run: `-`"
         if review_scene_block is not None:
-            diagnostic_parts.append(review_scene_block)
-        if evidence_detail:
-            diagnostic_parts.append(evidence_detail.lstrip())
-        body += (
-            "\n\n<details><summary>Diagnosis</summary>\n"
-            + "\n".join(diagnostic_parts)
-            + "\n</details>"
+            scene += f"\n{_redact_local_paths(review_scene_block)}"
+        body = _failure_comment_body(
+            outcome="fix needed", action=action, reason=reason,
+            diagnosis=diagnosis, scene=scene, evidence=evidence_detail,
+            pr_url=pr_url, issue=issue_context(source_repo, number),
+            run_id=run_id or "-",
         )
         outcome = "fix needed"
     if len(body) > FAILURE_COMMENT_MAX_CHARS:
@@ -9011,7 +9115,7 @@ def report_delivery_failure(
             body[:FAILURE_COMMENT_MAX_CHARS]
             + f"\n\n_[comment truncated at {FAILURE_COMMENT_MAX_CHARS} "
             f"chars; full session log: "
-            f"{session_file or '<unavailable>'}]_"
+            f"{'local session log' if session_file else '<unavailable>'}]_"
         )
     if run_id:
         # The hidden fingerprint marker rides under the run marker on

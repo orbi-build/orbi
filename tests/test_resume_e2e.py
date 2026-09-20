@@ -817,8 +817,8 @@ def test_e2e_review_failure_keeps_pr_and_stays_fix_needed(
     assert "Orbi needs a fix:" in failure
     assert "returned non-zero exit status 3" in failure
     assert f"<!-- orbi:run={run_id} -->" in failure
-    assert f"branch={branch}" in failure
-    assert f"worktree={worktree}" in failure
+    assert f"branch: `{branch}`" in failure
+    assert "worktree: `local runner worktree`" in failure
     fix_needed = comments[-1]
     assert "Orbi: fix needed" in fix_needed
     assert f"<!-- orbi:run={run_id} -->" in fix_needed
