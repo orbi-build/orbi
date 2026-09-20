@@ -257,3 +257,13 @@ def test_agents_md_documents_model_wait_dead_kill():
     assert "slow" in text
     # The no-business-timeout scope rule must stay intact next to it.
     assert "no business task timeout" in text
+
+
+def test_workflow_docs_say_orbi_resumes_merge_after_maintainer_action():
+    """The handoff is a resumable wait, never an instruction to merge."""
+    english = docs_page("workflow")
+    chinese = docs_page("zh/workflow")
+    assert "approves and merges" not in english
+    assert "批准并合并" not in chinese
+    assert "Orbi resumes and merges" in english
+    assert "Orbi 自己合并" in chinese

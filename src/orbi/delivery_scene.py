@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orbi.delivery_labels import (
+    AWAITING_MERGE_LABEL,
     BLOCKED_LABEL,
     CONTENT_ONLY_LABEL,
     EPIC_LABEL,
@@ -117,8 +118,9 @@ def classify(
     2. `ai-merged` / `ai-epic` → NOT_CLAIMABLE (success-terminal /
        coordination-only);
     3. task types in dispatch order — RELEASE, CONTENT_ONLY, OPS;
-    4. an opened-PR state (`ai-pr-opened` / `ai-fix-needed`) resumes
-       through the trusted scene: RESUME_REVIEW, or HUMAN_REVIEW_WAIT
+    4. an opened-PR state (`ai-pr-opened` / `ai-fix-needed` /
+       `ai-awaiting-merge`) resumes through the trusted scene: RESUME_REVIEW,
+       or HUMAN_REVIEW_WAIT
        while the gate holds; without a scene comment, a marker with an
        open external PR is the #726 takeover route, a queue-label
        ticket with an open PR is the internal takeover race (a fresh
@@ -133,7 +135,9 @@ def classify(
     """
     current = frozenset(labels)
     markers = frozenset(body_markers)
-    opened_pr = PR_OPENED_LABEL in current or FIX_NEEDED_LABEL in current
+    opened_pr = bool(current & {
+        PR_OPENED_LABEL, FIX_NEEDED_LABEL, AWAITING_MERGE_LABEL,
+    })
 
     if BLOCKED_LABEL in current:
         return DeliveryScene.BLOCKED

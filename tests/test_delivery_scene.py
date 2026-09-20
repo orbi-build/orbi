@@ -22,6 +22,7 @@ from orbi.delivery_scene import (
 )
 from tests.seam import seam as runner_seam
 from orbi.delivery_labels import (
+    AWAITING_MERGE_LABEL,
     BLOCKED_LABEL,
     CONTENT_ONLY_LABEL,
     EPIC_LABEL,
@@ -94,6 +95,8 @@ TRUSTED_SCENE_RECORD = Scene(
         ({PR_OPENED_LABEL}, TRUSTED_SCENE, None, frozenset(),
          DeliveryScene.RESUME_REVIEW),
         ({FIX_NEEDED_LABEL}, TRUSTED_SCENE, None, frozenset(),
+         DeliveryScene.RESUME_REVIEW),
+        ({AWAITING_MERGE_LABEL}, TRUSTED_SCENE, None, frozenset(),
          DeliveryScene.RESUME_REVIEW),
         # Issue #178: a killed review runner leaves the in-flight label
         # behind; the opened-PR state still resumes the review.

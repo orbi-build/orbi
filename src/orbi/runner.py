@@ -2911,12 +2911,12 @@ def pick_resumable_delivery(
 ) -> tuple[dict, dict] | None:
     """Return the newest FREE opened-PR delivery and its resume scene.
 
-    Both opened-PR states are scanned: `ai-fix-needed`
+    All opened-PR states are scanned: `ai-fix-needed`
     (awaiting the next review session after a finding or a base
     conflict — the review session fixes findings in the same
-    session, so the next tick runs the same independent review on the
-    same branch, worktree and PR) and `ai-pr-opened` (awaiting review —
-    the next tick runs the independent review). The `ai-pr-opened`
+    session), `ai-pr-opened` (awaiting review), and
+    `ai-awaiting-merge` (a known policy blocker whose maintainer action
+    is retried without another review). The `ai-pr-opened`
     scan exists because the delivery that opened the PR can be gone: the
     runner can die inside the delivery wait loop, leaving a valid
     MERGEABLE PR with no owner. Without the scan such a delivery is
@@ -2975,7 +2975,8 @@ def pick_resumable_delivery(
     issues = list_issues(
         repo, state="open",
         search=(
-            f"label:{FIX_NEEDED_LABEL},{PR_OPENED_LABEL} "
+            f"label:{FIX_NEEDED_LABEL},{PR_OPENED_LABEL},"
+            f"{AWAITING_MERGE_LABEL} "
             f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL}"
         ),
         json_fields="number,title,state,url,labels,body",
@@ -5977,9 +5978,13 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         )
         stderr = str(exc.stderr or "")
         if is_maintainer_actionable(stderr, preflight):
+            failed_preflight = [
+                line for line in preflight
+                if line.startswith("merge_gate: FAILED")
+            ]
             raise MergeHandoffRequired(
                 f"PR #{pr['number']} is ready for the named maintainer action",
-                preflight=preflight,
+                preflight=failed_preflight,
             ) from None
         raise
     event("merged", pr=pr["number"], head=pr["head_oid"])

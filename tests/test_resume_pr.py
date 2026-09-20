@@ -797,7 +797,7 @@ def test_pick_resumable_delivery_returns_newest_issue_with_scene(
     assert calls[0] == [
         "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
         "--search",
-        "label:ai-fix-needed,ai-pr-opened "
+        "label:ai-fix-needed,ai-pr-opened,ai-awaiting-merge "
         "-label:ai-blocked -label:ai-merged",
         # `labels` (Issue #101): a resumed P0 delivery keeps its
         # priority in the progress comment through review/merge.
@@ -815,10 +815,10 @@ def test_pick_resumable_delivery_returns_newest_issue_with_scene(
     ]
 
 
-def test_pick_resumable_delivery_scans_fix_needed_and_awaiting_review(
+def test_pick_resumable_delivery_scans_all_open_pr_states(
     monkeypatch, tmp_path,
 ):
-    """Both opened-PR states are scanned (Issue #70): `ai-fix-needed`
+    """Every resumable opened-PR state is scanned: `ai-fix-needed`
     (a review finding or base conflict — Fixer work) and
     `ai-pr-opened` (awaiting review — a stranded delivery whose runner
     died, or the progress 404 that used to block the Issue before the
@@ -841,7 +841,7 @@ def test_pick_resumable_delivery_scans_fix_needed_and_awaiting_review(
     assert calls == [[
         "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
         "--search",
-        "label:ai-fix-needed,ai-pr-opened "
+        "label:ai-fix-needed,ai-pr-opened,ai-awaiting-merge "
         "-label:ai-blocked -label:ai-merged",
         # `labels` (Issue #101): a resumed P0 delivery keeps its
         # priority in the progress comment through review/merge.

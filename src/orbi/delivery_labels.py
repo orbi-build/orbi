@@ -132,7 +132,8 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
         return ([READY_LABEL], to_remove)
     if event == EVENT_MERGED:
         to_remove = [
-            label for label in _DELIVERY_STATE_LABELS if label in current
+            label for label in (*_DELIVERY_STATE_LABELS, AWAITING_MERGE_LABEL)
+            if label in current
         ]
         return ([MERGED_LABEL], to_remove)
     if event == EVENT_BLOCKED:
