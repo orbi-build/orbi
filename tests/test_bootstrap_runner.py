@@ -7170,6 +7170,7 @@ def test_failure_summary_uses_concrete_final_stderr_line_and_redacts_it():
         "the independent review failed: Command ['pi', '--session-dir', "
         "'/home/runner/session'] returned non-zero exit status 1. "
         "stderr=mise installed 0 tools\n"
+        "\n"
         "provider log: /home/runner/private/session.jsonl\n"
         "Codex error: The usage limit has been reached",
     )
@@ -7217,6 +7218,14 @@ def test_failure_comment_layout_keeps_raw_evidence_collapsed():
     assert "stderr_tail:" in collapsed
     assert "```" in collapsed
     assert body.endswith("</details>")
+
+    without_diagnosis = runner._failure_comment_body(
+        outcome="fix needed", action="", reason="provider failed",
+        diagnosis="", scene="- run: `abcdef12`", evidence="",
+        pr_url=None, issue="o/r#1221", run_id="abcdef12",
+    )
+    assert "failure detail:" not in without_diagnosis
+    assert without_diagnosis.endswith("</details>")
 
 
 def test_blocked_failure_suffix_stays_inside_closed_diagnostics(

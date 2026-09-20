@@ -7454,8 +7454,7 @@ def _failure_summary(reason: str) -> str:
         # concrete error. The final non-empty line is the actionable result.
         stderr_lines = [line.strip() for line in stderr.splitlines()
                         if line.strip()]
-        stderr_summary = _redact_local_paths(stderr_lines[-1]) \
-            if stderr_lines else ""
+        stderr_summary = _redact_local_paths(stderr_lines[-1])
         if stderr_summary and stderr_summary not in summary:
             summary = f"{summary}: {stderr_summary}"
     return summary[:500]
