@@ -4534,7 +4534,7 @@ def test_run_review_pr_feedback_failure_logs_and_keeps_issue_comments(
 
     monkeypatch.setattr(seam, "pr_reviews", fail_reviews)
     calls = []
-    monkeypatch.setattr(runner, "stream_pi",
+    monkeypatch.setattr(seam, "stream_pi",
                         lambda command, **kwargs: calls.append(command) or "ok")
     config = runner.RunnerConfig(
         prompt_review=prompt_path, repo_dir=tmp_path / "checkout",
