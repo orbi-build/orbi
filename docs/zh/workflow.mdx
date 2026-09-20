@@ -61,9 +61,13 @@ ai-ready                任务被派发（orbi add，或人工加标签）
                         Pi 运行时长——审查精确的 base/head SHA，并在
                         会话内修复 findings（代码、完整测试、分层
                         覆盖率门禁（Issue #234）、只 push task
-                        branch），然后输出 REVIEW_VERDICT（其 prompt
-                        同样携带关联 Issue 的受信任评论时间线——决策
-                        演变历史，Issue #745）
+                        branch），然后输出 REVIEW_VERDICT。其 prompt
+                        除关联 Issue 的受信任评论时间线外，还携带**当前
+                        PR** 上受信任的人类反馈：正式 review 状态以及
+                        行内评论的文件/行号锚点。交付身份自己的 review
+                        会被排除；PR 反馈只是输入，不是交付状态，也不会
+                        往 PR 写 label。读取 GitHub 失败会记录日志并退回
+                        仅使用 Issue 评论。
   -> ai-fix-needed      会话内未能修复 finding，PR 落后最新 base / 有
                         merge conflict，或已有 run/PR 的**可恢复失败**
                         （Issue #50：Pi 执行失败、验证失败、未推送本地

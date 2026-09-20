@@ -26,6 +26,13 @@ comments were omitted, you are NOT seeing the full history.
 
 {{ISSUE_COMMENTS}}
 
+Human feedback on the current delivery PR (trusted authors only; formal
+review state is shown in brackets and inline comments retain their file/line
+anchor). This is context input, not delivery state; Orbi never writes labels
+or status to the PR.
+
+{{PR_FEEDBACK}}
+
 ## Repeated-failure guard (before the review work)
 
 Before starting the review work, read this delivery's round history so a
@@ -33,11 +40,11 @@ path that already failed is never walked again. Every completed round
 left one comment on the Issue and the PR starting with
 `Orbi review round <N> for PR #{{PR_NUMBER}}:` and carrying the run
 marker `<!-- orbi:run=<run_id> -->` (a hidden HTML comment; the raw
-comment body carries it verbatim). The `{{ISSUE_COMMENTS}}` block above
-is the Issue side of that history; the PR conversation carries the same
-comments (one bounded read:
-`timeout 30 gh pr view {{PR_NUMBER}} --repo {{SOURCE_REPO}} --json
-comments`). Group the round comments by their `run_id` field (the
+comment body carries it verbatim). The `{{ISSUE_COMMENTS}}` block above is the Issue side of that history.
+The current PR's conversation comments, formal reviews, and inline review
+comments are a separate bounded input in `{{PR_FEEDBACK}}`; formal reviews
+are not returned by `gh pr view --json comments`. Group the round comments
+by their `run_id` field (the
 marker's `orbi:run=` value) — the run id shared by
 the most recent round comments is THIS attempt — and read that group
 oldest first. Each round comment names its outcome right after the round
