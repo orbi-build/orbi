@@ -235,6 +235,33 @@ def test_pick_resumable_routes_scene_less_fix_with_open_pr_to_fresh_claim(
     ) == (issue, None)
 
 
+def test_pick_resumable_scene_less_fix_respects_blocked_precedence(
+    monkeypatch, tmp_path,
+):
+    """A stale scan result can never reclaim an already blocked ticket."""
+    issue = _scene_less_fix_issue()
+    issue["labels"].append({"name": BLOCKED_LABEL})
+    events = []
+    monkeypatch.setitem(runner.__dict__, "slot_held_deliveries", lambda *_: set())
+    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *a, **k: [issue])
+    monkeypatch.setitem(runner.__dict__, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setitem(runner.__dict__, "_route_external_pr_ticket", lambda *a: False)
+    monkeypatch.setitem(runner.__dict__, "open_pr_for_branch", lambda *a: {
+        "number": 1224, "url": "https://github.com/owner/repo/pull/1224",
+    })
+    monkeypatch.setitem(
+        runner.__dict__, "event",
+        lambda name, **fields: events.append((name, fields)),
+    )
+
+    assert runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1, tmp_path,
+    ) is None
+    assert events == [(
+        "claim_yield", {"issue": 1216, "reason": "scene_blocked"},
+    )]
+
+
 def test_pick_resumable_scene_less_fix_without_open_pr_stays_unclaimable(
     monkeypatch, tmp_path,
 ):

@@ -3046,6 +3046,11 @@ def pick_resumable_delivery(
                 )
                 if found_scene is DeliveryScene.FRESH_CLAIM:
                     return issue, None
+                event(
+                    "claim_yield", issue=int(issue["number"]),
+                    reason=f"scene_{found_scene.value}",
+                )
+                continue
             # A runner may have created the PR and label, then lost the
             # scene comment write. Retry it from the durable local run
             # state; keep ai-pr-opened for another tick if the retry fails.
