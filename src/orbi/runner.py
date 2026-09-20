@@ -7366,8 +7366,11 @@ def _failure_detail(exc: BaseException) -> str:
     return detail
 
 
+_SGR_RE = re.compile(r"(?:\x1b\[[0-9;]*m|\^\[\[[0-9;]*m)")
+
+
 def _tail_text(path: Path, *, lines: int = 20, chars: int = 4000) -> str:
-    """Read a bounded tail for failure evidence without blocking cleanup."""
+    """Read a bounded, de-coloured tail for failure evidence."""
     try:
         with path.open("rb") as handle:
             handle.seek(0, os.SEEK_END)
@@ -7383,6 +7386,7 @@ def _tail_text(path: Path, *, lines: int = 20, chars: int = 4000) -> str:
     except (OSError, UnicodeError):
         return "<unavailable>"
     tail = "\n".join(content.splitlines()[-lines:])
+    tail = _SGR_RE.sub("", tail)
     return tail[-chars:] if len(tail) > chars else tail
 
 
