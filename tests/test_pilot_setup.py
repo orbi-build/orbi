@@ -1086,11 +1086,13 @@ def test_check_checkout_wraps_a_missing_head_with_mount_guidance(tmp_path):
     repo.mkdir()
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["git", "config"]:
+        if command == ["git", "config", "remote.origin.url"]:
             return "git@github.com:xqliu/orbi.git"
-        if command[:2] == ["git", "ls-remote"]:
+        if command == [
+            "git", "ls-remote", "git@github.com:xqliu/orbi.git",
+        ]:
             return "abc\\tHEAD"
-        if command[:3] == ["git", "rev-parse", "HEAD"]:
+        if command == ["git", "rev-parse", "HEAD"]:
             raise subprocess.CalledProcessError(
                 128, command, stderr="fatal: ambiguous argument 'HEAD'"
             )

@@ -159,6 +159,7 @@ runuser -u orbi -- env HOME=/home/orbi GH_TOKEN="$GH_TOKEN" \
 # ---- 7. Delivery checkout (/work) --------------------------------------
 # First start clones the task pool; a bind-mounted checkout is reused
 # as-is. `orbi setup`'s checkout check validates it either way.
+workspace_cloned=false
 if [ ! -e "$WORKSPACE/.git" ]; then
   if [ -n "$(ls -A "$WORKSPACE" 2>/dev/null)" ]; then
     fail "$WORKSPACE is not a git checkout but is not empty — mount an empty volume, the task-pool checkout itself, or remove the stray files"
@@ -167,11 +168,15 @@ if [ ! -e "$WORKSPACE/.git" ]; then
   runuser -u orbi -- env HOME=/home/orbi GH_TOKEN="$GH_TOKEN" \
     git clone "https://github.com/$ORBI_SOURCE_REPO.git" "$WORKSPACE" \
     || fail "cloning $ORBI_SOURCE_REPO failed (does the token grant read access?)"
+  workspace_cloned=true
 fi
 # A repository can have a remote and fetched refs without having a commit
 # checked out (for example after an interrupted clone). Fail here instead of
 # exposing the raw `git rev-parse HEAD` error from `orbi setup`.
 if ! runuser -u orbi -- git -C "$WORKSPACE" rev-parse HEAD >/dev/null 2>&1; then
+  if $workspace_cloned; then
+    fail "$ORBI_SOURCE_REPO has no commits — push an initial commit before starting Orbi"
+  fi
   fail "$WORKSPACE must be a git checkout of $ORBI_SOURCE_REPO with a resolvable HEAD — mount the checkout with: docker run -v <path>:/work (or mount an empty volume so the task pool can be cloned)"
 fi
 # Keep the runner's runtime state out of the checkout status, with the
