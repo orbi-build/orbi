@@ -168,7 +168,7 @@ from orbi.pi_process import (
 # `runner` consumes them like any other caller; only `cli` and
 # `pilot_setup` import `runner` itself.
 from orbi import github, gitops, journal, release, scene
-from orbi.merge_handoff import MergeHandoffRequired, is_approval_handoff
+from orbi.merge_handoff import MergeHandoffRequired, is_maintainer_actionable
 from orbi.cli_source import CliInstallError, refresh_cli_install
 from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
@@ -5976,10 +5976,10 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             source_repo or pr.get("_source_repo", ""), base_branch,
         )
         stderr = str(exc.stderr or "")
-        if is_approval_handoff(stderr, preflight):
+        if is_maintainer_actionable(stderr, preflight):
             raise MergeHandoffRequired(
-                f"PR #{pr['number']} is ready, but repository policy requires "
-                "an approving review before the maintainer can merge it"
+                f"PR #{pr['number']} is ready for the named maintainer action",
+                preflight=preflight,
             ) from None
         raise
     event("merged", pr=pr["number"], head=pr["head_oid"])
@@ -6619,7 +6619,8 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                               config: RunnerConfig, source_repo: str,
                               number: int, title: str, priority: str,
                               *, scene: dict,
-                              previous_comments: list[dict] | None = None) -> bool:
+                              previous_comments: list[dict] | None = None,
+                              merge_only: bool = False) -> bool:
     """Run one independent review round; merge when the verdict is clean.
 
     `title` is the issue's GitHub title: the review
@@ -6683,7 +6684,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     rounds = int(scene["review_round"])
     base_advance_rounds = int(scene.get("base_advance_round", 0))
     recovery_at = None
-    if rounds >= MAX_REVIEW_ROUNDS:
+    if rounds >= MAX_REVIEW_ROUNDS and not merge_only:
         # A maintainer may repair an external prerequisite and
         # explicitly move the terminal Issue back to ai-fix-needed. That
         # transition establishes a new budget for this same PR; old review
@@ -6713,7 +6714,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                 "without a clean verdict; the bounded loop is a human "
                 "decision, so the AI cannot safely continue this PR"
             )
-    round = rounds + 1
+    round = rounds if merge_only else rounds + 1
     pr = freeze_pr(worktree, branch, base_branch)
     # Issue #877: a round that STARTS behind the base is under the absorb
     # contract — the session must end with the branch containing
@@ -6722,7 +6723,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     # local ref leaves the round unarmed (the gate's own ancestor check
     # against the fresh fetch still guards the merge either way).
     try:
-        absorb_required = not _is_ancestor(
+        absorb_required = not merge_only and not _is_ancestor(
             f"origin/{base_branch}", pr["head_oid"], cwd=worktree,
         )
     except subprocess.CalledProcessError:
@@ -6772,26 +6773,33 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             pr_url=pr["url"], review_round=round, priority=priority,
         ))),
     )
-    output = run_review(
-        ctx, pr, config, round,
-        progress=LiveProgressThrottle(
-            ctx, publisher, title=title, role=ROLE_REVIEW,
-            started=started, pr_url=pr["url"], review_round=round,
-            priority=priority,
-        ),
-    )
-    verdict = parse_review_verdict(output)
-    fixed_findings = len(verdict["findings"])
-    review_summary = (
-        "pass, no findings"
-        if fixed_findings == 0
-        else f"pass, {fixed_findings} findings fixed in-session"
-    )
-    event(
-        "review", pr=pr["number"], round=round,
-        verdict=verdict["verdict"], blockers=verdict["blockers"],
-        majors=verdict["majors"],
-    )
+    if merge_only:
+        verdict = {
+            "verdict": "pass", "head": pr["head_oid"],
+            "findings": [], "blockers": 0, "majors": 0,
+        }
+        review_summary = "maintainer-actionable merge retry"
+    else:
+        output = run_review(
+            ctx, pr, config, round,
+            progress=LiveProgressThrottle(
+                ctx, publisher, title=title, role=ROLE_REVIEW,
+                started=started, pr_url=pr["url"], review_round=round,
+                priority=priority,
+            ),
+        )
+        verdict = parse_review_verdict(output)
+        fixed_findings = len(verdict["findings"])
+        review_summary = (
+            "pass, no findings"
+            if fixed_findings == 0
+            else f"pass, {fixed_findings} findings fixed in-session"
+        )
+        event(
+            "review", pr=pr["number"], round=round,
+            verdict=verdict["verdict"], blockers=verdict["blockers"],
+            majors=verdict["majors"],
+        )
     if verdict["verdict"] == "blocked_on_human_decision":
         decisions = "; ".join(
             f"note: {finding.get('note', '')}; "
@@ -7043,17 +7051,18 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             {**refrozen, "_source_repo": source_repo},
             base_branch, repo_dir=config.repo_dir,
         )
-    except MergeHandoffRequired:
-        # A reviewed PR rejected by the repository's required-approval
-        # policy is a successful delivery handoff, not a failed run.
+    except MergeHandoffRequired as exc:
+        # A known policy blocker is a successful, resumable handoff.
         handoff_head = refrozen["head_oid"]
+        failed_lines = "\n".join(exc.preflight)
         handoff_body = (
             f"{marker}\n"
             f"Orbi: PR #{refrozen['number']} is delivered and waiting for "
-            "your merge.\n\n"
-            f"Approve and merge PR #{refrozen['number']} at head "
-            f"`{handoff_head}`. The repository requires a human approving "
-            "review; Orbi will not weaken that policy or retry this PR."
+            "a maintainer action.\n\n"
+            f"PR #{refrozen['number']} at head `{handoff_head}` is blocked "
+            "by this repository policy:\n````\n"
+            f"{failed_lines}\n````\n\n"
+            "After the named policy action, Orbi will resume and merge the PR."
         )
         apply_label_patch(
             number, repo=source_repo, event=EVENT_AWAITING_MERGE,
@@ -9242,6 +9251,8 @@ def _run_review_round(
         review_kwargs = {}
         if scene["review_round"] > 0:
             review_kwargs["previous_comments"] = comments
+        if AWAITING_MERGE_LABEL in labels:
+            review_kwargs["merge_only"] = True
         merged = review_and_merge_if_clean(
             worktree, branch, config.base_branch,
             review_config, source_repo, number,

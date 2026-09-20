@@ -88,9 +88,8 @@ ai-ready                a task is dispatched (orbi add, or a human
                         to the next tick, Issue #788)
   -> ai-merged          Orbi merge mode: success terminal state; the PR
                         body's Fixes #N closes the Issue natively
-  -> ai-awaiting-merge  collaborative repository mode: the reviewed PR is
-                        delivered; a maintainer approves and merges it
-                        at the exact head named in the Issue comment
+  -> ai-awaiting-merge  known policy blocker: the Issue comment names the
+                        one maintainer action; Orbi resumes and merges after it
 ```
 
 A failure of an existing run/PR is classified (Issue #50): an
@@ -276,16 +275,17 @@ commits — initialize them per repository (see
 | `ai-pr-opened` | PR created and verified; awaiting the independent review |
 | `ai-fix-needed` | The PR head is not mergeable yet, or an AI-recoverable failure of the run/PR (Issue #50); the next tick resumes the same run, branch, worktree and PR |
 | `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch |
-| `ai-awaiting-merge` | Collaborative repository mode: review and checks passed, but required approval prevents the bot from merging; a maintainer approves and merges the named PR head |
+| `ai-awaiting-merge` | Review and checks passed, but a known repository policy blocker remains; the comment names the maintainer action and Orbi resumes to merge the named PR head |
 | `ai-blocked` | Only an external precondition the AI cannot safely judge or fix (Issue #50); the blocked comment states why automatic recovery is impossible; a human must decide the next step |
 | `ai-human-review` | The human acceptance gate (Issue #763): a person confirmed the delivery's acceptance checklist. Only a human applies or removes it — the Runner never touches it |
 
-A repository may require a human approving review even after Orbi's review and
-checks pass. In that collaborative mode Orbi delivers the PR and stops at
-`ai-awaiting-merge`; the Issue comment names the exact head and asks the
-maintainer to approve and merge it. Orbi's normal mode remains automatic merge.
-A policy rejection without the approving-review blocker, or any other merge
-failure, remains `ai-blocked`.
+A repository policy may block the merge even after Orbi's review and checks
+pass. Orbi stops at `ai-awaiting-merge`; the Issue comment names the exact head
+and the one maintainer action (including the settings URL when applicable).
+After the maintainer changes the policy or supplies the required approval, a
+later tick resumes and Orbi merges the PR itself. A policy rejection without a
+known FAILED preflight action, or any other merge failure, remains
+`ai-blocked`.
 
 ## Human acceptance gate (ai-human-review)
 

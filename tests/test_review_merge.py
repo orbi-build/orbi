@@ -1218,10 +1218,11 @@ def test_review_handoff_marks_issue_awaiting_merge(monkeypatch, tmp_path):
         assert runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4, title="Review task", priority="normal",
-            scene=_scene(),
+            scene=_scene(), merge_only=True,
         ) is False
         assert any(
-            isinstance(call, str) and "Approve and merge PR #4" in call
+            isinstance(call, str) and "maintainer action" in call
+            and "PR #4" in call and "merge" in call
             for call in calls
         )
         assert any(call.get("add") == "ai-awaiting-merge" for call in calls

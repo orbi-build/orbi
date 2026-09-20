@@ -83,7 +83,7 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
     - blocked: add `ai-blocked`, remove every delivery-state label that
       is present (so the terminal state is `ai-blocked` ALONE).
     - awaiting_merge: add `ai-awaiting-merge`, remove every delivery-state
-      label and `ai-ready` (the maintainer owns the final merge).
+      label and `ai-ready` (a maintainer action is required before Orbi retries).
 
     An unknown event raises `ValueError` (fail fast — never a guessed
     patch).
@@ -190,7 +190,11 @@ def is_resumable(current_labels) -> bool:
     scan handles it separately).
     """
     current = set(current_labels)
-    return PR_OPENED_LABEL in current or FIX_NEEDED_LABEL in current
+    return (
+        PR_OPENED_LABEL in current
+        or FIX_NEEDED_LABEL in current
+        or AWAITING_MERGE_LABEL in current
+    )
 
 
 def needs_human_intervention(current_labels) -> bool:
