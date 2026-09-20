@@ -102,7 +102,8 @@ ai-ready                任务被派发（orbi add，或人工加标签）
 是等价的：Runner 会在下一次 steering 轮询时拾取它们（间隔由
 `steering_poll_seconds` 控制，默认 60 秒），并带着修正重启当前 session。
 重启次数由 `steering_max_rounds` 限制（默认 3 次）；达到上限后，后续修正
-不会再重启这次交付。
+不会再重启这次交付，journal 会记录 `steering_limit_reached`。让当前交付完成，
+再把修订后的范围放入后续交付。
 
 只有受信任的仓库角色——OWNER、MAINTAINER、MEMBER 或 COLLABORATOR——的
 评论可以 steering。公开评论者的评论会按设计被忽略，因为允许任意评论者

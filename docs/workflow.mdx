@@ -119,7 +119,9 @@ Issue body. These two channels are equivalent: both are picked up by the
 Runner's next steering poll (the interval is `steering_poll_seconds`, 60
 seconds by default), and the active session restarts with the correction. The
 restarts are bounded by `steering_max_rounds` (3 by default); after the limit
-is reached, further corrections do not restart that delivery.
+is reached, further corrections do not restart that delivery and the journal
+records `steering_limit_reached`. Let the current delivery finish, then put the
+revised scope in a follow-up delivery.
 
 Only comments from trusted repository roles—OWNER, MAINTAINER, MEMBER, or
 COLLABORATOR—can steer a run. A comment from a public commenter is ignored by
