@@ -4342,6 +4342,7 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
     steering_rounds = 0
     steering_started = time.time()
     steering_limit_logged = False
+    steering_limit_notice_logged = False
     # The body this run started from (Issue #1094): the exact text the
     # prompt above embeds. The steering poll compares the live body
     # against it — a maintainer rewrite of the Issue body steers like a
@@ -4352,16 +4353,16 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
     build_resume_context = globals()["resume_context"]
 
     def check_steering() -> SteeringRequest | None:
-        nonlocal steering_rounds, steering_limit_logged, steering_body
-        if steering_rounds >= config.steering_max_rounds:
-            if not steering_limit_logged:
-                steering_limit_logged = True
-                event(
-                    "steering_limit_reached", issue=issue_context(
-                        source_repo, int(issue["number"]),
-                    ), round=steering_rounds,
-                )
-            return None
+        nonlocal steering_rounds, steering_limit_logged
+        nonlocal steering_limit_notice_logged, steering_body
+        limit_reached = steering_rounds >= config.steering_max_rounds
+        if limit_reached and not steering_limit_logged:
+            steering_limit_logged = True
+            event(
+                "steering_limit_reached", issue=issue_context(
+                    source_repo, int(issue["number"]),
+                ), round=steering_rounds,
+            )
         try:
             # ONE request per poll (Issue #1094): the same `gh issue
             # view` that lists the comments also returns the body, so a
@@ -4404,6 +4405,26 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
                 item = dict(comment)
                 item["issue"] = issue["number"]
                 fresh.append(item)
+        if limit_reached:
+            if (fresh or body_changed) and not steering_limit_notice_logged:
+                steering_limit_notice_logged = True
+                try:
+                    comment_issue(
+                        int(issue["number"]), repo=source_repo,
+                        body=(
+                            f"<!-- orbi:run={config.run_id} -->\n"
+                            "The steering limit was reached, so this correction "
+                            "was not applied.\n"
+                            f"run_id={config.run_id}"
+                        ),
+                    )
+                except Exception as exc:
+                    event(
+                        "steering_limit_notice_failed", level=logging.WARNING,
+                        issue=issue_context(source_repo, int(issue["number"])),
+                        reason=type(exc).__name__,
+                    )
+            return None
         if not fresh and not body_changed:
             return None
         steering_rounds += 1

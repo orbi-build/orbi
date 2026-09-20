@@ -156,6 +156,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "delivery_steered": "an active delivery was restarted with a trusted Issue correction",
     "steering_limit_reached": "active delivery steering reached its configured round limit",
     "steering_poll_failed": "steering polling failed (pure bypass)",
+    "steering_limit_notice_failed": "the post-limit correction notice could not be published (pure bypass)",
     # Provider rate limiting.
     "pi_retry_429": "a provider 429 triggers an in-run backoff retry",
     "pi_429_attempts_reset": "the persisted 429 attempt counter was reset",

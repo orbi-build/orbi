@@ -463,6 +463,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `delivery_steered` | 活跃交付因可信 Issue 修正而重启 |
 | `steering_limit_reached` | 活跃交付达到 steering 轮数上限 |
 | `steering_poll_failed` | steering 拉取失败（纯旁路） |
+| `steering_limit_notice_failed` | steering 上限后的修正通知发布失败（纯旁路） |
 | `pi_retry_429` | provider 429 触发 run 内退避重试 |
 | `pi_429_attempts_reset` | 持久化的 429 重试计数被重置 |
 | `pi_429_attempts_write_failed` | 持久化 429 重试计数失败 |
