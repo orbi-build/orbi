@@ -416,7 +416,17 @@ gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 The PR description must contain `Fixes #<issue-number>` (it may be on the
 first line). GitHub reads the body (not the PR title) and closes the Issue
 natively when the PR merges into the default branch. The Runner verifies
-the keyword during PR acceptance and fails fast when it is missing.
+the keyword during PR acceptance and fails fast when it is missing. This
+validation failure is recorded on the affected Issue and does not terminate
+the runner tick.
+
+A staged initiative must not use one Issue and one PR for several independent
+runtime outcomes. Use an Epic or parent Issue for coordination, split each
+phase into a child Issue, and give every child its own delivery PR with
+`Fixes #<child-number>`. This preserves native close behavior without adding a
+second PR-body syntax. If an existing PR says `Part of #N`, the maintainer must
+update it to the exact `Fixes #N` reference when that PR is the complete child
+outcome, or split the remaining phases into child Issues before retrying.
 
 ## Epics, Release tasks and P0 priority
 
