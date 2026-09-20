@@ -217,6 +217,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     # Dead-loop guard (Issue #825).
     "failure_comment_deduplicated": "an identical failure repeat bumped the existing comment's counter; no second comment",
     "failure_comment_update_failed": "the existing failure comment could not be resolved or updated; the tick continues",
+    "failure_comment_id_unavailable": "a repeated failure comment had no recoverable REST id; a new comment was posted",
     "failure_streak_escalated": "the same failure reached the consecutive limit; the Issue goes ai-blocked",
     "failure_history_read_failed": "the failure-history read for the dead-loop guard failed (fail-open)",
     # External contributor PRs.
