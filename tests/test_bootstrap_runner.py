@@ -7159,6 +7159,9 @@ def test_failure_summary_removes_command_and_stderr_duplication():
     assert "/home/" not in summary
     assert summary.count("provider exploded") == 1
     assert "delivery command failed" in summary
+    assert runner._failure_summary(
+        "provider exploded stderr=provider exploded"
+    ) == "provider exploded"
 
 
 def test_failure_summary_defaults_when_reason_has_no_readable_content():
