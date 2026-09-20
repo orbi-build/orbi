@@ -261,6 +261,15 @@ def test_awaiting_merge_clears_queue_and_delivery_labels():
         )
 
 
+def test_failure_after_partial_awaiting_merge_handoff_replaces_terminal_label():
+    assert dl.label_patch(dl.EVENT_FIX_NEEDED, {"ai-awaiting-merge"}) == (
+        ["ai-fix-needed"], ["ai-awaiting-merge"],
+    )
+    assert dl.label_patch(dl.EVENT_BLOCKED, {"ai-awaiting-merge"}) == (
+        ["ai-blocked"], ["ai-awaiting-merge"],
+    )
+
+
 def test_scheduling_metadata_labels_are_not_lifecycle_states():
     for label in (dl.P0_LABEL, dl.BUG_LABEL, dl.EPIC_LABEL,
                   dl.RELEASE_LABEL, dl.CONTENT_ONLY_LABEL, dl.OPS_LABEL,

@@ -98,7 +98,9 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
         return ([PR_OPENED_LABEL], [IN_PROGRESS_LABEL])
     if event == EVENT_FIX_NEEDED:
         to_remove = [
-            label for label in (IN_PROGRESS_LABEL, PR_OPENED_LABEL)
+            label for label in (
+                IN_PROGRESS_LABEL, PR_OPENED_LABEL, AWAITING_MERGE_LABEL,
+            )
             if label in current
         ]
         return ([FIX_NEEDED_LABEL], to_remove)
@@ -134,8 +136,15 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
         ]
         return ([MERGED_LABEL], to_remove)
     if event == EVENT_BLOCKED:
+        # A handoff writes its terminal label before its required Issue
+        # comment. If that later write fails, classified failure reporting
+        # must still be able to replace the partial handoff rather than leave
+        # two lifecycle states on the Issue.
         to_remove = [
-            label for label in _DELIVERY_STATE_LABELS if label in current
+            label for label in (
+                *_DELIVERY_STATE_LABELS, AWAITING_MERGE_LABEL,
+            )
+            if label in current
         ]
         # The ready label is the queue entry, not a delivery state: a
         # blocked terminal must clear it too, or the pickup scan
