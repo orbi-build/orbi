@@ -178,6 +178,64 @@ def test_run_pi_steering_body_edit_respects_round_limit(monkeypatch, tmp_path):
     assert "steering_limit_reached" in events
 
 
+def test_run_pi_steering_limit_notifies_once_for_late_comment(monkeypatch, tmp_path):
+    future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
+    polls = iter([
+        _snapshot([{
+            "id": "late-1", "createdAt": future,
+            "authorAssociation": "MEMBER", "author": {"login": "alice"},
+            "body": "please use the new direction",
+        }]),
+        _snapshot([{
+            "id": "late-1", "createdAt": future,
+            "authorAssociation": "MEMBER", "author": {"login": "alice"},
+            "body": "please use the new direction",
+        }, {
+            "id": "late-2", "createdAt": future,
+            "authorAssociation": "MEMBER", "author": {"login": "bob"},
+            "body": "another correction",
+        }]),
+    ])
+    monkeypatch.setitem(runner.__dict__, "issue_view", lambda *a, **k: next(polls))
+    monkeypatch.setitem(runner.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(runner.__dict__, "activity_snapshot", lambda *a, **k: None)
+    comments = []
+    monkeypatch.setitem(runner.__dict__, "comment_issue",
+        lambda number, *, repo, body: comments.append((number, repo, body)))
+    captured = {}
+    monkeypatch.setitem(runner.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    issue = {"number": 2, "title": "title", "body": "body"}
+    config = _config(tmp_path, steering_max_rounds=0)
+    assert runner.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), config) == "done"
+    check = captured["watch"].steering_check
+    assert check() is None
+    assert check() is None
+    assert len(comments) == 1
+    assert "<!-- orbi:run=run1 -->" in comments[0][2]
+    assert "steering limit" in comments[0][2]
+    assert "not applied" in comments[0][2]
+    assert "run_id=run1" in comments[0][2]
+
+
+def test_run_pi_steering_limit_notice_failure_is_bypassed(monkeypatch, tmp_path):
+    future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
+    monkeypatch.setitem(runner.__dict__, "issue_view", lambda *a, **k: _snapshot([{
+        "id": "late", "createdAt": future, "authorAssociation": "MEMBER",
+        "author": {"login": "alice"}, "body": "correction",
+    }]))
+    events = []
+    monkeypatch.setitem(runner.__dict__, "event", lambda kind, **kw: events.append(kind))
+    monkeypatch.setitem(runner.__dict__, "comment_issue",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
+    captured = {}
+    monkeypatch.setitem(runner.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    issue = {"number": 2, "title": "title", "body": "body"}
+    config = _config(tmp_path, steering_max_rounds=0)
+    assert runner.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), config) == "done"
+    assert captured["watch"].steering_check() is None
+    assert "steering_limit_notice_failed" in events
+
+
 def test_run_pi_steering_snapshot_without_body_stays_inert(monkeypatch, tmp_path):
     """A payload without a body field cannot prove a body edit: body
     steering stays inert for that poll, comment steering unchanged."""

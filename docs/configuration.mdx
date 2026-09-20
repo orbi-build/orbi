@@ -72,7 +72,7 @@ The three `review_pi_*` rows let the independent review run on a different model
 
 Steering lets the Runner poll the Issue for a trusted correction and restart the active delivery with that correction. `steering_max_rounds` bounds those restarts so an active delivery cannot be redirected forever. A polling failure is a pure bypass: it is logged, but never makes the delivery fail.
 
-See the [`delivery_steered`, `steering_limit_reached`, and `steering_poll_failed`](/operations#event-reference) rows in Operations.
+See the [`delivery_steered`, `steering_limit_reached`, `steering_poll_failed`, and `steering_limit_notice_failed`](/operations#event-reference) rows in Operations.
 
 | Key | Type | Default | Allowed values | Meaning |
 |---|---|---|---|---|

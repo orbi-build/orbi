@@ -72,7 +72,7 @@ Orbi 从部署 home 读取 `orbi.toml`；设置 `ORBI_CONFIG` 可选择其他文
 
 Steering 让 Runner 轮询 Issue 中的受信任修正，并带着修正重启正在进行的交付。`steering_max_rounds` 限制重启次数，避免交付被无限重定向。轮询失败属于纯旁路：会记录日志，但绝不会让交付失败。
 
-详见 Operations 中的 [`delivery_steered`、`steering_limit_reached`、`steering_poll_failed`](/zh/operations) 行。
+详见 Operations 中的 [`delivery_steered`、`steering_limit_reached`、`steering_poll_failed`、`steering_limit_notice_failed`](/zh/operations) 行。
 
 | Key | Type | Default | Allowed values | Meaning |
 |---|---|---|---|---|
