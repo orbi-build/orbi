@@ -5376,9 +5376,18 @@ def verify_resumed_pr(scene: dict, issue: dict, config: RunnerConfig,
                 run_id=current_run_id(), pr_url=scene["pr_url"],
                 worktree=worktree, branch=branch, role=ROLE_REVIEW,
                 action=(
-                    "Review the preserved PR and decide how to repair or "
-                    "replace its delivery state."
-                    if isinstance(exc, UnrecoverableDeliveryError) else ""
+                    (
+                        f"Update PR {scene['pr_url']} to include `Fixes #{number}` "
+                        "so GitHub closes the source Issue when it merges; "
+                        "for staged work, split the remaining phases into "
+                        "child Issues with one PR per Issue."
+                    )
+                    if "PR body is missing `Fixes #" in str(exc)
+                    else (
+                        "Review the preserved PR and decide how to repair or "
+                        "replace its delivery state."
+                        if isinstance(exc, UnrecoverableDeliveryError) else ""
+                    )
                 ),
                 reason=(
                     f"The resume verification of PR {scene['pr_url']} "
@@ -9896,6 +9905,17 @@ def main(argv: list[str] | None = None) -> int:
                 # scene condition, not a failed Runner tick.
                 event(
                     "resume_pr_handled", level=logging.ERROR,
+                    issue=issue["number"], scene_pr=scene["pr_url"],
+                    reason=exc,
+                )
+                return 0
+            except RuntimeError as exc:
+                # verify_resumed_pr has already classified and reported the
+                # ticket failure. A malformed PR is data belonging to this
+                # delivery, not a Runner failure: release the slot and let
+                # the next tick handle another Issue.
+                event(
+                    "resume_pr_verification_failed", level=logging.ERROR,
                     issue=issue["number"], scene_pr=scene["pr_url"],
                     reason=exc,
                 )

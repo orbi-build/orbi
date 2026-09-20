@@ -336,7 +336,14 @@ gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 
 PR 描述必须包含 `Fixes #<issue-number>`（可以放在首行）。GitHub 读的是
 body（不是 PR title），PR merge 到默认分支时原生关闭 Issue。Runner 在
-PR 验收时校验该关键词，缺失即 fail fast。
+PR 验收时校验该关键词，缺失即 fail fast。这个校验失败会记录在对应 Issue
+上，不会让 runner tick 进程退出。
+
+分阶段计划不能用一张 Issue 和一个 PR 承载多个独立 runtime outcome。应使用
+Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各自有一个交付 PR，
+并写入对应的 `Fixes #<子票号>`。这样既保留 GitHub 原生关票，也不需要新增第二
+种 PR 正文语法。如果现有 PR 写的是 `Part of #N`，维护者应在该 PR 已经完整
+交付一个子票结果时改成精确的 `Fixes #N`，或者先把剩余阶段拆成子票再重试。
 
 ## Epic、Release task 与 P0 优先级
 

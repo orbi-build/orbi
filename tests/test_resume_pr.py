@@ -1762,10 +1762,10 @@ def test_main_continues_to_ready_delivery_after_scene_failure(
 # --------------------------- resume PR verification (Issue #89)
 
 
-def test_main_ends_cleanly_after_handled_resume_scene_failure(
+def test_main_ends_cleanly_after_pr_body_contract_failure(
     monkeypatch, tmp_path,
 ):
-    """Issue #495: an audited stale scene does not kill the Runner tick."""
+    """Issue #1219: a bad PR body does not kill the Runner tick."""
     prompts = tmp_path / "prompts"
     prompts.mkdir()
     (prompts / "prompt.md").write_text("prompt", encoding="utf-8")
@@ -1800,8 +1800,9 @@ def test_main_ends_cleanly_after_handled_resume_scene_failure(
     monkeypatch.setattr(
         runner, "verify_resumed_pr",
         lambda *a, **k: (_ for _ in ()).throw(
-            runner.ResumeVerificationError(
-                "open_pr_count=0 open_prs=[] scene_pr=" + FAKE_PR_URL
+            RuntimeError(
+                "PR body is missing `Fixes #9`; the keyword must point at "
+                "the source Issue so GitHub closes it natively"
             )
         ),
     )
@@ -2511,17 +2512,13 @@ def test_verify_resumed_pr_backfill_label_api_failure_fails_fast(
     assert "resume_pr_verification_failed" in caplog.text
 
 
-def test_verify_resumed_pr_pr_url_mismatch_stays_fix_needed(
+def test_verify_resumed_pr_missing_fixes_stays_fix_needed(
     monkeypatch, tmp_path, caplog,
 ):
-    """Issue #89 + #50: the comment URL does not match the open PR of
-    the task branch -> fail fast, but the failure is RECOVERABLE: the
-    Issue is marked `ai-fix-needed` (never `ai-blocked`) with a
-    run-marked failure comment that names the reason, and the error is
-    re-raised so the tick stops — no review Pi is started, the wrong
-    PR is never merged; the next tick resumes the same run, branch,
-    worktree and PR. (The pre-#82 `pr_url_mismatch` resume test,
-    restored.)"""
+    """Issue #1219 + #50: a staged PR body without `Fixes #N` is
+    recoverably reported with an actionable repair. The Issue remains
+    `ai-fix-needed`, the error is re-raised for the tick boundary, and
+    the runner process can continue with other deliveries."""
     existing = {
         "id": 77,
         "body": (
@@ -2535,10 +2532,8 @@ def test_verify_resumed_pr_pr_url_mismatch_stays_fix_needed(
 
     def fake_verify_pr(*args, **kwargs):
         raise RuntimeError(
-            "PR URL https://github.com/owner/repo/pull/87 is not the "
-            "recovered original PR "
-            "https://github.com/owner/repo/pull/99; the resume must "
-            "keep the same PR number"
+            "PR body is missing `Fixes #9`; the keyword must point at the "
+            "source Issue so GitHub closes it natively when the PR merges"
         )
 
     reviews: list = []
@@ -2550,7 +2545,7 @@ def test_verify_resumed_pr_pr_url_mismatch_stays_fix_needed(
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
     caplog.set_level("INFO")
-    with pytest.raises(RuntimeError, match="not the recovered original PR"):
+    with pytest.raises(RuntimeError, match="missing `Fixes #9`"):
         runner.verify_resumed_pr(
             make_resume_scene(pr_url="https://github.com/owner/repo/pull/99"),
             make_resume_issue(), make_resume_config(tmp_path), "owner/repo",
@@ -2568,7 +2563,9 @@ def test_verify_resumed_pr_pr_url_mismatch_stays_fix_needed(
     body = captured["comments"][0][1]["body"]
     assert "Orbi needs a fix:" in body
     assert run_marker_body() in body
-    assert "not the recovered original PR" in body
+    assert "missing `Fixes #9`" in body
+    assert "Update PR https://github.com/owner/repo/pull/99" in body
+    assert "split the remaining phases into child Issues" in body
     # ... written to the Issue AND the PR (Issue #50); the PR copy is
     # the same formatted comment and additionally carries the hidden
     # runner fingerprint (Issue #526) ...
@@ -2582,7 +2579,7 @@ def test_verify_resumed_pr_pr_url_mismatch_stays_fix_needed(
         if "--method" in command and "POST" in command
     ]
     assert any("Orbi: fix needed" in body for body in posted)
-    assert any("not the recovered original PR" in body for body in posted)
+    assert any("missing `Fixes #9`" in body for body in posted)
     # The tracked progress comment becomes the fix-needed scene in
     # place.
     patches = [
@@ -2594,7 +2591,7 @@ def test_verify_resumed_pr_pr_url_mismatch_stays_fix_needed(
     assert patches, "the tracked progress comment was not updated"
     fix_needed = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi fix needed" in fix_needed
-    assert "What Orbi will do next:" in fix_needed
+    assert "What you need to do: Update PR" in fix_needed
     assert "resume_pr_verification_failed" in caplog.text
 
 
