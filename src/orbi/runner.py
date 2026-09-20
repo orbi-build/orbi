@@ -2942,12 +2942,15 @@ def pick_resumable_delivery(
     positive `label:ai-fix-needed,ai-pr-opened` qualifier already
     restricts the scan to opened-PR Issues (an implement-phase Issue
     has `ai-ready`+`ai-in-progress` but neither opened-PR label, so it
-    never matches). A scene that cannot be recovered is a SINGLE-Issue
-    failure: the Issue is marked `ai-blocked` with the
-    concrete reason (`block_scene_failure`) and the scan moves on to the
-    next candidate, so the tick continues with the in-flight and ready
-    scans and exits 0 — one corrupted Issue must never make every
-    tick crash while the whole queue waits.
+    never matches). A missing scene on `ai-fix-needed` with exactly one
+    open PR on the stable internal branch is a fresh-claim takeover: the PR
+    supplies the continuation anchor and the claim writes a new trusted
+    scene. Other scenes that cannot be recovered are SINGLE-Issue failures:
+    the Issue is marked `ai-blocked` with the concrete reason
+    (`block_scene_failure`) and the scan moves on to the next candidate, so
+    the tick continues with the in-flight and ready scans and exits 0 — one
+    corrupted Issue must never make every tick crash while the whole queue
+    waits.
 
     Only the deliveries a live co-runner CURRENTLY holds are skipped:
     every holder names its (repo, issue) in its slot file
@@ -3019,12 +3022,34 @@ def pick_resumable_delivery(
         except scene.SceneMissingError as exc:
             # No trusted comment carries a scene at all — a distinct branch
             # from corruption. The original #726 incident was
-            # exactly this shape, so the external route is probed first;
-            # un-routed, the same terminal contract applies
-            # through its OWN reporting (explicit reason + human next
-            # step), never `block_scene_failure`. The failure is scoped to
-            # this one Issue: the scan moves on.
+            # exactly this shape, so the external route is probed first.
             if _route_external_pr_ticket(issue, repo):
+                continue
+            # Issue #1216: `awaiting_merge` can deliberately remove the
+            # queue label before the delivery returns to `ai-fix-needed`.
+            # An open PR on the stable internal branch is enough durable
+            # identity to route this through the ordinary fresh-claim
+            # takeover, which writes a new trusted scene before review.
+            # Probe the exact branch (and require the helper's sole-PR
+            # contract); no open PR falls through to the existing missing-
+            # scene failure below.
+            current_labels = _issue_label_set(issue)
+            if (repo_dir is not None
+                    and FIX_NEEDED_LABEL in current_labels
+                    and open_pr_for_branch(
+                        repo_dir,
+                        task_branch(repo, int(issue["number"])),
+                    ) is not None):
+                found_scene = classify(
+                    labels=current_labels, scene=None, pr_state="OPEN",
+                    body_markers=body_markers(issue.get("body")),
+                )
+                if found_scene is DeliveryScene.FRESH_CLAIM:
+                    return issue, None
+                event(
+                    "claim_yield", issue=int(issue["number"]),
+                    reason=f"scene_{found_scene.value}",
+                )
                 continue
             # A runner may have created the PR and label, then lost the
             # scene comment write. Retry it from the durable local run
@@ -7769,7 +7794,13 @@ def _gather_claim_facts(issue: dict, config: RunnerConfig,
     stable_branch_present = False
     resume_scene: tuple[str, Path] | None = None
     resume_error: Exception | None = None
-    if not in_progress and dispatch_label in claim_labels:
+    if (not in_progress
+            and (dispatch_label in claim_labels
+                 or FIX_NEEDED_LABEL in claim_labels)):
+        # A scene-less fix-needed delivery selected by the resumable scan
+        # reaches this same stable-branch takeover as a queued fresh claim.
+        # The open PR skips implementation and a new trusted scene is written
+        # before review; an absent PR keeps classification unclaimable.
         takeover_pr = open_pr_for_branch(config.repo_dir, stable_branch)
         stable_branch_present = stable_branch_exists(
             config.repo_dir, stable_branch,
@@ -7874,6 +7905,18 @@ def _dispatch_implementation(issue: dict, source_repo: str,
     external_takeover = facts.external_takeover
     existing_worktree = facts.resume_scene[1] if facts.resume_scene else None
     repo_config_fields = facts.repo_config_fields
+    # The scene-less #1216 takeover was selected only because the scan saw
+    # an open stable-branch PR. Recheck it in the dispatch gather: if the PR
+    # closed in that window, yield without claiming or re-implementing the
+    # branch. A later human re-open/requeue supplies a new claimable fact.
+    if (FIX_NEEDED_LABEL in claim_labels
+            and dispatch_label not in claim_labels
+            and takeover_pr is None):
+        event(
+            "claim_yield", issue=number,
+            reason="scene_less_fix_pr_not_open",
+        )
+        return IssueResult("claim-yielded", None)
     if in_progress:
         # The claim-race window has two halves. The scan
         # snapshot lacking the label while THIS direct read sees it
