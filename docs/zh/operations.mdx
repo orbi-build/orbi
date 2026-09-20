@@ -474,7 +474,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `transport` | 启动前 git transport 检查通过 |
 | `transport_check_failed` | 启动前 git transport 检查失败（不启动） |
 | `active_milestone_missing` | 配置的 active Milestone 不存在；记录修复信息并停止启动 |
-| `active_milestone_closed` | 配置的 active Milestone 已关闭；记录 INFO、ready 数量和标题 |
+| `active_milestone_closed` | 配置的 active Milestone 已关闭；记录 INFO 和该 Milestone 下的 `ai-ready` 数量 |
 | `runner_source` | runner 源新鲜度门通过 |
 | `runner_source_stale` | runner 源新鲜度门失败（过期或无法验证） |
 | `engine_source_synced` | 部署 checkout 已同步到 engine 源通道 |

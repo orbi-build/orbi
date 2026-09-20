@@ -1971,27 +1971,15 @@ def validate_active_milestone(repo: str, active_milestone: str | None) -> None:
     if milestone.get("state") != "closed":
         return
 
-    ready_issues: dict[int, dict] = {}
-    for search in ready_searches(None):
-        for issue in list_issues(
-            repo, state="open", search=search,
-            json_fields="number,milestone", limit=200,
-        ):
-            number = issue.get("number")
-            if isinstance(number, int):
-                ready_issues[number] = issue
-    ready_titles = sorted({
-        str(issue["milestone"].get("title"))
-        for issue in ready_issues.values()
-        if isinstance(issue.get("milestone"), dict)
-        and issue["milestone"].get("title")
-        and issue["milestone"].get("title") != active_milestone
-    })
+    ready_issues = list_issues(
+        repo, state="open", label=READY_LABEL,
+        milestone=active_milestone, json_fields="number", limit=1000,
+        timeout=30,
+    )
     event(
         "active_milestone_closed", level=logging.INFO,
         configured=active_milestone, repo=repo, state="closed",
         ai_ready_count=len(ready_issues),
-        open_milestones=", ".join(ready_titles) or "(none)",
     )
 
 
@@ -9556,12 +9544,13 @@ def _preflight(config: RunnerConfig) -> None:
     source-freshness gate precede the unit-drift and transport checks,
     and all of them precede any slot or claim.
     """
-    # Resolve the configured title before any slot or claim. A typo is
-    # unambiguously wrong; a closed title is informational and may be an
-    # intentional release wind-down state.
-    validate_active_milestone(
-        config.source_repos[0], config.active_milestone,
-    )
+    # Resolve every effective per-repository title before taking a slot. A
+    # repository policy may override the host value, so validating only the
+    # host value (or only the first source repository) can still leave a fresh
+    # claim silently scoped to a title that does not exist.
+    for repo in config.source_repos:
+        milestone, _ = _repo_scan_keys(config, repo, config.active_milestone)
+        validate_active_milestone(repo, milestone)
     # Publish the configured active milestone for the CI
     # triage workflow. This is a bypass; delivery must continue when the
     # variable API is unavailable.

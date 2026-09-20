@@ -690,22 +690,30 @@ def test_validate_active_milestone_missing_fails_with_repair_facts(monkeypatch, 
     assert "open_milestones=v1" in caplog.text
 
 
-@pytest.mark.parametrize("ready_issues, expected_count", [([], 0), ([
-    {"number": 7, "milestone": {"title": "v2"}},
-], 1)])
+@pytest.mark.parametrize("ready_issues", [[], [{"number": 7}]])
 def test_validate_active_milestone_closed_is_informational(
-    monkeypatch, caplog, ready_issues, expected_count,
+    monkeypatch, caplog, ready_issues,
 ):
     monkeypatch.setitem(runner.__dict__, "list_milestones", lambda *args, **kwargs: [
         {"title": "v1", "state": "closed"},
     ])
-    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: ready_issues)
+    seen = {}
+
+    def fake_list_issues(repo, **kwargs):
+        seen["repo"] = repo
+        seen.update(kwargs)
+        return ready_issues
+
+    monkeypatch.setitem(runner.__dict__, "list_issues", fake_list_issues)
     with caplog.at_level(logging.INFO):
         runner.validate_active_milestone("owner/repo", "v1")
     assert "active_milestone_closed" in caplog.text
-    assert f"ai_ready_count={expected_count}" in caplog.text
-    if expected_count:
-        assert "open_milestones=v2" in caplog.text
+    assert f"ai_ready_count={len(ready_issues)}" in caplog.text
+    assert seen == {
+        "repo": "owner/repo", "state": "open", "label": "ai-ready",
+        "milestone": "v1", "json_fields": "number", "limit": 1000,
+        "timeout": 30,
+    }
 
 
 def test_validate_active_milestone_open_is_valid(monkeypatch):
@@ -714,6 +722,32 @@ def test_validate_active_milestone_open_is_valid(monkeypatch):
     ])
     monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: pytest.fail("no ready scan"))
     runner.validate_active_milestone("owner/repo", "v1")
+
+
+def test_missing_effective_repository_milestone_fails_before_slot(
+    monkeypatch, tmp_path,
+):
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "host-v1"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "load_repo_policy",
+        lambda loaded, repo: runner.RepoPolicy(active_milestone="repo-v2"),
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "list_milestones",
+        lambda repo, **kwargs: [{"title": "host-v1", "state": "open"}],
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "acquire_slot",
+        lambda *args: pytest.fail("missing milestone must not take a slot"),
+    )
+
+    with pytest.raises(RuntimeError, match="configured='repo-v2'"):
+        runner.main(["--config", str(config)])
 
 
 def test_pick_issue_scopes_all_three_ready_scans_to_active_milestone(
