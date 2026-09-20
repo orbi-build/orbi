@@ -365,12 +365,24 @@ class UnrecoverableDeliveryError(RuntimeError):
 
 
 class ResumeVerificationError(UnrecoverableDeliveryError):
-    """A resume precondition was handled and reported for this tick.
+    """A terminal resume precondition was handled and reported for this tick.
 
     The verification handler has already written the label and failure
     evidence. Keeping a distinct type lets the tick boundary end normally
     without swallowing unrelated Runner bugs.
     """
+
+
+class ReportedMissingFixesError(RuntimeError):
+    """A missing-Fixes delivery failure was successfully reported.
+
+    Only this typed outcome is handled as a successful tick. The unwrapped
+    error still means its label/comment transition failed and must propagate.
+    """
+
+
+class MissingFixesError(RuntimeError):
+    """A delivery PR body does not carry its native-close keyword."""
 
 
 class PreExistingCIFailure(UnrecoverableDeliveryError):
@@ -4814,7 +4826,7 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
             "pr_fixes_missing", level=logging.ERROR,
             issue=issue, branch=branch,
         )
-        raise RuntimeError(
+        raise MissingFixesError(
             f"PR body is missing `{fixes}`; the keyword must point at the "
             "source Issue so GitHub closes it natively when the PR merges "
             "into the default branch"
@@ -5364,6 +5376,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: RunnerConfig,
             "issue=%s resume_pr_verification_failed pr=%s branch=%s",
             number, scene["pr_url"], branch,
         )
+        reported = False
         try:
             # The shared classified reporter: recoverable
             # -> `ai-fix-needed` with the full scene on Issue AND PR,
@@ -5377,9 +5390,18 @@ def verify_resumed_pr(scene: dict, issue: dict, config: RunnerConfig,
                 run_id=current_run_id(), pr_url=scene["pr_url"],
                 worktree=worktree, branch=branch, role=ROLE_REVIEW,
                 action=(
-                    "Review the preserved PR and decide how to repair or "
-                    "replace its delivery state."
-                    if isinstance(exc, UnrecoverableDeliveryError) else ""
+                    (
+                        f"Update PR {scene['pr_url']} to include `Fixes #{number}` "
+                        "so GitHub closes the source Issue when it merges; "
+                        "for staged work, split the remaining phases into "
+                        "child Issues with one PR per Issue."
+                    )
+                    if isinstance(exc, MissingFixesError)
+                    else (
+                        "Review the preserved PR and decide how to repair or "
+                        "replace its delivery state."
+                        if isinstance(exc, UnrecoverableDeliveryError) else ""
+                    )
                 ),
                 reason=(
                     f"The resume verification of PR {scene['pr_url']} "
@@ -5395,8 +5417,11 @@ def verify_resumed_pr(scene: dict, issue: dict, config: RunnerConfig,
                     "are preserved"
                 ),
             )
+            reported = True
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
+        if reported and isinstance(exc, MissingFixesError):
+            raise ReportedMissingFixesError(str(exc)) from exc
         raise
 
 
@@ -9912,6 +9937,19 @@ def main(argv: list[str] | None = None) -> int:
                 # scene condition, not a failed Runner tick.
                 event(
                     "resume_pr_handled", level=logging.ERROR,
+                    issue=issue["number"], scene_pr=scene["pr_url"],
+                    reason=exc,
+                )
+                return 0
+            except ReportedMissingFixesError as exc:
+                # verify_resumed_pr has already classified and reported the
+                # ticket failure. A malformed PR is data belonging to this
+                # delivery, not a Runner failure: release the slot and let
+                # the next tick handle another Issue. Catch only the typed,
+                # successfully reported outcome; unrelated Runner bugs and
+                # reporting failures must still propagate.
+                event(
+                    "resume_pr_verification_failed", level=logging.ERROR,
                     issue=issue["number"], scene_pr=scene["pr_url"],
                     reason=exc,
                 )
