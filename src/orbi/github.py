@@ -851,16 +851,14 @@ def _normalize_pr_feedback_item(item: dict) -> dict:
     return normalized
 
 
-def trusted_pr_feedback_block(items: list[dict], limit: int) -> str:
-    """Render trusted human PR feedback through the shared comment renderer."""
+def normalize_pr_feedback(items: list[dict]) -> list[dict]:
+    """Normalize PR feedback and exclude the delivery identity."""
     identity = _strip_bot_suffix(_authenticated_github_login())
     normalized = [_normalize_pr_feedback_item(item) for item in items]
-    trusted = [item for item in normalized
-               if _comment_is_trusted(item)
-               and _strip_bot_suffix(item["author"]["login"] or "") != identity]
-    block = trusted_issue_comments_block(trusted, limit)
-    return block.replace("(no trusted comments)",
-                         "(no trusted human PR feedback)", 1)
+    return [
+        item for item in normalized
+        if _strip_bot_suffix(item["author"]["login"] or "") != identity
+    ]
 
 
 def trusted_issue_comments_block(comments: list[dict], limit: int) -> str:

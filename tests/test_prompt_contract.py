@@ -572,8 +572,8 @@ def test_prompt_review_md_keeps_the_repeated_failure_guard():
 
 
 def test_prompt_review_md_keeps_the_variable_set_unchanged():
-    # The review context has one explicit placeholder for bounded feedback
-    # from the current PR; this is distinct from the Issue timeline.
+    # PR feedback reuses the existing bounded trusted-comment placeholder;
+    # no parallel prompt channel or renderer is introduced.
     # The scan matches EVERY {{...}} token, not only uppercase names:
     # render_prompt substitutes the exact uppercase keys alone, so a
     # lowercase drift ({{head_sha}}) would ship as literal prompt text.
@@ -584,5 +584,4 @@ def test_prompt_review_md_keeps_the_variable_set_unchanged():
     assert found == {
         "SOURCE_REPO", "PR_NUMBER", "PR_URL", "BASE_BRANCH", "BASE_SHA",
         "HEAD_SHA", "HEAD_REF", "ROUND", "BASE_SYNC_LOCK", "ISSUE_COMMENTS",
-        "PR_FEEDBACK",
     }, f"prompt_review.md prompt variables drifted: {found}"

@@ -206,7 +206,7 @@ from orbi.github import (
     pr_comments,
     pr_reviews,
     pr_review_comments,
-    trusted_pr_feedback_block,
+    normalize_pr_feedback,
     pr_delivery_status,
     pr_delivery_rollup,
     _check_summaries,
@@ -5650,31 +5650,25 @@ def run_review(ctx: RunContext, pr: dict, config: RunnerConfig, round: int,
         # run under it (flock <lock> git fetch origin <base>).
         "BASE_SYNC_LOCK": str(base_sync_lock_path(config.repo_dir)),
     }
-    # The review path sees the Issue's decision evolution too. PR feedback is
-    # input only: delivery state remains on the Issue and the current PR is
-    # the sole source selected by this call.
+    # The review path sees one bounded trusted timeline. PR feedback is input
+    # only: delivery state remains on the Issue and the current PR is the sole
+    # PR source selected by this call.
     if "{{ISSUE_COMMENTS}}" in review_template:
-        review_values["ISSUE_COMMENTS"] = trusted_issue_comments_block(
-            issue_comments(issue, repo=source_repo),
-            config.issue_comments_limit,
-        )
-    if "{{PR_FEEDBACK}}" in review_template:
+        comments = issue_comments(issue, repo=source_repo)
         try:
             feedback = pr_comments(pr["number"], repo=source_repo)
             feedback += pr_reviews(pr["number"], repo=source_repo)
             feedback += pr_review_comments(pr["number"], repo=source_repo)
-            review_values["PR_FEEDBACK"] = trusted_pr_feedback_block(
-                feedback, config.issue_comments_limit,
-            )
+            comments += normalize_pr_feedback(feedback)
+            comments.sort(key=lambda item: str(item.get("createdAt") or ""))
         except Exception:
             LOGGER.exception(
                 "pr_review_feedback_read_failed repo=%s pr=%s",
                 source_repo, pr["number"],
             )
-            review_values["PR_FEEDBACK"] = (
-                "(PR human feedback unavailable; GitHub read failed; "
-                "review the Issue comments only)"
-            )
+        review_values["ISSUE_COMMENTS"] = trusted_issue_comments_block(
+            comments, config.issue_comments_limit,
+        )
     system_prompt = render_prompt(review_template, review_values)
     context = (
         f"Independently review PR #{pr['number']} ({pr['url']}) of "

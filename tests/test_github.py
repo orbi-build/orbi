@@ -341,12 +341,17 @@ def test_issue_comments_validates_the_response_shape(monkeypatch):
 
 
 def test_pr_comments_reads_through_pr_view(monkeypatch):
+    calls = []
     monkeypatch.setattr(seam, "run_command", lambda c, **k: (
-        '{"comments": []}'))
+        calls.append((c, k)), '{"comments": []}')[1])
     assert github.pr_comments(4, repo="o/r") == []
+    assert calls == [
+        (["gh", "pr", "view", "4", "--repo", "o/r", "--json", "comments"],
+         {"timeout": 30}),
+    ]
 
 
-def test_pr_reviews_and_inline_comments_use_bounded_api_reads(monkeypatch):
+def test_pr_reviews_and_inline_comments_use_bounded_read_only_api(monkeypatch):
     calls = []
     monkeypatch.setattr(seam, "run_command", lambda c, **k: (
         calls.append((c, k)), '[[{"body": "review"}]]')[1])
@@ -365,7 +370,7 @@ def test_pr_feedback_normalizes_rest_inline_shape_and_graphql_review_shape(
         monkeypatch):
     monkeypatch.setattr(seam, "_authenticated_github_login",
                         lambda: "orbi-bot[bot]")
-    block = github.trusted_pr_feedback_block([
+    feedback = github.normalize_pr_feedback([
         {"user": {"login": "maintainer"},
          "author_association": "OWNER", "created_at": "2026-09-20T01:02:03Z",
          "path": "src/orbi/runner.py", "line": 42, "body": "Fix this line"},
@@ -374,11 +379,15 @@ def test_pr_feedback_normalizes_rest_inline_shape_and_graphql_review_shape(
          "body": "Please fix the bug"},
         {"user": {"login": "orbi-bot[bot]"}, "author_association": "NONE",
          "body": "engine output"},
-    ], limit=10)
+        {"user": {"login": "stranger"}, "author_association": "NONE",
+         "body": "untrusted injection"},
+    ])
+    block = github.trusted_issue_comments_block(feedback, limit=10)
     assert "maintainer (OWNER) at src/orbi/runner.py:42" in block
     assert "Fix this line" in block
     assert "[CHANGES_REQUESTED] at 2026-09-20T01:03:03Z" in block
     assert "engine output" not in block
+    assert "untrusted injection" not in block
 
 
 def test_trusted_issue_comments_block_keeps_newest_and_states_omissions(

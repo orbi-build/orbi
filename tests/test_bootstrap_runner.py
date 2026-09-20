@@ -4456,30 +4456,31 @@ def test_run_pi_skips_the_comment_fetch_without_the_placeholder(
     assert command[command.index("--system-prompt") + 1] == "SYSTEM b"
 
 
-def test_run_review_injects_trusted_issue_comments_into_the_prompt(
+def test_run_review_combines_current_pr_feedback_with_issue_comments(
     monkeypatch, tmp_path,
 ):
-    """Issue #745: the review path sees the decision evolution too —
-    its template's {{ISSUE_COMMENTS}} placeholder receives the same
-    trusted timeline of the linked Issue."""
+    """The current PR's normalized feedback shares one bounded timeline."""
     prompt_path = tmp_path / "prompt_review.md"
     prompt_path.write_text("REVIEW {{ISSUE_COMMENTS}}", encoding="utf-8")
-    comments = [
-        {"author": {"login": "mallory"}, "authorAssociation": "NONE",
-         "createdAt": "2026-09-12T01:00:00Z", "body": "public drive-by"},
+    monkeypatch.setattr(seam, "issue_comments", lambda number, *, repo: [
         {"author": {"login": "alice"}, "authorAssociation": "MEMBER",
-         "createdAt": "2026-09-12T02:00:00Z", "body": "decided plan B"},
-    ]
-    fetches = []
-
-    def fake_issue_comments(number, *, repo):
-        fetches.append((number, repo))
-        return comments
-
-    monkeypatch.setattr(seam, "issue_comments", fake_issue_comments)
-    # mallory's NONE-association comment reaches the authenticated-login
-    # fallback; pin it so the test never depends on the host's real gh
-    # login state (CI runs unauthenticated).
+         "createdAt": "2026-09-12T01:00:00Z", "body": "old issue decision"},
+    ])
+    pr_fetches = []
+    monkeypatch.setattr(seam, "pr_comments", lambda number, *, repo:
+                        pr_fetches.append((number, repo, "conversation")) or [])
+    monkeypatch.setattr(seam, "pr_reviews", lambda number, *, repo:
+                        pr_fetches.append((number, repo, "reviews")) or [
+        {"user": {"login": "bob"}, "author_association": "OWNER",
+         "submitted_at": "2026-09-12T02:00:00Z",
+         "state": "CHANGES_REQUESTED", "body": "review body"},
+    ])
+    monkeypatch.setattr(seam, "pr_review_comments", lambda number, *, repo:
+                        pr_fetches.append((number, repo, "inline")) or [
+        {"user": {"login": "bob"}, "author_association": "OWNER",
+         "created_at": "2026-09-12T03:00:00Z", "path": "src/x.py",
+         "line": 7, "body": "inline fix"},
+    ])
     monkeypatch.setattr(
         seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
     )
@@ -4488,13 +4489,68 @@ def test_run_review_injects_trusted_issue_comments_into_the_prompt(
         runner, "stream_pi",
         lambda command, **kwargs: calls.append(command) or "ok",
     )
-    runner.run_review(RunContext(run_id=runner.RunnerConfig(prompt_review=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=()).run_id, issue=4, branch="branch", worktree=tmp_path, source_repo="owner/repo"), {"number": 9, "url": "https://x/pull/9", "base_oid": "b1",
-         "head_oid": "h1", "head_ref": "h"}, runner.RunnerConfig(prompt_review=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=()), 1)
-    assert fetches == [(4, "owner/repo")]
+    config = runner.RunnerConfig(
+        prompt_review=prompt_path, repo_dir=tmp_path / "checkout",
+        source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4",
+        skills=(), issue_comments_limit=2,
+    )
+    runner.run_review(
+        RunContext(run_id=config.run_id, issue=4, branch="branch",
+                   worktree=tmp_path, source_repo="owner/repo"),
+        {"number": 9, "url": "https://x/pull/9", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"}, config, 1,
+    )
+    assert pr_fetches == [
+        (9, "owner/repo", "conversation"),
+        (9, "owner/repo", "reviews"),
+        (9, "owner/repo", "inline"),
+    ]
     command = calls[0]
     system_prompt = command[command.index("--system-prompt") + 1]
-    assert "decided plan B" in system_prompt
-    assert "public drive-by" not in system_prompt
+    assert (
+        "1 older trusted comment omitted; showing the 2 most recent"
+        in system_prompt
+    )
+    assert "old issue decision" not in system_prompt
+    assert "review body" in system_prompt
+    assert "[CHANGES_REQUESTED]" in system_prompt
+    assert "inline fix" in system_prompt
+    assert "src/x.py:7" in system_prompt
+
+
+def test_run_review_pr_feedback_failure_logs_and_keeps_issue_comments(
+    monkeypatch, tmp_path, caplog,
+):
+    prompt_path = tmp_path / "prompt_review.md"
+    prompt_path.write_text("REVIEW {{ISSUE_COMMENTS}}", encoding="utf-8")
+    monkeypatch.setattr(seam, "issue_comments", lambda *args, **kwargs: [
+        {"author": {"login": "alice"}, "authorAssociation": "OWNER",
+         "createdAt": "2026-09-12T01:00:00Z", "body": "issue decision"},
+    ])
+    monkeypatch.setattr(seam, "pr_comments", lambda *args, **kwargs: [])
+
+    def fail_reviews(*args, **kwargs):
+        raise RuntimeError("reviews unavailable")
+
+    monkeypatch.setattr(seam, "pr_reviews", fail_reviews)
+    calls = []
+    monkeypatch.setattr(runner, "stream_pi",
+                        lambda command, **kwargs: calls.append(command) or "ok")
+    config = runner.RunnerConfig(
+        prompt_review=prompt_path, repo_dir=tmp_path / "checkout",
+        source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4",
+        skills=(),
+    )
+    with caplog.at_level(logging.ERROR):
+        runner.run_review(
+            RunContext(run_id=config.run_id, issue=4, branch="branch",
+                       worktree=tmp_path, source_repo="owner/repo"),
+            {"number": 9, "url": "https://x/pull/9", "base_oid": "b1",
+             "head_oid": "h1", "head_ref": "h"}, config, 1,
+        )
+    system_prompt = calls[0][calls[0].index("--system-prompt") + 1]
+    assert "issue decision" in system_prompt
+    assert "pr_review_feedback_read_failed repo=owner/repo pr=9" in caplog.text
 
 
 def test_run_review_skips_the_comment_fetch_without_the_placeholder(
