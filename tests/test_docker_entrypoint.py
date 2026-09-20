@@ -9,11 +9,38 @@ ENTRYPOINT = REPO_ROOT / "3rd/docker/docker-entrypoint.sh"
 SETUP_SCRIPT = REPO_ROOT / "3rd/docker/orbi-container-setup.sh"
 
 
+def git(*args: str, cwd: Path) -> None:
+    subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True,
+        timeout=30,
+    )
+
+
+def make_source_repo(path: Path, *, has_commit: bool = True) -> Path:
+    path.mkdir()
+    git("init", "-q", "-b", "main", cwd=path)
+    if has_commit:
+        (path / "README").write_text("task pool\n", encoding="utf-8")
+        git("add", "README", cwd=path)
+        git(
+            "-c", "user.name=Orbi Test", "-c", "user.email=orbi@example.com",
+            "commit", "-q", "-m", "initial", cwd=path,
+        )
+    return path
+
+
 def stub_path(tmp_path: Path) -> tuple[Path, Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    real_git = shutil.which("git")
+    assert real_git
     stubs = {
-        "git": "#!/bin/sh\nexit 0\n",
+        "git": (
+            "#!/bin/sh\n"
+            "if [ \"$1\" = clone ]; then "
+            f'exec "{real_git}" clone "$GIT_CLONE_SOURCE" "${{@: -1}}"; fi\n'
+            f'exec "{real_git}" "$@"\n'
+        ),
         "gh": "#!/bin/sh\nexit 0\n",
         "uv": "#!/bin/sh\nexit 0\n",
         "useradd": "#!/bin/sh\nexit 0\n",
@@ -35,18 +62,37 @@ def stub_path(tmp_path: Path) -> tuple[Path, Path]:
     return bin_dir, tmp_path / "systemd-started"
 
 
-def prepare_root(tmp_path: Path) -> tuple[Path, Path]:
+def prepare_root(
+    tmp_path: Path, *, workspace_state: str = "valid",
+    source_has_commit: bool = True,
+) -> tuple[Path, Path, Path]:
     deploy = tmp_path / "orbi"
     work = tmp_path / "work"
+    source = tmp_path / "source"
+    if not source.exists():
+        make_source_repo(source, has_commit=source_has_commit)
     (deploy / ".git" / "info").mkdir(parents=True, exist_ok=True)
     work.mkdir(exist_ok=True)
-    (work / ".git" / "info").mkdir(parents=True, exist_ok=True)
-    (work / ".git" / "info" / "exclude").touch()
-    return deploy, work
+    if workspace_state == "valid":
+        if not (work / ".git").exists():
+            git("clone", "-q", str(source), ".", cwd=work)
+    elif workspace_state == "no_head":
+        git("init", "-q", cwd=work)
+        git("remote", "add", "origin", str(source), cwd=work)
+        git("fetch", "-q", "origin", "main", cwd=work)
+    elif workspace_state == "non_git":
+        (work / "stray").write_text("not a checkout\n", encoding="utf-8")
+    return deploy, work, source
 
 
-def run_entrypoint(tmp_path: Path, **extra_env: str) -> subprocess.CompletedProcess:
-    deploy, work = prepare_root(tmp_path)
+def run_entrypoint(
+    tmp_path: Path, *, workspace_state: str = "valid",
+    source_has_commit: bool = True, **extra_env: str,
+) -> subprocess.CompletedProcess:
+    deploy, work, source = prepare_root(
+        tmp_path, workspace_state=workspace_state,
+        source_has_commit=source_has_commit,
+    )
     bin_dir, marker = stub_path(tmp_path)
     env = {
         "PATH": str(bin_dir),
@@ -58,6 +104,7 @@ def run_entrypoint(tmp_path: Path, **extra_env: str) -> subprocess.CompletedProc
         "ORBI_UV_BIN": str(bin_dir / "uv"),
         "ORBI_SETUP_LOG": str(tmp_path / "setup.log"),
         "SYSTEMD_MARKER": str(marker),
+        "GIT_CLONE_SOURCE": str(source),
         **extra_env,
     }
     return subprocess.run(
@@ -112,6 +159,38 @@ def test_missing_provider_environment_prints_hint_and_writes_no_file(tmp_path):
     assert "model delivery is not configured" in result.stdout
     assert not (tmp_path / "orbi/.orbi/pi-providers.json").exists()
     assert "pi_provider" not in (tmp_path / "orbi/orbi.toml").read_text()
+
+
+def test_empty_work_directory_is_cloned_and_starts(tmp_path):
+    result = run_entrypoint(tmp_path, workspace_state="empty")
+    assert result.returncode == 0, result.stderr
+    assert "cloning the task pool" in result.stdout
+    assert (tmp_path / "work/README").read_text() == "task pool\n"
+
+
+def test_non_git_nonempty_work_directory_fails_before_clone(tmp_path):
+    result = run_entrypoint(tmp_path, workspace_state="non_git")
+    assert result.returncode != 0
+    assert "not a git checkout but is not empty" in result.stderr
+
+
+def test_fetched_work_checkout_without_head_fails_with_mount_guidance(tmp_path):
+    result = run_entrypoint(tmp_path, workspace_state="no_head")
+    assert result.returncode != 0
+    assert str(tmp_path / "work") in result.stderr
+    assert "owner/repo" in result.stderr
+    assert "must be a git checkout" in result.stderr
+    assert "docker run -v <path>:/work" in result.stderr
+    assert "ambiguous argument" not in result.stderr
+
+
+def test_empty_source_repo_requests_an_initial_commit(tmp_path):
+    result = run_entrypoint(
+        tmp_path, workspace_state="empty", source_has_commit=False,
+    )
+    assert result.returncode != 0
+    assert "owner/repo has no commits" in result.stderr
+    assert "push an initial commit" in result.stderr
 
 
 def run_setup_script(tmp_path: Path, setup_status: int = 0) -> subprocess.CompletedProcess:
@@ -187,7 +266,7 @@ def test_setup_appends_to_the_fixed_log_path():
 
 
 def test_existing_config_and_provider_are_not_overwritten(tmp_path):
-    deploy, _ = prepare_root(tmp_path)
+    deploy, _, _ = prepare_root(tmp_path)
     deploy.joinpath("orbi.toml").write_text("existing config\n")
     deploy.joinpath(".orbi").mkdir(exist_ok=True)
     deploy.joinpath(".orbi/pi-providers.json").write_text('{"existing": true}\n')
