@@ -95,6 +95,21 @@ ai-ready                任务被派发（orbi add，或人工加标签）
 才 fail fast：Issue 被标记 `ai-blocked` 并写明为什么不能自动恢复，自动
 循环从此不再碰它——人工决定下一步。
 
+## 运行中的交付修正
+
+无需取消正在进行的交付，也可以修正方向。当 Issue 处于
+`ai-in-progress` 时，可以评论新的决定，或直接编辑 Issue body。这两个渠道
+是等价的：Runner 会在下一次 steering 轮询时拾取它们（间隔由
+`steering_poll_seconds` 控制，默认 60 秒），并带着修正重启当前 session。
+重启次数由 `steering_max_rounds` 限制（默认 3 次）；达到上限后，后续修正
+不会再重启这次交付。
+
+只有受信任的仓库角色——OWNER、MAINTAINER、MEMBER 或 COLLABORATOR——的
+评论可以 steering。公开评论者的评论会按设计被忽略，因为允许任意评论者
+控制交付会暴露 prompt injection 入口。初始受信任评论时间线受
+`issue_comments_limit` 限制（默认 20 条）：更早的评论会被丢弃，注入的上下文
+会明确说明省略了多少条。
+
 死循环守卫与评论去重（Issue #825）：恢复接续可能绑定**新的 run id**
 （一次可恢复失败就够了），而 PR body 只在创建时写入一次，所以 resume
 校验接受本交付线曾用过的**任一** run marker——marker 集合读自 Issue 的
