@@ -111,6 +111,25 @@ the Issue is marked `ai-blocked` with the explicit reason why automatic
 recovery is impossible, and the automatic loop never touches it again — a
 human decides the next step.
 
+## Steering an active delivery
+
+You can correct direction without cancelling an active delivery. While the
+Issue is `ai-in-progress`, add a comment with the new decision or edit the
+Issue body. These two channels are equivalent: both are picked up by the
+Runner's next steering poll (the interval is `steering_poll_seconds`, 60
+seconds by default), and the active session restarts with the correction. The
+restarts are bounded by `steering_max_rounds` (3 by default); after the limit
+is reached, further corrections do not restart that delivery and the journal
+records `steering_limit_reached`. Let the current delivery finish, then put the
+revised scope in a follow-up delivery.
+
+Only comments from trusted repository roles—OWNER, MAINTAINER, MEMBER, or
+COLLABORATOR—can steer a run. A comment from a public commenter is ignored by
+design, because allowing arbitrary commenters to steer a delivery would expose
+a prompt-injection path. The initial trusted comment timeline is capped at
+`issue_comments_limit` (20 by default): older comments are dropped and the
+injected context states how many were omitted.
+
 Dead-loop guard and comment dedup (Issue #825): a resume may bind a NEW
 run id (one recoverable failure is enough), while the PR body is written
 once at creation, so the resume verification accepts ANY run marker the
