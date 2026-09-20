@@ -675,6 +675,47 @@ def test_pick_issue_fails_open_when_blocked_by_query_fails(
     assert "blocked_by_check_failed" in caplog.text
 
 
+def test_validate_active_milestone_none_is_unchanged(monkeypatch):
+    monkeypatch.setitem(runner.__dict__, "list_milestones", lambda *args, **kwargs: pytest.fail("no lookup"))
+    runner.validate_active_milestone("owner/repo", None)
+
+
+def test_validate_active_milestone_missing_fails_with_repair_facts(monkeypatch, caplog):
+    monkeypatch.setitem(runner.__dict__, "list_milestones", lambda *args, **kwargs: [
+        {"title": "v1", "state": "open"},
+    ])
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="state=absent"):
+        runner.validate_active_milestone("owner/repo", "v9")
+    assert "active_milestone_missing" in caplog.text
+    assert "open_milestones=v1" in caplog.text
+
+
+@pytest.mark.parametrize("ready_issues, expected_count", [([], 0), ([
+    {"number": 7, "milestone": {"title": "v2"}},
+], 1)])
+def test_validate_active_milestone_closed_is_informational(
+    monkeypatch, caplog, ready_issues, expected_count,
+):
+    monkeypatch.setitem(runner.__dict__, "list_milestones", lambda *args, **kwargs: [
+        {"title": "v1", "state": "closed"},
+    ])
+    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: ready_issues)
+    with caplog.at_level(logging.INFO):
+        runner.validate_active_milestone("owner/repo", "v1")
+    assert "active_milestone_closed" in caplog.text
+    assert f"ai_ready_count={expected_count}" in caplog.text
+    if expected_count:
+        assert "open_milestones=v2" in caplog.text
+
+
+def test_validate_active_milestone_open_is_valid(monkeypatch):
+    monkeypatch.setitem(runner.__dict__, "list_milestones", lambda *args, **kwargs: [
+        {"title": "v1", "state": "open"},
+    ])
+    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: pytest.fail("no ready scan"))
+    runner.validate_active_milestone("owner/repo", "v1")
+
+
 def test_pick_issue_scopes_all_three_ready_scans_to_active_milestone(
     monkeypatch,
 ):
@@ -6552,6 +6593,7 @@ def test_main_idle_release_arm_uses_repo_dispatch_label(
 
 
 def test_main_idle_release_arm_failure_is_bypassed(monkeypatch, tmp_path, caplog):
+    monkeypatch.setitem(runner.__dict__, "validate_active_milestone", lambda *args: None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -6576,6 +6618,7 @@ def test_main_idle_advance_failure_is_bypassed(monkeypatch, tmp_path, caplog):
     """Issue #614: the idle milestone advance is a pure bypass — a missing
     or ambiguous `active_milestone` (or any `gh` failure) must not change
     the idle outcome; the tick still returns 0 and only journals."""
+    monkeypatch.setitem(runner.__dict__, "validate_active_milestone", lambda *args: None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -6625,6 +6668,7 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
     """Issue #139: the configured `active_milestone` reaches the claim
     scan (the fresh-claim scope), and an unconfigured one passes None
     (the compat behavior — no milestone filter)."""
+    monkeypatch.setitem(runner.__dict__, "validate_active_milestone", lambda *args: None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -6647,6 +6691,7 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
 def test_main_advances_milestone_only_after_no_ready_issue(
     monkeypatch, tmp_path,
 ):
+    monkeypatch.setitem(runner.__dict__, "validate_active_milestone", lambda *args: None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -6670,6 +6715,7 @@ def test_main_advances_milestone_only_after_no_ready_issue(
 def test_main_passes_disabled_auto_next_milestone_to_idle_advance(
     monkeypatch, tmp_path,
 ):
+    monkeypatch.setitem(runner.__dict__, "validate_active_milestone", lambda *args: None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
