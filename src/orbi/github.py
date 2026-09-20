@@ -145,18 +145,17 @@ def merge_gate_preflight(repo: str, branch: str) -> list[str]:
                 f"merge_gate: FAILED classic protection requires "
                 f"{approvals} approving review(s) the configured merge "
                 "identity cannot supply (self-approval is forbidden); "
-                "repair: add a second reviewer or run "
-                f"gh api --method PATCH repos/{repo}/branches/"
-                f"{encoded_branch}/protection/required_pull_request_reviews "
-                "-F required_approving_review_count=0"
+                "mode: this is a collaborative repository; Orbi delivers a reviewed PR; "
+                "a maintainer approves "
+                "and merges it"
             )
         admins = classic.get("enforce_admins") or {}
         if isinstance(admins, dict) and admins.get("enabled") is True:
             blockers.append(
                 "merge_gate: FAILED classic protection enforces admins; "
-                "repair: disable enforce_admins or use a named human/admin "
-                f"merge path (gh api --method DELETE repos/{repo}/branches/"
-                f"{encoded_branch}/protection/enforce_admins)"
+                "mode: this is a collaborative repository; Orbi delivers a reviewed PR; "
+                "a maintainer merges it "
+                "through the repository's governance"
             )
 
     for rule in rules:
@@ -178,8 +177,9 @@ def merge_gate_preflight(repo: str, branch: str) -> list[str]:
                 f"merge_gate: FAILED {source} requires {approvals} "
                 "approving review(s) the configured merge identity cannot "
                 "supply (self-approval is forbidden); repair: add a second "
-                "reviewer or lower required_approving_review_count at "
-                f"{location}"
+                "reviewer; this collaborative repository mode delivers a reviewed PR "
+                "and the maintainer "
+                f"merges it under the repository's governance at {location}"
             )
 
     if classic_unreadable:

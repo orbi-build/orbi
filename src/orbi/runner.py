@@ -70,6 +70,7 @@ from orbi.pi_activity import (
 )
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
+    AWAITING_MERGE_LABEL,
     CONTENT_ONLY_LABEL,
     EPIC_LABEL,
     FIX_NEEDED_LABEL,
@@ -82,6 +83,7 @@ from orbi.delivery_labels import (
     READY_LABEL,
     RELEASE_LABEL,
     EVENT_BLOCKED,
+    EVENT_AWAITING_MERGE,
     EVENT_CLAIM,
     EVENT_FIX_NEEDED,
     EVENT_HUMAN_REVIEW_WAITING,
@@ -166,6 +168,7 @@ from orbi.pi_process import (
 # `runner` consumes them like any other caller; only `cli` and
 # `pilot_setup` import `runner` itself.
 from orbi import github, gitops, journal, release, scene
+from orbi.merge_handoff import MergeHandoffRequired, is_approval_handoff
 from orbi.cli_source import CliInstallError, refresh_cli_install
 from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
@@ -5888,10 +5891,22 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
     # `assess_base_freshness` has already classified the mergeable and
     # reviewed-head states above; only a fresh, mergeable head reaches the
     # actual merge command.
-    run_command([
-        "gh", "pr", "merge", str(pr["number"]),
-        "--match-head-commit", pr["head_oid"], "--merge",
-    ], cwd=worktree)
+    try:
+        run_command([
+            "gh", "pr", "merge", str(pr["number"]),
+            "--match-head-commit", pr["head_oid"], "--merge",
+        ], cwd=worktree)
+    except subprocess.CalledProcessError as exc:
+        preflight = github.merge_gate_preflight(
+            source_repo or pr.get("_source_repo", ""), base_branch,
+        )
+        stderr = str(exc.stderr or "")
+        if is_approval_handoff(stderr, preflight):
+            raise MergeHandoffRequired(
+                f"PR #{pr['number']} is ready, but repository policy requires "
+                "an approving review before the maintainer can merge it"
+            ) from None
+        raise
     event("merged", pr=pr["number"], head=pr["head_oid"])
     return {**pr, "merged": True}
 
@@ -6953,6 +6968,28 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             {**refrozen, "_source_repo": source_repo},
             base_branch, repo_dir=config.repo_dir,
         )
+    except MergeHandoffRequired:
+        # A reviewed PR rejected by the repository's required-approval
+        # policy is a successful delivery handoff, not a failed run.
+        handoff_head = refrozen["head_oid"]
+        handoff_body = (
+            f"{marker}\n"
+            f"Orbi: PR #{refrozen['number']} is delivered and waiting for "
+            "your merge.\n\n"
+            f"Approve and merge PR #{refrozen['number']} at head "
+            f"`{handoff_head}`. The repository requires a human approving "
+            "review; Orbi will not weaken that policy or retry this PR."
+        )
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_AWAITING_MERGE,
+            current_labels=issue_labels(number, source_repo),
+        )
+        comment_issue(number, repo=source_repo, body=handoff_body)
+        event(
+            "delivery_awaiting_human_merge", issue=number,
+            pr=refrozen["number"], head=handoff_head,
+        )
+        return False
     except DeliveryDeferred as exc:
         # A pending check or an UNKNOWN mergeability on the
         # reviewed head is an intermediate state, not a failure — the

@@ -1150,6 +1150,84 @@ def test_merge_gate_rejects_head_that_moved_since_review(monkeypatch, tmp_path):
                           repo_dir=tmp_path)
 
 
+def test_merge_gate_hands_off_policy_rejection_with_required_approval(
+        monkeypatch, tmp_path):
+    """A repository approval policy is a normal delivered handoff."""
+    def fake_run(command, **kwargs):
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
+            return json.dumps({
+                "state": "OPEN", "mergeable": "MERGEABLE", "headRefOid": "h1",
+                "statusCheckRollup": [],
+            })
+        if command[0] == "gh" and command[1] == "pr" and "merge" in command:
+            raise subprocess.CalledProcessError(
+                1, command, stderr="the base branch policy prohibits the merge",
+            )
+        return ""
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(runner.github, "merge_gate_preflight", lambda *a: [
+        "merge_gate: FAILED requires 1 approving review(s)",
+    ])
+    with pytest.raises(runner.MergeHandoffRequired):
+        runner.merge_gate(
+            tmp_path, {"number": 4, "head_oid": "h1", "head_ref": "h",
+                       "base_oid": "b1", "_source_repo": "owner/repo"},
+            "main", repo_dir=tmp_path,
+        )
+
+
+def test_merge_gate_does_not_hand_off_unrelated_policy_failure(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: (
+        (_ for _ in ()).throw(subprocess.CalledProcessError(
+            1, command, stderr="the base branch policy prohibits the merge",
+        )) if command[0] == "gh" and command[1] == "pr" and "merge" in command else (
+            json.dumps({"state": "OPEN", "mergeable": "MERGEABLE",
+                        "headRefOid": "h1", "statusCheckRollup": []})
+            if command[0] == "gh" and command[1] == "pr" and "view" in command else ""
+        )
+    ))
+    monkeypatch.setattr(runner.github, "merge_gate_preflight", lambda *a: [
+        "merge_gate: PASS protection readable",
+    ])
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.merge_gate(
+            tmp_path, {"number": 4, "head_oid": "h1", "head_ref": "h",
+                       "base_oid": "b1", "_source_repo": "owner/repo"},
+            "main", repo_dir=tmp_path,
+        )
+
+
+def test_review_handoff_marks_issue_awaiting_merge(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    from unittest.mock import patch
+    with patch.object(runner, "freeze_pr", lambda *a, **k: _pr()), \
+            patch.object(runner, "run_review", lambda *a, **k: _pass_verdict_text()), \
+            patch.object(
+                runner, "merge_gate",
+                lambda *a, **k: (_ for _ in ()).throw(
+                    runner.MergeHandoffRequired("approval required"),
+                ),
+            ):
+        monkeypatch.setattr(seam, "comment_issue",
+                            lambda *a, **k: calls.append(k.get("body")))
+        monkeypatch.setattr(seam, "edit_issue",
+                            lambda *a, **k: calls.append(k))
+        make_fake_gh(monkeypatch)
+        assert runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4, title="Review task", priority="normal",
+            scene=_scene(),
+        ) is False
+        assert any(
+            isinstance(call, str) and "Approve and merge PR #4" in call
+            for call in calls
+        )
+        assert any(call.get("add") == "ai-awaiting-merge" for call in calls
+                   if isinstance(call, dict))
+
+
 # ---------------------------------------------------------------------------
 # confirm_merged
 # ---------------------------------------------------------------------------

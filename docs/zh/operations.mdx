@@ -498,6 +498,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `health_failure_record_failed` | 向健康状态记录交付失败失败（旁路） |
 | `delivery_takeover` | 接管既有 PR 交付进行评审 |
 | `delivery_awaiting` | 交付等待其 PR 变为可合并 |
+| `delivery_awaiting_human_merge` | 已交付的评审 PR 等待维护者合并 |
 | `delivery_ci` | 观察到 PR CI 状态 |
 | `delivery_auto_merged` | PR 已自动合并（content-only 或琐碎） |
 | `delivery_merged` | PR 已合并；slot 释放 |

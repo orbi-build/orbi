@@ -59,6 +59,7 @@ KNOWN_LABELS = frozenset({
     runner.FIX_NEEDED_LABEL,
     runner.MERGED_LABEL,
     runner.BLOCKED_LABEL,
+    runner.AWAITING_MERGE_LABEL,
     # Issue #763: the human acceptance gate (a human-only label).
     runner.HUMAN_REVIEW_LABEL,
 })

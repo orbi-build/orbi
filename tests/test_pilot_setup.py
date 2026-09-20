@@ -70,6 +70,7 @@ VALID_DEFS = [
     {"name": "ai-fix-needed", "color": "fbca04", "description": "fix"},
     {"name": "ai-merged", "color": "0e8a16", "description": "merged"},
     {"name": "ai-blocked", "color": "d73a4a", "description": "blocked"},
+    {"name": "ai-awaiting-merge", "color": "5319e7", "description": "awaiting merge"},
     {"name": "p0", "color": "fbca04", "description": "urgent"},
     # Issue #93: the Epic marker is platform state (the claim scan
     # skips `ai-epic`), so it is part of the platform label set.
@@ -242,7 +243,8 @@ def test_load_label_defs_parses_all_twelve_platform_labels(tmp_path):
     defs = pilot_setup.load_label_defs(path)
     assert [entry["name"] for entry in defs] == [
         "ai-ready", "ai-in-progress", "ai-pr-opened",
-        "ai-fix-needed", "ai-merged", "ai-blocked", "p0", "ai-epic",
+        "ai-fix-needed", "ai-merged", "ai-blocked", "ai-awaiting-merge",
+        "p0", "ai-epic",
         "ai-release", "ai-content-only", "ai-ops-only",
         "ai-human-review",
     ]
@@ -303,7 +305,7 @@ def test_load_label_defs_rejects_malformed_toml(tmp_path):
 
 
 def test_committed_labels_toml_covers_the_twelve_platform_labels():
-    """The committed labels.toml (repo root) must define exactly the 12
+    """The committed labels.toml (repo root) must define exactly the 13
     platform labels with valid colors and non-empty descriptions."""
     path = Path(__file__).resolve().parent.parent / "labels.toml"
     defs = pilot_setup.load_label_defs(path)
@@ -660,8 +662,8 @@ def test_align_labels_creates_missing_and_edits_drifted(tmp_path):
         run_command=fake_run,
     )
     assert result["repo"] == "xqliu/orbi"
-    assert result["aligned"] == 12
-    assert result["total"] == 12
+    assert result["aligned"] == 13
+    assert result["total"] == 13
     # Only the drifted p0 label is written; ai-ready already matches and
     # the business label `bug` is never touched.
     creates = [c for c in calls if c[:3] == ["gh", "label", "create"]]
@@ -683,7 +685,7 @@ def test_align_labels_is_idempotent_when_everything_matches(tmp_path):
         pilot_setup.load_label_defs(repo / "labels.toml"),
         run_command=fake_run,
     )
-    assert result["aligned"] == 12
+    assert result["aligned"] == 13
     assert [c for c in calls if c[:3] == ["gh", "label", "create"]] == []
 
 
@@ -696,9 +698,9 @@ def test_align_labels_reports_partial_alignment(tmp_path):
         pilot_setup.load_label_defs(repo / "labels.toml"),
         run_command=fake_run,
     )
-    assert result["aligned"] == 12
-    assert result["total"] == 12
-    assert len([c for c in calls if c[:3] == ["gh", "label", "create"]]) == 12
+    assert result["aligned"] == 13
+    assert result["total"] == 13
+    assert len([c for c in calls if c[:3] == ["gh", "label", "create"]]) == 13
 
 
 def test_align_labels_fails_fast_on_a_label_write_error(tmp_path):
@@ -1387,7 +1389,7 @@ def test_run_setup_success_reports_all_steps(tmp_path):
             "repo": "xqliu/orbi",
             "permission": "ADMIN",
             "default_branch": "main",
-            "labels": {"aligned": 12, "total": 12},
+            "labels": {"aligned": 13, "total": 13},
         },
     ]
     assert result["service"]["installed"] is True
