@@ -237,11 +237,28 @@ def test_label_patch_accepts_any_iterable_of_labels():
 
 # --- lifecycle states vs scheduling metadata -------------------------
 
-def test_lifecycle_states_are_exactly_the_six_delivery_labels():
+def test_lifecycle_states_include_awaiting_merge_terminal_state():
     assert dl.LIFECYCLE_STATES == frozenset({
         "ai-ready", "ai-in-progress", "ai-pr-opened",
         "ai-fix-needed", "ai-merged", "ai-blocked",
+        "ai-awaiting-merge",
     })
+
+
+def test_awaiting_merge_clears_queue_and_delivery_labels():
+    for current in (
+        {"ai-pr-opened"},
+        {"ai-ready", "ai-in-progress"},
+        {"ai-ready", "ai-pr-opened"},
+        {"ai-ready", "ai-fix-needed"},
+        {"ai-ready", "ai-in-progress", "ai-pr-opened", "ai-fix-needed"},
+    ):
+        assert dl.label_patch(dl.EVENT_AWAITING_MERGE, current) == (
+            ["ai-awaiting-merge"],
+            [label for label in (
+                "ai-in-progress", "ai-pr-opened", "ai-fix-needed", "ai-ready",
+            ) if label in current],
+        )
 
 
 def test_scheduling_metadata_labels_are_not_lifecycle_states():
@@ -273,7 +290,7 @@ def test_is_pickup_eligible_true_with_p0_and_bug_metadata():
 
 def test_is_pickup_eligible_false_when_in_any_delivery_state():
     for state in ("ai-in-progress", "ai-pr-opened", "ai-fix-needed",
-                  "ai-merged", "ai-blocked"):
+                  "ai-merged", "ai-blocked", "ai-awaiting-merge"):
         assert dl.is_pickup_eligible({"ai-ready", state}) is False
 
 
@@ -293,6 +310,8 @@ def test_is_resumable_false_for_implement_phase_and_terminals():
     assert dl.is_resumable({"ai-ready", "ai-in-progress"}) is False
     assert dl.is_resumable({"ai-ready", "ai-merged"}) is False
     assert dl.is_resumable({"ai-ready", "ai-blocked"}) is False
+    assert dl.is_resumable({"ai-awaiting-merge"}) is False
+    assert dl.is_pickup_eligible({"ai-awaiting-merge"}) is False
     assert dl.is_resumable({"ai-ready"}) is False
 
 
@@ -300,6 +319,7 @@ def test_needs_human_intervention_true_only_for_ai_blocked():
     assert dl.needs_human_intervention({"ai-ready", "ai-blocked"}) is True
     assert dl.needs_human_intervention({"ai-ready", "ai-pr-opened"}) is False
     assert dl.needs_human_intervention({"ai-ready", "ai-fix-needed"}) is False
+    assert dl.needs_human_intervention({"ai-awaiting-merge"}) is False
     assert dl.needs_human_intervention({"ai-ready"}) is False
 
 

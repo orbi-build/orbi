@@ -17,10 +17,12 @@ PR_OPENED_LABEL = "ai-pr-opened"
 FIX_NEEDED_LABEL = "ai-fix-needed"
 MERGED_LABEL = "ai-merged"
 BLOCKED_LABEL = "ai-blocked"
+AWAITING_MERGE_LABEL = "ai-awaiting-merge"
 
 LIFECYCLE_STATES = frozenset({
     READY_LABEL, IN_PROGRESS_LABEL, PR_OPENED_LABEL,
     FIX_NEEDED_LABEL, MERGED_LABEL, BLOCKED_LABEL,
+    AWAITING_MERGE_LABEL,
 })
 
 # --- Scheduling metadata (NOT delivery lifecycle states) ---
@@ -53,6 +55,7 @@ EVENT_RELEASE_WAITING = "release_waiting"
 EVENT_HUMAN_REVIEW_WAITING = "human_review_waiting"
 EVENT_REQUEUE = "requeue"
 EVENT_BLOCKED = "blocked"
+EVENT_AWAITING_MERGE = "awaiting_merge"
 
 # The delivery-state labels a terminal failure must clear so the
 # terminal state is `ai-blocked` ALONE (never `ai-pr-opened` +
@@ -79,6 +82,8 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
       machine (which never enters the PR states).
     - blocked: add `ai-blocked`, remove every delivery-state label that
       is present (so the terminal state is `ai-blocked` ALONE).
+    - awaiting_merge: add `ai-awaiting-merge`, remove every delivery-state
+      label and `ai-ready` (the maintainer owns the final merge).
 
     An unknown event raises `ValueError` (fail fast — never a guessed
     patch).
@@ -140,6 +145,13 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
         if READY_LABEL in current:
             to_remove.append(READY_LABEL)
         return ([BLOCKED_LABEL], to_remove)
+    if event == EVENT_AWAITING_MERGE:
+        to_remove = [
+            label for label in _DELIVERY_STATE_LABELS if label in current
+        ]
+        if READY_LABEL in current:
+            to_remove.append(READY_LABEL)
+        return ([AWAITING_MERGE_LABEL], to_remove)
     raise ValueError(f"unknown delivery event: {event!r}")
 
 

@@ -44,6 +44,11 @@ color = "d73a4a"
 description = "Orbi stopped and needs human attention"
 
 [[label]]
+name = "ai-awaiting-merge"
+color = "5319e7"
+description = "Reviewed PR delivered; maintainer approval and merge are required"
+
+[[label]]
 name = "p0"
 color = "fbca04"
 description = "Orbi urgent priority: picked up before bugs and features"

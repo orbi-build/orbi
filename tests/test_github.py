@@ -430,7 +430,9 @@ def test_merge_gate_preflight_reports_classic_approval_and_admin(monkeypatch):
     report = github.merge_gate_preflight("acme/project", "main")
     assert any("requires 1 approving review" in line for line in report)
     assert any("enforces admins" in line for line in report)
-    assert "--method PATCH" in report[0]
+    assert any("collaborative" in line or "maintainer" in line for line in report)
+    assert all("required_approving_review_count=0" not in line for line in report)
+    assert all("--method DELETE" not in line for line in report)
 
 
 def test_merge_gate_preflight_reports_ruleset_and_no_writes(monkeypatch):

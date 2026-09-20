@@ -55,6 +55,7 @@ from orbi import cli_source
 from orbi.runner import RunnerConfig
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
+    AWAITING_MERGE_LABEL,
     FIX_NEEDED_LABEL,
     HUMAN_REVIEW_LABEL,
     IN_PROGRESS_LABEL,
@@ -105,6 +106,7 @@ REQUIRED_LABELS = (
     FIX_NEEDED_LABEL,
     MERGED_LABEL,
     BLOCKED_LABEL,
+    AWAITING_MERGE_LABEL,
     "p0",
     # Epic marker: the claim scan skips `ai-epic` Issues
     # (`epic_not_claimed`), so the label is platform state the setup

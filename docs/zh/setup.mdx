@@ -62,8 +62,8 @@ setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下
      管理 labels（Issue #613）：setup 对空字段改用一次性 create+delete
      标签探针（`gh api`）判定，并报告 `permission=INSTALLATION`；用户
      token 保持原有的权限要求；
-   - 十二个平台标签（`ai-ready`、`ai-in-progress`、`ai-pr-opened`、
-     `ai-fix-needed`、`ai-merged`、`ai-blocked`、`p0`、`ai-epic`、
+   - 十三个平台标签（`ai-ready`、`ai-in-progress`、`ai-pr-opened`、
+     `ai-fix-needed`、`ai-merged`、`ai-blocked`、`ai-awaiting-merge`、`p0`、`ai-epic`、
      `ai-release`、`ai-content-only`、`ai-ops-only`、`ai-human-review`）
      从部署 home 的 `labels.toml`（`<deploy_home>/labels.toml`，Issue #330）
      **声明式**对齐——标签名/颜色/描述的唯一事实源：缺的创建、漂移的更新、
