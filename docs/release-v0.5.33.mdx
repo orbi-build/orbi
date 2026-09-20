@@ -1,0 +1,25 @@
+# v0.5.33 release (latest)
+
+`v0.5.33` release notes for the GitHub Release [v0.5.33](https://github.com/orbi-build/orbi/releases/tag/v0.5.33) (release task: Issue #1210).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.5.33` | annotated tag `808d044e60752b632510971e325db9d2eba9a165` | commit `05e256646e74a9b72193b27279effc8ad46c0dc3` |
+
+## Release notes
+
+## Changelog
+
+### Bug fixes
+
+- Docker: an empty /work volume fails with a raw git rev-parse 128 instead of saying what to mount ([Issue #1203](https://github.com/orbi-build/orbi/issues/1203); [PR #1212](https://github.com/orbi-build/orbi/pull/1212))
+- AGENTS.md: document what the release gate waits for in its own milestone ([Issue #1211](https://github.com/orbi-build/orbi/issues/1211); [PR #1214](https://github.com/orbi-build/orbi/pull/1214))
+- A fix_needed delivery with no scene is unclaimable and silent: paying tenant stuck 6h, asked for help, nothing answered ([Issue #1216](https://github.com/orbi-build/orbi/issues/1216); [PR #1224](https://github.com/orbi-build/orbi/pull/1224))
+- Runner 崩溃停摆：失败评论去重拿到 GraphQL node id，断言要求 int 直接 ValueError ([Issue #1217](https://github.com/orbi-build/orbi/issues/1217); [PR #1220](https://github.com/orbi-build/orbi/pull/1220))
+- 线上事故：客户 runner 24 小时崩溃 77 次——分阶段交付的 PR 没有 Fixes 关键字，verify_pr 抛异常杀死进程 ([Issue #1219](https://github.com/orbi-build/orbi/issues/1219); [PR #1223](https://github.com/orbi-build/orbi/pull/1223))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>
