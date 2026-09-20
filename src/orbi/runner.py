@@ -8855,9 +8855,10 @@ def report_delivery_failure(
     `_failure_evidence` block after the scene.
 
     Label and ordinary comment failures retain their existing caller
-    semantics. A failure resolving or updating an existing deduplicated
-    comment is logged as `failure_comment_update_failed` and does not
-    escape this function, so one malformed comment cannot stop the tick.
+    semantics. A malformed deduplicated comment URL posts a fresh failure
+    comment and emits `failure_comment_id_unavailable`; an update failure
+    is logged as `failure_comment_update_failed`. Neither escapes this
+    function, so one malformed comment cannot stop the tick.
 
     The #825 dead-loop guard (classified recoverable failures only):
     the same (run_id, failure fingerprint) recurring to
@@ -9022,33 +9023,43 @@ def report_delivery_failure(
             f"{failure_marker(fingerprint)}\n"
         )
         body = f"{run_marker(run_id)}\n{fail_marker_line}{body}"
+    deduplicated = False
     if run_id and reported_failure is not None and not blocked:
-        # The #825 dedup: the identical failure already has its Issue
-        # comment — the repeat counter is bumped in that comment IN
-        # PLACE (the dead-loop streak scan reads it as the occurrence
-        # count), no second comment is posted, and the journal records
-        # the repeat. The PR copy stays as first posted; the Issue
-        # comment is the delivery line's failure record. The patch is
-        # the repeat's report and fails like one (the label patch above
-        # and the tracked progress publish below keep their semantics).
+        # The #825 dedup: `gh issue view --json comments` returns a GraphQL
+        # node id, but the PATCH route requires the REST id. The comment URL
+        # already carries that id, so do not make a second API request.
         comment_id = reported_failure.get("id")
         try:
             if isinstance(comment_id, int) and not isinstance(comment_id, bool):
                 rest_comment_id = comment_id
-            elif isinstance(comment_id, str):
-                rest_comment_id = issue_comment_rest_id(
-                    number, repo=source_repo, node_id=comment_id,
-                )
             else:
-                raise ValueError(
-                    f"unsupported failure comment id {comment_id!r}"
+                url = reported_failure.get("url")
+                match = (
+                    re.search(r"#issuecomment-(\d+)$", url)
+                    if isinstance(url, str) else None
                 )
+                if match is None:
+                    raise ValueError(
+                        "comment URL has no #issuecomment-<digits> suffix"
+                    )
+                rest_comment_id = int(match.group(1))
             update_issue_comment(
                 rest_comment_id, repo=source_repo,
                 # Apply the increment to the newly assembled body, not the
                 # stale first report. This preserves scene/retry fields added
                 # by this attempt while retaining the dedup counter.
                 body=bump_failure_repeat(body, fingerprint),
+            )
+        except ValueError as exc:
+            # A malformed or missing URL is data loss in the dedup metadata,
+            # not a delivery failure. Preserve the pre-#825 behavior so the
+            # current failure is still recorded and the tick continues.
+            LOGGER.warning(
+                "issue=%s failure comment id unavailable: %s", number, exc,
+            )
+            event(
+                "failure_comment_id_unavailable", level=logging.ERROR,
+                issue=number, run_id=run_id, reason=str(exc),
             )
         except Exception:
             LOGGER.exception(
@@ -9059,11 +9070,12 @@ def report_delivery_failure(
                 issue=number, run_id=run_id,
             )
         else:
+            deduplicated = True
             event(
                 "failure_comment_deduplicated", issue=number,
                 run_id=run_id, fingerprint=fingerprint,
             )
-    else:
+    if not deduplicated:
         comment_issue(number, repo=source_repo, body=body)
         if pr_url and not blocked:
             # The recoverable scene is written to the PR too:
