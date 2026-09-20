@@ -187,6 +187,7 @@ from orbi.github import (
     epic_issue_with_blockers,
     has_in_progress_label,
     issue_comments,
+    issue_comment_rest_id,
     issue_labels,
     issue_priority,
     issue_view,
@@ -8794,10 +8795,10 @@ def report_delivery_failure(
     the run marker. `evidence` appends the bounded
     `_failure_evidence` block after the scene.
 
-    The function raises on its own failures (label patch, comment):
-    the callers keep their reporting-error semantics (the review loop
-    fails fast; the other two log `failure reporting failed` and
-    continue to their terminal return / re-raise).
+    Label and ordinary comment failures retain their existing caller
+    semantics. A failure resolving or updating an existing deduplicated
+    comment is logged as `failure_comment_update_failed` and does not
+    escape this function, so one malformed comment cannot stop the tick.
 
     The #825 dead-loop guard (classified recoverable failures only):
     the same (run_id, failure fingerprint) recurring to
@@ -8972,22 +8973,37 @@ def report_delivery_failure(
         # the repeat's report and fails like one (the label patch above
         # and the tracked progress publish below keep their semantics).
         comment_id = reported_failure.get("id")
-        if not isinstance(comment_id, int):
-            raise ValueError(
-                f"issue={number} failure comment id must be an integer "
-                f"to bump the repeat counter, got {comment_id!r}"
+        try:
+            if isinstance(comment_id, int) and not isinstance(comment_id, bool):
+                rest_comment_id = comment_id
+            elif isinstance(comment_id, str):
+                rest_comment_id = issue_comment_rest_id(
+                    number, repo=source_repo, node_id=comment_id,
+                )
+            else:
+                raise ValueError(
+                    f"unsupported failure comment id {comment_id!r}"
+                )
+            update_issue_comment(
+                rest_comment_id, repo=source_repo,
+                # Apply the increment to the newly assembled body, not the
+                # stale first report. This preserves scene/retry fields added
+                # by this attempt while retaining the dedup counter.
+                body=bump_failure_repeat(body, fingerprint),
             )
-        update_issue_comment(
-            comment_id, repo=source_repo,
-            # Apply the increment to the newly assembled body, not the
-            # stale first report. This preserves scene/retry fields added
-            # by this attempt while retaining the dedup counter.
-            body=bump_failure_repeat(body, fingerprint),
-        )
-        event(
-            "failure_comment_deduplicated", issue=number,
-            run_id=run_id, fingerprint=fingerprint,
-        )
+        except Exception:
+            LOGGER.exception(
+                "issue=%s failure comment update failed", number,
+            )
+            event(
+                "failure_comment_update_failed", level=logging.ERROR,
+                issue=number, run_id=run_id,
+            )
+        else:
+            event(
+                "failure_comment_deduplicated", issue=number,
+                run_id=run_id, fingerprint=fingerprint,
+            )
     else:
         comment_issue(number, repo=source_repo, body=body)
         if pr_url and not blocked:

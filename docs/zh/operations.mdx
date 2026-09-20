@@ -517,6 +517,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `delivery_ci_triage_lookup_failed` | CI 失败分诊 Issue 查询失败 |
 | `delivery_review_failed` | 评审 session 失败 |
 | `failure_comment_deduplicated` | 同一失败重复发生，原评论计数器原位+1；不再发新评论 |
+| `failure_comment_update_failed` | 原失败评论无法解析或更新；本轮 tick 继续运行 |
 | `failure_streak_escalated` | 同一失败达到连续上限；Issue 转为 ai-blocked |
 | `failure_history_read_failed` | 死循环守卫的失败历史读取失败（fail-open） |
 | `external_takeover` | 外部 PR 被接管评审 |
