@@ -70,14 +70,14 @@ Orbi 从部署 home 读取 `orbi.toml`；设置 `ORBI_CONFIG` 可选择其他文
 
 ## Steering
 
-Steering 让 Runner 轮询 Issue 中的受信任修正，并带着修正重启正在进行的交付。`steering_max_rounds` 限制重启次数，避免交付被无限重定向。轮询失败属于纯旁路：会记录日志，但绝不会让交付失败。
+Steering 让 Runner 轮询 Issue 中的受信任修正，并带着修正重启正在进行的交付。`steering_max_rounds` 限制重启次数，避免交付被无限重定向。轮询失败属于纯旁路：会记录日志，但绝不会让交付失败。这三个键都可以写在仓库的 `.github/orbi.toml` 中；仓库声明的值优先，省略时回落到 host 值。`steering_poll_seconds` 必须是有限正数，不额外设置下限。
 
 详见 Operations 中的 [`delivery_steered`、`steering_limit_reached`、`steering_poll_failed`、`steering_limit_notice_failed`](/zh/operations) 行。
 
 | Key | Type | Default | Allowed values | Meaning |
 |---|---|---|---|---|
 | `steering_enabled` | 布尔值 | `true` | `true \| false` | 启用受信任的 Issue 修正轮询。参见[运行中的交付修正](/zh/workflow#运行中的交付修正)。 |
-| `steering_poll_seconds` | 数字 | `60.0` | 有限正数 | Steering 轮询间隔。参见[运行中的交付修正](/zh/workflow#运行中的交付修正)。 |
+| `steering_poll_seconds` | 数字 | `60.0` | 有限正数 | Steering 轮询间隔。可写在 `.github/orbi.toml` 中；不额外设置下限。参见[运行中的交付修正](/zh/workflow#运行中的交付修正)。 |
 | `steering_max_rounds` | 整数 | `3` | 非负整数 | 每个交付最多重启的 Steering 次数。参见[运行中的交付修正](/zh/workflow#运行中的交付修正)。 |
 
 ## Health

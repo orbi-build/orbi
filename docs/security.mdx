@@ -134,9 +134,11 @@ the system context) are host-only. A repository file that declares any
 host-only or unknown key fails the claim fast and the Issue becomes
 `ai-blocked` with the offending keys named.
 
-Only these four delivery-policy keys are repository-writable:
-`base_branch`, `active_milestone`, `context_files` and
-`dispatch_label`. Because a policy change is a default-branch change,
+These delivery-policy keys are repository-writable:
+`base_branch`, `active_milestone`, `context_files`, `dispatch_label`,
+`steering_enabled`, `steering_poll_seconds` and `steering_max_rounds`.
+The steering values affect only that repository; omitted keys fall back to
+host configuration. Because a policy change is a default-branch change,
 protect the file with GitHub's native review mechanism — add
 `.github/orbi.toml` to `CODEOWNERS` so changing it requires an owner's
 review.
