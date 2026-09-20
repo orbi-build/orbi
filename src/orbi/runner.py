@@ -9023,59 +9023,63 @@ def report_delivery_failure(
             f"{failure_marker(fingerprint)}\n"
         )
         body = f"{run_marker(run_id)}\n{fail_marker_line}{body}"
-    deduplicated = False
+    post_new_comment = True
     if run_id and reported_failure is not None and not blocked:
         # The #825 dedup: `gh issue view --json comments` returns a GraphQL
         # node id, but the PATCH route requires the REST id. The comment URL
         # already carries that id, so do not make a second API request.
         comment_id = reported_failure.get("id")
-        try:
-            if isinstance(comment_id, int) and not isinstance(comment_id, bool):
-                rest_comment_id = comment_id
-            else:
-                url = reported_failure.get("url")
-                match = (
-                    re.search(r"#issuecomment-(\d+)$", url)
-                    if isinstance(url, str) else None
-                )
-                if match is None:
-                    raise ValueError(
-                        "comment URL has no #issuecomment-<digits> suffix"
-                    )
-                rest_comment_id = int(match.group(1))
-            update_issue_comment(
-                rest_comment_id, repo=source_repo,
-                # Apply the increment to the newly assembled body, not the
-                # stale first report. This preserves scene/retry fields added
-                # by this attempt while retaining the dedup counter.
-                body=bump_failure_repeat(body, fingerprint),
+        if isinstance(comment_id, int) and not isinstance(comment_id, bool):
+            rest_comment_id = comment_id
+        else:
+            url = reported_failure.get("url")
+            match = (
+                re.search(r"#issuecomment-(\d+)$", url)
+                if isinstance(url, str) else None
             )
-        except ValueError as exc:
+            rest_comment_id = int(match.group(1)) if match is not None else None
+        if rest_comment_id is None:
             # A malformed or missing URL is data loss in the dedup metadata,
             # not a delivery failure. Preserve the pre-#825 behavior so the
             # current failure is still recorded and the tick continues.
+            unavailable_reason = (
+                "comment URL has no #issuecomment-<digits> suffix"
+            )
             LOGGER.warning(
-                "issue=%s failure comment id unavailable: %s", number, exc,
+                "issue=%s failure comment id unavailable: %s",
+                number, unavailable_reason,
             )
             event(
                 "failure_comment_id_unavailable", level=logging.ERROR,
-                issue=number, run_id=run_id, reason=str(exc),
-            )
-        except Exception:
-            LOGGER.exception(
-                "issue=%s failure comment update failed", number,
-            )
-            event(
-                "failure_comment_update_failed", level=logging.ERROR,
-                issue=number, run_id=run_id,
+                issue=number, run_id=run_id, reason=unavailable_reason,
             )
         else:
-            deduplicated = True
-            event(
-                "failure_comment_deduplicated", issue=number,
-                run_id=run_id, fingerprint=fingerprint,
-            )
-    if not deduplicated:
+            # A resolved existing comment owns this occurrence even if its
+            # PATCH fails. Preserve the existing update-failure behavior:
+            # log the failure without attempting a second ordinary comment.
+            post_new_comment = False
+            try:
+                update_issue_comment(
+                    rest_comment_id, repo=source_repo,
+                    # Apply the increment to the newly assembled body, not the
+                    # stale first report. This preserves scene/retry fields
+                    # added by this attempt while retaining the dedup counter.
+                    body=bump_failure_repeat(body, fingerprint),
+                )
+            except Exception:
+                LOGGER.exception(
+                    "issue=%s failure comment update failed", number,
+                )
+                event(
+                    "failure_comment_update_failed", level=logging.ERROR,
+                    issue=number, run_id=run_id,
+                )
+            else:
+                event(
+                    "failure_comment_deduplicated", issue=number,
+                    run_id=run_id, fingerprint=fingerprint,
+                )
+    if post_new_comment:
         comment_issue(number, repo=source_repo, body=body)
         if pr_url and not blocked:
             # The recoverable scene is written to the PR too:
