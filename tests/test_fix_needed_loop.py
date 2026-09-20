@@ -275,13 +275,18 @@ def test_delivery_step_recoverable_review_failure_stays_fix_needed(
     assert "Orbi needs a fix:" in body
     assert MARKER in body
     assert PR_URL in body
-    assert str(exc).split(" (Issue")[0] in body
-    assert f"branch={BRANCH}" in body
+    if isinstance(exc, subprocess.CalledProcessError):
+        assert "the delivery command failed" in body
+        assert "Command [" not in body
+        assert "exit_code=1" in body
+    else:
+        assert str(exc).split(" (Issue")[0] in body
+    assert f"branch: `{BRANCH}`" in body
     expected_worktree = (
         tmp_path / ".worktrees"
         / f"orbi-owner-repo-issue-39-{RUN_ID}"
     )
-    assert f"worktree={expected_worktree}" in body
+    assert "worktree: `local runner worktree`" in body
     assert "session=" in body
     assert "phase=" in body
     assert "last_activity=" in body
@@ -389,7 +394,7 @@ def test_delivery_step_recoverable_failure_with_session_file_includes_session_sc
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
     body = issue_comments[0][1]["body"]
     assert "session=sess-1" in body
-    assert f"session_file={worktree / '.pi-session' / 'sess.jsonl'}" in body
+    assert "session log: `local session log`" in body
 
 
 def test_delivery_step_recoverable_failure_scene_snapshot_failure_is_logged(
@@ -686,7 +691,7 @@ def test_verify_resumed_pr_diverged_pr_head_stays_fix_needed(
     assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in body
     assert FAKE_PR_URL in body
     assert "orbi/owner-repo-issue-9" in body
-    assert str(expected_resume_worktree(tmp_path)) in body
+    assert "worktree: `local runner worktree`" in body
     assert "the branch diverged" in body
     # ... and the fix-needed milestone (not the blocked one).
     posted = [
@@ -854,7 +859,7 @@ def test_verify_resumed_pr_recoverable_failure_with_session_file_includes_sessio
         )
     body = captured["comments"][0][1]["body"]
     assert "session=sess-1" in body
-    assert f"session_file={worktree / '.pi-session' / 'sess.jsonl'}" in body
+    assert "session log: `local session log`" in body
 
 
 def test_verify_resumed_pr_recoverable_failure_scene_snapshot_failure_is_logged(
