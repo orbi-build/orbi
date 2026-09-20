@@ -7118,6 +7118,37 @@ def test_process_issue_failure_without_session_still_carries_scene(
     assert "session_file=-" in failure_body
 
 
+def test_tail_text_strips_raw_and_caret_sgr_sequences(tmp_path):
+    log = tmp_path / "coloured.log"
+    log.write_bytes(
+        b"\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[32m10 passed\x1b[39m\n"
+        b"^[[32m\xe2\x9c\x93^[[39m tests/cta-ref.test.js\n"
+    )
+
+    result = runner._tail_text(log)
+
+    assert "Test Files  10 passed" in result
+    assert "tests/cta-ref.test.js" in result
+    assert "\x1b[" not in result
+    assert "^[" not in result
+
+
+def test_tail_text_preserves_plain_text_byte_for_byte(tmp_path):
+    log = tmp_path / "plain.log"
+    content = b"plain output  \ntrailing whitespace\t"
+    log.write_bytes(content)
+
+    assert runner._tail_text(log) == content.decode()
+
+
+def test_tail_text_preserves_non_sgr_lookalikes(tmp_path):
+    log = tmp_path / "lookalikes.log"
+    content = "^[[1] [32m literal \x1b without bracket"
+    log.write_text(content, encoding="utf-8")
+
+    assert runner._tail_text(log) == content
+
+
 def test_failure_evidence_handles_binary_streams_and_unavailable_files(tmp_path):
     error = subprocess.CalledProcessError(
         2, ["pi"], output=b"binary stdout", stderr=b"binary stderr",
