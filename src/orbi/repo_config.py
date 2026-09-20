@@ -27,6 +27,7 @@ import base64
 import dataclasses
 import json
 import logging
+import math
 import tomllib
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Callable, cast
@@ -60,6 +61,9 @@ POLICY_KEYS = (
     "active_milestone",
     "context_files",
     "dispatch_label",
+    "steering_enabled",
+    "steering_poll_seconds",
+    "steering_max_rounds",
 )
 
 # `test_command` left the whitelist — the merge gate reads
@@ -95,9 +99,6 @@ HOST_ONLY_KEYS = frozenset({
     "model_wait_dead_seconds",
     "model_wait_probe_url",
     "model_wait_probe_seconds",
-    "steering_enabled",
-    "steering_poll_seconds",
-    "steering_max_rounds",
     # host scheduling / transport / recovery semantics.
     "max_concurrency",
     "unit_name",
@@ -138,6 +139,9 @@ class RepoPolicy:
     active_milestone: str | None = None
     context_files: tuple[str, ...] | None = None
     dispatch_label: str | None = None
+    steering_enabled: bool | None = None
+    steering_poll_seconds: float | None = None
+    steering_max_rounds: int | None = None
     sha: str | None = None
 
 
@@ -185,11 +189,43 @@ def parse_repo_config(text: str, *, source: str = REPO_CONFIG_PATH) -> RepoPolic
             else None
         ),
         dispatch_label=cast("str | None", values.get("dispatch_label")),
+        steering_enabled=cast("bool | None", values.get("steering_enabled")),
+        steering_poll_seconds=cast(
+            "float | None", values.get("steering_poll_seconds")
+        ),
+        steering_max_rounds=cast(
+            "int | None", values.get("steering_max_rounds")
+        ),
     )
 
 
 def _validate_value(key: str, value: object, *, source: str) -> object:
     """Validate one whitelisted value; fail fast with the concrete reason."""
+    if key == "steering_enabled":
+        if not isinstance(value, bool):
+            raise RepoConfigError(f"{source}: steering_enabled must be a boolean")
+        return value
+    if key == "steering_poll_seconds":
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise RepoConfigError(
+                f"{source}: steering_poll_seconds must be a positive finite number"
+            )
+        return float(value)
+    if key == "steering_max_rounds":
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+        ):
+            raise RepoConfigError(
+                f"{source}: steering_max_rounds must be a non-negative integer"
+            )
+        return value
     if key == "context_files":
         if not isinstance(value, list) or not value:
             raise RepoConfigError(
@@ -262,6 +298,21 @@ def resolve_policy(config: RunnerConfig, policy: RepoPolicy) -> RunnerConfig:
             policy.dispatch_label
             if policy.dispatch_label is not None
             else config.dispatch_label
+        ),
+        steering_enabled=(
+            policy.steering_enabled
+            if policy.steering_enabled is not None
+            else config.steering_enabled
+        ),
+        steering_poll_seconds=(
+            policy.steering_poll_seconds
+            if policy.steering_poll_seconds is not None
+            else config.steering_poll_seconds
+        ),
+        steering_max_rounds=(
+            policy.steering_max_rounds
+            if policy.steering_max_rounds is not None
+            else config.steering_max_rounds
         ),
     )
 

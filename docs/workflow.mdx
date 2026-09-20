@@ -596,6 +596,9 @@ Only delivery-policy keys are allowed:
 | `active_milestone` | string | The fresh-claim Milestone scope for this repository. The one exception is the external-takeover scan (Issue #842, decision D1): the fifth, last ready scan has NO Milestone qualifier — an external triage ticket (body marker `<!-- orbi:external-pr:N -->`) is claimable regardless, because an external contribution belongs to no version's scope and must never block the release gate. |
 | `context_files` | string[] | Repository-relative context files; existence and a size cap are checked before injection. |
 | `dispatch_label` | string | The claim label for this repository (default `ai-ready`); the delivery lifecycle labels stay host constants. |
+| `steering_enabled` | boolean | Enables trusted correction polling for this repository; absent falls back to the host value. |
+| `steering_poll_seconds` | number | Poll interval for this repository; absent falls back to the host value and must be positive and finite. |
+| `steering_max_rounds` | integer | Maximum steering restarts for this repository; absent falls back to the host value. |
 
 ```toml
 # .github/orbi.toml

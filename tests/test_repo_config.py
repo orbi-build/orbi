@@ -44,12 +44,18 @@ def test_parse_repo_config_accepts_every_whitelisted_key():
         'active_milestone = "v0.5.0"\n'
         'context_files = ["AGENTS.md", "docs/testing.mdx"]\n'
         'dispatch_label = "ai-ready"\n'
+        'steering_enabled = false\n'
+        'steering_poll_seconds = 0.1\n'
+        'steering_max_rounds = 7\n'
     )
     assert repo_config.parse_repo_config(text) == repo_config.RepoPolicy(
         base_branch="beta",
         active_milestone="v0.5.0",
         context_files=("AGENTS.md", "docs/testing.mdx"),
         dispatch_label="ai-ready",
+        steering_enabled=False,
+        steering_poll_seconds=0.1,
+        steering_max_rounds=7,
     )
 
 
@@ -119,6 +125,9 @@ def test_parse_repo_config_lists_every_offending_host_only_key():
         'context_files = "AGENTS.md"\n',
         'context_files = ["AGENTS.md", 3]\n',
         'context_files = ["/etc/passwd"]\n',
+        'steering_enabled = "yes"\n',
+        'steering_poll_seconds = "60"\n',
+        'steering_max_rounds = 1.5\n',
         'context_files = ["../outside.md"]\n',
     ],
 )
@@ -173,6 +182,37 @@ def test_resolve_policy_overrides_only_the_declared_keys():
     assert effective.context_files == (Path("/host/ctx.md"),)
     # Repository context files are additive under their own key.
     assert effective.repo_context_files == ()
+
+
+def test_resolve_policy_overrides_steering_and_omitted_keys_fall_back():
+    host = runner.RunnerConfig(
+        steering_enabled=True, steering_poll_seconds=60.0,
+        steering_max_rounds=3,
+    )
+    effective = repo_config.resolve_policy(
+        host,
+        repo_config.RepoPolicy(
+            steering_enabled=False, steering_poll_seconds=1.0,
+        ),
+    )
+    assert effective.steering_enabled is False
+    assert effective.steering_poll_seconds == 1.0
+    assert effective.steering_max_rounds == 3
+
+
+def test_resolve_policy_overrides_all_declared_steering_keys():
+    effective = repo_config.resolve_policy(
+        runner.RunnerConfig(
+            steering_enabled=True, steering_poll_seconds=60.0,
+            steering_max_rounds=3,
+        ),
+        repo_config.RepoPolicy(
+            steering_enabled=False, steering_poll_seconds=1.0,
+            steering_max_rounds=7,
+        ),
+    )
+    assert (effective.steering_enabled, effective.steering_poll_seconds,
+            effective.steering_max_rounds) == (False, 1.0, 7)
 
 
 # --- D4 audit ---------------------------------------------------------------
