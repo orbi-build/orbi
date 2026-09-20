@@ -319,7 +319,10 @@ def test_is_resumable_false_for_implement_phase_and_terminals():
     assert dl.is_resumable({"ai-ready", "ai-in-progress"}) is False
     assert dl.is_resumable({"ai-ready", "ai-merged"}) is False
     assert dl.is_resumable({"ai-ready", "ai-blocked"}) is False
-    assert dl.is_resumable({"ai-awaiting-merge"}) is False
+    assert dl.is_resumable({"ai-awaiting-merge"}) is True
+    assert dl.label_patch(dl.EVENT_MERGED, {"ai-awaiting-merge"}) == (
+        ["ai-merged"], ["ai-awaiting-merge"],
+    )
     assert dl.is_pickup_eligible({"ai-awaiting-merge"}) is False
     assert dl.is_resumable({"ai-ready"}) is False
 

@@ -12262,7 +12262,7 @@ def test_delivery_step_passes_p0_priority_to_the_review(
                     },
                 ]})
             return json.dumps({"labels": [
-                {"name": "ai-pr-opened"}, {"name": "p0"},
+                {"name": "ai-awaiting-merge"}, {"name": "p0"},
             ]})
         if command == ["git", "branch", "--show-current"]:
             return "orbi/owner-repo-issue-39"
@@ -12282,7 +12282,7 @@ def test_delivery_step_passes_p0_priority_to_the_review(
      / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     issue = {
         "number": 39, "title": "p0 task", "body": "",
-        "labels": [{"name": "ai-pr-opened"}, {"name": "p0"}],
+        "labels": [{"name": "ai-awaiting-merge"}, {"name": "p0"}],
     }
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
@@ -12299,6 +12299,7 @@ def test_delivery_step_passes_p0_priority_to_the_review(
             "base_sha": "abc123def456", "pr_url": PR_URL,
             "external": "", "review_round": 0, "scene_at": None,
         },
+        "merge_only": True,
     }]
     # The awaiting log line carries the explicit priority field.
     awaiting = [m for m in caplog.messages if "delivery_awaiting" in m]

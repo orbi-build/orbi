@@ -1150,9 +1150,14 @@ def test_merge_gate_rejects_head_that_moved_since_review(monkeypatch, tmp_path):
                           repo_dir=tmp_path)
 
 
-def test_merge_gate_hands_off_policy_rejection_with_required_approval(
-        monkeypatch, tmp_path):
-    """A repository approval policy is a normal delivered handoff."""
+@pytest.mark.parametrize("failed_line", [
+    "merge_gate: FAILED classic protection requires 1 approving review(s)",
+    "merge_gate: FAILED classic protection enforces admins; repair: disable it",
+    "merge_gate: FAILED release-rules requires 2 approving review(s)",
+])
+def test_merge_gate_hands_off_each_actionable_policy_rejection(
+        monkeypatch, tmp_path, failed_line):
+    """Every known policy blocker is a normal delivered handoff."""
     def fake_run(command, **kwargs):
         if command[0] == "gh" and command[1] == "pr" and "view" in command:
             return json.dumps({
@@ -1166,18 +1171,24 @@ def test_merge_gate_hands_off_policy_rejection_with_required_approval(
         return ""
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner.github, "merge_gate_preflight", lambda *a: [
-        "merge_gate: FAILED requires 1 approving review(s)",
+        failed_line,
+        "merge_gate: UNKNOWN unrelated unreadable protection",
     ])
-    with pytest.raises(runner.MergeHandoffRequired):
+    with pytest.raises(runner.MergeHandoffRequired) as raised:
         runner.merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1", "head_ref": "h",
                        "base_oid": "b1", "_source_repo": "owner/repo"},
             "main", repo_dir=tmp_path,
         )
+    assert raised.value.preflight == [failed_line]
 
 
-def test_merge_gate_does_not_hand_off_unrelated_policy_failure(
-        monkeypatch, tmp_path):
+@pytest.mark.parametrize("preflight", [
+    ["merge_gate: PASS protection readable"],
+    ["merge_gate: UNKNOWN protection unreadable"],
+])
+def test_merge_gate_does_not_hand_off_without_failed_preflight(
+        monkeypatch, tmp_path, preflight):
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: (
         (_ for _ in ()).throw(subprocess.CalledProcessError(
             1, command, stderr="the base branch policy prohibits the merge",
@@ -1187,9 +1198,9 @@ def test_merge_gate_does_not_hand_off_unrelated_policy_failure(
             if command[0] == "gh" and command[1] == "pr" and "view" in command else ""
         )
     ))
-    monkeypatch.setattr(runner.github, "merge_gate_preflight", lambda *a: [
-        "merge_gate: PASS protection readable",
-    ])
+    monkeypatch.setattr(
+        runner.github, "merge_gate_preflight", lambda *a: preflight,
+    )
     with pytest.raises(subprocess.CalledProcessError):
         runner.merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1", "head_ref": "h",
@@ -1203,11 +1214,16 @@ def test_review_handoff_marks_issue_awaiting_merge(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     from unittest.mock import patch
     with patch.object(runner, "freeze_pr", lambda *a, **k: _pr()), \
-            patch.object(runner, "run_review", lambda *a, **k: _pass_verdict_text()), \
             patch.object(
+                runner, "run_review",
+                side_effect=AssertionError("merge retry must not start review"),
+            ), patch.object(
                 runner, "merge_gate",
                 lambda *a, **k: (_ for _ in ()).throw(
-                    runner.MergeHandoffRequired("approval required"),
+                    runner.MergeHandoffRequired(
+                        "approval required",
+                        preflight=["merge_gate: FAILED exact repair action"],
+                    ),
                 ),
             ):
         monkeypatch.setattr(seam, "comment_issue",
@@ -1218,14 +1234,53 @@ def test_review_handoff_marks_issue_awaiting_merge(monkeypatch, tmp_path):
         assert runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4, title="Review task", priority="normal",
-            scene=_scene(),
+            scene=_scene(), merge_only=True,
         ) is False
         assert any(
-            isinstance(call, str) and "Approve and merge PR #4" in call
+            isinstance(call, str) and "maintainer action" in call
+            and "PR #4" in call and "merge_gate: FAILED exact repair action" in call
+            and "maintainer merge" not in call and "merge it" not in call
             for call in calls
         )
         assert any(call.get("add") == "ai-awaiting-merge" for call in calls
                    if isinstance(call, dict))
+
+
+def test_resumed_awaiting_merge_succeeds_without_review(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        seam, "issue_labels", lambda *a, **k: ["ai-awaiting-merge"],
+    )
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(
+        seam, "edit_issue", lambda *a, **k: calls.append(k),
+    )
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
+    make_fake_gh(monkeypatch)
+
+    from unittest.mock import patch
+    with patch.object(runner, "freeze_pr", lambda *a, **k: _pr()), \
+            patch.object(
+                runner, "run_review",
+                side_effect=AssertionError("merge retry must not start review"),
+            ), patch.object(
+                runner, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
+            ), patch.object(
+                runner, "confirm_merged",
+                lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
+            ), patch.object(
+                runner, "sync_base_checkout", lambda *a, **k: None,
+            ):
+        assert runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4, title="Review task", priority="normal",
+            scene=_scene(), merge_only=True,
+        ) is True
+    assert any(
+        call.get("add") == "ai-merged"
+        and call.get("remove") == "ai-awaiting-merge"
+        for call in calls
+    )
 
 
 # ---------------------------------------------------------------------------

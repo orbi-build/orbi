@@ -430,7 +430,9 @@ def test_merge_gate_preflight_reports_classic_approval_and_admin(monkeypatch):
     report = github.merge_gate_preflight("acme/project", "main")
     assert any("requires 1 approving review" in line for line in report)
     assert any("enforces admins" in line for line in report)
-    assert any("collaborative" in line or "maintainer" in line for line in report)
+    assert all("repair:" in line for line in report)
+    assert all("Orbi retries the merge" in line for line in report)
+    assert all("maintainer merges" not in line for line in report)
     assert all("required_approving_review_count=0" not in line for line in report)
     assert all("--method DELETE" not in line for line in report)
 
@@ -458,6 +460,9 @@ def test_merge_gate_preflight_reports_ruleset_and_no_writes(monkeypatch):
     monkeypatch.setattr(github, "run_command", fake)
     report = github.merge_gate_preflight("acme/project", "main")
     assert any("release-rules requires 2" in line for line in report)
+    assert any("after the action Orbi retries the merge" in line
+               for line in report)
+    assert all("maintainer" not in line for line in report)
     assert any("UNKNOWN classic protection returned 404" in line
                for line in report)
     assert all("--method" not in command for command in commands)
@@ -594,7 +599,8 @@ def test_merge_gate_preflight_ruleset_without_id_names_settings(monkeypatch):
 
     monkeypatch.setattr(github, "run_command", fake)
     report = github.merge_gate_preflight("acme/project", "main")
-    assert report[0].endswith("https://github.com/acme/project/settings/rules")
+    assert "https://github.com/acme/project/settings/rules" in report[0]
+    assert report[0].endswith("after the action Orbi retries the merge")
 
 
 def test_authenticated_github_login_requires_an_active_account(monkeypatch):
