@@ -812,22 +812,28 @@ def pr_comments(number: int, *, repo: str) -> list[dict]:
     return comments
 
 
-def _pr_api_items(number: int, repo: str, endpoint: str) -> list[dict]:
-    raw = run_gh_read_command([
-        "gh", "api", f"repos/{repo}/pulls/{number}/{endpoint}",
-        "--paginate", "--slurp",
-    ], timeout=30)
-    return parse_paginated_issue_array(raw)
-
-
 def pr_reviews(number: int, *, repo: str) -> list[dict]:
     """Return formal PR reviews, including their state and body."""
-    return _pr_api_items(number, repo, "reviews")
+    raw = run_gh_read_command([
+        "gh", "pr", "view", str(number), "--repo", repo,
+        "--json", "reviews",
+    ], timeout=30)
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("pr view must be a JSON object")
+    reviews = data.get("reviews")
+    if not isinstance(reviews, list):
+        raise ValueError("pr reviews must be a JSON array")
+    return reviews
 
 
 def pr_review_comments(number: int, *, repo: str) -> list[dict]:
     """Return inline review comments, including their path and line."""
-    return _pr_api_items(number, repo, "comments")
+    raw = run_gh_read_command([
+        "gh", "api", f"repos/{repo}/pulls/{number}/comments",
+        "--paginate", "--slurp",
+    ], timeout=30)
+    return parse_paginated_issue_array(raw)
 
 
 def _normalize_pr_feedback_item(item: dict) -> dict:

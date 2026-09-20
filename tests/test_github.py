@@ -353,17 +353,30 @@ def test_pr_comments_reads_through_pr_view(monkeypatch):
 
 def test_pr_reviews_and_inline_comments_use_bounded_read_only_api(monkeypatch):
     calls = []
-    monkeypatch.setattr(seam, "run_command", lambda c, **k: (
-        calls.append((c, k)), '[[{"body": "review"}]]')[1])
 
+    def fake_read(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[:3] == ["gh", "pr", "view"]:
+            return '{"reviews": [{"body": "review"}]}'
+        return '[[{"body": "inline"}]]'
+
+    monkeypatch.setattr(seam, "run_command", fake_read)
     assert github.pr_reviews(4, repo="o/r") == [{"body": "review"}]
-    assert github.pr_review_comments(4, repo="o/r") == [{"body": "review"}]
+    assert github.pr_review_comments(4, repo="o/r") == [{"body": "inline"}]
     assert calls == [
-        (["gh", "api", "repos/o/r/pulls/4/reviews", "--paginate", "--slurp"],
+        (["gh", "pr", "view", "4", "--repo", "o/r", "--json", "reviews"],
          {"timeout": 30}),
         (["gh", "api", "repos/o/r/pulls/4/comments", "--paginate", "--slurp"],
          {"timeout": 30}),
     ]
+
+    monkeypatch.setattr(seam, "run_command", lambda *args, **kwargs: "[]")
+    with pytest.raises(ValueError, match="JSON object"):
+        github.pr_reviews(4, repo="o/r")
+    monkeypatch.setattr(seam, "run_command",
+                        lambda *args, **kwargs: '{"reviews": 1}')
+    with pytest.raises(ValueError, match="JSON array"):
+        github.pr_reviews(4, repo="o/r")
 
 
 def test_pr_feedback_normalizes_rest_inline_shape_and_graphql_review_shape(
