@@ -472,11 +472,27 @@ DAG, no priority numbers, no separate queues:
      mismatch fails fast at claim time, naming the supported ecosystem
      files that DO exist there and the `none` option, never as a late
      FileNotFoundError after the gates and the scope verification.
-  3. Enforce the pre-release gates: no leftover open `ai-in-progress` /
-     `ai-pr-opened` / `ai-fix-needed` Issues **in the release's
-     Milestone** (Issue #671; the release Issue itself excluded; without
-     a Milestone the repository-wide scan is unchanged), and CI green on
-     the release commit (no check runs passes
+  3. Apply the release milestone gates in claim-then-gate order. At the
+     claim layer (`_pick_from_scan`), a release is skipped while its Milestone
+     has any other open Issue (`open_issues > 1`), with
+     `release_milestone_incomplete`; it remains `ai-ready` and this is a
+     recoverable wait, never `ai-blocked`. A Milestone query that cannot be
+     evaluated fails safe with `release_milestone_check_failed`. Ordinary
+     scans skip `ai-release` Issues with `release_not_claimed`; only the
+     release fallback scan uses `allow_release=True`.
+
+     Only after that claim layer passes does the gate-layer
+     `release_waiting_deliveries` wait for same-Milestone Issues carrying
+     `ai-in-progress`, `ai-pr-opened`, or `ai-fix-needed`; a bare `ai-ready`
+     Issue does not hold the release. The bounded wait uses
+     `RELEASE_DELIVERIES_WAIT_SECONDS`; exceeding it produces a delivery wait
+     timeout and moves the release to `ai-blocked`. Thus a release queued
+     behind open tickets is not accumulating this timeout: it was not claimed.
+     Then enforce the remaining pre-release gates: no leftover open
+     `ai-in-progress` / `ai-pr-opened` / `ai-fix-needed` Issues **in the
+     release's Milestone** (Issue #671; the release Issue itself excluded;
+     without a Milestone the repository-wide scan is unchanged), and CI green
+     on the release commit (no check runs passes
      with explicit evidence; a pending check is an intermediate state —
      the gate waits for the final conclusion, one `release_waiting_ci`
      journal line and one progress-comment update per poll, up to
@@ -493,8 +509,11 @@ DAG, no priority numbers, no separate queues:
      `COMPLETED` — a `NOT_PLANNED` closure (duplicate / won't fix) is
      annotated in the Scope evidence as excluded and never enters the
      Changelog, and a Changelog PR link is written only when its PR is
-     merged (Issue #707). Checkbox parsing
-     is forbidden — every scope item is checked against the live API.
+     merged (Issue #707). For milestone-derived scope,
+     `open_milestone_evidence` does not wait: still-open milestone Issues are
+     excluded and recorded as `NOT released (still open in milestone <name>):
+     <item>`. Checkbox parsing is forbidden — every scope item is checked
+     against the live API.
   5. Test acceptance is the CI-wait gate on the release commit: after
      the version bump the gates re-run against that exact commit
      (step 3's `release_ci_wait_seconds` wait), and a red or timed-out

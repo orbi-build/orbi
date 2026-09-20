@@ -380,11 +380,25 @@ PR 验收时校验该关键词，缺失即 fail fast。
      不匹配在认领瞬间 fail fast，错误信息列出根目录实际存在的受支持
      文件和 `none` 选项，不会在烧完门禁和范围核验后才以
      FileNotFoundError 失败。
-  3. 执行发布前门禁：**release 所属 Milestone 内**无遗留 open 的
-     `ai-in-progress` / `ai-pr-opened` / `ai-fix-needed` Issue
-     （Issue #671；release Issue 本身除外；无 Milestone 时仍按全仓
-     扫描）、
-     release commit 的 CI 全绿（no check runs passes 带明确证据；
+  3. 按领取层、门禁层、范围层执行 Milestone 规则。在领取层
+     （`_pick_from_scan`），只要 Milestone 还有其他 open Issue
+     （`open_issues > 1`），release 就完全不领取，跳过并记录
+     `release_milestone_incomplete`；它保持 `ai-ready`，这是可恢复的等待，
+     永远不会变成 `ai-blocked`。Milestone 查询无法评估时安全失败，跳过并记录
+     `release_milestone_check_failed`。三个普通扫描用
+     `release_not_claimed` 跳过 `ai-release` Issue；只有 release fallback
+     扫描使用 `allow_release=True`。
+
+     只有领取层通过后，门禁层的 `release_waiting_deliveries` 才会等待同一
+     Milestone 中带有 `ai-in-progress`、`ai-pr-opened` 或 `ai-fix-needed`
+     的 Issue；只有 `ai-ready` 的 Issue 不会阻塞 release。这个有界等待使用
+     `RELEASE_DELIVERIES_WAIT_SECONDS`；超时就是 delivery wait timeout，
+     release 进入 `ai-blocked`。因此排在其他 open ticket 后面的 release
+     尚未被领取，不会累积这个超时。随后才执行其他发布前门禁：**release
+     所属 Milestone 内**无遗留 open 的 `ai-in-progress` /
+     `ai-pr-opened` / `ai-fix-needed` Issue（Issue #671；release Issue
+     本身除外；无 Milestone 时仍按全仓扫描）、release commit 的 CI 全绿
+     （no check runs passes 带明确证据；
      pending check 是中间态——门禁等待最终结论，每次轮询一条
      `release_waiting_ci` journal 行和一次进度评论更新，上限
      `release_ci_wait_seconds`（默认 1800 秒）；等待超时以独立原因
@@ -396,8 +410,10 @@ PR 验收时校验该关键词，缺失即 fail fast。
      `gh issue view` 必须报告 `CLOSED` 且 `stateReason` 为
      `COMPLETED`——`NOT_PLANNED` 关闭（重复/不做）的票在 Scope 证据里
      标注为排除、绝不进入 Changelog，Changelog 的 PR 链接只在 PR 已
-     合并时才写入（Issue #707）。禁止解析复选框——每个 scope
-     项都对照 live API 检查。
+     合并时才写入（Issue #707）。对于 Milestone-derived scope，
+     `open_milestone_evidence` 不等待：仍 open 的 Milestone Issue 会被
+     排除，并记录为 `NOT released (still open in milestone <name>): <item>`。
+     禁止解析复选框——每个 scope 项都对照 live API 检查。
   5. 测试验收就是 release commit 的 CI-wait 门：版本 bump 之后，门禁会对
      该 commit 重跑（步骤 3 的 `release_ci_wait_seconds` 等待），CI 红或
      等待超时走既有可恢复失败路径（`ai-blocked`）。没有本地测试执行
