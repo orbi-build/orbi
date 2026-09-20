@@ -123,9 +123,8 @@ def classify(
        or HUMAN_REVIEW_WAIT
        while the gate holds; without a scene comment, a marker with an
        open external PR is the #726 takeover route, a queue-label
-       ticket with an open PR is the internal takeover race (a fresh
-       claim — the handler reviews the PR), anything else is
-       NOT_CLAIMABLE;
+       ticket or `ai-fix-needed` ticket with an open PR is a fresh claim
+       (the handler reviews the PR), anything else is NOT_CLAIMABLE;
     5. marker + open external PR → EXTERNAL_TAKEOVER; a
        PR that is no longer open is not a takeover — the claim falls
        through to a fresh internal delivery;
@@ -158,6 +157,12 @@ def classify(
         # takeover routes survive it (both layers' #726/#608 handles).
         if EXTERNAL_PR_MARKER in markers and pr_state == "OPEN":
             return DeliveryScene.EXTERNAL_TAKEOVER
+        # Issue #1216: `awaiting_merge` deliberately removes the queue
+        # label. If the delivery then needs a fix and its PR is still open,
+        # the PR is the surviving continuation route even when the trusted
+        # scene comment was lost.
+        if FIX_NEEDED_LABEL in current and pr_state == "OPEN":
+            return DeliveryScene.FRESH_CLAIM
         if ready_label in current and pr_state == "OPEN":
             return DeliveryScene.FRESH_CLAIM
         return DeliveryScene.NOT_CLAIMABLE

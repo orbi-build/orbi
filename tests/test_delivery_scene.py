@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from orbi import delivery_scene
+from orbi import delivery_labels, delivery_scene
 from orbi import runner, scene
 from orbi.delivery_scene import (
     EXTERNAL_PR_MARKER,
@@ -119,8 +119,16 @@ TRUSTED_SCENE_RECORD = Scene(
         # Without the trusted scene the review cannot be resumed.
         ({PR_OPENED_LABEL}, None, None, frozenset(),
          DeliveryScene.NOT_CLAIMABLE),
+        # Issue #1216: an open PR is enough to recover a fix round when
+        # the trusted scene comment was lost.
         ({FIX_NEEDED_LABEL}, None, "OPEN", frozenset(),
+         DeliveryScene.FRESH_CLAIM),
+        ({FIX_NEEDED_LABEL}, None, "CLOSED", frozenset(),
          DeliveryScene.NOT_CLAIMABLE),
+        (
+            {FIX_NEEDED_LABEL, BLOCKED_LABEL}, None, "OPEN", frozenset(),
+            DeliveryScene.BLOCKED,
+        ),
         # Issue #726: a marker ticket with an open external PR routes to
         # the takeover even without a scene comment.
         (
@@ -181,6 +189,24 @@ def test_classify_decision_table(labels, scene, pr_state, markers, expected):
         labels, scene, pr_state,
         body_markers=frozenset(markers),
     ) is expected
+
+
+def test_awaiting_merge_then_fix_needed_remains_claimable_with_open_pr():
+    """Issue #1216: losing the queue label while awaiting a merge must
+    not strand the subsequent fix-needed delivery when its PR is open."""
+    labels = {READY_LABEL}
+    for event in (
+        delivery_labels.EVENT_AWAITING_MERGE,
+        delivery_labels.EVENT_FIX_NEEDED,
+    ):
+        to_add, to_remove = delivery_labels.label_patch(event, labels)
+        labels.update(to_add)
+        labels.difference_update(to_remove)
+
+    assert labels == {FIX_NEEDED_LABEL}
+    assert classify(
+        labels, None, "OPEN", body_markers=frozenset(),
+    ) is DeliveryScene.FRESH_CLAIM
 
 
 def test_classify_custom_dispatch_label():
