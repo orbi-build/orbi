@@ -60,6 +60,10 @@ def make_pr(head_oid: str, *, mergeable="MERGEABLE", state="OPEN",
     return json.dumps({
         "number": 4, "url": "https://github.com/owner/repo/pull/4",
         "state": state, "mergeable": mergeable, "headRefOid": head_oid,
+        "statusCheckRollup": [{
+            "name": "tests", "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+        }],
         "mergedAt": merged_at,
         "mergeCommit": ({"oid": merge_commit} if merge_commit else None),
     })

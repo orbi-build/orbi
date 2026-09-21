@@ -296,6 +296,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "review": "an independent review session finished (verdict)",
     "review_verdict_head_unknown": "the review verdict names an unknown Git object",
     "delivery_ci_pending": "the PR head's CI is still pending; the delivery defers to the next tick",
+    "delivery_ci_absent": "the PR head has no CI checks; the delivery defers to the next tick",
     "review_head_advanced": "the review session pushed a fixed head",
     "pushed_head_recorded": "a round-start head adoption recorded an engine-pushed head (Issue #833)",
     "pushed_head_unrecorded": "the engine push history could not be recorded; the merge record degrades to unknown (Issue #833)",
@@ -311,6 +312,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "review_recovery_ci_status_failed": "the CI status read for review recovery failed",
     # Merge gate.
     "merge_gate_ci_pending": "the merge gate found pending CI; the merge defers to the next tick",
+    "merge_gate_ci_absent": "the merge gate found no CI checks; the merge defers to the next tick",
     "merge_gate_mergeable_unknown": "GitHub mergeability is still UNKNOWN; the merge defers to the next tick",
     "merge_gate_behind_base": "the merge gate found the PR behind the base",
     "merge_gate_head_moved": "the PR head moved since the review",
