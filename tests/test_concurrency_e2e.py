@@ -220,10 +220,6 @@ elif args[:2] == ["pr", "view"]:
     print(json.dumps({
         "state": pr_state,
         "mergeable": "MERGEABLE",
-        "statusCheckRollup": [{
-            "name": "tests", "status": "COMPLETED",
-            "conclusion": "SUCCESS",
-        }],
         "headRefOid": git("rev-parse", "HEAD"),
         "mergedAt": "2026-08-25T00:00:00Z"
         if pr_state == "MERGED" else None,

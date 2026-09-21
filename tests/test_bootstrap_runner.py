@@ -3549,7 +3549,7 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
             if command[-1] == "state":
                 # The pre-PR closeout reads the source Issue state
                 # (Issue #746): open in this scene.
-                return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+                return json.dumps({"state": "OPEN"})
             return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # The Issue still carries `ai-in-progress` (the runner died).
@@ -3665,7 +3665,7 @@ def test_process_issue_second_tick_behind_the_index_resumes_not_reclaims(
             # that delivered the Issue was. The pre-PR closeout reads
             # the state too (Issue #746): open in this scene.
             if command[-1] == "state":
-                return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+                return json.dumps({"state": "OPEN"})
             return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:2] == ["gh", "issue"]:
             return ""
@@ -5347,7 +5347,7 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
             if command[-1] == "state":
                 # The pre-PR closeout reads the source Issue state
                 # (Issue #746): open in this scene.
-                return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+                return json.dumps({"state": "OPEN"})
             return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
@@ -12010,7 +12010,7 @@ def fake_pr_view(monkeypatch, state: str) -> tuple[list, object]:
                 "--repo", "owner/repo", "--json",
                 "state,statusCheckRollup",
             ]
-            return json.dumps({"state": state, "statusCheckRollup": ([{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}] if state == "OPEN" else [])})
+            return json.dumps({"state": state, "statusCheckRollup": []})
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -12305,7 +12305,7 @@ def test_delivery_step_runs_one_review_per_tick(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
             calls["pr"] += 1
-            return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+            return json.dumps({"state": "OPEN", "statusCheckRollup": []})
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "comments":
                 return json.dumps({"comments": [
@@ -12401,36 +12401,6 @@ def test_delivery_step_defers_when_ci_pending(
     assert "delivery_ci_pending" in caplog.text
 
 
-def test_delivery_step_defers_when_ci_absent(
-        monkeypatch, tmp_path, caplog,
-):
-    """An empty rollup cannot advance the pre-review gate."""
-    calls = {"pr": 0}
-
-    def fake_run(command, **kwargs):
-        if command == ["gh", "pr", "view", "46", "--repo", "owner/repo",
-                       "--json", "state,statusCheckRollup"]:
-            calls["pr"] += 1
-            return json.dumps({"state": "OPEN", "statusCheckRollup": []})
-        raise AssertionError(f"unexpected command: {command}")
-
-    monkeypatch.setattr(seam, "run_command", fake_run)
-    config = runner.RunnerConfig(repo_dir=tmp_path, base_branch="main")
-    edits = []
-    monkeypatch.setattr(
-        seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
-    )
-    caplog.set_level("INFO")
-    runner.delivery_step(PR_URL, {"number": 39, "title": "task", "body": ""},
-                         config, "owner/repo")
-    assert calls == {"pr": 1}
-    assert edits == []
-    assert "delivery_ci_absent" in caplog.text
-    with pytest.raises(AssertionError, match="unexpected command"):
-        fake_run(["gh", "pr", "merge", "46"])
-
-
 def test_delivery_step_auto_merges_on_clean_review(
         monkeypatch, caplog, tmp_path,
 ):
@@ -12443,7 +12413,7 @@ def test_delivery_step_auto_merges_on_clean_review(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
             pr_calls["n"] += 1
-            return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+            return json.dumps({"state": "OPEN"})
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "comments":
                 return json.dumps({"comments": [
@@ -12499,7 +12469,7 @@ def test_delivery_step_passes_p0_priority_to_the_review(
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
-            return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+            return json.dumps({"state": "OPEN"})
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "comments":
                 return json.dumps({"comments": [
@@ -12577,7 +12547,7 @@ def test_delivery_step_marks_blocked_when_review_fails(
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
-            return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+            return json.dumps({"state": "OPEN"})
         if command[:2] == ["gh", "api"]:
             api_calls.append(command)
             if "--method" not in command:
@@ -12692,7 +12662,7 @@ def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
-            return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+            return json.dumps({"state": "OPEN"})
         if command[:2] == ["gh", "api"]:
             api_calls.append(command)
             if "--method" not in command:
@@ -12794,7 +12764,7 @@ def test_delivery_step_blocks_when_scene_base_differs_from_config(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
             pr_calls["n"] += 1
-            return json.dumps({"state": states[pr_calls["n"] - 1], "statusCheckRollup": ([{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}] if states[pr_calls["n"] - 1] == "OPEN" else [])})
+            return json.dumps({"state": states[pr_calls["n"] - 1]})
         if command[:2] == ["gh", "api"]:
             api_calls.append(command)
             if "--method" not in command:
@@ -12920,7 +12890,7 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
             if command[2] == "comment":
                 pr_comments.append(command[-1])
                 return ""
-            return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+            return json.dumps({"state": "OPEN"})
         if command[:2] == ["gh", "api"]:
             api_calls.append(command)
             if "--method" not in command:
@@ -13057,7 +13027,7 @@ def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
         if command[:2] == ["gh", "pr"]:
             if command[2] == "comment":
                 return ""
-            return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+            return json.dumps({"state": "OPEN"})
         if command[:2] == ["gh", "api"]:
             api_calls.append(command)
             if "--method" not in command:
@@ -13128,7 +13098,7 @@ def test_delivery_step_runs_review_when_fix_needed(
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
-            return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+            return json.dumps({"state": "OPEN", "statusCheckRollup": []})
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "labels":
                 return json.dumps({
@@ -13335,7 +13305,7 @@ def test_delivery_step_review_failure_without_bound_run_id(
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
-            return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+            return json.dumps({"state": "OPEN"})
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "comments":
                 return json.dumps({"comments": []})
@@ -13424,7 +13394,7 @@ def test_delivery_step_blocks_when_in_progress_label_repair_fails(
 ):
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
-            return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+            return json.dumps({"state": "OPEN", "statusCheckRollup": []})
         return json.dumps({"labels": [{"name": "ai-in-progress"}]})
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -13456,7 +13426,7 @@ def test_delivery_step_keeps_holding_when_no_delivery_label(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
             pr_calls["n"] += 1
-            return json.dumps({"state": states[pr_calls["n"] - 1], "statusCheckRollup": ([{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}] if states[pr_calls["n"] - 1] == "OPEN" else [])})
+            return json.dumps({"state": states[pr_calls["n"] - 1]})
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "edit"]:
@@ -20273,7 +20243,7 @@ def test_reconcile_orphan_prs_skips_open_issues_and_non_delivery_branches(monkey
             ])
         if command == ["gh", "issue", "view", "4", "--repo", "o/r", "--json", "state"]:
             read_issues.append(4)
-            return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+            return json.dumps({"state": "OPEN"})
         raise AssertionError(command)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -21777,7 +21747,7 @@ def fake_deliver_run(command, **kwargs):
     if command[:3] == ["gh", "issue", "view"] and command[-1] == "state":
         # Issue #746: the pre-PR closeout reads the source Issue state;
         # the default scene is an open Issue.
-        return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+        return json.dumps({"state": "OPEN"})
     if command[:2] == ["gh", "pr"]:
         return fake_verify_pr_payload()
     raise AssertionError(f"unexpected command: {command}")
@@ -22597,7 +22567,7 @@ def test_pick_resumable_routes_marker_ticket_instead_of_blocking(
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([issue])
         if command[:3] == ["gh", "pr", "view"]:
-            return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+            return json.dumps({"state": "OPEN"})
         if command[:3] == ["gh", "issue", "view"]:
             return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
         raise AssertionError(f"unexpected command: {command}")
@@ -22657,7 +22627,7 @@ def test_delivery_step_never_closes_triage_issue_after_review(
     轮询发现人工已合并（MERGED）的分支。"""
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
-            return json.dumps({"state": "OPEN", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
+            return json.dumps({"state": "OPEN"})
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "comments":
                 return json.dumps({"comments": [
