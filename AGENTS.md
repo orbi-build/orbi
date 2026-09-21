@@ -142,6 +142,41 @@ file, the Issue templates, and the Runner's own output—not a CI gate.
 - When two designs both satisfy the requirements, choose the simpler one: fewer concepts, fewer files.
 - The MVP scope stays unchanged: no database, queue, DAG, daemon, risk engine or fallback.
 
+## No Issue in hand? File one — do not edit
+
+**This repository is delivered by Orbi.** Changes come from a ticket that a
+delivery agent executes. They do not come from whoever happens to walk in.
+
+Check this before you touch anything:
+
+| What you have | What to do |
+|---|---|
+| An Issue assigned to you | Deliver it; carry on to `Read first` |
+| "X looks bad" / "X is broken" / "change X" from a person | **File an Issue, then stop** |
+| A problem you spotted yourself | **File an Issue, then stop** |
+
+The test is **whether this repo is on Orbi**, not how small the change is or
+whether you know how to make it. Being able to make it is not a reason to.
+
+**"It's only a doc" is the hole to close.** What you may edit directly is plain
+prose only: `.md` files under `docs/`, the README, this file, ticket bodies and
+comments. **Everything else is a ticket**, including:
+
+- Source under `src/`, prompts under `prompts/` — that is code
+- Build scripts, CI config, tests — that is code
+- "It's one line", "just a rename", "while I'm here" — still code
+
+**What the person filing should bring**: evidence. The command and its real
+output, the root cause down to a file and line, a reproduction someone else can
+run. That saves the delivery agent from establishing it again and gives the
+acceptance criteria something to check against.
+
+**Once it is filed, stop.** After `ai-ready` goes on, that ticket belongs to the
+delivery agent. Pushing your own fix leaves it with a base that has nothing left
+to change, and the delivery ends with
+`the agent delivered no commit on the task branch` — the ticket reads as failed
+when the work was simply done by the wrong party.
+
 ## Read first
 
 - Read the GitHub Issue (body and comments) first. Then, in priority order: the repository `AGENTS.md`, the files you will change plus their callers, and the related tests.
