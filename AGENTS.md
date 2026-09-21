@@ -60,6 +60,21 @@ contradiction in place for the next delivery to rediscover.
   produced a plan and no commit, and the ticket body was never corrected
   between the two runs.
 
+## The release ticket waits for its milestone on its own
+
+While the milestone still has any other open Issue, the release ticket is **not
+claimed at all** — the engine skips it with `release_milestone_incomplete` and
+leaves it `ai-ready`. That is a recoverable wait, not a failure.
+
+So to land a ticket in a given version, **add it to that milestone and label it
+`ai-ready`** — nothing else. Do not stop the timer, strip the release ticket's
+labels, or clear worktrees: that only creates orphaned state to clean up later.
+
+The one exception is a release that already passed its gates (the ticket shows
+`release gates passed` / `scope verified`): the scope is frozen by then, so a
+newly added ticket belongs in the next milestone.
+
+
 ## Product positioning
 
 - Orbi is a **software dark factory**: an autonomous software delivery system
