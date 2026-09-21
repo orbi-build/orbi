@@ -245,6 +245,43 @@ system merely to make an end-to-end claim.
 - Pi (the implementer) does not merge and does not push `main` or `master`, and never force-pushes any shared branch. It delivers through exactly one PR linked to the Issue; the Runner is the only merge actor.
 - The PR description must contain `Fixes #<issue-number>` (it may be on the first line), pointing at the source Issue so GitHub closes the Issue natively when the PR merges into the default branch. The keyword works in the PR body and in commit messages, but not in the PR title. The runner rejects a PR whose body is missing it.
 
+## Operating the environment (read before reaching for a tool)
+
+These are not style preferences. Each one below cost a real debugging detour,
+and the failure mode they share is that the wrong tool **does not error** — it
+returns a plausible answer about the wrong thing.
+
+- **Driving a browser: use the Chrome that is already signed in.** GitHub App
+  installation, OAuth consent and GitHub's sudo-mode prompt are human
+  authorisation steps with no API: `gh` returns 403 on `/user/installations`
+  (needs an App-authorised token) and 401 on `/repos/{o}/{r}/installation`
+  (needs the App private key, which is deliberately outside the sandbox).
+  Launching a fresh Playwright/Chromium gives a profile with no session, so it
+  lands on the sign-in wall and the task looks blocked when it is not. Drive the
+  user's existing browser instead (in Claude Code: the `claude-in-chrome`
+  tools). Playwright is still the right tool for rendering checks and
+  screenshots of pages that need no session.
+- **GitHub's sudo mode: choose "Use GitHub Mobile".** It shows two digits the
+  user taps in the app — no password, no passkey. The digits expire in about a
+  minute, so surface them immediately and only while the user is present.
+- **`repo_dir` exists at the same path on more than one machine.** The
+  delivery checkout path on the runner host is also a valid path on a
+  maintainer's workstation. Running `git worktree list` / `git branch` /
+  `git cat-file` locally then answers about the wrong checkout **and exits 0**,
+  which reads as "already cleaned up". Resolve `repo_dir` from the runner's
+  own config and run git there (over ssh if that host is remote) before
+  concluding anything about branches, worktrees or objects.
+- **Never extend a short SHA into a full one.** A 40-char SHA reconstructed
+  from a 7- or 8-char prefix is a fabricated value that looks legitimate.
+  `gh pr merge --match-head-commit` refuses it, and that refusal is the tool
+  being right. Re-read the full value
+  (`gh pr view N --json headRefOid --jq .headRefOid`) instead of padding.
+- **A gate that only asks "did anything fail?" passes on an empty set.**
+  When reviewing or writing an admission check, test the empty input
+  explicitly: "nothing reported a failure" and "nothing has run yet" must not
+  take the same branch. Issue #1243 is the worked example — an empty
+  `statusCheckRollup` satisfied every merge precondition.
+
 ## Scope
 
 - No database, queue, daemon loop, risk engine, or fallback. GitHub Issues and labels are the only state store.
