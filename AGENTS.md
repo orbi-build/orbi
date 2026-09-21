@@ -146,6 +146,24 @@ regression tests. Both success and failure paths need
 observable acceptance evidence. Do not add a database, queue, daemon, or state
 system merely to make an end-to-end claim.
 
+### Deployment and install deliveries: four checks, none optional
+
+Set by the maintainer on 2026-09-17 after the Docker release broke three times in
+one day — each break was "verified something other than what shipped", while the
+docs still described a hand-edited provider file.
+
+1. **The implementation runs.** A clean environment reaches the target outcome
+   (for Docker: fresh volumes + the published image + Issue through merge).
+2. **The docs are correct.** Every variable name, volume name and command matches
+   the code, with a test that pins the two sets together.
+3. **The docs are executable.** Commands copied from the docs run as written,
+   placeholders aside — no undocumented manual step.
+4. **The docs are complete.** Injected variables (token, model key, provider),
+   volumes (named volumes, bind-mount uid rules), repository mapping, and an Orbi
+   quick guide (how to write an Issue, the `ai-ready` label, where to read logs,
+   expect a PR within two ticks, the release ticket). The target reader knows
+   Docker and nothing about Orbi.
+
 ## TDD and coverage
 
 - TDD: write a failing test first, then the smallest implementation, then refactor.
