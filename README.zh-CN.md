@@ -10,19 +10,6 @@ Orbi 从 GitHub Issue 领取任务，在隔离 worktree 中开发，运行独立
 
 **查看一条完整链路：** [Issue #1018](https://github.com/orbi-build/orbi/issues/1018) → [PR #1023](https://github.com/orbi-build/orbi/pull/1023) → [Release v0.5.17](https://github.com/orbi-build/orbi/releases/tag/v0.5.17)
 
-## 35 秒看完一条链路
-
-就是上面那条链路，从线上 GitHub 页面录制——包含审查否决第一次提交的那一轮：
-
-<video src="https://github.com/user-attachments/assets/1f0d3a62-5fc9-44ae-bf68-b312a6a55f85" controls muted></video>
-
-1. **一个 Issue** —— 一个 bug，打上 `ai-ready`
-2. **它写代码** —— PR #1023，基于记录下来的 base SHA
-3. **审查说不行** —— 一条 Major，点名 `src/orbi/release.py:2377` 和修法
-4. **它自己修** —— 继续提交，直到 checks 转绿
-5. **合并** —— 9 个 commit，+427/−43，审查通过之后才合
-6. **发布 tag** —— v0.5.17，release notes 里带着 Issue 和 PR
-
 官网 <https://orbi.build> ｜ [Orbi Managed Cloud](https://orbi.build/cloud/?ref=gh-readme) ｜ 文档 <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions)
 
 ## 快速开始
@@ -60,6 +47,19 @@ orbi setup --config orbi.toml  # 4. 一次性 setup（检查既有 gh auth、lab
 PYTHONPATH=src python3 -m orbi.runner --config orbi.toml  # 5. 手动跑一个 tick（首次验证；日常由 timer 调度）
 orbi doctor --config orbi.toml  # 6. 验证部署健康
 ```
+
+## 35 秒看完一条链路
+
+就是上面那条链路，从线上 GitHub 页面录制——包含审查否决第一次提交的那一轮：
+
+<video src="https://github.com/user-attachments/assets/1f0d3a62-5fc9-44ae-bf68-b312a6a55f85" controls muted></video>
+
+1. **一个 Issue** —— 一个 bug，打上 `ai-ready`
+2. **它写代码** —— PR #1023，基于记录下来的 base SHA
+3. **审查说不行** —— 一条 Major，点名 `src/orbi/release.py:2377` 和修法
+4. **它自己修** —— 继续提交，直到 checks 转绿
+5. **合并** —— 9 个 commit，+427/−43，审查通过之后才合
+6. **发布 tag** —— v0.5.17，release notes 里带着 Issue 和 PR
 
 ## 为什么用 Orbi
 
