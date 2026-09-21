@@ -142,6 +142,14 @@ file, the Issue templates, and the Runner's own output—not a CI gate.
 - When two designs both satisfy the requirements, choose the simpler one: fewer concepts, fewer files.
 - The MVP scope stays unchanged: no database, queue, DAG, daemon, risk engine or fallback.
 
+## Before filing: could this be deliberate?
+
+When something looks wrong, first check whether it is a product decision, a
+third party's documented behavior, or a limitation of the tool you are using.
+**If you cannot establish which, ask a human — do not file it as a bug.**
+A ticket filed on a false premise makes the delivery agent change what should
+not change, and burns review rounds.
+
 ## No Issue in hand? File one — do not edit
 
 **This repository is delivered by Orbi.** Changes come from a ticket that a
