@@ -4807,7 +4807,6 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
         "HEAD_SHA": pr["head_oid"],
         "HEAD_REF": pr["head_ref"],
         "ROUND": str(round),
-        "ISSUE_BODY": issue_body,
         # The SAME shared base-sync lock as the
         # implementer — the review session's base-absorb fetch must
         # run under it (flock <lock> git fetch origin <base>).
@@ -4832,6 +4831,9 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
         review_values["ISSUE_COMMENTS"] = trusted_issue_comments_block(
             comments, config.issue_comments_limit,
         )
+    # Substitute the body last so placeholder-shaped text in the body remains
+    # verbatim instead of being recursively interpreted as a prompt variable.
+    review_values["ISSUE_BODY"] = issue_body
     system_prompt = render_prompt(review_template, review_values)
     context = (
         f"Independently review PR #{pr['number']} ({pr['url']}) of "

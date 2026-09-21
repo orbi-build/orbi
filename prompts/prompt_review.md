@@ -55,8 +55,9 @@ merge-conflict scene, or the `Findings:` payload.
 Compare the failure reason of consecutive rounds against the current Issue
 body above. The current body is authoritative: first revalidate that each
 finding's cited acceptance criterion still exists in it. A prior finding whose
-criterion was deleted or changed is not the same failure and must not be
-re-raised; continue the review against the current body. Only when the same
+criterion was deleted, or changed so the finding no longer applies, is not the
+same failure and must not be re-raised; continue the review against the current
+body. Only when the same
 failure reason (the same wall — the same error, the same finding — not
 necessarily byte-identical text) still applies to the current body and appears
 in two or more consecutive rounds at the end of this run's history, do not
@@ -78,9 +79,9 @@ You create and close nothing.
 Review the exact diff from base `{{BASE_SHA}}` to head `{{HEAD_SHA}}` (run
 `git diff {{BASE_SHA}}...{{HEAD_SHA}}` in the worktree; do not review a moving
 `HEAD`). Read only what the review needs, in this priority order (Issue
-#180): the linked GitHub Issue (body and comments), the repository
-`AGENTS.md`, the PR diff, the changed files plus their callers, and the
-related tests. `README.md`, build files and history are read only when the
+#180): the current GitHub Issue body and trusted comments supplied above, the
+repository `AGENTS.md`, the PR diff, the changed files plus their callers,
+and the related tests. `README.md`, build files and history are read only when the
 task is actually about them — a normal Issue never requires a full
 repository scan, and re-reading the same large files is what triggers the
 pointless compactions of long sessions.

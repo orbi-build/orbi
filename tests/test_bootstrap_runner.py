@@ -4469,7 +4469,7 @@ def test_run_review_refreshes_issue_body_each_round(monkeypatch, tmp_path):
     now, so deleting an acceptance criterion takes effect on the next round."""
     prompt_path = tmp_path / "prompt_review.md"
     prompt_path.write_text("BODY={{ISSUE_BODY}}", encoding="utf-8")
-    bodies = iter(["old criterion", "new criterion"])
+    bodies = iter(["old criterion", "new criterion {{BASE_SYNC_LOCK}}"])
     issue_reads = []
     monkeypatch.setitem(
         runner.__dict__, "issue_view",
@@ -4494,8 +4494,31 @@ def test_run_review_refreshes_issue_body_each_round(monkeypatch, tmp_path):
     runner.run_review(ctx, pr, config, 2)
     assert issue_reads == [(4, "body", "owner/repo"), (4, "body", "owner/repo")]
     prompts = [call[call.index("--system-prompt") + 1] for call in calls]
-    assert prompts == ["BODY=old criterion", "BODY=new criterion"]
+    assert prompts == [
+        "BODY=old criterion",
+        "BODY=new criterion {{BASE_SYNC_LOCK}}",
+    ]
     assert "old criterion" not in prompts[1]
+
+
+def test_run_review_rejects_a_non_string_issue_body(monkeypatch, tmp_path):
+    prompt_path = tmp_path / "prompt_review.md"
+    prompt_path.write_text("BODY={{ISSUE_BODY}}", encoding="utf-8")
+    monkeypatch.setitem(
+        runner.__dict__, "issue_view",
+        lambda number, fields, *, repo: {"body": 42},
+    )
+    config = config_domain.RunnerConfig(
+        prompt_review=prompt_path, repo_dir=tmp_path / "checkout",
+        source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4",
+        skills=(),
+    )
+    ctx = RunContext(run_id=config.run_id, issue=4, branch="branch",
+                     worktree=tmp_path, source_repo="owner/repo")
+    pr = {"number": 9, "url": "https://x/pull/9", "base_oid": "b1",
+          "head_oid": "h1", "head_ref": "h"}
+    with pytest.raises(ValueError, match="issue body must be a string"):
+        runner.run_review(ctx, pr, config, 1)
 
 
 def test_run_review_combines_current_pr_feedback_with_issue_comments(

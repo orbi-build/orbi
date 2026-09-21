@@ -547,7 +547,8 @@ REPEAT_FAILURE_GUARD_ITEMS = (
     # reason (the same wall — semantic recurrence, not byte-identical text).
     ("guard-current-body", "current Issue body"),
     ("guard-criterion-revalidation", "cited acceptance criterion still exists"),
-    ("guard-deleted-criterion", "criterion was deleted or changed"),
+    ("guard-deleted-criterion", "criterion was deleted"),
+    ("guard-changed-no-longer-applies", "finding no longer applies"),
     ("guard-same-reason", "same failure reason"),
     ("guard-two-consecutive", "two or more consecutive rounds"),
     ("guard-not-byte-identical", "not necessarily byte-identical text"),
@@ -567,10 +568,15 @@ REPEAT_FAILURE_GUARD_ITEMS = (
 
 
 def test_prompt_review_md_keeps_the_repeated_failure_guard():
-    missing = _missing(_text(PROMPT_REVIEW), REPEAT_FAILURE_GUARD_ITEMS)
+    prompt = _text(PROMPT_REVIEW)
+    missing = _missing(prompt, REPEAT_FAILURE_GUARD_ITEMS)
     assert not missing, (
         f"prompt_review.md is missing the repeated-failure guard "
         f"(Issue #878): {missing}"
+    )
+    assert "the linked github issue (body and comments)" not in prompt, (
+        "the reviewer must use the fresh injected Issue body rather than "
+        "performing a second, nondeterministic body fetch"
     )
 
 
