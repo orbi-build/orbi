@@ -11,8 +11,6 @@ label lifecycle, claim scans) lives in the docs site (`docs/`,
 for when you need the full picture.
 Architectural invariants and the public surface live in [CONSTITUTION.md](CONSTITUTION.md); when this file and the constitution disagree, the constitution wins.
 
-`CLAUDE.md` is a symlink to this file; the two are always identical.
-
 **Documentation is not the source of truth — and neither is the code.** This file,
 `docs/`, the README and every comment describe what the code is meant to do; the
 code describes only what it currently does, which may itself be the bug. Treating
