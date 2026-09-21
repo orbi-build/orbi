@@ -540,12 +540,9 @@ REPEAT_FAILURE_GUARD_ITEMS = (
     ("guard-round-prefix", "orbi review round"),
     ("guard-run-marker", "<!-- orbi:run=<run_id> -->"),
     ("guard-run-id-grouping", "group the round comments by their"),
-    # The PR-side read is the real gh contract (the same command shape AND
-    # the same 30 s bound the runner's own pr_comments in src/orbi/github.py
-    # runs — Issue #95: a network wait is wrapped in timeout).
-    ("guard-pr-read",
-     "timeout 30 gh pr view {{pr_number}} --repo {{source_repo}} "
-     "--json comments"),
+    # PR conversation, formal reviews, and inline comments are supplied by
+    # the runner in the bounded PR feedback context; the prompt does not
+    # assemble a second GitHub command.
     # The decision rule: >= 2 consecutive rounds with the same failure
     # reason (the same wall — semantic recurrence, not byte-identical text).
     ("guard-same-reason", "same failure reason"),
@@ -575,9 +572,8 @@ def test_prompt_review_md_keeps_the_repeated_failure_guard():
 
 
 def test_prompt_review_md_keeps_the_variable_set_unchanged():
-    # Issue #878 acceptance: the criteria comes from the GitHub comments
-    # themselves — the guard adds NO new runner-side prompt variable, so
-    # the template's placeholder set stays exactly the pre-#878 ten.
+    # PR feedback reuses the existing bounded trusted-comment placeholder;
+    # no parallel prompt channel or renderer is introduced.
     # The scan matches EVERY {{...}} token, not only uppercase names:
     # render_prompt substitutes the exact uppercase keys alone, so a
     # lowercase drift ({{head_sha}}) would ship as literal prompt text.

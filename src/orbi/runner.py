@@ -205,6 +205,9 @@ from orbi.github import (
     parse_issue_list,
     parse_paginated_issue_array,
     pr_comments,
+    pr_reviews,
+    pr_review_comments,
+    normalize_pr_feedback,
     pr_delivery_status,
     pr_delivery_rollup,
     _check_summaries,
@@ -285,7 +288,15 @@ ROLE_TICKET = "ticket"
 # context; the NEWEST are kept (the latest decision lives there) and a
 # dropped-older-comments count is stated inside the injected block —
 # the truncation is never silent.
-ISSUE_COMMENTS_LIMIT = 20
+#
+# The cap exists to bound the prompt, not to curate it: dropping a
+# decision the maintainer wrote is the expensive failure, a longer
+# prompt is the cheap one. Measured on this repo, the busiest Issues
+# reach 18 comments — the old default of 20 truncated them at the
+# margin, and the review path now shares this one bound between the
+# Issue timeline and the delivery PR's trusted feedback, so the
+# combined stream passes 20 routinely.
+ISSUE_COMMENTS_LIMIT = 200
 
 # Task-worktree reclamation: the tick-start pass removes at
 # most this many worktrees per tick (oldest-closed first), so a large
@@ -1294,7 +1305,7 @@ def _issue_comments_limit(data: dict) -> int:
     """Load and validate the optional `issue_comments_limit` (Issue
     #745).
 
-    Omitted -> `ISSUE_COMMENTS_LIMIT` (default 20). Present -> must be
+    Omitted -> `ISSUE_COMMENTS_LIMIT` (default 200). Present -> must be
     a positive integer; booleans, fractional and non-numeric values
     fail fast at config load with the field name and the concrete
     reason.
@@ -5699,13 +5710,24 @@ def run_review(ctx: RunContext, pr: dict, config: RunnerConfig, round: int,
         # run under it (flock <lock> git fetch origin <base>).
         "BASE_SYNC_LOCK": str(base_sync_lock_path(config.repo_dir)),
     }
-    # The review path sees the Issue's decision evolution
-    # too — same trusted timeline, same placeholder gate (a template
-    # without it keeps the exact pre-#745 behavior).
+    # The review path sees one bounded trusted timeline. PR feedback is input
+    # only: delivery state remains on the Issue and the current PR is the sole
+    # PR source selected by this call.
     if "{{ISSUE_COMMENTS}}" in review_template:
+        comments = issue_comments(issue, repo=source_repo)
+        try:
+            feedback = pr_comments(pr["number"], repo=source_repo)
+            feedback += pr_reviews(pr["number"], repo=source_repo)
+            feedback += pr_review_comments(pr["number"], repo=source_repo)
+            comments += normalize_pr_feedback(feedback)
+            comments.sort(key=lambda item: str(item.get("createdAt") or ""))
+        except Exception:
+            LOGGER.exception(
+                "pr_review_feedback_read_failed repo=%s pr=%s",
+                source_repo, pr["number"],
+            )
         review_values["ISSUE_COMMENTS"] = trusted_issue_comments_block(
-            issue_comments(issue, repo=source_repo),
-            config.issue_comments_limit,
+            comments, config.issue_comments_limit,
         )
     system_prompt = render_prompt(review_template, review_values)
     context = (

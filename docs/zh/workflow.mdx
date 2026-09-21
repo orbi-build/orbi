@@ -63,9 +63,14 @@ ai-ready                任务被派发（orbi add，或人工加标签）
                         Pi 运行时长——审查精确的 base/head SHA，并在
                         会话内修复 findings（代码、完整测试、分层
                         覆盖率门禁（Issue #234）、只 push task
-                        branch），然后输出 REVIEW_VERDICT（其 prompt
-                        同样携带关联 Issue 的受信任评论时间线——决策
-                        演变历史，Issue #745）
+                        branch），然后输出 REVIEW_VERDICT。其 prompt
+                        除关联 Issue 的受信任评论时间线外，还携带**当前
+                        PR** 上受信任的人类反馈：正式 review 状态以及
+                        行内评论的文件/行号锚点。交付身份自己的 review
+                        会被排除；PR 反馈只是输入，不是交付状态，也不会
+                        往 PR 写 label。合并后的 Issue/PR 时间线共用同一个
+                        issue_comments_limit 上限；读取 PR 反馈失败会记录日志
+                        并退回仅使用 Issue 评论。
   -> ai-fix-needed      会话内未能修复 finding，PR 落后最新 base / 有
                         merge conflict，或已有 run/PR 的**可恢复失败**
                         （Issue #50：Pi 执行失败、验证失败、未推送本地
@@ -110,7 +115,7 @@ ai-ready                任务被派发（orbi add，或人工加标签）
 只有受信任的仓库角色——OWNER、MAINTAINER、MEMBER 或 COLLABORATOR——的
 评论可以 steering。公开评论者的评论会按设计被忽略，因为允许任意评论者
 控制交付会暴露 prompt injection 入口。初始受信任评论时间线受
-`issue_comments_limit` 限制（默认 20 条）：更早的评论会被丢弃，注入的上下文
+`issue_comments_limit` 限制（默认 200 条）：更早的评论会被丢弃，注入的上下文
 会明确说明省略了多少条。
 
 死循环守卫与评论去重（Issue #825）：恢复接续可能绑定**新的 run id**

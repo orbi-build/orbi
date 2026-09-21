@@ -117,7 +117,7 @@ def test_load_config_returns_the_frozen_runner_config(tmp_path):
     assert config.human_review_gate is False
     assert config.attribution_footer is True
     assert config.model_wait_dead_seconds == 1800.0
-    assert config.issue_comments_limit == 20
+    assert config.issue_comments_limit == 200
     assert config.repositories == ()
     assert config.repo_context_files == ()
     assert config.run_id == ""
@@ -546,14 +546,16 @@ def test_load_config_rejects_invalid_model_wait_dead_seconds(
 
 # --- Issue #745: the trusted-comment injection cap is configurable -----------
 
-def test_load_config_defaults_issue_comments_limit_to_twenty(tmp_path):
-    """Issue #745: omitted -> 20 — the newest 20 trusted comments cover
-    the recent decision history without letting a long-discussed Issue
-    dominate the context window."""
+def test_load_config_defaults_issue_comments_limit_to_two_hundred(tmp_path):
+    """Omitted -> 200. The cap bounds the prompt, it does not curate it:
+    dropping a maintainer's decision is the expensive failure. The
+    busiest Issues in this repo reach 18 comments, and the review path
+    shares this one bound between the Issue timeline and the delivery
+    PR's trusted feedback."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
-    assert config.issue_comments_limit == 20
+    assert config.issue_comments_limit == 200
 
 
 def test_load_config_reads_explicit_issue_comments_limit(tmp_path):
