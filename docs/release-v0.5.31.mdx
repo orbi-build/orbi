@@ -1,0 +1,35 @@
+# v0.5.31 release
+
+`v0.5.31` release notes for the GitHub Release [v0.5.31](https://github.com/orbi-build/orbi/releases/tag/v0.5.31) (release task: Issue #1197).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.5.31` | annotated tag `2078ef409013a846a030021f3f024b2e31d5bacb` | commit `cfc4c73a52fca2aecc81b33db2c7c81c294c91e0` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- active_milestone pointing at a closed or missing milestone is silent: every tick logs no_ready_issue while ai-ready work waits outside it ([Issue #1185](https://github.com/orbi-build/orbi/issues/1185); [PR #1188](https://github.com/orbi-build/orbi/pull/1188))
+- A correction posted after the steering limit is silently dropped: tell the maintainer it was not read ([Issue #1187](https://github.com/orbi-build/orbi/issues/1187); [PR #1190](https://github.com/orbi-build/orbi/pull/1190))
+- Cloud tenants cannot tune steering: steering_* is host-only, and writing it in .github/orbi.toml fails the claim ([Issue #1189](https://github.com/orbi-build/orbi/issues/1189); [PR #1191](https://github.com/orbi-build/orbi/pull/1191))
+
+### Reliability and recovery
+
+- Merge blockers a maintainer can fix are reported as delivery failures ([Issue #1192](https://github.com/orbi-build/orbi/issues/1192); [PR #1193](https://github.com/orbi-build/orbi/pull/1193))
+
+### Documentation
+
+- Docs: mid-run steering is documented only as config keys, so users conclude the agent cannot be corrected while running ([Issue #1184](https://github.com/orbi-build/orbi/issues/1184); [PR #1186](https://github.com/orbi-build/orbi/pull/1186))
+
+### Bug fixes
+
+- labels.toml 的 ai-awaiting-merge 描述仍是被 #1193 推翻的旧方向 ([Issue #1195](https://github.com/orbi-build/orbi/issues/1195); [PR #1196](https://github.com/orbi-build/orbi/pull/1196))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>

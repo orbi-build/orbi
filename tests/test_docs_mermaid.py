@@ -7,7 +7,7 @@ The docs must ship two diagrams, in BOTH languages (English at the
    the systemd timer/service, the Runner, the Pi sessions, the task
    worktree, the core llama-server path and the OPTIONAL
    `local-llm-kv-cache` proxy clearly distinguished from it;
-2. the task lifecycle / state machine (workflow page): all six delivery
+2. the task lifecycle / state machine (workflow page): all seven delivery
    states plus the Epic / Release task / P0 boundary.
 
 Mintlify renders Mermaid from fenced `mermaid` code blocks (verified
@@ -20,6 +20,8 @@ type keyword).
 """
 import re
 from pathlib import Path
+
+from orbi.delivery_labels import LIFECYCLE_STATES
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
@@ -77,10 +79,7 @@ def test_state_machine_diagram_exists_in_both_languages():
         blocks = mermaid_blocks(page_text(rel))
         check_syntax(blocks, f"{rel}")
         diagram = "\n".join(blocks)
-        for state in (
-            "ai-ready", "ai-in-progress", "ai-pr-opened",
-            "ai-fix-needed", "ai-merged", "ai-blocked",
-        ):
+        for state in LIFECYCLE_STATES:
             assert state in diagram, (
                 f"{rel}: state machine diagram misses the {state} state"
             )

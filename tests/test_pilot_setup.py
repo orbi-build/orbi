@@ -11,6 +11,7 @@ optional proxy never blocks the core setup.
 """
 import json
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -236,6 +237,27 @@ def test_fake_run_factory_rejects_an_unexpected_command():
 
 
 # --- labels.toml: the single source of truth -------------------------------
+
+
+def test_awaiting_merge_label_matches_resumable_workflow_direction():
+    labels = tomllib.loads(
+        (Path(__file__).resolve().parent.parent / "labels.toml").read_text(
+            encoding="utf-8",
+        ),
+    )["label"]
+    awaiting_merge = next(
+        label for label in labels if label["name"] == "ai-awaiting-merge"
+    )
+    workflow = " ".join(
+        (Path(__file__).resolve().parent.parent / "docs" / "workflow.mdx")
+        .read_text(encoding="utf-8")
+        .split(),
+    )
+
+    assert awaiting_merge["description"] == (
+        "Reviewed PR delivered; Orbi merges once the maintainer clears the named blocker"
+    )
+    assert "comment names the maintainer action and Orbi resumes to merge" in workflow
 
 
 def test_load_label_defs_parses_all_twelve_platform_labels(tmp_path):
@@ -1057,6 +1079,33 @@ def test_check_checkout_fails_fast_on_a_git_error(tmp_path):
                 )
             ),
         )
+
+
+def test_check_checkout_wraps_a_missing_head_with_mount_guidance(tmp_path):
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+
+    def fake_run(command, **kwargs):
+        if command == ["git", "config", "remote.origin.url"]:
+            return "git@github.com:xqliu/orbi.git"
+        if command == [
+            "git", "ls-remote", "git@github.com:xqliu/orbi.git",
+        ]:
+            return "abc\\tHEAD"
+        if command == ["git", "rev-parse", "HEAD"]:
+            raise subprocess.CalledProcessError(
+                128, command, stderr="fatal: ambiguous argument 'HEAD'"
+            )
+        return ""
+
+    with pytest.raises(pilot_setup.SetupError) as error:
+        pilot_setup.check_checkout(
+            repo, "main", ["xqliu/orbi"], run_command=fake_run,
+        )
+    message = str(error.value)
+    assert "must be a git checkout" in message
+    assert "xqliu/orbi" in message
+    assert "docker run -v <path>:/work" in message
 
 
 # --- git transport in the checkout check (Issue #114) -------------------------

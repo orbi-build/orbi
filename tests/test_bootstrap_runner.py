@@ -5451,7 +5451,7 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     ][0]
     assert "git failed" in blocked
     assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
-    assert "Orbi failed: git failed" in failure_body
+    assert "git failed" in failure_body
     assert "- base_branch: main" in failure_body
     assert "- base_sha: abc123def456" in failure_body
     assert "run_id=a1b2c3d4" in failure_body
@@ -5527,7 +5527,7 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     ]
     failure = [
         body for body in comment_bodies
-        if "Orbi failed:" in body
+        if "Orbi: blocked" in body
     ]
     assert len(failure) == 1
     assert "delivered no commit" in failure[0]
@@ -6040,7 +6040,7 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
     ]
     failure = [
         body for body in comment_bodies
-        if "Orbi failed:" in body
+        if "Orbi: blocked" in body
     ]
     assert len(failure) == 1
     # The idle-recovery reason and the run marker stay in the Issue.
@@ -7112,10 +7112,169 @@ def test_process_issue_failure_without_session_still_carries_scene(
     failure_body = calls[-1][2]["body"]
     # No session file yet: the scene still carries the full debug entry
     # (worktree, branch) with '-' session fields.
-    assert f"worktree={tmp_path / 'wt'}" in failure_body
-    assert "branch=orbi/xqliu-orbi-backlog-issue-8" in failure_body
-    assert "session=-" in failure_body
-    assert "session_file=-" in failure_body
+    assert "worktree: `local runner worktree`" in failure_body
+    assert "branch: `orbi/xqliu-orbi-backlog-issue-8`" in failure_body
+    assert "session log: `<unavailable>`" in failure_body
+
+
+def test_tail_text_strips_raw_and_caret_sgr_sequences(tmp_path):
+    log = tmp_path / "coloured.log"
+    log.write_bytes(
+        b"\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[32m10 passed\x1b[39m\n"
+        b"^[[32m\xe2\x9c\x93^[[39m tests/cta-ref.test.js\n"
+    )
+
+    result = runner._tail_text(log)
+
+    assert "Test Files  10 passed" in result
+    assert "tests/cta-ref.test.js" in result
+    assert "\x1b[" not in result
+    assert "^[" not in result
+
+
+def test_tail_text_preserves_plain_text_byte_for_byte(tmp_path):
+    log = tmp_path / "plain.log"
+    content = b"plain output  \ntrailing whitespace\t"
+    log.write_bytes(content)
+
+    assert runner._tail_text(log) == content.decode()
+
+
+def test_tail_text_preserves_non_sgr_lookalikes(tmp_path):
+    log = tmp_path / "lookalikes.log"
+    content = "^[[1] [32m literal \x1b without bracket"
+    log.write_text(content, encoding="utf-8")
+
+    assert runner._tail_text(log) == content
+
+
+def test_failure_summary_removes_command_and_stderr_duplication():
+    summary = runner._failure_summary(
+        "Review failed: Command ['pi', '--session', '/home/runner/session'] "
+        "returned non-zero exit status 1; stderr=provider exploded",
+    )
+
+    assert "Command [" not in summary
+    assert "stderr=" not in summary
+    assert "/home/" not in summary
+    assert summary.count("provider exploded") == 1
+    assert "delivery command failed" in summary
+    assert runner._failure_summary(
+        "provider exploded stderr=provider exploded"
+    ) == "provider exploded"
+
+
+def test_failure_summary_defaults_when_reason_has_no_readable_content():
+    assert runner._failure_summary(" stderr=") == "the delivery command failed"
+
+
+def test_failure_summary_uses_concrete_final_stderr_line_and_redacts_it():
+    summary = runner._failure_summary(
+        "the independent review failed: Command ['pi', '--session-dir', "
+        "'/home/runner/session'] returned non-zero exit status 1. "
+        "stderr=mise installed 0 tools\n"
+        "\n"
+        "provider log: /home/runner/private/session.jsonl\n"
+        "Codex error: The usage limit has been reached",
+    )
+
+    assert summary == (
+        "the independent review failed: the delivery command failed: "
+        "Codex error: The usage limit has been reached"
+    )
+    assert "/home/" not in summary
+
+
+def test_failure_scene_is_structured_and_redacts_local_paths():
+    rendered = runner._failure_scene(
+        {"session_id": "s1", "session_file": "/home/a/.pi-session/s.jsonl",
+         "phase": "review", "last_activity": "2026-09-20T18:00:00Z",
+         "action": "run tests", "result": "failed"},
+        run_id="abcdef12", issue="orbi-build/orbi#1221", role="review",
+        branch="orbi/task", worktree="/home/a/worktree", pr_url="https://github.com/o/r/pull/1",
+    )
+
+    assert "- run: `abcdef12`" in rendered
+    assert "- worktree: `local runner worktree`" in rendered
+    assert "- session log: `local session log`" in rendered
+    assert "/home/" not in rendered
+    assert "|" not in rendered
+
+
+def test_failure_comment_layout_keeps_raw_evidence_collapsed():
+    body = runner._failure_comment_body(
+        outcome="fix needed", action="Repair the delivery.",
+        reason="the provider rejected the request",
+        diagnosis="provider rejected the request",
+        scene="- run: `abcdef12`\n- phase: `review`",
+        evidence="\n\nstderr_tail:\n```\nprovider rejected the request\n```",
+        pr_url="https://github.com/o/r/pull/1", issue="o/r#1221",
+        run_id="abcdef12",
+    )
+
+    visible, collapsed = body.split("<details>", 1)
+    assert "Orbi: fix needed — the engine will retry" in visible
+    assert "provider rejected the request" in visible
+    assert "stderr_tail:" not in visible
+    assert "https://github.com/o/r/pull/1" in visible
+    assert "run_id=abcdef12" in visible
+    assert "stderr_tail:" in collapsed
+    assert "```" in collapsed
+    assert body.endswith("</details>")
+
+    without_diagnosis = runner._failure_comment_body(
+        outcome="fix needed", action="", reason="provider failed",
+        diagnosis="", scene="- run: `abcdef12`", evidence="",
+        pr_url=None, issue="o/r#1221", run_id="abcdef12",
+    )
+    assert "failure detail:" not in without_diagnosis
+    assert without_diagnosis.endswith("</details>")
+
+
+def test_blocked_failure_suffix_stays_inside_closed_diagnostics(
+    monkeypatch, tmp_path,
+):
+    posted = []
+    monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda number, *, repo, body: posted.append(body))
+
+    runner.report_delivery_failure(
+        runner.UnrecoverableDeliveryError("cannot recover"),
+        issue={"number": 1, "title": "t", "labels": []},
+        source_repo="owner/repo", run_id="abcdef12", pr_url=None,
+        worktree=tmp_path, branch="orbi/task", role=runner.ROLE_REVIEW,
+        classify=True, blocked_suffix="the preserved PR needs a decision",
+        current_labels=set(),
+    )
+
+    assert posted[0].count("<details>") == 1
+    assert posted[0].count("</details>") == 1
+    assert "the preserved PR needs a decision\n</details>" in posted[0]
+
+
+def test_no_run_id_failure_still_preserves_action_and_evidence(
+    monkeypatch, tmp_path,
+):
+    posted = []
+    monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda number, *, repo, body: posted.append(body))
+
+    runner.report_delivery_failure(
+        subprocess.CalledProcessError(2, ["pi"], stderr="provider failed"),
+        issue={"number": 1, "title": "t", "labels": []},
+        source_repo="owner/repo", run_id=None, pr_url=None,
+        worktree=tmp_path, branch="orbi/task", role=runner.ROLE_IMPLEMENT,
+        action="Repair provider access.", reason="delivery failed",
+        diagnosis="provider failed", classify=False, evidence=True,
+        current_labels=set(),
+    )
+
+    assert "**Action:** Repair provider access." in posted[0]
+    assert "stderr_tail:" in posted[0]
+    assert "provider failed" in posted[0]
+    assert posted[0].endswith("</details>")
 
 
 def test_failure_evidence_handles_binary_streams_and_unavailable_files(tmp_path):
@@ -7169,7 +7328,7 @@ def test_failure_evidence_includes_streams_session_and_test_tail(tmp_path):
     # Issue #775: the session tail is a structural summary, not raw JSONL.
     assert "2026-09-12T10:00:00Z message role=user content=text" in evidence
     assert "2026-09-12T10:01:00Z message role=toolResult tool=Bash" in evidence
-    assert f"full log: {worktree / '.pi-session' / 'session.jsonl'}" in evidence
+    assert "full log: local session log" in evidence
 
 
 def test_failure_evidence_keeps_coverage_table_literal_inside_fence(tmp_path):
@@ -7289,8 +7448,8 @@ def test_failure_evidence_truncates_oversized_segment_with_note(tmp_path):
 def test_report_delivery_failure_caps_comment_and_names_session_log(
     monkeypatch, tmp_path,
 ):
-    """Issue #775: an oversized body is cut at the cap, the cut names
-    the full session log path, and the failure reason stays first."""
+    """Issue #775 + #1221: an oversized raw cause becomes a bounded
+    visible summary while its bounded diagnostic evidence remains reachable."""
     posted = []
     monkeypatch.setattr(seam, "apply_label_patch", lambda *args, **kwargs: None)
     monkeypatch.setattr(seam, "issue_labels", lambda *args, **kwargs: set())
@@ -7313,11 +7472,11 @@ def test_report_delivery_failure_caps_comment_and_names_session_log(
 
     assert outcome == "blocked"
     body = posted[0]
-    # The cause-first head survives the cut; the oversize cause itself
-    # legitimately fills the whole window and pushes the evidence out.
-    assert body.startswith("Orbi failed:")
-    assert len(body) <= runner.FAILURE_COMMENT_MAX_CHARS + 300
-    assert f"full session log: {session_file}" in body
+    assert body.startswith("Orbi: blocked — waiting on a human decision")
+    assert "**Reason:** " + "x" * 500 in body
+    assert len(body) < runner.FAILURE_COMMENT_MAX_CHARS
+    assert "full log: local session log" in body
+    assert body.endswith("</details>")
 
 
 def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_path):
@@ -7375,23 +7534,24 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     # instead of re-raising; the scene assertions below are unchanged.
     assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
     failure_body = calls[-1][2]["body"]
-    assert "Orbi failed:" in failure_body
-    assert "session=sess-9" in failure_body
-    assert "phase=test" in failure_body
-    assert "last_activity=2026-08-25T02:30:00Z" in failure_body
-    assert 'action="bash pytest tests/"' in failure_body
-    assert "result=ok" in failure_body
+    assert "Orbi: blocked" in failure_body
+    assert "session log: `local session log`" in failure_body
+    assert "phase: `test`" in failure_body
+    assert "last activity: `2026-08-25T02:30:00Z`" in failure_body
+    assert "action: `bash pytest tests/`" in failure_body
+    assert "result: `ok`" in failure_body
     assert "exit_code=1" in failure_body
-    assert "stderr=boom" in failure_body
+    assert "stderr=boom" not in failure_body
+    assert "stderr_tail:\n```\nboom\n```" in failure_body
     # Issue #775: the session tail appears as its structured summary
     # line inside a fence, not as raw session text.
     assert "2026-08-25T02:30:00Z message role=assistant content=text" \
         in failure_body
     assert "assistant event" not in failure_body
     assert "1 failed" in failure_body
-    # The full scene on the failure comment carries the debug entry.
-    assert f"worktree={tmp_path / 'wt'}" in failure_body
-    assert "branch=orbi/xqliu-orbi-backlog-issue-8" in failure_body
+    # The reader-facing scene uses stable labels for local paths.
+    assert "worktree: `local runner worktree`" in failure_body
+    assert "branch: `orbi/xqliu-orbi-backlog-issue-8`" in failure_body
 
 
 def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, caplog):
@@ -7439,8 +7599,7 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
         assert runner.process_issue({"number": 9, "title": "Fail", "body": ""}, runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
     assert "activity scene failed" in caplog.text
     failure_body = calls[-1][2]["body"]
-    assert "Orbi failed: git failed" in failure_body
-    assert "session=" not in failure_body
+    assert "git failed" in failure_body
 
 
 def make_fake_pi(tmp_path: Path, *, session_records: list[tuple[float, dict]],
@@ -12742,7 +12901,7 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
     body = comments[0][1]["body"]
     assert "Orbi needs a fix:" in body
     assert f"<!-- orbi:run=a1b2c3d4 -->" in body
-    assert "orbi-owner-repo-issue-39-a1b2c3d4" in body
+    assert "branch: `orbi/owner-repo-issue-39`" in body
     # The full scene carries the ACTUAL branch (derived before the
     # worktree check, Issue #50) — never a `branch=None` placeholder.
     assert "branch=orbi/owner-repo-issue-39" in body
@@ -12863,7 +13022,7 @@ def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
     assert len(edits) == 1
     body = comments[0][1]["body"]
     assert "Orbi needs a fix:" in body
-    assert "orbi-owner-repo-issue-39-a1b2c3d4" in body
+    assert "branch: `orbi/owner-repo-issue-39`" in body
 
 
 def test_delivery_step_runs_review_when_fix_needed(
@@ -13445,7 +13604,7 @@ def test_run_review_round_returns_none_when_worktree_missing(
     }
     body = comments[0][1]["body"]
     assert "Orbi needs a fix:" in body
-    assert "orbi-owner-repo-issue-39-a1b2c3d4" in body
+    assert "branch: `orbi/owner-repo-issue-39`" in body
 
 
 def test_main_releases_slot_after_opening_the_pr(monkeypatch, tmp_path):

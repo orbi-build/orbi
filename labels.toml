@@ -46,7 +46,7 @@ description = "Orbi stopped and needs human attention"
 [[label]]
 name = "ai-awaiting-merge"
 color = "5319e7"
-description = "Reviewed PR delivered; maintainer approval and merge are required"
+description = "Reviewed PR delivered; Orbi merges once the maintainer clears the named blocker"
 
 [[label]]
 name = "p0"
