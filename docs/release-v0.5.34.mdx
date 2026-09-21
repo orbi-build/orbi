@@ -1,0 +1,37 @@
+# v0.5.34 release (latest)
+
+`v0.5.34` release notes for the GitHub Release [v0.5.34](https://github.com/orbi-build/orbi/releases/tag/v0.5.34) (release task: Issue #1222).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.5.34` | annotated tag `2872bdc3db106249a8dd72c34d8aa4418f989822` | commit `2476b13bbfa2f15aca2af78eeff9e2e5e90951e5` |
+
+## Release notes
+
+## Changelog
+
+### Reliability and recovery
+
+- A reclaimed worktree resumes from the local branch, not the fetched remote HEAD: an unpushed commit burns the Issue into ai-blocked ([Issue #1241](https://github.com/orbi-build/orbi/issues/1241); [PR #1245](https://github.com/orbi-build/orbi/pull/1245))
+- agent 留下未提交改动被判 ai-blocked：这是可恢复失败，不符合 UnrecoverableDeliveryError 自己的契约 ([Issue #1244](https://github.com/orbi-build/orbi/issues/1244); [PR #1247](https://github.com/orbi-build/orbi/pull/1247))
+
+### Observability
+
+- Secret redaction misses current key formats and is skipped on failure evidence: redact at the comment and journal choke points ([Issue #1233](https://github.com/orbi-build/orbi/issues/1233); [PR #1235](https://github.com/orbi-build/orbi/pull/1235))
+
+### Documentation
+
+- The state machine diagram in docs/workflow.mdx says six states and omits ai-awaiting-merge; the code has seven ([Issue #1227](https://github.com/orbi-build/orbi/issues/1227); [PR #1237](https://github.com/orbi-build/orbi/pull/1237))
+
+### Bug fixes
+
+- A maintainer's PR review is silently ignored: the review session reads only Issue comments ([Issue #1206](https://github.com/orbi-build/orbi/issues/1206); [PR #1215](https://github.com/orbi-build/orbi/pull/1215))
+- Make Orbi failure comments readable without losing diagnostics ([Issue #1221](https://github.com/orbi-build/orbi/issues/1221); [PR #1239](https://github.com/orbi-build/orbi/pull/1239))
+- Repeated-failure dedup crashes the tick: comment id from gh issue view is a node id, not an integer ([Issue #1236](https://github.com/orbi-build/orbi/issues/1236); [PR #1238](https://github.com/orbi-build/orbi/pull/1238))
+- The merge gate treats an empty status check rollup as a pass: a head with no CI can reach main ([Issue #1243](https://github.com/orbi-build/orbi/issues/1243); [PR #1246](https://github.com/orbi-build/orbi/pull/1246))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>
