@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+import orbi.gitops as gitops
 import orbi.runner as runner
 from orbi import progress
 from orbi import scene as scene_mod
@@ -2334,7 +2335,11 @@ def test_verify_resumed_pr_recreates_missing_worktree_from_remote_branch(
     fake_git = FakeGit(tmp_path, base_branch="main")
     fake_gh = FakeGh("owner/repo")
     fake_gh.add_issue(9, title="ship")
-    remote_head = fake_git.commit([fake_git.base_sha])
+    local_head = fake_git.commit([fake_git.base_sha])
+    remote_head = fake_git.commit([local_head])
+    # Reclamation removed the worktree but deliberately left the local
+    # delivery branch behind. The remote advanced while that cache was gone.
+    fake_git.branch(FAKE_BRANCH, local_head)
     fake_git.origin[FAKE_BRANCH] = remote_head
     fake_gh.add_pr(
         9, head=FAKE_BRANCH, base="main", oid=remote_head, url=FAKE_PR_URL,
@@ -2358,10 +2363,51 @@ def test_verify_resumed_pr_recreates_missing_worktree_from_remote_branch(
     assert worktree.is_dir()
     assert fake_git.worktrees[str(worktree)]["branch"] == FAKE_BRANCH
     assert fake_git.worktrees[str(worktree)]["head"] == remote_head
-    # The in-flight backfill label transition (Issue #178) ran on the
-    # resumed delivery.
+    assert fake_git.local[FAKE_BRANCH] == remote_head
+    # The REAL verify_pr compared this rebuilt HEAD to the PR head, so the
+    # successful return proves the resumed user path no longer diverges.
     assert "ai-in-progress" in fake_gh.issues[9]["labels"]
     assert "ai-pr-opened" not in fake_gh.issues[9]["labels"]
+
+
+def test_verify_resumed_pr_preserves_diverged_local_branch_with_evidence(
+    monkeypatch, tmp_path,
+):
+    """A reclaimed diverged branch fails before checkout and identifies
+    the local cache precisely, so a maintainer can preserve or resolve it."""
+    fake_git = FakeGit(tmp_path, base_branch="main")
+    fake_gh = FakeGh("owner/repo")
+    fake_gh.add_issue(9, title="ship", labels=("ai-pr-opened",))
+    local_head = fake_git.commit([fake_git.base_sha])
+    remote_head = fake_git.commit([fake_git.base_sha])
+    fake_git.branch(FAKE_BRANCH, local_head)
+    fake_git.origin[FAKE_BRANCH] = remote_head
+    fake_gh.add_pr(
+        9, head=FAKE_BRANCH, base="main", oid=remote_head, url=FAKE_PR_URL,
+        body=f"{run_marker_body()}\n\nFixes #9\n\nPlan",
+    )
+
+    def fake_run(command, **kwargs):
+        if command[0] == "git":
+            return fake_git(command, **kwargs)
+        return fake_gh(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(gitops.socket, "gethostname", lambda: "runner-box")
+    with pytest.raises(RuntimeError) as excinfo:
+        runner.verify_resumed_pr(
+            make_resume_scene(), make_resume_issue(),
+            make_resume_config(tmp_path), "owner/repo",
+        )
+
+    message = str(excinfo.value)
+    assert FAKE_BRANCH in message
+    assert f"local={local_head}" in message
+    assert f"remote={remote_head}" in message
+    assert f"checkout {tmp_path}" in message
+    assert "host runner-box" in message
+    assert fake_git.local[FAKE_BRANCH] == local_head
+    assert not expected_resume_worktree(tmp_path).exists()
 
 
 def test_verify_resumed_pr_branch_gone_from_origin_is_terminal(

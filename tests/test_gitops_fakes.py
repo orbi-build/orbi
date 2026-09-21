@@ -135,6 +135,19 @@ def test_create_worktree_fork_takeover_uses_forced_single_refspec(fake_git):
     assert fake_git.origin[head_branch] == second_head
 
 
+def test_fake_git_rejects_invalid_forced_branch_updates(fake_git):
+    """The fake rejects malformed force updates like real git instead of
+    silently making impossible branch state valid."""
+    invalid_commands = [
+        ["git", "branch", "--force", "only-a-name"],
+        ["git", "branch", "--force", "topic", fake_git.base_sha],
+        ["git", "branch", "--force", "missing", "origin/missing"],
+    ]
+    for command in invalid_commands:
+        with pytest.raises(subprocess.CalledProcessError):
+            fake_git(command)
+
+
 def test_fake_git_rejects_missing_pull_head_ref(fake_git):
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
         fake_git([
