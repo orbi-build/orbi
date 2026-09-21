@@ -23,6 +23,13 @@ TOOLS_DIR = REPO_ROOT / "tools"
 # The runner-patch literal, assembled so it never appears contiguously
 # in this file.
 PATCH_LINE = 'monkeypatch.setattr(' + 'runner, "run_command", fake)'
+MODULE_PATCH_LINE = 'monkeypatch.setattr(' + 'journal, "x", fake)'
+MODULE_WRAPPED_PATCH = 'monkeypatch.setattr(' + '\n        journal, "x", fake)'
+MODULE_QUALIFIED_PATCH = 'monkeypatch.setattr(' + 'orbi.scheduler, "x", fake)'
+RUNNER_QUALIFIED_PATCH = 'monkeypatch.setattr(' + 'runner.github, "x", fake)'
+MODULE_STRING_PATCH = 'monkeypatch.setattr("orbi.' + 'release.x", fake)'
+RUNNER_STRING_PATCH = 'monkeypatch.setattr("orbi.' + 'runner.x", fake)'
+FALSE_MODULE_PATCH = 'monkeypatch.setattr(' + 'my_journal_helper, "x", fake)'
 # The shape-assert literal — same trick.
 SHAPE_LINE = 'assert command[:' + '3] == ["gh", "issue", "view"]'
 
@@ -55,10 +62,11 @@ def test_counts_both_patterns_and_excludes_fakes(tmp_path):
         "sub/test_two.py": [SHAPE_LINE, SHAPE_LINE],
         "fakes/github.py": [PATCH_LINE, SHAPE_LINE],
     })
-    assert module.counts(tests) == {
-        "monkeypatch_setattr_runner": 2,
-        "command_shape_asserts": 3,
-    }
+    counts = module.counts(tests)
+    assert counts["monkeypatch_setattr_runner"] == 2
+    assert counts["command_shape_asserts"] == 3
+    assert counts["monkeypatch_setattr_runner_string"] == 0
+    assert counts["monkeypatch_setattr_modules"]["journal"] == 0
 
 
 def test_shape_metric_skips_the_fake_based_seam_modules(tmp_path):
@@ -71,19 +79,17 @@ def test_shape_metric_skips_the_fake_based_seam_modules(tmp_path):
         "test_git_fakes.py": [SHAPE_LINE, SHAPE_LINE, PATCH_LINE],
         "test_runner.py": [SHAPE_LINE],
     })
-    assert module.counts(tests) == {
-        "monkeypatch_setattr_runner": 1,
-        "command_shape_asserts": 1,
-    }
+    counts = module.counts(tests)
+    assert counts["monkeypatch_setattr_runner"] == 1
+    assert counts["command_shape_asserts"] == 1
 
 
 def test_main_fails_when_a_count_rises_above_the_baseline(tmp_path):
     module = load_ratchet()
     tests = make_corpus(tmp_path, {"test_one.py": [PATCH_LINE]})
     baseline = tmp_path / "baseline.json"
-    baseline.write_text(json.dumps({
+    baseline.write_text(json.dumps(module.counts(tests) | {
         "monkeypatch_setattr_runner": 0,
-        "command_shape_asserts": 0,
     }), encoding="utf-8")
     assert module.main(
         ["patch_ratchet.py", str(tests)], baseline_file=baseline,
@@ -94,7 +100,7 @@ def test_main_fails_when_only_the_shape_count_rises(tmp_path):
     module = load_ratchet()
     tests = make_corpus(tmp_path, {"test_one.py": [SHAPE_LINE]})
     baseline = tmp_path / "baseline.json"
-    baseline.write_text(json.dumps({
+    baseline.write_text(json.dumps(module.counts(tests) | {
         "monkeypatch_setattr_runner": 99,
         "command_shape_asserts": 0,
     }), encoding="utf-8")
@@ -109,14 +115,14 @@ def test_main_passes_at_the_baseline_and_on_a_decrease(tmp_path, capsys):
     baseline = tmp_path / "baseline.json"
     # Equal counts pass; lower counts pass too (a migration PR lands
     # before the baseline is re-frozen).
-    baseline.write_text(json.dumps({
+    baseline.write_text(json.dumps(module.counts(tests) | {
         "monkeypatch_setattr_runner": 1,
         "command_shape_asserts": 0,
     }), encoding="utf-8")
     assert module.main(
         ["patch_ratchet.py", str(tests)], baseline_file=baseline,
     ) == 0
-    baseline.write_text(json.dumps({
+    baseline.write_text(json.dumps(module.counts(tests) | {
         "monkeypatch_setattr_runner": 5,
         "command_shape_asserts": 5,
     }), encoding="utf-8")
@@ -140,10 +146,10 @@ def test_main_update_freezes_the_current_counts(tmp_path):
         ["patch_ratchet.py", "--update", str(tests)],
         baseline_file=baseline,
     ) == 0
-    assert json.loads(baseline.read_text(encoding="utf-8")) == {
-        "monkeypatch_setattr_runner": 1,
-        "command_shape_asserts": 1,
-    }
+    frozen = json.loads(baseline.read_text(encoding="utf-8"))
+    assert frozen["monkeypatch_setattr_runner"] == 1
+    assert frozen["command_shape_asserts"] == 1
+    assert frozen["monkeypatch_setattr_modules"]["journal"] == 0
     # After the freeze the gate passes at the frozen counts.
     assert module.main(
         ["patch_ratchet.py", str(tests)], baseline_file=baseline,
@@ -167,6 +173,7 @@ def test_main_fails_fast_on_a_malformed_baseline(tmp_path):
         "[1, 2]",
         '{"monkeypatch_setattr_runner": "many", "command_shape_asserts": 0}',
         '{"monkeypatch_setattr_runner": 1}',
+        '{"monkeypatch_setattr_runner": 1, "command_shape_asserts": 0, "monkeypatch_setattr_runner_string": 0, "monkeypatch_setattr_modules": []}',
     ):
         baseline = tmp_path / "baseline.json"
         baseline.write_text(content, encoding="utf-8")
@@ -193,6 +200,49 @@ def test_frozen_baseline_matches_the_real_corpus():
 # The wrapped-form patch, assembled so this file's own source never
 # matches the ratcheted pattern.
 WRAPPED_PATCH = 'monkeypatch.setattr(' + '\n        runner, "run_command", fake)'
+
+
+def test_counts_package_module_targets_and_ignores_substrings(tmp_path):
+    module = load_ratchet()
+    tests = make_corpus(tmp_path, {
+        "test_modules.py": [
+            MODULE_PATCH_LINE,
+            MODULE_WRAPPED_PATCH,
+            MODULE_QUALIFIED_PATCH,
+            RUNNER_QUALIFIED_PATCH,
+            MODULE_STRING_PATCH,
+            RUNNER_STRING_PATCH,
+            FALSE_MODULE_PATCH,
+        ],
+    })
+    counts = module.counts(tests)
+    assert counts["monkeypatch_setattr_modules"]["journal"] == 2
+    assert counts["monkeypatch_setattr_modules"]["scheduler"] == 1
+    assert counts["monkeypatch_setattr_modules"]["github"] == 1
+    assert counts["monkeypatch_setattr_modules"]["release"] == 1
+    assert counts["monkeypatch_setattr_runner_string"] == 1
+    assert "runner" not in counts["monkeypatch_setattr_modules"]
+
+
+def test_module_ceiling_failures_name_the_module_and_absent_keys_are_zero(tmp_path, capsys):
+    module = load_ratchet()
+    tests = make_corpus(tmp_path, {"test_modules.py": [MODULE_PATCH_LINE]})
+    baseline = module.counts(tests)
+    baseline["monkeypatch_setattr_modules"] = {}
+    baseline_file = tmp_path / "baseline.json"
+    baseline_file.write_text(json.dumps(baseline), encoding="utf-8")
+    assert module.main(["patch_ratchet.py", str(tests)], baseline_file=baseline_file) == 1
+    assert "journal" in capsys.readouterr().out
+
+
+def test_old_flat_baseline_is_unreadable(tmp_path):
+    module = load_ratchet()
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({
+        "monkeypatch_setattr_runner": 1,
+        "command_shape_asserts": 1,
+    }), encoding="utf-8")
+    assert module.read_baseline(baseline) is None
 
 
 def test_counts_wrapped_form_runner_patches(tmp_path):
