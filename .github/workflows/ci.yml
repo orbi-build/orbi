@@ -162,6 +162,14 @@ jobs:
       - name: Enforce the patch ratchet (contract, Issue #789)
         run: python3 tools/patch_ratchet.py
 
+      # Size ratchet (Issue #1229): Article 3 freezes runner.py's direct
+      # top-level definitions and prevents modules over 1,000 lines from
+      # growing. Extract code into a sibling module, or deliberately lower
+      # a measured value and run `python3 tools/size_ratchet.py --update`
+      # to refreeze tools/size_ratchet_baseline.json.
+      - name: Enforce the size ratchet (contract, Issue #1229)
+        run: python3 tools/size_ratchet.py
+
       # Mintlify docs build smoke (Issue #116): the official `mint` CLI
       # validates the docs/ build (docs.json config, pages, links) in
       # strict mode — non-zero exit on any warning or error. Same single
