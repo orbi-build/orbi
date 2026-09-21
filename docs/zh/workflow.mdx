@@ -22,7 +22,7 @@ Orbi 会领取符合条件的 Issue，在 worktree 中实现，开 PR，独立�
 
 ## 完整链路
 
-状态机（六个交付状态；review/fix 循环留在同一个 PR 上——只有它的 head
+状态机（七个交付状态；review/fix 循环留在同一个 PR 上——只有它的 head
 可以前进）：
 
 ```mermaid
@@ -36,6 +36,8 @@ flowchart LR
   progress -->|PR 验收：base 新鲜、run marker、Fixes #N| opened["ai-pr-opened"]
   opened -->|独立审查会话（会话内修复）| verdict{"REVIEW_VERDICT"}
   verdict -->|clean verdict + merge 门禁| merged["ai-merged（终态）"]
+  verdict -->|clean verdict + 已知仓库策略仍阻塞；需要维护者动作| awaiting["ai-awaiting-merge"]
+  awaiting -->|维护者动作完成，Orbi 恢复并合并指定 head| merged
   verdict -->|超轮（人工决策）| blocked["ai-blocked（终态，人工决策）"]
   opened -->|finding / base 冲突 / 可恢复失败（Issue #50）| fixneeded["ai-fix-needed"]
   fixneeded -->|下一 tick：同一 run、branch、worktree、PR 的下一个审查会话| opened
@@ -341,7 +343,14 @@ gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 
 PR 描述必须包含 `Fixes #<issue-number>`（可以放在首行）。GitHub 读的是
 body（不是 PR title），PR merge 到默认分支时原生关闭 Issue。Runner 在
-PR 验收时校验该关键词，缺失即 fail fast。
+PR 验收时校验该关键词，缺失即 fail fast。这个校验失败会记录在对应 Issue
+上，不会让 runner tick 进程退出。
+
+分阶段计划不能用一张 Issue 和一个 PR 承载多个独立 runtime outcome。应使用
+Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各自有一个交付 PR，
+并写入对应的 `Fixes #<子票号>`。这样既保留 GitHub 原生关票，也不需要新增第二
+种 PR 正文语法。如果现有 PR 写的是 `Part of #N`，维护者应在该 PR 已经完整
+交付一个子票结果时改成精确的 `Fixes #N`，或者先把剩余阶段拆成子票再重试。
 
 ## Epic、Release task 与 P0 优先级
 

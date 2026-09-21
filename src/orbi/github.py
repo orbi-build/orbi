@@ -761,6 +761,37 @@ def comment_issue(number: int, *, repo: str, body: str) -> None:
     run_gh_write_command(command, already_applied=already_posted)
 
 
+def issue_comment_rest_id(
+    number: int, *, repo: str, node_id: str,
+) -> int:
+    """Resolve a GraphQL Issue-comment node id to its REST numeric id.
+
+    ``gh issue view --json comments`` exposes GraphQL node ids, while the
+    REST PATCH route used by ``update_issue_comment`` requires ``id``.
+    """
+    raw = run_gh_read_command([
+        "gh", "api", f"repos/{repo}/issues/{number}/comments",
+        "--paginate", "--slurp",
+    ], timeout=30)
+    data = json.loads(raw)
+    pages = data if isinstance(data, list) else []
+    comments = (
+        [comment for page in pages if isinstance(page, list)
+         for comment in page if isinstance(comment, dict)]
+        if any(isinstance(page, list) for page in pages)
+        else [comment for comment in pages if isinstance(comment, dict)]
+    )
+    for comment in comments:
+        if comment.get("node_id") == node_id:
+            comment_id = comment.get("id")
+            if isinstance(comment_id, int) and not isinstance(comment_id, bool):
+                return comment_id
+            break
+    raise ValueError(
+        f"REST comment id not found for GraphQL node id {node_id!r}"
+    )
+
+
 def update_issue_comment(comment_id: int, *, repo: str, body: str) -> None:
     """Patch one Issue comment in place (Issue #825's repeat counter).
 

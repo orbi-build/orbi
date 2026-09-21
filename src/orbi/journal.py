@@ -28,6 +28,53 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger("orbi.bootstrap")
 
+# Credential shapes are deliberately anchored at provider/header prefixes.
+# Keep this table here as the single redaction choke point shared by journal,
+# activity summaries, and GitHub comments.
+_SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"Bearer\s+[A-Za-z0-9._-]+"), "Bearer <redacted>"),
+    (re.compile(r"\b(gh[pousr]_)[A-Za-z0-9]{16,}"), r"\1<redacted>"),
+    (re.compile(r"\b(sk-(?:proj-|ant-api03-|or-v1-))[A-Za-z0-9_-]{16,}"),
+     r"\1<redacted>"),
+    (re.compile(r"\b(sk-[A-Za-z0-9]+[-_])[A-Za-z0-9_-]{16,}"),
+     r"\1<redacted>"),
+    (re.compile(r"\b(sk-)[A-Za-z0-9]{16,}"), r"\1<redacted>"),
+    (re.compile(r"\b(gsk_)[A-Za-z0-9]{16,}"), r"\1<redacted>"),
+    (re.compile(r"\b(AIza)[A-Za-z0-9_-]{35}"), r"\1<redacted>"),
+    (re.compile(r"\b(github_pat_)[A-Za-z0-9_]{16,}"), r"\1<redacted>"),
+    (re.compile(r"\b(xox[abprs]-)[A-Za-z0-9-]{16,}"), r"\1<redacted>"),
+    (re.compile(r"\b(AKIA)[A-Z0-9]{16}"), r"\1<redacted>"),
+    # Preserve the optional auth scheme while replacing the header value.
+    (re.compile(r"(?i)(Authorization:\s*)(Bearer\s+)?\S+"),
+     r"\1\2<redacted>"),
+    (re.compile(r"(?i)(x-api-key:\s*)\S+"), r"\1<redacted>"),
+    (re.compile(r"(?i)(?<!x-)(api-key:\s*)\S+"),
+     r"\1<redacted>"),
+)
+
+
+def redact_secrets(text: str) -> str:
+    """Redact supported credentials while retaining their readable prefix."""
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+class SecretRedactingFormatter(logging.Formatter):
+    """Format records, including exception tracebacks, without credentials."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_secrets(super().format(record))
+
+
+def configure_logging() -> None:
+    """Configure the standard journal format with source redaction."""
+    logging.basicConfig(level=logging.INFO, format=log_format())
+    formatter = SecretRedactingFormatter(log_format())
+    for handler in logging.getLogger().handlers:
+        handler.setFormatter(formatter)
+
+
 # Run correlation: one task attempt generates one run_id and
 # every journal line of the attempt starts with `[run_id]`, so a single
 # grep reconstructs the whole timeline. The filter rewrites the message in
@@ -216,6 +263,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "delivery_review_failed": "the review session failed",
     # Dead-loop guard (Issue #825).
     "failure_comment_deduplicated": "an identical failure repeat bumped the existing comment's counter; no second comment",
+    "failure_comment_update_failed": "the existing failure comment could not be resolved or updated; the tick continues",
+    "failure_comment_id_unavailable": "a repeated failure comment had no recoverable REST id; a new comment was posted",
     "failure_streak_escalated": "the same failure reached the consecutive limit; the Issue goes ai-blocked",
     "failure_history_read_failed": "the failure-history read for the dead-loop guard failed (fail-open)",
     # External contributor PRs.

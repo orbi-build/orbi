@@ -30,6 +30,7 @@ from orbi.journal import (
     RUN_ID_PATTERN,
     issue_context,
     quote_value,
+    redact_secrets,
     validate_run_id,
 )
 from orbi.pi_activity import activity_snapshot, sanitize
@@ -121,6 +122,7 @@ def format_status_comment(body: str) -> str:
     """Expand legacy one-line Orbi status comments into field blocks."""
     if not isinstance(body, str):
         return body
+    body = redact_secrets(body)
     marker = ""
     if body.startswith("<!-- orbi:run=") and "\n" in body:
         marker, _, body = body.partition("\n")
