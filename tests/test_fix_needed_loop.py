@@ -275,13 +275,18 @@ def test_delivery_step_recoverable_review_failure_stays_fix_needed(
     assert "Orbi needs a fix:" in body
     assert MARKER in body
     assert PR_URL in body
-    assert str(exc).split(" (Issue")[0] in body
-    assert f"branch={BRANCH}" in body
+    if isinstance(exc, subprocess.CalledProcessError):
+        assert "the delivery command failed" in body
+        assert "Command [" not in body
+        assert "exit_code=1" in body
+    else:
+        assert str(exc).split(" (Issue")[0] in body
+    assert f"branch: `{BRANCH}`" in body
     expected_worktree = (
         tmp_path / ".worktrees"
         / f"orbi-owner-repo-issue-39-{RUN_ID}"
     )
-    assert f"worktree={expected_worktree}" in body
+    assert "worktree: `local runner worktree`" in body
     assert "session=" in body
     assert "phase=" in body
     assert "last_activity=" in body
@@ -389,7 +394,7 @@ def test_delivery_step_recoverable_failure_with_session_file_includes_session_sc
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
     body = issue_comments[0][1]["body"]
     assert "session=sess-1" in body
-    assert f"session_file={worktree / '.pi-session' / 'sess.jsonl'}" in body
+    assert "session log: `local session log`" in body
 
 
 def test_delivery_step_recoverable_failure_scene_snapshot_failure_is_logged(
@@ -686,7 +691,7 @@ def test_verify_resumed_pr_diverged_pr_head_stays_fix_needed(
     assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in body
     assert FAKE_PR_URL in body
     assert "orbi/owner-repo-issue-9" in body
-    assert str(expected_resume_worktree(tmp_path)) in body
+    assert "worktree: `local runner worktree`" in body
     assert "the branch diverged" in body
     # ... and the fix-needed milestone (not the blocked one).
     posted = [
@@ -854,7 +859,7 @@ def test_verify_resumed_pr_recoverable_failure_with_session_file_includes_sessio
         )
     body = captured["comments"][0][1]["body"]
     assert "session=sess-1" in body
-    assert f"session_file={worktree / '.pi-session' / 'sess.jsonl'}" in body
+    assert "session log: `local session log`" in body
 
 
 def test_verify_resumed_pr_recoverable_failure_scene_snapshot_failure_is_logged(
@@ -1377,7 +1382,12 @@ def make_report_fake(monkeypatch, *, history=None, labels=("ai-fix-needed",),
         if failing_comment_update:
             raise RuntimeError("comment update unavailable")
         for comment in store:
-            if comment.get("id") == comment_id or comment.get("rest_id") == comment_id:
+            comment_url = comment.get("url")
+            if (comment.get("id") == comment_id
+                    or comment.get("rest_id") == comment_id
+                    or (isinstance(comment_url, str)
+                        and comment_url.endswith(
+                            f"#issuecomment-{comment_id}"))):
                 comment["body"] = body
                 break
         else:
@@ -1694,22 +1704,60 @@ def test_streak_and_dedup_scans_skip_non_failure_noise(
 
 
 def test_report_failure_repeat_resolves_graphql_comment_id(
-        monkeypatch, tmp_path):
-    """Issue #1217: GraphQL comment node ids are resolved to the REST id
-    before the repeat counter is patched, and the report completes."""
+        monkeypatch, tmp_path, caplog):
+    """A gh issue-view node id is resolved from its URL, patched in place,
+    and reported as a successful dedup without escaping the tick."""
     exc = _failure_exc()
     fp = runner_health.failure_fingerprint(exc)
     history = [{
         "id": "IC_kwDOUC1jsc8AAAABVrm_6w",
-        "rest_id": 900,
+        "url": "https://github.com/owner/repo/issues/39#issuecomment-900",
         "body": _failure_history(1, fp)[0]["body"],
         "authorAssociation": "OWNER",
     }]
     captured = make_report_fake(monkeypatch, history=history)
-    _report(exc)
+    caplog.set_level("INFO")
+    assert _report(exc) is None
     assert captured["comments"] == []
     assert captured["updates"][0][0] == 900
     assert f"<!-- orbi:fail={fp}:2 -->" in captured["updates"][0][1]
+    assert "failure_comment_deduplicated" in caplog.text
+
+
+def test_report_failure_repeat_without_comment_url_posts_new_comment(
+        monkeypatch, tmp_path, caplog):
+    """A GraphQL id without a recoverable URL must fail open: record a new
+    failure comment and explain the missing REST id in a structured event."""
+    exc = _failure_exc()
+    fp = runner_health.failure_fingerprint(exc)
+    captured = make_report_fake(monkeypatch, history=[{
+        "id": "IC_kwDOUC1jsc8AAAABVrm_6w",
+        "body": _failure_history(1, fp)[0]["body"],
+        "authorAssociation": "OWNER",
+    }])
+    caplog.set_level("INFO")
+    _report(exc)
+    assert len(captured["comments"]) == 1
+    assert captured["updates"] == []
+    assert "failure_comment_id_unavailable" in caplog.text
+    assert "#issuecomment-<digits>" in caplog.text
+
+
+def test_report_failure_repeat_with_malformed_comment_url_posts_new_comment(
+        monkeypatch, tmp_path, caplog):
+    exc = _failure_exc()
+    fp = runner_health.failure_fingerprint(exc)
+    captured = make_report_fake(monkeypatch, history=[{
+        "id": "IC_kwDOUC1jsc8AAAABVrm_6w",
+        "url": "https://github.com/owner/repo/issues/39#comment-900",
+        "body": _failure_history(1, fp)[0]["body"],
+        "authorAssociation": "OWNER",
+    }])
+    caplog.set_level("INFO")
+    _report(exc)
+    assert len(captured["comments"]) == 1
+    assert captured["updates"] == []
+    assert "failure_comment_id_unavailable" in caplog.text
 
 
 def test_issue_comment_rest_id_rejects_non_numeric_rest_id(monkeypatch):
@@ -1740,8 +1788,8 @@ def test_report_failure_unsupported_comment_id_does_not_escape(
     }])
     caplog.set_level("INFO")
     _report(exc)
-    assert captured["comments"] == []
-    assert "failure_comment_update_failed" in caplog.text
+    assert len(captured["comments"]) == 1
+    assert "failure_comment_id_unavailable" in caplog.text
 
 
 def test_report_failure_comment_update_error_does_not_escape(
@@ -1751,11 +1799,14 @@ def test_report_failure_comment_update_error_does_not_escape(
     exc = _failure_exc()
     fp = runner_health.failure_fingerprint(exc)
     history = _failure_history(1, fp)
-    make_report_fake(
+    history[0]["url"] = "https://github.com/owner/repo/issues/39#issuecomment-900"
+    captured = make_report_fake(
         monkeypatch, history=history, failing_comment_update=True,
     )
     caplog.set_level("INFO")
     assert _report(exc) is None
+    assert captured["comments"] == []
+    assert captured["pr_comments"] == []
     assert "failure_comment_update_failed" in caplog.text
 
 

@@ -2398,7 +2398,7 @@ def test_verify_resumed_pr_branch_gone_from_origin_is_terminal(
     body = fake_gh.issues[9]["comments"][-1]["body"]
     assert "Orbi failed:" in body
     assert f"delivery branch {FAKE_BRANCH} no longer exists" in body
-    assert str(expected_resume_worktree(tmp_path)) in body
+    assert "worktree: `local runner worktree`" in body
     # The blocked comment states why automatic recovery is impossible.
     assert "cannot be recovered automatically" in body
     # Nothing is left to preserve: the preserved-objects suffix of the

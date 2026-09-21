@@ -7418,6 +7418,49 @@ def _failure_detail(exc: BaseException) -> str:
     return detail
 
 
+_LOCAL_PATH_RE = re.compile(
+    r"(?:/home/[^\s`),]+|/Users/[^\s`),]+|/tmp/[^\s`),]+|"
+    r"/workspace/[^\s`),]+|/workspaces/[^\s`),]+)"
+)
+
+
+def _redact_local_paths(value: str) -> str:
+    """Keep GitHub comments free of host-specific filesystem paths."""
+    return _LOCAL_PATH_RE.sub("local runner path", value)
+
+
+def _failure_summary(reason: str) -> str:
+    """Turn a runner exception description into a short reader summary."""
+    stderr_match = re.search(r"\s+stderr=(.*)$", reason,
+                             flags=re.IGNORECASE | re.DOTALL)
+    stderr = stderr_match.group(1).strip() if stderr_match else ""
+    summary = re.sub(r"\s+stderr=.*$", "", reason,
+                     flags=re.IGNORECASE | re.DOTALL)
+    # A CalledProcessError renders the entire argv between ``Command`` and
+    # ``returned``. Match that semantic boundary rather than the first closing
+    # bracket: an argv value may itself contain ``]``.
+    summary = re.sub(
+        r"Command\s+.+?\s+returned non-zero exit status\s+\d+",
+        "the delivery command failed", summary,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    summary = re.sub(r"CalledProcessError\([^)]*\)",
+                     "the delivery command failed", summary)
+    summary = _redact_local_paths(summary)
+    summary = re.sub(r"\s+", " ", summary).strip(" .;:")
+    if not summary:
+        summary = "the delivery command failed"
+    if stderr:
+        # Setup tools often write informational lines before the provider's
+        # concrete error. The final non-empty line is the actionable result.
+        stderr_summary = _redact_local_paths(
+            stderr.rstrip().rsplit("\n", 1)[-1].strip()
+        )
+        if stderr_summary and stderr_summary not in summary:
+            summary = f"{summary}: {stderr_summary}"
+    return summary[:500]
+
+
 _SGR_RE = re.compile(r"(?:\x1b\[[0-9;]*m|\^\[\[[0-9;]*m)")
 
 
@@ -7546,6 +7589,84 @@ def _session_summary(session_file: Path,
     return "\n".join(reversed(summary))
 
 
+def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
+                   branch: str, worktree: str, pr_url: str | None = None) -> str:
+    """Render run facts as wrapping Markdown, never as a host-path dump."""
+    fields = [
+        ("run", run_id), ("issue", issue), ("role", role),
+        ("branch", branch),
+        ("worktree", "local runner worktree"),
+        ("session", snapshot.get("session_id") or "-"),
+        ("session log", "local session log"),
+        ("phase", snapshot.get("phase") or "-"),
+        ("last activity", snapshot.get("last_activity") or "-"),
+        ("action", snapshot.get("action") or "-"),
+        ("result", snapshot.get("result") or "-"),
+    ]
+    if snapshot.get("session_file"):
+        fields[6] = ("session log", "local session log")
+    else:
+        fields[6] = ("session log", "<unavailable>")
+    rendered_fields = [
+        f"- {key}: `{_redact_local_paths(str(value))}`"
+        for key, value in fields
+    ]
+    if pr_url:
+        rendered_fields.insert(1, f"- PR: [{pr_url}]({pr_url})")
+    rendered = "\n".join(rendered_fields)
+    return rendered + (
+        "\n- legacy correlation: "
+        f"`run={run_id} branch={branch} session="
+        f"{snapshot.get('session_id') or '-'} phase={snapshot.get('phase') or '-'} "
+        f"last_activity={snapshot.get('last_activity') or '-'}`"
+    )
+
+
+def _failure_comment_body(*, outcome: str, action: str, reason: str,
+                          diagnosis: str, scene: str, evidence: str,
+                          pr_url: str | None, issue: str, run_id: str) -> str:
+    """Build the reader-facing hierarchy shared by classified failures."""
+    retrying = outcome == "fix needed"
+    headline = (
+        "Orbi: fix needed — the engine will retry"
+        if retrying else "Orbi: blocked — waiting on a human decision"
+    )
+    parts = [headline]
+    if pr_url:
+        parts.append(f"PR: [{pr_url}]({pr_url})")
+    parts.append(f"Issue: `{issue}` · run_id={run_id}")
+    if action:
+        parts.append(f"**Action:** {_redact_local_paths(action)}")
+    parts.append(f"**Reason:** {_failure_summary(reason)}")
+    disposition = "Orbi needs a fix" if retrying else "Orbi failed"
+    branch_match = re.search(r"- branch: `([^`]+)`", scene)
+    session_match = re.search(r"- session: `([^`]+)`", scene)
+    correlation = (
+        f"run={run_id} branch={branch_match.group(1) if branch_match else '-'} "
+        f"session={session_match.group(1) if session_match else '-'}"
+    )
+    details = [
+        "<details><summary>Diagnosis</summary>",
+        f"- disposition: `{disposition}: see the reason above`",
+        scene,
+        # Stable correlation keys retain the old journal lookup shape while
+        # local path fields above remain reader-safe labels.
+        f"- correlation: `{correlation}`",
+    ]
+    if diagnosis:
+        reason_summary = _failure_summary(reason)
+        diagnosis_summary = _failure_summary(diagnosis)
+        if diagnosis_summary == reason_summary or diagnosis_summary in reason_summary:
+            label = "Orbi needs a fix" if retrying else "Orbi failed"
+            details.append(f"- failure detail: `{label}: see the reason above`")
+        else:
+            details.append(f"- failure detail: `{diagnosis_summary}`")
+    if evidence:
+        details.append(evidence.lstrip())
+    details.append("</details>")
+    return "\n\n".join(parts + ["\n".join(details)])
+
+
 def _failure_evidence(worktree: Path | None, exc: BaseException) -> str:
     """Render the bounded evidence that survives terminal worktree cleanup.
 
@@ -7569,6 +7690,7 @@ def _failure_evidence(worktree: Path | None, exc: BaseException) -> str:
     session = (
         _session_summary(session_file) if session_file else "<unavailable>"
     )
+    session_label = "local session log" if session_file else "<unavailable>"
     test_log = "<unavailable>"
     if worktree is not None:
         test_path = worktree / ".orbi" / "test.log"
@@ -7577,12 +7699,12 @@ def _failure_evidence(worktree: Path | None, exc: BaseException) -> str:
     return (
         "\n\nFailure evidence (captured before cleanup):\n"
         f"exit_code={return_code if return_code is not None else '<unknown>'}\n"
-        f"\nstderr_tail:\n{_fenced(stderr)}\n"
-        f"\nstdout_tail:\n{_fenced(stdout)}\n"
+        f"\nstderr_tail:\n{_fenced(_redact_local_paths(stderr))}\n"
+        f"\nstdout_tail:\n{_fenced(_redact_local_paths(stdout))}\n"
         "\nsession_last_events "
         f"(last {SESSION_SUMMARY_LIMIT} records; full log: "
-        f"{session_file or '<unavailable>'}):\n{_fenced(session)}\n"
-        f"\ntest_log_tail:\n{_fenced(test_log)}"
+        f"{session_label}):\n{_fenced(_redact_local_paths(session))}\n"
+        f"\ntest_log_tail:\n{_fenced(_redact_local_paths(test_log))}"
     )
 
 
@@ -8856,9 +8978,10 @@ def report_delivery_failure(
     `_failure_evidence` block after the scene.
 
     Label and ordinary comment failures retain their existing caller
-    semantics. A failure resolving or updating an existing deduplicated
-    comment is logged as `failure_comment_update_failed` and does not
-    escape this function, so one malformed comment cannot stop the tick.
+    semantics. A malformed deduplicated comment URL posts a fresh failure
+    comment and emits `failure_comment_id_unavailable`; an update failure
+    is logged as `failure_comment_update_failed`. Neither escapes this
+    function, so one malformed comment cannot stop the tick.
 
     The #825 dead-loop guard (classified recoverable failures only):
     the same (run_id, failure fingerprint) recurring to
@@ -8930,10 +9053,13 @@ def report_delivery_failure(
         #256 isolation).
         """
         if classify:
-            snapshot = _snapshot_or_placeholder(
-                worktree / ".pi-session", number=number,
+            snapshot = (
+                _snapshot_or_placeholder(worktree / ".pi-session", number=number)
+                if worktree is not None else dict(_SNAPSHOT_PLACEHOLDER)
             )
         else:
+            if worktree is None:
+                return None
             try:
                 snapshot = activity_snapshot(worktree / ".pi-session")
             except Exception:
@@ -8941,11 +9067,10 @@ def report_delivery_failure(
                 return None
             if snapshot is None:
                 snapshot = dict(_SNAPSHOT_PLACEHOLDER)
-        return format_run_scene(
-            snapshot,
-            run_id=run_id or "-",
-            issue=issue_context(source_repo, number),
-            role=role, branch=branch or "-", worktree=str(worktree),
+        return _failure_scene(
+            snapshot, run_id=run_id or "-",
+            issue=issue_context(source_repo, number), role=role,
+            branch=branch or "-", worktree=str(worktree), pr_url=pr_url,
         )
 
     labels = (
@@ -8958,49 +9083,38 @@ def report_delivery_failure(
             number, repo=source_repo, event=EVENT_BLOCKED,
             current_labels=labels,
         )
-        headline = (
-            "Orbi failed: " + reason if not classify and not run_id
-            else "Orbi: blocked — waiting on a human decision"
+        scene = scene_line() or "- run: `-`"
+        body = _failure_comment_body(
+            outcome="blocked", action=action, reason=reason,
+            diagnosis=diagnosis, scene=scene, evidence=evidence_detail,
+            pr_url=pr_url, issue=issue_context(source_repo, number),
+            run_id=run_id or "-",
         )
-        paragraphs = [headline]
-        if action:
-            paragraphs.append(action)
-        paragraphs.append(reason)
-        # Keep the legacy failure label in the collapsed diagnosis while
-        # the headline carries the actionable disposition.
-        diagnosis = f"Orbi failed: {diagnosis}"
-        if worktree is not None and not classify:
-            scene = scene_line()
-            if scene is not None:
-                diagnosis += f"\n{scene}"
-        body = "\n\n".join(paragraphs)
-        body += f"\n\n<details><summary>Diagnosis</summary>\n{diagnosis}"
         if classify:
-            body += f"\n{_BLOCKED_PRECONDITION_PHRASE.lstrip('; ')}"
+            body = body.replace(
+                "</details>",
+                f"\n{_BLOCKED_PRECONDITION_PHRASE.lstrip('; ')}\n</details>",
+                1,
+            )
         if blocked_suffix:
-            body += f"\n{blocked_suffix.lstrip('; ')}"
-        body += evidence_detail
-        body += "\n</details>"
+            body = body.replace(
+                "</details>",
+                f"\n{blocked_suffix.lstrip('; ')}\n</details>", 1,
+            )
         outcome = "blocked"
     else:
         apply_label_patch(
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
             current_labels=labels,
         )
-        body = "\n\n".join((
-            "Orbi: fix needed — the engine will retry",
-            *(([f"What you need to do: {action}"] if action else [])),
-            f"What happened: {reason}",
-        ))
-        diagnostic_parts = [f"Orbi needs a fix: {diagnosis}", scene_line()]
+        scene = scene_line() or "- run: `-`"
         if review_scene_block is not None:
-            diagnostic_parts.append(review_scene_block)
-        if evidence_detail:
-            diagnostic_parts.append(evidence_detail.lstrip())
-        body += (
-            "\n\n<details><summary>Diagnosis</summary>\n"
-            + "\n".join(diagnostic_parts)
-            + "\n</details>"
+            scene += f"\n{_redact_local_paths(review_scene_block)}"
+        body = _failure_comment_body(
+            outcome="fix needed", action=action, reason=reason,
+            diagnosis=diagnosis, scene=scene, evidence=evidence_detail,
+            pr_url=pr_url, issue=issue_context(source_repo, number),
+            run_id=run_id or "-",
         )
         outcome = "fix needed"
     if len(body) > FAILURE_COMMENT_MAX_CHARS:
@@ -9012,7 +9126,7 @@ def report_delivery_failure(
             body[:FAILURE_COMMENT_MAX_CHARS]
             + f"\n\n_[comment truncated at {FAILURE_COMMENT_MAX_CHARS} "
             f"chars; full session log: "
-            f"{session_file or '<unavailable>'}]_"
+            f"{'local session log' if session_file else '<unavailable>'}]_"
         )
     if run_id:
         # The hidden fingerprint marker rides under the run marker on
@@ -9023,48 +9137,63 @@ def report_delivery_failure(
             f"{failure_marker(fingerprint)}\n"
         )
         body = f"{run_marker(run_id)}\n{fail_marker_line}{body}"
+    post_new_comment = True
     if run_id and reported_failure is not None and not blocked:
-        # The #825 dedup: the identical failure already has its Issue
-        # comment — the repeat counter is bumped in that comment IN
-        # PLACE (the dead-loop streak scan reads it as the occurrence
-        # count), no second comment is posted, and the journal records
-        # the repeat. The PR copy stays as first posted; the Issue
-        # comment is the delivery line's failure record. The patch is
-        # the repeat's report and fails like one (the label patch above
-        # and the tracked progress publish below keep their semantics).
+        # The #825 dedup: `gh issue view --json comments` returns a GraphQL
+        # node id, but the PATCH route requires the REST id. The comment URL
+        # already carries that id, so do not make a second API request.
         comment_id = reported_failure.get("id")
-        try:
-            if isinstance(comment_id, int) and not isinstance(comment_id, bool):
-                rest_comment_id = comment_id
-            elif isinstance(comment_id, str):
-                rest_comment_id = issue_comment_rest_id(
-                    number, repo=source_repo, node_id=comment_id,
-                )
-            else:
-                raise ValueError(
-                    f"unsupported failure comment id {comment_id!r}"
-                )
-            update_issue_comment(
-                rest_comment_id, repo=source_repo,
-                # Apply the increment to the newly assembled body, not the
-                # stale first report. This preserves scene/retry fields added
-                # by this attempt while retaining the dedup counter.
-                body=bump_failure_repeat(body, fingerprint),
+        if isinstance(comment_id, int) and not isinstance(comment_id, bool):
+            rest_comment_id = comment_id
+        else:
+            url = reported_failure.get("url")
+            match = (
+                re.search(r"#issuecomment-(\d+)$", url)
+                if isinstance(url, str) else None
             )
-        except Exception:
-            LOGGER.exception(
-                "issue=%s failure comment update failed", number,
+            rest_comment_id = int(match.group(1)) if match is not None else None
+        if rest_comment_id is None:
+            # A malformed or missing URL is data loss in the dedup metadata,
+            # not a delivery failure. Preserve the pre-#825 behavior so the
+            # current failure is still recorded and the tick continues.
+            unavailable_reason = (
+                "comment URL has no #issuecomment-<digits> suffix"
+            )
+            LOGGER.warning(
+                "issue=%s failure comment id unavailable: %s",
+                number, unavailable_reason,
             )
             event(
-                "failure_comment_update_failed", level=logging.ERROR,
-                issue=number, run_id=run_id,
+                "failure_comment_id_unavailable", level=logging.ERROR,
+                issue=number, run_id=run_id, reason=unavailable_reason,
             )
         else:
-            event(
-                "failure_comment_deduplicated", issue=number,
-                run_id=run_id, fingerprint=fingerprint,
-            )
-    else:
+            # A resolved existing comment owns this occurrence even if its
+            # PATCH fails. Preserve the existing update-failure behavior:
+            # log the failure without attempting a second ordinary comment.
+            post_new_comment = False
+            try:
+                update_issue_comment(
+                    rest_comment_id, repo=source_repo,
+                    # Apply the increment to the newly assembled body, not the
+                    # stale first report. This preserves scene/retry fields
+                    # added by this attempt while retaining the dedup counter.
+                    body=bump_failure_repeat(body, fingerprint),
+                )
+            except Exception:
+                LOGGER.exception(
+                    "issue=%s failure comment update failed", number,
+                )
+                event(
+                    "failure_comment_update_failed", level=logging.ERROR,
+                    issue=number, run_id=run_id,
+                )
+            else:
+                event(
+                    "failure_comment_deduplicated", issue=number,
+                    run_id=run_id, fingerprint=fingerprint,
+                )
+    if post_new_comment:
         comment_issue(number, repo=source_repo, body=body)
         if pr_url and not blocked:
             # The recoverable scene is written to the PR too:
