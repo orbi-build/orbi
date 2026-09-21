@@ -72,7 +72,7 @@ class FakeGit:
         verb = command[1]
         handler = {
             "ls-remote": self._ls_remote,
-            "branch": self._branch_list,
+            "branch": self._branch_dispatch,
             "fetch": self._fetch,
             "rev-parse": self._rev_parse,
             "merge-base": self._merge_base,
@@ -90,6 +90,23 @@ class FakeGit:
         name = ref.removeprefix("refs/heads/")
         if name in self.origin and f"refs/heads/{name}" == ref:
             return f"{self.origin[name]}\t{ref}\n"
+        return ""
+
+    def _branch_dispatch(self, args: list[str], cwd) -> str:
+        if args and args[0] == "--force":
+            return self._branch(args, cwd)
+        return self._branch_list(args, cwd)
+
+    def _branch(self, args: list[str], cwd) -> str:
+        if len(args) != 3 or args[0] != "--force":
+            self._unsupported(["git", "branch", *args])
+        _, name, start = args
+        if not start.startswith("origin/"):
+            self._unsupported(["git", "branch", *args])
+        remote = start[len("origin/"):]
+        if name not in self.local or remote not in self.origin:
+            self._fail(128, f"fatal: invalid reference: {start}")
+        self.local[name] = self.origin[remote]
         return ""
 
     def _branch_list(self, args: list[str], cwd) -> str:
@@ -152,11 +169,12 @@ class FakeGit:
             return str(self._worktree_state(cwd)["head"])
         if len(args) != 1:
             self._unsupported(["git", "rev-parse", *args])
-        # The adapter only ever reads `origin/<branch>` (freeze_base).
-        name = args[0].removeprefix("origin/")
-        if name != args[0] and name in self.origin:
-            return self.origin[name]
-        self._fail(128, f"fatal: ambiguous argument '{args[0]}'")
+        ref = args[0]
+        if ref.startswith("origin/") and ref[len("origin/"):] in self.origin:
+            return self.origin[ref[len("origin/"):]]
+        if ref in self.local:
+            return self.local[ref]
+        self._fail(128, f"fatal: ambiguous argument '{ref}'")
 
     def _worktree_state(self, cwd) -> dict:
         key = _key(cwd) if cwd is not None else "<no cwd>"

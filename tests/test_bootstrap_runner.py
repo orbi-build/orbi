@@ -2550,10 +2550,7 @@ def test_create_worktree_reuses_existing_remote_branch(monkeypatch, tmp_path):
 def test_create_worktree_existing_local_branch_is_reused_never_re_created(
     monkeypatch, tmp_path,
 ):
-    """Issue #608 (the #600 retry run 456880f8 scene): the stable branch
-    already exists (left by the previous run) — the claim takeover reuses
-    it with `worktree add --force`, never a second `-b <branch>` (which
-    is the fatal exit-255)."""
+    """An equal local delivery branch remains the checked-out identity."""
     path = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
     calls = []
 
@@ -2561,6 +2558,10 @@ def test_create_worktree_existing_local_branch_is_reused_never_re_created(
         calls.append((command, kwargs))
         if command[:3] == ["git", "branch", "--list"]:
             return "orbi/owner-repo-issue-3"
+        if command == ["git", "rev-parse", "orbi/owner-repo-issue-3"]:
+            return "same-sha"
+        if command == ["git", "rev-parse", "origin/orbi/owner-repo-issue-3"]:
+            return "same-sha"
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -2570,6 +2571,8 @@ def test_create_worktree_existing_local_branch_is_reused_never_re_created(
     assert calls == [
         (["git", "fetch", "origin", "orbi/owner-repo-issue-3"], {"cwd": tmp_path, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS}),
         (["git", "branch", "--list", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
+        (["git", "rev-parse", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
+        (["git", "rev-parse", "origin/orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
         (["git", "worktree", "add", "--force", str(path), "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
     ]
 
@@ -2647,6 +2650,10 @@ def test_create_worktree_fork_takeover_repeats_with_existing_target(tmp_path):
         existing_branch=True, branch="fix/outer", pr_number=592,
     )
     assert path.is_dir()
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "worktree", "remove", "--force", str(path)],
+        check=True, capture_output=True, timeout=30,
+    )
 
     (work / "f.txt").write_text("second\n", encoding="utf-8")
     subprocess.run(
