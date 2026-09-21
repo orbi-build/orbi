@@ -525,9 +525,9 @@ def test_agents_md_tdd_section_keeps_the_run_dir_coverage_rule():
 # Issue AND the PR with the round counter and the hidden run marker), so
 # the guard is a reviewer-prompt contract: read the round history before the
 # work, and on the same failure reason in >= 2 consecutive rounds emit the
-# findings verdict naming the repetition instead of repeating the fix. No
-# new runner-side prompt variable feeds it (the acceptance forbids it), so
-# the variable-set test below pins the template's placeholder set too.
+# findings verdict naming the repetition instead of repeating the fix. The
+# current Issue body is injected separately and is authoritative over this
+# history, so the variable-set test below pins the template's placeholders.
 REPEAT_FAILURE_GUARD_ITEMS = (
     # The guard runs BEFORE the review work starts.
     ("guard-before-work", "before starting the review work"),
@@ -545,6 +545,9 @@ REPEAT_FAILURE_GUARD_ITEMS = (
     # assemble a second GitHub command.
     # The decision rule: >= 2 consecutive rounds with the same failure
     # reason (the same wall — semantic recurrence, not byte-identical text).
+    ("guard-current-body", "current Issue body"),
+    ("guard-criterion-revalidation", "cited acceptance criterion still exists"),
+    ("guard-deleted-criterion", "criterion was deleted or changed"),
     ("guard-same-reason", "same failure reason"),
     ("guard-two-consecutive", "two or more consecutive rounds"),
     ("guard-not-byte-identical", "not necessarily byte-identical text"),
@@ -583,5 +586,6 @@ def test_prompt_review_md_keeps_the_variable_set_unchanged():
     ))
     assert found == {
         "SOURCE_REPO", "PR_NUMBER", "PR_URL", "BASE_BRANCH", "BASE_SHA",
-        "HEAD_SHA", "HEAD_REF", "ROUND", "BASE_SYNC_LOCK", "ISSUE_COMMENTS",
+        "HEAD_SHA", "HEAD_REF", "ROUND", "BASE_SYNC_LOCK", "ISSUE_BODY",
+        "ISSUE_COMMENTS",
     }, f"prompt_review.md prompt variables drifted: {found}"

@@ -4464,6 +4464,40 @@ def test_run_pi_skips_the_comment_fetch_without_the_placeholder(
     assert command[command.index("--system-prompt") + 1] == "SYSTEM b"
 
 
+def test_run_review_refreshes_issue_body_each_round(monkeypatch, tmp_path):
+    """Issue #1273: each review round receives the Issue body as it reads
+    now, so deleting an acceptance criterion takes effect on the next round."""
+    prompt_path = tmp_path / "prompt_review.md"
+    prompt_path.write_text("BODY={{ISSUE_BODY}}", encoding="utf-8")
+    bodies = iter(["old criterion", "new criterion"])
+    issue_reads = []
+    monkeypatch.setitem(
+        runner.__dict__, "issue_view",
+        lambda number, fields, *, repo: issue_reads.append((number, fields, repo))
+        or {"body": next(bodies)},
+    )
+    calls = []
+    monkeypatch.setitem(
+        runner.__dict__, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "ok",
+    )
+    config = config_domain.RunnerConfig(
+        prompt_review=prompt_path, repo_dir=tmp_path / "checkout",
+        source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4",
+        skills=(),
+    )
+    ctx = RunContext(run_id=config.run_id, issue=4, branch="branch",
+                     worktree=tmp_path, source_repo="owner/repo")
+    pr = {"number": 9, "url": "https://x/pull/9", "base_oid": "b1",
+          "head_oid": "h1", "head_ref": "h"}
+    runner.run_review(ctx, pr, config, 1)
+    runner.run_review(ctx, pr, config, 2)
+    assert issue_reads == [(4, "body", "owner/repo"), (4, "body", "owner/repo")]
+    prompts = [call[call.index("--system-prompt") + 1] for call in calls]
+    assert prompts == ["BODY=old criterion", "BODY=new criterion"]
+    assert "old criterion" not in prompts[1]
+
+
 def test_run_review_combines_current_pr_feedback_with_issue_comments(
     monkeypatch, tmp_path,
 ):

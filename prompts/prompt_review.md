@@ -20,6 +20,11 @@ Runtime context supplied by the runner:
 - Base sync lock: `{{BASE_SYNC_LOCK}}`
 - Review round: `{{ROUND}}`
 
+Current Issue body (fresh for this review round; authoritative acceptance
+criteria):
+
+{{ISSUE_BODY}}
+
 Trusted comments and feedback (oldest first): the linked Issue's decision
 history plus human feedback on the current delivery PR. Formal review state
 is shown in brackets and inline comments retain their file/line anchor. This
@@ -47,12 +52,16 @@ oldest first. Each round comment names its outcome right after the round
 counter: `CI merge gate blocked: <message>`, the behind-base /
 merge-conflict scene, or the `Findings:` payload.
 
-Compare the failure reason of consecutive rounds. When the same failure
-reason (the same wall — the same error, the same finding — not
-necessarily byte-identical text) appears in two or more consecutive
-rounds at the end of this run's history, do not repeat the same fix
-path: the wall has been hit twice already, and another normal fix
-attempt would only burn the remaining round budget. A round that already
+Compare the failure reason of consecutive rounds against the current Issue
+body above. The current body is authoritative: first revalidate that each
+finding's cited acceptance criterion still exists in it. A prior finding whose
+criterion was deleted or changed is not the same failure and must not be
+re-raised; continue the review against the current body. Only when the same
+failure reason (the same wall — the same error, the same finding — not
+necessarily byte-identical text) still applies to the current body and appears
+in two or more consecutive rounds at the end of this run's history, do not
+repeat the same fix path: the wall has been hit twice already, and another
+normal fix attempt would only burn the remaining round budget. A round that already
 reported the repetition counts as the failure it named. Instead emit
 immediately, before any other review work, the findings verdict with
 exactly one Major finding: its location is the PR round comments, its

@@ -4788,6 +4788,16 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
     (worktree / ".orbi").mkdir(exist_ok=True)
     started = time.monotonic()
     review_template = config.prompt_review.read_text(encoding="utf-8")
+    # Acceptance criteria are mutable review input. Read the Issue body for
+    # every round, rather than relying on the reviewer's initiative or on a
+    # body captured by an earlier run. Custom templates that do not consume
+    # it retain their historical GitHub-read behavior.
+    issue_body = ""
+    if "{{ISSUE_BODY}}" in review_template:
+        issue_data = issue_view(issue, "body", repo=source_repo)
+        issue_body = issue_data.get("body") or ""
+        if not isinstance(issue_body, str):
+            raise ValueError("issue body must be a string")
     review_values = {
         "SOURCE_REPO": source_repo,
         "PR_NUMBER": str(pr["number"]),
@@ -4797,6 +4807,7 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
         "HEAD_SHA": pr["head_oid"],
         "HEAD_REF": pr["head_ref"],
         "ROUND": str(round),
+        "ISSUE_BODY": issue_body,
         # The SAME shared base-sync lock as the
         # implementer — the review session's base-absorb fetch must
         # run under it (flock <lock> git fetch origin <base>).
