@@ -60,6 +60,21 @@ contradiction in place for the next delivery to rediscover.
   produced a plan and no commit, and the ticket body was never corrected
   between the two runs.
 
+## The release ticket waits for its milestone on its own
+
+While the milestone still has any other open Issue, the release ticket is **not
+claimed at all** — the engine skips it with `release_milestone_incomplete` and
+leaves it `ai-ready`. That is a recoverable wait, not a failure.
+
+So to land a ticket in a given version, **add it to that milestone and label it
+`ai-ready`** — nothing else. Do not stop the timer, strip the release ticket's
+labels, or clear worktrees: that only creates orphaned state to clean up later.
+
+The one exception is a release that already passed its gates (the ticket shows
+`release gates passed` / `scope verified`): the scope is frozen by then, so a
+newly added ticket belongs in the next milestone.
+
+
 ## Product positioning
 
 - Orbi is a **software dark factory**: an autonomous software delivery system
@@ -269,6 +284,18 @@ docs still described a hand-edited provider file.
 - Pre-start check: the configured `origin` URL matches the configured transport for the first source repo and `git ls-remote <expected-url>` exits 0; a failure logs `transport_check_failed` and fails the start — no slot, no claim, no label change, no fallback (in ssh mode explicitly no HTTPS fallback), no silent skip (the probe-failure reason is `ssh_unreachable` in ssh mode, `transport_unreachable` in https mode — fix the gh credentials there).
 - A remote on the opposite transport is never rewritten silently: only the human-run `orbi setup` migrates it with `git remote set-url origin <expected-url>` (HTTPS→SSH in ssh mode, SSH→HTTPS in https mode); every other path fails fast with the exact migration command. `orbi doctor` reports the transport read-only.
 - Full explanation: `docs/operations.mdx` and `docs/setup.mdx` (EN/ZH).
+
+## Always widen gh list queries
+
+`gh api <list endpoint>`, `gh issue list` and `gh pr list` return only the first
+page by default. **An empty result is not an error** — the query succeeds, exits
+0, warns about nothing, and "not on this page" gets read as "does not exist".
+
+- `gh api` takes `--paginate`
+- `gh issue list` / `gh pr list` take `--limit 200 --state all`
+- for versions use `gh release list --limit 10`
+
+If you only want a sample, say so; do not conclude "does not exist" from it.
 
 ## Task dependencies (blockedBy)
 
