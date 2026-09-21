@@ -849,6 +849,18 @@ def test_merge_gate_merges_after_green_ci(monkeypatch, tmp_path):
     assert result["merged"] is True
 
 
+def test_merge_gate_defers_when_ci_absent(monkeypatch, tmp_path, caplog):
+    """An empty rollup is no CI evidence, not a vacuous pass."""
+    monkeypatch.setattr(seam, "run_command", _merge_gate_fake(check_runs=[]))
+    with caplog.at_level("INFO"), pytest.raises(runner.DeliveryDeferred):
+        runner.merge_gate(
+            tmp_path, {"number": 4, "url": "u", "base_ref": "main",
+                       "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
+            "main", repo_dir=tmp_path,
+        )
+    assert "merge_gate_ci_absent" in caplog.text
+
+
 def test_preexisting_ci_triage_lookup_is_best_effort(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda *_args, **_kwargs: "{}")
     assert runner._main_ci_triage_url("owner/repo", "tests") is None
@@ -926,7 +938,8 @@ def _absorb_merge_command_fake(states, remote_head="h2"):
 
 def _absorb_pr_state(head, mergeable="MERGEABLE"):
     return {"state": "OPEN", "mergeable": mergeable, "headRefOid": head,
-            "statusCheckRollup": []}
+            "statusCheckRollup": [{"name": "tests", "status": "COMPLETED",
+                                   "conclusion": "SUCCESS"}]}
 
 
 def test_absorb_fake_dispatch_covers_command_results():
@@ -990,15 +1003,15 @@ def test_merge_gate_absorb_rejects_newly_dirty_pr(monkeypatch, tmp_path):
                           "main", repo_dir=tmp_path)
 
 
-def test_merge_gate_without_ci_proceeds_to_mergeable_gate(monkeypatch, tmp_path):
+def test_merge_gate_without_ci_defers_before_mergeable_gate(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command",
         _merge_gate_fake(check_runs=[]),
     )
-    result = runner.merge_gate(tmp_path, {"number": 4, "url": "u",
-                                          "base_ref": "main", "base_oid": "b1",
-                                          "head_ref": "h", "head_oid": "h1"},
-                               "main", repo_dir=tmp_path)
-    assert result["merged"] is True
+    with pytest.raises(runner.DeliveryDeferred):
+        runner.merge_gate(tmp_path, {"number": 4, "url": "u",
+                                     "base_ref": "main", "base_oid": "b1",
+                                     "head_ref": "h", "head_oid": "h1"},
+                          "main", repo_dir=tmp_path)
 
 
 def test_merge_gate_merges_reviewed_head_with_match_head_commit(monkeypatch, tmp_path):
@@ -1066,7 +1079,7 @@ def test_merge_gate_reraises_merge_base_errors(monkeypatch, tmp_path):
         if command[0] == "gh" and command[1] == "pr" and "view" in command:
             return json.dumps({
                 "state": "OPEN", "mergeable": "MERGEABLE",
-                "headRefOid": "h1", "statusCheckRollup": [],
+                "headRefOid": "h1", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}],
             })
         return ""
 
@@ -1087,7 +1100,7 @@ def test_merge_gate_behind_conflicted_pr_remains_recoverable(
         if command[0] == "gh" and command[1] == "pr" and "view" in command:
             return json.dumps({
                 "state": "OPEN", "mergeable": "DIRTY", "headRefOid": "h1",
-                "statusCheckRollup": [],
+                "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}],
             })
         return ""
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -1162,7 +1175,7 @@ def test_merge_gate_hands_off_each_actionable_policy_rejection(
         if command[0] == "gh" and command[1] == "pr" and "view" in command:
             return json.dumps({
                 "state": "OPEN", "mergeable": "MERGEABLE", "headRefOid": "h1",
-                "statusCheckRollup": [],
+                "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}],
             })
         if command[0] == "gh" and command[1] == "pr" and "merge" in command:
             raise subprocess.CalledProcessError(
@@ -1194,7 +1207,7 @@ def test_merge_gate_does_not_hand_off_without_failed_preflight(
             1, command, stderr="the base branch policy prohibits the merge",
         )) if command[0] == "gh" and command[1] == "pr" and "merge" in command else (
             json.dumps({"state": "OPEN", "mergeable": "MERGEABLE",
-                        "headRefOid": "h1", "statusCheckRollup": []})
+                        "headRefOid": "h1", "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}]})
             if command[0] == "gh" and command[1] == "pr" and "view" in command else ""
         )
     ))
@@ -3232,7 +3245,7 @@ def _install_merge_record_gh(monkeypatch, clone: Path) -> dict:
                     "mergeable": "MERGEABLE",
                     "headRefOid": git(clone, "rev-parse",
                                       f"origin/{TASK_BRANCH}"),
-                    "statusCheckRollup": [],
+                    "statusCheckRollup": [{"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}],
                 })
             return json.dumps({
                 "number": 4, "state": "MERGED", "mergedAt": "now",

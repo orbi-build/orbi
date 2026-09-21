@@ -206,7 +206,13 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     if command[-1] == "state":
                         # The pre-PR closeout reads the source Issue
                         # state (Issue #746): open in these scenes.
-                        return json.dumps({"state": "OPEN"})
+                        return json.dumps({
+                            "state": "OPEN",
+                            "statusCheckRollup": [{
+                                "name": "tests", "status": "COMPLETED",
+                                "conclusion": "SUCCESS",
+                            }],
+                        })
                     if command[-1] == "labels":
                         return json.dumps({
                             "labels": [{"name": name} for name in labels],
@@ -279,7 +285,13 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     cwd = kwargs.get("cwd")
                     if cwd is None:
                         # `pr_state` only needs the state (no git).
-                        return json.dumps({"state": pr["state"]})
+                        return json.dumps({
+                            "state": pr["state"],
+                            "statusCheckRollup": [{
+                                "name": "tests", "status": "COMPLETED",
+                                "conclusion": "SUCCESS",
+                            }],
+                        })
                     head = real_run(
                         ["git", "rev-parse", "HEAD"], cwd=cwd,
                     )
@@ -292,6 +304,10 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     return json.dumps({
                         "state": pr["state"],
                         "mergeable": "MERGEABLE",
+                        "statusCheckRollup": [{
+                            "name": "tests", "status": "COMPLETED",
+                            "conclusion": "SUCCESS",
+                        }],
                         "headRefOid": head,
                     })
                 if command[2] == "merge":
