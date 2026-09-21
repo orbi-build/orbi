@@ -1,4 +1,31 @@
 {
   "command_shape_asserts": 517,
-  "monkeypatch_setattr_runner": 485
+  "monkeypatch_setattr_modules": {
+    "cli": 4,
+    "cli_source": 7,
+    "delivery_labels": 6,
+    "delivery_scene": 0,
+    "engine_source": 0,
+    "git_transport": 0,
+    "github": 21,
+    "gitops": 0,
+    "human_review": 0,
+    "journal": 84,
+    "launchd_deploy": 0,
+    "merge_handoff": 0,
+    "pi_activity": 0,
+    "pi_process": 19,
+    "pi_recovery": 51,
+    "pilot_setup": 18,
+    "pilot_slots": 0,
+    "progress": 12,
+    "release": 45,
+    "repo_config": 0,
+    "runner_health": 14,
+    "scene": 0,
+    "scheduler": 17,
+    "systemd_deploy": 0
+  },
+  "monkeypatch_setattr_runner": 485,
+  "monkeypatch_setattr_runner_string": 6
 }
