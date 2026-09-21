@@ -16,6 +16,7 @@ journal. These tests pin the active detection contract:
 - normal multi-round review/fix cycles (different fingerprints, a successful
   run breaking the streak) never produce a finding.
 """
+from orbi import config as config_domain
 import fcntl
 import json
 import os
@@ -85,7 +86,7 @@ ORBI_REPO = "orbi-build/orbi"
 
 def make_config(tmp_path: Path, *, health_alert_repo=None,
                 unit_name: str | None = None) -> dict:
-    return runner.RunnerConfig(repo_dir=tmp_path, source_repos=(REPO,), deploy_home=tmp_path, health_alert_repo=health_alert_repo, unit_name=unit_name, max_concurrency=2)
+    return config_domain.RunnerConfig(repo_dir=tmp_path, source_repos=(REPO,), deploy_home=tmp_path, health_alert_repo=health_alert_repo, unit_name=unit_name, max_concurrency=2)
 
 
 def origin_route(url: str = f"git@github.com:{ORBI_REPO}.git") -> dict:
@@ -1112,7 +1113,7 @@ def test_process_issue_pickup_record_failure_is_bypass(
     with caplog.at_level("INFO"):
         result = runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
-            runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
+            config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
             "xqliu/orbi-backlog",
         )
     assert result.url == "https://github.com/orbi-build/orbi/pull/4"
@@ -1161,7 +1162,7 @@ def test_process_issue_failure_record_failure_is_bypass(
     with caplog.at_level("INFO"):
         result = runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
-            runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
+            config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
             "xqliu/orbi-backlog",
         )
     assert result.kind == "failed"

@@ -10,6 +10,7 @@ one label read plus local evidence reads decide.
 `orbi.human_review` is the pure half (classification, rendering); the
 runner tests below cover the wiring in `_run_review_round`.
 """
+from orbi import config as config_domain
 import json
 from unittest.mock import Mock
 
@@ -177,13 +178,13 @@ def test_load_config_human_review_gate_defaults_off_and_validates(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n',
                            encoding="utf-8")
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.human_review_gate is False
     config_path.write_text(
         'source_repos = ["owner/repo"]\nhuman_review_gate = true\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path).human_review_gate is True
+    assert config_domain.load_config(config_path).human_review_gate is True
     config_path.write_text(
         'source_repos = ["owner/repo"]\nhuman_review_gate = "yes"\n',
         encoding="utf-8",
@@ -191,7 +192,7 @@ def test_load_config_human_review_gate_defaults_off_and_validates(tmp_path):
     with pytest.raises(
         ValueError, match="human_review_gate must be a boolean",
     ):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 # ------------------------------------------------------- runner: the gate
@@ -210,7 +211,7 @@ def _scene_comments():
 
 
 def _gate_config(tmp_path, *, gate=True):
-    return runner.RunnerConfig(repo_dir=tmp_path, base_branch="main", base_sha=BASE_SHA, human_review_gate=gate)
+    return config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main", base_sha=BASE_SHA, human_review_gate=gate)
 
 
 @pytest.fixture()

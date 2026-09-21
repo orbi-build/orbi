@@ -33,7 +33,7 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
-from orbi import __version__, cli_source, engine_source, git_transport, runner, scheduler
+from orbi import __version__, cli_source, config as config_domain, engine_source, git_transport, runner, scheduler
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
     FIX_NEEDED_LABEL,
@@ -45,13 +45,10 @@ from orbi.delivery_labels import (
 
 from orbi.github import list_milestones, merge_gate_preflight
 from orbi.runner import (
-    ConfigFileMissingError,
     RunIdFilter,
-    RunnerConfig,
     configure_logging,
     freeze_base,
     list_issues,
-    load_config,
     log_format,
     rewrite_active_milestone_line,
     run_command,
@@ -400,7 +397,7 @@ def deploy_home_dirty_files(repo_dir: Path, *, run_command) -> list[str]:
     ]
 
 
-def install_units_command(config: RunnerConfig, installed_dir: Path | None) -> str:
+def install_units_command(config: config_domain.RunnerConfig, installed_dir: Path | None) -> str:
     """Run the idempotent unit install and return the deployment report.
 
     The report carries the deployed commit (the deployment checkout's
@@ -427,7 +424,7 @@ def install_units_command(config: RunnerConfig, installed_dir: Path | None) -> s
     return "\n".join(lines)
 
 
-def doctor_report(config: RunnerConfig, installed_dir: Path | None) -> str:
+def doctor_report(config: config_domain.RunnerConfig, installed_dir: Path | None) -> str:
     """Read-only deployment and health report.
 
     Checks: repo commit, unit drift (the same comparison
@@ -616,7 +613,7 @@ def doctor_report(config: RunnerConfig, installed_dir: Path | None) -> str:
     return "\n".join(lines)
 
 
-def status_report(config: RunnerConfig) -> str:
+def status_report(config: config_domain.RunnerConfig) -> str:
     lines = [
         f"capacity: {config.max_concurrency}",
         *slot_lines(config.slot_dir, config.max_concurrency),
@@ -644,7 +641,7 @@ class MilestoneSetError(Exception):
     """The `milestone set` fail-fast error: one structured line (reason + fix)."""
 
 
-def milestone_set(config: RunnerConfig, config_path: Path,
+def milestone_set(config: config_domain.RunnerConfig, config_path: Path,
                   title: str) -> tuple[str, str]:
     """Advance `active_milestone` to one exact Milestone title (Issue #895).
 
@@ -950,7 +947,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "setup":
             pilot_setup.ensure_config(args.config)
-        config = load_config(
+        config = config_domain.load_config(
             args.config,
             # The engine-source sync and the milestone advance are
             # deployment maintenance operations — a missing provider
@@ -975,7 +972,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             LOGGER.error("config_invalid reason=%s", exc)
         return 1
-    except ConfigFileMissingError as exc:
+    except config_domain.ConfigFileMissingError as exc:
         if not candidates:
             candidates = _installed_unit_configs(
                 getattr(args, "installed_dir", None),

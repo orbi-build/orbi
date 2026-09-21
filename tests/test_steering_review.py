@@ -1,3 +1,4 @@
+from orbi import config as config_domain
 import time
 from pathlib import Path
 import pytest
@@ -9,7 +10,7 @@ from orbi.pi_process import PiWatchOptions
 def _config(tmp_path: Path, **kwargs):
     prompt = tmp_path / "prompt.md"
     prompt.write_text("system", encoding="utf-8")
-    return runner.RunnerConfig(prompt=prompt, repo_dir=tmp_path,
+    return config_domain.RunnerConfig(prompt=prompt, repo_dir=tmp_path,
         source_repos=("owner/repo",), workspace_root=tmp_path,
         context_files=(), skills=(), base_branch="main", base_sha="abc123def456",
         run_id="run1", **kwargs)
@@ -76,10 +77,10 @@ def test_stream_pi_steers_and_restarts(tmp_path):
 
 def test_steering_validation_and_limit(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="positive finite"):
-        runner._positive_seconds({"x": "bad"}, "x", 1.0)
+        config_domain._positive_seconds({"x": "bad"}, "x", 1.0)
     with pytest.raises(ValueError, match="positive finite"):
-        runner._positive_seconds({"x": 0}, "x", 1.0)
-    assert runner._positive_seconds({}, "x", 2.0) == 2.0
+        config_domain._positive_seconds({"x": 0}, "x", 1.0)
+    assert config_domain._positive_seconds({}, "x", 2.0) == 2.0
     config = _config(tmp_path, steering_max_rounds=0)
     monkeypatch.setitem(runner.__dict__, "issue_view",
         lambda *a, **k: _snapshot([]))
@@ -297,7 +298,7 @@ def test_load_config_rejects_invalid_steering_values(tmp_path):
     path = tmp_path / "orbi.toml"
     path.write_text('source_repos = ["owner/repo"]\nsteering_enabled = "yes"\n', encoding="utf-8")
     with pytest.raises(ValueError, match="steering_enabled"):
-        runner.load_config(path)
+        config_domain.load_config(path)
     path.write_text('source_repos = ["owner/repo"]\nsteering_max_rounds = true\n', encoding="utf-8")
     with pytest.raises(ValueError, match="steering_max_rounds"):
-        runner.load_config(path)
+        config_domain.load_config(path)

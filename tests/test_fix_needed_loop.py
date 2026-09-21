@@ -10,6 +10,7 @@ same run, branch, worktree and PR. `ai-blocked` is reserved for
 external preconditions the AI cannot safely judge or fix; every blocked
 comment states the explicit reason why automatic recovery is impossible.
 """
+from orbi import config as config_domain
 import json
 import subprocess
 from pathlib import Path
@@ -97,7 +98,7 @@ def _issue():
 
 
 def _config(tmp_path):
-    return runner.RunnerConfig(repo_dir=tmp_path, base_branch="main")
+    return config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main")
 
 
 # ---------------------------------------------------------------- classification
@@ -619,7 +620,7 @@ def test_delivery_step_base_branch_mismatch_marks_blocked_with_reason(
     caplog.set_level("INFO")
     runner.delivery_step(
         PR_URL, _issue(),
-        runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
+        config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
     )
     # No review was started (the mismatch is terminal before it).
     assert reviews == []
@@ -1105,7 +1106,7 @@ def test_exhausted_review_enters_new_budget_after_human_recovery(
         runner, "run_review",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("review started")),
     )
-    config = runner.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main", repo_dir=tmp_path)
+    config = config_domain.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main", repo_dir=tmp_path)
     with pytest.raises(RuntimeError, match="review started"):
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", config, "owner/repo", 39,
@@ -1138,7 +1139,7 @@ def test_review_rounds_exhausted_raises_unrecoverable(monkeypatch, tmp_path):
                             "base_oid": "abc", "head_ref": "b",
                             "head_oid": "def",
                         })
-    config = runner.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main", repo_dir=tmp_path)
+    config = config_domain.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main", repo_dir=tmp_path)
     with pytest.raises(
         runner.UnrecoverableDeliveryError, match="exhausted",
     ):
@@ -1211,7 +1212,7 @@ def _external_review_env(monkeypatch, tmp_path, *, external: bool):
                         lambda *a, **k: ["ai-pr-opened"])
     monkeypatch.setattr(seam, "apply_label_patch",
                         lambda number, **kwargs: patches.append(kwargs))
-    config = runner.RunnerConfig(
+    config = config_domain.RunnerConfig(
         run_id=FAKE_RUN_ID, base_branch="main", repo_dir=tmp_path,
     )
     scene = {
@@ -1237,7 +1238,7 @@ def test_external_takeover_clean_verdict_stops_at_triage(
     caplog.set_level("INFO")
     merged = runner.review_and_merge_if_clean(
         tmp_path, "contributor-patch", "main",
-        runner.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main",
+        config_domain.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main",
                             repo_dir=tmp_path),
         "owner/repo", 39, title="task", priority="normal",
         scene={
@@ -1281,7 +1282,7 @@ def test_internal_clean_verdict_still_merges(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "sync_base_checkout", lambda *a, **k: None)
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main",
-        runner.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main",
+        config_domain.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main",
                             repo_dir=tmp_path),
         "owner/repo", 39, title="task", priority="normal",
         scene={

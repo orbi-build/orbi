@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     # vocabulary at runtime; this module never imports the runner
     # (CONSTITUTION Article 3.3).
     from orbi.repo_config import RepoPolicy
-    from orbi.runner import RunnerConfig
+    from orbi.config import RunnerConfig
 
 
 class DeliveryScene(Enum):

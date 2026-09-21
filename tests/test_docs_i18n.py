@@ -12,6 +12,7 @@ language documents a topic the other does not), when a Chinese page
 references a label or config field the implementation does not have, or
 when the README stops pointing at the Chinese docs entry.
 """
+from orbi import config as config_domain
 import re
 from pathlib import Path
 
@@ -58,7 +59,7 @@ KNOWN_LABELS = frozenset({
 
 LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")
 
-# Config fields the implementation understands (bootstrap_runner.load_config
+# Config fields the implementation understands (bootstrap_config_domain.load_config
 # plus the committed example) — the Chinese field table may document
 # exactly this set, no invented field.
 KNOWN_CONFIG_FIELDS = frozenset({

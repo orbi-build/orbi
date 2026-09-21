@@ -5,6 +5,7 @@ per-key merge over the host fallback (D3), the `gh api` read pipeline (missing
 file -> no-op, malformed file -> fail fast, read error -> fail open), the D4
 change-visibility audit, and the runner wiring at the claim scan and claim.
 """
+from orbi import config as config_domain
 import base64
 import dataclasses
 import json
@@ -164,7 +165,7 @@ def test_context_files_rejects_absolute_posix_path():
 # --- D3 per-key resolution --------------------------------------------------
 
 def test_resolve_policy_overrides_only_the_declared_keys():
-    host = runner.RunnerConfig(
+    host = config_domain.RunnerConfig(
         base_branch="main",
         active_milestone="v0.1.0",
         context_files=(Path("/host/ctx.md"),),
@@ -185,7 +186,7 @@ def test_resolve_policy_overrides_only_the_declared_keys():
 
 
 def test_resolve_policy_overrides_steering_and_omitted_keys_fall_back():
-    host = runner.RunnerConfig(
+    host = config_domain.RunnerConfig(
         steering_enabled=True, steering_poll_seconds=60.0,
         steering_max_rounds=3,
     )
@@ -202,7 +203,7 @@ def test_resolve_policy_overrides_steering_and_omitted_keys_fall_back():
 
 def test_resolve_policy_overrides_all_declared_steering_keys():
     effective = repo_config.resolve_policy(
-        runner.RunnerConfig(
+        config_domain.RunnerConfig(
             steering_enabled=True, steering_poll_seconds=60.0,
             steering_max_rounds=3,
         ),
@@ -465,7 +466,7 @@ def test_pick_next_delivery_in_flight_scan_uses_the_repo_dispatch_label(
     monkeypatch.setattr(
         runner, "reconcile_release_milestones", lambda *a, **k: None,
     )
-    config = runner.RunnerConfig()
+    config = config_domain.RunnerConfig()
     assert runner.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1, config=config,
     ) == ("owner/repo", in_flight, None)
@@ -497,7 +498,7 @@ def test_pick_next_delivery_in_flight_scan_falls_back_on_a_malformed_file(
     )
     assert runner.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1,
-        config=runner.RunnerConfig(),
+        config=config_domain.RunnerConfig(),
     ) is None
     assert any(
         search.startswith("label:ai-ready label:ai-in-progress")
@@ -506,18 +507,18 @@ def test_pick_next_delivery_in_flight_scan_falls_back_on_a_malformed_file(
 
 
 def test_repository_config_path_defaults_and_honors_the_entry():
-    config = runner.RunnerConfig(repositories=(
+    config = config_domain.RunnerConfig(repositories=(
         {"github": "owner/pilot", "config_path": ".orbi/policy.toml"},
     ))
-    assert runner.repository_config_path(config, "owner/pilot") == ".orbi/policy.toml"
-    assert runner.repository_config_path(config, "owner/other") == ".github/orbi.toml"
-    assert runner.repository_config_path(
-        runner.RunnerConfig(), "owner/other",
+    assert config_domain.repository_config_path(config, "owner/pilot") == ".orbi/policy.toml"
+    assert config_domain.repository_config_path(config, "owner/other") == ".github/orbi.toml"
+    assert config_domain.repository_config_path(
+        config_domain.RunnerConfig(), "owner/other",
     ) == ".github/orbi.toml"
 
 
 def test_repository_base_branch_falls_back_to_the_entry_then_host():
-    config = runner.RunnerConfig(
+    config = config_domain.RunnerConfig(
         base_branch="main",
         repositories=({"github": "owner/pilot", "base_branch": "develop"},),
     )
@@ -526,7 +527,7 @@ def test_repository_base_branch_falls_back_to_the_entry_then_host():
 
 
 def test_apply_repo_policy_uses_the_entry_base_branch_as_fallback():
-    config = runner.RunnerConfig(
+    config = config_domain.RunnerConfig(
         base_branch="main",
         repositories=({"github": "owner/pilot", "base_branch": "develop"},),
     )
@@ -589,7 +590,7 @@ def test_pick_issue_with_repo_policy_uses_repo_scan_keys(monkeypatch):
         return json.dumps([])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    config = runner.RunnerConfig()
+    config = config_domain.RunnerConfig()
     assert runner._pick_issue_with_repo_policy("owner/repo", "v1.0.0", config) is None
     searched = "\n".join(" ".join(command) for command in commands)
     assert "label:repo-ready" in searched
@@ -605,7 +606,7 @@ def test_pick_issue_with_repo_policy_ignores_a_malformed_file(monkeypatch):
     monkeypatch.setattr(seam, "run_command", fake_run)
     # The scan keeps the host keys and stays alive; process_issue blocks.
     assert runner._pick_issue_with_repo_policy(
-        "owner/repo", "v1.0.0", runner.RunnerConfig(),
+        "owner/repo", "v1.0.0", config_domain.RunnerConfig(),
     ) is None
 
 
@@ -706,7 +707,7 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
     )
     result = runner.process_issue(
         {"number": 4, "title": "T", "body": "", "labels": []},
-        runner.RunnerConfig(
+        config_domain.RunnerConfig(
             repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
             base_branch="main",
         ),
@@ -799,7 +800,7 @@ def test_main_blocks_a_claim_when_the_repo_config_is_invalid(
 
 def test_resolve_policy_overrides_the_declared_milestone():
     effective = repo_config.resolve_policy(
-        runner.RunnerConfig(active_milestone="v1"),
+        config_domain.RunnerConfig(active_milestone="v1"),
         repo_config.RepoPolicy(active_milestone="v2"),
     )
     assert effective.active_milestone == "v2"
@@ -837,7 +838,7 @@ def test_read_repo_config_at_invalid_toml_is_none():
 
 def test_parse_repositories_rejects_non_string_config_path(tmp_path):
     with pytest.raises(ValueError, match=r"config_path must be a non-empty"):
-        runner.parse_repositories(
+        config_domain.parse_repositories(
             [{
                 "name": "p", "path": "repo", "github": "owner/p",
                 "base_branch": "main", "config_path": 7,
@@ -847,7 +848,7 @@ def test_parse_repositories_rejects_non_string_config_path(tmp_path):
 
 
 def test_parse_repositories_honors_a_custom_config_path(tmp_path):
-    repos = runner.parse_repositories(
+    repos = config_domain.parse_repositories(
         [{
             "name": "p", "path": "repo", "github": "owner/p",
             "base_branch": "main", "config_path": ".orbi/policy.toml",
@@ -881,7 +882,7 @@ def test_run_pi_injects_repo_context_files(monkeypatch, tmp_path):
         lambda command, **kwargs: calls.append(command) or "done",
     )
     monkeypatch.setattr(runner, "prepare_pi_agent_dir", lambda *a, **k: None)
-    config = runner.RunnerConfig(
+    config = config_domain.RunnerConfig(
         prompt=prompt, repo_dir=tmp_path,
         source_repos=("owner/repo",), workspace_root=tmp_path,
         context_files=(), skills=(), base_branch="main",
@@ -935,7 +936,7 @@ def test_process_issue_accepts_a_pre_resolved_record(monkeypatch, tmp_path):
     }))
     result = runner.process_issue(
         {"number": 4, "title": "T", "body": "", "labels": []},
-        runner.RunnerConfig(
+        config_domain.RunnerConfig(
             repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
             base_branch="main",
         ),
@@ -960,10 +961,10 @@ def test_repo_policies_are_isolated_per_repository(monkeypatch):
         })
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    good = runner.load_repo_policy(runner.RunnerConfig(), "owner/good")
+    good = runner.load_repo_policy(config_domain.RunnerConfig(), "owner/good")
     assert good == repo_config.RepoPolicy(base_branch="beta", sha="g")
     with pytest.raises(repo_config.RepoConfigError):
-        runner.load_repo_policy(runner.RunnerConfig(), "owner/bad")
+        runner.load_repo_policy(config_domain.RunnerConfig(), "owner/bad")
 
 
 # --- this repository's own policy file (Issue #731) -------------------------
@@ -1017,7 +1018,7 @@ def test_parse_repo_config_returns_frozen_repo_policy():
 
 
 def test_resolve_policy_returns_a_runner_config_with_declared_overrides():
-    host = runner.RunnerConfig(
+    host = config_domain.RunnerConfig(
         base_branch="main", active_milestone="v0.1.0",
         context_files=(Path("/host/ctx.md"),),
         dispatch_label="ai-ready",
@@ -1027,7 +1028,7 @@ def test_resolve_policy_returns_a_runner_config_with_declared_overrides():
             base_branch="beta", dispatch_label="custom-ready",
         ),
     )
-    assert isinstance(effective, runner.RunnerConfig)
+    assert isinstance(effective, config_domain.RunnerConfig)
     assert effective.base_branch == "beta"
     assert effective.dispatch_label == "custom-ready"
     # Omitted keys keep the host fallback.
@@ -1038,7 +1039,7 @@ def test_resolve_policy_returns_a_runner_config_with_declared_overrides():
 
 def test_resolve_policy_context_files_are_additive():
     effective = repo_config.resolve_policy(
-        runner.RunnerConfig(context_files=(Path("/host.md"),)),
+        config_domain.RunnerConfig(context_files=(Path("/host.md"),)),
         repo_config.RepoPolicy(context_files=("AGENTS.md",)),
     )
     assert effective.context_files == (Path("/host.md"),)
@@ -1063,7 +1064,7 @@ def test_resolve_source_base_branch_fuses_entry_without_a_policy_file():
     the release path re-derived the entry value — two paths, two base
     branches for the same repository. A policy, when present, still
     overrides the entry."""
-    config = runner.RunnerConfig(
+    config = config_domain.RunnerConfig(
         repo_dir=Path("/repo"), source_repos=("o/r",),
         deploy_home=Path("/repo"), max_concurrency=2,
         base_branch="main",

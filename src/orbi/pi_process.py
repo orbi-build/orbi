@@ -52,7 +52,7 @@ from orbi.pi_recovery import (
 if TYPE_CHECKING:
     # Annotation-only: `orbi.runner` imports this module's constants at
     # runtime.
-    from orbi.runner import RunnerConfig
+    from orbi.config import RunnerConfig
 
 
 LOGGER = logging.getLogger("orbi.pi_process")

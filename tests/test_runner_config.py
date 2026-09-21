@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from orbi import config as config_domain
+from orbi.pilot_slots import slot_dir_for
 import orbi.runner as runner
 
 
@@ -22,13 +24,37 @@ def test_load_config_resolves_relative_paths_and_values(tmp_path):
         """source_repos = [\"owner/repo\"]\nrepo_dir = \"repo\"\nworkspace_root = \"..\"\nprompt = \"prompt.md\"\nskills = [\"skill.md\"]\ncontext_files = [\"context.md\"]\n""",
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.source_repos == ("owner/repo",)
     assert config.repo_dir == (tmp_path / "repo").resolve()
     assert config.workspace_root == tmp_path.parent.resolve()
     assert config.prompt == (tmp_path / "prompt.md").resolve()
     assert config.skills == ((tmp_path / "skill.md").resolve(),)
     assert config.context_files == ((tmp_path / "context.md").resolve(),)
+
+
+def test_load_config_matches_the_pre_extraction_runner_config_field_for_field(
+    tmp_path,
+):
+    """The module move preserves the complete parsed config value."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n',
+        encoding="utf-8",
+    )
+    repo_dir = (tmp_path / "repo").resolve()
+
+    assert config_domain.load_config(config_path) == config_domain.RunnerConfig(
+        config_path=config_path.resolve(),
+        source_repos=("owner/repo",),
+        repo_dir=repo_dir,
+        deploy_home=repo_dir,
+        workspace_root=tmp_path.parent.resolve(),
+        prompt=(tmp_path / "prompts" / "prompt.md").resolve(),
+        prompt_review=(tmp_path / "prompts" / "prompt_review.md").resolve(),
+        engine_source_track="main",
+        slot_dir=slot_dir_for(repo_dir),
+    )
 
 
 def test_validate_execution_source_repos_rejects_multiple_checkouts():
@@ -49,7 +75,7 @@ def test_runner_config_keys_are_documented_and_shipped():
         "slot_dir",
     }
     runner_keys = {
-        field.name for field in dataclasses.fields(runner.RunnerConfig)
+        field.name for field in dataclasses.fields(config_domain.RunnerConfig)
     } - derived
     assert runner_keys
 
@@ -77,7 +103,7 @@ def test_example_config_passes_execution_source_repos_validation():
         Path(__file__).resolve().parent.parent
         / "src" / "orbi" / "example_config.toml"
     )
-    config = runner.load_config(example)
+    config = config_domain.load_config(example)
     assert len(config.source_repos) == 1
     runner.validate_execution_source_repos(config.source_repos)
 
@@ -86,14 +112,14 @@ def test_load_config_requires_source_repos(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text("prompt = \"prompt.md\"\n", encoding="utf-8")
     with pytest.raises(ValueError, match="source_repos must be a non-empty list"):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_rejects_empty_source_repo_name(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo", ""]\n', encoding="utf-8")
     with pytest.raises(ValueError, match="source_repos must contain non-empty strings"):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_returns_the_frozen_runner_config(tmp_path):
@@ -105,8 +131,8 @@ def test_load_config_returns_the_frozen_runner_config(tmp_path):
         'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n',
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
-    assert isinstance(config, runner.RunnerConfig)
+    config = config_domain.load_config(config_path)
+    assert isinstance(config, config_domain.RunnerConfig)
     assert config.source_repos == ("owner/repo",)
     assert config.repo_dir == (tmp_path / "repo").resolve()
     assert config.base_branch == "main"
@@ -134,13 +160,13 @@ def test_load_config_rejects_invalid_attribution_footer(tmp_path, value):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="attribution_footer must be a boolean"):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_defaults_base_branch_to_main(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.base_branch == "main"
 
 
@@ -149,7 +175,7 @@ def test_load_config_defaults_git_transport_to_ssh(tmp_path):
     the exact pre-#580 SSH contract."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    assert runner.load_config(config_path).git_transport == "ssh"
+    assert config_domain.load_config(config_path).git_transport == "ssh"
 
 
 def test_load_config_accepts_the_https_git_transport(tmp_path):
@@ -160,7 +186,7 @@ def test_load_config_accepts_the_https_git_transport(tmp_path):
         'source_repos = ["owner/repo"]\ngit_transport = "https"\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path).git_transport == "https"
+    assert config_domain.load_config(config_path).git_transport == "https"
 
 
 def test_load_config_rejects_an_unknown_git_transport(tmp_path):
@@ -170,7 +196,7 @@ def test_load_config_rejects_an_unknown_git_transport(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="git_transport must be"):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_rejects_a_non_string_git_transport(tmp_path):
@@ -180,7 +206,7 @@ def test_load_config_rejects_a_non_string_git_transport(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="git_transport must be"):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_defaults_engine_source_track_to_main(tmp_path):
@@ -188,7 +214,7 @@ def test_load_config_defaults_engine_source_track_to_main(tmp_path):
     dogfood behavior — the deploy home tracks origin/main."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    assert runner.load_config(config_path).engine_source_track == "main"
+    assert config_domain.load_config(config_path).engine_source_track == "main"
 
 
 @pytest.mark.parametrize(
@@ -202,7 +228,7 @@ def test_load_config_accepts_the_engine_source_track_forms(tmp_path, track):
         f'source_repos = ["owner/repo"]\nengine_source_track = "{track}"\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path).engine_source_track == track
+    assert config_domain.load_config(config_path).engine_source_track == track
 
 
 def test_load_config_normalizes_stable_to_release(tmp_path):
@@ -213,7 +239,7 @@ def test_load_config_normalizes_stable_to_release(tmp_path):
         'source_repos = ["owner/repo"]\nengine_source_track = "stable"\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path).engine_source_track == "release"
+    assert config_domain.load_config(config_path).engine_source_track == "release"
 
 
 def test_load_config_rejects_an_invalid_engine_source_track(tmp_path):
@@ -223,13 +249,13 @@ def test_load_config_rejects_an_invalid_engine_source_track(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="engine_source_track"):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_defaults_prompts_to_prompts_directory(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.prompt == (tmp_path / "prompts" / "prompt.md").resolve()
     assert config.prompt_review == (
         tmp_path / "prompts" / "prompt_review.md"
@@ -247,7 +273,7 @@ def test_load_config_maps_missing_explicit_legacy_prompt_to_new_asset(tmp_path):
     prompts.mkdir()
     (prompts / "prompt.md").write_text("prompt", encoding="utf-8")
     (prompts / "prompt_review.md").write_text("review", encoding="utf-8")
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.prompt == (prompts / "prompt.md").resolve()
     assert config.prompt_review == (prompts / "prompt_review.md").resolve()
 
@@ -257,13 +283,13 @@ def test_load_config_health_alert_repo_default_and_override(tmp_path):
     # present -> the verbatim `owner/repo` override.
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    assert runner.load_config(config_path).health_alert_repo is None
+    assert config_domain.load_config(config_path).health_alert_repo is None
     config_path.write_text(
         'source_repos = ["owner/repo"]\n'
         'health_alert_repo = "fork-owner/orbi-fork"\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path).health_alert_repo == \
+    assert config_domain.load_config(config_path).health_alert_repo == \
         "fork-owner/orbi-fork"
 
 
@@ -276,7 +302,7 @@ def test_load_config_rejects_empty_health_alert_repo(tmp_path):
     with pytest.raises(
         ValueError, match="health_alert_repo must be a non-empty string",
     ):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_defaults_deploy_home_to_repo_dir(tmp_path):
@@ -287,7 +313,7 @@ def test_load_config_defaults_deploy_home_to_repo_dir(tmp_path):
         'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n',
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.deploy_home == (tmp_path / "repo").resolve()
 
 
@@ -300,7 +326,7 @@ def test_load_config_reads_explicit_deploy_home(tmp_path):
         'deploy_home = "home"\n',
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.repo_dir == (tmp_path / "repo").resolve()
     assert config.deploy_home == (tmp_path / "home").resolve()
 
@@ -314,7 +340,7 @@ def test_load_config_rejects_an_empty_deploy_home(tmp_path):
     with pytest.raises(
         ValueError, match="deploy_home must be a non-empty string",
     ):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_rejects_a_non_string_deploy_home(tmp_path):
@@ -326,7 +352,7 @@ def test_load_config_rejects_a_non_string_deploy_home(tmp_path):
     with pytest.raises(
         ValueError, match="deploy_home must be a non-empty string",
     ):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_prompt_defaults_resolve_from_deploy_home(tmp_path):
@@ -338,7 +364,7 @@ def test_load_config_prompt_defaults_resolve_from_deploy_home(tmp_path):
         'deploy_home = "home"\n',
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.prompt == (
         tmp_path / "home" / "prompts" / "prompt.md"
     ).resolve()
@@ -356,7 +382,7 @@ def test_load_config_explicit_prompt_resolves_from_config_dir(tmp_path):
         'deploy_home = "home"\nprompt = "my-prompt.md"\n',
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.prompt == (tmp_path / "my-prompt.md").resolve()
 
 
@@ -370,7 +396,7 @@ def test_validate_config_requires_the_deploy_home_dir(tmp_path):
         encoding="utf-8",
     )
     (tmp_path / "repo").mkdir()
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     with pytest.raises(FileNotFoundError):
         runner.validate_config(config)
 
@@ -381,7 +407,7 @@ def test_load_config_has_no_auto_repair_issues_field(tmp_path):
     the field and its consumer are gone."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    assert getattr(runner.load_config(config_path), "auto_repair_issues",
+    assert getattr(config_domain.load_config(config_path), "auto_repair_issues",
                    "absent") == "absent"
 
 
@@ -391,7 +417,7 @@ def test_load_config_reads_explicit_base_branch(tmp_path):
         'source_repos = ["owner/repo"]\nbase_branch = "develop"\n',
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.base_branch == "develop"
 
 
@@ -401,13 +427,13 @@ def test_load_config_rejects_empty_base_branch(tmp_path):
         'source_repos = ["owner/repo"]\nbase_branch = ""\n', encoding="utf-8",
     )
     with pytest.raises(ValueError, match="base_branch must be a non-empty string"):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_defaults_auto_next_milestone_to_true(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    assert runner.load_config(config_path).auto_next_milestone is True
+    assert config_domain.load_config(config_path).auto_next_milestone is True
 
 
 def test_load_config_reads_and_validates_auto_next_milestone(tmp_path):
@@ -416,13 +442,13 @@ def test_load_config_reads_and_validates_auto_next_milestone(tmp_path):
         'source_repos = ["owner/repo"]\nauto_next_milestone = false\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path).auto_next_milestone is False
+    assert config_domain.load_config(config_path).auto_next_milestone is False
     config_path.write_text(
         'source_repos = ["owner/repo"]\nauto_next_milestone = "no"\n',
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="auto_next_milestone must be a boolean"):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_defaults_active_milestone_to_none(tmp_path):
@@ -430,7 +456,7 @@ def test_load_config_defaults_active_milestone_to_none(tmp_path):
     current compat behavior (no milestone filter on the ready scans)."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.active_milestone is None
 
 
@@ -442,7 +468,7 @@ def test_load_config_reads_explicit_active_milestone(tmp_path):
         'source_repos = ["owner/repo"]\nactive_milestone = "v0.2.0"\n',
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.active_milestone == "v0.2.0"
 
 
@@ -457,7 +483,7 @@ def test_load_config_rejects_empty_active_milestone(tmp_path):
     with pytest.raises(
         ValueError, match="active_milestone must be a non-empty string",
     ):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_rejects_non_string_active_milestone(tmp_path):
@@ -471,7 +497,7 @@ def test_load_config_rejects_non_string_active_milestone(tmp_path):
     with pytest.raises(
         ValueError, match="active_milestone must be a non-empty string",
     ):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 # --- Issue #228: model_wait_dead_seconds is configurable ---------------------
@@ -487,7 +513,7 @@ def test_load_config_defaults_model_wait_dead_seconds_to_thirty_minutes(
     more than 10 minutes."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.model_wait_dead_seconds == 1800.0
 
 
@@ -498,7 +524,7 @@ def test_load_config_reads_explicit_model_wait_dead_seconds_int(tmp_path):
         'source_repos = ["owner/repo"]\nmodel_wait_dead_seconds = 900\n',
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.model_wait_dead_seconds == 900.0
 
 
@@ -509,7 +535,7 @@ def test_load_config_reads_explicit_model_wait_dead_seconds_float(tmp_path):
         'source_repos = ["owner/repo"]\nmodel_wait_dead_seconds = 1234.5\n',
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.model_wait_dead_seconds == 1234.5
 
 
@@ -539,7 +565,7 @@ def test_load_config_rejects_invalid_model_wait_dead_seconds(
         encoding="utf-8",
     )
     with pytest.raises(ValueError) as excinfo:
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
     assert "model_wait_dead_seconds" in str(excinfo.value)
     assert reason in str(excinfo.value)
 
@@ -554,7 +580,7 @@ def test_load_config_defaults_issue_comments_limit_to_two_hundred(tmp_path):
     PR's trusted feedback."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.issue_comments_limit == 200
 
 
@@ -565,7 +591,7 @@ def test_load_config_reads_explicit_issue_comments_limit(tmp_path):
         'source_repos = ["owner/repo"]\nissue_comments_limit = 5\n',
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.issue_comments_limit == 5
 
 
@@ -593,7 +619,7 @@ def test_load_config_rejects_invalid_issue_comments_limit(
         encoding="utf-8",
     )
     with pytest.raises(ValueError) as excinfo:
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
     assert "issue_comments_limit" in str(excinfo.value)
     assert reason in str(excinfo.value)
 
@@ -606,7 +632,7 @@ def test_load_config_defaults_swallow_probe_disabled(tmp_path):
     (the exact pre-#233 behavior)."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.model_wait_probe_url is None
     assert config.model_wait_probe_seconds == 60.0
 
@@ -620,7 +646,7 @@ def test_load_config_reads_explicit_swallow_probe(tmp_path):
         "model_wait_probe_seconds = 90\n",
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.model_wait_probe_url == "http://127.0.0.1:18082/slots"
     assert config.model_wait_probe_seconds == 90.0
 
@@ -649,7 +675,7 @@ def test_load_config_rejects_invalid_swallow_probe_url(
         encoding="utf-8",
     )
     with pytest.raises(ValueError) as excinfo:
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
     assert "model_wait_probe_url" in str(excinfo.value)
     assert reason in str(excinfo.value)
 
@@ -680,7 +706,7 @@ def test_load_config_rejects_invalid_swallow_probe_seconds(
         encoding="utf-8",
     )
     with pytest.raises(ValueError) as excinfo:
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
     assert "model_wait_probe_seconds" in str(excinfo.value)
     assert reason in str(excinfo.value)
 
@@ -690,7 +716,7 @@ def test_load_config_rejects_invalid_swallow_probe_seconds(
 def test_load_config_defaults_release_deliveries_wait_seconds(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.release_deliveries_wait_seconds == 1800.0
 
 
@@ -700,7 +726,7 @@ def test_load_config_reads_explicit_release_deliveries_wait_seconds(tmp_path):
         'source_repos = ["owner/repo"]\nrelease_deliveries_wait_seconds = 42\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path).release_deliveries_wait_seconds == 42.0
+    assert config_domain.load_config(config_path).release_deliveries_wait_seconds == 42.0
 
 
 @pytest.mark.parametrize("value", ["true", "0", "-1", '"42"'])
@@ -712,7 +738,7 @@ def test_load_config_rejects_invalid_release_deliveries_wait_seconds(tmp_path, v
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="release_deliveries_wait_seconds"):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 # --- Issue #268: release_ci_wait_seconds is configurable ---------------------
@@ -723,7 +749,7 @@ def test_load_config_defaults_release_ci_wait_seconds(tmp_path):
     instead of failing on the intermediate state."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.release_ci_wait_seconds == 1800.0
 
 
@@ -734,7 +760,7 @@ def test_load_config_reads_explicit_release_ci_wait_seconds(tmp_path):
         'source_repos = ["owner/repo"]\nrelease_ci_wait_seconds = 900\n',
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.release_ci_wait_seconds == 900.0
 
 
@@ -764,7 +790,7 @@ def test_load_config_rejects_invalid_release_ci_wait_seconds(
         encoding="utf-8",
     )
     with pytest.raises(ValueError) as excinfo:
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
     assert "release_ci_wait_seconds" in str(excinfo.value)
     assert reason in str(excinfo.value)
 
@@ -775,7 +801,7 @@ def test_load_config_no_longer_has_a_mergeable_wait(tmp_path):
     key is no longer a config field and no longer a known host-only key."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert not hasattr(config, "mergeable_wait_seconds")
     from orbi.repo_config import HOST_ONLY_KEYS
     assert "mergeable_wait_seconds" not in HOST_ONLY_KEYS
@@ -802,7 +828,7 @@ def test_load_config_parses_repositories_registry(tmp_path):
         'base_branch = "develop"\n',
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.repositories == (
         {
             "name": "pilot",
@@ -831,7 +857,7 @@ def test_load_config_defaults_repositories_to_empty_list(tmp_path):
         'source_repos = ["owner/pilot"]\nrepo_dir = "repo"\n',
         encoding="utf-8",
     )
-    config = runner.load_config(config_path)
+    config = config_domain.load_config(config_path)
     assert config.repositories == ()
     assert config.source_repos == ("owner/pilot",)
     assert config.repo_dir == (tmp_path / "repo").resolve()
@@ -854,7 +880,7 @@ def test_load_config_rejects_repository_missing_field(tmp_path, field):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text("".join(lines), encoding="utf-8")
     with pytest.raises(ValueError, match=field):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_rejects_repository_empty_field(tmp_path):
@@ -870,7 +896,7 @@ def test_load_config_rejects_repository_empty_field(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="path"):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_rejects_repository_non_string_field(tmp_path):
@@ -886,7 +912,7 @@ def test_load_config_rejects_repository_non_string_field(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="base_branch"):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_rejects_repository_non_table_entry(tmp_path):
@@ -898,7 +924,7 @@ def test_load_config_rejects_repository_non_table_entry(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match=r"repositories\[0\]"):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_rejects_repositories_not_a_list(tmp_path):
@@ -910,7 +936,7 @@ def test_load_config_rejects_repositories_not_a_list(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="repositories must be a list"):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_load_config_rejects_duplicate_repository_name(tmp_path):
@@ -929,7 +955,7 @@ def test_load_config_rejects_duplicate_repository_name(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="duplicate.*pilot"):
-        runner.load_config(config_path)
+        config_domain.load_config(config_path)
 
 
 def test_validate_config_accepts_existing_files(tmp_path):
@@ -939,24 +965,24 @@ def test_validate_config_accepts_existing_files(tmp_path):
     context = tmp_path / "context.md"
     for path in (prompt, prompt_review, skill, context):
         path.write_text("ok", encoding="utf-8")
-    runner.validate_config(runner.RunnerConfig(repo_dir=tmp_path, deploy_home=tmp_path, prompt=prompt, prompt_review=prompt_review, skills=(skill,), context_files=(context,)))
+    runner.validate_config(config_domain.RunnerConfig(repo_dir=tmp_path, deploy_home=tmp_path, prompt=prompt, prompt_review=prompt_review, skills=(skill,), context_files=(context,)))
 
 
 def test_validate_config_requires_review_prompt(tmp_path):
     prompt = tmp_path / "prompt.md"
     prompt.write_text("ok", encoding="utf-8")
     with pytest.raises(FileNotFoundError, match="prompt_review.md"):
-        runner.validate_config(runner.RunnerConfig(repo_dir=tmp_path, deploy_home=tmp_path, prompt=prompt, prompt_review=tmp_path / "prompt_review.md", skills=(), context_files=()))
+        runner.validate_config(config_domain.RunnerConfig(repo_dir=tmp_path, deploy_home=tmp_path, prompt=prompt, prompt_review=tmp_path / "prompt_review.md", skills=(), context_files=()))
 
 
 def test_validate_config_fails_before_issue_claim_when_path_missing(tmp_path):
     with pytest.raises(FileNotFoundError, match="missing.md"):
-        runner.validate_config(runner.RunnerConfig(repo_dir=tmp_path, deploy_home=tmp_path, prompt=tmp_path / "missing.md", prompt_review=tmp_path / "prompt_review.md", skills=(), context_files=()))
+        runner.validate_config(config_domain.RunnerConfig(repo_dir=tmp_path, deploy_home=tmp_path, prompt=tmp_path / "missing.md", prompt_review=tmp_path / "prompt_review.md", skills=(), context_files=()))
 
 
 def test_validate_config_rejects_missing_repo_dir(tmp_path):
     with pytest.raises(FileNotFoundError, match="missing-repo"):
-        runner.validate_config(runner.RunnerConfig(repo_dir=tmp_path / "missing-repo", deploy_home=tmp_path, prompt=tmp_path / "prompt.md", skills=(), context_files=()))
+        runner.validate_config(config_domain.RunnerConfig(repo_dir=tmp_path / "missing-repo", deploy_home=tmp_path, prompt=tmp_path / "prompt.md", skills=(), context_files=()))
 
 
 def _git_checkout(path: Path) -> Path:
@@ -981,13 +1007,13 @@ def _git_checkout(path: Path) -> Path:
     return path
 
 
-def _base_config(tmp_path: Path) -> runner.RunnerConfig:
+def _base_config(tmp_path: Path) -> config_domain.RunnerConfig:
     """The minimal valid single-repo config (no repositories key)."""
     prompt = tmp_path / "prompt.md"
     prompt_review = tmp_path / "prompt_review.md"
     for path in (prompt, prompt_review):
         path.write_text("ok", encoding="utf-8")
-    return runner.RunnerConfig(
+    return config_domain.RunnerConfig(
         repo_dir=tmp_path,
         # Issue #330: the bootstrap deployment — home == delivery checkout.
         deploy_home=tmp_path,

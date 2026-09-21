@@ -16,6 +16,7 @@ Together these prove the acceptance criteria:
   queryable by the old run_id;
 - a failed attempt marks the Issue blocked with the same run_id marker.
 """
+from orbi import config as config_domain
 import json
 import os
 import re
@@ -298,7 +299,7 @@ def write_prompt(tmp_path: Path) -> Path:
 
 
 def config_for(clone: Path, tmp_path: Path) -> dict:
-    return runner.RunnerConfig(repo_dir=clone, prompt=write_prompt(tmp_path), base_branch="main", source_repos=(REPO,), workspace_root=tmp_path, context_files=(), skills=())
+    return config_domain.RunnerConfig(repo_dir=clone, prompt=write_prompt(tmp_path), base_branch="main", source_repos=(REPO,), workspace_root=tmp_path, context_files=(), skills=())
 
 
 def issue() -> dict:

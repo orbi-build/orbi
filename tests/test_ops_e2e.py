@@ -24,6 +24,7 @@ The production replay of orbi-website#70 itself needs the deployed
 runner and its real credentials; this file proves the runner-side
 behavior end to end in a hermetic world.
 """
+from orbi import config as config_domain
 import json
 import os
 import re
@@ -350,11 +351,11 @@ def ops_issue() -> dict:
     }
 
 
-def config_for(clone: Path) -> runner.RunnerConfig:
+def config_for(clone: Path) -> config_domain.RunnerConfig:
     # The REAL repo prompts: the ops session must receive the real
     # rendered ops playbook (`prompt_ops.md`, the sibling of the
     # configured dev prompt), not a test stub.
-    return runner.RunnerConfig(
+    return config_domain.RunnerConfig(
         repo_dir=clone,
         # The REAL repo prompts: the ops session must receive the real
         # rendered ops playbook (`prompt_ops.md`, the sibling of the

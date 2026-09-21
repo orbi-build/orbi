@@ -9,6 +9,7 @@ optional model proxy health as a warning only. Core failures raise
 `SetupError` with a concrete reason before any later mutation; the
 optional proxy never blocks the core setup.
 """
+from orbi import config as config_domain
 import json
 import subprocess
 import tomllib
@@ -1425,7 +1426,7 @@ def make_run_state(tmp_path: Path):
 def test_run_setup_success_reports_all_steps(tmp_path):
     repo, installed, state = make_run_state(tmp_path)
     fake_run, calls = fake_run_factory(state)
-    config = runner.load_config(make_config(tmp_path, repo))
+    config = config_domain.load_config(make_config(tmp_path, repo))
     result = pilot_setup.run_setup(
         config, installed,
         run_command=fake_run,
@@ -1464,7 +1465,7 @@ def test_run_setup_success_reports_all_steps(tmp_path):
 def test_run_setup_capacity_two_enables_both_timers(tmp_path):
     repo, installed, state = make_run_state(tmp_path)
     fake_run, calls = fake_run_factory(state)
-    config = runner.load_config(make_config(tmp_path, repo, max_concurrency=2))
+    config = config_domain.load_config(make_config(tmp_path, repo, max_concurrency=2))
     config = dataclasses.replace(config, unit_name="website")
     result = pilot_setup.run_setup(config, installed, run_command=fake_run)
     for instance in systemd_deploy.timer_instances("website", 2):
@@ -1490,7 +1491,7 @@ def test_run_setup_capacity_two_enables_both_timers(tmp_path):
 def test_run_setup_repo_override_limits_the_target(tmp_path):
     repo, installed, state = make_run_state(tmp_path)
     fake_run, calls = fake_run_factory(state)
-    config = runner.load_config(make_config(
+    config = config_domain.load_config(make_config(
         tmp_path, repo,
         source_repos=["xqliu/orbi", "xqliu/orbi-backlog"],
     ))
@@ -1510,7 +1511,7 @@ def test_run_setup_repo_override_limits_the_target(tmp_path):
 
 def test_run_setup_rejects_a_repo_outside_the_config(tmp_path):
     repo, installed, state = make_run_state(tmp_path)
-    config = runner.load_config(make_config(tmp_path, repo))
+    config = config_domain.load_config(make_config(tmp_path, repo))
     with pytest.raises(pilot_setup.SetupError, match="--repo"):
         pilot_setup.run_setup(
             config, installed,
@@ -1528,7 +1529,7 @@ def test_run_setup_fails_fast_on_auth_before_any_mutation(tmp_path):
             raise subprocess.CalledProcessError(1, command, stderr="nope")
         return fake_run(command, **kwargs)
 
-    config = runner.load_config(make_config(tmp_path, repo))
+    config = config_domain.load_config(make_config(tmp_path, repo))
     with pytest.raises(pilot_setup.SetupError, match="gh auth"):
         pilot_setup.run_setup(
             config, installed, run_command=failing,
@@ -1548,7 +1549,7 @@ def test_run_setup_fails_fast_on_a_label_error_before_units(tmp_path):
             raise subprocess.CalledProcessError(1, command, stderr="boom")
         return fake_run(command, **kwargs)
 
-    config = runner.load_config(make_config(tmp_path, repo))
+    config = config_domain.load_config(make_config(tmp_path, repo))
     with pytest.raises(pilot_setup.SetupError, match="label"):
         pilot_setup.run_setup(
             config, installed, run_command=failing,
@@ -1569,7 +1570,7 @@ def test_run_setup_installs_the_editable_cli_when_drifted(tmp_path,
         "lib/python3.14/site-packages/orbi.py"
     )
     fake_run, calls = fake_run_factory(state)
-    config = runner.load_config(make_config(tmp_path, repo))
+    config = config_domain.load_config(make_config(tmp_path, repo))
     result = pilot_setup.run_setup(
         config, installed, run_command=fake_run,
     )
@@ -1608,7 +1609,7 @@ def test_run_setup_fails_fast_on_a_failed_cli_reinstall(
             )
         return fake_run(command, **kwargs)
 
-    config = runner.load_config(make_config(tmp_path, repo))
+    config = config_domain.load_config(make_config(tmp_path, repo))
     with pytest.raises(pilot_setup.SetupError, match="editable tool install"):
         pilot_setup.run_setup(
             config, installed, run_command=failing,
@@ -1620,7 +1621,7 @@ def test_run_setup_optional_proxy_failure_never_blocks(tmp_path):
     repo, installed, state = make_run_state(tmp_path)
     state["proxy_down"] = True
     fake_run, calls = fake_run_factory(state)
-    config = runner.load_config(make_config(tmp_path, repo))
+    config = config_domain.load_config(make_config(tmp_path, repo))
     result = pilot_setup.run_setup(
         config, installed, run_command=fake_run,
     )
@@ -1635,7 +1636,7 @@ def test_run_setup_migrates_an_https_checkout_remote(tmp_path):
     repo, installed, state = make_run_state(tmp_path)
     state["origin_url"] = "https://github.com/xqliu/orbi.git"
     fake_run, calls = fake_run_factory(state)
-    config = runner.load_config(make_config(tmp_path, repo))
+    config = config_domain.load_config(make_config(tmp_path, repo))
     result = pilot_setup.run_setup(
         config, installed, run_command=fake_run,
     )
@@ -1658,7 +1659,7 @@ def test_run_setup_fails_fast_when_ssh_is_unreachable(tmp_path):
     repo, installed, state = make_run_state(tmp_path)
     state["ssh_down"] = True
     fake_run, calls = fake_run_factory(state)
-    config = runner.load_config(make_config(tmp_path, repo))
+    config = config_domain.load_config(make_config(tmp_path, repo))
     with pytest.raises(pilot_setup.SetupError, match="ssh_unreachable"):
         pilot_setup.run_setup(
             config, installed, run_command=fake_run,
@@ -1670,7 +1671,7 @@ def test_run_setup_fails_fast_when_ssh_is_unreachable(tmp_path):
 def test_run_setup_missing_labels_file_fails_fast(tmp_path):
     repo = make_repo(tmp_path)
     (repo / "labels.toml").unlink()
-    config = runner.load_config(make_config(tmp_path, repo))
+    config = config_domain.load_config(make_config(tmp_path, repo))
     with pytest.raises(pilot_setup.SetupError, match="labels.toml"):
         pilot_setup.run_setup(
             config, tmp_path / "units",
@@ -1942,7 +1943,7 @@ def test_check_checkout_fails_fast_when_origin_is_missing(tmp_path):
 
 def test_run_setup_rejects_an_empty_repo_list(tmp_path):
     repo = make_repo(tmp_path)
-    config = runner.load_config(make_config(tmp_path, repo))
+    config = config_domain.load_config(make_config(tmp_path, repo))
     with pytest.raises(pilot_setup.SetupError, match="--repo"):
         pilot_setup.run_setup(
             config, tmp_path / "units",
@@ -1959,7 +1960,7 @@ def test_run_setup_routes_home_files_to_deploy_home(tmp_path, monkeypatch):
     fake_run, calls = fake_run_factory(state)
     home = tmp_path / "home"
     home.mkdir()
-    config = runner.load_config(make_config(tmp_path, repo))
+    config = config_domain.load_config(make_config(tmp_path, repo))
     config = dataclasses.replace(config, deploy_home=home)
 
     seen: dict = {}
@@ -2056,7 +2057,7 @@ def test_ensure_config_reports_write_failure(tmp_path, monkeypatch):
 
 
 def test_scaffold_model_config_is_idempotent_and_private(tmp_path):
-    config = runner.RunnerConfig(deploy_home=tmp_path, pi_providers=None)
+    config = config_domain.RunnerConfig(deploy_home=tmp_path, pi_providers=None)
     first = pilot_setup.scaffold_model_config(config)
     provider = Path(first["provider_file"])
     env = Path(first["env_file"])
@@ -2098,7 +2099,7 @@ def test_scaffold_model_config_preserves_existing_content_without_newline(tmp_pa
     env = tmp_path / ".orbi" / "env"
     env.parent.mkdir()
     env.write_text("EXISTING=value", encoding="utf-8")
-    result = pilot_setup.scaffold_model_config(runner.RunnerConfig(deploy_home=tmp_path))
+    result = pilot_setup.scaffold_model_config(config_domain.RunnerConfig(deploy_home=tmp_path))
     assert env.read_text() == "EXISTING=value\n# API key for the starter provider\nPROVIDER_API_KEY=\n"
     assert result["env_created"] is True
 
@@ -2106,13 +2107,13 @@ def test_scaffold_model_config_preserves_existing_content_without_newline(tmp_pa
 def test_model_provider_status_reports_missing_key_without_secret(tmp_path):
     path = tmp_path / "providers.json"
     finding = {"variable": "GROQ_API_KEY", "state": "is not set"}
-    result = pilot_setup.model_provider_status(runner.RunnerConfig(deploy_home=tmp_path, pi_providers=path, pi_provider="groq", pi_model="model", pi_providers_data={"providers": {"groq": {}}}, pi_provider_key_finding=finding))
+    result = pilot_setup.model_provider_status(config_domain.RunnerConfig(deploy_home=tmp_path, pi_providers=path, pi_provider="groq", pi_model="model", pi_providers_data={"providers": {"groq": {}}}, pi_provider_key_finding=finding))
     assert result["state"] == "NOT CONFIGURED"
     assert result["key"] == "GROQ_API_KEY=is not set"
 
 
 def test_model_provider_status_reports_configured_provider_and_model(tmp_path):
-    result = pilot_setup.model_provider_status(runner.RunnerConfig(deploy_home=tmp_path, pi_providers=tmp_path / "providers.json", pi_provider="openai", pi_model="gpt", pi_providers_data={"providers": {
+    result = pilot_setup.model_provider_status(config_domain.RunnerConfig(deploy_home=tmp_path, pi_providers=tmp_path / "providers.json", pi_provider="openai", pi_model="gpt", pi_providers_data={"providers": {
             "openai": {"apiKey": "${OPENAI_API_KEY}"},
         }}))
     assert result["state"] == "ok"
@@ -2122,7 +2123,7 @@ def test_model_provider_status_reports_configured_provider_and_model(tmp_path):
 
 
 def test_model_provider_status_reports_literal_key_as_set(tmp_path):
-    result = pilot_setup.model_provider_status(runner.RunnerConfig(deploy_home=tmp_path, pi_providers=tmp_path / "providers.json", pi_provider="local", pi_model="model", pi_providers_data={"providers": {"local": {"apiKey": "local"}}}))
+    result = pilot_setup.model_provider_status(config_domain.RunnerConfig(deploy_home=tmp_path, pi_providers=tmp_path / "providers.json", pi_provider="local", pi_model="model", pi_providers_data={"providers": {"local": {"apiKey": "local"}}}))
     assert result["key"] == "literal=set"
 
 
@@ -2130,7 +2131,7 @@ def test_scaffold_model_config_does_not_append_existing_key(tmp_path):
     env = tmp_path / ".orbi" / "env"
     env.parent.mkdir()
     env.write_text("PROVIDER_API_KEY=already-set\n", encoding="utf-8")
-    result = pilot_setup.scaffold_model_config(runner.RunnerConfig(deploy_home=tmp_path))
+    result = pilot_setup.scaffold_model_config(config_domain.RunnerConfig(deploy_home=tmp_path))
     assert result["env_created"] is False
     assert env.read_text() == "PROVIDER_API_KEY=already-set\n"
 

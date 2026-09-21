@@ -19,6 +19,7 @@ reset to an old commit while ``refs/remotes/origin/main`` points at a
 newer one (the stale-deployment shape), and a linked worktree pinned to
 the old commit (the exact incident scene).
 """
+from orbi import config as config_domain
 import subprocess
 from pathlib import Path
 
@@ -88,8 +89,8 @@ def point_module_file(monkeypatch, checkout: Path) -> None:
     monkeypatch.setattr(cli_source, "module_file", lambda: pkg / "__init__.py")
 
 
-def gate_config(deploy_home: Path, **extra) -> runner.RunnerConfig:
-    return runner.RunnerConfig(
+def gate_config(deploy_home: Path, **extra) -> config_domain.RunnerConfig:
+    return config_domain.RunnerConfig(
         **{"base_branch": "main", "deploy_home": deploy_home, **extra},
     )
 
@@ -464,7 +465,7 @@ def test_parse_release_version_handles_tags_and_rejects_noise():
 def test_load_config_allow_stale_runner_defaults_false(tmp_path):
     config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    loaded = runner.load_config(config, check_provider_api_keys=False)
+    loaded = config_domain.load_config(config, check_provider_api_keys=False)
     assert loaded.allow_stale_runner is False
 
 
@@ -475,7 +476,7 @@ def test_load_config_allow_stale_runner_rejects_non_boolean(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="allow_stale_runner"):
-        runner.load_config(config, check_provider_api_keys=False)
+        config_domain.load_config(config, check_provider_api_keys=False)
 
 
 # --- main() wiring ----------------------------------------------------------------

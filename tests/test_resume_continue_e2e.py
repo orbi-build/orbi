@@ -25,6 +25,7 @@ The acceptance criteria proven here:
   (the Issue goes ``ai-blocked`` with the reason) — never a silent
   fresh redo.
 """
+from orbi import config as config_domain
 import json
 import os
 import re
@@ -286,7 +287,7 @@ def write_prompt(tmp_path: Path) -> Path:
 
 
 def config_for(clone: Path, tmp_path: Path, source_repo: str) -> dict:
-    return runner.RunnerConfig(repo_dir=clone, prompt=write_prompt(tmp_path), base_branch="main", source_repos=(source_repo,), workspace_root=tmp_path, context_files=(), skills=())
+    return config_domain.RunnerConfig(repo_dir=clone, prompt=write_prompt(tmp_path), base_branch="main", source_repos=(source_repo,), workspace_root=tmp_path, context_files=(), skills=())
 
 
 def issue() -> dict:

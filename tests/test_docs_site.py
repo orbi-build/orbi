@@ -17,6 +17,7 @@ references a label or config field the implementation does not have, or
 when a doc (in any language) carries a personal absolute path, an
 unimplemented feature, or the stale 15-minute timer.
 """
+from orbi import config as config_domain
 import inspect
 import json
 import re
@@ -66,7 +67,7 @@ KNOWN_LABELS = frozenset({
 
 LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")
 
-# Config fields the implementation understands (bootstrap_runner.load_config
+# Config fields the implementation understands (bootstrap_config_domain.load_config
 # plus the committed example). A docs field table may document exactly this
 # set — no invented field may sneak in.
 KNOWN_CONFIG_FIELDS = frozenset({
