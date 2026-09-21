@@ -5103,7 +5103,7 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
             "delivery_uncommitted_changes", level=logging.ERROR,
             branch=branch, status=" ".join(dirty.splitlines()),
         )
-        raise RuntimeError(
+        raise RecoverablePiFailure(
             f"the agent left uncommitted changes in the worktree "
             f"({dirty.strip()}); the runner never commits uncommitted "
             "changes or expands the agent's commit boundary"

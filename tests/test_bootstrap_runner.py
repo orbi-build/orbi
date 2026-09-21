@@ -16607,10 +16607,13 @@ def test_process_issue_ops_with_uncommitted_leftovers_fails_fast(
     (prompts / "prompt_ops.md").write_text("ops playbook", encoding="utf-8")
 
     def failing_deliver_pr(*a, **k):
-        raise RuntimeError(
+        raise runner.RecoverablePiFailure(
             "the agent left uncommitted changes in the worktree"
         )
 
+    cleanup = Mock()
+    original_cleanup = runner.cleanup_task_worktree
+    runner.cleanup_task_worktree = cleanup
     monkeypatch.setattr(runner, "deliver_pr", failing_deliver_pr)
 
     result = runner.process_issue(
@@ -16618,11 +16621,13 @@ def test_process_issue_ops_with_uncommitted_leftovers_fails_fast(
         "o/r",
     )
 
-    # The failure path reports the terminal state; the Issue is blocked.
+    # Recoverable delivery failures preserve the scene for the next
+    # same-run implement session instead of entering ai-blocked.
     assert result == runner.IssueResult("failed", None)
-    runner.edit_issue.assert_any_call(
-        99, repo="o/r", add=runner.BLOCKED_LABEL,
-        remove=runner.IN_PROGRESS_LABEL,
+    cleanup.assert_not_called()
+    runner.cleanup_task_worktree = original_cleanup
+    runner.edit_issue.assert_called_once_with(
+        99, repo="o/r", add=runner.IN_PROGRESS_LABEL,
     )
 
 
@@ -21817,7 +21822,7 @@ def test_deliver_pr_rejects_uncommitted_changes(monkeypatch, tmp_path):
         return fake_deliver_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    with pytest.raises(RuntimeError, match="uncommitted changes"):
+    with pytest.raises(runner.RecoverablePiFailure, match="uncommitted changes"):
         runner.deliver_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=DELIVER_BRANCH, worktree=tmp_path, source_repo="o/r"), "main", "9" * 40, issue_title="t", repo_dir=tmp_path)
 
 
