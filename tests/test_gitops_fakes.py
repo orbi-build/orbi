@@ -114,7 +114,7 @@ def test_create_worktree_takes_over_an_external_branch(fake_git):
 def test_create_worktree_fork_takeover_uses_forced_single_refspec(fake_git):
     head_branch = "contributor-patch"
     first_head = fake_git.commit([fake_git.base_sha])
-    second_head = fake_git.commit([fake_git.base_sha])
+    second_head = fake_git.commit([first_head])
     fake_git.pull_heads["592"] = first_head
     gitops.create_worktree(
         fake_git.repo_dir, "owner/repo", 7, "first", fake_git.base_sha,
@@ -133,6 +133,19 @@ def test_create_worktree_fork_takeover_uses_forced_single_refspec(fake_git):
          "+pull/592/head:refs/remotes/origin/contributor-patch"],
     ]
     assert fake_git.origin[head_branch] == second_head
+
+
+def test_fake_git_rejects_invalid_forced_branch_updates(fake_git):
+    """The fake rejects malformed force updates like real git instead of
+    silently making impossible branch state valid."""
+    invalid_commands = [
+        ["git", "branch", "--force", "only-a-name"],
+        ["git", "branch", "--force", "topic", fake_git.base_sha],
+        ["git", "branch", "--force", "missing", "origin/missing"],
+    ]
+    for command in invalid_commands:
+        with pytest.raises(subprocess.CalledProcessError):
+            fake_git(command)
 
 
 def test_fake_git_rejects_missing_pull_head_ref(fake_git):
@@ -165,6 +178,55 @@ def test_fake_git_rejects_pull_refspec_with_wrong_destination(fake_git):
         ])
     assert excinfo.value.returncode == 2
     assert "unsupported command" in excinfo.value.stderr
+
+
+def test_create_worktree_fast_forwards_a_local_branch_behind_remote(fake_git):
+    branch = "orbi/owner-repo-issue-7"
+    behind = fake_git.commit([fake_git.base_sha])
+    remote = fake_git.commit([behind])
+    fake_git.branch(branch, behind)
+    fake_git.origin[branch] = remote
+
+    path = gitops.create_worktree(
+        fake_git.repo_dir, "owner/repo", 7, "338f3484", fake_git.base_sha,
+        existing_branch=True,
+    )
+
+    assert fake_git.local[branch] == remote
+    assert fake_git.worktrees[str(path)]["head"] == remote
+    assert ["git", "branch", "--force", branch, f"origin/{branch}"] in fake_git.calls
+
+
+def test_create_worktree_rejects_local_branch_ahead_without_discarding_it(fake_git):
+    branch = "orbi/owner-repo-issue-7"
+    local = fake_git.commit([fake_git.base_sha])
+    remote = fake_git.base_sha
+    fake_git.branch(branch, local)
+    fake_git.origin[branch] = remote
+
+    with pytest.raises(RuntimeError, match=rf"{branch}.*{local}.*{remote}") as excinfo:
+        gitops.create_worktree(
+            fake_git.repo_dir, "owner/repo", 7, "338f3484", fake_git.base_sha,
+            existing_branch=True,
+        )
+
+    assert fake_git.local[branch] == local
+    assert str(fake_git.repo_dir) in str(excinfo.value)
+
+
+def test_create_worktree_rejects_diverged_local_branch(fake_git):
+    branch = "orbi/owner-repo-issue-7"
+    local = fake_git.commit([fake_git.base_sha])
+    remote = fake_git.commit([fake_git.base_sha])
+    fake_git.branch(branch, local)
+    fake_git.origin[branch] = remote
+
+    with pytest.raises(RuntimeError, match=rf"{branch}.*{local}.*{remote}"):
+        gitops.create_worktree(
+            fake_git.repo_dir, "owner/repo", 7, "338f3484", fake_git.base_sha,
+            existing_branch=True,
+        )
+    assert fake_git.local[branch] == local
 
 
 def test_create_worktree_reuses_a_local_external_branch(fake_git):
