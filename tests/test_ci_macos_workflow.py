@@ -83,13 +83,22 @@ def test_macos_workflow_exists_as_a_separate_file():
     assert LINUX_WORKFLOW_FILE.is_file()
 
 
-def test_macos_workflow_runs_on_pull_request_push_to_main_and_dispatch():
+def test_macos_workflow_filters_pull_requests_but_keeps_main_push_and_dispatch():
     section = on_section(load_workflow())
-    assert "pull_request" in section, "the macOS job must run on every pull_request"
+    pull_request = section.get("pull_request")
+    assert isinstance(pull_request, dict), "the macOS workflow must configure pull_request"
+    assert pull_request.get("paths") == [
+        "install.sh",
+        "launchd/**",
+        "pyproject.toml",
+        "requirements.txt",
+        "src/orbi/**",
+        ".github/workflows/ci-macos.yml",
+    ], f"unexpected macOS pull_request paths: {pull_request!r}"
     push = section.get("push")
     assert push is not None, "the macOS job must run on push to the protected branch"
-    assert push.get("branches") == ["main"], (
-        f"push trigger must be limited to main, got: {push!r}"
+    assert push == {"branches": ["main"]}, (
+        f"push trigger must stay unfiltered and limited to main, got: {push!r}"
     )
     assert "workflow_dispatch" in section, (
         "the macOS job must be manually dispatchable (workflow_dispatch)"
