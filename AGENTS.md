@@ -40,6 +40,26 @@ contradiction in place for the next delivery to rediscover.
   posted back onto the ticket so the Implementer's acceptance stays inside what
   the sandbox can reach.
 
+  **Writing an Issue: every path and command in it must work inside the
+  sandbox.** The delivery runs in a worktree sandbox, not on the machine that
+  filed the ticket. A host-only path (`~/Videos/...`, `~/Downloads/...`,
+  `/home/<someone>/...`), a host credential, or a step needing a real external
+  account makes the run burn a full cycle and end `ai-blocked` with zero
+  commits — a defect in the ticket, not in the delivery.
+
+  Go through the acceptance criteria line by line and ask: **what does the
+  agent in the sandbox use to do this step?** No answer means the step belongs
+  to the maintainer — mark it "maintainer supplies this; not part of the
+  delivery's acceptance" and post the evidence yourself. When the ticket points
+  at an external asset, **run the fetch command on the runner host first** and
+  write the verified command plus the resulting parameters into the ticket; an
+  untested command is no better than no command at all.
+
+  orbi-website#325 failed this way twice in one day (2026-09-21): the ticket
+  named the video master at a host-only path, the agent could not reach it,
+  produced a plan and no commit, and the ticket body was never corrected
+  between the two runs.
+
 ## Product positioning
 
 - Orbi is a **software dark factory**: an autonomous software delivery system
