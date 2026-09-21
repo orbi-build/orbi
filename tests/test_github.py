@@ -356,7 +356,9 @@ def test_pr_reviews_and_inline_comments_use_bounded_read_only_api(monkeypatch):
 
     def fake_read(command, **kwargs):
         calls.append((command, kwargs))
-        if command[:3] == ["gh", "pr", "view"]:
+        if command == [
+            "gh", "pr", "view", "4", "--repo", "o/r", "--json", "reviews",
+        ]:
             return '{"reviews": [{"body": "review"}]}'
         return '[[{"body": "inline"}]]'
 
