@@ -20,9 +20,12 @@ Runtime context supplied by the runner:
 - Base sync lock: `{{BASE_SYNC_LOCK}}`
 - Review round: `{{ROUND}}`
 
-Issue comments from trusted authors of the linked Issue (oldest first):
-the decision history the delivery must match. When a note says older
-comments were omitted, you are NOT seeing the full history.
+Trusted comments and feedback (oldest first): the linked Issue's decision
+history plus human feedback on the current delivery PR. Formal review state
+is shown in brackets and inline comments retain their file/line anchor. This
+is one combined, bounded input; it is not delivery state, and Orbi never
+writes labels or status to the PR. When a note says older comments were
+omitted, you are NOT seeing the full history.
 
 {{ISSUE_COMMENTS}}
 
@@ -34,10 +37,10 @@ left one comment on the Issue and the PR starting with
 `Orbi review round <N> for PR #{{PR_NUMBER}}:` and carrying the run
 marker `<!-- orbi:run=<run_id> -->` (a hidden HTML comment; the raw
 comment body carries it verbatim). The `{{ISSUE_COMMENTS}}` block above
-is the Issue side of that history; the PR conversation carries the same
-comments (one bounded read:
-`timeout 30 gh pr view {{PR_NUMBER}} --repo {{SOURCE_REPO}} --json
-comments`). Group the round comments by their `run_id` field (the
+contains the Issue side of that history plus trusted human feedback from the
+current PR's conversation, formal reviews, and inline review comments; formal
+reviews are not returned by `gh pr view --json comments`. Group the round
+comments by their `run_id` field (the
 marker's `orbi:run=` value) — the run id shared by
 the most recent round comments is THIS attempt — and read that group
 oldest first. Each round comment names its outcome right after the round

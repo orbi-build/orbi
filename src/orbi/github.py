@@ -829,14 +829,7 @@ def issue_comments(number: int, *, repo: str) -> list[dict]:
 
 
 def pr_comments(number: int, *, repo: str) -> list[dict]:
-    """Return the PR's comment history (oldest first) from GitHub.
-
-    The PR-side twin of `issue_comments`: a PR's comments are read
-    through `gh pr view --json comments` (`gh issue view` rejects PR
-    numbers), the same top-level object with a `comments` array — and
-    the same 30 s bound (#745 bounded the issue-side read; an
-    unbounded comments read is the same hang on the PR side).
-    """
+    """Return the PR's conversation comments (oldest first)."""
     raw = run_gh_read_command([
         "gh", "pr", "view", str(number), "--repo", repo,
         "--json", "comments",
@@ -848,6 +841,61 @@ def pr_comments(number: int, *, repo: str) -> list[dict]:
     if not isinstance(comments, list):
         raise ValueError("pr comments must be a JSON array")
     return comments
+
+
+def pr_reviews(number: int, *, repo: str) -> list[dict]:
+    """Return formal PR reviews, including their state and body."""
+    raw = run_gh_read_command([
+        "gh", "pr", "view", str(number), "--repo", repo,
+        "--json", "reviews",
+    ], timeout=30)
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("pr view must be a JSON object")
+    reviews = data.get("reviews")
+    if not isinstance(reviews, list):
+        raise ValueError("pr reviews must be a JSON array")
+    return reviews
+
+
+def pr_review_comments(number: int, *, repo: str) -> list[dict]:
+    """Return inline review comments, including their path and line."""
+    raw = run_gh_read_command([
+        "gh", "api", f"repos/{repo}/pulls/{number}/comments",
+        "--paginate", "--slurp",
+    ], timeout=30)
+    return parse_paginated_issue_array(raw)
+
+
+def _normalize_pr_feedback_item(item: dict) -> dict:
+    """Map GraphQL and REST PR feedback to the Issue-comment shape."""
+    author = item.get("author")
+    if not isinstance(author, dict):
+        author = item.get("user")
+    normalized = {
+        "author": {"login": author.get("login") if isinstance(author, dict)
+                    else None},
+        "authorAssociation": item.get(
+            "authorAssociation", item.get("author_association")),
+        "createdAt": item.get(
+            "createdAt", item.get("created_at", item.get(
+                "submittedAt", item.get("submitted_at")))),
+        "body": item.get("body"),
+    }
+    for field in ("state", "path", "line", "original_line"):
+        if field in item:
+            normalized[field] = item[field]
+    return normalized
+
+
+def normalize_pr_feedback(items: list[dict]) -> list[dict]:
+    """Normalize PR feedback and exclude the delivery identity."""
+    identity = _strip_bot_suffix(_authenticated_github_login())
+    normalized = [_normalize_pr_feedback_item(item) for item in items]
+    return [
+        item for item in normalized
+        if _strip_bot_suffix(item["author"]["login"] or "") != identity
+    ]
 
 
 def trusted_issue_comments_block(comments: list[dict], limit: int) -> str:
@@ -880,10 +928,16 @@ def trusted_issue_comments_block(comments: list[dict], limit: int) -> str:
     for comment in kept:
         author = comment.get("author")
         login = author.get("login") if isinstance(author, dict) else None
+        state = comment.get("state")
+        anchor = ""
+        if "path" in comment:
+            line = comment.get("line") or comment.get("original_line") or "-"
+            anchor = f" at {comment.get('path') or '-'}:{line}"
+        state_text = f" [{state}]" if state else ""
         lines.append(
             f"- {login or 'unknown'} "
-            f"({comment.get('authorAssociation') or '-'}) "
-            f"at {comment.get('createdAt') or '-'}:\n\n"
+            f"({comment.get('authorAssociation') or '-'})"
+            f"{anchor}{state_text} at {comment.get('createdAt') or '-'}:\n\n"
             f"{str(comment.get('body') or '').rstrip()}"
         )
     return "\n\n".join(lines)

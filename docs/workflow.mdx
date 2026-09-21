@@ -68,10 +68,15 @@ ai-ready                a task is dispatched (orbi add, or a human
                         reviews the exact base/head SHAs and FIXES
                         findings in-session (code, full test suite,
                         tiered coverage gate (Issue #234), push only the
-                        task branch), then emits a REVIEW_VERDICT (its
-                        prompt carries the same trusted-comment timeline
-                        of the linked Issue — the decision history,
-                        Issue #745)
+                        task branch), then emits a REVIEW_VERDICT. Its
+                        prompt carries the linked Issue's trusted timeline
+                        and trusted human feedback on the CURRENT PR:
+                        formal review state plus inline file/line anchors.
+                        The runner identity is excluded; PR feedback is
+                        input only, never delivery state or PR labels.
+                        The combined Issue/PR timeline uses the same
+                        issue_comments_limit bound. A GitHub PR-feedback
+                        read failure is logged and falls back to Issue comments.
   -> ai-fix-needed      a finding could not be fixed in-session, the PR is
                         behind the latest base / has a merge conflict, or
                         an AI-recoverable failure of the existing run/PR
