@@ -50,9 +50,8 @@ from pathlib import Path
 
 LOGGER = logging.getLogger("orbi.pilot_setup")
 
-from orbi import runner
+from orbi import runner, config as config_domain
 from orbi import cli_source
-from orbi.runner import RunnerConfig
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
     AWAITING_MERGE_LABEL,
@@ -1085,7 +1084,7 @@ def run_checks(config_path: Path, *, run_command) -> list[str]:
             DOCS_LINKS["config"],
         )
     try:
-        config = runner.load_config(
+        config = config_domain.load_config(
             config_path,
             # The provider key gate would stop the whole gate on a
             # missing key; the provider step below reports the state

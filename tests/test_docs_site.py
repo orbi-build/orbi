@@ -1,3 +1,4 @@
+from orbi import config as config_domain
 """Documentation site contract for the v0.1.0 open-source release (Issue #104
 + Issue #116).
 
@@ -66,7 +67,7 @@ KNOWN_LABELS = frozenset({
 
 LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")
 
-# Config fields the implementation understands (bootstrap_runner.load_config
+# Config fields the implementation understands (bootstrap_config_domain.load_config
 # plus the committed example). A docs field table may document exactly this
 # set — no invented field may sneak in.
 KNOWN_CONFIG_FIELDS = frozenset({

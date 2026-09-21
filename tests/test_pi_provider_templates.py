@@ -1,3 +1,4 @@
+from orbi import config as config_domain
 """Contract tests for the committed Issue #309 provider templates."""
 import json
 from pathlib import Path
@@ -37,7 +38,7 @@ def test_template_is_a_complete_runner_validated_provider(name, monkeypatch, tmp
     assert set(data["providers"]) == {provider_id}
     if variable:
         monkeypatch.setenv(variable, "test-only-key")
-    runner._load_pi_providers(
+    config_domain._load_pi_providers(
         path, provider_id, model_id, tmp_path / "env",
     )
 

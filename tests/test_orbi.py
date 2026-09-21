@@ -1,3 +1,4 @@
+from orbi import config as config_domain
 import json
 import logging
 import os
@@ -264,7 +265,7 @@ def test_status_report_lists_sources_current_ready_and_result(monkeypatch):
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: fake_lookup(repo, "ready"))
     monkeypatch.setattr(orbi, "recent_result", lambda repo: fake_lookup(repo, "result"))
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    report = orbi.status_report(runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="main", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots")))
+    report = orbi.status_report(config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="main", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots")))
     assert "source: xqliu/orbi" in report
     assert "base: main abc123def456" in report
     assert "current: #3 now u3" in report
@@ -281,7 +282,7 @@ def test_status_report_freezes_base_from_configured_repo_dir(monkeypatch):
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    orbi.status_report(runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="develop", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots")))
+    orbi.status_report(config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="develop", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots")))
     assert calls == [(Path("/srv/orbi/orbi"), "develop")]
 
 
@@ -290,7 +291,7 @@ def test_status_report_marks_empty_lookups(monkeypatch):
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    report = orbi.status_report(runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="main", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots")))
+    report = orbi.status_report(config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="main", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots")))
     assert "base: main abc123def456" in report
     assert "current: -" in report
     assert "ready: -" in report
@@ -993,7 +994,7 @@ def test_setup_reports_missing_config_with_setup_prefix(
     monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
     monkeypatch.setattr(
         orbi.pilot_setup, "ensure_config",
-        lambda path: (_ for _ in ()).throw(runner.ConfigFileMissingError(path)),
+        lambda path: (_ for _ in ()).throw(config_domain.ConfigFileMissingError(path)),
     )
     assert orbi.main(["setup"]) == 1
     assert "setup_failed reason=config_not_found" in capsys.readouterr().err
@@ -1197,7 +1198,7 @@ def test_status_report_includes_live_lines_for_current_issue(monkeypatch, tmp_pa
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    report = orbi.status_report(runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots"))
+    report = orbi.status_report(config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots"))
     assert "current: #3 now u3" in report
     # Issue #176: the session file exists but no first response has
     # arrived, so the live line shows the request_pending sub-phase.
@@ -1213,7 +1214,7 @@ def test_status_report_has_no_live_lines_without_current_issue(monkeypatch, tmp_
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    report = orbi.status_report(runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots"))
+    report = orbi.status_report(config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots"))
     assert "live:" not in report
     assert "current: -" in report
 
@@ -1229,7 +1230,7 @@ def test_status_report_shows_capacity_and_free_slots(monkeypatch, tmp_path):
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    config = runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=2, slot_dir=tmp_path / ".orbi" / "slots")
+    config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=2, slot_dir=tmp_path / ".orbi" / "slots")
     report = orbi.status_report(config)
     assert "capacity: 2" in report
     assert "slots: 0/2" in report
@@ -1251,7 +1252,7 @@ def test_status_report_shows_occupied_slots_with_pids(monkeypatch, tmp_path):
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    config = runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=2, slot_dir=slot_dir)
+    config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=2, slot_dir=slot_dir)
     report = orbi.status_report(config)
     assert "capacity: 2" in report
     assert "slots: 1/2" in report
@@ -1275,7 +1276,7 @@ def test_status_report_shows_free_slot_when_file_exists_without_lock(
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    config = runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=slot_dir)
+    config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=slot_dir)
     report = orbi.status_report(config)
     assert "slots: 0/1" in report
 
@@ -1305,7 +1306,7 @@ def test_slot_lines_reports_held_unknown_pid(monkeypatch, tmp_path):
 
 def _deploy_world(
         tmp_path, drift: bool = False,
-) -> tuple[runner.RunnerConfig, Path]:
+) -> tuple[config_domain.RunnerConfig, Path]:
     """A deployment checkout with templates plus an installed unit dir."""
     import shutil
 
@@ -1324,7 +1325,7 @@ def _deploy_world(
         (installed / "orbi@.service").write_text(
             "[Service]\n# drift\n", encoding="utf-8",
         )
-    config = runner.RunnerConfig(
+    config = config_domain.RunnerConfig(
         source_repos=("xqliu/orbi",),
         repo_dir=repo,
         # Issue #330: the bootstrap deployment — home == delivery checkout.
@@ -1720,7 +1721,7 @@ def test_main_setup_config_failure_prints_structured_reason(
 ):
     config = _setup_world(tmp_path)
     monkeypatch.setattr(
-        orbi, "load_config",
+        config_domain, "load_config",
         lambda path, **kwargs: (_ for _ in ()).throw(
             ValueError("API key for provider 'ollama' references environment variable OLLAMA_API_KEY is not set")
         ),
@@ -1736,7 +1737,7 @@ def test_main_non_setup_config_failure_logs_structured_reason(
 ):
     config = _setup_world(tmp_path)
     monkeypatch.setattr(
-        orbi, "load_config",
+        config_domain, "load_config",
         lambda path, **kwargs: (_ for _ in ()).throw(
             ValueError("invalid configuration"),
         ),

@@ -3,6 +3,7 @@
   "monkeypatch_setattr_modules": {
     "cli": 4,
     "cli_source": 7,
+    "config": 0,
     "delivery_labels": 6,
     "delivery_scene": 0,
     "engine_source": 0,
@@ -26,6 +27,6 @@
     "scheduler": 17,
     "systemd_deploy": 0
   },
-  "monkeypatch_setattr_runner": 485,
+  "monkeypatch_setattr_runner": 484,
   "monkeypatch_setattr_runner_string": 6
 }

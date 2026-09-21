@@ -1,3 +1,4 @@
+from orbi import config as config_domain
 """E2E: the review session fixes the same PR in-session (Issues #45, #82).
 
 Real git (local bare origin + clone) plus a fake ``pi`` executable that
@@ -374,7 +375,7 @@ def write_prompt(tmp_path: Path) -> Path:
 
 
 def config_for(clone: Path, tmp_path: Path) -> dict:
-    return runner.RunnerConfig(repo_dir=clone, prompt=write_prompt(tmp_path), prompt_review=Path(tmp_path) / "prompt_review.md", base_branch="main", source_repos=(REPO,), workspace_root=tmp_path, context_files=(), skills=())
+    return config_domain.RunnerConfig(repo_dir=clone, prompt=write_prompt(tmp_path), prompt_review=Path(tmp_path) / "prompt_review.md", base_branch="main", source_repos=(REPO,), workspace_root=tmp_path, context_files=(), skills=())
 
 
 def issue() -> dict:

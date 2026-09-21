@@ -38,7 +38,7 @@ from orbi.journal import event
 if TYPE_CHECKING:
     # Annotation-only: `orbi.runner` imports this module at runtime, so a
     # real import here would be circular.
-    from orbi.runner import RunnerConfig
+    from orbi.config import RunnerConfig
 
 # Decision D1: one location, `.github/` (the GitHub automation-config
 # convention shared by CODEOWNERS / dependabot.yml / labeler).

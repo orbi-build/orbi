@@ -1,3 +1,4 @@
+from orbi import config as config_domain
 """Resume the same PR from its opened-PR state (Issue #45, #82).
 
 Unit tests for the runner's resume path: an Issue in an opened-PR state
@@ -1484,7 +1485,7 @@ def test_pick_next_delivery_prefers_resumable_delivery_over_ready(
         runner, "pick_resumable_delivery",
         lambda repo, slot_dir, max_concurrency: (
             calls.append(("resume", repo))
-            or (resumable, runner.RunnerConfig(run_id=FAKE_RUN_ID))
+            or (resumable, config_domain.RunnerConfig(run_id=FAKE_RUN_ID))
         ),
     )
     monkeypatch.setattr(
@@ -1494,7 +1495,7 @@ def test_pick_next_delivery_prefers_resumable_delivery_over_ready(
     result = runner.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1,
     )
-    assert result == ("owner/repo", resumable, runner.RunnerConfig(run_id=FAKE_RUN_ID))
+    assert result == ("owner/repo", resumable, config_domain.RunnerConfig(run_id=FAKE_RUN_ID))
     assert calls == [("resume", "owner/repo")]
 
 
@@ -1532,7 +1533,7 @@ def test_pick_next_delivery_falls_back_to_ready_when_no_resumable(
 
 def test_pick_next_delivery_scans_sources_in_order(monkeypatch, tmp_path):
     resumable = {"number": 9, "title": "ship"}
-    scene = runner.RunnerConfig(run_id=FAKE_RUN_ID)
+    scene = config_domain.RunnerConfig(run_id=FAKE_RUN_ID)
     ready = {"number": 10, "title": "new"}
     calls = []
     monkeypatch.setattr(
@@ -1587,7 +1588,7 @@ def test_run_pi_fresh_context_has_no_existing_pr(monkeypatch, tmp_path):
         runner, "stream_pi",
         lambda command, **kwargs: calls.append((command, kwargs)) or "done",
     )
-    config = runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id=FAKE_RUN_ID)
+    config = config_domain.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id=FAKE_RUN_ID)
     runner.run_pi({"number": 9, "title": "t", "body": "b"}, RunContext(run_id=config.run_id, issue={"number": 9, "title": "t", "body": "b"}["number"], branch=FAKE_BRANCH, worktree=tmp_path, source_repo="owner/repo"), config)
     context = calls[0][0][-1]
     assert "Existing PR:" not in context
@@ -1825,7 +1826,7 @@ def test_main_ends_cleanly_after_reported_resume_failure(
 
 
 def make_resume_config(tmp_path) -> dict:
-    return runner.RunnerConfig(repo_dir=tmp_path, base_branch="main")
+    return config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main")
 
 
 def make_resume_scene(pr_url: str = FAKE_PR_URL) -> dict:

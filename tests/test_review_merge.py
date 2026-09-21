@@ -1,3 +1,4 @@
+from orbi import config as config_domain
 """Unit tests for the auto review/fix/merge orchestration (Issues #34, #82).
 
 The Runner (not Pi) closes the delivery loop: after the implementer opens a PR
@@ -618,7 +619,7 @@ def _review_config(tmp_path, prompt_name="prompt_review.md"):
     prompt = tmp_path / prompt_name
     prompt.write_text("REVIEW PROMPT {{PR_NUMBER}} {{BASE_SHA}} {{HEAD_SHA}}",
                       encoding="utf-8")
-    return runner.RunnerConfig(prompt_review=prompt, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(tmp_path / "code-review.md",), base_branch="main", base_sha="b1", run_id="run1")
+    return config_domain.RunnerConfig(prompt_review=prompt, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(tmp_path / "code-review.md",), base_branch="main", base_sha="b1", run_id="run1")
 
 
 def test_run_review_launches_independent_readonly_pi_session(monkeypatch, tmp_path):
@@ -1925,7 +1926,7 @@ def _pr():
 
 
 def _review_merge_config(tmp_path):
-    return runner.RunnerConfig(
+    return config_domain.RunnerConfig(
         repo_dir=tmp_path, deploy_home=tmp_path, base_branch="main",
         base_sha="b1", run_id="a1b2c3d4",
     )

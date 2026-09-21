@@ -1,3 +1,4 @@
+from orbi import config as config_domain
 """E2E ops-delivery tests (Issue #537).
 
 Real git (local bare origin + clone) plus REAL subprocess executables:
@@ -350,11 +351,11 @@ def ops_issue() -> dict:
     }
 
 
-def config_for(clone: Path) -> runner.RunnerConfig:
+def config_for(clone: Path) -> config_domain.RunnerConfig:
     # The REAL repo prompts: the ops session must receive the real
     # rendered ops playbook (`prompt_ops.md`, the sibling of the
     # configured dev prompt), not a test stub.
-    return runner.RunnerConfig(
+    return config_domain.RunnerConfig(
         repo_dir=clone,
         # The REAL repo prompts: the ops session must receive the real
         # rendered ops playbook (`prompt_ops.md`, the sibling of the

@@ -1,3 +1,4 @@
+from orbi import config as config_domain
 """Chinese documentation contract (Issue #116).
 
 The Chinese docs live in `docs/zh/` (the verified Mintlify i18n layout:
@@ -58,7 +59,7 @@ KNOWN_LABELS = frozenset({
 
 LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")
 
-# Config fields the implementation understands (bootstrap_runner.load_config
+# Config fields the implementation understands (bootstrap_config_domain.load_config
 # plus the committed example) — the Chinese field table may document
 # exactly this set, no invented field.
 KNOWN_CONFIG_FIELDS = frozenset({

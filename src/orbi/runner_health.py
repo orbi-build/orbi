@@ -49,7 +49,7 @@ from orbi.progress import format_status_comment, run_marker
 
 if TYPE_CHECKING:
     # Annotation-only: `orbi.runner` imports this module at runtime.
-    from orbi.runner import RunnerConfig
+    from orbi.config import RunnerConfig
 
 LOGGER = logging.getLogger("orbi.health")
 

@@ -1,3 +1,4 @@
+from orbi import config as config_domain
 """The delivery scene classification (Issue #787).
 
 `classify` is the single pure decision the scan layer and the dispatch
@@ -321,7 +322,7 @@ def test_gather_claim_facts_probes_scene_less_fix_needed_takeover(
     monkeypatch.setitem(runner.__dict__, "stable_branch_exists", lambda *a: True)
 
     facts = runner._gather_claim_facts(
-        issue, runner.RunnerConfig(repo_dir=tmp_path), "owner/repo", None,
+        issue, config_domain.RunnerConfig(repo_dir=tmp_path), "owner/repo", None,
     )
 
     assert facts.takeover_pr == pr
@@ -340,7 +341,7 @@ def test_scene_less_fix_yields_when_pr_closes_between_scan_and_dispatch(
     )
     facts = delivery_scene.DeliveryFacts(
         labels=frozenset({FIX_NEEDED_LABEL}),
-        config=runner.RunnerConfig(repo_dir=tmp_path),
+        config=config_domain.RunnerConfig(repo_dir=tmp_path),
         run_id="a1b2c3d4", base_branch="main",
         claim_labels=frozenset({FIX_NEEDED_LABEL}),
         stable_branch="orbi/owner-repo-issue-1216",

@@ -98,7 +98,7 @@ if TYPE_CHECKING:
     # Annotation-only: this module imports `orbi.runner` never — the
     # runner imports this module at runtime — while
     # `process_release` annotates the frozen host config of #790.
-    from orbi.runner import RunnerConfig
+    from orbi.config import RunnerConfig
 
 
 # --- release-domain constants, scene and gates (moved from

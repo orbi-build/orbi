@@ -1,3 +1,4 @@
+from orbi import config as config_domain
 """Tests for the automatic GitHub progress comment wiring (Issue #18).
 
 `process_issue` and `review_and_merge_if_clean` must keep exactly one
@@ -70,7 +71,7 @@ def make_fake_gh(monkeypatch, comments=None, in_progress=False):
 
 
 def make_config(tmp_path):
-    return runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main")
+    return config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main")
 
 
 def make_issue():
@@ -1660,7 +1661,7 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
                                 AssertionError("no merge")))
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main",
-        runner.RunnerConfig(repo_dir=tmp_path, base_branch="main", base_sha="b1", run_id="a1b2c3d4"),
+        config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main", base_sha="b1", run_id="a1b2c3d4"),
         "xqliu/orbi", 18, title="Publish progress",
         priority="normal",
         scene={
@@ -1899,7 +1900,7 @@ def test_delivery_step_review_failure_finishes_progress_comment_with_blocked_sce
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.delivery_step(
         pr_url, {"number": 39, "title": "t", "body": ""},
-        runner.RunnerConfig(repo_dir=Path("/srv/repo")), "owner/repo",
+        config_domain.RunnerConfig(repo_dir=Path("/srv/repo")), "owner/repo",
     )
     posted_bodies = [
         command[command.index("--field") + 1][len("body="):]
@@ -2123,7 +2124,7 @@ def test_delivery_step_review_failure_progress_failure_still_releases(
     runner.delivery_step(
         "https://github.com/owner/repo/pull/46",
         {"number": 39, "title": "t", "body": ""},
-        runner.RunnerConfig(repo_dir=Path("/srv/repo")), "owner/repo",
+        config_domain.RunnerConfig(repo_dir=Path("/srv/repo")), "owner/repo",
     )
 
     # The `ai-blocked` transition completed even though the progress
@@ -2302,7 +2303,7 @@ def test_delivery_step_external_merge_closes_the_triage_issue(monkeypatch):
     runner.delivery_step(
         "https://github.com/xqliu/orbi/pull/592",
         {"number": 608, "title": "t", "body": ""},
-        runner.RunnerConfig(repo_dir=Path("/srv/repo"), base_branch="main"),
+        config_domain.RunnerConfig(repo_dir=Path("/srv/repo"), base_branch="main"),
         "xqliu/orbi", external_takeover=True,
     )
     assert close_calls == [
@@ -2331,7 +2332,7 @@ def test_delivery_step_external_close_failure_never_rewrites(monkeypatch,
     runner.delivery_step(
         "https://github.com/xqliu/orbi/pull/592",
         {"number": 608, "title": "t", "body": ""},
-        runner.RunnerConfig(repo_dir=Path("/srv/repo"), base_branch="main"),
+        config_domain.RunnerConfig(repo_dir=Path("/srv/repo"), base_branch="main"),
         "xqliu/orbi", external_takeover=True,
     )
     assert "external_takeover_close_failed" in caplog.text
@@ -2366,7 +2367,7 @@ def test_delivery_step_external_closed_requeues_for_internal_redo(
     runner.delivery_step(
         "https://github.com/xqliu/orbi/pull/592",
         {"number": 608, "title": "t", "body": ""},
-        runner.RunnerConfig(repo_dir=Path("/srv/repo"), base_branch="main"),
+        config_domain.RunnerConfig(repo_dir=Path("/srv/repo"), base_branch="main"),
         "xqliu/orbi", external_takeover=True,
     )
     assert edits == [{
@@ -2465,7 +2466,7 @@ def test_process_ticket_only_publishes_the_bound_context(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "")
     monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: seen.append(kwargs))
 
-    runner.process_ticket_only(issue, runner.RunnerConfig(repo_dir=Path("/repo")), "o/r")
+    runner.process_ticket_only(issue, config_domain.RunnerConfig(repo_dir=Path("/repo")), "o/r")
 
     # ensure (claim) -> delivered milestone -> finish.
     assert len(seen) == 3
