@@ -1,34 +1,12 @@
 #!/usr/bin/env python3
 """Patch ratchet gate (Issue #789).
 
-The test corpus may only SHRINK. The gate counts the two patterns the
-constitution forbids in new tests (Article 5.1/5.2) over the test
-modules:
+The test corpus may only SHRINK. The gate counts forbidden internal patches
+and command-shape assertions. Besides the historical runner metric, package
+module targets are discovered from ``src/orbi/*.py`` at runtime (excluding
+``runner`` and ``__init__``), so moving code cannot hide test coupling.
 
-- ``monkeypatch.setattr(runner,`` — direct patches of the runner
-  module: they pin the corpus to runner.py's internal layout and are
-  the reason runner.py could freeze but never shrink (Issues
-  #286/#300/#785-#788);
-- ``command[:N] ==`` — argv shape assertions: the command line is the
-  contract only at the adapter seam (Article 5.2), not inside the
-  runner's tests.
-
-The counts are frozen in ``tools/patch_ratchet_baseline.json``. A PR
-that adds either pattern fails the gate; a PR that migrates tests to
-the fakes (``tests/fakes/``) lowers the counts and passes. After a
-migration lands, ``--update`` re-freezes the baseline to the current
-counts — the ONE deliberate command that can lower it.
-
-Scope: every ``*.py`` under ``tests/`` EXCEPT ``tests/fakes/`` — the
-fakes ARE the sanctioned alternative, and their internal command
-dispatch is implementation, not assertion. The ``command[:N] ==``
-metric also skips the fake-based seam modules
-(``tests/test_*_fakes.py``): at the adapter seam the command line IS
-the contract (Article 5.2), so their argv asserts are sanctioned —
-the ``monkeypatch.setattr(runner,`` metric still counts them, so a
-runner patch dressed as a fake-based test still fails.
-
-Usage:  python3 tools/patch_ratchet.py [--update] [tests_dir]
+Usage: python3 tools/patch_ratchet.py [--update] [tests_dir]
 """
 import json
 import re
@@ -39,53 +17,80 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_DIR = REPO_ROOT / "tests"
 BASELINE_FILE = Path(__file__).resolve().parent / "patch_ratchet_baseline.json"
 
-# The runner patch: monkeypatch's setattr call naming the runner module
-# as the patch target. Whitespace-tolerant — the call may wrap the
-# target onto the next line (`setattr(` newline `runner, ...`), the
-# style the corpus itself already uses in 200+ places; a plain
-# single-line literal would let any new wrapped-form patch through
-# with the count unchanged.
+# Kept unchanged so the historical metric remains comparable.
 SETATTR_RUNNER_RE = re.compile(r"monkeypatch\.setattr\(\s*runner\s*,")
-# The argv shape assertion: `command[:N] == [...]` (the exact form the
-# Issue names; only `==` — a shape assert, not a shape dispatch).
+SETATTR_RUNNER_STRING_RE = re.compile(
+    r"monkeypatch\.setattr\(\s*[\"']orbi\.runner\."
+)
 COMMAND_SHAPE_RE = re.compile(r"command\[\s*:\s*\d+\s*\]\s*==")
+MODULE_STEMS = tuple(sorted(
+    path.stem for path in (REPO_ROOT / "src" / "orbi").glob("*.py")
+    if path.stem not in {"runner", "__init__"}
+))
+MODULE_ATTRIBUTE_RES = {
+    stem: re.compile(
+        rf"monkeypatch\.setattr\(\s*(?:[A-Za-z_]\w*\.)*{re.escape(stem)}\s*,"
+    )
+    for stem in MODULE_STEMS
+}
+MODULE_STRING_RES = {
+    stem: re.compile(
+        rf"monkeypatch\.setattr\(\s*[\"']orbi\.{re.escape(stem)}\."
+    )
+    for stem in MODULE_STEMS
+}
 
-METRICS = ("monkeypatch_setattr_runner", "command_shape_asserts")
 
-
-def counts(tests_dir: Path) -> dict[str, int]:
-    """Count both patterns over the test corpus, excluding the
-    top-level `tests/fakes/` directory and (for the shape metric) the
-    fake-based seam modules."""
+def counts(tests_dir: Path) -> dict[str, int | dict[str, int]]:
+    """Count ratcheted patterns, excluding the top-level ``tests/fakes/``."""
     tests_dir = Path(tests_dir)
     fakes_dir = tests_dir / "fakes"
-    totals = {metric: 0 for metric in METRICS}
+    totals = {
+        "monkeypatch_setattr_runner": 0,
+        "monkeypatch_setattr_runner_string": 0,
+        "monkeypatch_setattr_modules": {stem: 0 for stem in MODULE_STEMS},
+        "command_shape_asserts": 0,
+    }
     for path in sorted(tests_dir.rglob("*.py")):
         if path.parent == fakes_dir:
             continue
         text = path.read_text(encoding="utf-8")
-        totals["monkeypatch_setattr_runner"] += len(
-            SETATTR_RUNNER_RE.findall(text)
+        totals["monkeypatch_setattr_runner"] += len(SETATTR_RUNNER_RE.findall(text))
+        totals["monkeypatch_setattr_runner_string"] += len(
+            SETATTR_RUNNER_STRING_RE.findall(text)
         )
+        modules = totals["monkeypatch_setattr_modules"]
+        for stem in MODULE_STEMS:
+            modules[stem] += (
+                len(MODULE_ATTRIBUTE_RES[stem].findall(text))
+                + len(MODULE_STRING_RES[stem].findall(text))
+            )
         if path.name.endswith("_fakes.py"):
             continue
-        totals["command_shape_asserts"] += len(
-            COMMAND_SHAPE_RE.findall(text)
-        )
+        totals["command_shape_asserts"] += len(COMMAND_SHAPE_RE.findall(text))
     return totals
 
 
 def read_baseline(baseline_file: Path) -> dict | None:
-    """Read the frozen baseline; None when it is missing or malformed —
-    the gate must fail fast, never pass on unreadable evidence."""
+    """Read a valid nested baseline, returning ``None`` if malformed."""
     if not baseline_file.exists():
         return None
     try:
         baseline = json.loads(baseline_file.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
+    scalar_metrics = (
+        "monkeypatch_setattr_runner",
+        "monkeypatch_setattr_runner_string",
+        "command_shape_asserts",
+    )
     if not isinstance(baseline, dict) or any(
-        not isinstance(baseline.get(metric), int) for metric in METRICS
+        not isinstance(baseline.get(metric), int) for metric in scalar_metrics
+    ):
+        return None
+    modules = baseline.get("monkeypatch_setattr_modules")
+    if not isinstance(modules, dict) or any(
+        not isinstance(value, int) for value in modules.values()
     ):
         return None
     return baseline
@@ -98,29 +103,19 @@ def main(argv: list[str], *, tests_dir: Path | None = None,
     if len(arguments) > 1:
         print(
             "patch ratchet: expected at most one tests_dir argument, "
-            f"got {arguments!r}",
-            file=sys.stderr,
+            f"got {arguments!r}", file=sys.stderr,
         )
         return 1
     tests = Path(arguments[0]) if arguments else (tests_dir or TESTS_DIR)
     if not tests.is_dir():
-        # An empty corpus would count as zero patches and pass; the
-        # gate must fail fast, mirroring the baseline's own fail-fast.
-        print(
-            f"patch ratchet: tests directory not found: {tests}",
-            file=sys.stderr,
-        )
+        print(f"patch ratchet: tests directory not found: {tests}", file=sys.stderr)
         return 1
     current = counts(tests)
     if update:
         baseline_file.write_text(
-            json.dumps(current, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+            json.dumps(current, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        print(
-            "patch ratchet baseline frozen at "
-            f"{baseline_file}: {current}"
-        )
+        print(f"patch ratchet baseline frozen at {baseline_file}: {current}")
         return 0
     baseline = read_baseline(baseline_file)
     if baseline is None:
@@ -130,29 +125,41 @@ def main(argv: list[str], *, tests_dir: Path | None = None,
             "(the current counts become the ceiling)"
         )
         return 1
-    failures = [
-        metric for metric in METRICS
-        if current[metric] > baseline[metric]
+    scalar_failures = [
+        metric for metric in (
+            "monkeypatch_setattr_runner",
+            "monkeypatch_setattr_runner_string",
+            "command_shape_asserts",
+        ) if current[metric] > baseline[metric]
+    ]
+    module_failures = [
+        stem for stem, count in current["monkeypatch_setattr_modules"].items()
+        if count > baseline["monkeypatch_setattr_modules"].get(stem, 0)
     ]
     print(
         "patch ratchet (Issue #789): "
-        "monkeypatch.setattr(runner,)="
-        f"{current['monkeypatch_setattr_runner']}"
+        f"monkeypatch.setattr(runner,)={current['monkeypatch_setattr_runner']}"
         f"/{baseline['monkeypatch_setattr_runner']} "
+        f"runner strings={current['monkeypatch_setattr_runner_string']}"
+        f"/{baseline['monkeypatch_setattr_runner_string']} "
         f"command[:N]==={current['command_shape_asserts']}"
         f"/{baseline['command_shape_asserts']} "
         "(current/baseline — the corpus may only shrink)"
     )
-    if failures:
+    if scalar_failures or module_failures:
+        failures = [
+            f"{metric} {current[metric]} > {baseline[metric]}"
+            for metric in scalar_failures
+        ] + [
+            f"{stem} {current['monkeypatch_setattr_modules'][stem]} > "
+            f"{baseline['monkeypatch_setattr_modules'].get(stem, 0)}"
+            for stem in module_failures
+        ]
         print(
             "patch ratchet FAILED: new test patches are ratcheted shut "
-            "(Issue #789). Migrate to tests/fakes/ (state + public entry "
-            "+ public surface, zero `monkeypatch.setattr(runner, ...)`) "
-            "or remove the pattern; `--update` is only for a PR that "
-            "LOWERS the counts: " + ", ".join(
-                f"{metric} {current[metric]} > {baseline[metric]}"
-                for metric in failures
-            )
+            "(Issue #789). Migrate to tests/fakes/ or remove the pattern; "
+            "`--update` is only for a PR that LOWERS the counts: "
+            + ", ".join(failures)
         )
         return 1
     return 0
