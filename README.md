@@ -14,7 +14,7 @@ Orbi claims an Issue from GitHub Issues, develops it in an isolated worktree, ru
 
 That same loop, recorded from the live GitHub pages — including the review that rejected the first attempt:
 
-<video src="https://github.com/user-attachments/assets/1f0d3a62-5fc9-44ae-bf68-b312a6a55f85" controls muted width="100%"></video>
+<video src="https://github.com/user-attachments/assets/1f0d3a62-5fc9-44ae-bf68-b312a6a55f85" controls muted width="880"></video>
 
 1. **An issue** — a bug, labelled `ai-ready`
 2. **It writes the code** — PR #1023, on a recorded base SHA
