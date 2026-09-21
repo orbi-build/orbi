@@ -270,6 +270,18 @@ docs still described a hand-edited provider file.
 - A remote on the opposite transport is never rewritten silently: only the human-run `orbi setup` migrates it with `git remote set-url origin <expected-url>` (HTTPS→SSH in ssh mode, SSH→HTTPS in https mode); every other path fails fast with the exact migration command. `orbi doctor` reports the transport read-only.
 - Full explanation: `docs/operations.mdx` and `docs/setup.mdx` (EN/ZH).
 
+## Always widen gh list queries
+
+`gh api <list endpoint>`, `gh issue list` and `gh pr list` return only the first
+page by default. **An empty result is not an error** — the query succeeds, exits
+0, warns about nothing, and "not on this page" gets read as "does not exist".
+
+- `gh api` takes `--paginate`
+- `gh issue list` / `gh pr list` take `--limit 200 --state all`
+- for versions use `gh release list --limit 10`
+
+If you only want a sample, say so; do not conclude "does not exist" from it.
+
 ## Task dependencies (blockedBy)
 
 - Dependencies use GitHub's native `blockedBy` relation (`gh issue edit N --add-blocked-by M`); never write `Depends on #N` in the Issue body — the runner does not parse body dependencies.
