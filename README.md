@@ -8,7 +8,20 @@ Orbi claims an Issue from GitHub Issues, develops it in an isolated worktree, ru
 
 **Ledger:** [merged PRs](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [closed Issues](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged releases](https://github.com/orbi-build/orbi/releases) — the repository is the record.
 
-**Inspect one loop:** [Issue #835](https://github.com/orbi-build/orbi/issues/835) → [PR #843](https://github.com/orbi-build/orbi/pull/843) → [Release v0.5.4](https://github.com/orbi-build/orbi/releases/tag/v0.5.4)
+**Inspect one loop:** [Issue #1018](https://github.com/orbi-build/orbi/issues/1018) → [PR #1023](https://github.com/orbi-build/orbi/pull/1023) → [Release v0.5.17](https://github.com/orbi-build/orbi/releases/tag/v0.5.17)
+
+## The loop, in 35 seconds
+
+That same loop, recorded from the live GitHub pages — including the review that rejected the first attempt:
+
+<video src="https://github.com/user-attachments/assets/1f0d3a62-5fc9-44ae-bf68-b312a6a55f85" controls muted width="100%"></video>
+
+1. **An issue** — a bug, labelled `ai-ready`
+2. **It writes the code** — PR #1023, on a recorded base SHA
+3. **The review says no** — one Major finding, naming `src/orbi/release.py:2377` and the fix
+4. **It fixes itself** — more commits, until the checks go green
+5. **It merges** — 9 commits, +427/−43, only after the review passed
+6. **A tagged release** — v0.5.17, with the Issue and PR in the notes
 
 Website <https://orbi.build> ｜ [Orbi Managed Cloud](https://orbi.build/cloud/?ref=gh-readme) ｜ Documentation <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions) ｜ Docker [GHCR](https://ghcr.io/orbi-build/orbi) · [Docker Hub](https://hub.docker.com/r/orbibuild/orbi)
 
