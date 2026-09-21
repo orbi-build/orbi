@@ -138,6 +138,7 @@ def test_log_format_has_no_timestamp():
         ("Bearer fabricated-token-123456", "Bearer "),
         ("ghp_" + "a" * 40, "ghp_"),
         ("sk-proj-" + "a" * 40, "sk-proj-"),
+        ("sk-proj-" + "a" * 20 + "_" + "b" * 20, "sk-proj-"),
         ("sk-ant-api03-" + "a" * 40, "sk-ant-api03-"),
         ("sk-or-v1-" + "a" * 40, "sk-or-v1-"),
         ("gsk_" + "a" * 40, "gsk_"),
@@ -146,14 +147,17 @@ def test_log_format_has_no_timestamp():
         ("xoxb-" + "a" * 30, "xoxb-"),
         ("AKIA" + "A" * 16, "AKIA"),
         ("Authorization: fabricated", "Authorization: "),
+        ("Authorization:fabricated", "Authorization:"),
+        ("Authorization:Bearer fabricated", "Authorization:Bearer "),
         ("x-api-key: fabricated", "x-api-key: "),
+        ("x-api-key:fabricated", "x-api-key:"),
         ("api-key: fabricated", "api-key: "),
+        ("api-key:fabricated", "api-key:"),
     ],
 )
 def test_redact_secrets_covers_current_formats(value, prefix):
     redacted = journal.redact_secrets(value)
-    assert "<redacted>" in redacted
-    assert redacted.startswith(prefix)
+    assert redacted == prefix + "<redacted>"
     assert value not in redacted
 
 

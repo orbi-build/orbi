@@ -34,7 +34,9 @@ LOGGER = logging.getLogger("orbi.bootstrap")
 _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"Bearer\s+[A-Za-z0-9._-]+"), "Bearer <redacted>"),
     (re.compile(r"\b(gh[pousr]_)[A-Za-z0-9]{16,}"), r"\1<redacted>"),
-    (re.compile(r"\b(sk-(?:[A-Za-z0-9]+[-_])+)[A-Za-z0-9]{16,}"),
+    (re.compile(r"\b(sk-(?:proj-|ant-api03-|or-v1-))[A-Za-z0-9_-]{16,}"),
+     r"\1<redacted>"),
+    (re.compile(r"\b(sk-[A-Za-z0-9]+[-_])[A-Za-z0-9_-]{16,}"),
      r"\1<redacted>"),
     (re.compile(r"\b(sk-)[A-Za-z0-9]{16,}"), r"\1<redacted>"),
     (re.compile(r"\b(gsk_)[A-Za-z0-9]{16,}"), r"\1<redacted>"),
@@ -43,11 +45,11 @@ _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(xox[abprs]-)[A-Za-z0-9-]{16,}"), r"\1<redacted>"),
     (re.compile(r"\b(AKIA)[A-Z0-9]{16}"), r"\1<redacted>"),
     # Preserve the optional auth scheme while replacing the header value.
-    (re.compile(r"(?i)(Authorization:\s+)(Bearer\s+)?\S+"),
+    (re.compile(r"(?i)(Authorization:\s*)(Bearer\s+)?\S+"),
      r"\1\2<redacted>"),
-    (re.compile(r"(?i)(x-api-key:)\s+\S+"), r"\1 <redacted>"),
-    (re.compile(r"(?i)(?<!x-)(api-key:)\s+\S+"),
-     r"\1 <redacted>"),
+    (re.compile(r"(?i)(x-api-key:\s*)\S+"), r"\1<redacted>"),
+    (re.compile(r"(?i)(?<!x-)(api-key:\s*)\S+"),
+     r"\1<redacted>"),
 )
 
 
