@@ -1955,10 +1955,7 @@ def _wait_delivery_fake_gh(monkeypatch, *, pr_state, labels, comments,
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
-            return json.dumps({"state": pr_state, "statusCheckRollup": [{
-                "name": "tests", "status": "COMPLETED",
-                "conclusion": "SUCCESS",
-            }]})
+            return json.dumps({"state": pr_state})
         if command[:2] == ["gh", "issue"]:
             if command[-1] == "labels":
                 return json.dumps({"labels": labels})
@@ -2194,10 +2191,6 @@ def _make_takeover_gh(monkeypatch, monkeypatched, tmp_path, *, pr_state="OPEN",
                     "https://github.com/xqliu/orbi/pull/592",
                 "baseRefName": pr_base, "headRefName": "fix/outer",
                 "headRefOid": "e592a11",
-                "statusCheckRollup": [{
-                    "name": "tests", "status": "COMPLETED",
-                    "conclusion": "SUCCESS",
-                }],
             })
         if command[:2] == ["gh", "api"]:
             if "--method" not in command:
@@ -2290,10 +2283,7 @@ def _external_wait_fake(monkeypatch, *, pr_state, fail_progress=None):
 
     def fake_run(command, **kwargs):
         if command[:3] == ["gh", "pr", "view"]:
-            return json.dumps({"state": pr_state, "statusCheckRollup": [{
-                "name": "tests", "status": "COMPLETED",
-                "conclusion": "SUCCESS",
-            }]})
+            return json.dumps({"state": pr_state})
         if command[:3] == ["gh", "issue", "close"]:
             close_calls.append(command)
             return ""

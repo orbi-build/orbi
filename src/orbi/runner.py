@@ -6029,12 +6029,6 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             f"PR #{pr['number']} CI is still running ({detail}); "
             "the merge is deferred to the next tick"
         )
-    if not state.get("statusCheckRollup"):
-        event("merge_gate_ci_absent", pr=pr["number"])
-        raise DeliveryDeferred(
-            f"PR #{pr['number']} has no CI checks yet; "
-            "the merge is deferred to the next tick"
-        )
     mergeable = state.get("mergeable")
     if mergeable == "UNKNOWN":
         event(
@@ -9800,9 +9794,6 @@ def delivery_step(pr_url: str, issue: dict, config: RunnerConfig,
             "delivery_ci_pending", issue=number, pr=pr_url,
             pending="; ".join(_render_check(entry) for entry in pending),
         )
-        return
-    if not rollup:
-        event("delivery_ci_absent", issue=number, pr=pr_url)
         return
     # One OPEN round — the label read/repair, the
     # resumable gate, one independent review of the frozen PR and
