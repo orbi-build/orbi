@@ -15,6 +15,7 @@ from __future__ import annotations
 import fcntl
 import logging
 import os
+import socket
 import subprocess
 import time
 from collections.abc import Callable
@@ -136,18 +137,17 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
     the identity the takeover PR is frozen on. `pr_number` makes an
     external takeover fetch the base repository's pull ref, which also
     works when the head branch exists only in a fork. With
-    `existing_branch` the named branch is fetched and reused (a local branch is reused
-    with `--force`, never a second `-b` — the exit-255 claim failure; a
-    missing branch is created from `origin/<branch>` with `--force` so
-    the stale missing-but-registered entry a deleted worktree leaves
-    behind cannot block the rebuild);
+    `existing_branch` the named branch is fetched and reused (a local branch
+    is fast-forwarded to the remote when it is behind, while a local-only
+    commit fails safely with both SHAs; a missing branch is created from
+    `origin/<branch>` with `--force` so the stale missing-but-registered
+    entry a deleted worktree leaves behind cannot block the rebuild);
     without it the branch is created from the frozen base.
 
-    A local branch that already exists (the orphan a SIGKILLed run
-    leaves with no worktree and no remote counterpart) is
-    reused as-is rather than re-created with `-b`: git exits 255 on an
-    existing branch, which used to burn the re-claimed Issue into
-    terminal `ai-blocked`.
+    A local branch that already exists only in the orphan scene (no remote
+    counterpart, handled by `existing_branch=False`) is reused as-is rather
+    than re-created with `-b`: git exits 255 on an existing branch, which
+    used to burn the re-claimed Issue into terminal `ai-blocked`.
     """
     if existing is not None and existing.is_dir():
         return existing
@@ -169,6 +169,25 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
             ["git", "branch", "--list", branch], cwd=repo_dir,
         )
         if local.strip():
+            local_head = run_command(
+                ["git", "rev-parse", branch], cwd=repo_dir,
+            )
+            remote_head = run_command(
+                ["git", "rev-parse", f"origin/{branch}"], cwd=repo_dir,
+            )
+            if local_head != remote_head:
+                if not _is_ancestor(local_head, remote_head, cwd=repo_dir):
+                    raise RuntimeError(
+                        "cannot recreate worktree from remote HEAD: local "
+                        f"branch {branch} is ahead of or diverged from "
+                        f"origin/{branch} (local={local_head} "
+                        f"remote={remote_head}) in checkout {repo_dir} "
+                        f"on host {socket.gethostname()}"
+                    )
+                run_command([
+                    "git", "branch", "--force", branch,
+                    f"origin/{branch}",
+                ], cwd=repo_dir)
             run_command([
                 "git", "worktree", "add", "--force", str(path), branch,
             ], cwd=repo_dir)
