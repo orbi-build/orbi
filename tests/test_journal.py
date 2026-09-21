@@ -6,6 +6,7 @@ the single subprocess seam (`run_command` + its bounded git network retry).
 The tests fake the seam with injected fakes or tiny real subprocesses —
 they never patch `runner` internals.
 """
+import io
 import logging
 import subprocess
 import sys
@@ -129,6 +130,78 @@ def test_single_line_flattens_line_breaks():
 
 def test_log_format_has_no_timestamp():
     assert journal.log_format() == "%(levelname)s %(message)s"
+
+
+@pytest.mark.parametrize(
+    ("value", "prefix"),
+    [
+        ("Bearer fabricated-token-123456", "Bearer "),
+        ("ghp_" + "a" * 40, "ghp_"),
+        ("sk-proj-" + "a" * 40, "sk-proj-"),
+        ("sk-proj-" + "a" * 20 + "_" + "b" * 20, "sk-proj-"),
+        ("sk-ant-api03-" + "a" * 40, "sk-ant-api03-"),
+        ("sk-or-v1-" + "a" * 40, "sk-or-v1-"),
+        ("gsk_" + "a" * 40, "gsk_"),
+        ("AIza" + "a" * 35, "AIza"),
+        ("github_pat_" + "a" * 40, "github_pat_"),
+        ("xoxb-" + "a" * 30, "xoxb-"),
+        ("AKIA" + "A" * 16, "AKIA"),
+        ("Authorization: fabricated", "Authorization: "),
+        ("Authorization:fabricated", "Authorization:"),
+        ("Authorization:Bearer fabricated", "Authorization:Bearer "),
+        ("x-api-key: fabricated", "x-api-key: "),
+        ("x-api-key:fabricated", "x-api-key:"),
+        ("api-key: fabricated", "api-key: "),
+        ("api-key:fabricated", "api-key:"),
+    ],
+)
+def test_redact_secrets_covers_current_formats(value, prefix):
+    redacted = journal.redact_secrets(value)
+    assert redacted == prefix + "<redacted>"
+    assert value not in redacted
+
+
+def test_redact_secrets_leaves_identifiers_and_scene_markers_unchanged():
+    scene = '<!-- orbi:scene:v1 {"schema": 1} -->'
+    values = (
+        "a" * 40,
+        "a1b2c3d4",
+        "123e4567-e89b-12d3-a456-426614174000",
+        scene,
+        "<!-- orbi:fail=0123456789abcdef -->",
+    )
+    assert all(journal.redact_secrets(value) == value for value in values)
+
+
+def test_configured_logging_redacts_messages_and_tracebacks():
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    root = logging.getLogger()
+    original = {item: item.formatter for item in root.handlers}
+    original_level = root.level
+    root.addHandler(handler)
+    journal.configure_logging()
+    logger = logging.getLogger("orbi.bootstrap")
+    previous_level = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        logger.info("key=%s", "sk-ant-api03-" + "a" * 40)
+        try:
+            raise RuntimeError("gsk_" + "b" * 40)
+        except RuntimeError:
+            logger.exception("failed")
+    finally:
+        logger.setLevel(previous_level)
+        root.removeHandler(handler)
+        root.setLevel(original_level)
+        for item, formatter in original.items():
+            item.setFormatter(formatter)
+    output = stream.getvalue()
+    assert "<redacted>" in output
+    assert "sk-ant-api03-" in output
+    assert "gsk_" in output
+    assert "a" * 40 not in output
+    assert "b" * 40 not in output
 
 
 def test_git_network_command_retries_transient_failure_then_succeeds(

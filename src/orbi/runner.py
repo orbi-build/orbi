@@ -228,6 +228,7 @@ from orbi.journal import (
     LOGGER,
     RunIdFilter,
     clear_active_run,
+    configure_logging,
     current_run_id,
     event,
     issue_context,
@@ -9930,7 +9931,7 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(os.environ.get("ORBI_CONFIG", "orbi.toml")),
     )
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format=log_format())
+    configure_logging()
     # Stop scene: install the SIGTERM handler BEFORE any
     # other step so every phase of the tick (pre-claim, claim,
     # implement, delivery wait) stops with the active Issue context
