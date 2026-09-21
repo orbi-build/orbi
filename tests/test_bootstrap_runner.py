@@ -12401,34 +12401,42 @@ def test_delivery_step_defers_when_ci_pending(
     assert "delivery_ci_pending" in caplog.text
 
 
-def test_delivery_step_defers_when_ci_absent(
+def test_delivery_step_reviews_when_repository_has_no_ci(
         monkeypatch, tmp_path, caplog,
 ):
-    """An empty rollup cannot advance the pre-review gate."""
-    calls = {"pr": 0}
-
+    """An empty rollup must not block review for a no-CI repository."""
     def fake_run(command, **kwargs):
         if command == ["gh", "pr", "view", "46", "--repo", "owner/repo",
                        "--json", "state,statusCheckRollup"]:
-            calls["pr"] += 1
             return json.dumps({"state": "OPEN", "statusCheckRollup": []})
+        if command[0:3] == ["gh", "issue", "view"]:
+            if command[-1] == "comments":
+                return json.dumps({"comments": [{
+                    "body": ("<!-- orbi:run=a1b2c3d4 -->\\nOrbi opened PR: "
+                              f"{PR_URL} (base_branch=main base_sha=abc123def456 "
+                              "run_id=a1b2c3d4)"),
+                    "authorAssociation": "OWNER",
+                }]})
+            return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+        if command == ["git", "branch", "--show-current"]:
+            return "orbi/owner-repo-issue-39"
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    config = runner.RunnerConfig(repo_dir=tmp_path, base_branch="main")
-    edits = []
-    monkeypatch.setattr(
-        seam, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
+    worktree = tmp_path / ".worktrees" / "orbi-owner-repo-issue-39-a1b2c3d4"
+    worktree.mkdir(parents=True)
+    reviews = []
+    monkeypatch.setitem(
+        runner.__dict__, "review_and_merge_if_clean",
+        lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     caplog.set_level("INFO")
-    runner.delivery_step(PR_URL, {"number": 39, "title": "task", "body": ""},
-                         config, "owner/repo")
-    assert calls == {"pr": 1}
-    assert edits == []
-    assert "delivery_ci_absent" in caplog.text
-    with pytest.raises(AssertionError, match="unexpected command"):
-        fake_run(["gh", "pr", "merge", "46"])
+    runner.delivery_step(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
+    )
+    assert len(reviews) == 1
+    assert "delivery_ci_absent" not in caplog.text
 
 
 def test_delivery_step_auto_merges_on_clean_review(
