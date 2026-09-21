@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """Issue #763: the human acceptance gate.
 
 The carrier of the gate is the human-only label `ai-human-review`; the
@@ -11,6 +10,7 @@ one label read plus local evidence reads decide.
 `orbi.human_review` is the pure half (classification, rendering); the
 runner tests below cover the wiring in `_run_review_round`.
 """
+from orbi import config as config_domain
 import json
 from unittest.mock import Mock
 

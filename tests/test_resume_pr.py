@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """Resume the same PR from its opened-PR state (Issue #45, #82).
 
 Unit tests for the runner's resume path: an Issue in an opened-PR state
@@ -10,6 +9,7 @@ fixer: both states resume into the SAME independent review session,
 which fixes findings in the same session. Failures mark the Issue
 `ai-blocked` and preserve the PR, branch and worktree.
 """
+from orbi import config as config_domain
 import json
 import os
 import subprocess

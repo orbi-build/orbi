@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """Issue #50: keep AI-recoverable failures in the automatic fix loop.
 
 Recoverable failures of an existing run/PR (Pi execution failure, model
@@ -11,6 +10,7 @@ same run, branch, worktree and PR. `ai-blocked` is reserved for
 external preconditions the AI cannot safely judge or fix; every blocked
 comment states the explicit reason why automatic recovery is impossible.
 """
+from orbi import config as config_domain
 import json
 import subprocess
 from pathlib import Path

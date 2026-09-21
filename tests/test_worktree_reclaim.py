@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """Bounded task-worktree reclamation at tick start (Issue #760).
 
 The worktrees only ever grew: every delivered or failed run left its
@@ -15,6 +14,7 @@ The tests drive REAL git repositories with REAL registered worktrees (the
 `git worktree remove` path is the product path); only the GitHub read
 (`list_issues`) and the clock are faked.
 """
+from orbi import config as config_domain
 import logging
 import subprocess
 from datetime import datetime, timedelta, timezone

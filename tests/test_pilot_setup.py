@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """One-time setup tests (Issue #117).
 
 `orbi.py setup` is the config-driven, idempotent, fail-fast
@@ -10,6 +9,7 @@ optional model proxy health as a warning only. Core failures raise
 `SetupError` with a concrete reason before any later mutation; the
 optional proxy never blocks the core setup.
 """
+from orbi import config as config_domain
 import json
 import subprocess
 import tomllib

@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """Chinese documentation contract (Issue #116).
 
 The Chinese docs live in `docs/zh/` (the verified Mintlify i18n layout:
@@ -13,6 +12,7 @@ language documents a topic the other does not), when a Chinese page
 references a label or config field the implementation does not have, or
 when the README stops pointing at the Chinese docs entry.
 """
+from orbi import config as config_domain
 import re
 from pathlib import Path
 

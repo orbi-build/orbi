@@ -1,5 +1,5 @@
-from orbi import config as config_domain
 """Contract tests for the committed Issue #309 provider templates."""
+from orbi import config as config_domain
 import json
 from pathlib import Path
 

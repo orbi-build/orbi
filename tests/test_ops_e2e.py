@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """E2E ops-delivery tests (Issue #537).
 
 Real git (local bare origin + clone) plus REAL subprocess executables:
@@ -25,6 +24,7 @@ The production replay of orbi-website#70 itself needs the deployed
 runner and its real credentials; this file proves the runner-side
 behavior end to end in a hermetic world.
 """
+from orbi import config as config_domain
 import json
 import os
 import re

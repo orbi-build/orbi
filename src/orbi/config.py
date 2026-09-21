@@ -969,5 +969,3 @@ def repository_config_path(config: RunnerConfig, source_repo: str) -> str:
         if repo.get("github") == source_repo:
             return repo.get("config_path", REPO_CONFIG_PATH)
     return REPO_CONFIG_PATH
-
-

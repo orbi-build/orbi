@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """E2E: an interrupted run continues on the existing work (Issue #219).
 
 Real git (local bare origin + clone) plus a fake ``pi`` executable:
@@ -26,6 +25,7 @@ The acceptance criteria proven here:
   (the Issue goes ``ai-blocked`` with the reason) — never a silent
   fresh redo.
 """
+from orbi import config as config_domain
 import json
 import os
 import re

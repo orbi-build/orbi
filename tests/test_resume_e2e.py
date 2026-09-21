@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """E2E: the review session fixes the same PR in-session (Issues #45, #82).
 
 Real git (local bare origin + clone) plus a fake ``pi`` executable that
@@ -27,6 +26,7 @@ The acceptance criteria proven here:
 - a review session that cannot finish marks the Issue ``ai-blocked``
   and preserves the PR, branch and worktree.
 """
+from orbi import config as config_domain
 import json
 import os
 import re

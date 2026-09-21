@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """Runner source freshness gate (Issue #525).
 
 The 2026-09-07 incident: the editable install resolved to an OLD issue
@@ -20,6 +19,7 @@ reset to an old commit while ``refs/remotes/origin/main`` points at a
 newer one (the stale-deployment shape), and a linked worktree pinned to
 the old commit (the exact incident scene).
 """
+from orbi import config as config_domain
 import subprocess
 from pathlib import Path
 

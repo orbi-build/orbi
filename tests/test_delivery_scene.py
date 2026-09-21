@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """The delivery scene classification (Issue #787).
 
 `classify` is the single pure decision the scan layer and the dispatch
@@ -7,6 +6,7 @@ layers, so a "#726-style two-layer disagreement" is structurally
 impossible. The tests below enumerate the fact combinations and assert
 the classified scene — no `gh` stub, no I/O: the module is pure.
 """
+from orbi import config as config_domain
 import dataclasses
 import json
 

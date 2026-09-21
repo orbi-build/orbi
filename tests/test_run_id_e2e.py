@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """E2E run_id correlation tests (Issue #41).
 
 Real git (local bare origin + clone) plus a fake ``pi`` executable that
@@ -17,6 +16,7 @@ Together these prove the acceptance criteria:
   queryable by the old run_id;
 - a failed attempt marks the Issue blocked with the same run_id marker.
 """
+from orbi import config as config_domain
 import json
 import os
 import re

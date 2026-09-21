@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """Repository-level config-as-code tests (Issue #527).
 
 Covers the strict schema (host-only / unknown / type / path rejections), the
@@ -6,6 +5,7 @@ per-key merge over the host fallback (D3), the `gh api` read pipeline (missing
 file -> no-op, malformed file -> fail fast, read error -> fail open), the D4
 change-visibility audit, and the runner wiring at the claim scan and claim.
 """
+from orbi import config as config_domain
 import base64
 import dataclasses
 import json

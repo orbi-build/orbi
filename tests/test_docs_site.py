@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """Documentation site contract for the v0.1.0 open-source release (Issue #104
 + Issue #116).
 
@@ -18,6 +17,7 @@ references a label or config field the implementation does not have, or
 when a doc (in any language) carries a personal absolute path, an
 unimplemented feature, or the stale 15-minute timer.
 """
+from orbi import config as config_domain
 import inspect
 import json
 import re

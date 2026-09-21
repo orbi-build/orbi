@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """Unit tests for the auto review/fix/merge orchestration (Issues #34, #82).
 
 The Runner (not Pi) closes the delivery loop: after the implementer opens a PR
@@ -9,6 +8,7 @@ verdict (the reviewer may have pushed a fix), re-checks the merge gate
 against the latest origin/main, and merges via `gh pr merge
 --match-head-commit`. Pi never pushes main.
 """
+from orbi import config as config_domain
 import fcntl
 import json
 import os

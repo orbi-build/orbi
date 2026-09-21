@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """Runner config domain: `load_config` / `validate_config` (Issue #789).
 
 The first domain split out of `test_bootstrap_runner.py` (moved
@@ -14,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from orbi import config as config_domain
+from orbi.pilot_slots import slot_dir_for
 import orbi.runner as runner
 
 
@@ -30,6 +31,30 @@ def test_load_config_resolves_relative_paths_and_values(tmp_path):
     assert config.prompt == (tmp_path / "prompt.md").resolve()
     assert config.skills == ((tmp_path / "skill.md").resolve(),)
     assert config.context_files == ((tmp_path / "context.md").resolve(),)
+
+
+def test_load_config_matches_the_pre_extraction_runner_config_field_for_field(
+    tmp_path,
+):
+    """The module move preserves the complete parsed config value."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n',
+        encoding="utf-8",
+    )
+    repo_dir = (tmp_path / "repo").resolve()
+
+    assert config_domain.load_config(config_path) == config_domain.RunnerConfig(
+        config_path=config_path.resolve(),
+        source_repos=("owner/repo",),
+        repo_dir=repo_dir,
+        deploy_home=repo_dir,
+        workspace_root=tmp_path.parent.resolve(),
+        prompt=(tmp_path / "prompts" / "prompt.md").resolve(),
+        prompt_review=(tmp_path / "prompts" / "prompt_review.md").resolve(),
+        engine_source_track="main",
+        slot_dir=slot_dir_for(repo_dir),
+    )
 
 
 def test_validate_execution_source_repos_rejects_multiple_checkouts():

@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """Behavioral tests for the Runner self-health check (Issue #266).
 
 The two 2026-09-04 incidents (#246: three identical delivery failures on one
@@ -17,6 +16,7 @@ journal. These tests pin the active detection contract:
 - normal multi-round review/fix cycles (different fingerprints, a successful
   run breaking the streak) never produce a finding.
 """
+from orbi import config as config_domain
 import fcntl
 import json
 import os

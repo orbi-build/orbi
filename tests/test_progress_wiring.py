@@ -1,4 +1,3 @@
-from orbi import config as config_domain
 """Tests for the automatic GitHub progress comment wiring (Issue #18).
 
 `process_issue` and `review_and_merge_if_clean` must keep exactly one
@@ -7,6 +6,7 @@ any Pi session runs and at most every 30 seconds, post short milestone
 comments for the key events, and end with either the final delivery
 summary or the blocked scene — in the same comment.
 """
+from orbi import config as config_domain
 import ast
 import json
 import subprocess
