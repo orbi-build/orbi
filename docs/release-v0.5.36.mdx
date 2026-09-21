@@ -1,0 +1,23 @@
+# v0.5.36 release (latest)
+
+`v0.5.36` release notes for the GitHub Release [v0.5.36](https://github.com/orbi-build/orbi/releases/tag/v0.5.36) (release task: Issue #1258).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.5.36` | annotated tag `b646108b754b2a78b398c42a45a9148352d00472` | commit `d114715687b7b44e402734e19f323656562d8019` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Article 3 has no gate: add a size ratchet for runner.py's top-level definitions and for modules over 1,000 lines ([Issue #1229](https://github.com/orbi-build/orbi/issues/1229); [PR #1265](https://github.com/orbi-build/orbi/pull/1265))
+- The patch ratchet counts only runner: 298 monkeypatch.setattr sites against other orbi modules are invisible to it ([Issue #1230](https://github.com/orbi-build/orbi/issues/1230); [PR #1264](https://github.com/orbi-build/orbi/pull/1264))
+- Extract the config domain into src/orbi/config.py: 21 definitions and ~900 lines leave runner.py ([Issue #1257](https://github.com/orbi-build/orbi/issues/1257); [PR #1266](https://github.com/orbi-build/orbi/pull/1266))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>

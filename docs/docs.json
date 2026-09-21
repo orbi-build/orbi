@@ -83,14 +83,15 @@
             "group": "Releases",
             "icon": "tag",
             "pages": [
+              "release-v0.5.36",
               "release-v0.5.35",
               "release-v0.5.34",
-              "release-v0.5.33",
               {
                 "group": "Earlier releases",
                 "icon": "history",
                 "expanded": false,
                 "pages": [
+                  "release-v0.5.33",
                   "release-v0.5.32",
                   "release-v0.5.31",
                   "release-v0.5.30",
@@ -222,14 +223,15 @@
             "group": "发布",
             "icon": "tag",
             "pages": [
+              "zh/release-v0.5.36",
               "zh/release-v0.5.35",
               "zh/release-v0.5.34",
-              "zh/release-v0.5.33",
               {
                 "group": "历史版本",
                 "icon": "history",
                 "expanded": false,
                 "pages": [
+                  "zh/release-v0.5.33",
                   "zh/release-v0.5.32",
                   "zh/release-v0.5.31",
                   "zh/release-v0.5.30",
