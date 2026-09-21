@@ -14,7 +14,7 @@ Orbi 从 GitHub Issue 领取任务，在隔离 worktree 中开发，运行独立
 
 就是上面那条链路，从线上 GitHub 页面录制——包含审查否决第一次提交的那一轮：
 
-<video src="https://github.com/user-attachments/assets/1f0d3a62-5fc9-44ae-bf68-b312a6a55f85" controls muted width="880"></video>
+<video src="https://github.com/user-attachments/assets/1f0d3a62-5fc9-44ae-bf68-b312a6a55f85" controls muted></video>
 
 1. **一个 Issue** —— 一个 bug，打上 `ai-ready`
 2. **它写代码** —— PR #1023，基于记录下来的 base SHA
