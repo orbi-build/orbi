@@ -12416,11 +12416,19 @@ def test_delivery_step_defers_when_ci_absent(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     config = runner.RunnerConfig(repo_dir=tmp_path, base_branch="main")
+    edits = []
+    monkeypatch.setattr(
+        seam, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
     caplog.set_level("INFO")
     runner.delivery_step(PR_URL, {"number": 39, "title": "task", "body": ""},
                          config, "owner/repo")
     assert calls == {"pr": 1}
+    assert edits == []
     assert "delivery_ci_absent" in caplog.text
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "pr", "merge", "46"])
 
 
 def test_delivery_step_auto_merges_on_clean_review(
