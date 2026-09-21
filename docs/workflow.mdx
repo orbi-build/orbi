@@ -133,7 +133,7 @@ Only comments from trusted repository roles—OWNER, MAINTAINER, MEMBER, or
 COLLABORATOR—can steer a run. A comment from a public commenter is ignored by
 design, because allowing arbitrary commenters to steer a delivery would expose
 a prompt-injection path. The initial trusted comment timeline is capped at
-`issue_comments_limit` (20 by default): older comments are dropped and the
+`issue_comments_limit` (200 by default): older comments are dropped and the
 injected context states how many were omitted.
 
 Dead-loop guard and comment dedup (Issue #825): a resume may bind a NEW

@@ -64,7 +64,7 @@ Orbi 从部署 home 读取 `orbi.toml`；设置 `ORBI_CONFIG` 可选择其他文
 |---|---|---|---|---|
 | `dispatch_label` | 字符串或空 | 未设置 → `ai-ready` | 任意非空字符串 | 仓库策略使用的 ready 标签，见[仓库配置](/zh/workflow)。 |
 | `human_review_gate` | 布尔值 | `false` | `true \| false` | 人工验收门禁（Issue #763，仅宿主/部署侧——仓库的 `.github/orbi.toml` 不可携带）：`true` 时每个交付在 PR 打开时向 Issue 发一条验收清单（栏一：本次 run 已验证的证据——真实测试结果与覆盖层；栏二：按改动路径生成的机器验不了的最小集合——业务意图、UI 视觉与文案、外部环境、证据缺失）。栏二非空时评审轮次在任何 Pi session 之前短路：票回 `ai-ready`（opened-PR 标签保留作 resume 锚）、槽位释放，此后每个 tick 只花一次 label 读——等待绝不消耗评审轮次预算。人用只有人能打的 `ai-human-review` 标签确认清单，下一 tick 照常评审/合并（`--match-head-commit` 零改动）。栏二为空是目标状态：清单明写无需人工介入，交付不要求标签直接通过。默认关闭：关闭时交付/评审/merge/release 与之前逐字节一致。必须是布尔值，否则配置加载立即失败 |
-| `issue_comments_limit` | 整数 | `20` | 正整数 | 受信任评论注入上限（Issue #745，仅宿主/部署侧——仓库的 `.github/orbi.toml` 不可携带）：`{{ISSUE_COMMENTS}}` 占位符注入多少条受信任评论（OWNER/MAINTAINER/MEMBER/COLLABORATOR 或 runner 自己的 App——与恢复现场同一套 `authorAssociation` 信任判据），按时间正序、保留最新。超出上限时丢弃更早的，并在注入内容里标明省略条数——绝不静默截断。模板不含该占位符时不发起任何评论读取（#745 之前的行为）。必须是正整数，否则启动 fail fast |
+| `issue_comments_limit` | 整数 | `200` | 正整数 | 受信任评论注入上限（Issue #745，仅宿主/部署侧——仓库的 `.github/orbi.toml` 不可携带）：`{{ISSUE_COMMENTS}}` 占位符注入多少条受信任评论（OWNER/MAINTAINER/MEMBER/COLLABORATOR 或 runner 自己的 App——与恢复现场同一套 `authorAssociation` 信任判据），按时间正序、保留最新。超出上限时丢弃更早的，并在注入内容里标明省略条数——绝不静默截断。模板不含该占位符时不发起任何评论读取（#745 之前的行为）。必须是正整数，否则启动 fail fast |
 | `release_ci_wait_seconds` | 数字 | `1800` | 有限正数 | release 门禁 CI 上限（Issue #268）：release 状态机在 tick 内等待 release commit 上 pending（queued/in_progress）检查的最长时间，超时以独立原因失败——它只是 release 机的纯上限保护，绝不是交付等待机制（Issue #788 已移除交付路径的 CI 等待：pending 检查把交付顺延到下一 tick）。等待期间以 `release_waiting_ci` journal 行和进度评论更新可见；最终结论说了算。必须是有限正数，否则启动 fail fast |
 | `release_deliveries_wait_seconds` | 数字 | `1800` | 有限正数 | release 等待未完成交付的上限。 |
 
