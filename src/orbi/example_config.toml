@@ -125,7 +125,7 @@ engine_source_track = "release"
 # be a finite positive number; anything else fails the start fast.
 # model_wait_dead_seconds = 1800
 # Maximum trusted Issue comments injected into the task context. Default: 20.
-# issue_comments_limit = 20
+# issue_comments_limit = 200
 # Swallowed-model-request probe: the model's /slots
 # endpoint (the agent-facing port — the local-llm-kv-cache proxy passes
 # it through from llama.cpp). While Pi is frozen in model_wait the

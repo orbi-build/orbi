@@ -285,7 +285,15 @@ ROLE_TICKET = "ticket"
 # context; the NEWEST are kept (the latest decision lives there) and a
 # dropped-older-comments count is stated inside the injected block —
 # the truncation is never silent.
-ISSUE_COMMENTS_LIMIT = 20
+#
+# The cap exists to bound the prompt, not to curate it: dropping a
+# decision the maintainer wrote is the expensive failure, a longer
+# prompt is the cheap one. Measured on this repo, the busiest Issues
+# reach 18 comments — the old default of 20 truncated them at the
+# margin, and the review path now shares this one bound between the
+# Issue timeline and the delivery PR's trusted feedback, so the
+# combined stream passes 20 routinely.
+ISSUE_COMMENTS_LIMIT = 200
 
 # Task-worktree reclamation: the tick-start pass removes at
 # most this many worktrees per tick (oldest-closed first), so a large
@@ -1294,7 +1302,7 @@ def _issue_comments_limit(data: dict) -> int:
     """Load and validate the optional `issue_comments_limit` (Issue
     #745).
 
-    Omitted -> `ISSUE_COMMENTS_LIMIT` (default 20). Present -> must be
+    Omitted -> `ISSUE_COMMENTS_LIMIT` (default 200). Present -> must be
     a positive integer; booleans, fractional and non-numeric values
     fail fast at config load with the field name and the concrete
     reason.
