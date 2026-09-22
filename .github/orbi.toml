@@ -12,4 +12,4 @@
 # managed sandbox renders no `active_milestone` line of its own, and the
 # host value it would otherwise fall back to is not the repository's to
 # assume.
-active_milestone = "v0.6.0"
+active_milestone = "v0.5.40"
