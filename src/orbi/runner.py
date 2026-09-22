@@ -3647,7 +3647,12 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
     )
 
 
-def _query_open_prs(worktree: Path, branch: str) -> list:
+def _query_open_prs(
+    worktree: Path,
+    branch: str,
+    *,
+    external_pr: bool = False,
+) -> list:
     """Return the task branch's open PRs as the raw `gh pr list` list.
 
     The ONE PR-query contract shared by verify_pr and freeze_pr:
@@ -3673,11 +3678,23 @@ def _query_open_prs(worktree: Path, branch: str) -> list:
             "gh pr list --json returned a non-array payload "
             "(expected exactly one open PR)"
         )
+    # External-contribution takeover is selected by the trusted PR-number
+    # marker before this lookup. Its contributor head may legitimately live
+    # in a fork, so only Runner-owned stable-branch lookups apply the
+    # same-repository filter.
+    if external_pr:
+        return prs
     return github.filter_same_repository_prs(prs, branch)
 
 
-def _single_open_pr(worktree: Path, branch: str, base_branch: str,
-                    *, scene: str) -> dict:
+def _single_open_pr(
+    worktree: Path,
+    branch: str,
+    base_branch: str,
+    *,
+    scene: str,
+    external_pr: bool = False,
+) -> dict:
     """Return the one open delivery PR of the task branch, base validated.
 
     The "exactly one open PR + configured base" decision shared by
@@ -3687,7 +3704,9 @@ def _single_open_pr(worktree: Path, branch: str, base_branch: str,
     identical sentence from both paths and the log could not tell them
     apart.
     """
-    prs = _query_open_prs(worktree, branch)
+    prs = _query_open_prs(
+        worktree, branch, external_pr=external_pr,
+    )
     if len(prs) == 0:
         raise RuntimeError(
             f"{scene}: no open PR for the task branch "
@@ -3789,7 +3808,9 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
         # own exactly-one policy: the FULL open list is the
         # failure audit record and zero open PRs is
         # classified against the scene PR's state.
-        prs = _query_open_prs(worktree, branch)
+        prs = _query_open_prs(
+            worktree, branch, external_pr=external_pr,
+        )
         if len(prs) != 1:
             # A resume cannot safely select a replacement PR. Query the scene
             # PR separately so zero open PRs (a closed/merged or missing
@@ -3849,7 +3870,10 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
             )
         pr = prs[0]
     else:
-        pr = _single_open_pr(worktree, branch, base_branch, scene="verify_pr")
+        pr = _single_open_pr(
+            worktree, branch, base_branch, scene="verify_pr",
+            external_pr=external_pr,
+        )
     url = pr.get("url")
     if not url:
         raise RuntimeError("open PR has no URL")
@@ -4295,11 +4319,7 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     # verify it with the full PR contract (exactly one open PR, base,
     # head, run marker, `Fixes #<issue>`, URL). The verify step skips
     # its own base re-fetch: this function just fetched and merged it.
-    raw = run_gh_read_command([
-        "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json", "url",
-    ], cwd=worktree)
-    if not json.loads(raw):
+    if open_pr_for_branch(worktree, branch) is None:
         body = (
             f"{run_marker(run_id)}\n\n"
             f"Fixes #{issue}\n\n"
@@ -4707,9 +4727,18 @@ def review_has_findings(verdict: dict) -> bool:
     return verdict["blockers"] > 0 or verdict["majors"] > 0
 
 
-def freeze_pr(worktree: Path, branch: str, base_branch: str) -> dict:
+def freeze_pr(
+    worktree: Path,
+    branch: str,
+    base_branch: str,
+    *,
+    external_pr: bool = False,
+) -> dict:
     """Freeze the exact base/head SHA of the one open PR for a task branch."""
-    pr = _single_open_pr(worktree, branch, base_branch, scene="freeze_pr")
+    pr = _single_open_pr(
+        worktree, branch, base_branch, scene="freeze_pr",
+        external_pr=external_pr,
+    )
     return {
         "number": pr["number"],
         "url": pr["url"],
@@ -5900,7 +5929,10 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                 "decision, so the AI cannot safely continue this PR"
             )
     round = rounds if merge_only else rounds + 1
-    pr = freeze_pr(worktree, branch, base_branch)
+    pr = freeze_pr(
+        worktree, branch, base_branch,
+        external_pr=bool(scene.get("external")),
+    )
     # Issue #877: a round that STARTS behind the base is under the absorb
     # contract — the session must end with the branch containing
     # origin/<base> or with a findings verdict reporting the abandoned
@@ -6056,7 +6088,10 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     # gate then checks the latest-base ancestor, mergeability and the
     # exact reviewed head against the current remote head, and merges
     # only that head via --match-head-commit.
-    refrozen = freeze_pr(worktree, branch, base_branch)
+    refrozen = freeze_pr(
+        worktree, branch, base_branch,
+        external_pr=bool(scene.get("external")),
+    )
     if refrozen["head_oid"] != pr["head_oid"]:
         event(
             "review_head_advanced", pr=pr["number"], round=round,

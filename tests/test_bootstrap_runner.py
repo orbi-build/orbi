@@ -5109,6 +5109,7 @@ def test_verify_pr_external_mode_skips_marker_and_fixes_checks(
             return fake_verify_pr_payload(
                 headRefName="fix/outer",
                 body="please review my fix, thanks",
+                isCrossRepository=True,
             )
         return fake_verify_run(command, **kwargs)
 
@@ -21964,9 +21965,13 @@ def test_deliver_pr_absorbs_an_advanced_base(monkeypatch, tmp_path, caplog):
     assert "base_absorbed" in caplog.text
 
 
-@pytest.mark.parametrize("attribution_footer, expected_footer", [(True, True), (False, False)])
-def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path,
-                                              attribution_footer, expected_footer):
+@pytest.mark.parametrize(
+    "attribution_footer, expected_footer, foreign_pr",
+    [(True, True, False), (False, False, False), (False, False, True)],
+)
+def test_deliver_pr_creates_the_pr_when_absent(
+    monkeypatch, tmp_path, attribution_footer, expected_footer, foreign_pr,
+):
     """No open PR of the branch: the Runner creates it with the run
     marker and `Fixes #<issue>` in the body (the PR body contract is
     the Runner's obligation now, Issue #186)."""
@@ -21980,9 +21985,16 @@ def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path,
         if command[:2] == ["gh", "pr"] and command[2] == "list":
             # Stateful: empty until the Runner creates the PR, then the
             # created PR of the task branch (like the real GitHub state).
-            if not created:
-                return "[]"
-            return json.dumps([created[0]])
+            # A fork PR with the same head name is unrelated and must not
+            # suppress creation of this Runner-owned PR.
+            prs = ([{
+                "number": 99,
+                "url": "https://github.com/fork/repo/pull/99",
+                "isCrossRepository": True,
+            }] if foreign_pr else [])
+            if created:
+                prs.append(created[0])
+            return json.dumps(prs)
         if command[:2] == ["gh", "pr"] and command[2] == "create":
             created.append({
                 "url": FAKE_PR_URL,
