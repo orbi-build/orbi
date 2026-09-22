@@ -9087,6 +9087,49 @@ def _preflight(config: config_domain.RunnerConfig) -> None:
         LOGGER.exception("health_check_failed")
 
 
+def log_ready_outside_milestone(
+    repos: Sequence[str], active_milestone: str | None,
+    config: config_domain.RunnerConfig | None = None,
+) -> bool:
+    """Report ready Issues excluded by the configured milestone scope.
+
+    This is idle-path diagnostics only. A failed query must preserve the
+    existing ``no_ready_issue`` outcome so observability cannot change the
+    delivery decision.
+    """
+    if active_milestone is None:
+        return False
+    outside_by_repo: list[tuple[str, str, int]] = []
+    for repo in repos:
+        milestone, dispatch_label = _repo_scan_keys(
+            config, repo, active_milestone,
+        )
+        try:
+            issues = list_issues(
+                repo, state="open", label=dispatch_label,
+                json_fields="number,milestone", limit=1000, timeout=30,
+            )
+            outside = [
+                issue for issue in issues
+                if not isinstance(issue.get("milestone"), dict)
+                or issue["milestone"].get("title") != milestone
+            ]
+        except Exception as exc:
+            event(
+                "ready_outside_milestone_check_failed", level=logging.ERROR,
+                repo=repo, active_milestone=milestone, error=exc,
+            )
+            return False
+        if outside:
+            outside_by_repo.append((repo, milestone, len(outside)))
+    for repo, milestone, count in outside_by_repo:
+        event(
+            "ready_outside_milestone", repo=repo,
+            active_milestone=milestone, count=count,
+        )
+    return bool(outside_by_repo)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -9147,10 +9190,14 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
         )
         if selected is None:
-            LOGGER.info(
-                "source_repos=%s outcome=no_ready_issue",
-                config.source_repos,
+            ready_outside_milestone = log_ready_outside_milestone(
+                config.source_repos, config.active_milestone, config=config,
             )
+            if not ready_outside_milestone:
+                LOGGER.info(
+                    "source_repos=%s outcome=no_ready_issue",
+                    config.source_repos,
+                )
             # Arm a release ticket as a pure bypass. A failed
             # label operation must not change the idle outcome.
             if config.active_milestone is not None:

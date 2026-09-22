@@ -6808,6 +6808,91 @@ def _write_prompts(tmp_path):
         (prompts / name).write_text("prompt", encoding="utf-8")
 
 
+def test_idle_diagnostic_logs_ready_outside_active_milestone(
+    monkeypatch, caplog,
+):
+    issues = [
+        {"number": 834, "milestone": None},
+        {"number": 828, "milestone": {"title": "v0.5.37"}},
+        {"number": 827, "milestone": {"title": "v0.5.38"}},
+    ]
+    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: issues)
+    with caplog.at_level(logging.INFO):
+        assert runner.log_ready_outside_milestone(
+            ["owner/repo"], "v0.5.38",
+        ) is True
+    assert "ready_outside_milestone" in caplog.text
+    assert "repo=owner/repo" in caplog.text
+    assert "active_milestone=v0.5.38" in caplog.text
+    assert "count=2" in caplog.text
+    assert "no_ready_issue" not in caplog.text
+
+
+def test_idle_diagnostic_keeps_no_ready_issue_when_queue_is_empty(
+    monkeypatch, caplog,
+):
+    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: [])
+    with caplog.at_level(logging.INFO):
+        assert runner.log_ready_outside_milestone(
+            ["owner/repo"], "v0.5.38",
+        ) is False
+    assert "ready_outside_milestone" not in caplog.text
+
+
+def test_idle_diagnostic_query_failure_falls_back_to_no_ready_issue(
+    monkeypatch, caplog,
+):
+    def fail_query(*args, **kwargs):
+        raise RuntimeError("GitHub unavailable")
+
+    monkeypatch.setitem(runner.__dict__, "list_issues", fail_query)
+    with caplog.at_level(logging.ERROR):
+        assert runner.log_ready_outside_milestone(
+            ["owner/repo"], "v0.5.38",
+        ) is False
+    assert "ready_outside_milestone_check_failed" in caplog.text
+    assert "GitHub unavailable" in caplog.text
+
+
+def test_main_uses_outside_milestone_outcome_instead_of_no_ready(
+    monkeypatch, tmp_path, caplog,
+):
+    monkeypatch.setitem(runner.__dict__, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setitem(runner.__dict__, "log_ready_outside_milestone", lambda *args, **kwargs: True)
+    monkeypatch.setitem(runner.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
+    monkeypatch.setitem(runner.__dict__, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
+    monkeypatch.setitem(runner.__dict__, "validate_active_milestone", lambda *args: None)
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v0.5.38"\n',
+        encoding="utf-8",
+    )
+    with caplog.at_level(logging.INFO):
+        assert runner.main(["--config", str(config)]) == 0
+    assert "no_ready_issue" not in caplog.text
+
+
+def test_main_query_failure_keeps_idle_exit(monkeypatch, tmp_path, caplog):
+    monkeypatch.setitem(runner.__dict__, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setitem(runner.__dict__, "validate_active_milestone", lambda *args: None)
+    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: (_ for _ in ()).throw(
+        RuntimeError("GitHub unavailable")
+    ))
+    monkeypatch.setitem(runner.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
+    monkeypatch.setitem(runner.__dict__, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v0.5.38"\n',
+        encoding="utf-8",
+    )
+    with caplog.at_level(logging.INFO):
+        assert runner.main(["--config", str(config)]) == 0
+    assert "ready_outside_milestone_check_failed" in caplog.text
+    assert "no_ready_issue" in caplog.text
+
+
 def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runner, "pick_next_delivery",
