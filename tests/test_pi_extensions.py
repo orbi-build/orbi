@@ -2,6 +2,7 @@ from orbi import config as config_domain
 import pytest
 
 from orbi import runner
+from orbi import pi_command
 from orbi.delivery_scene import RunContext
 
 
@@ -68,7 +69,7 @@ def test_pi_extension_args_and_env_isolate_disabled_and_secrets():
          "env": {"FIXTURE_TOKEN": "secret"}},
         {"source": "/tmp/disabled.mjs", "enabled": False,
          "env": {"DISABLED": "no"}},))
-    args = runner._pi_extension_args(config)
+    args = pi_command._pi_extension_args(config)
     assert args == ["--no-extensions", "--extension", "npm:fixture@1.2.3"]
     assert runner._pi_extension_env(config) == {"FIXTURE_TOKEN": "secret"}
     assert "secret" not in " ".join(args)

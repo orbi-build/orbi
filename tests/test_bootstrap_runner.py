@@ -23,7 +23,7 @@ import orbi.milestone as milestone
 import orbi.release as release
 import orbi.release_git as release_git
 import orbi.github as github
-from orbi import pi_activity, pi_process, progress
+from orbi import pi_activity, pi_command, pi_process, progress
 from tests.fakes.github import FakeGh
 from tests.test_progress_wiring import make_fake_gh
 import orbi.journal as journal
@@ -11427,12 +11427,12 @@ def test_run_pi_and_run_review_skill_lists_differ(monkeypatch, tmp_path):
 def test_skill_name_of_skill_md_inside_skill_directory(tmp_path):
     path = tmp_path / "skills" / "tdd-dev" / "SKILL.md"
     path.parent.mkdir(parents=True)
-    assert runner._skill_name(path) == "tdd-dev"
+    assert pi_command._skill_name(path) == "tdd-dev"
 
 
 def test_skill_name_of_bare_markdown_entry(tmp_path):
     path = tmp_path / "my-skill.md"
-    assert runner._skill_name(path) == "my-skill"
+    assert pi_command._skill_name(path) == "my-skill"
 
 
 def test_run_review_keeps_non_delivery_skill_names(monkeypatch, tmp_path):
