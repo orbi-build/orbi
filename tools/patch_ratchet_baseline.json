@@ -15,6 +15,7 @@
     "launchd_deploy": 0,
     "merge_handoff": 0,
     "milestone": 14,
+    "milestone_command": 0,
     "pi_activity": 0,
     "pi_process": 19,
     "pi_recovery": 51,

@@ -398,6 +398,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "active_milestone_variable_absent": "the active_milestone repo variable is absent",
     "active_milestone_variable_created": "the active_milestone repo variable was created",
     "active_milestone_variable_sync_failed": "the active_milestone repo variable sync failed",
+    "milestone_command_applied": "an in-ticket `/milestone` command ran all three steps",
+    "milestone_command_failed": "an in-ticket `/milestone` command failed at one step",
     # Releases.
     "release_not_claimed": "the release state machine did not claim the release Issue",
     "release_task": "the release state machine advanced (step report)",

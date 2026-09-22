@@ -611,6 +611,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `active_milestone_advanced` | active Milestone 已推进到下一个待定版本 |
 | `active_milestone_advance_none` | 没有可推进的待定 Milestone |
 | `active_milestone_advance_pending` | 存在待定的 Milestone 候选在等待 |
+| `milestone_command_applied` | 票内 `/milestone` 命令已完成全部三步 |
+| `milestone_command_failed` | 票内 `/milestone` 命令在某一步失败 |
 | `active_milestone_advance_failed` | 推进 active Milestone 失败 |
 | `active_milestone_variable_removed` | active_milestone 仓库变量已被移除 |
 | `active_milestone_variable_unchanged` | active_milestone 仓库变量与配置一致 |
@@ -697,8 +699,8 @@ orbi check --config orbi.toml
 orbi setup --config orbi.toml
 
 # 把 active milestone 推进到一个 exact 的 GitHub Milestone 标题
-# （auto_next_milestone=false 确认流程背后的人工命令；只有
-# active_milestone 这一行会变化）
+# （主机侧的人工命令；auto_next_milestone=false 的确认 Issue 自带票内
+# `/milestone <标题>` 命令；只有 active_milestone 这一行会变化）
 orbi milestone set v0.6.0 --config orbi.toml
 
 # 打印当前 run 的 Pi session JSONL 路径（没有 session 时 fail fast）
@@ -714,9 +716,9 @@ journal 和 GitHub 仍是正常可观测路径。
 ### 人工推进 active milestone
 
 `orbi milestone set <title>`（Issue #895）是 milestone 生命周期中的
-人工命令：当 `auto_next_milestone = false` 让推进进入待确认状态
-（确认 Issue 中给出的就是这条命令），或任何一次版本切换应当是运维的
-明确动作时，它把本地 `orbi.toml` 的 `active_milestone` 改为给定的
+人工命令：当 `auto_next_milestone = false` 让推进进入待确认状态，或任何
+一次版本切换应当是运维的明确动作时，它把本地 `orbi.toml` 的
+`active_milestone` 改为给定的
 GitHub Milestone 标题——不再手工编辑文件。该标题必须在唯一配置的
 source repo 上恰好对应一个 Milestone（GitHub Milestone 标题不唯一，
 exact title 重名是硬错误）。只有 `active_milestone` 这一行会被重写：
@@ -748,6 +750,33 @@ orbi milestone set v0.9.9 --config orbi.toml
 #   title from `gh api repos/orbi-build/orbi/milestones?state=open --jq '.[].title'`
 ```
 
+### 从确认 Issue 推进 active milestone
+
+`auto_next_milestone = false` 时，已关闭的 active Milestone 会产生一张
+确认 Issue，票内自带命令（Issue #1290）：评论中以行首开始的
+`/milestone <标题>` 会执行维护者本来要做的三步，托管租户无需主机访问
+权限，也无需 CLI。
+
+- 命令锚定在行首：长评论的任意一行都生效，`>` 引用回复永远不触发；
+  匹配前先剥离 ```/~~~ 围栏代码块，因此「怎么用这条命令」的说明不会真的
+  触发。
+- 只接受该 Issue 候选列表里的标题，且版本号一律取自评论字面量——命令
+  从不推断下一个版本。
+- 评论者需对该仓有 write 权限（OWNER/MEMBER/MAINTAINER/COLLABORATOR）；其他人、
+  候选外的标题、格式错误的命令行，都会在 Issue 上留下一条可读原因；
+  Runner 自己的评论永不触发。
+- 三步各自幂等：创建缺失的 Milestone（open）；该 Milestone 下没有
+  release 票时按 `.github/release-ticket-template.md` 开一张
+  （`version_file` 取 `version_file` 配置项，否则按仓内文件探测，再否则
+  `pyproject.toml`；仓库没有该模板时退回内置最小字段集并在票中注明）；
+  最后落地 `active_milestone`——当前值来自仓库 `.github/orbi.toml` 时写
+  该文件，否则写部署配置。
+- 某一步失败时，Issue 上说明失败在哪一步及原因，已成功的步骤不回滚；
+  下一个 tick 会幂等地重跑整条命令。
+
+全程不调用模型：结果由评论、候选列表和仓库状态唯一决定。它记录的事件
+类型是 `milestone_command_applied` 与 `milestone_command_failed`。
+
 ## 公开表面
 
 以下接口和持久化命名都是公开表面。任何变更都必须在 release notes
@@ -761,6 +790,8 @@ orbi milestone set v0.9.9 --config orbi.toml
 - **部署：**`systemd/orbi@.service` 和 `systemd/orbi@.timer` 模板，及其
   `orbi@1..N` 实例（N = `max_concurrency`，上限为
   `MAX_RUNNER_INSTANCES = 5`）。
+- **票内命令：**milestone 确认 Issue 上的 `/milestone <标题>` 评论
+  （Issue #1290）。
 - **标签和生命周期：**`labels.toml` 与 `src/orbi/delivery_labels.py`，
   以及 `ai-ready`、`ai-in-progress`、`ai-pr-opened`、`ai-fix-needed`、
   `ai-merged`、`ai-blocked` 状态机。
