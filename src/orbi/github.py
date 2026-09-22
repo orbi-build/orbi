@@ -1065,16 +1065,16 @@ def line_run_markers(comments: list[dict]) -> frozenset[str]:
             for match in RUN_MARKER_PATTERN.finditer(body)
         )
     return frozenset(markers)
-
+_FOREIGN_PRS_JOURNALED: set[tuple[str, str]] = set()
 def filter_same_repository_prs(prs: list, branch: str) -> list:
-    foreign = [p for p in prs if isinstance(p, dict)
-               and p.get("isCrossRepository") is True]
-    for pr in foreign: event("foreign_pr_ignored", branch=branch, pr=str(pr.get("url", "")))
+    foreign = [p for p in prs if isinstance(p, dict) and p.get("isCrossRepository") is True]
+    for pr in foreign:
+        key = (branch, str(pr.get("url", "")))
+        if key not in _FOREIGN_PRS_JOURNALED: event("foreign_pr_ignored", branch=branch, pr=key[1]); _FOREIGN_PRS_JOURNALED.add(key)
     return [pr for pr in prs if pr not in foreign]
 
 
 def open_pr_for_branch(repo_dir: Path, branch: str) -> dict | None:
-    """Return the sole same-repository open PR for a branch, or None."""
     raw = run_gh_read_command(["gh", "pr", "list", "--state", "open", "--head", branch, "--json", "number,url,baseRefName,headRefName,headRefOid,isCrossRepository", "--limit", "20"], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
     prs = json.loads(raw) if raw.strip() else []
     if not isinstance(prs, list):
