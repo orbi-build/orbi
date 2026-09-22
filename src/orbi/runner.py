@@ -2210,6 +2210,15 @@ def block_repo_config_failure(number: int, source_repo: str,
 
 
 
+def _parse_version_title(title: object) -> tuple[int, int, int] | None:
+    """Parse a strict ``v<major>.<minor>.<patch>`` milestone title."""
+    if not isinstance(title, str):
+        return None
+    match = re.fullmatch(
+        r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", title,
+    )
+    return tuple(map(int, match.groups())) if match else None
+
 
 def arm_release_ticket(
     repo: str, active_milestone: str,
@@ -6149,6 +6158,17 @@ _TEST_FAILURE_EVIDENCE_RE = re.compile(
 
 
 
+def _test_result_failed(result: str) -> bool:
+    """Classify a test result without treating prose or zero counts as errors."""
+    exits = [int(value) for value in _TEST_EXIT_RE.findall(result)]
+    if any(value != 0 for value in exits):
+        return True
+
+    counts = _TEST_OUTCOME_COUNT_RE.findall(result)
+    if any(int(count) > 0 for count in counts):
+        return True
+    return bool(_TEST_FAILURE_EVIDENCE_RE.search(result))
+
 
 def _failure_detail(exc: BaseException) -> str:
     """One-line failure description; keeps bounded subprocess stderr visible."""
@@ -7021,7 +7041,9 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             action=lambda: milestone_bookkeeping._publish_plan_milestone(publisher, worktree),
         )
         publish(
-            action=lambda: milestone_bookkeeping._publish_test_milestone(publisher, worktree),
+            action=lambda: milestone_bookkeeping._publish_test_milestone(
+                publisher, worktree, _test_result_failed,
+            ),
         )
         if ops:
             # An ops delivery without a commit is COMPLETE —
@@ -8805,6 +8827,7 @@ def main(argv: list[str] | None = None) -> int:
                         config.config_path,
                         config.repo_dir,
                         auto_next_milestone=config.auto_next_milestone,
+                        parse_version_title=_parse_version_title,
                     )
                 except Exception:
                     LOGGER.exception(

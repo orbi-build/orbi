@@ -7,8 +7,8 @@ import logging
 import os
 import re
 import subprocess
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 
 from orbi.delivery_labels import READY_LABEL
 from orbi.gitops import acquire_base_sync_lock
@@ -18,14 +18,6 @@ from orbi.github import (
 )
 from orbi.journal import LOGGER, event, run_command
 from orbi.progress import ProgressPublisher, read_test_result
-
-_TEST_EXIT_RE = re.compile(r"\bexit\s*[:=]\s*(-?\d+)\b", re.IGNORECASE)
-_TEST_OUTCOME_COUNT_RE = re.compile(
-    r"\b(\d+)\s+(?:failed|failures?|errors?)\b", re.IGNORECASE,
-)
-_TEST_FAILURE_EVIDENCE_RE = re.compile(
-    r"^\s*(?:FAILED|ERROR)\b", re.IGNORECASE,
-)
 
 def sync_active_milestone_variable(
     repo: str, milestone: str | None, *,
@@ -189,15 +181,6 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
         evidence.append(f"Milestone #{number} ({title}) closed")
     return evidence
 
-def _parse_version_title(title: object) -> tuple[int, int, int] | None:
-    """Parse a strict ``v<major>.<minor>.<patch>`` milestone title."""
-    if not isinstance(title, str):
-        return None
-    match = re.fullmatch(
-        r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", title,
-    )
-    return tuple(map(int, match.groups())) if match else None
-
 def rewrite_active_milestone_line(config_path: Path, new_value: str) -> None:
     """Replace only the configured active_milestone line, byte-for-byte."""
     text = config_path.read_bytes().decode("utf-8")
@@ -313,6 +296,7 @@ def advance_active_milestone_on_idle(
     repo: str, active_milestone: str, config_path: Path,
     repo_dir: Path | None = None,
     *, auto_next_milestone: bool = True,
+    parse_version_title: Callable[[object], tuple[int, int, int] | None],
 ) -> tuple[str, str | None]:
     """Check and advance a configured milestone after no_ready_issue."""
     milestones = list_milestones(repo, timeout=30)
@@ -348,12 +332,12 @@ def advance_active_milestone_on_idle(
                 repo, active_milestone,
             )
         return "open", None
-    current = _parse_version_title(active_milestone)
+    current = parse_version_title(active_milestone)
     candidates = []
     for milestone in milestones:
         if not isinstance(milestone, dict) or milestone.get("state") != "open":
             continue
-        version = _parse_version_title(milestone.get("title"))
+        version = parse_version_title(milestone.get("title"))
         if version is not None and current is not None and version > current:
             candidates.append((version, milestone.get("title")))
     if not candidates:
@@ -403,24 +387,16 @@ def _publish_plan_milestone(publisher: ProgressPublisher, worktree: Path) -> Non
     if (worktree / ".orbi" / "plan.md").is_file():
         publisher.milestone("plan ready")
 
-def _test_result_failed(result: str) -> bool:
-    """Classify a test result without treating prose or zero counts as errors."""
-    exits = [int(value) for value in _TEST_EXIT_RE.findall(result)]
-    if any(value != 0 for value in exits):
-        return True
-
-    counts = _TEST_OUTCOME_COUNT_RE.findall(result)
-    if any(int(count) > 0 for count in counts):
-        return True
-    return bool(_TEST_FAILURE_EVIDENCE_RE.search(result))
-
-def _publish_test_milestone(publisher: ProgressPublisher,
-                            worktree: Path) -> None:
+def _publish_test_milestone(
+    publisher: ProgressPublisher,
+    worktree: Path,
+    test_result_failed: Callable[[str], bool],
+) -> None:
     """Post `tests passed` / `tests failed` from the worktree's test.log."""
     result = read_test_result(worktree)
     if result is None:
         return
-    if _test_result_failed(result):
+    if test_result_failed(result):
         publisher.milestone(f"tests failed: {result}")
     else:
         publisher.milestone(f"tests passed: {result}")

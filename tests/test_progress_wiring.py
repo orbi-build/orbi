@@ -371,18 +371,24 @@ def test_publish_test_milestone_posts_passed_or_failed(tmp_path):
     publisher = Mock()
     publisher.milestone = Mock(side_effect=lambda text: posted.append(text))
     # No test.log: nothing is posted.
-    milestone._publish_test_milestone(publisher, tmp_path)
+    milestone._publish_test_milestone(
+        publisher, tmp_path, runner._test_result_failed,
+    )
     assert posted == []
     (tmp_path / ".orbi" / "test.log").write_text(
         "156 passed in 4.43s\n", encoding="utf-8",
     )
-    milestone._publish_test_milestone(publisher, tmp_path)
+    milestone._publish_test_milestone(
+        publisher, tmp_path, runner._test_result_failed,
+    )
     assert posted == ["tests passed: 156 passed in 4.43s"]
     posted.clear()
     (tmp_path / ".orbi" / "test.log").write_text(
         "1 failed, 155 passed in 4.43s\n", encoding="utf-8",
     )
-    milestone._publish_test_milestone(publisher, tmp_path)
+    milestone._publish_test_milestone(
+        publisher, tmp_path, runner._test_result_failed,
+    )
     assert posted == ["tests failed: 1 failed, 155 passed in 4.43s"]
 
 
@@ -423,7 +429,9 @@ def test_publish_test_milestone_classifies_results_by_verdict(
         result + "\n", encoding="utf-8",
     )
 
-    milestone._publish_test_milestone(publisher, tmp_path)
+    milestone._publish_test_milestone(
+        publisher, tmp_path, runner._test_result_failed,
+    )
 
     assert posted == [f"{expected_milestone}: {result}"]
 
@@ -441,7 +449,9 @@ def test_publish_test_milestone_detects_failure_case_insensitively(
         "FAILED tests/test_b.py::test_b_fails - assert 1 == 2\n",
         encoding="utf-8",
     )
-    milestone._publish_test_milestone(publisher, tmp_path)
+    milestone._publish_test_milestone(
+        publisher, tmp_path, runner._test_result_failed,
+    )
     assert posted == [
         "tests failed: FAILED tests/test_b.py::test_b_fails - assert 1 == 2",
     ]
@@ -459,13 +469,17 @@ def test_publish_test_milestone_posts_nothing_when_no_tests_ran(
         "collected 0 items\nno tests ran in 0.01s\n",
         encoding="utf-8",
     )
-    milestone._publish_test_milestone(publisher, tmp_path)
+    milestone._publish_test_milestone(
+        publisher, tmp_path, runner._test_result_failed,
+    )
     assert posted == []
     posted.clear()
     (tmp_path / ".orbi" / "test.log").write_text(
         "3 deselected in 0.02s\n", encoding="utf-8",
     )
-    milestone._publish_test_milestone(publisher, tmp_path)
+    milestone._publish_test_milestone(
+        publisher, tmp_path, runner._test_result_failed,
+    )
     assert posted == []
 
 
