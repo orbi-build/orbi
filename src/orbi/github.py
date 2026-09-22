@@ -1066,45 +1066,22 @@ def line_run_markers(comments: list[dict]) -> frozenset[str]:
         )
     return frozenset(markers)
 
-# One Runner process performs one tick. A foreign PR may appear in several
-# branch lookups during that tick (claim, create, verify), but its audit event
-# is emitted once rather than repeated at every gate.
-_FOREIGN_PRS_JOURNALED: set[tuple[str, str]] = set()
-
-
 def filter_same_repository_prs(prs: list, branch: str) -> list:
-    """Drop fork PRs from a Runner-owned branch lookup and journal each."""
-    kept = []
-    for pr in prs:
-        if isinstance(pr, dict) and pr.get("isCrossRepository") is True:
-            url = str(pr.get("url", ""))
-            key = (branch, url)
-            if key not in _FOREIGN_PRS_JOURNALED:
-                event("foreign_pr_ignored", branch=branch, pr=url)
-                _FOREIGN_PRS_JOURNALED.add(key)
-            continue
-        kept.append(pr)
-    return kept
+    foreign = [p for p in prs if isinstance(p, dict)
+               and p.get("isCrossRepository") is True]
+    for pr in foreign: event("foreign_pr_ignored", branch=branch, pr=str(pr.get("url", "")))
+    return [pr for pr in prs if pr not in foreign]
 
 
 def open_pr_for_branch(repo_dir: Path, branch: str) -> dict | None:
     """Return the sole same-repository open PR for a branch, or None."""
-    raw = run_gh_read_command([
-        "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json", (
-            "number,url,baseRefName,headRefName,headRefOid,"
-            "isCrossRepository"
-        ),
-        "--limit", "20",
-    ], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
+    raw = run_gh_read_command(["gh", "pr", "list", "--state", "open", "--head", branch, "--json", "number,url,baseRefName,headRefName,headRefOid,isCrossRepository", "--limit", "20"], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
     prs = json.loads(raw) if raw.strip() else []
     if not isinstance(prs, list):
         raise RuntimeError("open PR query must return an array")
     prs = filter_same_repository_prs(prs, branch)
     if len(prs) > 1:
-        raise RuntimeError(
-            f"multiple open PRs for stable delivery branch {branch}"
-        )
+        raise RuntimeError(f"multiple open PRs for stable delivery branch {branch}")
     return prs[0] if prs else None
 
 def issue_labels(number: int, repo: str) -> list[str]:
