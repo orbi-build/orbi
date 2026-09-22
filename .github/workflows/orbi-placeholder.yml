@@ -1,0 +1,18 @@
+# Installed by Orbi Cloud when this repository was connected.
+# Placeholder: Orbi's final workflow content is not confirmed yet. This
+# workflow never runs on its own - it only answers a manual "Run workflow"
+# dispatch and exits immediately.
+name: Orbi placeholder
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: No-op placeholder
+        run: "true"
