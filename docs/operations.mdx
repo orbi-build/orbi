@@ -530,6 +530,7 @@ registry — in both directions (a name only in code or only in docs fails
 | `run_stopped` | the Runner stopped (idle, or the interrupted scene) |
 | `picked` | an Issue was claimed for this run |
 | `fresh_claim_route` | which ready-claim scan produced the pickup |
+| `foreign_pr_ignored` | a cross-repository PR was ignored in a branch lookup |
 | `claim_yield` | the claim was yielded to a concurrent claimant |
 | `blocked_by` | an Issue was skipped: open blockedBy blockers |
 | `blocked_by_check_failed` | the blockedBy query failed (fail open) |
@@ -571,6 +572,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `transport_check_failed` | the pre-start git transport check failed (no start) |
 | `active_milestone_missing` | configured active Milestone title is absent; the start fails with repair details |
 | `active_milestone_closed` | configured active Milestone is closed; informational state with its `ai-ready` count |
+| `ready_outside_milestone` | open ready Issues exist outside the active Milestone |
+| `ready_outside_milestone_check_failed` | the outside-Milestone ready queue diagnostic failed; idle outcome falls back to `no_ready_issue` |
 | `runner_source` | the runner source freshness gate passed |
 | `runner_source_stale` | the runner source freshness gate failed (stale or unverifiable) |
 | `engine_source_synced` | the deployment checkout synced to the engine source channel |
@@ -692,6 +695,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `milestone_kept_open` | the release Milestone stays open (unmet condition) |
 | `milestone_closed` | the release Milestone closed |
 | `milestone_reconcile_failed` | the Milestone reconciliation sweep crashed (bypass) |
+| `milestone_reconcile_auth_failed` | milestone reconciliation could not authenticate to GitHub |
+| `milestone_reconcile_not_found` | milestone reconciliation target was not found on GitHub |
 | `orphan_pr_reported` | an orphan PR (source Issue closed) was reported |
 | `orphan_pr_reconcile_failed` | the orphan-PR reconciliation sweep crashed (bypass) |
 | `stale_milestone_issue_closed` | a stale milestone-tracking Issue was closed |
@@ -701,6 +706,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `active_milestone_advanced` | the active Milestone advanced to the next pending one |
 | `active_milestone_advance_none` | no pending Milestone to advance to |
 | `active_milestone_advance_pending` | a pending Milestone candidate is waiting |
+| `milestone_command_applied` | an in-ticket `/milestone` command ran all three steps |
+| `milestone_command_failed` | an in-ticket `/milestone` command failed at one step |
 | `active_milestone_advance_failed` | advancing the active Milestone failed |
 | `active_milestone_variable_removed` | the active_milestone repo variable was removed |
 | `active_milestone_variable_unchanged` | the active_milestone repo variable matches the config |
@@ -807,8 +814,9 @@ orbi check --config orbi.toml
 orbi setup --config orbi.toml
 
 # Advance the active milestone to an exact GitHub Milestone title
-# (the manual command behind the auto_next_milestone=false
-# confirmation flow; only the active_milestone line changes)
+# (the host-side move; the auto_next_milestone=false confirmation
+# Issue carries the in-ticket `/milestone <title>` command; only the
+# active_milestone line changes)
 orbi milestone set v0.6.0 --config orbi.toml
 
 # Print the live Pi session JSONL path (fail fast when no session exists)
@@ -826,7 +834,7 @@ journal and GitHub remain the normal observability path.
 
 `orbi milestone set <title>` (Issue #895) is the human command in the
 milestone lifecycle: when `auto_next_milestone = false` leaves the
-advance pending (the confirmation Issue names this command), or
+advance pending, or
 whenever a version switch should be a deliberate operator step, it
 moves `active_milestone` in the local `orbi.toml` to the given GitHub
 Milestone title — no hand-editing the file. The title must exist as
@@ -863,6 +871,41 @@ orbi milestone set v0.9.9 --config orbi.toml
 #   title from `gh api repos/orbi-build/orbi/milestones?state=open --jq '.[].title'`
 ```
 
+### Advance the active milestone from the confirmation Issue
+
+The confirmation Issue a closed active Milestone produces with
+`auto_next_milestone = false` carries an in-ticket command (Issue #1290):
+a comment whose own line is `/milestone <title>` runs the same three
+steps a maintainer would, and a hosted tenant can send it without host
+access or the CLI.
+
+- The line is anchored at the line start, so the command works on any
+  line of a long comment and a `>` quoted reply never triggers it; fenced
+  code blocks (``` or ~~~) are stripped before matching, so documenting
+  the command does not run it.
+- Only a title from the Issue's candidate list is accepted, and the
+  literal in the comment is the only version used — the command never
+  infers the next version.
+- The comment author needs write permission on the repository
+  (OWNER/MEMBER/MAINTAINER/COLLABORATOR); a comment from anyone else, a title outside
+  the candidates, and a malformed line all leave one readable reason
+  comment on the Issue. The runner's own comments never trigger it.
+- The three steps are idempotent: create the Milestone (open) when it is
+  missing, open its release ticket from
+  `.github/release-ticket-template.md` when the Milestone has none (the
+  `version_file` comes from the `version_file` config key, else the
+  detection, else `pyproject.toml`; a missing template falls back to the
+  built-in minimal field set and says so in the ticket), then land
+  `active_milestone` — in the repository `.github/orbi.toml` when the
+  active Milestone comes from there, otherwise in the deployment config.
+- A step that fails leaves the failure and the step name on the Issue and
+  does not roll back the steps that already succeeded; the next tick
+  retries the whole command idempotently.
+
+No model call is involved: the command is deterministic from the comment,
+the candidate list and the repository state. The event kinds it logs are
+`milestone_command_applied` and `milestone_command_failed`.
+
 ## Public surface
 
 The following interfaces and persisted names are public surfaces. Changes to
@@ -879,6 +922,8 @@ can migrate deliberately:
 - **Deployment:** the `systemd/orbi@.service` and `systemd/orbi@.timer`
   templates and their `orbi@1..N` instances (N = `max_concurrency`,
   at most `MAX_RUNNER_INSTANCES = 5`).
+- **In-ticket commands:** the `/milestone <title>` comment on a milestone
+  confirmation Issue (Issue #1290).
 - **Labels and lifecycle:** `labels.toml` together with
   `src/orbi/delivery_labels.py`, and the `ai-ready`, `ai-in-progress`,
   `ai-pr-opened`, `ai-fix-needed`, `ai-merged`, and `ai-blocked` state machine.

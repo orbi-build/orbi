@@ -165,6 +165,24 @@ third party's documented behavior, or a limitation of the tool you are using.
 A ticket filed on a false premise makes the delivery agent change what should
 not change, and burns review rounds.
 
+**Waiting is not breakage.** The runner is built to stop and let a human
+decide. Each state below is the design working, and none of them is a
+ticket on its own:
+
+| State | What it means |
+|---|---|
+| `active_milestone` names a closed milestone, or none | The version shipped. Nobody has decided what the next one carries. |
+| No claimable Issue; every tick reports `no_ready_issue` | The queue is empty, or what is left is already in flight. |
+| A unit sits `inactive dead` with `ExecMainStatus=0` | A oneshot tick finished. The timer starts the next one. |
+| `auto_next_milestone = false` and the milestone advance stalls | It is doing exactly what the flag asks — Issue #933 set it on purpose. |
+| A delivery ends `ai-blocked` | A terminal state a human is meant to resolve, not a crash. |
+
+These look identical to a fault: nothing moves and nothing complains. Before
+writing "stalled", "stuck" or "silently stops" into a ticket, name the
+decision the system is waiting for and who owes it. If you can name it, the
+gap — if any — is that the person was never told they are being waited on,
+or has no way to answer. **File that, not the waiting.**
+
 ## No Issue in hand? File one — do not edit
 
 **This repository is delivered by Orbi.** Changes come from a ticket that a
@@ -333,6 +351,7 @@ If you only want a sample, say so; do not conclude "does not exist" from it.
 ## Review, fix and merge (same PR)
 
 - The review session is independent (a new Pi process, `prompts/prompt_review.md`, a new JSONL) and ALSO the fixer: it may modify code, run the full suite with the tiered coverage gate (Issue #234: whole repository line/branch >= 95% checked separately, changed Python code at 100%), commit, and push ONLY the task branch, then re-emit the `REVIEW_VERDICT` for the fixed head. A `pass` verdict means zero Blocker/Major findings AFTER the in-session fixes; a missing or malformed verdict fails fast and is never treated as a pass.
+- The review prompt receives a fresh Issue body at the start of every round. Editing the Issue body takes effect from the next round; the current body is authoritative over prior findings, so a finding whose acceptance criterion was removed must not be re-raised.
 - `ai-pr-opened` means awaiting review; `ai-fix-needed` marks a delivery whose head is not mergeable yet (a finding the session could not fix, a PR behind the latest base / with a merge conflict, or an AI-recoverable failure of the existing run/PR): the NEXT tick resumes the SAME run_id, branch, worktree and PR and runs the next independent review session, which absorbs the latest base in-session. Never a replacement PR, never a re-claim.
 - The merge gate re-fetches the latest remote base and requires the PR head to contain it, the PR to be mergeable, and the remote head to still be the reviewed head; the merge lands exactly that head (`gh pr merge --match-head-commit`).
 - The review loop is bounded (5 rounds); exhausting rounds with findings fails fast and marks the Issue `ai-blocked`.

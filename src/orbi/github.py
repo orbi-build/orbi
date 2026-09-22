@@ -29,7 +29,8 @@ from orbi.delivery_labels import (
     P0_LABEL,
     label_patch,
 )
-from orbi.journal import LOGGER, event, run_command, single_line
+from orbi.journal import (LOGGER, MilestoneReconcileError,
+                          classify_milestone_error, event, run_command, single_line)
 from orbi.progress import (
     RUN_MARKER_PATTERN,
     format_status_comment,
@@ -232,6 +233,7 @@ def run_gh_read_command(
     command: list[str], *, cwd: Path | None = None,
     timeout: int | None = None,
     command_runner: Callable[..., str] | None = None,
+    failure_log_level: int = logging.ERROR,
 ) -> str:
     """Run one read-only gh command with bounded transient-failure retries.
 
@@ -251,13 +253,14 @@ def run_gh_read_command(
             # Forward only the set options: None is run_command's own
             # default, and passing it explicitly would change the call
             # observed by the run_command fakes and probes.
-            if timeout is None:
-                if cwd is None:
-                    return execute(command)
-                return execute(command, cwd=cwd)
-            if cwd is None:
-                return execute(command, timeout=timeout)
-            return execute(command, cwd=cwd, timeout=timeout)
+            kwargs: dict[str, object] = {}
+            if cwd is not None:
+                kwargs["cwd"] = cwd
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            if failure_log_level != logging.ERROR:
+                kwargs["failure_log_level"] = failure_log_level
+            return execute(command, **kwargs)
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or "").strip()
             retryable = (
@@ -396,7 +399,7 @@ def milestone_open_issues(repo: str, milestone_number: int) -> list[dict]:
         "gh", "api",
         f"repos/{repo}/issues?milestone={milestone_number}&state=open&per_page=100",
         "--paginate", "--slurp",
-    ])
+    ], timeout=30)
     return parse_paginated_issue_array(raw)
 
 
@@ -418,16 +421,13 @@ def milestone_issues(repo: str, milestone_number: int,
 
 
 def list_milestones(repo: str, *, timeout: int | None = None) -> list[dict]:
-    """List ALL Milestones of the repo (open and closed), all pages.
-
-    ``timeout`` keeps the caller's bound (a network wait is
-    a blocking command): the idle milestone-advance sweep bounded this
-    read at 30 s before the move into this module.
-    """
-    raw = run_gh_read_command([
-        "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
-        "--paginate", "--slurp",
-    ], timeout=timeout)
+    try:
+        raw = run_gh_read_command([
+            "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
+            "--paginate", "--slurp",
+        ], timeout=timeout, failure_log_level=logging.DEBUG)
+    except subprocess.CalledProcessError as exc:
+        classify_milestone_error(exc, "list_milestones")
     return parse_paginated_issue_array(raw)
 
 
@@ -466,7 +466,7 @@ def close_milestone(repo: str, number: int) -> None:
     run_command([
         "gh", "api", f"repos/{repo}/milestones/{number}",
         "--method", "PATCH", "-f", "state=closed",
-    ])
+    ], timeout=30)
 
 
 def close_issue(number: int, *, repo: str) -> None:
@@ -1065,24 +1065,24 @@ def line_run_markers(comments: list[dict]) -> frozenset[str]:
             for match in RUN_MARKER_PATTERN.finditer(body)
         )
     return frozenset(markers)
+_FOREIGN_PRS_JOURNALED: set[tuple[str, str]] = set()
+def filter_same_repository_prs(prs: list, branch: str) -> list:
+    foreign = [p for p in prs if isinstance(p, dict) and p.get("isCrossRepository") is True]
+    for pr in foreign:
+        key = (branch, str(pr.get("url", "")))
+        if key not in _FOREIGN_PRS_JOURNALED: event("foreign_pr_ignored", branch=branch, pr=key[1]); _FOREIGN_PRS_JOURNALED.add(key)
+    return [pr for pr in prs if pr not in foreign]
 
 
 def open_pr_for_branch(repo_dir: Path, branch: str) -> dict | None:
-    """Return the sole open PR for a branch, or None when absent."""
-    raw = run_gh_read_command([
-        "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json", "number,url,baseRefName,headRefName,headRefOid",
-        "--limit", "2",
-    ], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
+    raw = run_gh_read_command(["gh", "pr", "list", "--state", "open", "--head", branch, "--json", "number,url,baseRefName,headRefName,headRefOid,isCrossRepository", "--limit", "20"], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
     prs = json.loads(raw) if raw.strip() else []
     if not isinstance(prs, list):
         raise RuntimeError("open PR query must return an array")
+    prs = filter_same_repository_prs(prs, branch)
     if len(prs) > 1:
-        raise RuntimeError(
-            f"multiple open PRs for stable delivery branch {branch}"
-        )
+        raise RuntimeError(f"multiple open PRs for stable delivery branch {branch}")
     return prs[0] if prs else None
-
 
 def issue_labels(number: int, repo: str) -> list[str]:
     """Return the current label names of one Issue."""

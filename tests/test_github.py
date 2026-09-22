@@ -6,6 +6,7 @@ assert the real `gh` command line — the argv IS the contract (Article 5.2).
 No test patches `runner` internals.
 """
 import json
+import logging
 import subprocess
 
 import pytest
@@ -141,6 +142,26 @@ def test_list_milestones_reads_the_exact_api_page(monkeypatch):
     ]]
 
 
+def test_list_milestones_classifies_auth_and_not_found_errors():
+    original = seam.run_command
+    try:
+        errors = [
+            ("gh: Bad credentials (HTTP 401)", 401),
+            ("gh: Not Found (HTTP 404)", 404),
+        ]
+        for stderr, status in errors:
+            def fail(command, **kwargs):
+                raise subprocess.CalledProcessError(1, command, stderr=stderr)
+            seam.run_command = fail
+            with pytest.raises(github.MilestoneReconcileError) as caught:
+                github.list_milestones("o/r")
+            assert caught.value.status == status
+            assert caught.value.operation == "list_milestones"
+            assert caught.value.stderr == stderr
+    finally:
+        seam.run_command = original
+
+
 def test_list_milestones_forwards_the_callers_timeout(monkeypatch):
     # Issue #95: the idle milestone-advance sweep bounds this network
     # read at 30 s — the bound must survive the seam (run_gh_read_command
@@ -150,9 +171,9 @@ def test_list_milestones_forwards_the_callers_timeout(monkeypatch):
         captured.append(k), "[]")[1])
 
     github.list_milestones("o/r", timeout=30)
-    assert captured == [{"timeout": 30}]
+    assert captured == [{"timeout": 30, "failure_log_level": logging.DEBUG}]
     github.list_milestones("o/r")
-    assert captured[1] == {}
+    assert captured[1] == {"failure_log_level": logging.DEBUG}
 
 
 def test_milestone_open_issue_count_reads_githubs_own_counter(monkeypatch):
@@ -686,6 +707,26 @@ def test_open_pr_for_branch_returns_the_sole_open_pr(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda c, **k: two)
     with pytest.raises(RuntimeError, match="multiple open PRs"):
         github.open_pr_for_branch("/repo", "branch")
+
+
+
+def test_open_pr_for_branch_ignores_cross_repository_prs(monkeypatch, caplog):
+    github._FOREIGN_PRS_JOURNALED.clear()
+    foreign = {"number": 6, "url": "https://example.test/foreign/6",
+               "isCrossRepository": True}
+    local = {"number": 5, "url": "https://example.test/local/5",
+             "isCrossRepository": False}
+    monkeypatch.setattr(seam, "run_command", lambda c, **k:
+                        json.dumps([foreign, local]))
+    with caplog.at_level("INFO", logger="orbi.bootstrap"):
+        assert github.open_pr_for_branch("/repo", "orbi/branch") == local
+    assert "foreign_pr_ignored branch=orbi/branch pr=https://example.test/foreign/6" \
+        in caplog.messages[-1]
+
+    monkeypatch.setattr(seam, "run_command", lambda c, **k:
+                        json.dumps([foreign]))
+    assert github.open_pr_for_branch("/repo", "orbi/branch") is None
+    assert sum("foreign_pr_ignored" in message for message in caplog.messages) == 1
 
 
 def test_issue_labels_returns_names_and_validates_shape(monkeypatch):

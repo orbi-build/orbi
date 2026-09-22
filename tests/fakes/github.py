@@ -334,7 +334,8 @@ class FakeGh:
             ]
             matches.sort(key=lambda pr: -pr["_created"])
             return json.dumps([
-                {field: pr[field] for field in fields}
+                {field: pr.get(field, False) if field == "isCrossRepository"
+                 else pr[field] for field in fields}
                 for pr in matches[:limit]
             ])
         number = int(args[1])

@@ -1,0 +1,522 @@
+"""Milestone bookkeeping and progress milestones."""
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import json
+import logging
+import os
+import re
+import subprocess
+import time
+from collections.abc import Callable
+from pathlib import Path
+
+from orbi.delivery_labels import READY_LABEL
+from orbi.gitops import acquire_base_sync_lock
+from orbi.github import (
+    close_milestone, list_issues, list_milestones, milestone_open_issues,
+    parse_paginated_issue_array, run_gh_read_command,
+)
+from orbi.journal import (
+    LOGGER, MilestoneReconcileError, classify_milestone_error, event,
+    run_command, single_line,
+)
+from orbi.milestone_command import (
+    process_milestone_commands, rewrite_active_milestone_line,
+)
+from orbi.progress import ProgressPublisher, read_test_result
+from orbi.repo_config import REPO_CONFIG_PATH, RepoPolicy
+
+MILESTONE_RECONCILE_RETRY_SECONDS = 60 * 60
+_MILESTONE_FAILURE_DIR = "milestone-reconcile-failures"
+_MILESTONE_FAILURE_STATUSES = (401, 404)
+
+
+def _milestone_failure_marker(state_dir: Path, repo: str, status: int) -> Path:
+    repo_key = hashlib.sha256(repo.encode("utf-8")).hexdigest()
+    return state_dir / _MILESTONE_FAILURE_DIR / f"{repo_key}-{status}"
+
+
+def milestone_reconcile_due(
+    state_dir: Path, repo: str, *, now: float | None = None,
+) -> bool:
+    """Return whether a failed repo is due for its bounded retry.
+
+    The Runner is a fresh process on every timer tick, so an in-memory guard
+    cannot reduce cross-tick requests or journal noise.  A tiny marker under
+    the existing ``.orbi`` state directory suppresses retries for one hour;
+    success clears the marker and restores the normal every-tick sweep.
+    """
+    current = time.time() if now is None else now
+    markers = [
+        _milestone_failure_marker(state_dir, repo, status)
+        for status in _MILESTONE_FAILURE_STATUSES
+    ]
+    modified: list[float] = []
+    for marker in markers:
+        try:
+            modified.append(marker.stat().st_mtime)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return True
+    if not modified:
+        return True
+    if current - max(modified) < MILESTONE_RECONCILE_RETRY_SECONDS:
+        return False
+    for marker in markers:
+        try:
+            marker.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return True
+    return True
+
+
+def record_milestone_reconcile_failure(
+    state_dir: Path, repo: str, error: MilestoneReconcileError,
+) -> None:
+    marker = _milestone_failure_marker(state_dir, repo, error.status)
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return
+    except OSError:
+        # State persistence is a log-noise bypass: never let it decide the
+        # delivery outcome.  Emit the classified failure so auth loss remains
+        # observable even on a read-only state directory.
+        pass
+    else:
+        os.close(descriptor)
+    kind = {
+        401: "milestone_reconcile_auth_failed",
+        404: "milestone_reconcile_not_found",
+    }[error.status]
+    event(
+        kind, level=logging.ERROR, repo=repo, status=error.status,
+        operation=error.operation, stderr=single_line(error.stderr),
+    )
+
+
+def clear_milestone_reconcile_failure(state_dir: Path, repo: str) -> None:
+    for status in _MILESTONE_FAILURE_STATUSES:
+        marker = _milestone_failure_marker(state_dir, repo, status)
+        try:
+            marker.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            LOGGER.exception(
+                "milestone_reconcile_suppression_clear_failed repo=%s path=%s",
+                repo, marker,
+            )
+
+
+def sync_active_milestone_variable(
+    repo: str, milestone: str | None, *,
+    run_command: Callable[..., str] | None = None,
+) -> None:
+    """Keep the triage workflow's read-only milestone variable current.
+
+    This is deliberately a bypass: a GitHub variable outage must not stop
+    the Runner's issue delivery tick.  The workflow consumes this value via
+    ``vars.ORBI_ACTIVE_MILESTONE`` and the triage script resolves its title.
+    """
+    command_runner = run_command or globals()["run_command"]
+    endpoint = f"repos/{repo}/actions/variables/ORBI_ACTIVE_MILESTONE"
+    try:
+        # The read's 404 is the designed absent branch (a repo without the
+        # variable is the normal state), so its generic command_failed line
+        # stays at DEBUG — same contract as the repo_config contents read.
+        raw = command_runner(
+            ["gh", "api", endpoint], timeout=30,
+            failure_log_level=logging.DEBUG,
+        )
+        current = json.loads(raw)
+        if not isinstance(current, dict):
+            raise ValueError("variable response is not an object")
+        if milestone is None:
+            command_runner(
+                ["gh", "api", "-X", "DELETE", endpoint], timeout=30,
+            )
+            event("active_milestone_variable_removed", repo=repo)
+            return
+        if current.get("value") == milestone:
+            event("active_milestone_variable_unchanged", repo=repo)
+            return
+        command_runner(
+            ["gh", "api", "-X", "PATCH", endpoint, "-f", f"name=ORBI_ACTIVE_MILESTONE",
+             "-f", f"value={milestone}"], timeout=30,
+        )
+        event("active_milestone_variable_updated", repo=repo)
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode != 1 or "404" not in (exc.stderr or ""):
+            LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
+            return
+        if milestone is None:
+            event("active_milestone_variable_absent", repo=repo)
+            return
+        try:
+            command_runner(
+                ["gh", "api", "-X", "POST", "repos/{}/actions/variables".format(repo),
+                 "-f", "name=ORBI_ACTIVE_MILESTONE", "-f", f"value={milestone}"],
+                timeout=30,
+            )
+            event("active_milestone_variable_created", repo=repo)
+        except Exception:
+            LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
+    except Exception:
+        LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
+
+def validate_active_milestone(repo: str, active_milestone: str | None) -> None:
+    """Validate the configured Milestone before a tick can claim work.
+
+    A missing title is an unambiguous configuration error and fails fast.
+    A closed title is reported as a fact only: maintainers may intentionally
+    leave it configured during release wind-down or while preparing another
+    line of work (Issue #1185 correction).
+    """
+    if active_milestone is None:
+        return
+
+    milestones = list_milestones(repo, timeout=30)
+    matches = [
+        milestone for milestone in milestones
+        if isinstance(milestone, dict)
+        and milestone.get("title") == active_milestone
+    ]
+    if not matches:
+        open_titles = [
+            str(milestone.get("title"))
+            for milestone in milestones
+            if isinstance(milestone, dict)
+            and milestone.get("state") == "open"
+        ]
+        event(
+            "active_milestone_missing", level=logging.ERROR,
+            configured=active_milestone, repo=repo, state="absent",
+            open_milestones=", ".join(open_titles) or "(none)",
+            fix=("set active_milestone to an exact existing title, or remove "
+                 "the field"),
+        )
+        raise RuntimeError(
+            f"active_milestone_missing configured={active_milestone!r} "
+            f"repo={repo} state=absent open_milestones="
+            f"{', '.join(open_titles) or '(none)'}; "
+            "fix=set active_milestone to an exact existing title or remove it"
+        )
+
+    milestone = matches[0]
+    if milestone.get("state") != "closed":
+        return
+
+    ready_issues = list_issues(
+        repo, state="open", label=READY_LABEL,
+        milestone=active_milestone, json_fields="number", limit=1000,
+        timeout=30,
+    )
+    event(
+        "active_milestone_closed", level=logging.INFO,
+        configured=active_milestone, repo=repo, state="closed",
+        ai_ready_count=len(ready_issues),
+    )
+
+def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
+    """Close published-release Milestones that now have no open Issues.
+
+    This is a tick-level, fail-open sweep: release publication and the exact
+    Milestone title are independent GitHub facts, so a late-closing Issue is
+    reconciled on a later tick without requiring a new release run.
+    """
+    all_milestones = list_milestones(repo, timeout=30)
+    milestones = [m for m in all_milestones if m.get("state") == "open"]
+    for milestone in all_milestones:
+        if not isinstance(milestone, dict) or milestone.get("state") not in {"open", "closed"}:
+            event(
+                "milestone_kept_open", number=milestone.get("number")
+                if isinstance(milestone, dict) else None,
+                repo=repo, reason="malformed",
+            )
+    try:
+        releases_raw = run_gh_read_command([
+            "gh", "api", f"repos/{repo}/releases?per_page=100",
+            "--paginate", "--slurp",
+        ], timeout=30, failure_log_level=logging.DEBUG)
+    except subprocess.CalledProcessError as exc:
+        classify_milestone_error(exc, "list_releases")
+    releases = parse_paginated_issue_array(releases_raw)
+    published_tags = {
+        release.get("tag_name") for release in releases
+        if isinstance(release.get("tag_name"), str)
+        and release.get("draft") is False
+    }
+    evidence: list[str] = []
+    for milestone in milestones:
+        number = milestone.get("number")
+        title = milestone.get("title")
+        if not isinstance(number, int) or isinstance(number, bool) or not isinstance(title, str):
+            event("milestone_kept_open", number=number, repo=repo, reason="malformed")
+            continue
+        # Closed duplicates still make the title ambiguous; do not guess
+        # which milestone a release belongs to.
+        matches = [m for m in all_milestones if m.get("title") == title]
+        if len(matches) != 1:
+            reason = "ambiguous title" if len(matches) > 1 else "missing title"
+            event("milestone_kept_open", number=number, repo=repo, reason=reason)
+            continue
+        if title not in published_tags:
+            event("milestone_kept_open", number=number, repo=repo,
+                  reason="no published release")
+            continue
+        try:
+            open_issues = milestone_open_issues(repo, number)
+        except subprocess.CalledProcessError as exc:
+            classify_milestone_error(exc, "list_milestone_issues")
+        if open_issues:
+            event("milestone_kept_open", number=number, repo=repo, reason="open issues")
+            continue
+        try:
+            close_milestone(repo, int(number))
+        except subprocess.CalledProcessError as exc:
+            classify_milestone_error(exc, "close_milestone")
+        event("milestone_closed", number=number, repo=repo)
+        evidence.append(f"Milestone #{number} ({title}) closed")
+    return evidence
+
+def _pending_milestone_issue(
+    repo: str, old: str, candidates: list[dict], repo_dir: Path,
+) -> int | None:
+    """Create one idempotent human-confirmation issue for a milestone advance.
+
+    The fingerprint check and create share the deployment checkout's lock.
+    GitHub search can lag a create, so the open-issue search is repeated and
+    any duplicate is closed in favour of the lowest issue number. Returns the
+    winning issue number so the caller can read its `/milestone` commands.
+    """
+    titles = [str(candidate["title"]) for candidate in candidates]
+    fingerprint = f"orbi-milestone-advance old={old} candidates={','.join(titles)}"
+    fd = acquire_base_sync_lock(repo_dir, 300.0)
+    try:
+        existing = list_issues(
+            repo, state="all", search=f'in:body "{fingerprint}"',
+            json_fields="number", limit=1, timeout=30,
+        )
+        if existing:
+            return _issue_number(existing[0])
+        lines = [
+            "## Milestone 自动推进待人工确认",
+            "",
+            fingerprint,
+            "",
+            f"当前 milestone `{old}` 已完成，等待确认推进到以下候选版本：",
+            "",
+        ]
+        lines.extend(
+            f"- `{candidate['title']}`：{candidate.get('open_issues', 0)} open issues"
+            for candidate in candidates
+        )
+        lines.extend([
+            "",
+            "请在本 Issue 评论 `/milestone <目标版本>`（对候选标题精确匹配）：",
+            "命令会创建 milestone、按 `.github/release-ticket-template.md`"
+            " 开一张 release 票，并落地 `active_milestone`；三步各自幂等。",
+            "评论者需对该仓有 write 权限。也可恢复自动推进，然后关闭本 Issue。",
+        ])
+        run_command([
+            "gh", "issue", "create", "--repo", repo,
+            "--title", f"Milestone {old} 已完成，等待确认推进到 {titles[0]}",
+            "--body", "\n".join(lines),
+        ], timeout=30)
+        open_issues = list_issues(
+            repo, state="open", search=f'in:body "{fingerprint}"',
+            json_fields="number", limit=200, timeout=30,
+        )
+        numbered = sorted(
+            issue["number"] for issue in open_issues
+            if isinstance(issue, dict) and isinstance(issue.get("number"), int)
+        )
+        if not numbered:
+            return None
+        winner = numbered[0]
+        for duplicate in numbered[1:]:
+            run_command([
+                "gh", "issue", "close", str(duplicate), "--repo", repo,
+                "--comment", f"duplicate of #{winner}",
+            ], timeout=30)
+        if len(numbered) > 1:
+            event(
+                "pending_milestone_issue_deduplicated",
+                issue=f"#{winner}", duplicates=",".join(
+                    f"#{number}" for number in numbered[1:]
+                ),
+            )
+        return winner
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _issue_number(issue: object) -> int | None:
+    if not isinstance(issue, dict):
+        return None
+    number = issue.get("number")
+    if isinstance(number, int) and not isinstance(number, bool):
+        return number
+    return None
+
+def _close_stale_milestone_issues(repo: str, active_milestone: str) -> None:
+    """Close manual advance notices that no longer match the config."""
+    issues = list_issues(
+        repo, state="open", search='in:body "orbi-milestone-advance"',
+        json_fields="number,body", limit=200, timeout=30,
+    )
+    pattern = re.compile(r"orbi-milestone-advance old=([^ ]+)")
+    for issue in issues:
+        if not isinstance(issue, dict) or not isinstance(issue.get("number"), int):
+            continue
+        body = issue.get("body")
+        match = pattern.search(body) if isinstance(body, str) else None
+        if match is None or match.group(1) == active_milestone:
+            continue
+        run_command([
+            "gh", "issue", "close", str(issue["number"]), "--repo", repo,
+            "--comment", (
+                f"已收敛：当前配置 active_milestone = `{active_milestone}`。"
+            ),
+        ], timeout=30)
+        event(
+            "stale_milestone_issue_closed", issue=f"#{issue['number']}",
+            active=active_milestone,
+        )
+
+def advance_active_milestone_on_idle(
+    repo: str, active_milestone: str, config_path: Path,
+    repo_dir: Path | None = None,
+    *, auto_next_milestone: bool = True,
+    parse_version_title: Callable[[object], tuple[int, int, int] | None],
+    policy: RepoPolicy | None = None,
+    policy_path: str = REPO_CONFIG_PATH,
+    base_branch: str = "main",
+    dispatch_label: str = READY_LABEL,
+    version_file: str | None = None,
+) -> tuple[str, str | None]:
+    """Check and advance a configured milestone after no_ready_issue."""
+    milestones = list_milestones(repo, timeout=30)
+    matches = [
+        milestone for milestone in milestones
+        if isinstance(milestone, dict)
+        and milestone.get("title") == active_milestone
+    ]
+    if not matches:
+        open_list = ", ".join(
+            f"{milestone.get('title')}({milestone.get('open_issues')})"
+            for milestone in milestones
+            if isinstance(milestone, dict) and milestone.get("state") == "open"
+        ) or "(none)"
+        raise RuntimeError(
+            f"active_milestone_missing current={active_milestone}; "
+            f"open milestones: {open_list}"
+        )
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"active_milestone {active_milestone}: ambiguous exact-title "
+            f"match in {repo}, refusing to guess"
+        )
+    if matches[0].get("state") == "open":
+        try:
+            _close_stale_milestone_issues(repo, active_milestone)
+        except Exception:
+            # Closing an obsolete confirmation is notification maintenance;
+            # it must not turn an otherwise successful idle tick into a
+            # delivery failure.
+            LOGGER.exception(
+                "stale_milestone_issue_close_failed repo=%s active=%s",
+                repo, active_milestone,
+            )
+        return "open", None
+    current = parse_version_title(active_milestone)
+    candidates = []
+    for milestone in milestones:
+        if not isinstance(milestone, dict) or milestone.get("state") != "open":
+            continue
+        version = parse_version_title(milestone.get("title"))
+        if version is not None and current is not None and version > current:
+            candidates.append((version, milestone.get("title")))
+    if not candidates:
+        event(
+            "active_milestone_advance_none", current=active_milestone,
+            closed=active_milestone, repo=repo,
+        )
+        return "closed", None
+    candidates.sort()
+    candidate_details = [
+        milestone for _, title in candidates
+        for milestone in milestones
+        if isinstance(milestone, dict) and milestone.get("title") == title
+    ]
+    if not auto_next_milestone:
+        candidate_titles = [title for _, title in candidates]
+        event(
+            "active_milestone_advance_pending", level=logging.WARNING,
+            old=active_milestone, candidates=",".join(candidate_titles),
+            auto_next_milestone="false",
+        )
+        issue_number: int | None = None
+        try:
+            issue_number = _pending_milestone_issue(
+                repo, active_milestone, candidate_details,
+                repo_dir if repo_dir is not None else config_path.parent,
+            )
+        except Exception:
+            # The confirmation Issue is an idle-path notification. Its
+            # failure must not turn an otherwise successful no-ready tick
+            # into a delivery failure.
+            LOGGER.exception(
+                "pending_milestone_issue_failed repo=%s old=%s",
+                repo, active_milestone,
+            )
+        if issue_number is not None:
+            try:
+                process_milestone_commands(
+                    repo, issue_number,
+                    candidate_titles=candidate_titles,
+                    config_path=config_path, policy=policy,
+                    policy_path=policy_path, base_branch=base_branch,
+                    dispatch_label=dispatch_label, version_file=version_file,
+                )
+            except Exception:
+                LOGGER.exception(
+                    "milestone_command_processing_failed repo=%s old=%s",
+                    repo, active_milestone,
+                )
+        return "closed", None
+    new_value = candidates[0][1]
+    rewrite_active_milestone_line(config_path, new_value)
+    event(
+        "active_milestone_advanced", old=active_milestone, new=new_value,
+        closed=active_milestone, repo=repo,
+    )
+    return "closed", new_value
+
+def _publish_plan_milestone(publisher: ProgressPublisher, worktree: Path) -> None:
+    """Post the `plan ready` milestone once the worktree has the plan
+    artifact."""
+    if (worktree / ".orbi" / "plan.md").is_file():
+        publisher.milestone("plan ready")
+
+def _publish_test_milestone(
+    publisher: ProgressPublisher,
+    worktree: Path,
+    test_result_failed: Callable[[str], bool],
+) -> None:
+    """Post `tests passed` / `tests failed` from the worktree's test.log."""
+    result = read_test_result(worktree)
+    if result is None:
+        return
+    if test_result_failed(result):
+        publisher.milestone(f"tests failed: {result}")
+    else:
+        publisher.milestone(f"tests passed: {result}")

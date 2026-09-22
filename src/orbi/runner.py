@@ -30,13 +30,11 @@ import functools
 import hashlib
 import json
 import logging
-import math
 import os
 import re
 import shutil
 import signal
 import subprocess
-import tempfile
 import threading
 import time
 import tomllib
@@ -55,6 +53,7 @@ from typing import NamedTuple
 # is fixed at the root. `refresh_cli_install` lives in `orbi.cli_source`; `runner` imports it like any caller and the
 # preflight stubs keep patching the module global below.
 from orbi import engine_source
+from orbi import milestone as milestone_bookkeeping
 from orbi import config as config_domain
 from orbi.engine_source import EngineSourceError
 from orbi.git_transport import TransportError, check_transport
@@ -114,7 +113,6 @@ from orbi.repo_config import (
     read_repo_config_at,
     repo_config_audit,
     resolve_policy,
-    validate_context_file,
 )
 from orbi.progress import (
     RUN_MARKER_PATTERN,
@@ -153,15 +151,25 @@ from orbi.pi_process import (
     PI_MODEL_WAIT_PROBE_SECONDS,
     ROLE_IMPLEMENT,
     ModelWaitDeadError,
-    PiWatchOptions,
-    SteeringRequest,
     RateLimitExhaustedError,
     RecoverablePiFailure,
     RecoverablePiProcessError,
     RecoverablePiTimeoutError,
-    _log_provider_config_loaded,
-    stream_pi,
 )
+
+# The agent's command-line grammar is one pure module (Issue #1231):
+# `pi_command` owns the argv pair for every session role.
+from orbi.pi_command import (
+    ROLE_REVIEW,
+    ROLE_TICKET,
+)
+
+# Launching a Pi session is its own module (Issue #1262): the
+# launchers, their prompt/context helpers, the per-run agent dir and
+# the Runner-owned runtime excludes live in `pi_session`. `runner`
+# calls them through the module and never imports a launcher name into
+# its own namespace (Article 3.3: `pi_session` imports no runner).
+from orbi import pi_session
 
 # The shared primitives live in the leaf modules now — the
 # journal kernel (logger, run binding, subprocess seam), the GitHub
@@ -206,18 +214,13 @@ from orbi.github import (
     parse_issue_list,
     parse_paginated_issue_array,
     pr_comments,
-    pr_reviews,
-    pr_review_comments,
-    normalize_pr_feedback,
     pr_delivery_status,
     pr_delivery_rollup,
     _check_summaries,
     pr_view,
-    trusted_issue_comments_block,
 )
 from orbi.gitops import (
     acquire_base_sync_lock,
-    base_sync_lock_path,
     create_release_worktree,
     create_worktree,
     fetch_base_ref,
@@ -276,11 +279,6 @@ PI_HEARTBEAT_SECONDS = 30.0
 # it always reaps the child and exits with 128+SIGTERM before systemd's
 # own deadline — a clean signal stop, never `failed`/`timeout`.
 STOP_CHILD_GRACE_SECONDS = 15.0
-
-# Non-implement Pi session roles. `ROLE_IMPLEMENT` is the
-# default role of a delivery Pi session and lives in `orbi.pi_process`.
-ROLE_REVIEW = "review"
-ROLE_TICKET = "ticket"
 
 
 # {{ISSUE_COMMENTS}} injects the Issue's trusted-comment
@@ -569,280 +567,6 @@ def _handle_stop(signum: int, frame: object) -> None:
     _stop_delivery(signum)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def _pi_extension_args(config: config_domain.RunnerConfig) -> list[str]:
-    """Return the isolated extension flags for every Pi role."""
-    args = ["--no-extensions"]
-    for extension in config.pi_extensions:
-        if extension["enabled"]:
-            args.extend(("--extension", extension["source"]))
-    return args
-
-
-def _pi_extension_env(config: config_domain.RunnerConfig) -> dict[str, str]:
-    """Return extension variables for the Pi child only; never log them."""
-    values: dict[str, str] = {}
-    for extension in config.pi_extensions:
-        if extension["enabled"]:
-            values.update(extension["env"])
-    return values
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def prepare_pi_agent_dir(worktree: Path, config: config_domain.RunnerConfig,
-                         role: str = ROLE_IMPLEMENT) -> Path | None:
-    """Materialize the per-run Pi agent dir.
-
-    Returns None when no provider file is configured — the Pi command
-    and environment keep their exact pre-#157 shape (Pi uses its own
-    agent dir). Otherwise creates `<worktree>/.orbi/pi-agent/`
-    (gitignored, per-run) and returns it:
-
-    - `models.json`: the user agent dir's providers merged with the
-      configured file's providers (the file wins on id collision) —
-      the user's existing providers keep working, the file adds or
-      overrides; the merged catalog is what Pi loads via
-      `PI_CODING_AGENT_DIR` (verified against real Pi 0.84.3);
-    - `auth.json`: a SYMLINK to the user agent dir's file when it
-      exists, so Pi's stored auth is unchanged; `settings.json` is a
-      per-run REAL file (see below).
-
-    The per-run `settings.json` is a REAL file, consistent
-    with the per-run catalog:
-
-    - base: the user agent dir's settings when it exists (the user's
-      other settings are preserved), `{}` otherwise — the user's global
-      `~/.pi/agent/settings.json` is never modified;
-    - `pi_provider`/`pi_model` configured: `defaultProvider` /
-      `defaultModel` point at the selected provider/model and
-      `enabledModels` is exactly that model, so the initial model
-      selection (CLI flags, then scoped models, then settings defaults)
-      can only land on a model of the merged catalog;
-    - not configured: `enabledModels` keeps only the patterns that
-      resolve in the merged catalog (Pi's exact reference match:
-      canonical `provider/modelId` or unambiguous bare model id,
-      case-insensitive); a pattern that resolves to nothing would make
-      Pi warn `No models match pattern` at startup and could steer the
-      initial model to a provider the run cannot use — an empty result
-      drops the key entirely (Pi falls back to the full catalog);
-    - a user `httpIdleTimeoutMs` of `0` (Pi's documented "disabled")
-      is dropped: with it, a first response that never arrives hangs
-      forever; without the key Pi applies its built-in default (300s)
-      and the request fails with a concrete timeout error instead.
-
-    `auth.json` stays a SYMLINK to the user agent dir's file when it
-    exists: stored auth for providers present in the merged catalog is
-    still valid.
-
-    `apiKey` env-var references (`$VAR` / `${VAR}`) are resolved into
-    the per-run copy: config load already required the
-    SELECTED provider's references to resolve, so the materialized
-    catalog carries a usable real credential — without it Pi would
-    hold the literal `$VAR` string and the request could never
-    authenticate. References whose variable is missing or empty (only
-    possible for non-selected providers) stay verbatim. The user's
-    provider file and user agent dir are never modified, and the
-    resolved key never reaches the journal, a comment, or a commit:
-    the per-run dir is the gitignored `<worktree>/.orbi/pi-agent/`.
-    """
-    providers_data = config.pi_providers_data
-    if providers_data is None:
-        return None
-    agent_dir = worktree / ".orbi" / "pi-agent"
-    agent_dir.mkdir(parents=True, exist_ok=True)
-    user_agent = Path(os.path.expanduser("~")) / ".pi" / "agent"
-    merged_providers: dict = {}
-    user_models = user_agent / "models.json"
-    if user_models.is_file():
-        try:
-            user_data = json.loads(user_models.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"user agent dir models.json {user_models} is not valid "
-                f"JSON: {exc}"
-            ) from None
-        user_providers = user_data.get("providers") if isinstance(
-            user_data, dict
-        ) else None
-        if not isinstance(user_providers, dict):
-            user_providers = {}
-        merged_providers.update(user_providers)
-    merged_providers.update(providers_data["providers"])
-    # The per-run copy carries the resolved `apiKey` values
-    # (entries with a string key are copied, so the loaded config data
-    # keeps its literal references).
-    resolved_providers: dict = {}
-    for provider_id, entry in merged_providers.items():
-        api_key = entry.get("apiKey") if isinstance(entry, dict) else None
-        if isinstance(api_key, str) and api_key:
-            entry = {**entry, "apiKey": config_domain._expand_pi_api_key_refs(api_key)}
-        resolved_providers[provider_id] = entry
-    (agent_dir / "models.json").write_text(
-        json.dumps({"providers": resolved_providers}, indent=2),
-        encoding="utf-8",
-    )
-    # Per-run settings.json: a real file consistent with
-    # the merged catalog above, never a symlink to the user's global
-    # settings (whose defaults/enabledModels may reference models this
-    # run's catalog cannot resolve). Idempotent for a resumed run in
-    # the same worktree: a stale file or symlink from an earlier
-    # attempt is replaced, never kept.
-    user_settings = user_agent / "settings.json"
-    base_settings: dict = {}
-    if user_settings.is_file():
-        try:
-            loaded = json.loads(user_settings.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"user agent dir settings.json {user_settings} is not "
-                f"valid JSON: {exc}"
-            ) from None
-        if not isinstance(loaded, dict):
-            raise ValueError(
-                f"user agent dir settings.json {user_settings} must be "
-                f"a JSON object"
-            )
-        base_settings = loaded
-    settings = dict(base_settings)
-    if role == ROLE_REVIEW:
-        pi_provider = config.review_pi_provider or config.pi_provider
-        pi_model = config.review_pi_model or config.pi_model
-    else:
-        pi_provider = config.pi_provider
-        pi_model = config.pi_model
-    if pi_provider is not None and pi_model is not None:
-        settings["defaultProvider"] = pi_provider
-        settings["defaultModel"] = pi_model
-        settings["enabledModels"] = [f"{pi_provider}/{pi_model}"]
-    else:
-        patterns = settings.get("enabledModels")
-        if isinstance(patterns, list):
-            resolved = _resolve_enabled_models(patterns, merged_providers)
-            if resolved:
-                settings["enabledModels"] = resolved
-            else:
-                settings.pop("enabledModels", None)
-    if settings.get("httpIdleTimeoutMs") == 0:
-        settings.pop("httpIdleTimeoutMs")
-    stale = agent_dir / "settings.json"
-    if stale.is_symlink() or stale.is_file():
-        stale.unlink()
-    stale.write_text(
-        json.dumps(settings, indent=2), encoding="utf-8",
-    )
-    # auth.json keeps its pre-#172 shape: a symlink to the user's
-    # stored auth (valid for the merged catalog's providers).
-    auth_source = user_agent / "auth.json"
-    auth_link = agent_dir / "auth.json"
-    if auth_link.is_symlink():
-        auth_link.unlink()
-    if auth_source.is_file():
-        auth_link.symlink_to(auth_source)
-    return agent_dir
-
-
-def _resolve_enabled_models(patterns: list, providers: dict) -> list:
-    """Filter `enabledModels` patterns to the merged catalog.
-
-    Mirrors Pi's exact reference match (`model-resolver.js`
-    `findExactModelReferenceMatch`, verified against Pi 0.84.3): the
-    canonical `provider/modelId` form, or a bare model id that is
-    unambiguous across the catalog — case-insensitive. A pattern that
-    resolves to nothing would make Pi warn `No models match pattern`
-    at startup and could steer the initial model selection to a model
-    the run cannot use, so the per-run settings.json keeps only what
-    the per-run models.json can resolve.
-    """
-    canonical: set = set()
-    bare_counts: dict = {}
-    for provider_id, entry in providers.items():
-        models = entry.get("models") if isinstance(entry, dict) else None
-        if not isinstance(models, list):
-            continue
-        for model in models:
-            model_id = model.get("id") if isinstance(model, dict) else None
-            if not isinstance(model_id, str) or not model_id:
-                continue
-            canonical.add(f"{provider_id}/{model_id}".lower())
-            key = model_id.lower()
-            bare_counts[key] = bare_counts.get(key, 0) + 1
-    resolved = []
-    for pattern in patterns:
-        if not isinstance(pattern, str) or not pattern.strip():
-            continue
-        reference = pattern.strip().lower()
-        if reference in canonical:
-            resolved.append(pattern)
-        elif bare_counts.get(reference, 0) == 1:
-            resolved.append(pattern)
-    return resolved
-
-
-def _pi_model_args(config: config_domain.RunnerConfig, role: str = ROLE_IMPLEMENT) -> list[str]:
-    """Return the configured Pi model flags.
-
-    One `--flag value` pair per configured key, in the fixed order
-    provider, model, thinking; an unset key contributes nothing, so a
-    config without any of the three keys returns [] and the Pi command
-    keeps its exact pre-#119 shape. The values are non-sensitive model
-    identifiers (never keys or tokens) and are part of the redacted
-    `log_command`, so the journal run scene records what was launched.
-    """
-    args: list[str] = []
-    prefix = "review_" if role == ROLE_REVIEW else ""
-    for flag, key in (
-        ("--provider", "pi_provider"),
-        ("--model", "pi_model"),
-        ("--thinking", "pi_thinking"),
-    ):
-        value = getattr(config, f"{prefix}{key}")
-        if prefix and value is None:
-            value = getattr(config, key)
-        if value is not None:
-            args.extend((flag, value))
-    return args
-
-
-
-
-
-
 def repository_base_branch(config: config_domain.RunnerConfig, source_repo: str) -> str:
     """The fallback base branch of one source repo.
 
@@ -927,13 +651,6 @@ def previous_repo_config_sha(number: int, source_repo: str) -> str | None:
     return None
 
 
-def render_prompt(template: str, values: dict[str, str]) -> str:
-    rendered = template
-    for key, value in values.items():
-        rendered = rendered.replace("{{" + key + "}}", value)
-    return rendered
-
-
 def validate_execution_source_repos(source_repos: Sequence[str]) -> None:
     """Reject task-pool fan-out until execution has per-repo checkouts."""
     if len(source_repos) > 1:
@@ -973,63 +690,6 @@ def validate_config(config: config_domain.RunnerConfig) -> None:
             )
 
 
-def sync_active_milestone_variable(
-    repo: str, milestone: str | None, *,
-    run_command: Callable[..., str] | None = None,
-) -> None:
-    """Keep the triage workflow's read-only milestone variable current.
-
-    This is deliberately a bypass: a GitHub variable outage must not stop
-    the Runner's issue delivery tick.  The workflow consumes this value via
-    ``vars.ORBI_ACTIVE_MILESTONE`` and the triage script resolves its title.
-    """
-    command_runner = run_command or globals()["run_command"]
-    endpoint = f"repos/{repo}/actions/variables/ORBI_ACTIVE_MILESTONE"
-    try:
-        # The read's 404 is the designed absent branch (a repo without the
-        # variable is the normal state), so its generic command_failed line
-        # stays at DEBUG — same contract as the repo_config contents read.
-        raw = command_runner(
-            ["gh", "api", endpoint], timeout=30,
-            failure_log_level=logging.DEBUG,
-        )
-        current = json.loads(raw)
-        if not isinstance(current, dict):
-            raise ValueError("variable response is not an object")
-        if milestone is None:
-            command_runner(
-                ["gh", "api", "-X", "DELETE", endpoint], timeout=30,
-            )
-            event("active_milestone_variable_removed", repo=repo)
-            return
-        if current.get("value") == milestone:
-            event("active_milestone_variable_unchanged", repo=repo)
-            return
-        command_runner(
-            ["gh", "api", "-X", "PATCH", endpoint, "-f", f"name=ORBI_ACTIVE_MILESTONE",
-             "-f", f"value={milestone}"], timeout=30,
-        )
-        event("active_milestone_variable_updated", repo=repo)
-    except subprocess.CalledProcessError as exc:
-        if exc.returncode != 1 or "404" not in (exc.stderr or ""):
-            LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
-            return
-        if milestone is None:
-            event("active_milestone_variable_absent", repo=repo)
-            return
-        try:
-            command_runner(
-                ["gh", "api", "-X", "POST", "repos/{}/actions/variables".format(repo),
-                 "-f", "name=ORBI_ACTIVE_MILESTONE", "-f", f"value={milestone}"],
-                timeout=30,
-            )
-            event("active_milestone_variable_created", repo=repo)
-        except Exception:
-            LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
-    except Exception:
-        LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
-
-
 # Ready scans: P0 urgent Issues are claimed before
 # bugs, bugs before new features — if the delivery loop is broken,
 # claiming enhancements only piles up unreviewed PRs, and a production
@@ -1044,60 +704,6 @@ READY_SCAN_EXCLUSIONS = (
     f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
     f"-label:{BLOCKED_LABEL}"
 )
-
-
-def validate_active_milestone(repo: str, active_milestone: str | None) -> None:
-    """Validate the configured Milestone before a tick can claim work.
-
-    A missing title is an unambiguous configuration error and fails fast.
-    A closed title is reported as a fact only: maintainers may intentionally
-    leave it configured during release wind-down or while preparing another
-    line of work (Issue #1185 correction).
-    """
-    if active_milestone is None:
-        return
-
-    milestones = list_milestones(repo, timeout=30)
-    matches = [
-        milestone for milestone in milestones
-        if isinstance(milestone, dict)
-        and milestone.get("title") == active_milestone
-    ]
-    if not matches:
-        open_titles = [
-            str(milestone.get("title"))
-            for milestone in milestones
-            if isinstance(milestone, dict)
-            and milestone.get("state") == "open"
-        ]
-        event(
-            "active_milestone_missing", level=logging.ERROR,
-            configured=active_milestone, repo=repo, state="absent",
-            open_milestones=", ".join(open_titles) or "(none)",
-            fix=("set active_milestone to an exact existing title, or remove "
-                 "the field"),
-        )
-        raise RuntimeError(
-            f"active_milestone_missing configured={active_milestone!r} "
-            f"repo={repo} state=absent open_milestones="
-            f"{', '.join(open_titles) or '(none)'}; "
-            "fix=set active_milestone to an exact existing title or remove it"
-        )
-
-    milestone = matches[0]
-    if milestone.get("state") != "closed":
-        return
-
-    ready_issues = list_issues(
-        repo, state="open", label=READY_LABEL,
-        milestone=active_milestone, json_fields="number", limit=1000,
-        timeout=30,
-    )
-    event(
-        "active_milestone_closed", level=logging.INFO,
-        configured=active_milestone, repo=repo, state="closed",
-        ai_ready_count=len(ready_issues),
-    )
 
 
 def ready_searches(active_milestone: str | None = None,
@@ -1258,60 +864,6 @@ def reconcile_open_epics(repo: str, run_id: str) -> list[str]:
         close_issue(int(number), repo=repo)
         event("epic_closed", issue=number, repo=repo)
         evidence.append(f"Epic #{number} closed after verification ({'; '.join(child_evidence)})")
-    return evidence
-
-
-def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
-    """Close published-release Milestones that now have no open Issues.
-
-    This is a tick-level, fail-open sweep: release publication and the exact
-    Milestone title are independent GitHub facts, so a late-closing Issue is
-    reconciled on a later tick without requiring a new release run.
-    """
-    all_milestones = list_milestones(repo)
-    milestones = [m for m in all_milestones if m.get("state") == "open"]
-    for milestone in all_milestones:
-        if not isinstance(milestone, dict) or milestone.get("state") not in {"open", "closed"}:
-            event(
-                "milestone_kept_open", number=milestone.get("number")
-                if isinstance(milestone, dict) else None,
-                repo=repo, reason="malformed",
-            )
-    releases_raw = run_gh_read_command([
-        "gh", "api", f"repos/{repo}/releases?per_page=100",
-        "--paginate", "--slurp",
-    ])
-    releases = parse_paginated_issue_array(releases_raw)
-    published_tags = {
-        release.get("tag_name") for release in releases
-        if isinstance(release.get("tag_name"), str)
-        and release.get("draft") is False
-    }
-    evidence: list[str] = []
-    for milestone in milestones:
-        number = milestone.get("number")
-        title = milestone.get("title")
-        if not isinstance(number, int) or isinstance(number, bool) or not isinstance(title, str):
-            event("milestone_kept_open", number=number, repo=repo, reason="malformed")
-            continue
-        # Closed duplicates still make the title ambiguous; do not guess
-        # which milestone a release belongs to.
-        matches = [m for m in all_milestones if m.get("title") == title]
-        if len(matches) != 1:
-            reason = "ambiguous title" if len(matches) > 1 else "missing title"
-            event("milestone_kept_open", number=number, repo=repo, reason=reason)
-            continue
-        if title not in published_tags:
-            event("milestone_kept_open", number=number, repo=repo,
-                  reason="no published release")
-            continue
-        open_issues = milestone_open_issues(repo, number)
-        if open_issues:
-            event("milestone_kept_open", number=number, repo=repo, reason="open issues")
-            continue
-        close_milestone(repo, int(number))
-        event("milestone_closed", number=number, repo=repo)
-        evidence.append(f"Milestone #{number} ({title}) closed")
     return evidence
 
 
@@ -2375,26 +1927,6 @@ def _parse_version_title(title: object) -> tuple[int, int, int] | None:
     return tuple(map(int, match.groups())) if match else None
 
 
-def rewrite_active_milestone_line(config_path: Path, new_value: str) -> None:
-    """Replace only the configured active_milestone line, byte-for-byte."""
-    text = config_path.read_bytes().decode("utf-8")
-    pattern = re.compile(r"(?m)^[ \t]*active_milestone[ \t]*=[ \t]*[^\r\n]+")
-    if not pattern.search(text):
-        raise RuntimeError(
-            f"active_milestone line not found in {config_path}"
-        )
-    # The value is serialized, never interpolated: a Milestone title is
-    # arbitrary text, and a raw f-string produced invalid TOML for `"`,
-    # or a re replacement escape error for `\`. json.dumps emits a TOML-
-    # compatible basic string; the lambda keeps the replacement text out
-    # of the regex escape layer entirely.
-    serialized = json.dumps(new_value, ensure_ascii=False)
-    updated, _ = pattern.subn(
-        lambda _match: f"active_milestone = {serialized}", text, count=1,
-    )
-    config_path.write_bytes(updated.encode("utf-8"))
-
-
 def arm_release_ticket(
     repo: str, active_milestone: str,
     dispatch_label: str = READY_LABEL,
@@ -2435,189 +1967,6 @@ def arm_release_ticket(
     )
 
 
-def _pending_milestone_issue(
-    repo: str, old: str, candidates: list[dict], repo_dir: Path,
-) -> None:
-    """Create one idempotent human-confirmation issue for a milestone advance.
-
-    The fingerprint check and create share the deployment checkout's lock.
-    GitHub search can lag a create, so the open-issue search is repeated and
-    any duplicate is closed in favour of the lowest issue number.
-    """
-    titles = [str(candidate["title"]) for candidate in candidates]
-    fingerprint = f"orbi-milestone-advance old={old} candidates={','.join(titles)}"
-    fd = acquire_base_sync_lock(repo_dir, 300.0)
-    try:
-        existing = list_issues(
-            repo, state="all", search=f'in:body "{fingerprint}"',
-            json_fields="number", limit=1, timeout=30,
-        )
-        if existing:
-            return
-        lines = [
-            "## Milestone 自动推进待人工确认",
-            "",
-            fingerprint,
-            "",
-            f"当前 milestone `{old}` 已完成，等待确认推进到以下候选版本：",
-            "",
-        ]
-        lines.extend(
-            f"- `{candidate['title']}`：{candidate.get('open_issues', 0)} open issues"
-            for candidate in candidates
-        )
-        lines.extend([
-            "",
-            "请人工运行 `orbi milestone set <目标版本>` 推进 `active_milestone`"
-            "（或恢复自动推进），然后关闭本 Issue。",
-        ])
-        run_command([
-            "gh", "issue", "create", "--repo", repo,
-            "--title", f"Milestone {old} 已完成，等待确认推进到 {titles[0]}",
-            "--body", "\n".join(lines),
-        ], timeout=30)
-        open_issues = list_issues(
-            repo, state="open", search=f'in:body "{fingerprint}"',
-            json_fields="number", limit=200, timeout=30,
-        )
-        numbered = sorted(
-            issue["number"] for issue in open_issues
-            if isinstance(issue, dict) and isinstance(issue.get("number"), int)
-        )
-        if len(numbered) <= 1:
-            return
-        winner = numbered[0]
-        for duplicate in numbered[1:]:
-            run_command([
-                "gh", "issue", "close", str(duplicate), "--repo", repo,
-                "--comment", f"duplicate of #{winner}",
-            ], timeout=30)
-        event(
-            "pending_milestone_issue_deduplicated",
-            issue=f"#{winner}", duplicates=",".join(
-                f"#{number}" for number in numbered[1:]
-            ),
-        )
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
-
-
-def _close_stale_milestone_issues(repo: str, active_milestone: str) -> None:
-    """Close manual advance notices that no longer match the config."""
-    issues = list_issues(
-        repo, state="open", search='in:body "orbi-milestone-advance"',
-        json_fields="number,body", limit=200, timeout=30,
-    )
-    pattern = re.compile(r"orbi-milestone-advance old=([^ ]+)")
-    for issue in issues:
-        if not isinstance(issue, dict) or not isinstance(issue.get("number"), int):
-            continue
-        body = issue.get("body")
-        match = pattern.search(body) if isinstance(body, str) else None
-        if match is None or match.group(1) == active_milestone:
-            continue
-        run_command([
-            "gh", "issue", "close", str(issue["number"]), "--repo", repo,
-            "--comment", (
-                f"已收敛：当前配置 active_milestone = `{active_milestone}`。"
-            ),
-        ], timeout=30)
-        event(
-            "stale_milestone_issue_closed", issue=f"#{issue['number']}",
-            active=active_milestone,
-        )
-
-
-def advance_active_milestone_on_idle(
-    repo: str, active_milestone: str, config_path: Path,
-    repo_dir: Path | None = None,
-    *, auto_next_milestone: bool = True,
-) -> tuple[str, str | None]:
-    """Check and advance a configured milestone after no_ready_issue."""
-    milestones = list_milestones(repo, timeout=30)
-    matches = [
-        milestone for milestone in milestones
-        if isinstance(milestone, dict)
-        and milestone.get("title") == active_milestone
-    ]
-    if not matches:
-        open_list = ", ".join(
-            f"{milestone.get('title')}({milestone.get('open_issues')})"
-            for milestone in milestones
-            if isinstance(milestone, dict) and milestone.get("state") == "open"
-        ) or "(none)"
-        raise RuntimeError(
-            f"active_milestone_missing current={active_milestone}; "
-            f"open milestones: {open_list}"
-        )
-    if len(matches) > 1:
-        raise RuntimeError(
-            f"active_milestone {active_milestone}: ambiguous exact-title "
-            f"match in {repo}, refusing to guess"
-        )
-    if matches[0].get("state") == "open":
-        try:
-            _close_stale_milestone_issues(repo, active_milestone)
-        except Exception:
-            # Closing an obsolete confirmation is notification maintenance;
-            # it must not turn an otherwise successful idle tick into a
-            # delivery failure.
-            LOGGER.exception(
-                "stale_milestone_issue_close_failed repo=%s active=%s",
-                repo, active_milestone,
-            )
-        return "open", None
-    current = _parse_version_title(active_milestone)
-    candidates = []
-    for milestone in milestones:
-        if not isinstance(milestone, dict) or milestone.get("state") != "open":
-            continue
-        version = _parse_version_title(milestone.get("title"))
-        if version is not None and current is not None and version > current:
-            candidates.append((version, milestone.get("title")))
-    if not candidates:
-        event(
-            "active_milestone_advance_none", current=active_milestone,
-            closed=active_milestone, repo=repo,
-        )
-        return "closed", None
-    candidates.sort()
-    candidate_details = [
-        milestone for _, title in candidates
-        for milestone in milestones
-        if isinstance(milestone, dict) and milestone.get("title") == title
-    ]
-    if not auto_next_milestone:
-        candidate_titles = ",".join(title for _, title in candidates)
-        event(
-            "active_milestone_advance_pending", level=logging.WARNING,
-            old=active_milestone, candidates=candidate_titles,
-            auto_next_milestone="false",
-        )
-        try:
-            _pending_milestone_issue(
-                repo, active_milestone, candidate_details,
-                repo_dir if repo_dir is not None else config_path.parent,
-            )
-        except Exception:
-            # The confirmation Issue is an idle-path notification. Its
-            # failure must not turn an otherwise successful no-ready tick
-            # into a delivery failure.
-            LOGGER.exception(
-                "pending_milestone_issue_failed repo=%s old=%s",
-                repo, active_milestone,
-            )
-        return "closed", None
-    new_value = candidates[0][1]
-    rewrite_active_milestone_line(config_path, new_value)
-    event(
-        "active_milestone_advanced", old=active_milestone, new=new_value,
-        closed=active_milestone, repo=repo,
-    )
-    return "closed", new_value
-
-
 def pick_next_delivery(
     repos: Sequence[str], slot_dir: Path, max_concurrency: int,
     active_milestone: str | None = None, config: config_domain.RunnerConfig | None = None,
@@ -2655,10 +2004,26 @@ def pick_next_delivery(
             LOGGER.exception("epic_reconcile_failed repo=%s", repo)
         # Milestone reconciliation intentionally follows the Epic sweep so a
         # just-closed final Epic can make its Milestone eligible this tick.
-        try:
-            reconcile_release_milestones(repo, tick_run_id)
-        except Exception:
-            LOGGER.exception("milestone_reconcile_failed repo=%s", repo)
+        # A classified 401/404 leaves a cross-process retry marker: systemd
+        # starts a fresh Runner for every timer tick, so process-local
+        # suppression would still issue and log the same failure every time.
+        milestone_state_dir = slot_dir.parent
+        if milestone_bookkeeping.milestone_reconcile_due(
+            milestone_state_dir, repo,
+        ):
+            try:
+                milestone_bookkeeping.reconcile_release_milestones(
+                    repo, tick_run_id,
+                )
+                milestone_bookkeeping.clear_milestone_reconcile_failure(
+                    milestone_state_dir, repo,
+                )
+            except milestone_bookkeeping.MilestoneReconcileError as exc:
+                milestone_bookkeeping.record_milestone_reconcile_failure(
+                    milestone_state_dir, repo, exc,
+                )
+            except Exception:
+                LOGGER.exception("milestone_reconcile_failed repo=%s", repo)
         # Orphan-PR reconciliation follows the same bypass
         # pattern: a broken GitHub query must never prevent the ordinary
         # delivery scans.
@@ -2702,8 +2067,23 @@ def _repo_scan_keys(
     alive): the claim blocks the Issue with the readable reason instead of
     silently claiming nothing.
     """
+    milestone, dispatch_label, _policy = _repo_scan_context(
+        config, repo, active_milestone,
+    )
+    return milestone, dispatch_label
+
+
+def _repo_scan_context(
+    config: config_domain.RunnerConfig | None, repo: str, active_milestone: str | None,
+) -> tuple[str | None, str, RepoPolicy | None]:
+    """Resolve one source repo's scan keys AND the policy they came from.
+
+    The idle path needs the policy itself to know whether `active_milestone`
+    is landed in the repository file or in the host config, so both are
+    returned from the same read instead of reading the file twice.
+    """
     if config is None:
-        return active_milestone, READY_LABEL
+        return active_milestone, READY_LABEL, None
     try:
         policy = load_repo_policy(config, repo)
     except RepoConfigError as exc:
@@ -2713,12 +2093,13 @@ def _repo_scan_keys(
         )
         policy = None
     if policy is None:
-        return active_milestone, READY_LABEL
+        return active_milestone, READY_LABEL, None
     return (
         policy.active_milestone
         if policy.active_milestone is not None
         else active_milestone,
         policy.dispatch_label or READY_LABEL,
+        policy,
     )
 
 
@@ -2926,84 +2307,6 @@ def read_run_state(worktree: Path) -> dict | None:
                 f"invalid field {key!r}"
             )
     return state
-
-
-def changed_files(worktree: Path) -> list[str]:
-    """The worktree's uncommitted changes (tracked + untracked paths)."""
-    raw = run_command(["git", "status", "--porcelain"], cwd=worktree)
-    files: list[str] = []
-    for line in raw.splitlines():
-        if len(line) > 3 and line[:2].strip():
-            files.append(line[3:].strip())
-    return files
-
-
-def resume_context(worktree: Path, steering_comments: list[dict] | None = None,
-                   body_revision: dict | None = None) -> str | None:
-    """The resume context for a continued run, or None.
-
-    A worktree without uncommitted changes and without a previous
-    session is a fresh scene: the agent starts from the Issue alone
-    (the exact pre-#219 prompt). Otherwise the new session must
-    continue the existing work: the context carries the instruction
-    to continue (never redo, never discard), the previous session's
-    progress and the list of changed files — the agent inspects the
-    actual diff itself, it runs inside the worktree.
-
-    `body_revision` is a steering correction carried as an edited
-    Issue body (Issue #1094; keys `issue`, `body`): it renders under
-    the 「正文已更新」 header before the steering comments' 「新评论」 block.
-    """
-    files = changed_files(worktree)
-    snapshot = activity_snapshot(worktree / ".pi-session")
-    if (not files and snapshot is None and not steering_comments
-            and not body_revision):
-        return None
-    lines = [
-        "Resume context (Issue #219): this worktree already carries "
-        "work from an earlier session of the SAME run. Continue that "
-        "work — do not start from scratch, do not discard or rewrite "
-        "the existing changes, and do not create a new plan from "
-        "nothing.",
-    ]
-    if snapshot is not None:
-        lines.append(
-            "Previous session progress: "
-            f"session={snapshot.get('session_id') or '-'} "
-            f"events={snapshot.get('events', 0)} "
-            f"phase={snapshot.get('phase') or '-'} "
-            f"last_action={snapshot.get('action') or '-'} "
-            f"last_result={snapshot.get('result') or '-'}"
-        )
-    if files:
-        lines.append(
-            f"Uncommitted changed files ({len(files)}):"
-        )
-        lines.extend(f"- {path}" for path in files)
-    if steering_comments or body_revision:
-        if body_revision:
-            lines.append(
-                f"[方向修正 · 来自 Issue #{body_revision.get('issue', '-')} 的正文已更新 · "
-                f"{time.strftime('%Y-%m-%d %H:%M:%S')} local time]"
-            )
-            lines.append(str(body_revision.get("body") or "").rstrip())
-        if steering_comments:
-            lines.append(
-                f"[方向修正 · 来自 Issue #{steering_comments[0].get('issue', '-') } 的新评论 · "
-                f"{time.strftime('%Y-%m-%d %H:%M:%S')} local time]"
-            )
-            for comment in steering_comments:
-                author = comment.get("author")
-                login = author.get("login") if isinstance(author, dict) else "unknown"
-                lines.append(f"{login}: {str(comment.get('body') or '').rstrip()}")
-        lines.append(
-            "以上是在你开始这轮工作之后补充的说明，你的上一个会话没有看到它。"
-        )
-        lines.append(
-            "如果它与你已完成的改动冲突，以这条为准，修正已有实现；"
-            "如果只是补充信息，按原方向继续。"
-        )
-    return "\n".join(lines)
 
 
 def worktree_resume_scene(repo_dir: Path, source_repo: str,
@@ -3261,55 +2564,6 @@ def is_ops(issue: dict) -> bool:
     )
 
 
-def run_ticket_agent(issue: dict, config: config_domain.RunnerConfig, source_repo: str,
-                     *, progress: Callable[[dict], None] | None = None) -> str:
-    """Generate one ticket-only deliverable without using Git state (#209)."""
-    started = time.monotonic()
-    system_prompt = (
-        "You are a ticket-only content agent. Produce the requested final "
-        "content as your complete stdout response. Do not create or modify "
-        "files, branches, commits, pull requests, tests, or use git/gh tools."
-    )
-    context = (
-        f"Issue #{issue['number']}: {issue['title']}\n\n"
-        f"Issue body:\n{issue.get('body', '')}\n\n"
-        "Return only the final content to post on this Issue."
-    )
-    # Pi's session is transient OS state, not a task worktree or repository
-    # artifact. Its output and all terminal evidence are kept on the Issue.
-    with tempfile.TemporaryDirectory(prefix="orbi-ticket-") as directory:
-        ticket_dir = Path(directory)
-        session_dir = ticket_dir / ".pi-session"
-        command = [
-            "pi", "--no-tools",
-            *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
-            *_pi_model_args(config), "--print", "--session-dir", str(session_dir),
-            "--system-prompt", system_prompt, context,
-        ]
-        # Startup phase: the ticket-only session keeps Pi's
-        # own agent dir (no per-run materialization) — the provider
-        # config is still loaded and resolved before the spawn.
-        _log_provider_config_loaded(
-            issue_ref=issue_context(source_repo, int(issue["number"])),
-            role=ROLE_TICKET, config=config,
-            elapsed=time.monotonic() - started,
-        )
-        return stream_pi(
-            command, cwd=ticket_dir,
-            ctx=RunContext(
-                run_id=config.run_id, issue=int(issue["number"]),
-                branch="-", worktree=Path("-"), source_repo=source_repo,
-            ),
-            role=ROLE_TICKET,
-            log_command=[
-                "pi", *_pi_model_args(config), "--print", "--session-dir",
-                str(session_dir), "--system-prompt", "<redacted>",
-                "<issue-context-redacted>",
-            ],
-            progress=progress,
-        )
-
-
 def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_repo: str) -> str:
     """Deliver explicit ticket-only Agent output to the source Issue (#209)."""
     number = int(issue["number"])
@@ -3342,7 +2596,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
                 pr_url=None, review_round=0, priority=priority,
             ))),
         )
-        output = run_ticket_agent(
+        output = pi_session.run_ticket_agent(
             issue, replace(config, run_id=run_id), source_repo,
             progress=LiveProgressThrottle(
                 ticket_ctx, publisher, title=title, role=ROLE_TICKET,
@@ -3403,250 +2657,6 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
         raise
 
 
-def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
-           timeout: int | None = None,
-           progress: Callable[[dict], None] | None = None,
-           resume_context: str | None = None) -> str:
-    """Run the implementer Pi session for a freshly claimed Issue.
-
-    Findings are fixed by the review session in the same session, so
-    the implementer is the only user of `prompts/prompt.md`.
-
-    `ctx` is the run-identity bundle (Issue #290): the delivery
-    worktree, branch, source repo, issue number and run id travel as
-    one frozen value.
-
-    `resume_context`: when the worktree already carries
-    the interrupted run's work (uncommitted changes and/or a previous
-    session), the context argument gains the resume section so the NEW
-    session continues the existing work instead of a fresh redo. The
-    prompt template itself is untouched; absent -> the exact
-    pre-#219 context.
-    """
-    worktree = ctx.worktree
-    source_repo = ctx.source_repo
-    branch: str = ctx.branch
-    # Pin the Runner-owned runtime paths in the worktree's
-    # local exclude BEFORE Pi starts (covers create, resume and
-    # implement) — the tracked .gitignore is the agent's to rename.
-    apply_runner_runtime_excludes(worktree)
-    # The run artifact dir exists BEFORE the session starts,
-    # so the contract commands write `.orbi/plan.md`, `.orbi/test.log`
-    # and the coverage artifacts without a mkdir step (a shell redirect
-    # into a missing directory fails the command outright).
-    (worktree / ".orbi").mkdir(exist_ok=True)
-    started = time.monotonic()
-    # The repository policy's context files are
-    # repository-relative; resolve them against the delivery worktree and
-    # enforce existence + the size cap before injection (D2).
-    context_files = list(config.context_files)
-    for relative in config.repo_context_files:
-        context_files.append(validate_context_file(worktree, relative))
-    template = config.prompt.read_text(encoding="utf-8")
-    prompt_values = {
-        "SOURCE_REPO": source_repo,
-        "SOURCE_REPOS": ", ".join(config.source_repos),
-        "ISSUE_NUMBER": str(issue["number"]),
-        "ISSUE_TITLE": issue["title"],
-        "ISSUE_BODY": issue.get("body", ""),
-        "WORKSPACE_ROOT": str(config.workspace_root),
-        "CONTEXT_FILES": "\n".join(str(path) for path in context_files),
-        "SKILLS": "\n".join(
-            str(path)
-            for path in _skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)
-        ),
-        "BASE_BRANCH": config.base_branch,
-        "BASE_SHA": config.base_sha,
-        "RUN_ID": config.run_id,
-        # The implementer prompt no longer carries the
-        # base-sync lock (the base fetch is the Runner's operation);
-        # the value stays available for custom prompt templates.
-        "BASE_SYNC_LOCK": str(base_sync_lock_path(config.repo_dir)),
-    }
-    # The trusted-comment timeline enters the task context
-    # only when the template carries the placeholder — a template
-    # without it keeps the exact pre-#745 behavior (no extra GitHub
-    # read, no new failure mode).
-    if "{{ISSUE_COMMENTS}}" in template:
-        prompt_values["ISSUE_COMMENTS"] = trusted_issue_comments_block(
-            issue_comments(int(issue["number"]), repo=source_repo),
-            config.issue_comments_limit,
-        )
-    system_prompt = render_prompt(template, prompt_values)
-    context = (
-        f"Issue #{issue['number']}: {issue['title']}\n\n"
-        f"Issue body:\n{issue.get('body', '')}\n\n"
-        f"Worktree: {worktree}\n"
-    )
-    context += "Complete the delivery process in the system prompt."
-    if resume_context:
-        context += f"\n{resume_context}"
-    steering_seen: set[str] = set()
-    steering_rounds = 0
-    steering_started = time.time()
-    steering_limit_logged = False
-    steering_limit_notice_logged = False
-    # The body this run started from (Issue #1094): the exact text the
-    # prompt above embeds. The steering poll compares the live body
-    # against it — a maintainer rewrite of the Issue body steers like a
-    # new comment.
-    steering_body = issue.get("body", "")
-    # `resume_context` is also the public parameter name of this function;
-    # keep an unshadowed reference for the restart callback below.
-    build_resume_context = globals()["resume_context"]
-
-    def check_steering() -> SteeringRequest | None:
-        nonlocal steering_rounds, steering_limit_logged
-        nonlocal steering_limit_notice_logged, steering_body
-        limit_reached = steering_rounds >= config.steering_max_rounds
-        if limit_reached and not steering_limit_logged:
-            steering_limit_logged = True
-            event(
-                "steering_limit_reached", issue=issue_context(
-                    source_repo, int(issue["number"]),
-                ), round=steering_rounds,
-            )
-        try:
-            # ONE request per poll (Issue #1094): the same `gh issue
-            # view` that lists the comments also returns the body, so a
-            # body rewrite needs no second call and no new poll.
-            snapshot = issue_view(
-                int(issue["number"]), "comments,body",
-                repo=source_repo, timeout=30,
-            )
-            comments = snapshot.get("comments")
-            if not isinstance(comments, list):
-                raise ValueError("issue comments must be a JSON array")
-        except Exception as exc:
-            event(
-                "steering_poll_failed", level=logging.WARNING,
-                issue=issue_context(source_repo, int(issue["number"])),
-                reason=type(exc).__name__,
-            )
-            return None
-        # A str-only compare: an absent body field cannot prove an edit
-        # and leaves body steering inert for the poll (the bypass shape).
-        current_body = snapshot.get("body")
-        body_changed = (
-            isinstance(current_body, str) and current_body != steering_body
-        )
-        fresh: list[dict] = []
-        # GitHub exposes comment timestamps only to whole seconds. Round
-        # the boundary up so a comment created in the startup second is not
-        # mistaken for a post-start correction.
-        started_at = time.strftime(
-            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(math.ceil(steering_started))
-        )
-        for comment in comments:
-            identifier = str(comment.get("id", ""))
-            if not identifier or identifier in steering_seen:
-                continue
-            steering_seen.add(identifier)
-            if str(comment.get("createdAt") or "") < started_at:
-                continue
-            if _comment_is_trusted(comment):
-                item = dict(comment)
-                item["issue"] = issue["number"]
-                fresh.append(item)
-        if limit_reached:
-            if (fresh or body_changed) and not steering_limit_notice_logged:
-                steering_limit_notice_logged = True
-                try:
-                    comment_issue(
-                        int(issue["number"]), repo=source_repo,
-                        body=(
-                            f"<!-- orbi:run={config.run_id} -->\n"
-                            "The steering limit was reached, so this correction "
-                            "was not applied.\n"
-                            f"run_id={config.run_id}"
-                        ),
-                    )
-                except Exception as exc:
-                    event(
-                        "steering_limit_notice_failed", level=logging.WARNING,
-                        issue=issue_context(source_repo, int(issue["number"])),
-                        reason=type(exc).__name__,
-                    )
-            return None
-        if not fresh and not body_changed:
-            return None
-        steering_rounds += 1
-        authors = []
-        for comment in fresh:
-            author = comment.get("author")
-            authors.append(author.get("login") if isinstance(author, dict) else "unknown")
-        if body_changed:
-            # The recorded body becomes the edited one, so the SAME edit
-            # never triggers a second restart (Issue #1094).
-            steering_body = current_body
-        resume = build_resume_context(
-            worktree, fresh,
-            body_revision=(
-                {"issue": issue["number"], "body": current_body}
-                if body_changed else None
-            ),
-        ) or ""
-        return SteeringRequest(
-            context=f"{context}\n{resume}",
-            comment_ids=tuple(str(item["id"]) for item in fresh),
-            author=", ".join(authors),
-            body_revision=body_changed,
-        )
-    command = [
-        "pi", *_pi_extension_args(config),
-        *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
-        *_pi_model_args(config, ROLE_IMPLEMENT),
-        "--print", "--session-dir",
-        str(worktree / ".pi-session"), "--system-prompt", system_prompt, context,
-    ]
-    # The provider file (baseUrl / api / apiKey / models)
-    # reaches Pi through the materialized per-run agent dir, never
-    # through the command line or the log (the redacted command keeps
-    # only the #119 provider/model/thinking identifiers). Unconfigured
-    # -> the stream_pi call keeps its exact pre-#157 shape.
-    agent_dir = prepare_pi_agent_dir(worktree, config, role=ROLE_IMPLEMENT)
-    # Startup phase: the provider config is loaded and
-    # materialized for this run (or resolved to Pi's own agent dir when
-    # unconfigured) — the first startup line, before the process is
-    # spawned.
-    _log_provider_config_loaded(
-        issue_ref=issue_context(source_repo, int(issue["number"])),
-        role=ROLE_IMPLEMENT, config=config,
-        elapsed=time.monotonic() - started,
-    )
-    extra = {}
-    pi_env = _pi_extension_env(config)
-    if agent_dir is not None:
-        pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
-    if pi_env:
-        extra["pi_env"] = pi_env
-    return stream_pi(
-        command,
-        cwd=worktree,
-        ctx=ctx,
-        timeout=timeout,
-        log_command=[
-            "pi", *_pi_extension_args(config), *_pi_model_args(config, ROLE_IMPLEMENT),
-            "--print", "--session-dir", str(worktree / ".pi-session"),
-            "--system-prompt", "<redacted>", "<issue-context-redacted>",
-        ],
-        progress=progress,
-        # The configured model_wait dead threshold and the
-        # /slots swallow probe (absent URL -> disabled, the exact
-        # pre-#233 behavior) ride the watch bundle (the real config_domain.load_config
-        # always provides the keys; the module constants stay the
-        # fallback for hand-built configs).
-        watch=PiWatchOptions(
-            model_wait_dead_seconds=config.model_wait_dead_seconds,
-            model_wait_probe_url=config.model_wait_probe_url,
-            model_wait_probe_seconds=config.model_wait_probe_seconds,
-            steering_poll_seconds=config.steering_poll_seconds,
-            steering_check=check_steering if config.steering_enabled else None,
-        ),
-        **extra,
-    )
-
-
 def _query_open_prs(worktree: Path, branch: str) -> list:
     """Return the task branch's open PRs as the raw `gh pr list` list.
 
@@ -3662,7 +2672,8 @@ def _query_open_prs(worktree: Path, branch: str) -> list:
         "gh", "pr", "list", "--state", "open", "--head", branch,
         "--json", (
             "number,url,baseRefName,baseRefOid,"
-            "headRefName,headRefOid,headRepository,headRepositoryOwner,body"
+            "headRefName,headRefOid,headRepository,headRepositoryOwner,"
+            "isCrossRepository,body"
         ),
         "--limit", "100",
     ], cwd=worktree)
@@ -3672,11 +2683,18 @@ def _query_open_prs(worktree: Path, branch: str) -> list:
             "gh pr list --json returned a non-array payload "
             "(expected exactly one open PR)"
         )
-    return prs
+    return github.filter_same_repository_prs(prs, branch)
 
 
-def _single_open_pr(worktree: Path, branch: str, base_branch: str,
-                    *, scene: str) -> dict:
+def _single_open_pr(
+    worktree: Path,
+    branch: str,
+    base_branch: str,
+    *,
+    scene: str,
+    external_pr_url: str | None = None,
+    source_repo: str | None = None,
+) -> dict:
     """Return the one open delivery PR of the task branch, base validated.
 
     The "exactly one open PR + configured base" decision shared by
@@ -3686,7 +2704,21 @@ def _single_open_pr(worktree: Path, branch: str, base_branch: str,
     identical sentence from both paths and the log could not tell them
     apart.
     """
-    prs = _query_open_prs(worktree, branch)
+    if external_pr_url is not None:
+        if source_repo is None:
+            raise ValueError("external PR lookup requires source_repo")
+        external = pr_view(
+            _pr_number(external_pr_url),
+            (
+                "number,url,state,baseRefName,baseRefOid,headRefName,"
+                "headRefOid,headRepository,headRepositoryOwner,body"
+            ),
+            repo=source_repo, cwd=worktree,
+            timeout=RESUME_PR_STATE_TIMEOUT_SECONDS,
+        )
+        prs = [external] if external.get("state") == "OPEN" else []
+    else:
+        prs = _query_open_prs(worktree, branch)
     if len(prs) == 0:
         raise RuntimeError(
             f"{scene}: no open PR for the task branch "
@@ -3734,8 +2766,10 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
     the two body checks are skipped — an external PR body carries
     neither the run marker nor a `Fixes` keyword for this Issue; the
     Issue is closed by the Runner after the merge instead. When
-    `pr_repo` is given (resume path), the PR's head repo must be that
-    repo; when `expected_url` is given, the verified PR URL must exactly
+    `pr_repo` is given (resume path), a Runner-owned PR's head repo must
+    be that repo; an external takeover is selected by its trusted marker
+    number and may have a fork head. When `expected_url` is given, the
+    verified PR URL must exactly
     equal the recovered original PR URL (the resume must keep the
     same PR number). Issue #825/#1300: the marker check accepts ANY run
     marker of the delivery line — the marker set is read from the
@@ -3792,7 +2826,19 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
         # own exactly-one policy: the FULL open list is the
         # failure audit record and zero open PRs is
         # classified against the scene PR's state.
-        prs = _query_open_prs(worktree, branch)
+        if external_pr:
+            external = pr_view(
+                _pr_number(expected_url),
+                (
+                    "number,url,state,baseRefName,baseRefOid,headRefName,"
+                    "headRefOid,headRepository,headRepositoryOwner,body"
+                ),
+                repo=pr_repo, cwd=worktree,
+                timeout=RESUME_PR_STATE_TIMEOUT_SECONDS,
+            )
+            prs = [external] if external.get("state") == "OPEN" else []
+        else:
+            prs = _query_open_prs(worktree, branch)
         if len(prs) != 1:
             # A resume cannot safely select a replacement PR. Query the scene
             # PR separately so zero open PRs (a closed/merged or missing
@@ -3852,11 +2898,13 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
             )
         pr = prs[0]
     else:
-        pr = _single_open_pr(worktree, branch, base_branch, scene="verify_pr")
+        pr = _single_open_pr(
+            worktree, branch, base_branch, scene="verify_pr",
+        )
     url = pr.get("url")
     if not url:
         raise RuntimeError("open PR has no URL")
-    if pr_repo is not None:
+    if pr_repo is not None and not external_pr:
         head_repo = _pr_head_repo(pr)
         if head_repo != pr_repo:
             event(
@@ -3991,119 +3039,6 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
     return url
 
 
-# Runner-owned runtime paths inside a task worktree: created
-# by the parent Runner and the Pi session machinery, never by the agent's
-# delivery. The task branch's tracked `.gitignore` must NOT be the thing
-# that keeps them out of the delivery commit boundary — a task may legally
-# rename that file (the #246 brand-rename scene, run `b879a88c`), so the
-# Runner pins its own runtime paths in the worktree's LOCAL git exclude
-# (`.git/info/exclude`): git metadata that never enters an agent commit and
-# never depends on the task branch's content. The #246 rename converged the
-# legacy state dir onto `.orbi/`, so the migration window is closed and a
-# single pattern covers it.
-#
-# The set also covers the ORBI CONTRACT ARTIFACTS: the pi-loop
-# plugin state (#215) and the per-run plan/test/verify artifacts the
-# Runner's own prompt tells the agent to write (once at the worktree
-# root, now under the excluded `.orbi/` run dir). The four historical
-# dirty-gate incidents (#215/#235/#256/#301) were all orbi-owned artifacts
-# blocking a finished delivery — the exemption is now the Runner's runtime
-# behavior, not a hand-maintained tracked blacklist. Excludes hide only
-# untracked paths, so a modified tracked file or a committed artifact
-# still fails the gate; coverage command artifacts are NOT in this set —
-# the contract commands write them into the excluded `.orbi/` run dir and
-# the tracked `.gitignore` stays as the fallback layer.
-RUNNER_RUNTIME_EXCLUDES = (
-    ".orbi/",
-    ".worktrees/",
-    ".pi-session/",
-    ".pi/",
-    "plan.md",
-    "test.log",
-    "verify.md",
-)
-
-
-def runner_runtime_exclude_path(worktree: Path) -> Path:
-    """The task worktree's local git exclude file (`.git/info/exclude`).
-
-    A linked worktree's `.git` is a pointer file (`gitdir: <path>`) that
-    resolves to `<common-gitdir>/worktrees/<name>`. Git applies the
-    exclude file of the COMMON gitdir to every worktree of the repo (the
-    worktree-specific gitdir carries no exclude of its own — verified
-    against real git), so the exclude is written to
-    `<common-gitdir>/info/exclude`. That is repository-local metadata:
-    it never enters an agent commit and never touches the user's global
-    excludes (`core.excludesFile`).
-    """
-    git_entry = worktree / ".git"
-    if git_entry.is_file():
-        for line in git_entry.read_text(encoding="utf-8").splitlines():
-            if line.startswith("gitdir:"):
-                git_dir = Path(line.split(":", 1)[1].strip())
-                # <common-gitdir>/worktrees/<name> -> <common-gitdir>
-                common_gitdir = git_dir.parent.parent
-                return common_gitdir / "info" / "exclude"
-        raise ValueError(
-            f"worktree .git pointer {git_entry} has no gitdir entry"
-        )
-    return git_entry / "info" / "exclude"
-
-
-def apply_runner_runtime_excludes(worktree: Path) -> None:
-    """Idempotently pin the Runner-owned runtime paths in the worktree's
-    local git exclude.
-
-    Existing exclude content (including user-written patterns) is
-    preserved verbatim; a pattern already present is never written twice.
-    Called before every Pi launch (implement, resume, review) and before
-    the delivery commit-boundary check. A directory without a `.git`
-    entry (unit-test tmp dirs) is a no-op: the delivery commit boundary
-    still fails fast on a real corrupted scene.
-    """
-    git_entry = worktree / ".git"
-    if not git_entry.exists():
-        event(
-            "runner_runtime_exclude_skipped", level=logging.DEBUG,
-            worktree=worktree, reason="no .git entry",
-        )
-        return
-    exclude_path = runner_runtime_exclude_path(worktree)
-    existing = ""
-    if exclude_path.is_file():
-        existing = exclude_path.read_text(encoding="utf-8")
-    present = {line.strip() for line in existing.splitlines()}
-    missing = [p for p in RUNNER_RUNTIME_EXCLUDES if p not in present]
-    if not missing:
-        return
-    exclude_path.parent.mkdir(parents=True, exist_ok=True)
-    prefix = "\n" if existing and not existing.endswith("\n") else ""
-    exclude_path.write_text(
-        existing + prefix + "\n".join(missing) + "\n", encoding="utf-8",
-    )
-
-
-def _is_runner_runtime_only(status: str) -> bool:
-    """True when EVERY non-empty porcelain entry is a Runner-owned runtime
-    path: the delivery repair may then continue; any
-    agent-owned entry keeps the `delivery_uncommitted_changes` fail fast."""
-    entries = [line for line in status.splitlines() if line.strip()]
-    if not entries:
-        return False
-    for line in entries:
-        path = line[3:].strip()
-        if path.startswith('"') and path.endswith('"'):
-            # Porcelain quotes paths with special characters; the runner
-            # paths are plain ASCII, so an unquoted match is exact.
-            path = path[1:-1]
-        if not any(
-            path == pattern.strip("/") or path.startswith(pattern)
-            for pattern in RUNNER_RUNTIME_EXCLUDES
-        ):
-            return False
-    return True
-
-
 def cleanup_task_worktree(ctx: RunContext, repo_dir: Path) -> None:
     """Remove a terminally failed task's worktree and Runner state.
 
@@ -4143,10 +3078,10 @@ def _agent_delivery_boundary(worktree: Path) -> tuple[str, str]:
     no deletion, no arbitrary whitelisting. Shared by the dev closeout
     (`deliver_pr`) and the ops closeout.
     """
-    apply_runner_runtime_excludes(worktree)
+    pi_session.apply_runner_runtime_excludes(worktree)
     dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
-    if dirty and _is_runner_runtime_only(dirty):
-        apply_runner_runtime_excludes(worktree)
+    if dirty and pi_session._is_runner_runtime_only(dirty):
+        pi_session.apply_runner_runtime_excludes(worktree)
         event(
             "runner_runtime_exclude_repaired",
             status=" ".join(dirty.splitlines()),
@@ -4310,11 +3245,7 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     # verify it with the full PR contract (exactly one open PR, base,
     # head, run marker, `Fixes #<issue>`, URL). The verify step skips
     # its own base re-fetch: this function just fetched and merged it.
-    raw = run_gh_read_command([
-        "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json", "url",
-    ], cwd=worktree)
-    if not json.loads(raw):
+    if open_pr_for_branch(worktree, branch) is None:
         body = (
             f"{run_marker(run_id)}\n\n"
             f"Fixes #{issue}\n\n"
@@ -4722,9 +3653,19 @@ def review_has_findings(verdict: dict) -> bool:
     return verdict["blockers"] > 0 or verdict["majors"] > 0
 
 
-def freeze_pr(worktree: Path, branch: str, base_branch: str) -> dict:
+def freeze_pr(
+    worktree: Path,
+    branch: str,
+    base_branch: str,
+    *,
+    external_pr_url: str | None = None,
+    source_repo: str | None = None,
+) -> dict:
     """Freeze the exact base/head SHA of the one open PR for a task branch."""
-    pr = _single_open_pr(worktree, branch, base_branch, scene="freeze_pr")
+    pr = _single_open_pr(
+        worktree, branch, base_branch, scene="freeze_pr",
+        external_pr_url=external_pr_url, source_repo=source_repo,
+    )
     return {
         "number": pr["number"],
         "url": pr["url"],
@@ -4733,167 +3674,6 @@ def freeze_pr(worktree: Path, branch: str, base_branch: str) -> dict:
         "head_ref": pr["headRefName"],
         "head_oid": pr["headRefOid"],
     }
-
-
-# Role-specific skill filtering: the review session ends
-# with a single REVIEW_VERDICT line and its job is to review this one
-# diff and fix it until it can merge — not to open another
-# full delivery — so the delivery-oriented skills must not be loaded
-# there (tdd-dev would steer it into the implement/test/PR flow,
-# review-fix-loop would open another fix/review round). The
-# implementer keeps tdd-dev and code-review but not review-fix-loop:
-# the Runner itself runs the independent review loop once the PR is
-# open.
-REVIEW_EXCLUDED_SKILLS = frozenset({"tdd-dev", "review-fix-loop"})
-IMPLEMENT_EXCLUDED_SKILLS = frozenset({"review-fix-loop"})
-
-
-def _skill_name(entry: str | Path) -> str:
-    """Return the skill name of one configured skill entry.
-
-    Entries point at the SKILL.md file inside the skill directory
-    (e.g. .../skills/tdd-dev/SKILL.md); the skill name is the parent
-    directory. A bare markdown entry (e.g. my-skill.md) or a skill
-    directory is named after its own stem.
-    """
-    path = Path(entry)
-    if path.name == "SKILL.md":
-        return path.parent.name
-    return path.stem
-
-
-def _skills_for(config: config_domain.RunnerConfig, excluded: frozenset[str]) -> list[str | Path]:
-    """Return one role's configured skills, dropping excluded names."""
-    return [
-        skill for skill in config.skills
-        if _skill_name(skill) not in excluded
-    ]
-
-
-def _skill_args(skills: list[str | Path]) -> list[str]:
-    """Return the --skill command args for one role's skill list."""
-    return [
-        item for skill in skills
-        for item in ("--skill", str(skill))
-    ]
-
-
-def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, round: int,
-               timeout: int | None = None,
-               progress: Callable[[dict], None] | None = None) -> str:
-    """Run one independent review session for a frozen PR.
-
-    The session is independent (new process, `prompts/prompt_review.md`, a new
-    session JSONL) and reviews the exact frozen base/head. When it finds Blocker/Major issues it fixes them IN THIS SAME
-    SESSION (modify code, run the full test suite with coverage, commit
-    and push the task branch) and re-emits the final verdict — there is
-    no cold-start fixer and no third review. The review streams live
-    activity through the same pipeline as the implementer (role=review;
-    One run_id end to end, the roles are steps of the same
-    run).
-    """
-    worktree = ctx.worktree
-    source_repo: str = ctx.source_repo
-    issue: int = ctx.issue
-    branch: str = ctx.branch
-    # The review/fix session gets the SAME local-exclude
-    # preflight as the implementer (one idempotent helper, Pi 前).
-    apply_runner_runtime_excludes(worktree)
-    # Same run-dir guarantee as the implementer — the
-    # review session reads/writes the same `.orbi/` artifacts.
-    (worktree / ".orbi").mkdir(exist_ok=True)
-    started = time.monotonic()
-    review_template = config.prompt_review.read_text(encoding="utf-8")
-    review_values = {
-        "SOURCE_REPO": source_repo,
-        "PR_NUMBER": str(pr["number"]),
-        "PR_URL": pr["url"],
-        "BASE_BRANCH": config.base_branch,
-        "BASE_SHA": pr["base_oid"],
-        "HEAD_SHA": pr["head_oid"],
-        "HEAD_REF": pr["head_ref"],
-        "ROUND": str(round),
-        # The SAME shared base-sync lock as the
-        # implementer — the review session's base-absorb fetch must
-        # run under it (flock <lock> git fetch origin <base>).
-        "BASE_SYNC_LOCK": str(base_sync_lock_path(config.repo_dir)),
-    }
-    # The review path sees one bounded trusted timeline. PR feedback is input
-    # only: delivery state remains on the Issue and the current PR is the sole
-    # PR source selected by this call.
-    if "{{ISSUE_COMMENTS}}" in review_template:
-        comments = issue_comments(issue, repo=source_repo)
-        try:
-            feedback = pr_comments(pr["number"], repo=source_repo)
-            feedback += pr_reviews(pr["number"], repo=source_repo)
-            feedback += pr_review_comments(pr["number"], repo=source_repo)
-            comments += normalize_pr_feedback(feedback)
-            comments.sort(key=lambda item: str(item.get("createdAt") or ""))
-        except Exception:
-            LOGGER.exception(
-                "pr_review_feedback_read_failed repo=%s pr=%s",
-                source_repo, pr["number"],
-            )
-        review_values["ISSUE_COMMENTS"] = trusted_issue_comments_block(
-            comments, config.issue_comments_limit,
-        )
-    system_prompt = render_prompt(review_template, review_values)
-    context = (
-        f"Independently review PR #{pr['number']} ({pr['url']}) of "
-        f"{source_repo} against base {config.base_branch}@{pr['base_oid']} "
-        f"and head {pr['head_oid']} (round {round}). Follow code-review R1-R9; "
-        "fix Blocker/Major findings in this same session (push only the "
-        "task branch) and end with a single REVIEW_VERDICT line carrying "
-        "the head it covers."
-    )
-    command = [
-        "pi", *_pi_extension_args(config),
-        *_skill_args(_skills_for(config, REVIEW_EXCLUDED_SKILLS)),
-        *_pi_model_args(config, ROLE_REVIEW),
-        "--print", "--session-dir",
-        str(worktree / ".pi-session"), "--system-prompt", system_prompt,
-        context,
-    ]
-    # The review session uses its role-specific provider selection,
-    # falling back to the implementer selection when no override exists.
-    agent_dir = prepare_pi_agent_dir(worktree, config, role=ROLE_REVIEW)
-    # Startup phase: the review session's provider config
-    # is loaded and materialized too (same line shape, role=review).
-    _log_provider_config_loaded(
-        issue_ref=issue_context(source_repo, issue),
-        role=ROLE_REVIEW, config=config,
-        elapsed=time.monotonic() - started,
-    )
-    extra = {}
-    pi_env = _pi_extension_env(config)
-    if agent_dir is not None:
-        pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
-    if pi_env:
-        extra["pi_env"] = pi_env
-    return stream_pi(
-        command,
-        cwd=worktree,
-        ctx=ctx,
-        timeout=timeout,
-        role=ROLE_REVIEW,
-        log_command=[
-            "pi", *_pi_extension_args(config), *_pi_model_args(config, ROLE_REVIEW),
-            "--print", "--session-dir", str(worktree / ".pi-session"),
-            "--system-prompt", "<redacted>", "<review-context-redacted>",
-        ],
-        progress=progress,
-        # The review session uses the SAME configured
-        # model_wait dead threshold and /slots swallow probe as the
-        # implementer (the real config_domain.load_config always provides the keys;
-        # the module constants stay the fallback for hand-built
-        # configs).
-        watch=PiWatchOptions(
-            model_wait_dead_seconds=config.model_wait_dead_seconds,
-            model_wait_probe_url=config.model_wait_probe_url,
-            model_wait_probe_seconds=config.model_wait_probe_seconds,
-        ),
-        **extra,
-    )
 
 
 def _main_ci_triage_url(repo: str, check_name: str) -> str | None:
@@ -5902,7 +4682,11 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                 "decision, so the AI cannot safely continue this PR"
             )
     round = rounds if merge_only else rounds + 1
-    pr = freeze_pr(worktree, branch, base_branch)
+    external_pr_url = scene["pr_url"] if scene.get("external") else None
+    pr = freeze_pr(
+        worktree, branch, base_branch,
+        external_pr_url=external_pr_url, source_repo=source_repo,
+    )
     # Issue #877: a round that STARTS behind the base is under the absorb
     # contract — the session must end with the branch containing
     # origin/<base> or with a findings verdict reporting the abandoned
@@ -5967,7 +4751,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         }
         review_summary = "maintainer-actionable merge retry"
     else:
-        output = run_review(
+        output = pi_session.run_review(
             ctx, pr, config, round,
             progress=LiveProgressThrottle(
                 ctx, publisher, title=title, role=ROLE_REVIEW,
@@ -6058,7 +4842,10 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     # gate then checks the latest-base ancestor, mergeability and the
     # exact reviewed head against the current remote head, and merges
     # only that head via --match-head-commit.
-    refrozen = freeze_pr(worktree, branch, base_branch)
+    refrozen = freeze_pr(
+        worktree, branch, base_branch,
+        external_pr_url=external_pr_url, source_repo=source_repo,
+    )
     if refrozen["head_oid"] != pr["head_oid"]:
         event(
             "review_head_advanced", pr=pr["number"], round=round,
@@ -6499,13 +5286,6 @@ def _human_review_column2(worktree: Path, config: config_domain.RunnerConfig) ->
     )["column2"]
 
 
-def _publish_plan_milestone(publisher: ProgressPublisher, worktree: Path) -> None:
-    """Post the `plan ready` milestone once the worktree has the plan
-    artifact."""
-    if (worktree / ".orbi" / "plan.md").is_file():
-        publisher.milestone("plan ready")
-
-
 _TEST_EXIT_RE = re.compile(r"\bexit\s*[:=]\s*(-?\d+)\b", re.IGNORECASE)
 _TEST_OUTCOME_COUNT_RE = re.compile(
     r"\b(\d+)\s+(?:failed|failures?|errors?)\b", re.IGNORECASE,
@@ -6525,18 +5305,6 @@ def _test_result_failed(result: str) -> bool:
     if any(int(count) > 0 for count in counts):
         return True
     return bool(_TEST_FAILURE_EVIDENCE_RE.search(result))
-
-
-def _publish_test_milestone(publisher: ProgressPublisher,
-                            worktree: Path) -> None:
-    """Post `tests passed` / `tests failed` from the worktree's test.log."""
-    result = read_test_result(worktree)
-    if result is None:
-        return
-    if _test_result_failed(result):
-        publisher.milestone(f"tests failed: {result}")
-    else:
-        publisher.milestone(f"tests passed: {result}")
 
 
 def _failure_detail(exc: BaseException) -> str:
@@ -7350,7 +6118,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         # the uncommitted changes and the previous session's progress —
         # instead of a fresh redo. A clean worktree without a previous
         # session is a fresh scene (None, the pre-#219 prompt).
-        resume_ctx = resume_context(worktree)
+        resume_ctx = pi_session.resume_context(worktree)
         if resume_ctx is not None:
             session_dir = worktree / ".pi-session"
             previous_sessions = (
@@ -7361,7 +6129,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             snapshot = activity_snapshot(session_dir)
             event(
                 "resume_continue", issue=number, worktree=worktree,
-                changed_files=len(changed_files(worktree)),
+                changed_files=len(pi_session.changed_files(worktree)),
                 reused_runs=previous_sessions,
                 previous_session=(
                     snapshot.get("session_id") if snapshot else None
@@ -7397,7 +6165,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             )),
         )
         if takeover_pr is None:
-            run_pi(
+            pi_session.run_pi(
                 issue, ctx, config,
                 resume_context=resume_ctx,
                 progress=LiveProgressThrottle(
@@ -7407,10 +6175,12 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 ),
             )
         publish(
-            action=lambda: _publish_plan_milestone(publisher, worktree),
+            action=lambda: milestone_bookkeeping._publish_plan_milestone(publisher, worktree),
         )
         publish(
-            action=lambda: _publish_test_milestone(publisher, worktree),
+            action=lambda: milestone_bookkeeping._publish_test_milestone(
+                publisher, worktree, _test_result_failed,
+            ),
         )
         if ops:
             # An ops delivery without a commit is COMPLETE —
@@ -8935,11 +7705,11 @@ def _preflight(config: config_domain.RunnerConfig) -> None:
     # claim silently scoped to a title that does not exist.
     for repo in config.source_repos:
         milestone, _ = _repo_scan_keys(config, repo, config.active_milestone)
-        validate_active_milestone(repo, milestone)
+        milestone_bookkeeping.validate_active_milestone(repo, milestone)
     # Publish the configured active milestone for the CI
     # triage workflow. This is a bypass; delivery must continue when the
     # variable API is unavailable.
-    sync_active_milestone_variable(
+    milestone_bookkeeping.sync_active_milestone_variable(
         config.source_repos[0], config.active_milestone,
         run_command=run_command,
     )
@@ -9054,6 +7824,49 @@ def _preflight(config: config_domain.RunnerConfig) -> None:
         LOGGER.exception("health_check_failed")
 
 
+def log_ready_outside_milestone(
+    repos: Sequence[str], active_milestone: str | None,
+    config: config_domain.RunnerConfig | None = None,
+) -> bool:
+    """Report ready Issues excluded by the configured milestone scope.
+
+    This is idle-path diagnostics only. A failed query must preserve the
+    existing ``no_ready_issue`` outcome so observability cannot change the
+    delivery decision.
+    """
+    if active_milestone is None:
+        return False
+    outside_by_repo: list[tuple[str, str, int]] = []
+    for repo in repos:
+        milestone, dispatch_label = _repo_scan_keys(
+            config, repo, active_milestone,
+        )
+        try:
+            issues = list_issues(
+                repo, state="open", label=dispatch_label,
+                json_fields="number,milestone", limit=1000, timeout=30,
+            )
+            outside = [
+                issue for issue in issues
+                if not isinstance(issue.get("milestone"), dict)
+                or issue["milestone"].get("title") != milestone
+            ]
+        except Exception as exc:
+            event(
+                "ready_outside_milestone_check_failed", level=logging.ERROR,
+                repo=repo, active_milestone=milestone, error=exc,
+            )
+            return False
+        if outside:
+            outside_by_repo.append((repo, milestone, len(outside)))
+    for repo, milestone, count in outside_by_repo:
+        event(
+            "ready_outside_milestone", repo=repo,
+            active_milestone=milestone, count=count,
+        )
+    return bool(outside_by_repo)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -9114,45 +7927,66 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
         )
         if selected is None:
-            LOGGER.info(
-                "source_repos=%s outcome=no_ready_issue",
-                config.source_repos,
+            ready_outside_milestone = log_ready_outside_milestone(
+                config.source_repos, config.active_milestone, config=config,
             )
+            if not ready_outside_milestone:
+                LOGGER.info(
+                    "source_repos=%s outcome=no_ready_issue",
+                    config.source_repos,
+                )
             # Arm a release ticket as a pure bypass. A failed
             # label operation must not change the idle outcome.
-            if config.active_milestone is not None:
+            idle_repo = config.source_repos[0]
+            effective_milestone, dispatch_label, repo_policy = _repo_scan_context(
+                config, idle_repo, config.active_milestone,
+            )
+            if effective_milestone is not None:
                 try:
                     arm_release_ticket(
-                        config.source_repos[0],
-                        config.active_milestone,
-                        dispatch_label=_repo_scan_keys(
-                            config, config.source_repos[0],
-                            config.active_milestone,
-                        )[1],
+                        idle_repo,
+                        effective_milestone,
+                        dispatch_label=dispatch_label,
                     )
                 except Exception:
                     LOGGER.exception(
                         "release_ticket_arm_failed repo=%s milestone=%s",
-                        config.source_repos[0],
-                        config.active_milestone,
+                        idle_repo,
+                        effective_milestone,
                     )
                 # Validate and advance only after the arm attempt.
                 # Like the arm above, the advance is an idle-path
                 # pure bypass — a renamed/deleted milestone or a failed `gh`
                 # call must not turn an idle tick into a non-zero exit.
+                # The base branch is the repo's FUSED value (entry
+                # fallback, then the policy override): the command writes
+                # it into the release ticket, and the release state
+                # machine freezes the DECLARED branch — the raw host value
+                # would release the wrong branch for any repository whose
+                # entry or policy overrides it.
                 try:
-                    advance_active_milestone_on_idle(
-                        config.source_repos[0],
-                        config.active_milestone,
+                    milestone_bookkeeping.advance_active_milestone_on_idle(
+                        idle_repo,
+                        effective_milestone,
                         config.config_path,
                         config.repo_dir,
                         auto_next_milestone=config.auto_next_milestone,
+                        parse_version_title=_parse_version_title,
+                        policy=repo_policy,
+                        policy_path=config_domain.repository_config_path(
+                            config, idle_repo,
+                        ),
+                        base_branch=resolve_source_base_branch(
+                            config, idle_repo, repo_policy,
+                        ).base_branch,
+                        dispatch_label=dispatch_label,
+                        version_file=config.version_file,
                     )
                 except Exception:
                     LOGGER.exception(
                         "active_milestone_advance_failed repo=%s milestone=%s",
-                        config.source_repos[0],
-                        config.active_milestone,
+                        idle_repo,
+                        effective_milestone,
                     )
             return 0
         source_repo, issue, scene = selected

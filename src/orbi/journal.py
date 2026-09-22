@@ -21,6 +21,32 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+
+class MilestoneReconcileError(RuntimeError):
+    def __init__(self, *, status: int, operation: str, stderr: str) -> None:
+        self.status, self.operation, self.stderr = status, operation, stderr
+        super().__init__(f"{operation} failed with HTTP {status}: {stderr}")
+
+
+def classify_milestone_error(exc, operation: str) -> None:
+    status = milestone_error_status(str(exc.stderr or ""), str(exc.stdout or ""))
+    if status is not None:
+        raise MilestoneReconcileError(
+            status=status, operation=operation,
+            stderr=str(exc.stderr or exc.stdout or ""),
+        ) from exc
+    raise exc
+
+
+def milestone_error_status(stderr: str, stdout: str = "") -> int | None:
+    detail = " ".join((stderr, stdout))
+    if re.search(r"(?:http|status) ?401|bad credentials", detail, re.I):
+        return 401
+    if re.search(r"(?:http|status) ?404|not found", detail, re.I):
+        return 404
+    return None
+
+
 if TYPE_CHECKING:
     # Annotation-only: this module stays the runtime leaf (no `orbi`
     # imports at runtime); the run-identity bundle travels as a value.
@@ -173,6 +199,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "run_stopped": "the Runner stopped (idle, or the interrupted scene)",
     "picked": "an Issue was claimed for this run",
     "fresh_claim_route": "which ready-claim scan produced the pickup",
+    "foreign_pr_ignored": "a cross-repository PR was ignored in a branch lookup",
     "claim_yield": "the claim was yielded to a concurrent claimant",
     "blocked_by": "an Issue was skipped: open blockedBy blockers",
     "blocked_by_check_failed": "the blockedBy query failed (fail open)",
@@ -219,6 +246,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "transport_check_failed": "the pre-start git transport check failed (no start)",
     "active_milestone_missing": "the configured active Milestone does not exist (no start)",
     "active_milestone_closed": "the configured active Milestone is closed (informational)",
+    "ready_outside_milestone": "open ready Issues exist outside the active Milestone",
+    "ready_outside_milestone_check_failed": "the outside-Milestone ready queue diagnostic failed (idle fallback)",
     "runner_source": "the runner source freshness gate passed",
     "runner_source_stale": "the runner source freshness gate failed (stale or unverifiable)",
     "engine_source_synced": "the deployment checkout synced to the engine source channel",
@@ -351,6 +380,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "milestone_kept_open": "the release Milestone stays open (unmet condition)",
     "milestone_closed": "the release Milestone closed",
     "milestone_reconcile_failed": "the Milestone reconciliation sweep crashed (bypass)",
+    "milestone_reconcile_auth_failed": "milestone reconciliation could not authenticate to GitHub",
+    "milestone_reconcile_not_found": "milestone reconciliation target was not found on GitHub",
     "orphan_pr_reported": "an orphan PR (source Issue closed) was reported",
     "orphan_pr_reconcile_failed": "the orphan-PR reconciliation sweep crashed (bypass)",
     "stale_milestone_issue_closed": "a stale milestone-tracking Issue was closed",
@@ -367,6 +398,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "active_milestone_variable_absent": "the active_milestone repo variable is absent",
     "active_milestone_variable_created": "the active_milestone repo variable was created",
     "active_milestone_variable_sync_failed": "the active_milestone repo variable sync failed",
+    "milestone_command_applied": "an in-ticket `/milestone` command ran all three steps",
+    "milestone_command_failed": "an in-ticket `/milestone` command failed at one step",
     # Releases.
     "release_not_claimed": "the release state machine did not claim the release Issue",
     "release_task": "the release state machine advanced (step report)",

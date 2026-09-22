@@ -1034,6 +1034,7 @@ def _run_ref_hammer(
     import threading
 
     import orbi.runner as runner
+    import orbi.gitops as gitops
 
     # The fake `gh` on PATH answers the PR commands of the verify path
     # (the state file carries the default OPEN PR state, which is
@@ -1120,7 +1121,7 @@ def _run_ref_hammer(
     for thread in threads:
         assert not thread.is_alive(), "a hammer thread hung"
     # The lock is short-lived: after the hammer it is free again.
-    lock_path = runner.base_sync_lock_path(clone)
+    lock_path = gitops.base_sync_lock_path(clone)
     probe = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
     try:
         fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)

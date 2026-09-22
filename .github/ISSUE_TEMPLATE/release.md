@@ -5,14 +5,6 @@ title: "release vX.Y.Z"
 labels: ai-release, ai-ready
 ---
 
-## Background
-
-Which tickets vX.Y.Z includes and why this release is being cut.
-
-## Not included in this release
-
-List tickets left in other milestones so they are not included accidentally.
-
 ## Preconditions
 
 - All milestone vX.Y.Z Issues except this ticket are closed

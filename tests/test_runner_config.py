@@ -451,6 +451,26 @@ def test_load_config_reads_and_validates_auto_next_milestone(tmp_path):
         config_domain.load_config(config_path)
 
 
+def test_load_config_reads_and_validates_version_file(tmp_path):
+    """Issue #1290: the release ticket the in-ticket `/milestone` command
+    opens carries a definite `version_file`; the deployment may declare it
+    once here, and an unknown value is a misconfiguration — fail fast."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    assert config_domain.load_config(config_path).version_file is None
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nversion_file = "Cargo.toml"\n',
+        encoding="utf-8",
+    )
+    assert config_domain.load_config(config_path).version_file == "Cargo.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nversion_file = "setup.py"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="version_file must be one of"):
+        config_domain.load_config(config_path)
+
+
 def test_load_config_defaults_active_milestone_to_none(tmp_path):
     """Issue #139: without an active_milestone the config keeps the
     current compat behavior (no milestone filter on the ready scans)."""
