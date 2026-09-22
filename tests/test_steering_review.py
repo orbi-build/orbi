@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 import pytest
 import orbi.runner as runner
+import orbi.pi_session as pi_session
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
 
@@ -32,15 +33,15 @@ def test_run_pi_steering_callback_filters_and_deduplicates(monkeypatch, tmp_path
         {"id": "bad", "createdAt": future, "authorAssociation": "NONE", "author": {"login": "bad"}, "body": "ignore"},
         {"id": "new", "createdAt": future, "authorAssociation": "MEMBER", "author": {"login": "alice"}, "body": "correct this"},
     ]
-    monkeypatch.setitem(runner.__dict__, "issue_view",
+    monkeypatch.setitem(pi_session.__dict__, "issue_view",
         lambda *a, **k: _snapshot(comments))
-    monkeypatch.setitem(runner.__dict__, "_comment_is_trusted", lambda c: c["id"] == "new")
-    monkeypatch.setitem(runner.__dict__, "changed_files", lambda *a, **k: [])
-    monkeypatch.setitem(runner.__dict__, "activity_snapshot", lambda *a, **k: None)
+    monkeypatch.setitem(pi_session.__dict__, "_comment_is_trusted", lambda c: c["id"] == "new")
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     captured = {}
-    monkeypatch.setitem(runner.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
-    assert runner.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     request = captured["watch"].steering_check()
     assert request.comment_ids == ("new",)
     assert "alice: correct this" in request.context
@@ -48,11 +49,11 @@ def test_run_pi_steering_callback_filters_and_deduplicates(monkeypatch, tmp_path
 
 
 def test_run_pi_steering_poll_failure_is_bypassed(monkeypatch, tmp_path):
-    monkeypatch.setitem(runner.__dict__, "issue_view", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
+    monkeypatch.setitem(pi_session.__dict__, "issue_view", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
     captured = {}
-    monkeypatch.setitem(runner.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
-    assert runner.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     assert captured["watch"].steering_check() is None
 
 
@@ -69,7 +70,7 @@ def test_stream_pi_steers_and_restarts(tmp_path):
         if len(calls) == 2:
             raise RuntimeError("offline")
         return None
-    result = runner.stream_pi(command, ctx=RunContext("deadbeef", 24, "branch", tmp_path, "owner/repo"),
+    result = pi_session.stream_pi(command, ctx=RunContext("deadbeef", 24, "branch", tmp_path, "owner/repo"),
         watch=PiWatchOptions(poll_interval=0.01, steering_poll_seconds=0.01, steering_check=check), cwd=tmp_path)
     assert result == "ok"
     assert len(calls) >= 2
@@ -82,12 +83,12 @@ def test_steering_validation_and_limit(monkeypatch, tmp_path):
         config_domain._positive_seconds({"x": 0}, "x", 1.0)
     assert config_domain._positive_seconds({}, "x", 2.0) == 2.0
     config = _config(tmp_path, steering_max_rounds=0)
-    monkeypatch.setitem(runner.__dict__, "issue_view",
+    monkeypatch.setitem(pi_session.__dict__, "issue_view",
         lambda *a, **k: _snapshot([]))
     captured = {}
-    monkeypatch.setitem(runner.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 3, "title": "t", "body": "b"}
-    runner.run_pi(issue, RunContext("run1", 3, "branch", tmp_path, "owner/repo"), config)
+    pi_session.run_pi(issue, RunContext("run1", 3, "branch", tmp_path, "owner/repo"), config)
     assert captured["watch"].steering_check() is None
     assert captured["watch"].steering_check() is None
 
@@ -97,14 +98,14 @@ def test_run_pi_steering_body_edit_restarts(monkeypatch, tmp_path):
     comment (Issue #1094): the request carries the 「正文已更新」 header and
     the edited text, and the SAME edited body on the next poll is inert —
     the recorded body became the edited one."""
-    monkeypatch.setitem(runner.__dict__, "issue_view",
+    monkeypatch.setitem(pi_session.__dict__, "issue_view",
         lambda *a, **k: _snapshot([], body="edited body"))
-    monkeypatch.setitem(runner.__dict__, "changed_files", lambda *a, **k: [])
-    monkeypatch.setitem(runner.__dict__, "activity_snapshot", lambda *a, **k: None)
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     captured = {}
-    monkeypatch.setitem(runner.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "original body"}
-    assert runner.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     request = captured["watch"].steering_check()
     assert request is not None
     assert request.comment_ids == ()
@@ -117,14 +118,14 @@ def test_run_pi_steering_body_edit_restarts(monkeypatch, tmp_path):
 def test_run_pi_steering_unchanged_body_stays_silent(monkeypatch, tmp_path):
     """Body unchanged and no new comments: no request, no restart
     (today's behaviour, Issue #1094)."""
-    monkeypatch.setitem(runner.__dict__, "issue_view",
+    monkeypatch.setitem(pi_session.__dict__, "issue_view",
         lambda *a, **k: _snapshot([]))
-    monkeypatch.setitem(runner.__dict__, "changed_files", lambda *a, **k: [])
-    monkeypatch.setitem(runner.__dict__, "activity_snapshot", lambda *a, **k: None)
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     captured = {}
-    monkeypatch.setitem(runner.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
-    assert runner.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     assert captured["watch"].steering_check() is None
 
 
@@ -135,15 +136,15 @@ def test_run_pi_steering_body_edit_and_comment_is_one_request(monkeypatch, tmp_p
     comments = [
         {"id": "new", "createdAt": future, "authorAssociation": "MEMBER", "author": {"login": "alice"}, "body": "and this"},
     ]
-    monkeypatch.setitem(runner.__dict__, "issue_view",
+    monkeypatch.setitem(pi_session.__dict__, "issue_view",
         lambda *a, **k: _snapshot(comments, body="edited body"))
-    monkeypatch.setitem(runner.__dict__, "_comment_is_trusted", lambda c: c["id"] == "new")
-    monkeypatch.setitem(runner.__dict__, "changed_files", lambda *a, **k: [])
-    monkeypatch.setitem(runner.__dict__, "activity_snapshot", lambda *a, **k: None)
+    monkeypatch.setitem(pi_session.__dict__, "_comment_is_trusted", lambda c: c["id"] == "new")
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     captured = {}
-    monkeypatch.setitem(runner.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "original body"}
-    assert runner.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     request = captured["watch"].steering_check()
     assert request is not None
     assert request.comment_ids == ("new",)
@@ -162,16 +163,16 @@ def test_run_pi_steering_body_edit_respects_round_limit(monkeypatch, tmp_path):
         _snapshot([], body="second edit"),
         _snapshot([], body="second edit"),
     ])
-    monkeypatch.setitem(runner.__dict__, "issue_view", lambda *a, **k: next(polls))
+    monkeypatch.setitem(pi_session.__dict__, "issue_view", lambda *a, **k: next(polls))
     events = []
-    monkeypatch.setitem(runner.__dict__, "event", lambda kind, **kw: events.append(kind))
-    monkeypatch.setitem(runner.__dict__, "changed_files", lambda *a, **k: [])
-    monkeypatch.setitem(runner.__dict__, "activity_snapshot", lambda *a, **k: None)
+    monkeypatch.setitem(pi_session.__dict__, "event", lambda kind, **kw: events.append(kind))
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     captured = {}
-    monkeypatch.setitem(runner.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "original body"}
     config = _config(tmp_path, steering_max_rounds=1)
-    assert runner.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), config) == "done"
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), config) == "done"
     check = captured["watch"].steering_check
     first = check()
     assert first is not None and first.body_revision is True
@@ -197,17 +198,17 @@ def test_run_pi_steering_limit_notifies_once_for_late_comment(monkeypatch, tmp_p
             "body": "another correction",
         }]),
     ])
-    monkeypatch.setitem(runner.__dict__, "issue_view", lambda *a, **k: next(polls))
-    monkeypatch.setitem(runner.__dict__, "changed_files", lambda *a, **k: [])
-    monkeypatch.setitem(runner.__dict__, "activity_snapshot", lambda *a, **k: None)
+    monkeypatch.setitem(pi_session.__dict__, "issue_view", lambda *a, **k: next(polls))
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     comments = []
-    monkeypatch.setitem(runner.__dict__, "comment_issue",
+    monkeypatch.setitem(pi_session.__dict__, "comment_issue",
         lambda number, *, repo, body: comments.append((number, repo, body)))
     captured = {}
-    monkeypatch.setitem(runner.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
     config = _config(tmp_path, steering_max_rounds=0)
-    assert runner.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), config) == "done"
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), config) == "done"
     check = captured["watch"].steering_check
     assert check() is None
     assert check() is None
@@ -220,19 +221,19 @@ def test_run_pi_steering_limit_notifies_once_for_late_comment(monkeypatch, tmp_p
 
 def test_run_pi_steering_limit_notice_failure_is_bypassed(monkeypatch, tmp_path):
     future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
-    monkeypatch.setitem(runner.__dict__, "issue_view", lambda *a, **k: _snapshot([{
+    monkeypatch.setitem(pi_session.__dict__, "issue_view", lambda *a, **k: _snapshot([{
         "id": "late", "createdAt": future, "authorAssociation": "MEMBER",
         "author": {"login": "alice"}, "body": "correction",
     }]))
     events = []
-    monkeypatch.setitem(runner.__dict__, "event", lambda kind, **kw: events.append(kind))
-    monkeypatch.setitem(runner.__dict__, "comment_issue",
+    monkeypatch.setitem(pi_session.__dict__, "event", lambda kind, **kw: events.append(kind))
+    monkeypatch.setitem(pi_session.__dict__, "comment_issue",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
     captured = {}
-    monkeypatch.setitem(runner.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
     config = _config(tmp_path, steering_max_rounds=0)
-    assert runner.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), config) == "done"
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), config) == "done"
     assert captured["watch"].steering_check() is None
     assert "steering_limit_notice_failed" in events
 
@@ -240,14 +241,14 @@ def test_run_pi_steering_limit_notice_failure_is_bypassed(monkeypatch, tmp_path)
 def test_run_pi_steering_snapshot_without_body_stays_inert(monkeypatch, tmp_path):
     """A payload without a body field cannot prove a body edit: body
     steering stays inert for that poll, comment steering unchanged."""
-    monkeypatch.setitem(runner.__dict__, "issue_view",
+    monkeypatch.setitem(pi_session.__dict__, "issue_view",
         lambda *a, **k: _snapshot([], body=None))
-    monkeypatch.setitem(runner.__dict__, "changed_files", lambda *a, **k: [])
-    monkeypatch.setitem(runner.__dict__, "activity_snapshot", lambda *a, **k: None)
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     captured = {}
-    monkeypatch.setitem(runner.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
-    assert runner.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     assert captured["watch"].steering_check() is None
 
 
@@ -256,15 +257,15 @@ def test_run_pi_steering_malformed_payload_is_bypassed(monkeypatch, tmp_path):
     same way a fetch error does: the steering_poll_failed bypass, never
     a restart (Issue #1094 keeps #1002's bypass shape)."""
     events = []
-    monkeypatch.setitem(runner.__dict__, "issue_view",
+    monkeypatch.setitem(pi_session.__dict__, "issue_view",
         lambda *a, **k: {"comments": None, "body": "body"})
-    monkeypatch.setitem(runner.__dict__, "event", lambda kind, **kw: events.append(kind))
-    monkeypatch.setitem(runner.__dict__, "changed_files", lambda *a, **k: [])
-    monkeypatch.setitem(runner.__dict__, "activity_snapshot", lambda *a, **k: None)
+    monkeypatch.setitem(pi_session.__dict__, "event", lambda kind, **kw: events.append(kind))
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     captured = {}
-    monkeypatch.setitem(runner.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
-    assert runner.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     assert captured["watch"].steering_check() is None
     assert "steering_poll_failed" in events
 
@@ -275,15 +276,15 @@ def test_resume_context_renders_body_revision(tmp_path, monkeypatch):
     「新评论」 header (Issue #1094)."""
     from seam import seam
     monkeypatch.setattr(seam, "run_command", lambda *a, **k: "")
-    monkeypatch.setitem(runner.__dict__, "activity_snapshot", lambda *a, **k: None)
-    context = runner.resume_context(
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
+    context = pi_session.resume_context(
         tmp_path, body_revision={"issue": 9, "body": "new direction"},
     )
     assert context is not None
     assert "正文已更新" in context
     assert "Issue #9" in context
     assert "new direction" in context
-    combined = runner.resume_context(
+    combined = pi_session.resume_context(
         tmp_path,
         [{"issue": 9, "author": {"login": "alice"}, "body": "note"}],
         body_revision={"issue": 9, "body": "new direction"},

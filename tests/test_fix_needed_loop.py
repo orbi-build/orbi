@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 import orbi.runner as runner
+import orbi.pi_session as pi_session
 import orbi.runner_health as runner_health
 from orbi import progress, scene
 from seam import seam
@@ -1103,7 +1104,7 @@ def test_exhausted_review_enters_new_budget_after_human_recovery(
     monkeypatch.setattr(runner, "log_recovery_ci_status", lambda *a, **k: None)
     monkeypatch.setattr(seam, "_safe_publish", lambda *a, **k: None)
     monkeypatch.setattr(
-        runner, "run_review",
+        pi_session, "run_review",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("review started")),
     )
     config = config_domain.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main", repo_dir=tmp_path)
@@ -1171,7 +1172,7 @@ def _external_review_env(monkeypatch, tmp_path, *, external: bool):
               "head_oid": "def"}
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: frozen)
     monkeypatch.setattr(
-        runner, "run_review",
+        pi_session, "run_review",
         lambda *a, **k: (
             "Review of the contributor diff: the change is minimal and "
             "tested.\nREVIEW_VERDICT "

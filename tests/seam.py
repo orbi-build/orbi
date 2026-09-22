@@ -19,11 +19,12 @@ import orbi.milestone_command as milestone_command
 import orbi.progress as progress
 import orbi.release as release
 import orbi.release_git as release_git
+import orbi.pi_session as pi_session
 import orbi.runner as runner
 
 _MODULES = (
     journal, github, gitops, milestone, milestone_command, progress,
-    cli_source, release, release_git, runner,
+    cli_source, release, release_git, pi_session, runner,
 )
 
 
