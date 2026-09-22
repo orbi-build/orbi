@@ -1,0 +1,34 @@
+# v0.5.39 发布（最新）
+
+`v0.5.39` 的 GitHub Release 发布说明：[v0.5.39](https://github.com/orbi-build/orbi/releases/tag/v0.5.39)（release task：Issue #1280）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.5.39` | 注解 tag `2d382b02634bfc33db8c74518e0f3a896e063e3d` | 提交 `fe697776e53595314b7ea1f8471419c5644121f6` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Extract milestone bookkeeping into src/orbi/milestone.py: 9 definitions and ~370 lines leave runner.py ([Issue #1261](https://github.com/orbi-build/orbi/issues/1261); [PR #1284](https://github.com/orbi-build/orbi/pull/1284))
+
+### Reliability and recovery
+
+- A cross-repository PR whose head branch has the delivery branch's name is counted as the delivery's PR and ends the Issue ai-blocked ([Issue #1234](https://github.com/orbi-build/orbi/issues/1234); [PR #1281](https://github.com/orbi-build/orbi/pull/1281))
+
+### Observability
+
+- 有 ai-ready 却全被 active_milestone 挡在外面时，journal 与「真没活干」记成同一个 outcome ([Issue #1279](https://github.com/orbi-build/orbi/issues/1279); [PR #1282](https://github.com/orbi-build/orbi/pull/1282))
+
+### Bug fixes
+
+- 已停用(inactive)的仓库仍被 tick 做里程碑对账：每 tick 一次 401，6 小时 288 条误导性 ERROR ([Issue #1283](https://github.com/orbi-build/orbi/issues/1283); [PR #1286](https://github.com/orbi-build/orbi/pull/1286))
+- CI failure: tests on branch main (push) ([Issue #1285](https://github.com/orbi-build/orbi/issues/1285); [PR #1287](https://github.com/orbi-build/orbi/pull/1287))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>
