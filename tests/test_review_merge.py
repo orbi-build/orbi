@@ -597,6 +597,51 @@ def test_freeze_pr_returns_frozen_base_and_head(monkeypatch, tmp_path):
     assert calls == [UNIFIED_PR_LIST_COMMAND]
 
 
+def test_freeze_external_pr_uses_its_marker_number(monkeypatch, tmp_path):
+    """Fork takeovers are frozen by PR number, never by branch lookup."""
+    calls = []
+    payload = {
+        "number": 592,
+        "url": "https://github.com/owner/repo/pull/592",
+        "state": "OPEN",
+        "baseRefName": "main",
+        "baseRefOid": "b1",
+        "headRefName": "fix/outer",
+        "headRefOid": "h1",
+        "headRepository": {"name": "repo-fork"},
+        "headRepositoryOwner": {"login": "contributor"},
+        "body": "external contribution",
+    }
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return json.dumps(payload)
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    with pytest.raises(ValueError, match="requires source_repo"):
+        runner.freeze_pr(
+            tmp_path, "fix/outer", "main", external_pr_url=payload["url"],
+        )
+    pr = runner.freeze_pr(
+        tmp_path, "fix/outer", "main",
+        external_pr_url=payload["url"], source_repo="owner/repo",
+    )
+    assert pr["number"] == 592
+    assert calls == [[
+        "gh", "pr", "view", "592", "--repo", "owner/repo", "--json",
+        (
+            "number,url,state,baseRefName,baseRefOid,headRefName,"
+            "headRefOid,headRepository,headRepositoryOwner,body"
+        ),
+    ]]
+    payload["state"] = "CLOSED"
+    with pytest.raises(RuntimeError, match="no open PR"):
+        runner.freeze_pr(
+            tmp_path, "fix/outer", "main",
+            external_pr_url=payload["url"], source_repo="owner/repo",
+        )
+
+
 def test_freeze_pr_rejects_wrong_base(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: _pr_json(base="develop"),
     )
@@ -3238,6 +3283,19 @@ def _install_merge_record_gh(monkeypatch, clone: Path) -> dict:
             }])
         if command[0] == "gh" and command[1] == "pr" \
                 and command[2] == "view":
+            if "baseRefName" in command[-1]:
+                return json.dumps({
+                    "number": 4, "url": PR_URL, "state": "OPEN",
+                    "baseRefName": "main",
+                    "baseRefOid": git(clone, "rev-parse", "origin/main"),
+                    "headRefName": TASK_BRANCH,
+                    "headRefOid": git(
+                        clone, "rev-parse", f"origin/{TASK_BRANCH}",
+                    ),
+                    "headRepository": {"name": "repo-fork"},
+                    "headRepositoryOwner": {"login": "contributor"},
+                    "body": "external contribution",
+                })
             if "mergeable" in command[-1]:
                 return json.dumps({
                     "number": 4, "state": "OPEN",
@@ -3319,8 +3377,11 @@ def _run_merge_round(monkeypatch, clone: Path, *, session=None,
     merged = runner.review_and_merge_if_clean(
         clone, TASK_BRANCH, "main", config,
         "owner/repo", 4, title="Review task", priority="normal",
-        scene=_scene(review_round=scene_review_round,
-                     external="true" if external else ""),
+        scene=_scene(
+            review_round=scene_review_round,
+            external="true" if external else "",
+            pr_url=PR_URL if external else "u",
+        ),
     )
     if not merged:
         return None

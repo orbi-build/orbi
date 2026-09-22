@@ -3647,12 +3647,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
     )
 
 
-def _query_open_prs(
-    worktree: Path,
-    branch: str,
-    *,
-    external_pr: bool = False,
-) -> list:
+def _query_open_prs(worktree: Path, branch: str) -> list:
     """Return the task branch's open PRs as the raw `gh pr list` list.
 
     The ONE PR-query contract shared by verify_pr and freeze_pr:
@@ -3678,12 +3673,6 @@ def _query_open_prs(
             "gh pr list --json returned a non-array payload "
             "(expected exactly one open PR)"
         )
-    # External-contribution takeover is selected by the trusted PR-number
-    # marker before this lookup. Its contributor head may legitimately live
-    # in a fork, so only Runner-owned stable-branch lookups apply the
-    # same-repository filter.
-    if external_pr:
-        return prs
     return github.filter_same_repository_prs(prs, branch)
 
 
@@ -3693,7 +3682,8 @@ def _single_open_pr(
     base_branch: str,
     *,
     scene: str,
-    external_pr: bool = False,
+    external_pr_url: str | None = None,
+    source_repo: str | None = None,
 ) -> dict:
     """Return the one open delivery PR of the task branch, base validated.
 
@@ -3704,9 +3694,21 @@ def _single_open_pr(
     identical sentence from both paths and the log could not tell them
     apart.
     """
-    prs = _query_open_prs(
-        worktree, branch, external_pr=external_pr,
-    )
+    if external_pr_url is not None:
+        if source_repo is None:
+            raise ValueError("external PR lookup requires source_repo")
+        external = pr_view(
+            _pr_number(external_pr_url),
+            (
+                "number,url,state,baseRefName,baseRefOid,headRefName,"
+                "headRefOid,headRepository,headRepositoryOwner,body"
+            ),
+            repo=source_repo, cwd=worktree,
+            timeout=RESUME_PR_STATE_TIMEOUT_SECONDS,
+        )
+        prs = [external] if external.get("state") == "OPEN" else []
+    else:
+        prs = _query_open_prs(worktree, branch)
     if len(prs) == 0:
         raise RuntimeError(
             f"{scene}: no open PR for the task branch "
@@ -3754,8 +3756,10 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
     the two body checks are skipped — an external PR body carries
     neither the run marker nor a `Fixes` keyword for this Issue; the
     Issue is closed by the Runner after the merge instead. When
-    `pr_repo` is given (resume path), the PR's head repo must be that
-    repo; when `expected_url` is given, the verified PR URL must exactly
+    `pr_repo` is given (resume path), a Runner-owned PR's head repo must
+    be that repo; an external takeover is selected by its trusted marker
+    number and may have a fork head. When `expected_url` is given, the
+    verified PR URL must exactly
     equal the recovered original PR URL (the resume must keep the
     same PR number). Issue #825: on the resume path the marker check
     accepts ANY run marker of the delivery line — the marker set is
@@ -3808,9 +3812,19 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
         # own exactly-one policy: the FULL open list is the
         # failure audit record and zero open PRs is
         # classified against the scene PR's state.
-        prs = _query_open_prs(
-            worktree, branch, external_pr=external_pr,
-        )
+        if external_pr:
+            external = pr_view(
+                _pr_number(expected_url),
+                (
+                    "number,url,state,baseRefName,baseRefOid,headRefName,"
+                    "headRefOid,headRepository,headRepositoryOwner,body"
+                ),
+                repo=pr_repo, cwd=worktree,
+                timeout=RESUME_PR_STATE_TIMEOUT_SECONDS,
+            )
+            prs = [external] if external.get("state") == "OPEN" else []
+        else:
+            prs = _query_open_prs(worktree, branch)
         if len(prs) != 1:
             # A resume cannot safely select a replacement PR. Query the scene
             # PR separately so zero open PRs (a closed/merged or missing
@@ -3872,12 +3886,11 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
     else:
         pr = _single_open_pr(
             worktree, branch, base_branch, scene="verify_pr",
-            external_pr=external_pr,
         )
     url = pr.get("url")
     if not url:
         raise RuntimeError("open PR has no URL")
-    if pr_repo is not None:
+    if pr_repo is not None and not external_pr:
         head_repo = _pr_head_repo(pr)
         if head_repo != pr_repo:
             event(
@@ -4732,12 +4745,13 @@ def freeze_pr(
     branch: str,
     base_branch: str,
     *,
-    external_pr: bool = False,
+    external_pr_url: str | None = None,
+    source_repo: str | None = None,
 ) -> dict:
     """Freeze the exact base/head SHA of the one open PR for a task branch."""
     pr = _single_open_pr(
         worktree, branch, base_branch, scene="freeze_pr",
-        external_pr=external_pr,
+        external_pr_url=external_pr_url, source_repo=source_repo,
     )
     return {
         "number": pr["number"],
@@ -5929,9 +5943,10 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                 "decision, so the AI cannot safely continue this PR"
             )
     round = rounds if merge_only else rounds + 1
+    external_pr_url = scene["pr_url"] if scene.get("external") else None
     pr = freeze_pr(
         worktree, branch, base_branch,
-        external_pr=bool(scene.get("external")),
+        external_pr_url=external_pr_url, source_repo=source_repo,
     )
     # Issue #877: a round that STARTS behind the base is under the absorb
     # contract — the session must end with the branch containing
@@ -6090,7 +6105,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     # only that head via --match-head-commit.
     refrozen = freeze_pr(
         worktree, branch, base_branch,
-        external_pr=bool(scene.get("external")),
+        external_pr_url=external_pr_url, source_repo=source_repo,
     )
     if refrozen["head_oid"] != pr["head_oid"]:
         event(

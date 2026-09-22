@@ -5105,16 +5105,27 @@ def test_verify_pr_external_mode_skips_marker_and_fixes_checks(
     def fake_run(command, **kwargs):
         if command[:3] == ["git", "branch", "--show-current"]:
             return "fix/outer"
-        if command[:2] == ["gh", "pr"]:
-            return fake_verify_pr_payload(
+        if command[:3] == ["gh", "pr", "view"]:
+            payload = json.loads(fake_verify_pr_payload(
                 headRefName="fix/outer",
                 body="please review my fix, thanks",
                 isCrossRepository=True,
-            )
+                state="OPEN",
+                headRepository={"name": "orbi-fork"},
+                headRepositoryOwner={"login": "contributor"},
+            ))[0]
+            return json.dumps(payload)
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch="fix/outer", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path, external_pr=True) == FAKE_PR_URL
+    assert runner.verify_pr(
+        RunContext(
+            run_id=FAKE_RUN_ID, issue=4, branch="fix/outer",
+            worktree=tmp_path, source_repo="owner/repo",
+        ),
+        "main", repo_dir=tmp_path, pr_repo=FAKE_PR_REPO,
+        expected_url=FAKE_PR_URL, external_pr=True,
+    ) == FAKE_PR_URL
 
 
 def test_verify_pr_normal_mode_still_requires_marker_and_fixes(
