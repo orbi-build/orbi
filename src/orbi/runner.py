@@ -2771,12 +2771,16 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
     number and may have a fork head. When `expected_url` is given, the
     verified PR URL must exactly
     equal the recovered original PR URL (the resume must keep the
-    same PR number). Issue #825: on the resume path the marker check
-    accepts ANY run marker of the delivery line — the marker set is
-    read from the Issue's trusted comments when the current attempt's
-    marker misses, because the PR body is written once by the creating
-    run while a resume may bind a new run id; the deliver path keeps
-    the strict current-attempt marker.
+    same PR number). Issue #825/#1300: the marker check accepts ANY run
+    marker of the delivery line — the marker set is read from the
+    Issue's trusted comments when the current attempt's marker misses,
+    because the PR body is written once by the creating run while a
+    later attempt of the same line may bind a new run id. Both paths
+    read the same source (`pr_repo` on the resume, the delivery's own
+    source repo on the deliver path); the deliver path creates the PR
+    only when none is open and verifies unconditionally, so a re-claim
+    of an Issue whose PR an earlier run opened must not be rejected for
+    owning its own PR.
     """
     worktree = ctx.worktree
     branch: str = ctx.branch
@@ -2968,19 +2972,31 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
     if not external_pr and (
         not isinstance(body, str) or marker not in body
     ):
-        # Issue #825: the resume may run under a NEW run id of the SAME
-        # delivery line (one recoverable failure is enough to rebind it),
-        # while the PR body is written once by the creating run. On the
-        # resume path the check therefore accepts ANY marker the Issue's
-        # TRUSTED comment history knows; the deliver path (no
-        # expected_url) keeps the strict current-attempt marker. The
-        # trusted-only source keeps the #45/#89 posture — a copied
-        # marker in a public comment widens nothing — and the branch,
-        # base, head and exact-URL checks above still pin the PR.
+        # Issue #825: a delivery may run under a NEW run id of the SAME
+        # line (one recoverable failure is enough to rebind it), while the
+        # PR body is written once by the creating run. The check therefore
+        # accepts ANY marker the Issue's TRUSTED comment history knows.
+        #
+        # Issue #1300: this used to be gated on `expected_url is not None`,
+        # i.e. the resume path only. But the deliver path creates the PR
+        # only when none is open and verifies UNCONDITIONALLY, so a re-claim
+        # of an Issue whose PR an earlier run already opened hit the strict
+        # current-attempt marker and fell to `ai-blocked` — a healthy
+        # delivery rejected for owning its own PR (production #914: body
+        # carried `orbi:run=675f38a0`, the re-claim ran as `f70987dd`). The
+        # line identity is the same on both paths, so the source is too.
+        #
+        # The delivery line's repo is the resume's `pr_repo` and, on the
+        # deliver path (`deliver_pr` passes no `pr_repo`: the head-repo pin
+        # is a resume-only check), the delivery's own source repo — the
+        # Issue's repo on both paths. The trusted-only source keeps the
+        # #45/#89 posture — a copied marker in a public comment widens
+        # nothing — and the branch, base, head and (on resume) exact-URL
+        # checks above still pin the PR.
+        line_repo = pr_repo or ctx.source_repo
         line_markers = (
-            line_run_markers(issue_comments(issue, repo=pr_repo))
-            if isinstance(body, str) and expected_url is not None
-            and pr_repo else frozenset()
+            line_run_markers(issue_comments(issue, repo=line_repo))
+            if isinstance(body, str) and line_repo else frozenset()
         )
         if not isinstance(body, str) or not any(
             candidate in body for candidate in line_markers

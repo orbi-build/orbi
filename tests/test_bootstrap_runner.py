@@ -4825,6 +4825,13 @@ def fake_verify_run(command, **kwargs):
         return ""
     if command[:3] == ["git", "rev-parse", "HEAD"]:
         return FAKE_HEAD_SHA
+    if command[0] == "gh" and command[1] == "issue":
+        # Issue #1300: a body without the current marker makes the
+        # check read the Issue's TRUSTED comment history on the deliver
+        # path too. The empty history keeps these rejections about the
+        # body's marker — the read happened and knew no run of the line
+        # — instead of about a call the fake refused to answer.
+        return json.dumps({"comments": []})
     if command[:2] == ["gh", "pr"]:
         return fake_verify_pr_payload()
     raise AssertionError(f"unexpected command: {command}")

@@ -3238,3 +3238,143 @@ def test_verify_pr_resume_ignores_public_comment_markers(
             "main", repo_dir=tmp_path, pr_repo="owner/repo",
             expected_url=FAKE_PR_URL, require_latest_base=False,
         )
+
+
+CREATING_RUN_ID = "675f38a0"
+RECLAIM_RUN_ID = "f70987dd"
+
+
+def _deliver_scene_gh(monkeypatch):
+    """FakeGh at the ONE subprocess seam, beside the two local git reads
+    the deliver-path verification makes. The git dispatch indexes single
+    argv elements — no argv-shape asserts (Issue #789)."""
+    fake = FakeGh("owner/repo")
+    git_reads = {"branch": FAKE_BRANCH, "rev-parse": "head"}
+
+    def run(command, **kwargs):
+        if command[0] == "git":
+            return git_reads[command[1]]
+        return fake(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", run)
+    return fake
+
+
+def _deliver_verify(worktree, tmp_path):
+    """The REAL deliver-path call (runner.py `deliver_pr`'s closeout).
+
+    `deliver_pr` passes neither `pr_repo` nor `expected_url`, so the
+    marker source cannot depend on `pr_repo` — the repo the delivery
+    already knows is its own source repo. A test that hands `pr_repo`
+    in verifies a call shape production never makes (Issue #1300).
+    """
+    return runner.verify_pr(
+        RunContext(run_id=RECLAIM_RUN_ID, issue=9, branch=FAKE_BRANCH,
+                   worktree=worktree, source_repo="owner/repo"),
+        "main", repo_dir=tmp_path, require_latest_base=False,
+    )
+
+
+def test_deliver_path_accepts_the_creating_runs_marker_on_an_existing_pr(
+    monkeypatch, tmp_path,
+):
+    """Issue #1300: a re-claim must not reject the PR it already owns.
+
+    The deliver path creates a PR only when none is open, but verifies
+    UNCONDITIONALLY. When an earlier run of the SAME Issue already opened the
+    PR, its body carries the CREATING run's marker while the current run has a
+    new id, so the strict current-attempt check rejected a healthy delivery and
+    the Issue fell to `ai-blocked`. Production #914: the PR body carried
+    `orbi:run=675f38a0` while the re-claim ran as `f70987dd`.
+
+    The delivery line's identity is the SET of run ids the Issue's trusted
+    comments carry (Issue #825) — the same source the resume path already
+    consults.
+    """
+    fake = _deliver_scene_gh(monkeypatch)
+    fake.add_issue(9, labels=("ai-ready",))
+    fake.add_pr(9, head=FAKE_BRANCH, oid="head", body=(
+        f"{runner.run_marker(CREATING_RUN_ID)}\n\nFixes #9\n"
+    ))
+    fake.comment(9, f"Orbi opened PR: {runner.run_marker(CREATING_RUN_ID)}")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    assert _deliver_verify(worktree, tmp_path) == FAKE_PR_URL
+
+
+def test_deliver_path_still_rejects_a_marker_no_trusted_comment_knows(
+    monkeypatch, tmp_path,
+):
+    """Issue #1300: widening to the delivery line must not accept ANY PR.
+
+    A body whose marker belongs to no run of this Issue's trusted history is
+    still a foreign PR — otherwise the check would degrade into "any
+    marker-shaped string passes".
+    """
+    fake = _deliver_scene_gh(monkeypatch)
+    fake.add_issue(9, labels=("ai-ready",))
+    fake.add_pr(9, head=FAKE_BRANCH, oid="head", body=(
+        f"{runner.run_marker('deadbeef')}\n\nFixes #9\n"
+    ))
+    fake.comment(9, f"Orbi opened PR: {runner.run_marker(CREATING_RUN_ID)}")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    with pytest.raises(RuntimeError, match="missing the stable run marker"):
+        _deliver_verify(worktree, tmp_path)
+
+
+def test_deliver_path_rejects_a_marker_only_an_untrusted_comment_carries(
+    monkeypatch, tmp_path,
+):
+    """Issue #1300: the #45/#89 posture holds — a copied marker in a public
+    comment widens nothing, on the deliver path too."""
+    fake = _deliver_scene_gh(monkeypatch)
+    fake.add_issue(9, labels=("ai-ready",))
+    fake.add_pr(9, head=FAKE_BRANCH, oid="head", body=(
+        f"{runner.run_marker('deadbeef')}\n\nFixes #9\n"
+    ))
+    fake.comment(9, f"Orbi opened PR: {runner.run_marker('deadbeef')}",
+                 login="drive-by", association="NONE")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    with pytest.raises(RuntimeError, match="missing the stable run marker"):
+        _deliver_verify(worktree, tmp_path)
+
+
+def test_deliver_closeout_continues_on_the_creating_runs_existing_pr(
+    monkeypatch, tmp_path,
+):
+    """Issue #1300, the real user path: the `deliver_pr` closeout finds
+    the open PR an EARLIER run of this Issue created, skips creation and
+    returns the verified URL — the delivery continues to review instead
+    of stopping at `ai-blocked` with
+    "PR body is missing the stable run marker ...".
+
+    The closeout is driven for real (one FakeGh at the subprocess seam
+    plus the local git reads it makes); only `verify_pr`'s own call
+    shape is what production uses — no `pr_repo`, no `expected_url`.
+    """
+    fake = FakeGh("owner/repo")
+    fake.add_issue(9, labels=("ai-ready",), state="open")
+    fake.add_pr(9, head=FAKE_BRANCH, oid="head", body=(
+        f"{runner.run_marker(CREATING_RUN_ID)}\n\nFixes #9\n"
+    ))
+    fake.comment(9, f"Orbi opened PR: {runner.run_marker(CREATING_RUN_ID)}")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    git_reads = {
+        "status": "", "rev-parse": "head", "fetch": "",
+        "merge-base": "", "push": "", "branch": FAKE_BRANCH,
+    }
+
+    def run(command, **kwargs):
+        if command[0] == "git":
+            return git_reads[command[1]]
+        return fake(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", run)
+    ctx = RunContext(run_id=RECLAIM_RUN_ID, issue=9, branch=FAKE_BRANCH,
+                     worktree=worktree, source_repo="owner/repo")
+    assert runner.deliver_pr(
+        ctx, "main", "c0000", issue_title="t", repo_dir=tmp_path,
+    ) == FAKE_PR_URL
