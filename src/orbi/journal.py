@@ -21,6 +21,32 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+
+class MilestoneReconcileError(RuntimeError):
+    def __init__(self, *, status: int, operation: str, stderr: str) -> None:
+        self.status, self.operation, self.stderr = status, operation, stderr
+        super().__init__(f"{operation} failed with HTTP {status}: {stderr}")
+
+
+def classify_milestone_error(exc, operation: str) -> None:
+    status = milestone_error_status(str(exc.stderr or ""), str(exc.stdout or ""))
+    if status is not None:
+        raise MilestoneReconcileError(
+            status=status, operation=operation,
+            stderr=str(exc.stderr or exc.stdout or ""),
+        ) from exc
+    raise exc
+
+
+def milestone_error_status(stderr: str, stdout: str = "") -> int | None:
+    detail = " ".join((stderr, stdout))
+    if re.search(r"(?:http|status) ?401|bad credentials", detail, re.I):
+        return 401
+    if re.search(r"(?:http|status) ?404|not found", detail, re.I):
+        return 404
+    return None
+
+
 if TYPE_CHECKING:
     # Annotation-only: this module stays the runtime leaf (no `orbi`
     # imports at runtime); the run-identity bundle travels as a value.
@@ -354,6 +380,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "milestone_kept_open": "the release Milestone stays open (unmet condition)",
     "milestone_closed": "the release Milestone closed",
     "milestone_reconcile_failed": "the Milestone reconciliation sweep crashed (bypass)",
+    "milestone_reconcile_auth_failed": "milestone reconciliation could not authenticate to GitHub",
+    "milestone_reconcile_not_found": "milestone reconciliation target was not found on GitHub",
     "orphan_pr_reported": "an orphan PR (source Issue closed) was reported",
     "orphan_pr_reconcile_failed": "the orphan-PR reconciliation sweep crashed (bypass)",
     "stale_milestone_issue_closed": "a stale milestone-tracking Issue was closed",

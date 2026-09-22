@@ -2303,10 +2303,26 @@ def pick_next_delivery(
             LOGGER.exception("epic_reconcile_failed repo=%s", repo)
         # Milestone reconciliation intentionally follows the Epic sweep so a
         # just-closed final Epic can make its Milestone eligible this tick.
-        try:
-            milestone_bookkeeping.reconcile_release_milestones(repo, tick_run_id)
-        except Exception:
-            LOGGER.exception("milestone_reconcile_failed repo=%s", repo)
+        # A classified 401/404 leaves a cross-process retry marker: systemd
+        # starts a fresh Runner for every timer tick, so process-local
+        # suppression would still issue and log the same failure every time.
+        milestone_state_dir = slot_dir.parent
+        if milestone_bookkeeping.milestone_reconcile_due(
+            milestone_state_dir, repo,
+        ):
+            try:
+                milestone_bookkeeping.reconcile_release_milestones(
+                    repo, tick_run_id,
+                )
+                milestone_bookkeeping.clear_milestone_reconcile_failure(
+                    milestone_state_dir, repo,
+                )
+            except milestone_bookkeeping.MilestoneReconcileError as exc:
+                milestone_bookkeeping.record_milestone_reconcile_failure(
+                    milestone_state_dir, repo, exc,
+                )
+            except Exception:
+                LOGGER.exception("milestone_reconcile_failed repo=%s", repo)
         # Orphan-PR reconciliation follows the same bypass
         # pattern: a broken GitHub query must never prevent the ordinary
         # delivery scans.

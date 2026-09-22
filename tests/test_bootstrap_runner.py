@@ -20235,12 +20235,157 @@ def test_reconcile_open_epics_keeps_incomplete_without_comment(monkeypatch, capl
     assert "epic_kept_open issue=20 repo=o/r reason=\"open blockers: #3\"" in caplog.text
 
 
+def test_milestone_reconcile_classified_failures_are_throttled_across_ticks(
+    tmp_path, caplog,
+):
+    caplog.set_level("INFO")
+    error = github.MilestoneReconcileError(
+        status=401, operation="list_milestones", stderr="Bad credentials (HTTP 401)",
+    )
+    assert milestone.milestone_reconcile_due(tmp_path, "o/r", now=1000)
+    milestone.record_milestone_reconcile_failure(tmp_path, "o/r", error)
+
+    # A later systemd tick is a new Python process, so the filesystem marker —
+    # not process memory — must prevent both another request and another log.
+    assert not milestone.milestone_reconcile_due(tmp_path, "o/r", now=1100)
+    milestone.record_milestone_reconcile_failure(tmp_path, "o/r", error)
+    messages = [record.message for record in caplog.records]
+    assert sum(message.endswith(
+        'milestone_reconcile_auth_failed repo=o/r status=401 '
+        'operation=list_milestones stderr="Bad credentials (HTTP 401)"'
+    ) for message in messages) == 1
+    assert "milestone_reconcile_failed" not in caplog.text
+
+
+def test_milestone_reconcile_success_clears_suppression(tmp_path, caplog):
+    error = github.MilestoneReconcileError(
+        status=404, operation="list_milestones", stderr="Not Found (HTTP 404)",
+    )
+    milestone.record_milestone_reconcile_failure(tmp_path, "o/r", error)
+    assert not milestone.milestone_reconcile_due(tmp_path, "o/r")
+    milestone.clear_milestone_reconcile_failure(tmp_path, "o/r")
+    assert milestone.milestone_reconcile_due(tmp_path, "o/r")
+    milestone.record_milestone_reconcile_failure(tmp_path, "o/r", error)
+    assert sum(record.message.endswith(
+        'milestone_reconcile_not_found repo=o/r status=404 '
+        'operation=list_milestones stderr="Not Found (HTTP 404)"'
+    ) for record in caplog.records) == 2
+
+
+def test_milestone_reconcile_failure_is_retried_after_cooldown(tmp_path):
+    error = github.MilestoneReconcileError(
+        status=401, operation="list_milestones", stderr="HTTP 401",
+    )
+    milestone.record_milestone_reconcile_failure(tmp_path, "o/r", error)
+    marker = milestone._milestone_failure_marker(tmp_path, "o/r", 401)
+    os.utime(marker, (1000, 1000))
+    assert not milestone.milestone_reconcile_due(
+        tmp_path, "o/r", now=1000 + milestone.MILESTONE_RECONCILE_RETRY_SECONDS - 1,
+    )
+    assert milestone.milestone_reconcile_due(
+        tmp_path, "o/r", now=1000 + milestone.MILESTONE_RECONCILE_RETRY_SECONDS,
+    )
+
+
+def test_milestone_reconcile_state_io_failures_stay_fail_open(
+    tmp_path, monkeypatch, caplog,
+):
+    marker = milestone._milestone_failure_marker(tmp_path, "o/r", 401)
+    marker.parent.mkdir(parents=True)
+    marker.touch()
+    original_stat = Path.stat
+    monkeypatch.setattr(
+        Path, "stat",
+        lambda self: (_ for _ in ()).throw(OSError("stat failed"))
+        if self == marker else original_stat(self),
+    )
+    assert milestone.milestone_reconcile_due(tmp_path, "o/r")
+    monkeypatch.setattr(Path, "stat", original_stat)
+
+    original_unlink = Path.unlink
+    monkeypatch.setattr(
+        Path, "unlink",
+        lambda self: (_ for _ in ()).throw(OSError("unlink failed"))
+        if self == marker else original_unlink(self),
+    )
+    os.utime(marker, (0, 0))
+    assert milestone.milestone_reconcile_due(tmp_path, "o/r", now=4000)
+    milestone.clear_milestone_reconcile_failure(tmp_path, "o/r")
+    assert "milestone_reconcile_suppression_clear_failed repo=o/r" in caplog.text
+    monkeypatch.setattr(Path, "unlink", original_unlink)
+
+    marker.unlink()
+    monkeypatch.setattr(
+        os, "open",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("read only")),
+    )
+    milestone.record_milestone_reconcile_failure(
+        tmp_path, "o/r", github.MilestoneReconcileError(
+            status=401, operation="list_milestones", stderr="HTTP 401",
+        ),
+    )
+    assert "milestone_reconcile_auth_failed repo=o/r status=401" in caplog.text
+
+
+def test_reconcile_release_milestones_classifies_auth_and_not_found(monkeypatch):
+    monkeypatch.setattr(github.time, "sleep", lambda _delay: None)
+    errors = [
+        ("gh: Bad credentials (HTTP 401)", 401),
+        ("gh: Not Found (HTTP 404)", 404),
+    ]
+    for stderr, status in errors:
+        def fake_run(command, **kwargs):
+            if "milestones?state=all" in command[2]:
+                return "[[]]"
+            raise subprocess.CalledProcessError(1, command, stderr=stderr)
+
+        monkeypatch.setattr(seam, "run_command", fake_run)
+        with pytest.raises(github.MilestoneReconcileError) as caught:
+            milestone.reconcile_release_milestones("o/r", "abc12345")
+        assert caught.value.status == status
+        assert caught.value.operation == "list_releases"
+        assert caught.value.stderr == stderr
+
+
+@pytest.mark.parametrize(
+    ("failed_endpoint", "stderr", "operation"),
+    [
+        ("issues?milestone=5", "Bad credentials (HTTP 401)", "list_milestone_issues"),
+        ("milestones/5", "Not Found (HTTP 404)", "close_milestone"),
+    ],
+)
+def test_reconcile_release_milestones_classifies_later_operations(
+    monkeypatch, failed_endpoint, stderr, operation,
+):
+    monkeypatch.setattr(github.time, "sleep", lambda _delay: None)
+
+    def fake_run(command, **kwargs):
+        endpoint = command[2]
+        if failed_endpoint in endpoint:
+            raise subprocess.CalledProcessError(1, command, stderr=stderr)
+        if "milestones?state=all" in endpoint:
+            return json.dumps([[_milestone(5, "v0.4.0", "open", 0)]])
+        if "releases?per_page=100" in endpoint:
+            return json.dumps([[{"tag_name": "v0.4.0", "draft": False}]])
+        if "issues?milestone=5" in endpoint:
+            return "[[]]"
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    with pytest.raises(github.MilestoneReconcileError) as caught:
+        milestone.reconcile_release_milestones("o/r", "abc12345")
+    assert caught.value.operation == operation
+    assert caught.value.stderr == stderr
+    assert fake_run(["gh", "api", "unexpected"]) is None
+
+
 def test_reconcile_release_milestones_closes_only_published_empty_milestones(monkeypatch, caplog):
     caplog.set_level("INFO")
     calls = []
+    call_kwargs = []
     listed_milestone = _milestone(5, "v0.4.0", "open", 0)
     def fake_run(command, **kwargs):
         calls.append(command)
+        call_kwargs.append(kwargs)
         if command == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[listed_milestone]])
         if command == ["gh", "api", "repos/o/r/releases?per_page=100", "--paginate", "--slurp"]:
@@ -20254,6 +20399,12 @@ def test_reconcile_release_milestones_closes_only_published_empty_milestones(mon
     assert milestone.reconcile_release_milestones("o/r", "abc12345") == ["Milestone #5 (v0.4.0) closed"]
     assert "milestone_closed number=5 repo=o/r" in caplog.text
     assert calls.index(["gh", "api", "repos/o/r/milestones/5", "--method", "PATCH", "-f", "state=closed"]) > calls.index(["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100", "--paginate", "--slurp"])
+    assert call_kwargs == [
+        {"timeout": 30, "failure_log_level": logging.DEBUG},
+        {"timeout": 30, "failure_log_level": logging.DEBUG},
+        {"timeout": 30},
+        {"timeout": 30},
+    ]
     with pytest.raises(AssertionError):
         fake_run(["unexpected"])
 
@@ -20442,30 +20593,49 @@ def test_reconcile_orphan_prs_skips_open_issues_and_non_delivery_branches(monkey
         fake_run(["unexpected"])
 
 
-def test_reconcile_orphan_prs_failure_is_fail_open(monkeypatch, caplog):
+def test_reconcile_orphan_prs_failure_is_fail_open(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda *args, **kwargs: None)
-    monkeypatch.setattr(milestone, "reconcile_release_milestones", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        milestone, "reconcile_release_milestones",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("a throttled milestone sweep must be skipped")
+        ),
+    )
     monkeypatch.setattr(runner, "reconcile_orphan_prs", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
     monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_issue", lambda *args: {"number": 1})
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "abc12345")
-    result = runner.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1)
+    slot_dir = tmp_path / "slots"
+    milestone.record_milestone_reconcile_failure(
+        slot_dir.parent, "o/r", github.MilestoneReconcileError(
+            status=401, operation="list_milestones", stderr="HTTP 401",
+        ),
+    )
+    result = runner.pick_next_delivery(["o/r"], slot_dir, 1)
     assert result == ("o/r", {"number": 1}, None)
     assert "orphan_pr_reconcile_failed repo=o/r" in caplog.text
 
 
-def test_reconcile_open_epics_failure_is_fail_open(monkeypatch, caplog):
+def test_reconcile_open_epics_failure_is_fail_open(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
-    monkeypatch.setattr(milestone, "reconcile_release_milestones", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        milestone, "reconcile_release_milestones",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            github.MilestoneReconcileError(
+                status=404, operation="list_milestones", stderr="HTTP 404",
+            )
+        ),
+    )
     monkeypatch.setattr(runner, "reconcile_orphan_prs", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_issue", lambda *args: {"number": 1})
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "abc12345")
-    result = runner.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1)
+    result = runner.pick_next_delivery(["o/r"], tmp_path / "slots", 1)
     assert result == ("o/r", {"number": 1}, None)
     assert "epic_reconcile_failed repo=o/r" in caplog.text
+    assert "milestone_reconcile_not_found repo=o/r status=404" in caplog.text
 
 
 def test_reconcile_open_epics_runs_on_a_fresh_tick(monkeypatch):

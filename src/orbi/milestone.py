@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import logging
 import os
 import re
 import subprocess
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -16,8 +18,98 @@ from orbi.github import (
     close_milestone, list_issues, list_milestones, milestone_open_issues,
     parse_paginated_issue_array, run_gh_read_command,
 )
-from orbi.journal import LOGGER, event, run_command
+from orbi.journal import (
+    LOGGER, MilestoneReconcileError, classify_milestone_error, event,
+    run_command, single_line,
+)
 from orbi.progress import ProgressPublisher, read_test_result
+
+MILESTONE_RECONCILE_RETRY_SECONDS = 60 * 60
+_MILESTONE_FAILURE_DIR = "milestone-reconcile-failures"
+_MILESTONE_FAILURE_STATUSES = (401, 404)
+
+
+def _milestone_failure_marker(state_dir: Path, repo: str, status: int) -> Path:
+    repo_key = hashlib.sha256(repo.encode("utf-8")).hexdigest()
+    return state_dir / _MILESTONE_FAILURE_DIR / f"{repo_key}-{status}"
+
+
+def milestone_reconcile_due(
+    state_dir: Path, repo: str, *, now: float | None = None,
+) -> bool:
+    """Return whether a failed repo is due for its bounded retry.
+
+    The Runner is a fresh process on every timer tick, so an in-memory guard
+    cannot reduce cross-tick requests or journal noise.  A tiny marker under
+    the existing ``.orbi`` state directory suppresses retries for one hour;
+    success clears the marker and restores the normal every-tick sweep.
+    """
+    current = time.time() if now is None else now
+    markers = [
+        _milestone_failure_marker(state_dir, repo, status)
+        for status in _MILESTONE_FAILURE_STATUSES
+    ]
+    modified: list[float] = []
+    for marker in markers:
+        try:
+            modified.append(marker.stat().st_mtime)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return True
+    if not modified:
+        return True
+    if current - max(modified) < MILESTONE_RECONCILE_RETRY_SECONDS:
+        return False
+    for marker in markers:
+        try:
+            marker.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return True
+    return True
+
+
+def record_milestone_reconcile_failure(
+    state_dir: Path, repo: str, error: MilestoneReconcileError,
+) -> None:
+    marker = _milestone_failure_marker(state_dir, repo, error.status)
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return
+    except OSError:
+        # State persistence is a log-noise bypass: never let it decide the
+        # delivery outcome.  Emit the classified failure so auth loss remains
+        # observable even on a read-only state directory.
+        pass
+    else:
+        os.close(descriptor)
+    kind = {
+        401: "milestone_reconcile_auth_failed",
+        404: "milestone_reconcile_not_found",
+    }[error.status]
+    event(
+        kind, level=logging.ERROR, repo=repo, status=error.status,
+        operation=error.operation, stderr=single_line(error.stderr),
+    )
+
+
+def clear_milestone_reconcile_failure(state_dir: Path, repo: str) -> None:
+    for status in _MILESTONE_FAILURE_STATUSES:
+        marker = _milestone_failure_marker(state_dir, repo, status)
+        try:
+            marker.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            LOGGER.exception(
+                "milestone_reconcile_suppression_clear_failed repo=%s path=%s",
+                repo, marker,
+            )
+
 
 def sync_active_milestone_variable(
     repo: str, milestone: str | None, *,
@@ -135,7 +227,7 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
     Milestone title are independent GitHub facts, so a late-closing Issue is
     reconciled on a later tick without requiring a new release run.
     """
-    all_milestones = list_milestones(repo)
+    all_milestones = list_milestones(repo, timeout=30)
     milestones = [m for m in all_milestones if m.get("state") == "open"]
     for milestone in all_milestones:
         if not isinstance(milestone, dict) or milestone.get("state") not in {"open", "closed"}:
@@ -144,10 +236,13 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
                 if isinstance(milestone, dict) else None,
                 repo=repo, reason="malformed",
             )
-    releases_raw = run_gh_read_command([
-        "gh", "api", f"repos/{repo}/releases?per_page=100",
-        "--paginate", "--slurp",
-    ])
+    try:
+        releases_raw = run_gh_read_command([
+            "gh", "api", f"repos/{repo}/releases?per_page=100",
+            "--paginate", "--slurp",
+        ], timeout=30, failure_log_level=logging.DEBUG)
+    except subprocess.CalledProcessError as exc:
+        classify_milestone_error(exc, "list_releases")
     releases = parse_paginated_issue_array(releases_raw)
     published_tags = {
         release.get("tag_name") for release in releases
@@ -172,11 +267,17 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
             event("milestone_kept_open", number=number, repo=repo,
                   reason="no published release")
             continue
-        open_issues = milestone_open_issues(repo, number)
+        try:
+            open_issues = milestone_open_issues(repo, number)
+        except subprocess.CalledProcessError as exc:
+            classify_milestone_error(exc, "list_milestone_issues")
         if open_issues:
             event("milestone_kept_open", number=number, repo=repo, reason="open issues")
             continue
-        close_milestone(repo, int(number))
+        try:
+            close_milestone(repo, int(number))
+        except subprocess.CalledProcessError as exc:
+            classify_milestone_error(exc, "close_milestone")
         event("milestone_closed", number=number, repo=repo)
         evidence.append(f"Milestone #{number} ({title}) closed")
     return evidence

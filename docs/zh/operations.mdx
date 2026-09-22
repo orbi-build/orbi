@@ -600,6 +600,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `milestone_kept_open` | 发布 Milestone 保持打开（条件未满足） |
 | `milestone_closed` | 发布 Milestone 已关闭 |
 | `milestone_reconcile_failed` | Milestone 对账扫描崩溃（旁路） |
+| `milestone_reconcile_auth_failed` | Milestone 对账无法通过 GitHub 认证 |
+| `milestone_reconcile_not_found` | GitHub 上找不到 Milestone 对账目标 |
 | `orphan_pr_reported` | 孤儿 PR（源 Issue 已关闭）已上报 |
 | `orphan_pr_reconcile_failed` | 孤儿 PR 对账扫描崩溃（旁路） |
 | `stale_milestone_issue_closed` | 过期的 milestone 确认 Issue 已关闭 |
