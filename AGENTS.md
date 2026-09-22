@@ -165,6 +165,24 @@ third party's documented behavior, or a limitation of the tool you are using.
 A ticket filed on a false premise makes the delivery agent change what should
 not change, and burns review rounds.
 
+**Waiting is not breakage.** The runner is built to stop and let a human
+decide. Each state below is the design working, and none of them is a
+ticket on its own:
+
+| State | What it means |
+|---|---|
+| `active_milestone` names a closed milestone, or none | The version shipped. Nobody has decided what the next one carries. |
+| No claimable Issue; every tick reports `no_ready_issue` | The queue is empty, or what is left is already in flight. |
+| A unit sits `inactive dead` with `ExecMainStatus=0` | A oneshot tick finished. The timer starts the next one. |
+| `auto_next_milestone = false` and the milestone advance stalls | It is doing exactly what the flag asks — Issue #933 set it on purpose. |
+| A delivery ends `ai-blocked` | A terminal state a human is meant to resolve, not a crash. |
+
+These look identical to a fault: nothing moves and nothing complains. Before
+writing "stalled", "stuck" or "silently stops" into a ticket, name the
+decision the system is waiting for and who owes it. If you can name it, the
+gap — if any — is that the person was never told they are being waited on,
+or has no way to answer. **File that, not the waiting.**
+
 ## No Issue in hand? File one — do not edit
 
 **This repository is delivered by Orbi.** Changes come from a ticket that a
