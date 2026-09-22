@@ -20375,6 +20375,7 @@ def test_reconcile_release_milestones_classifies_later_operations(
         milestone.reconcile_release_milestones("o/r", "abc12345")
     assert caught.value.operation == operation
     assert caught.value.stderr == stderr
+    assert fake_run(["gh", "api", "unexpected"]) is None
 
 
 def test_reconcile_release_milestones_closes_only_published_empty_milestones(monkeypatch, caplog):
