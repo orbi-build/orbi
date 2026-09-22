@@ -33,7 +33,7 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
-from orbi import __version__, cli_source, config as config_domain, engine_source, git_transport, runner, scheduler
+from orbi import __version__, cli_source, config as config_domain, engine_source, git_transport, runner, scheduler, milestone
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
     FIX_NEEDED_LABEL,
@@ -50,7 +50,6 @@ from orbi.runner import (
     freeze_base,
     list_issues,
     log_format,
-    rewrite_active_milestone_line,
     run_command,
     validate_config,
     validate_execution_source_repos,
@@ -699,7 +698,7 @@ def milestone_set(config: config_domain.RunnerConfig, config_path: Path,
             "Milestones; fix=rename or close the duplicate Milestone first"
         )
     try:
-        rewrite_active_milestone_line(config_path, title)
+        milestone.rewrite_active_milestone_line(config_path, title)
     except (OSError, RuntimeError) as exc:
         raise MilestoneSetError(
             f"milestone_set_failed reason={exc}; "

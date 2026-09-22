@@ -29,10 +29,8 @@ from orbi.delivery_labels import (
     P0_LABEL,
     label_patch,
 )
-from orbi.journal import (
-    LOGGER, MilestoneReconcileError, classify_milestone_error, event, run_command,
-    single_line,
-)
+from orbi.journal import (LOGGER, MilestoneReconcileError,
+                          classify_milestone_error, event, run_command, single_line)
 from orbi.progress import (
     RUN_MARKER_PATTERN,
     format_status_comment,
@@ -235,6 +233,7 @@ def run_gh_read_command(
     command: list[str], *, cwd: Path | None = None,
     timeout: int | None = None,
     command_runner: Callable[..., str] | None = None,
+    failure_log_level: int = logging.ERROR,
 ) -> str:
     """Run one read-only gh command with bounded transient-failure retries.
 
@@ -254,13 +253,14 @@ def run_gh_read_command(
             # Forward only the set options: None is run_command's own
             # default, and passing it explicitly would change the call
             # observed by the run_command fakes and probes.
-            if timeout is None:
-                if cwd is None:
-                    return execute(command)
-                return execute(command, cwd=cwd)
-            if cwd is None:
-                return execute(command, timeout=timeout)
-            return execute(command, cwd=cwd, timeout=timeout)
+            kwargs: dict[str, object] = {}
+            if cwd is not None:
+                kwargs["cwd"] = cwd
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            if failure_log_level != logging.ERROR:
+                kwargs["failure_log_level"] = failure_log_level
+            return execute(command, **kwargs)
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or "").strip()
             retryable = (
@@ -399,7 +399,7 @@ def milestone_open_issues(repo: str, milestone_number: int) -> list[dict]:
         "gh", "api",
         f"repos/{repo}/issues?milestone={milestone_number}&state=open&per_page=100",
         "--paginate", "--slurp",
-    ])
+    ], timeout=30)
     return parse_paginated_issue_array(raw)
 
 
@@ -425,7 +425,7 @@ def list_milestones(repo: str, *, timeout: int | None = None) -> list[dict]:
         raw = run_gh_read_command([
             "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
             "--paginate", "--slurp",
-        ], timeout=timeout)
+        ], timeout=timeout, failure_log_level=logging.DEBUG)
     except subprocess.CalledProcessError as exc:
         classify_milestone_error(exc, "list_milestones")
     return parse_paginated_issue_array(raw)
@@ -466,7 +466,7 @@ def close_milestone(repo: str, number: int) -> None:
     run_command([
         "gh", "api", f"repos/{repo}/milestones/{number}",
         "--method", "PATCH", "-f", "state=closed",
-    ])
+    ], timeout=30)
 
 
 def close_issue(number: int, *, repo: str) -> None:

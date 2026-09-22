@@ -6,6 +6,7 @@ assert the real `gh` command line — the argv IS the contract (Article 5.2).
 No test patches `runner` internals.
 """
 import json
+import logging
 import subprocess
 
 import pytest
@@ -170,9 +171,9 @@ def test_list_milestones_forwards_the_callers_timeout(monkeypatch):
         captured.append(k), "[]")[1])
 
     github.list_milestones("o/r", timeout=30)
-    assert captured == [{"timeout": 30}]
+    assert captured == [{"timeout": 30, "failure_log_level": logging.DEBUG}]
     github.list_milestones("o/r")
-    assert captured[1] == {}
+    assert captured[1] == {"failure_log_level": logging.DEBUG}
 
 
 def test_milestone_open_issue_count_reads_githubs_own_counter(monkeypatch):
