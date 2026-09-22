@@ -29,6 +29,7 @@ import pytest
 from subprocess import CalledProcessError
 
 from orbi import runner
+import orbi.pi_session as pi_session
 from orbi import runner_health
 from seam import seam
 import orbi.journal as journal
@@ -1084,7 +1085,7 @@ def test_process_issue_pickup_record_failure_is_bypass(
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
     )
-    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    monkeypatch.setattr(pi_session, "run_pi", lambda *args, **kwargs: "done")
     monkeypatch.setattr(
         runner, "deliver_pr",
         lambda *args, **kwargs: "https://github.com/orbi-build/orbi/pull/4",

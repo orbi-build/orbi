@@ -17,6 +17,7 @@ from unittest.mock import Mock, call as mock_call
 import pytest
 
 import orbi.runner as runner
+import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 import orbi.release as release
 from seam import seam
@@ -115,10 +116,10 @@ def patch_process_deps(monkeypatch, tmp_path, *, run_pi_side_effect=None):
         },
     )
     if run_pi_side_effect is not None:
-        monkeypatch.setattr(runner, "run_pi",
+        monkeypatch.setattr(pi_session, "run_pi",
                             Mock(side_effect=run_pi_side_effect))
     else:
-        monkeypatch.setattr(runner, "run_pi",
+        monkeypatch.setattr(pi_session, "run_pi",
                             Mock(return_value="done"))
     # Issue #186: the fresh-claim closeout is `deliver_pr` (the Runner
     # pushes the task branch and opens the PR); the agent no longer does.
@@ -669,7 +670,7 @@ def test_process_issue_finishes_progress_comment_with_delivery_summary(
         )
         return "done"
 
-    monkeypatch.setattr(runner, "run_pi", fake_run_pi)
+    monkeypatch.setattr(pi_session, "run_pi", fake_run_pi)
     runner.process_issue(make_issue(), make_config(tmp_path),
                          "xqliu/orbi")
     # The final PATCH of comment 77 must carry the delivery summary.
@@ -854,7 +855,7 @@ def test_process_issue_keeps_the_claim_when_the_journal_proves_the_request(
             "reached\\n')\n"
             "sys.exit(1)\n"
         )
-        return runner.stream_pi(
+        return pi_session.stream_pi(
             [sys.executable, "-c", script], ctx=ctx,
             watch=PiWatchOptions(poll_interval=0.1), cwd=ctx.worktree,
         )
@@ -866,7 +867,7 @@ def test_process_issue_keeps_the_claim_when_the_journal_proves_the_request(
         def _next_session_file(self):
             return None
 
-    monkeypatch.setattr(runner, "run_pi", fake_run_pi)
+    monkeypatch.setattr(pi_session, "run_pi", fake_run_pi)
     monkeypatch.setattr(pi_process, "SessionWatcher", StaleWatcher)
     # The worktree carries the stable derived name so the next tick's
     # in-flight scan can derive the same scene from it (Issue #219).
@@ -982,7 +983,7 @@ def test_process_issue_posts_plan_ready_milestone_when_plan_written(
         )
         return "done"
 
-    monkeypatch.setattr(runner, "run_pi", fake_run_pi)
+    monkeypatch.setattr(pi_session, "run_pi", fake_run_pi)
     runner.process_issue(make_issue(), make_config(tmp_path),
                          "xqliu/orbi")
     milestones = [
@@ -1007,7 +1008,7 @@ def test_process_issue_posts_tests_passed_milestone_when_test_log_ok(
         )
         return "done"
 
-    monkeypatch.setattr(runner, "run_pi", fake_run_pi)
+    monkeypatch.setattr(pi_session, "run_pi", fake_run_pi)
     runner.process_issue(make_issue(), make_config(tmp_path),
                          "xqliu/orbi")
     milestones = [
@@ -1030,7 +1031,7 @@ def test_process_issue_posts_tests_failed_milestone_when_test_log_fails(
         )
         return "done"
 
-    monkeypatch.setattr(runner, "run_pi", fake_run_pi)
+    monkeypatch.setattr(pi_session, "run_pi", fake_run_pi)
     runner.process_issue(make_issue(), make_config(tmp_path),
                          "xqliu/orbi")
     milestones = [
@@ -1326,7 +1327,7 @@ def test_process_issue_ensure_failure_does_not_fail_delivery(
         for kwargs in edits
     )
     # ...Pi ran (run_pi was not skipped because ensure failed)...
-    assert runner.run_pi.called
+    assert pi_session.run_pi.called
     # ...and the delivery was NOT marked blocked.
     assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
     # The failure is logged like the in-stream callback.
@@ -1365,7 +1366,7 @@ def test_process_issue_started_scene_has_no_duplicate_milestone(
                                   "xqliu/orbi")
 
     assert result.url == "https://github.com/xqliu/orbi/pull/40"
-    assert runner.run_pi.called
+    assert pi_session.run_pi.called
     assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
     # The ensure itself succeeded; the scene comment is the sole
     # started announcement...
@@ -1648,7 +1649,7 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
         "base_ref": "main", "base_oid": "b1",
         "head_ref": "h", "head_oid": "h1",
     })
-    monkeypatch.setattr(runner, "run_review", lambda *a, **k: verdict)
+    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: verdict)
     # CI-as-gate is exercised in test_review_merge; keep this fixture focused
     # on ProgressPublisher's bypass behavior. Issue #788: the gate's CI read
     # is one-shot inside merge_gate itself, so no separate stub is needed.
@@ -2252,7 +2253,7 @@ def test_process_issue_claims_external_pr_and_skips_run_pi(
     assert result.kind == "external-pr"
     assert result.url == "https://github.com/xqliu/orbi/pull/592"
     # The implementer never ran: the review loop is the FIRST touch.
-    assert not runner.run_pi.called
+    assert not pi_session.run_pi.called
     # The worktree was created on the contributor's head branch.
     assert worktree_calls[0]["branch"] == "fix/outer"
     assert worktree_calls[0]["pr_number"] == 592
@@ -2287,7 +2288,7 @@ def test_process_issue_external_pr_closed_claims_fresh(monkeypatch, tmp_path):
     result = runner.process_issue(issue, make_config(tmp_path), "xqliu/orbi")
     assert result.kind == "pr"
     assert result.url == "https://github.com/xqliu/orbi/pull/40"
-    assert runner.run_pi.called
+    assert pi_session.run_pi.called
 
 
 def _external_wait_fake(monkeypatch, *, pr_state, fail_progress=None):
@@ -2476,7 +2477,7 @@ def test_process_ticket_only_publishes_the_bound_context(monkeypatch):
     monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        runner, "run_ticket_agent", lambda *args, **kwargs: "content")
+        pi_session, "run_ticket_agent", lambda *args, **kwargs: "content")
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "")
     monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: seen.append(kwargs))

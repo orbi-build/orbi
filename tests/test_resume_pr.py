@@ -19,6 +19,7 @@ import pytest
 
 import orbi.gitops as gitops
 import orbi.runner as runner
+import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 from orbi import progress
 from orbi import scene as scene_mod
@@ -1586,11 +1587,11 @@ def test_run_pi_fresh_context_has_no_existing_pr(monkeypatch, tmp_path):
     prompt_path.write_text("SYSTEM", encoding="utf-8")
     calls = []
     monkeypatch.setattr(
-        runner, "stream_pi",
+        pi_session, "stream_pi",
         lambda command, **kwargs: calls.append((command, kwargs)) or "done",
     )
     config = config_domain.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id=FAKE_RUN_ID)
-    runner.run_pi({"number": 9, "title": "t", "body": "b"}, RunContext(run_id=config.run_id, issue={"number": 9, "title": "t", "body": "b"}["number"], branch=FAKE_BRANCH, worktree=tmp_path, source_repo="owner/repo"), config)
+    pi_session.run_pi({"number": 9, "title": "t", "body": "b"}, RunContext(run_id=config.run_id, issue={"number": 9, "title": "t", "body": "b"}["number"], branch=FAKE_BRANCH, worktree=tmp_path, source_repo="owner/repo"), config)
     context = calls[0][0][-1]
     assert "Existing PR:" not in context
 

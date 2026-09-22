@@ -17,6 +17,7 @@ import pytest
 
 import orbi.repo_config as repo_config
 import orbi.runner as runner
+import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 from seam import seam
 from orbi.delivery_scene import RunContext
@@ -668,10 +669,10 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
     monkeypatch.setattr(seam, "create_worktree", lambda *a, **k: tmp_path / "wt",
     )
     monkeypatch.setattr(runner, "write_run_state", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "resume_context", lambda worktree: None)
-    monkeypatch.setattr(runner, "apply_runner_runtime_excludes", lambda *a: None)
+    monkeypatch.setattr(pi_session, "resume_context", lambda worktree: None)
+    monkeypatch.setattr(pi_session, "apply_runner_runtime_excludes", lambda *a: None)
     monkeypatch.setattr(
-        runner, "run_pi",
+        pi_session, "run_pi",
         lambda issue, ctx, config, **kwargs: "done",
     )
     monkeypatch.setattr(
@@ -879,10 +880,10 @@ def test_run_pi_injects_repo_context_files(monkeypatch, tmp_path):
     (tmp_path / "AGENTS.md").write_text("guide", encoding="utf-8")
     calls = []
     monkeypatch.setattr(
-        runner, "stream_pi",
+        pi_session, "stream_pi",
         lambda command, **kwargs: calls.append(command) or "done",
     )
-    monkeypatch.setattr(runner, "prepare_pi_agent_dir", lambda *a, **k: None)
+    monkeypatch.setattr(pi_session, "prepare_pi_agent_dir", lambda *a, **k: None)
     config = config_domain.RunnerConfig(
         prompt=prompt, repo_dir=tmp_path,
         source_repos=("owner/repo",), workspace_root=tmp_path,
@@ -890,7 +891,7 @@ def test_run_pi_injects_repo_context_files(monkeypatch, tmp_path):
         base_sha="sha", run_id="run1",
         repo_context_files=("AGENTS.md",),
     )
-    assert runner.run_pi(
+    assert pi_session.run_pi(
         {"number": 4, "title": "T", "body": "b"},
         runner.RunContext(
             run_id=config.run_id, issue=4, branch="orbi/owner-repo-issue-4",

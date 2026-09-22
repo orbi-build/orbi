@@ -20,6 +20,7 @@
     "pi_command": 0,
     "pi_process": 19,
     "pi_recovery": 51,
+    "pi_session": 114,
     "pilot_setup": 18,
     "pilot_slots": 0,
     "progress": 12,
@@ -31,6 +32,6 @@
     "scheduler": 17,
     "systemd_deploy": 0
   },
-  "monkeypatch_setattr_runner": 470,
+  "monkeypatch_setattr_runner": 357,
   "monkeypatch_setattr_runner_string": 6
 }

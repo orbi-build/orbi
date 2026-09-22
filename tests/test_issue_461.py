@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from orbi import pilot_setup, runner, scheduler, systemd_deploy
+import orbi.pi_session as pi_session
 
 # The systemd-shape deployment/setup contract, pinned to the systemd
 # impl on every host (the conftest fixture documents the seam).
@@ -65,7 +66,7 @@ def test_unit_name_is_optional_and_validated(tmp_path):
 
 
 def test_runner_runtime_excludes_cover_worktrees():
-    assert ".worktrees/" in runner.RUNNER_RUNTIME_EXCLUDES
+    assert ".worktrees/" in pi_session.RUNNER_RUNTIME_EXCLUDES
 
 
 def test_setup_excludes_runner_worktrees_and_reports_structured_change(tmp_path):
