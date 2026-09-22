@@ -666,10 +666,19 @@ def test_apply_milestone_command_reports_all_three_steps(monkeypatch):
 # --- receipts -------------------------------------------------------------
 
 
-def test_identity_helpers_reject_unreadable_input():
-    assert milestone_command.authenticated_login() == (
-        milestone_command.authenticated_login()
+def test_identity_helpers_reject_unreadable_input(monkeypatch):
+    # The active account comes from `gh auth status`; stub that credential
+    # read so the assertion pins this module's delegation and the gh argument
+    # list instead of whichever account happens to be logged into the machine
+    # running the suite (CI machines have none, and the real call fails there).
+    commands = []
+    monkeypatch.setattr(
+        seam, "run_gh_read_command",
+        lambda command, **kwargs: commands.append(command) or (
+            "account orbi-build[bot]\nActive account: true\n"),
     )
+    assert milestone_command.authenticated_login() == "orbi-build[bot]"
+    assert commands == [["gh", "auth", "status", "--hostname", "github.com"]]
     assert milestone_command.comment_author_login(None) is None
     assert milestone_command.comment_author_login("just a body") is None
     assert milestone_command.same_github_identity(None, "orbi-build") is False
