@@ -17,6 +17,7 @@ from unittest.mock import Mock, call as mock_call
 import pytest
 
 import orbi.runner as runner
+import orbi.milestone as milestone
 import orbi.release as release
 from seam import seam
 import orbi.journal as journal
@@ -358,10 +359,10 @@ def test_publish_plan_milestone_posts_only_when_plan_exists(tmp_path):
     posted = []
     publisher = Mock()
     publisher.milestone = Mock(side_effect=lambda text: posted.append(text))
-    runner._publish_plan_milestone(publisher, tmp_path)
+    milestone._publish_plan_milestone(publisher, tmp_path)
     assert posted == []
     (tmp_path / ".orbi" / "plan.md").write_text("# Plan\n", encoding="utf-8")
-    runner._publish_plan_milestone(publisher, tmp_path)
+    milestone._publish_plan_milestone(publisher, tmp_path)
     assert posted == ["plan ready"]
 
 
@@ -370,23 +371,23 @@ def test_publish_test_milestone_posts_passed_or_failed(tmp_path):
     publisher = Mock()
     publisher.milestone = Mock(side_effect=lambda text: posted.append(text))
     # No test.log: nothing is posted.
-    runner._publish_test_milestone(publisher, tmp_path)
+    milestone._publish_test_milestone(publisher, tmp_path)
     assert posted == []
     (tmp_path / ".orbi" / "test.log").write_text(
         "156 passed in 4.43s\n", encoding="utf-8",
     )
-    runner._publish_test_milestone(publisher, tmp_path)
+    milestone._publish_test_milestone(publisher, tmp_path)
     assert posted == ["tests passed: 156 passed in 4.43s"]
     posted.clear()
     (tmp_path / ".orbi" / "test.log").write_text(
         "1 failed, 155 passed in 4.43s\n", encoding="utf-8",
     )
-    runner._publish_test_milestone(publisher, tmp_path)
+    milestone._publish_test_milestone(publisher, tmp_path)
     assert posted == ["tests failed: 1 failed, 155 passed in 4.43s"]
 
 
 @pytest.mark.parametrize(
-    ("result", "milestone"),
+    ("result", "expected_milestone"),
     [
         (
             "RESULT: check exit=0, suite finished with 2 failed",
@@ -412,7 +413,7 @@ def test_publish_test_milestone_posts_passed_or_failed(tmp_path):
     ],
 )
 def test_publish_test_milestone_classifies_results_by_verdict(
-    tmp_path, result, milestone,
+    tmp_path, result, expected_milestone,
 ):
     posted = []
     publisher = Mock()
@@ -422,9 +423,9 @@ def test_publish_test_milestone_classifies_results_by_verdict(
         result + "\n", encoding="utf-8",
     )
 
-    runner._publish_test_milestone(publisher, tmp_path)
+    milestone._publish_test_milestone(publisher, tmp_path)
 
-    assert posted == [f"{milestone}: {result}"]
+    assert posted == [f"{expected_milestone}: {result}"]
 
 
 def test_publish_test_milestone_detects_failure_case_insensitively(
@@ -440,7 +441,7 @@ def test_publish_test_milestone_detects_failure_case_insensitively(
         "FAILED tests/test_b.py::test_b_fails - assert 1 == 2\n",
         encoding="utf-8",
     )
-    runner._publish_test_milestone(publisher, tmp_path)
+    milestone._publish_test_milestone(publisher, tmp_path)
     assert posted == [
         "tests failed: FAILED tests/test_b.py::test_b_fails - assert 1 == 2",
     ]
@@ -458,13 +459,13 @@ def test_publish_test_milestone_posts_nothing_when_no_tests_ran(
         "collected 0 items\nno tests ran in 0.01s\n",
         encoding="utf-8",
     )
-    runner._publish_test_milestone(publisher, tmp_path)
+    milestone._publish_test_milestone(publisher, tmp_path)
     assert posted == []
     posted.clear()
     (tmp_path / ".orbi" / "test.log").write_text(
         "3 deselected in 0.02s\n", encoding="utf-8",
     )
-    runner._publish_test_milestone(publisher, tmp_path)
+    milestone._publish_test_milestone(publisher, tmp_path)
     assert posted == []
 
 
