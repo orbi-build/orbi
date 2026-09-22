@@ -21,6 +21,7 @@ import pytest
 import orbi.runner as runner
 import orbi.milestone as milestone
 import orbi.release as release
+import orbi.release_git as release_git
 import orbi.github as github
 from orbi import pi_activity, pi_process, progress
 from tests.fakes.github import FakeGh
@@ -17920,6 +17921,148 @@ def test_prepare_release_version_is_idempotent(tmp_path, monkeypatch):
     assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": work})]
 
 
+def make_release_race_clones(tmp_path):
+    """A bare origin plus two clones of the same v0.2.0 base (Issue #1289).
+
+    Models two independent Runner instances releasing the same version from
+    the same frozen base: each clone owns a real `origin` remote.
+    """
+    remote = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", str(remote)],
+        check=True, capture_output=True,
+    )
+    seed = tmp_path / "seed"
+    subprocess.run(
+        ["git", "init", "-b", "main", str(seed)],
+        check=True, capture_output=True,
+    )
+    for key, value in (("user.email", "t@t"), ("user.name", "t"),
+                       ("commit.gpgsign", "false"),
+                       ("tag.gpgsign", "false")):
+        subprocess.run(
+            ["git", "-C", str(seed), "config", key, value],
+            check=True, capture_output=True,
+        )
+    (seed / "pyproject.toml").write_text(
+        '[project]\nname = "orbi"\nversion = "0.2.0"\n', encoding="utf-8",
+    )
+    package = seed / "src" / "orbi"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        '__version__ = "0.2.0"\n', encoding="utf-8",
+    )
+    subprocess.run(
+        ["git", "-C", str(seed), "add", "."],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(seed), "commit", "-m", "base"],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(seed), "remote", "add", "origin", str(remote)],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(seed), "push", "origin", "main"],
+        check=True, capture_output=True,
+    )
+    winner = tmp_path / "winner"
+    loser = tmp_path / "loser"
+    for clone in (winner, loser):
+        subprocess.run(
+            ["git", "clone", str(remote), str(clone)],
+            check=True, capture_output=True,
+        )
+        for key, value in (("user.email", "t@t"), ("user.name", "t"),
+                           ("commit.gpgsign", "false"),
+                           ("tag.gpgsign", "false")):
+            subprocess.run(
+                ["git", "-C", str(clone), "config", key, value],
+                check=True, capture_output=True,
+            )
+    return winner, loser
+
+
+def _git_output(cwd, *args):
+    return subprocess.run(
+        ["git", "-C", str(cwd), *args],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def test_prepare_release_version_yields_when_concurrent_instance_won(
+    tmp_path, monkeypatch,
+):
+    """Issue #1289: the loser of the version-push race fetches, proves the
+    remote head content-equivalent to its own version commit, and yields
+    instead of failing the release ticket."""
+    winner, loser = make_release_race_clones(tmp_path)
+    # The two independent instances commit at different wall-clock times,
+    # so the identical content yields two distinct commit SHAs and the
+    # loser's plain push really is rejected.
+    monkeypatch.setenv("GIT_AUTHOR_DATE", "2026-01-01T00:00:00")
+    monkeypatch.setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:00")
+    winner_commit = release.prepare_release_version(winner, "v0.3.0", "main")
+    winner_tree = _git_output(winner, "rev-parse", "HEAD^{tree}")
+    monkeypatch.setenv("GIT_AUTHOR_DATE", "2026-01-01T01:00:00")
+    monkeypatch.setenv("GIT_COMMITTER_DATE", "2026-01-01T01:00:00")
+
+    with pytest.raises(release.ReleaseVersionAlreadyLanded) as excinfo:
+        release.prepare_release_version(
+            loser, "v0.3.0", "main", repo_dir=loser,
+        )
+
+    assert excinfo.value.tag == "v0.3.0"
+    assert excinfo.value.base_branch == "main"
+    assert excinfo.value.remote_commit == winner_commit
+    # The rejected push carried the same content; the fetch updated the
+    # shared remote-tracking ref to the landed commit.
+    assert _git_output(loser, "rev-parse", "HEAD^{tree}") == winner_tree
+    assert _git_output(loser, "rev-parse", "origin/main") == winner_commit
+
+
+def test_prepare_release_version_rejects_unrelated_remote_commit(tmp_path):
+    """Issue #1289 failure path: the push is rejected and the remote head is
+    unrelated, so the original push failure is re-raised unchanged."""
+    winner, loser = make_release_race_clones(tmp_path)
+    (winner / "unrelated.txt").write_text("unrelated\n", encoding="utf-8")
+    _git_output(winner, "add", "unrelated.txt")
+    _git_output(winner, "commit", "-m", "unrelated change")
+    _git_output(winner, "push", "origin", "main")
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        release.prepare_release_version(
+            loser, "v0.3.0", "main", repo_dir=loser,
+        )
+
+    assert "rejected" in (excinfo.value.stderr or "")
+
+
+def test_push_prepared_release_version_reraises_a_plain_push_failure(
+    tmp_path, monkeypatch,
+):
+    """Issue #1289: a push failing for any reason other than an advanced
+    remote ref is not the race — it propagates unchanged, without fetching
+    or second-guessing the failure."""
+    calls = []
+
+    def broken_push(command, **kwargs):
+        calls.append(command)
+        raise subprocess.CalledProcessError(
+            128, command, stderr="fatal: unable to access the remote",
+        )
+
+    monkeypatch.setattr(seam, "run_git_network_command", broken_push)
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        release_git.push_prepared_release_version(
+            tmp_path, "v0.3.0", "main", tmp_path,
+        )
+    assert "unable to access" in (excinfo.value.stderr or "")
+    assert calls == [["git", "push", "origin", "HEAD:refs/heads/main"]]
+
+
 def test_release_tag_commit_returns_none_for_missing_remote_tag(tmp_path):
     work, _ = make_local_remote_pair(tmp_path)
     assert release.release_tag_commit(work, "v9.9.9") is None
@@ -18547,7 +18690,8 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                              in_progress=False, existing_run_id=None,
                              check_run_pages=None, milestone_items=None,
                              leftover_labels=None, leftover_milestones=None,
-                             release_tree_files=("pyproject.toml", "package.json")):
+                             release_tree_files=("pyproject.toml", "package.json"),
+                             prepare_release_version_error=None):
     """Full fake environment for `process_release`.
 
     Returns a dict of captured state: edit_issue / comment_issue calls,
@@ -18713,8 +18857,14 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     monkeypatch.setattr(release, "LOGGER", Mock())
     monkeypatch.setattr(release, "release_tag_commit",
                         lambda r, t: tag_commit)
+
+    def fake_prepare_release_version(worktree, tag, base_branch, **kwargs):
+        if prepare_release_version_error is not None:
+            raise prepare_release_version_error
+        return "abc123"
+
     monkeypatch.setattr(release, "prepare_release_version",
-                        lambda worktree, tag, base_branch: "abc123")
+                        fake_prepare_release_version)
     monkeypatch.setattr(seam, "refresh_cli_install",
         lambda worktree, **kwargs: "installed",
     )
@@ -18838,7 +18988,7 @@ def test_process_release_uses_declared_package_version_file(monkeypatch):
     seen = []
     monkeypatch.setattr(
         release, "prepare_release_version",
-        lambda *args: seen.append(args) or "abc123",
+        lambda *args, **kwargs: seen.append(args) or "abc123",
     )
     body = RELEASE_DECLARATION_BODY.replace(
         "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: package.json\n",
@@ -18861,7 +19011,7 @@ def test_process_release_blocks_at_claim_when_default_version_file_missing(monke
     seen = []
     monkeypatch.setattr(
         release, "prepare_release_version",
-        lambda *args: seen.append(args) or "abc123",
+        lambda *args, **kwargs: seen.append(args) or "abc123",
     )
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
@@ -18903,6 +19053,69 @@ def test_process_release_blocks_when_declared_version_file_missing(monkeypatch):
     failure = [k["body"] for n, k in state["comments"]
                if n == 99 and "ai-blocked" in k["body"]]
     assert failure and "package.json" in failure[0]
+
+
+def test_process_release_yields_claim_when_version_already_landed(
+    monkeypatch, caplog,
+):
+    """Issue #1289: a concurrent release instance already pushed the same
+    version commit. The run yields — `claim_yield`, the ticket returns to
+    the ready queue — and it is never rewritten `ai-blocked`."""
+    state = make_release_process_env(
+        monkeypatch,
+        prepare_release_version_error=release.ReleaseVersionAlreadyLanded(
+            "v0.3.0", "main", "abc123",
+        ),
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
+        result = release.process_release(
+            issue,
+            config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
+            "o/r",
+        )
+    assert result == ""
+    # Yielded, not blocked: `ai-ready` replaces `ai-in-progress`.
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-ready",
+                                       "remove": "ai-in-progress"})
+    assert not any(
+        edit[1].get("add") == "ai-blocked" for edit in state["edits"]
+    )
+    assert "claim_yield" in caplog.text
+    assert "reason=release_version_already_landed" in caplog.text
+    assert "remote_commit=abc123" in caplog.text
+    yield_comments = [k["body"] for n, k in state["comments"]
+                      if n == 99 and "yielded" in k["body"]]
+    assert yield_comments
+    # The yield comment must not seed the deliveries wait timer.
+    assert "waiting for deliveries" not in yield_comments[0]
+
+
+def test_process_release_blocks_when_version_push_rejected(monkeypatch, caplog):
+    """Issue #1289 failure path: a rejected push whose remote head is not
+    content-equivalent keeps the existing `ai-blocked` semantics, and no
+    claim is yielded."""
+    state = make_release_process_env(
+        monkeypatch,
+        prepare_release_version_error=subprocess.CalledProcessError(
+            1, ["git", "push"], stderr="! [rejected] (fetch first)",
+        ),
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
+        result = release.process_release(
+            issue,
+            config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
+            "o/r",
+        )
+    assert result == ""
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+                                       "remove": "ai-in-progress"})
+    assert "claim_yield" not in caplog.text
 
 
 def test_process_release_success_end_to_end(monkeypatch):
@@ -19149,7 +19362,7 @@ def test_process_release_refreshes_deployment_cli_after_version_bump(
     order = []
     monkeypatch.setattr(
         release, "prepare_release_version",
-        lambda worktree, tag, base_branch: order.append("version") or "abc123",
+        lambda worktree, tag, base_branch, **kwargs: order.append("version") or "abc123",
     )
 
     def refresh(repo_dir, **kwargs):
