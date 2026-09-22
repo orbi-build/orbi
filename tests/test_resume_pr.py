@@ -3259,11 +3259,17 @@ def _deliver_scene_gh(monkeypatch):
 
 
 def _deliver_verify(worktree, tmp_path):
+    """The REAL deliver-path call (runner.py `deliver_pr`'s closeout).
+
+    `deliver_pr` passes neither `pr_repo` nor `expected_url`, so the
+    marker source cannot depend on `pr_repo` — the repo the delivery
+    already knows is its own source repo. A test that hands `pr_repo`
+    in verifies a call shape production never makes (Issue #1300).
+    """
     return runner.verify_pr(
         RunContext(run_id=RECLAIM_RUN_ID, issue=9, branch=FAKE_BRANCH,
                    worktree=worktree, source_repo="owner/repo"),
-        "main", repo_dir=tmp_path, pr_repo="owner/repo",
-        require_latest_base=False,
+        "main", repo_dir=tmp_path, require_latest_base=False,
     )
 
 
@@ -3331,3 +3337,42 @@ def test_deliver_path_rejects_a_marker_only_an_untrusted_comment_carries(
     worktree.mkdir()
     with pytest.raises(RuntimeError, match="missing the stable run marker"):
         _deliver_verify(worktree, tmp_path)
+
+
+def test_deliver_closeout_continues_on_the_creating_runs_existing_pr(
+    monkeypatch, tmp_path,
+):
+    """Issue #1300, the real user path: the `deliver_pr` closeout finds
+    the open PR an EARLIER run of this Issue created, skips creation and
+    returns the verified URL — the delivery continues to review instead
+    of stopping at `ai-blocked` with
+    "PR body is missing the stable run marker ...".
+
+    The closeout is driven for real (one FakeGh at the subprocess seam
+    plus the local git reads it makes); only `verify_pr`'s own call
+    shape is what production uses — no `pr_repo`, no `expected_url`.
+    """
+    fake = FakeGh("owner/repo")
+    fake.add_issue(9, labels=("ai-ready",), state="open")
+    fake.add_pr(9, head=FAKE_BRANCH, oid="head", body=(
+        f"{runner.run_marker(CREATING_RUN_ID)}\n\nFixes #9\n"
+    ))
+    fake.comment(9, f"Orbi opened PR: {runner.run_marker(CREATING_RUN_ID)}")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    git_reads = {
+        "status": "", "rev-parse": "head", "fetch": "",
+        "merge-base": "", "push": "", "branch": FAKE_BRANCH,
+    }
+
+    def run(command, **kwargs):
+        if command[0] == "git":
+            return git_reads[command[1]]
+        return fake(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", run)
+    ctx = RunContext(run_id=RECLAIM_RUN_ID, issue=9, branch=FAKE_BRANCH,
+                     worktree=worktree, source_repo="owner/repo")
+    assert runner.deliver_pr(
+        ctx, "main", "c0000", issue_title="t", repo_dir=tmp_path,
+    ) == FAKE_PR_URL
