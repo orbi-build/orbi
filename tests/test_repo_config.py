@@ -17,6 +17,7 @@ import pytest
 
 import orbi.repo_config as repo_config
 import orbi.runner as runner
+import orbi.milestone as milestone
 from seam import seam
 from orbi.delivery_scene import RunContext
 
@@ -464,7 +465,7 @@ def test_pick_next_delivery_in_flight_scan_uses_the_repo_dispatch_label(
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda *a, **k: None)
     monkeypatch.setattr(
-        runner, "reconcile_release_milestones", lambda *a, **k: None,
+        milestone, "reconcile_release_milestones", lambda *a, **k: None,
     )
     config = config_domain.RunnerConfig()
     assert runner.pick_next_delivery(
@@ -494,7 +495,7 @@ def test_pick_next_delivery_in_flight_scan_falls_back_on_a_malformed_file(
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda *a, **k: None)
     monkeypatch.setattr(
-        runner, "reconcile_release_milestones", lambda *a, **k: None,
+        milestone, "reconcile_release_milestones", lambda *a, **k: None,
     )
     assert runner.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1,

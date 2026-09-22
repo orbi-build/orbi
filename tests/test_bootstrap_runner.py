@@ -19,6 +19,7 @@ from unittest.mock import Mock
 import pytest
 
 import orbi.runner as runner
+import orbi.milestone as milestone
 import orbi.release as release
 import orbi.github as github
 from orbi import pi_activity, pi_process, progress
@@ -306,7 +307,7 @@ def test_sync_active_milestone_variable_skips_matching_value():
         calls.append((args, kwargs))
         return '{"name":"ORBI_ACTIVE_MILESTONE","value":"v1"}'
 
-    runner.sync_active_milestone_variable("owner/repo", "v1", run_command=command)
+    milestone.sync_active_milestone_variable("owner/repo", "v1", run_command=command)
     assert len(calls) == 1
     # The read may 404 by design (no variable yet): its generic
     # command_failed line must stay at DEBUG (Issue #1085).
@@ -320,7 +321,7 @@ def test_sync_active_milestone_variable_patches_different_value():
         calls.append(args)
         return '{"name":"ORBI_ACTIVE_MILESTONE","value":"v0"}' if len(calls) == 1 else "{}"
 
-    runner.sync_active_milestone_variable("owner/repo", "v1", run_command=command)
+    milestone.sync_active_milestone_variable("owner/repo", "v1", run_command=command)
     assert calls[1][:5] == ["gh", "api", "-X", "PATCH", "repos/owner/repo/actions/variables/ORBI_ACTIVE_MILESTONE"]
     assert "value=v1" in calls[1]
 
@@ -342,7 +343,7 @@ def test_sync_active_milestone_variable_creates_missing_value(caplog, monkeypatc
 
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
     with caplog.at_level(logging.DEBUG):
-        runner.sync_active_milestone_variable("owner/repo", "v1")
+        milestone.sync_active_milestone_variable("owner/repo", "v1")
     assert calls[1][:4] == ["gh", "api", "-X", "POST"]
     assert "value=v1" in calls[1]
     failed = [
@@ -353,6 +354,25 @@ def test_sync_active_milestone_variable_creates_missing_value(caplog, monkeypatc
     assert "active_milestone_variable_created repo=owner/repo" in caplog.text
 
 
+def test_sync_active_milestone_variable_create_failure_is_bypassed(caplog):
+    calls = 0
+
+    def command(args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise subprocess.CalledProcessError(1, args, stderr="HTTP 404")
+        raise RuntimeError("create denied")
+
+    with caplog.at_level("ERROR"):
+        milestone.sync_active_milestone_variable(
+            "owner/repo", "v1", run_command=command,
+        )
+
+    assert calls == 2
+    assert "active_milestone_variable_sync_failed repo=owner/repo" in caplog.text
+
+
 def test_sync_active_milestone_variable_removes_stale_value():
     calls = []
 
@@ -360,7 +380,7 @@ def test_sync_active_milestone_variable_removes_stale_value():
         calls.append(args)
         return '{"name":"ORBI_ACTIVE_MILESTONE","value":"v0"}' if len(calls) == 1 else "{}"
 
-    runner.sync_active_milestone_variable("owner/repo", None, run_command=command)
+    milestone.sync_active_milestone_variable("owner/repo", None, run_command=command)
     assert calls[1] == [
         "gh", "api", "-X", "DELETE",
         "repos/owner/repo/actions/variables/ORBI_ACTIVE_MILESTONE",
@@ -387,7 +407,7 @@ def test_sync_active_milestone_variable_absent_on_404(caplog, monkeypatch):
 
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
     with caplog.at_level(logging.DEBUG):
-        runner.sync_active_milestone_variable("owner/repo", None)
+        milestone.sync_active_milestone_variable("owner/repo", None)
     assert calls == [
         ["gh", "api", "repos/owner/repo/actions/variables/ORBI_ACTIVE_MILESTONE"],
     ]
@@ -404,7 +424,7 @@ def test_sync_active_milestone_variable_read_403_logs_sync_failed_at_error(caplo
         raise subprocess.CalledProcessError(1, args, stderr="HTTP 403")
 
     with caplog.at_level("ERROR"):
-        runner.sync_active_milestone_variable(
+        milestone.sync_active_milestone_variable(
             "owner/repo", None, run_command=command,
         )
     failed = [
@@ -420,7 +440,7 @@ def test_sync_active_milestone_variable_failure_is_bypass(caplog):
         raise RuntimeError("offline")
 
     with caplog.at_level("ERROR"):
-        runner.sync_active_milestone_variable("owner/repo", "v1", run_command=command)
+        milestone.sync_active_milestone_variable("owner/repo", "v1", run_command=command)
     assert "active_milestone_variable_sync_failed" in caplog.text
 
 
@@ -678,15 +698,15 @@ def test_pick_issue_fails_open_when_blocked_by_query_fails(
 
 def test_validate_active_milestone_none_is_unchanged(monkeypatch):
     monkeypatch.setitem(runner.__dict__, "list_milestones", lambda *args, **kwargs: pytest.fail("no lookup"))
-    runner.validate_active_milestone("owner/repo", None)
+    milestone.validate_active_milestone("owner/repo", None)
 
 
 def test_validate_active_milestone_missing_fails_with_repair_facts(monkeypatch, caplog):
-    monkeypatch.setitem(runner.__dict__, "list_milestones", lambda *args, **kwargs: [
+    monkeypatch.setitem(milestone.__dict__, "list_milestones", lambda *args, **kwargs: [
         {"title": "v1", "state": "open"},
     ])
     with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="state=absent"):
-        runner.validate_active_milestone("owner/repo", "v9")
+        milestone.validate_active_milestone("owner/repo", "v9")
     assert "active_milestone_missing" in caplog.text
     assert "open_milestones=v1" in caplog.text
 
@@ -695,7 +715,7 @@ def test_validate_active_milestone_missing_fails_with_repair_facts(monkeypatch, 
 def test_validate_active_milestone_closed_is_informational(
     monkeypatch, caplog, ready_issues,
 ):
-    monkeypatch.setitem(runner.__dict__, "list_milestones", lambda *args, **kwargs: [
+    monkeypatch.setitem(milestone.__dict__, "list_milestones", lambda *args, **kwargs: [
         {"title": "v1", "state": "closed"},
     ])
     seen = {}
@@ -705,9 +725,9 @@ def test_validate_active_milestone_closed_is_informational(
         seen.update(kwargs)
         return ready_issues
 
-    monkeypatch.setitem(runner.__dict__, "list_issues", fake_list_issues)
+    monkeypatch.setitem(milestone.__dict__, "list_issues", fake_list_issues)
     with caplog.at_level(logging.INFO):
-        runner.validate_active_milestone("owner/repo", "v1")
+        milestone.validate_active_milestone("owner/repo", "v1")
     assert "active_milestone_closed" in caplog.text
     assert f"ai_ready_count={len(ready_issues)}" in caplog.text
     assert seen == {
@@ -718,11 +738,11 @@ def test_validate_active_milestone_closed_is_informational(
 
 
 def test_validate_active_milestone_open_is_valid(monkeypatch):
-    monkeypatch.setitem(runner.__dict__, "list_milestones", lambda *args, **kwargs: [
+    monkeypatch.setitem(milestone.__dict__, "list_milestones", lambda *args, **kwargs: [
         {"title": "v1", "state": "open"},
     ])
     monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: pytest.fail("no ready scan"))
-    runner.validate_active_milestone("owner/repo", "v1")
+    milestone.validate_active_milestone("owner/repo", "v1")
 
 
 def test_missing_effective_repository_milestone_fails_before_slot(
@@ -739,7 +759,7 @@ def test_missing_effective_repository_milestone_fails_before_slot(
         lambda loaded, repo: runner.RepoPolicy(active_milestone="repo-v2"),
     )
     monkeypatch.setitem(
-        runner.__dict__, "list_milestones",
+        milestone.__dict__, "list_milestones",
         lambda repo, **kwargs: [{"title": "host-v1", "state": "open"}],
     )
     monkeypatch.setitem(
@@ -6259,11 +6279,16 @@ def test_parse_milestone_version_accepts_only_strict_semver():
     assert runner._parse_version_title("v1.2.3.4") is None
 
 
+def _advance_active_milestone_on_idle(*args, **kwargs):
+    kwargs.setdefault("parse_version_title", runner._parse_version_title)
+    return milestone.advance_active_milestone_on_idle(*args, **kwargs)
+
+
 def test_rewrite_active_milestone_line_preserves_all_other_bytes(tmp_path):
     config = tmp_path / "orbi.toml"
     original = '# keep \r\nsource_repos = ["owner/repo"]\r\nactive_milestone = \'v0.3.0\'\r\nother = "x"\r\n'
     config.write_bytes(original.encode())
-    runner.rewrite_active_milestone_line(config, "v0.3.1")
+    milestone.rewrite_active_milestone_line(config, "v0.3.1")
     assert config.read_bytes() == original.replace(
         "active_milestone = 'v0.3.0'", 'active_milestone = "v0.3.1"',
     ).encode()
@@ -6273,7 +6298,7 @@ def test_rewrite_active_milestone_line_fails_when_missing(tmp_path):
     config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     with pytest.raises(RuntimeError, match="active_milestone line not found"):
-        runner.rewrite_active_milestone_line(config, "v0.3.1")
+        milestone.rewrite_active_milestone_line(config, "v0.3.1")
 
 
 def test_advance_active_milestone_pending_creates_one_p0_ready_issue(
@@ -6296,7 +6321,7 @@ def test_advance_active_milestone_pending_creates_one_p0_ready_issue(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.advance_active_milestone_on_idle(
+        assert _advance_active_milestone_on_idle(
             "owner/repo", "v0.3.0", config, auto_next_milestone=False,
         ) == ("closed", None)
     assert config.read_text() == 'active_milestone = "v0.3.0"\n'
@@ -6326,7 +6351,7 @@ def test_advance_active_milestone_manual_notification_is_not_pickupable(
         ),
     )
 
-    runner.advance_active_milestone_on_idle(
+    _advance_active_milestone_on_idle(
         "owner/repo", "v0.3.0", config, auto_next_milestone=False,
     )
 
@@ -6355,7 +6380,7 @@ def test_advance_active_milestone_closes_old_manual_notification_after_manual_mo
         return json.dumps([[{"title": "v0.4.0", "state": "open"}]])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.advance_active_milestone_on_idle(
+    assert _advance_active_milestone_on_idle(
         "owner/repo", "v0.4.0", config, auto_next_milestone=False,
     ) == ("open", None)
     close = next(command for command in calls if command[:3] == ["gh", "issue", "close"])
@@ -6378,7 +6403,7 @@ def test_advance_active_milestone_close_failure_is_bypassed(
 
     monkeypatch.setattr(seam, "run_command", fail_close)
     with caplog.at_level("ERROR"):
-        assert runner.advance_active_milestone_on_idle(
+        assert _advance_active_milestone_on_idle(
             "owner/repo", "v0.4.0", config,
         ) == ("open", None)
     assert "stale_milestone_issue_close_failed repo=owner/repo active=v0.4.0" in caplog.text
@@ -6398,8 +6423,8 @@ def test_advance_active_milestone_closure_is_idempotent_on_repeated_tick(
         ),
     )
 
-    runner.advance_active_milestone_on_idle("owner/repo", "v0.4.0", config)
-    runner.advance_active_milestone_on_idle("owner/repo", "v0.4.0", config)
+    _advance_active_milestone_on_idle("owner/repo", "v0.4.0", config)
+    _advance_active_milestone_on_idle("owner/repo", "v0.4.0", config)
 
     assert not any(command[:3] == ["gh", "issue", "close"] for command in calls)
 
@@ -6422,7 +6447,7 @@ def test_advance_active_milestone_pending_issue_failure_is_bypassed(
 
     monkeypatch.setattr(seam, "run_command", fail_pending)
     with caplog.at_level("ERROR"):
-        assert runner.advance_active_milestone_on_idle(
+        assert _advance_active_milestone_on_idle(
             "owner/repo", "v0.3.0", config, auto_next_milestone=False,
         ) == ("closed", None)
     assert "pending_milestone_issue_failed repo=owner/repo old=v0.3.0" in caplog.text
@@ -6456,7 +6481,7 @@ def test_pending_milestone_issue_serializes_concurrent_search_and_create(
         return f"https://github.com/owner/repo/issues/{number}"
 
     def call_pending():
-        runner._pending_milestone_issue(
+        milestone._pending_milestone_issue(
             "owner/repo", "v0.3.0", candidates, tmp_path,
         )
 
@@ -6507,10 +6532,10 @@ def test_pending_milestone_issue_deduplicates_after_search_lag(
     monkeypatch.setattr(seam, "list_issues", fake_list)
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level(logging.INFO):
-        runner._pending_milestone_issue(
+        milestone._pending_milestone_issue(
             "owner/repo", "v0.3.0", candidates, tmp_path,
         )
-        runner._pending_milestone_issue(
+        milestone._pending_milestone_issue(
             "owner/repo", "v0.3.0", candidates, tmp_path,
         )
 
@@ -6536,7 +6561,7 @@ def test_advance_active_milestone_pending_is_idempotent(
     ]
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append(command) or responses.pop(0),
     )
-    runner.advance_active_milestone_on_idle(
+    _advance_active_milestone_on_idle(
         "owner/repo", "v0.3.0", config, auto_next_milestone=False,
     )
     assert not any(command[:3] == ["gh", "issue", "create"] for command in calls)
@@ -6555,7 +6580,7 @@ def test_advance_active_milestone_sorts_double_digit_versions_numerically(
         ]]),
     )
 
-    assert runner.advance_active_milestone_on_idle(
+    assert _advance_active_milestone_on_idle(
         "owner/repo", "v0.9.0", config,
     ) == ("closed", "v0.10.0")
 
@@ -6575,7 +6600,7 @@ def test_advance_active_milestone_selects_smallest_higher_open(
         lambda command, **kwargs: json.dumps([milestones]),
     )
     with caplog.at_level("INFO"):
-        assert runner.advance_active_milestone_on_idle(
+        assert _advance_active_milestone_on_idle(
             "owner/repo", "v0.3.0", config,
         ) == ("closed", "v0.3.1")
     assert 'active_milestone = "v0.3.1"\n' == config.read_text()
@@ -6593,7 +6618,7 @@ def test_advance_active_milestone_open_reconciles_notifications_without_write(
             {"title": "v0.3.0", "state": "open"},
         ]]),
     )
-    assert runner.advance_active_milestone_on_idle("owner/repo", "v0.3.0", config) == ("open", None)
+    assert _advance_active_milestone_on_idle("owner/repo", "v0.3.0", config) == ("open", None)
     assert len(calls) == 2
     assert calls[1][:3] == ["gh", "issue", "list"]
     assert config.read_text() == 'active_milestone = "v0.3.0"\n'
@@ -6612,7 +6637,7 @@ def test_advance_active_milestone_closed_without_candidate_logs_and_keeps_value(
         ]]),
     )
     with caplog.at_level("INFO"):
-        assert runner.advance_active_milestone_on_idle(
+        assert _advance_active_milestone_on_idle(
             "owner/repo", "v0.3.0", config,
         ) == ("closed", None)
     assert config.read_text() == 'active_milestone = "v0.3.0"\n'
@@ -6628,7 +6653,7 @@ def test_advance_active_milestone_missing_lists_open_milestones(monkeypatch, tmp
         ]]),
     )
     with pytest.raises(RuntimeError, match=r"active_milestone_missing current=v0.3.0; open milestones: v0.3.1\(8\)"):
-        runner.advance_active_milestone_on_idle("owner/repo", "v0.3.0", config)
+        _advance_active_milestone_on_idle("owner/repo", "v0.3.0", config)
 
 
 def test_advance_active_milestone_rejects_duplicate_title(monkeypatch, tmp_path):
@@ -6641,7 +6666,7 @@ def test_advance_active_milestone_rejects_duplicate_title(monkeypatch, tmp_path)
         ]]),
     )
     with pytest.raises(RuntimeError, match="ambiguous"):
-        runner.advance_active_milestone_on_idle("owner/repo", "v0.3.0", config)
+        _advance_active_milestone_on_idle("owner/repo", "v0.3.0", config)
 
 
 def test_arm_release_ticket_adds_ready_to_matching_open_issue(
@@ -6761,7 +6786,7 @@ def test_main_idle_release_arm_uses_repo_dispatch_label(
 
 
 def test_main_idle_release_arm_failure_is_bypassed(monkeypatch, tmp_path, caplog):
-    monkeypatch.setitem(runner.__dict__, "validate_active_milestone", lambda *args: None)
+    monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args: None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -6773,7 +6798,7 @@ def test_main_idle_release_arm_failure_is_bypassed(monkeypatch, tmp_path, caplog
         runner, "arm_release_ticket",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("permission denied")),
     )
-    monkeypatch.setattr(runner, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
+    monkeypatch.setattr(milestone, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
 
     with caplog.at_level("ERROR"):
         assert runner.main(["--config", str(config)]) == 0
@@ -6786,7 +6811,7 @@ def test_main_idle_advance_failure_is_bypassed(monkeypatch, tmp_path, caplog):
     """Issue #614: the idle milestone advance is a pure bypass — a missing
     or ambiguous `active_milestone` (or any `gh` failure) must not change
     the idle outcome; the tick still returns 0 and only journals."""
-    monkeypatch.setitem(runner.__dict__, "validate_active_milestone", lambda *args: None)
+    monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args: None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -6796,7 +6821,7 @@ def test_main_idle_advance_failure_is_bypassed(monkeypatch, tmp_path, caplog):
     monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        runner, "advance_active_milestone_on_idle",
+        milestone, "advance_active_milestone_on_idle",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             RuntimeError(
                 "active_milestone_missing current=v0.4.0; "
@@ -6871,8 +6896,8 @@ def test_main_uses_outside_milestone_outcome_instead_of_no_ready(
     monkeypatch.setitem(runner.__dict__, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setitem(runner.__dict__, "log_ready_outside_milestone", lambda *args, **kwargs: True)
     monkeypatch.setitem(runner.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
-    monkeypatch.setitem(runner.__dict__, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
-    monkeypatch.setitem(runner.__dict__, "validate_active_milestone", lambda *args: None)
+    monkeypatch.setitem(milestone.__dict__, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
+    monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args: None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -6886,12 +6911,12 @@ def test_main_uses_outside_milestone_outcome_instead_of_no_ready(
 
 def test_main_query_failure_keeps_idle_exit(monkeypatch, tmp_path, caplog):
     monkeypatch.setitem(runner.__dict__, "pick_next_delivery", lambda *args, **kwargs: None)
-    monkeypatch.setitem(runner.__dict__, "validate_active_milestone", lambda *args: None)
+    monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args: None)
     monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: (_ for _ in ()).throw(
         RuntimeError("GitHub unavailable")
     ))
     monkeypatch.setitem(runner.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
-    monkeypatch.setitem(runner.__dict__, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
+    monkeypatch.setitem(milestone.__dict__, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -6921,7 +6946,7 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
     """Issue #139: the configured `active_milestone` reaches the claim
     scan (the fresh-claim scope), and an unconfigured one passes None
     (the compat behavior — no milestone filter)."""
-    monkeypatch.setitem(runner.__dict__, "validate_active_milestone", lambda *args: None)
+    monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args: None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -6936,7 +6961,7 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
 
     monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
     monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
+    monkeypatch.setattr(milestone, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
     assert runner.main(["--config", str(config)]) == 0
     assert seen["milestone"] == "v0.2.0"
 
@@ -6944,7 +6969,7 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
 def test_main_advances_milestone_only_after_no_ready_issue(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setitem(runner.__dict__, "validate_active_milestone", lambda *args: None)
+    monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args: None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -6955,20 +6980,23 @@ def test_main_advances_milestone_only_after_no_ready_issue(
     monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        runner, "advance_active_milestone_on_idle",
+        milestone, "advance_active_milestone_on_idle",
         lambda *args, **kwargs: calls.append((args, kwargs)),
     )
     assert runner.main(["--config", str(config)]) == 0
     assert calls == [
         (("owner/repo", "v0.3.0", config.resolve(), tmp_path.resolve()),
-         {"auto_next_milestone": True}),
+         {
+             "auto_next_milestone": True,
+             "parse_version_title": runner._parse_version_title,
+         }),
     ]
 
 
 def test_main_passes_disabled_auto_next_milestone_to_idle_advance(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setitem(runner.__dict__, "validate_active_milestone", lambda *args: None)
+    monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args: None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -6981,11 +7009,14 @@ def test_main_passes_disabled_auto_next_milestone_to_idle_advance(
     monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        runner, "advance_active_milestone_on_idle",
+        milestone, "advance_active_milestone_on_idle",
         lambda *args, **kwargs: seen.update(kwargs),
     )
     assert runner.main(["--config", str(config)]) == 0
-    assert seen == {"auto_next_milestone": False}
+    assert seen == {
+        "auto_next_milestone": False,
+        "parse_version_title": runner._parse_version_title,
+    }
 
 
 def test_main_passes_none_active_milestone_when_unconfigured(
@@ -15588,6 +15619,7 @@ import time
 
 sys.path.insert(0, {repo!r} + "/src")
 import orbi.runner as runner
+import orbi.milestone as milestone
 from orbi.delivery_scene import RunContext
 
 logging.basicConfig(level=logging.INFO, format=runner.log_format())
@@ -20206,11 +20238,11 @@ def test_reconcile_open_epics_keeps_incomplete_without_comment(monkeypatch, capl
 def test_reconcile_release_milestones_closes_only_published_empty_milestones(monkeypatch, caplog):
     caplog.set_level("INFO")
     calls = []
-    milestone = _milestone(5, "v0.4.0", "open", 0)
+    listed_milestone = _milestone(5, "v0.4.0", "open", 0)
     def fake_run(command, **kwargs):
         calls.append(command)
         if command == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100", "--paginate", "--slurp"]:
-            return json.dumps([[milestone]])
+            return json.dumps([[listed_milestone]])
         if command == ["gh", "api", "repos/o/r/releases?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[{"tag_name": "v0.4.0", "draft": False}]])
         if command == ["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100", "--paginate", "--slurp"]:
@@ -20219,7 +20251,7 @@ def test_reconcile_release_milestones_closes_only_published_empty_milestones(mon
             return ""
         raise AssertionError(command)
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.reconcile_release_milestones("o/r", "abc12345") == ["Milestone #5 (v0.4.0) closed"]
+    assert milestone.reconcile_release_milestones("o/r", "abc12345") == ["Milestone #5 (v0.4.0) closed"]
     assert "milestone_closed number=5 repo=o/r" in caplog.text
     assert calls.index(["gh", "api", "repos/o/r/milestones/5", "--method", "PATCH", "-f", "state=closed"]) > calls.index(["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100", "--paginate", "--slurp"])
     with pytest.raises(AssertionError):
@@ -20236,7 +20268,7 @@ def test_reconcile_release_milestones_keeps_open_without_published_release_or_em
             return json.dumps([[{"tag_name": "v0.4.0", "draft": True}]])
         raise AssertionError(command)
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.reconcile_release_milestones("o/r", "abc12345") == []
+    assert milestone.reconcile_release_milestones("o/r", "abc12345") == []
     assert 'reason="ambiguous title"' in caplog.text
     with pytest.raises(AssertionError):
         fake_run(["unexpected"])
@@ -20287,7 +20319,7 @@ def test_reconcile_release_milestones_keeps_malformed_or_incomplete_open(monkeyp
             return json.dumps([[{"number": 9}]])
         raise AssertionError(command)
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.reconcile_release_milestones("o/r", "abc12345") == []
+    assert milestone.reconcile_release_milestones("o/r", "abc12345") == []
     assert "reason=malformed" in caplog.text
     assert 'reason="open issues"' in caplog.text
     assert 'reason="no published release"' in caplog.text
@@ -20412,7 +20444,7 @@ def test_reconcile_orphan_prs_skips_open_issues_and_non_delivery_branches(monkey
 
 def test_reconcile_orphan_prs_failure_is_fail_open(monkeypatch, caplog):
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "reconcile_release_milestones", lambda *args, **kwargs: None)
+    monkeypatch.setattr(milestone, "reconcile_release_milestones", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "reconcile_orphan_prs", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
     monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
@@ -20425,7 +20457,7 @@ def test_reconcile_orphan_prs_failure_is_fail_open(monkeypatch, caplog):
 
 def test_reconcile_open_epics_failure_is_fail_open(monkeypatch, caplog):
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
-    monkeypatch.setattr(runner, "reconcile_release_milestones", lambda *args, **kwargs: None)
+    monkeypatch.setattr(milestone, "reconcile_release_milestones", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "reconcile_orphan_prs", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
@@ -20441,7 +20473,7 @@ def test_reconcile_open_epics_runs_on_a_fresh_tick(monkeypatch):
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda repo, run_id: calls.append((repo, run_id)))
-    monkeypatch.setattr(runner, "reconcile_release_milestones", lambda *args, **kwargs: None)
+    monkeypatch.setattr(milestone, "reconcile_release_milestones", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "reconcile_orphan_prs", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
