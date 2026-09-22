@@ -435,6 +435,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `run_stopped` | Runner 已停止（空闲，或上面的中断现场） |
 | `picked` | 一个 Issue 已被领取给本 run |
 | `fresh_claim_route` | 产出本次领取的就绪扫描路线 |
+| `foreign_pr_ignored` | 分支查询忽略了一个跨仓库 PR |
 | `claim_yield` | 领取让位给并发的领取者 |
 | `blocked_by` | 跳过该 Issue：存在未关闭的 blockedBy 依赖 |
 | `blocked_by_check_failed` | blockedBy 查询失败（fail open） |

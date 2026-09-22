@@ -5105,15 +5105,27 @@ def test_verify_pr_external_mode_skips_marker_and_fixes_checks(
     def fake_run(command, **kwargs):
         if command[:3] == ["git", "branch", "--show-current"]:
             return "fix/outer"
-        if command[:2] == ["gh", "pr"]:
-            return fake_verify_pr_payload(
+        if command[:3] == ["gh", "pr", "view"]:
+            payload = json.loads(fake_verify_pr_payload(
                 headRefName="fix/outer",
                 body="please review my fix, thanks",
-            )
+                isCrossRepository=True,
+                state="OPEN",
+                headRepository={"name": "orbi-fork"},
+                headRepositoryOwner={"login": "contributor"},
+            ))[0]
+            return json.dumps(payload)
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch="fix/outer", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path, external_pr=True) == FAKE_PR_URL
+    assert runner.verify_pr(
+        RunContext(
+            run_id=FAKE_RUN_ID, issue=4, branch="fix/outer",
+            worktree=tmp_path, source_repo="owner/repo",
+        ),
+        "main", repo_dir=tmp_path, pr_repo=FAKE_PR_REPO,
+        expected_url=FAKE_PR_URL, external_pr=True,
+    ) == FAKE_PR_URL
 
 
 def test_verify_pr_normal_mode_still_requires_marker_and_fixes(
@@ -5259,7 +5271,8 @@ def test_verify_pr_queries_base_head_and_accepts_matching_pr(
         f"orbi/issue-4-{FAKE_RUN_ID}",
         "--json", (
             "number,url,baseRefName,baseRefOid,"
-            "headRefName,headRefOid,headRepository,headRepositoryOwner,body"
+            "headRefName,headRefOid,headRepository,headRepositoryOwner,"
+            "isCrossRepository,body"
         ),
         "--limit", "100",
     ] in calls
@@ -22048,9 +22061,13 @@ def test_deliver_pr_absorbs_an_advanced_base(monkeypatch, tmp_path, caplog):
     assert "base_absorbed" in caplog.text
 
 
-@pytest.mark.parametrize("attribution_footer, expected_footer", [(True, True), (False, False)])
-def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path,
-                                              attribution_footer, expected_footer):
+@pytest.mark.parametrize(
+    "attribution_footer, expected_footer, foreign_pr",
+    [(True, True, False), (False, False, False), (False, False, True)],
+)
+def test_deliver_pr_creates_the_pr_when_absent(
+    monkeypatch, tmp_path, attribution_footer, expected_footer, foreign_pr,
+):
     """No open PR of the branch: the Runner creates it with the run
     marker and `Fixes #<issue>` in the body (the PR body contract is
     the Runner's obligation now, Issue #186)."""
@@ -22064,9 +22081,16 @@ def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path,
         if command[:2] == ["gh", "pr"] and command[2] == "list":
             # Stateful: empty until the Runner creates the PR, then the
             # created PR of the task branch (like the real GitHub state).
-            if not created:
-                return "[]"
-            return json.dumps([created[0]])
+            # A fork PR with the same head name is unrelated and must not
+            # suppress creation of this Runner-owned PR.
+            prs = ([{
+                "number": 99,
+                "url": "https://github.com/fork/repo/pull/99",
+                "isCrossRepository": True,
+            }] if foreign_pr else [])
+            if created:
+                prs.append(created[0])
+            return json.dumps(prs)
         if command[:2] == ["gh", "pr"] and command[2] == "create":
             created.append({
                 "url": FAKE_PR_URL,

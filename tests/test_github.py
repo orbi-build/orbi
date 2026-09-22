@@ -688,6 +688,26 @@ def test_open_pr_for_branch_returns_the_sole_open_pr(monkeypatch):
         github.open_pr_for_branch("/repo", "branch")
 
 
+
+def test_open_pr_for_branch_ignores_cross_repository_prs(monkeypatch, caplog):
+    github._FOREIGN_PRS_JOURNALED.clear()
+    foreign = {"number": 6, "url": "https://example.test/foreign/6",
+               "isCrossRepository": True}
+    local = {"number": 5, "url": "https://example.test/local/5",
+             "isCrossRepository": False}
+    monkeypatch.setattr(seam, "run_command", lambda c, **k:
+                        json.dumps([foreign, local]))
+    with caplog.at_level("INFO", logger="orbi.bootstrap"):
+        assert github.open_pr_for_branch("/repo", "orbi/branch") == local
+    assert "foreign_pr_ignored branch=orbi/branch pr=https://example.test/foreign/6" \
+        in caplog.messages[-1]
+
+    monkeypatch.setattr(seam, "run_command", lambda c, **k:
+                        json.dumps([foreign]))
+    assert github.open_pr_for_branch("/repo", "orbi/branch") is None
+    assert sum("foreign_pr_ignored" in message for message in caplog.messages) == 1
+
+
 def test_issue_labels_returns_names_and_validates_shape(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda c, **k: (
         '{"labels": [{"name": "ai-ready"}, {"name": "p0"}]}'))
