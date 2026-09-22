@@ -20617,17 +20617,25 @@ def test_reconcile_orphan_prs_failure_is_fail_open(tmp_path, monkeypatch, caplog
     assert "orphan_pr_reconcile_failed repo=o/r" in caplog.text
 
 
-def test_reconcile_open_epics_failure_is_fail_open(monkeypatch, caplog):
+def test_reconcile_open_epics_failure_is_fail_open(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
-    monkeypatch.setattr(milestone, "reconcile_release_milestones", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        milestone, "reconcile_release_milestones",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            github.MilestoneReconcileError(
+                status=404, operation="list_milestones", stderr="HTTP 404",
+            )
+        ),
+    )
     monkeypatch.setattr(runner, "reconcile_orphan_prs", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_issue", lambda *args: {"number": 1})
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "abc12345")
-    result = runner.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1)
+    result = runner.pick_next_delivery(["o/r"], tmp_path / "slots", 1)
     assert result == ("o/r", {"number": 1}, None)
     assert "epic_reconcile_failed repo=o/r" in caplog.text
+    assert "milestone_reconcile_not_found repo=o/r status=404" in caplog.text
 
 
 def test_reconcile_open_epics_runs_on_a_fresh_tick(monkeypatch):
