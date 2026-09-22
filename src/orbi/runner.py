@@ -164,6 +164,18 @@ from orbi.pi_process import (
     stream_pi,
 )
 
+# The agent's command-line grammar is one pure module (Issue #1231):
+# `runner` builds the argv pair for every session role from
+# `pi_command.build_pi_command` and never spells out a `pi` flag itself.
+from orbi.pi_command import (
+    IMPLEMENT_EXCLUDED_SKILLS,
+    REVIEW_EXCLUDED_SKILLS,
+    ROLE_REVIEW,
+    ROLE_TICKET,
+    _skills_for,
+    build_pi_command,
+)
+
 # The shared primitives live in the leaf modules now — the
 # journal kernel (logger, run binding, subprocess seam), the GitHub
 # data-access layer, the git operations layer, and the CLI-install domain.
@@ -277,11 +289,6 @@ PI_HEARTBEAT_SECONDS = 30.0
 # it always reaps the child and exits with 128+SIGTERM before systemd's
 # own deadline — a clean signal stop, never `failed`/`timeout`.
 STOP_CHILD_GRACE_SECONDS = 15.0
-
-# Non-implement Pi session roles. `ROLE_IMPLEMENT` is the
-# default role of a delivery Pi session and lives in `orbi.pi_process`.
-ROLE_REVIEW = "review"
-ROLE_TICKET = "ticket"
 
 
 # {{ISSUE_COMMENTS}} injects the Issue's trusted-comment
@@ -586,15 +593,6 @@ def _handle_stop(signum: int, frame: object) -> None:
 
 
 
-def _pi_extension_args(config: config_domain.RunnerConfig) -> list[str]:
-    """Return the isolated extension flags for every Pi role."""
-    args = ["--no-extensions"]
-    for extension in config.pi_extensions:
-        if extension["enabled"]:
-            args.extend(("--extension", extension["source"]))
-    return args
-
-
 def _pi_extension_env(config: config_domain.RunnerConfig) -> dict[str, str]:
     """Return extension variables for the Pi child only; never log them."""
     values: dict[str, str] = {}
@@ -813,35 +811,6 @@ def _resolve_enabled_models(patterns: list, providers: dict) -> list:
         elif bare_counts.get(reference, 0) == 1:
             resolved.append(pattern)
     return resolved
-
-
-def _pi_model_args(config: config_domain.RunnerConfig, role: str = ROLE_IMPLEMENT) -> list[str]:
-    """Return the configured Pi model flags.
-
-    One `--flag value` pair per configured key, in the fixed order
-    provider, model, thinking; an unset key contributes nothing, so a
-    config without any of the three keys returns [] and the Pi command
-    keeps its exact pre-#119 shape. The values are non-sensitive model
-    identifiers (never keys or tokens) and are part of the redacted
-    `log_command`, so the journal run scene records what was launched.
-    """
-    args: list[str] = []
-    prefix = "review_" if role == ROLE_REVIEW else ""
-    for flag, key in (
-        ("--provider", "pi_provider"),
-        ("--model", "pi_model"),
-        ("--thinking", "pi_thinking"),
-    ):
-        value = getattr(config, f"{prefix}{key}")
-        if prefix and value is None:
-            value = getattr(config, key)
-        if value is not None:
-            args.extend((flag, value))
-    return args
-
-
-
-
 
 
 def repository_base_branch(config: config_domain.RunnerConfig, source_repo: str) -> str:
@@ -2960,12 +2929,12 @@ def run_ticket_agent(issue: dict, config: config_domain.RunnerConfig, source_rep
     with tempfile.TemporaryDirectory(prefix="orbi-ticket-") as directory:
         ticket_dir = Path(directory)
         session_dir = ticket_dir / ".pi-session"
-        command = [
-            "pi", "--no-tools",
-            *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
-            *_pi_model_args(config), "--print", "--session-dir", str(session_dir),
-            "--system-prompt", system_prompt, context,
-        ]
+        command, log_command = build_pi_command(
+            config, ROLE_TICKET, IMPLEMENT_EXCLUDED_SKILLS, session_dir,
+            system_prompt, context,
+            context_placeholder="<issue-context-redacted>",
+            tools=False, extensions=False,
+        )
         # Startup phase: the ticket-only session keeps Pi's
         # own agent dir (no per-run materialization) — the provider
         # config is still loaded and resolved before the spawn.
@@ -2981,11 +2950,7 @@ def run_ticket_agent(issue: dict, config: config_domain.RunnerConfig, source_rep
                 branch="-", worktree=Path("-"), source_repo=source_repo,
             ),
             role=ROLE_TICKET,
-            log_command=[
-                "pi", *_pi_model_args(config), "--print", "--session-dir",
-                str(session_dir), "--system-prompt", "<redacted>",
-                "<issue-context-redacted>",
-            ],
+            log_command=log_command,
             progress=progress,
         )
 
@@ -3272,13 +3237,12 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
             author=", ".join(authors),
             body_revision=body_changed,
         )
-    command = [
-        "pi", *_pi_extension_args(config),
-        *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
-        *_pi_model_args(config, ROLE_IMPLEMENT),
-        "--print", "--session-dir",
-        str(worktree / ".pi-session"), "--system-prompt", system_prompt, context,
-    ]
+    command, log_command = build_pi_command(
+        config, ROLE_IMPLEMENT, IMPLEMENT_EXCLUDED_SKILLS,
+        worktree / ".pi-session", system_prompt, context,
+        context_placeholder="<issue-context-redacted>",
+        tools=True, extensions=True,
+    )
     # The provider file (baseUrl / api / apiKey / models)
     # reaches Pi through the materialized per-run agent dir, never
     # through the command line or the log (the redacted command keeps
@@ -3305,11 +3269,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         cwd=worktree,
         ctx=ctx,
         timeout=timeout,
-        log_command=[
-            "pi", *_pi_extension_args(config), *_pi_model_args(config, ROLE_IMPLEMENT),
-            "--print", "--session-dir", str(worktree / ".pi-session"),
-            "--system-prompt", "<redacted>", "<issue-context-redacted>",
-        ],
+        log_command=log_command,
         progress=progress,
         # The configured model_wait dead threshold and the
         # /slots swallow probe (absent URL -> disabled, the exact
@@ -4443,49 +4403,6 @@ def freeze_pr(
     }
 
 
-# Role-specific skill filtering: the review session ends
-# with a single REVIEW_VERDICT line and its job is to review this one
-# diff and fix it until it can merge — not to open another
-# full delivery — so the delivery-oriented skills must not be loaded
-# there (tdd-dev would steer it into the implement/test/PR flow,
-# review-fix-loop would open another fix/review round). The
-# implementer keeps tdd-dev and code-review but not review-fix-loop:
-# the Runner itself runs the independent review loop once the PR is
-# open.
-REVIEW_EXCLUDED_SKILLS = frozenset({"tdd-dev", "review-fix-loop"})
-IMPLEMENT_EXCLUDED_SKILLS = frozenset({"review-fix-loop"})
-
-
-def _skill_name(entry: str | Path) -> str:
-    """Return the skill name of one configured skill entry.
-
-    Entries point at the SKILL.md file inside the skill directory
-    (e.g. .../skills/tdd-dev/SKILL.md); the skill name is the parent
-    directory. A bare markdown entry (e.g. my-skill.md) or a skill
-    directory is named after its own stem.
-    """
-    path = Path(entry)
-    if path.name == "SKILL.md":
-        return path.parent.name
-    return path.stem
-
-
-def _skills_for(config: config_domain.RunnerConfig, excluded: frozenset[str]) -> list[str | Path]:
-    """Return one role's configured skills, dropping excluded names."""
-    return [
-        skill for skill in config.skills
-        if _skill_name(skill) not in excluded
-    ]
-
-
-def _skill_args(skills: list[str | Path]) -> list[str]:
-    """Return the --skill command args for one role's skill list."""
-    return [
-        item for skill in skills
-        for item in ("--skill", str(skill))
-    ]
-
-
 def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, round: int,
                timeout: int | None = None,
                progress: Callable[[dict], None] | None = None) -> str:
@@ -4567,14 +4484,12 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
         "task branch) and end with a single REVIEW_VERDICT line carrying "
         "the head it covers."
     )
-    command = [
-        "pi", *_pi_extension_args(config),
-        *_skill_args(_skills_for(config, REVIEW_EXCLUDED_SKILLS)),
-        *_pi_model_args(config, ROLE_REVIEW),
-        "--print", "--session-dir",
-        str(worktree / ".pi-session"), "--system-prompt", system_prompt,
-        context,
-    ]
+    command, log_command = build_pi_command(
+        config, ROLE_REVIEW, REVIEW_EXCLUDED_SKILLS,
+        worktree / ".pi-session", system_prompt, context,
+        context_placeholder="<review-context-redacted>",
+        tools=True, extensions=True,
+    )
     # The review session uses its role-specific provider selection,
     # falling back to the implementer selection when no override exists.
     agent_dir = prepare_pi_agent_dir(worktree, config, role=ROLE_REVIEW)
@@ -4597,11 +4512,7 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
         ctx=ctx,
         timeout=timeout,
         role=ROLE_REVIEW,
-        log_command=[
-            "pi", *_pi_extension_args(config), *_pi_model_args(config, ROLE_REVIEW),
-            "--print", "--session-dir", str(worktree / ".pi-session"),
-            "--system-prompt", "<redacted>", "<review-context-redacted>",
-        ],
+        log_command=log_command,
         progress=progress,
         # The review session uses the SAME configured
         # model_wait dead threshold and /slots swallow probe as the
