@@ -8904,6 +8904,12 @@ def main(argv: list[str] | None = None) -> int:
                 # Like the arm above, the advance is an idle-path
                 # pure bypass — a renamed/deleted milestone or a failed `gh`
                 # call must not turn an idle tick into a non-zero exit.
+                # The base branch is the repo's FUSED value (entry
+                # fallback, then the policy override): the command writes
+                # it into the release ticket, and the release state
+                # machine freezes the DECLARED branch — the raw host value
+                # would release the wrong branch for any repository whose
+                # entry or policy overrides it.
                 try:
                     milestone_bookkeeping.advance_active_milestone_on_idle(
                         idle_repo,
@@ -8916,7 +8922,9 @@ def main(argv: list[str] | None = None) -> int:
                         policy_path=config_domain.repository_config_path(
                             config, idle_repo,
                         ),
-                        base_branch=config.base_branch,
+                        base_branch=resolve_source_base_branch(
+                            config, idle_repo, repo_policy,
+                        ).base_branch,
                         dispatch_label=dispatch_label,
                         version_file=config.version_file,
                     )

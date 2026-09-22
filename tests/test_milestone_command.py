@@ -524,8 +524,14 @@ def test_write_policy_active_milestone_puts_the_rewritten_file(monkeypatch):
         seam, "run_command", lambda command, **kwargs: writes.append(command) or "",
     )
     milestone_command._write_policy_active_milestone(
-        "owner/repo", ".github/orbi.toml", "v0.5.41", base_branch="main",
+        "owner/repo", ".github/orbi.toml", "v0.5.41",
     )
+    # The blob and the commit address the SAME branch: the read carries no
+    # `?ref=` (the engine reads the policy from the repository's default
+    # branch tip, `read_repo_config`) and the PUT names no `branch`, so the
+    # sha always pins the blob of the branch being updated. Naming the
+    # delivery base branch here would pin a sha from another branch whenever
+    # the two differ.
     assert reads == [[
         "gh", "api", "repos/owner/repo/contents/.github/orbi.toml",
     ]]
@@ -539,13 +545,12 @@ def test_write_policy_active_milestone_puts_the_rewritten_file(monkeypatch):
         "-f", message,
         "-f", content,
         "-f", "sha=deadbeef",
-        "-f", "branch=main",
     ]
     assert base64.b64decode(content[len("content="):]).decode() == (
         'source_repos = ["owner/repo"]\nactive_milestone = "v0.5.41"\n'
     )
     assert "sha=deadbeef" in command
-    assert "branch=main" in command
+    assert not any(item.startswith("branch=") for item in command)
 
 
 @pytest.mark.parametrize("payload,reason", [
@@ -565,7 +570,7 @@ def test_write_policy_active_milestone_fails_loudly(monkeypatch, payload, reason
     )
     with pytest.raises(RuntimeError, match=reason):
         milestone_command._write_policy_active_milestone(
-            "owner/repo", ".github/orbi.toml", "v0.5.41", base_branch="main",
+            "owner/repo", ".github/orbi.toml", "v0.5.41",
         )
     assert writes == []
 
@@ -580,10 +585,8 @@ def test_land_active_milestone_writes_the_repository_policy(monkeypatch):
         "owner/repo", "v0.5.41",
         policy=RepoPolicy(active_milestone="v0.5.40"),
         policy_path=".github/orbi.toml", config_path=Path("/nope/orbi.toml"),
-        base_branch="main",
     )
-    assert landed == [(("owner/repo", ".github/orbi.toml", "v0.5.41"),
-                       {"base_branch": "main"})]
+    assert landed == [(("owner/repo", ".github/orbi.toml", "v0.5.41"), {})]
 
 
 def test_land_active_milestone_writes_the_host_config_without_policy(tmp_path):
@@ -591,7 +594,7 @@ def test_land_active_milestone_writes_the_host_config_without_policy(tmp_path):
     config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
     milestone_command._land_active_milestone(
         "owner/repo", "v0.5.41", policy=None,
-        policy_path=".github/orbi.toml", config_path=config, base_branch="main",
+        policy_path=".github/orbi.toml", config_path=config,
     )
     assert config.read_text() == 'active_milestone = "v0.5.41"\n'
 
@@ -603,7 +606,7 @@ def test_land_active_milestone_falls_back_to_host_config_for_a_partial_policy(
     config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
     milestone_command._land_active_milestone(
         "owner/repo", "v0.5.41", policy=RepoPolicy(dispatch_label="ai-ready"),
-        policy_path=".github/orbi.toml", config_path=config, base_branch="main",
+        policy_path=".github/orbi.toml", config_path=config,
     )
     assert config.read_text() == 'active_milestone = "v0.5.41"\n'
 

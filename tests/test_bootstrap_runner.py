@@ -6789,6 +6789,61 @@ def test_main_idle_release_arm_uses_repo_dispatch_label(
     assert fake.issues[385]["labels"] == ["ai-release", "dev-queue"]
 
 
+def test_main_idle_advance_uses_the_repos_fused_base_branch(
+    monkeypatch, tmp_path,
+):
+    """Issue #1290: the idle path hands the milestone command the repo's
+    FUSED base branch, never the raw host value.
+
+    `resolve_source_base_branch` is the documented single source of a
+    repository's effective base branch ("Every consumer (dev path AND the
+    release state machine) reads `config.base_branch` and must never
+    re-derive it from the raw entry"): the raw host value skips both the
+    `[[repositories]]` entry fallback and the repository policy. The
+    command writes that value into the release ticket it opens, and the
+    release state machine freezes the DECLARED branch — so a raw value
+    releases the wrong branch."""
+    _write_prompts(tmp_path)
+    checkout = tmp_path / "checkouts" / "pilot"
+    checkout.mkdir(parents=True)
+    (checkout / ".git").write_text("gitdir: /nonexistent\n", encoding="utf-8")
+    fake = FakeGh("owner/repo")
+    fake.add_milestone(1, title="v0.4.0")
+    fake.set_repo_config('base_branch = "release/1.x"\n')
+    monkeypatch.setattr(seam, "run_command", fake)
+    monkeypatch.setitem(
+        runner.__dict__, "pick_next_delivery", lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "arm_release_ticket", lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(
+        milestone.__dict__, "validate_active_milestone", lambda *args: None,
+    )
+    seen = {}
+    monkeypatch.setitem(
+        milestone.__dict__, "advance_active_milestone_on_idle",
+        lambda *args, **kwargs: seen.update(kwargs),
+    )
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\n'
+        'active_milestone = "v0.4.0"\n'
+        "[[repositories]]\n"
+        'name = "pilot"\n'
+        'path = "checkouts/pilot"\n'
+        'github = "owner/repo"\n'
+        'base_branch = "develop"\n',
+        encoding="utf-8",
+    )
+
+    assert runner.main(["--config", str(config)]) == 0
+
+    # The policy layer overrides the entry, and neither of them is the
+    # raw host value the idle path used to pass through.
+    assert seen["base_branch"] == "release/1.x"
+
+
 def test_main_idle_release_arm_failure_is_bypassed(monkeypatch, tmp_path, caplog):
     monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args: None)
     _write_prompts(tmp_path)

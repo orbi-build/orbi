@@ -405,9 +405,17 @@ def _ensure_command_release_ticket(
 
 
 def _write_policy_active_milestone(
-    repo: str, policy_path: str, version: str, *, base_branch: str,
+    repo: str, policy_path: str, version: str,
 ) -> None:
-    """Land `active_milestone` in the repository policy file on the base branch."""
+    """Land `active_milestone` in the repository policy file.
+
+    The blob is read AND committed on the repository's DEFAULT branch: the
+    engine reads the policy from that branch tip (``read_repo_config`` sends
+    no ref), so the sha resolved by the read above belongs to the branch the
+    PUT must update. Naming the delivery base branch here would pin a sha
+    from another branch whenever the two differ — a 409, or an update on a
+    branch the engine never reads the policy back from.
+    """
     raw = run_gh_read_command([
         "gh", "api", f"repos/{repo}/contents/{policy_path}",
     ], timeout=30)
@@ -426,26 +434,24 @@ def _write_policy_active_milestone(
     updated = rewrite_active_milestone_text(text, version)
     # Documented route: PUT /repos/{owner}/{repo}/contents/{path} ("Create or
     # update file contents"); `message` and `content` are required, `sha`
-    # pins the blob that was just read and `branch` targets the base branch.
+    # pins the blob that was just read, and omitting `branch` updates that
+    # same blob's branch — the API default branch the read resolved.
     run_command([
         "gh", "api", "--method", "PUT",
         f"repos/{repo}/contents/{policy_path}",
         "-f", f"message=chore: set active_milestone to {version}",
         "-f", f"content={base64.b64encode(updated.encode('utf-8')).decode('ascii')}",
         "-f", f"sha={sha}",
-        "-f", f"branch={base_branch}",
     ], timeout=30)
 
 
 def _land_active_milestone(
     repo: str, version: str, *, policy: RepoPolicy | None, policy_path: str,
-    config_path: Path, base_branch: str,
+    config_path: Path,
 ) -> None:
     """Land `active_milestone` where the current value actually comes from."""
     if policy is not None and policy.active_milestone is not None:
-        _write_policy_active_milestone(
-            repo, policy_path, version, base_branch=base_branch,
-        )
+        _write_policy_active_milestone(repo, policy_path, version)
         return
     rewrite_active_milestone_line(config_path, version)
 
@@ -464,7 +470,7 @@ def apply_milestone_command(
         )),
         (_STEP_ACTIVE_MILESTONE, lambda: _land_active_milestone(
             repo, version, policy=policy, policy_path=policy_path,
-            config_path=config_path, base_branch=base_branch,
+            config_path=config_path,
         )),
     )
     completed: list[str] = []
