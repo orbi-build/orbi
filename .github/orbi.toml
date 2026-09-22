@@ -1,7 +1,14 @@
 # Repository delivery policy (config-as-code, orbi-build/orbi#527).
 # Whitelisted policy keys only — everything else (identity, credentials,
 # scheduling such as max_concurrency) is host-only and blocks the claim.
-# No key is declared today: since orbi-build/orbi#805 the test authority
-# is the GitHub Actions CI (merge gate) and the agent's own inference —
-# a declared test command would only be a stale hint, so the key was
-# removed.
+#
+# `test_command` left the whitelist: since orbi-build/orbi#805 the test
+# authority is the GitHub Actions CI (merge gate) and the agent's own
+# inference — a declared test command would only be a stale hint.
+
+# The milestone this repository delivers from. Declared here rather than
+# in the host config so the claim scope travels with the repository: a
+# managed sandbox renders no `active_milestone` line of its own, and the
+# host value it would otherwise fall back to is not the repository's to
+# assume.
+active_milestone = "v0.5.39"
