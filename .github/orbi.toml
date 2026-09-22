@@ -2,9 +2,10 @@
 # Whitelisted policy keys only — everything else (identity, credentials,
 # scheduling such as max_concurrency) is host-only and blocks the claim.
 #
-# `test_command` left the whitelist: since orbi-build/orbi#805 the test
-# authority is the GitHub Actions CI (merge gate) and the agent's own
-# inference — a declared test command would only be a stale hint.
+# The repository no longer declares its test command: since
+# orbi-build/orbi#805 the test authority is the GitHub Actions CI (merge
+# gate) and the agent's own inference, so a configured command would only
+# be a stale hint.
 
 # The milestone this repository delivers from. Declared here rather than
 # in the host config so the claim scope travels with the repository: a
