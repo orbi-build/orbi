@@ -9068,8 +9068,6 @@ def log_ready_outside_milestone(
         milestone, dispatch_label = _repo_scan_keys(
             config, repo, active_milestone,
         )
-        if milestone is None:
-            continue
         try:
             issues = list_issues(
                 repo, state="open", label=dispatch_label,
