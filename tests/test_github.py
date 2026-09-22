@@ -141,6 +141,26 @@ def test_list_milestones_reads_the_exact_api_page(monkeypatch):
     ]]
 
 
+def test_list_milestones_classifies_auth_and_not_found_errors():
+    original = seam.run_command
+    try:
+        errors = [
+            ("gh: Bad credentials (HTTP 401)", 401),
+            ("gh: Not Found (HTTP 404)", 404),
+        ]
+        for stderr, status in errors:
+            def fail(command, **kwargs):
+                raise subprocess.CalledProcessError(1, command, stderr=stderr)
+            seam.run_command = fail
+            with pytest.raises(github.MilestoneReconcileError) as caught:
+                github.list_milestones("o/r")
+            assert caught.value.status == status
+            assert caught.value.operation == "list_milestones"
+            assert caught.value.stderr == stderr
+    finally:
+        seam.run_command = original
+
+
 def test_list_milestones_forwards_the_callers_timeout(monkeypatch):
     # Issue #95: the idle milestone-advance sweep bounds this network
     # read at 30 s — the bound must survive the seam (run_gh_read_command

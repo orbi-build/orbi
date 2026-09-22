@@ -20203,6 +20203,36 @@ def test_reconcile_open_epics_keeps_incomplete_without_comment(monkeypatch, capl
     assert "epic_kept_open issue=20 repo=o/r reason=\"open blockers: #3\"" in caplog.text
 
 
+def test_milestone_reconcile_classified_failures_are_emitted_once(caplog):
+    caplog.set_level("INFO")
+    runner._MILESTONE_RECONCILE_FAILURES.clear()
+    error = github.MilestoneReconcileError(
+        status=401, operation="list_milestones", stderr="Bad credentials (HTTP 401)",
+    )
+    runner._record_milestone_reconcile_failure("o/r", error)
+    runner._record_milestone_reconcile_failure("o/r", error)
+    messages = [record.message for record in caplog.records]
+    assert sum(message.endswith(
+        'milestone_reconcile_auth_failed repo=o/r status=401 '
+        'operation=list_milestones stderr="Bad credentials (HTTP 401)"'
+    ) for message in messages) == 1
+    assert "milestone_reconcile_failed" not in caplog.text
+
+
+def test_milestone_reconcile_success_clears_suppression(caplog):
+    runner._MILESTONE_RECONCILE_FAILURES.clear()
+    error = github.MilestoneReconcileError(
+        status=404, operation="list_milestones", stderr="Not Found (HTTP 404)",
+    )
+    runner._record_milestone_reconcile_failure("o/r", error)
+    runner._clear_milestone_reconcile_failures("o/r")
+    runner._record_milestone_reconcile_failure("o/r", error)
+    assert sum(record.message.endswith(
+        'milestone_reconcile_not_found repo=o/r status=404 '
+        'operation=list_milestones stderr="Not Found (HTTP 404)"'
+    ) for record in caplog.records) == 2
+
+
 def test_reconcile_release_milestones_closes_only_published_empty_milestones(monkeypatch, caplog):
     caplog.set_level("INFO")
     calls = []

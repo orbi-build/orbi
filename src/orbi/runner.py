@@ -196,6 +196,8 @@ from orbi.github import (
     line_run_markers,
     list_issues,
     list_milestones,
+    MilestoneReconcileError,
+    classify_milestone_error,
     milestone_issues,
     milestone_open_issue_count,
     milestone_open_issues,
@@ -1261,6 +1263,32 @@ def reconcile_open_epics(repo: str, run_id: str) -> list[str]:
     return evidence
 
 
+_MILESTONE_RECONCILE_FAILURES: set[tuple[str, int]] = set()
+
+
+def _record_milestone_reconcile_failure(
+    repo: str, error: MilestoneReconcileError,
+) -> None:
+    key = (repo, error.status)
+    if key in _MILESTONE_RECONCILE_FAILURES:
+        return
+    _MILESTONE_RECONCILE_FAILURES.add(key)
+    kind = {
+        401: "milestone_reconcile_auth_failed",
+        404: "milestone_reconcile_not_found",
+    }[error.status]
+    event(
+        kind, level=logging.ERROR, repo=repo, status=error.status,
+        operation=error.operation, stderr=single_line(error.stderr),
+    )
+
+
+def _clear_milestone_reconcile_failures(repo: str) -> None:
+    _MILESTONE_RECONCILE_FAILURES.difference_update({
+        key for key in _MILESTONE_RECONCILE_FAILURES if key[0] == repo
+    })
+
+
 def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
     """Close published-release Milestones that now have no open Issues.
 
@@ -1277,10 +1305,13 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
                 if isinstance(milestone, dict) else None,
                 repo=repo, reason="malformed",
             )
-    releases_raw = run_gh_read_command([
-        "gh", "api", f"repos/{repo}/releases?per_page=100",
-        "--paginate", "--slurp",
-    ])
+    try:
+        releases_raw = run_gh_read_command([
+            "gh", "api", f"repos/{repo}/releases?per_page=100",
+            "--paginate", "--slurp",
+        ])
+    except subprocess.CalledProcessError as exc:
+        classify_milestone_error(exc, "list_releases")
     releases = parse_paginated_issue_array(releases_raw)
     published_tags = {
         release.get("tag_name") for release in releases
@@ -2657,6 +2688,9 @@ def pick_next_delivery(
         # just-closed final Epic can make its Milestone eligible this tick.
         try:
             reconcile_release_milestones(repo, tick_run_id)
+            _clear_milestone_reconcile_failures(repo)
+        except MilestoneReconcileError as exc:
+            _record_milestone_reconcile_failure(repo, exc)
         except Exception:
             LOGGER.exception("milestone_reconcile_failed repo=%s", repo)
         # Orphan-PR reconciliation follows the same bypass

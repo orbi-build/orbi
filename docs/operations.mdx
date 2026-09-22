@@ -695,6 +695,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `milestone_kept_open` | the release Milestone stays open (unmet condition) |
 | `milestone_closed` | the release Milestone closed |
 | `milestone_reconcile_failed` | the Milestone reconciliation sweep crashed (bypass) |
+| `milestone_reconcile_auth_failed` | milestone reconciliation could not authenticate to GitHub |
+| `milestone_reconcile_not_found` | milestone reconciliation target was not found on GitHub |
 | `orphan_pr_reported` | an orphan PR (source Issue closed) was reported |
 | `orphan_pr_reconcile_failed` | the orphan-PR reconciliation sweep crashed (bypass) |
 | `stale_milestone_issue_closed` | a stale milestone-tracking Issue was closed |
