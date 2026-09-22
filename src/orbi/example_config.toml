@@ -110,6 +110,13 @@ engine_source_track = "release"
 # ai-ready + p0 confirmation Issue instead of rewriting this file.
 # Missing keeps the existing automatic-advance behavior.
 # auto_next_milestone = true
+# The version file the in-ticket `/milestone <version>` command writes
+# into the release ticket it opens for the milestone. Leave it unset
+# to detect the file from the base-branch tree (it falls back to
+# pyproject.toml). One of pyproject.toml, package.json, pom.xml,
+# build.gradle, build.gradle.kts, gradle.properties, Cargo.toml,
+# composer.json, pubspec.yaml, none.
+# version_file = "pyproject.toml"
 # Hung-model-request threshold: seconds of silence in
 # `model_wait` (the newest COMPLETE Pi session event is a tool result
 # and no new event arrives) after which the Runner declares the model

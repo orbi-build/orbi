@@ -6330,9 +6330,9 @@ def test_advance_active_milestone_pending_creates_one_p0_ready_issue(
     assert len(create) == 1
     assert "--label" not in create[0]
     assert "`v0.3.1`：2 open issues" in create[0][create[0].index("--body") + 1]
-    # Issue #895: the human instruction names the explicit advance
-    # command instead of a hand-edit of orbi.toml.
-    assert "orbi milestone set" in create[0][create[0].index("--body") + 1]
+    # Issue #1290: the human instruction names the in-ticket command a
+    # hosted tenant can actually use (no host CLI, no config edit).
+    assert "/milestone" in create[0][create[0].index("--body") + 1]
     assert "active_milestone_advance_pending old=v0.3.0" in caplog.text
     assert "auto_next_milestone=false" in caplog.text
 
@@ -6559,6 +6559,9 @@ def test_advance_active_milestone_pending_is_idempotent(
             {"title": "v0.3.1", "state": "open", "open_issues": 2},
         ]]),
         '[{"number": 436}]',
+        # The confirmation ticket's comments are read for `/milestone`
+        # commands; none here, so nothing is applied.
+        json.dumps({"comments": []}),
     ]
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append(command) or responses.pop(0),
     )
@@ -6990,6 +6993,11 @@ def test_main_advances_milestone_only_after_no_ready_issue(
          {
              "auto_next_milestone": True,
              "parse_version_title": runner._parse_version_title,
+             "policy": None,
+             "policy_path": ".github/orbi.toml",
+             "base_branch": "main",
+             "dispatch_label": runner.READY_LABEL,
+             "version_file": None,
          }),
     ]
 
@@ -7017,6 +7025,11 @@ def test_main_passes_disabled_auto_next_milestone_to_idle_advance(
     assert seen == {
         "auto_next_milestone": False,
         "parse_version_title": runner._parse_version_title,
+        "policy": None,
+        "policy_path": ".github/orbi.toml",
+        "base_branch": "main",
+        "dispatch_label": runner.READY_LABEL,
+        "version_file": None,
     }
 
 

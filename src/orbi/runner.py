@@ -2366,8 +2366,23 @@ def _repo_scan_keys(
     alive): the claim blocks the Issue with the readable reason instead of
     silently claiming nothing.
     """
+    milestone, dispatch_label, _policy = _repo_scan_context(
+        config, repo, active_milestone,
+    )
+    return milestone, dispatch_label
+
+
+def _repo_scan_context(
+    config: config_domain.RunnerConfig | None, repo: str, active_milestone: str | None,
+) -> tuple[str | None, str, RepoPolicy | None]:
+    """Resolve one source repo's scan keys AND the policy they came from.
+
+    The idle path needs the policy itself to know whether `active_milestone`
+    is landed in the repository file or in the host config, so both are
+    returned from the same read instead of reading the file twice.
+    """
     if config is None:
-        return active_milestone, READY_LABEL
+        return active_milestone, READY_LABEL, None
     try:
         policy = load_repo_policy(config, repo)
     except RepoConfigError as exc:
@@ -2377,12 +2392,13 @@ def _repo_scan_keys(
         )
         policy = None
     if policy is None:
-        return active_milestone, READY_LABEL
+        return active_milestone, READY_LABEL, None
     return (
         policy.active_milestone
         if policy.active_milestone is not None
         else active_milestone,
         policy.dispatch_label or READY_LABEL,
+        policy,
     )
 
 
@@ -8867,21 +8883,22 @@ def main(argv: list[str] | None = None) -> int:
                 )
             # Arm a release ticket as a pure bypass. A failed
             # label operation must not change the idle outcome.
-            if config.active_milestone is not None:
+            idle_repo = config.source_repos[0]
+            effective_milestone, dispatch_label, repo_policy = _repo_scan_context(
+                config, idle_repo, config.active_milestone,
+            )
+            if effective_milestone is not None:
                 try:
                     arm_release_ticket(
-                        config.source_repos[0],
-                        config.active_milestone,
-                        dispatch_label=_repo_scan_keys(
-                            config, config.source_repos[0],
-                            config.active_milestone,
-                        )[1],
+                        idle_repo,
+                        effective_milestone,
+                        dispatch_label=dispatch_label,
                     )
                 except Exception:
                     LOGGER.exception(
                         "release_ticket_arm_failed repo=%s milestone=%s",
-                        config.source_repos[0],
-                        config.active_milestone,
+                        idle_repo,
+                        effective_milestone,
                     )
                 # Validate and advance only after the arm attempt.
                 # Like the arm above, the advance is an idle-path
@@ -8889,18 +8906,25 @@ def main(argv: list[str] | None = None) -> int:
                 # call must not turn an idle tick into a non-zero exit.
                 try:
                     milestone_bookkeeping.advance_active_milestone_on_idle(
-                        config.source_repos[0],
-                        config.active_milestone,
+                        idle_repo,
+                        effective_milestone,
                         config.config_path,
                         config.repo_dir,
                         auto_next_milestone=config.auto_next_milestone,
                         parse_version_title=_parse_version_title,
+                        policy=repo_policy,
+                        policy_path=config_domain.repository_config_path(
+                            config, idle_repo,
+                        ),
+                        base_branch=config.base_branch,
+                        dispatch_label=dispatch_label,
+                        version_file=config.version_file,
                     )
                 except Exception:
                     LOGGER.exception(
                         "active_milestone_advance_failed repo=%s milestone=%s",
-                        config.source_repos[0],
-                        config.active_milestone,
+                        idle_repo,
+                        effective_milestone,
                     )
             return 0
         source_repo, issue, scene = selected

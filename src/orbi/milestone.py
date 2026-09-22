@@ -22,7 +22,11 @@ from orbi.journal import (
     LOGGER, MilestoneReconcileError, classify_milestone_error, event,
     run_command, single_line,
 )
+from orbi.milestone_command import (
+    process_milestone_commands, rewrite_active_milestone_line,
+)
 from orbi.progress import ProgressPublisher, read_test_result
+from orbi.repo_config import REPO_CONFIG_PATH, RepoPolicy
 
 MILESTONE_RECONCILE_RETRY_SECONDS = 60 * 60
 _MILESTONE_FAILURE_DIR = "milestone-reconcile-failures"
@@ -282,33 +286,15 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
         evidence.append(f"Milestone #{number} ({title}) closed")
     return evidence
 
-def rewrite_active_milestone_line(config_path: Path, new_value: str) -> None:
-    """Replace only the configured active_milestone line, byte-for-byte."""
-    text = config_path.read_bytes().decode("utf-8")
-    pattern = re.compile(r"(?m)^[ \t]*active_milestone[ \t]*=[ \t]*[^\r\n]+")
-    if not pattern.search(text):
-        raise RuntimeError(
-            f"active_milestone line not found in {config_path}"
-        )
-    # The value is serialized, never interpolated: a Milestone title is
-    # arbitrary text, and a raw f-string produced invalid TOML for `"`,
-    # or a re replacement escape error for `\`. json.dumps emits a TOML-
-    # compatible basic string; the lambda keeps the replacement text out
-    # of the regex escape layer entirely.
-    serialized = json.dumps(new_value, ensure_ascii=False)
-    updated, _ = pattern.subn(
-        lambda _match: f"active_milestone = {serialized}", text, count=1,
-    )
-    config_path.write_bytes(updated.encode("utf-8"))
-
 def _pending_milestone_issue(
     repo: str, old: str, candidates: list[dict], repo_dir: Path,
-) -> None:
+) -> int | None:
     """Create one idempotent human-confirmation issue for a milestone advance.
 
     The fingerprint check and create share the deployment checkout's lock.
     GitHub search can lag a create, so the open-issue search is repeated and
-    any duplicate is closed in favour of the lowest issue number.
+    any duplicate is closed in favour of the lowest issue number. Returns the
+    winning issue number so the caller can read its `/milestone` commands.
     """
     titles = [str(candidate["title"]) for candidate in candidates]
     fingerprint = f"orbi-milestone-advance old={old} candidates={','.join(titles)}"
@@ -319,7 +305,7 @@ def _pending_milestone_issue(
             json_fields="number", limit=1, timeout=30,
         )
         if existing:
-            return
+            return _issue_number(existing[0])
         lines = [
             "## Milestone 自动推进待人工确认",
             "",
@@ -334,8 +320,10 @@ def _pending_milestone_issue(
         )
         lines.extend([
             "",
-            "请人工运行 `orbi milestone set <目标版本>` 推进 `active_milestone`"
-            "（或恢复自动推进），然后关闭本 Issue。",
+            "请在本 Issue 评论 `/milestone <目标版本>`（对候选标题精确匹配）：",
+            "命令会创建 milestone、按 `.github/release-ticket-template.md`"
+            " 开一张 release 票，并落地 `active_milestone`；三步各自幂等。",
+            "评论者需对该仓有 write 权限。也可恢复自动推进，然后关闭本 Issue。",
         ])
         run_command([
             "gh", "issue", "create", "--repo", repo,
@@ -350,23 +338,34 @@ def _pending_milestone_issue(
             issue["number"] for issue in open_issues
             if isinstance(issue, dict) and isinstance(issue.get("number"), int)
         )
-        if len(numbered) <= 1:
-            return
+        if not numbered:
+            return None
         winner = numbered[0]
         for duplicate in numbered[1:]:
             run_command([
                 "gh", "issue", "close", str(duplicate), "--repo", repo,
                 "--comment", f"duplicate of #{winner}",
             ], timeout=30)
-        event(
-            "pending_milestone_issue_deduplicated",
-            issue=f"#{winner}", duplicates=",".join(
-                f"#{number}" for number in numbered[1:]
-            ),
-        )
+        if len(numbered) > 1:
+            event(
+                "pending_milestone_issue_deduplicated",
+                issue=f"#{winner}", duplicates=",".join(
+                    f"#{number}" for number in numbered[1:]
+                ),
+            )
+        return winner
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
+
+
+def _issue_number(issue: object) -> int | None:
+    if not isinstance(issue, dict):
+        return None
+    number = issue.get("number")
+    if isinstance(number, int) and not isinstance(number, bool):
+        return number
+    return None
 
 def _close_stale_milestone_issues(repo: str, active_milestone: str) -> None:
     """Close manual advance notices that no longer match the config."""
@@ -398,6 +397,11 @@ def advance_active_milestone_on_idle(
     repo_dir: Path | None = None,
     *, auto_next_milestone: bool = True,
     parse_version_title: Callable[[object], tuple[int, int, int] | None],
+    policy: RepoPolicy | None = None,
+    policy_path: str = REPO_CONFIG_PATH,
+    base_branch: str = "main",
+    dispatch_label: str = READY_LABEL,
+    version_file: str | None = None,
 ) -> tuple[str, str | None]:
     """Check and advance a configured milestone after no_ready_issue."""
     milestones = list_milestones(repo, timeout=30)
@@ -454,14 +458,15 @@ def advance_active_milestone_on_idle(
         if isinstance(milestone, dict) and milestone.get("title") == title
     ]
     if not auto_next_milestone:
-        candidate_titles = ",".join(title for _, title in candidates)
+        candidate_titles = [title for _, title in candidates]
         event(
             "active_milestone_advance_pending", level=logging.WARNING,
-            old=active_milestone, candidates=candidate_titles,
+            old=active_milestone, candidates=",".join(candidate_titles),
             auto_next_milestone="false",
         )
+        issue_number: int | None = None
         try:
-            _pending_milestone_issue(
+            issue_number = _pending_milestone_issue(
                 repo, active_milestone, candidate_details,
                 repo_dir if repo_dir is not None else config_path.parent,
             )
@@ -473,6 +478,20 @@ def advance_active_milestone_on_idle(
                 "pending_milestone_issue_failed repo=%s old=%s",
                 repo, active_milestone,
             )
+        if issue_number is not None:
+            try:
+                process_milestone_commands(
+                    repo, issue_number,
+                    candidate_titles=candidate_titles,
+                    config_path=config_path, policy=policy,
+                    policy_path=policy_path, base_branch=base_branch,
+                    dispatch_label=dispatch_label, version_file=version_file,
+                )
+            except Exception:
+                LOGGER.exception(
+                    "milestone_command_processing_failed repo=%s old=%s",
+                    repo, active_milestone,
+                )
         return "closed", None
     new_value = candidates[0][1]
     rewrite_active_milestone_line(config_path, new_value)

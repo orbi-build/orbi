@@ -16,6 +16,7 @@ from orbi import engine_source
 from orbi.pi_process import PI_MODEL_WAIT_DEAD_SECONDS, PI_MODEL_WAIT_PROBE_SECONDS
 from orbi.pilot_slots import slot_dir_for
 from orbi.release import RELEASE_CI_WAIT_SECONDS, RELEASE_DELIVERIES_WAIT_SECONDS
+from orbi.release_git import RELEASE_VERSION_FILE_OPTIONS
 from orbi.repo_config import REPO_CONFIG_PATH
 from orbi.scheduler import MAX_RUNNER_INSTANCES
 
@@ -123,6 +124,10 @@ class RunnerConfig:
     engine_source_track: str | None = None
     active_milestone: str | None = None
     auto_next_milestone: bool = True
+    # ``/milestone`` release-ticket generation: the version file the release
+    # state machine bumps. Host-only (a repository policy cannot route a
+    # release), absent -> detected in the repository -> ``pyproject.toml``.
+    version_file: str | None = None
     max_concurrency: int = 1
     allow_stale_runner: bool = False
     human_review_gate: bool = False
@@ -207,6 +212,15 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     auto_next_milestone = data.get("auto_next_milestone", True)
     if not isinstance(auto_next_milestone, bool):
         raise ValueError("auto_next_milestone must be a boolean")
+    # `/milestone` release-ticket generation: the version file the release
+    # state machine bumps. Absent -> detected in the repository, then the
+    # parser default. A declared value must be one the release parser knows.
+    version_file = data.get("version_file")
+    if version_file is not None and version_file not in RELEASE_VERSION_FILE_OPTIONS:
+        raise ValueError(
+            "version_file must be one of "
+            + ", ".join(RELEASE_VERSION_FILE_OPTIONS)
+        )
     # Startup source freshness: the Runner refuses to claim
     # when the code it executes is not the origin/main head.
     # This flag is the EXPLICIT degraded mode for offline/restricted-
@@ -405,6 +419,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         engine_source_track=engine_source_track,
         active_milestone=active_milestone,
         auto_next_milestone=auto_next_milestone,
+        version_file=version_file,
         max_concurrency=max_concurrency,
         allow_stale_runner=allow_stale_runner,
         human_review_gate=human_review_gate,
