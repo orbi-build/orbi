@@ -3662,7 +3662,8 @@ def _query_open_prs(worktree: Path, branch: str) -> list:
         "gh", "pr", "list", "--state", "open", "--head", branch,
         "--json", (
             "number,url,baseRefName,baseRefOid,"
-            "headRefName,headRefOid,headRepository,headRepositoryOwner,body"
+            "headRefName,headRefOid,headRepository,headRepositoryOwner,"
+            "isCrossRepository,body"
         ),
         "--limit", "100",
     ], cwd=worktree)
@@ -3672,7 +3673,7 @@ def _query_open_prs(worktree: Path, branch: str) -> list:
             "gh pr list --json returned a non-array payload "
             "(expected exactly one open PR)"
         )
-    return prs
+    return github.filter_same_repository_prs(prs, branch)
 
 
 def _single_open_pr(worktree: Path, branch: str, base_branch: str,

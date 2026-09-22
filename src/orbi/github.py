@@ -1066,23 +1066,23 @@ def line_run_markers(comments: list[dict]) -> frozenset[str]:
         )
     return frozenset(markers)
 
+def filter_same_repository_prs(prs: list, branch: str) -> list:
+    foreign = [p for p in prs if isinstance(p, dict)
+               and p.get("isCrossRepository") is True]
+    for pr in foreign: event("foreign_pr_ignored", branch=branch, pr=str(pr.get("url", "")))
+    return [pr for pr in prs if pr not in foreign]
+
 
 def open_pr_for_branch(repo_dir: Path, branch: str) -> dict | None:
     """Return the sole open PR for a branch, or None when absent."""
-    raw = run_gh_read_command([
-        "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json", "number,url,baseRefName,headRefName,headRefOid",
-        "--limit", "2",
-    ], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
+    raw = run_gh_read_command(["gh", "pr", "list", "--state", "open", "--head", branch, "--json", "number,url,baseRefName,headRefName,headRefOid,isCrossRepository", "--limit", "20"], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
     prs = json.loads(raw) if raw.strip() else []
     if not isinstance(prs, list):
         raise RuntimeError("open PR query must return an array")
+    prs = filter_same_repository_prs(prs, branch)
     if len(prs) > 1:
-        raise RuntimeError(
-            f"multiple open PRs for stable delivery branch {branch}"
-        )
+        raise RuntimeError(f"multiple open PRs for stable delivery branch {branch}")
     return prs[0] if prs else None
-
 
 def issue_labels(number: int, repo: str) -> list[str]:
     """Return the current label names of one Issue."""

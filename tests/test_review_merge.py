@@ -467,7 +467,8 @@ UNIFIED_PR_LIST_COMMAND = [
     "orbi/owner-repo-issue-4",
     "--json", (
         "number,url,baseRefName,baseRefOid,"
-        "headRefName,headRefOid,headRepository,headRepositoryOwner,body"
+        "headRefName,headRefOid,headRepository,headRepositoryOwner,"
+        "isCrossRepository,body"
     ),
     "--limit", "100",
 ]
@@ -484,6 +485,16 @@ def test_query_open_prs_owns_the_shared_query_contract(monkeypatch, tmp_path):
     prs = runner._query_open_prs(tmp_path, "orbi/owner-repo-issue-4")
     assert prs == [{"number": 4, "url": "u4"}]
     assert calls == [UNIFIED_PR_LIST_COMMAND]
+
+
+def test_query_open_prs_ignores_cross_repository_prs(monkeypatch, tmp_path):
+    foreign = {"number": 6, "url": "https://example.test/foreign/6",
+               "isCrossRepository": True}
+    local = {"number": 4, "url": "https://example.test/local/4",
+             "isCrossRepository": False}
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k:
+                        json.dumps([foreign, local]))
+    assert runner._query_open_prs(tmp_path, "orbi/owner-repo-issue-4") == [local]
 
 
 def test_query_open_prs_rejects_non_array_payload(monkeypatch, tmp_path):

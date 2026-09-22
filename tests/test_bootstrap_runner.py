@@ -5259,7 +5259,8 @@ def test_verify_pr_queries_base_head_and_accepts_matching_pr(
         f"orbi/issue-4-{FAKE_RUN_ID}",
         "--json", (
             "number,url,baseRefName,baseRefOid,"
-            "headRefName,headRefOid,headRepository,headRepositoryOwner,body"
+            "headRefName,headRefOid,headRepository,headRepositoryOwner,"
+            "isCrossRepository,body"
         ),
         "--limit", "100",
     ] in calls
