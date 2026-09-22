@@ -1,0 +1,30 @@
+# v0.5.40 发布（最新）
+
+`v0.5.40` 的 GitHub Release 发布说明：[v0.5.40](https://github.com/orbi-build/orbi/releases/tag/v0.5.40)（release task：Issue #1291）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.5.40` | 注解 tag `c6546675788ca2f9da107cbc984bad4f38e85f49` | 提交 `37b3e7ef8704e901b0396c7fed986ef170c28c2e` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Extract the Pi command line into a pure pi_command module: six hand-copied argv literals in runner.py become one function ([Issue #1231](https://github.com/orbi-build/orbi/issues/1231); [PR #1296](https://github.com/orbi-build/orbi/pull/1296))
+- Extract Pi session launching into src/orbi/pi_session.py: 8 definitions and ~610 lines leave runner.py ([Issue #1262](https://github.com/orbi-build/orbi/issues/1262); [PR #1299](https://github.com/orbi-build/orbi/pull/1299))
+
+### Reliability and recovery
+
+- 发版竞态：push 撞 (fetch first) 的败者把已落地的版本 commit 判为失败，release 票进 ai-blocked ([Issue #1289](https://github.com/orbi-build/orbi/issues/1289); [PR #1292](https://github.com/orbi-build/orbi/pull/1292))
+
+### Deployment and operations
+
+- 里程碑推进只接受 CLI：托管租户收到提问却给不出引擎认的答案，且建 milestone 与开 release 票仍需人工 ([Issue #1290](https://github.com/orbi-build/orbi/issues/1290); [PR #1293](https://github.com/orbi-build/orbi/pull/1293))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
