@@ -17,9 +17,13 @@ import orbi.journal as journal
 import orbi.milestone as milestone
 import orbi.progress as progress
 import orbi.release as release
+import orbi.release_git as release_git
 import orbi.runner as runner
 
-_MODULES = (journal, github, gitops, milestone, progress, cli_source, release, runner)
+_MODULES = (
+    journal, github, gitops, milestone, progress, cli_source, release,
+    release_git, runner,
+)
 
 
 class Seam:

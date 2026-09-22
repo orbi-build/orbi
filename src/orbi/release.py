@@ -19,8 +19,6 @@ import os
 import re
 import subprocess
 import time
-import tomllib
-import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -73,6 +71,13 @@ from orbi.gitops import (
     latest_run_id,
     task_branch,
     worktree_path,
+)
+from orbi.release_git import (
+    RELEASE_VERSION_FILE_OPTIONS,
+    RELEASE_VERSION_TAG_RE,
+    ReleaseVersionAlreadyLanded,
+    prepare_release_version,
+    run_git_write,
 )
 from orbi.journal import (
     LOGGER,
@@ -133,39 +138,6 @@ RELEASE_DELIVERIES_WAIT_SECONDS = 1800
 # the live progress heartbeat (PI_HEARTBEAT_SECONDS).
 RELEASE_CI_POLL_INTERVAL = 30.0
 
-# Identity used for every local Git object written by the release state
-# machine. Cloud sandboxes intentionally do not provide a user Git config.
-RELEASE_GIT_IDENTITY = ("Orbi", "orbi@localhost")
-
-
-def run_git_write(
-    args: list[str], cwd: Path,
-) -> str | subprocess.CompletedProcess[str]:
-    """Run a local Git write with the release machine's stable identity."""
-    env = os.environ.copy()
-    name, email = RELEASE_GIT_IDENTITY
-    env.update({
-        "GIT_AUTHOR_NAME": name,
-        "GIT_AUTHOR_EMAIL": email,
-        "GIT_COMMITTER_NAME": name,
-        "GIT_COMMITTER_EMAIL": email,
-    })
-    return run_command(args, cwd=cwd, env=env)
-
-
-# Supported `version_file` declaration values: the ecosystem metadata
-# files (written by `prepare_release_version`) plus `none` — skip version
-# metadata changes and tag the frozen base HEAD directly.
-# The only release tag shape (prepare_release_version has enforced it at
-# execution time since v0.3; resolve enforces it at claim time so a bad
-# Milestone title fails before the gates burn their wait budgets).
-RELEASE_VERSION_TAG_RE = re.compile(r"v([0-9]+(?:\.[0-9]+)+)")
-
-RELEASE_VERSION_FILE_OPTIONS = (
-    "pyproject.toml", "package.json", "pom.xml", "build.gradle",
-    "build.gradle.kts", "gradle.properties", "Cargo.toml",
-    "composer.json", "pubspec.yaml", "none",
-)
 
 # Issue #831: the copy-paste guidance embedded in the declaration parse
 # errors. The example is valid parser input (locked by test) and the
@@ -1062,175 +1034,6 @@ def check_release_gates(repo: str, release_commit: str,
     # No open-PR gate — an open PR is queue state, not a
     # release premise (see the docstring for the maintainer ruling).
     return evidence, bool(check_runs)
-
-
-def prepare_release_version(worktree: Path, tag: str,
-                            base_branch: str,
-                            version_file: str = "pyproject.toml") -> str:
-    """Commit the tag's version into the declared metadata source.
-
-    The release tag is the public identity (for example ``v0.3.0``), while
-    metadata version fields omit the leading ``v``.  The selected source
-    must be structurally recognizable before it is changed; the commit is
-    pushed directly to the release base, matching the release docs-sync step.
-    """
-    match = RELEASE_VERSION_TAG_RE.fullmatch(tag)
-    if match is None:
-        raise ValueError(
-            f"release version {tag!r} must be a v-prefixed numeric tag"
-        )
-    version = match.group(1)
-    if version_file not in RELEASE_VERSION_FILE_OPTIONS:
-        raise ValueError("release version_file is not supported")
-    if version_file == "none":
-        return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
-    if version_file in ("package.json", "composer.json"):
-        package_json = worktree / version_file
-        try:
-            package_data = json.loads(package_json.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(
-                f"release version source {version_file} is not valid JSON"
-            ) from exc
-        if not isinstance(package_data, dict) or not isinstance(
-            package_data.get("version"), str
-        ) or not package_data["version"]:
-            raise RuntimeError(
-                f"release version source {version_file} must contain a non-empty "
-                "version field"
-            )
-        if package_data["version"] != version:
-            package_data["version"] = version
-            package_json.write_text(
-                json.dumps(package_data, indent=2) + "\n", encoding="utf-8",
-            )
-            run_command(["git", "add", version_file], cwd=worktree)
-            run_git_write([
-                "git", "commit", "-m", f"chore: prepare release {tag}",
-            ], cwd=worktree)
-            run_git_network_command(
-                ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
-                cwd=worktree,
-            )
-        return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
-    if version_file != "pyproject.toml":
-        source = worktree / version_file
-        try:
-            text = source.read_text(encoding="utf-8")
-            if version_file == "pom.xml":
-                ET.fromstring(text)
-                matches = list(re.finditer(
-                    r"<version>\s*([^<\s]+)\s*</version>", text,
-                ))
-                parents = [m.span() for m in re.finditer(
-                    r"<parent\b.*?</parent>", text, re.DOTALL,
-                )]
-                matches = [m for m in matches if not any(
-                    start <= m.start() < end for start, end in parents
-                )]
-                # Maven projects normally contain additional dependency
-                # versions.  The declaration contract selects the first
-                # version outside the parent block, not a uniquely occurring
-                # version in the whole document.
-                pattern = matches[0] if matches else None
-                replacement = rf"<version>{version}</version>"
-            elif version_file == "Cargo.toml":
-                data = tomllib.loads(text)
-                current = data.get("package", {}).get("version")
-                if not isinstance(current, str) or not current:
-                    raise ValueError("missing [package].version")
-                pattern = re.search(
-                    r"(?ms)^(\[package\][^\[]*?^version\s*=\s*)"
-                    r"([\"'])[^\n]+?\2\s*$",
-                    text,
-                )
-                replacement = None
-            elif version_file == "pubspec.yaml":
-                matches = list(re.finditer(
-                    r"(?m)^version\s*:\s*([^#\s]+)", text,
-                ))
-                pattern = matches[0] if len(matches) == 1 else None
-                replacement = f"version: {version}"
-            elif version_file == "gradle.properties":
-                matches = list(re.finditer(
-                    r"(?m)^version\s*=\s*([^#\s]+)", text,
-                ))
-                pattern = matches[0] if len(matches) == 1 else None
-                replacement = f"version={version}"
-            else:
-                matches = list(re.finditer(
-                    r"(?m)^([ \t]*version\s*=\s*)(['\"])([^'\"]+)\2[ \t]*$",
-                    text,
-                ))
-                pattern = matches[0] if len(matches) == 1 else None
-                # Groovy accepts either quote style, while Kotlin DSL only
-                # accepts double quotes. Preserve the source syntax.
-                replacement = (
-                    pattern.group(1) + pattern.group(2) + version
-                    + pattern.group(2)
-                    if pattern is not None else ""
-                )
-            if pattern is None:
-                raise ValueError("version declaration is not uniquely parseable")
-            if version_file == "Cargo.toml":
-                replacement = pattern.group(1) + f'"{version}"'
-            updated = text[:pattern.start()] + replacement + text[pattern.end():]
-        except (OSError, ET.ParseError, tomllib.TOMLDecodeError, ValueError) as exc:
-            raise RuntimeError(
-                f"release version source {version_file} has no parseable version"
-            ) from exc
-        if updated != text:
-            source.write_text(updated, encoding="utf-8")
-            run_command(["git", "add", version_file], cwd=worktree)
-            run_git_write([
-                "git", "commit", "-m", f"chore: prepare release {tag}",
-            ], cwd=worktree)
-            run_git_network_command(
-                ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
-                cwd=worktree,
-            )
-        return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
-    pyproject = worktree / version_file
-    init_file = worktree / "src" / "orbi" / "__init__.py"
-    pyproject_text = pyproject.read_text(encoding="utf-8")
-    init_text = init_file.read_text(encoding="utf-8")
-    py_matches = re.findall(
-        r'(?m)^version\s*=\s*"([^"]+)"\s*$', pyproject_text,
-    )
-    init_matches = re.findall(
-        r'(?m)^__version__\s*=\s*"([^"]+)"\s*$', init_text,
-    )
-    if len(py_matches) != 1 or len(init_matches) != 1:
-        raise RuntimeError(
-            "release version sources must contain exactly one version "
-            "declaration each"
-        )
-    if py_matches[0] != init_matches[0]:
-        raise RuntimeError(
-            "release version sources disagree before release preparation"
-        )
-    updated_pyproject = re.sub(
-        r'(?m)^(version\s*=\s*)"[^"]+"(\s*)$',
-        rf'\g<1>"{version}"\g<2>', pyproject_text, count=1,
-    )
-    updated_init = re.sub(
-        r'(?m)^(__version__\s*=\s*)"[^"]+"(\s*)$',
-        rf'\g<1>"{version}"\g<2>', init_text, count=1,
-    )
-    if updated_pyproject != pyproject_text:
-        pyproject.write_text(updated_pyproject, encoding="utf-8")
-        init_file.write_text(updated_init, encoding="utf-8")
-        run_command([
-            "git", "add", version_file, "src/orbi/__init__.py",
-        ], cwd=worktree)
-        run_git_write([
-            "git", "commit", "-m", f"chore: prepare release {tag}",
-        ], cwd=worktree)
-        run_git_network_command(
-            ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
-            cwd=worktree,
-        )
-    return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
 
 
 def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
@@ -2341,11 +2144,13 @@ def process_release(issue: dict, config: RunnerConfig,
             # the omitted field is the unchanged Python release path.
             release_commit = prepare_release_version(
                 worktree, declaration["version"], base_branch,
+                repo_dir=config.repo_dir,
             )
         else:
             release_commit = prepare_release_version(
                 worktree, declaration["version"], base_branch,
                 declaration["version_file"],
+                repo_dir=config.repo_dir,
             )
         # Version preparation creates the commit that will be tagged. Re-run
         # the commit-specific gates so the recorded CI result and final
@@ -2573,6 +2378,38 @@ def process_release(issue: dict, config: RunnerConfig,
             elapsed=f"{time.monotonic() - started:.1f}s",
         )
         return release_url
+    except ReleaseVersionAlreadyLanded as landed:
+        # The version commit is already on the base branch: a concurrent
+        # release instance won the push race (Issue #1289). This run yields
+        # — the ticket returns to the ready queue and the next tick resumes
+        # the release from the landed commit (tag/release/docs) instead of
+        # rewriting work that is already done as `ai-blocked`.
+        event(
+            "claim_yield", issue=number,
+            reason="release_version_already_landed",
+            base_branch=landed.base_branch,
+            remote_commit=landed.remote_commit,
+        )
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_RELEASE_WAITING,
+            current_labels={IN_PROGRESS_LABEL},
+        )
+        comment_issue(
+            number, repo=source_repo,
+            body=(
+                run_marker(run_id) + "\n"
+                "Orbi release yielded: a concurrent release instance "
+                "already pushed the same version commit\n"
+                f"tag: {landed.tag}\n"
+                f"base_branch: {landed.base_branch}\n"
+                f"remote_commit: {landed.remote_commit}\n"
+                f"run_id={run_id}"
+            ),
+        )
+        publish(
+            action=lambda: publisher.finish(progress_body(progress())),
+        )
+        return ""
     except ReleaseDeliveriesWaiting as waiting:
         # This is a clean, recoverable tick. Return the release
         # ticket to the ready queue before releasing the caller's slot.
