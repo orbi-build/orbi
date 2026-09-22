@@ -17947,6 +17947,10 @@ def make_release_race_clones(tmp_path):
     (seed / "pyproject.toml").write_text(
         '[project]\nname = "orbi"\nversion = "0.2.0"\n', encoding="utf-8",
     )
+    (seed / "package.json").write_text(
+        '{\n  "name": "cloud",\n  "version": "0.2.0"\n}\n',
+        encoding="utf-8",
+    )
     package = seed / "src" / "orbi"
     package.mkdir(parents=True)
     (package / "__init__.py").write_text(
@@ -18021,6 +18025,29 @@ def test_prepare_release_version_yields_when_concurrent_instance_won(
     # shared remote-tracking ref to the landed commit.
     assert _git_output(loser, "rev-parse", "HEAD^{tree}") == winner_tree
     assert _git_output(loser, "rev-parse", "origin/main") == winner_commit
+
+
+def test_prepare_release_version_package_json_yields_when_instance_won(
+    tmp_path, monkeypatch,
+):
+    """Issue #1289: the `package.json`/`composer.json` push site is the same
+    race as the pyproject path — the loser yields on the content-equivalent
+    remote head instead of failing the release ticket."""
+    winner, loser = make_release_race_clones(tmp_path)
+    monkeypatch.setenv("GIT_AUTHOR_DATE", "2026-01-01T00:00:00")
+    monkeypatch.setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:00")
+    winner_commit = release.prepare_release_version(
+        winner, "v0.3.0", "main", "package.json",
+    )
+    monkeypatch.setenv("GIT_AUTHOR_DATE", "2026-01-01T01:00:00")
+    monkeypatch.setenv("GIT_COMMITTER_DATE", "2026-01-01T01:00:00")
+
+    with pytest.raises(release.ReleaseVersionAlreadyLanded) as excinfo:
+        release.prepare_release_version(
+            loser, "v0.3.0", "main", "package.json", repo_dir=loser,
+        )
+
+    assert excinfo.value.remote_commit == winner_commit
 
 
 def test_prepare_release_version_rejects_unrelated_remote_commit(tmp_path):

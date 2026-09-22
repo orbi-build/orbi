@@ -184,9 +184,8 @@ def prepare_release_version(worktree: Path, tag: str,
             run_git_write([
                 "git", "commit", "-m", f"chore: prepare release {tag}",
             ], cwd=worktree)
-            run_git_network_command(
-                ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
-                cwd=worktree,
+            push_prepared_release_version(
+                worktree, tag, base_branch, repo_dir or worktree,
             )
         return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
     if version_file != "pyproject.toml":
