@@ -706,6 +706,7 @@ registry — in both directions (a name only in code or only in docs fails
 | `active_milestone_advanced` | the active Milestone advanced to the next pending one |
 | `active_milestone_advance_none` | no pending Milestone to advance to |
 | `active_milestone_advance_pending` | a pending Milestone candidate is waiting |
+| `active_milestone_release_pending` | a finished Milestone still needs its release ticket confirmed |
 | `milestone_command_applied` | an in-ticket `/milestone` command ran all three steps |
 | `milestone_command_failed` | an in-ticket `/milestone` command failed at one step |
 | `active_milestone_advance_failed` | advancing the active Milestone failed |
@@ -932,6 +933,36 @@ access or the CLI.
 No model call is involved: the command is deterministic from the comment,
 the candidate list and the repository state. The event kinds it logs are
 `milestone_command_applied` and `milestone_command_failed`.
+
+### A finished Milestone with no release ticket
+
+Issue #856: when the active Milestone has no open Issue left but nobody has
+opened its release ticket, the engine waits silently — the queue is empty,
+each tick reports `no_ready_issue`, and no one is told that a decision is
+owed. With `release_confirmation = true` in the repository's
+`.github/orbi.toml` the idle path surfaces that state through the SAME
+decision-notice mechanism as the advance wait: exactly one notice Issue,
+carrying the same fingerprint (`orbi-milestone-advance old=<active>
+candidates=<active>`) and the same in-ticket `/milestone <version>` reply.
+The engine never creates the release ticket by itself — the notice tells
+the maintainer, and a trusted `/milestone <active>` comment runs the three
+deterministic steps documented above.
+
+- Idempotent: one open notice per finished Milestone, never one per tick.
+- Kept open while the release ticket is missing; closed automatically once
+  the wait is over — a release ticket for that Milestone exists, or the
+  Milestone stops waiting (it got new work, or it closed after the
+  release). The closing comment states which of the two happened.
+- The pending state logs `active_milestone_release_pending old=<active>
+  repo=<repo>`, the same `old=` field the advance notice logs. A failed
+  notice write is a pure bypass
+  (`pending_milestone_issue_failed`) and never fails the tick.
+- The wait is intentional, not a fault: the decision owed is "open the
+  release ticket for the finished Milestone". Without the opt-in key (the
+  default `false`) the behavior is unchanged from before #856.
+- If the `/milestone` release-ticket step cannot resolve `version_file`, the
+  notice gets the `version_file_unresolved` receipt naming the fix; set
+  `version_file` (or `"none"`) and reply again.
 
 ## Public surface
 

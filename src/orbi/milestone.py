@@ -12,11 +12,11 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from orbi.delivery_labels import READY_LABEL
+from orbi.delivery_labels import READY_LABEL, RELEASE_LABEL
 from orbi.gitops import acquire_base_sync_lock
 from orbi.github import (
     close_milestone, list_issues, list_milestones, milestone_open_issues,
-    parse_paginated_issue_array, run_gh_read_command,
+    parse_paginated_issue_array, run_gh_read_command, run_gh_write_command,
 )
 from orbi.journal import (
     LOGGER, MilestoneReconcileError, classify_milestone_error, event,
@@ -32,6 +32,147 @@ from orbi.repo_config import REPO_CONFIG_PATH, RepoPolicy
 MILESTONE_RECONCILE_RETRY_SECONDS = 60 * 60
 _MILESTONE_FAILURE_DIR = "milestone-reconcile-failures"
 _MILESTONE_FAILURE_STATUSES = (401, 404)
+
+# The waiting states one active Milestone can be in on the idle path
+# (Issue #856). `in_progress` and `nothing_to_do` need no human reply;
+# the two `awaiting_*` states each own one decision notice the maintainer
+# answers with `/milestone <version>`.
+MILESTONE_IN_PROGRESS = "in_progress"
+MILESTONE_AWAITING_RELEASE = "awaiting_release"
+MILESTONE_AWAITING_NEXT = "awaiting_next"
+MILESTONE_NOTHING_TO_DO = "nothing_to_do"
+
+# The waiting state an existing decision notice was opened for. Only
+# `next` matches the pre-#856 notice; `release` is the release-ticket
+# confirmation.
+_WAITING_NEXT = "next"
+_WAITING_RELEASE = "release"
+
+
+def classify_milestone_waiting(
+    *,
+    state: object,
+    open_issues: int,
+    release_ticket_exists: bool,
+    candidates: list,
+    auto_next_milestone: bool,
+    release_confirmation: bool,
+) -> str:
+    """Classify the active Milestone's idle waiting state (Issue #856).
+
+    Pure table over the already-resolved facts, so the Runner's idle path
+    reads GitHub once and this function owns the decision:
+
+    - an OPEN Milestone still carrying Issues is `in_progress`;
+    - an OPEN Milestone with no open Issue and `release_confirmation` on
+      but no `ai-release` Issue yet is `awaiting_release` — the maintainer
+      is told to open the release ticket;
+    - a CLOSED Milestone with a higher open candidate is `awaiting_next`
+      when `auto_next_milestone` is false (the existing notice) and
+      `nothing_to_do` when the engine advances by itself;
+    - everything else is `nothing_to_do`.
+    """
+    if state == "open":
+        if open_issues > 0:
+            return MILESTONE_IN_PROGRESS
+        if release_confirmation and not release_ticket_exists:
+            return MILESTONE_AWAITING_RELEASE
+        return MILESTONE_NOTHING_TO_DO
+    if not candidates or auto_next_milestone:
+        return MILESTONE_NOTHING_TO_DO
+    return MILESTONE_AWAITING_NEXT
+
+
+def _release_ticket_exists(repo: str, version: str) -> bool:
+    """Whether an `ai-release` Issue already exists in ``version``.
+
+    The same search `_ensure_command_release_ticket` uses to stay
+    idempotent: `gh issue list` over one Milestone's release label.
+    """
+    issues = list_issues(
+        repo, state="all",
+        search=f'label:{RELEASE_LABEL} milestone:"{version}"',
+        json_fields="number", limit=1, timeout=30,
+    )
+    return bool(issues)
+
+
+def arm_release_ticket(
+    repo: str, active_milestone: str,
+    dispatch_label: str = READY_LABEL,
+) -> None:
+    """Arm one open release ticket for the current milestone on idle.
+
+    The ticket is armed with the repo's dispatch label — the same label
+    `release_fallback_search` requires before the ticket can be claimed —
+    so callers must resolve it from the repository policy, not assume the
+    host default. The search exclusion uses the same label: an armed
+    ticket carries it, and a ticket polluted by a stale arm (labelled
+    `ai-ready` under a custom-dispatch-label repo) no longer matches the
+    exclusion, so the next idle tick re-arms and heals it.
+
+    This is an idle-path bypass: callers deliberately catch failures so a
+    GitHub label operation cannot change the outcome of the main tick.
+    """
+    search = (
+        f"label:{RELEASE_LABEL} -label:{dispatch_label} "
+        f'milestone:"{active_milestone}"'
+    )
+    issues = list_issues(
+        repo, state="open", search=search,
+        json_fields="number", limit=200, timeout=30,
+    )
+    if not issues:
+        return
+    number = issues[0].get("number")
+    if not isinstance(number, int):
+        raise RuntimeError(f"release ticket has invalid issue number: {number!r}")
+    run_gh_write_command([
+        "gh", "issue", "edit", str(number), "--repo", repo,
+        "--add-label", dispatch_label,
+    ], timeout=30, command_runner=run_command)
+    event(
+        "release_ticket_armed", issue=f"#{number}",
+        milestone=active_milestone,
+    )
+
+
+def reconcile_milestone_on_idle(
+    repo: str, active_milestone: str, config_path: Path,
+    repo_dir: Path | None = None,
+    *, auto_next_milestone: bool = True, release_confirmation: bool = False,
+    parse_version_title: Callable[[object], tuple[int, int, int] | None],
+    policy: RepoPolicy | None = None,
+    policy_path: str = REPO_CONFIG_PATH,
+    base_branch: str = "main",
+    dispatch_label: str = READY_LABEL,
+    version_file: str | None = None,
+) -> tuple[str, str | None]:
+    """One idle-path Milestone bookkeeping entry point (Issue #856).
+
+    Arms any existing release ticket, then classifies the Milestone's
+    waiting state and acts on it (`advance_active_milestone_on_idle`).
+    The Runner makes ONE call inside ONE bypass `try/except`, so a new
+    bookkeeping step never becomes a second, separately-failing call.
+    """
+    try:
+        arm_release_ticket(
+            repo, active_milestone, dispatch_label=dispatch_label,
+        )
+    except Exception:
+        LOGGER.exception(
+            "release_ticket_arm_failed repo=%s milestone=%s",
+            repo, active_milestone,
+        )
+    return advance_active_milestone_on_idle(
+        repo, active_milestone, config_path, repo_dir,
+        auto_next_milestone=auto_next_milestone,
+        release_confirmation=release_confirmation,
+        parse_version_title=parse_version_title,
+        policy=policy, policy_path=policy_path,
+        base_branch=base_branch, dispatch_label=dispatch_label,
+        version_file=version_file,
+    )
 
 
 def _milestone_failure_marker(state_dir: Path, repo: str, status: int) -> Path:
@@ -289,16 +430,47 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
 
 def _pending_milestone_issue(
     repo: str, old: str, candidates: list[dict], repo_dir: Path,
+    *, waiting_state: str = _WAITING_NEXT,
 ) -> int | None:
-    """Create one idempotent human-confirmation issue for a milestone advance.
+    """Create one idempotent human-confirmation issue for a milestone wait.
 
     The fingerprint check and create share the deployment checkout's lock.
     GitHub search can lag a create, so the open-issue search is repeated and
     any duplicate is closed in favour of the lowest issue number. Returns the
     winning issue number so the caller can read its `/milestone` commands.
+
+    ``waiting_state`` selects the wording: the pre-#856 ``next`` advance
+    notice (`auto_next_milestone = false`) or ``release`` — the Issue #856
+    notice that a finished Milestone still needs its release ticket. Both
+    carry the same fingerprint shape, so the close sweep recognises each.
     """
     titles = [str(candidate["title"]) for candidate in candidates]
     fingerprint = f"orbi-milestone-advance old={old} candidates={','.join(titles)}"
+    if waiting_state == _WAITING_RELEASE:
+        title = f"Milestone {old} 已完成，等待确认发布"
+        intro = [
+            "## Milestone 已完成，等待人工确认发布",
+            "",
+            fingerprint,
+            "",
+            f"当前 milestone `{old}` 的 Issue 已全部关闭，但尚未创建 release ticket。",
+            "本 Issue 不会自动创建 release 票，需要你确认后才会开票。",
+            "",
+            f"请在本 Issue 评论 `/milestone {old}` 创建 release 票"
+            "（按 `.github/release-ticket-template.md` 渲染并附上 `"
+            f"{RELEASE_LABEL}` 标签，三步各自幂等）。",
+            "评论者需对该仓有 write 权限。",
+        ]
+    else:
+        title = f"Milestone {old} 已完成，等待确认推进到 {titles[0]}"
+        intro = [
+            "## Milestone 自动推进待人工确认",
+            "",
+            fingerprint,
+            "",
+            f"当前 milestone `{old}` 已完成，等待确认推进到以下候选版本：",
+            "",
+        ]
     fd = acquire_base_sync_lock(repo_dir, 300.0)
     try:
         existing = list_issues(
@@ -307,28 +479,22 @@ def _pending_milestone_issue(
         )
         if existing:
             return _issue_number(existing[0])
-        lines = [
-            "## Milestone 自动推进待人工确认",
-            "",
-            fingerprint,
-            "",
-            f"当前 milestone `{old}` 已完成，等待确认推进到以下候选版本：",
-            "",
-        ]
-        lines.extend(
-            f"- `{candidate['title']}`：{candidate.get('open_issues', 0)} open issues"
-            for candidate in candidates
-        )
-        lines.extend([
-            "",
-            "请在本 Issue 评论 `/milestone <目标版本>`（对候选标题精确匹配）：",
-            "命令会创建 milestone、按 `.github/release-ticket-template.md`"
-            " 开一张 release 票，并落地 `active_milestone`；三步各自幂等。",
-            "评论者需对该仓有 write 权限。也可恢复自动推进，然后关闭本 Issue。",
-        ])
+        lines = list(intro)
+        if waiting_state != _WAITING_RELEASE:
+            lines.extend(
+                f"- `{candidate['title']}`：{candidate.get('open_issues', 0)} open issues"
+                for candidate in candidates
+            )
+            lines.extend([
+                "",
+                "请在本 Issue 评论 `/milestone <目标版本>`（对候选标题精确匹配）：",
+                "命令会创建 milestone、按 `.github/release-ticket-template.md`"
+                " 开一张 release 票，并落地 `active_milestone`；三步各自幂等。",
+                "评论者需对该仓有 write 权限。也可恢复自动推进，然后关闭本 Issue。",
+            ])
         run_command([
             "gh", "issue", "create", "--repo", repo,
-            "--title", f"Milestone {old} 已完成，等待确认推进到 {titles[0]}",
+            "--title", title,
             "--body", "\n".join(lines),
         ], timeout=30)
         open_issues = list_issues(
@@ -368,35 +534,156 @@ def _issue_number(issue: object) -> int | None:
         return number
     return None
 
-def _close_stale_milestone_issues(repo: str, active_milestone: str) -> None:
-    """Close manual advance notices that no longer match the config."""
+_NOTICE_FINGERPRINT_RE = re.compile(
+    r"orbi-milestone-advance old=([^ \r\n]+)(?: candidates=([^ \r\n]+))?"
+)
+
+
+def _stale_notice_comment(
+    body: object, active_milestone: str, *, keep_release_notice: bool,
+    release_ticket_exists: bool = False,
+) -> str | None:
+    """The close comment for a decision notice, or ``None`` to keep it.
+
+    A notice whose ``old=`` differs from the current active Milestone is
+    always stale — both the pre-#856 advance notice and the Issue #856
+    release notice. The release notice carries the active Milestone's own
+    title as its only candidate (``old=`` == ``candidates=``), so it is
+    kept while the release ticket is still missing and closed, with a
+    receipt, once the wait is over (``keep_release_notice=False``).
+
+    The receipt states WHY the wait ended, so it never claims a release
+    ticket that does not exist: the ticket wording only when the caller
+    resolved ``release_ticket_exists=True``, otherwise the neutral "no
+    longer waiting" wording (the Milestone got new work, was closed, or
+    the opt-in was turned off).
+
+    A decoded ``candidates=`` is compared instead of the raw group so a
+    body without one keeps the pre-#856 behaviour: ``str(None)`` is never
+    a single-title candidate list, so it is closed like any advance notice.
+    """
+    match = _NOTICE_FINGERPRINT_RE.search(body) if isinstance(body, str) else None
+    if match is None:
+        return None
+    old = match.group(1)
+    candidates = str(match.group(2)).split(",")
+    if old != active_milestone:
+        return f"已收敛：当前配置 active_milestone = `{active_milestone}`。"
+    if candidates != [old] or keep_release_notice:
+        return None
+    if release_ticket_exists:
+        return (
+            f"已收敛：Milestone `{active_milestone}` 的 release ticket"
+            " 已存在，不再等待发布确认。"
+        )
+    return f"已收敛：Milestone `{active_milestone}` 不再等待发布确认。"
+
+
+def _close_stale_milestone_issues(
+    repo: str, active_milestone: str, *, keep_release_notice: bool = True,
+    release_ticket_exists: bool = False,
+) -> None:
+    """Close decision notices that no longer match the config.
+
+    A notice whose ``old=`` differs from the current active Milestone is
+    always stale. The Issue #856 release notice shares the active
+    Milestone's own title (``old=`` == ``candidates=``), so it is kept
+    while the release ticket is still missing and closed — with its own
+    receipt — once the wait is over (``keep_release_notice=False``).
+    """
     issues = list_issues(
         repo, state="open", search='in:body "orbi-milestone-advance"',
         json_fields="number,body", limit=200, timeout=30,
     )
-    pattern = re.compile(r"orbi-milestone-advance old=([^ ]+)")
     for issue in issues:
         if not isinstance(issue, dict) or not isinstance(issue.get("number"), int):
             continue
-        body = issue.get("body")
-        match = pattern.search(body) if isinstance(body, str) else None
-        if match is None or match.group(1) == active_milestone:
+        comment = _stale_notice_comment(
+            issue.get("body"), active_milestone,
+            keep_release_notice=keep_release_notice,
+            release_ticket_exists=release_ticket_exists,
+        )
+        if comment is None:
             continue
         run_command([
             "gh", "issue", "close", str(issue["number"]), "--repo", repo,
-            "--comment", (
-                f"已收敛：当前配置 active_milestone = `{active_milestone}`。"
-            ),
+            "--comment", comment,
         ], timeout=30)
         event(
             "stale_milestone_issue_closed", issue=f"#{issue['number']}",
             active=active_milestone,
         )
 
+
+def _milestone_open_issue_count(milestone: dict) -> int:
+    """GitHub's own open-Issue counter, coerced to an int (0 if absent)."""
+    value = milestone.get("open_issues")
+    return value if isinstance(value, int) else 0
+
+
+def _close_stale_milestone_issues_safely(
+    repo: str, active_milestone: str, *, keep_release_notice: bool,
+    release_ticket_exists: bool = False,
+) -> None:
+    """Close obsolete decision notices as a pure idle-path bypass.
+
+    Closing an obsolete confirmation is notification maintenance; it must
+    not turn an otherwise successful idle tick into a delivery failure.
+    """
+    try:
+        _close_stale_milestone_issues(
+            repo, active_milestone, keep_release_notice=keep_release_notice,
+            release_ticket_exists=release_ticket_exists,
+        )
+    except Exception:
+        LOGGER.exception(
+            "stale_milestone_issue_close_failed repo=%s active=%s",
+            repo, active_milestone,
+        )
+
+
+def _ensure_pending_milestone_notice(
+    repo: str, old: str, candidates: list[dict], repo_dir: Path | None,
+    config_path: Path, waiting_state: str, candidate_titles: list[str],
+    *, policy: RepoPolicy | None, policy_path: str, base_branch: str,
+    dispatch_label: str, version_file: str | None,
+) -> None:
+    """Open one idempotent decision notice and apply any `/milestone` reply.
+
+    Both steps are idle-path bypasses: a failed notice or command must not
+    turn an otherwise successful no-ready tick into a delivery failure.
+    """
+    issue_number: int | None = None
+    try:
+        issue_number = _pending_milestone_issue(
+            repo, old, candidates,
+            repo_dir if repo_dir is not None else config_path.parent,
+            waiting_state=waiting_state,
+        )
+    except Exception:
+        LOGGER.exception(
+            "pending_milestone_issue_failed repo=%s old=%s", repo, old,
+        )
+    if issue_number is None:
+        return
+    try:
+        process_milestone_commands(
+            repo, issue_number,
+            candidate_titles=candidate_titles,
+            config_path=config_path, policy=policy,
+            policy_path=policy_path, base_branch=base_branch,
+            dispatch_label=dispatch_label, version_file=version_file,
+        )
+    except Exception:
+        LOGGER.exception(
+            "milestone_command_processing_failed repo=%s old=%s", repo, old,
+        )
+
+
 def advance_active_milestone_on_idle(
     repo: str, active_milestone: str, config_path: Path,
     repo_dir: Path | None = None,
-    *, auto_next_milestone: bool = True,
+    *, auto_next_milestone: bool = True, release_confirmation: bool = False,
     parse_version_title: Callable[[object], tuple[int, int, int] | None],
     policy: RepoPolicy | None = None,
     policy_path: str = REPO_CONFIG_PATH,
@@ -426,18 +713,55 @@ def advance_active_milestone_on_idle(
             f"active_milestone {active_milestone}: ambiguous exact-title "
             f"match in {repo}, refusing to guess"
         )
-    if matches[0].get("state") == "open":
-        try:
-            _close_stale_milestone_issues(repo, active_milestone)
-        except Exception:
-            # Closing an obsolete confirmation is notification maintenance;
-            # it must not turn an otherwise successful idle tick into a
-            # delivery failure.
-            LOGGER.exception(
-                "stale_milestone_issue_close_failed repo=%s active=%s",
+    active = matches[0]
+    state = str(active.get("state"))
+    open_issues = _milestone_open_issue_count(active)
+    if state == "open":
+        # Issue #856: only the opted-in repository pays the extra release
+        # ticket search, and only when the Milestone is actually finished.
+        release_ticket_exists = False
+        if open_issues == 0 and release_confirmation:
+            release_ticket_exists = _release_ticket_exists(
                 repo, active_milestone,
             )
-        return "open", None
+        waiting = classify_milestone_waiting(
+            state=state, open_issues=open_issues,
+            release_ticket_exists=release_ticket_exists,
+            candidates=[], auto_next_milestone=auto_next_milestone,
+            release_confirmation=release_confirmation,
+        )
+        if waiting == MILESTONE_AWAITING_RELEASE:
+            _close_stale_milestone_issues_safely(
+                repo, active_milestone, keep_release_notice=True,
+            )
+            event(
+                "active_milestone_release_pending", level=logging.WARNING,
+                old=active_milestone, repo=repo,
+            )
+            _ensure_pending_milestone_notice(
+                repo, active_milestone,
+                [{"title": active_milestone, "open_issues": open_issues}],
+                repo_dir, config_path, _WAITING_RELEASE, [active_milestone],
+                policy=policy, policy_path=policy_path,
+                base_branch=base_branch, dispatch_label=dispatch_label,
+                version_file=version_file,
+            )
+            return state, None
+        _close_stale_milestone_issues_safely(
+            repo, active_milestone, keep_release_notice=False,
+            release_ticket_exists=release_ticket_exists,
+        )
+        return state, None
+    if release_confirmation:
+        # Issue #856: the release notice's wait also ends when its Milestone
+        # closes — the release shipped, or the decision went another way —
+        # and the closed path never swept notices before #856. Key-gated so
+        # an unopted repository keeps the pre-#856 closed path unchanged;
+        # the pre-#856 advance notice (``candidates != [old]``) is kept
+        # either way, exactly like the open path.
+        _close_stale_milestone_issues_safely(
+            repo, active_milestone, keep_release_notice=False,
+        )
     current = parse_version_title(active_milestone)
     candidates = []
     for milestone in milestones:
@@ -458,41 +782,25 @@ def advance_active_milestone_on_idle(
         for milestone in milestones
         if isinstance(milestone, dict) and milestone.get("title") == title
     ]
-    if not auto_next_milestone:
+    waiting = classify_milestone_waiting(
+        state=state, open_issues=open_issues, release_ticket_exists=False,
+        candidates=candidates, auto_next_milestone=auto_next_milestone,
+        release_confirmation=release_confirmation,
+    )
+    if waiting == MILESTONE_AWAITING_NEXT:
         candidate_titles = [title for _, title in candidates]
         event(
             "active_milestone_advance_pending", level=logging.WARNING,
             old=active_milestone, candidates=",".join(candidate_titles),
             auto_next_milestone="false",
         )
-        issue_number: int | None = None
-        try:
-            issue_number = _pending_milestone_issue(
-                repo, active_milestone, candidate_details,
-                repo_dir if repo_dir is not None else config_path.parent,
-            )
-        except Exception:
-            # The confirmation Issue is an idle-path notification. Its
-            # failure must not turn an otherwise successful no-ready tick
-            # into a delivery failure.
-            LOGGER.exception(
-                "pending_milestone_issue_failed repo=%s old=%s",
-                repo, active_milestone,
-            )
-        if issue_number is not None:
-            try:
-                process_milestone_commands(
-                    repo, issue_number,
-                    candidate_titles=candidate_titles,
-                    config_path=config_path, policy=policy,
-                    policy_path=policy_path, base_branch=base_branch,
-                    dispatch_label=dispatch_label, version_file=version_file,
-                )
-            except Exception:
-                LOGGER.exception(
-                    "milestone_command_processing_failed repo=%s old=%s",
-                    repo, active_milestone,
-                )
+        _ensure_pending_milestone_notice(
+            repo, active_milestone, candidate_details, repo_dir, config_path,
+            _WAITING_NEXT, candidate_titles,
+            policy=policy, policy_path=policy_path,
+            base_branch=base_branch, dispatch_label=dispatch_label,
+            version_file=version_file,
+        )
         return "closed", None
     new_value = candidates[0][1]
     # Issue #1304: land the value where it actually comes from.  The

@@ -50,6 +50,7 @@ def test_parse_repo_config_accepts_every_whitelisted_key():
         'steering_enabled = false\n'
         'steering_poll_seconds = 0.1\n'
         'steering_max_rounds = 7\n'
+        'release_confirmation = true\n'
     )
     assert repo_config.parse_repo_config(text) == repo_config.RepoPolicy(
         base_branch="beta",
@@ -59,7 +60,30 @@ def test_parse_repo_config_accepts_every_whitelisted_key():
         steering_enabled=False,
         steering_poll_seconds=0.1,
         steering_max_rounds=7,
+        release_confirmation=True,
     )
+
+
+def test_release_confirmation_is_a_repository_policy_key():
+    """Issue #856: the finished-Milestone release confirmation is an
+    opt-in the repository that owns the Milestone declares — never a
+    host-only key."""
+    assert "release_confirmation" in repo_config.POLICY_KEYS
+    assert "release_confirmation" not in repo_config.HOST_ONLY_KEYS
+    policy = repo_config.parse_repo_config("release_confirmation = true\n")
+    assert policy.release_confirmation is True
+    assert repo_config.parse_repo_config("release_confirmation = false\n") == (
+        repo_config.RepoPolicy(release_confirmation=False)
+    )
+
+
+@pytest.mark.parametrize("value", ['"true"', "1", '["yes"]'])
+def test_parse_repo_config_rejects_a_non_boolean_release_confirmation(value):
+    with pytest.raises(
+        repo_config.RepoConfigError,
+        match="release_confirmation must be a boolean",
+    ):
+        repo_config.parse_repo_config(f"release_confirmation = {value}\n")
 
 
 def test_parse_repo_config_tolerates_a_legacy_test_command():

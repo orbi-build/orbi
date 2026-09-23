@@ -611,6 +611,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `active_milestone_advanced` | active Milestone 已推进到下一个待定版本 |
 | `active_milestone_advance_none` | 没有可推进的待定 Milestone |
 | `active_milestone_advance_pending` | 存在待定的 Milestone 候选在等待 |
+| `active_milestone_release_pending` | 已完成的 Milestone 仍在等待确认创建 release 票 |
 | `milestone_command_applied` | 票内 `/milestone` 命令已完成全部三步 |
 | `milestone_command_failed` | 票内 `/milestone` 命令在某一步失败 |
 | `active_milestone_advance_failed` | 推进 active Milestone 失败 |
@@ -798,6 +799,32 @@ orbi milestone set v0.5.7 --config orbi.toml
 
 全程不调用模型：结果由评论、候选列表和仓库状态唯一决定。它记录的事件
 类型是 `milestone_command_applied` 与 `milestone_command_failed`。
+
+### 已完成但没有 release 票的 Milestone
+
+Issue #856：active Milestone 已无 open Issue，却没人开它的 release 票时，
+引擎会静默等待——队列为空，每个 tick 都报 `no_ready_issue`，没有任何人
+被告知有一个决定待做。在仓库 `.github/orbi.toml` 里设置
+`release_confirmation = true` 后，空闲路径会通过与推进等待相同的
+决策通知机制把这个状态呈现出来：恰好一条通知 Issue，指纹相同
+（`orbi-milestone-advance old=<active> candidates=<active>`），同样自带
+票内 `/milestone <版本>` 回复。引擎绝不自己创建 release 票——通知告知
+维护者，受信任的 `/milestone <active>` 评论执行上面记录的三步确定性
+操作。
+
+- 幂等：每个已完成的 Milestone 只存在一条 open 通知，绝不每 tick 一条。
+- release 票缺失时通知保持打开；等待结束后自动关闭——该 Milestone 的
+  release 票已出现，或该 Milestone 不再处于等待状态（又有新的 open
+  Issue，或 release 后已关闭）。关闭评论会说明是哪种情况。
+- 等待状态记录 `active_milestone_release_pending old=<active> repo=<repo>`，
+  与推进等待记录的是同一个 `old=` 字段。通知写入失败属于纯旁路（`pending_milestone_issue_failed`），绝不让
+  tick 失败。
+- 这个等待是有意为之，不是故障：待做的决定是「为已完成的 Milestone
+  打开 release 票」。未开启该键（默认 `false`）时行为与 #856 之前完全
+  一致。
+- `/milestone` 的 release-ticket 步骤无法解析 `version_file` 时，通知会
+  收到 `version_file_unresolved` 回执并给出修复方式；设置 `version_file`
+  （或 `"none"`）后重新回复即可。
 
 ## 公开表面
 
