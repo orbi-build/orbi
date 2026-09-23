@@ -881,6 +881,22 @@ orbi milestone set v0.9.9 --config orbi.toml
 #   title from `gh api repos/orbi-build/orbi/milestones?state=open --jq '.[].title'`
 ```
 
+A **closed** target is refused while `auto_next_milestone` is true (the
+default, Issue #933): the idle path advances a closed `active_milestone`
+to the newest open one on the next tick, so accepting it would report a
+success the engine undoes one tick later. Reopen the milestone, or set
+`auto_next_milestone = false` first. With `auto_next_milestone = false`
+the closed target stays allowed — that is the confirmation flow this
+command exists for.
+
+```bash
+orbi milestone set v0.5.7 --config orbi.toml
+# milestone_set_failed reason=milestone_closed title='v0.5.7'
+#   repo=orbi-build/orbi state=closed; auto_next_milestone is true, so the
+#   next idle tick would advance active_milestone away from it;
+#   fix=reopen the milestone or set auto_next_milestone = false
+```
+
 ### Advance the active milestone from the confirmation Issue
 
 The confirmation Issue a closed active Milestone produces with

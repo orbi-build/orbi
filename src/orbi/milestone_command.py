@@ -496,7 +496,12 @@ def milestone_set(
     `active_milestone` (the per-key override the Runner reads), else the
     host config `active_milestone` line. In the rewrite only the
     `active_milestone` line changes — comments, blank lines and every
-    other field stay byte-identical. The variable sync is NOT part of
+    other field stay byte-identical. A CLOSED target is refused while
+    `auto_next_milestone` is true (Issue #933): the idle path would
+    advance a closed active_milestone to the newest open one on the next
+    tick, so success here would contradict the real behavior; the repair
+    is to reopen the milestone or set `auto_next_milestone = false`
+    first. The variable sync is NOT part of
     this command: the Runner's next tick publishes
     `ORBI_ACTIVE_MILESTONE` (the bypass contract). Returns
     (old, new, target); every failure raises MilestoneSetError with the
@@ -555,6 +560,16 @@ def milestone_set(
             f"milestone_set_failed reason=milestone_ambiguous title={title!r} "
             f"repo={repo}: the exact title matches {len(matches)} "
             "Milestones; fix=rename or close the duplicate Milestone first"
+        )
+    if config.auto_next_milestone and matches[0].get("state") == "closed":
+        # A closed active_milestone is exactly what the next idle tick's
+        # auto-advance rewrites (Issue #933): reporting success here would
+        # promise a claim scope that is undone one tick later.
+        raise MilestoneSetError(
+            f"milestone_set_failed reason=milestone_closed title={title!r} "
+            f"repo={repo} state=closed; auto_next_milestone is true, so the "
+            "next idle tick would advance active_milestone away from it; "
+            "fix=reopen the milestone or set auto_next_milestone = false"
         )
     try:
         target = _land_active_milestone(
