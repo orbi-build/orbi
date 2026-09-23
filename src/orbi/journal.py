@@ -391,6 +391,9 @@ JOURNAL_EVENTS: dict[str, str] = {
     "active_milestone_advanced": "the active Milestone advanced to the next pending one",
     "active_milestone_advance_none": "no pending Milestone to advance to",
     "active_milestone_advance_pending": "a pending Milestone candidate is waiting",
+    "active_milestone_release_pending": (
+        "a finished Milestone still needs its release ticket confirmed"
+    ),
     "active_milestone_advance_failed": "advancing the active Milestone failed",
     "active_milestone_variable_removed": "the active_milestone repo variable was removed",
     "active_milestone_variable_unchanged": "the active_milestone repo variable matches the config",

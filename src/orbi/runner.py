@@ -1927,46 +1927,6 @@ def _parse_version_title(title: object) -> tuple[int, int, int] | None:
     return tuple(map(int, match.groups())) if match else None
 
 
-def arm_release_ticket(
-    repo: str, active_milestone: str,
-    dispatch_label: str = READY_LABEL,
-) -> None:
-    """Arm one open release ticket for the current milestone on idle.
-
-    The ticket is armed with the repo's dispatch label — the same label
-    `release_fallback_search` requires before the ticket can be claimed —
-    so callers must resolve it from the repository policy, not assume the
-    host default. The search exclusion uses the same label: an armed
-    ticket carries it, and a ticket polluted by a stale arm (labelled
-    `ai-ready` under a custom-dispatch-label repo) no longer matches the
-    exclusion, so the next idle tick re-arms and heals it.
-
-    This is an idle-path bypass: callers deliberately catch failures so a
-    GitHub label operation cannot change the outcome of the main tick.
-    """
-    search = (
-        f"label:{RELEASE_LABEL} -label:{dispatch_label} "
-        f'milestone:"{active_milestone}"'
-    )
-    issues = list_issues(
-        repo, state="open", search=search,
-        json_fields="number", limit=200, timeout=30,
-    )
-    if not issues:
-        return
-    number = issues[0].get("number")
-    if not isinstance(number, int):
-        raise RuntimeError(f"release ticket has invalid issue number: {number!r}")
-    run_gh_write_command([
-        "gh", "issue", "edit", str(number), "--repo", repo,
-        "--add-label", dispatch_label,
-    ], timeout=30, command_runner=run_command)
-    event(
-        "release_ticket_armed", issue=f"#{number}",
-        milestone=active_milestone,
-    )
-
-
 def pick_next_delivery(
     repos: Sequence[str], slot_dir: Path, max_concurrency: int,
     active_milestone: str | None = None, config: config_domain.RunnerConfig | None = None,
@@ -7935,29 +7895,16 @@ def main(argv: list[str] | None = None) -> int:
                     "source_repos=%s outcome=no_ready_issue",
                     config.source_repos,
                 )
-            # Arm a release ticket as a pure bypass. A failed
-            # label operation must not change the idle outcome.
+            # Milestone bookkeeping as a pure bypass (Issues #856/#186):
+            # ONE entry point arms an existing release ticket, classifies
+            # the active Milestone's waiting state and advances/opens the
+            # decision notice. A thrown `gh` call or a renamed Milestone
+            # must not turn an idle tick into a non-zero exit.
             idle_repo = config.source_repos[0]
             effective_milestone, dispatch_label, repo_policy = _repo_scan_context(
                 config, idle_repo, config.active_milestone,
             )
             if effective_milestone is not None:
-                try:
-                    arm_release_ticket(
-                        idle_repo,
-                        effective_milestone,
-                        dispatch_label=dispatch_label,
-                    )
-                except Exception:
-                    LOGGER.exception(
-                        "release_ticket_arm_failed repo=%s milestone=%s",
-                        idle_repo,
-                        effective_milestone,
-                    )
-                # Validate and advance only after the arm attempt.
-                # Like the arm above, the advance is an idle-path
-                # pure bypass — a renamed/deleted milestone or a failed `gh`
-                # call must not turn an idle tick into a non-zero exit.
                 # The base branch is the repo's FUSED value (entry
                 # fallback, then the policy override): the command writes
                 # it into the release ticket, and the release state
@@ -7965,12 +7912,18 @@ def main(argv: list[str] | None = None) -> int:
                 # would release the wrong branch for any repository whose
                 # entry or policy overrides it.
                 try:
-                    milestone_bookkeeping.advance_active_milestone_on_idle(
+                    milestone_bookkeeping.reconcile_milestone_on_idle(
                         idle_repo,
                         effective_milestone,
                         config.config_path,
                         config.repo_dir,
                         auto_next_milestone=config.auto_next_milestone,
+                        release_confirmation=(
+                            repo_policy.release_confirmation
+                            if repo_policy is not None
+                            and repo_policy.release_confirmation is not None
+                            else False
+                        ),
                         parse_version_title=_parse_version_title,
                         policy=repo_policy,
                         policy_path=config_domain.repository_config_path(

@@ -510,6 +510,7 @@ contents API 读取仓库**默认分支 tip** 上的 `.github/orbi.toml`——
 | `steering_enabled` | boolean | 为该仓库启用受信任修正轮询；缺席时回退到宿主值。 |
 | `steering_poll_seconds` | number | 该仓库的轮询间隔；缺席时回退到宿主值，且必须为有限正数。 |
 | `steering_max_rounds` | integer | 该仓库最多重启 Steering 的次数；缺席时回退到宿主值。 |
+| `release_confirmation` | boolean | 选择开启“已完成 Milestone 发布确认”（Issue #856）：当 active Milestone 已无 open Issue 且尚无 release 票时，空闲路径会发一条决策通知，携带票内 `/milestone <版本>` 命令，不再静默等待。默认 `false`（#856 之前的行为），未启用的仓库零变化。见下节《等待 Milestone 决策时的唯一回复》。 |
 
 ```toml
 # .github/orbi.toml
@@ -539,3 +540,22 @@ claim 选中的那个 Issue 上；`dispatch_label` 不是 `ai-ready` 的仓库�
 始终在 run 上可见。传输原因（限流、网络）导致的读取失败只记一行
 `repo_config_read_failed` 并回退宿主配置——该降级在 run 评论上表现为
 缺少 `repo_config` 字段。
+
+## 等待 Milestone 决策时的唯一回复
+
+整条链路安静下来时，Runner 会说明**为什么**，而不是静默等待。两种空闲状态
+通过**同一个**决策通知呈现——一张带有指纹
+`orbi-milestone-advance old=<active> candidates=<titles>` 的 Issue——两者
+都由票内同一条命令回答：在该通知上以受信任评论形式发出的
+`/milestone <版本>`：
+
+| 等待状态 | 何时出现 | 回答它的唯一回复 |
+| --- | --- | --- |
+| 推进等待 | `auto_next_milestone = false` 且 active Milestone 已 CLOSED——推进是有意停下的。 | `/milestone <下一个版本>`——把下一个待发布 Milestone 落为 active。 |
+| 发布等待 | active Milestone 为 OPEN、已无 open Issue，且还没有人开它的 release 票，同时仓库策略设置了 `release_confirmation = true`（Issue #856）。未设置该键时保持 #856 之前的静默等待。 | `/milestone <当前版本>`——为已完成的 Milestone 打开 release 票。 |
+
+两种通知都是幂等的（每种等待只有一张 open 通知，绝不是每 tick 一张），
+等待结束后自动关闭并留下回执，而且都不会自行行动：Runner 绝不自己创建
+release 票，也绝不在没有回复的情况下推进 Milestone。回复执行的是确定性
+三步命令 `/milestone`（`milestone` → `release ticket` →
+`active_milestone`），详见 [Operations](/zh/operations)；不涉及任何模型调用。

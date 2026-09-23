@@ -35,14 +35,19 @@ from orbi.pi_process import PiWatchOptions
 
 # Hosted-macOS boundaries; the Ubuntu CI keeps every scene here
 # authoritative. The idle-recovery scenes discover hung tools via
-# /proc (Linux-only by pi_recovery's contract); the unit-drift
-# preflight scenes contract the systemd deployment over systemd-shaped
-# fixtures.
+# /proc (Linux-only by pi_recovery's contract) and time their start
+# from /proc/stat btime; the unit-drift preflight scenes contract the
+# systemd deployment over systemd-shaped fixtures.
+_proc_based_recovery = (
+    sys.platform != "darwin" and Path("/proc/stat").exists()
+)
 _stream_pi_linux_only = pytest.mark.skipif(
-    sys.platform == "darwin",
+    not _proc_based_recovery,
     reason=(
-        "pi_recovery idle-descendant discovery reads /proc (Linux); on "
-        "macOS the recovery loop honestly finds no target, so these "
+        "pi_recovery idle-descendant discovery reads /proc (Linux) and "
+        "times each descendant from /proc/stat btime; on macOS or a "
+        "container whose /proc is mounted `subset=pid` (no /proc/stat) "
+        "the recovery loop honestly finds no target, so these "
         "real-subprocess recovery scenes stay Linux-authoritative"
     ),
 )
@@ -6400,6 +6405,40 @@ def test_advance_active_milestone_closes_old_manual_notification_after_manual_mo
     ]
 
 
+def test_stale_notice_comment_table():
+    """Issue #856: the pure close/keep decision for one decision notice."""
+    active = "v0.4.0"
+    release_body = "orbi-milestone-advance old=v0.4.0 candidates=v0.4.0"
+    advance_body = "orbi-milestone-advance old=v0.4.0 candidates=v0.5.0"
+    stale_body = "orbi-milestone-advance old=v0.3.0 candidates=v0.4.0"
+    close = "已收敛：当前配置 active_milestone = `v0.4.0`。"
+    confirmed = (
+        "已收敛：Milestone `v0.4.0` 的 release ticket"
+        " 已存在，不再等待发布确认。"
+    )
+    assert milestone._stale_notice_comment(
+        release_body, active, keep_release_notice=True,
+    ) is None
+    assert milestone._stale_notice_comment(
+        release_body, active, keep_release_notice=False,
+    ) == confirmed
+    assert milestone._stale_notice_comment(
+        advance_body, active, keep_release_notice=False,
+    ) is None
+    assert milestone._stale_notice_comment(
+        stale_body, active, keep_release_notice=True,
+    ) == close
+    # A body without a candidates= group keeps the pre-#856 behaviour: it is
+    # closed like any advance notice once its old= no longer matches.
+    assert milestone._stale_notice_comment(
+        "orbi-milestone-advance old=v0.3.0", active, keep_release_notice=True,
+    ) == close
+    assert milestone._stale_notice_comment(None, active, keep_release_notice=True) is None
+    assert milestone._stale_notice_comment(
+        "no fingerprint here", active, keep_release_notice=True,
+    ) is None
+
+
 def test_advance_active_milestone_close_failure_is_bypassed(
     monkeypatch, tmp_path, caplog,
 ):
@@ -6695,7 +6734,7 @@ def test_arm_release_ticket_adds_ready_to_matching_open_issue(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        runner.arm_release_ticket("owner/repo", "v0.4.0")
+        milestone.arm_release_ticket("owner/repo", "v0.4.0")
 
     assert calls == [
         [
@@ -6718,7 +6757,7 @@ def test_arm_release_ticket_does_nothing_when_no_ticket_matches(monkeypatch):
         lambda command, **kwargs: calls.append(command) or "[]",
     )
 
-    runner.arm_release_ticket("owner/repo", "v0.4.0")
+    milestone.arm_release_ticket("owner/repo", "v0.4.0")
 
     assert len(calls) == 1
 
@@ -6729,7 +6768,7 @@ def test_arm_release_ticket_rejects_malformed_issue_number(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="invalid issue number"):
-        runner.arm_release_ticket("owner/repo", "v0.4.0")
+        milestone.arm_release_ticket("owner/repo", "v0.4.0")
 
 
 def test_arm_release_ticket_uses_custom_dispatch_label(monkeypatch, caplog):
@@ -6752,7 +6791,7 @@ def test_arm_release_ticket_uses_custom_dispatch_label(monkeypatch, caplog):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        runner.arm_release_ticket(
+        milestone.arm_release_ticket(
             "owner/repo", "v0.4.0", dispatch_label="dev-queue",
         )
 
@@ -6824,7 +6863,7 @@ def test_main_idle_advance_uses_the_repos_fused_base_branch(
         runner.__dict__, "pick_next_delivery", lambda *args, **kwargs: None,
     )
     monkeypatch.setitem(
-        runner.__dict__, "arm_release_ticket", lambda *args, **kwargs: None,
+        milestone.__dict__, "arm_release_ticket", lambda *args, **kwargs: None,
     )
     monkeypatch.setitem(
         milestone.__dict__, "validate_active_milestone", lambda *args: None,
@@ -6862,11 +6901,11 @@ def test_main_idle_release_arm_failure_is_bypassed(monkeypatch, tmp_path, caplog
         encoding="utf-8",
     )
     monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        runner, "arm_release_ticket",
+    monkeypatch.setitem(
+        milestone.__dict__, "arm_release_ticket",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("permission denied")),
     )
-    monkeypatch.setattr(milestone, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
+    monkeypatch.setitem(milestone.__dict__, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
 
     with caplog.at_level("ERROR"):
         assert runner.main(["--config", str(config)]) == 0
@@ -6887,9 +6926,9 @@ def test_main_idle_advance_failure_is_bypassed(monkeypatch, tmp_path, caplog):
         encoding="utf-8",
     )
     monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        milestone, "advance_active_milestone_on_idle",
+    monkeypatch.setitem(milestone.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
+    monkeypatch.setitem(
+        milestone.__dict__, "advance_active_milestone_on_idle",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             RuntimeError(
                 "active_milestone_missing current=v0.4.0; "
@@ -6963,7 +7002,7 @@ def test_main_uses_outside_milestone_outcome_instead_of_no_ready(
 ):
     monkeypatch.setitem(runner.__dict__, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setitem(runner.__dict__, "log_ready_outside_milestone", lambda *args, **kwargs: True)
-    monkeypatch.setitem(runner.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
+    monkeypatch.setitem(milestone.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setitem(milestone.__dict__, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
     monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args: None)
     _write_prompts(tmp_path)
@@ -6983,7 +7022,7 @@ def test_main_query_failure_keeps_idle_exit(monkeypatch, tmp_path, caplog):
     monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: (_ for _ in ()).throw(
         RuntimeError("GitHub unavailable")
     ))
-    monkeypatch.setitem(runner.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
+    monkeypatch.setitem(milestone.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setitem(milestone.__dict__, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
@@ -7028,8 +7067,8 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
         return None
 
     monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
-    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
-    monkeypatch.setattr(milestone, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
+    monkeypatch.setitem(milestone.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
+    monkeypatch.setitem(milestone.__dict__, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
     assert runner.main(["--config", str(config)]) == 0
     assert seen["milestone"] == "v0.2.0"
 
@@ -7046,9 +7085,9 @@ def test_main_advances_milestone_only_after_no_ready_issue(
     )
     calls = []
     monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        milestone, "advance_active_milestone_on_idle",
+    monkeypatch.setitem(milestone.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
+    monkeypatch.setitem(
+        milestone.__dict__, "advance_active_milestone_on_idle",
         lambda *args, **kwargs: calls.append((args, kwargs)),
     )
     assert runner.main(["--config", str(config)]) == 0
@@ -7056,6 +7095,7 @@ def test_main_advances_milestone_only_after_no_ready_issue(
         (("owner/repo", "v0.3.0", config.resolve(), tmp_path.resolve()),
          {
              "auto_next_milestone": True,
+             "release_confirmation": False,
              "parse_version_title": runner._parse_version_title,
              "policy": None,
              "policy_path": ".github/orbi.toml",
@@ -7080,14 +7120,15 @@ def test_main_passes_disabled_auto_next_milestone_to_idle_advance(
     )
     seen = {}
     monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        milestone, "advance_active_milestone_on_idle",
+    monkeypatch.setitem(milestone.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
+    monkeypatch.setitem(
+        milestone.__dict__, "advance_active_milestone_on_idle",
         lambda *args, **kwargs: seen.update(kwargs),
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen == {
         "auto_next_milestone": False,
+        "release_confirmation": False,
         "parse_version_title": runner._parse_version_title,
         "policy": None,
         "policy_path": ".github/orbi.toml",
@@ -7095,6 +7136,69 @@ def test_main_passes_disabled_auto_next_milestone_to_idle_advance(
         "dispatch_label": runner.READY_LABEL,
         "version_file": None,
     }
+
+
+def test_main_idle_uses_the_single_milestone_reconcile_entry_point(
+    monkeypatch, tmp_path,
+):
+    """Issue #856: the idle path makes ONE Milestone bookkeeping call, so a
+    new step never becomes a second, separately-failing call."""
+    monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args: None)
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v0.4.0"\n',
+        encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setitem(
+        milestone.__dict__, "arm_release_ticket",
+        lambda *args, **kwargs: pytest.fail("the runner must not arm directly"),
+    )
+    monkeypatch.setitem(
+        milestone.__dict__, "reconcile_milestone_on_idle",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert len(calls) == 1
+    assert calls[0][0][:2] == ("owner/repo", "v0.4.0")
+    assert calls[0][1]["release_confirmation"] is False
+    assert not hasattr(runner, "arm_release_ticket")
+    # The acceptance is structural: the idle path reaches Milestone
+    # bookkeeping through reconcile alone, never by calling the arm or
+    # the advance directly (Issue #856).
+    source = Path(runner.__file__).read_text(encoding="utf-8")
+    assert "arm_release_ticket" not in source
+    assert "advance_active_milestone_on_idle" not in source
+
+
+def test_main_idle_passes_release_confirmation_from_the_repo_policy(
+    monkeypatch, tmp_path,
+):
+    """Issue #856: the opted-in repository policy reaches the reconcile call."""
+    monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args: None)
+    _write_prompts(tmp_path)
+    fake = FakeGh("owner/repo")
+    fake.add_milestone(1, title="v0.4.0")
+    fake.set_repo_config(
+        'dispatch_label = "dev-queue"\nrelease_confirmation = true\n'
+    )
+    monkeypatch.setattr(seam, "run_command", fake)
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
+    seen = {}
+    monkeypatch.setitem(
+        milestone.__dict__, "reconcile_milestone_on_idle",
+        lambda *args, **kwargs: seen.update(kwargs) or ("open", None),
+    )
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v0.4.0"\n',
+        encoding="utf-8",
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert seen["release_confirmation"] is True
+    assert seen["dispatch_label"] == "dev-queue"
 
 
 def test_main_passes_none_active_milestone_when_unconfigured(

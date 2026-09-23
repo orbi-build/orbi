@@ -1073,6 +1073,54 @@ def test_full_command_is_idempotent_and_lands_every_step(
     ] == []
 
 
+def test_the_release_confirmation_reply_opens_the_release_ticket(
+    monkeypatch, tmp_path,
+):
+    """Issue #856 user journey: the maintainer replies `/milestone <active>`
+    on the finished-Milestone notice and the release ticket appears — the
+    engine never creates it on its own, and `active_milestone` is kept."""
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
+    fake = FakeMilestoneGh(
+        policy_text='active_milestone = "v0.5.40"\n',
+        template=REAL_TEMPLATE,
+    )
+    fake.milestones[0]["state"] = "open"  # finished, not closed
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
+    completed = milestone_command.apply_milestone_command(
+        "owner/repo", "v0.5.40", config_path=config,
+        policy=RepoPolicy(active_milestone="v0.5.40"),
+        policy_path=".github/orbi.toml", base_branch="main",
+        dispatch_label=READY_LABEL, version_file="pyproject.toml",
+    )
+    assert completed == [
+        milestone_command._STEP_MILESTONE,
+        milestone_command._STEP_RELEASE_TICKET,
+        milestone_command._STEP_ACTIVE_MILESTONE,
+    ]
+    assert [m["title"] for m in fake.milestones] == ["v0.5.40"]
+    assert len(fake.release_issues) == 1
+    assert parse_release_declaration(
+        fake.release_issues[0]["body"],
+    )["version"] == "v0.5.40"
+    assert 'active_milestone = "v0.5.40"' in fake.policy_text
+
+    # A second identical reply changes nothing (idempotent).
+    fake.commands.clear()
+    milestone_command.apply_milestone_command(
+        "owner/repo", "v0.5.40", config_path=config,
+        policy=RepoPolicy(active_milestone="v0.5.40"),
+        policy_path=".github/orbi.toml", base_branch="main",
+        dispatch_label=READY_LABEL, version_file="pyproject.toml",
+    )
+    assert len(fake.release_issues) == 1
+    assert [
+        command for command in fake.commands
+        if "issue" in command and "create" in command
+    ] == []
+
+
 def test_a_command_never_infers_the_next_version(monkeypatch, tmp_path):
     # v0.5.42 is the higher open milestone, but the command says v0.5.41 —
     # the literal in the comment is the only version that may be used.
@@ -1208,6 +1256,218 @@ def test_advance_pending_command_failure_never_fails_the_idle_tick(
             parse_version_title=runner._parse_version_title,
         ) == ("closed", None)
     assert "milestone_command_processing_failed" in caplog.text
+
+
+def test_classify_milestone_waiting_table():
+    """Issue #856: the pure table over the resolved idle facts."""
+    candidates = [((0, 5, 41), "v0.5.41")]
+    assert milestone.classify_milestone_waiting(
+        state="open", open_issues=3, release_ticket_exists=False,
+        candidates=[], auto_next_milestone=True, release_confirmation=True,
+    ) == milestone.MILESTONE_IN_PROGRESS
+    assert milestone.classify_milestone_waiting(
+        state="open", open_issues=0, release_ticket_exists=False,
+        candidates=[], auto_next_milestone=True, release_confirmation=False,
+    ) == milestone.MILESTONE_NOTHING_TO_DO
+    assert milestone.classify_milestone_waiting(
+        state="open", open_issues=0, release_ticket_exists=True,
+        candidates=[], auto_next_milestone=True, release_confirmation=True,
+    ) == milestone.MILESTONE_NOTHING_TO_DO
+    assert milestone.classify_milestone_waiting(
+        state="open", open_issues=0, release_ticket_exists=False,
+        candidates=[], auto_next_milestone=True, release_confirmation=True,
+    ) == milestone.MILESTONE_AWAITING_RELEASE
+    # The existing `auto_next_milestone = false` path: closed + candidate.
+    assert milestone.classify_milestone_waiting(
+        state="closed", open_issues=0, release_ticket_exists=False,
+        candidates=candidates, auto_next_milestone=True,
+        release_confirmation=False,
+    ) == milestone.MILESTONE_NOTHING_TO_DO
+    assert milestone.classify_milestone_waiting(
+        state="closed", open_issues=0, release_ticket_exists=False,
+        candidates=candidates, auto_next_milestone=False,
+        release_confirmation=False,
+    ) == milestone.MILESTONE_AWAITING_NEXT
+    assert milestone.classify_milestone_waiting(
+        state="closed", open_issues=0, release_ticket_exists=False,
+        candidates=[], auto_next_milestone=False, release_confirmation=False,
+    ) == milestone.MILESTONE_NOTHING_TO_DO
+
+
+def test_no_release_notice_without_the_opt_in(monkeypatch, tmp_path):
+    """Issue #856: the absent/false key keeps the pre-#856 silent wait,
+    and the extra release-ticket search is never paid for."""
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
+    fake = FakeMilestoneGh(current="v0.5.40")
+    fake.milestones[0].update(state="open", open_issues=0)
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
+    monkeypatch.setattr(seam, "process_milestone_commands", lambda *a, **k: None)
+    parse_version_title = runner._parse_version_title
+    # Default (key absent) and explicit false: one and the same wait.
+    assert milestone.advance_active_milestone_on_idle(
+        "owner/repo", "v0.5.40", config,
+        parse_version_title=parse_version_title,
+    ) == ("open", None)
+    assert milestone.advance_active_milestone_on_idle(
+        "owner/repo", "v0.5.40", config, release_confirmation=False,
+        parse_version_title=parse_version_title,
+    ) == ("open", None)
+    assert fake.notices == []
+    assert fake.first_index("gh", "issue", "create") == -1
+    assert not [
+        command for command in fake.commands
+        if any("label:ai-release" in part for part in command)
+    ]
+
+
+def test_no_release_notice_while_the_milestone_has_open_issues(
+    monkeypatch, tmp_path,
+):
+    """Issue #856: a Milestone still carrying tickets is in progress — the
+    opt-in changes nothing and costs no extra search."""
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
+    fake = FakeMilestoneGh(current="v0.5.40")
+    fake.milestones[0].update(state="open", open_issues=2)
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
+    monkeypatch.setattr(seam, "process_milestone_commands", lambda *a, **k: None)
+    assert milestone.advance_active_milestone_on_idle(
+        "owner/repo", "v0.5.40", config, release_confirmation=True,
+        parse_version_title=runner._parse_version_title,
+    ) == ("open", None)
+    assert fake.notices == []
+    assert fake.first_index("gh", "issue", "create") == -1
+    assert not [
+        command for command in fake.commands
+        if any("label:ai-release" in part for part in command)
+    ]
+
+
+def test_advance_release_confirmation_opens_one_notice_and_processes_commands(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #856 user journey: a finished Milestone with no release ticket
+    produces ONE decision notice that carries the `/milestone <version>`
+    reply, and the maintainer's reply is processed from that same place."""
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
+    fake = FakeMilestoneGh(current="v0.5.40")
+    fake.milestones[0].update(state="open", open_issues=0)
+    processed = []
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
+    monkeypatch.setattr(
+        seam, "process_milestone_commands",
+        lambda repo, number, **kwargs: processed.append((repo, number, kwargs)),
+    )
+    with caplog.at_level(logging.WARNING):
+        for _ in range(2):
+            assert milestone.advance_active_milestone_on_idle(
+                "owner/repo", "v0.5.40", config,
+                release_confirmation=True,
+                parse_version_title=runner._parse_version_title,
+            ) == ("open", None)
+
+    assert len(fake.notices) == 1
+    notice = fake.notices[0]
+    assert notice["title"] == "Milestone v0.5.40 已完成，等待确认发布"
+    assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.40" in notice["body"]
+    assert "/milestone v0.5.40" in notice["body"]
+    assert [entry[2]["candidate_titles"] for entry in processed] == [
+        ["v0.5.40"], ["v0.5.40"],
+    ]
+    assert "active_milestone_release_pending old=v0.5.40" in caplog.text
+    # The wait is intentional: the engine never creates the ticket itself.
+    assert config.read_text() == 'active_milestone = "v0.5.40"\n'
+    assert fake.release_issues == []
+
+
+def test_advance_release_notice_is_kept_then_closed_once_its_ticket_exists(
+    monkeypatch, tmp_path, caplog,
+):
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
+    fake = FakeMilestoneGh(current="v0.5.40")
+    fake.milestones[0].update(state="open", open_issues=0)
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
+    monkeypatch.setattr(seam, "process_milestone_commands", lambda *a, **k: None)
+    with caplog.at_level(logging.WARNING):
+        milestone.advance_active_milestone_on_idle(
+            "owner/repo", "v0.5.40", config,
+            release_confirmation=True,
+            parse_version_title=runner._parse_version_title,
+        )
+    # Missing ticket: the notice waits, and nothing else is written.
+    assert len(fake.notices) == 1
+    assert fake.comments == []
+    assert "active_milestone_release_pending" in caplog.text
+
+    caplog.clear()
+    fake.release_issues.append({"number": 501, "body": "release v0.5.40"})
+    with caplog.at_level(logging.INFO):
+        milestone.advance_active_milestone_on_idle(
+            "owner/repo", "v0.5.40", config,
+            release_confirmation=True,
+            parse_version_title=runner._parse_version_title,
+        )
+    # The wait is over: the notice is closed with its own receipt.
+    assert fake.notices == []
+    assert len(fake.comments) == 1
+    assert fake.comments[0]["number"] == 500
+    assert "release ticket" in fake.comments[0]["body"]
+    assert "active_milestone_release_pending" not in caplog.text
+
+
+def test_reconcile_milestone_on_idle_arms_then_advances(
+    monkeypatch, tmp_path,
+):
+    """Issue #856: the single entry point arms the existing release ticket
+    first, then classifies and acts on the Milestone's waiting state."""
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
+    fake = FakeMilestoneGh(current="v0.5.40")
+    fake.milestones[0].update(state="open", open_issues=0)
+    fake.release_issues.append({"number": 500, "body": "release v0.5.40"})
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
+    monkeypatch.setattr(seam, "process_milestone_commands", lambda *a, **k: None)
+    assert milestone.reconcile_milestone_on_idle(
+        "owner/repo", "v0.5.40", config,
+        release_confirmation=True,
+        parse_version_title=runner._parse_version_title,
+        dispatch_label="dev-queue",
+    ) == ("open", None)
+    # The arm ran with the caller's dispatch label, before the Milestone
+    # was read for classification...
+    assert fake.armed == [(500, "dev-queue")]
+    assert fake.first_index("gh", "issue", "edit") < fake.first_index(
+        "gh", "api",
+    )
+    # ...and the advance then classified the finished Milestone: its
+    # release ticket exists, so there is nothing to confirm.
+    assert fake.notices == []
+
+
+def test_reconcile_milestone_on_idle_arm_failure_is_bypassed(
+    monkeypatch, tmp_path, caplog,
+):
+    """A failed arm never stops the classification/act step."""
+    fake = FakeMilestoneGh(current="v0.5.40")
+    # A matching release ticket without a number: the arm itself fails.
+    fake.release_issues.append({"title": "release v0.5.40"})
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
+    with caplog.at_level(logging.ERROR):
+        assert milestone.reconcile_milestone_on_idle(
+            "owner/repo", "v0.5.40", tmp_path / "orbi.toml",
+            parse_version_title=runner._parse_version_title,
+        ) == ("closed", None)
+    assert "release_ticket_arm_failed" in caplog.text
+    assert "invalid issue number" in caplog.text
 
 
 def test_advance_lands_the_repository_policy_when_it_declares_active_milestone(
