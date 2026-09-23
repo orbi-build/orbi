@@ -823,8 +823,10 @@ orbi milestone set v0.5.7 --config orbi.toml
    中补上对应行；`event()` 会拒绝未登记的 kind。
 3. 在本表（及中文页）补上该命令行：绑定测试
    `tests/test_ticket_command.py` 会读取两张表，出现偏差即失败。
-4. 把新的 spec 传给票的 `process_commands(...)` 调用——一个调度器用同一批
-   评论评估所有已登记命令。
+4. 确保命令模块在处理票据前被 import（调用点所在模块是
+   `orbi/milestone.py`）：`register_command` 在 import 时执行。唯一的
+   `process_commands(...)` 调用传入整张 `TICKET_COMMANDS` 注册表，已登记的
+   命令无需改动调用点就会被调度。
 
 ### 已完成但没有 release 票的 Milestone
 

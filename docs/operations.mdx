@@ -962,8 +962,11 @@ To add a command:
    unregistered kind.
 3. Add the command's row to this table (and the Chinese page): the binding
    test `tests/test_ticket_command.py` reads both tables and fails on drift.
-4. Pass the new spec to the ticket's `process_commands(...)` call — one
-   dispatcher evaluates every registered command against the same comments.
+4. Make sure the command's module is imported before tickets are
+   processed (`orbi/milestone.py` is the module that owns the call site):
+   `register_command` runs at import time. The single `process_commands(...)`
+   call already passes the whole `TICKET_COMMANDS` registry, so a registered
+   command is dispatched without changing the call site.
 
 ### A finished Milestone with no release ticket
 
