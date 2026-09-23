@@ -541,6 +541,7 @@ _NOTICE_FINGERPRINT_RE = re.compile(
 
 def _stale_notice_comment(
     body: object, active_milestone: str, *, keep_release_notice: bool,
+    release_ticket_exists: bool = False,
 ) -> str | None:
     """The close comment for a decision notice, or ``None`` to keep it.
 
@@ -548,8 +549,14 @@ def _stale_notice_comment(
     always stale — both the pre-#856 advance notice and the Issue #856
     release notice. The release notice carries the active Milestone's own
     title as its only candidate (``old=`` == ``candidates=``), so it is
-    kept while the release ticket is still missing and closed, with its
-    own receipt, once the wait is over (``keep_release_notice=False``).
+    kept while the release ticket is still missing and closed, with a
+    receipt, once the wait is over (``keep_release_notice=False``).
+
+    The receipt states WHY the wait ended, so it never claims a release
+    ticket that does not exist: the ticket wording only when the caller
+    resolved ``release_ticket_exists=True``, otherwise the neutral "no
+    longer waiting" wording (the Milestone got new work, was closed, or
+    the opt-in was turned off).
 
     A decoded ``candidates=`` is compared instead of the raw group so a
     body without one keeps the pre-#856 behaviour: ``str(None)`` is never
@@ -564,14 +571,17 @@ def _stale_notice_comment(
         return f"已收敛：当前配置 active_milestone = `{active_milestone}`。"
     if candidates != [old] or keep_release_notice:
         return None
-    return (
-        f"已收敛：Milestone `{active_milestone}` 的 release ticket"
-        " 已存在，不再等待发布确认。"
-    )
+    if release_ticket_exists:
+        return (
+            f"已收敛：Milestone `{active_milestone}` 的 release ticket"
+            " 已存在，不再等待发布确认。"
+        )
+    return f"已收敛：Milestone `{active_milestone}` 不再等待发布确认。"
 
 
 def _close_stale_milestone_issues(
     repo: str, active_milestone: str, *, keep_release_notice: bool = True,
+    release_ticket_exists: bool = False,
 ) -> None:
     """Close decision notices that no longer match the config.
 
@@ -591,6 +601,7 @@ def _close_stale_milestone_issues(
         comment = _stale_notice_comment(
             issue.get("body"), active_milestone,
             keep_release_notice=keep_release_notice,
+            release_ticket_exists=release_ticket_exists,
         )
         if comment is None:
             continue
@@ -612,6 +623,7 @@ def _milestone_open_issue_count(milestone: dict) -> int:
 
 def _close_stale_milestone_issues_safely(
     repo: str, active_milestone: str, *, keep_release_notice: bool,
+    release_ticket_exists: bool = False,
 ) -> None:
     """Close obsolete decision notices as a pure idle-path bypass.
 
@@ -621,6 +633,7 @@ def _close_stale_milestone_issues_safely(
     try:
         _close_stale_milestone_issues(
             repo, active_milestone, keep_release_notice=keep_release_notice,
+            release_ticket_exists=release_ticket_exists,
         )
     except Exception:
         LOGGER.exception(
@@ -736,8 +749,19 @@ def advance_active_milestone_on_idle(
             return state, None
         _close_stale_milestone_issues_safely(
             repo, active_milestone, keep_release_notice=False,
+            release_ticket_exists=release_ticket_exists,
         )
         return state, None
+    if release_confirmation:
+        # Issue #856: the release notice's wait also ends when its Milestone
+        # closes — the release shipped, or the decision went another way —
+        # and the closed path never swept notices before #856. Key-gated so
+        # an unopted repository keeps the pre-#856 closed path unchanged;
+        # the pre-#856 advance notice (``candidates != [old]``) is kept
+        # either way, exactly like the open path.
+        _close_stale_milestone_issues_safely(
+            repo, active_milestone, keep_release_notice=False,
+        )
     current = parse_version_title(active_milestone)
     candidates = []
     for milestone in milestones:

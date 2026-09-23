@@ -813,10 +813,11 @@ Issue #856：active Milestone 已无 open Issue，却没人开它的 release 票
 操作。
 
 - 幂等：每个已完成的 Milestone 只存在一条 open 通知，绝不每 tick 一条。
-- release 票缺失时通知保持打开；一旦该 Milestone 的 release 票出现，
-  通知自动关闭（关闭评论会说明原因）。
-- 等待状态记录 `active_milestone_release_pending repo=... milestone=...`。
-  通知写入失败属于纯旁路（`pending_milestone_issue_failed`），绝不让
+- release 票缺失时通知保持打开；等待结束后自动关闭——该 Milestone 的
+  release 票已出现，或该 Milestone 不再处于等待状态（又有新的 open
+  Issue，或 release 后已关闭）。关闭评论会说明是哪种情况。
+- 等待状态记录 `active_milestone_release_pending old=<active> repo=<repo>`，
+  与推进等待记录的是同一个 `old=` 字段。通知写入失败属于纯旁路（`pending_milestone_issue_failed`），绝不让
   tick 失败。
 - 这个等待是有意为之，不是故障：待做的决定是「为已完成的 Milestone
   打开 release 票」。未开启该键（默认 `false`）时行为与 #856 之前完全

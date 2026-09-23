@@ -1422,6 +1422,68 @@ def test_advance_release_notice_is_kept_then_closed_once_its_ticket_exists(
     assert "active_milestone_release_pending" not in caplog.text
 
 
+def test_release_notice_is_closed_once_its_milestone_closes(
+    monkeypatch, tmp_path,
+):
+    """Issue #856: the notice's wait also ends when its Milestone closes —
+    the release shipped (or the decision went another way), so the closed
+    path closes the notice instead of leaving a stale claim open."""
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
+    fake = FakeMilestoneGh(current="v0.5.40")
+    fake.milestones[0].update(state="open", open_issues=0)
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
+    monkeypatch.setattr(seam, "process_milestone_commands", lambda *a, **k: None)
+    milestone.advance_active_milestone_on_idle(
+        "owner/repo", "v0.5.40", config, release_confirmation=True,
+        parse_version_title=runner._parse_version_title,
+    )
+    assert [notice["number"] for notice in fake.notices] == [500]
+    # The reply opened the ticket and the release published -> M closed
+    # before the next idle tick.
+    fake.release_issues.append({"number": 501, "body": "release v0.5.40"})
+    fake.milestones[0].update(state="closed")
+    assert milestone.advance_active_milestone_on_idle(
+        "owner/repo", "v0.5.40", config, release_confirmation=True,
+        parse_version_title=runner._parse_version_title,
+    ) == ("closed", None)
+    assert fake.notices == []
+    assert len(fake.comments) == 1
+    assert "不再等待发布确认" in fake.comments[0]["body"]
+
+
+def test_release_notice_close_receipt_never_claims_a_missing_ticket(
+    monkeypatch, tmp_path,
+):
+    """Issue #856: the wait can end for another reason (the Milestone got
+    new work) — the closing receipt then says the wait is over, never that
+    a release ticket exists."""
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
+    fake = FakeMilestoneGh(current="v0.5.40")
+    fake.milestones[0].update(state="open", open_issues=0)
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
+    monkeypatch.setattr(seam, "process_milestone_commands", lambda *a, **k: None)
+    milestone.advance_active_milestone_on_idle(
+        "owner/repo", "v0.5.40", config, release_confirmation=True,
+        parse_version_title=runner._parse_version_title,
+    )
+    assert [notice["number"] for notice in fake.notices] == [500]
+    # A new ticket lands in the Milestone: no release ticket exists.
+    fake.milestones[0].update(open_issues=1)
+    milestone.advance_active_milestone_on_idle(
+        "owner/repo", "v0.5.40", config, release_confirmation=True,
+        parse_version_title=runner._parse_version_title,
+    )
+    assert fake.release_issues == []
+    assert fake.notices == []
+    assert len(fake.comments) == 1
+    assert "release ticket 已存在" not in fake.comments[0]["body"]
+    assert "不再等待发布确认" in fake.comments[0]["body"]
+
+
 def test_reconcile_milestone_on_idle_arms_then_advances(
     monkeypatch, tmp_path,
 ):

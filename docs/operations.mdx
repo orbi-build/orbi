@@ -950,9 +950,12 @@ deterministic steps documented above.
 
 - Idempotent: one open notice per finished Milestone, never one per tick.
 - Kept open while the release ticket is missing; closed automatically once
-  a release ticket for that Milestone exists (the closing comment says so).
-- The pending state logs `active_milestone_release_pending repo=...
-  milestone=...`. A failed notice write is a pure bypass
+  the wait is over — a release ticket for that Milestone exists, or the
+  Milestone stops waiting (it got new work, or it closed after the
+  release). The closing comment states which of the two happened.
+- The pending state logs `active_milestone_release_pending old=<active>
+  repo=<repo>`, the same `old=` field the advance notice logs. A failed
+  notice write is a pure bypass
   (`pending_milestone_issue_failed`) and never fails the tick.
 - The wait is intentional, not a fault: the decision owed is "open the
   release ticket for the finished Milestone". Without the opt-in key (the

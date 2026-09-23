@@ -6441,12 +6441,24 @@ def test_stale_notice_comment_table():
         "已收敛：Milestone `v0.4.0` 的 release ticket"
         " 已存在，不再等待发布确认。"
     )
+    wait_over = "已收敛：Milestone `v0.4.0` 不再等待发布确认。"
     assert milestone._stale_notice_comment(
         release_body, active, keep_release_notice=True,
     ) is None
     assert milestone._stale_notice_comment(
         release_body, active, keep_release_notice=False,
+        release_ticket_exists=True,
     ) == confirmed
+    # The wait also ends without a release ticket (the Milestone got new
+    # work, was closed, or the opt-in was turned off): the receipt must
+    # not claim a ticket that does not exist.
+    assert milestone._stale_notice_comment(
+        release_body, active, keep_release_notice=False,
+    ) == wait_over
+    assert milestone._stale_notice_comment(
+        release_body, active, keep_release_notice=False,
+        release_ticket_exists=False,
+    ) == wait_over
     assert milestone._stale_notice_comment(
         advance_body, active, keep_release_notice=False,
     ) is None
