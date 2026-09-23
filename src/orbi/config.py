@@ -17,7 +17,10 @@ from orbi.pi_process import PI_MODEL_WAIT_DEAD_SECONDS, PI_MODEL_WAIT_PROBE_SECO
 from orbi.pilot_slots import slot_dir_for
 from orbi.release import RELEASE_CI_WAIT_SECONDS, RELEASE_DELIVERIES_WAIT_SECONDS
 from orbi.release_git import RELEASE_VERSION_FILE_OPTIONS
-from orbi.repo_config import REPO_CONFIG_PATH
+# `repository_config_path` / `load_repo_policy` live in `orbi.repo_config`
+# (the module that owns the policy file); the path resolver stays
+# re-exported here for the modules that resolve it through the config.
+from orbi.repo_config import REPO_CONFIG_PATH, repository_config_path
 from orbi.scheduler import MAX_RUNNER_INSTANCES
 
 ISSUE_COMMENTS_LIMIT = 200
@@ -975,16 +978,3 @@ def parse_repositories(entries: object, base: Path) -> list[dict]:
             "config_path": config_path,
         })
     return repos
-
-
-def repository_config_path(config: RunnerConfig, source_repo: str) -> str:
-    """The repository config path of one source repo.
-
-    The optional `[[repositories]].config_path` wins when its `github`
-    entry matches the source repo; otherwise the single default location
-    `.github/orbi.toml` applies.
-    """
-    for repo in config.repositories:
-        if repo.get("github") == source_repo:
-            return repo.get("config_path", REPO_CONFIG_PATH)
-    return REPO_CONFIG_PATH

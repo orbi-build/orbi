@@ -1,11 +1,11 @@
 {
   "oversized_modules": {
-    "cli.py": 1105,
+    "cli.py": 1040,
     "github.py": 1162,
     "pi_process.py": 1749,
-    "pilot_setup.py": 1328,
-    "release.py": 2678,
-    "runner.py": 10186
+    "pilot_setup.py": 1327,
+    "release.py": 2515,
+    "runner.py": 7136
   },
-  "runner_top_level_defs": 199
+  "runner_top_level_defs": 134
 }

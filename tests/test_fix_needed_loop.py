@@ -1206,7 +1206,7 @@ def _external_review_env(monkeypatch, tmp_path, *, external: bool):
     comments: list = []
     monkeypatch.setattr(seam, "comment_issue",
                         lambda *args, **kwargs: comments.append(kwargs))
-    monkeypatch.setattr(seam, "comment_pr",
+    monkeypatch.setattr(runner, "comment_pr",
                         lambda *args, **kwargs: comments.append(kwargs))
     patches: list = []
     monkeypatch.setattr(seam, "issue_labels",
@@ -1400,7 +1400,7 @@ def make_report_fake(monkeypatch, *, history=None, labels=("ai-fix-needed",),
     monkeypatch.setattr(seam, "comment_issue", post_issue_comment)
     monkeypatch.setattr(seam, "update_issue_comment",
                         update_stored_comment)
-    monkeypatch.setattr(seam, "comment_pr",
+    monkeypatch.setattr(runner, "comment_pr",
         lambda number, *, repo, body:
             captured["pr_comments"].append(body))
     monkeypatch.setattr(seam, "edit_issue",

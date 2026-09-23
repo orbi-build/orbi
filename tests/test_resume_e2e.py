@@ -38,9 +38,10 @@ import pytest
 
 from conftest import git
 
+import orbi.claim as claim
 import orbi.runner as runner
 from orbi import human_review
-from seam import seam
+from seam import resume_deps, seam
 import orbi.journal as journal
 
 REPO = "owner/repo"
@@ -471,8 +472,9 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
     # ---- Resume: the next tick recovers the scene from the Issue
     #      comments and runs the SAME independent review on the
     #      ORIGINAL worktree (Issue #82: no cold-start fixer).
-    resumed, scene = runner.pick_resumable_delivery(
+    resumed, scene = claim.pick_resumable_delivery(
         REPO, tmp_path / "slots", 1,
+        hooks=resume_deps(),
     )
     assert scene is not None
     # The scene carries only what the runner cannot derive itself;
@@ -752,8 +754,9 @@ def test_e2e_public_comment_scene_is_never_resumed(
     # scene comment is public: no resume from it, no git work, no
     # fixer — the Issue is marked ai-blocked instead, and the scan
     # returns None so the tick continues.
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         REPO, tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
     # The blocked transition happened (add ai-blocked, remove
     # ai-fix-needed) and the failure comment names the reason...

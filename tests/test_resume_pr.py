@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 import orbi.gitops as gitops
+import orbi.claim as claim
 import orbi.runner as runner
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
@@ -26,7 +27,7 @@ from orbi import scene as scene_mod
 from tests.test_progress_wiring import make_fake_gh
 from tests.fakes.github import FakeGh
 from tests.fakes.gitops import FakeGit
-from seam import seam
+from seam import resume_deps, seam
 import orbi.journal as journal
 import orbi.github as github
 from orbi.delivery_scene import RunContext
@@ -47,14 +48,14 @@ def test_missing_pr_scene_recovery_republishes_from_run_state(monkeypatch):
         lambda *_args: (FAKE_RUN_ID, worktree),
     )
     monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: state)
-    monkeypatch.setitem(
-        runner.__dict__, "open_pr_for_branch",
+    monkeypatch.setattr(
+        seam, "open_pr_for_branch",
         lambda *_args: {"baseRefName": "main", "baseRefOid": "a" * 40,
                         "url": FAKE_PR_URL},
     )
     posted = []
-    monkeypatch.setitem(
-        runner.__dict__, "comment_issue", lambda number, **kwargs: posted.append(kwargs["body"]),
+    monkeypatch.setattr(
+        seam, "comment_issue", lambda number, **kwargs: posted.append(kwargs["body"]),
     )
     found = runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo"))
     assert found["run_id"] == FAKE_RUN_ID
@@ -70,12 +71,12 @@ def test_missing_pr_scene_retry_stays_recoverable_on_write_failure(monkeypatch):
         lambda *_args: (FAKE_RUN_ID, worktree),
     )
     monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
-    monkeypatch.setitem(
-        runner.__dict__, "open_pr_for_branch",
+    monkeypatch.setattr(
+        seam, "open_pr_for_branch",
         lambda *_args: {"baseRefName": "main", "baseRefOid": "a" * 40,
                         "url": FAKE_PR_URL},
     )
-    monkeypatch.setitem(runner.__dict__, "comment_issue", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("down")))
+    monkeypatch.setattr(seam, "comment_issue", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("down")))
     assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
     assert runner._has_recoverable_pr_scene(issue, "owner/repo", Path("/tmp/repo"))
 
@@ -87,9 +88,9 @@ def test_missing_pr_scene_helper_handles_unavailable_state_pr_and_bad_pr(monkeyp
     monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: None)
     assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
     monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
-    monkeypatch.setitem(runner.__dict__, "open_pr_for_branch", lambda *_args: None)
+    monkeypatch.setattr(seam, "open_pr_for_branch", lambda *_args: None)
     assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
-    monkeypatch.setitem(runner.__dict__, "open_pr_for_branch", lambda *_args: {"url": FAKE_PR_URL})
+    monkeypatch.setattr(seam, "open_pr_for_branch", lambda *_args: {"url": FAKE_PR_URL})
     assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
 
 
@@ -99,10 +100,10 @@ def test_missing_pr_scene_helper_handles_no_resume_and_unparseable_scene(monkeyp
     assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
     monkeypatch.setitem(runner.__dict__, "worktree_resume_scene", lambda *_args: (FAKE_RUN_ID, Path("/tmp/delivery")))
     monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
-    monkeypatch.setitem(runner.__dict__, "open_pr_for_branch", lambda *_args: {
+    monkeypatch.setattr(seam, "open_pr_for_branch", lambda *_args: {
         "baseRefName": "main", "baseRefOid": "a" * 40, "url": FAKE_PR_URL,
     })
-    monkeypatch.setitem(runner.__dict__, "comment_issue", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *_args, **_kwargs: None)
     monkeypatch.setitem(runner.__dict__, "parse_pr_comment", lambda _body: None)
     assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
 
@@ -117,8 +118,8 @@ def test_has_recoverable_pr_scene_handles_probe_failure(monkeypatch):
         runner.__dict__, "read_run_state",
         lambda _path: {"branch": "branch"},
     )
-    monkeypatch.setitem(
-        runner.__dict__, "open_pr_for_branch",
+    monkeypatch.setattr(
+        seam, "open_pr_for_branch",
         lambda *_args: (_ for _ in ()).throw(RuntimeError("down")),
     )
     assert runner._has_recoverable_pr_scene(
@@ -158,8 +159,8 @@ def test_has_recoverable_pr_scene_rejects_missing_pr(monkeypatch):
         runner.__dict__, "read_run_state",
         lambda _path: {"branch": "branch"},
     )
-    monkeypatch.setitem(
-        runner.__dict__, "open_pr_for_branch", lambda *_args: None,
+    monkeypatch.setattr(
+        seam, "open_pr_for_branch", lambda *_args: None,
     )
     assert not runner._has_recoverable_pr_scene(
         {"number": 9}, "owner/repo", Path("/tmp/repo"),
@@ -169,10 +170,10 @@ def test_has_recoverable_pr_scene_rejects_missing_pr(monkeypatch):
 def test_missing_pr_scene_recovery_clears_scene_timestamp(monkeypatch):
     monkeypatch.setitem(runner.__dict__, "worktree_resume_scene", lambda *_args: (FAKE_RUN_ID, Path("/tmp/delivery")))
     monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
-    monkeypatch.setitem(runner.__dict__, "open_pr_for_branch", lambda *_args: {
+    monkeypatch.setattr(seam, "open_pr_for_branch", lambda *_args: {
         "baseRefName": "main", "baseRefOid": "a" * 40, "url": FAKE_PR_URL,
     })
-    monkeypatch.setitem(runner.__dict__, "comment_issue", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *_args, **_kwargs: None)
     recovered = {"run_id": FAKE_RUN_ID, "scene_at": "old"}
     monkeypatch.setitem(runner.__dict__, "parse_pr_comment", lambda _body: recovered)
     assert runner._recover_missing_pr_scene(
@@ -183,24 +184,27 @@ def test_missing_pr_scene_recovery_clears_scene_timestamp(monkeypatch):
 def test_pick_missing_pr_scene_recovers_or_defers_or_blocks(monkeypatch, tmp_path):
     issue = {"number": 9, "title": "delivery", "state": "OPEN",
              "labels": [{"name": "ai-pr-opened"}], "body": ""}
-    monkeypatch.setitem(runner.__dict__, "slot_held_deliveries", lambda *_args: set())
-    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: [issue])
-    monkeypatch.setitem(runner.__dict__, "issue_comments", lambda *args, **kwargs: [])
+    monkeypatch.setattr(seam, "slot_held_deliveries", lambda *_args: set())
+    monkeypatch.setattr(seam, "list_issues", lambda *args, **kwargs: [issue])
+    monkeypatch.setattr(seam, "issue_comments", lambda *args, **kwargs: [])
     monkeypatch.setitem(runner.__dict__, "_route_external_pr_ticket", lambda *_args: False)
-    monkeypatch.setitem(runner.__dict__, "apply_label_patch", lambda *args, **kwargs: None)
-    monkeypatch.setitem(runner.__dict__, "comment_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(seam, "apply_label_patch", lambda *args, **kwargs: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None)
     monkeypatch.setitem(runner.__dict__, "_recover_missing_pr_scene", lambda *args: {"run_id": FAKE_RUN_ID})
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1, tmp_path,
+        hooks=resume_deps(),
     )[1]["run_id"] == FAKE_RUN_ID
     monkeypatch.setitem(runner.__dict__, "_recover_missing_pr_scene", lambda *args: None)
     monkeypatch.setitem(runner.__dict__, "_has_recoverable_pr_scene", lambda *args: True)
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1, tmp_path,
+        hooks=resume_deps(),
     ) is None
     monkeypatch.setitem(runner.__dict__, "_has_recoverable_pr_scene", lambda *args: False)
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1, tmp_path,
+        hooks=resume_deps(),
     ) is None
 
 
@@ -783,8 +787,9 @@ def test_pick_resumable_delivery_returns_newest_issue_with_scene(
         return fake(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", counting)
-    issue, scene = runner.pick_resumable_delivery(
+    issue, scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     )
     assert issue["number"] == 9
     assert scene["run_id"] == FAKE_RUN_ID
@@ -839,8 +844,9 @@ def test_pick_resumable_delivery_scans_all_open_pr_states(
         return "[]"
 
     monkeypatch.setattr(seam, "run_command", counting)
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
     assert calls == [[
         "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
@@ -873,8 +879,9 @@ def test_pick_resumable_delivery_resumes_delivery_that_carries_in_progress_label
         gh_comments_payload(["human note", opened_pr_comment()]),
     )
     monkeypatch.setattr(seam, "run_command", fake)
-    issue, scene = runner.pick_resumable_delivery(
+    issue, scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     )
     assert issue["number"] == 9
     assert scene["run_id"] == FAKE_RUN_ID
@@ -885,8 +892,9 @@ def test_pick_resumable_delivery_returns_none_when_queue_empty(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setattr(seam, "run_command", make_pick_fake("[]"))
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
 
 
@@ -907,10 +915,11 @@ def test_pick_resumable_delivery_skips_only_the_held_delivery(
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: gh_calls.append(command) or "[]",
     )
-    monkeypatch.setattr(runner, "slot_held_deliveries",
+    monkeypatch.setattr(seam, "slot_held_deliveries",
                         lambda slot_dir, capacity: {("owner/repo", 9)})
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
     assert len(gh_calls) == 1, "only the queue query, no candidate reads"
     assert gh_calls[0][:3] == ["gh", "issue", "list"]
@@ -926,15 +935,16 @@ def test_pick_resumable_delivery_reviews_free_pr_while_other_in_flight(
     reported starvation (nine MERGEABLE PRs, the oldest 90 minutes,
     zero review ticks while new PRs kept opening)."""
     monkeypatch.setattr(
-        runner, "slot_held_deliveries",
+        seam, "slot_held_deliveries",
         lambda slot_dir, capacity: {("owner/repo", 7)},
     )
     monkeypatch.setattr(seam, "run_command", make_pick_fake(
         issue_payload(),
         gh_comments_payload(["human note", opened_pr_comment()]),
     ))
-    issue, scene = runner.pick_resumable_delivery(
+    issue, scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     )
     assert issue["number"] == 9
     assert scene["run_id"] == FAKE_RUN_ID
@@ -969,11 +979,12 @@ def test_pick_resumable_delivery_skips_held_and_reviews_next_free(
                 )
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "slot_held_deliveries",
+    monkeypatch.setattr(seam, "slot_held_deliveries",
                         lambda slot_dir, capacity: {("owner/repo", 9)})
     monkeypatch.setattr(seam, "run_command", fake_run)
-    issue, scene = runner.pick_resumable_delivery(
+    issue, scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
+        hooks=resume_deps(),
     )
     assert issue["number"] == 10
     assert scene["run_id"] == "b2c3d4e5"
@@ -996,15 +1007,16 @@ def test_pick_resumable_delivery_ignores_holds_of_other_repos(
     repo B's review — the skip matches on (repo, issue), never on the
     shared slot dir."""
     monkeypatch.setattr(
-        runner, "slot_held_deliveries",
+        seam, "slot_held_deliveries",
         lambda slot_dir, capacity: {("orbi-build/orbi-cloud", 367)},
     )
     monkeypatch.setattr(seam, "run_command", make_pick_fake(
         issue_payload(),
         gh_comments_payload(["human note", opened_pr_comment()]),
     ))
-    issue, scene = runner.pick_resumable_delivery(
+    issue, scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
+        hooks=resume_deps(),
     )
     assert issue["number"] == 9
     assert scene["run_id"] == FAKE_RUN_ID
@@ -1029,8 +1041,9 @@ def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
         ),
     )
     caplog.set_level("ERROR")
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
     assert edits == [[
         "gh", "issue", "edit", "9", "--repo", "owner/repo",
@@ -1061,8 +1074,9 @@ def test_pick_resumable_delivery_blocks_pr_opened_issue_without_scene(
         ),
     )
     caplog.set_level("ERROR")
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
     assert edits == [[
         "gh", "issue", "edit", "9", "--repo", "owner/repo",
@@ -1078,8 +1092,9 @@ def test_pick_resumable_delivery_skips_closed_issue(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command",
         make_pick_fake(issue_payload(state="CLOSED")),
     )
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
 
 
@@ -1111,8 +1126,9 @@ def test_pick_resumable_delivery_blocks_issue_when_scene_is_malformed(
 
     monkeypatch.setattr(seam, "run_command", counting)
     caplog.set_level("ERROR")
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
     # The blocked transition: add ai-blocked, remove ai-fix-needed...
     assert edits == [[
@@ -1179,8 +1195,9 @@ def test_pick_resumable_delivery_routes_corrupted_marker_and_next_candidate(
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    found = runner.pick_resumable_delivery(
+    found = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
+        hooks=resume_deps(),
     )
     assert found is not None
     issue, scene = found
@@ -1216,8 +1233,9 @@ def test_pick_resumable_delivery_resumes_from_the_v1_scene_block(
     monkeypatch.setattr(seam, "run_command", make_pick_fake(
         issue_payload(), gh_comments_payload([body]),
     ))
-    issue, scene = runner.pick_resumable_delivery(
+    issue, scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     )
     assert issue["number"] == 9
     # The scan's scene carries the `scene_at` stamp (the fake comment
@@ -1247,8 +1265,9 @@ def test_pick_resumable_delivery_blocks_on_a_corrupted_v1_block(
     monkeypatch.setattr(seam, "run_command", make_pick_fake(
         issue_payload(), gh_comments_payload([body]),
     ))
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
     assert blocked == [9]
 
@@ -1275,8 +1294,9 @@ def test_pick_resumable_delivery_blocks_issue_when_no_trusted_scene(
 
     monkeypatch.setattr(seam, "run_command", counting)
     caplog.set_level("ERROR")
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
     assert edits == [[
         "gh", "issue", "edit", "9", "--repo", "owner/repo",
@@ -1302,8 +1322,9 @@ def test_pick_resumable_delivery_missing_scene_names_the_run_marker(
         edits=[],
         comments=comments,
     ))
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
     assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in comments[0]
     assert "no trusted 'Orbi opened PR'" in comments[0]
@@ -1324,8 +1345,9 @@ def test_pick_resumable_delivery_missing_scene_reporting_failure_is_bypass(
 
     monkeypatch.setattr(seam, "edit_issue", failing_edit)
     caplog.set_level("ERROR")
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
     assert "failure reporting failed" in caplog.text
 
@@ -1353,8 +1375,9 @@ def test_pick_resumable_delivery_scene_failure_carries_marker_when_present(
         return fake(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", counting)
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
     assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in comments[0]
 
@@ -1383,8 +1406,9 @@ def test_pick_resumable_delivery_scene_failure_skips_bodyless_comments(
         comments=comments,
     )
     monkeypatch.setattr(seam, "run_command", fake)
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
     assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in comments[0]
 
@@ -1409,8 +1433,9 @@ def test_pick_resumable_delivery_scene_failure_logs_reporting_failure(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("ERROR"):
-        assert runner.pick_resumable_delivery(
+        assert claim.pick_resumable_delivery(
             "owner/repo", tmp_path / "slots", 1,
+            hooks=resume_deps(),
         ) is None
     assert "failure reporting failed" in caplog.text
     # The fake's edit/comment branches are reachable without capture
@@ -1453,13 +1478,14 @@ def test_pick_next_delivery_continues_after_scene_failure(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(
-        runner, "pick_issue",
+        claim, "pick_issue",
         lambda repo, active_milestone=None, **_kwargs: (
             calls.append(("ready", repo)) or ready
         ),
     )
-    result = runner.pick_next_delivery(
+    result = claim.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1,
+        hooks=resume_deps(),
     )
     # The ready queue was consulted in the same tick: the corrupted
     # Issue was scoped to a single-ticket block, not a tick stop.
@@ -1484,18 +1510,19 @@ def test_pick_next_delivery_prefers_resumable_delivery_over_ready(
     ready = {"number": 10, "title": "new"}
     calls = []
     monkeypatch.setattr(
-        runner, "pick_resumable_delivery",
-        lambda repo, slot_dir, max_concurrency: (
+        claim, "pick_resumable_delivery",
+        lambda repo, slot_dir, max_concurrency, **_kwargs: (
             calls.append(("resume", repo))
             or (resumable, config_domain.RunnerConfig(run_id=FAKE_RUN_ID))
         ),
     )
     monkeypatch.setattr(
-        runner, "pick_issue",
+        claim, "pick_issue",
         lambda repo, active_milestone=None, **_kwargs: calls.append(("ready", repo)) or ready,
     )
-    result = runner.pick_next_delivery(
+    result = claim.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1,
+        hooks=resume_deps(),
     )
     assert result == ("owner/repo", resumable, config_domain.RunnerConfig(run_id=FAKE_RUN_ID))
     assert calls == [("resume", "owner/repo")]
@@ -1507,23 +1534,24 @@ def test_pick_next_delivery_falls_back_to_ready_when_no_resumable(
     ready = {"number": 10, "title": "new"}
     calls = []
     monkeypatch.setattr(
-        runner, "pick_resumable_delivery",
-        lambda repo, slot_dir, max_concurrency: (
+        claim, "pick_resumable_delivery",
+        lambda repo, slot_dir, max_concurrency, **_kwargs: (
             calls.append(("resume", repo)) or None
         ),
     )
     monkeypatch.setattr(
-        runner, "pick_in_progress_issue",
+        claim, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency, **_kwargs: (
             calls.append(("in_progress", repo)) or None
         ),
     )
     monkeypatch.setattr(
-        runner, "pick_issue",
+        claim, "pick_issue",
         lambda repo, active_milestone=None, **_kwargs: calls.append(("ready", repo)) or ready,
     )
-    result = runner.pick_next_delivery(
+    result = claim.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1,
+        hooks=resume_deps(),
     )
     assert result == ("owner/repo", ready, None)
     assert calls == [
@@ -1539,18 +1567,19 @@ def test_pick_next_delivery_scans_sources_in_order(monkeypatch, tmp_path):
     ready = {"number": 10, "title": "new"}
     calls = []
     monkeypatch.setattr(
-        runner, "pick_resumable_delivery",
-        lambda repo, slot_dir, max_concurrency: (
+        claim, "pick_resumable_delivery",
+        lambda repo, slot_dir, max_concurrency, **_kwargs: (
             calls.append(("resume", repo))
             or ((resumable, scene) if repo == "owner/second" else None)
         ),
     )
     monkeypatch.setattr(
-        runner, "pick_issue",
+        claim, "pick_issue",
         lambda repo, active_milestone=None, **_kwargs: calls.append(("ready", repo)) or ready,
     )
-    result = runner.pick_next_delivery(
+    result = claim.pick_next_delivery(
         ["owner/first", "owner/second"], tmp_path / "slots", 1,
+        hooks=resume_deps(),
     )
     assert result == ("owner/second", resumable, scene)
     assert calls == [
@@ -1562,16 +1591,17 @@ def test_pick_next_delivery_returns_none_when_nothing_to_do(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setattr(
-        runner, "pick_resumable_delivery",
-        lambda repo, slot_dir, max_concurrency: None,
-    )
-    monkeypatch.setattr(
-        runner, "pick_in_progress_issue",
+        claim, "pick_resumable_delivery",
         lambda repo, slot_dir, max_concurrency, **_kwargs: None,
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
-    assert runner.pick_next_delivery(
+    monkeypatch.setattr(
+        claim, "pick_in_progress_issue",
+        lambda repo, slot_dir, max_concurrency, **_kwargs: None,
+    )
+    monkeypatch.setattr(claim, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
+    assert claim.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
 
 
@@ -1621,7 +1651,7 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
     config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, scene
         ),
@@ -1663,7 +1693,7 @@ def test_main_still_claims_new_issue_when_no_resumable(monkeypatch, tmp_path):
     config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
@@ -1732,7 +1762,7 @@ def test_main_continues_to_ready_delivery_after_scene_failure(
         },
     )())
     monkeypatch.setattr(
-        runner, "pick_issue",
+        claim, "pick_issue",
         lambda repo, active_milestone=None, **_kwargs: ready,
     )
     monkeypatch.setattr(
@@ -1808,7 +1838,7 @@ def test_main_ends_cleanly_after_reported_resume_failure(
         "Slot", (), {"fd": mark_fd, "release": release_slot},
     )())
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda *a, **k: ("owner/repo", issue, make_resume_scene()),
     )
     monkeypatch.setattr(
