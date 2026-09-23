@@ -6058,7 +6058,8 @@ def report_delivery_failure(
         )
         if outcome == "blocked":
             publish(action=lambda: target.milestone(
-                f"blocked: {reason}",
+                f"blocked: {_failure_summary(reason)}",
+                block=failure.render(failure_record),
             ))
             if classify:
                 finish_failure = reason
@@ -6076,7 +6077,8 @@ def report_delivery_failure(
             finish_outcome = "blocked"
         else:
             publish(action=lambda: target.milestone(
-                f"fix needed: {reason}",
+                f"fix needed: {_failure_summary(reason)}",
+                block=failure.render(failure_record),
             ))
             finish_failure = reason
             next_step = (

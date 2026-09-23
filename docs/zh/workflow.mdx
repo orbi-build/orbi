@@ -341,8 +341,9 @@ gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 
 ## 失败记录：`orbi:failure:v1`
 
-每条 `Orbi: blocked` / `Orbi: fix needed` 失败评论都是机器可读的。在
-run marker 旁，它携带恰好一个隐藏的带版本 block：
+引擎通过失败通道上报的每一次失败都是机器可读的：详细的
+`Orbi: blocked` / `Orbi: fix needed` 评论与其旁的短 milestone 都在
+run marker 旁携带恰好一个隐藏的带版本 block：
 
 ```html
 <!-- orbi:failure:v1 {"schema":1,"outcome":"blocked","reason_code":"github_transient","action_code":"requeue","retry_safe":true} -->
@@ -368,7 +369,9 @@ run marker 旁，它携带恰好一个隐藏的带版本 block：
 动作：`requeue` 给 Issue 重新加 `ai-ready`（或点击重试）——无需修复；
 `fix_ticket` 修复失败并重跑该 Issue；`decide` 需要人工决策；
 `check_credentials` 检查并修复凭据后重试；`wait_quota` 等配额窗口重置后
-重试。人类可读的标题、`**Reason:**` 与 `**Action:**` 行与 block 并列。
+重试。人类可读的标题、`**Reason:**` 与 `**Action:**` 行与 block 并列；
+milestone 的可见摘要就是同一条有长度上限、不含本机路径的理由——完整的
+命令 stderr 绝不会被截成第一个词。
 
 ## PR body 契约：`Fixes #N`
 

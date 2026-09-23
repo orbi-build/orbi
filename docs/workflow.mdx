@@ -420,9 +420,10 @@ gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 
 ## Failure record: `orbi:failure:v1`
 
-Every `Orbi: blocked` and `Orbi: fix needed` failure comment is
-machine-readable. Next to the run marker it carries exactly one hidden
-versioned block:
+Every failure the engine reports through its failure path is
+machine-readable: both the detailed `Orbi: blocked` / `Orbi: fix needed`
+comment and the short milestone posted beside it carry exactly one hidden
+versioned block next to the run marker:
 
 ```html
 <!-- orbi:failure:v1 {"schema":1,"outcome":"blocked","reason_code":"github_transient","action_code":"requeue","retry_safe":true} -->
@@ -452,7 +453,9 @@ nothing to fix; `fix_ticket` fixes the failure and re-runs the Issue;
 `decide` is a human decision; `check_credentials` verifies and repairs
 the credential, then retries; `wait_quota` retries after the quota window
 resets. The readable headline, `**Reason:**` and `**Action:**` lines stay
-beside the block for a human reader.
+beside the block for a human reader, and the milestone's visible summary
+is the same bounded, host-path free reason — a full command stderr is
+never cut to its first word.
 
 ## PR body contract: `Fixes #N`
 

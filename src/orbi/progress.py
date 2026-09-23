@@ -404,7 +404,7 @@ class ProgressPublisher:
             raise RuntimeError("no progress comment to update")
         self._patch_comment(self.comment_id, body)
 
-    def milestone(self, text: str) -> None:
+    def milestone(self, text: str, *, block: str | None = None) -> None:
         """Post a short standalone milestone comment (mobile notification).
 
         The milestone carries the hidden run marker and the visible
@@ -413,6 +413,12 @@ class ProgressPublisher:
         both). The visible field is appended when the text does not
         carry it already, so the contract holds for every milestone
         without repeating the field.
+
+        `block` is an optional hidden machine-readable block (the
+        `orbi:failure:v1` record, Issue #1322). A blocked/fix-needed
+        milestone IS a failure comment, so the record sits directly
+        under the run marker and a status reader never parses the
+        visible text.
         """
         headline, separator, detail = text.partition(": ")
         fields: dict[str, object] = {}
@@ -424,10 +430,14 @@ class ProgressPublisher:
             if prose or len({key for key, _ in pairs}) != len(pairs):
                 fields["result"] = prose if headline == "merged" else detail
         fields["run_id"] = self.run_id
-        self._post_comment(field_block(
+        body = field_block(
             self.run_id, f"{MILESTONE_PREFIX} {headline}", fields,
             detail_keys={"merge_commit"} if headline == "merged" else set(),
-        ))
+        )
+        if block:
+            marker, _, rest = body.partition("\n")
+            body = f"{marker}\n{block}\n{rest}"
+        self._post_comment(body)
 
     def failure_scene(self, body: str) -> None:
         """Update this run's identical recoverable-failure comment in place.

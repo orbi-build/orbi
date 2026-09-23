@@ -13404,9 +13404,21 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
         if "--method" in command and "POST" in command
     ]
     assert any("Orbi: fix needed" in body for body in posted_bodies)
+    # The milestone names the failing scene through the same bounded,
+    # host-path free summary as the failure comment (a GitHub comment
+    # never leaks a local runner path): the missing worktree and the
+    # failing PR are still named, the raw `/tmp/...` path is not.
     assert any(
-        "orbi-owner-repo-issue-39-a1b2c3d4" in body
+        "worktree missing: local runner path" in body
         for body in posted_bodies
+    )
+    assert not any(
+        "/tmp/pytest-of-" in body for body in posted_bodies
+    )
+    # The milestone is a failure comment too: it carries the same
+    # machine-readable record as the detailed comment (Issue #1322).
+    assert any(
+        "<!-- orbi:failure:v1 " in body for body in posted_bodies
     )
     assert not any(
         "Orbi: blocked" in body for body in posted_bodies

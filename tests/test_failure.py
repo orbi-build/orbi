@@ -14,13 +14,14 @@ The readable hierarchy stays beside the block: `**Action:**`,
 `**Reason:**` and the bounded raw evidence inside ONE `<details>`.
 """
 import dataclasses
+import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
 import orbi.runner as runner
-from orbi import failure
+from orbi import failure, progress
 from orbi.pi_process import RateLimitExhaustedError
 from seam import seam
 
@@ -539,6 +540,101 @@ def test_report_delivery_failure_recoverable_is_fix_needed(monkeypatch):
     assert parsed.action_code == "fix_ticket"
     assert parsed.outcome == "fix_needed"
     assert parsed.retry_safe is False
+
+
+def _milestone_publisher(run_id="c517c8c7"):
+    """A real publisher whose milestone POST bodies are captured.
+
+    Milestones go through the publisher's own `_post_comment`
+    (`gh api ... --method POST`), so capturing that command is the real
+    milestone rendering, not a stub.
+    """
+    milestones: list[str] = []
+
+    def fake_run_command(command, **kwargs):
+        # Only the milestone POST happens: the reporter is called with
+        # `finish=False`, so the tracked comment is never located or
+        # PATCHed.
+        assert "--method" in command and "POST" in command, command
+        milestones.append(command[-1].removeprefix("body="))
+        return json.dumps({"id": 42})
+
+    publisher = progress.ProgressPublisher(
+        1322, "orbi-build/orbi", run_id, run_command=fake_run_command,
+    )
+    return publisher, milestones
+
+
+def test_report_delivery_failure_milestone_is_machine_readable(monkeypatch):
+    """Acceptance: the live `Orbi: blocked` milestone (the shape
+    orbi-build/orbi#1088 shows) carries the same block as the detailed
+    comment, the full bounded stderr, and no truncated `stderr: pull`
+    line."""
+    posted = _capture_comment(monkeypatch)
+    publisher, milestones = _milestone_publisher()
+    stderr = (
+        "pull request create failed: GraphQL: Something went wrong while "
+        "executing your query on 2026-09-23T14:13:38Z. Please include "
+        "D1F4ED5C in your report."
+    )
+    error = subprocess.CalledProcessError(
+        1, ["gh", "pr", "create"], stderr=stderr,
+    )
+    runner.report_delivery_failure(
+        error,
+        issue={"number": 1322, "title": "t", "labels": []},
+        source_repo="orbi-build/orbi", run_id="c517c8c7", pr_url=None,
+        worktree=None, branch="b", role=runner.ROLE_IMPLEMENT,
+        reason=f"The delivery stopped: {runner._failure_detail(error)}",
+        diagnosis=runner._failure_detail(error),
+        classify=False, evidence=False, publisher=publisher, finish=False,
+    )
+    assert len(milestones) == 1
+    milestone = milestones[0]
+    assert "Orbi: blocked" in milestone
+    # The stderr line is the bounded stderr, not its first word.
+    assert stderr in milestone
+    assert "- stderr: pull" not in milestone
+    record = failure.Failure(
+        reason_code="github_transient", action_code="requeue",
+        retry_safe=True, outcome="blocked",
+    )
+    assert failure.parse(milestone) == record
+    # The detailed comment carries its own copy of the same record.
+    assert failure.parse(posted[0]) == record
+
+
+def test_report_delivery_failure_fix_needed_milestone_is_machine_readable(
+    monkeypatch,
+):
+    posted = _capture_comment(monkeypatch)
+    publisher, milestones = _milestone_publisher()
+    monkeypatch.setattr(seam, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    error = subprocess.CalledProcessError(1, ["pytest"], stderr="3 failed")
+    outcome = runner.report_delivery_failure(
+        error,
+        issue={"number": 1322, "title": "t", "labels": []},
+        source_repo="orbi-build/orbi", run_id="c517c8c7",
+        pr_url="https://github.com/orbi-build/orbi/pull/9",
+        worktree=None, branch="b", role=runner.ROLE_REVIEW,
+        reason=(
+            "The independent review of PR 9 failed: "
+            f"{runner._failure_detail(error)}"
+        ),
+        diagnosis=runner._failure_detail(error),
+        evidence=False, publisher=publisher, finish=False,
+    )
+    assert outcome == "fix needed"
+    assert len(milestones) == 1
+    milestone = milestones[0]
+    assert "Orbi: fix needed" in milestone
+    assert failure.parse(milestone) == failure.Failure(
+        reason_code="tests_failed", action_code="fix_ticket",
+        retry_safe=False, outcome="fix_needed",
+    )
+    assert "- stderr: 3" not in milestone
+    assert "3 failed" in milestone
 
 
 # --------------------------------------------------------------------------
