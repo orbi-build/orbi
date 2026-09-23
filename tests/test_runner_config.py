@@ -815,6 +815,60 @@ def test_load_config_rejects_invalid_release_ci_wait_seconds(
     assert reason in str(excinfo.value)
 
 
+# --- Issue #610: one validator for every "seconds" host setting -------------
+
+# (key, omitted default). The five settings share `_positive_seconds`.
+_SECONDS_KEYS = [
+    ("model_wait_probe_seconds", 60.0),
+    ("release_ci_wait_seconds", 1800.0),
+    ("release_deliveries_wait_seconds", 1800.0),
+    ("model_wait_dead_seconds", 1800.0),
+    ("steering_poll_seconds", 60.0),
+]
+
+_OMITTED = "<omitted>"
+
+# (TOML literal, expected value or exact error text after "<key> ").
+_SECONDS_VALUES = [
+    (_OMITTED, None),
+    ("7", 7.0),
+    ("2.5", 2.5),
+    ("true", "must be a number, not a boolean (got True)"),
+    ("false", "must be a number, not a boolean (got False)"),
+    ('"300"', "must be a number (got str '300')"),
+    ("nan", "must be a finite number of seconds (got nan)"),
+    ("inf", "must be a finite number of seconds (got inf)"),
+    ("-inf", "must be a finite number of seconds (got -inf)"),
+    ("0", "must be a positive number of seconds (got 0)"),
+    ("-5", "must be a positive number of seconds (got -5)"),
+]
+
+
+@pytest.mark.parametrize(("key", "default"), _SECONDS_KEYS)
+@pytest.mark.parametrize(("toml_value", "expected"), _SECONDS_VALUES)
+def test_seconds_settings_share_one_validator(
+    tmp_path, key, default, toml_value, expected,
+):
+    """Issue #610: all five "seconds" settings go through the single
+    `_positive_seconds` validator. Every previously rejected value is
+    still rejected, with the offending field name in the message; each
+    accepted value and each omitted default is unchanged."""
+    line = "" if toml_value == _OMITTED else f"{key} = {toml_value}\n"
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n' + line, encoding="utf-8",
+    )
+    if isinstance(expected, str):
+        with pytest.raises(ValueError) as excinfo:
+            config_domain.load_config(config_path)
+        assert str(excinfo.value) == f"{key} {expected}"
+    else:
+        config = config_domain.load_config(config_path)
+        assert getattr(config, key) == (
+            default if expected is None else expected
+        )
+
+
 def test_load_config_no_longer_has_a_mergeable_wait(tmp_path):
     """Issue #788: the delivery path never waits for mergeability in
     tick — `mergeable_wait_seconds` was removed with the wait loop. The

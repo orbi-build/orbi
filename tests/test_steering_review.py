@@ -77,9 +77,9 @@ def test_stream_pi_steers_and_restarts(tmp_path):
 
 
 def test_steering_validation_and_limit(monkeypatch, tmp_path):
-    with pytest.raises(ValueError, match="positive finite"):
+    with pytest.raises(ValueError, match="must be a number"):
         config_domain._positive_seconds({"x": "bad"}, "x", 1.0)
-    with pytest.raises(ValueError, match="positive finite"):
+    with pytest.raises(ValueError, match="must be a positive number of seconds"):
         config_domain._positive_seconds({"x": 0}, "x", 1.0)
     assert config_domain._positive_seconds({}, "x", 2.0) == 2.0
     config = _config(tmp_path, steering_max_rounds=0)
