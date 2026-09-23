@@ -1091,6 +1091,91 @@ def test_advance_pending_command_failure_never_fails_the_idle_tick(
     assert "milestone_command_processing_failed" in caplog.text
 
 
+def test_advance_lands_the_repository_policy_when_it_declares_active_milestone(
+    monkeypatch, tmp_path, caplog,
+):
+    # Issue #1304: the engine reads `active_milestone` back from the
+    # repository policy, so writing the host config discarded the advance
+    # on the next tick. The auto-advance must land it where it came from.
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
+    fake = FakeMilestoneGh(policy_text='active_milestone = "v0.5.40"\n')
+    fake.milestones.append(
+        {"title": "v0.5.41", "state": "open", "open_issues": 0},
+    )
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    with caplog.at_level(logging.INFO):
+        assert milestone.advance_active_milestone_on_idle(
+            "owner/repo", "v0.5.40", config,
+            parse_version_title=runner._parse_version_title,
+            policy=RepoPolicy(
+                active_milestone="v0.5.40", dispatch_label="ai-ready",
+            ),
+            policy_path=".github/orbi.toml", base_branch="main",
+            dispatch_label=READY_LABEL, version_file="pyproject.toml",
+        ) == ("closed", "v0.5.41")
+    # The repository policy blob got the contents-API PUT with the new
+    # value: the fake only decodes a policy payload on that PUT.
+    assert fake.policy_puts == ['active_milestone = "v0.5.41"\n']
+    # The host config is NOT where the engine reads the value back from.
+    assert config.read_text() == 'active_milestone = "v0.5.40"\n'
+    assert "active_milestone_advanced old=v0.5.40 new=v0.5.41" in caplog.text
+
+
+def test_advance_rewrites_the_host_config_when_the_policy_lacks_the_key(
+    monkeypatch, tmp_path, caplog,
+):
+    # No policy key: unchanged behaviour, the host config is the source.
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: _milestone_responses([
+            {"title": "v0.5.40", "state": "closed"},
+            {"title": "v0.5.41", "state": "open", "open_issues": 0},
+        ]),
+    )
+    with caplog.at_level(logging.INFO):
+        assert milestone.advance_active_milestone_on_idle(
+            "owner/repo", "v0.5.40", config,
+            parse_version_title=runner._parse_version_title,
+            policy=RepoPolicy(dispatch_label="ai-ready"),
+            policy_path=".github/orbi.toml", base_branch="main",
+            dispatch_label=READY_LABEL, version_file="pyproject.toml",
+        ) == ("closed", "v0.5.41")
+    assert config.read_text() == 'active_milestone = "v0.5.41"\n'
+    assert "active_milestone_advanced old=v0.5.40 new=v0.5.41" in caplog.text
+
+
+def test_advance_does_not_emit_advanced_when_the_policy_write_fails(
+    monkeypatch, tmp_path, caplog,
+):
+    # A failed policy write means the advance did not happen: no success
+    # event, and the host config is never rewritten as a silent fallback.
+    # The raise reaches the Runner's idle bypass, which logs it.
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
+    fake = FakeMilestoneGh(
+        policy_text='active_milestone = "v0.5.40"\n', fail_policy_put=True,
+    )
+    fake.milestones.append(
+        {"title": "v0.5.41", "state": "open", "open_issues": 0},
+    )
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(RuntimeError, match="gh unavailable"):
+            milestone.advance_active_milestone_on_idle(
+                "owner/repo", "v0.5.40", config,
+                parse_version_title=runner._parse_version_title,
+                policy=RepoPolicy(active_milestone="v0.5.40"),
+                policy_path=".github/orbi.toml", base_branch="main",
+                dispatch_label=READY_LABEL, version_file="pyproject.toml",
+            )
+    assert "active_milestone_advanced" not in caplog.text
+    assert config.read_text() == 'active_milestone = "v0.5.40"\n'
+    assert fake.policy_text == 'active_milestone = "v0.5.40"\n'
+
+
 def test_issue_number_only_accepts_a_github_issue_number():
     assert milestone._issue_number({"number": 436}) == 436
     assert milestone._issue_number(None) is None

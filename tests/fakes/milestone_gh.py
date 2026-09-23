@@ -30,12 +30,17 @@ class FakeMilestoneGh:
 
     def __init__(self, *, policy_text: str | None = None,
                  template: str | None = None,
-                 current: str = "v0.5.40"):
+                 current: str = "v0.5.40",
+                 fail_policy_put: bool = False):
         self.milestones = [{"title": current, "state": "closed"}]
         self.release_issues: list[dict] = []
         self.policy_text = policy_text
         self.template = template
         self.commands: list[list[str]] = []
+        # Each successful contents-API PUT of the policy, decoded: the
+        # observable "the advance landed where the engine reads it back".
+        self.policy_puts: list[str] = []
+        self.fail_policy_put = fail_policy_put
 
     def run(self, command: list[str], **kwargs) -> str:
         """Answer one ``gh`` argv as the real CLI would for this state."""
@@ -50,9 +55,12 @@ class FakeMilestoneGh:
             return "{}"
         if command[:4] == ["gh", "api", "--method", "PUT"]:
             content = next(item for item in command if item.startswith("content="))
+            if self.fail_policy_put:
+                raise RuntimeError("gh unavailable")
             self.policy_text = base64.b64decode(
                 content[len("content="):]
             ).decode()
+            self.policy_puts.append(self.policy_text)
             return "{}"
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps(list(self.release_issues))
