@@ -178,7 +178,15 @@ from orbi import pi_session
 # data-access layer, the git operations layer, and the CLI-install domain.
 # `runner` consumes them like any other caller; only `cli` and
 # `pilot_setup` import `runner` itself.
-from orbi import github, gitops, journal, release, scene
+from orbi import failure, github, gitops, journal, release, scene
+# The failure record lives in its own lean module (Issue #1229); these
+# helpers are re-exported so `runner.<name>` keeps working for callers.
+from orbi.failure import (
+    _failure_comment_body,
+    _failure_detail,
+    _failure_summary,
+    _redact_local_paths,
+)
 from orbi.merge_handoff import MergeHandoffRequired, is_maintainer_actionable
 from orbi.cli_source import CliInstallError, refresh_cli_install
 from orbi.github import (
@@ -4314,56 +4322,18 @@ def _test_result_failed(result: str) -> bool:
     return bool(_TEST_FAILURE_EVIDENCE_RE.search(result))
 
 
-def _failure_detail(exc: BaseException) -> str:
-    """One-line failure description; keeps bounded subprocess stderr visible."""
-    detail = str(exc)
-    stderr = getattr(exc, "stderr", None)
-    if isinstance(stderr, str) and stderr.strip() and stderr.strip() not in detail:
-        detail = f"{detail} stderr={stderr.strip()[:1000]}"
-    return detail
-
-
-_LOCAL_PATH_RE = re.compile(
-    r"(?:/home/[^\s`),]+|/Users/[^\s`),]+|/tmp/[^\s`),]+|"
-    r"/workspace/[^\s`),]+|/workspaces/[^\s`),]+)"
-)
-
-
-def _redact_local_paths(value: str) -> str:
-    """Keep GitHub comments free of host-specific filesystem paths."""
-    return _LOCAL_PATH_RE.sub("local runner path", value)
-
-
-def _failure_summary(reason: str) -> str:
-    """Turn a runner exception description into a short reader summary."""
-    stderr_match = re.search(r"\s+stderr=(.*)$", reason,
-                             flags=re.IGNORECASE | re.DOTALL)
-    stderr = stderr_match.group(1).strip() if stderr_match else ""
-    summary = re.sub(r"\s+stderr=.*$", "", reason,
-                     flags=re.IGNORECASE | re.DOTALL)
-    # A CalledProcessError renders the entire argv between ``Command`` and
-    # ``returned``. Match that semantic boundary rather than the first closing
-    # bracket: an argv value may itself contain ``]``.
-    summary = re.sub(
-        r"Command\s+.+?\s+returned non-zero exit status\s+\d+",
-        "the delivery command failed", summary,
-        flags=re.IGNORECASE | re.DOTALL,
+# The delivery exception hierarchy is OURS; the closed code set and its
+# markers live in `orbi.failure` (Issue #1229 keeps this module small).
+def _classify_failure(exc: BaseException, *, outcome: str) -> failure.Failure:
+    """Map one delivery exception to the machine-readable failure record."""
+    return failure.classify(
+        _failure_detail(exc),
+        provider_quota=isinstance(exc, RateLimitExhaustedError),
+        review_budget=isinstance(exc, ReviewRoundsExhausted),
+        human_decision=isinstance(exc, HumanDecisionRequired),
+        unrecoverable=isinstance(exc, UnrecoverableDeliveryError),
+        outcome=outcome,
     )
-    summary = re.sub(r"CalledProcessError\([^)]*\)",
-                     "the delivery command failed", summary)
-    summary = _redact_local_paths(summary)
-    summary = re.sub(r"\s+", " ", summary).strip(" .;:")
-    if not summary:
-        summary = "the delivery command failed"
-    if stderr:
-        # Setup tools often write informational lines before the provider's
-        # concrete error. The final non-empty line is the actionable result.
-        stderr_summary = _redact_local_paths(
-            stderr.rstrip().rsplit("\n", 1)[-1].strip()
-        )
-        if stderr_summary and stderr_summary not in summary:
-            summary = f"{summary}: {stderr_summary}"
-    return summary[:500]
 
 
 _SGR_RE = re.compile(r"(?:\x1b\[[0-9;]*m|\^\[\[[0-9;]*m)")
@@ -4525,51 +4495,6 @@ def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
         f"{snapshot.get('session_id') or '-'} phase={snapshot.get('phase') or '-'} "
         f"last_activity={snapshot.get('last_activity') or '-'}`"
     )
-
-
-def _failure_comment_body(*, outcome: str, action: str, reason: str,
-                          diagnosis: str, scene: str, evidence: str,
-                          pr_url: str | None, issue: str, run_id: str) -> str:
-    """Build the reader-facing hierarchy shared by classified failures."""
-    retrying = outcome == "fix needed"
-    headline = (
-        "Orbi: fix needed — the engine will retry"
-        if retrying else "Orbi: blocked — waiting on a human decision"
-    )
-    parts = [headline]
-    if pr_url:
-        parts.append(f"PR: [{pr_url}]({pr_url})")
-    parts.append(f"Issue: `{issue}` · run_id={run_id}")
-    if action:
-        parts.append(f"**Action:** {_redact_local_paths(action)}")
-    parts.append(f"**Reason:** {_failure_summary(reason)}")
-    disposition = "Orbi needs a fix" if retrying else "Orbi failed"
-    branch_match = re.search(r"- branch: `([^`]+)`", scene)
-    session_match = re.search(r"- session: `([^`]+)`", scene)
-    correlation = (
-        f"run={run_id} branch={branch_match.group(1) if branch_match else '-'} "
-        f"session={session_match.group(1) if session_match else '-'}"
-    )
-    details = [
-        "<details><summary>Diagnosis</summary>",
-        f"- disposition: `{disposition}: see the reason above`",
-        scene,
-        # Stable correlation keys retain the old journal lookup shape while
-        # local path fields above remain reader-safe labels.
-        f"- correlation: `{correlation}`",
-    ]
-    if diagnosis:
-        reason_summary = _failure_summary(reason)
-        diagnosis_summary = _failure_summary(diagnosis)
-        if diagnosis_summary == reason_summary or diagnosis_summary in reason_summary:
-            label = "Orbi needs a fix" if retrying else "Orbi failed"
-            details.append(f"- failure detail: `{label}: see the reason above`")
-        else:
-            details.append(f"- failure detail: `{diagnosis_summary}`")
-    if evidence:
-        details.append(evidence.lstrip())
-    details.append("</details>")
-    return "\n\n".join(parts + ["\n".join(details)])
 
 
 def _failure_evidence(worktree: Path | None, exc: BaseException) -> str:
@@ -5949,6 +5874,14 @@ def report_delivery_failure(
                     fingerprint=fingerprint,
                 )
 
+    # The machine-readable record travels with every failure comment:
+    # a status reader parses the block, a human reads the hierarchy.
+    # `failure_record` is computed once here so the block and the
+    # reader-facing Action / Reason cannot disagree.
+    failure_record = _classify_failure(
+        exc, outcome="blocked" if blocked else "fix_needed",
+    )
+
     def scene_line() -> str | None:
         """The run scene for the body, or None when omitted.
 
@@ -5995,7 +5928,7 @@ def report_delivery_failure(
             outcome="blocked", action=action, reason=reason,
             diagnosis=diagnosis, scene=scene, evidence=evidence_detail,
             pr_url=pr_url, issue=issue_context(source_repo, number),
-            run_id=run_id or "-",
+            run_id=run_id or "-", failure_record=failure_record,
         )
         if classify:
             body = body.replace(
@@ -6021,7 +5954,7 @@ def report_delivery_failure(
             outcome="fix needed", action=action, reason=reason,
             diagnosis=diagnosis, scene=scene, evidence=evidence_detail,
             pr_url=pr_url, issue=issue_context(source_repo, number),
-            run_id=run_id or "-",
+            run_id=run_id or "-", failure_record=failure_record,
         )
         outcome = "fix needed"
     if len(body) > FAILURE_COMMENT_MAX_CHARS:
@@ -6125,7 +6058,8 @@ def report_delivery_failure(
         )
         if outcome == "blocked":
             publish(action=lambda: target.milestone(
-                f"blocked: {reason}",
+                f"blocked: {_failure_summary(reason)}",
+                block=failure.render(failure_record),
             ))
             if classify:
                 finish_failure = reason
@@ -6143,7 +6077,8 @@ def report_delivery_failure(
             finish_outcome = "blocked"
         else:
             publish(action=lambda: target.milestone(
-                f"fix needed: {reason}",
+                f"fix needed: {_failure_summary(reason)}",
+                block=failure.render(failure_record),
             ))
             finish_failure = reason
             next_step = (

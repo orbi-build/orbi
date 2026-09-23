@@ -816,6 +816,27 @@ def test_publisher_milestone_posts_multiline_field_block(monkeypatch):
     assert publisher.comment_id is None
 
 
+def test_publisher_milestone_places_a_failure_block_under_the_run_marker():
+    # Issue #1322: a blocked/fix-needed milestone is a failure comment, so
+    # its hidden `orbi:failure:v1` block sits directly under the run marker
+    # where a status reader finds it without parsing the visible prose.
+    publisher, calls = make_publisher()
+    block = '<!-- orbi:failure:v1 {"schema":1} -->'
+    publisher.milestone("blocked: boom", block=block)
+    body = calls[0][-1]
+    assert body.startswith(
+        f"body=<!-- orbi:run=abc12345 -->\n{block}\nOrbi: blocked\n"
+    )
+    assert body.count(block) == 1
+    # The block never replaces the milestone's own content.
+    assert "\n- result: boom\n- run_id=abc12345\n" in body
+    # A milestone without a block is byte-identical to the pre-#1322 shape.
+    publisher.milestone("tests passed: ok")
+    assert calls[1][-1].startswith(
+        "body=<!-- orbi:run=abc12345 -->\nOrbi: tests passed\n"
+    )
+
+
 def test_publisher_post_parses_full_comment_object_response():
     # Real `gh api` replies with the full comment object, not a bare id.
     publisher, _ = make_publisher(

@@ -418,6 +418,45 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 ```
 
+## Failure record: `orbi:failure:v1`
+
+Every failure the engine reports through its failure path is
+machine-readable: both the detailed `Orbi: blocked` / `Orbi: fix needed`
+comment and the short milestone posted beside it carry exactly one hidden
+versioned block next to the run marker:
+
+```html
+<!-- orbi:failure:v1 {"schema":1,"outcome":"blocked","reason_code":"github_transient","action_code":"requeue","retry_safe":true} -->
+```
+
+`outcome` is `blocked` (terminal, a human decides) or `fix_needed` (the
+next tick resumes the same run). `reason_code` says why the delivery
+stopped; `action_code` says what the reader should do; `retry_safe` says
+whether a plain re-queue can succeed without a human repair. The sets
+are closed and owned by the engine (`src/orbi/failure.py`); an exception
+the classifier does not recognize maps to `unclassified`, the block is
+never omitted, and a comment written before this feature carries no block
+at all — readers ignore it (`parse` returns `None`).
+
+| `reason_code` | meaning | `action_code` | `retry_safe` |
+| --- | --- | --- | --- |
+| `github_transient` | a transient GitHub API/server failure | `requeue` | true |
+| `provider_quota` | the model provider quota is exhausted | `wait_quota` | true |
+| `tests_failed` | the delivery's own tests failed | `fix_ticket` | false |
+| `review_budget_exhausted` | the bounded review/fix budget is spent | `decide` | false |
+| `human_decision_required` | an external precondition only a human can decide | `decide` | false |
+| `credential_missing` | the GitHub/provider credential is missing or rejected | `check_credentials` | false |
+| `unclassified` | any other runner exception | `fix_ticket` | false |
+
+Actions: `requeue` relabels the Issue `ai-ready` (or presses retry) —
+nothing to fix; `fix_ticket` fixes the failure and re-runs the Issue;
+`decide` is a human decision; `check_credentials` verifies and repairs
+the credential, then retries; `wait_quota` retries after the quota window
+resets. The readable headline, `**Reason:**` and `**Action:**` lines stay
+beside the block for a human reader, and the milestone's visible summary
+is the same bounded, host-path free reason — a full command stderr is
+never cut to its first word.
+
 ## PR body contract: `Fixes #N`
 
 The PR description must contain `Fixes #<issue-number>` (it may be on the
