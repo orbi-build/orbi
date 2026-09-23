@@ -27,13 +27,12 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
 
-from orbi import __version__, cli_source, config as config_domain, engine_source, git_transport, runner, scheduler, milestone
+from orbi import __version__, cli_source, config as config_domain, engine_source, git_transport, runner, scheduler
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
     FIX_NEEDED_LABEL,
@@ -43,7 +42,8 @@ from orbi.delivery_labels import (
     READY_LABEL,
 )
 
-from orbi.github import list_milestones, merge_gate_preflight
+from orbi.github import merge_gate_preflight
+from orbi.milestone_command import MilestoneSetError, milestone_set
 from orbi.runner import (
     RunIdFilter,
     configure_logging,
@@ -636,77 +636,6 @@ def status_report(config: config_domain.RunnerConfig) -> str:
     return "\n".join(lines)
 
 
-class MilestoneSetError(Exception):
-    """The `milestone set` fail-fast error: one structured line (reason + fix)."""
-
-
-def milestone_set(config: config_domain.RunnerConfig, config_path: Path,
-                  title: str) -> tuple[str, str]:
-    """Advance `active_milestone` to one exact Milestone title (Issue #895).
-
-    The manual advance behind the `auto_next_milestone = false`
-    confirmation flow. The claim scope the Runner reads is set the same
-    way it is resolved: the title must exist as exactly ONE Milestone
-    on the source repo (GitHub Milestone titles are not unique, so a
-    duplicate exact title is a hard error, never a guess), then ONLY
-    the `active_milestone` line is rewritten — comments, blank lines
-    and every other field stay byte-identical. The variable sync is NOT
-    part of this command: the Runner's next tick publishes
-    `ORBI_ACTIVE_MILESTONE` (the bypass contract). Returns (old, new);
-    every failure raises MilestoneSetError with the config untouched.
-    """
-    repo = config.source_repos[0]
-    if config.active_milestone is None:
-        raise MilestoneSetError(
-            f"milestone_set_failed reason=no active_milestone line in "
-            f"{config_path}; fix=add "
-            '`active_milestone = "<current>"` to the config first '
-            "(the field is never created implicitly)"
-        )
-    try:
-        milestones = list_milestones(repo, timeout=30)
-    except (subprocess.SubprocessError, OSError, ValueError) as exc:
-        # The docstring promises one structured line for EVERY failure:
-        # a hung gh raises TimeoutExpired, a missing gh raises OSError,
-        # a malformed payload raises ValueError — same collapse.
-        detail = (getattr(exc, "stderr", "") or "").strip() or str(exc)
-        raise MilestoneSetError(
-            f"milestone_set_failed reason=milestone lookup failed: {detail}; "
-            "fix=check `gh auth status` and Milestone read access to "
-            f"{repo}"
-        ) from exc
-    matches = [
-        milestone for milestone in milestones
-        if isinstance(milestone, dict) and milestone.get("title") == title
-    ]
-    if not matches:
-        open_list = ", ".join(
-            f"{milestone.get('title')}({milestone.get('open_issues')})"
-            for milestone in milestones
-            if isinstance(milestone, dict) and milestone.get("state") == "open"
-        ) or "(none)"
-        raise MilestoneSetError(
-            f"milestone_set_failed reason=milestone_not_found title={title!r} "
-            f"repo={repo} open milestones: {open_list}; fix=use one exact "
-            "title from `gh api "
-            f"repos/{repo}/milestones?state=open --jq '.[].title'`"
-        )
-    if len(matches) > 1:
-        raise MilestoneSetError(
-            f"milestone_set_failed reason=milestone_ambiguous title={title!r} "
-            f"repo={repo}: the exact title matches {len(matches)} "
-            "Milestones; fix=rename or close the duplicate Milestone first"
-        )
-    try:
-        milestone.rewrite_active_milestone_line(config_path, title)
-    except (OSError, RuntimeError) as exc:
-        raise MilestoneSetError(
-            f"milestone_set_failed reason={exc}; "
-            f"fix=repair the config file at {config_path}"
-        ) from exc
-    return config.active_milestone, title
-
-
 def _installed_unit_configs(
     installed_dir: Path | None = None,
 ) -> tuple[tuple[Path, str], ...]:
@@ -862,15 +791,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     milestone_parser = subparsers.add_parser(
         "milestone", parents=[common],
-        help="advance the config's active_milestone (the manual command "
-             "behind the auto_next_milestone=false confirmation flow)",
+        help="advance active_milestone (the manual command behind the "
+             "auto_next_milestone=false confirmation flow)",
     )
     milestone_subparsers = milestone_parser.add_subparsers(
         dest="milestone_command", required=True,
     )
     milestone_set_parser = milestone_subparsers.add_parser(
         "set", parents=[common],
-        help="set active_milestone to one exact GitHub Milestone title",
+        help="set active_milestone to one exact GitHub Milestone title: "
+             "the repository policy (.github/orbi.toml) when it declares "
+             "the key, otherwise the host config",
     )
     milestone_set_parser.add_argument(
         "title",
@@ -1076,16 +1007,22 @@ def main(argv: list[str] | None = None) -> int:
             print("\n".join(pilot_setup.format_setup(result)))
     elif args.command == "milestone":
         try:
-            old, new = milestone_set(config, args.config, args.title)
+            old, new, target = milestone_set(
+                config, args.config, args.title,
+            )
         except MilestoneSetError as exc:
             # One structured line with the actual reason and the repair
-            # action; the config file is untouched on every failure path.
+            # action; the written target is untouched on every failure
+            # path.
             print(exc, file=sys.stderr)
             return 1
         repo = config.source_repos[0]
         print(f"active_milestone: {old} -> {new}")
         print(f"repo: {repo}")
-        print(f"config: {config.config_path}")
+        # Name WHERE the value landed: the repository policy overrides the
+        # host config, so the two targets are not interchangeable
+        # (Issue #1306).
+        print(f"wrote: {target}")
         print(
             "next: the Runner's next tick claims Issues from Milestone "
             f'"{new}" and syncs the ORBI_ACTIVE_MILESTONE variable '

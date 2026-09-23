@@ -814,9 +814,9 @@ orbi check --config orbi.toml
 orbi setup --config orbi.toml
 
 # Advance the active milestone to an exact GitHub Milestone title
-# (the host-side move; the auto_next_milestone=false confirmation
-# Issue carries the in-ticket `/milestone <title>` command; only the
-# active_milestone line changes)
+# (the repository policy when it declares active_milestone, else the
+# host config; the auto_next_milestone=false confirmation Issue carries
+# the in-ticket `/milestone <title>` command)
 orbi milestone set v0.6.0 --config orbi.toml
 
 # Print the live Pi session JSONL path (fail fast when no session exists)
@@ -832,37 +832,47 @@ journal and GitHub remain the normal observability path.
 
 ### Advance the active milestone manually
 
-`orbi milestone set <title>` (Issue #895) is the human command in the
-milestone lifecycle: when `auto_next_milestone = false` leaves the
+`orbi milestone set <title>` (Issue #895, #1306) is the human command in
+the milestone lifecycle: when `auto_next_milestone = false` leaves the
 advance pending, or
 whenever a version switch should be a deliberate operator step, it
-moves `active_milestone` in the local `orbi.toml` to the given GitHub
-Milestone title — no hand-editing the file. The title must exist as
-exactly ONE Milestone on the single configured source repo (GitHub
-Milestone titles are not unique; a duplicate exact title is a hard
-error). Only the `active_milestone` line is rewritten: comments, blank
-lines and every other field stay byte-identical.
+moves `active_milestone` to the given GitHub Milestone title — no
+hand-editing the file. The value lands where the Runner actually reads
+it from, precedence **repository policy, then host config**: when
+`.github/orbi.toml` on the repository's default branch declares
+`active_milestone` (the per-key override the Runner reads), the command
+rewrites that key there with a contents PUT; otherwise it rewrites the
+host `orbi.toml` line. Only the `active_milestone` line is rewritten:
+comments, blank lines and every other field stay byte-identical. The
+title must exist as exactly ONE Milestone on the single configured
+source repo (GitHub Milestone titles are not unique; a duplicate exact
+title is a hard error).
 
 ```bash
 orbi milestone set v0.6.0 --config orbi.toml
 # active_milestone: v0.5.6 -> v0.6.0
 # repo: orbi-build/orbi
-# config: /path/to/orbi.toml
+# wrote: repo policy .github/orbi.toml
 # next: the Runner's next tick claims Issues from Milestone "v0.6.0" and
 # syncs the ORBI_ACTIVE_MILESTONE variable (verify: gh api
 # repos/orbi-build/orbi/actions/variables/ORBI_ACTIVE_MILESTONE --jq .value)
 ```
 
-The command itself never writes to GitHub — the Milestone list read is
-its only network call. The `ORBI_ACTIVE_MILESTONE` Actions variable is
+The `wrote:` line names the target: `repo policy .github/orbi.toml` (a
+contents PUT on the repository's default branch) or `host config
+/path/to/orbi.toml`. The Milestone list read is not the only network
+call: the command also reads the repository policy, and when the policy
+declares the key it commits the rewritten blob and never touches the
+host config. The `ORBI_ACTIVE_MILESTONE` Actions variable is
 published by the Runner's next-tick preflight (the bypass contract), so
 the command's success is NOT the variable's success: verify with the
 printed `gh api` probe. Every failure exits non-zero with one
 structured `milestone_set_failed reason=... fix=...` line on stderr and
-leaves the config untouched — a missing or duplicated title, a GitHub
-API or permission failure, a config without the `active_milestone`
-line (the field is never created implicitly), or an unwritable file
-all fail fast with the actual reason:
+leaves the target untouched — a missing or duplicated title, a GitHub
+API or permission failure, neither source declaring the
+`active_milestone` line (the field is never created implicitly), a
+failed policy PUT, or an unwritable file all fail fast with the actual
+reason:
 
 ```bash
 orbi milestone set v0.9.9 --config orbi.toml

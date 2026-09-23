@@ -372,6 +372,8 @@ class FakeGh:
     # --- api verbs -----------------------------------------------------------
 
     def _api(self, args: list[str]) -> str:
+        if args[:2] == ["--method", "PUT"]:
+            return self._api_put(args[2:])
         path = args[0]
         flags = self._flags(args[1:])
         match = re.fullmatch(
@@ -418,6 +420,41 @@ class FakeGh:
                 ).decode("ascii"),
             })
         return self._unsupported(["gh", "api", path])
+
+    def _api_put(self, args: list[str]) -> str:
+        """The contents API PUT (create/update a file): `gh api --method
+        PUT <path> -f key=value ...`. Only the repository policy path is
+        modelled, and only for the three required fields, so a mistyped
+        write fails fast instead of silently updating the wrong file."""
+        path = args[0]
+        match = re.fullmatch(
+            r"repos/([^/]+/[^/]+)/contents/\.github/orbi\.toml", path,
+        )
+        if match is None:
+            return self._unsupported(["gh", "api", "--method", "PUT", *args])
+        self._repo_or_fail(match.group(1))
+        fields: dict[str, str] = {}
+        index = 1
+        while index < len(args):
+            if args[index] != "-f" or index + 1 >= len(args):
+                return self._unsupported(
+                    ["gh", "api", "--method", "PUT", *args]
+                )
+            key, _, value = args[index + 1].partition("=")
+            fields[key] = value
+            index += 2
+        if set(fields) != {"message", "content", "sha"}:
+            return self._unsupported(["gh", "api", "--method", "PUT", *args])
+        try:
+            self.repo_config = base64.b64decode(
+                fields["content"], validate=True,
+            ).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            self._fail(1, "fake-gh: content is not base64-encoded UTF-8")
+        return json.dumps({
+            "content": {"sha": fields["sha"]},
+            "commit": {"sha": "0" * 40},
+        })
 
     def _milestone_jq(self, jq: str) -> str:
         """Answer the title-select jq with GitHub's own open_issues

@@ -699,8 +699,8 @@ orbi check --config orbi.toml
 orbi setup --config orbi.toml
 
 # 把 active milestone 推进到一个 exact 的 GitHub Milestone 标题
-# （主机侧的人工命令；auto_next_milestone=false 的确认 Issue 自带票内
-# `/milestone <标题>` 命令；只有 active_milestone 这一行会变化）
+# （仓库策略声明 active_milestone 时写策略，否则写主机配置；
+# auto_next_milestone=false 的确认 Issue 自带票内 `/milestone <标题>` 命令）
 orbi milestone set v0.6.0 --config orbi.toml
 
 # 打印当前 run 的 Pi session JSONL 路径（没有 session 时 fail fast）
@@ -715,33 +715,39 @@ journal 和 GitHub 仍是正常可观测路径。
 
 ### 人工推进 active milestone
 
-`orbi milestone set <title>`（Issue #895）是 milestone 生命周期中的
-人工命令：当 `auto_next_milestone = false` 让推进进入待确认状态，或任何
-一次版本切换应当是运维的明确动作时，它把本地 `orbi.toml` 的
-`active_milestone` 改为给定的
-GitHub Milestone 标题——不再手工编辑文件。该标题必须在唯一配置的
-source repo 上恰好对应一个 Milestone（GitHub Milestone 标题不唯一，
-exact title 重名是硬错误）。只有 `active_milestone` 这一行会被重写：
-注释、空行和其他所有字段保持逐字节不变。
+`orbi milestone set <title>`（Issue #895、#1306）是 milestone 生命周期
+中的人工命令：当 `auto_next_milestone = false` 让推进进入待确认状态，
+或任何一次版本切换应当是运维的明确动作时，它把 `active_milestone`
+改为给定的 GitHub Milestone 标题——不再手工编辑文件。新值落在
+Runner 实际读取它的地方，优先级是**仓库策略，然后主机配置**：仓库
+默认分支上的 `.github/orbi.toml` 声明了 `active_milestone` 时
+（Runner 按按键分域读取的覆盖值），命令用 contents PUT 重写该键；
+否则重写主机 `orbi.toml` 的那一行。只有 `active_milestone` 这一行会被
+重写：注释、空行和其他所有字段保持逐字节不变。该标题必须在唯一
+配置的 source repo 上恰好对应一个 Milestone（GitHub Milestone 标题
+不唯一，exact title 重名是硬错误）。
 
 ```bash
 orbi milestone set v0.6.0 --config orbi.toml
 # active_milestone: v0.5.6 -> v0.6.0
 # repo: orbi-build/orbi
-# config: /path/to/orbi.toml
+# wrote: repo policy .github/orbi.toml
 # next: the Runner's next tick claims Issues from Milestone "v0.6.0" and
 # syncs the ORBI_ACTIVE_MILESTONE variable (verify: gh api
 # repos/orbi-build/orbi/actions/variables/ORBI_ACTIVE_MILESTONE --jq .value)
 ```
 
-命令本身从不写 GitHub——Milestone 列表读取是它唯一的网络调用。
+`wrote:` 行指明写入目标：`repo policy .github/orbi.toml`（对仓库默认
+分支做 contents PUT）或 `host config /path/to/orbi.toml`。Milestone
+列表读取不再是唯一的网络调用：命令还会读取仓库策略，且当策略
+声明了该键时提交重写后的 blob，绝不触碰主机配置。
 `ORBI_ACTIVE_MILESTONE` Actions variable 由 Runner 下一 tick 的
 preflight 发布（bypass 契约），因此命令成功不代表 variable 已同步：
 用输出里给出的 `gh api` 探针验证。所有失败都以非零退出，在 stderr
-输出一行结构化 `milestone_set_failed reason=... fix=...`，配置保持
-原样——目标不存在、exact title 重名、GitHub API 或权限失败、配置
-没有 `active_milestone` 行（该字段从不被隐式创建）、文件不可写，
-全部带实际原因快速失败：
+输出一行结构化 `milestone_set_failed reason=... fix=...`，目标保持
+原样——目标不存在、exact title 重名、GitHub API 或权限失败、两个
+来源都没有 `active_milestone` 行（该字段从不被隐式创建）、策略 PUT
+失败、文件不可写，全部带实际原因快速失败：
 
 ```bash
 orbi milestone set v0.9.9 --config orbi.toml

@@ -1,9 +1,11 @@
-"""`orbi milestone set` — the explicit manual active_milestone advance
-(Issue #895).
+"""`orbi milestone set` — the explicit manual active_milestone
+advance (Issue #895).
 
-One command moves the single source repo's `active_milestone` in the
-local `orbi.toml` to an exact GitHub Milestone title — no manual config
-editing, no second state, no guessing:
+One command moves the single source repo's `active_milestone` to an exact
+GitHub Milestone title — no manual config editing, no second state, no
+guessing. The value lands where the Runner actually reads it from (Issue
+#1306): the repository policy `.github/orbi.toml` when it declares
+`active_milestone` (per-key override), otherwise the host `orbi.toml`.
 
 - the title must exist as exactly ONE Milestone (GitHub Milestone
   titles are NOT unique, so a duplicate exact title is a hard error);
@@ -12,20 +14,22 @@ editing, no second state, no guessing:
   (`rewrite_active_milestone_line`);
 - every failure (missing target, duplicate title, GitHub API /
   permission failure, config without the field, missing config,
-  unwritable config) exits non-zero with one structured
-  `milestone_set_failed reason=... fix=...` line on stderr and leaves
-  the config file untouched;
+  unwritable config, a failed policy write) exits non-zero with one
+  structured `milestone_set_failed reason=... fix=...` line on stderr
+  and leaves the untouched target byte-identical;
 - the command does NOT sync the `ORBI_ACTIVE_MILESTONE` Actions
   variable itself: the Runner's preflight syncs it on the next tick
   (the bypass contract), and the success output says so.
 
-The command never writes to GitHub — the only network call is the
-read-only Milestone list, stubbed at the one subprocess seam with the
-in-memory `FakeGh` (Article 5.2: the command line is the contract at
-the adapter seam, and the fake owns its dispatch).
+The command writes to GitHub only when the repository policy declares
+`active_milestone` (the contents PUT); the network calls are stubbed at
+the one subprocess seam with the in-memory `FakeGh` (Article 5.2: the
+command line is the contract at the adapter seam, and the fake owns its
+dispatch).
 """
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -93,6 +97,31 @@ def run_set(config_path: Path, title: str) -> int:
     ])
 
 
+POLICY_WITH_MILESTONE = (
+    'base_branch = "main"\nactive_milestone = "v0.5.0"\n'
+)
+POLICY_WITHOUT_MILESTONE = 'base_branch = "main"\n'
+
+
+def _call_text(command: list[str]) -> str:
+    return " ".join(command)
+
+
+def _policy_reads(calls: list[list[str]]) -> list[list[str]]:
+    return [
+        command for command in calls
+        if "/contents/" in _call_text(command) and "--method" not in command
+    ]
+
+
+def _policy_puts(calls: list[list[str]]) -> list[list[str]]:
+    return [command for command in calls if "--method" in command]
+
+
+def _milestone_reads(calls: list[list[str]]) -> list[list[str]]:
+    return [command for command in calls if "/milestones?" in _call_text(command)]
+
+
 # --- the success path -----------------------------------------------------------
 
 
@@ -119,13 +148,96 @@ def test_milestone_set_success_rewrites_only_that_line(
     out = capsys.readouterr().out
     assert "active_milestone: v0.5.0 -> v0.6.0" in out
     assert f"repo: {REPO}" in out
-    assert f"config: {config_path.resolve()}" in out
+    # The output names the target actually written (Issue #1306).
+    assert f"wrote: host config {config_path}" in out
     # The variable is NOT synced by this command: the next Runner tick
     # does it (the bypass contract) and the output makes that checkable.
     assert "ORBI_ACTIVE_MILESTONE" in out
     assert "next tick" in out
-    # Exactly one network call: the read-only Milestone list.
-    assert len(calls) == 1
+    # No repository policy: the host config is the only place written
+    # (exactly one read-only Milestone list, plus the policy probe).
+    assert len(_policy_reads(calls)) == 1
+    assert len(_policy_puts(calls)) == 0
+    assert len(_milestone_reads(calls)) == 1
+
+
+def test_milestone_set_lands_in_the_repository_policy_when_declared(
+    tmp_path, monkeypatch, capsys,
+):
+    """The repository policy overrides the host config: the value must
+    land there (Issue #1306). The host config stays byte-identical and
+    the contents PUT commits the rewritten policy blob."""
+    config_path = make_world(tmp_path)
+    original = config_path.read_bytes()
+    gh = FakeGh(REPO)
+    gh.set_repo_config(POLICY_WITH_MILESTONE)
+    gh.add_milestone(1, title="v0.5.0", state="closed")
+    gh.add_milestone(2, title="v0.6.0", open_issues=3)
+    calls = wire(monkeypatch, gh)
+
+    exit_code = run_set(config_path, "v0.6.0")
+
+    assert exit_code == 0
+    # The repository policy got the new value ...
+    assert gh.repo_config == POLICY_WITH_MILESTONE.replace(
+        'active_milestone = "v0.5.0"', 'active_milestone = "v0.6.0"',
+    )
+    # ... and the host config is untouched, byte for byte.
+    assert config_path.read_bytes() == original
+    puts = _policy_puts(calls)
+    assert len(puts) == 1
+    put = puts[0]
+    assert put[:2] == ["gh", "api"]
+    assert put[2:4] == ["--method", "PUT"]
+    assert put[4] == f"repos/{REPO}/contents/.github/orbi.toml"
+    assert any(item.startswith("sha=") for item in put)  # the blob read is pinned
+    assert not any(item.startswith("branch=") for item in put)
+    out = capsys.readouterr().out
+    assert "active_milestone: v0.5.0 -> v0.6.0" in out
+    assert "wrote: repo policy .github/orbi.toml" in out
+
+
+def test_milestone_set_policy_without_the_key_writes_the_host_config(
+    tmp_path, monkeypatch, capsys,
+):
+    """A policy file that does NOT declare `active_milestone` leaves the
+    host config as the effective source (regression guard)."""
+    config_path = make_world(tmp_path)
+    original = config_path.read_text(encoding="utf-8")
+    gh = FakeGh(REPO)
+    gh.set_repo_config(POLICY_WITHOUT_MILESTONE)
+    gh.add_milestone(1, title="v0.6.0", open_issues=3)
+    calls = wire(monkeypatch, gh)
+
+    assert run_set(config_path, "v0.6.0") == 0
+
+    assert config_path.read_text(encoding="utf-8") == original.replace(
+        'active_milestone = "v0.5.0"', 'active_milestone = "v0.6.0"',
+    )
+    assert gh.repo_config == POLICY_WITHOUT_MILESTONE
+    assert _policy_puts(calls) == []
+    assert f"wrote: host config {config_path}" in capsys.readouterr().out
+
+
+def test_milestone_set_policy_declares_without_host_line_succeeds(
+    tmp_path, monkeypatch, capsys,
+):
+    """When the policy declares the value, a host config without the
+    line is not a failure: the policy is the effective source."""
+    config_path = make_world(tmp_path, milestone=None)
+    original = config_path.read_bytes()
+    gh = FakeGh(REPO)
+    gh.set_repo_config(POLICY_WITH_MILESTONE)
+    gh.add_milestone(1, title="v0.6.0", open_issues=3)
+    wire(monkeypatch, gh)
+
+    assert run_set(config_path, "v0.6.0") == 0
+
+    assert gh.repo_config == POLICY_WITH_MILESTONE.replace(
+        'active_milestone = "v0.5.0"', 'active_milestone = "v0.6.0"',
+    )
+    assert config_path.read_bytes() == original
+    assert "active_milestone: v0.5.0 -> v0.6.0" in capsys.readouterr().out
 
 
 def test_milestone_set_preserves_comments_and_blank_lines(
@@ -179,6 +291,67 @@ def test_milestone_set_missing_target_fails_without_touching_config(
     assert config_path.read_text(encoding="utf-8") == original
 
 
+def test_milestone_set_invalid_repository_policy_fails_fast(
+    tmp_path, monkeypatch, capsys,
+):
+    """A repository policy the Runner reads but cannot validate is a hard
+    failure naming the policy — never a silent fallback to the host config
+    (Issue #1306)."""
+    config_path = make_world(tmp_path)
+    original = config_path.read_bytes()
+    gh = FakeGh(REPO)
+    gh.set_repo_config("nope = 1\n")
+    gh.add_milestone(1, title="v0.6.0", open_issues=3)
+    wire(monkeypatch, gh)
+
+    assert run_set(config_path, "v0.6.0") == 1
+
+    err = capsys.readouterr().err
+    assert err.startswith("milestone_set_failed")
+    assert "repository policy invalid" in err
+    assert "fix=" in err
+    assert "Traceback" not in err
+    assert config_path.read_bytes() == original
+
+
+def test_milestone_set_policy_write_failure_is_structured(
+    tmp_path, monkeypatch, capsys,
+):
+    """A failed policy PUT is a structured failure: non-zero exit, one
+    `milestone_set_failed reason=...` line, no success, and the host
+    config untouched (Issue #1306)."""
+    config_path = make_world(tmp_path)
+    original = config_path.read_bytes()
+    gh = FakeGh(REPO)
+    gh.set_repo_config(POLICY_WITH_MILESTONE)
+    gh.add_milestone(1, title="v0.6.0", open_issues=3)
+    calls: list[list[str]] = []
+
+    def recording(command, **kwargs):
+        calls.append(list(command))
+        if "--method" in command:
+            raise subprocess.CalledProcessError(
+                1, command, output="", stderr="gh: HTTP 403",
+            )
+        return gh(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", recording)
+
+    exit_code = run_set(config_path, "v0.6.0")
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    err = captured.err
+    assert err.startswith("milestone_set_failed")
+    assert "reason=" in err
+    assert "fix=" in err
+    assert "Traceback" not in err
+    assert config_path.read_bytes() == original
+    # The PUT was attempted and only the policy write path ran.
+    assert len(_policy_puts(calls)) == 1
+
+
 def test_milestone_set_duplicate_exact_title_fails_without_touching_config(
     tmp_path, monkeypatch, capsys,
 ):
@@ -222,12 +395,12 @@ def test_milestone_set_gh_api_failure_fails_fast_without_touching_config(
     assert "fix=" in err and "gh auth" in err
     assert "Traceback" not in err
     assert config_path.read_text(encoding="utf-8") == original
-    # Exactly one attempt: the failure is not transient, the read-retry
-    # loop must not spin.
-    assert len(calls) == 1
+    # Exactly one milestone-list attempt: the failure is not transient,
+    # the read-retry loop must not spin (the policy probe is separate).
+    assert len(_milestone_reads(calls)) == 1
 
 
-def test_milestone_set_without_active_milestone_line_fails_before_github(
+def test_milestone_set_without_active_milestone_line_fails_without_touching(
     tmp_path, monkeypatch, capsys,
 ):
     config_path = make_world(tmp_path, milestone=None)
@@ -244,8 +417,10 @@ def test_milestone_set_without_active_milestone_line_fails_before_github(
     assert "active_milestone" in err and "fix=" in err
     assert "Traceback" not in err
     assert config_path.read_text(encoding="utf-8") == original
-    # The local precondition fails before any network call.
-    assert calls == []
+    # The only network call is the policy probe that confirms neither
+    # source declares the field; the Milestone list is never read.
+    assert len(_policy_reads(calls)) == 1
+    assert _milestone_reads(calls) == []
 
 
 def test_milestone_set_missing_config_fails(

@@ -13,6 +13,8 @@ the comment order, and the returned PR/check data.
 The list order mirrors ``gh issue list``: newest first, so tests seed
 issues oldest-first.
 """
+import base64
+import json
 import logging
 import subprocess
 
@@ -447,3 +449,64 @@ def test_repo_config_unseeded_is_a_designed_no_op(fake_gh):
     assert repo_config.read_repo_config(
         "owner/repo", run_command=fake_gh,
     ) is None
+
+
+# --- the contents PUT surface (Issue #1306) ---------------------------------
+
+
+def _contents_put(*fields: str, path: str = "repos/owner/repo/contents/.github/orbi.toml") -> list[str]:
+    command = ["gh", "api", "--method", "PUT", path]
+    for field in fields:
+        command += ["-f", field]
+    return command
+
+
+def test_contents_put_updates_the_repo_config(fake_gh):
+    """The write the `milestone set` policy path needs: a contents PUT
+    replaces the in-memory policy blob and answers the new commit sha."""
+    fake_gh.set_repo_config('base_branch = "main"\n')
+    written = 'base_branch = "main"\nactive_milestone = "v0.6.0"\n'
+    encoded = base64.b64encode(written.encode("utf-8")).decode("ascii")
+    result = fake_gh(_contents_put(
+        "message=set active_milestone",
+        f"content={encoded}",
+        "sha=" + "0" * 40,
+    ))
+    assert fake_gh.repo_config == written
+    assert json.loads(result)["commit"]["sha"] == "0" * 40
+
+
+def test_contents_put_rejects_any_other_path(fake_gh):
+    """Only the repository policy path is modelled: a mistyped write
+    fails fast instead of silently updating the wrong file."""
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        fake_gh(_contents_put(
+            "message=x", "content=eA==", "sha=abc",
+            path="repos/owner/repo/contents/README.md",
+        ))
+    assert "unsupported" in excinfo.value.stderr
+
+
+def test_contents_put_rejects_a_non_field_argument(fake_gh):
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        fake_gh([
+            "gh", "api", "--method", "PUT",
+            "repos/owner/repo/contents/.github/orbi.toml",
+            "-f", "message=x", "stray", "content=eA==",
+        ])
+    assert "unsupported" in excinfo.value.stderr
+
+
+def test_contents_put_requires_the_three_contents_fields(fake_gh):
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        fake_gh(_contents_put("message=x", "content=eA=="))
+    assert "unsupported" in excinfo.value.stderr
+
+
+def test_contents_put_rejects_non_base64_content(fake_gh):
+    fake_gh.set_repo_config('base_branch = "main"\n')
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        fake_gh(_contents_put(
+            "message=x", "content=not base64!", "sha=abc",
+        ))
+    assert "base64" in excinfo.value.stderr

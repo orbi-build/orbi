@@ -643,6 +643,13 @@ active_milestone = "v0.5.0"
 context_files = ["AGENTS.md"]
 ```
 
+The override is per key: when the repository file declares
+`active_milestone`, it wins over the host config and that is the value
+the claim scan uses. `orbi milestone set <title>` lands the new value in
+the same place — the repository policy when it declares the key (a
+contents PUT on the default branch), otherwise the host `orbi.toml`
+line — and prints `wrote:` naming the target (Issue #1306).
+
 Every other key is rejected: an unknown key, a host-only
 identity/security key (see [Security](/security)), invalid TOML or a
 wrong type fails the claim fast with the offending key names and the
