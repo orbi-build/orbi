@@ -1,0 +1,31 @@
+# v0.5.42 release (latest)
+
+`v0.5.42` release notes for the GitHub Release [v0.5.42](https://github.com/orbi-build/orbi/releases/tag/v0.5.42) (release task: Issue #1308).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.5.42` | annotated tag `c1150e1b29f1346347a76afb410a53df938e2bcb` | commit `a8e388dc37d0b454ce5e794528a2c2d9a05ce7d8` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- config.py: four hand-copied seconds validators, route them through the existing _positive_seconds ([Issue #610](https://github.com/orbi-build/orbi/issues/610); [PR #1315](https://github.com/orbi-build/orbi/pull/1315))
+- A finished Milestone with no release ticket waits silently: surface it through the existing /milestone decision notice ([Issue #856](https://github.com/orbi-build/orbi/issues/856); [PR #1314](https://github.com/orbi-build/orbi/pull/1314))
+- `auto_next_milestone` 默认 true 时，`milestone set` 写入的值会被下个空闲 tick 的自动推进改写，命令输出与实际行为相反 ([Issue #933](https://github.com/orbi-build/orbi/issues/933); [PR #1311](https://github.com/orbi-build/orbi/pull/1311))
+- Extract the claim domain into src/orbi/claim.py: 17 definitions and ~850 lines leave runner.py ([Issue #1259](https://github.com/orbi-build/orbi/issues/1259); [PR #1317](https://github.com/orbi-build/orbi/pull/1317))
+
+### Bug fixes
+
+- Runner fails after fresh branch push before PR creation ([Issue #898](https://github.com/orbi-build/orbi/issues/898); [PR #1312](https://github.com/orbi-build/orbi/pull/1312))
+- Idle auto-advance writes the host config, so a repository-declared active_milestone never advances ([Issue #1304](https://github.com/orbi-build/orbi/issues/1304); [PR #1305](https://github.com/orbi-build/orbi/pull/1305))
+- `orbi milestone set` reports success but writes only the host config when the repo policy declares active_milestone ([Issue #1306](https://github.com/orbi-build/orbi/issues/1306); [PR #1309](https://github.com/orbi-build/orbi/pull/1309))
+- /milestone release-ticket step guesses version_file = pyproject.toml when detection finds nothing ([Issue #1307](https://github.com/orbi-build/orbi/issues/1307); [PR #1310](https://github.com/orbi-build/orbi/pull/1310))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
