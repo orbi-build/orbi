@@ -800,6 +800,32 @@ orbi milestone set v0.5.7 --config orbi.toml
 全程不调用模型：结果由评论、候选列表和仓库状态唯一决定。它记录的事件
 类型是 `milestone_command_applied` 与 `milestone_command_failed`。
 
+### 票内命令
+
+票内可以携带的命令集中在一张显式注册表 `TICKET_COMMANDS`
+（`src/orbi/ticket_command.py`）。共享层负责第二个命令不该重复实现的部分：
+行首锚定匹配、权限门禁、围栏/引用处理、后发命令覆盖先发、以及回执。命令
+只提供 verbs（绝不是正则）、一个声明式权限级别、一个 `validate` 回调
+（命令自己的业务规则：返回可读原因，参数被接受时返回 `None`）和一个
+`apply` 回调。只有调度入口 `process_commands(...)` 能触达 handler。
+
+| Command | Usage | Permission | Description |
+| --- | --- | --- | --- |
+| `milestone` | `/milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
+
+新增一个命令：
+
+1. 在命令自己的模块里定义 `CommandSpec`（`/milestone` 是第一个注册者）并
+   调用 `register_command(spec)`。注册即校验：名称重复、verb 已被其他命令
+   占用、权限级别不在 `PERMISSION_LEVELS` 中，都会在 import 时快速失败。
+2. 在 `JOURNAL_EVENTS`（`src/orbi/journal.py`）中登记事件类型
+   `<name>_command_applied` 与 `<name>_command_failed`，并在上面的"事件参考"
+   中补上对应行；`event()` 会拒绝未登记的 kind。
+3. 在本表（及中文页）补上该命令行：绑定测试
+   `tests/test_ticket_command.py` 会读取两张表，出现偏差即失败。
+4. 把新的 spec 传给票的 `process_commands(...)` 调用——一个调度器用同一批
+   评论评估所有已登记命令。
+
 ### 已完成但没有 release 票的 Milestone
 
 Issue #856：active Milestone 已无 open Issue，却没人开它的 release 票时，

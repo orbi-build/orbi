@@ -23,11 +23,11 @@ from orbi.journal import (
     run_command, single_line,
 )
 from orbi.milestone_command import (
-    _land_active_milestone, process_milestone_commands,
-    rewrite_active_milestone_line,
+    _land_active_milestone, rewrite_active_milestone_line,
 )
 from orbi.progress import ProgressPublisher, read_test_result
 from orbi.repo_config import REPO_CONFIG_PATH, RepoPolicy
+from orbi.ticket_command import TICKET_COMMANDS, process_commands
 
 MILESTONE_RECONCILE_RETRY_SECONDS = 60 * 60
 _MILESTONE_FAILURE_DIR = "milestone-reconcile-failures"
@@ -667,8 +667,9 @@ def _ensure_pending_milestone_notice(
     if issue_number is None:
         return
     try:
-        process_milestone_commands(
+        process_commands(
             repo, issue_number,
+            commands=TICKET_COMMANDS.values(),
             candidate_titles=candidate_titles,
             config_path=config_path, policy=policy,
             policy_path=policy_path, base_branch=base_branch,
