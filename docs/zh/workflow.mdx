@@ -339,6 +339,37 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 ```
 
+## 失败记录：`orbi:failure:v1`
+
+每条 `Orbi: blocked` / `Orbi: fix needed` 失败评论都是机器可读的。在
+run marker 旁，它携带恰好一个隐藏的带版本 block：
+
+```html
+<!-- orbi:failure:v1 {"schema":1,"outcome":"blocked","reason_code":"github_transient","action_code":"requeue","retry_safe":true} -->
+```
+
+`outcome` 为 `blocked`（终态，由人决策）或 `fix_needed`（下一 tick 恢复
+同一个 run）。`reason_code` 说明交付为何停止；`action_code` 说明读者该
+做什么；`retry_safe` 表示仅重新入队能否在没有人工修复的情况下成功。两个
+集合都是封闭的、由引擎拥有（`src/orbi/failure.py`）；分类器无法识别的
+异常映射为 `unclassified`，block 永不省略；在本功能之前写出的评论完全
+没有 block——读取方会忽略它（`parse` 返回 `None`）。
+
+| `reason_code` | 含义 | `action_code` | `retry_safe` |
+| --- | --- | --- | --- |
+| `github_transient` | 临时的 GitHub API/服务端失败 | `requeue` | true |
+| `provider_quota` | 模型 provider 配额耗尽 | `wait_quota` | true |
+| `tests_failed` | 交付自身的测试失败 | `fix_ticket` | false |
+| `review_budget_exhausted` | 有界 review/fix 预算用尽 | `decide` | false |
+| `human_decision_required` | 只有人能决策的外部前置条件 | `decide` | false |
+| `credential_missing` | GitHub/provider 凭据缺失或被拒绝 | `check_credentials` | false |
+| `unclassified` | 其它任何 Runner 异常 | `fix_ticket` | false |
+
+动作：`requeue` 给 Issue 重新加 `ai-ready`（或点击重试）——无需修复；
+`fix_ticket` 修复失败并重跑该 Issue；`decide` 需要人工决策；
+`check_credentials` 检查并修复凭据后重试；`wait_quota` 等配额窗口重置后
+重试。人类可读的标题、`**Reason:**` 与 `**Action:**` 行与 block 并列。
+
 ## PR body 契约：`Fixes #N`
 
 PR 描述必须包含 `Fixes #<issue-number>`（可以放在首行）。GitHub 读的是

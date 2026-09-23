@@ -7946,7 +7946,11 @@ def test_report_delivery_failure_caps_comment_and_names_session_log(
 
     assert outcome == "blocked"
     body = posted[0]
-    assert body.startswith("Orbi: blocked — waiting on a human decision")
+    # Issue #1322: the hidden machine-readable block leads the readable
+    # hierarchy (the run marker is prepended by `report_delivery_failure`
+    # when a run_id is bound; this call has none).
+    assert body.startswith("<!-- orbi:failure:v1 ")
+    assert "\n\nOrbi: blocked — waiting on a human decision" in body
     assert "**Reason:** " + "x" * 500 in body
     assert len(body) < runner.FAILURE_COMMENT_MAX_CHARS
     assert "full log: local session log" in body
