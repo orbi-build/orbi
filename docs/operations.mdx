@@ -934,6 +934,40 @@ No model call is involved: the command is deterministic from the comment,
 the candidate list and the repository state. The event kinds it logs are
 `milestone_command_applied` and `milestone_command_failed`.
 
+### In-ticket commands
+
+Every command a ticket can carry lives in one explicit registry,
+`TICKET_COMMANDS` (`src/orbi/ticket_command.py`). The shared layer owns the
+parts a second command must not re-implement: the anchored matcher, the
+permission gate, the fenced/quoted handling, last-occurrence-wins and the
+receipts. A command supplies its verbs — never a regex — a declarative
+permission level, a `validate` callback (its own business rule: it returns
+a readable reason, or `None` when the argument is accepted) and an `apply`
+callback. The dispatcher `process_commands(...)` is the only path to a
+handler.
+
+| Command | Usage | Permission | Description |
+| --- | --- | --- | --- |
+| `milestone` | `/milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
+
+To add a command:
+
+1. Define a `CommandSpec` in the command's own module (`/milestone` is the
+   first registrant) and call `register_command(spec)`. Registration is the
+   validation: a duplicate name, a verb another command already owns, or a
+   permission level outside `PERMISSION_LEVELS` fails at import time.
+2. Register the journal event kinds `<name>_command_applied` and
+   `<name>_command_failed` in `JOURNAL_EVENTS` (`src/orbi/journal.py`) and
+   add their rows to the event reference above; `event()` refuses an
+   unregistered kind.
+3. Add the command's row to this table (and the Chinese page): the binding
+   test `tests/test_ticket_command.py` reads both tables and fails on drift.
+4. Make sure the command's module is imported before tickets are
+   processed (`orbi/milestone.py` is the module that owns the call site):
+   `register_command` runs at import time. The single `process_commands(...)`
+   call already passes the whole `TICKET_COMMANDS` registry, so a registered
+   command is dispatched without changing the call site.
+
 ### A finished Milestone with no release ticket
 
 Issue #856: when the active Milestone has no open Issue left but nobody has

@@ -9,13 +9,15 @@ would — create the milestone, open its release ticket, land
 ``active_milestone``.
 
 Deliberate limits: the command never advances anything by itself, never
-infers the next version, and never calls a model. The command is the first
-line anchored, so a quoted reply (``> /milestone vX.Y.Z``) and a fenced
-code block never trigger it; it only accepts a title from the caller's
-candidate set, and only from an author with write permission.
+infers the next version, and never calls a model. It only accepts a title
+from the caller's candidate set.
 
-The active_milestone line rewrite lives here too: landing that value is the
-command's third step, and the idle-time auto-advance shares the same write.
+The generic machinery — the anchored matching, the permission gate, the
+receipts — lives in `orbi.ticket_command` (Issue #1294); this module is its
+first registrant, `MILESTONE_COMMAND`. Everything milestone-specific (the
+candidate-set rule, the three idempotent steps and the active_milestone
+line rewrite) stays here: landing that value is the command's third step,
+and the idle-time auto-advance shares the same write.
 """
 from __future__ import annotations
 
@@ -29,35 +31,13 @@ from urllib.parse import quote
 
 from orbi import config as config_domain
 from orbi.delivery_labels import RELEASE_LABEL
-from orbi.github import (
-    TRUSTED_COMMENT_ASSOCIATIONS, _authenticated_github_login,
-    _strip_bot_suffix, issue_comments, list_issues, list_milestones,
-    run_gh_read_command,
-)
-from orbi.journal import event, run_command
+from orbi.github import list_issues, list_milestones, run_gh_read_command
+from orbi.journal import run_command
 from orbi.release_git import RELEASE_VERSION_FILE_OPTIONS
 from orbi.repo_config import RepoConfigError, RepoPolicy, read_repo_config
-
-
-def authenticated_login() -> str:
-    """Public accessor for the login represented by the active credential."""
-    return _authenticated_github_login()
-
-
-def comment_author_login(comment: object) -> str | None:
-    """The login of a comment's author, or None when it is unreadable."""
-    if not isinstance(comment, dict):
-        return None
-    author = comment.get("author")
-    login = author.get("login") if isinstance(author, dict) else None
-    return login if isinstance(login, str) and login else None
-
-
-def same_github_identity(login: object, other: object) -> bool:
-    """True when two logins name the same account (``[bot]`` normalized)."""
-    if not isinstance(login, str) or not isinstance(other, str):
-        return False
-    return _strip_bot_suffix(login) == _strip_bot_suffix(other)
+from orbi.ticket_command import (
+    CommandSpec, TicketCommandError, register_command,
+)
 
 
 _ACTIVE_MILESTONE_LINE_RE = re.compile(
@@ -95,8 +75,6 @@ def rewrite_active_milestone_line(config_path: Path, new_value: str) -> None:
 
 # --- the three idempotent steps -----------------------------------------
 
-MILESTONE_COMMAND_RE = re.compile(r"(?mi)^/milestone\b[ \t]*([^\r\n]*)$")
-
 _RELEASE_TICKET_TEMPLATE_PATH = ".github/release-ticket-template.md"
 _RELEASE_TICKET_DROP_SECTIONS = (
     "## Background",
@@ -107,109 +85,10 @@ _RELEASE_TICKET_DROP_SECTIONS = (
 # fenced ```markdown alternates that themselves start with `## Release`.
 _RELEASE_TICKET_REFERENCE_PREFIX = "## Release section reference"
 _RELEASE_TICKET_VERSION_PLACEHOLDER = "vX.Y.Z"
-_COMMAND_RECEIPT_MARKER = "orbi-milestone-command"
 
 _STEP_MILESTONE = "milestone"
 _STEP_RELEASE_TICKET = "release ticket"
 _STEP_ACTIVE_MILESTONE = "active_milestone"
-
-
-def strip_fenced_code_blocks(text: str) -> str:
-    """Blank fenced code blocks so a documented command is not a command.
-
-    The regex cannot see Markdown, so a `/milestone` line inside a ``` or
-    ~~~ fence (the very way the command is explained) would otherwise
-    trigger a real advance. Fences are dropped line by line; the line count
-    is preserved.
-    """
-    kept: list[str] = []
-    fence: str | None = None
-    for line in text.splitlines():
-        marker = None
-        for candidate in ("```", "~~~"):
-            if line.lstrip().startswith(candidate):
-                marker = candidate
-                break
-        if fence is not None:
-            if marker == fence:
-                fence = None
-            kept.append("")
-            continue
-        if marker is not None:
-            fence = marker
-            kept.append("")
-            continue
-        kept.append(line)
-    return "\n".join(kept)
-
-
-def parse_milestone_commands(text: object) -> list[str | None]:
-    """Every command a comment body issues, in line order.
-
-    A `/milestone` line whose argument is not exactly one version yields
-    `None`: it is readable as a command but malformed, and the caller owes
-    its author one readable receipt instead of silence.
-    """
-    if not isinstance(text, str) or not text:
-        return []
-    parsed: list[str | None] = []
-    for argument in MILESTONE_COMMAND_RE.findall(strip_fenced_code_blocks(text)):
-        fields = argument.split()
-        parsed.append(fields[0] if len(fields) == 1 else None)
-    return parsed
-
-
-def select_milestone_command(
-    comments: list[dict], candidate_titles: list[str], *, runner_login: str,
-) -> tuple[tuple[dict, str] | None, list[tuple[dict, str | None, str]]]:
-    """Resolve the ticket's command occurrences to one executable command.
-
-    Returns `(target, rejections)`. `target` is the LAST occurrence when it
-    is authorized, well-formed and inside the candidate set — the last word
-    wins, so an operator can correct a typo by commenting again. Every
-    rejected occurrence is returned with a readable reason so the caller can
-    leave one receipt each. The runner's own comments are skipped silently:
-    the bot must never trigger itself off its own receipt text.
-    """
-    occurrences: list[tuple[dict, str | None]] = []
-    for comment in comments:
-        if not isinstance(comment, dict):
-            continue
-        for version in parse_milestone_commands(comment.get("body")):
-            occurrences.append((comment, version))
-    rejections: list[tuple[dict, str | None, str]] = []
-    target: tuple[dict, str] | None = None
-    allowed = set(candidate_titles)
-    for comment, version in occurrences:
-        login = comment_author_login(comment)
-        if login is not None and same_github_identity(login, runner_login):
-            continue
-        if comment.get("authorAssociation") not in TRUSTED_COMMENT_ASSOCIATIONS:
-            target = None
-            rejections.append((
-                comment, version,
-                "the command author has no write permission on this "
-                f"repository (authorAssociation={comment.get('authorAssociation')!r})",
-            ))
-            continue
-        if version is None:
-            target = None
-            rejections.append((
-                comment, version,
-                "the command line is malformed: write exactly one version on "
-                "its own line, `/milestone <version>`",
-            ))
-            continue
-        if version not in allowed:
-            target = None
-            rejections.append((
-                comment, version,
-                f"`{version}` is not an open milestone above the current one; "
-                f"candidates: {', '.join(candidate_titles) or '(none)'}",
-            ))
-            continue
-        target = (comment, version)
-    return target, rejections
 
 
 def _strip_release_sections(text: str) -> str:
@@ -349,15 +228,6 @@ def _detect_version_file(repo: str, base_branch: str) -> str | None:
         if candidate != "none" and candidate in names:
             return candidate
     return None
-
-
-class MilestoneCommandError(RuntimeError):
-    """One `/milestone` step failed; the ticket names the step and reason."""
-
-    def __init__(self, step: str, reason: str):
-        super().__init__(f"{step}: {reason}")
-        self.step = step
-        self.reason = reason
 
 
 def _ensure_command_milestone(repo: str, version: str) -> None:
@@ -614,94 +484,51 @@ def apply_milestone_command(
         try:
             action()
         except Exception as exc:  # reported as one readable step receipt
-            raise MilestoneCommandError(step, str(exc)) from exc
+            raise TicketCommandError(step, str(exc)) from exc
         completed.append(step)
     return completed
 
 
-def _command_comment_key(comment: dict) -> str:
-    for field in ("id", "url"):
-        value = comment.get(field)
-        if value:
-            return str(value)
-    login = comment_author_login(comment) or "unknown"
-    return f"{login}@{comment.get('createdAt') or 'unknown'}"
+def _milestone_validate(
+    version: str, *, candidate_titles: list[str], **_context: object,
+) -> str | None:
+    """The command's own business rule: the title must be a candidate."""
+    if version not in set(candidate_titles):
+        return (
+            f"`{version}` is not an open milestone above the current one; "
+            f"candidates: {', '.join(candidate_titles) or '(none)'}"
+        )
+    return None
 
 
-def _command_comment_ref(comment: dict) -> str:
-    url = comment.get("url")
-    if isinstance(url, str) and url:
-        return url
-    login = comment_author_login(comment) or "unknown"
-    return f"comment by @{login} at {comment.get('createdAt') or 'unknown time'}"
-
-
-def _post_command_receipt(
-    repo: str, issue_number: int, existing_comments: list[dict], comment: dict,
-    *, marker: str, summary: str, version: str | None, reason: str,
-    step: str | None = None,
+def _milestone_apply(
+    version: str, *, repo: str, config_path: Path, policy: RepoPolicy | None,
+    policy_path: str, base_branch: str, dispatch_label: str,
+    version_file: str | None, candidate_titles: list[str],
+    issue_number: int, **_context: object,
 ) -> None:
-    """Post one reason comment, at most once per occurrence (idempotent)."""
-    hidden = f"<!-- {marker} comment={_command_comment_key(comment)} -->"
-    if any(
-        isinstance(existing, dict) and isinstance(existing.get("body"), str)
-        and hidden in existing["body"]
-        for existing in existing_comments
-    ):
-        return
-    lines = [summary, "", f"- reason: {reason}"]
-    lines.append(
-        "- command line: `/milestone`" if version is None
-        else f"- version: `{version}`"
+    """Run the three idempotent steps from the shared dispatcher's context."""
+    apply_milestone_command(
+        repo, version, config_path=config_path, policy=policy,
+        policy_path=policy_path, base_branch=base_branch,
+        dispatch_label=dispatch_label, version_file=version_file,
     )
-    if step is not None:
-        lines.append(f"- failed step: `{step}`")
-    lines.extend([f"- command comment: {_command_comment_ref(comment)}", "", hidden])
-    run_command([
-        "gh", "issue", "comment", str(issue_number), "--repo", repo,
-        "--body", "\n".join(lines),
-    ], timeout=30)
 
 
-def process_milestone_commands(
-    repo: str, issue_number: int, *, candidate_titles: list[str],
-    config_path: Path, policy: RepoPolicy | None, policy_path: str,
-    base_branch: str, dispatch_label: str, version_file: str | None,
-) -> None:
-    """Evaluate a pending ticket's comments and run the winning command."""
-    comments = issue_comments(issue_number, repo=repo)
-    target, rejections = select_milestone_command(
-        comments, candidate_titles, runner_login=authenticated_login(),
-    )
-    for comment, version, reason in rejections:
-        _post_command_receipt(
-            repo, issue_number, comments, comment,
-            marker=f"{_COMMAND_RECEIPT_MARKER}-rejected",
-            summary="**`/milestone` command not applied**",
-            version=version, reason=reason,
-        )
-    if target is None:
-        return
-    comment, version = target
-    try:
-        apply_milestone_command(
-            repo, version, config_path=config_path, policy=policy,
-            policy_path=policy_path, base_branch=base_branch,
-            dispatch_label=dispatch_label, version_file=version_file,
-        )
-    except MilestoneCommandError as exc:
-        _post_command_receipt(
-            repo, issue_number, comments, comment,
-            marker=f"{_COMMAND_RECEIPT_MARKER}-failed step={exc.step}",
-            summary=f"**`/milestone {version}` command failed**",
-            version=version, reason=exc.reason, step=exc.step,
-        )
-        event(
-            "milestone_command_failed", level=logging.ERROR, repo=repo,
-            milestone=version, step=exc.step, reason=exc.reason,
-        )
-        return
-    event(
-        "milestone_command_applied", repo=repo, milestone=version,
-        issue=f"#{issue_number}",
-    )
+# `/milestone` is the first registrant of the shared in-ticket command layer
+# (`orbi.ticket_command`). Registration validates itself: the shared layer
+# owns the anchored matcher, the permission gate and the receipts, so this
+# module supplies only the verbs, the declarative permission, and the two
+# callbacks that carry the milestone's business.
+MILESTONE_COMMAND = CommandSpec(
+    name="milestone",
+    verbs=("milestone",),
+    permission="write",
+    validate=_milestone_validate,
+    apply=_milestone_apply,
+    usage="/milestone <version>",
+    description="advance the active Milestone from a confirmation Issue",
+    argument_label="version",
+)
+
+register_command(MILESTONE_COMMAND)

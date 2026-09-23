@@ -7,7 +7,7 @@ carries the command itself: a comment line `/milestone vX.Y.Z` runs the same
 three deterministic steps a maintainer would.
 
 The tests below drive the real entry points:
-`process_milestone_commands` (parsing, authorization, receipts) and
+`ticket_command.process_commands` (parsing, authorization, receipts) and
 `apply_milestone_command` (create milestone, open the release ticket from the
 repository template, land `active_milestone`) against a stateful fake `gh`,
 plus the idle-path wiring in `advance_active_milestone_on_idle`.
@@ -22,6 +22,7 @@ import pytest
 import orbi.runner as runner
 from orbi import milestone
 from orbi import milestone_command
+from orbi import ticket_command
 from orbi.delivery_labels import READY_LABEL, RELEASE_LABEL
 from orbi.release import parse_release_declaration
 from orbi.repo_config import RepoPolicy
@@ -52,13 +53,14 @@ def _comment(body, *, login="alice", association="MEMBER", cid=1, url=None):
 
 
 def test_command_matches_any_line_not_only_the_comment_start():
-    assert milestone_command.parse_milestone_commands(
-        "first line\n\nplease run this:\n/milestone v0.5.41\nthanks"
+    assert ticket_command.parse_commands(
+        "first line\n\nplease run this:\n/milestone v0.5.41\nthanks",
+        milestone_command.MILESTONE_COMMAND,
     ) == ["v0.5.41"]
 
 
 def test_command_allows_trailing_arguments_and_whitespace():
-    assert milestone_command.parse_milestone_commands("/milestone\tv0.5.41  ") == [
+    assert ticket_command.parse_commands("/milestone\tv0.5.41  ", milestone_command.MILESTONE_COMMAND) == [
         "v0.5.41"
     ]
 
@@ -66,49 +68,55 @@ def test_command_allows_trailing_arguments_and_whitespace():
 def test_quoted_reply_does_not_trigger():
     # GitHub's "Quote reply" prefixes every quoted line with `>`, which
     # pushes `/` off the line start.
-    assert milestone_command.parse_milestone_commands("> /milestone v0.5.41") == []
-    assert milestone_command.parse_milestone_commands(">\t/milestone v0.5.41") == []
+    assert ticket_command.parse_commands("> /milestone v0.5.41", milestone_command.MILESTONE_COMMAND) == []
+    assert ticket_command.parse_commands(">\t/milestone v0.5.41", milestone_command.MILESTONE_COMMAND) == []
 
 
 def test_fenced_code_blocks_do_not_trigger():
-    assert milestone_command.parse_milestone_commands(
-        "how to advance:\n```\n/milestone v0.5.41\n```\n"
+    assert ticket_command.parse_commands(
+        "how to advance:\n```\n/milestone v0.5.41\n```\n",
+        milestone_command.MILESTONE_COMMAND,
     ) == []
-    assert milestone_command.parse_milestone_commands(
-        "~~~\n/milestone v0.5.41\n~~~"
+    assert ticket_command.parse_commands(
+        "~~~\n/milestone v0.5.41\n~~~",
+        milestone_command.MILESTONE_COMMAND,
     ) == []
-    assert milestone_command.parse_milestone_commands(
-        "```bash\n/milestone v0.5.41\n```"
+    assert ticket_command.parse_commands(
+        "```bash\n/milestone v0.5.41\n```",
+        milestone_command.MILESTONE_COMMAND,
     ) == []
 
 
 def test_a_real_command_after_a_fenced_example_still_triggers():
-    assert milestone_command.parse_milestone_commands(
-        "example:\n```\n/milestone v0.5.40\n```\n/milestone v0.5.41"
+    assert ticket_command.parse_commands(
+        "example:\n```\n/milestone v0.5.40\n```\n/milestone v0.5.41",
+        milestone_command.MILESTONE_COMMAND,
     ) == ["v0.5.41"]
 
 
 def test_inline_code_span_does_not_trigger():
-    assert milestone_command.parse_milestone_commands("use `/milestone v0.5.41`") == []
+    assert ticket_command.parse_commands("use `/milestone v0.5.41`", milestone_command.MILESTONE_COMMAND) == []
 
 
 def test_a_malformed_command_line_is_reported_not_ignored():
     # A `/milestone` line that carries no single version is still a command
     # attempt: it is parsed as `None` so its author gets a readable reason.
-    assert milestone_command.parse_milestone_commands("/milestone") == [None]
+    assert ticket_command.parse_commands("/milestone", milestone_command.MILESTONE_COMMAND) == [None]
     # An indented line is never a command (it may be an indented code block).
-    assert milestone_command.parse_milestone_commands("  /milestone  ") == []
-    assert milestone_command.parse_milestone_commands(
-        "/milestone v0.5.41 v0.6.0"
+    assert ticket_command.parse_commands("  /milestone  ", milestone_command.MILESTONE_COMMAND) == []
+    assert ticket_command.parse_commands(
+        "/milestone v0.5.41 v0.6.0",
+        milestone_command.MILESTONE_COMMAND,
     ) == [None]
     # A different word after the slash is not this command.
-    assert milestone_command.parse_milestone_commands("/milestones v0.5.41") == []
+    assert ticket_command.parse_commands("/milestones v0.5.41", milestone_command.MILESTONE_COMMAND) == []
 
 
 def test_select_rejects_a_malformed_command_with_a_readable_reason():
     comments = [_comment("/milestone")]
-    target, rejections = milestone_command.select_milestone_command(
-        comments, ["v0.5.41"], runner_login="orbi-build",
+    target, rejections = ticket_command.select_command(
+        comments, milestone_command.MILESTONE_COMMAND,
+        candidate_titles=["v0.5.41"], runner_login="orbi-build",
     )
     assert target is None
     assert len(rejections) == 1
@@ -118,9 +126,9 @@ def test_select_rejects_a_malformed_command_with_a_readable_reason():
 
 
 def test_non_string_or_empty_bodies_are_ignored():
-    assert milestone_command.parse_milestone_commands(None) == []
-    assert milestone_command.parse_milestone_commands("") == []
-    assert milestone_command.parse_milestone_commands(123) == []
+    assert ticket_command.parse_commands(None, milestone_command.MILESTONE_COMMAND) == []
+    assert ticket_command.parse_commands("", milestone_command.MILESTONE_COMMAND) == []
+    assert ticket_command.parse_commands(123, milestone_command.MILESTONE_COMMAND) == []
 
 
 # --- selection ------------------------------------------------------------
@@ -130,8 +138,9 @@ def test_select_requires_write_permission_and_reports_the_reason():
     comments = [_comment(
         "/milestone v0.5.41", login="outsider", association="NONE",
     )]
-    target, rejections = milestone_command.select_milestone_command(
-        comments, ["v0.5.41"], runner_login="orbi-build",
+    target, rejections = ticket_command.select_command(
+        comments, milestone_command.MILESTONE_COMMAND,
+        candidate_titles=["v0.5.41"], runner_login="orbi-build",
     )
     assert target is None
     assert len(rejections) == 1
@@ -141,8 +150,9 @@ def test_select_requires_write_permission_and_reports_the_reason():
 
 def test_select_rejects_a_version_outside_the_candidate_set():
     comments = [_comment("/milestone v9.9.9")]
-    target, rejections = milestone_command.select_milestone_command(
-        comments, ["v0.5.41", "v0.6.0"], runner_login="orbi-build",
+    target, rejections = ticket_command.select_command(
+        comments, milestone_command.MILESTONE_COMMAND,
+        candidate_titles=["v0.5.41", "v0.6.0"], runner_login="orbi-build",
     )
     assert target is None
     assert "not an open milestone above the current one" in rejections[0][2]
@@ -150,8 +160,9 @@ def test_select_rejects_a_version_outside_the_candidate_set():
 
 
 def test_select_reports_an_empty_candidate_set_readably():
-    _target, rejections = milestone_command.select_milestone_command(
-        [_comment("/milestone v0.5.41")], [], runner_login="orbi-build",
+    _target, rejections = ticket_command.select_command(
+        [_comment("/milestone v0.5.41")], milestone_command.MILESTONE_COMMAND,
+        candidate_titles=[], runner_login="orbi-build",
     )
     assert "(none)" in rejections[0][2]
 
@@ -162,8 +173,9 @@ def test_select_skips_the_runners_own_comments_silently():
     comments = [_comment(
         "/milestone v0.5.41", login="orbi-build[bot]", association="NONE",
     )]
-    target, rejections = milestone_command.select_milestone_command(
-        comments, ["v0.5.41"], runner_login="orbi-build",
+    target, rejections = ticket_command.select_command(
+        comments, milestone_command.MILESTONE_COMMAND,
+        candidate_titles=["v0.5.41"], runner_login="orbi-build",
     )
     assert target is None
     assert rejections == []
@@ -171,8 +183,9 @@ def test_select_skips_the_runners_own_comments_silently():
 
 def test_select_accepts_a_trusted_author():
     comments = [_comment("/milestone v0.5.41")]
-    target, rejections = milestone_command.select_milestone_command(
-        comments, ["v0.5.41"], runner_login="orbi-build",
+    target, rejections = ticket_command.select_command(
+        comments, milestone_command.MILESTONE_COMMAND,
+        candidate_titles=["v0.5.41"], runner_login="orbi-build",
     )
     assert rejections == []
     assert target is not None
@@ -184,8 +197,9 @@ def test_select_lets_the_last_command_win():
         _comment("/milestone v0.5.41", cid=1),
         _comment("/milestone v0.6.0", cid=2),
     ]
-    target, rejections = milestone_command.select_milestone_command(
-        comments, ["v0.5.41", "v0.6.0"], runner_login="orbi-build",
+    target, rejections = ticket_command.select_command(
+        comments, milestone_command.MILESTONE_COMMAND,
+        candidate_titles=["v0.5.41", "v0.6.0"], runner_login="orbi-build",
     )
     assert rejections == []
     assert target is not None and target[1] == "v0.6.0"
@@ -197,16 +211,18 @@ def test_select_lets_a_later_bad_command_shadow_an_earlier_good_one():
         _comment("/milestone v0.5.41", cid=1),
         _comment("/milestone v9.9.9", cid=2),
     ]
-    target, rejections = milestone_command.select_milestone_command(
-        comments, ["v0.5.41"], runner_login="orbi-build",
+    target, rejections = ticket_command.select_command(
+        comments, milestone_command.MILESTONE_COMMAND,
+        candidate_titles=["v0.5.41"], runner_login="orbi-build",
     )
     assert target is None
     assert len(rejections) == 1 and rejections[0][1] == "v9.9.9"
 
 
 def test_select_ignores_non_comment_entries():
-    target, rejections = milestone_command.select_milestone_command(
-        ["not-a-dict", None], ["v0.5.41"], runner_login="orbi-build",
+    target, rejections = ticket_command.select_command(
+        ["not-a-dict", None], milestone_command.MILESTONE_COMMAND,
+        candidate_titles=["v0.5.41"], runner_login="orbi-build",
     )
     assert target is None and rejections == []
 
@@ -689,7 +705,7 @@ def test_apply_milestone_command_names_the_failing_step(monkeypatch):
         seam, "_land_active_milestone",
         lambda *args, **kwargs: ok("active_milestone"),
     )
-    with pytest.raises(milestone_command.MilestoneCommandError) as raised:
+    with pytest.raises(ticket_command.TicketCommandError) as raised:
         milestone_command.apply_milestone_command(
             "owner/repo", "v0.5.41", config_path=Path("/nope"),
             policy=None, policy_path=".github/orbi.toml", base_branch="main",
@@ -720,7 +736,7 @@ def test_apply_milestone_command_reports_unresolved_version_file(monkeypatch):
         seam, "run_command",
         lambda command, **kwargs: pytest.fail("no issue may be created"),
     )
-    with pytest.raises(milestone_command.MilestoneCommandError) as raised:
+    with pytest.raises(ticket_command.TicketCommandError) as raised:
         milestone_command.apply_milestone_command(
             "owner/repo", "v0.5.41", config_path=Path("/nope"),
             policy=None, policy_path=".github/orbi.toml", base_branch="main",
@@ -768,13 +784,13 @@ def test_identity_helpers_reject_unreadable_input(monkeypatch):
         lambda command, **kwargs: commands.append(command) or (
             "account orbi-build[bot]\nActive account: true\n"),
     )
-    assert milestone_command.authenticated_login() == "orbi-build[bot]"
+    assert ticket_command.authenticated_login() == "orbi-build[bot]"
     assert commands == [["gh", "auth", "status", "--hostname", "github.com"]]
-    assert milestone_command.comment_author_login(None) is None
-    assert milestone_command.comment_author_login("just a body") is None
-    assert milestone_command.same_github_identity(None, "orbi-build") is False
-    assert milestone_command.same_github_identity("orbi-build", 7) is False
-    assert milestone_command.same_github_identity(
+    assert ticket_command.comment_author_login(None) is None
+    assert ticket_command.comment_author_login("just a body") is None
+    assert ticket_command.same_github_identity(None, "orbi-build") is False
+    assert ticket_command.same_github_identity("orbi-build", 7) is False
+    assert ticket_command.same_github_identity(
         "orbi-build[bot]", "orbi-build",
     ) is True
 
@@ -794,8 +810,8 @@ def test_process_posts_one_reason_per_rejected_command(monkeypatch):
     monkeypatch.setattr(
         seam, "run_command", lambda command, **kwargs: posts.append(command) or "",
     )
-    milestone_command.process_milestone_commands(
-        "owner/repo", 436, candidate_titles=["v0.5.41"], config_path=Path("/nope"),
+    ticket_command.process_commands(
+        "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND], candidate_titles=["v0.5.41"], config_path=Path("/nope"),
         policy=None, policy_path=".github/orbi.toml", base_branch="main",
         dispatch_label=READY_LABEL, version_file=None,
     )
@@ -813,7 +829,7 @@ def test_process_posts_one_reason_per_rejected_command(monkeypatch):
     )
     assert "<!-- orbi-milestone-command-rejected comment=11 -->" in body
     # A receipt must never re-trigger the parser itself.
-    assert milestone_command.parse_milestone_commands(body) == []
+    assert ticket_command.parse_commands(body, milestone_command.MILESTONE_COMMAND) == []
 
 
 def test_rejected_receipts_name_the_comment_without_an_id(monkeypatch):
@@ -841,8 +857,8 @@ def test_rejected_receipts_name_the_comment_without_an_id(monkeypatch):
     monkeypatch.setattr(
         seam, "run_command", lambda command, **kwargs: posts.append(command) or "",
     )
-    milestone_command.process_milestone_commands(
-        "owner/repo", 436, candidate_titles=["v0.5.41"], config_path=Path("/nope"),
+    ticket_command.process_commands(
+        "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND], candidate_titles=["v0.5.41"], config_path=Path("/nope"),
         policy=None, policy_path=".github/orbi.toml", base_branch="main",
         dispatch_label=READY_LABEL, version_file=None,
     )
@@ -869,8 +885,8 @@ def test_process_answers_a_malformed_command_on_the_ticket(monkeypatch):
         seam, "apply_milestone_command",
         lambda *args, **kwargs: pytest.fail("nothing to apply"),
     )
-    milestone_command.process_milestone_commands(
-        "owner/repo", 436, candidate_titles=["v0.5.41"], config_path=Path("/nope"),
+    ticket_command.process_commands(
+        "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND], candidate_titles=["v0.5.41"], config_path=Path("/nope"),
         policy=None, policy_path=".github/orbi.toml", base_branch="main",
         dispatch_label=READY_LABEL, version_file=None,
     )
@@ -890,15 +906,15 @@ def test_process_receipts_are_idempotent_per_command_comment(monkeypatch):
     monkeypatch.setattr(
         seam, "run_command", lambda command, **kwargs: posts.append(command) or "",
     )
-    milestone_command.process_milestone_commands(
-        "owner/repo", 436, candidate_titles=["v0.5.41"], config_path=Path("/nope"),
+    ticket_command.process_commands(
+        "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND], candidate_titles=["v0.5.41"], config_path=Path("/nope"),
         policy=None, policy_path=".github/orbi.toml", base_branch="main",
         dispatch_label=READY_LABEL, version_file=None,
     )
     assert len(posts) == 1
     comments.append({"id": 99, "body": _receipt_body(posts)})
-    milestone_command.process_milestone_commands(
-        "owner/repo", 436, candidate_titles=["v0.5.41"], config_path=Path("/nope"),
+    ticket_command.process_commands(
+        "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND], candidate_titles=["v0.5.41"], config_path=Path("/nope"),
         policy=None, policy_path=".github/orbi.toml", base_branch="main",
         dispatch_label=READY_LABEL, version_file=None,
     )
@@ -916,12 +932,12 @@ def test_process_names_the_failed_step_on_the_ticket(monkeypatch, caplog):
     monkeypatch.setattr(
         seam, "apply_milestone_command",
         lambda *args, **kwargs: (_ for _ in ()).throw(
-            milestone_command.MilestoneCommandError("release ticket", "template missing")
+            ticket_command.TicketCommandError("release ticket", "template missing")
         ),
     )
     with caplog.at_level(logging.ERROR):
-        milestone_command.process_milestone_commands(
-            "owner/repo", 436, candidate_titles=["v0.5.41"],
+        ticket_command.process_commands(
+            "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND], candidate_titles=["v0.5.41"],
             config_path=Path("/nope"), policy=None,
             policy_path=".github/orbi.toml", base_branch="main",
             dispatch_label=READY_LABEL, version_file=None,
@@ -944,8 +960,8 @@ def test_process_posts_the_version_file_fix_and_creates_no_ticket(
     monkeypatch.setattr(seam, "run_command", fake.run)
     monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
     with caplog.at_level(logging.ERROR):
-        milestone_command.process_milestone_commands(
-            "owner/repo", 436, candidate_titles=["v0.5.41"],
+        ticket_command.process_commands(
+            "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND], candidate_titles=["v0.5.41"],
             config_path=Path("/nope"), policy=None,
             policy_path=".github/orbi.toml", base_branch="main",
             dispatch_label=READY_LABEL, version_file=None,
@@ -978,8 +994,8 @@ def test_process_applies_the_winning_command_and_logs_it(monkeypatch, caplog):
         lambda repo, version, **kwargs: applied.append((repo, version, kwargs)),
     )
     with caplog.at_level(logging.INFO):
-        milestone_command.process_milestone_commands(
-            "owner/repo", 436, candidate_titles=["v0.5.41"],
+        ticket_command.process_commands(
+            "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND], candidate_titles=["v0.5.41"],
             config_path=Path("/cfg"), policy=RepoPolicy(active_milestone="v0.5.40"),
             policy_path=".github/orbi.toml", base_branch="main",
             dispatch_label=READY_LABEL, version_file="package.json",
@@ -1011,8 +1027,8 @@ def test_process_ignores_a_ticket_without_any_command(monkeypatch):
         seam, "apply_milestone_command",
         lambda *args, **kwargs: pytest.fail("nothing to apply"),
     )
-    milestone_command.process_milestone_commands(
-        "owner/repo", 436, candidate_titles=["v0.5.41"], config_path=Path("/nope"),
+    ticket_command.process_commands(
+        "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND], candidate_titles=["v0.5.41"], config_path=Path("/nope"),
         policy=None, policy_path=".github/orbi.toml", base_branch="main",
         dispatch_label=READY_LABEL, version_file=None,
     )
@@ -1177,7 +1193,7 @@ def test_advance_pending_processes_commands_on_the_confirmation_ticket(
         seam, "_pending_milestone_issue", lambda *args, **kwargs: 436,
     )
     monkeypatch.setattr(
-        seam, "process_milestone_commands",
+        seam, "process_commands",
         lambda repo, number, **kwargs: processed.append((repo, number, kwargs)),
     )
     monkeypatch.setattr(
@@ -1219,7 +1235,7 @@ def test_advance_pending_skips_commands_when_the_ticket_is_unknown(
         seam, "_pending_milestone_issue", lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
-        seam, "process_milestone_commands",
+        seam, "process_commands",
         lambda *args, **kwargs: pytest.fail("nothing to process"),
     )
     milestone.advance_active_milestone_on_idle(
@@ -1248,7 +1264,7 @@ def test_advance_pending_command_failure_never_fails_the_idle_tick(
         raise RuntimeError("gh unavailable")
 
     monkeypatch.setattr(
-        seam, "process_milestone_commands", boom)
+        seam, "process_commands", boom)
     with caplog.at_level(logging.ERROR):
         assert milestone.advance_active_milestone_on_idle(
             "owner/repo", "v0.5.40", config,
@@ -1303,7 +1319,7 @@ def test_no_release_notice_without_the_opt_in(monkeypatch, tmp_path):
     fake.milestones[0].update(state="open", open_issues=0)
     monkeypatch.setattr(seam, "run_command", fake.run)
     monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
-    monkeypatch.setattr(seam, "process_milestone_commands", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "process_commands", lambda *a, **k: None)
     parse_version_title = runner._parse_version_title
     # Default (key absent) and explicit false: one and the same wait.
     assert milestone.advance_active_milestone_on_idle(
@@ -1333,7 +1349,7 @@ def test_no_release_notice_while_the_milestone_has_open_issues(
     fake.milestones[0].update(state="open", open_issues=2)
     monkeypatch.setattr(seam, "run_command", fake.run)
     monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
-    monkeypatch.setattr(seam, "process_milestone_commands", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "process_commands", lambda *a, **k: None)
     assert milestone.advance_active_milestone_on_idle(
         "owner/repo", "v0.5.40", config, release_confirmation=True,
         parse_version_title=runner._parse_version_title,
@@ -1360,7 +1376,7 @@ def test_advance_release_confirmation_opens_one_notice_and_processes_commands(
     monkeypatch.setattr(seam, "run_command", fake.run)
     monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
     monkeypatch.setattr(
-        seam, "process_milestone_commands",
+        seam, "process_commands",
         lambda repo, number, **kwargs: processed.append((repo, number, kwargs)),
     )
     with caplog.at_level(logging.WARNING):
@@ -1394,7 +1410,7 @@ def test_advance_release_notice_is_kept_then_closed_once_its_ticket_exists(
     fake.milestones[0].update(state="open", open_issues=0)
     monkeypatch.setattr(seam, "run_command", fake.run)
     monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
-    monkeypatch.setattr(seam, "process_milestone_commands", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "process_commands", lambda *a, **k: None)
     with caplog.at_level(logging.WARNING):
         milestone.advance_active_milestone_on_idle(
             "owner/repo", "v0.5.40", config,
@@ -1434,7 +1450,7 @@ def test_release_notice_is_closed_once_its_milestone_closes(
     fake.milestones[0].update(state="open", open_issues=0)
     monkeypatch.setattr(seam, "run_command", fake.run)
     monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
-    monkeypatch.setattr(seam, "process_milestone_commands", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "process_commands", lambda *a, **k: None)
     milestone.advance_active_milestone_on_idle(
         "owner/repo", "v0.5.40", config, release_confirmation=True,
         parse_version_title=runner._parse_version_title,
@@ -1465,7 +1481,7 @@ def test_release_notice_close_receipt_never_claims_a_missing_ticket(
     fake.milestones[0].update(state="open", open_issues=0)
     monkeypatch.setattr(seam, "run_command", fake.run)
     monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
-    monkeypatch.setattr(seam, "process_milestone_commands", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "process_commands", lambda *a, **k: None)
     milestone.advance_active_milestone_on_idle(
         "owner/repo", "v0.5.40", config, release_confirmation=True,
         parse_version_title=runner._parse_version_title,
@@ -1496,7 +1512,7 @@ def test_reconcile_milestone_on_idle_arms_then_advances(
     fake.release_issues.append({"number": 500, "body": "release v0.5.40"})
     monkeypatch.setattr(seam, "run_command", fake.run)
     monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
-    monkeypatch.setattr(seam, "process_milestone_commands", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "process_commands", lambda *a, **k: None)
     assert milestone.reconcile_milestone_on_idle(
         "owner/repo", "v0.5.40", config,
         release_confirmation=True,

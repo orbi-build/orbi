@@ -31,7 +31,8 @@
     "runner_health": 14,
     "scene": 0,
     "scheduler": 17,
-    "systemd_deploy": 0
+    "systemd_deploy": 0,
+    "ticket_command": 0
   },
   "monkeypatch_setattr_runner": 257,
   "monkeypatch_setattr_runner_string": 6
