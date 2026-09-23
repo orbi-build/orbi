@@ -3194,14 +3194,16 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     # Plain push of the task branch (never a force push), then verify
     # the remote head: the PR must be created from exactly this head.
     # The head is re-read after the absorb step: a successful base
-    # merge advanced it to the merge commit.
+    # merge advanced it to the merge commit. The head is resolved from
+    # the remote itself (ls-remote, refspec independent): the pushed
+    # branch has no local remote-tracking ref in a checkout whose fetch
+    # refspec does not cover it, e.g. a `--single-branch` clone
+    # (Issue #898).
     local_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
     run_git_network_command(
         ["git", "push", "origin", f"HEAD:{branch}"], cwd=worktree,
     )
-    remote_head = run_command(
-        ["git", "rev-parse", f"origin/{branch}"], cwd=worktree,
-    )
+    remote_head = gitops.remote_branch_head(branch, cwd=worktree)
     if remote_head != local_head:
         event(
             "remote_head_mismatch", level=logging.ERROR,
@@ -3846,9 +3848,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             ["git", "push", "origin", f"HEAD:{pr['head_ref']}"],
             cwd=worktree,
         )
-        remote_head = run_command(
-            ["git", "rev-parse", f"origin/{pr['head_ref']}"], cwd=worktree,
-        )
+        remote_head = gitops.remote_branch_head(pr["head_ref"], cwd=worktree)
         if remote_head != absorbed_head:
             raise RuntimeError(
                 f"remote head {remote_head} does not match absorbed head "

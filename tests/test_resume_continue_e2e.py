@@ -629,3 +629,79 @@ def test_fake_gh_handler_answers_the_unreached_transitions(
     assert json.loads(get) == [
         {"id": 1, "body": "scene"},
     ]
+
+
+@pytest.fixture()
+def single_branch_clone(tmp_path: Path) -> Path:
+    """A clone whose ONLY fetch refspec maps the base branch (Issue #898).
+
+    `git clone --single-branch` maps just `refs/heads/main`, so a freshly
+    pushed delivery branch has NO local remote-tracking ref — exactly the
+    Fedora smoke checkout scene where `git rev-parse origin/<branch>`
+    exited 128 after a successful push.
+    """
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    git(origin, "init", "--bare", "-b", "main")
+    seed = tmp_path / "seed"
+    subprocess.run(
+        ["git", "clone", str(origin), str(seed)],
+        capture_output=True, text=True, check=True,
+    )
+    git(seed, "config", "user.email", "pilot@test.local")
+    git(seed, "config", "user.name", "Pilot")
+    (seed / "a.txt").write_text("a", encoding="utf-8")
+    git(seed, "add", "a.txt")
+    git(seed, "commit", "-m", "first")
+    git(seed, "push", "origin", "main")
+    clone = tmp_path / "single-branch-clone"
+    subprocess.run(
+        ["git", "clone", "--single-branch", str(origin), str(clone)],
+        capture_output=True, text=True, check=True,
+    )
+    git(clone, "config", "user.email", "pilot@test.local")
+    git(clone, "config", "user.name", "Pilot")
+    return clone
+
+
+def test_e2e_delivery_on_single_branch_clone_resolves_the_pushed_head(
+    single_branch_clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #898: the Fedora smoke scene — a single-branch checkout.
+
+    The closeout pushes a fresh branch whose remote-tracking ref does not
+    exist locally. The pushed head must be resolved from the remote
+    itself, the PR-creation step must be reached, and the Issue must end
+    `ai-pr-opened` — never `ai-blocked` at the closeout."""
+    clone = single_branch_clone
+    # The precondition that makes the old closeout fail: the refspec
+    # covers only the base branch (no `origin/<delivery>` ref is ever
+    # created locally by fetch or push).
+    assert git(clone, "config", "--get", "remote.origin.fetch") == (
+        "+refs/heads/main:refs/remotes/origin/main"
+    )
+    comments: list[str] = []
+    labels: dict[int, list[str]] = {ISSUE_NUMBER: ["ai-ready"]}
+    caplog.set_level("INFO")
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI_DELIVERS)
+    install_fake_gh(monkeypatch, comments, labels)
+    monkeypatch.setattr(seam, "new_run_id", lambda: "e5f6a7b8")
+
+    result = runner.process_issue(
+        issue(), config_for(clone, tmp_path, REPO), REPO,
+    )
+
+    branch = f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}"
+    # The delivery completed: one PR for this branch, opened by the
+    # Runner's closeout.
+    assert result.url == PR_URL
+    assert "ai-pr-opened" in labels[ISSUE_NUMBER]
+    assert "ai-blocked" not in labels[ISSUE_NUMBER]
+    # The branch really reached the remote...
+    assert branch in git(clone, "ls-remote", "--heads", "origin")
+    # ...while the local checkout still has no remote-tracking ref for
+    # it: the fetch refspec was never widened, the closeout read the
+    # remote directly.
+    with pytest.raises(AssertionError, match="failed rc=128"):
+        git(clone, "rev-parse", f"origin/{branch}")
+    assert "remote_head_mismatch" not in caplog.text

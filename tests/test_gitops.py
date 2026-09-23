@@ -9,6 +9,7 @@ import fcntl
 import os
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 
@@ -103,6 +104,34 @@ def test_stable_branch_exists_probes_the_remote_head(monkeypatch):
     assert gitops.stable_branch_exists("/repo", "branch") is False
 
 
+def test_remote_branch_head_resolves_the_remote_sha(monkeypatch):
+    """Issue #898: the pushed head is read from the remote itself, not
+    from a local remote-tracking ref the fetch refspec may not cover."""
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append((command, kwargs))
+        return "abc123\trefs/heads/orbi/o-r-issue-4\n"
+
+    monkeypatch.setattr(seam, "run_command", run)
+    assert gitops.remote_branch_head(
+        "orbi/o-r-issue-4", cwd=Path("/work"),
+    ) == "abc123"
+    command, kwargs = commands[-1]
+    assert command == [
+        "git", "ls-remote", "--heads", "origin",
+        "refs/heads/orbi/o-r-issue-4",
+    ]
+    assert kwargs["cwd"] == Path("/work")
+    assert kwargs["timeout"] == gitops.GIT_NETWORK_TIMEOUT_SECONDS
+
+    # Exit 0 with empty output: the remote has no such branch.
+    monkeypatch.setattr(seam, "run_command", lambda c, **k: "")
+    assert gitops.remote_branch_head(
+        "orbi/o-r-issue-4", cwd=Path("/work"),
+    ) is None
+
+
 def test_create_worktree_from_the_frozen_base_sha(monkeypatch, tmp_path):
     commands = []
     monkeypatch.setattr(seam, "run_command", lambda c, **k: (
@@ -149,8 +178,12 @@ def test_create_worktree_fetches_an_existing_remote_branch(
     )
     # Issue #807: `--force` lets the rebuild clear a stale
     # missing-but-registered entry a deleted worktree leaves behind.
+    # Issue #898: the fetch names the remote-tracking destination
+    # explicitly — a bare branch name writes FETCH_HEAD only in a
+    # `--single-branch` clone, and the reads below are `origin/<branch>`.
     assert commands == [
-        ["git", "fetch", "origin", "orbi/o-r-issue-4"],
+        ["git", "fetch", "origin",
+         "+refs/heads/orbi/o-r-issue-4:refs/remotes/origin/orbi/o-r-issue-4"],
         ["git", "branch", "--list", "orbi/o-r-issue-4"],
         ["git", "worktree", "add", "--force", "-b", "orbi/o-r-issue-4",
          str(path), "origin/orbi/o-r-issue-4"],
