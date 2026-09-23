@@ -23,7 +23,8 @@ from orbi.journal import (
     run_command, single_line,
 )
 from orbi.milestone_command import (
-    process_milestone_commands, rewrite_active_milestone_line,
+    _land_active_milestone, process_milestone_commands,
+    rewrite_active_milestone_line,
 )
 from orbi.progress import ProgressPublisher, read_test_result
 from orbi.repo_config import REPO_CONFIG_PATH, RepoPolicy
@@ -494,7 +495,13 @@ def advance_active_milestone_on_idle(
                 )
         return "closed", None
     new_value = candidates[0][1]
-    rewrite_active_milestone_line(config_path, new_value)
+    # Issue #1304: land the value where it actually comes from.  The
+    # repository policy overrides the host config, so a host write here
+    # was discarded on the next read and the advance never took effect.
+    _land_active_milestone(
+        repo, new_value, policy=policy, policy_path=policy_path,
+        config_path=config_path,
+    )
     event(
         "active_milestone_advanced", old=active_milestone, new=new_value,
         closed=active_milestone, repo=repo,
