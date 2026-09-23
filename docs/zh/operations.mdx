@@ -756,6 +756,21 @@ orbi milestone set v0.9.9 --config orbi.toml
 #   title from `gh api repos/orbi-build/orbi/milestones?state=open --jq '.[].title'`
 ```
 
+当 `auto_next_milestone` 为 true（默认值）时，**已关闭**的目标会被拒绝
+（Issue #933）：空闲路径会在下一个 tick 把已关闭的 active_milestone
+自动推进到最新的开放版本，接受它等于报告一个引擎一 tick 后就会撤销的
+成功。修复方式：重新打开该 Milestone，或先设置
+`auto_next_milestone = false`。`auto_next_milestone = false` 时关闭的
+目标仍然允许——那正是本命令所服务的确认流。
+
+```bash
+orbi milestone set v0.5.7 --config orbi.toml
+# milestone_set_failed reason=milestone_closed title='v0.5.7'
+#   repo=orbi-build/orbi state=closed; auto_next_milestone is true, so the
+#   next idle tick would advance active_milestone away from it;
+#   fix=reopen the milestone or set auto_next_milestone = false
+```
+
 ### 从确认 Issue 推进 active milestone
 
 `auto_next_milestone = false` 时，已关闭的 active Milestone 会产生一张
@@ -773,8 +788,9 @@ orbi milestone set v0.9.9 --config orbi.toml
   Runner 自己的评论永不触发。
 - 三步各自幂等：创建缺失的 Milestone（open）；该 Milestone 下没有
   release 票时按 `.github/release-ticket-template.md` 开一张
-  （`version_file` 取 `version_file` 配置项，否则按仓内文件探测，再否则
-  `pyproject.toml`；仓库没有该模板时退回内置最小字段集并在票中注明）；
+  （`version_file` 取 `version_file` 配置项，否则按仓内文件探测；两者都
+  取不到时该步失败并在回执中给出修复方式，不再猜测 `pyproject.toml`；
+  仓库没有该模板时退回内置最小字段集并在票中注明）；
   最后落地 `active_milestone`——当前值来自仓库 `.github/orbi.toml` 时写
   该文件，否则写部署配置。
 - 某一步失败时，Issue 上说明失败在哪一步及原因，已成功的步骤不回滚；

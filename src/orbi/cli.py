@@ -801,7 +801,9 @@ def main(argv: list[str] | None = None) -> int:
         "set", parents=[common],
         help="set active_milestone to one exact GitHub Milestone title: "
              "the repository policy (.github/orbi.toml) when it declares "
-             "the key, otherwise the host config",
+             "the key, otherwise the host config; a CLOSED target is "
+             "refused while auto_next_milestone is true (the next idle "
+             "tick would advance it away)",
     )
     milestone_set_parser.add_argument(
         "title",

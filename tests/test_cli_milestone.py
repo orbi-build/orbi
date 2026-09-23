@@ -43,7 +43,10 @@ from tests.fakes.github import FakeGh
 REPO = "octocat/hello-world"
 
 
-def make_world(tmp_path: Path, *, milestone: str | None = "v0.5.0") -> Path:
+def make_world(
+    tmp_path: Path, *, milestone: str | None = "v0.5.0",
+    auto_next_milestone: bool | None = None,
+) -> Path:
     """A minimal valid deployment layout; returns the config path.
 
     The same shape `orbi check`'s world uses: an explicit deploy home
@@ -75,6 +78,11 @@ def make_world(tmp_path: Path, *, milestone: str | None = "v0.5.0") -> Path:
     ]
     if milestone is not None:
         lines.append(f'active_milestone = "{milestone}"')
+    if auto_next_milestone is not None:
+        lines.append(
+            "auto_next_milestone = "
+            + ("true" if auto_next_milestone else "false")
+        )
     config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return config_path
 
@@ -261,6 +269,77 @@ def test_milestone_set_preserves_comments_and_blank_lines(
     assert updated == original.replace(
         'active_milestone = "v0.5.0"', 'active_milestone = "v0.6.0"',
     )
+
+
+# --- auto_next_milestone vs. a closed target (Issue #933) -----------------------
+
+
+def test_milestone_set_closed_target_with_auto_next_milestone_true_is_refused(
+    tmp_path, monkeypatch, capsys,
+):
+    """A closed target with `auto_next_milestone = true` (the default) is
+    refused: the next idle tick would advance active_milestone away from
+    it, so the command's success output would contradict the real
+    behavior. One structured line, config byte-identical (Issue #933)."""
+    config_path = make_world(tmp_path)
+    original = config_path.read_bytes()
+    gh = FakeGh(REPO)
+    gh.add_milestone(1, title="v0.5.8", open_issues=2)
+    gh.add_milestone(2, title="v0.5.7", state="closed")
+    calls = wire(monkeypatch, gh)
+
+    exit_code = run_set(config_path, "v0.5.7")
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    err = captured.err
+    assert err.startswith("milestone_set_failed")
+    assert "reason=milestone_closed" in err
+    assert "v0.5.7" in err and REPO in err
+    assert "fix=" in err
+    assert "auto_next_milestone = false" in err
+    assert "Traceback" not in err
+    assert config_path.read_bytes() == original
+    # Refused before any write: one read-only Milestone list, no policy PUT.
+    assert len(_milestone_reads(calls)) == 1
+    assert _policy_puts(calls) == []
+
+
+def test_milestone_set_open_target_with_auto_next_milestone_true_still_lands(
+    tmp_path, monkeypatch, capsys,
+):
+    """Regression (Issue #933): an OPEN target is not touched by the idle
+    advance, so `auto_next_milestone = true` must not block it."""
+    config_path = make_world(tmp_path)
+    gh = FakeGh(REPO)
+    gh.add_milestone(1, title="v0.5.4", state="closed")
+    gh.add_milestone(2, title="v0.6.0", open_issues=3)
+    wire(monkeypatch, gh)
+
+    assert run_set(config_path, "v0.6.0") == 0
+
+    assert 'active_milestone = "v0.6.0"' in config_path.read_text(
+        encoding="utf-8")
+    assert "active_milestone: v0.5.0 -> v0.6.0" in capsys.readouterr().out
+
+
+def test_milestone_set_closed_target_allowed_with_auto_next_milestone_false(
+    tmp_path, monkeypatch, capsys,
+):
+    """`auto_next_milestone = false` is the documented manual-advance flow:
+    a closed target stays allowed and is written (Issue #933)."""
+    config_path = make_world(tmp_path, auto_next_milestone=False)
+    gh = FakeGh(REPO)
+    gh.add_milestone(1, title="v0.5.8", open_issues=2)
+    gh.add_milestone(2, title="v0.5.7", state="closed")
+    wire(monkeypatch, gh)
+
+    assert run_set(config_path, "v0.5.7") == 0
+
+    assert 'active_milestone = "v0.5.7"' in config_path.read_text(
+        encoding="utf-8")
+    assert "active_milestone: v0.5.0 -> v0.5.7" in capsys.readouterr().out
 
 
 # --- the failure paths (the config file must never change) ----------------------

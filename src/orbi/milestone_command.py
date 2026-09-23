@@ -107,7 +107,6 @@ _RELEASE_TICKET_DROP_SECTIONS = (
 # fenced ```markdown alternates that themselves start with `## Release`.
 _RELEASE_TICKET_REFERENCE_PREFIX = "## Release section reference"
 _RELEASE_TICKET_VERSION_PLACEHOLDER = "vX.Y.Z"
-_RELEASE_TICKET_DEFAULT_VERSION_FILE = "pyproject.toml"
 _COMMAND_RECEIPT_MARKER = "orbi-milestone-command"
 
 _STEP_MILESTONE = "milestone"
@@ -388,11 +387,24 @@ def _ensure_command_release_ticket(
     )
     if existing:
         return
-    template = _read_release_ticket_template(repo, base_branch)
     resolved = version_file or _detect_version_file(repo, base_branch)
+    if resolved is None:
+        # No configured value and no supported file in the base tree: the
+        # release state machine would read a file that does not exist and
+        # the armed ticket would end `release_failed` -> `ai-blocked`. Fail
+        # here, before reading the template or creating anything, with the
+        # repair the maintainer owes. Never guess `none` either: a version
+        # stored in an unlisted file would then be tagged without being
+        # bumped (Issue #1307).
+        raise RuntimeError(
+            "version_file_unresolved; fix=set `version_file` in "
+            "`.github/orbi.toml` to the file that carries the version, or "
+            'to "none" for a tag-only release'
+        )
+    template = _read_release_ticket_template(repo, base_branch)
     body = render_release_ticket(
         template, version=version, base_branch=base_branch,
-        version_file=resolved or _RELEASE_TICKET_DEFAULT_VERSION_FILE,
+        version_file=resolved,
     )
     # `--milestone <name>` attaches the ticket to the version's Milestone;
     # without it the release gate would never find its own scope.
@@ -484,7 +496,12 @@ def milestone_set(
     `active_milestone` (the per-key override the Runner reads), else the
     host config `active_milestone` line. In the rewrite only the
     `active_milestone` line changes — comments, blank lines and every
-    other field stay byte-identical. The variable sync is NOT part of
+    other field stay byte-identical. A CLOSED target is refused while
+    `auto_next_milestone` is true (Issue #933): the idle path would
+    advance a closed active_milestone to the newest open one on the next
+    tick, so success here would contradict the real behavior; the repair
+    is to reopen the milestone or set `auto_next_milestone = false`
+    first. The variable sync is NOT part of
     this command: the Runner's next tick publishes
     `ORBI_ACTIVE_MILESTONE` (the bypass contract). Returns
     (old, new, target); every failure raises MilestoneSetError with the
@@ -543,6 +560,16 @@ def milestone_set(
             f"milestone_set_failed reason=milestone_ambiguous title={title!r} "
             f"repo={repo}: the exact title matches {len(matches)} "
             "Milestones; fix=rename or close the duplicate Milestone first"
+        )
+    if config.auto_next_milestone and matches[0].get("state") == "closed":
+        # A closed active_milestone is exactly what the next idle tick's
+        # auto-advance rewrites (Issue #933): reporting success here would
+        # promise a claim scope that is undone one tick later.
+        raise MilestoneSetError(
+            f"milestone_set_failed reason=milestone_closed title={title!r} "
+            f"repo={repo} state=closed; auto_next_milestone is true, so the "
+            "next idle tick would advance active_milestone away from it; "
+            "fix=reopen the milestone or set auto_next_milestone = false"
         )
     try:
         target = _land_active_milestone(

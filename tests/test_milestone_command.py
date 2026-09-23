@@ -485,6 +485,63 @@ def test_ensure_release_ticket_detects_the_version_file_when_unset(monkeypatch):
     assert "- version_file: package.json" in body
 
 
+def test_ensure_release_ticket_refuses_to_guess_the_version_file(monkeypatch):
+    """Issue #1307: detection None and nothing configured must not guess."""
+    monkeypatch.setattr(seam, "list_issues", lambda repo, **kwargs: [])
+    monkeypatch.setattr(
+        seam, "run_gh_read_command",
+        lambda command, **kwargs: json.dumps({
+            "tree": [{"path": "README.md"}],
+        }),
+    )
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: pytest.fail("no issue may be created"),
+    )
+    with pytest.raises(RuntimeError) as raised:
+        milestone_command._ensure_command_release_ticket(
+            "owner/repo", "v0.5.41", base_branch="main",
+            dispatch_label=READY_LABEL, version_file=None,
+        )
+    reason = str(raised.value)
+    assert reason.startswith("version_file_unresolved")
+    assert ".github/orbi.toml" in reason
+    assert '"none"' in reason
+
+
+def test_ensure_release_ticket_uses_a_configured_version_file_without_detecting(
+    monkeypatch,
+):
+    created = []
+    reads = []
+
+    def fake_read(command, **kwargs):
+        reads.append(command)
+        return json.dumps({
+            "content": base64.b64encode(REAL_TEMPLATE.encode()).decode(),
+        })
+
+    monkeypatch.setattr(seam, "list_issues", lambda repo, **kwargs: [])
+    monkeypatch.setattr(seam, "run_gh_read_command", fake_read)
+    monkeypatch.setattr(
+        seam, "run_command", lambda command, **kwargs: created.append(command) or "",
+    )
+    milestone_command._ensure_command_release_ticket(
+        "owner/repo", "v0.5.41", base_branch="main",
+        dispatch_label=READY_LABEL, version_file="Cargo.toml",
+    )
+    body = created[0][created[0].index("--body") + 1]
+    assert "- version_file: Cargo.toml" in body
+    assert not any("/git/trees/" in command[2] for command in reads)
+
+
+def test_no_release_ticket_default_version_file_fallback_remains():
+    source = (
+        ROOT / "src" / "orbi" / "milestone_command.py"
+    ).read_text(encoding="utf-8")
+    assert "DEFAULT_VERSION_FILE" not in source
+
+
 def test_ensure_release_ticket_uses_the_builtin_set_without_a_template(
     monkeypatch,
 ):
@@ -642,6 +699,37 @@ def test_apply_milestone_command_names_the_failing_step(monkeypatch):
     assert raised.value.reason == "template unreadable"
     # The successful first step is NOT rolled back, and the third never ran.
     assert completed == ["milestone"]
+
+
+def test_apply_milestone_command_reports_unresolved_version_file(monkeypatch):
+    """Issue #1307: the wrapped failure names the step and the fix."""
+    monkeypatch.setattr(
+        seam, "_ensure_command_milestone", lambda repo, version: None,
+    )
+    monkeypatch.setattr(
+        seam, "_land_active_milestone", lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(seam, "list_issues", lambda repo, **kwargs: [])
+    monkeypatch.setattr(
+        seam, "run_gh_read_command",
+        lambda command, **kwargs: json.dumps({
+            "tree": [{"path": "README.md"}],
+        }),
+    )
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: pytest.fail("no issue may be created"),
+    )
+    with pytest.raises(milestone_command.MilestoneCommandError) as raised:
+        milestone_command.apply_milestone_command(
+            "owner/repo", "v0.5.41", config_path=Path("/nope"),
+            policy=None, policy_path=".github/orbi.toml", base_branch="main",
+            dispatch_label=READY_LABEL, version_file=None,
+        )
+    assert raised.value.step == "release ticket"
+    assert raised.value.reason.startswith("version_file_unresolved")
+    assert ".github/orbi.toml" in raised.value.reason
+    assert '"none"' in raised.value.reason
 
 
 def test_apply_milestone_command_reports_all_three_steps(monkeypatch):
@@ -841,6 +929,37 @@ def test_process_names_the_failed_step_on_the_ticket(monkeypatch, caplog):
     body = _receipt_body(posts)
     assert "`/milestone v0.5.41` command failed" in body
     assert "- reason: template missing" in body
+    assert "- failed step: `release ticket`" in body
+    assert 'step="release ticket"' in caplog.text
+
+
+def test_process_posts_the_version_file_fix_and_creates_no_ticket(
+    monkeypatch, caplog,
+):
+    """Issue #1307 end to end: the real steps fail with a readable repair."""
+    comments = [_comment("/milestone v0.5.41", cid=41)]
+    fake = FakeMilestoneGh(tree=("README.md",))
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
+    monkeypatch.setattr(seam, "authenticated_login", lambda: "orbi-build")
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
+    with caplog.at_level(logging.ERROR):
+        milestone_command.process_milestone_commands(
+            "owner/repo", 436, candidate_titles=["v0.5.41"],
+            config_path=Path("/nope"), policy=None,
+            policy_path=".github/orbi.toml", base_branch="main",
+            dispatch_label=READY_LABEL, version_file=None,
+        )
+    assert [
+        command for command in fake.commands
+        if "issue" in command and "create" in command
+    ] == []
+    assert len(fake.comments) == 1
+    body = fake.comments[0]["body"]
+    assert "`/milestone v0.5.41` command failed" in body
+    assert "- reason: version_file_unresolved" in body
+    assert ".github/orbi.toml" in body
+    assert '"none"' in body
     assert "- failed step: `release ticket`" in body
     assert 'step="release ticket"' in caplog.text
 

@@ -31,11 +31,14 @@ class FakeMilestoneGh:
     def __init__(self, *, policy_text: str | None = None,
                  template: str | None = None,
                  current: str = "v0.5.40",
-                 fail_policy_put: bool = False):
+                 fail_policy_put: bool = False,
+                 tree: tuple[str, ...] = ("pyproject.toml",)):
         self.milestones = [{"title": current, "state": "closed"}]
         self.release_issues: list[dict] = []
         self.policy_text = policy_text
         self.template = template
+        self.tree = list(tree)
+        self.comments: list[dict] = []
         self.commands: list[list[str]] = []
         # Each successful contents-API PUT of the policy, decoded: the
         # observable "the advance landed where the engine reads it back".
@@ -64,6 +67,16 @@ class FakeMilestoneGh:
             return "{}"
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps(list(self.release_issues))
+        if command[:3] == ["gh", "issue", "comment"]:
+            self.comments.append({
+                "number": int(command[3]),
+                "body": command[command.index("--body") + 1],
+            })
+            return "{}"
+        if command[:2] == ["gh", "api"] and "/git/trees/" in command[2]:
+            return json.dumps({
+                "tree": [{"path": path} for path in self.tree],
+            })
         if command[:2] == ["gh", "api"] and "/contents/" in command[2]:
             if command[2].startswith(_TEMPLATE_PATH):
                 if self.template is None:

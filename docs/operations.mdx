@@ -881,6 +881,22 @@ orbi milestone set v0.9.9 --config orbi.toml
 #   title from `gh api repos/orbi-build/orbi/milestones?state=open --jq '.[].title'`
 ```
 
+A **closed** target is refused while `auto_next_milestone` is true (the
+default, Issue #933): the idle path advances a closed `active_milestone`
+to the newest open one on the next tick, so accepting it would report a
+success the engine undoes one tick later. Reopen the milestone, or set
+`auto_next_milestone = false` first. With `auto_next_milestone = false`
+the closed target stays allowed — that is the confirmation flow this
+command exists for.
+
+```bash
+orbi milestone set v0.5.7 --config orbi.toml
+# milestone_set_failed reason=milestone_closed title='v0.5.7'
+#   repo=orbi-build/orbi state=closed; auto_next_milestone is true, so the
+#   next idle tick would advance active_milestone away from it;
+#   fix=reopen the milestone or set auto_next_milestone = false
+```
+
 ### Advance the active milestone from the confirmation Issue
 
 The confirmation Issue a closed active Milestone produces with
@@ -904,8 +920,9 @@ access or the CLI.
   missing, open its release ticket from
   `.github/release-ticket-template.md` when the Milestone has none (the
   `version_file` comes from the `version_file` config key, else the
-  detection, else `pyproject.toml`; a missing template falls back to the
-  built-in minimal field set and says so in the ticket), then land
+  detection; when neither resolves, the step fails and the receipt names
+  the fix instead of guessing `pyproject.toml`; a missing template falls
+  back to the built-in minimal field set and says so in the ticket), then land
   `active_milestone` — in the repository `.github/orbi.toml` when the
   active Milestone comes from there, otherwise in the deployment config.
 - A step that fails leaves the failure and the step name on the Issue and
