@@ -23,9 +23,11 @@ import base64
 import json
 import logging
 import re
+import subprocess
 from pathlib import Path
 from urllib.parse import quote
 
+from orbi import config as config_domain
 from orbi.delivery_labels import RELEASE_LABEL
 from orbi.github import (
     TRUSTED_COMMENT_ASSOCIATIONS, _authenticated_github_login,
@@ -34,7 +36,7 @@ from orbi.github import (
 )
 from orbi.journal import event, run_command
 from orbi.release_git import RELEASE_VERSION_FILE_OPTIONS
-from orbi.repo_config import RepoPolicy
+from orbi.repo_config import RepoConfigError, RepoPolicy, read_repo_config
 
 
 def authenticated_login() -> str:
@@ -448,12 +450,119 @@ def _write_policy_active_milestone(
 def _land_active_milestone(
     repo: str, version: str, *, policy: RepoPolicy | None, policy_path: str,
     config_path: Path,
-) -> None:
-    """Land `active_milestone` where the current value actually comes from."""
+) -> str:
+    """Land `active_milestone` where the current value actually comes from.
+
+    Returns a readable name of the target written — the repository policy
+    when it declares the key (it overrides the host config per key),
+    otherwise the host config line — so a reporting caller can name it
+    (Issue #1306).
+    """
     if policy is not None and policy.active_milestone is not None:
         _write_policy_active_milestone(repo, policy_path, version)
-        return
+        return f"repo policy {policy_path}"
     rewrite_active_milestone_line(config_path, version)
+    return f"host config {config_path}"
+
+
+class MilestoneSetError(Exception):
+    """The `milestone set` fail-fast error: one structured line (reason + fix)."""
+
+
+def milestone_set(
+    config: config_domain.RunnerConfig, config_path: Path, title: str,
+) -> tuple[str, str, str]:
+    """Advance `active_milestone` to one exact Milestone title (Issue #895).
+
+    The manual advance behind the `auto_next_milestone = false`
+    confirmation flow. The claim scope the Runner reads is set the same
+    way it is resolved: the title must exist as exactly ONE Milestone
+    on the source repo (GitHub Milestone titles are not unique, so a
+    duplicate exact title is a hard error, never a guess), then the new
+    value is landed where the CURRENT value comes from (Issue #1306):
+    the repository policy `.github/orbi.toml` when it declares
+    `active_milestone` (the per-key override the Runner reads), else the
+    host config `active_milestone` line. In the rewrite only the
+    `active_milestone` line changes — comments, blank lines and every
+    other field stay byte-identical. The variable sync is NOT part of
+    this command: the Runner's next tick publishes
+    `ORBI_ACTIVE_MILESTONE` (the bypass contract). Returns
+    (old, new, target); every failure raises MilestoneSetError with the
+    written target untouched.
+    """
+    repo = config.source_repos[0]
+    policy_path = config_domain.repository_config_path(config, repo)
+    try:
+        policy = read_repo_config(
+            repo, path=policy_path, run_command=run_command,
+        )
+    except RepoConfigError as exc:
+        raise MilestoneSetError(
+            f"milestone_set_failed reason=repository policy invalid: {exc}; "
+            f"fix=repair {policy_path} on the default branch"
+        ) from exc
+    declared = policy.active_milestone if policy is not None else None
+    current = declared if declared is not None else config.active_milestone
+    if current is None:
+        raise MilestoneSetError(
+            f"milestone_set_failed reason=no active_milestone in "
+            f"{config_path} or {policy_path}; fix=add "
+            '`active_milestone = "<current>"` to the config first '
+            "(the field is never created implicitly)"
+        )
+    try:
+        milestones = list_milestones(repo, timeout=30)
+    except (subprocess.SubprocessError, OSError, ValueError) as exc:
+        # The docstring promises one structured line for EVERY failure:
+        # a hung gh raises TimeoutExpired, a missing gh raises OSError,
+        # a malformed payload raises ValueError — same collapse.
+        detail = (getattr(exc, "stderr", "") or "").strip() or str(exc)
+        raise MilestoneSetError(
+            f"milestone_set_failed reason=milestone lookup failed: {detail}; "
+            "fix=check `gh auth status` and Milestone read access to "
+            f"{repo}"
+        ) from exc
+    matches = [
+        milestone for milestone in milestones
+        if isinstance(milestone, dict) and milestone.get("title") == title
+    ]
+    if not matches:
+        open_list = ", ".join(
+            f"{milestone.get('title')}({milestone.get('open_issues')})"
+            for milestone in milestones
+            if isinstance(milestone, dict) and milestone.get("state") == "open"
+        ) or "(none)"
+        raise MilestoneSetError(
+            f"milestone_set_failed reason=milestone_not_found title={title!r} "
+            f"repo={repo} open milestones: {open_list}; fix=use one exact "
+            "title from `gh api "
+            f"repos/{repo}/milestones?state=open --jq '.[].title'`"
+        )
+    if len(matches) > 1:
+        raise MilestoneSetError(
+            f"milestone_set_failed reason=milestone_ambiguous title={title!r} "
+            f"repo={repo}: the exact title matches {len(matches)} "
+            "Milestones; fix=rename or close the duplicate Milestone first"
+        )
+    try:
+        target = _land_active_milestone(
+            repo, title, policy=policy, policy_path=policy_path,
+            config_path=config_path,
+        )
+    except (OSError, RuntimeError, subprocess.SubprocessError,
+            ValueError) as exc:
+        # The landing is the command's only write: a failed policy PUT
+        # or a bad payload collapses into the same structured line as
+        # an unwritable host config, and the target stays untouched.
+        detail = (getattr(exc, "stderr", "") or "").strip() or str(exc)
+        if declared is not None:
+            fix = f"repair the repository policy at {policy_path}"
+        else:
+            fix = f"repair the config file at {config_path}"
+        raise MilestoneSetError(
+            f"milestone_set_failed reason={detail}; fix={fix}"
+        ) from exc
+    return current, title, target
 
 
 def apply_milestone_command(

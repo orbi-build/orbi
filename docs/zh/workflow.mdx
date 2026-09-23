@@ -518,6 +518,12 @@ active_milestone = "v0.5.0"
 context_files = ["AGENTS.md"]
 ```
 
+覆盖是按键分域的：仓库文件声明 `active_milestone` 时，它胜过宿主
+配置，也就是 claim 扫描使用的值。`orbi milestone set <title>` 把新值
+写到同一个地方——仓库策略声明该键时写策略（对默认分支做 contents
+PUT），否则写宿主 `orbi.toml` 的那一行——并打印 `wrote:` 指明目标
+（Issue #1306）。
+
 其他键一律拒绝：未知键、host-only 身份/安全键（见
 [安全](/zh/security)）、坏 TOML 或类型错误都会让 claim fail-fast 并
 在错误里列出违规键，Issue 进入 `ai-blocked`——一个仓库的坏文件绝不
