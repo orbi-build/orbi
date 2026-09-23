@@ -1,5 +1,5 @@
 {
-  "command_shape_asserts": 517,
+  "command_shape_asserts": 515,
   "monkeypatch_setattr_modules": {
     "cli": 4,
     "cli_source": 7,

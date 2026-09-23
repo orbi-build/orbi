@@ -3365,6 +3365,8 @@ def test_deliver_closeout_continues_on_the_creating_runs_existing_pr(
     git_reads = {
         "status": "", "rev-parse": "head", "fetch": "",
         "merge-base": "", "push": "", "branch": FAKE_BRANCH,
+        # Issue #898: the pushed head is resolved with ls-remote.
+        "ls-remote": f"head\trefs/heads/{FAKE_BRANCH}\n",
     }
 
     def run(command, **kwargs):

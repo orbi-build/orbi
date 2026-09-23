@@ -31,6 +31,19 @@ def _key(path) -> str:
     return str(Path(path).absolute())
 
 
+def remote_head_answer(command, sha):
+    """Answer the ``git ls-remote --heads`` remote-head read (Issue #898).
+
+    Returns the ``<sha>\trefs/heads/<name>`` line for the requested ref,
+    or ``None`` for any other command so a fake dispatcher falls through.
+    The shape check lives here, in the excluded fakes package, so it is
+    not re-asserted across the test corpus (Issue #789 ratchet).
+    """
+    if command[:3] != ["git", "ls-remote", "--heads"]:
+        return None
+    return f"{sha}\t{command[-1]}\n"
+
+
 class FakeGit:
     """One repository's git state: DAG, branches, worktrees."""
 
@@ -160,6 +173,18 @@ class FakeGit:
                 if forced or branch not in self.origin:
                     self.origin[branch] = self.pull_heads[pr_number]
                     return ""
+            if (separator and source.startswith("refs/heads/")
+                    and destination == "refs/remotes/origin/"
+                    + source.removeprefix("refs/heads/")):
+                # The destination is named explicitly (Issue #898): a
+                # bare `git fetch origin <branch>` writes FETCH_HEAD
+                # only and creates no remote-tracking ref.
+                name = source.removeprefix("refs/heads/")
+                if name not in self.origin:
+                    self._fail(
+                        128, f"fatal: couldn't find remote ref {source}"
+                    )
+                return ""
         self._unsupported(["git", "fetch", *args])
 
     def _rev_parse(self, args: list[str], cwd) -> str:

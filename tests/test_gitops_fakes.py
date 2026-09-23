@@ -52,6 +52,20 @@ def test_fake_git_rejects_invalid_pull_fetches(fake_git):
     ) is False
 
 
+def test_fake_git_rejects_a_missing_explicit_heads_fetch(fake_git):
+    # Issue #898: the explicit destination fetch fails like real git when
+    # the remote has no such branch.
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        fake_git([
+            "git", "fetch", "origin",
+            "+refs/heads/absent:refs/remotes/origin/absent",
+        ])
+    assert excinfo.value.returncode == 128
+    assert excinfo.value.stderr == (
+        "fatal: couldn't find remote ref refs/heads/absent"
+    )
+
+
 def test_create_worktree_creates_the_branch_from_the_frozen_base(fake_git):
     base = fake_git.base_sha
     path = gitops.create_worktree(

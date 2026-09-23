@@ -23,6 +23,7 @@ import orbi.runner as runner
 import orbi.gitops as gitops
 import orbi.pi_session as pi_session
 from orbi import progress
+from tests.fakes.gitops import remote_head_answer
 from tests.test_progress_wiring import make_fake_gh
 from tests.test_git_merge_smoke import git
 from seam import seam
@@ -977,8 +978,10 @@ def _absorb_merge_command_fake(states, remote_head="h2"):
             return "h2"
         if command[0:2] == ["git", "push"]:
             return ""
-        if command[0:3] == ["git", "rev-parse", "origin/h"]:
-            return remote_head
+        # Issue #898: the pushed head is read from the remote itself.
+        answer = remote_head_answer(command, remote_head)
+        if answer is not None:
+            return answer
         return ""
     return fake_run
 
@@ -997,7 +1000,9 @@ def test_absorb_fake_dispatch_covers_command_results():
     assert fake(["git", "merge", "origin/main"]) == ""
     assert fake(["git", "rev-parse", "HEAD"]) == "h2"
     assert fake(["git", "push"]) == ""
-    assert fake(["git", "rev-parse", "origin/h"]) == "h2"
+    assert remote_head_answer(
+        ["git", "ls-remote", "--heads", "origin", "refs/heads/h"], "h2",
+    ) == "h2\trefs/heads/h\n"
     assert fake(["git", "status"]) == ""
 
 
