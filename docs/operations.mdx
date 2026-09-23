@@ -904,8 +904,9 @@ access or the CLI.
   missing, open its release ticket from
   `.github/release-ticket-template.md` when the Milestone has none (the
   `version_file` comes from the `version_file` config key, else the
-  detection, else `pyproject.toml`; a missing template falls back to the
-  built-in minimal field set and says so in the ticket), then land
+  detection; when neither resolves, the step fails and the receipt names
+  the fix instead of guessing `pyproject.toml`; a missing template falls
+  back to the built-in minimal field set and says so in the ticket), then land
   `active_milestone` — in the repository `.github/orbi.toml` when the
   active Milestone comes from there, otherwise in the deployment config.
 - A step that fails leaves the failure and the step name on the Issue and

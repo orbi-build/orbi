@@ -773,8 +773,9 @@ orbi milestone set v0.9.9 --config orbi.toml
   Runner 自己的评论永不触发。
 - 三步各自幂等：创建缺失的 Milestone（open）；该 Milestone 下没有
   release 票时按 `.github/release-ticket-template.md` 开一张
-  （`version_file` 取 `version_file` 配置项，否则按仓内文件探测，再否则
-  `pyproject.toml`；仓库没有该模板时退回内置最小字段集并在票中注明）；
+  （`version_file` 取 `version_file` 配置项，否则按仓内文件探测；两者都
+  取不到时该步失败并在回执中给出修复方式，不再猜测 `pyproject.toml`；
+  仓库没有该模板时退回内置最小字段集并在票中注明）；
   最后落地 `active_milestone`——当前值来自仓库 `.github/orbi.toml` 时写
   该文件，否则写部署配置。
 - 某一步失败时，Issue 上说明失败在哪一步及原因，已成功的步骤不回滚；

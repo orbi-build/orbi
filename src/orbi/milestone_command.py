@@ -107,7 +107,6 @@ _RELEASE_TICKET_DROP_SECTIONS = (
 # fenced ```markdown alternates that themselves start with `## Release`.
 _RELEASE_TICKET_REFERENCE_PREFIX = "## Release section reference"
 _RELEASE_TICKET_VERSION_PLACEHOLDER = "vX.Y.Z"
-_RELEASE_TICKET_DEFAULT_VERSION_FILE = "pyproject.toml"
 _COMMAND_RECEIPT_MARKER = "orbi-milestone-command"
 
 _STEP_MILESTONE = "milestone"
@@ -388,11 +387,24 @@ def _ensure_command_release_ticket(
     )
     if existing:
         return
-    template = _read_release_ticket_template(repo, base_branch)
     resolved = version_file or _detect_version_file(repo, base_branch)
+    if resolved is None:
+        # No configured value and no supported file in the base tree: the
+        # release state machine would read a file that does not exist and
+        # the armed ticket would end `release_failed` -> `ai-blocked`. Fail
+        # here, before reading the template or creating anything, with the
+        # repair the maintainer owes. Never guess `none` either: a version
+        # stored in an unlisted file would then be tagged without being
+        # bumped (Issue #1307).
+        raise RuntimeError(
+            "version_file_unresolved; fix=set `version_file` in "
+            "`.github/orbi.toml` to the file that carries the version, or "
+            'to "none" for a tag-only release'
+        )
+    template = _read_release_ticket_template(repo, base_branch)
     body = render_release_ticket(
         template, version=version, base_branch=base_branch,
-        version_file=resolved or _RELEASE_TICKET_DEFAULT_VERSION_FILE,
+        version_file=resolved,
     )
     # `--milestone <name>` attaches the ticket to the version's Milestone;
     # without it the release gate would never find its own scope.
