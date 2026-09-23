@@ -112,10 +112,11 @@ engine_source_track = "release"
 # auto_next_milestone = true
 # The version file the in-ticket `/milestone <version>` command writes
 # into the release ticket it opens for the milestone. Leave it unset
-# to detect the file from the base-branch tree (it falls back to
-# pyproject.toml). One of pyproject.toml, package.json, pom.xml,
-# build.gradle, build.gradle.kts, gradle.properties, Cargo.toml,
-# composer.json, pubspec.yaml, none.
+# to detect the file from the base-branch tree; when detection finds no
+# supported file the release-ticket step fails with a receipt naming the
+# fix instead of guessing pyproject.toml. One of pyproject.toml,
+# package.json, pom.xml, build.gradle, build.gradle.kts,
+# gradle.properties, Cargo.toml, composer.json, pubspec.yaml, none.
 # version_file = "pyproject.toml"
 # Hung-model-request threshold: seconds of silence in
 # `model_wait` (the newest COMPLETE Pi session event is a tool result

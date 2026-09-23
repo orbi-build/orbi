@@ -126,7 +126,9 @@ class RunnerConfig:
     auto_next_milestone: bool = True
     # ``/milestone`` release-ticket generation: the version file the release
     # state machine bumps. Host-only (a repository policy cannot route a
-    # release), absent -> detected in the repository -> ``pyproject.toml``.
+    # release), absent -> detected in the repository -> when detection finds
+    # none the release-ticket step fails with a receipt naming the fix instead
+    # of guessing ``pyproject.toml``.
     version_file: str | None = None
     max_concurrency: int = 1
     allow_stale_runner: bool = False
@@ -214,7 +216,9 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         raise ValueError("auto_next_milestone must be a boolean")
     # `/milestone` release-ticket generation: the version file the release
     # state machine bumps. Absent -> detected in the repository, then the
-    # parser default. A declared value must be one the release parser knows.
+    # release-ticket step fails when detection finds none (Issue #1307, never
+    # a `pyproject.toml` guess). A declared value must be one the release
+    # parser knows.
     version_file = data.get("version_file")
     if version_file is not None and version_file not in RELEASE_VERSION_FILE_OPTIONS:
         raise ValueError(
