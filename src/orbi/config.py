@@ -288,7 +288,9 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     # silence is configurable; omitted -> PI_MODEL_WAIT_DEAD_SECONDS
     # (default 1800 s, 30 minutes). It measures silence between
     # complete session events, never token-level model progress.
-    model_wait_dead_seconds = _model_wait_dead_seconds(data)
+    model_wait_dead_seconds = _positive_seconds(
+        data, "model_wait_dead_seconds", PI_MODEL_WAIT_DEAD_SECONDS,
+    )
     # Trusted-comment injection cap: how many of the
     # Issue's trusted comments enter the agent's task context.
     issue_comments_limit = _issue_comments_limit(data)
@@ -300,7 +302,9 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     # -> the probe is disabled (the exact pre-#233 behavior: the run is
     # bounded by model_wait_dead_seconds only).
     model_wait_probe_url = _model_wait_probe_url(data)
-    model_wait_probe_seconds = _model_wait_probe_seconds(data)
+    model_wait_probe_seconds = _positive_seconds(
+        data, "model_wait_probe_seconds", PI_MODEL_WAIT_PROBE_SECONDS,
+    )
     steering_enabled = data.get("steering_enabled", True)
     if not isinstance(steering_enabled, bool):
         raise ValueError("steering_enabled must be a boolean")
@@ -315,8 +319,13 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     # has no CI wait anymore: a pending check defers the
     # delivery to the next tick, so this bound is the release state
     # machine's pure cap, never a delivery-wait mechanism.
-    release_ci_wait_seconds = _release_ci_wait_seconds(data)
-    release_deliveries_wait_seconds = _release_deliveries_wait_seconds(data)
+    release_ci_wait_seconds = _positive_seconds(
+        data, "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
+    )
+    release_deliveries_wait_seconds = _positive_seconds(
+        data, "release_deliveries_wait_seconds",
+        RELEASE_DELIVERIES_WAIT_SECONDS,
+    )
     # Runner-self health alert routing: the orbi repo that
     # receives the watchdog's crash_loop / stale_pickup Issues. Absent ->
     # None (the Runner derives the orbi repo from the deploy home's git
@@ -543,12 +552,33 @@ def _load_pi_extensions(value: object, base: Path) -> list[dict]:
 
 
 def _positive_seconds(data: dict, key: str, default: float) -> float:
+    """Load and validate a finite positive number of seconds.
+
+    Omitted -> `default`. Present -> must be an int or float that is
+    finite and > 0; booleans, non-numeric values, NaN, infinity, zero and
+    negatives fail fast at config load with the field name and the
+    concrete reason. The single validator for every "seconds" host
+    setting (Issue #610).
+    """
     value = data.get(key, default)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{key} must be a positive finite number")
+    if isinstance(value, bool):
+        raise ValueError(
+            f"{key} must be a number, not a boolean (got {value!r})"
+        )
+    if not isinstance(value, (int, float)):
+        raise ValueError(
+            f"{key} must be a number "
+            f"(got {type(value).__name__} {value!r})"
+        )
     number = float(value)
-    if not math.isfinite(number) or number <= 0:
-        raise ValueError(f"{key} must be a positive finite number")
+    if not math.isfinite(number):
+        raise ValueError(
+            f"{key} must be a finite number of seconds (got {value!r})"
+        )
+    if number <= 0:
+        raise ValueError(
+            f"{key} must be a positive number of seconds (got {value!r})"
+        )
     return number
 
 
@@ -575,142 +605,6 @@ def _model_wait_probe_url(data: dict) -> str | None:
             f"(got {value!r})"
         )
     return value
-
-
-def _model_wait_probe_seconds(data: dict) -> float:
-    """Load and validate the optional `model_wait_probe_seconds`.
-
-    Omitted -> `PI_MODEL_WAIT_PROBE_SECONDS` (default 60 s). Present ->
-    must be a finite positive number (int or float); booleans, zero,
-    negative, NaN/infinity and non-numeric values fail fast at config
-    load with the field name and the concrete reason.
-    """
-    value = data.get(
-        "model_wait_probe_seconds", PI_MODEL_WAIT_PROBE_SECONDS,
-    )
-    if isinstance(value, bool):
-        raise ValueError(
-            "model_wait_probe_seconds must be a number, not a boolean "
-            f"(got {value!r})"
-        )
-    if not isinstance(value, (int, float)):
-        raise ValueError(
-            "model_wait_probe_seconds must be a number "
-            f"(got {type(value).__name__} {value!r})"
-        )
-    number = float(value)
-    if math.isnan(number):
-        raise ValueError(
-            "model_wait_probe_seconds must be a finite number of seconds "
-            f"(got {value!r})"
-        )
-    if math.isinf(number):
-        raise ValueError(
-            "model_wait_probe_seconds must be a finite number of seconds "
-            f"(got {value!r})"
-        )
-    if number <= 0:
-        raise ValueError(
-            "model_wait_probe_seconds must be a positive number of seconds "
-            f"(got {value!r})"
-        )
-    return number
-
-
-def _release_ci_wait_seconds(data: dict) -> float:
-    """Load and validate the optional `release_ci_wait_seconds`.
-
-    Omitted -> `RELEASE_CI_WAIT_SECONDS` (default 1800 s). Present ->
-    must be a finite positive number (int or float); booleans, zero,
-    negative, NaN/infinity and non-numeric values fail fast at config
-    load with the field name and the concrete reason.
-    """
-    value = data.get("release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS)
-    if isinstance(value, bool):
-        raise ValueError(
-            "release_ci_wait_seconds must be a number, not a boolean "
-            f"(got {value!r})"
-        )
-    if not isinstance(value, (int, float)):
-        raise ValueError(
-            "release_ci_wait_seconds must be a number "
-            f"(got {type(value).__name__} {value!r})"
-        )
-    number = float(value)
-    if math.isnan(number):
-        raise ValueError(
-            "release_ci_wait_seconds must be a finite number of seconds "
-            f"(got {value!r})"
-        )
-    if math.isinf(number):
-        raise ValueError(
-            "release_ci_wait_seconds must be a finite number of seconds "
-            f"(got {value!r})"
-        )
-    if number <= 0:
-        raise ValueError(
-            "release_ci_wait_seconds must be a positive number of seconds "
-            f"(got {value!r})"
-        )
-    return number
-
-
-def _release_deliveries_wait_seconds(data: dict) -> float:
-    """Load the release delivery wait limit."""
-    value = data.get(
-        "release_deliveries_wait_seconds", RELEASE_DELIVERIES_WAIT_SECONDS,
-    )
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(
-            "release_deliveries_wait_seconds must be a positive number "
-            f"(got {value!r})"
-        )
-    number = float(value)
-    if not math.isfinite(number) or number <= 0:
-        raise ValueError(
-            "release_deliveries_wait_seconds must be a positive finite "
-            f"number (got {value!r})"
-        )
-    return number
-
-
-def _model_wait_dead_seconds(data: dict) -> float:
-    """Load and validate the optional `model_wait_dead_seconds`.
-
-    Omitted -> `PI_MODEL_WAIT_DEAD_SECONDS` (default 1800 s, 30
-    minutes). Present -> must be a finite positive number (int or
-    float); booleans, zero, negative, NaN/infinity and non-numeric
-    values fail fast at config load with the field name and the
-    concrete reason.
-    """
-    value = data.get("model_wait_dead_seconds", PI_MODEL_WAIT_DEAD_SECONDS)
-    if isinstance(value, bool):
-        raise ValueError(
-            "model_wait_dead_seconds must be a number, not a boolean "
-            f"(got {value!r})"
-        )
-    if not isinstance(value, (int, float)):
-        raise ValueError(
-            "model_wait_dead_seconds must be a number "
-            f"(got {type(value).__name__} {value!r})"
-        )
-    number = float(value)
-    if math.isnan(number):
-        raise ValueError(
-            "model_wait_dead_seconds must be a finite number of seconds "
-            f"(got {value!r})"
-        )
-    if math.isinf(number):
-        raise ValueError(
-            "model_wait_dead_seconds must be a finite number of seconds "
-            f"(got {value!r})"
-        )
-    if number <= 0:
-        raise ValueError(
-            "model_wait_dead_seconds must be a positive number of seconds "
-            f"(got {value!r})"
-        )
-    return number
 
 
 def _worktree_retain_hours(data: dict) -> float:
