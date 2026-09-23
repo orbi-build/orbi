@@ -117,6 +117,27 @@ def stable_branch_exists(repo_dir: Path, branch: str) -> bool:
     return bool(raw.strip())
 
 
+def remote_branch_head(branch: str, *, cwd: Path) -> str | None:
+    """Return the remote ``refs/heads/<branch>`` head, or None when absent.
+
+    ``git rev-parse origin/<branch>`` only resolves when the configured
+    fetch refspec maps that branch into ``refs/remotes/origin/``: a
+    ``git clone --single-branch`` checkout maps only the base branch, so
+    a freshly pushed delivery branch has no local remote-tracking ref and
+    the rev-parse exits 128 after a successful push (Issue #898).
+    ``git ls-remote`` asks the remote directly and is independent of the
+    refspec; it writes no ref, so no base-sync lock is needed. The exact
+    ref pattern matches at most one ref: exit 0 with empty output means
+    the remote has no such branch (None); any non-zero exit is a real
+    failure (network/auth) and propagates.
+    """
+    raw = run_command(
+        ["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
+        cwd=cwd, timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+    )
+    return raw.split()[0] if raw.strip() else None
+
+
 def create_worktree(repo_dir: Path, source_repo: str, number: int,
                     run_id: str, base_sha: str,
                     existing: Path | None = None,
@@ -158,9 +179,15 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
     if existing_branch:
         # The branch is the delivery identity.  Fetch it, then create the
         # run-isolated worktree from its remote HEAD rather than the base.
+        # The fetch always names its destination explicitly: a bare
+        # `git fetch origin <branch>` leaves FETCH_HEAD only — it does not
+        # create `refs/remotes/origin/<branch>` when the clone's fetch
+        # refspec does not cover that branch (a `--single-branch` clone),
+        # and every read below is `origin/<branch>` (Issue #898).
         fetch_ref = (
             f"+pull/{pr_number}/head:refs/remotes/origin/{branch}"
-            if pr_number is not None else branch
+            if pr_number is not None
+            else f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
         )
         run_git_network_command(
             ["git", "fetch", "origin", fetch_ref], cwd=repo_dir,

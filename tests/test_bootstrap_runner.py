@@ -27,6 +27,7 @@ import orbi.release_git as release_git
 import orbi.github as github
 from orbi import pi_activity, pi_command, pi_process, progress
 from tests.fakes.github import FakeGh
+from tests.fakes.gitops import remote_head_answer
 from tests.test_progress_wiring import make_fake_gh
 import orbi.journal as journal
 from seam import seam
@@ -2570,7 +2571,7 @@ def test_create_worktree_reuses_existing_remote_branch(monkeypatch, tmp_path):
         tmp_path, "owner/repo", 3, "run1", "base", existing_branch=True,
     ) == path
     assert calls == [
-        (["git", "fetch", "origin", "orbi/owner-repo-issue-3"], {"cwd": tmp_path, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS}),
+        (["git", "fetch", "origin", "+refs/heads/orbi/owner-repo-issue-3:refs/remotes/origin/orbi/owner-repo-issue-3"], {"cwd": tmp_path, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS}),
         (["git", "branch", "--list", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
         (["git", "worktree", "add", "--force", "-b", "orbi/owner-repo-issue-3", str(path), "origin/orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
     ]
@@ -2598,7 +2599,7 @@ def test_create_worktree_existing_local_branch_is_reused_never_re_created(
         tmp_path, "owner/repo", 3, "run1", "base", existing_branch=True,
     ) == path
     assert calls == [
-        (["git", "fetch", "origin", "orbi/owner-repo-issue-3"], {"cwd": tmp_path, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS}),
+        (["git", "fetch", "origin", "+refs/heads/orbi/owner-repo-issue-3:refs/remotes/origin/orbi/owner-repo-issue-3"], {"cwd": tmp_path, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS}),
         (["git", "branch", "--list", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
         (["git", "rev-parse", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
         (["git", "rev-parse", "origin/orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
@@ -2626,7 +2627,7 @@ def test_create_worktree_branch_override_checks_out_the_external_head(
         existing_branch=True, branch="fix/outer",
     ) == path
     assert calls == [
-        (["git", "fetch", "origin", "fix/outer"], {"cwd": tmp_path, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS}),
+        (["git", "fetch", "origin", "+refs/heads/fix/outer:refs/remotes/origin/fix/outer"], {"cwd": tmp_path, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS}),
         (["git", "branch", "--list", "fix/outer"], {"cwd": tmp_path}),
         (["git", "worktree", "add", "--force", "-b", "fix/outer", str(path), "origin/fix/outer"], {"cwd": tmp_path}),
     ]
@@ -3602,6 +3603,10 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
             return branch
         if command[:2] == ["git", "rev-parse"]:
             return head
+        # Issue #898: the pushed head is read from the remote itself.
+        answer = remote_head_answer(command, head)
+        if answer is not None:
+            return answer
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -3712,6 +3717,10 @@ def test_process_issue_second_tick_behind_the_index_resumes_not_reclaims(
             return branch
         if command[:2] == ["git", "rev-parse"]:
             return head
+        # Issue #898: the pushed head is read from the remote itself.
+        answer = remote_head_answer(command, head)
+        if answer is not None:
+            return answer
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -3799,6 +3808,10 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
             return branch
         if command[:2] == ["git", "rev-parse"]:
             return head
+        # Issue #898: the pushed head is read from the remote itself.
+        answer = remote_head_answer(command, head)
+        if answer is not None:
+            return answer
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -3869,6 +3882,10 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
             return "orbi/xqliu-orbi-backlog-issue-4"
         if command[:2] == ["git", "rev-parse"]:
             return head
+        # Issue #898: the pushed head is read from the remote itself.
+        answer = remote_head_answer(command, head)
+        if answer is not None:
+            return answer
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -3935,6 +3952,10 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
             return "orbi/xqliu-orbi-backlog-issue-4"
         if command[:2] == ["git", "rev-parse"]:
             return head
+        # Issue #898: the pushed head is read from the remote itself.
+        answer = remote_head_answer(command, head)
+        if answer is not None:
+            return answer
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -5479,6 +5500,10 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
             return branch
         if command[:2] == ["git", "rev-parse"]:
             return head
+        # Issue #898: the pushed head is read from the remote itself.
+        answer = remote_head_answer(command, head)
+        if answer is not None:
+            return answer
         # git fetch / git merge-base: no output needed.
         return ""
 
@@ -22526,8 +22551,12 @@ def fake_deliver_run(command, **kwargs):
         return ""
     if command[:3] == ["git", "push", "origin"]:
         return ""
-    if command[:3] == ["git", "rev-parse", f"origin/{DELIVER_BRANCH}"]:
-        return FAKE_HEAD_SHA
+    # Issue #898: the pushed head is read from the remote, never from a
+    # local remote-tracking ref the fetch refspec may not cover (a
+    # `--single-branch` clone).
+    answer = remote_head_answer(command, FAKE_HEAD_SHA)
+    if answer is not None:
+        return answer
     if command[:3] == ["gh", "issue", "view"] and command[-1] == "state":
         # Issue #746: the pre-PR closeout reads the source Issue state;
         # the default scene is an open Issue.
@@ -22612,7 +22641,11 @@ def test_deliver_pr_completes_the_closeout(monkeypatch, tmp_path):
     assert ["git", "fetch", "origin", "main"] in calls
     assert ["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"] in calls
     assert ["git", "push", "origin", f"HEAD:{DELIVER_BRANCH}"] in calls
-    assert ["git", "rev-parse", f"origin/{DELIVER_BRANCH}"] in calls
+    # Issue #898: the pushed head is resolved with ls-remote, never with
+    # `git rev-parse origin/<branch>` — that local ref does not exist in
+    # a checkout whose fetch refspec does not cover the pushed branch.
+    assert ["git", "ls-remote", "--heads", "origin",
+            f"refs/heads/{DELIVER_BRANCH}"] in calls
     # The pushed head is the delivery's first recorded engine-pushed
     # head (Issue #833): the merge record subtracts exactly these.
     assert runner.read_pushed_head(tmp_path) == FAKE_HEAD_SHA
@@ -22768,8 +22801,10 @@ def test_deliver_pr_rejects_remote_head_mismatch_after_push(
     monkeypatch, tmp_path,
 ):
     def fake_run(command, **kwargs):
-        if command[:3] == ["git", "rev-parse", f"origin/{DELIVER_BRANCH}"]:
-            return "f" * 40
+        # Issue #898: the remote head is read with ls-remote.
+        answer = remote_head_answer(command, "f" * 40)
+        if answer is not None:
+            return answer
         return fake_deliver_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
