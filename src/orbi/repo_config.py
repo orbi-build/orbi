@@ -33,7 +33,7 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Callable, cast
 
 from orbi.delivery_labels import LIFECYCLE_STATES, READY_LABEL
-from orbi.journal import event
+from orbi.journal import event, run_command
 
 if TYPE_CHECKING:
     # Annotation-only: `orbi.runner` imports this module at runtime, so a
@@ -518,3 +518,32 @@ def validate_context_file(worktree, relative: str, *,
             f"({size} bytes > {MAX_REPO_CONTEXT_BYTES})"
         )
     return path
+
+
+def repository_config_path(config: RunnerConfig, source_repo: str) -> str:
+    """The repository config path of one source repo.
+
+    The optional `[[repositories]].config_path` wins when its `github`
+    entry matches the source repo; otherwise the single default location
+    `.github/orbi.toml` applies.
+    """
+    for repo in config.repositories:
+        if repo.get("github") == source_repo:
+            return repo.get("config_path", REPO_CONFIG_PATH)
+    return REPO_CONFIG_PATH
+
+
+def load_repo_policy(config: RunnerConfig,
+                     source_repo: str) -> RepoPolicy | None:
+    """Read and validate one source repo's policy file.
+
+    Returns the validated :class:`RepoPolicy` with the file's blob sha
+    bound, or `None` when the repository has no policy file. A
+    malformed/forbidden file raises :class:`RepoConfigError` — the caller
+    fails the claim fast.
+    """
+    return read_repo_config(
+        source_repo,
+        path=repository_config_path(config, source_repo),
+        run_command=run_command,
+    )

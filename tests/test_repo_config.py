@@ -16,10 +16,11 @@ from pathlib import Path
 import pytest
 
 import orbi.repo_config as repo_config
+import orbi.claim as claim
 import orbi.runner as runner
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
-from seam import seam
+from seam import resume_deps, seam
 from orbi.delivery_scene import RunContext
 
 
@@ -488,13 +489,14 @@ def test_pick_next_delivery_in_flight_scan_uses_the_repo_dispatch_label(
         return json.dumps([in_flight] if "in-progress" in searches[-1] else [])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(runner, "reconcile_open_epics", lambda *a, **k: None)
+    monkeypatch.setattr(claim, "reconcile_open_epics", lambda *a, **k: None)
     monkeypatch.setattr(
         milestone, "reconcile_release_milestones", lambda *a, **k: None,
     )
     config = config_domain.RunnerConfig()
-    assert runner.pick_next_delivery(
+    assert claim.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1, config=config,
+        hooks=resume_deps(),
     ) == ("owner/repo", in_flight, None)
     # The resumable-PR scan ran first, then the in-flight scan with the
     # repository's own claim label; the ready scan was never reached.
@@ -518,13 +520,14 @@ def test_pick_next_delivery_in_flight_scan_falls_back_on_a_malformed_file(
         return json.dumps([])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(runner, "reconcile_open_epics", lambda *a, **k: None)
+    monkeypatch.setattr(claim, "reconcile_open_epics", lambda *a, **k: None)
     monkeypatch.setattr(
         milestone, "reconcile_release_milestones", lambda *a, **k: None,
     )
-    assert runner.pick_next_delivery(
+    assert claim.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1,
         config=config_domain.RunnerConfig(),
+        hooks=resume_deps(),
     ) is None
     assert any(
         search.startswith("label:ai-ready label:ai-in-progress")
@@ -597,7 +600,7 @@ def test_pick_issue_uses_a_custom_dispatch_label(monkeypatch):
         return json.dumps([])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.pick_issue("owner/repo", dispatch_label="custom-ready") is None
+    assert claim.pick_issue("owner/repo", dispatch_label="custom-ready") is None
     searched = " ".join(" ".join(command) for command in seen)
     assert "label:custom-ready" in searched
     assert "label:ai-ready" not in searched
@@ -617,7 +620,7 @@ def test_pick_issue_with_repo_policy_uses_repo_scan_keys(monkeypatch):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     config = config_domain.RunnerConfig()
-    assert runner._pick_issue_with_repo_policy("owner/repo", "v1.0.0", config) is None
+    assert claim._pick_issue_with_repo_policy("owner/repo", "v1.0.0", config) is None
     searched = "\n".join(" ".join(command) for command in commands)
     assert "label:repo-ready" in searched
     assert 'milestone:"v9.9.9"' in searched
@@ -631,7 +634,7 @@ def test_pick_issue_with_repo_policy_ignores_a_malformed_file(monkeypatch):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     # The scan keeps the host keys and stays alive; process_issue blocks.
-    assert runner._pick_issue_with_repo_policy(
+    assert claim._pick_issue_with_repo_policy(
         "owner/repo", "v1.0.0", config_domain.RunnerConfig(),
     ) is None
 
@@ -644,7 +647,7 @@ def test_pick_issue_with_repo_policy_without_config_uses_host_keys(monkeypatch):
         return json.dumps([])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    runner._pick_issue_with_repo_policy("owner/repo", "v1.0.0", None)
+    claim._pick_issue_with_repo_policy("owner/repo", "v1.0.0", None)
     searched = "\n".join(" ".join(command) for command in commands)
     assert "label:ai-ready" in searched
     assert "gh api" not in searched
@@ -769,7 +772,7 @@ def test_main_applies_repo_base_branch_before_resume_verification(
         "pr_url": "https://github.com/owner/repo/pull/98", "external": "",
     }
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None,
         **_kwargs: ("owner/repo", issue, scene),
     )
@@ -801,7 +804,7 @@ def test_main_blocks_a_claim_when_the_repo_config_is_invalid(
     config = _write_main_config(tmp_path)
     issue = {"number": 9, "title": "ship", "body": "", "labels": []}
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None,
         **_kwargs: ("owner/repo", issue, None),
     )
@@ -932,7 +935,7 @@ def test_process_issue_accepts_a_pre_resolved_record(monkeypatch, tmp_path):
     #527); `process_issue` must not re-read or re-block."""
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(
-        runner, "load_repo_policy",
+        seam, "load_repo_policy",
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError("process_issue must not re-read the policy"),
         ),

@@ -18,6 +18,7 @@ from unittest.mock import Mock
 
 import pytest
 
+import orbi.claim as claim
 import orbi.runner as runner
 import orbi.gitops as gitops
 import orbi.pi_session as pi_session
@@ -30,7 +31,7 @@ from tests.fakes.github import FakeGh
 from tests.fakes.gitops import remote_head_answer
 from tests.test_progress_wiring import make_fake_gh
 import orbi.journal as journal
-from seam import seam
+from seam import resume_deps, seam
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
 
@@ -519,7 +520,7 @@ def test_pick_issue_uses_github_queue(monkeypatch):
         return json.dumps([issue])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/orbi-backlog") == issue
+    assert claim.pick_issue("xqliu/orbi-backlog") == issue
     # Issue #101: the P0 scan runs first, then the bug scan (Issue
     # #71); with nothing in either queue the plain ready scan decides.
     # All three keep the same exclusions.
@@ -607,7 +608,7 @@ def test_pick_issue_skips_blocked_issue_and_claims_next(monkeypatch, caplog):
         lambda command, **kwargs: json.dumps([blocked, ready]),
     )
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") == ready
+        assert claim.pick_issue("xqliu/orbi") == ready
     assert "blocked_by" in caplog.text
     assert "54" in caplog.text
     assert "31" in caplog.text
@@ -629,7 +630,7 @@ def test_pick_issue_returns_none_when_all_ready_issues_blocked(
         lambda command, **kwargs: json.dumps([blocked_a, blocked_b]),
     )
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("xqliu/orbi") is None
     assert caplog.text.count("blocked_by") >= 2
 
 
@@ -647,7 +648,7 @@ def test_pick_issue_claims_issue_whose_blocker_is_closed(monkeypatch):
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([issue]),
     )
-    assert runner.pick_issue("xqliu/orbi") == issue
+    assert claim.pick_issue("xqliu/orbi") == issue
 
 
 def test_pick_issue_claims_issue_with_empty_blocked_by(monkeypatch):
@@ -658,7 +659,7 @@ def test_pick_issue_claims_issue_with_empty_blocked_by(monkeypatch):
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([issue]),
     )
-    assert runner.pick_issue("xqliu/orbi") == issue
+    assert claim.pick_issue("xqliu/orbi") == issue
 
 
 def test_pick_issue_stays_blocked_while_any_blocker_is_open(monkeypatch):
@@ -672,7 +673,7 @@ def test_pick_issue_stays_blocked_while_any_blocker_is_open(monkeypatch):
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([blocked]),
     )
-    assert runner.pick_issue("xqliu/orbi") is None
+    assert claim.pick_issue("xqliu/orbi") is None
 
 
 def test_pick_issue_fails_open_when_blocked_by_field_missing(monkeypatch):
@@ -682,7 +683,7 @@ def test_pick_issue_fails_open_when_blocked_by_field_missing(monkeypatch):
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([issue]),
     )
-    assert runner.pick_issue("xqliu/orbi") == issue
+    assert claim.pick_issue("xqliu/orbi") == issue
 
 
 def test_pick_issue_fails_open_when_blocked_by_query_fails(
@@ -701,7 +702,7 @@ def test_pick_issue_fails_open_when_blocked_by_query_fails(
     # real backoff sleeps like the git/gh retry tests do.
     monkeypatch.setattr(runner.time, "sleep", lambda _: None)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("xqliu/orbi") is None
     assert "blocked_by_check_failed" in caplog.text
 
 
@@ -750,7 +751,7 @@ def test_validate_active_milestone_open_is_valid(monkeypatch):
     monkeypatch.setitem(milestone.__dict__, "list_milestones", lambda *args, **kwargs: [
         {"title": "v1", "state": "open"},
     ])
-    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: pytest.fail("no ready scan"))
+    monkeypatch.setattr(seam, "list_issues", lambda *args, **kwargs: pytest.fail("no ready scan"))
     milestone.validate_active_milestone("owner/repo", "v1")
 
 
@@ -763,8 +764,8 @@ def test_missing_effective_repository_milestone_fails_before_slot(
         'source_repos = ["owner/repo"]\nactive_milestone = "host-v1"\n',
         encoding="utf-8",
     )
-    monkeypatch.setitem(
-        runner.__dict__, "load_repo_policy",
+    monkeypatch.setattr(
+        seam, "load_repo_policy",
         lambda loaded, repo: runner.RepoPolicy(active_milestone="repo-v2"),
     )
     monkeypatch.setitem(
@@ -806,7 +807,7 @@ def test_pick_issue_scopes_all_three_ready_scans_to_active_milestone(
         return json.dumps([issue])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.pick_issue(
+    assert claim.pick_issue(
         "xqliu/orbi-backlog", active_milestone="v0.2.0",
     ) == issue
     scope = ' milestone:"v0.2.0"'
@@ -846,7 +847,7 @@ def test_pick_issue_p0_scan_keeps_the_milestone_scope():
     sitting in an old milestone never enters the current version's
     queue (one uniform rule, no special case). The scan order itself
     is unchanged: the p0 scan is still the FIRST one."""
-    p0_search, bug_search, plain_search = runner.ready_searches("v0.2.0")
+    p0_search, bug_search, plain_search = claim.ready_searches("v0.2.0")
     for search in (p0_search, bug_search, plain_search):
         assert 'milestone:"v0.2.0"' in search
     assert "label:p0" in p0_search
@@ -858,7 +859,7 @@ def test_ready_searches_without_milestone_are_the_compat_scans():
     """Issue #139 compat: without a configured Milestone the three
     ready scans are byte-identical to the pre-#139 scans — a config
     without `active_milestone` behaves exactly like before."""
-    p0_search, bug_search, plain_search = runner.ready_searches(None)
+    p0_search, bug_search, plain_search = claim.ready_searches(None)
     assert p0_search == (
         "label:ai-ready label:p0 -label:ai-in-progress "
         "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
@@ -874,7 +875,7 @@ def test_ready_searches_without_milestone_are_the_compat_scans():
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked"
     )
     # The default (no argument) is the same compat behavior.
-    assert runner.ready_searches() == runner.ready_searches(None)
+    assert claim.ready_searches() == claim.ready_searches(None)
 
 
 def test_pick_issue_keeps_epic_and_blocked_by_guards_with_milestone(
@@ -903,7 +904,7 @@ def test_pick_issue_keeps_epic_and_blocked_by_guards_with_milestone(
         lambda command, **kwargs: json.dumps([epic, blocked, ready]),
     )
     with caplog.at_level("INFO"):
-        assert runner.pick_issue(
+        assert claim.pick_issue(
             "xqliu/orbi", active_milestone="v0.2.0",
         ) == ready
     assert "epic_not_claimed" in caplog.text
@@ -927,7 +928,7 @@ def test_pick_issue_fails_open_when_milestone_query_fails(
     # real backoff sleeps like the git/gh retry tests do.
     monkeypatch.setattr(runner.time, "sleep", lambda _: None)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue(
+        assert claim.pick_issue(
             "xqliu/orbi", active_milestone="v0.2.0",
         ) is None
     assert "blocked_by_check_failed" in caplog.text
@@ -955,7 +956,7 @@ def test_pick_issue_prefers_bug_labeled_issues(monkeypatch):
         return json.dumps([])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/orbi") == bug
+    assert claim.pick_issue("xqliu/orbi") == bug
     # The P0 scan ran first and found nothing; the bug scan found the
     # bug: the plain ready scan never ran.
     assert len(searches) == 2
@@ -982,7 +983,7 @@ def test_pick_issue_bug_scan_keeps_existing_exclusions(monkeypatch):
         return json.dumps([])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/orbi") == bug
+    assert claim.pick_issue("xqliu/orbi") == bug
     assert searches[0] == (
         "label:ai-ready label:p0 -label:ai-in-progress "
         "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
@@ -1012,7 +1013,7 @@ def test_pick_issue_falls_back_to_ready_scan_when_no_bug(monkeypatch):
         return json.dumps([feature])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/orbi") == feature
+    assert claim.pick_issue("xqliu/orbi") == feature
     assert len(searches) == 3
     assert "label:p0" in searches[0]
     assert "label:bug" in searches[1]
@@ -1045,7 +1046,7 @@ def test_pick_issue_bug_blocked_by_open_blocker_falls_back(monkeypatch):
         return json.dumps([feature])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/orbi") == feature
+    assert claim.pick_issue("xqliu/orbi") == feature
     assert len(searches) == 3
 
 
@@ -1058,7 +1059,7 @@ def test_pick_issue_bug_scan_failure_fails_open(monkeypatch, caplog):
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("xqliu/orbi") is None
     assert "blocked_by_check_failed" in caplog.text
 
 
@@ -1096,7 +1097,7 @@ def test_pick_issue_prefers_p0_over_bug_and_plain(monkeypatch, caplog):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") == p0
+        assert claim.pick_issue("xqliu/orbi") == p0
     # The P0 scan ran first and found the P0: the bug and plain ready
     # scans never ran.
     assert len(searches) == 1
@@ -1126,7 +1127,7 @@ def test_pick_issue_p0_scan_keeps_existing_exclusions(monkeypatch):
         return json.dumps([p0])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/orbi") == p0
+    assert claim.pick_issue("xqliu/orbi") == p0
     assert searches[0] == (
         "label:ai-ready label:p0 -label:ai-in-progress "
         "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
@@ -1147,13 +1148,13 @@ def test_release_fallback_search_query():
         "-label:ai-in-progress -label:ai-pr-opened -label:ai-fix-needed "
         "-label:ai-merged -label:ai-blocked"
     )
-    assert runner.release_fallback_search(None) == (
+    assert claim.release_fallback_search(None) == (
         f"label:ai-ready label:ai-release {exclusions}"
     )
-    assert runner.release_fallback_search() == (
+    assert claim.release_fallback_search() == (
         f"label:ai-ready label:ai-release {exclusions}"
     )
-    assert runner.release_fallback_search("v0.3.0") == (
+    assert claim.release_fallback_search("v0.3.0") == (
         f'label:ai-ready label:ai-release milestone:"v0.3.0" {exclusions}'
     )
 
@@ -1188,7 +1189,7 @@ def test_release_issue_not_claimed_when_ordinary_delivery_exists(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") == feature
+        assert claim.pick_issue("xqliu/orbi") == feature
     assert len(searches) == 3
     assert "release_not_claimed" in caplog.text
     assert "issue=254" in caplog.text
@@ -1215,7 +1216,7 @@ def test_release_issue_claimed_when_no_ordinary_delivery(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") == release
+        assert claim.pick_issue("xqliu/orbi") == release
     # Three ordinary scans + one release fallback scan.
     assert len(searches) == 4
     assert "label:ai-release" in searches[3]
@@ -1246,7 +1247,7 @@ def test_release_fallback_scoped_to_active_milestone(monkeypatch):
         return json.dumps([])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.pick_issue(
+    assert claim.pick_issue(
         "xqliu/orbi", active_milestone="v0.3.0",
     ) == release
     assert 'milestone:"v0.3.0"' in searches[3]
@@ -1282,7 +1283,7 @@ def test_release_fallback_excludes_epic_and_blocked(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("xqliu/orbi") is None
     assert "epic_not_claimed" in caplog.text
     assert "blocked_by" in caplog.text
 
@@ -1301,7 +1302,7 @@ def test_release_fallback_scan_failure_fails_open(monkeypatch, caplog):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("xqliu/orbi") is None
     assert "blocked_by_check_failed" in caplog.text
 
 
@@ -1324,14 +1325,14 @@ def test_external_takeover_search_query():
         "-label:ai-in-progress -label:ai-pr-opened -label:ai-fix-needed "
         "-label:ai-merged -label:ai-blocked"
     )
-    query = runner.external_takeover_search()
+    query = claim.external_takeover_search()
     assert query == f'label:ai-ready "orbi:external-pr" in:body {exclusions}'
     assert "milestone:" not in query
     # The default (no argument) is the same query; a repository's
     # custom dispatch label keys the scan the same way.
-    assert runner.external_takeover_search() \
-        == runner.external_takeover_search(None)
-    assert runner.external_takeover_search("go") == (
+    assert claim.external_takeover_search() \
+        == claim.external_takeover_search(None)
+    assert claim.external_takeover_search("go") == (
         f'label:go "orbi:external-pr" in:body {exclusions}'
     )
 
@@ -1364,7 +1365,7 @@ def test_pick_issue_claims_milestone_less_external_ticket(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue(
+        assert claim.pick_issue(
             "xqliu/orbi", active_milestone="v0.5.4",
         ) == ticket
     # p0, bug, plain, release fallback — all scoped; the fifth scan is
@@ -1401,7 +1402,7 @@ def test_pick_issue_external_scan_never_claims_a_plain_ticket(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue(
+        assert claim.pick_issue(
             "xqliu/orbi", active_milestone="v0.5.4",
         ) is None
     assert "claim_yield" in caplog.text
@@ -1422,7 +1423,7 @@ def test_pick_issue_external_scan_failure_fails_open(monkeypatch, caplog):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue(
+        assert claim.pick_issue(
             "xqliu/orbi", active_milestone="v0.5.4",
         ) is None
     assert "blocked_by_check_failed" in caplog.text
@@ -1453,7 +1454,7 @@ def test_pick_issue_without_milestone_claims_external_ticket_first(
         return json.dumps([ticket])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/orbi") == ticket
+    assert claim.pick_issue("xqliu/orbi") == ticket
     assert len(searches) == 3
     assert all("orbi:external-pr" not in search for search in searches)
 
@@ -1465,8 +1466,8 @@ def test_pick_issue_never_scopes_the_takeover_scan_to_a_milestone():
     active milestone's queue would let an external contributor block
     `release_milestone_incomplete` forever."""
     for search in (
-        runner.external_takeover_search(None),
-        runner.external_takeover_search("go"),
+        claim.external_takeover_search(None),
+        claim.external_takeover_search("go"),
     ):
         assert "milestone:" not in search
 
@@ -1592,7 +1593,7 @@ def test_release_not_claimed_when_milestone_incomplete(monkeypatch, caplog):
     indexed) can no longer let the release run ahead."""
     monkeypatch.setattr(seam, "run_command", _release_scan_fake("3"))
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("xqliu/orbi") is None
     assert "release_milestone_incomplete" in caplog.text
     assert "milestone=v0.4.2" in caplog.text
     assert "open_issues=3" in caplog.text
@@ -1607,7 +1608,7 @@ def test_release_claimed_when_milestone_only_has_the_release(
     (`open_issues=1`) the release is claimed exactly as before."""
     monkeypatch.setattr(seam, "run_command", _release_scan_fake("1"))
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") == RELEASE_663
+        assert claim.pick_issue("xqliu/orbi") == RELEASE_663
     assert "picked issue=254" in caplog.text
 
 
@@ -1618,7 +1619,7 @@ def test_release_not_claimed_when_milestone_check_fails(monkeypatch, caplog):
     error = subprocess.CalledProcessError(1, ["gh"], output="boom")
     monkeypatch.setattr(seam, "run_command", _release_scan_fake(error))
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("xqliu/orbi") is None
     assert "release_milestone_check_failed" in caplog.text
     assert "picked issue=254" not in caplog.text
 
@@ -1644,7 +1645,7 @@ def test_release_without_milestone_claimed_without_api_call(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") == release
+        assert claim.pick_issue("xqliu/orbi") == release
     assert not [c for c in commands_seen if c[1] == "api"]
     assert "picked issue=254" in caplog.text
 
@@ -1673,7 +1674,7 @@ def test_release_milestone_falls_back_to_active_milestone(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue(
+        assert claim.pick_issue(
             "xqliu/orbi", active_milestone="v0.3.0",
         ) is None
     assert api_calls
@@ -1700,7 +1701,7 @@ def test_release_fallback_scan_fetches_milestone(monkeypatch):
         return json.dumps([])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/orbi") == release
+    assert claim.pick_issue("xqliu/orbi") == release
     fields = scans[-1][scans[-1].index("--json") + 1]
     assert "milestone" in fields.split(",")
 
@@ -1733,7 +1734,7 @@ def test_pick_issue_p0_blocked_by_open_blocker_falls_back_to_bug(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") == bug
+        assert claim.pick_issue("xqliu/orbi") == bug
     # The blocked P0 was skipped with the structured blocked_by line;
     # the bug was claimed with priority=normal (it is not a P0).
     assert "blocked_by" in caplog.text
@@ -1752,7 +1753,7 @@ def test_pick_issue_p0_scan_failure_fails_open(monkeypatch, caplog):
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("xqliu/orbi") is None
     assert "blocked_by_check_failed" in caplog.text
 
 
@@ -1776,7 +1777,7 @@ def test_pick_issue_logs_priority_normal_for_plain_pickup(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") == feature
+        assert claim.pick_issue("xqliu/orbi") == feature
     assert "priority=normal" in caplog.text
     assert "issue=10" in caplog.text
 
@@ -1815,17 +1816,17 @@ def test_is_epic_reads_the_ai_epic_label():
     failing to normal): the scan always requests `labels`, so a shape
     change only loses the Epic guard for one run — it must never
     deadlock the queue."""
-    assert runner.is_epic({
+    assert claim.is_epic({
         "number": 80,
         "labels": [{"name": "ai-epic"}, {"name": "ai-ready"}],
     }) is True
-    assert runner.is_epic({
+    assert claim.is_epic({
         "number": 10,
         "labels": [{"name": "ai-ready"}, {"name": "bug"}],
     }) is False
-    assert runner.is_epic({"number": 10}) is False
-    assert runner.is_epic({"number": 10, "labels": "nope"}) is False
-    assert runner.is_epic({
+    assert claim.is_epic({"number": 10}) is False
+    assert claim.is_epic({"number": 10, "labels": "nope"}) is False
+    assert claim.is_epic({
         "number": 10, "labels": ["ai-epic", {"name": 7}],
     }) is False
 
@@ -1849,7 +1850,7 @@ def test_pick_issue_skips_epic_and_claims_next(monkeypatch, caplog):
         lambda command, **kwargs: json.dumps([epic, ready]),
     )
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") == ready
+        assert claim.pick_issue("xqliu/orbi") == ready
     assert "epic_not_claimed" in caplog.text
     assert "issue=80" in caplog.text
     assert "repo=xqliu/orbi" in caplog.text
@@ -1889,7 +1890,7 @@ def test_pick_issue_returns_none_when_only_epics_are_ready(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("xqliu/orbi") is None
     assert caplog.text.count("epic_not_claimed") == 2
     assert "issue=80" in caplog.text
     assert "issue=133" in caplog.text
@@ -1911,7 +1912,7 @@ def test_pick_issue_epic_check_precedes_blocker_check(monkeypatch, caplog):
         lambda command, **kwargs: json.dumps([epic]),
     )
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") is None
+        assert claim.pick_issue("xqliu/orbi") is None
     assert "epic_not_claimed" in caplog.text
     assert "issue=80" in caplog.text
     assert "blocked_by" not in caplog.text
@@ -1952,7 +1953,7 @@ def test_pick_issue_skips_epic_in_p0_and_bug_scans(monkeypatch, caplog):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/orbi") == feature
+        assert claim.pick_issue("xqliu/orbi") == feature
     assert caplog.text.count("epic_not_claimed") == 2
     assert "issue=80" in caplog.text
     assert "issue=81" in caplog.text
@@ -1970,7 +1971,7 @@ def test_pick_in_progress_issue_scan_excludes_epics(monkeypatch, tmp_path):
         return json.dumps([])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.pick_in_progress_issue(
+    assert claim.pick_in_progress_issue(
         "xqliu/orbi", tmp_path / "slots", 1,
     ) is None
     assert calls == [[
@@ -2046,7 +2047,7 @@ def test_pick_in_progress_issue_scan_fetches_labels(monkeypatch, tmp_path):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     # No slot dir yet: every slot is free, so the scan runs.
-    assert runner.pick_in_progress_issue(
+    assert claim.pick_in_progress_issue(
         "xqliu/orbi", tmp_path / "slots", 1,
     ) == issue
     assert calls == [[
@@ -2077,7 +2078,7 @@ def test_pick_in_progress_issue_scan_fetches_milestone(monkeypatch, tmp_path):
         return json.dumps([issue])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    resumed = runner.pick_in_progress_issue(
+    resumed = claim.pick_in_progress_issue(
         "xqliu/orbi", tmp_path / "slots", 1,
     )
     assert calls == [[
@@ -2111,7 +2112,7 @@ def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     # No slot dir yet: every slot is free, so the scan runs.
-    assert runner.pick_in_progress_issue(
+    assert claim.pick_in_progress_issue(
         "xqliu/orbi", tmp_path / "slots", 1,
     ) == issue
     assert calls == [[
@@ -2138,7 +2139,7 @@ def test_pick_in_progress_issue_uses_the_repo_dispatch_label(
         return json.dumps([])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.pick_in_progress_issue(
+    assert claim.pick_in_progress_issue(
         "xqliu/orbi", tmp_path / "slots", 1,
         dispatch_label="repo-ready",
     ) is None
@@ -2157,7 +2158,7 @@ def test_pick_in_progress_issue_returns_none_when_idle(
 ):
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]",
     )
-    assert runner.pick_in_progress_issue(
+    assert claim.pick_in_progress_issue(
         "xqliu/orbi", tmp_path / "slots", 1,
     ) is None
 
@@ -2173,16 +2174,16 @@ def test_pick_in_progress_issue_skips_when_another_runner_is_live(
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: gh_calls.append(command) or "[]",
     )
-    monkeypatch.setattr(runner, "slot_occupancy",
+    monkeypatch.setattr(seam, "slot_occupancy",
                         lambda slot_dir, capacity: [(1, 4242)])
-    assert runner.pick_in_progress_issue(
+    assert claim.pick_in_progress_issue(
         "xqliu/orbi", tmp_path / "slots", 1,
     ) is None
     assert gh_calls == [], "no gh traffic while another runner is live"
     # Own PID: the scan still runs (this runner holds its own slot).
-    monkeypatch.setattr(runner, "slot_occupancy",
+    monkeypatch.setattr(seam, "slot_occupancy",
                         lambda slot_dir, capacity: [(1, os.getpid())])
-    assert runner.pick_in_progress_issue(
+    assert claim.pick_in_progress_issue(
         "xqliu/orbi", tmp_path / "slots", 1,
     ) is None
     assert len(gh_calls) == 1
@@ -2197,18 +2198,19 @@ def test_pick_next_delivery_recovers_in_flight_issue_before_ready(
     in_flight = {"number": 2, "title": "in flight", "body": ""}
     ready = {"number": 3, "title": "ready", "body": ""}
     monkeypatch.setattr(
-        runner, "pick_resumable_delivery",
-        lambda repo, slot_dir, max_concurrency: None,
+        claim, "pick_resumable_delivery",
+        lambda repo, slot_dir, max_concurrency, **_kwargs: None,
     )
     monkeypatch.setattr(
-        runner, "pick_in_progress_issue",
+        claim, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency, **_kwargs: (
             in_flight if repo == "r1" else None
         ),
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: ready)
-    assert runner.pick_next_delivery(
+    monkeypatch.setattr(claim, "pick_issue", lambda repo, active_milestone=None, **_kwargs: ready)
+    assert claim.pick_next_delivery(
         ["r1", "r2"], tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) == ("r1", in_flight, None)
 
 
@@ -2221,18 +2223,19 @@ def test_pick_next_delivery_keeps_resumable_delivery_first(
     resumable = {"number": 5, "title": "fix needed", "body": ""}
     scene = config_domain.RunnerConfig(run_id="a1b2c3d4")
     monkeypatch.setattr(
-        runner, "pick_resumable_delivery",
-        lambda repo, slot_dir, max_concurrency: (
+        claim, "pick_resumable_delivery",
+        lambda repo, slot_dir, max_concurrency, **_kwargs: (
             (resumable, scene) if repo == "r2" else None
         ),
     )
     monkeypatch.setattr(
-        runner, "pick_in_progress_issue",
+        claim, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency, **_kwargs: in_flight,
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: in_flight)
-    assert runner.pick_next_delivery(
+    monkeypatch.setattr(claim, "pick_issue", lambda repo, active_milestone=None, **_kwargs: in_flight)
+    assert claim.pick_next_delivery(
         ["r1", "r2"], tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) == ("r2", resumable, scene)
 
 
@@ -2241,16 +2244,17 @@ def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
 ):
     ready = {"number": 3, "title": "ready", "body": ""}
     monkeypatch.setattr(
-        runner, "pick_resumable_delivery",
-        lambda repo, slot_dir, max_concurrency: None,
-    )
-    monkeypatch.setattr(
-        runner, "pick_in_progress_issue",
+        claim, "pick_resumable_delivery",
         lambda repo, slot_dir, max_concurrency, **_kwargs: None,
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: ready)
-    assert runner.pick_next_delivery(
+    monkeypatch.setattr(
+        claim, "pick_in_progress_issue",
+        lambda repo, slot_dir, max_concurrency, **_kwargs: None,
+    )
+    monkeypatch.setattr(claim, "pick_issue", lambda repo, active_milestone=None, **_kwargs: ready)
+    assert claim.pick_next_delivery(
         ["r1"], tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) == ("r1", ready, None)
 
 
@@ -2258,16 +2262,17 @@ def test_pick_next_delivery_returns_none_when_all_scans_empty(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setattr(
-        runner, "pick_resumable_delivery",
-        lambda repo, slot_dir, max_concurrency: None,
-    )
-    monkeypatch.setattr(
-        runner, "pick_in_progress_issue",
+        claim, "pick_resumable_delivery",
         lambda repo, slot_dir, max_concurrency, **_kwargs: None,
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
-    assert runner.pick_next_delivery(
+    monkeypatch.setattr(
+        claim, "pick_in_progress_issue",
+        lambda repo, slot_dir, max_concurrency, **_kwargs: None,
+    )
+    monkeypatch.setattr(claim, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
+    assert claim.pick_next_delivery(
         ["r1"], tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
 
 
@@ -2279,8 +2284,8 @@ def test_pick_next_issue_returns_first_ready_source(monkeypatch):
         calls.append(repo)
         return issue if repo == "xqliu/orbi-backlog" else None
 
-    monkeypatch.setattr(runner, "pick_issue", pick)
-    assert runner.pick_next_issue(["xqliu/orbi-backlog", "xqliu/orbi"]) == (
+    monkeypatch.setattr(claim, "pick_issue", pick)
+    assert claim.pick_next_issue(["xqliu/orbi-backlog", "xqliu/orbi"]) == (
         "xqliu/orbi-backlog", issue,
     )
     assert calls == ["xqliu/orbi-backlog"]
@@ -2294,16 +2299,16 @@ def test_pick_next_issue_falls_through_to_second_source(monkeypatch):
         calls.append(repo)
         return issue if repo == "xqliu/orbi" else None
 
-    monkeypatch.setattr(runner, "pick_issue", pick)
-    assert runner.pick_next_issue(["xqliu/orbi-backlog", "xqliu/orbi"]) == (
+    monkeypatch.setattr(claim, "pick_issue", pick)
+    assert claim.pick_next_issue(["xqliu/orbi-backlog", "xqliu/orbi"]) == (
         "xqliu/orbi", issue,
     )
     assert calls == ["xqliu/orbi-backlog", "xqliu/orbi"]
 
 
 def test_pick_next_issue_returns_none_when_all_sources_empty(monkeypatch):
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
-    assert runner.pick_next_issue(["xqliu/orbi-backlog", "xqliu/orbi"]) is None
+    monkeypatch.setattr(claim, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
+    assert claim.pick_next_issue(["xqliu/orbi-backlog", "xqliu/orbi"]) is None
 
 
 def test_edit_issue_builds_add_and_remove_command(monkeypatch):
@@ -3434,7 +3439,7 @@ def _release_race_deps(monkeypatch, in_progress: bool, live_holders: list):
 
     monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(
-        runner, "slot_occupancy", lambda *a, **k: list(live_holders),
+        seam, "slot_occupancy", lambda *a, **k: list(live_holders),
     )
     return fake_run_command
 
@@ -3536,11 +3541,11 @@ def test_another_live_runner_reads_slot_occupancy(monkeypatch, tmp_path):
         seen["args"] = (directory, limit)
         return [(slot_dir / "slot-0", 424242)]
 
-    monkeypatch.setattr(runner, "slot_occupancy", foreign)
+    monkeypatch.setattr(seam, "slot_occupancy", foreign)
     assert runner._another_live_runner(slot_dir, 2) is True
     assert seen["args"] == (slot_dir, 2)
     monkeypatch.setattr(
-        runner, "slot_occupancy",
+        seam, "slot_occupancy",
         lambda d, m: [(slot_dir / "slot-0", None),
                       (slot_dir / "slot-1", os.getpid())],
     )
@@ -6896,8 +6901,8 @@ def test_main_idle_advance_uses_the_repos_fused_base_branch(
     fake.add_milestone(1, title="v0.4.0")
     fake.set_repo_config('base_branch = "release/1.x"\n')
     monkeypatch.setattr(seam, "run_command", fake)
-    monkeypatch.setitem(
-        runner.__dict__, "pick_next_delivery", lambda *args, **kwargs: None,
+    monkeypatch.setattr(
+        claim, "pick_next_delivery", lambda *args, **kwargs: None,
     )
     monkeypatch.setitem(
         milestone.__dict__, "arm_release_ticket", lambda *args, **kwargs: None,
@@ -6937,7 +6942,7 @@ def test_main_idle_release_arm_failure_is_bypassed(monkeypatch, tmp_path, caplog
         'source_repos = ["owner/repo"]\nactive_milestone = "v0.4.0"\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setitem(
         milestone.__dict__, "arm_release_ticket",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("permission denied")),
@@ -6962,7 +6967,7 @@ def test_main_idle_advance_failure_is_bypassed(monkeypatch, tmp_path, caplog):
         'source_repos = ["owner/repo"]\nactive_milestone = "v0.4.0"\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setitem(milestone.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setitem(
         milestone.__dict__, "advance_active_milestone_on_idle",
@@ -6996,7 +7001,7 @@ def test_idle_diagnostic_logs_ready_outside_active_milestone(
         {"number": 828, "milestone": {"title": "v0.5.37"}},
         {"number": 827, "milestone": {"title": "v0.5.38"}},
     ]
-    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: issues)
+    monkeypatch.setattr(seam, "list_issues", lambda *args, **kwargs: issues)
     with caplog.at_level(logging.INFO):
         assert runner.log_ready_outside_milestone(
             ["owner/repo"], "v0.5.38",
@@ -7011,7 +7016,7 @@ def test_idle_diagnostic_logs_ready_outside_active_milestone(
 def test_idle_diagnostic_keeps_no_ready_issue_when_queue_is_empty(
     monkeypatch, caplog,
 ):
-    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: [])
+    monkeypatch.setattr(seam, "list_issues", lambda *args, **kwargs: [])
     with caplog.at_level(logging.INFO):
         assert runner.log_ready_outside_milestone(
             ["owner/repo"], "v0.5.38",
@@ -7025,7 +7030,7 @@ def test_idle_diagnostic_query_failure_falls_back_to_no_ready_issue(
     def fail_query(*args, **kwargs):
         raise RuntimeError("GitHub unavailable")
 
-    monkeypatch.setitem(runner.__dict__, "list_issues", fail_query)
+    monkeypatch.setattr(seam, "list_issues", fail_query)
     with caplog.at_level(logging.ERROR):
         assert runner.log_ready_outside_milestone(
             ["owner/repo"], "v0.5.38",
@@ -7037,7 +7042,7 @@ def test_idle_diagnostic_query_failure_falls_back_to_no_ready_issue(
 def test_main_uses_outside_milestone_outcome_instead_of_no_ready(
     monkeypatch, tmp_path, caplog,
 ):
-    monkeypatch.setitem(runner.__dict__, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setitem(runner.__dict__, "log_ready_outside_milestone", lambda *args, **kwargs: True)
     monkeypatch.setitem(milestone.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setitem(milestone.__dict__, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
@@ -7054,9 +7059,9 @@ def test_main_uses_outside_milestone_outcome_instead_of_no_ready(
 
 
 def test_main_query_failure_keeps_idle_exit(monkeypatch, tmp_path, caplog):
-    monkeypatch.setitem(runner.__dict__, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args: None)
-    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: (_ for _ in ()).throw(
+    monkeypatch.setattr(seam, "list_issues", lambda *args, **kwargs: (_ for _ in ()).throw(
         RuntimeError("GitHub unavailable")
     ))
     monkeypatch.setitem(milestone.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
@@ -7075,7 +7080,7 @@ def test_main_query_failure_keeps_idle_exit(monkeypatch, tmp_path, caplog):
 
 def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     _write_prompts(tmp_path)
@@ -7103,7 +7108,7 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
         seen["milestone"] = active_milestone
         return None
 
-    monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
+    monkeypatch.setattr(claim, "pick_next_delivery", fake_pick)
     monkeypatch.setitem(milestone.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setitem(milestone.__dict__, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
     assert runner.main(["--config", str(config)]) == 0
@@ -7121,7 +7126,7 @@ def test_main_advances_milestone_only_after_no_ready_issue(
         encoding="utf-8",
     )
     calls = []
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setitem(milestone.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setitem(
         milestone.__dict__, "advance_active_milestone_on_idle",
@@ -7156,7 +7161,7 @@ def test_main_passes_disabled_auto_next_milestone_to_idle_advance(
         encoding="utf-8",
     )
     seen = {}
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setitem(milestone.__dict__, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setitem(
         milestone.__dict__, "advance_active_milestone_on_idle",
@@ -7188,7 +7193,7 @@ def test_main_idle_uses_the_single_milestone_reconcile_entry_point(
         encoding="utf-8",
     )
     calls = []
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setitem(
         milestone.__dict__, "arm_release_ticket",
         lambda *args, **kwargs: pytest.fail("the runner must not arm directly"),
@@ -7222,7 +7227,7 @@ def test_main_idle_passes_release_confirmation_from_the_repo_policy(
         'dispatch_label = "dev-queue"\nrelease_confirmation = true\n'
     )
     monkeypatch.setattr(seam, "run_command", fake)
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_next_delivery", lambda *args, **kwargs: None)
     seen = {}
     monkeypatch.setitem(
         milestone.__dict__, "reconcile_milestone_on_idle",
@@ -7252,7 +7257,7 @@ def test_main_passes_none_active_milestone_when_unconfigured(
         seen["milestone"] = active_milestone
         return None
 
-    monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
+    monkeypatch.setattr(claim, "pick_next_delivery", fake_pick)
     assert runner.main(["--config", str(config)]) == 0
     assert seen["milestone"] is None
 
@@ -7265,7 +7270,7 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "xqliu/orbi", issue, None
         ),
@@ -7293,7 +7298,7 @@ def test_main_uses_process_result_kind_without_rechecking_task_type(
     config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
@@ -7315,7 +7320,7 @@ def test_main_uses_process_result_kind_without_rechecking_task_type(
         ),
     )
     monkeypatch.setattr(
-        runner, "is_release",
+        claim, "is_release",
         lambda issue: (_ for _ in ()).throw(
             AssertionError("main must not recheck task type")
         ),
@@ -7346,7 +7351,7 @@ def test_main_ends_tick_when_process_issue_delivers_nothing(
     config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
@@ -7373,7 +7378,7 @@ def test_main_ticket_only_finishes_without_entering_pr_delivery_wait(
     config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
@@ -7409,7 +7414,7 @@ def test_main_release_success_ends_tick_without_pr_delivery_wait(
     config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
@@ -7451,7 +7456,7 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
         "pr_url": "https://github.com/owner/repo/pull/12",
     }
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, scene,
         ),
@@ -7497,7 +7502,7 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
         "pr_url": "https://github.com/owner/repo/pull/12",
     }
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, scene,
         ),
@@ -7531,7 +7536,7 @@ def test_main_rejects_repeated_source_repo_before_execution(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda *args, **kwargs: seen.append(args) or None,
     )
     assert runner.main(["--config", str(config)]) == 1
@@ -11724,7 +11729,7 @@ def test_main_capacity_full_does_not_pick_issue_or_call_pi(
     def fail_if_called(repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs):
         raise AssertionError("pick_next_delivery must not run when capacity is full")
 
-    monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
+    monkeypatch.setattr(claim, "pick_next_delivery", fail_if_called)
     monkeypatch.setattr(runner, "process_issue", fail_if_called)
     # The guard itself must fail loudly if it is ever reached.
     with pytest.raises(AssertionError, match="must not run when capacity is full"):
@@ -11758,7 +11763,7 @@ def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
         )
         return ("owner/repo", issue, None)
 
-    monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
+    monkeypatch.setattr(claim, "pick_next_delivery", fake_pick)
     monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: runner.IssueResult("pr", "https://x/y/pull/12"))
     monkeypatch.setattr(runner, "delivery_step", lambda *a, **k: None)
     assert runner.main(["--config", str(config)]) == 0
@@ -11773,7 +11778,7 @@ def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     _write_prompts(tmp_path)
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
 
@@ -11804,7 +11809,7 @@ def test_main_delegates_all_preflight_to_one_helper(
     config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
@@ -11905,7 +11910,7 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
     def fail_if_called(*args, **kwargs):
         raise AssertionError("pick_next_delivery must not run on unit drift")
 
-    monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
+    monkeypatch.setattr(claim, "pick_next_delivery", fail_if_called)
     # The guard itself must fail loudly if it is ever reached.
     with pytest.raises(
         AssertionError, match="must not run on unit drift",
@@ -11964,7 +11969,7 @@ def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     with caplog.at_level("INFO"):
@@ -12020,7 +12025,7 @@ def test_main_unit_drift_auto_sync_failure_blocks_claim(
     def fail_if_called(*args, **kwargs):
         raise AssertionError("pick_next_delivery must not run on unit drift")
 
-    monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
+    monkeypatch.setattr(claim, "pick_next_delivery", fail_if_called)
     # The guard itself must fail loudly if it is ever reached.
     with pytest.raises(
         AssertionError, match="must not run on unit drift",
@@ -12050,7 +12055,7 @@ def test_main_unit_drift_clean_proceeds_to_claim(monkeypatch, tmp_path,
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     with caplog.at_level("INFO"):
@@ -12075,7 +12080,7 @@ def test_main_preflight_receives_the_configured_repo_dir(
     config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
@@ -12105,7 +12110,7 @@ def test_main_transport_check_blocks_claim_before_slot(
             "pick_next_delivery must not run on transport failure"
         )
 
-    monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
+    monkeypatch.setattr(claim, "pick_next_delivery", fail_if_called)
     # The guard itself must fail loudly if it is ever reached.
     with pytest.raises(
         AssertionError, match="must not run on transport failure",
@@ -12154,7 +12159,7 @@ def test_main_transport_check_clean_proceeds_to_claim(
         },
     )
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     with caplog.at_level("INFO"):
@@ -12189,7 +12194,7 @@ def test_main_transport_preflight_receives_the_configured_args(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
@@ -12225,7 +12230,7 @@ def test_main_transport_preflight_honors_the_https_config(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     with caplog.at_level("INFO"):
@@ -12261,7 +12266,7 @@ def test_main_cli_install_refresh_runs_before_slot_and_claim(
         'source_repos = ["owner/repo"]\n', encoding="utf-8",
     )
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
@@ -12310,7 +12315,7 @@ def test_main_cli_refresh_uses_deploy_home_not_repo_dir(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
@@ -12351,7 +12356,7 @@ def test_main_unit_drift_check_uses_deploy_home(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
@@ -12376,7 +12381,7 @@ def test_main_cli_install_failure_fails_fast_before_slot_and_claim(
             "pick_next_delivery must not run on cli install failure"
         )
 
-    monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
+    monkeypatch.setattr(claim, "pick_next_delivery", fail_if_called)
     with pytest.raises(
         AssertionError, match="must not run on cli install failure",
     ):
@@ -14094,7 +14099,7 @@ def test_main_releases_slot_after_opening_the_pr(monkeypatch, tmp_path):
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     _write_prompts(tmp_path)
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
@@ -15821,7 +15826,7 @@ def test_main_installs_the_stop_handler(monkeypatch, tmp_path):
     repo.mkdir()
     (repo / ".git").mkdir()
     monkeypatch.setattr(
-        runner, "pick_next_delivery", lambda *args, **kwargs: None,
+        claim, "pick_next_delivery", lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(runner, "acquire_slot", lambda *args: Mock(release=lambda: None))
     monkeypatch.setattr(seam, "refresh_cli_install", lambda *a, **k: "unchanged")
@@ -16535,13 +16540,13 @@ def test_is_release_detects_the_label():
     issue = {"number": 99, "labels": [
         {"name": "ai-ready"}, {"name": "ai-release"},
     ]}
-    assert runner.is_release(issue) is True
+    assert claim.is_release(issue) is True
 
 
 def test_is_release_false_without_label_or_malformed():
-    assert runner.is_release({"number": 1, "labels": [{"name": "ai-ready"}]}) is False
-    assert runner.is_release({"number": 1}) is False
-    assert runner.is_release({"number": 1, "labels": "ai-release"}) is False
+    assert claim.is_release({"number": 1, "labels": [{"name": "ai-ready"}]}) is False
+    assert claim.is_release({"number": 1}) is False
+    assert claim.is_release({"number": 1, "labels": "ai-release"}) is False
 
 
 def test_process_issue_routes_release_to_process_release(monkeypatch):
@@ -16742,7 +16747,7 @@ def test_process_issue_keeps_pr_ready_label_when_scene_comment_5xx_exhausts(
 ):
     issue = {"number": 99, "title": "Normal", "body": "",
              "labels": [{"name": "ai-ready"}]}
-    monkeypatch.setattr(seam, "is_release", lambda i: False)
+    monkeypatch.setattr(claim, "is_release", lambda i: False)
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(seam, "set_run_id", lambda rid: None)
     monkeypatch.setattr(seam, "has_in_progress_label", lambda n, r: False)
@@ -16793,7 +16798,7 @@ def test_process_issue_keeps_normal_flow_without_release_label(
 ):
     issue = {"number": 99, "title": "Normal", "body": "",
              "labels": [{"name": "ai-ready"}]}
-    monkeypatch.setattr(runner, "is_release", lambda i: False)
+    monkeypatch.setattr(claim, "is_release", lambda i: False)
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(seam, "set_run_id", lambda rid: None)
     monkeypatch.setattr(seam, "has_in_progress_label", lambda n, r: False)
@@ -16814,7 +16819,7 @@ def test_process_issue_keeps_normal_flow_without_release_label(
     monkeypatch.setattr(seam, "run_command", lambda c, **k: "")
     monkeypatch.setattr(runner, "delivery_step", Mock())
     monkeypatch.setattr(seam, "edit_issue", Mock())
-    monkeypatch.setattr(runner, "LOGGER", Mock())
+    monkeypatch.setattr(seam, "LOGGER", Mock())
     monkeypatch.setattr(runner, "activity_snapshot", lambda p: None)
     monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
     monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
@@ -16840,7 +16845,7 @@ def _ops_issue_mocks(monkeypatch, tmp_path, *, head_sha: str, dirty: str):
     }
     commands: list[list[str]] = []
     configs: list[dict] = []
-    monkeypatch.setattr(runner, "is_release", lambda i: False)
+    monkeypatch.setattr(claim, "is_release", lambda i: False)
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(seam, "set_run_id", lambda rid: None)
     monkeypatch.setattr(seam, "has_in_progress_label", lambda n, r: False)
@@ -20675,13 +20680,13 @@ def test_reconcile_open_epics_closes_and_deduplicates_audit(monkeypatch, caplog)
     comments = []
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
     monkeypatch.setattr(seam, "comment_issue", lambda number, *, repo, body: comments.append({"body": body}))
-    result = runner.reconcile_open_epics("o/r", "abc12345")
+    result = claim.reconcile_open_epics("o/r", "abc12345")
     assert result == ["Epic #20 closed after verification (Issue #21 closed)"]
     assert len(comments) == 1 and "run_id=abc12345" in comments[0]["body"]
     assert ["gh", "issue", "close", "20", "--repo", "o/r"] in commands
     # The same audit is idempotent on the next tick.
     commands.clear()
-    runner.reconcile_open_epics("o/r", "def67890")
+    claim.reconcile_open_epics("o/r", "def67890")
     assert len(comments) == 1
     assert "epic_closed issue=20 repo=o/r" in caplog.text
 
@@ -20693,7 +20698,7 @@ def test_reconcile_open_epics_keeps_incomplete_without_comment(monkeypatch, capl
     monkeypatch.setattr(seam, "_verify_epic_complete", lambda repo, item: (_ for _ in ()).throw(ValueError("open blockers: #3")))
     comments = []
     monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: comments.append(True))
-    runner.reconcile_open_epics("o/r", "abc12345")
+    claim.reconcile_open_epics("o/r", "abc12345")
     assert not comments
     assert "epic_kept_open issue=20 repo=o/r reason=\"open blockers: #3\"" in caplog.text
 
@@ -20965,7 +20970,7 @@ def test_reconcile_orphan_prs_reports_an_open_pr_of_a_closed_issue(monkeypatch, 
         runner, "comment_pr",
         lambda number, *, repo, body: posted.append((number, repo, body)),
     )
-    result = runner.reconcile_orphan_prs("o/r", "abc12345")
+    result = claim.reconcile_orphan_prs("o/r", "abc12345", hooks=resume_deps())
     assert result == ["PR #9 reported: source Issue #4 is closed"]
     assert len(posted) == 1
     number, repo, body = posted[0]
@@ -20976,7 +20981,7 @@ def test_reconcile_orphan_prs_reports_an_open_pr_of_a_closed_issue(monkeypatch, 
     assert "orphan_pr_reported pr=9 issue=4 repo=o/r" in caplog.text
     # Idempotent: the marker on the PR means the next tick reports nothing.
     pr_comments.append({"body": posted[0][2]})
-    assert runner.reconcile_orphan_prs("o/r", "def67890") == []
+    assert claim.reconcile_orphan_prs("o/r", "def67890", hooks=resume_deps()) == []
     assert len(posted) == 1
     with pytest.raises(AssertionError):
         fake_run(["unexpected"])
@@ -20993,7 +20998,7 @@ def test_reconcile_orphan_prs_rejects_malformed_pr_list_and_state(monkeypatch):
 
     monkeypatch.setattr(seam, "run_command", pr_list_run)
     with pytest.raises(ValueError, match="pr list must return a JSON array"):
-        runner.reconcile_orphan_prs("o/r", "abc12345")
+        claim.reconcile_orphan_prs("o/r", "abc12345", hooks=resume_deps())
     with pytest.raises(AssertionError):
         pr_list_run(["unexpected"])
 
@@ -21006,7 +21011,7 @@ def test_reconcile_orphan_prs_rejects_malformed_pr_list_and_state(monkeypatch):
 
     monkeypatch.setattr(seam, "run_command", weird_state_run)
     with pytest.raises(ValueError, match="state must be OPEN or CLOSED"):
-        runner.reconcile_orphan_prs("o/r", "abc12345")
+        claim.reconcile_orphan_prs("o/r", "abc12345", hooks=resume_deps())
     with pytest.raises(AssertionError):
         weird_state_run(["unexpected"])
 
@@ -21050,24 +21055,24 @@ def test_reconcile_orphan_prs_skips_open_issues_and_non_delivery_branches(monkey
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no comment")))
-    assert runner.reconcile_orphan_prs("o/r", "abc12345") == []
+    assert claim.reconcile_orphan_prs("o/r", "abc12345", hooks=resume_deps()) == []
     assert read_issues == [4]
     with pytest.raises(AssertionError):
         fake_run(["unexpected"])
 
 
 def test_reconcile_orphan_prs_failure_is_fail_open(tmp_path, monkeypatch, caplog):
-    monkeypatch.setattr(runner, "reconcile_open_epics", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "reconcile_open_epics", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         milestone, "reconcile_release_milestones",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("a throttled milestone sweep must be skipped")
         ),
     )
-    monkeypatch.setattr(runner, "reconcile_orphan_prs", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "pick_issue", lambda *args: {"number": 1})
+    monkeypatch.setattr(claim, "reconcile_orphan_prs", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
+    monkeypatch.setattr(claim, "pick_resumable_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_in_progress_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_issue", lambda *args: {"number": 1})
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "abc12345")
     slot_dir = tmp_path / "slots"
     milestone.record_milestone_reconcile_failure(
@@ -21075,13 +21080,13 @@ def test_reconcile_orphan_prs_failure_is_fail_open(tmp_path, monkeypatch, caplog
             status=401, operation="list_milestones", stderr="HTTP 401",
         ),
     )
-    result = runner.pick_next_delivery(["o/r"], slot_dir, 1)
+    result = claim.pick_next_delivery(["o/r"], slot_dir, 1, hooks=resume_deps())
     assert result == ("o/r", {"number": 1}, None)
     assert "orphan_pr_reconcile_failed repo=o/r" in caplog.text
 
 
 def test_reconcile_open_epics_failure_is_fail_open(tmp_path, monkeypatch, caplog):
-    monkeypatch.setattr(runner, "reconcile_open_epics", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
+    monkeypatch.setattr(claim, "reconcile_open_epics", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
     monkeypatch.setattr(
         milestone, "reconcile_release_milestones",
         lambda *args, **kwargs: (_ for _ in ()).throw(
@@ -21090,12 +21095,12 @@ def test_reconcile_open_epics_failure_is_fail_open(tmp_path, monkeypatch, caplog
             )
         ),
     )
-    monkeypatch.setattr(runner, "reconcile_orphan_prs", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "pick_issue", lambda *args: {"number": 1})
+    monkeypatch.setattr(claim, "reconcile_orphan_prs", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_resumable_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_in_progress_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_issue", lambda *args: {"number": 1})
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "abc12345")
-    result = runner.pick_next_delivery(["o/r"], tmp_path / "slots", 1)
+    result = claim.pick_next_delivery(["o/r"], tmp_path / "slots", 1, hooks=resume_deps())
     assert result == ("o/r", {"number": 1}, None)
     assert "epic_reconcile_failed repo=o/r" in caplog.text
     assert "milestone_reconcile_not_found repo=o/r status=404" in caplog.text
@@ -21105,13 +21110,13 @@ def test_reconcile_open_epics_runs_on_a_fresh_tick(monkeypatch):
     calls = []
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "reconcile_open_epics", lambda repo, run_id: calls.append((repo, run_id)))
+    monkeypatch.setattr(claim, "reconcile_open_epics", lambda repo, run_id: calls.append((repo, run_id)))
     monkeypatch.setattr(milestone, "reconcile_release_milestones", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "reconcile_orphan_prs", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "pick_issue", lambda *args, **kwargs: None)
-    assert runner.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1) is None
+    monkeypatch.setattr(claim, "reconcile_orphan_prs", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_resumable_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_in_progress_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(claim, "pick_issue", lambda *args, **kwargs: None)
+    assert claim.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1, hooks=resume_deps()) is None
     assert calls == [("o/r", "a1b2c3d4")]
 
 
@@ -23389,7 +23394,7 @@ def test_pick_resumable_routes_marker_ticket_instead_of_blocking(
     直接烧成 ai-blocked，而接管入口对这些票永不可达。带 external 标记
     且 PR 仍 OPEN 的票必须转投：EVENT_REQUEUE 回 ready 队列，下一个
     fresh claim 的接管探针接手评审。"""
-    monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "slot_occupancy", lambda *a, **k: [])
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
     patches = []
     monkeypatch.setattr(seam, "apply_label_patch",
@@ -23415,8 +23420,9 @@ def test_pick_resumable_routes_marker_ticket_instead_of_blocking(
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    result = runner.pick_resumable_delivery(
+    result = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
+        hooks=resume_deps(),
     )
     assert result is None
     assert patches == [runner.EVENT_REQUEUE]
@@ -23432,7 +23438,7 @@ def test_pick_resumable_closes_marker_ticket_when_pr_already_merged(
     """Issue #726 gap 1 的合并分支：标记票的外部 PR 已被人工合并——
     修复已交付，triage 票按接管合并的同款簿记关票，而不是 block、
     也不是重做。"""
-    monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "slot_occupancy", lambda *a, **k: [])
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
     closes = []
     issue = {"number": 100, "title": "triage", "state": "OPEN",
@@ -23450,8 +23456,9 @@ def test_pick_resumable_closes_marker_ticket_when_pr_already_merged(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(seam, "comment_issue", Mock())
-    result = runner.pick_resumable_delivery(
+    result = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
+        hooks=resume_deps(),
     )
     assert result is None
     assert any(c[:3] == ["gh", "issue", "close"] for c in closes)
@@ -23533,7 +23540,7 @@ def test_route_external_pr_probe_failure_falls_through_to_block(
 ):
     """Issue #726/#786：接管探针自身失败（gh 异常）时绝不瞎猜路由——
     落回 missing-scene 分支自己的 block 路径，让失败被看见。"""
-    monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "slot_occupancy", lambda *a, **k: [])
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([issue])
@@ -23551,8 +23558,9 @@ def test_route_external_pr_probe_failure_falls_through_to_block(
     issue = {"number": 100, "title": "triage", "state": "OPEN",
              "body": "<!-- orbi:external-pr:55 -->\nfix",
              "labels": [{"name": "ai-pr-opened"}]}
-    result = runner.pick_resumable_delivery(
+    result = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
+        hooks=resume_deps(),
     )
     assert result is None
     assert edits == [((100,), {"repo": "owner/repo",
@@ -23566,7 +23574,7 @@ def test_route_external_pr_unknown_state_falls_through_to_block(
 ):
     """Issue #726：PR 状态是意外值（非 OPEN/MERGED/CLOSED）时同样落回
     block 路径——路由器只承诺三种已知世界。"""
-    monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "slot_occupancy", lambda *a, **k: [])
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([issue])
@@ -23586,8 +23594,9 @@ def test_route_external_pr_unknown_state_falls_through_to_block(
     issue = {"number": 100, "title": "triage", "state": "OPEN",
              "body": "<!-- orbi:external-pr:55 -->\nfix",
              "labels": [{"name": "ai-pr-opened"}]}
-    result = runner.pick_resumable_delivery(
+    result = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
+        hooks=resume_deps(),
     )
     assert result is None
     assert edits == [((100,), {"repo": "owner/repo",
@@ -23601,7 +23610,7 @@ def test_route_external_pr_ignores_tickets_without_marker(
 ):
     """Issue #726 的边界：body 没有外部标记的普通无现场票照走 block
     路径——路由器零介入（连 pr view 都不发生）。"""
-    monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "slot_occupancy", lambda *a, **k: [])
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
 
     def fake_run(command, **kwargs):
@@ -23620,8 +23629,9 @@ def test_route_external_pr_ignores_tickets_without_marker(
     )
     issue = {"number": 41, "title": "dev", "state": "OPEN",
              "body": "plain ticket", "labels": [{"name": "ai-pr-opened"}]}
-    result = runner.pick_resumable_delivery(
+    result = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
+        hooks=resume_deps(),
     )
     assert result is None
     assert edits == [((41,), {"repo": "owner/repo",
@@ -23685,7 +23695,7 @@ def test_process_issue_yields_when_the_label_lands_in_the_scan_window(
     真孤儿（标签在快照和直读里都有）照旧走 resume，不受此守卫影响。"""
     make_claim_race_gh(monkeypatch, {"in_progress": True})
     _claim_race_deps(monkeypatch, tmp_path)
-    monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [
+    monkeypatch.setattr(seam, "slot_occupancy", lambda *a, **k: [
         (tmp_path / "slot-0", 424242)])
     monkeypatch.setattr(pi_session, "run_pi", Mock(
         side_effect=AssertionError("must not start a second Pi over a live run")))
@@ -23705,7 +23715,7 @@ def test_process_issue_scan_window_orphan_resumes_when_no_runner_live(
     一拍。"""
     make_claim_race_gh(monkeypatch, {"in_progress": True})
     _claim_race_deps(monkeypatch, tmp_path)
-    monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [
+    monkeypatch.setattr(seam, "slot_occupancy", lambda *a, **k: [
         (tmp_path / "slot-0", None), (tmp_path / "slot-1", os.getpid())])
     monkeypatch.setattr(seam, "apply_label_patch", Mock())
     monkeypatch.setattr(seam, "create_worktree", Mock(

@@ -5,7 +5,7 @@ These tests NEVER patch a runner-internal name — zero
 ``setattr(runner, ...)``. They arrange state in the
 ``FakeGh`` in-memory GitHub, patch only the ONE subprocess seam
 (``seam.run_command``, Article 3.4), run the real public entry points
-(the claim scans through ``runner.pick_issue``; the label/comment/PR/
+(the claim scans through ``claim.pick_issue``; the label/comment/PR/
 check-run reads and writes through ``orbi.github``), and assert the
 public surface: which Issue the scan picks, the labels an edit leaves,
 the comment order, and the returned PR/check data.
@@ -22,6 +22,7 @@ import pytest
 
 import orbi.github as github
 import orbi.repo_config as repo_config
+import orbi.claim as claim
 import orbi.runner as runner
 from orbi.delivery_labels import (
     EPIC_LABEL,
@@ -46,13 +47,13 @@ def fake_gh(monkeypatch):
     return fake
 
 
-# --- the claim scans (public entry: runner.pick_issue) ----------------------
+# --- the claim scans (public entry: claim.pick_issue) ----------------------
 
 
 def test_pickup_claims_the_p0_issue_first(fake_gh):
     fake_gh.add_issue(1, labels=(READY_LABEL,))
     fake_gh.add_issue(2, labels=(READY_LABEL, P0_LABEL))
-    picked = runner.pick_issue("owner/repo")
+    picked = claim.pick_issue("owner/repo")
     assert picked["number"] == 2
     assert github.issue_priority(picked) == "p0"
 
@@ -60,13 +61,13 @@ def test_pickup_claims_the_p0_issue_first(fake_gh):
 def test_pickup_prefers_a_bug_over_plain_ready(fake_gh):
     fake_gh.add_issue(1, labels=(READY_LABEL,))
     fake_gh.add_issue(2, labels=(READY_LABEL, "bug"))
-    assert runner.pick_issue("owner/repo")["number"] == 2
+    assert claim.pick_issue("owner/repo")["number"] == 2
 
 
 def test_pickup_claims_the_p0_scan_before_the_bug_scan(fake_gh):
     fake_gh.add_issue(1, labels=(READY_LABEL, "bug"))
     fake_gh.add_issue(2, labels=(READY_LABEL, P0_LABEL))
-    assert runner.pick_issue("owner/repo")["number"] == 2
+    assert claim.pick_issue("owner/repo")["number"] == 2
 
 
 def test_pickup_skips_a_blocked_issue_and_claims_the_next(fake_gh, caplog):
@@ -76,7 +77,7 @@ def test_pickup_skips_a_blocked_issue_and_claims_the_next(fake_gh, caplog):
     fake_gh.add_issue(1, labels=(READY_LABEL,))
     fake_gh.add_blocker(1, 3, state="OPEN")
     with caplog.at_level(logging.INFO):
-        picked = runner.pick_issue("owner/repo")
+        picked = claim.pick_issue("owner/repo")
     assert picked["number"] == 2
     # A skip never touches labels: the blocked Issue stays claimable.
     assert github.issue_labels(1, "owner/repo") == [READY_LABEL]
@@ -88,14 +89,14 @@ def test_pickup_claims_an_issue_whose_blocker_is_closed(fake_gh):
     fake_gh.add_issue(3, state="closed")
     fake_gh.add_issue(1, labels=(READY_LABEL,))
     fake_gh.add_blocker(1, 3, state="CLOSED")
-    assert runner.pick_issue("owner/repo")["number"] == 1
+    assert claim.pick_issue("owner/repo")["number"] == 1
 
 
 def test_pickup_skips_an_epic(fake_gh, caplog):
     fake_gh.add_issue(2, labels=(READY_LABEL,))
     fake_gh.add_issue(1, labels=(READY_LABEL, EPIC_LABEL))
     with caplog.at_level(logging.INFO):
-        picked = runner.pick_issue("owner/repo")
+        picked = claim.pick_issue("owner/repo")
     assert picked["number"] == 2
     assert "epic_not_claimed issue=1" in caplog.text
 
@@ -104,7 +105,7 @@ def test_pickup_excludes_terminal_and_in_flight_states(fake_gh):
     fake_gh.add_issue(3, labels=(READY_LABEL,))
     fake_gh.add_issue(1, labels=(READY_LABEL, MERGED_LABEL))
     fake_gh.add_issue(2, labels=(READY_LABEL, IN_PROGRESS_LABEL))
-    assert runner.pick_issue("owner/repo")["number"] == 3
+    assert claim.pick_issue("owner/repo")["number"] == 3
 
 
 def test_pickup_scopes_the_scan_to_the_active_milestone(fake_gh):
@@ -115,7 +116,7 @@ def test_pickup_scopes_the_scan_to_the_active_milestone(fake_gh):
                       milestone=1)
     fake_gh.add_milestone(1, title="v1")
     fake_gh.add_milestone(2, title="v2")
-    picked = runner.pick_issue("owner/repo", active_milestone="v1")
+    picked = claim.pick_issue("owner/repo", active_milestone="v1")
     assert picked["number"] == 8
 
 
@@ -131,7 +132,7 @@ def test_pickup_fails_open_when_the_scan_query_fails(
 
     monkeypatch.setattr(seam, "run_command", down)
     with caplog.at_level(logging.ERROR):
-        assert runner.pick_issue("owner/repo") is None
+        assert claim.pick_issue("owner/repo") is None
     assert "blocked_by_check_failed" in caplog.text
 
 
@@ -142,7 +143,7 @@ def test_pickup_claims_the_release_from_the_fallback_scan(fake_gh, caplog):
     fake_gh.add_issue(1, labels=(READY_LABEL, RELEASE_LABEL), milestone=1)
     fake_gh.add_milestone(1, title="v1.0", open_issues=1)
     with caplog.at_level(logging.INFO):
-        picked = runner.pick_issue("owner/repo")
+        picked = claim.pick_issue("owner/repo")
     assert picked["number"] == 1
     # The ordinary scans logged the release skip before the fallback ran.
     assert "release_not_claimed issue=1" in caplog.text
@@ -155,7 +156,7 @@ def test_pickup_skips_the_release_while_the_milestone_has_open_work(
     fake_gh.add_milestone(1, title="v1.0", open_issues=2)
     fake_gh.add_issue(2, milestone=1)  # the other open Milestone Issue
     with caplog.at_level(logging.INFO):
-        assert runner.pick_issue("owner/repo") is None
+        assert claim.pick_issue("owner/repo") is None
     assert "release_milestone_incomplete issue=1" in caplog.text
 
 
@@ -177,7 +178,7 @@ def test_pickup_release_with_a_failed_milestone_check_fails_safe(
 
     monkeypatch.setattr(seam, "run_command", api_outage)
     with caplog.at_level(logging.ERROR):
-        assert runner.pick_issue("owner/repo") is None
+        assert claim.pick_issue("owner/repo") is None
     assert "release_milestone_check_failed issue=1" in caplog.text
 
 
@@ -186,8 +187,8 @@ def test_pickup_release_scoped_to_the_active_milestone(fake_gh):
     fake_gh.add_milestone(1, title="v1.0", open_issues=1)
     fake_gh.add_milestone(2, title="v2.0", open_issues=1)
     # The scan scoped to v2.0 must not see the v1.0 release Issue.
-    assert runner.pick_issue("owner/repo", active_milestone="v2.0") is None
-    picked = runner.pick_issue("owner/repo", active_milestone="v1.0")
+    assert claim.pick_issue("owner/repo", active_milestone="v2.0") is None
+    picked = claim.pick_issue("owner/repo", active_milestone="v1.0")
     assert picked["number"] == 1
 
 

@@ -1,6 +1,7 @@
 {
   "command_shape_asserts": 515,
   "monkeypatch_setattr_modules": {
+    "claim": 94,
     "cli": 4,
     "cli_source": 7,
     "config": 0,
@@ -32,6 +33,6 @@
     "scheduler": 17,
     "systemd_deploy": 0
   },
-  "monkeypatch_setattr_runner": 354,
+  "monkeypatch_setattr_runner": 257,
   "monkeypatch_setattr_runner_string": 6
 }

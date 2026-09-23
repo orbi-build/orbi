@@ -13,7 +13,7 @@ import json
 import pytest
 
 from orbi import delivery_labels, delivery_scene
-from orbi import runner, scene
+from orbi import claim, runner, scene
 from orbi.delivery_scene import (
     EXTERNAL_PR_MARKER,
     DeliveryScene,
@@ -21,7 +21,7 @@ from orbi.delivery_scene import (
     body_markers,
     classify,
 )
-from tests.seam import seam as runner_seam
+from tests.seam import resume_deps, seam as runner_seam
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL,
     BLOCKED_LABEL,
@@ -223,16 +223,17 @@ def test_pick_resumable_routes_scene_less_fix_with_open_pr_to_fresh_claim(
 ):
     """The production scan gathers the PR fact before deciding #1216."""
     issue = _scene_less_fix_issue()
-    monkeypatch.setitem(runner.__dict__, "slot_held_deliveries", lambda *_: set())
-    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *a, **k: [issue])
-    monkeypatch.setitem(runner.__dict__, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(runner_seam, "slot_held_deliveries", lambda *_: set())
+    monkeypatch.setattr(runner_seam, "list_issues", lambda *a, **k: [issue])
+    monkeypatch.setattr(runner_seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setitem(runner.__dict__, "_route_external_pr_ticket", lambda *a: False)
-    monkeypatch.setitem(runner.__dict__, "open_pr_for_branch", lambda *a: {
+    monkeypatch.setattr(runner_seam, "open_pr_for_branch", lambda *a: {
         "number": 1224, "url": "https://github.com/owner/repo/pull/1224",
     })
 
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1, tmp_path,
+        hooks=resume_deps(),
     ) == (issue, None)
 
 
@@ -243,20 +244,21 @@ def test_pick_resumable_scene_less_fix_respects_blocked_precedence(
     issue = _scene_less_fix_issue()
     issue["labels"].append({"name": BLOCKED_LABEL})
     events = []
-    monkeypatch.setitem(runner.__dict__, "slot_held_deliveries", lambda *_: set())
-    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *a, **k: [issue])
-    monkeypatch.setitem(runner.__dict__, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(runner_seam, "slot_held_deliveries", lambda *_: set())
+    monkeypatch.setattr(runner_seam, "list_issues", lambda *a, **k: [issue])
+    monkeypatch.setattr(runner_seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setitem(runner.__dict__, "_route_external_pr_ticket", lambda *a: False)
-    monkeypatch.setitem(runner.__dict__, "open_pr_for_branch", lambda *a: {
+    monkeypatch.setattr(runner_seam, "open_pr_for_branch", lambda *a: {
         "number": 1224, "url": "https://github.com/owner/repo/pull/1224",
     })
-    monkeypatch.setitem(
-        runner.__dict__, "event",
+    monkeypatch.setattr(
+        runner_seam, "event",
         lambda name, **fields: events.append((name, fields)),
     )
 
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1, tmp_path,
+        hooks=resume_deps(),
     ) is None
     assert events == [(
         "claim_yield", {"issue": 1216, "reason": "scene_blocked"},
@@ -269,21 +271,22 @@ def test_pick_resumable_scene_less_fix_without_open_pr_stays_unclaimable(
     """A closed/absent PR never enters the fresh-claim takeover."""
     issue = _scene_less_fix_issue()
     blocked = []
-    monkeypatch.setitem(runner.__dict__, "slot_held_deliveries", lambda *_: set())
-    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *a, **k: [issue])
-    monkeypatch.setitem(runner.__dict__, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(runner_seam, "slot_held_deliveries", lambda *_: set())
+    monkeypatch.setattr(runner_seam, "list_issues", lambda *a, **k: [issue])
+    monkeypatch.setattr(runner_seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setitem(runner.__dict__, "_route_external_pr_ticket", lambda *a: False)
-    monkeypatch.setitem(runner.__dict__, "open_pr_for_branch", lambda *a: None)
+    monkeypatch.setattr(runner_seam, "open_pr_for_branch", lambda *a: None)
     monkeypatch.setitem(runner.__dict__, "_recover_missing_pr_scene", lambda *a: None)
     monkeypatch.setitem(runner.__dict__, "_has_recoverable_pr_scene", lambda *a: False)
-    monkeypatch.setitem(
-        runner.__dict__, "apply_label_patch",
+    monkeypatch.setattr(
+        runner_seam, "apply_label_patch",
         lambda number, **kwargs: blocked.append(number),
     )
-    monkeypatch.setitem(runner.__dict__, "comment_issue", lambda *a, **k: None)
+    monkeypatch.setattr(runner_seam, "comment_issue", lambda *a, **k: None)
 
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1, tmp_path,
+        hooks=resume_deps(),
     ) is None
     assert blocked == [1216]
 
@@ -293,18 +296,19 @@ def test_pick_resumable_scene_less_fix_rejects_ambiguous_open_prs(
 ):
     """The sole-open-PR contract fails fast instead of choosing a PR."""
     issue = _scene_less_fix_issue()
-    monkeypatch.setitem(runner.__dict__, "slot_held_deliveries", lambda *_: set())
-    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *a, **k: [issue])
-    monkeypatch.setitem(runner.__dict__, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(runner_seam, "slot_held_deliveries", lambda *_: set())
+    monkeypatch.setattr(runner_seam, "list_issues", lambda *a, **k: [issue])
+    monkeypatch.setattr(runner_seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setitem(runner.__dict__, "_route_external_pr_ticket", lambda *a: False)
-    monkeypatch.setitem(
-        runner.__dict__, "open_pr_for_branch",
+    monkeypatch.setattr(
+        runner_seam, "open_pr_for_branch",
         lambda *a: (_ for _ in ()).throw(RuntimeError("multiple open PRs")),
     )
 
     with pytest.raises(RuntimeError, match="multiple open PRs"):
-        runner.pick_resumable_delivery(
+        claim.pick_resumable_delivery(
             "owner/repo", tmp_path / "slots", 1, tmp_path,
+            hooks=resume_deps(),
         )
 
 
@@ -318,7 +322,7 @@ def test_gather_claim_facts_probes_scene_less_fix_needed_takeover(
         "headRefName": "orbi/owner-repo-issue-1216",
     }
     monkeypatch.setitem(runner.__dict__, "has_in_progress_label", lambda *a: False)
-    monkeypatch.setitem(runner.__dict__, "open_pr_for_branch", lambda *a: pr)
+    monkeypatch.setattr(runner_seam, "open_pr_for_branch", lambda *a: pr)
     monkeypatch.setitem(runner.__dict__, "stable_branch_exists", lambda *a: True)
 
     facts = runner._gather_claim_facts(
@@ -335,8 +339,8 @@ def test_scene_less_fix_yields_when_pr_closes_between_scan_and_dispatch(
 ):
     """The open-PR race cannot turn into a fresh implementation run."""
     events = []
-    monkeypatch.setitem(
-        runner.__dict__, "event",
+    monkeypatch.setattr(
+        runner_seam, "event",
         lambda name, **fields: events.append((name, fields)),
     )
     facts = delivery_scene.DeliveryFacts(
@@ -483,8 +487,9 @@ def test_pick_resumable_delivery_skips_candidate_relabelled_blocked(
         "url": "https://github.com/owner/repo/issues/9",
         "body": "b", "labels": [{"name": "ai-blocked"}],
     }])
-    assert runner.pick_resumable_delivery(
+    assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     ) is None
 
 
@@ -505,8 +510,9 @@ def test_pick_resumable_delivery_resumes_a_scene_candidate(
         "url": "https://github.com/owner/repo/issues/9",
         "body": "b", "labels": [{"name": "ai-pr-opened"}],
     }])
-    found = runner.pick_resumable_delivery(
+    found = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
     )
     assert found is not None
     issue, resumed = found
@@ -527,7 +533,7 @@ def test_pick_in_progress_issue_skips_candidate_relabelled_blocked(
         "number": 18, "title": "task", "body": "b",
         "labels": [{"name": "ai-blocked"}],
     }])
-    assert runner.pick_in_progress_issue(
+    assert claim.pick_in_progress_issue(
         "owner/repo", tmp_path / "slots", 1,
     ) is None
 
@@ -541,7 +547,7 @@ def test_pick_issue_skips_candidate_that_left_the_queue(monkeypatch):
         "blockedBy": {"nodes": [], "totalCount": 0},
         "labels": [{"name": "ai-pr-opened"}],
     }])
-    assert runner.pick_issue("owner/repo") is None
+    assert claim.pick_issue("owner/repo") is None
 
 
 def test_pick_issue_claims_a_fresh_candidate(monkeypatch):
@@ -552,7 +558,7 @@ def test_pick_issue_claims_a_fresh_candidate(monkeypatch):
         "blockedBy": {"nodes": [], "totalCount": 0},
         "labels": [{"name": "ai-ready"}],
     }])
-    assert runner.pick_issue("owner/repo") == {
+    assert claim.pick_issue("owner/repo") == {
         "number": 56, "title": "task", "body": "",
         "blockedBy": {"nodes": [], "totalCount": 0},
         "labels": [{"name": "ai-ready"}],

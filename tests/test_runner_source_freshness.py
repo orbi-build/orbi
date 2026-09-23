@@ -28,6 +28,7 @@ import pytest
 from conftest import git
 
 import orbi.cli_source as cli_source
+import orbi.claim as claim
 import orbi.runner as runner
 from seam import seam
 
@@ -499,7 +500,7 @@ def test_main_source_gate_blocks_claim_before_slot(monkeypatch, tmp_path):
     def fail_if_called(*args, **kwargs):
         raise AssertionError("pick_next_delivery must not run on a stale runner")
 
-    monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
+    monkeypatch.setattr(claim, "pick_next_delivery", fail_if_called)
     monkeypatch.setattr(
         runner, "check_runner_source_freshness",
         lambda *a, **k: (_ for _ in ()).throw(
@@ -524,7 +525,7 @@ def test_main_source_gate_clean_proceeds_to_claim(monkeypatch, tmp_path):
         lambda *a, **k: {"install": "editable"},
     )
     monkeypatch.setattr(
-        runner, "pick_next_delivery",
+        claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0

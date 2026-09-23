@@ -2378,7 +2378,7 @@ def test_unknown_verdict_head_budget_resets_after_clean_review_round(
     )
     monkeypatch.setattr(seam, "comment_issue",
                         lambda *a, **k: calls.append(k["body"]))
-    monkeypatch.setattr(seam, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
     make_fake_gh(monkeypatch)
     # Keep the GitHub fake while making the repository object probe fail.
@@ -2635,7 +2635,7 @@ def test_review_and_merge_absorb_abandon_is_machine_named(
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        seam, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -2698,7 +2698,7 @@ def test_review_and_merge_unreadable_base_probe_leaves_round_unarmed(
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        seam, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -2740,7 +2740,7 @@ def test_review_and_merge_gate_time_probe_unreadable_keeps_plain_comment(
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        seam, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -2784,7 +2784,7 @@ def test_review_and_merge_midround_base_advance_is_not_a_violation(
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        seam, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -2833,7 +2833,7 @@ def test_review_and_merge_absorbed_head_is_not_a_violation(
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        seam, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -2966,7 +2966,7 @@ def test_review_and_merge_preexisting_ci_failure_is_not_swallowed(
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        seam, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: calls.append(("edit", k)),
     )
@@ -3107,7 +3107,7 @@ def test_base_advance_budget_exhausts_separately(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(seam, "comment_issue",
                         lambda *a, **k: calls.append(k.get("body")))
-    monkeypatch.setattr(seam, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
     make_fake_gh(monkeypatch)
     with pytest.raises(runner.UnrecoverableDeliveryError, match="base-advance retry loop exhausted"):
@@ -3360,7 +3360,7 @@ def _run_merge_round(monkeypatch, clone: Path, *, session=None,
     monkeypatch.setattr(seam, "stream_pi",
                         lambda command, **kwargs: session())
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
-    monkeypatch.setattr(seam, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
     _install_merge_record_gh(monkeypatch, clone)
     comments: list = []
