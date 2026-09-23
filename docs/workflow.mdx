@@ -285,6 +285,7 @@ commits — initialize them per repository (see
 | `ai-awaiting-merge` | Review and checks passed, but a known repository policy blocker remains; the comment names the maintainer action and Orbi resumes to merge the named PR head |
 | `ai-blocked` | Only an external precondition the AI cannot safely judge or fix (Issue #50); the blocked comment states why automatic recovery is impossible; a human must decide the next step |
 | `ai-human-review` | The human acceptance gate (Issue #763): a person confirmed the delivery's acceptance checklist. Only a human applies or removes it — the Runner never touches it |
+| `ai-needs-detail` | The thin-ticket clarification gate (Issue #1088): the ticket states too little to deliver, so Orbi stopped BEFORE any work. The Runner swaps `ai-ready` for it and posts ONE comment naming the missing pieces; a human adds them and re-adds `ai-ready` |
 
 A repository policy may block the merge even after Orbi's review and checks
 pass. Orbi stops at `ai-awaiting-merge`; the Issue comment names the exact head
@@ -335,6 +336,37 @@ so the migration is toolable without changing the artifact shape. The
 checklist makes no correctness guarantee of any kind: column 1 is
 evidence of what was verified, column 2 is what a person still
 confirms.
+
+## Thin-ticket clarification gate (ai-needs-detail)
+
+A confident delivery against a vague ticket is worse than no delivery: it
+burns a run, opens a PR nobody can accept and buries the real question.
+The gate is OFF by default and a repository turns it on with
+`clarify_thin_tickets = true` in `.github/orbi.toml`; an unopted
+repository behaves exactly as before.
+
+With the gate on, a fresh claim first asks ONE Pi session — `--no-tools`,
+no worktree, no branch, no delivery — to judge the ticket body on three
+checks: the **observable result** (what a user sees or does differently),
+the **acceptance condition** (how a finished delivery is told apart from
+an unfinished one) and the **single outcome** (one fix or one change, not
+several unrelated things). A passing verdict changes nothing and the
+delivery starts.
+
+A failing verdict stops the attempt before any work exists: ONE Issue
+comment lists every missing piece and the repair action, `ai-ready` is
+replaced by `ai-needs-detail`, and the tick ends — no worktree, no branch,
+no Pi session, no PR, and the slot is released for the next Issue. The
+ticket then waits for a human exactly like `ai-blocked`: the next chance to
+be delivered comes from editing the Issue and adding `ai-ready` again,
+which re-runs the judgment from scratch.
+
+Every error path is a **bypass** — the gate never loses a delivery. A model
+error or timeout, an unusable answer, or a failed comment/label write logs
+the `clarify_check_skipped` journal line and lets the delivery proceed.
+The judgment and the stop are visible as the `clarify_check_skipped` and
+`clarify_needs_detail` rows in
+[Operations](/operations#event-reference).
 
 ## Ticket dispatch: content, dev and ops
 
@@ -675,6 +707,7 @@ Only delivery-policy keys are allowed:
 | `steering_poll_seconds` | number | Poll interval for this repository; absent falls back to the host value and must be positive and finite. |
 | `steering_max_rounds` | integer | Maximum steering restarts for this repository; absent falls back to the host value. |
 | `release_confirmation` | boolean | Opt in to the finished-Milestone release confirmation (Issue #856): when the active Milestone has no open Issue left and no release ticket yet, the idle path posts ONE decision notice carrying the in-ticket `/milestone <version>` command instead of waiting silently. Default `false` (the pre-#856 behavior), so an unopted repository is unchanged. See *Waiting for a Milestone decision* below. |
+| `clarify_thin_tickets` | boolean | Opt in to the thin-ticket clarification gate (Issue #1088): a fresh claim first asks one no-tools Pi session whether the ticket states an observable result, an acceptance condition and a single outcome. A failing verdict stops the attempt (ONE comment naming the missing pieces, `ai-ready` swapped for `ai-needs-detail`) before any worktree, branch, Pi session or PR exists. Default `false`; every gate error fails open. See *Thin-ticket clarification gate* above. |
 
 ```toml
 # .github/orbi.toml

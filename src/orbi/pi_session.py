@@ -3,10 +3,10 @@
 Extracted unchanged from ``runner.py`` (Issue #1262, Article 3.2): this
 module owns the session boundary — the prompt rendering, the resume
 context, the per-run agent directory, the Runner-owned runtime excludes
-and the three launch functions (``run_pi``, ``run_review``,
-``run_ticket_agent``). It imports no delivery state machine (Article
-3.3): every dependency is a leaf module, and ``runner`` imports from
-here, never the other way round.
+and the four launch functions (``run_pi``, ``run_review``,
+``run_ticket_agent``, ``run_clarify_agent``). It imports no delivery
+state machine (Article 3.3): every dependency is a leaf module, and
+``runner`` imports from here, never the other way round.
 """
 from __future__ import annotations
 
@@ -810,6 +810,58 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
         ),
         **extra,
     )
+
+
+def run_clarify_agent(issue: dict, config: config_domain.RunnerConfig,
+                      source_repo: str, run_id: str, *, system_prompt: str,
+                      context: str,
+                      progress: Callable[[dict], None] | None = None) -> str:
+    """Ask one no-tools Pi session whether this ticket is deliverable (#1088).
+
+    The gate runs BEFORE any worktree or branch exists, so the session is
+    transient OS state in a temp dir (like the ticket-only session) — a
+    stopped ticket leaves nothing under the repository. When a provider
+    file is configured, the per-run agent dir is materialized inside that
+    temp dir so the judgment reaches the same provider/model a delivery
+    would; without one, Pi keeps its own agent dir. The answer is the
+    session's stdout, parsed by `orbi.clarify.parse_verdict` — a model
+    error or an unusable answer is the caller's fail-open path.
+    """
+    started = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="orbi-clarify-") as directory:
+        clarify_dir = Path(directory)
+        session_dir = clarify_dir / ".pi-session"
+        command, log_command = build_pi_command(
+            config, ROLE_TICKET, IMPLEMENT_EXCLUDED_SKILLS, session_dir,
+            system_prompt, context,
+            context_placeholder="<issue-context-redacted>",
+            tools=False, extensions=False,
+        )
+        _log_provider_config_loaded(
+            issue_ref=issue_context(source_repo, int(issue["number"])),
+            role=ROLE_TICKET, config=config,
+            elapsed=time.monotonic() - started,
+        )
+        agent_dir = prepare_pi_agent_dir(clarify_dir, config, role=ROLE_TICKET)
+        pi_env = _pi_extension_env(config)
+        if agent_dir is not None:
+            pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
+        return stream_pi(
+            command, cwd=clarify_dir,
+            ctx=RunContext(
+                run_id=run_id, issue=int(issue["number"]),
+                branch="-", worktree=Path("-"), source_repo=source_repo,
+            ),
+            role=ROLE_TICKET,
+            log_command=log_command,
+            progress=progress,
+            pi_env=pi_env or None,
+            watch=PiWatchOptions(
+                model_wait_dead_seconds=config.model_wait_dead_seconds,
+                model_wait_probe_url=config.model_wait_probe_url,
+                model_wait_probe_seconds=config.model_wait_probe_seconds,
+            ),
+        )
 
 
 def run_ticket_agent(issue: dict, config: config_domain.RunnerConfig, source_repo: str,

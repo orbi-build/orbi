@@ -225,6 +225,12 @@ max_concurrency = 1
 # release_ci_wait_seconds = 1800
 # Release wait bound for open delivery Issues. Default: 1800 seconds.
 # release_deliveries_wait_seconds = 1800
+# Thin-ticket clarification gate (Issue #1088): one no-tools Pi session
+# judges a fresh claim's ticket body before any work starts; a ticket
+# missing the observable result, the acceptance condition or the single
+# outcome is stopped with ONE comment and the ai-needs-detail label.
+# Default: false (off). Every error path fails open.
+# clarify_thin_tickets = false
 # Optional Pi skills. Paths may be absolute, use ~, or be relative to this file.
 skills = []
 

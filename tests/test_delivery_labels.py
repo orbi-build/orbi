@@ -273,7 +273,7 @@ def test_failure_after_partial_awaiting_merge_handoff_replaces_terminal_label():
 def test_scheduling_metadata_labels_are_not_lifecycle_states():
     for label in (dl.P0_LABEL, dl.BUG_LABEL, dl.EPIC_LABEL,
                   dl.RELEASE_LABEL, dl.CONTENT_ONLY_LABEL, dl.OPS_LABEL,
-                  dl.HUMAN_REVIEW_LABEL):
+                  dl.HUMAN_REVIEW_LABEL, dl.NEEDS_DETAIL_LABEL):
         assert label not in dl.LIFECYCLE_STATES
 
 

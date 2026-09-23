@@ -13,6 +13,7 @@ references a label or config field the implementation does not have, or
 when the README stops pointing at the Chinese docs entry.
 """
 from orbi import config as config_domain
+from orbi.delivery_labels import NEEDS_DETAIL_LABEL
 import re
 from pathlib import Path
 
@@ -55,6 +56,8 @@ KNOWN_LABELS = frozenset({
     runner.AWAITING_MERGE_LABEL,
     # Issue #763: the human acceptance gate (a human-only label).
     runner.HUMAN_REVIEW_LABEL,
+    # Issue #1088: the thin-ticket clarification gate's waiting label.
+    NEEDS_DETAIL_LABEL,
 })
 
 LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")
@@ -99,6 +102,9 @@ KNOWN_CONFIG_FIELDS = frozenset({
     "model_wait_probe_seconds",
     "skills",
     "context_files",
+    # Issue #1088: the thin-ticket clarification gate (explicit
+    # boolean, default false; also a repository policy key).
+    "clarify_thin_tickets",
     # Issue #119/#157: the optional Pi model selection keys (load_config
     # plus the committed example, commented out).
     "pi_provider",

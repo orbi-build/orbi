@@ -52,6 +52,7 @@ def test_parse_repo_config_accepts_every_whitelisted_key():
         'steering_poll_seconds = 0.1\n'
         'steering_max_rounds = 7\n'
         'release_confirmation = true\n'
+        'clarify_thin_tickets = true\n'
     )
     assert repo_config.parse_repo_config(text) == repo_config.RepoPolicy(
         base_branch="beta",
@@ -62,7 +63,29 @@ def test_parse_repo_config_accepts_every_whitelisted_key():
         steering_poll_seconds=0.1,
         steering_max_rounds=7,
         release_confirmation=True,
+        clarify_thin_tickets=True,
     )
+
+
+def test_clarify_thin_tickets_is_a_repository_policy_key():
+    """Issue #1088: the thin-ticket clarification gate is an opt-in the
+    repository declares, so it never becomes host-only state."""
+    assert "clarify_thin_tickets" in repo_config.POLICY_KEYS
+    assert "clarify_thin_tickets" not in repo_config.HOST_ONLY_KEYS
+    policy = repo_config.parse_repo_config("clarify_thin_tickets = true\n")
+    assert policy.clarify_thin_tickets is True
+    assert repo_config.parse_repo_config("clarify_thin_tickets = false\n") == (
+        repo_config.RepoPolicy(clarify_thin_tickets=False)
+    )
+
+
+@pytest.mark.parametrize("value", ['"true"', "1", '["yes"]'])
+def test_parse_repo_config_rejects_a_non_boolean_clarify_thin_tickets(value):
+    with pytest.raises(
+        repo_config.RepoConfigError,
+        match="clarify_thin_tickets must be a boolean",
+    ):
+        repo_config.parse_repo_config(f"clarify_thin_tickets = {value}\n")
 
 
 def test_release_confirmation_is_a_repository_policy_key():
@@ -241,6 +264,18 @@ def test_resolve_policy_overrides_all_declared_steering_keys():
     )
     assert (effective.steering_enabled, effective.steering_poll_seconds,
             effective.steering_max_rounds) == (False, 1.0, 7)
+
+
+def test_resolve_policy_overrides_clarify_thin_tickets():
+    """Issue #1088: the repository flag reaches the effective config and
+    an omitted key keeps the host default (off)."""
+    host = config_domain.RunnerConfig(clarify_thin_tickets=False)
+    assert repo_config.resolve_policy(
+        host, repo_config.RepoPolicy(clarify_thin_tickets=True),
+    ).clarify_thin_tickets is True
+    assert repo_config.resolve_policy(
+        host, repo_config.RepoPolicy(),
+    ).clarify_thin_tickets is False
 
 
 # --- D4 audit ---------------------------------------------------------------

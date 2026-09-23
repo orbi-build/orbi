@@ -68,6 +68,7 @@ Orbi 从部署 home 读取 `orbi.toml`；设置 `ORBI_CONFIG` 可选择其他文
 | `issue_comments_limit` | 整数 | `200` | 正整数 | 受信任评论注入上限（Issue #745，仅宿主/部署侧——仓库的 `.github/orbi.toml` 不可携带）：`{{ISSUE_COMMENTS}}` 占位符注入多少条受信任评论（OWNER/MAINTAINER/MEMBER/COLLABORATOR 或 runner 自己的 App——与恢复现场同一套 `authorAssociation` 信任判据），按时间正序、保留最新。超出上限时丢弃更早的，并在注入内容里标明省略条数——绝不静默截断。模板不含该占位符时不发起任何评论读取（#745 之前的行为）。必须是正整数，否则启动 fail fast |
 | `release_ci_wait_seconds` | 数字 | `1800` | 有限正数 | release 门禁 CI 上限（Issue #268）：release 状态机在 tick 内等待 release commit 上 pending（queued/in_progress）检查的最长时间，超时以独立原因失败——它只是 release 机的纯上限保护，绝不是交付等待机制（Issue #788 已移除交付路径的 CI 等待：pending 检查把交付顺延到下一 tick）。等待期间以 `release_waiting_ci` journal 行和进度评论更新可见；最终结论说了算。必须是有限正数，否则启动 fail fast |
 | `release_deliveries_wait_seconds` | 数字 | `1800` | 有限正数 | release 等待未完成交付的上限。 |
+| `clarify_thin_tickets` | 布尔值 | `false` | `true \| false` | 薄 ticket 闸门（Issue #1088）。可写在仓库的 `.github/orbi.toml`；仓库声明值优先，未声明的键沿用本值。`true` 时在领取开工之前用一次无工具 Pi session 判定 ticket 正文的三项检查：可观察结果、验收条件、单一结果。判定不通过时只发 ONE 条列出全部缺失项的评论，把 `ai-ready` 换成 `ai-needs-detail`，并中止本次尝试——不建 worktree、不建分支、不起 Pi session、不开 PR；票像 `ai-blocked` 一样等人补齐。所有错误路径（模型报错、超时、答案不可用、评论或标签写入失败）一律 fail OPEN：记 `clarify_check_skipped`，交付照常继续。默认关闭，未启用的仓库行为不变。参见[薄 ticket 闸门](/zh/workflow#薄-ticket-闸门)。 |
 
 ## Steering
 

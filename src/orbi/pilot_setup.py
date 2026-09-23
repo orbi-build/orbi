@@ -59,6 +59,7 @@ from orbi.delivery_labels import (
     HUMAN_REVIEW_LABEL,
     IN_PROGRESS_LABEL,
     MERGED_LABEL,
+    NEEDS_DETAIL_LABEL,
     PR_OPENED_LABEL,
     READY_LABEL,
 )
@@ -107,28 +108,25 @@ REQUIRED_LABELS = (
     BLOCKED_LABEL,
     AWAITING_MERGE_LABEL,
     "p0",
-    # Epic marker: the claim scan skips `ai-epic` Issues
-    # (`epic_not_claimed`), so the label is platform state the setup
-    # entry must guarantee — same as every delivery-state label.
+    # Epic marker: the claim scan skips `ai-epic` Issues (`epic_not_claimed`),
+    # so the label is platform state the setup entry must guarantee.
     "ai-epic",
-    # Release task marker: the ready scan picks up
-    # `ai-ready`+`ai-release` Issues and `process_issue` routes them to
-    # the deterministic release state machine (never `run_pi`), so the
-    # label is platform state the setup entry must guarantee.
+    # Release task marker: the ready scan picks up `ai-ready`+`ai-release`
+    # Issues and routes them to the deterministic release state machine.
     "ai-release",
-    # Content-only marker: the pure content agent
-    # delivers text directly in the Issue (no execution, no git), so
-    # setup must provision this explicit, auditable type.
+    # Content-only marker: the pure content agent delivers text directly in
+    # the Issue (no execution, no git).
     "ai-content-only",
-    # Ops marker: a full-execution session (shell/gh/
-    # network, the ops playbook) whose deliverable is evidence posted to
-    # the Issue, so setup must provision this explicit, auditable type.
+    # Ops marker: a full-execution session (shell/gh/network, the ops
+    # playbook) whose deliverable is evidence posted to the Issue.
     "ai-ops-only",
     # Human acceptance gate: the label only a human applies
     # to confirm a delivery's acceptance checklist — the Runner never
     # adds or removes it, but setup provisions it so the gate is ready
     # before the operator turns `human_review_gate` on.
     HUMAN_REVIEW_LABEL,
+    # Thin-ticket gate (Issue #1088): a stopped ticket waits here.
+    NEEDS_DETAIL_LABEL,
 )
 COLOR_PATTERN = re.compile(r"^[0-9a-fA-F]{6}$")
 
