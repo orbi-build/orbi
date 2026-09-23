@@ -108,7 +108,16 @@ engine_source_track = "release"
 # active_milestone = "v0.2.0"
 # When false, a closed active milestone pauses here and creates one
 # ai-ready + p0 confirmation Issue instead of rewriting this file.
-# Missing keeps the existing automatic-advance behavior.
+# Missing keeps the existing automatic-advance behavior. That Issue is the
+# decision channel: a trusted `/milestone <version>` comment on it answers
+# the wait.
+# A second wait uses the same notice (Issue #856): an OPEN active
+# milestone with no open Issue left and no release ticket yet. It is
+# opted in by the REPOSITORY policy `release_confirmation = true` in
+# .github/orbi.toml (see docs/workflow.mdx) — never by this host file —
+# and the notice then carries the same `/milestone <active-version>`
+# reply. In both waits the engine never acts by itself: it creates no
+# release ticket and advances no milestone without the reply.
 # auto_next_milestone = true
 # The version file the in-ticket `/milestone <version>` command writes
 # into the release ticket it opens for the milestone. Leave it unset

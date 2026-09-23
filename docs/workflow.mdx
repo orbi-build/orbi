@@ -635,6 +635,7 @@ Only delivery-policy keys are allowed:
 | `steering_enabled` | boolean | Enables trusted correction polling for this repository; absent falls back to the host value. |
 | `steering_poll_seconds` | number | Poll interval for this repository; absent falls back to the host value and must be positive and finite. |
 | `steering_max_rounds` | integer | Maximum steering restarts for this repository; absent falls back to the host value. |
+| `release_confirmation` | boolean | Opt in to the finished-Milestone release confirmation (Issue #856): when the active Milestone has no open Issue left and no release ticket yet, the idle path posts ONE decision notice carrying the in-ticket `/milestone <version>` command instead of waiting silently. Default `false` (the pre-#856 behavior), so an unopted repository is unchanged. See *Waiting for a Milestone decision* below. |
 
 ```toml
 # .github/orbi.toml
@@ -670,3 +671,24 @@ when the previous content is readable, the effective policy diff as
 that fails for a transport reason (rate limit, network) is logged as
 `repo_config_read_failed` and the host config applies — the degradation
 is visible as the missing `repo_config` field on the run comment.
+
+## Waiting for a Milestone decision: the one reply that answers it
+
+When the whole chain goes quiet, the Runner says WHY instead of waiting
+silently. Two idle states are surfaced through the SAME decision notice — one
+Issue carrying the fingerprint
+`orbi-milestone-advance old=<active> candidates=<titles>` — and each of them is
+answered by the same in-ticket command, a trusted `/milestone <version>`
+comment posted on that notice:
+
+| Waiting state | When it appears | The one reply that answers it |
+| --- | --- | --- |
+| Advance wait | `auto_next_milestone = false` and the active Milestone is CLOSED — the advance stopped on purpose. | `/milestone <next-version>` — lands the next pending Milestone as active. |
+| Release wait | The active Milestone is OPEN with no open Issue left and nobody has opened its release ticket, and the repository policy sets `release_confirmation = true` (Issue #856). Without the key the pre-#856 silent wait is unchanged. | `/milestone <active-version>` — opens the release ticket for the finished Milestone. |
+
+Both notices are idempotent (one open notice per wait, never one per tick),
+are closed automatically with a receipt once the wait ends, and never act by
+themselves: the Runner never creates a release ticket and never advances the
+Milestone without the reply. The reply runs the deterministic three-step
+`/milestone` command (`milestone` → `release ticket` → `active_milestone`)
+described in [Operations](/operations); no model call is involved.

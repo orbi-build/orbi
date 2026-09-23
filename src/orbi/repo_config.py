@@ -64,6 +64,7 @@ POLICY_KEYS = (
     "steering_enabled",
     "steering_poll_seconds",
     "steering_max_rounds",
+    "release_confirmation",
 )
 
 # `test_command` left the whitelist — the merge gate reads
@@ -142,6 +143,7 @@ class RepoPolicy:
     steering_enabled: bool | None = None
     steering_poll_seconds: float | None = None
     steering_max_rounds: int | None = None
+    release_confirmation: bool | None = None
     sha: str | None = None
 
 
@@ -196,6 +198,9 @@ def parse_repo_config(text: str, *, source: str = REPO_CONFIG_PATH) -> RepoPolic
         steering_max_rounds=cast(
             "int | None", values.get("steering_max_rounds")
         ),
+        release_confirmation=cast(
+            "bool | None", values.get("release_confirmation")
+        ),
     )
 
 
@@ -204,6 +209,15 @@ def _validate_value(key: str, value: object, *, source: str) -> object:
     if key == "steering_enabled":
         if not isinstance(value, bool):
             raise RepoConfigError(f"{source}: steering_enabled must be a boolean")
+        return value
+    if key == "release_confirmation":
+        # Issue #856: opt-in per repository — the finished-Milestone
+        # release-confirmation notice. A boolean so a mistyped string
+        # never silently enables or disables the wait.
+        if not isinstance(value, bool):
+            raise RepoConfigError(
+                f"{source}: release_confirmation must be a boolean"
+            )
         return value
     if key == "steering_poll_seconds":
         if (
