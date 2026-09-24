@@ -4,7 +4,7 @@
 
 **GitHub Issues in, tagged releases out.**
 
-Orbi 从 GitHub Issue 领取任务，在隔离 worktree 中开发，运行独立审查会话，只合并经过审查的 head；发布 Issue 冻结 SHA 并发布 tag。GitHub Issue 是唯一状态存储——没有数据库、队列或 daemon。
+Orbi 是一个自托管、开源的自主编程 agent：给 GitHub Issue 打上 `ai-ready`，它在独立的 worktree 里写代码、开 PR，由独立的评审会话对照 Issue 验收项审查，只合并审过的那个 head，最后打 tag 发版。GitHub Issue 是唯一状态存储——没有数据库、队列或 daemon。
 
 **公开账本：** [已合并 PR](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [已关闭 Issue](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged release](https://github.com/orbi-build/orbi/releases) — 仓库就是记录。
 
@@ -116,16 +116,18 @@ package），直接执行兼容入口是 `python3 -m orbi.cli`，不是正式使
 
 ## 许可证
 
-本项目是 [fair-code](https://faircode.io)，以 **Sustainable Use License**
-（v1.0）发布，完整文本见根目录 [LICENSE.md](LICENSE.md)。
+Orbi 以 **[GNU AGPL-3.0](LICENSE)** 开源发布，也可以选择
+**[Sustainable Use License](docs/licenses/sustainable-use-license.md)**
+（v1.0）。两种许可证任选其一；无论哪种，自托管都免费。
 
 实际含义：
 
 - **在自己的仓库上跑 Orbi 永久免费** —— 个人用、公司内部用都一样，不限规模，
-  改代码、自托管、跑一千个仓库都不需要向我们申请授权。
-- **可以分享**，前提是免费且用于非商业目的。
-- **只有把 Orbi 本身卖出去才需要商业授权** —— 即托管成服务卖给你的客户，
-  或嵌入你收费的产品里。
+  两种许可证都适用；改代码、自托管、跑一千个仓库都不需要向我们申请授权。
+- **可以分享** —— 按 SUL 需免费且用于非商业目的；按 AGPL-3.0，把修改过的
+  Orbi 作为网络服务提供，需要公开你的修改。
+- **只有把 Orbi 本身卖出去才需要商业授权** —— 即按 SUL 托管成服务卖给你的客户，
+  或嵌入你收费的产品里；AGPL-3.0 没有这项限制。
 
 不确定自己的用法算哪一边，来
 [Discussions](https://github.com/orbi-build/orbi/discussions) 问，我们直说。

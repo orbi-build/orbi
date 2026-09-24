@@ -1,0 +1,31 @@
+# v0.5.43 release (latest)
+
+`v0.5.43` release notes for the GitHub Release [v0.5.43](https://github.com/orbi-build/orbi/releases/tag/v0.5.43) (release task: Issue #1316).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.5.43` | annotated tag `bea4685aa95177cd0a8d30f18028a0e9f33ab3fa` | commit `0e696c18b7305619d6f7be182822f56982565b58` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- A thin ai-ready ticket becomes a confident wrong delivery: ask for the missing pieces before implementing ([Issue #1088](https://github.com/orbi-build/orbi/issues/1088); [PR #1326](https://github.com/orbi-build/orbi/pull/1326))
+- 票内命令抽成通用层：/milestone 成为第一个注册者，解析/权限/回执不再绑死在 milestone 模块 ([Issue #1294](https://github.com/orbi-build/orbi/issues/1294); [PR #1321](https://github.com/orbi-build/orbi/pull/1321))
+
+### Reliability and recovery
+
+- Blocked comments carry no machine-readable reason: add an orbi:failure:v1 block (reason_code, action_code) to every blocked/fix-needed comment ([Issue #1322](https://github.com/orbi-build/orbi/issues/1322); [PR #1323](https://github.com/orbi-build/orbi/pull/1323))
+- Delivery PR creation bypasses the bounded write retry: one GitHub GraphQL hiccup blocks a finished delivery ([Issue #1324](https://github.com/orbi-build/orbi/issues/1324); [PR #1325](https://github.com/orbi-build/orbi/pull/1325))
+
+### Documentation
+
+- README: name the category in the first sentence (self-hosted, fair-code autonomous coding agent) ([Issue #1328](https://github.com/orbi-build/orbi/issues/1328); [PR #1331](https://github.com/orbi-build/orbi/pull/1331))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>

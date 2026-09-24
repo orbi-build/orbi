@@ -20,6 +20,25 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 README = REPO_ROOT / "README.md"
 README_ZH = REPO_ROOT / "README.zh-CN.md"
 
+# Issue #1328: the first sentence under the tagline must name the category
+# (self-hosted, open-source autonomous coding agent) so the sentence GitHub's
+# search result shows tells a searcher what Orbi is. Issue #1332: the project
+# is open source under AGPL-3.0, so the category sentence no longer says
+# "fair-code".
+TAGLINE = "**GitHub Issues in, tagged releases out.**"
+CATEGORY_SENTENCE_EN = (
+    "Orbi is a self-hosted, open-source autonomous coding agent: label a "
+    "GitHub Issue `ai-ready`, and it writes the code in an isolated worktree, "
+    "opens a PR, has an independent review session check it against the "
+    "Issue's acceptance criteria, merges only the reviewed head, and cuts a "
+    "tagged release."
+)
+CATEGORY_SENTENCE_ZH = (
+    "Orbi 是一个自托管、开源的自主编程 agent：给 GitHub Issue 打上 "
+    "`ai-ready`，它在独立的 worktree 里写代码、开 PR，由独立的评审会话对照 "
+    "Issue 验收项审查，只合并审过的那个 head，最后打 tag 发版。"
+)
+
 # The homepage budget (Issue #241 acceptance criteria).
 MAX_LINES = 120
 MAX_BYTES = 8 * 1024
@@ -96,6 +115,43 @@ FORBIDDEN_MECHANISM_NEEDLES = (
 def readme_text() -> str:
     assert README.is_file(), f"missing README: {README}"
     return README.read_text(encoding="utf-8")
+
+
+def intro_paragraph(text: str) -> str:
+    """The first paragraph after the bold tagline (Issue #1328)."""
+    after_tagline = text.split(TAGLINE, 1)[1]
+    return after_tagline.strip().splitlines()[0].strip()
+
+
+def test_readme_intro_opens_with_the_category_sentence():
+    """Issue #1328: the first paragraph under the tagline must open with
+    the category sentence (self-hosted, open-source autonomous coding
+    agent) and keep the existing state-store sentence, in both languages."""
+    cases = (
+        (README, CATEGORY_SENTENCE_EN, "GitHub Issues are the only state store"),
+        (README_ZH, CATEGORY_SENTENCE_ZH, "GitHub Issue 是唯一状态存储"),
+    )
+    for path, sentence, state_store in cases:
+        paragraph = intro_paragraph(path.read_text(encoding="utf-8"))
+        assert paragraph.startswith(sentence), (
+            f"{path.name} does not open with the category sentence: "
+            f"{paragraph[:100]!r}"
+        )
+        assert state_store in paragraph, (
+            f"{path.name} dropped the state-store sentence after the "
+            "category sentence"
+        )
+
+
+def test_readmes_call_the_project_open_source_under_agpl():
+    """Issue #1332: the project is open source under AGPL-3.0, so both
+    READMEs must say so (EN "open source" / ZH "开源") and name the
+    license."""
+    for path in (README, README_ZH):
+        text = path.read_text(encoding="utf-8")
+        found = re.findall(r"(?im)^.*(?:open[- ]source|开源).*$", text)
+        assert found, f"{path.name} does not call the project open source"
+        assert "AGPL-3.0" in text, f"{path.name} does not name AGPL-3.0"
 
 
 def test_readme_cloud_ctas_carry_attribution_ref():
@@ -294,16 +350,20 @@ def test_readme_capability_overview_keeps_the_delivery_chain():
 
 
 def test_readme_keeps_the_license_and_contributing_entries():
-    """Issue #241: the homepage keeps the License (fair-code under the
-    Sustainable Use License, linked to the root LICENSE.md) and the
+    """Issue #241/#1332: the homepage keeps the License (open source under
+    AGPL-3.0, linked to the root LICENSE, with the SUL alternative) and the
     contributing entry (the contributing docs page plus the in-repo
     development contract)."""
     text = readme_text()
-    assert re.search(r"\]\(LICENSE\.md\)", text), (
-        "README must link to the LICENSE.md file"
+    assert re.search(r"\]\(LICENSE\)", text), (
+        "README must link to the root AGPL LICENSE file"
     )
+    assert "AGPL-3.0" in text, "README must name AGPL-3.0"
     assert "Sustainable Use License" in text, (
         "README must name the Sustainable Use License"
+    )
+    assert "docs/licenses/sustainable-use-license.md" in text, (
+        "README must link the Sustainable Use License text"
     )
     assert "docs/contributing.mdx" in text, (
         "README must point at the contributing docs"
