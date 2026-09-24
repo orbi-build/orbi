@@ -55,11 +55,15 @@ class FakeGh:
 
     def add_issue(self, number: int, *, title: str = "Issue", body: str = "",
                   labels: tuple[str, ...] = (), milestone: int | None = None,
-                  state: str = "open") -> None:
+                  state: str = "open",
+                  author: str = "issue-author") -> None:
         self.issues[number] = {
             "number": number, "title": title, "body": body,
             "state": state, "labels": list(labels), "milestone": milestone,
             "comments": [], "blocked_by": [],
+            # The claim scans fetch `author` for the thin-ticket gate
+            # (Issue #1336); `login` is the field `clarify` mentions.
+            "author": {"login": author},
             "_created": self._next_clock(),
         }
 
