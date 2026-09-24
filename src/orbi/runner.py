@@ -54,7 +54,7 @@ from typing import NamedTuple
 # preflight stubs keep patching the module global below.
 from orbi import engine_source
 from orbi import milestone as milestone_bookkeeping
-from orbi import claim
+from orbi import claim, clarify
 from orbi import config as config_domain
 from orbi.engine_source import EngineSourceError
 from orbi.git_transport import TransportError, check_transport
@@ -4971,18 +4971,16 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         # the default constant — a custom-label repository's tickets
         # never carry `ai-ready`, and the guard must guard them too.
         if has_in_progress_label(number, source_repo):
-            event(
-                "claim_yield", issue=number, reason="in_progress_label",
-            )
+            event("claim_yield", issue=number, reason="in_progress_label")
             return IssueResult("claim-yielded", None)
         if not stable_branch_present and stable_branch_exists(
                 config.repo_dir, stable_branch,
         ):
-            event(
-                "claim_yield", issue=number,
-                reason="stable_branch_appeared",
-            )
+            event("claim_yield", issue=number, reason="stable_branch_appeared")
             return IssueResult("claim-yielded", None)
+        if config.clarify_thin_tickets and not clarify.enforce(
+                issue, config, source_repo, run_id):
+            return IssueResult("needs-detail", None)
     apply_label_patch(
         number, repo=source_repo, event=EVENT_CLAIM,
         current_labels=claim_labels,

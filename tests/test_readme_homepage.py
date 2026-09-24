@@ -20,6 +20,23 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 README = REPO_ROOT / "README.md"
 README_ZH = REPO_ROOT / "README.zh-CN.md"
 
+# Issue #1328: the first sentence under the tagline must name the category
+# (self-hosted, fair-code autonomous coding agent) so the sentence GitHub's
+# search result shows tells a searcher what Orbi is.
+TAGLINE = "**GitHub Issues in, tagged releases out.**"
+CATEGORY_SENTENCE_EN = (
+    "Orbi is a self-hosted, fair-code autonomous coding agent: label a "
+    "GitHub Issue `ai-ready`, and it writes the code in an isolated worktree, "
+    "opens a PR, has an independent review session check it against the "
+    "Issue's acceptance criteria, merges only the reviewed head, and cuts a "
+    "tagged release."
+)
+CATEGORY_SENTENCE_ZH = (
+    "Orbi 是一个自托管、fair-code 的自主编程 agent：给 GitHub Issue 打上 "
+    "`ai-ready`，它在独立的 worktree 里写代码、开 PR，由独立的评审会话对照 "
+    "Issue 验收项审查，只合并审过的那个 head，最后打 tag 发版。"
+)
+
 # The homepage budget (Issue #241 acceptance criteria).
 MAX_LINES = 120
 MAX_BYTES = 8 * 1024
@@ -96,6 +113,41 @@ FORBIDDEN_MECHANISM_NEEDLES = (
 def readme_text() -> str:
     assert README.is_file(), f"missing README: {README}"
     return README.read_text(encoding="utf-8")
+
+
+def intro_paragraph(text: str) -> str:
+    """The first paragraph after the bold tagline (Issue #1328)."""
+    after_tagline = text.split(TAGLINE, 1)[1]
+    return after_tagline.strip().splitlines()[0].strip()
+
+
+def test_readme_intro_opens_with_the_category_sentence():
+    """Issue #1328: the first paragraph under the tagline must open with
+    the category sentence (self-hosted, fair-code autonomous coding agent)
+    and keep the existing state-store sentence, in both languages."""
+    cases = (
+        (README, CATEGORY_SENTENCE_EN, "GitHub Issues are the only state store"),
+        (README_ZH, CATEGORY_SENTENCE_ZH, "GitHub Issue 是唯一状态存储"),
+    )
+    for path, sentence, state_store in cases:
+        paragraph = intro_paragraph(path.read_text(encoding="utf-8"))
+        assert paragraph.startswith(sentence), (
+            f"{path.name} does not open with the category sentence: "
+            f"{paragraph[:100]!r}"
+        )
+        assert state_store in paragraph, (
+            f"{path.name} dropped the state-store sentence after the "
+            "category sentence"
+        )
+
+
+def test_readmes_do_not_call_the_project_open_source():
+    """Issue #1328: the license is fair-code / source-available, so neither
+    README may call the project "open source" (EN) or 开源 (ZH)."""
+    for path in (README, README_ZH):
+        text = path.read_text(encoding="utf-8")
+        found = re.findall(r"(?im)^.*(?:open[- ]source|开源).*$", text)
+        assert not found, f"{path.name} calls the project open source: {found}"
 
 
 def test_readme_cloud_ctas_carry_attribution_ref():

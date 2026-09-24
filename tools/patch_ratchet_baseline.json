@@ -2,6 +2,7 @@
   "command_shape_asserts": 515,
   "monkeypatch_setattr_modules": {
     "claim": 94,
+    "clarify": 0,
     "cli": 4,
     "cli_source": 7,
     "config": 0,

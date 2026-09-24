@@ -201,6 +201,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "fresh_claim_route": "which ready-claim scan produced the pickup",
     "foreign_pr_ignored": "a cross-repository PR was ignored in a branch lookup",
     "claim_yield": "the claim was yielded to a concurrent claimant",
+    "clarify_needs_detail": "the thin-ticket gate stopped the claim: the missing pieces are on the Issue",
+    "clarify_check_skipped": "the thin-ticket gate could not decide or could not write (fail open)",
     "blocked_by": "an Issue was skipped: open blockedBy blockers",
     "blocked_by_check_failed": "the blockedBy query failed (fail open)",
     "capacity_full": "every slot is taken; no claim this tick",

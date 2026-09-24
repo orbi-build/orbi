@@ -437,6 +437,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `fresh_claim_route` | 产出本次领取的就绪扫描路线 |
 | `foreign_pr_ignored` | 分支查询忽略了一个跨仓库 PR |
 | `claim_yield` | 领取让位给并发的领取者 |
+| `clarify_needs_detail` | 薄 ticket 闸门中止领取：缺失项已写在 Issue 上 |
+| `clarify_check_skipped` | 薄 ticket 闸门无法判定或写入失败（fail open） |
 | `blocked_by` | 跳过该 Issue：存在未关闭的 blockedBy 依赖 |
 | `blocked_by_check_failed` | blockedBy 查询失败（fail open） |
 | `capacity_full` | 所有 slot 均被占用；本 tick 不领取 |

@@ -238,6 +238,7 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 | `ai-awaiting-merge` | 评审和检查已通过，但已知仓库策略仍阻塞合并；评论写明维护者动作，完成后 Orbi 恢复并合并指定 PR head |
 | `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50）；blocked comment 写明为什么不能自动恢复；人工必须决定下一步 |
 | `ai-human-review` | 人工验收门禁（Issue #763）：人已确认该交付的验收清单。只有人能打或摘——Runner 永不增删 |
+| `ai-needs-detail` | 薄 ticket 闸门（Issue #1088）：ticket 说得太少无法交付，Orbi 在开工前停住。Runner 把 `ai-ready` 换成它，并只发一条列出缺失项的评论；人补齐后重新加 `ai-ready` |
 
 仓库策略可能在 Orbi 的评审和检查都通过后仍阻塞合并。Orbi 交付 PR 后停止
 在 `ai-awaiting-merge`；Issue 评论写出精确 head 和维护者要做的一件事（适用时
@@ -272,6 +273,31 @@ host 配置打开门禁（`orbi.toml` 里 `human_review_gate = true`——这是
 `<!-- orbi:human-review {...} -->` 块（schema 1），迁移可以做工具化，
 工件形态不变。清单不声称任何正确性保证：栏一是已验证内容的证据，栏二是
 人仍需确认的最小集合。
+
+## 薄 ticket 闸门
+
+对一个含糊的 ticket 自信交付，比不交付更糟：烧掉一次 run、开出一个没人
+能接受的 PR，还把你真正要问的问题埋掉。闸门默认关闭，仓库用
+`.github/orbi.toml` 里的 `clarify_thin_tickets = true` 打开；未启用的仓库
+行为与之前完全一致。
+
+闸门打开时，一次 fresh claim 会先问一次 Pi session（`--no-tools`，无
+worktree、无分支、不交付）判定 ticket 正文的三项检查：**可观察结果**
+（用户会看到或做得了什么不同的）、**验收条件**（怎么区分完成与未完成）、
+**单一结果**（一个 fix 或一个 change，而不是几件互不相关的事）。判定通过
+则一切不变，交付照常开始。
+
+判定不通过则在任何工作存在之前中止本次尝试：只发一条评论列出全部缺失项
+与修复动作，把该仓库的认领标签（默认 `ai-ready`，可经 `dispatch_label` 改名）
+换成 `ai-needs-detail`，本 tick 结束——无
+worktree、无分支、无 Pi session、无 PR，槽位留给下一个 Issue，该票与
+`ai-blocked` 一样等人。重新编辑 Issue 并加上该认领标签才获得下一次机会，
+届时判定从头再跑一遍。
+
+所有错误路径都是**旁路**——闸门绝不会弄丢一次交付。模型报错或超时、答案不可
+用、评论或标签写入失败，都只记 `clarify_check_skipped` journal 行，交付照常继续。
+判定与中止分别对应 [Operations](/zh/operations#事件参考) 里的
+`clarify_check_skipped` 和 `clarify_needs_detail` 行。
 
 ## 票派发：content、dev、ops
 
@@ -545,6 +571,7 @@ contents API 读取仓库**默认分支 tip** 上的 `.github/orbi.toml`——
 | `steering_poll_seconds` | number | 该仓库的轮询间隔；缺席时回退到宿主值，且必须为有限正数。 |
 | `steering_max_rounds` | integer | 该仓库最多重启 Steering 的次数；缺席时回退到宿主值。 |
 | `release_confirmation` | boolean | 选择开启“已完成 Milestone 发布确认”（Issue #856）：当 active Milestone 已无 open Issue 且尚无 release 票时，空闲路径会发一条决策通知，携带票内 `/milestone <版本>` 命令，不再静默等待。默认 `false`（#856 之前的行为），未启用的仓库零变化。见下节《等待 Milestone 决策时的唯一回复》。 |
+| `clarify_thin_tickets` | boolean | 选择开启薄 ticket 闸门（Issue #1088）：fresh claim 先用一次无工具 Pi session 判定该票是否说清可观察结果、验收条件与单一结果。判定不通过时在任何 worktree、分支、Pi session 或 PR 存在之前中止（只发一条列出缺失项的评论，把 `ai-ready` 换成 `ai-needs-detail`）。默认 `false`；闸门的任何错误都 fail open。见上文《薄 ticket 闸门》。 |
 
 ```toml
 # .github/orbi.toml

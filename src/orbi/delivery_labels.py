@@ -35,9 +35,12 @@ LIFECYCLE_STATES = frozenset({
 # content task (the content agent, no execution, the deliverable is
 # posted to the Issue); `ai-human-review` is the human acceptance gate
 # — the Runner never adds or removes it (the `ai-release`
-# shape: no event's patch names it in either direction). None of them
-# is a delivery state, and `blockedBy` (a GitHub relation, not a label)
-# is handled by the dependency scan.
+# shape: no event's patch names it in either direction);
+# `ai-needs-detail` is the thin-ticket clarification gate's terminal
+# state (Issue #1088) — the delivery is stopped and the Issue waits for
+# a human to add the missing pieces, exactly like `ai-blocked`. None of
+# them is a delivery state, and `blockedBy` (a GitHub relation, not a
+# label) is handled by the dependency scan.
 P0_LABEL = "p0"
 BUG_LABEL = "bug"
 EPIC_LABEL = "ai-epic"
@@ -45,6 +48,7 @@ RELEASE_LABEL = "ai-release"
 CONTENT_ONLY_LABEL = "ai-content-only"
 OPS_LABEL = "ai-ops-only"
 HUMAN_REVIEW_LABEL = "ai-human-review"
+NEEDS_DETAIL_LABEL = "ai-needs-detail"
 
 # --- Events that drive label transitions ---
 EVENT_CLAIM = "claim"

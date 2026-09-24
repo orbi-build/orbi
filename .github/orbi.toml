@@ -12,4 +12,10 @@
 # managed sandbox renders no `active_milestone` line of its own, and the
 # host value it would otherwise fall back to is not the repository's to
 # assume.
-active_milestone = "v0.5.43"
+active_milestone = "v0.5.44"
+
+# The thin-ticket clarification gate (orbi-build/orbi#1088) is NOT enabled
+# here yet: the managed sandbox runs the latest stable release (v0.5.42),
+# whose config validator rejects `clarify_thin_tickets` as an unknown key
+# and fails every claim fast. Re-add `clarify_thin_tickets = true` only
+# after a release that knows the key (v0.5.43) is the stable track.

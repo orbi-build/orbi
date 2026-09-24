@@ -14,6 +14,7 @@ from pathlib import Path
 
 import orbi.runner as runner
 from orbi import scene as scene_mod
+from orbi.delivery_labels import NEEDS_DETAIL_LABEL
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 README = REPO_ROOT / "README.md"
@@ -41,6 +42,8 @@ KNOWN_LABELS = frozenset({
     runner.CONTENT_ONLY_LABEL,
     runner.OPS_LABEL,
     runner.HUMAN_REVIEW_LABEL,
+    # Issue #1088: the thin-ticket clarification gate's waiting label.
+    NEEDS_DETAIL_LABEL,
 })
 
 LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")
@@ -71,6 +74,9 @@ def test_workflow_documents_all_labels_with_meaning():
         assert label in text, f"workflow label table is missing {label}"
     assert "ai-epic" in text, "workflow must document the Epic marker"
     assert "ai-release" in text, "workflow must document the Release marker"
+    assert "ai-needs-detail" in text, (
+        "workflow must document the thin-ticket waiting label"
+    )
     assert "external state" in text, (
         "workflow must state that labels are external state"
     )

@@ -153,6 +153,12 @@ class RunnerConfig:
     steering_enabled: bool = True
     steering_poll_seconds: float = 60.0
     steering_max_rounds: int = 3
+    # Thin-ticket clarification gate (Issue #1088): before a fresh claim
+    # starts any work, one no-tools Pi session judges the ticket body on
+    # the observable result, the acceptance condition and the single
+    # outcome. OFF by default; a repository turns it on in
+    # `.github/orbi.toml`. Any error fails OPEN (the delivery proceeds).
+    clarify_thin_tickets: bool = False
     release_ci_wait_seconds: float = RELEASE_CI_WAIT_SECONDS
     release_deliveries_wait_seconds: float = RELEASE_DELIVERIES_WAIT_SECONDS
     pi_providers: Path | None = None
@@ -317,6 +323,9 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
             or not isinstance(steering_max_rounds, int)
             or steering_max_rounds < 0):
         raise ValueError("steering_max_rounds must be a non-negative integer")
+    clarify_thin_tickets = data.get("clarify_thin_tickets", False)
+    if not isinstance(clarify_thin_tickets, bool):
+        raise ValueError("clarify_thin_tickets must be a boolean")
     # Release CI wait: the release gate's in-tick upper
     # bound for pending checks on the release commit. The DELIVERY path
     # has no CI wait anymore: a pending check defers the
@@ -456,6 +465,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         steering_enabled=steering_enabled,
         steering_poll_seconds=steering_poll_seconds,
         steering_max_rounds=steering_max_rounds,
+        clarify_thin_tickets=clarify_thin_tickets,
         release_ci_wait_seconds=release_ci_wait_seconds,
         release_deliveries_wait_seconds=release_deliveries_wait_seconds,
         pi_providers=pi_providers_path,

@@ -65,6 +65,7 @@ POLICY_KEYS = (
     "steering_poll_seconds",
     "steering_max_rounds",
     "release_confirmation",
+    "clarify_thin_tickets",
 )
 
 # `test_command` left the whitelist — the merge gate reads
@@ -144,6 +145,7 @@ class RepoPolicy:
     steering_poll_seconds: float | None = None
     steering_max_rounds: int | None = None
     release_confirmation: bool | None = None
+    clarify_thin_tickets: bool | None = None
     sha: str | None = None
 
 
@@ -201,6 +203,9 @@ def parse_repo_config(text: str, *, source: str = REPO_CONFIG_PATH) -> RepoPolic
         release_confirmation=cast(
             "bool | None", values.get("release_confirmation")
         ),
+        clarify_thin_tickets=cast(
+            "bool | None", values.get("clarify_thin_tickets")
+        ),
     )
 
 
@@ -217,6 +222,15 @@ def _validate_value(key: str, value: object, *, source: str) -> object:
         if not isinstance(value, bool):
             raise RepoConfigError(
                 f"{source}: release_confirmation must be a boolean"
+            )
+        return value
+    if key == "clarify_thin_tickets":
+        # Issue #1088: the thin-ticket clarification gate is opt-in per
+        # repository — a boolean so a mistyped string never silently
+        # turns the gate on or off.
+        if not isinstance(value, bool):
+            raise RepoConfigError(
+                f"{source}: clarify_thin_tickets must be a boolean"
             )
         return value
     if key == "steering_poll_seconds":
@@ -327,6 +341,11 @@ def resolve_policy(config: RunnerConfig, policy: RepoPolicy) -> RunnerConfig:
             policy.steering_max_rounds
             if policy.steering_max_rounds is not None
             else config.steering_max_rounds
+        ),
+        clarify_thin_tickets=(
+            policy.clarify_thin_tickets
+            if policy.clarify_thin_tickets is not None
+            else config.clarify_thin_tickets
         ),
     )
 
