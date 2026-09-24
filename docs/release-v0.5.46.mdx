@@ -1,0 +1,36 @@
+# v0.5.46 release (latest)
+
+`v0.5.46` release notes for the GitHub Release [v0.5.46](https://github.com/orbi-build/orbi/releases/tag/v0.5.46) (release task: Issue #1343).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.5.46` | annotated tag `e7f25ac27be42f0075e8e1cfbc55d21fd00d19e7` | commit `142346e7c00d96f838b8464b5ca5c33fa5e0fa19` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- DeepSeek provider template: switch to deepseek-flash, the configuration Orbi's own deliveries run on ([Issue #1346](https://github.com/orbi-build/orbi/issues/1346); [PR #1348](https://github.com/orbi-build/orbi/pull/1348))
+
+### Reliability and recovery
+
+- launchd: a running instance whose plist changed on upgrade is never reloaded, so it keeps the old schedule (split from #1344) ([Issue #1347](https://github.com/orbi-build/orbi/issues/1347); [PR #1349](https://github.com/orbi-build/orbi/pull/1349))
+- retry_safe failures are never retried: re-queue a github_transient failure once instead of leaving it in ai-blocked ([Issue #1351](https://github.com/orbi-build/orbi/issues/1351); [PR #1352](https://github.com/orbi-build/orbi/pull/1352))
+
+### Deployment and operations
+
+- All runner instances fire in the same second: give each timer instance a deterministic offset ([Issue #1320](https://github.com/orbi-build/orbi/issues/1320); [PR #1330](https://github.com/orbi-build/orbi/pull/1330))
+- systemd stagger drop-in is outside the drift check, so an upgraded deployment never gets it and doctor/status report it as deployed ([Issue #1344](https://github.com/orbi-build/orbi/issues/1344); [PR #1354](https://github.com/orbi-build/orbi/pull/1354))
+- git fetch/push: treat 'Permission denied (publickey)' / 'Could not read from remote repository' as retryable (transient GitHub SSH failure blocked orbi-cloud#1157) ([Issue #1350](https://github.com/orbi-build/orbi/issues/1350); [PR #1353](https://github.com/orbi-build/orbi/pull/1353))
+
+### Bug fixes
+
+- auto_next_milestone is host-only, so a managed tenant can set active_milestone but cannot stop the engine from overwriting it ([Issue #1342](https://github.com/orbi-build/orbi/issues/1342); [PR #1345](https://github.com/orbi-build/orbi/pull/1345))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a> <a href="https://github.com/shobhitagnihotri69"><img src="https://avatars.githubusercontent.com/u/134706149?u=a856cf25e68bd547fd62af510e80ce07ec47f879&v=4&s=48" width="32" height="32" alt="shobhitagnihotri69" /></a>
