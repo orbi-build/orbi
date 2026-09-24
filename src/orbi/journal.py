@@ -530,6 +530,10 @@ GIT_TRANSIENT_ERROR_MARKERS = (
     "temporary failure in name resolution",
     "network is unreachable",
     "network unreachable",
+    # A transient GitHub SSH auth failure (a missing key reports the same
+    # text, but it keeps failing after the bounded retries and is re-raised).
+    "could not read from remote repository",
+    "permission denied (publickey)",
 )
 
 
