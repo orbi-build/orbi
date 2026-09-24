@@ -174,6 +174,11 @@ def test_parse_verdict_rejects_broken_json():
     assert clarify.parse_verdict('{"satisfied": true,') is None
 
 
+def test_parse_verdict_rejects_malformed_json_inside_an_object():
+    # Braces but not valid JSON: the parse itself fails (the fail-open path).
+    assert clarify.parse_verdict('{"satisfied": true "missing": []}') is None
+
+
 @pytest.mark.parametrize("output", [
     '{"satisfied": "yes", "missing": []}',
     '{"satisfied": true, "missing": "none"}',

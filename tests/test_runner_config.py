@@ -141,6 +141,7 @@ def test_load_config_returns_the_frozen_runner_config(tmp_path):
     assert config.auto_next_milestone is True
     assert config.allow_stale_runner is False
     assert config.human_review_gate is False
+    assert config.clarify_thin_tickets is False
     assert config.attribution_footer is True
     assert config.model_wait_dead_seconds == 1800.0
     assert config.issue_comments_limit == 200
@@ -160,6 +161,20 @@ def test_load_config_rejects_invalid_attribution_footer(tmp_path, value):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="attribution_footer must be a boolean"):
+        config_domain.load_config(config_path)
+
+
+@pytest.mark.parametrize("value", ["1", '"yes"'])
+def test_load_config_rejects_a_non_boolean_clarify_thin_tickets(tmp_path, value):
+    """Issue #1088: a mistyped gate flag fails the start, never guesses."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        f'source_repos = ["owner/repo"]\nclarify_thin_tickets = {value}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError, match="clarify_thin_tickets must be a boolean",
+    ):
         config_domain.load_config(config_path)
 
 
