@@ -4,7 +4,7 @@
 
 **GitHub Issues in, tagged releases out.**
 
-Orbi 从 GitHub Issue 领取任务，在隔离 worktree 中开发，运行独立审查会话，只合并经过审查的 head；发布 Issue 冻结 SHA 并发布 tag。GitHub Issue 是唯一状态存储——没有数据库、队列或 daemon。
+Orbi 是一个自托管、fair-code 的自主编程 agent：给 GitHub Issue 打上 `ai-ready`，它在独立的 worktree 里写代码、开 PR，由独立的评审会话对照 Issue 验收项审查，只合并审过的那个 head，最后打 tag 发版。GitHub Issue 是唯一状态存储——没有数据库、队列或 daemon。
 
 **公开账本：** [已合并 PR](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [已关闭 Issue](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged release](https://github.com/orbi-build/orbi/releases) — 仓库就是记录。
 
