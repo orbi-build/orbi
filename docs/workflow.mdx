@@ -724,11 +724,17 @@ the same place — the repository policy when it declares the key (a
 contents PUT on the default branch), otherwise the host `orbi.toml`
 line — and prints `wrote:` naming the target (Issue #1306).
 
-Every other key is rejected: an unknown key, a host-only
-identity/security key (see [Security](/security)), invalid TOML or a
-wrong type fails the claim fast with the offending key names and the
-Issue becomes `ai-blocked` — one repository's bad file never affects
-another pool. The host-only set also owns host scheduling:
+A host-only identity/security key (see [Security](/security)), invalid
+TOML or a wrong type fails the claim fast with the offending key names
+and the Issue becomes `ai-blocked` — one repository's bad file never
+affects another pool. Any other unrecognized key is ignored instead: one
+`repo_config_keys_ignored` journal line names the key and the engine
+version, the run comment carries `repo_config_ignored`, and the claim
+proceeds with the known keys (Issue #1329). The file is read by whatever
+engine version the delivery host runs, which is often older than the code
+that wrote the file, so a new policy key must be safe for an older engine
+to ignore: it defaults to the pre-feature behavior, and an engine that
+does not know it delivers as before. The host-only set also owns host scheduling:
 `max_concurrency` can never be delegated to a repository file — the
 concurrency slot pool belongs to the deployment host.
 `dispatch_label` must not be a delivery lifecycle label

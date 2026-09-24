@@ -379,7 +379,7 @@ def test_milestone_set_invalid_repository_policy_fails_fast(
     config_path = make_world(tmp_path)
     original = config_path.read_bytes()
     gh = FakeGh(REPO)
-    gh.set_repo_config("nope = 1\n")
+    gh.set_repo_config("base_branch = 1\n")
     gh.add_milestone(1, title="v0.6.0", open_issues=3)
     wire(monkeypatch, gh)
 

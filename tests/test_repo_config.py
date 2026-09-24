@@ -5,7 +5,7 @@ per-key merge over the host fallback (D3), the `gh api` read pipeline (missing
 file -> no-op, malformed file -> fail fast, read error -> fail open), the D4
 change-visibility audit, and the runner wiring at the claim scan and claim.
 """
-from orbi import config as config_domain
+from orbi import __version__, config as config_domain
 import base64
 import dataclasses
 import json
@@ -135,11 +135,67 @@ def test_parse_repo_config_rejects_bad_toml():
         repo_config.parse_repo_config('base_branch = "unterminated')
 
 
-def test_parse_repo_config_rejects_unknown_key():
+def test_parse_repo_config_ignores_an_unknown_future_key(caplog):
+    """Issue #1329: a key the running engine does not know is ignored.
+
+    The policy file is read by whatever engine version the delivery host
+    runs, often older than the code that wrote the file. Rejecting a
+    newer key deadlocks delivery: the release that knows the key cannot
+    ship, because shipping it goes through a claim the key blocks."""
+    with caplog.at_level(logging.WARNING, logger="orbi.bootstrap"):
+        policy = repo_config.parse_repo_config(
+            'active_milestone = "v1.0.0"\nsome_future_key = true\n',
+        )
+    assert policy.active_milestone == "v1.0.0"
+    assert policy.ignored_keys == ("some_future_key",)
+    assert "repo_config_keys_ignored" in caplog.text
+    assert "some_future_key" in caplog.text
+    assert __version__ in caplog.text
+
+
+def test_parse_repo_config_reports_every_ignored_key_sorted():
+    policy = repo_config.parse_repo_config('zeta = 1\nalpha = "x"\n')
+    assert policy.ignored_keys == ("alpha", "zeta")
+
+
+def test_parse_repo_config_without_unknown_keys_reports_nothing_ignored():
+    policy = repo_config.parse_repo_config('base_branch = "beta"\n')
+    assert policy.ignored_keys == ()
+
+
+def test_parse_repo_config_still_rejects_a_host_only_key_before_ignoring():
+    """The #527 credential red line outranks the #1329 fail-open."""
     with pytest.raises(
-        repo_config.RepoConfigError, match=r"unknown key\(s\): mystery",
+        repo_config.RepoConfigError, match=r"host-only key\(s\).*pi_model",
     ):
-        repo_config.parse_repo_config('mystery = "x"\n')
+        repo_config.parse_repo_config(
+            'pi_model = "m"\nsome_future_key = true\n',
+        )
+
+
+def test_parse_repo_config_still_rejects_a_bad_value_of_a_known_key():
+    """A typo'd value of a known key is not a future key."""
+    with pytest.raises(
+        repo_config.RepoConfigError,
+        match="clarify_thin_tickets must be a boolean",
+    ):
+        repo_config.parse_repo_config('clarify_thin_tickets = "yes"\n')
+
+
+def test_ignored_keys_reach_the_policy_audit_comment():
+    fields = repo_config.repo_config_audit(
+        "sha1", repo_config.RepoPolicy(ignored_keys=("some_future_key",)),
+        previous_sha=None, previous_policy=None,
+    )
+    assert fields["repo_config_ignored"] == "some_future_key"
+
+
+def test_ignored_keys_are_not_a_policy_diff():
+    """`ignored_keys` is a read observation, not a policy key."""
+    assert repo_config.policy_diff(
+        repo_config.RepoPolicy(base_branch="beta"),
+        repo_config.RepoPolicy(base_branch="beta", ignored_keys=("x",)),
+    ) is None
 
 
 @pytest.mark.parametrize(
@@ -441,9 +497,9 @@ def test_read_repo_config_decoded_size_cap_fails_fast():
 
 def test_read_repo_config_invalid_policy_fails_fast():
     def bad(command, **kwargs):
-        return json.dumps({"sha": "x", "content": _b64("nope = 1\n")})
+        return json.dumps({"sha": "x", "content": _b64('pi_model = "m"\n')})
 
-    with pytest.raises(repo_config.RepoConfigError, match="unknown key"):
+    with pytest.raises(repo_config.RepoConfigError, match="host-only key"):
         repo_config.read_repo_config("owner/repo", run_command=bad)
 
 

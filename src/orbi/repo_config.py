@@ -12,7 +12,10 @@ whole-file override.
 Only delivery-policy keys are allowed (decision D2). Identity and security
 keys — everything that routes credentials or crosses repositories — are
 permanently host-only: a repository file that carries one fails the claim
-fast with the offending key names. This module owns the strict schema, the
+fast with the offending key names. Any other unrecognized key is ignored
+with a warning (Issue #1329), because the reading engine is often older
+than the code that wrote the file — a new policy key must be safe for an
+older engine to ignore. This module owns the strict schema, the
 pure per-key merge/diff helpers and the `gh api` read; the decision to block
 a claim lives in the claim loop in ``runner.main``.
 
@@ -32,6 +35,7 @@ import tomllib
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Callable, cast
 
+from orbi import __version__
 from orbi.delivery_labels import LIFECYCLE_STATES, READY_LABEL
 from orbi.journal import event, run_command
 
@@ -134,7 +138,9 @@ class RepoPolicy:
     the blob sha of the file the policy was read from — ``None`` until a
     reader (the contents API or a previous run's blob read) binds it, and
     excluded from :func:`policy_diff` (it is the file's version, not a
-    policy key).
+    policy key). ``ignored_keys`` carries the keys this engine did not
+    know (Issue #1329) and is excluded from :func:`policy_diff` for the
+    same reason.
     """
 
     base_branch: str | None = None
@@ -147,17 +153,29 @@ class RepoPolicy:
     release_confirmation: bool | None = None
     clarify_thin_tickets: bool | None = None
     sha: str | None = None
+    ignored_keys: tuple[str, ...] = ()
 
 
 def parse_repo_config(text: str, *, source: str = REPO_CONFIG_PATH) -> RepoPolicy:
     """Parse and strictly validate one repository policy file.
 
     Returns the validated :class:`RepoPolicy` (only whitelisted keys,
-    validated values). A TOML error, an unknown key, a host-only key or a
-    wrong type raises :class:`RepoConfigError` naming the offending
-    key(s) — the claim then fails fast with a readable reason (Issue
-    #527 acceptance). A key in :data:`LEGACY_IGNORED_KEYS` is skipped
-    instead of rejected.
+    validated values). A TOML error, a host-only key or a wrong type
+    raises :class:`RepoConfigError` naming the offending key(s) — the
+    claim then fails fast with a readable reason (Issue #527
+    acceptance). A key in :data:`LEGACY_IGNORED_KEYS` is skipped instead
+    of rejected.
+
+    Issue #1329: a key that is neither whitelisted nor host-only is
+    ignored with one WARNING journal line naming it and the engine
+    version, and lands in ``RepoPolicy.ignored_keys`` for the policy
+    audit comment. The file is read by whatever engine version the
+    delivery host runs, which is often older than the code that wrote
+    the file. Rejecting a newer key deadlocks delivery: the release that
+    knows the key cannot ship, because shipping it goes through a claim
+    the key blocks. Failing open is safe because every policy key
+    defaults to the pre-feature behavior, so a new policy key must stay
+    safe for an older engine to ignore.
     """
     try:
         data = tomllib.loads(text)
@@ -169,13 +187,14 @@ def parse_repo_config(text: str, *, source: str = REPO_CONFIG_PATH) -> RepoPolic
             f"{source}: host-only key(s) are not allowed: "
             + ", ".join(host_only)
         )
-    unknown = sorted(
+    ignored = tuple(sorted(
         key for key in data
         if key not in POLICY_KEYS and key not in LEGACY_IGNORED_KEYS
-    )
-    if unknown:
-        raise RepoConfigError(
-            f"{source}: unknown key(s): " + ", ".join(unknown)
+    ))
+    if ignored:
+        event(
+            "repo_config_keys_ignored", level=logging.WARNING,
+            source=source, keys=",".join(ignored), engine_version=__version__,
         )
     values = {
         key: _validate_value(key, data[key], source=source)
@@ -206,6 +225,7 @@ def parse_repo_config(text: str, *, source: str = REPO_CONFIG_PATH) -> RepoPolic
         clarify_thin_tickets=cast(
             "bool | None", values.get("clarify_thin_tickets")
         ),
+        ignored_keys=ignored,
     )
 
 
@@ -364,13 +384,14 @@ def policy_diff(old: RepoPolicy | None, new: RepoPolicy) -> str | None:
     ``None`` when no effective policy key changed (the file sha may still
     differ, e.g. a comment-only edit). Spaces are allowed here: the
     summary is rendered as its own comment field, never spliced into the
-    space-separated `run_info`. The `sha` field is the file version, not
-    a policy key, and never appears.
+    space-separated `run_info`. The `sha` and `ignored_keys` fields are
+    the file version and the read observation, not policy keys, and never
+    appear.
     """
     parts = []
     for field in sorted(
         item.name for item in dataclasses.fields(RepoPolicy)
-        if item.name != "sha"
+        if item.name not in ("sha", "ignored_keys")
     ):
         old_value = getattr(old, field) if old is not None else None
         new_value = getattr(new, field)
@@ -388,11 +409,14 @@ def repo_config_audit(sha: str | None, policy: RepoPolicy, *,
     """The D4 change-visibility fields for the run comment.
 
     Always carries nothing (the caller adds `repo_config: <sha>` to the
-    run info). When the previous run recorded a different sha, adds the
-    `repo_config_changed` marker and, when the previous content was
-    readable, the effective policy diff summary.
+    run info). A key this engine did not know lands as
+    `repo_config_ignored` (Issue #1329). When the previous run recorded a
+    different sha, adds the `repo_config_changed` marker and, when the
+    previous content was readable, the effective policy diff summary.
     """
     fields: dict = {}
+    if policy.ignored_keys:
+        fields["repo_config_ignored"] = ",".join(policy.ignored_keys)
     if not previous_sha or previous_sha == sha:
         return fields
     fields["repo_config_changed"] = f"{previous_sha}..{sha}"

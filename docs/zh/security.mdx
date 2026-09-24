@@ -108,8 +108,9 @@ Orbi 保留从不出机的本地状态：
 凭据引向别处或在池之间横移。同理
 `source_repos`/`repo_dir`/`deploy_home`/`workspace_root`（跨池横移）与
 `prompt`/`prompt_review`/`skills`（系统上下文的持久化注入通道）都是
-host-only。仓库文件出现任何 host-only 或未知键都会让 claim fail-fast，
-Issue 进入 `ai-blocked` 并列出违规键。
+host-only。仓库文件出现任何 host-only 键都会让 claim fail-fast，
+Issue 进入 `ai-blocked` 并列出违规键。不认识的键则改为记一行警告后忽略
+（Issue #1329），host-only 集合不受影响。
 
 以下交付策略键可被仓库写入：`base_branch`、`active_milestone`、
 `context_files`、`dispatch_label`、`steering_enabled`、

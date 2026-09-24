@@ -370,6 +370,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "runner_runtime_exclude_repaired": "the runtime exclude was repaired",
     # Repository config.
     "repo_config_invalid": "the repository config failed validation",
+    "repo_config_keys_ignored": "the repository config carried key(s) this engine version does not know",
     "repo_config_read_failed": "the repository config could not be read",
     "repo_config_previous_read_failed": "the previous repository config snapshot could not be read",
     "repo_config_previous_lookup_failed": "the previous repository config snapshot lookup failed",

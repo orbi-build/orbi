@@ -131,8 +131,9 @@ across pools. For the same reason `source_repos`/`repo_dir`/
 `deploy_home`/`workspace_root` (cross-pool movement) and
 `prompt`/`prompt_review`/`skills` (a persistent injection channel into
 the system context) are host-only. A repository file that declares any
-host-only or unknown key fails the claim fast and the Issue becomes
-`ai-blocked` with the offending keys named.
+host-only key fails the claim fast and the Issue becomes `ai-blocked`
+with the offending keys named. An unrecognized key is ignored with a
+warning instead (Issue #1329); the host-only set is unchanged by that.
 
 These delivery-policy keys are repository-writable:
 `base_branch`, `active_milestone`, `context_files`, `dispatch_label`,

@@ -337,7 +337,7 @@ def _pick_from_scan(
     issues: list[dict], repo: str, allow_release: bool = False,
     active_milestone: str | None = None,
     ready_label: str = READY_LABEL,
-    external_only: bool = False,
+    external_only: bool = False, held: frozenset = frozenset(),
 ) -> dict | None:
     """Return the first claimable Issue of one scan result, else None.
 
@@ -380,24 +380,24 @@ def _pick_from_scan(
     by the same pure `classify` the dispatch layer runs, so a stale
     index handing over a ticket that no longer carries the queue label
     is skipped, never claimed into a scene it is no longer in.
+
+    `held` names the deliveries a live co-runner works on: such an Issue
+    is skipped (`claim_yield reason=held_by_live_runner`) and never
+    claimed twice — the skip is the FIRST guard of this loop.
     """
     for issue in issues:
+        if (repo, int(issue["number"])) in held:
+            event("claim_yield", issue=issue.get("number"), reason="held_by_live_runner")
+            continue
         if external_only and EXTERNAL_PR_MARKER not in body_markers(
                 issue.get("body")):
-            event(
-                "claim_yield", issue=issue.get("number"),
-                reason="no_external_marker",
-            )
+            event("claim_yield", issue=issue.get("number"), reason="no_external_marker")
             continue
         if is_epic(issue):
-            event(
-                "epic_not_claimed", issue=issue.get("number"), repo=repo,
-            )
+            event("epic_not_claimed", issue=issue.get("number"), repo=repo)
             continue
         if not allow_release and is_release(issue):
-            event(
-                "release_not_claimed", issue=issue.get("number"), repo=repo,
-            )
+            event("release_not_claimed", issue=issue.get("number"), repo=repo)
             continue
         if allow_release and is_release(issue):
             target_milestone = release_target_milestone(
@@ -412,22 +412,17 @@ def _pick_from_scan(
                     event(
                         "release_milestone_check_failed", level=logging.ERROR,
                         issue=issue.get("number"), repo=repo,
-                        milestone=target_milestone, error=exc,
-                    )
+                        milestone=target_milestone, error=exc)
                     return None
                 if open_issues > 1:
-                    event(
-                        "release_milestone_incomplete",
-                        issue=issue.get("number"), repo=repo,
-                        milestone=target_milestone, open_issues=open_issues,
-                    )
+                    event("release_milestone_incomplete", issue=issue.get("number"),
+                          repo=repo, milestone=target_milestone,
+                          open_issues=open_issues)
                     continue
         blockers = open_blocker_numbers(issue)
         if blockers:
-            event(
-                "blocked_by", issue=issue.get("number"), repo=repo,
-                blockers=",".join(str(number) for number in blockers),
-            )
+            event("blocked_by", issue=issue.get("number"), repo=repo,
+                  blockers=",".join(str(number) for number in blockers))
             continue
         current_labels = _issue_label_set(issue)
         if current_labels:
@@ -442,16 +437,15 @@ def _pick_from_scan(
                     reason=f"scene_{scene_value.value}",
                 )
                 continue
-        event(
-            "picked", issue=issue.get("number"), repo=repo,
-            priority=issue_priority(issue),
-        )
+        event("picked", issue=issue.get("number"), repo=repo,
+              priority=issue_priority(issue))
         return issue
     return None
 
 
 def pick_issue(repo: str, active_milestone: str | None = None,
-               dispatch_label: str = READY_LABEL) -> dict | None:
+               dispatch_label: str = READY_LABEL,
+               held: frozenset = frozenset()) -> dict | None:
     # A merged delivery keeps `ai-ready` + `ai-merged` on the (still
     # open) Issue; `ai-merged` is the success terminal state, so it is
     # excluded from the ready scan like every other delivery state.
@@ -471,6 +465,10 @@ def pick_issue(repo: str, active_milestone: str | None = None,
     # (see `ready_searches`) — the Epic skip and the blockedBy skip
     # above are the unchanged second (code) layer, and a failed scan
     # still fails open (never a silent claim of the wrong version).
+    # `held` carries the deliveries live co-runners work on RIGHT NOW:
+    # the claim window is serialized by the caller, so a second runner
+    # re-scanning in the same tick finds the first one's identity here
+    # and yields instead of claiming the same Issue (#1319).
     # An `ai-release` Issue is skipped by the three ordinary
     # scans (`release_not_claimed`) and claimed only by the release
     # fallback scan that runs AFTER all three found nothing claimable —
@@ -498,7 +496,7 @@ def pick_issue(repo: str, active_milestone: str | None = None,
             )
             return None
         picked = _pick_from_scan(
-            issues, repo, ready_label=dispatch_label,
+            issues, repo, ready_label=dispatch_label, held=held,
         )
         if picked is not None:
             return picked
@@ -523,7 +521,7 @@ def pick_issue(repo: str, active_milestone: str | None = None,
         )
         return None
     picked = _pick_from_scan(
-        issues, repo, allow_release=True,
+        issues, repo, allow_release=True, held=held,
         active_milestone=active_milestone,
         ready_label=dispatch_label,
     )
@@ -552,7 +550,7 @@ def pick_issue(repo: str, active_milestone: str | None = None,
         )
         return None
     return _pick_from_scan(
-        issues, repo, external_only=True,
+        issues, repo, external_only=True, held=held,
         ready_label=dispatch_label,
     )
 
@@ -930,7 +928,8 @@ def pick_next_delivery(
         if issue is not None:
             return repo, issue, None
     for repo in repos:
-        issue = _pick_issue_with_repo_policy(repo, active_milestone, config)
+        held = slot_held_deliveries(slot_dir, max_concurrency)
+        issue = _pick_issue_with_repo_policy(repo, active_milestone, config, held)
         if issue is not None:
             return repo, issue, None
     return None
@@ -984,15 +983,17 @@ def _repo_scan_context(
 
 def _pick_issue_with_repo_policy(
     repo: str, active_milestone: str | None, config: RunnerConfig | None,
+    held: frozenset = frozenset(),
 ) -> dict | None:
     """Fresh ready scan with the repo's scan keys.
 
     `dispatch_label` and `active_milestone` are resolved from the
-    repository policy before the scan (see `_repo_scan_keys`).
+    repository policy before the scan (see `_repo_scan_keys`), and
+    `held` (the deliveries live co-runners work on) is passed through.
     """
     milestone, dispatch_label = _repo_scan_keys(
         config, repo, active_milestone,
     )
     if dispatch_label == READY_LABEL:
-        return pick_issue(repo, milestone)
-    return pick_issue(repo, milestone, dispatch_label=dispatch_label)
+        return pick_issue(repo, milestone, held=held)
+    return pick_issue(repo, milestone, dispatch_label=dispatch_label, held=held)
