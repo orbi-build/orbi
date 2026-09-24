@@ -21096,7 +21096,9 @@ def test_reconcile_orphan_prs_failure_is_fail_open(tmp_path, monkeypatch, caplog
     monkeypatch.setattr(claim, "reconcile_orphan_prs", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
     monkeypatch.setattr(claim, "pick_resumable_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(claim, "pick_in_progress_issue", lambda *args, **kwargs: None)
-    monkeypatch.setattr(claim, "pick_issue", lambda *args: {"number": 1})
+    monkeypatch.setattr(
+        claim, "pick_issue", lambda *args, **kwargs: {"number": 1},
+    )
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "abc12345")
     slot_dir = tmp_path / "slots"
     milestone.record_milestone_reconcile_failure(
@@ -21122,7 +21124,9 @@ def test_reconcile_open_epics_failure_is_fail_open(tmp_path, monkeypatch, caplog
     monkeypatch.setattr(claim, "reconcile_orphan_prs", lambda *args, **kwargs: None)
     monkeypatch.setattr(claim, "pick_resumable_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(claim, "pick_in_progress_issue", lambda *args, **kwargs: None)
-    monkeypatch.setattr(claim, "pick_issue", lambda *args: {"number": 1})
+    monkeypatch.setattr(
+        claim, "pick_issue", lambda *args, **kwargs: {"number": 1},
+    )
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "abc12345")
     result = claim.pick_next_delivery(["o/r"], tmp_path / "slots", 1, hooks=resume_deps())
     assert result == ("o/r", {"number": 1}, None)

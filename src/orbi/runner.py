@@ -6897,8 +6897,7 @@ def main(argv: list[str] | None = None) -> int:
                 # GitHub calls, and the hold stays what it is for — the
                 # pick -> identity-write window — never a piece of work a
                 # co-runner's claim would have to wait for.
-                if claim_lock is not None:
-                    claim_lock.release()
+                claim_lock.release()
                 ready_outside_milestone = log_ready_outside_milestone(
                     config.source_repos, config.active_milestone, config=config,
                 )
@@ -6964,8 +6963,10 @@ def main(argv: list[str] | None = None) -> int:
             # not started).
             mark_slot_delivery(slot, source_repo, int(issue["number"]))
         finally:
-            if claim_lock is not None:
-                claim_lock.release()
+            # Blocking acquisition above: the lock was taken, never None
+            # (the non-blocking probe is the only None path). Release is
+            # idempotent, so the idle path above may release first.
+            claim_lock.release()
         # Resolve the repository-level policy ONCE for the whole
         # delivery. The effective base branch/milestone must drive the
         # resume verification, the claim and the review/merge loop, and a

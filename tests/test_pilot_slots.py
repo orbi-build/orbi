@@ -660,6 +660,36 @@ def test_acquire_claim_lock_context_manager(tmp_path):
     assert pilot_slots.is_claim_lock_held(state) is False
 
 
+def test_claim_lock_release_ignores_unlock_error(monkeypatch, tmp_path):
+    """An unlock that fails must not raise: closing the descriptor — and
+    the process exit — releases the flock either way."""
+    state = tmp_path / "slots"
+    lock = pilot_slots.acquire_claim_lock(state)
+    assert lock is not None
+
+    def failing_flock(fd, operation):
+        raise OSError("no unlock")
+
+    monkeypatch.setattr(pilot_slots.fcntl, "flock", failing_flock)
+    lock.release()  # must not raise
+    assert lock.fd == -1
+
+
+def test_claim_lock_release_ignores_close_error(monkeypatch, tmp_path):
+    """A close that fails (the fd is already gone) must not raise."""
+    state = tmp_path / "slots"
+    lock = pilot_slots.acquire_claim_lock(state)
+    assert lock is not None
+
+    def failing_close(fd):
+        raise OSError("already closed")
+
+    monkeypatch.setattr(pilot_slots.os, "close", failing_close)
+    lock.release()  # must not raise
+    lock.release()  # idempotent: the descriptor is already released
+    assert lock.fd == -1
+
+
 def test_claim_lock_serializes_concurrent_claim_and_mark_delivery(tmp_path):
     """Real cross-process scene for Issue #1319:
     Process 1 acquires claim lock, selects Issue 1294, and calls mark_slot_delivery.
