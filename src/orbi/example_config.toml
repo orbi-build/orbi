@@ -203,7 +203,7 @@ max_concurrency = 1
 # Optional independent review selection; each unset key falls back to its
 # corresponding pi_* value.
 # review_pi_provider = "deepseek"
-# review_pi_model = "deepseek-chat"
+# review_pi_model = "deepseek-flash"
 # review_pi_thinking = "high"
 # Optional Pi extensions (repeatable [[pi_extensions]] tables).
 # pi_extensions = []

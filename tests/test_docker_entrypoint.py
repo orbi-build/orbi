@@ -117,7 +117,7 @@ def test_provider_environment_generates_json_and_toml(tmp_path):
     result = run_entrypoint(
         tmp_path,
         ORBI_PI_PROVIDER="deepseek",
-        ORBI_PI_MODEL="deepseek-chat",
+        ORBI_PI_MODEL="deepseek-flash",
         ORBI_PI_BASE_URL="https://api.deepseek.com",
         ORBI_PI_API_KEY="secret-key",
         ORBI_PI_CONTEXT_WINDOW="64000",
@@ -132,20 +132,20 @@ def test_provider_environment_generates_json_and_toml(tmp_path):
     assert provider["apiKey"] == "$PI_API_KEY"
     assert "PI_API_KEY=secret-key" in (deploy / ".orbi/env").read_text()
     assert provider["models"] == [{
-        "id": "deepseek-chat", "name": "deepseek-chat",
+        "id": "deepseek-flash", "name": "deepseek-flash",
         "contextWindow": 64000, "maxTokens": 8192,
     }]
     toml = (deploy / "orbi.toml").read_text()
     assert 'pi_providers = ".orbi/pi-providers.json"' in toml
     assert 'pi_provider = "deepseek"' in toml
-    assert 'pi_model = "deepseek-chat"' in toml
+    assert 'pi_model = "deepseek-flash"' in toml
 
 
 def test_partial_provider_environment_fails_with_missing_names(tmp_path):
     result = run_entrypoint(
         tmp_path,
         ORBI_PI_PROVIDER="deepseek",
-        ORBI_PI_MODEL="deepseek-chat",
+        ORBI_PI_MODEL="deepseek-flash",
     )
     assert result.returncode != 0
     assert "ORBI_PI_BASE_URL" in result.stderr
@@ -277,7 +277,7 @@ def test_existing_config_and_provider_are_not_overwritten(tmp_path):
     result = run_entrypoint(
         tmp_path,
         ORBI_PI_PROVIDER="deepseek",
-        ORBI_PI_MODEL="deepseek-chat",
+        ORBI_PI_MODEL="deepseek-flash",
         ORBI_PI_BASE_URL="https://api.deepseek.com",
         ORBI_PI_API_KEY="secret-key",
     )

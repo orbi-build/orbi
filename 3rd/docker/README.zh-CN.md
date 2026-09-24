@@ -58,7 +58,7 @@ docker run -d --name orbi \
   -e GH_TOKEN="github_pat_xxx" \
   -e ORBI_SOURCE_REPO="OWNER/REPO" \
   -e ORBI_PI_PROVIDER=deepseek \
-  -e ORBI_PI_MODEL=deepseek-chat \
+  -e ORBI_PI_MODEL=deepseek-flash \
   -e ORBI_PI_BASE_URL=https://api.deepseek.com \
   -e ORBI_PI_API_KEY="sk-xxx" \
   ghcr.io/orbi-build/orbi:latest
@@ -115,7 +115,7 @@ engine_source_track = "release"
 max_concurrency = 1
 pi_providers = ".orbi/pi-providers.json"
 pi_provider = "deepseek"
-pi_model = "deepseek-chat"
+pi_model = "deepseek-flash"
 ```
 
 ## 第一次交付
@@ -216,7 +216,7 @@ agent，按 pi.dev 文档以 `npm install -g --ignore-scripts` 安装）。
 
 ```bash
 docker exec -u orbi orbi bash -c '. /orbi/.orbi/env && pi --provider deepseek \
-  --model deepseek-chat --api-key "$PI_API_KEY" \
+  --model deepseek-flash --api-key "$PI_API_KEY" \
   --print "reply with the single word: ok"'
 ```
 

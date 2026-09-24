@@ -20,7 +20,7 @@ pi_model = "glm-5.3-flash"
 | Google Gemini | `gemini.json` | `GOOGLE_API_KEY` | `gemini-3.8-flash` | Tested 2026-09-04: full Pi chain passed in 7s | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | z.ai GLM | `z-ai.json` | `ZAI_API_KEY` | `glm-5.3-flash` | Tested 2026-09-04: real task #303 reached PR #304 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | OpenRouter free | `openrouter.json` | `OPENROUTER_API_KEY` | `google/gemma-4-31b-it:free` | Observed 2026-09-08: real Gemma request returned upstream-shared-pool HTTP 429; North Mini Code returned HTTP 200 | [#305](https://github.com/orbi-build/orbi/issues/305) |
-| DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-chat` | Not tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-flash` | Used for Orbi's own deliveries since 2026-09-22 (e.g. [#1328](https://github.com/orbi-build/orbi/issues/1328)); [pricing](https://api-docs.deepseek.com/quick_start/pricing) | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309-reasoning` | Model ID verified against xAI docs 2026-09-09; not quota-tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Groq Free Plan | `groq.json` | `GROQ_API_KEY` | `groq/compound` | Free Plan limits verified 2026-09-04; real request/usage/429 not tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Local Qwen | `local-qwen.json` | None (dummy key `local`) | `Qwen3.8-27B` | Local zero-cost example; requires a local OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
@@ -28,6 +28,20 @@ pi_model = "glm-5.3-flash"
 | GitHub Models | `github-models.json` | `GH_MODELS_TOKEN` | `openai/gpt-4.1-mini` | Historical snapshot; service retired and not available for live requests | [#319](https://github.com/orbi-build/orbi/issues/319) |
 
 A template being listed is not a promise of quota, availability, speed, or model support. The `Not tested` labels are intentional.
+
+### DeepSeek: the configuration Orbi's own deliveries run on
+
+DeepSeek's [pricing page](https://api-docs.deepseek.com/quick_start/pricing)
+(checked 2026-09-24) lists two API model ids with a 1M context,
+`deepseek-flash` (DeepSeek-V4.1-Flash) and `deepseek-v4-pro`. The committed
+template pins `deepseek-flash` with `contextWindow` 131,072 and `maxTokens`
+16,384 — the exact block Orbi's own deliveries have run since **2026-09-22**
+(the 20 deliveries merged between then and 2026-09-24, e.g. source Issue
+[#1328](https://github.com/orbi-build/orbi/issues/1328)).
+
+Cached input is billed far below uncached input, which is why this default
+model stays cheap for Orbi's cache-heavy sessions; the pricing page carries
+the current numbers, which change.
 
 ### xAI: Grok 4.20 Reasoning
 

@@ -21,7 +21,7 @@ docker run -d --name orbi \
   -e GH_TOKEN="github_pat_xxx" \
   -e ORBI_SOURCE_REPO="OWNER/REPO" \
   -e ORBI_PI_PROVIDER=deepseek \
-  -e ORBI_PI_MODEL=deepseek-chat \
+  -e ORBI_PI_MODEL=deepseek-flash \
   -e ORBI_PI_BASE_URL=https://api.deepseek.com \
   -e ORBI_PI_API_KEY="sk-xxx" \
   docker.io/orbibuild/orbi:latest

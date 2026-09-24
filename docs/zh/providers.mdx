@@ -20,7 +20,7 @@ pi_model = "glm-5.3-flash"
 | Google Gemini | `gemini.json` | `GOOGLE_API_KEY` | `gemini-3.8-flash` | 2026-09-04 实测：Pi 全链路 7 秒通过 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | z.ai GLM | `z-ai.json` | `ZAI_API_KEY` | `glm-5.3-flash` | 2026-09-04 实测：真实任务 #303 到达 PR #304 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | OpenRouter 免费层 | `openrouter.json` | `OPENROUTER_API_KEY` | `google/gemma-4-31b-it:free` | 2026-09-08 实测：Gemma 返回上游共享池 HTTP 429；North Mini Code 返回 HTTP 200 | [#305](https://github.com/orbi-build/orbi/issues/305) |
-| DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-chat` | 未实测 | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-flash` | Orbi 自身交付自 2026-09-22 起使用（例如 [#1328](https://github.com/orbi-build/orbi/issues/1328)）；[价格](https://api-docs.deepseek.com/quick_start/pricing) | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309-reasoning` | 已根据 xAI 文档核对模型 ID（2026-09-09）；未测试额度 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Groq 免费档 | `groq.json` | `GROQ_API_KEY` | `groq/compound` | 2026-09-04 核对 Free Plan 限流；真实请求/usage/429 未实测 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | 本地 Qwen | `local-qwen.json` | 无（dummy key `local`） | `Qwen3.8-27B` | 本地零成本示例；需要本地 OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
@@ -28,6 +28,18 @@ pi_model = "glm-5.3-flash"
 | GitHub Models | `github-models.json` | `GH_MODELS_TOKEN` | `openai/gpt-4.1-mini` | 历史快照；服务已退役，无法进行实时请求 | [#319](https://github.com/orbi-build/orbi/issues/319) |
 
 模板出现在清单中不代表承诺额度、可用性、速度或模型支持。`未实测` 是有意保留的状态。
+
+### DeepSeek：Orbi 自身交付使用的配置
+
+DeepSeek 的[价格页](https://api-docs.deepseek.com/quick_start/pricing)
+（2026-09-24 核对）列出两个 API 模型 id，均为 1M 上下文：
+`deepseek-flash`（DeepSeek-V4.1-Flash）和 `deepseek-v4-pro`。仓库模板固定
+`deepseek-flash`，`contextWindow` 131,072、`maxTokens` 16,384——正是 Orbi
+自身交付自 **2026-09-22** 起使用的配置（截至 2026-09-24 合并的 20 次交付，例如
+来源 Issue [#1328](https://github.com/orbi-build/orbi/issues/1328)）。
+
+缓存输入（cached input）的计费远低于未缓存输入，因此这个默认模型对 Orbi
+这类缓存密集的会话成本很低；具体价格以价格页为准，会随时变化。
 
 ### xAI：Grok 4.20 Reasoning
 
