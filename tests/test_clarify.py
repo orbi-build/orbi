@@ -218,6 +218,9 @@ def test_render_comment_names_every_missing_piece_and_the_repair():
     assert clarify.MISSING["single_outcome"] not in body
     assert delivery_labels.READY_LABEL in body
     assert f"run_id={RUN_ID}" in body
+    # Issue #1088: the comment shows the shape to fill in.
+    assert "Outcome:" in body
+    assert "Acceptance:" in body
 
 
 @pytest.mark.parametrize("missing_piece", [
