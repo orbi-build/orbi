@@ -64,6 +64,30 @@ def test_pickup_prefers_a_bug_over_plain_ready(fake_gh):
     assert claim.pick_issue("owner/repo")["number"] == 2
 
 
+def test_pickup_yields_an_issue_a_live_co_runner_holds(fake_gh, caplog):
+    """Issue #1319: the ready scan skips the delivery a live co-runner
+    already holds (the first runner wrote its identity into its slot
+    file) and claims the next free one, logging the yield."""
+    fake_gh.add_issue(7, labels=(READY_LABEL,))
+    fake_gh.add_issue(8, labels=(READY_LABEL,))
+    with caplog.at_level(logging.INFO):
+        picked = claim.pick_issue(
+            "owner/repo", held=frozenset({("owner/repo", 8)}),
+        )
+    assert picked["number"] == 7
+    assert "claim_yield" in caplog.text
+    assert "held_by_live_runner" in caplog.text
+
+
+def test_pickup_returns_none_when_every_ready_issue_is_held(fake_gh):
+    """Issue #1319: no candidate is claimed from a scan whose every
+    Issue is already held by a live co-runner."""
+    fake_gh.add_issue(7, labels=(READY_LABEL,))
+    assert claim.pick_issue(
+        "owner/repo", held=frozenset({("owner/repo", 7)}),
+    ) is None
+
+
 def test_pickup_claims_the_p0_scan_before_the_bug_scan(fake_gh):
     fake_gh.add_issue(1, labels=(READY_LABEL, "bug"))
     fake_gh.add_issue(2, labels=(READY_LABEL, P0_LABEL))

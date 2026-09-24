@@ -59,8 +59,8 @@ from orbi import config as config_domain
 from orbi.engine_source import EngineSourceError
 from orbi.git_transport import TransportError, check_transport
 from orbi.pilot_slots import (
-    acquire_slot, mark_slot_delivery, slot_dir_for, slot_held_deliveries,
-    slot_occupancy,
+    acquire_claim_lock, acquire_slot, mark_slot_delivery, slot_dir_for,
+    slot_held_deliveries, slot_occupancy,
 )
 from orbi.pi_activity import (
     activity_snapshot,
@@ -6869,87 +6869,104 @@ def main(argv: list[str] | None = None) -> int:
             "capacity_full", max_concurrency=config.max_concurrency,
             slot_dir=config.slot_dir,
         )
+        # No slot means no claim and no delivery: a runner that kept going
+        # would work WITHOUT a slot (exceeding `max_concurrency`) and then
+        # crash in the `finally` below on `None.release()`.
         return 0
     try:
-        selected = claim.pick_next_delivery(
-            config.source_repos, config.slot_dir,
-            config.max_concurrency,
-            config.active_milestone,
-            config=config,
-            hooks=claim.ResumeHooks(
-                resume_scene=resume_scene,
-                route_external_pr_ticket=_route_external_pr_ticket,
-                block_scene_failure=block_scene_failure,
-                recover_missing_pr_scene=_recover_missing_pr_scene,
-                has_recoverable_pr_scene=_has_recoverable_pr_scene,
-                comment_pr=comment_pr,
-            ),
-        )
-        if selected is None:
-            ready_outside_milestone = log_ready_outside_milestone(
-                config.source_repos, config.active_milestone, config=config,
+        claim_lock = acquire_claim_lock(config.slot_dir)
+        try:
+            selected = claim.pick_next_delivery(
+                config.source_repos, config.slot_dir,
+                config.max_concurrency,
+                config.active_milestone,
+                config=config,
+                hooks=claim.ResumeHooks(
+                    resume_scene=resume_scene,
+                    route_external_pr_ticket=_route_external_pr_ticket,
+                    block_scene_failure=block_scene_failure,
+                    recover_missing_pr_scene=_recover_missing_pr_scene,
+                    has_recoverable_pr_scene=_has_recoverable_pr_scene,
+                    comment_pr=comment_pr,
+                ),
             )
-            if not ready_outside_milestone:
-                LOGGER.info(
-                    "source_repos=%s outcome=no_ready_issue",
-                    config.source_repos,
+            if selected is None:
+                # Nothing was selected: the claim window is over, so release
+                # it BEFORE the milestone bookkeeping below. That
+                # bookkeeping takes the shared base-sync lock and makes
+                # GitHub calls, and the hold stays what it is for — the
+                # pick -> identity-write window — never a piece of work a
+                # co-runner's claim would have to wait for.
+                claim_lock.release()
+                ready_outside_milestone = log_ready_outside_milestone(
+                    config.source_repos, config.active_milestone, config=config,
                 )
-            # Milestone bookkeeping as a pure bypass (Issues #856/#186):
-            # ONE entry point arms an existing release ticket, classifies
-            # the active Milestone's waiting state and advances/opens the
-            # decision notice. A thrown `gh` call or a renamed Milestone
-            # must not turn an idle tick into a non-zero exit.
-            idle_repo = config.source_repos[0]
-            effective_milestone, dispatch_label, repo_policy = claim._repo_scan_context(
-                config, idle_repo, config.active_milestone,
-            )
-            if effective_milestone is not None:
-                # The base branch is the repo's FUSED value (entry
-                # fallback, then the policy override): the command writes
-                # it into the release ticket, and the release state
-                # machine freezes the DECLARED branch — the raw host value
-                # would release the wrong branch for any repository whose
-                # entry or policy overrides it.
-                try:
-                    milestone_bookkeeping.reconcile_milestone_on_idle(
-                        idle_repo,
-                        effective_milestone,
-                        config.config_path,
-                        config.repo_dir,
-                        auto_next_milestone=config.auto_next_milestone,
-                        release_confirmation=(
-                            repo_policy.release_confirmation
-                            if repo_policy is not None
-                            and repo_policy.release_confirmation is not None
-                            else False
-                        ),
-                        parse_version_title=_parse_version_title,
-                        policy=repo_policy,
-                        policy_path=config_domain.repository_config_path(
-                            config, idle_repo,
-                        ),
-                        base_branch=resolve_source_base_branch(
-                            config, idle_repo, repo_policy,
-                        ).base_branch,
-                        dispatch_label=dispatch_label,
-                        version_file=config.version_file,
+                if not ready_outside_milestone:
+                    LOGGER.info(
+                        "source_repos=%s outcome=no_ready_issue",
+                        config.source_repos,
                     )
-                except Exception:
-                    LOGGER.exception(
-                        "active_milestone_advance_failed repo=%s milestone=%s",
-                        idle_repo,
-                        effective_milestone,
-                    )
-            return 0
-        source_repo, issue, scene = selected
-        # Name THIS delivery in the held slot file — the
-        # earliest point after selection, before any verification work.
-        # The other runners' resume scans then skip exactly this
-        # (repo, issue) while it is in flight (implement, review, or the
-        # implement→opened-PR boundary) instead of abandoning their whole
-        # scan; a write failure propagates (fail fast, the delivery has
-        # not started).
-        mark_slot_delivery(slot, source_repo, int(issue["number"]))
+                # Milestone bookkeeping as a pure bypass (Issues #856/#186):
+                # ONE entry point arms an existing release ticket, classifies
+                # the active Milestone's waiting state and advances/opens the
+                # decision notice. A thrown `gh` call or a renamed Milestone
+                # must not turn an idle tick into a non-zero exit.
+                idle_repo = config.source_repos[0]
+                effective_milestone, dispatch_label, repo_policy = claim._repo_scan_context(
+                    config, idle_repo, config.active_milestone,
+                )
+                if effective_milestone is not None:
+                    # The base branch is the repo's FUSED value (entry
+                    # fallback, then the policy override): the command writes
+                    # it into the release ticket, and the release state
+                    # machine freezes the DECLARED branch — the raw host value
+                    # would release the wrong branch for any repository whose
+                    # entry or policy overrides it.
+                    try:
+                        milestone_bookkeeping.reconcile_milestone_on_idle(
+                            idle_repo,
+                            effective_milestone,
+                            config.config_path,
+                            config.repo_dir,
+                            auto_next_milestone=config.auto_next_milestone,
+                            release_confirmation=(
+                                repo_policy.release_confirmation
+                                if repo_policy is not None
+                                and repo_policy.release_confirmation is not None
+                                else False
+                            ),
+                            parse_version_title=_parse_version_title,
+                            policy=repo_policy,
+                            policy_path=config_domain.repository_config_path(
+                                config, idle_repo,
+                            ),
+                            base_branch=resolve_source_base_branch(
+                                config, idle_repo, repo_policy,
+                            ).base_branch,
+                            dispatch_label=dispatch_label,
+                            version_file=config.version_file,
+                        )
+                    except Exception:
+                        LOGGER.exception(
+                            "active_milestone_advance_failed repo=%s milestone=%s",
+                            idle_repo,
+                            effective_milestone,
+                        )
+                return 0
+            source_repo, issue, scene = selected
+            # Name THIS delivery in the held slot file — the
+            # earliest point after selection, before any verification work.
+            # The other runners' resume scans then skip exactly this
+            # (repo, issue) while it is in flight (implement, review, or the
+            # implement→opened-PR boundary) instead of abandoning their whole
+            # scan; a write failure propagates (fail fast, the delivery has
+            # not started).
+            mark_slot_delivery(slot, source_repo, int(issue["number"]))
+        finally:
+            # Blocking acquisition above: the lock was taken, never None
+            # (the non-blocking probe is the only None path). Release is
+            # idempotent, so the idle path above may release first.
+            claim_lock.release()
         # Resolve the repository-level policy ONCE for the whole
         # delivery. The effective base branch/milestone must drive the
         # resume verification, the claim and the review/merge loop, and a
