@@ -107,6 +107,22 @@ def test_label_patch_requeue_returns_external_takeover_to_ready_queue():
     )
 
 
+def test_label_patch_requeue_clears_a_stale_blocked_label():
+    """Issue #1351: the one-shot transient retry re-queues a terminal
+    Issue, so the patch clears `ai-blocked` too and leaves `ai-ready`
+    alone."""
+    to_add, to_remove = dl.label_patch(
+        dl.EVENT_REQUEUE, {"ai-blocked", "ai-in-progress"},
+    )
+    assert to_add == ["ai-ready"]
+    assert to_remove == ["ai-in-progress", "ai-blocked"]
+    # A partial-write pair (`ai-ready` + `ai-blocked`) is repaired to
+    # `ai-ready` alone.
+    assert dl.label_patch(
+        dl.EVENT_REQUEUE, {"ai-blocked", "ai-ready"},
+    ) == (["ai-ready"], ["ai-blocked"])
+
+
 def test_label_patch_pr_opened_swaps_in_progress_for_pr_opened():
     to_add, to_remove = dl.label_patch(
         dl.EVENT_PR_OPENED, {"ai-ready", "ai-in-progress"},

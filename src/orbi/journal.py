@@ -298,6 +298,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "failure_comment_id_unavailable": "a repeated failure comment had no recoverable REST id; a new comment was posted",
     "failure_streak_escalated": "the same failure reached the consecutive limit; the Issue goes ai-blocked",
     "failure_history_read_failed": "the failure-history read for the dead-loop guard failed (fail-open)",
+    # One-shot transient retry (Issue #1351).
+    "failure_requeued": "a first github_transient failure returned the Issue to ai-ready for one automatic retry",
     # External contributor PRs.
     "external_takeover": "an external PR is taken over for review",
     "external_takeover_skipped": "the external PR is not takeover-eligible",

@@ -10,6 +10,7 @@
     "delivery_scene": 0,
     "engine_source": 0,
     "failure": 0,
+    "failure_history": 0,
     "git_transport": 0,
     "github": 21,
     "gitops": 0,
