@@ -288,9 +288,10 @@ worktree、无分支、不交付）判定 ticket 正文的三项检查：**可�
 则一切不变，交付照常开始。
 
 判定不通过则在任何工作存在之前中止本次尝试：只发一条评论列出全部缺失项
-与修复动作，把 `ai-ready` 换成 `ai-needs-detail`，本 tick 结束——无
+与修复动作，把该仓库的认领标签（默认 `ai-ready`，可经 `dispatch_label` 改名）
+换成 `ai-needs-detail`，本 tick 结束——无
 worktree、无分支、无 Pi session、无 PR，槽位留给下一个 Issue，该票与
-`ai-blocked` 一样等人。重新编辑 Issue 并加上 `ai-ready` 才获得下一次机会，
+`ai-blocked` 一样等人。重新编辑 Issue 并加上该认领标签才获得下一次机会，
 届时判定从头再跑一遍。
 
 所有错误路径都是**旁路**——闸门绝不会弄丢一次交付。模型报错或超时、答案不可

@@ -354,12 +354,13 @@ several unrelated things). A passing verdict changes nothing and the
 delivery starts.
 
 A failing verdict stops the attempt before any work exists: ONE Issue
-comment lists every missing piece and the repair action, `ai-ready` is
-replaced by `ai-needs-detail`, and the tick ends — no worktree, no branch,
+comment lists every missing piece and the repair action, the repository's
+claim label (`ai-ready` by default — `dispatch_label` may name another)
+is replaced by `ai-needs-detail`, and the tick ends — no worktree, no branch,
 no Pi session, no PR, and the slot is released for the next Issue. The
 ticket then waits for a human exactly like `ai-blocked`: the next chance to
-be delivered comes from editing the Issue and adding `ai-ready` again,
-which re-runs the judgment from scratch.
+be delivered comes from editing the Issue and adding that claim label
+again, which re-runs the judgment from scratch.
 
 Every error path is a **bypass** — the gate never loses a delivery. A model
 error or timeout, an unusable answer, or a failed comment/label write logs

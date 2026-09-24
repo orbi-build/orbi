@@ -9,8 +9,9 @@ an **observable result**, an **acceptance condition** and a **single
 outcome** — and a failing verdict stops the ticket at the claim:
 
 - ONE Issue comment names every missing piece and the repair action;
-- `ai-ready` is removed and `ai-needs-detail` is added, so the ticket
-  waits for a human exactly like `ai-blocked` does;
+- the repository's claim label (default `ai-ready`) is removed and
+  `ai-needs-detail` is added, so the ticket waits for a human exactly
+  like `ai-blocked` does;
 - no worktree, branch, Pi session dir or PR is created for the attempt.
 
 The gate is OFF by default (`clarify_thin_tickets = false`) and may be
@@ -130,8 +131,15 @@ def parse_verdict(output: str) -> ClarifyVerdict | None:
     return ClarifyVerdict(passed=satisfied, missing=tuple(missing))
 
 
-def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str) -> str:
-    """Render the ONE comment that names the missing pieces."""
+def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
+                   ready_label: str = READY_LABEL) -> str:
+    """Render the ONE comment that names the missing pieces.
+
+    `ready_label` is the repository's claim label (default `ai-ready`,
+    #527): the repair instruction names the label the claim scan really
+    reads, never a hardcoded default a custom-label repository does not
+    use.
+    """
     pieces = "\n".join(f"- {MISSING[item]}" for item in verdict.missing)
     return (
         f"{run_marker(run_id)}\n"
@@ -140,7 +148,7 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str) -> str:
         "delivery needs:\n\n"
         f"{pieces}\n\n"
         "Edit the Issue body into this shape, then add the "
-        f"`{READY_LABEL}` label again:\n\n"
+        f"`{ready_label}` label again:\n\n"
         "```\n"
         "Outcome: what a user does, and what they should see differently.\n"
         "Acceptance: how a finished delivery is told apart from an "
@@ -193,14 +201,22 @@ def enforce(issue: dict, config: RunnerConfig, source_repo: str,
     verdict = judge_issue_body(issue, config, source_repo, run_id)
     if verdict is None or verdict.passed:
         return True
+    # The stop removes the label the claim scan actually reads: the
+    # repository's dispatch label (default `ai-ready`, #527). Removing a
+    # hardcoded `ai-ready` in a custom-label repository would leave the
+    # ticket claimable, and the next tick would judge it again — the gate
+    # would repeat instead of stopping.
+    ready_label = config.dispatch_label or READY_LABEL
     try:
         comment_issue(
             issue["number"], repo=source_repo,
-            body=render_comment(issue, verdict, run_id),
+            body=render_comment(
+                issue, verdict, run_id, ready_label=ready_label,
+            ),
         )
         edit_issue(
             issue["number"], repo=source_repo,
-            add=NEEDS_DETAIL_LABEL, remove=READY_LABEL,
+            add=NEEDS_DETAIL_LABEL, remove=ready_label,
         )
     except Exception as exc:
         event(

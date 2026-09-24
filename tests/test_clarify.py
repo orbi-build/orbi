@@ -347,6 +347,33 @@ def test_enforce_lets_a_ticket_through_when_the_judge_cannot_decide(
     assert comments == [] and edits == []
 
 
+def test_enforce_removes_the_repositorys_claim_label(monkeypatch, caplog):
+    """Issue #1088/#527: the stop removes the label the claim scan reads.
+
+    A custom-label repository's tickets never carry `ai-ready`; removing
+    a hardcoded `ai-ready` would leave the ticket claimable and the gate
+    would judge (and comment) again on every tick instead of stopping.
+    """
+    verdict = clarify.ClarifyVerdict(
+        passed=False, missing=("observable_result",),
+    )
+    monkeypatch.setattr(seam, "judge_issue_body", lambda *a, **k: verdict)
+    comments, edits = _record_writes(monkeypatch)
+    caplog.set_level("INFO")
+
+    assert clarify.enforce(
+        ISSUE, config_domain.RunnerConfig(dispatch_label="ai-queue"),
+        REPO, RUN_ID,
+    ) is False
+    assert edits == [(
+        ISSUE["number"], REPO,
+        delivery_labels.NEEDS_DETAIL_LABEL, "ai-queue",
+    )]
+    assert "`ai-queue`" in comments[0][2]
+    assert "`ai-ready`" not in comments[0][2]
+    assert "clarify_needs_detail" in caplog.text
+
+
 @pytest.mark.parametrize("failing_write", ["comment_issue", "edit_issue"])
 def test_enforce_fails_open_when_a_write_fails(
     monkeypatch, caplog, failing_write,
@@ -515,3 +542,38 @@ def test_ticket_the_gate_accepts_is_delivered(clone, tmp_path, monkeypatch):
     assert all("not ready to deliver" not in body for body in comments)
     assert len(comments) == 4
     assert re.search(r"<!-- orbi:run=[0-9a-f]{8} -->", comments[0])
+
+
+def test_custom_dispatch_label_ticket_stops_and_leaves_the_claim_queue(
+    clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #1088/#527: a custom-label repository stops on ITS label.
+
+    The ready scan keys on the repository's dispatch label. Removing the
+    hardcoded `ai-ready` (absent here) would leave `ai-queue` in place:
+    the ticket stays claimable and every tick re-judges it and posts
+    another comment instead of waiting for the human.
+    """
+    monkeypatch.setattr(seam, "new_run_id", lambda: RUN_ID)
+    install_fake_pi(monkeypatch, tmp_path, fake_pi_thin(["observable_result"]))
+    comments: list[str] = []
+    labels = {ISSUE_NUMBER: ["ai-queue"]}
+    install_fake_gh(monkeypatch, comments, labels)
+    caplog.set_level("INFO")
+
+    issue = dict(THIN_ISSUE, labels=[{"name": "ai-queue"}])
+    result = runner.process_issue(
+        issue,
+        gate_config(clone, tmp_path, dispatch_label="ai-queue"),
+        REPO,
+    )
+
+    assert result == runner.IssueResult("needs-detail", None)
+    assert len(comments) == 1
+    # The claim label is gone: the ready scan can no longer pick the
+    # ticket up, so the ticket waits instead of being judged again.
+    assert labels[ISSUE_NUMBER] == [delivery_labels.NEEDS_DETAIL_LABEL]
+    assert "`ai-queue`" in comments[0]
+    assert "clarify_needs_detail" in caplog.text
+    assert not worktree_for(clone, RUN_ID).exists()
+    assert git(clone, "branch", "--list", "orbi/*").strip() == ""
