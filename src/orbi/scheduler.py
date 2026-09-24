@@ -272,14 +272,28 @@ class Scheduler(Protocol):
     def restart_hint(self, unit_name: str | None = None) -> str:
         """The operator command that starts/restarts instance 1."""
 
+    def reload_pending(self, installed_dir: Path, name: str) -> bool:
+        """Whether a rewritten unit waits for its running instance.
+
+        ``True`` only on launchd: a running agent keeps the plist it
+        was loaded with, so a plist rewritten under it is flagged and
+        reloaded at its next idle tick (Issue #1347). systemd's
+        ``daemon-reload`` applies the new unit to the next service
+        start, so its answer is always ``False``.
+        """
+
     def activate_instances(self, run_command, installed_dir: Path,
                            unit_name: str | None = None, *,
-                           max_concurrency: int) -> None:
+                           max_concurrency: int,
+                           changed: frozenset[str] = frozenset()) -> None:
         """Converge the instance schedules onto ``max_concurrency``.
 
         Activates instances 1..max_concurrency, deactivates the
         surplus up to MAX_RUNNER_INSTANCES. A live Runner instance is
-        NEVER stopped or restarted.
+        NEVER stopped or restarted. ``changed`` names the installed
+        units whose bytes the install just rewrote; an implementation
+        whose platform defers a live instance's reload (launchd)
+        records it through :meth:`reload_pending`.
         """
 
     def pre_install(self, run_command, installed_dir: Path,
@@ -391,6 +405,9 @@ def unit_status(repo_dir: Path, installed_dir: Path,
                 or installed_sha is None
                 or repo_sha != installed_sha
             ),
+            # A rewritten unit a running instance still holds (launchd)
+            # is not file drift, but the next idle tick must reload it.
+            "reload_pending": sched.reload_pending(installed_dir, name),
         })
     return entries
 
@@ -449,6 +466,9 @@ def check_unit_drift(repo_dir: Path,
     structured ``unit_drift`` line per drifted unit and raises
     ``UnitDriftError`` — the caller fails fast and claims no Issue
     until the units are synced with the idempotent install command.
+    A deferred reload (a running launchd instance holding a rewritten
+    plist, Issue #1347) is not file drift, but it raises the same way
+    so the caller's self-heal runs and the next idle tick reloads it.
     """
     sched = sched or detect()
     if installed_dir is None:
@@ -457,8 +477,25 @@ def check_unit_drift(repo_dir: Path,
                          max_concurrency=max_concurrency, sched=sched)
     lines = drift_lines(status)
     if not lines:
-        event("unit_drift", result="clean", installed_dir=installed_dir)
-        return
+        pending = [entry for entry in status if entry["reload_pending"]]
+        if not pending:
+            event("unit_drift", result="clean", installed_dir=installed_dir)
+            return
+        for entry in pending:
+            event(
+                "unit_drift", result="reload_pending", unit=entry["unit"],
+                installed=entry["installed_path"], fix=FIX_COMMAND,
+            )
+        raise UnitDriftError(
+            f"installed {sched.display} units hold a rewritten plist on a "
+            "running instance; the reload is deferred to the next idle "
+            f"tick (sync with: {FIX_COMMAND})\n" + "\n".join(
+                f"unit_drift unit={entry['unit']} "
+                f"installed={quote_value(str(entry['installed_path']))} "
+                f"reload_pending=true fix={FIX_COMMAND}"
+                for entry in pending
+            )
+        )
     _log_drifted_units(status)
     raise UnitDriftError(
         f"installed {sched.display} units have drifted from the repo "
@@ -507,6 +544,7 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
             )
     installed_dir.mkdir(parents=True, exist_ok=True)
     sched.pre_install(run_command, installed_dir, unit_name)
+    changed: set[str] = set()
     for index, (template_name, name) in enumerate(pairs, start=1):
         # Render the template (substitute the deployment-specific
         # placeholders) so the installed unit points at THIS checkout
@@ -518,10 +556,15 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
             template_text, repo_dir, unit_name, instance=index,
             max_concurrency=max_concurrency,
         )
+        # The overwrite is idempotent: only a REAL content change is
+        # handed to the activation hook, which uses it to record a
+        # deferred reload for a live instance (launchd, Issue #1347).
+        if sched.installed_sha(installed_dir / name) != sched.content_sha(rendered):
+            changed.add(name)
         (installed_dir / name).write_bytes(rendered.encode("utf-8"))
     sched.activate_instances(
         run_command, installed_dir, unit_name,
-        max_concurrency=max_concurrency,
+        max_concurrency=max_concurrency, changed=frozenset(changed),
     )
     commit = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
     units = {
@@ -572,7 +615,9 @@ def sync_drifted_units(repo_dir: Path,
     installed_dir = Path(installed_dir)
     before = unit_status(repo_dir, installed_dir, unit_name,
                          max_concurrency=max_concurrency, sched=sched)
-    if not any(entry["drifted"] for entry in before):
+    if not any(
+        entry["drifted"] or entry["reload_pending"] for entry in before
+    ):
         return []
     result = install_units(
         repo_dir, installed_dir, max_concurrency=max_concurrency,
