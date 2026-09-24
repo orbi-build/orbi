@@ -276,6 +276,18 @@ def classify(detail: str, *, outcome: str = "blocked",
 # The comment: bounded detail + the reader-facing hierarchy
 # --------------------------------------------------------------------------
 
+# The one-shot automatic retry (Issue #1351). The first `github_transient`
+# failure re-queues the Issue instead of stopping at `ai-blocked`; the
+# comment that re-queues it carries AUTO_RETRY_LINE, and the next failure
+# reads the Issue's `orbi:failure:v1` comments back to spend the budget
+# once — plus AUTO_RETRY_SPENT_LINE when the retry is already used.
+AUTO_RETRY_LINE = "Retrying automatically (transient failure, attempt 1 of 1)."
+AUTO_RETRY_SPENT_LINE = (
+    "The automatic retry was already used (transient failure, "
+    "attempt 1 of 1)."
+)
+
+
 def _failure_detail(exc: BaseException) -> str:
     """One-line failure description; keeps bounded subprocess stderr visible."""
     detail = str(exc)
@@ -331,7 +343,8 @@ def _failure_summary(reason: str) -> str:
 def _failure_comment_body(*, outcome: str, action: str, reason: str,
                          diagnosis: str, scene: str, evidence: str,
                          pr_url: str | None, issue: str, run_id: str,
-                         failure_record: Failure | None = None) -> str:
+                         failure_record: Failure | None = None,
+                         retry_line: str = "") -> str:
     """Build the reader-facing hierarchy shared by classified failures.
 
     The hidden `orbi:failure:v1` block is the first line so every
@@ -339,19 +352,29 @@ def _failure_comment_body(*, outcome: str, action: str, reason: str,
     headline, **Action** and **Reason** stay beside it and the bounded
     raw detail stays inside the one Diagnosis `<details>` block
     (`evidence`).
+
+    `outcome="requeued"` is the one-shot transient retry (Issue #1351):
+    the failure record still renders `outcome="blocked"` (the transient
+    record's documented shape), while the headline says the Issue is
+    returning to the queue; `retry_line` is the visible budget line.
     """
     retrying = outcome == "fix needed"
+    requeued = outcome == "requeued"
     if failure_record is None:
         failure_record = Failure(
             reason_code="unclassified", action_code="fix_ticket",
             retry_safe=False,
             outcome="fix_needed" if retrying else "blocked",
         )
-    headline = (
-        "Orbi: fix needed — the engine will retry"
-        if retrying else "Orbi: blocked — waiting on a human decision"
-    )
+    if requeued:
+        headline = "Orbi: transient failure — retrying automatically once"
+    elif retrying:
+        headline = "Orbi: fix needed — the engine will retry"
+    else:
+        headline = "Orbi: blocked — waiting on a human decision"
     parts = [render(failure_record), headline]
+    if retry_line:
+        parts.append(retry_line)
     if pr_url:
         parts.append(f"PR: [{pr_url}]({pr_url})")
     parts.append(f"Issue: `{issue}` · run_id={run_id}")

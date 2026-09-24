@@ -399,6 +399,17 @@ run marker 旁携带恰好一个隐藏的带版本 block：
 milestone 的可见摘要就是同一条有长度上限、不含本机路径的理由——完整的
 命令 stderr 绝不会被截成第一个词。
 
+一次性瞬时重试（Issue #1351）：Issue 的**第一次** `github_transient`
+失败不是终态。引擎清掉交付状态标签和 `ai-blocked`，保留 `ai-ready`
+单独存在，并在失败评论里多加一行可见文字——
+`Retrying automatically (transient failure, attempt 1 of 1).`——下一个
+tick 会再次领取同一个 Issue。重试预算从 Issue 自己的失败评论推导
+（`orbi:failure:v1` block 记录了 reason），不依赖任何本地状态：同一个
+Issue 的第二次 `github_transient` 失败仍停在 `ai-blocked`，评论写明
+`The automatic retry was already used (transient failure, attempt 1 of 1).`
+`provider_quota` 仍等待配额窗口，所有非 `retry_safe` 记录保持现有终态
+行为。
+
 ## PR body 契约：`Fixes #N`
 
 PR 描述必须包含 `Fixes #<issue-number>`（可以放在首行）。GitHub 读的是

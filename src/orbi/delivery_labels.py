@@ -129,9 +129,13 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
         # (the contributor withdrew the PR, or a maintainer closed it) —
         # the Issue returns to the ready queue and the next claim redoes
         # the fix internally. Every delivery-state label is cleared so the
-        # Issue is `ai-ready` alone.
+        # Issue is `ai-ready` alone; `ai-blocked` too, because the one-shot
+        # transient retry (Issue #1351) re-queues a terminal failure.
         to_remove = [
-            label for label in _DELIVERY_STATE_LABELS if label in current
+            label for label in (
+                *_DELIVERY_STATE_LABELS, BLOCKED_LABEL,
+            )
+            if label in current
         ]
         return ([READY_LABEL], to_remove)
     if event == EVENT_MERGED:

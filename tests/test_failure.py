@@ -447,6 +447,7 @@ def _capture_comment(monkeypatch):
     posted: list[str] = []
     monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
     monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: set())
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(
         seam, "comment_issue", lambda number, *, repo, body: posted.append(body),
     )
@@ -566,10 +567,10 @@ def _milestone_publisher(run_id="c517c8c7"):
 
 
 def test_report_delivery_failure_milestone_is_machine_readable(monkeypatch):
-    """Acceptance: the live `Orbi: blocked` milestone (the shape
-    orbi-build/orbi#1088 shows) carries the same block as the detailed
-    comment, the full bounded stderr, and no truncated `stderr: pull`
-    line."""
+    """Acceptance: the live `Orbi: requeued` milestone of a transient
+    failure (Issue #1351; orbi-build/orbi#1088 shows the pre-retry shape)
+    carries the same block as the detailed comment, the full bounded
+    stderr, and no truncated `stderr: pull` line."""
     posted = _capture_comment(monkeypatch)
     publisher, milestones = _milestone_publisher()
     stderr = (
@@ -580,7 +581,7 @@ def test_report_delivery_failure_milestone_is_machine_readable(monkeypatch):
     error = subprocess.CalledProcessError(
         1, ["gh", "pr", "create"], stderr=stderr,
     )
-    runner.report_delivery_failure(
+    outcome = runner.report_delivery_failure(
         error,
         issue={"number": 1322, "title": "t", "labels": []},
         source_repo="orbi-build/orbi", run_id="c517c8c7", pr_url=None,
@@ -589,9 +590,10 @@ def test_report_delivery_failure_milestone_is_machine_readable(monkeypatch):
         diagnosis=runner._failure_detail(error),
         classify=False, evidence=False, publisher=publisher, finish=False,
     )
+    assert outcome == "requeued"
     assert len(milestones) == 1
     milestone = milestones[0]
-    assert "Orbi: blocked" in milestone
+    assert "Orbi: requeued" in milestone
     # The stderr line is the bounded stderr, not its first word.
     assert stderr in milestone
     assert "- stderr: pull" not in milestone
@@ -600,8 +602,10 @@ def test_report_delivery_failure_milestone_is_machine_readable(monkeypatch):
         retry_safe=True, outcome="blocked",
     )
     assert failure.parse(milestone) == record
-    # The detailed comment carries its own copy of the same record.
+    # The detailed comment carries its own copy of the same record and
+    # the visible one-shot retry line.
     assert failure.parse(posted[0]) == record
+    assert failure.AUTO_RETRY_LINE in posted[0]
 
 
 def test_report_delivery_failure_fix_needed_milestone_is_machine_readable(
@@ -635,6 +639,178 @@ def test_report_delivery_failure_fix_needed_milestone_is_machine_readable(
     )
     assert "- stderr: 3" not in milestone
     assert "3 failed" in milestone
+
+
+# --------------------------------------------------------------------------
+# The one-shot transient retry (Issue #1351)
+# --------------------------------------------------------------------------
+
+def _retry_fakes(monkeypatch, *, history=None,
+                 labels=("ai-in-progress",)):
+    """A mutable comment store behind the REAL label patch.
+
+    `apply_label_patch` runs for real and its `edit_issue` calls are
+    captured, so a test asserts the actual label transition rather than a
+    stub. A posted failure comment joins the store exactly like the GitHub
+    API — that shared store is what a second runner instance reads.
+    """
+    store = [dict(comment) for comment in (history or [])]
+    captured = {"comments": [], "edits": [], "milestones": []}
+
+    def post_issue_comment(number, *, repo, body):
+        captured["comments"].append(body)
+        store.append({
+            "id": 5000 + len(store), "body": body,
+            "authorAssociation": "OWNER",
+            "url": (
+                f"https://github.com/{repo}/issues/{number}"
+                f"#issuecomment-{5000 + len(store)}"
+            ),
+        })
+
+    monkeypatch.setattr(seam, "comment_issue", post_issue_comment)
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: list(store))
+    monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: set(labels))
+    monkeypatch.setattr(
+        seam, "edit_issue",
+        lambda number, *, repo, add=None, remove=None:
+            captured["edits"].append((add, remove)),
+    )
+
+    def fake_run_command(command, **kwargs):
+        # The progress milestone is a bypass; capture its body and answer
+        # the `gh api` response shape the publisher requires.
+        captured["milestones"].append(command[-1].removeprefix("body="))
+        return json.dumps({"id": 42})
+
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    return captured, store
+
+
+def _report_failure(exc, *, run_id="a1b2c3d4", reason="the delivery failed",
+                    diagnosis="the delivery failed", **kwargs):
+    return runner.report_delivery_failure(
+        exc, issue={"number": 1351, "title": "t", "labels": []},
+        source_repo="orbi-build/orbi", run_id=run_id, pr_url=None,
+        worktree=None, branch="b", role=runner.ROLE_IMPLEMENT,
+        action="Fix the failure described below and re-run this Issue.",
+        reason=reason, diagnosis=diagnosis,
+        classify=False, evidence=False, finish=False, **kwargs,
+    )
+
+
+def test_first_github_transient_failure_requeues_the_issue_once(monkeypatch):
+    """Acceptance: the first transient failure becomes `ai-ready` without
+    `ai-blocked` and the comment carries the one-shot retry line."""
+    captured, store = _retry_fakes(monkeypatch)
+
+    outcome = _report_failure(
+        github_transient_error(),
+        reason="the delivery command failed: pull request create failed",
+        diagnosis="pull request create failed",
+    )
+
+    assert outcome == "requeued"
+    assert captured["edits"] == [("ai-ready", "ai-in-progress")]
+    body = captured["comments"][0]
+    assert failure.AUTO_RETRY_LINE in body
+    parsed = failure.parse(body)
+    assert parsed == record_for()
+    # The retry comment is itself the record the next occurrence reads.
+    assert any(failure.AUTO_RETRY_LINE in c["body"] for c in store)
+
+
+def test_second_github_transient_failure_stays_blocked(monkeypatch):
+    """Acceptance: once the retry is used, the next transient failure
+    stops at `ai-blocked` and says so."""
+    first = (
+        "<!-- orbi:run=deadbeef -->\n"
+        f"{failure.AUTO_RETRY_LINE}\n{failure.render(record_for())}\n\n"
+        "Orbi: blocked — waiting on a human decision\n"
+    )
+    captured, _ = _retry_fakes(
+        monkeypatch,
+        history=[{"body": first, "authorAssociation": "OWNER"}],
+    )
+
+    outcome = _report_failure(github_transient_error(), run_id="feedface")
+
+    assert outcome == "blocked"
+    assert captured["edits"] == [("ai-blocked", "ai-in-progress")]
+    body = captured["comments"][0]
+    assert failure.AUTO_RETRY_SPENT_LINE in body
+    assert failure.AUTO_RETRY_LINE not in body
+
+
+def test_terminal_tests_failed_never_requeues(monkeypatch):
+    """Acceptance: a non-retry-safe record still stops at `ai-blocked`."""
+    captured, _ = _retry_fakes(monkeypatch)
+    error = subprocess.CalledProcessError(1, ["pytest"], stderr="3 failed")
+
+    outcome = _report_failure(
+        error, reason="the delivery tests failed", diagnosis="3 failed",
+    )
+
+    assert outcome == "blocked"
+    assert captured["edits"] == [("ai-blocked", "ai-in-progress")]
+    body = captured["comments"][0]
+    assert failure.AUTO_RETRY_LINE not in body
+    assert failure.AUTO_RETRY_SPENT_LINE not in body
+
+
+def test_terminal_unclassified_never_requeues(monkeypatch):
+    """Acceptance: an unclassified record still stops at `ai-blocked`."""
+    captured, _ = _retry_fakes(monkeypatch)
+
+    outcome = _report_failure(RuntimeError("totally unexpected"))
+
+    assert outcome == "blocked"
+    assert captured["edits"] == [("ai-blocked", "ai-in-progress")]
+    assert failure.AUTO_RETRY_LINE not in captured["comments"][0]
+
+
+def test_two_instances_requeue_a_transient_failure_at_most_once(monkeypatch):
+    """Acceptance: the retry budget lives in the Issue comments, so a
+    second runner instance that re-reads the same failure does not
+    re-queue it again."""
+    captured, store = _retry_fakes(monkeypatch)
+
+    _report_failure(github_transient_error(), run_id="a1b2c3d4")
+    _report_failure(github_transient_error(), run_id="a1b2c3d4")
+
+    retry_comments = [
+        comment for comment in store
+        if failure.AUTO_RETRY_LINE in comment["body"]
+    ]
+    requeues = [edit for edit in captured["edits"] if edit[0] == "ai-ready"]
+    assert len(retry_comments) == 1
+    assert len(requeues) == 1
+
+
+def test_transient_failure_scan_skips_corrupted_and_untrusted_comments():
+    """A malformed or untrusted failure record neither consumes nor
+    grants the one-shot retry budget — the scan ignores it."""
+    transient = failure.render(record_for())
+    untrusted = {"body": transient, "authorAssociation": "NONE"}
+    corrupted = {
+        "body": f"{transient}\n{transient}\n",
+        "authorAssociation": "OWNER",
+    }
+    plain = {"body": "just chatter", "authorAssociation": "OWNER"}
+    not_transient = {
+        "body": failure.render(record_for(
+            reason_code="tests_failed", action_code="fix_ticket",
+            retry_safe=False, outcome="blocked",
+        )),
+        "authorAssociation": "OWNER",
+    }
+    assert runner._transient_failure_seen(
+        [untrusted, corrupted, plain, not_transient],
+    ) is False
+    assert runner._transient_failure_seen(
+        [untrusted, corrupted, plain, not_transient,
+         {"body": transient, "authorAssociation": "OWNER"}],
+    ) is True
 
 
 # --------------------------------------------------------------------------
