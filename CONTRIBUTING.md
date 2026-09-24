@@ -15,9 +15,11 @@ discovering after the work is written that the approach needs to change.
 
 ## Licence of your contribution
 
-Orbi is [fair-code](https://faircode.io) under the **Sustainable Use License**
-v1.0 ([LICENSE.md](LICENSE.md)). By opening a pull request you agree that your
-contribution is licensed under those same terms.
+Orbi is dual-licensed: open source under the **GNU AGPL-3.0**
+([LICENSE](LICENSE)), or alternatively under the **Sustainable Use License**
+v1.0 ([docs/licenses/sustainable-use-license.md](docs/licenses/sustainable-use-license.md)).
+By opening a pull request you agree that your contribution is licensed under
+both, so each user can pick either license.
 
 ## Developer Certificate of Origin
 
