@@ -7,15 +7,17 @@
          StartInterval below mirrors the systemd
          OnCalendar=*-*-* *:00/5 five-minute tick. At N > 1 the
          renderer drops StartInterval and switches every instance to
-         the equivalent wall-clock StartCalendarInterval grid
-         (`*:00/5`, `*:02/5`, `*:04/5`, ... — one whole-minute offset
-         per instance, Issue #1320): StartInterval counts from each
-         job's load time, so instances bootstrapped together would
-         otherwise fire in the same second. The ORBI_* placeholders
-         are substituted at install time by `orbi install-units`; the
-         drift check re-renders this template and compares the
-         canonical plist form, so key order and whitespace in the
-         installed XML never fabricate drift. -->
+         the equivalent wall-clock StartCalendarInterval grid on the
+         same five-minute cadence, each instance shifted by its own
+         whole-minute offset `(instance - 1) * (300 // N) // 60`
+         (`*:00/5` for instance 1; `*:02/5` for instance 2 at N = 2;
+         `*:00/5`, `*:01/5`, `*:03/5` at N = 3 — Issue #1320):
+         StartInterval counts from each job's load time, so instances
+         bootstrapped together would otherwise fire in the same
+         second. The ORBI_* placeholders are substituted at install
+         time by `orbi install-units`; the drift check re-renders this
+         template and compares the canonical plist form, so key order
+         and whitespace in the installed XML never fabricate drift. -->
     <key>Label</key>
     <string>{{ORBI_LABEL}}</string>
     <key>WorkingDirectory</key>
