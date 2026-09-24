@@ -1096,9 +1096,11 @@ def block_repo_config_failure(number: int, source_repo: str,
     """Mark an Issue `ai-blocked` when its repo config is invalid (#527).
 
     The strict repository schema is a fail-fast precondition: a file that
-    exists on the default branch but carries an unknown/host-only key, a
-    wrong type or invalid TOML blocks the claim with the concrete reason
-    and the offending key names. The failure is scoped to this repository
+    exists on the default branch but carries a host-only key, a wrong type
+    or invalid TOML blocks the claim with the concrete reason and the
+    offending key names. An unrecognized key is not a failure since Issue
+    #1329 — it is ignored with a warning and the claim proceeds with the
+    known keys. The failure is scoped to this repository
     only (a sibling pool's valid config is unaffected). A failure of the
     reporting itself is logged, never raised, so the tick still ends
     cleanly (`main` releases the slot in its `finally`).
