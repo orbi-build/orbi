@@ -63,6 +63,8 @@ KNOWN_LABELS = frozenset({
     runner.AWAITING_MERGE_LABEL,
     # Issue #763: the human acceptance gate (a human-only label).
     runner.HUMAN_REVIEW_LABEL,
+    # Issue #1088: the thin-ticket clarification gate's waiting label.
+    "ai-needs-detail",
 })
 
 LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")
@@ -92,6 +94,9 @@ KNOWN_CONFIG_FIELDS = frozenset({
     "unit_name",
     "skills",
     "context_files",
+    # Issue #1088: the thin-ticket clarification gate (explicit
+    # boolean, default false; also a repository policy key).
+    "clarify_thin_tickets",
     # Issue #119/#157: the optional Pi model selection keys (load_config
     # plus the committed example, commented out).
     "pi_provider",

@@ -77,3 +77,8 @@ description = "Ops/research task: full execution session (ops playbook) — evid
 name = "ai-human-review"
 color = "d93f0b"
 description = "Human acceptance gate: a person confirmed the delivery checklist; Orbi never adds or removes it"
+
+[[label]]
+name = "ai-needs-detail"
+color = "fbca04"
+description = "Thin ticket: Orbi asked for the missing pieces and waits for a human to re-add ai-ready"

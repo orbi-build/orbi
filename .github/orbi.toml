@@ -13,3 +13,9 @@
 # host value it would otherwise fall back to is not the repository's to
 # assume.
 active_milestone = "v0.5.43"
+
+# Orbi's own repository turns the thin-ticket clarification gate on
+# (orbi-build/orbi#1088): a thin ai-ready ticket is stopped with one
+# comment naming the missing pieces instead of being delivered wrong.
+# The default is false; every gate error fails open.
+clarify_thin_tickets = true
