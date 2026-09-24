@@ -6916,19 +6916,28 @@ def main(argv: list[str] | None = None) -> int:
                     config, idle_repo, config.active_milestone,
                 )
                 if effective_milestone is not None:
-                    # The base branch is the repo's FUSED value (entry
-                    # fallback, then the policy override): the command writes
-                    # it into the release ticket, and the release state
-                    # machine freezes the DECLARED branch — the raw host value
-                    # would release the wrong branch for any repository whose
-                    # entry or policy overrides it.
+                    # The base branch AND `auto_next_milestone` are the repo's
+                    # FUSED values (entry fallback, then the policy override):
+                    # the command writes the base branch into the release
+                    # ticket, and the release state machine freezes the
+                    # DECLARED branch — the raw host value would release the
+                    # wrong branch for any repository whose entry or policy
+                    # overrides it. `auto_next_milestone` follows the same
+                    # per-key precedence (Issue #1342): a repository policy
+                    # value wins over the host fallback, so a managed tenant
+                    # can stop the engine overwriting `active_milestone`.
+                    fused_idle = resolve_source_base_branch(
+                        config, idle_repo, repo_policy,
+                    )
                     try:
                         milestone_bookkeeping.reconcile_milestone_on_idle(
                             idle_repo,
                             effective_milestone,
                             config.config_path,
                             config.repo_dir,
-                            auto_next_milestone=config.auto_next_milestone,
+                            auto_next_milestone=(
+                                fused_idle.auto_next_milestone
+                            ),
                             release_confirmation=(
                                 repo_policy.release_confirmation
                                 if repo_policy is not None
@@ -6940,9 +6949,7 @@ def main(argv: list[str] | None = None) -> int:
                             policy_path=config_domain.repository_config_path(
                                 config, idle_repo,
                             ),
-                            base_branch=resolve_source_base_branch(
-                                config, idle_repo, repo_policy,
-                            ).base_branch,
+                            base_branch=fused_idle.base_branch,
                             dispatch_label=dispatch_label,
                             version_file=config.version_file,
                         )

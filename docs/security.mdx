@@ -136,9 +136,9 @@ with the offending keys named. An unrecognized key is ignored with a
 warning instead (Issue #1329); the host-only set is unchanged by that.
 
 These delivery-policy keys are repository-writable:
-`base_branch`, `active_milestone`, `context_files`, `dispatch_label`,
-`steering_enabled`, `steering_poll_seconds`, `steering_max_rounds`,
-`release_confirmation` and `clarify_thin_tickets`.
+`base_branch`, `active_milestone`, `auto_next_milestone`, `context_files`,
+`dispatch_label`, `steering_enabled`, `steering_poll_seconds`,
+`steering_max_rounds`, `release_confirmation` and `clarify_thin_tickets`.
 The steering values affect only that repository; omitted keys fall back to
 host configuration. Because a policy change is a default-branch change,
 protect the file with GitHub's native review mechanism — add
