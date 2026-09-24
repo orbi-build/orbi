@@ -14,8 +14,8 @@
 # assume.
 active_milestone = "v0.5.45"
 
-# The thin-ticket clarification gate (orbi-build/orbi#1088) is NOT enabled
-# here yet: the managed sandbox runs the latest stable release (v0.5.42),
-# whose config validator rejects `clarify_thin_tickets` as an unknown key
-# and fails every claim fast. Re-add `clarify_thin_tickets = true` only
-# after a release that knows the key (v0.5.43) is the stable track.
+# The thin-ticket clarification gate (orbi-build/orbi#1088): a fresh claim
+# asks one no-tools Pi session whether the ticket states an observable
+# result, an acceptance condition and a single outcome, and stops a thin
+# ticket before any worktree, branch or Pi session exists.
+clarify_thin_tickets = true
