@@ -585,13 +585,8 @@ def doctor_report(config: config_domain.RunnerConfig, installed_dir: Path | None
     # Report the INSTANCES (verified against the real CLIs: `systemctl
     # show` rejects the bare template name, and `journalctl
     # -u` with a template-name glob fails when no instance exists —
-    # instance names always work).
-    for unit in dict.fromkeys((
-            *sched.timer_instances(config.unit_name, config.max_concurrency),
-            *sched.service_instances(
-                config.unit_name, config.max_concurrency))):
-        state = sched.unit_state(run_command, unit)
-        lines.append(f"{unit}: {state}")
+    # instance names always work), each with the schedule it deploys.
+    lines.extend(scheduler.instance_report_lines(sched, run_command, config))
     lines.extend(slot_lines(config.slot_dir, config.max_concurrency))
     session = find_session_file(repo_dir)
     lines.append(f"pi: {session if session else 'none'}")
@@ -613,8 +608,13 @@ def doctor_report(config: config_domain.RunnerConfig, installed_dir: Path | None
 
 
 def status_report(config: config_domain.RunnerConfig) -> str:
+    # Platform-resolved (as in doctor): the instance names and the
+    # schedule spelling are what this deployment actually installs.
+    sched = scheduler.detect()
+    schedule_parts = scheduler.schedule_spellings(sched, config)
     lines = [
         f"capacity: {config.max_concurrency}",
+        f"schedule: {', '.join(schedule_parts)}",
         *slot_lines(config.slot_dir, config.max_concurrency),
     ]
     for repo in config.source_repos:
