@@ -11752,7 +11752,12 @@ def test_main_capacity_full_does_not_pick_issue_or_call_pi(
 
 
 def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
-    """The slot is acquired before the pick and held for the whole task."""
+    """The slot is acquired before the pick and held for the whole task.
+
+    Issue #1319: the claim lock is held for the SAME pick and is free
+    again while the Pi session runs — the hold spans the scan -> identity
+    write, never a Pi session.
+    """
     from orbi import pilot_slots
 
     issue = {"number": 12, "title": "task", "body": "body"}
@@ -11760,18 +11765,27 @@ def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     _write_prompts(tmp_path)
     seen = {}
+    slot_dir = tmp_path / ".orbi" / "slots"
 
     def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs):
         seen["occupancy"] = pilot_slots.slot_occupancy(
             tmp_path / ".orbi" / "slots", 1,
         )
+        seen["claim_window"] = pilot_slots.is_claim_lock_held(slot_dir)
         return ("owner/repo", issue, None)
 
+    def fake_process(*args, **kwargs):
+        # The first Pi session starts only after `mark_slot_delivery`.
+        seen["pi_session"] = pilot_slots.is_claim_lock_held(slot_dir)
+        return runner.IssueResult("pr", "https://x/y/pull/12")
+
     monkeypatch.setattr(claim, "pick_next_delivery", fake_pick)
-    monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: runner.IssueResult("pr", "https://x/y/pull/12"))
+    monkeypatch.setattr(runner, "process_issue", fake_process)
     monkeypatch.setattr(runner, "delivery_step", lambda *a, **k: None)
     assert runner.main(["--config", str(config)]) == 0
     assert seen["occupancy"] == [(1, os.getpid())]
+    assert seen["claim_window"] is True
+    assert seen["pi_session"] is False
 
 
 def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):

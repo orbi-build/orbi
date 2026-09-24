@@ -6871,6 +6871,10 @@ def main(argv: list[str] | None = None) -> int:
             "capacity_full", max_concurrency=config.max_concurrency,
             slot_dir=config.slot_dir,
         )
+        # No slot means no claim and no delivery: a runner that kept going
+        # would work WITHOUT a slot (exceeding `max_concurrency`) and then
+        # crash in the `finally` below on `None.release()`.
+        return 0
     try:
         claim_lock = acquire_claim_lock(config.slot_dir)
         try:
@@ -6889,6 +6893,14 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
             if selected is None:
+                # Nothing was selected: the claim window is over, so release
+                # it BEFORE the milestone bookkeeping below. That
+                # bookkeeping takes the shared base-sync lock and makes
+                # GitHub calls, and the hold stays what it is for — the
+                # pick -> identity-write window — never a piece of work a
+                # co-runner's claim would have to wait for.
+                if claim_lock is not None:
+                    claim_lock.release()
                 ready_outside_milestone = log_ready_outside_milestone(
                     config.source_repos, config.active_milestone, config=config,
                 )

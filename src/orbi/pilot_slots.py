@@ -94,17 +94,15 @@ def acquire_claim_lock(state_dir: Path, blocking: bool = True) -> ClaimLock | No
     state_dir = Path(state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
     path = state_dir / CLAIM_LOCK_FILENAME
-    try:
-        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
-    except OSError:
-        return None
+    # Both calls fail fast: a claim lock that cannot be taken would silently
+    # return the machine to the unserialized claim window this lock exists
+    # to close, and the double claim would look like a fresh bug.
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
     flags = fcntl.LOCK_EX if blocking else (fcntl.LOCK_EX | fcntl.LOCK_NB)
     try:
         fcntl.flock(fd, flags)
-    except (BlockingIOError, PermissionError):
-        os.close(fd)
-        return None
-    except OSError:
+    except BlockingIOError:
+        # The non-blocking probe found the lock held by another process.
         os.close(fd)
         return None
     return ClaimLock(path, fd)

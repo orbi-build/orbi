@@ -22,6 +22,11 @@ executable records every invocation. These prove the acceptance criteria:
   delivery (Issue #809): the holder names its (repo, issue) in the slot
   file, the concurrent tick skips exactly that delivery and reviews the
   free one instead of falling through to a fresh claim;
+- two runners in one tick claim at most one copy of a ready Issue
+  (Issue #1319): the claim window is serialized and the second runner
+  skips the delivery the first one already holds, instead of claiming
+  it again (the loser's worktree-add failure and the `ai-blocked` it
+  wrote over a live delivery);
 - a SIGKILLed runner releases its slot automatically (the kernel owns
   the flock lock), so an abnormal exit never deadlocks the machine.
 """
@@ -1011,6 +1016,81 @@ def test_capacity_two_allows_two_runners_and_rejects_third(clone, tmp_path):
     snap = read_state(state)
     assert "ai-merged" in snap["issues"]["7"]["labels"]
     assert "ai-merged" in snap["issues"]["8"]["labels"]
+
+
+@_runner_e2e_linux_only
+def test_two_runners_one_ready_issue_claim_it_once(clone, tmp_path):
+    """Issue #1319: two runners, one ready Issue — exactly one claim.
+
+    Two runner processes hold two slots and scan one ready Issue while
+    the first one's delivery identity is written and its claim label has
+    NOT landed yet (the scan -> label window of the 2026-09-23 scene,
+    where both runs picked #1294 within one second). The loser must
+    find the held delivery and yield (`claim_yield
+    reason=held_by_live_runner`), never start a second delivery on the
+    same Issue and never write `ai-blocked` over the live one; the
+    winner keeps delivering to its PR.
+    """
+    from orbi import pilot_slots
+
+    bin_dir = install_fakes(tmp_path)
+    state = tmp_path / "gh-state.json"
+    write_state(state, {"7": ["ai-ready"]})
+    pi_log = tmp_path / "pi.log"
+    config = write_config(clone, tmp_path, 2)
+    slot_dir = clone / ".orbi" / "slots"
+    gate = tmp_path / "pi-gate-7"
+
+    winner = start_runner(
+        config, bin_dir, state, pi_log, pi_gate=gate, drain_stderr=True,
+    )
+    wait_for(
+        lambda: "ai-in-progress" in read_state(state)["issues"]["7"]["labels"],
+        what="the winner to claim issue 7",
+    )
+    wait_for(
+        lambda: any("#7" in path.read_text(encoding="utf-8")
+                    for path in slot_files(clone)),
+        what="the winner's delivery identity in its slot file",
+    )
+    # The winner's Pi session is up, so the claim window is over: the
+    # claim lock is FREE, never held across a Pi session (Issue #1319).
+    assert pilot_slots.is_claim_lock_held(slot_dir) is False
+    # The loser's scan lands inside the winner's scan -> label window:
+    # the identity is written, the claim label has not landed yet (the
+    # label write is a separate `gh` call after the claim).
+    snap = read_state(state)
+    snap["issues"]["7"]["labels"].remove("ai-in-progress")
+    atomic_write_json(state, snap)
+
+    loser = start_runner(config, bin_dir, state, pi_log)
+    out, err = loser.communicate(timeout=120)
+    assert loser.returncode == 0, err
+    # The held delivery is skipped, not claimed: a claim-yield event, no
+    # pick of the held Issue, no second Pi and no label change at all.
+    assert "claim_yield" in err, err
+    assert "held_by_live_runner" in err, err
+    assert "picked issue=7" not in err, err
+    assert len(pi_invocations(pi_log)) == 1, pi_invocations(pi_log)
+    assert read_state(state)["issues"]["7"]["labels"] == ["ai-ready"]
+    assert winner.poll() is None
+
+    # The winner kept delivering: the claim label is back, the gate
+    # opens and the same run reaches its PR — exactly one `picked` for
+    # issue 7 across both runners.
+    snap = read_state(state)
+    snap["issues"]["7"]["labels"].append("ai-in-progress")
+    atomic_write_json(state, snap)
+    gate.write_text("go", encoding="utf-8")
+    wait_for(
+        lambda: "ai-pr-opened" in read_state(state)["issues"]["7"]["labels"],
+        timeout=180,
+        what="the winner to open its PR",
+    )
+    winner.wait(timeout=120)
+    assert winner.returncode == 0, winner.drained_stderr.getvalue()
+    assert winner.drained_stderr.getvalue().count("picked issue=7") == 1
+    assert len(pi_invocations(pi_log)) == 1
 
 
 def _run_ref_hammer(
