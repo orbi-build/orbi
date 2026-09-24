@@ -1,24 +1,36 @@
+---
+title: "Sustainable Use License"
+---
+
 # License
 
-Copyright 2026 xqliu
+Orbi is **dual-licensed**: you choose either license.
 
-Orbi is [fair-code](https://faircode.io) distributed under the **Sustainable Use
-License** (v1.0), reproduced in full below.
+- **AGPL-3.0** — Orbi is open source under the [GNU Affero General Public
+  License v3.0](https://www.gnu.org/licenses/agpl-3.0.html). The verbatim GNU
+  text is the repository root
+  [`LICENSE`](https://github.com/orbi-build/orbi/blob/main/LICENSE). Anyone who
+  offers a modified Orbi as a network service must publish their modifications.
+- **Sustainable Use License (SUL) v1.0** — reproduced in full below, kept for
+  users whose policies forbid AGPL.
 
-## What this means in practice
+Copyright 2026 xqliu.
+
+Self-hosting Orbi on your own repositories is free under either license. In
+practice, under the SUL:
 
 - **Running Orbi on your own repositories is free, forever** — for yourself, and
   inside a company of any size. Modify it, self-host it, run it on a thousand
-  repos; none of that needs a licence from us.
+  repos; none of that needs a license from us.
 - **You may share it**, as long as you do so free of charge and for
   non-commercial purposes.
-- **You need a commercial licence only if you sell Orbi itself** — hosting it as
+- **You need a commercial license only if you sell Orbi itself** — hosting it as
   a service for your own customers, or embedding it in a product you charge for.
 
 If you are unsure which side of that line your use falls on, open a discussion at
 https://github.com/orbi-build/orbi/discussions and we will answer plainly.
 
-The summary above is a convenience, not a substitute. The licence text below is
+The summary above is a convenience, not a substitute. The license text below is
 what governs.
 
 ## Sustainable Use License
