@@ -483,7 +483,7 @@ def pick_issue(repo: str, active_milestone: str | None = None,
         try:
             issues = list_issues(
                 repo, state="open", search=search,
-                json_fields="number,title,body,labels,blockedBy", limit=200,
+                json_fields="number,title,body,labels,blockedBy,author", limit=200,
             )
         except Exception as exc:
             # Fail open: a failed blockedBy query must

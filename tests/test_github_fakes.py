@@ -425,8 +425,8 @@ def test_fake_fails_fast_on_an_unknown_issue(fake_gh):
 def test_fake_fails_fast_on_unsupported_field_requests(fake_gh):
     fake_gh.add_issue(5)
     assert_fails_with(
-        lambda: github.issue_view(5, "author"),
-        "unsupported issue field: 'author'",
+        lambda: github.issue_view(5, "assignees"),
+        "unsupported issue field: 'assignees'",
     )
     fake_gh.add_pr(6, head="b")
     assert_fails_with(

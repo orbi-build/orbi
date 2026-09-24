@@ -531,7 +531,7 @@ def test_pick_issue_uses_github_queue(monkeypatch):
             "label:ai-ready label:p0 -label:ai-in-progress "
             "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
             "-label:ai-blocked",
-            "--json", "number,title,body,labels,blockedBy",
+            "--json", "number,title,body,labels,blockedBy,author",
             "--limit", "200",
         ],
         [
@@ -540,7 +540,7 @@ def test_pick_issue_uses_github_queue(monkeypatch):
             "label:ai-ready label:bug -label:ai-in-progress "
             "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
             "-label:ai-blocked",
-            "--json", "number,title,body,labels,blockedBy",
+            "--json", "number,title,body,labels,blockedBy,author",
             "--limit", "200",
         ],
         [
@@ -548,7 +548,7 @@ def test_pick_issue_uses_github_queue(monkeypatch):
             "--state", "open", "--search",
             "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
             "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
-            "--json", "number,title,body,labels,blockedBy",
+            "--json", "number,title,body,labels,blockedBy,author",
             "--limit", "200",
         ],
     ]
@@ -820,21 +820,21 @@ def test_pick_issue_scopes_all_three_ready_scans_to_active_milestone(
             "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
             "--state", "open", "--search",
             f"label:ai-ready label:p0{scope} {exclusions}",
-            "--json", "number,title,body,labels,blockedBy",
+            "--json", "number,title,body,labels,blockedBy,author",
             "--limit", "200",
         ],
         [
             "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
             "--state", "open", "--search",
             f"label:ai-ready label:bug{scope} {exclusions}",
-            "--json", "number,title,body,labels,blockedBy",
+            "--json", "number,title,body,labels,blockedBy,author",
             "--limit", "200",
         ],
         [
             "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
             "--state", "open", "--search",
             f"label:ai-ready{scope} {exclusions}",
-            "--json", "number,title,body,labels,blockedBy",
+            "--json", "number,title,body,labels,blockedBy,author",
             "--limit", "200",
         ],
     ]

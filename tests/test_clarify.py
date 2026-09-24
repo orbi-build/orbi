@@ -41,12 +41,15 @@ from tests.test_run_id_e2e import (
 ISSUE = {"number": 7, "title": "Thin ticket", "body": "Make it better."}
 RUN_ID = "a1b2c3d4"
 
-# A thin `ai-ready` ticket as the claim scan sees it.
+# A thin `ai-ready` ticket as the claim scan sees it. `author` is the
+# `gh issue list --json author` shape: the gate reads `author.login`
+# from the same payload the claim already fetched (Issue #1336).
 THIN_ISSUE = {
     "number": ISSUE_NUMBER,
     "title": "Thin ticket",
     "body": "Make the thing better somehow.",
     "labels": [{"name": delivery_labels.READY_LABEL}],
+    "author": {"login": "alice"},
 }
 
 # The clarify session is the `pi --no-tools` call; the delivery session is
@@ -236,6 +239,46 @@ def test_render_comment_covers_each_of_the_three_checks(missing_piece):
             assert text not in body
 
 
+def test_render_comment_mentions_the_issue_author():
+    """Issue #1336: the first line names the author so GitHub notifies."""
+    verdict = clarify.ClarifyVerdict(
+        passed=False, missing=("observable_result",),
+    )
+    body = clarify.render_comment(
+        dict(ISSUE, author={"login": "alice"}), verdict, RUN_ID,
+    )
+    assert "@alice" in body.splitlines()[0]
+    # The run marker and the visible run id survive the mention.
+    assert f"<!-- orbi:run={RUN_ID} -->" in body
+    assert f"run_id={RUN_ID}" in body
+
+
+@pytest.mark.parametrize("author", [
+    # No `author` key at all (the claim payload did not carry it).
+    "missing",
+    # A present author with no usable login (deleted account).
+    {"login": None},
+    {"login": "ghost"},
+    {"login": "renovate[bot]"},
+])
+def test_render_comment_without_a_usable_author_has_no_mention(author):
+    """Issue #1336: no usable login renders exactly the old comment.
+
+    A missing field, `ghost`, or a bot must not produce a partial or
+    broken mention — the gate is never allowed to fail because of it.
+    """
+    verdict = clarify.ClarifyVerdict(
+        passed=False, missing=("observable_result",),
+    )
+    issue = dict(ISSUE)
+    if author != "missing":
+        issue["author"] = author
+    body = clarify.render_comment(issue, verdict, RUN_ID)
+    assert "@" not in body
+    assert body.startswith(f"<!-- orbi:run={RUN_ID} -->")
+    assert f"run_id={RUN_ID}" in body
+
+
 # --- judge_issue_body ------------------------------------------------------
 
 def test_judge_issue_body_asks_the_model_and_parses_the_answer(monkeypatch):
@@ -318,6 +361,62 @@ def test_enforce_posts_one_comment_and_swaps_the_labels(monkeypatch, caplog):
     assert (number, repo) == (ISSUE["number"], REPO)
     assert body.startswith(f"<!-- orbi:run={RUN_ID} -->")
     assert f"run_id={RUN_ID}" in body
+    assert edits == [(
+        ISSUE["number"], REPO,
+        delivery_labels.NEEDS_DETAIL_LABEL, delivery_labels.READY_LABEL,
+    )]
+    assert "clarify_needs_detail" in caplog.text
+    assert "clarify_check_skipped" not in caplog.text
+
+
+def test_enforce_carries_the_claim_payload_author_into_the_comment(
+    monkeypatch,
+):
+    """Issue #1336: the claim scan's `author.login` reaches render_comment.
+
+    `THIN_ISSUE` is the payload shape the ordinary claim scan hands to
+    `enforce()`; its `author.login` must be the mention the stopped
+    ticket receives.
+    """
+    verdict = clarify.ClarifyVerdict(
+        passed=False, missing=("observable_result",),
+    )
+    monkeypatch.setattr(seam, "judge_issue_body", lambda *a, **k: verdict)
+    comments, edits = _record_writes(monkeypatch)
+
+    assert clarify.enforce(
+        THIN_ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is False
+    assert "@alice" in comments[0][2].splitlines()[0]
+
+
+@pytest.mark.parametrize("author", [
+    "missing",
+    {"login": None},
+    {"login": "ghost"},
+    {"login": "dependabot[bot]"},
+])
+def test_enforce_stops_without_a_usable_author(monkeypatch, caplog, author):
+    """Issue #1336: no mention must never stop the stop.
+
+    A missing author or `author.login` still posts the ONE comment and
+    swaps the labels — the gate stops the ticket exactly as before.
+    """
+    verdict = clarify.ClarifyVerdict(
+        passed=False, missing=("observable_result",),
+    )
+    monkeypatch.setattr(seam, "judge_issue_body", lambda *a, **k: verdict)
+    comments, edits = _record_writes(monkeypatch)
+    caplog.set_level("INFO")
+    issue = dict(ISSUE)
+    if author != "missing":
+        issue["author"] = author
+
+    assert clarify.enforce(
+        issue, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is False
+    assert len(comments) == 1
+    assert "@" not in comments[0][2]
     assert edits == [(
         ISSUE["number"], REPO,
         delivery_labels.NEEDS_DETAIL_LABEL, delivery_labels.READY_LABEL,
@@ -487,6 +586,9 @@ def test_thin_ticket_stops_before_any_worktree_or_session(
     # ONE comment, naming the missing pieces and the repair action.
     assert len(comments) == 1
     body = comments[0]
+    # Issue #1336: the claim payload's author is mentioned so GitHub
+    # notifies the person on the stopped ticket.
+    assert "@alice" in body.splitlines()[0]
     assert f"<!-- orbi:run={RUN_ID} -->" in body
     assert f"run_id={RUN_ID}" in body
     for piece in missing:
