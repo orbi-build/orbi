@@ -37,7 +37,9 @@
 # dir stay machine-local.
 
 [build-system]
-requires = ["setuptools>=64"]
+# setuptools>=77 carries PEP 639 (SPDX `license` expression plus
+# `license-files`) used below; older setuptools rejects the string form.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -46,7 +48,11 @@ version = "0.5.43"
 description = "Orbi — local AI development worker: claims GitHub Issues, runs Pi in isolated worktrees, and delivers PRs (GitHub Issues + labels are the only state store)."
 readme = "README.md"
 requires-python = ">=3.14"
-license = { file = "LICENSE.md" }
+# Dual license (Issue #1332): the user picks either the GNU AGPL-3.0 (the
+# verbatim root `LICENSE`, OSI open source) or the Sustainable Use License
+# v1.0 (not on the SPDX list, hence the `LicenseRef-` id).
+license = "AGPL-3.0-only OR LicenseRef-Sustainable-Use-1.0"
+license-files = ["LICENSE", "docs/licenses/sustainable-use-license.md"]
 authors = [{ name = "xqliu" }]
 dependencies = []
 

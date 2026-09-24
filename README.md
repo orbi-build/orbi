@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 **GitHub Issues in, tagged releases out.**
 
-Orbi is a self-hosted, fair-code autonomous coding agent: label a GitHub Issue `ai-ready`, and it writes the code in an isolated worktree, opens a PR, has an independent review session check it against the Issue's acceptance criteria, merges only the reviewed head, and cuts a tagged release. GitHub Issues are the only state store—no database, queue, or daemon.
+Orbi is a self-hosted, open-source autonomous coding agent: label a GitHub Issue `ai-ready`, and it writes the code in an isolated worktree, opens a PR, has an independent review session check it against the Issue's acceptance criteria, merges only the reviewed head, and cuts a tagged release. GitHub Issues are the only state store—no database, queue, or daemon.
 
 **Ledger:** [merged PRs](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [closed Issues](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged releases](https://github.com/orbi-build/orbi/releases) — the repository is the record.
 
@@ -92,12 +92,12 @@ See the development contract in [AGENTS.md](AGENTS.md), and [Contributing](docs/
 
 ## License
 
-This project is [fair-code](https://faircode.io), released under the **Sustainable Use License** (v1.0). See the complete text in [LICENSE.md](LICENSE.md) at the repository root.
+Orbi is **open source under the [GNU AGPL-3.0](LICENSE)**, with the **[Sustainable Use License](docs/licenses/sustainable-use-license.md)** (v1.0) as an alternative. Pick either license.
 
 In practice:
 
-- **Run Orbi on your own repositories for free forever**—for personal use and internal company use alike, at any scale. You can modify the code, self-host it, and run it across a thousand repositories without requesting authorization.
-- **You may share it**, provided that it is free and used for non-commercial purposes.
-- **Commercial authorization is required only when you sell Orbi itself**—for example, hosting it as a service for customers or embedding it in a paid product.
+- **Run Orbi on your own repositories for free forever**—personal or internal company use, at any scale, under either license. Modify it, self-host it, run it across a thousand repositories; no authorization needed.
+- **You may share it**—free of charge for non-commercial purposes under the SUL; under AGPL-3.0, offering a modified Orbi as a network service means publishing your changes.
+- **Commercial authorization is needed only to sell Orbi itself**—hosting it as a service for customers or embedding it in a paid product (SUL); AGPL-3.0 has no such restriction.
 
-If you are unsure which side your use falls on, ask in [Discussions](https://github.com/orbi-build/orbi/discussions); we will give you a clear answer.
+Unsure which side your use falls on? Ask in [Discussions](https://github.com/orbi-build/orbi/discussions).

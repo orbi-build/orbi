@@ -69,6 +69,7 @@
             "pages": [
               "docker",
               "optional-kv-cache",
+              "licenses/sustainable-use-license",
               {
                 "group": "Engineering notes",
                 "icon": "notebook-pen",
