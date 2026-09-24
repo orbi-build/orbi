@@ -630,3 +630,68 @@ def test_held_deliveries_reports_child_holder_identity(tmp_path):
     finally:
         holder.terminate()
         holder.wait(timeout=10)
+
+
+# --- claim lock (Issue #1319) -----------------------------------------------
+
+
+def test_acquire_claim_lock_and_release(tmp_path):
+    """Claim lock is exclusive: while held, non-blocking acquire fails."""
+    state = tmp_path / "slots"
+    lock1 = pilot_slots.acquire_claim_lock(state)
+    assert lock1 is not None
+    assert pilot_slots.is_claim_lock_held(state) is True
+    # Non-blocking acquisition while held returns None
+    assert pilot_slots.acquire_claim_lock(state, blocking=False) is None
+    lock1.release()
+    assert pilot_slots.is_claim_lock_held(state) is False
+    # Now acquire succeeds again
+    lock2 = pilot_slots.acquire_claim_lock(state, blocking=False)
+    assert lock2 is not None
+    lock2.release()
+
+
+def test_acquire_claim_lock_context_manager(tmp_path):
+    """Claim lock context manager releases automatically on exit."""
+    state = tmp_path / "slots"
+    with pilot_slots.acquire_claim_lock(state) as lock:
+        assert lock is not None
+        assert pilot_slots.is_claim_lock_held(state) is True
+    assert pilot_slots.is_claim_lock_held(state) is False
+
+
+def test_claim_lock_serializes_concurrent_claim_and_mark_delivery(tmp_path):
+    """Real cross-process scene for Issue #1319:
+    Process 1 acquires claim lock, selects Issue 1294, and calls mark_slot_delivery.
+    Process 2 blocks on claim lock until Process 1 releases, then runs and sees
+    Issue 1294 in slot_held_deliveries.
+    """
+    state = tmp_path / "slots"
+    code = (
+        "import os, time\n"
+        "from orbi import pilot_slots\n"
+        f"state = {str(state)!r}\n"
+        "slot = pilot_slots.acquire_slot(state, 2, os.getpid())\n"
+        "with pilot_slots.acquire_claim_lock(state):\n"
+        "    print('locked', flush=True)\n"
+        "    time.sleep(0.5)\n"
+        "    pilot_slots.mark_slot_delivery(slot, 'owner/repo', 1294)\n"
+        "print('unlocked', flush=True)\n"
+        "time.sleep(10)\n"
+    )
+    proc1 = run_slot_script(code)
+    assert proc1.stdout.readline().strip() == "locked"
+    try:
+        # While proc1 holds claim lock, non-blocking acquire in proc2 fails
+        assert pilot_slots.acquire_claim_lock(state, blocking=False) is None
+
+        # Blocking acquire waits until proc1 finishes writing identity and releases
+        with pilot_slots.acquire_claim_lock(state):
+            # Now proc1 has written identity to slot file, so slot_held_deliveries
+            # immediately reports owner/repo#1294
+            held = pilot_slots.slot_held_deliveries(state, 2)
+            assert ("owner/repo", 1294) in held
+    finally:
+        proc1.terminate()
+        proc1.wait(timeout=10)
+

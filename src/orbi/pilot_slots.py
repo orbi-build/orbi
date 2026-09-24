@@ -40,6 +40,7 @@ import os
 from pathlib import Path
 
 SLOT_DIRNAME = ".orbi/slots"
+CLAIM_LOCK_FILENAME = "claim.lock"
 
 #: Sentinel for a slot whose flock is held while the holder PID is not
 #: readable (a torn rewrite window, a corrupted PID line, or a slot file
@@ -49,6 +50,73 @@ SLOT_DIRNAME = ".orbi/slots"
 #: non-``None`` foreign holder as a live co-runner, and folding a held
 #: slot into ``None`` would let a second Pi start on a live run (#39).
 HELD_PID_UNKNOWN = -1
+
+
+class ClaimLock:
+    """Exclusive flock lock that serializes the claim window.
+
+    Held across ``pick_next_delivery`` -> ``mark_slot_delivery`` so
+    two concurrent runners never claim the same Issue in the same tick.
+    """
+
+    def __init__(self, path: Path, fd: int):
+        self.path = path
+        self.fd = fd
+
+    def release(self) -> None:
+        """Release the claim lock; closing the descriptor releases the flock."""
+        if self.fd >= 0:
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = -1
+
+    def __enter__(self) -> ClaimLock:
+        return self
+
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        self.release()
+
+
+def acquire_claim_lock(state_dir: Path, blocking: bool = True) -> ClaimLock | None:
+    """Acquire the host-local claim serialization lock.
+
+    Serializes the window from ``pick_next_delivery`` through
+    ``mark_slot_delivery`` so that a second runner scans only after the
+    first has written its identity, allowing ``slot_held_deliveries``
+    to skip the claimed delivery.
+    """
+    state_dir = Path(state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = state_dir / CLAIM_LOCK_FILENAME
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError:
+        return None
+    flags = fcntl.LOCK_EX if blocking else (fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        fcntl.flock(fd, flags)
+    except (BlockingIOError, PermissionError):
+        os.close(fd)
+        return None
+    except OSError:
+        os.close(fd)
+        return None
+    return ClaimLock(path, fd)
+
+
+def is_claim_lock_held(state_dir: Path) -> bool:
+    """Return True if another process holds the claim lock."""
+    probe = acquire_claim_lock(state_dir, blocking=False)
+    if probe is None:
+        return True
+    probe.release()
+    return False
 
 
 class Slot:
