@@ -84,6 +84,28 @@ CLARIFY_SYSTEM_PROMPT = (
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+# GitHub's sentinel for a deleted account: there is no user to notify.
+_GHOST_LOGIN = "ghost"
+
+
+def _author_mention(issue: dict) -> str:
+    """Return the `@login` mention for the Issue author, or "".
+
+    The login comes from the claim payload's `author.login` — the same
+    `gh issue` JSON the claim scan already fetched, so the gate adds no
+    API call. No usable login (a missing/empty field, the deleted-account
+    `ghost`, or a bot `... [bot]`) means no mention: a malformed author
+    must never fail the gate, it only renders the comment as before.
+    """
+    author = issue.get("author")
+    login = author.get("login") if isinstance(author, dict) else None
+    if not isinstance(login, str):
+        return ""
+    login = login.strip()
+    if not login or login == _GHOST_LOGIN or login.endswith("[bot]"):
+        return ""
+    return f"@{login}"
+
 
 @dataclass(frozen=True)
 class ClarifyVerdict:
@@ -135,13 +157,19 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
                    ready_label: str = READY_LABEL) -> str:
     """Render the ONE comment that names the missing pieces.
 
-    `ready_label` is the repository's claim label (default `ai-ready`,
-    #527): the repair instruction names the label the claim scan really
-    reads, never a hardcoded default a custom-label repository does not
-    use.
+    The first line mentions the Issue author (`@<login>`, #1336) so the
+    stop reaches a person through GitHub's mention notification; without
+    a usable login the mention is omitted and the comment renders as
+    before. `ready_label` is the repository's claim label (default
+    `ai-ready`, #527): the repair instruction names the label the claim
+    scan really reads, never a hardcoded default a custom-label
+    repository does not use.
     """
     pieces = "\n".join(f"- {MISSING[item]}" for item in verdict.missing)
+    mention = _author_mention(issue)
+    prefix = f"{mention}\n" if mention else ""
     return (
+        f"{prefix}"
         f"{run_marker(run_id)}\n"
         "**Orbi: this ticket is not ready to deliver.**\n\n"
         "The pre-flight check says the Issue does not state pieces a "
