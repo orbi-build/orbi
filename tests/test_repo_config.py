@@ -833,13 +833,20 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
             base_branch="main",
         ),
         "owner/repo",
-        repo_config.RepoPolicy(base_branch="beta", sha="b" * 40),
+        repo_config.RepoPolicy(
+            base_branch="beta", sha="b" * 40,
+            ignored_keys=("some_future_key",),
+        ),
     )
     assert result.kind == "pr"
     assert seen["base"] == "beta"
     start = starts[0]
     assert "- base_branch: beta" in start
     assert "- repo_config: " + "b" * 40 in start
+    # Issue #1329: the claim proceeds with the known keys and the run
+    # comment records the keys this engine ignored (the #527 host-only
+    # key never reaches here — it blocks the claim before this point).
+    assert "- repo_config_ignored: some_future_key" in start
 
 
 def _write_main_config(tmp_path):
