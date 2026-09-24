@@ -107,6 +107,25 @@ def service_instances(unit_name: str | None = None,
     return tuple(f"{prefix}@{index}.service" for index in range(1, count + 1))
 
 
+def instance_offset_seconds(instance: int, max_concurrency: int) -> int:
+    """The deterministic stagger offset in seconds for one runner instance.
+
+    offset(i) = (i - 1) * (300 // max_concurrency) for i = 1..N.
+    """
+    if max_concurrency <= 1 or instance <= 1:
+        return 0
+    return (instance - 1) * (300 // max_concurrency)
+
+
+def instance_schedule(instance: int, max_concurrency: int) -> str:
+    """The schedule string for one runner instance."""
+    offset = instance_offset_seconds(instance, max_concurrency)
+    if offset == 0:
+        return "*-*-* *:00/5"
+    m, s = divmod(offset, 60)
+    return f"*-*-* *:{m:02d}/5:{s:02d}"
+
+
 @runtime_checkable
 class Scheduler(Protocol):
     """The hooks one platform scheduler implements.
@@ -151,7 +170,8 @@ class Scheduler(Protocol):
 
     def render_unit(self, template_text: str, repo_dir: Path,
                     unit_name: str | None = None,
-                    instance: int = 1) -> str:
+                    instance: int = 1,
+                    max_concurrency: int = 1) -> str:
         """Render one template for this deployment and instance."""
 
     def content_sha(self, rendered: str) -> str:
@@ -297,6 +317,7 @@ def unit_status(repo_dir: Path, installed_dir: Path,
             rendered = sched.render_unit(
                 repo_path.read_text(encoding="utf-8"),
                 repo_dir, unit_name, instance=index,
+                max_concurrency=max_concurrency,
             )
             repo_sha = sched.content_sha(rendered)
         else:
@@ -439,6 +460,7 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
         ).read_text(encoding="utf-8")
         rendered = sched.render_unit(
             template_text, repo_dir, unit_name, instance=index,
+            max_concurrency=max_concurrency,
         )
         (installed_dir / name).write_bytes(rendered.encode("utf-8"))
     sched.activate_instances(

@@ -58,11 +58,26 @@ from orbi.scheduler import (
     MAX_RUNNER_INSTANCES,
     REPO_DIR_PLACEHOLDER,
     USER_HOME_PLACEHOLDER,
+    instance_offset_seconds,
+    instance_schedule,
 )
 
 TEMPLATE_NAME = "org.orbi.runner.plist"
 LABEL_BASE = "org.orbi.runner"
 LOG_TAIL_LINES = 400
+
+
+def calendar_interval_entries(offset_seconds: int) -> list[dict[str, int]]:
+    """Generate StartCalendarInterval dicts shifted by offset_seconds."""
+    minute_offset, second_offset = divmod(offset_seconds, 60)
+    entries = []
+    for base_min in range(0, 60, 5):
+        m = (base_min + minute_offset) % 60
+        entry = {"Minute": m}
+        if second_offset:
+            entry["Second"] = second_offset
+        entries.append(entry)
+    return entries
 
 
 def label_base(unit_name: str | None = None) -> str:
@@ -145,15 +160,23 @@ class LaunchdScheduler:
 
     def render_unit(self, template_text: str, repo_dir: Path,
                     unit_name: str | None = None,
-                    instance: int = 1) -> str:
+                    instance: int = 1,
+                    max_concurrency: int = 1) -> str:
         # launchd expands nothing (no ~, no %h): the render substitutes
         # every machine-specific value as an absolute path.
-        return (
+        rendered = (
             template_text
             .replace(REPO_DIR_PLACEHOLDER, str(Path(repo_dir).resolve()))
             .replace(USER_HOME_PLACEHOLDER, str(Path.home()))
             .replace("{{ORBI_LABEL}}", label_for(unit_name, instance))
         )
+        offset = instance_offset_seconds(instance, max_concurrency)
+        if offset > 0:
+            parsed = plistlib.loads(rendered.encode("utf-8"))
+            parsed.pop("StartInterval", None)
+            parsed["StartCalendarInterval"] = calendar_interval_entries(offset)
+            return plistlib.dumps(parsed, fmt=plistlib.FMT_XML).decode("utf-8")
+        return rendered
 
     def content_sha(self, rendered: str) -> str:
         data = _canonical_bytes(rendered.encode("utf-8"))
@@ -229,12 +252,13 @@ class LaunchdScheduler:
     def instances_status(self, run_command, unit_name: str | None = None,
                          *, max_concurrency: int) -> dict[str, dict]:
         instances: dict[str, dict] = {}
-        for label in self.timer_instances(unit_name, max_concurrency):
+        for index, label in enumerate(self.timer_instances(unit_name, max_concurrency), start=1):
             instances[label] = {
                 "enabled": self.unit_enabled(run_command, label),
                 "active": self.unit_state(run_command, label) == "active",
                 # launchd exposes no next-fire time; honest dash.
                 "next": "-",
+                "schedule": instance_schedule(index, max_concurrency),
             }
         return instances
 

@@ -536,12 +536,38 @@ def test_instances_status_reports_enabled_active_and_an_honest_next():
     status = sched.instances_status(fake, None, max_concurrency=2)
     assert status == {
         "org.orbi.runner.1": {
-            "enabled": True, "active": True, "next": "-",
+            "enabled": True, "active": True, "next": "-", "schedule": "*-*-* *:00/5",
         },
         "org.orbi.runner.2": {
-            "enabled": False, "active": False, "next": "-",
+            "enabled": False, "active": False, "next": "-", "schedule": "*-*-* *:02/5:30",
         },
     }
+
+
+def test_launchd_plist_for_instance_two_carries_150s_offset(tmp_path):
+    """Issue #1320: the launchd plist for instance 2 carries the same 150s offset."""
+    sched = launchd_deploy.LaunchdScheduler()
+    template = (
+        REPO_ROOT / "launchd" / launchd_deploy.TEMPLATE_NAME
+    ).read_text(encoding="utf-8")
+
+    # Instance 1 keeps template value (StartInterval = 300)
+    rendered_1 = sched.render_unit(template, tmp_path, None, instance=1, max_concurrency=2)
+    plist_1 = plistlib.loads(rendered_1.encode("utf-8"))
+    assert plist_1.get("StartInterval") == 300
+    assert "StartCalendarInterval" not in plist_1
+
+    # Instance 2 replaces StartInterval with StartCalendarInterval shifted by 150s
+    rendered_2 = sched.render_unit(template, tmp_path, None, instance=2, max_concurrency=2)
+    plist_2 = plistlib.loads(rendered_2.encode("utf-8"))
+    assert "StartInterval" not in plist_2
+    assert "StartCalendarInterval" in plist_2
+    calendar = plist_2["StartCalendarInterval"]
+    assert len(calendar) == 12
+    # 150s is 2m 30s: first interval in hour is Minute 2, Second 30
+    assert calendar[0] == {"Minute": 2, "Second": 30}
+    assert all(entry["Second"] == 30 for entry in calendar)
+    assert [entry["Minute"] for entry in calendar] == list(range(2, 60, 5))
 
 
 def test_journal_lines_skip_instances_without_a_log_file(tmp_path):

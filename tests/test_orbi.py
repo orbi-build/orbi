@@ -2251,3 +2251,24 @@ def test_doctor_report_reports_configured_model_provider(tmp_path, monkeypatch):
     )
     report = orbi.doctor_report(config, installed)
     assert "model_provider: ok provider=openai model=gpt key=OPENAI_API_KEY=set" in report
+
+
+def test_doctor_and_status_report_list_instance_schedules(tmp_path, monkeypatch):
+    """Issue #1320: orbi doctor / orbi status lists each instance's schedule,
+    so the offsets are visible without systemctl."""
+    config, installed = _deploy_world(tmp_path, drift=False)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
+    monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+
+    # doctor_report lists each instance's schedule
+    report = orbi.doctor_report(config, installed)
+    assert "schedule: orbi@1.timer=*-*-* *:00/5" in report
+    assert "schedule: orbi@2.timer=*-*-* *:02/5:30" in report
+
+    # status_report lists each instance's schedule
+    status = orbi.status_report(config)
+    assert "schedule: orbi@1.timer=*-*-* *:00/5, orbi@2.timer=*-*-* *:02/5:30" in status
+

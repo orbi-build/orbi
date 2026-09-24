@@ -592,6 +592,9 @@ def doctor_report(config: config_domain.RunnerConfig, installed_dir: Path | None
                 config.unit_name, config.max_concurrency))):
         state = sched.unit_state(run_command, unit)
         lines.append(f"{unit}: {state}")
+    for index, unit in enumerate(sched.timer_instances(config.unit_name, config.max_concurrency), start=1):
+        schedule = scheduler.instance_schedule(index, config.max_concurrency)
+        lines.append(f"schedule: {unit}={schedule}")
     lines.extend(slot_lines(config.slot_dir, config.max_concurrency))
     session = find_session_file(repo_dir)
     lines.append(f"pi: {session if session else 'none'}")
@@ -613,8 +616,14 @@ def doctor_report(config: config_domain.RunnerConfig, installed_dir: Path | None
 
 
 def status_report(config: config_domain.RunnerConfig) -> str:
+    timer_names = scheduler.timer_instances(config.unit_name, config.max_concurrency)
+    schedule_parts = [
+        f"{unit}={scheduler.instance_schedule(i, config.max_concurrency)}"
+        for i, unit in enumerate(timer_names, start=1)
+    ]
     lines = [
         f"capacity: {config.max_concurrency}",
+        f"schedule: {', '.join(schedule_parts)}",
         *slot_lines(config.slot_dir, config.max_concurrency),
     ]
     for repo in config.source_repos:

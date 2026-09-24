@@ -38,6 +38,7 @@ from pathlib import Path
 from orbi.scheduler import (
     MAX_RUNNER_INSTANCES,
     REPO_DIR_PLACEHOLDER,
+    instance_schedule,
     service_instances,
     timer_instances,
     unit_names,
@@ -197,6 +198,45 @@ def migrate_legacy_units(installed_dir: Path, *, run_command) -> bool:
     return True
 
 
+def sync_stagger_dropins(installed_dir: Path, unit_name: str | None = None,
+                         *, max_concurrency: int) -> None:
+    """Manage timer stagger drop-ins for enabled and surplus instances.
+
+    Instance 1 keeps the template value (no drop-in).
+    Instances 2..max_concurrency get a stagger.conf drop-in with OnCalendar.
+    Surplus instances and instance 1 have their stagger.conf drop-in removed.
+    """
+    instances = timer_instances(unit_name, MAX_RUNNER_INSTANCES)
+    # Remove drop-in for instance 1 (keeps template value)
+    inst1_dir = installed_dir / f"{instances[0]}.d"
+    inst1_file = inst1_dir / "stagger.conf"
+    if inst1_file.is_file():
+        inst1_file.unlink()
+    if inst1_dir.is_dir() and not any(inst1_dir.iterdir()):
+        inst1_dir.rmdir()
+
+    # Write drop-ins for instances 2..max_concurrency
+    for idx in range(2, max_concurrency + 1):
+        instance = instances[idx - 1]
+        schedule = instance_schedule(idx, max_concurrency)
+        dropin_dir = installed_dir / f"{instance}.d"
+        dropin_dir.mkdir(parents=True, exist_ok=True)
+        dropin_file = dropin_dir / "stagger.conf"
+        dropin_file.write_text(
+            f"[Timer]\nOnCalendar=\nOnCalendar={schedule}\n",
+            encoding="utf-8",
+        )
+
+    # Remove drop-ins for surplus instances (max_concurrency + 1 .. MAX_RUNNER_INSTANCES)
+    for instance in instances[max_concurrency:]:
+        dropin_dir = installed_dir / f"{instance}.d"
+        dropin_file = dropin_dir / "stagger.conf"
+        if dropin_file.is_file():
+            dropin_file.unlink()
+        if dropin_dir.is_dir() and not any(dropin_dir.iterdir()):
+            dropin_dir.rmdir()
+
+
 class SystemdScheduler:
     """The Linux member of the scheduler layer (systemd user units).
 
@@ -231,7 +271,8 @@ class SystemdScheduler:
 
     def render_unit(self, template_text: str, repo_dir: Path,
                     unit_name: str | None = None,
-                    instance: int = 1) -> str:
+                    instance: int = 1,
+                    max_concurrency: int = 1) -> str:
         # systemd instantiates instances from one template (%i); the
         # install renders the same text for every instance.
         return render_unit_template(template_text, repo_dir, unit_name)
@@ -289,18 +330,19 @@ class SystemdScheduler:
         """One report entry per configured timer instance.
 
         The enabled state (``is-enabled``), the active state
-        (``show -p ActiveState``) and the next trigger time
-        (``list-timers``, read once).
+        (``show -p ActiveState``), the next trigger time
+        (``list-timers``, read once), and the instance schedule.
         """
         list_timers = run_command([
             "systemctl", "--user", "list-timers", "--no-pager",
         ])
         instances: dict[str, dict] = {}
-        for instance in timer_instances(unit_name, max_concurrency):
+        for index, instance in enumerate(timer_instances(unit_name, max_concurrency), start=1):
             instances[instance] = {
                 "enabled": self.unit_enabled(run_command, instance),
                 "active": self.unit_state(run_command, instance) == "active",
                 "next": timer_next_trigger(list_timers, instance),
+                "schedule": instance_schedule(index, max_concurrency),
             }
         return instances
 
@@ -344,6 +386,7 @@ class SystemdScheduler:
         Runner keeps running, and the new config takes effect at the
         next service start.
         """
+        sync_stagger_dropins(installed_dir, unit_name, max_concurrency=max_concurrency)
         run_command(["systemctl", "--user", "daemon-reload"])
         instances = timer_instances(unit_name, MAX_RUNNER_INSTANCES)
         for instance in instances[:max_concurrency]:
