@@ -992,3 +992,70 @@ def test_unmanaged_units_skips_template_form_non_orbi_and_dirs(tmp_path):
     # A directory named like a unit is not a unit file.
     (installed / "orbi-dir.service").mkdir()
     assert systemd_deploy.unmanaged_units(installed) == []
+
+
+def test_install_units_staggers_timers_with_deterministic_offsets(tmp_path):
+    """Issue #1320: installing with N = 2 writes exactly one drop-in, orbi@2.timer.d/stagger.conf,
+    with OnCalendar=*-*-* *:02/5:30 (preceded by an empty OnCalendar=). With N = 1 it writes none.
+    With N = 3 it writes offsets of 100s and 200s."""
+    repo = make_repo(tmp_path)
+
+    # N = 1 writes none
+    install_n1 = tmp_path / "install_n1"
+    scheduler.install_units(
+        repo, install_n1, max_concurrency=1,
+        run_command=lambda command, **kwargs: "",
+    )
+    assert not (install_n1 / "orbi@1.timer.d" / "stagger.conf").exists()
+    assert not (install_n1 / "orbi@2.timer.d" / "stagger.conf").exists()
+
+    # N = 2 writes exactly one drop-in: orbi@2.timer.d/stagger.conf with 150s offset (*:02/5:30)
+    install_n2 = tmp_path / "install_n2"
+    scheduler.install_units(
+        repo, install_n2, max_concurrency=2,
+        run_command=lambda command, **kwargs: "",
+    )
+    assert not (install_n2 / "orbi@1.timer.d" / "stagger.conf").exists()
+    dropin_2 = install_n2 / "orbi@2.timer.d" / "stagger.conf"
+    assert dropin_2.is_file()
+    assert dropin_2.read_text(encoding="utf-8") == (
+        "[Timer]\nOnCalendar=\nOnCalendar=*-*-* *:02/5:30\n"
+    )
+
+    # N = 3 writes offsets of 100s (*:01/5:40) and 200s (*:03/5:20)
+    install_n3 = tmp_path / "install_n3"
+    scheduler.install_units(
+        repo, install_n3, max_concurrency=3,
+        run_command=lambda command, **kwargs: "",
+    )
+    assert not (install_n3 / "orbi@1.timer.d" / "stagger.conf").exists()
+    dropin_n3_2 = install_n3 / "orbi@2.timer.d" / "stagger.conf"
+    assert dropin_n3_2.is_file()
+    assert dropin_n3_2.read_text(encoding="utf-8") == (
+        "[Timer]\nOnCalendar=\nOnCalendar=*-*-* *:01/5:40\n"
+    )
+    dropin_n3_3 = install_n3 / "orbi@3.timer.d" / "stagger.conf"
+    assert dropin_n3_3.is_file()
+    assert dropin_n3_3.read_text(encoding="utf-8") == (
+        "[Timer]\nOnCalendar=\nOnCalendar=*-*-* *:03/5:20\n"
+    )
+
+
+def test_reinstall_after_concurrency_shrinks_removes_stagger_dropin(tmp_path):
+    """Issue #1320: reinstalling after N shrinks from 2 to 1 removes orbi@2.timer.d/stagger.conf."""
+    repo = make_repo(tmp_path)
+    install_dir = tmp_path / "install"
+
+    # Install at N = 2
+    scheduler.install_units(
+        repo, install_dir, max_concurrency=2,
+        run_command=lambda command, **kwargs: "",
+    )
+    assert (install_dir / "orbi@2.timer.d" / "stagger.conf").is_file()
+
+    # Reinstall at N = 1
+    scheduler.install_units(
+        repo, install_dir, max_concurrency=1,
+        run_command=lambda command, **kwargs: "",
+    )
+    assert not (install_dir / "orbi@2.timer.d" / "stagger.conf").exists()
