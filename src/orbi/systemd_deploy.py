@@ -198,31 +198,67 @@ def migrate_legacy_units(installed_dir: Path, *, run_command) -> bool:
     return True
 
 
+def stagger_dropin(installed_dir: Path, timer: str) -> Path:
+    """The per-instance stagger drop-in path for one timer instance."""
+    return Path(installed_dir) / f"{timer}.d" / "stagger.conf"
+
+
+def stagger_dropin_text(instance: int, max_concurrency: int) -> str:
+    """The exact stagger.conf content for one runner instance.
+
+    A bare ``OnCalendar=`` line resets the inherited list, so the
+    drop-in REPLACES the template's schedule instead of appending to
+    it (systemd drop-in semantics).
+    """
+    return (
+        "[Timer]\nOnCalendar=\n"
+        f"OnCalendar={instance_schedule(instance, max_concurrency)}\n"
+    )
+
+
+def parse_oncalendar(text: str) -> str | None:
+    """The effective ``OnCalendar`` value of unit text (or ``None``).
+
+    Systemd applies the LAST setting, so the last non-empty
+    ``OnCalendar=`` line wins (a bare ``OnCalendar=`` clears the list
+    and carries no value).
+    """
+    value: str | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("OnCalendar="):
+            setting = stripped[len("OnCalendar="):]
+            if setting:
+                value = setting
+    return value
+
+
 def sync_stagger_dropins(installed_dir: Path, unit_name: str | None = None,
                          *, max_concurrency: int) -> None:
     """Manage timer stagger drop-ins for enabled and surplus instances.
 
     Instance 1 keeps the template value (no drop-in).
     Instances 2..max_concurrency get a stagger.conf drop-in with OnCalendar.
-    Surplus instances have their stagger.conf drop-in removed.
+    Any other instance (1 or surplus) has its stagger.conf drop-in removed,
+    so the installed set converges on the expected one (Issue #1344).
     """
     instances = timer_instances(unit_name, MAX_RUNNER_INSTANCES)
     # Write drop-ins for instances 2..max_concurrency
     for idx in range(2, max_concurrency + 1):
         instance = instances[idx - 1]
-        schedule = instance_schedule(idx, max_concurrency)
         dropin_dir = installed_dir / f"{instance}.d"
         dropin_dir.mkdir(parents=True, exist_ok=True)
-        dropin_file = dropin_dir / "stagger.conf"
-        dropin_file.write_text(
-            f"[Timer]\nOnCalendar=\nOnCalendar={schedule}\n",
-            encoding="utf-8",
+        stagger_dropin(installed_dir, instance).write_text(
+            stagger_dropin_text(idx, max_concurrency), encoding="utf-8",
         )
 
-    # Remove drop-ins for surplus instances (max_concurrency + 1 .. MAX_RUNNER_INSTANCES)
-    for instance in instances[max_concurrency:]:
+    # Remove drop-ins outside the expected set: instance 1 (the template
+    # value) and the surplus instances (max_concurrency + 1 .. MAX).
+    for idx, instance in enumerate(instances, start=1):
+        if 2 <= idx <= max_concurrency:
+            continue
         dropin_dir = installed_dir / f"{instance}.d"
-        dropin_file = dropin_dir / "stagger.conf"
+        dropin_file = stagger_dropin(installed_dir, instance)
         if dropin_file.is_file():
             dropin_file.unlink()
         if dropin_dir.is_dir() and not any(dropin_dir.iterdir()):
@@ -320,6 +356,73 @@ class SystemdScheduler:
     def schedule_text(self, instance: int, max_concurrency: int) -> str:
         """The ``OnCalendar`` spelling of the deployed instance schedule."""
         return instance_schedule(instance, max_concurrency)
+
+    def extra_drift(self, installed_dir: Path, unit_name: str | None,
+                    max_concurrency: int) -> list[dict]:
+        """The stagger drop-ins the drift check must also compare.
+
+        The expected set for ``max_concurrency`` is one
+        ``orbi@<i>.timer.d/stagger.conf`` for instances 2..N with the
+        exact :func:`stagger_dropin_text` content, and NO drop-in for
+        instance 1 (it keeps the template value) or a surplus instance
+        (Issue #1344). A missing, stale or unexpected file is drift.
+        """
+        installed_dir = Path(installed_dir)
+        expected = {
+            index: stagger_dropin_text(index, max_concurrency)
+            for index in range(2, max_concurrency + 1)
+        }
+        entries: list[dict] = []
+        for index, timer in enumerate(
+            timer_instances(unit_name, MAX_RUNNER_INSTANCES), start=1,
+        ):
+            installed_path = stagger_dropin(installed_dir, timer)
+            installed_sha = self.installed_sha(installed_path)
+            wanted = expected.get(index)
+            if wanted is None and installed_sha is None:
+                # No drop-in is expected here and none is installed.
+                continue
+            repo_sha = self.content_sha(wanted) if wanted is not None else None
+            entries.append({
+                "unit": f"{timer}.d/stagger.conf",
+                # The drop-in is generated, not a repo template: the
+                # expected file is named by its unit-relative path.
+                "repo_path": Path(f"{timer}.d") / "stagger.conf",
+                "installed_path": installed_path,
+                "repo_sha256": repo_sha,
+                "installed_sha256": installed_sha,
+                "missing": installed_sha is None,
+                "drifted": (
+                    repo_sha is None
+                    or installed_sha is None
+                    or repo_sha != installed_sha
+                ),
+                "reload_pending": False,
+            })
+        return entries
+
+    def installed_schedule(self, installed_dir: Path, unit_name: str | None,
+                           instance: int,
+                           max_concurrency: int) -> str | None:
+        """The instance's OnCalendar as INSTALLED on disk (Issue #1344).
+
+        The drop-in value wins for instances 2..N; instance 1 (and an
+        instance whose drop-in vanished) falls back to the installed
+        template, so the report never echoes the computed schedule as
+        if it were deployed. ``None`` means the installed unit cannot
+        be read at all.
+        """
+        installed_dir = Path(installed_dir)
+        timer = timer_instances(unit_name, instance)[-1]
+        dropin = stagger_dropin(installed_dir, timer)
+        if dropin.is_file():
+            value = parse_oncalendar(dropin.read_text(encoding="utf-8"))
+            if value is not None:
+                return value
+        template = installed_dir / unit_names(unit_name)[1]
+        if template.is_file():
+            return parse_oncalendar(template.read_text(encoding="utf-8"))
+        return None
 
     def instances_status(self, run_command, unit_name: str | None = None,
                          *, max_concurrency: int) -> dict[str, dict]:

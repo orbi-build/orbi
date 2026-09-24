@@ -76,6 +76,11 @@ class FakeScheduler:
     def reload_pending(self, installed_dir, name: str) -> bool:
         return name in self.reload_pending_units
 
+    def extra_drift(self, installed_dir, unit_name, max_concurrency):
+        # The fake ships no platform-specific extra files (systemd's
+        # stagger drop-ins); its drift set is the template pairs.
+        return []
+
     def activate_instances(self, run_command, installed_dir,
                            unit_name=None, *, max_concurrency=1,
                            changed=frozenset()):
