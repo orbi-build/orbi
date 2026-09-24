@@ -3,12 +3,19 @@
 <plist version="1.0">
   <dict>
     <!-- One launchd agent per Runner instance: the plist is the
-         .service and the .timer in one (StartInterval mirrors the
-         systemd OnCalendar=*-*-* *:00/5 five-minute tick). The
-         ORBI_* placeholders are substituted at install time by
-         `orbi install-units`; the drift check re-renders this
-         template and compares the canonical plist form, so key order
-         and whitespace in the installed XML never fabricate drift. -->
+         .service and the .timer in one. At max_concurrency == 1 the
+         StartInterval below mirrors the systemd
+         OnCalendar=*-*-* *:00/5 five-minute tick. At N > 1 the
+         renderer drops StartInterval and switches every instance to
+         the equivalent wall-clock StartCalendarInterval grid
+         (`*:00/5`, `*:02/5`, `*:04/5`, ... — one whole-minute offset
+         per instance, Issue #1320): StartInterval counts from each
+         job's load time, so instances bootstrapped together would
+         otherwise fire in the same second. The ORBI_* placeholders
+         are substituted at install time by `orbi install-units`; the
+         drift check re-renders this template and compares the
+         canonical plist form, so key order and whitespace in the
+         installed XML never fabricate drift. -->
     <key>Label</key>
     <string>{{ORBI_LABEL}}</string>
     <key>WorkingDirectory</key>
@@ -46,6 +53,8 @@
            /usr/local/bin stays for x86_64 macs. -->
       <string>/opt/homebrew/bin:{{ORBI_USER_HOME}}/.npm-global/bin:{{ORBI_USER_HOME}}/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
+    <!-- Single instance only: the renderer removes this key at N > 1
+         and writes StartCalendarInterval on the same 5-minute grid. -->
     <key>StartInterval</key>
     <integer>300</integer>
     <!-- Runner output lands per instance in the gitignored state dir
