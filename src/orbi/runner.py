@@ -2273,10 +2273,21 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
                 "\nBuilt by Orbi from Issue #"
                 f"{issue} · https://github.com/orbi-build/orbi\n"
             )
-        run_command([
-            "gh", "pr", "create", "--base", base_branch, "--head", branch,
-            "--title", issue_title, "--body", body,
-        ], cwd=worktree)
+        # A transient GitHub hiccup must not throw away a finished
+        # delivery: the create goes through the bounded write retry, and
+        # a response lost after GitHub actually created the PR is caught
+        # by the idempotency hook instead of producing a duplicate.
+        run_gh_write_command(
+            [
+                "gh", "pr", "create", "--base", base_branch,
+                "--head", branch, "--title", issue_title, "--body", body,
+            ],
+            cwd=worktree,
+            command_runner=run_command,
+            already_applied=(
+                lambda: open_pr_for_branch(worktree, branch) is not None
+            ),
+        )
         event(
             "pr_created", branch=branch, base_branch=base_branch,
             issue=issue,
