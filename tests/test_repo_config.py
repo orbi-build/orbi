@@ -1104,6 +1104,18 @@ def test_this_repositorys_own_orbi_toml_is_valid_and_legacy_free():
     assert "test_command" not in text
 
 
+def test_this_repositorys_own_orbi_toml_enables_clarify_thin_tickets():
+    """Issue #1337: the thin-ticket clarification gate (#1088) is on for
+    this repository. The stable engine track (v0.5.43) knows the key and
+    #1329/v0.5.44 ignores an unknown key with a warning instead of a
+    failed claim, so the policy file declares it and the stale
+    "NOT enabled here yet" comment is gone."""
+    path = Path(__file__).resolve().parents[1] / ".github" / "orbi.toml"
+    text = path.read_text(encoding="utf-8")
+    assert repo_config.parse_repo_config(text).clarify_thin_tickets is True
+    assert "NOT enabled here yet" not in text
+
+
 def test_this_repositorys_own_orbi_toml_is_not_gitignored():
     """The policy file must be deliverable (Issue #731): the tracked
     .gitignore ignores the local ROOT-level `orbi.toml` (host-style
