@@ -132,24 +132,39 @@ def instance_schedule(instance: int, max_concurrency: int) -> str:
 
 
 def schedule_spellings(sched: Scheduler,
-                       config: config_domain.RunnerConfig) -> list[str]:
+                       config: config_domain.RunnerConfig,
+                       installed_dir: Path) -> list[str]:
     """``<instance>=<schedule>`` for every configured instance.
 
-    The schedule is spelled the way THIS platform deploys it
-    (:meth:`Scheduler.schedule_text`), so the report and the installed
-    units cannot disagree (Issue #1320).
+    The expected schedule is spelled the way THIS platform deploys it
+    (:meth:`Scheduler.schedule_text`). The INSTALLED schedule is read
+    from disk (:meth:`Scheduler.installed_schedule`) and a mismatch
+    reports both values plus the fix command (Issue #1344): the report
+    never claims a schedule that is not deployed.
     """
-    return [
-        f"{unit}={sched.schedule_text(index, config.max_concurrency)}"
-        for index, unit in enumerate(
-            sched.timer_instances(config.unit_name, config.max_concurrency),
-            start=1,
+    spellings: list[str] = []
+    for index, unit in enumerate(
+        sched.timer_instances(config.unit_name, config.max_concurrency),
+        start=1,
+    ):
+        expected = sched.schedule_text(index, config.max_concurrency)
+        installed = sched.installed_schedule(
+            installed_dir, config.unit_name, index, config.max_concurrency,
         )
-    ]
+        if installed == expected:
+            spellings.append(f"{unit}={expected}")
+        else:
+            shown = installed if installed is not None else "?"
+            spellings.append(
+                f"{unit}={shown} "
+                f"(expected {expected}; run: {FIX_COMMAND})"
+            )
+    return spellings
 
 
 def instance_report_lines(sched: Scheduler, run_command,
-                          config: config_domain.RunnerConfig) -> list[str]:
+                          config: config_domain.RunnerConfig,
+                          installed_dir: Path) -> list[str]:
     """The doctor's per-unit state lines and per-instance schedule lines.
 
     One ``<unit>: <state>`` line per managed unit (the timer names
@@ -157,7 +172,8 @@ def instance_report_lines(sched: Scheduler, run_command,
     then one ``schedule: <instance>=<schedule>`` line per configured
     timer instance. The schedule spelling belongs to the scheduler
     contract, and ``cli`` is frozen by the size ratchet (Issue #1229),
-    so the rendering lives here (Issue #1320).
+    so the rendering lives here (Issue #1320). ``installed_dir`` makes
+    the schedule lines read the INSTALLED value (Issue #1344).
     """
     lines = [
         f"{unit}: {sched.unit_state(run_command, unit)}"
@@ -168,7 +184,7 @@ def instance_report_lines(sched: Scheduler, run_command,
     ]
     lines.extend(
         f"schedule: {spelling}"
-        for spelling in schedule_spellings(sched, config)
+        for spelling in schedule_spellings(sched, config, installed_dir)
     )
     return lines
 
@@ -282,6 +298,27 @@ class Scheduler(Protocol):
         start, so its answer is always ``False``.
         """
 
+    def extra_drift(self, installed_dir: Path, unit_name: str | None,
+                    max_concurrency: int) -> list[dict]:
+        """Installed files outside the template set that drift applies to.
+
+        The entries use the :func:`unit_status` shape (``unit``,
+        ``repo_path``, ``installed_path``, both hashes, ``missing``,
+        ``drifted``, ``reload_pending``) so the same drift report and
+        self-heal path handles them. systemd returns one entry per
+        expected/extra stagger drop-in; launchd returns ``[]``.
+        """
+
+    def installed_schedule(self, installed_dir: Path, unit_name: str | None,
+                           instance: int,
+                           max_concurrency: int) -> str | None:
+        """The instance's schedule as INSTALLED on disk (or ``None``).
+
+        The report reads this instead of the computed
+        :meth:`schedule_text`, so an uninstalled or stale schedule is
+        never reported as deployed (Issue #1344).
+        """
+
     def activate_instances(self, run_command, installed_dir: Path,
                            unit_name: str | None = None, *,
                            max_concurrency: int,
@@ -364,11 +401,12 @@ def unit_status(repo_dir: Path, installed_dir: Path,
                 sched: Scheduler | None = None) -> list[dict]:
     """Compare the installed units against the repo templates.
 
-    One entry per managed unit (the impl's ``unit_pairs`` set): the
-    repo and installed paths, both content identities (None when the
-    file is missing) and whether the unit drifted. A missing template
-    or a missing installed unit is drift: the deployment is not
-    verifiable.
+    One entry per managed unit (the impl's ``unit_pairs`` set) plus the
+    platform's non-template installed files (:meth:`Scheduler.extra_drift`,
+    systemd's stagger drop-ins): the repo and installed paths, both
+    content identities (None when the file is missing) and whether the
+    unit drifted. A missing template or a missing installed unit is
+    drift: the deployment is not verifiable.
     """
     sched = sched or detect()
     repo_dir = Path(repo_dir)
@@ -409,6 +447,11 @@ def unit_status(repo_dir: Path, installed_dir: Path,
             # is not file drift, but the next idle tick must reload it.
             "reload_pending": sched.reload_pending(installed_dir, name),
         })
+    # The platform's non-template installed files (systemd's stagger
+    # drop-ins) are part of the SAME drift set (Issue #1344).
+    entries.extend(
+        sched.extra_drift(installed_dir, unit_name, max_concurrency),
+    )
     return entries
 
 

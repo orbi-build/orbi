@@ -743,6 +743,12 @@ def test_launchd_instances_are_staggered_on_the_wall_clock(tmp_path):
     assert launchd_deploy.calendar_minute_offset(2, 3) == 1
     assert launchd_deploy.calendar_minute_offset(3, 3) == 3
 
+    # Issue #1344: the report reads the installed schedule (the plist's
+    # own whole-minute value), and launchd has no non-template installed
+    # file for the drift check to compare.
+    assert sched.installed_schedule(tmp_path, None, 2, 2) == "*-*-* *:02/5"
+    assert sched.extra_drift(tmp_path, None, 2) == []
+
 
 def test_journal_lines_skip_instances_without_a_log_file(tmp_path):
     sched = launchd_deploy.LaunchdScheduler()

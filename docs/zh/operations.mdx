@@ -13,10 +13,13 @@ journal 和 GitHub。正常路径永远不需要 status 命令、轮询或督工
 
 timer 模板 `systemd/orbi@.timer` 部署为 **N 个实例**：
 `orbi@1.timer` 到 `orbi@N.timer`（N = `max_concurrency`，上限
-`MAX_RUNNER_INSTANCES = 5`——Issue #827）。每个实例每 5 分钟触发
+`MAX_RUNNER_INSTANCES = 5`——Issue #827）。实例 1 每 5 分钟触发
 一次，全天 24 小时（`OnCalendar=*-*-* *:00/5`、`AccuracySec=30s`、
-`Persistent=false`——错过的 tick 被丢弃，从不排队），并各自启动自己的
-service 实例（`orbi@1.timer` → `orbi@1.service`，
+`Persistent=false`——错过的 tick 被丢弃，从不排队）；实例 2..N 通过各自的
+`orbi@<i>.timer.d/stagger.conf` drop-in 偏移 `(i-1)*(300 // N)` 秒，
+因此不会同时触发。这些 drop-in 属于启动前 drift 检查的一部分，
+`orbi doctor` / `orbi status` 从已安装的 unit 读取每个实例的 schedule。
+每个实例各自启动自己的 service 实例（`orbi@1.timer` → `orbi@1.service`，
 `orbi@2.timer` → `orbi@2.service`，……），所以可以同时运行
 N 个独立的 Runner 实例。每个 tick 的 service 实例：
 

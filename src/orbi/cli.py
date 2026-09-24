@@ -586,7 +586,7 @@ def doctor_report(config: config_domain.RunnerConfig, installed_dir: Path | None
     # show` rejects the bare template name, and `journalctl
     # -u` with a template-name glob fails when no instance exists —
     # instance names always work), each with the schedule it deploys.
-    lines.extend(scheduler.instance_report_lines(sched, run_command, config))
+    lines.extend(scheduler.instance_report_lines(sched, run_command, config, installed_dir))
     lines.extend(slot_lines(config.slot_dir, config.max_concurrency))
     session = find_session_file(repo_dir)
     lines.append(f"pi: {session if session else 'none'}")
@@ -611,7 +611,7 @@ def status_report(config: config_domain.RunnerConfig) -> str:
     # Platform-resolved (as in doctor): the instance names and the
     # schedule spelling are what this deployment actually installs.
     sched = scheduler.detect()
-    schedule_parts = scheduler.schedule_spellings(sched, config)
+    schedule_parts = scheduler.schedule_spellings(sched, config, sched.installed_unit_dir())
     lines = [
         f"capacity: {config.max_concurrency}",
         f"schedule: {', '.join(schedule_parts)}",
