@@ -586,10 +586,15 @@ context_files = ["AGENTS.md"]
 PUT），否则写宿主 `orbi.toml` 的那一行——并打印 `wrote:` 指明目标
 （Issue #1306）。
 
-其他键一律拒绝：未知键、host-only 身份/安全键（见
+host-only 身份/安全键（见
 [安全](/zh/security)）、坏 TOML 或类型错误都会让 claim fail-fast 并
 在错误里列出违规键，Issue 进入 `ai-blocked`——一个仓库的坏文件绝不
-影响其他池。host-only 集合同样包括宿主调度：`max_concurrency`
+影响其他池。其余不认识的键则被忽略：journal 记一行
+`repo_config_keys_ignored` 指明该键与引擎版本，run 评论带
+`repo_config_ignored`，claim 用已知键继续（Issue #1329）。该文件由交付
+宿主实际运行的引擎版本读取，而它往往比写出该文件的代码更旧，所以新策略
+键必须能被旧引擎安全忽略：它默认保持功能加入前的行为，不认识它的引擎照
+常交付。host-only 集合同样包括宿主调度：`max_concurrency`
 永远不能下放到仓库文件——并发 slot 池属于部署宿主。
 `dispatch_label` 不得是交付生命周期标签
 （`ai-in-progress`、`ai-merged` 等）：那些恒为宿主常量。阻塞落在

@@ -1116,7 +1116,7 @@ def block_repo_config_failure(number: int, source_repo: str,
                 "this is a fail-fast repository precondition the AI does "
                 "not fix "
                 "itself — correct the file on the default branch "
-                "(remove the host-only/unknown key or fix the value) and "
+                "(remove the host-only key or fix the value) and "
                 "relabel the Issue ai-ready for a new run"
             ),
         )
