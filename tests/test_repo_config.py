@@ -46,6 +46,7 @@ def test_parse_repo_config_accepts_every_whitelisted_key():
     text = (
         'base_branch = "beta"\n'
         'active_milestone = "v0.5.0"\n'
+        'auto_next_milestone = false\n'
         'context_files = ["AGENTS.md", "docs/testing.mdx"]\n'
         'dispatch_label = "ai-ready"\n'
         'steering_enabled = false\n'
@@ -57,6 +58,7 @@ def test_parse_repo_config_accepts_every_whitelisted_key():
     assert repo_config.parse_repo_config(text) == repo_config.RepoPolicy(
         base_branch="beta",
         active_milestone="v0.5.0",
+        auto_next_milestone=False,
         context_files=("AGENTS.md", "docs/testing.mdx"),
         dispatch_label="ai-ready",
         steering_enabled=False,
@@ -86,6 +88,29 @@ def test_parse_repo_config_rejects_a_non_boolean_clarify_thin_tickets(value):
         match="clarify_thin_tickets must be a boolean",
     ):
         repo_config.parse_repo_config(f"clarify_thin_tickets = {value}\n")
+
+
+def test_auto_next_milestone_is_a_repository_policy_key():
+    """Issue #1342: the idle auto-advance switch is delivery policy the
+    repository that owns the Milestone declares — never a host-only key
+    (the #527 grouping with `engine_source_track` was wrong: it is not
+    identity or security, and a managed tenant cannot reach the host)."""
+    assert "auto_next_milestone" in repo_config.POLICY_KEYS
+    assert "auto_next_milestone" not in repo_config.HOST_ONLY_KEYS
+    policy = repo_config.parse_repo_config("auto_next_milestone = false\n")
+    assert policy.auto_next_milestone is False
+    assert repo_config.parse_repo_config("auto_next_milestone = true\n") == (
+        repo_config.RepoPolicy(auto_next_milestone=True)
+    )
+
+
+@pytest.mark.parametrize("value", ['"no"', "1", '["yes"]'])
+def test_parse_repo_config_rejects_a_non_boolean_auto_next_milestone(value):
+    with pytest.raises(
+        repo_config.RepoConfigError,
+        match="auto_next_milestone must be a boolean",
+    ):
+        repo_config.parse_repo_config(f"auto_next_milestone = {value}\n")
 
 
 def test_release_confirmation_is_a_repository_policy_key():
@@ -320,6 +345,24 @@ def test_resolve_policy_overrides_all_declared_steering_keys():
     )
     assert (effective.steering_enabled, effective.steering_poll_seconds,
             effective.steering_max_rounds) == (False, 1.0, 7)
+
+
+def test_resolve_policy_auto_next_milestone_precedence():
+    """Issue #1342: a repository value wins over the host, the host is the
+    fallback when the repository omits the key, and the default stays true
+    when neither declares it."""
+    assert repo_config.resolve_policy(
+        config_domain.RunnerConfig(auto_next_milestone=True),
+        repo_config.RepoPolicy(auto_next_milestone=False),
+    ).auto_next_milestone is False
+    assert repo_config.resolve_policy(
+        config_domain.RunnerConfig(auto_next_milestone=False),
+        repo_config.RepoPolicy(),
+    ).auto_next_milestone is False
+    assert repo_config.resolve_policy(
+        config_domain.RunnerConfig(),
+        repo_config.RepoPolicy(),
+    ).auto_next_milestone is True
 
 
 def test_resolve_policy_overrides_clarify_thin_tickets():

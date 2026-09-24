@@ -63,6 +63,7 @@ MAX_REPO_CONTEXT_BYTES = 256 * 1024
 POLICY_KEYS = (
     "base_branch",
     "active_milestone",
+    "auto_next_milestone",
     "context_files",
     "dispatch_label",
     "steering_enabled",
@@ -115,7 +116,6 @@ HOST_ONLY_KEYS = frozenset({
     # Engine source update channel: a deploy-home decision,
     # never a repository policy.
     "engine_source_track",
-    "auto_next_milestone",
     "allow_stale_runner",
     "human_review_gate",
     "release_ci_wait_seconds",
@@ -145,6 +145,7 @@ class RepoPolicy:
 
     base_branch: str | None = None
     active_milestone: str | None = None
+    auto_next_milestone: bool | None = None
     context_files: tuple[str, ...] | None = None
     dispatch_label: str | None = None
     steering_enabled: bool | None = None
@@ -206,6 +207,9 @@ def parse_repo_config(text: str, *, source: str = REPO_CONFIG_PATH) -> RepoPolic
     return RepoPolicy(
         base_branch=cast("str | None", values.get("base_branch")),
         active_milestone=cast("str | None", values.get("active_milestone")),
+        auto_next_milestone=cast(
+            "bool | None", values.get("auto_next_milestone")
+        ),
         context_files=(
             tuple(cast("list[str]", context_files))
             if context_files is not None
@@ -234,6 +238,15 @@ def _validate_value(key: str, value: object, *, source: str) -> object:
     if key == "steering_enabled":
         if not isinstance(value, bool):
             raise RepoConfigError(f"{source}: steering_enabled must be a boolean")
+        return value
+    if key == "auto_next_milestone":
+        # Issue #1342: the idle auto-advance switch is delivery policy, so
+        # the repository that owns the Milestone decides it. A boolean so a
+        # mistyped string never silently freezes or resumes the advance.
+        if not isinstance(value, bool):
+            raise RepoConfigError(
+                f"{source}: auto_next_milestone must be a boolean"
+            )
         return value
     if key == "release_confirmation":
         # Issue #856: opt-in per repository — the finished-Milestone
@@ -336,6 +349,11 @@ def resolve_policy(config: RunnerConfig, policy: RepoPolicy) -> RunnerConfig:
             policy.active_milestone
             if policy.active_milestone is not None
             else config.active_milestone
+        ),
+        auto_next_milestone=(
+            policy.auto_next_milestone
+            if policy.auto_next_milestone is not None
+            else config.auto_next_milestone
         ),
         repo_context_files=(
             policy.context_files

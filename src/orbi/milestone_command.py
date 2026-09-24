@@ -371,7 +371,10 @@ def milestone_set(
     advance a closed active_milestone to the newest open one on the next
     tick, so success here would contradict the real behavior; the repair
     is to reopen the milestone or set `auto_next_milestone = false`
-    first. The variable sync is NOT part of
+    first. `auto_next_milestone` is resolved per key like
+    `active_milestone` (Issue #1342): a value declared in the repository
+    policy wins, the host value is the fallback. The variable sync is NOT
+    part of
     this command: the Runner's next tick publishes
     `ORBI_ACTIVE_MILESTONE` (the bypass contract). Returns
     (old, new, target); every failure raises MilestoneSetError with the
@@ -390,6 +393,13 @@ def milestone_set(
         ) from exc
     declared = policy.active_milestone if policy is not None else None
     current = declared if declared is not None else config.active_milestone
+    # Issue #1342: the auto-advance switch is delivery policy, so the
+    # repository policy value wins over the host fallback here too.
+    auto_next_milestone = (
+        policy.auto_next_milestone
+        if policy is not None and policy.auto_next_milestone is not None
+        else config.auto_next_milestone
+    )
     if current is None:
         raise MilestoneSetError(
             f"milestone_set_failed reason=no active_milestone in "
@@ -431,7 +441,7 @@ def milestone_set(
             f"repo={repo}: the exact title matches {len(matches)} "
             "Milestones; fix=rename or close the duplicate Milestone first"
         )
-    if config.auto_next_milestone and matches[0].get("state") == "closed":
+    if auto_next_milestone and matches[0].get("state") == "closed":
         # A closed active_milestone is exactly what the next idle tick's
         # auto-advance rewrites (Issue #933): reporting success here would
         # promise a claim scope that is undone one tick later.

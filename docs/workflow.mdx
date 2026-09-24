@@ -702,6 +702,7 @@ Only delivery-policy keys are allowed:
 | --- | --- | --- |
 | `base_branch` | string | Delivery base branch for this repository; absent falls back to the matching `[[repositories]].base_branch`, else the host `base_branch`. |
 | `active_milestone` | string | The fresh-claim Milestone scope for this repository. The one exception is the external-takeover scan (Issue #842, decision D1): the fifth, last ready scan has NO Milestone qualifier — an external triage ticket (body marker `<!-- orbi:external-pr:N -->`) is claimable regardless, because an external contribution belongs to no version's scope and must never block the release gate. |
+| `auto_next_milestone` | boolean | The idle auto-advance switch for this repository (Issue #1342): when `false`, a closed active Milestone with a pending higher one is not rewritten — the confirmation Issue carrying the in-ticket `/milestone <version>` command is posted instead. Absent falls back to the host value (default `true`). |
 | `context_files` | string[] | Repository-relative context files; existence and a size cap are checked before injection. |
 | `dispatch_label` | string | The claim label for this repository (default `ai-ready`); the delivery lifecycle labels stay host constants. |
 | `steering_enabled` | boolean | Enables trusted correction polling for this repository; absent falls back to the host value. |

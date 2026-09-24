@@ -7218,13 +7218,18 @@ def test_main_idle_uses_the_single_milestone_reconcile_entry_point(
 def test_main_idle_passes_release_confirmation_from_the_repo_policy(
     monkeypatch, tmp_path,
 ):
-    """Issue #856: the opted-in repository policy reaches the reconcile call."""
+    """Issue #856: the opted-in repository policy reaches the reconcile call.
+
+    Issue #1342: the same per-key precedence applies to
+    `auto_next_milestone`, so the repository value reaches the idle path.
+    """
     monkeypatch.setitem(milestone.__dict__, "validate_active_milestone", lambda *args: None)
     _write_prompts(tmp_path)
     fake = FakeGh("owner/repo")
     fake.add_milestone(1, title="v0.4.0")
     fake.set_repo_config(
         'dispatch_label = "dev-queue"\nrelease_confirmation = true\n'
+        "auto_next_milestone = false\n"
     )
     monkeypatch.setattr(seam, "run_command", fake)
     monkeypatch.setattr(claim, "pick_next_delivery", lambda *args, **kwargs: None)
@@ -7241,6 +7246,10 @@ def test_main_idle_passes_release_confirmation_from_the_repo_policy(
     assert runner.main(["--config", str(config)]) == 0
     assert seen["release_confirmation"] is True
     assert seen["dispatch_label"] == "dev-queue"
+    # Issue #1342: `auto_next_milestone` is a repository policy key too --
+    # the repo value (false) must reach the idle path even though the host
+    # default is true, so a managed tenant can stop the auto-advance.
+    assert seen["auto_next_milestone"] is False
 
 
 def test_main_passes_none_active_milestone_when_unconfigured(

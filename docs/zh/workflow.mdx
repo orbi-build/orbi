@@ -565,6 +565,7 @@ contents API 读取仓库**默认分支 tip** 上的 `.github/orbi.toml`——
 | --- | --- | --- |
 | `base_branch` | string | 该仓库的交付 base 分支；缺席时回退到匹配的 `[[repositories]].base_branch`，否则回退宿主 `base_branch`。 |
 | `active_milestone` | string | 该仓库 fresh claim 的 Milestone 范围。唯一例外是外部接管扫描（Issue #842 决策 D1）：第五条、排最后的 ready 扫描**不带** Milestone 限定——带正文标记 `<!-- orbi:external-pr:N -->` 的外部 triage 票始终可被认领，因为外部贡献不属于任何版本的范围，绝不能阻塞发版门禁。 |
+| `auto_next_milestone` | boolean | 该仓库的空闲自动推进开关（Issue #1342）：为 `false` 时，已关闭的 active Milestone 即使有更高的待发布候选也不会被改写——改为发一条确认 Issue，携带票内 `/milestone <版本>` 命令。缺席时回退宿主值（默认 `true`）。 |
 | `context_files` | string[] | 仓库内相对路径的上下文文件；注入前校验存在性与大小上限。 |
 | `dispatch_label` | string | 该仓库的认领标签（默认 `ai-ready`）；交付生命周期标签恒为宿主常量。 |
 | `steering_enabled` | boolean | 为该仓库启用受信任修正轮询；缺席时回退到宿主值。 |

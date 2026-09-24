@@ -20,6 +20,8 @@ from pathlib import Path
 import pytest
 
 import orbi.runner as runner
+import orbi.repo_config as repo_config
+from orbi import config as config_domain
 from orbi import milestone
 from orbi import milestone_command
 from orbi import ticket_command
@@ -1653,3 +1655,55 @@ def test_repo_policy_carries_the_active_milestone_the_idle_path_reads():
     # The idle path and the claim scans read ONE policy object, so a
     # repository-file `active_milestone` reaches the command path.
     assert RepoPolicy(active_milestone="v0.5.40").active_milestone == "v0.5.40"
+
+
+def test_repo_policy_auto_next_milestone_false_stops_the_idle_advance(
+    monkeypatch, tmp_path,
+):
+    """Issue #1342 user journey: a managed tenant declares
+    `auto_next_milestone = false` in `.github/orbi.toml`; the closed active
+    Milestone is NOT rewritten to the higher candidate and the confirmation
+    Issue carrying the in-ticket `/milestone <version>` command is opened
+    instead, so the tenant decides the next version."""
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
+    fake = FakeMilestoneGh(
+        policy_text=(
+            'active_milestone = "v0.5.40"\n'
+            "auto_next_milestone = false\n"
+        ),
+    )
+    fake.milestones.append(
+        {"title": "v0.5.41", "state": "open", "open_issues": 0},
+    )
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
+    # The engine acts on the value the repository file declares, resolved
+    # per key over the host fallback (whose default here is `true`).
+    policy = repo_config.read_repo_config(
+        "owner/repo", run_command=fake.run,
+    )
+    effective = repo_config.resolve_policy(
+        config_domain.RunnerConfig(
+            source_repos=["owner/repo"], active_milestone="v0.5.40",
+            auto_next_milestone=True,
+        ),
+        policy,
+    )
+    assert effective.auto_next_milestone is False
+    assert milestone.advance_active_milestone_on_idle(
+        "owner/repo", "v0.5.40", config,
+        auto_next_milestone=effective.auto_next_milestone,
+        parse_version_title=runner._parse_version_title,
+        policy=policy, policy_path=".github/orbi.toml",
+        base_branch="main", dispatch_label=READY_LABEL,
+        version_file="pyproject.toml",
+    ) == ("closed", None)
+    # No policy PUT: the engine did not overwrite the tenant's
+    # `active_milestone`, and it did not fall back to the host config either.
+    assert fake.policy_puts == []
+    assert 'active_milestone = "v0.5.40"' in fake.policy_text
+    assert 'active_milestone = "v0.5.40"' in config.read_text()
+    # The confirmation Issue is the decision channel.
+    assert len(fake.notices) == 1
+    assert "orbi-milestone-advance" in fake.notices[0]["body"]

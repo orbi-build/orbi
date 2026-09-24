@@ -342,6 +342,56 @@ def test_milestone_set_closed_target_allowed_with_auto_next_milestone_false(
     assert "active_milestone: v0.5.0 -> v0.5.7" in capsys.readouterr().out
 
 
+def test_milestone_set_closed_target_allowed_by_the_repo_policy_switch(
+    tmp_path, monkeypatch, capsys,
+):
+    """Issue #1342: `auto_next_milestone = false` declared in the
+    repository policy is the effective switch, so a closed target stays
+    allowed even while the host value is the default `true`."""
+    config_path = make_world(tmp_path)
+    gh = FakeGh(REPO)
+    gh.set_repo_config(
+        'active_milestone = "v0.5.0"\nauto_next_milestone = false\n'
+    )
+    gh.add_milestone(1, title="v0.5.8", open_issues=2)
+    gh.add_milestone(2, title="v0.5.7", state="closed")
+    wire(monkeypatch, gh)
+
+    assert run_set(config_path, "v0.5.7") == 0
+
+    # The value lands where the engine reads it back: the repository
+    # policy, not the host config that never declared the key.
+    assert 'active_milestone = "v0.5.7"' in gh.repo_config
+    assert 'active_milestone = "v0.5.0"' in config_path.read_text(
+        encoding="utf-8")
+    assert "active_milestone: v0.5.0 -> v0.5.7" in capsys.readouterr().out
+
+
+def test_milestone_set_closed_target_refused_by_the_repo_policy_switch(
+    tmp_path, monkeypatch, capsys,
+):
+    """Issue #1342: a repository-declared `auto_next_milestone = true`
+    also wins over a host `false`, so the closed-target refusal still
+    fires for that repository and the config stays byte-identical."""
+    config_path = make_world(tmp_path, auto_next_milestone=False)
+    original = config_path.read_bytes()
+    gh = FakeGh(REPO)
+    gh.set_repo_config(
+        'active_milestone = "v0.5.0"\nauto_next_milestone = true\n'
+    )
+    gh.add_milestone(1, title="v0.5.8", open_issues=2)
+    gh.add_milestone(2, title="v0.5.7", state="closed")
+    wire(monkeypatch, gh)
+
+    exit_code = run_set(config_path, "v0.5.7")
+
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "reason=milestone_closed" in err
+    assert "auto_next_milestone = false" in err
+    assert config_path.read_bytes() == original
+
+
 # --- the failure paths (the config file must never change) ----------------------
 
 
