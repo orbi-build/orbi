@@ -14191,7 +14191,7 @@ def test_load_config_reads_pi_model_keys(tmp_path):
         'pi_model = "gpt-5.6-sol"\n'
         'pi_thinking = "medium"\n'
         'review_pi_provider = "deepseek"\n'
-        'review_pi_model = "deepseek-chat"\n'
+        'review_pi_model = "deepseek-flash"\n'
         'review_pi_thinking = "high"\n',
         encoding="utf-8",
     )
@@ -14200,7 +14200,7 @@ def test_load_config_reads_pi_model_keys(tmp_path):
     assert config.pi_model == "gpt-5.6-sol"
     assert config.pi_thinking == "medium"
     assert config.review_pi_provider == "deepseek"
-    assert config.review_pi_model == "deepseek-chat"
+    assert config.review_pi_model == "deepseek-flash"
     assert config.review_pi_thinking == "high"
 
 
