@@ -30,10 +30,15 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from orbi.journal import event
 from orbi.progress import quote_value
+
+if TYPE_CHECKING:
+    # Annotation-only: ``orbi.config`` imports this module at runtime,
+    # so this module never imports it back.
+    from orbi import config as config_domain
 
 # The honest-failure link carried by every platform-limitation error
 # (install.sh, the dispatch below): platform support status lives here.
@@ -126,6 +131,48 @@ def instance_schedule(instance: int, max_concurrency: int) -> str:
     return f"*-*-* *:{m:02d}/5:{s:02d}"
 
 
+def schedule_spellings(sched: Scheduler,
+                       config: config_domain.RunnerConfig) -> list[str]:
+    """``<instance>=<schedule>`` for every configured instance.
+
+    The schedule is spelled the way THIS platform deploys it
+    (:meth:`Scheduler.schedule_text`), so the report and the installed
+    units cannot disagree (Issue #1320).
+    """
+    return [
+        f"{unit}={sched.schedule_text(index, config.max_concurrency)}"
+        for index, unit in enumerate(
+            sched.timer_instances(config.unit_name, config.max_concurrency),
+            start=1,
+        )
+    ]
+
+
+def instance_report_lines(sched: Scheduler, run_command,
+                          config: config_domain.RunnerConfig) -> list[str]:
+    """The doctor's per-unit state lines and per-instance schedule lines.
+
+    One ``<unit>: <state>`` line per managed unit (the timer names
+    first, then the service names; a name in both sets is listed once),
+    then one ``schedule: <instance>=<schedule>`` line per configured
+    timer instance. The schedule spelling belongs to the scheduler
+    contract, and ``cli`` is frozen by the size ratchet (Issue #1229),
+    so the rendering lives here (Issue #1320).
+    """
+    lines = [
+        f"{unit}: {sched.unit_state(run_command, unit)}"
+        for unit in dict.fromkeys((
+            *sched.timer_instances(config.unit_name, config.max_concurrency),
+            *sched.service_instances(config.unit_name, config.max_concurrency),
+        ))
+    ]
+    lines.extend(
+        f"schedule: {spelling}"
+        for spelling in schedule_spellings(sched, config)
+    )
+    return lines
+
+
 @runtime_checkable
 class Scheduler(Protocol):
     """The hooks one platform scheduler implements.
@@ -196,6 +243,15 @@ class Scheduler(Protocol):
 
     def unit_state(self, run_command, instance: str) -> str:
         """``active`` / ``inactive`` for one instance."""
+
+    def schedule_text(self, instance: int, max_concurrency: int) -> str:
+        """The instance's deployed schedule, spelled for this platform.
+
+        The two schedulers cannot always express the same offset
+        (launchd's ``StartCalendarInterval`` has whole-minute
+        granularity), so the reports read the spelling the platform
+        actually deploys instead of one shared string.
+        """
 
     def instances_status(self, run_command, unit_name: str | None = None,
                          *, max_concurrency: int) -> dict[str, dict]:

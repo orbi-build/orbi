@@ -204,17 +204,9 @@ def sync_stagger_dropins(installed_dir: Path, unit_name: str | None = None,
 
     Instance 1 keeps the template value (no drop-in).
     Instances 2..max_concurrency get a stagger.conf drop-in with OnCalendar.
-    Surplus instances and instance 1 have their stagger.conf drop-in removed.
+    Surplus instances have their stagger.conf drop-in removed.
     """
     instances = timer_instances(unit_name, MAX_RUNNER_INSTANCES)
-    # Remove drop-in for instance 1 (keeps template value)
-    inst1_dir = installed_dir / f"{instances[0]}.d"
-    inst1_file = inst1_dir / "stagger.conf"
-    if inst1_file.is_file():
-        inst1_file.unlink()
-    if inst1_dir.is_dir() and not any(inst1_dir.iterdir()):
-        inst1_dir.rmdir()
-
     # Write drop-ins for instances 2..max_concurrency
     for idx in range(2, max_concurrency + 1):
         instance = instances[idx - 1]
@@ -325,13 +317,18 @@ class SystemdScheduler:
             "--value", instance,
         ])
 
+    def schedule_text(self, instance: int, max_concurrency: int) -> str:
+        """The ``OnCalendar`` spelling of the deployed instance schedule."""
+        return instance_schedule(instance, max_concurrency)
+
     def instances_status(self, run_command, unit_name: str | None = None,
                          *, max_concurrency: int) -> dict[str, dict]:
         """One report entry per configured timer instance.
 
         The enabled state (``is-enabled``), the active state
         (``show -p ActiveState``), the next trigger time
-        (``list-timers``, read once), and the instance schedule.
+        (``list-timers``, read once), and the instance schedule
+        (``OnCalendar`` spelling).
         """
         list_timers = run_command([
             "systemctl", "--user", "list-timers", "--no-pager",
@@ -342,7 +339,7 @@ class SystemdScheduler:
                 "enabled": self.unit_enabled(run_command, instance),
                 "active": self.unit_state(run_command, instance) == "active",
                 "next": timer_next_trigger(list_timers, instance),
-                "schedule": instance_schedule(index, max_concurrency),
+                "schedule": self.schedule_text(index, max_concurrency),
             }
         return instances
 

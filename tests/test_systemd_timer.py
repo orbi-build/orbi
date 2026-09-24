@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -230,6 +231,70 @@ def test_analyze_verify_skips_without_systemd_analyze(monkeypatch):
     with pytest.raises(pytest.skip.Exception):
         test_templates_and_instances_pass_systemd_analyze_verify(
             monkeypatch, Path("/tmp"),
+        )
+
+
+def next_elapse(analyze: str, expression: str) -> datetime:
+    """The next fire time `systemd-analyze calendar` reports (real CLI)."""
+    result = subprocess.run(
+        [analyze, "calendar", expression],
+        capture_output=True, text=True, check=True, timeout=60,
+    )
+    match = re.search(
+        r"Next elapse:\s+(\w{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})",
+        result.stdout,
+    )
+    assert match, result.stdout
+    return datetime.strptime(match.group(1), "%a %Y-%m-%d %H:%M:%S")
+
+
+def test_stagger_dropin_spreads_the_instances_for_the_real_systemd(
+    tmp_path, monkeypatch,
+):
+    """Issue #1320 on the REAL scheduler: the installed shape — the timer
+    template rendered as `orbi install-units` does, plus the
+    `orbi@2.timer.d/stagger.conf` drop-in `sync_stagger_dropins` writes
+    (an empty `OnCalendar=` reset, then the staggered value) — is accepted
+    by `systemd-analyze --user verify` (which resolves the drop-in by
+    name beside the unit, so the file name and the reset line are the
+    ones systemd loads), and the expression puts instance 2 150s away
+    from instance 1 on the same 5-minute grid."""
+    analyze = shutil.which("systemd-analyze")
+    if analyze is None:
+        pytest.skip("systemd-analyze not available on this machine")
+    unit_dir = tmp_path / "systemd" / "user"
+    unit_dir.mkdir(parents=True)
+    (unit_dir / "orbi@.timer").write_bytes(
+        systemd_deploy.render_unit_template(
+            TIMER_FILE.read_text(encoding="utf-8"), REPO_ROOT,
+        ).encode("utf-8"),
+    )
+    systemd_deploy.sync_stagger_dropins(unit_dir, None, max_concurrency=2)
+    assert (unit_dir / "orbi@2.timer.d" / "stagger.conf").read_text(
+        encoding="utf-8",
+    ) == "[Timer]\nOnCalendar=\nOnCalendar=*-*-* *:02/5:30\n"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    verify = subprocess.run(
+        [analyze, "--user", "verify", str(unit_dir / "orbi@2.timer")],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert verify.returncode == 0, f"{verify.stdout}{verify.stderr}"
+    # Both elapses are exact instants of the 300s cycle (phase 0 and phase
+    # 150), so the difference is exact whichever moment each command ran.
+    difference = abs(
+        next_elapse(analyze, "*-*-* *:00/5")
+        - next_elapse(analyze, "*-*-* *:02/5:30")
+    )
+    assert difference % timedelta(seconds=300) == timedelta(seconds=150)
+
+
+def test_stagger_dropin_check_skips_without_systemd_analyze(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    with pytest.raises(pytest.skip.Exception):
+        test_stagger_dropin_spreads_the_instances_for_the_real_systemd(
+            tmp_path, monkeypatch,
         )
 
 
