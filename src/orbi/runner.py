@@ -5847,6 +5847,8 @@ def report_delivery_failure(
                 "failure_history_read_failed", issue=number,
                 run_id=run_id,
             )
+            # The #1351 retry budget IS this read: no read, no retry.
+            history = None
         else:
             reported_failure = _reported_failure_comment(
                 history, run_id, fingerprint,
@@ -5869,13 +5871,11 @@ def report_delivery_failure(
                         fingerprint=fingerprint,
                     )
 
-    # Re-queue the Issue when this is the first transient failure; a
-    # transient failure whose budget is spent (a prior transient record in
-    # the history) stays `ai-blocked` and names the spent budget. Without a
-    # bound run id or a readable history the Issue stays blocked — the
-    # retry is never guessed (Issue #1351).
+    # Re-queue the first transient failure only; a spent budget, a missing
+    # run id or an unreadable history stays `ai-blocked` (Issue #1351).
     requeue = (
-        retry_candidate and run_id is not None and not automatic_retry_used
+        retry_candidate and run_id is not None and history is not None
+        and not automatic_retry_used
     )
     retry_spent = retry_candidate and automatic_retry_used
     # The streak guard above may have escalated `blocked`; re-derive the
@@ -5923,7 +5923,9 @@ def report_delivery_failure(
     if requeue:
         # The one-shot retry returns the Issue to the ready queue: drop the
         # delivery labels and `ai-blocked`, add `ai-ready` alone. The retry
-        # comment carries the failure record AND the visible budget line.
+        # comment carries the failure record AND the visible budget line;
+        # the retry replaces the blocked-path action text (Issue #1351).
+        action = failure.AUTO_RETRY_ACTION
         apply_label_patch(
             number, repo=source_repo, event=EVENT_REQUEUE,
             current_labels=labels,

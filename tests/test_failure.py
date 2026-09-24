@@ -646,13 +646,15 @@ def test_report_delivery_failure_fix_needed_milestone_is_machine_readable(
 # --------------------------------------------------------------------------
 
 def _retry_fakes(monkeypatch, *, history=None,
-                 labels=("ai-in-progress",)):
+                 labels=("ai-in-progress",), history_unreadable=False):
     """A mutable comment store behind the REAL label patch.
 
     `apply_label_patch` runs for real and its `edit_issue` calls are
     captured, so a test asserts the actual label transition rather than a
     stub. A posted failure comment joins the store exactly like the GitHub
     API — that shared store is what a second runner instance reads.
+    `history_unreadable` makes the history read itself fail (the #825
+    fail-open path).
     """
     store = [dict(comment) for comment in (history or [])]
     captured = {"comments": [], "edits": [], "milestones": []}
@@ -668,8 +670,13 @@ def _retry_fakes(monkeypatch, *, history=None,
             ),
         })
 
+    def read_issue_comments(*args, **kwargs):
+        if history_unreadable:
+            raise RuntimeError("gh api unavailable")
+        return list(store)
+
     monkeypatch.setattr(seam, "comment_issue", post_issue_comment)
-    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: list(store))
+    monkeypatch.setattr(seam, "issue_comments", read_issue_comments)
     monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: set(labels))
     monkeypatch.setattr(
         seam, "edit_issue",
@@ -714,6 +721,10 @@ def test_first_github_transient_failure_requeues_the_issue_once(monkeypatch):
     assert captured["edits"] == [("ai-ready", "ai-in-progress")]
     body = captured["comments"][0]
     assert failure.AUTO_RETRY_LINE in body
+    # Nothing is left for a human: the blocked-path action text would
+    # tell the customer to fix and re-run a transient GitHub failure.
+    assert f"**Action:** {failure.AUTO_RETRY_ACTION}" in body
+    assert "Fix the failure described below" not in body
     parsed = failure.parse(body)
     assert parsed == record_for()
     # The retry comment is itself the record the next occurrence reads.
@@ -785,6 +796,27 @@ def test_two_instances_requeue_a_transient_failure_at_most_once(monkeypatch):
     requeues = [edit for edit in captured["edits"] if edit[0] == "ai-ready"]
     assert len(retry_comments) == 1
     assert len(requeues) == 1
+
+
+def test_transient_retry_is_never_guessed_when_the_history_read_fails(
+        monkeypatch, caplog):
+    """Issue #1351: the retry budget IS the Issue's failure history. A
+    failed read — the fail-open #825 path — leaves the budget unknown, and
+    an unknown budget is never spent: the Issue stays `ai-blocked`.
+    Reading it as "no prior transient record" would re-queue the Issue on
+    every tick of a GitHub outage (the same scene that produces the
+    transient failure) instead of retrying it once."""
+    captured, _ = _retry_fakes(monkeypatch, history_unreadable=True)
+    caplog.set_level("INFO")
+
+    outcome = _report_failure(github_transient_error())
+
+    assert outcome == "blocked"
+    assert captured["edits"] == [("ai-blocked", "ai-in-progress")]
+    body = captured["comments"][0]
+    assert failure.AUTO_RETRY_LINE not in body
+    assert failure.AUTO_RETRY_SPENT_LINE not in body
+    assert "failure_history_read_failed" in caplog.text
 
 
 def test_transient_failure_scan_skips_corrupted_and_untrusted_comments():

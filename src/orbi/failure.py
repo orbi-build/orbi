@@ -286,6 +286,13 @@ AUTO_RETRY_SPENT_LINE = (
     "The automatic retry was already used (transient failure, "
     "attempt 1 of 1)."
 )
+# A re-queued transient failure needs NO human repair, so the blocked-path
+# action text ("fix the failure and re-run this Issue") would contradict
+# the retry it announces; the requeued report carries this text instead.
+AUTO_RETRY_ACTION = (
+    "Nothing: the Issue returned to ai-ready and the next tick retries it "
+    "automatically."
+)
 
 
 def _failure_detail(exc: BaseException) -> str:
