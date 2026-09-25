@@ -165,6 +165,12 @@ def fake_run_factory(state: dict):
             return "main"
         if head[:2] == ["git", "status"]:
             return ""
+        if head[:3] == ["git", "check-ignore", "--quiet"]:
+            # `.orbi/` counts as untracked until the setup pins it in the
+            # local exclude (Issue #1367).
+            raise subprocess.CalledProcessError(1, command)
+        if head[:4] == ["git", "rev-parse", "--git-path", "info/exclude"]:
+            return ".git/info/exclude"
         if head[:3] == ["git", "fetch", "origin"]:
             return ""
         if head[:3] == ["git", "rev-parse", "origin/main"]:

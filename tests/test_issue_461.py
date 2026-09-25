@@ -91,7 +91,7 @@ def test_setup_excludes_runner_worktrees_and_reports_structured_change(tmp_path)
         return ""
 
     assert pilot_setup.ensure_worktrees_ignored(repo, run_command=run) is True
-    assert exclude.read_text() == ".worktrees/\n"
+    assert exclude.read_text() == ".worktrees/\n.orbi/\n"
     assert run(["noop"]) == ""
 
 
@@ -104,13 +104,15 @@ def test_setup_does_not_duplicate_a_local_exclude_entry(tmp_path):
     def run(command, **kwargs):
         command = strip_safety(command)
         if command[:3] == ["git", "check-ignore", "--quiet"]:
+            if command[-1] == ".orbi/":
+                return "ignored"
             raise subprocess.CalledProcessError(1, command)
         return str(exclude)
     assert pilot_setup.ensure_worktrees_ignored(repo, run_command=run) is True
     assert exclude.read_text() == ".worktrees/\n"
 
 
-def test_setup_keeps_an_already_ignored_worktrees_directory(tmp_path):
+def test_setup_keeps_an_already_ignored_runtime_directory(tmp_path):
     repo = tmp_path / "checkout"
     (repo / ".worktrees").mkdir(parents=True)
     assert pilot_setup.ensure_worktrees_ignored(

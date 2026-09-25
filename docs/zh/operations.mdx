@@ -596,6 +596,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `worktree_reclaimed` | 批量回收了已释放的任务 worktree |
 | `worktree_reclaim_failed` | worktree 回收的一步失败（旁路；扫描继续） |
 | `worktrees_exclude_added` | 一个 worktrees 路径已加入本地 git exclude |
+| `orbi_exclude_added` | 一个 `.orbi/` 运行时路径已加入本地 git exclude |
 | `runner_runtime_exclude_skipped` | 运行时 exclude 修复被跳过（已正确） |
 | `runner_runtime_exclude_repaired` | 运行时 exclude 已修复 |
 | `repo_config_invalid` | 仓库配置校验失败 |

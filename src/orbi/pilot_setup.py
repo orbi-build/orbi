@@ -51,6 +51,7 @@ from pathlib import Path
 LOGGER = logging.getLogger("orbi.pilot_setup")
 
 from orbi import runner, config as config_domain
+from orbi import gitops
 from orbi import cli_source
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
@@ -706,28 +707,27 @@ def install_units_step(repo_dir: Path, installed_dir: Path | None,
 
 
 def ensure_worktrees_ignored(repo_dir: Path, *, run_command) -> bool:
-    """Keep Runner-created worktrees out of the main checkout status."""
-    if not (Path(repo_dir) / ".worktrees").is_dir():
-        return False
-    try:
-        run_git(["git", "check-ignore", "--quiet", "--", ".worktrees/"],
-                command_runner=run_command, cwd=repo_dir)
-        return False
-    except subprocess.CalledProcessError:
-        exclude = Path(run_git(
-            ["git", "rev-parse", "--git-path", "info/exclude"],
-            command_runner=run_command, cwd=repo_dir))
-        if not exclude.is_absolute():
-            exclude = Path(repo_dir) / exclude
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-        if ".worktrees/" not in existing.splitlines():
-            exclude.write_text(
-                existing + ("\n" if existing and not existing.endswith("\n") else "")
-                + ".worktrees/\n", encoding="utf-8",
-            )
-        event("worktrees_exclude_added", repo=repo_dir, path=exclude)
-        return True
+    """Keep Orbi-owned runtime dirs out of the main checkout status.
+
+    ``.worktrees/`` holds Runner-created delivery worktrees, ``.orbi/``
+    Orbi's runtime state (``base-sync.lock``, ``cli-install.json``,
+    ``health.json``, ``slots/``). Untracked, either makes the checkout
+    dirty and blocks every later ``orbi setup`` retry (Issue #1367).
+    ``.orbi/`` is pinned whether or not it exists yet, so the Runner's
+    later writes can never dirty the checkout; ``.worktrees/`` keeps its
+    existence gate.
+    """
+    entries = [(".orbi/", "orbi_exclude_added")]
+    if (Path(repo_dir) / ".worktrees").is_dir():
+        entries.insert(0, (".worktrees/", "worktrees_exclude_added"))
+    added = False
+    for pattern, kind in entries:
+        exclude = gitops.pin_git_exclude(
+            repo_dir, pattern, run_command=run_command)
+        if exclude is not None:
+            event(kind, repo=repo_dir, path=exclude)
+            added = True
+    return added
 
 
 def check_checkout(repo_dir: Path, base_branch: str,

@@ -381,3 +381,34 @@ def freeze_base(repo_dir: Path, base_branch: str) -> str:
     return run_git(
         ["git", "rev-parse", f"origin/{base_branch}"], cwd=repo_dir,
     )
+
+
+def pin_git_exclude(repo_dir: Path, pattern: str, *,
+                    run_command) -> Path | None:
+    """Idempotently pin `pattern` in the checkout's local git exclude.
+
+    The exclude file is ``<git-path> info/exclude`` (repository-local
+    metadata, never a tracked file). Returns that path when the pattern
+    was handled, or ``None`` when `pattern` is already ignored (by this
+    file, the repository ``.gitignore`` or the global excludes); the
+    pattern is written at most once.
+    """
+    try:
+        run_git(["git", "check-ignore", "--quiet", "--", pattern],
+                command_runner=run_command, cwd=repo_dir)
+        return None
+    except subprocess.CalledProcessError:
+        pass
+    exclude = Path(run_git(
+        ["git", "rev-parse", "--git-path", "info/exclude"],
+        command_runner=run_command, cwd=repo_dir))
+    if not exclude.is_absolute():
+        exclude = Path(repo_dir) / exclude
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    if pattern not in existing.splitlines():
+        exclude.write_text(
+            existing + ("\n" if existing and not existing.endswith("\n") else "")
+            + pattern + "\n", encoding="utf-8",
+        )
+    return exclude
