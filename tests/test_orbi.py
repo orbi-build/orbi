@@ -13,7 +13,7 @@ import dataclasses
 
 import orbi.runner as runner
 import orbi.cli as orbi
-from seam import seam
+from seam import seam, strip_safety
 
 # The systemd-shape deployment/setup contract, pinned to the systemd
 # impl on every host (the conftest fixture documents the seam).
@@ -1353,6 +1353,7 @@ def _fake_doctor_commands(monkeypatch, ssh_down: bool = False,
     calls: list = []
 
     def fake_run(command, **kwargs):
+        command = strip_safety(command)
         calls.append(command)
         if command[:3] == ["git", "rev-parse", "HEAD"]:
             return "0123456789abcdef0123456789abcdef01234567"
@@ -1381,6 +1382,10 @@ def _fake_doctor_commands(monkeypatch, ssh_down: bool = False,
             return "line one\nline two"
         raise AssertionError(f"unexpected command: {command}")
 
+    # `cli` is not part of the seam fan-out (it binds the seam for its
+    # own gh calls); `seam.run_command` covers `orbi.journal.run_command`,
+    # the function `run_git` executes through (Issue #1366).
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(orbi, "run_command", fake_run)
     monkeypatch.setattr(orbi, "merge_gate_preflight", lambda repo, branch: [
         f"merge_gate: PASS repo={repo} branch={branch} protection readable",

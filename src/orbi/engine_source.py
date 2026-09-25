@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Callable
 
 from orbi import scheduler
-from orbi.journal import event
+from orbi.journal import event, run_git
 from orbi.progress import quote_value
 
 # One git fetch inside one sync; the unit's ExecStartPre timeout (90 s)
@@ -162,7 +162,10 @@ def _probe(run_command: Callable[..., str], args: list[str],
            cwd: Path) -> str | None:
     """One LOCAL read-only git probe; None when git cannot answer."""
     try:
-        return run_command(["git", *args], cwd=cwd, timeout=15)
+        return run_git(
+            ["git", *args], command_runner=run_command, cwd=cwd,
+            timeout=15,
+        )
     except Exception:
         return None
 
@@ -193,8 +196,9 @@ def resolve_expected_head(track: str, cwd: Path, *,
             "resolved": ref, "expected": expected,
         }
     if kind == "release":
-        tags = (run_command(
+        tags = (run_git(
             ["git", "tag", "--list", "v*"], cwd=cwd, timeout=15,
+            command_runner=run_command,
         ) or "").split()
         tag = latest_release_tag(tags)
         if tag is None:
@@ -248,8 +252,9 @@ def _fail_on_dirty(deploy_home: Path, track: str, *,
                    run_command: Callable[..., str]) -> None:
     """Fail closed on tracked local changes before ANY mutation (the
     same porcelain contract as the doctor's deploy-home check)."""
-    status = run_command(
+    status = run_git(
         ["git", "status", "--short", "--untracked-files=no"],
+        command_runner=run_command,
         cwd=deploy_home, timeout=15,
     )
     # run_command strips the stdout, so the first porcelain line can lose
@@ -280,12 +285,19 @@ def _deploy_home_dirty_line(deploy_home: Path, files: list[str]) -> str:
 def _checkout_locked_head(deploy_home: Path, track: str, expected: str, *,
                           run_command: Callable[..., str]) -> str:
     """Detach onto the resolved commit (idempotent) and return the head."""
-    head = run_command(["git", "rev-parse", "HEAD"], cwd=deploy_home)
+    head = run_git(
+        ["git", "rev-parse", "HEAD"],
+        command_runner=run_command, cwd=deploy_home,
+    )
     if head != expected:
-        run_command(
-            ["git", "checkout", "--detach", expected], cwd=deploy_home,
+        run_git(
+            ["git", "checkout", "--detach", expected],
+            command_runner=run_command, cwd=deploy_home,
         )
-        head = run_command(["git", "rev-parse", "HEAD"], cwd=deploy_home)
+        head = run_git(
+            ["git", "rev-parse", "HEAD"],
+            command_runner=run_command, cwd=deploy_home,
+        )
     if head != expected:
         raise EngineSourceError(
             f"engine_source_unverified engine_source_track={track} "
@@ -299,8 +311,9 @@ def _sync_branch(deploy_home: Path, track: str, branch: str, *,
                  run_command: Callable[..., str]) -> dict:
     """Branch/main mode: fetch, land on the branch, fast-forward, verify."""
     try:
-        run_command(
+        run_git(
             ["git", "fetch", "--no-auto-maintenance", "origin", branch],
+            command_runner=run_command,
             cwd=deploy_home, timeout=FETCH_TIMEOUT_SECONDS,
         )
     except Exception:
@@ -320,7 +333,10 @@ def _sync_branch(deploy_home: Path, track: str, branch: str, *,
         raise
     resolved = resolve_expected_head(track, deploy_home, run_command=run_command)
     expected = resolved["expected"]
-    head = run_command(["git", "rev-parse", "HEAD"], cwd=deploy_home)
+    head = run_git(
+        ["git", "rev-parse", "HEAD"],
+        command_runner=run_command, cwd=deploy_home,
+    )
     if head != expected:
         local_branch = (
             _probe(run_command,
@@ -328,10 +344,14 @@ def _sync_branch(deploy_home: Path, track: str, branch: str, *,
                    deploy_home)
         )
         if local_branch is not None:
-            run_command(["git", "checkout", branch], cwd=deploy_home)
+            run_git(
+                ["git", "checkout", branch],
+                command_runner=run_command, cwd=deploy_home,
+            )
             try:
-                run_command(
+                run_git(
                     ["git", "merge", "--ff-only", resolved["resolved"]],
+                    command_runner=run_command,
                     cwd=deploy_home,
                 )
             except Exception:
@@ -343,11 +363,15 @@ def _sync_branch(deploy_home: Path, track: str, branch: str, *,
                     f"{resolved['resolved']}"
                 ) from None
         else:
-            run_command(
+            run_git(
                 ["git", "checkout", "-b", branch, resolved["resolved"]],
+                command_runner=run_command,
                 cwd=deploy_home,
             )
-        head = run_command(["git", "rev-parse", "HEAD"], cwd=deploy_home)
+        head = run_git(
+            ["git", "rev-parse", "HEAD"],
+            command_runner=run_command, cwd=deploy_home,
+        )
     if head != expected:
         raise EngineSourceError(
             f"engine_source_unverified engine_source_track={track} "
@@ -369,9 +393,9 @@ def _fetch_exact_tag(deploy_home: Path, track: str, tag: str, *,
     """Fetch one exact tag; missing remotely vs conflicting locally are
     two distinct structured reasons (both fail closed)."""
     try:
-        run_command(
+        run_git(
             ["git", "fetch", "--no-auto-maintenance", "origin",
-             f"refs/tags/{tag}:refs/tags/{tag}"],
+             f"refs/tags/{tag}:refs/tags/{tag}"], command_runner=run_command,
             cwd=deploy_home, timeout=FETCH_TIMEOUT_SECONDS,
         )
     except Exception:
@@ -406,9 +430,9 @@ def sync_engine_source(deploy_home: Path, track: str, *,
             deploy_home, track, argument, run_command=run_command,
         )
     if kind == "release":
-        run_command(
+        run_git(
             ["git", "fetch", "--no-auto-maintenance", "origin",
-             "refs/tags/v*:refs/tags/v*"],
+             "refs/tags/v*:refs/tags/v*"], command_runner=run_command,
             cwd=deploy_home, timeout=FETCH_TIMEOUT_SECONDS,
         )
     elif kind == "tag":
@@ -419,8 +443,9 @@ def sync_engine_source(deploy_home: Path, track: str, *,
         # GitHub rejects fetching unadvertised SHAs (`not our ref`), so
         # the sha channel fetches every advertised ref once and verifies
         # the commit locally; an unreachable SHA fails closed.
-        run_command(
+        run_git(
             ["git", "fetch", "--no-auto-maintenance", "origin"],
+            command_runner=run_command,
             cwd=deploy_home, timeout=FETCH_TIMEOUT_SECONDS,
         )
     resolved = resolve_expected_head(track, deploy_home, run_command=run_command)

@@ -22,7 +22,7 @@ def test_git_network_command_retries_transient_failure_then_succeeds(
 
     monkeypatch.setattr(runner.time, "sleep", sleeps.append)
     with caplog.at_level("INFO"):
-        assert runner.run_git_network_command(
+        assert journal.run_git_network_command(
             ["git", "push", "origin", "HEAD:branch"],
             cwd="worktree", command_runner=fake_run,
         ) == "ok"
@@ -46,7 +46,7 @@ def test_git_network_command_retries_bounded_timeouts_then_succeeds(
         return "ok"
 
     monkeypatch.setattr(runner.time, "sleep", sleeps.append)
-    assert runner.run_git_network_command(
+    assert journal.run_git_network_command(
         ["git", "fetch", "origin", "main"], command_runner=fake_run,
     ) == "ok"
     assert len(calls) == 3
@@ -70,7 +70,7 @@ def test_git_network_command_exhausts_transient_failures_and_preserves_stderr(
         )
 
     with pytest.raises(subprocess.CalledProcessError) as caught:
-        runner.run_git_network_command(
+        journal.run_git_network_command(
             ["git", "fetch", "origin", "main"], command_runner=fake_run,
         )
 
@@ -96,7 +96,7 @@ def test_git_network_command_retries_transient_ssh_auth_fetch_then_succeeds(
 
     monkeypatch.setattr(runner.time, "sleep", sleeps.append)
     with caplog.at_level("WARNING"):
-        assert runner.run_git_network_command(
+        assert journal.run_git_network_command(
             ["git", "fetch", "origin", "main"], command_runner=fake_run,
         ) == "ok"
 
@@ -120,7 +120,7 @@ def test_git_network_command_exhausts_ssh_auth_failures_and_preserves_stderr(
         raise subprocess.CalledProcessError(128, command, stderr=stderr)
 
     with pytest.raises(subprocess.CalledProcessError) as caught:
-        runner.run_git_network_command(
+        journal.run_git_network_command(
             ["git", "push", "origin", "HEAD:branch"], command_runner=fake_run,
         )
 
@@ -150,7 +150,7 @@ def test_git_network_command_does_not_retry_deterministic_git_failure(
 
     monkeypatch.setattr(runner.time, "sleep", lambda _: pytest.fail("slept"))
     with pytest.raises(subprocess.CalledProcessError):
-        runner.run_git_network_command(
+        journal.run_git_network_command(
             ["git", "push", "origin", "HEAD:branch"], command_runner=fake_run,
         )
     assert len(calls) == 1
@@ -173,7 +173,7 @@ def test_git_network_command_does_not_retry_non_git_timeout(monkeypatch):
 
     monkeypatch.setattr(runner.time, "sleep", lambda _: pytest.fail("slept"))
     with pytest.raises(subprocess.TimeoutExpired):
-        runner.run_git_network_command(["gh", "pr", "create"], command_runner=fake_run)
+        journal.run_git_network_command(["gh", "pr", "create"], command_runner=fake_run)
     assert len(calls) == 1
 
 
@@ -188,5 +188,5 @@ def test_git_network_command_does_not_retry_non_git_commands(monkeypatch):
 
     monkeypatch.setattr(runner.time, "sleep", lambda _: pytest.fail("slept"))
     with pytest.raises(subprocess.CalledProcessError):
-        runner.run_git_network_command(["gh", "pr", "create"], command_runner=fake_run)
+        journal.run_git_network_command(["gh", "pr", "create"], command_runner=fake_run)
     assert len(calls) == 1

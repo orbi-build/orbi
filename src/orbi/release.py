@@ -83,8 +83,8 @@ from orbi.journal import (
     LOGGER,
     event,
     new_run_id,
-    run_command,
-    run_git_network_command,
+    run_command, run_git,
+    run_git_network,
     set_active_run,
     set_run_id,
 )
@@ -414,7 +414,7 @@ def resolve_release_declaration(
     base_branch = config.base_branch
     version_file = overrides.get("version_file")
     if version_file is None:
-        root_entries = set(run_command(
+        root_entries = set(run_git(
             ["git", "ls-tree", "--name-only", release_commit], cwd=repo_dir,
         ).splitlines())
         version_file = next(
@@ -470,7 +470,7 @@ def verify_release_version_file(repo_dir: Path, release_commit: str,
     """
     if version_file == "none":
         return
-    root_entries = set(run_command(
+    root_entries = set(run_git(
         ["git", "ls-tree", "--name-only", release_commit],
         cwd=repo_dir,
     ).splitlines())
@@ -1056,7 +1056,7 @@ def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
     """
     fd = acquire_base_sync_lock(repo_dir, 300.0)
     try:
-        output = run_git_network_command(
+        output = run_git_network(
             ["git", "ls-remote", "origin",
              f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
             cwd=repo_dir,
@@ -1077,7 +1077,7 @@ def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
 def local_release_tag_commit(repo_dir: Path, tag: str) -> str | None:
     """Return a local tag's peeled commit, or None when it is absent."""
     try:
-        return run_command(
+        return run_git(
             ["git", "rev-parse", "-q", "--verify",
              f"refs/tags/{tag}^{{commit}}"], cwd=repo_dir,
         ).strip()
@@ -1106,7 +1106,7 @@ def ensure_release_tag_pushed(repo_dir: Path, tag: str,
                               release_commit: str) -> None:
     """Create the annotated release tag and push it — idempotently."""
     ensure_release_tag_created(repo_dir, tag, release_commit)
-    run_git_network_command(
+    run_git_network(
         ["git", "push", "origin", f"refs/tags/{tag}"], cwd=repo_dir,
     )
 
@@ -1561,13 +1561,13 @@ def move_latest_marker(worktree: Path, old_slug: str,
 def rollback_release_docs(*, worktree: Path, base_branch: str,
                           docs_commit: str) -> None:
     """Remove a pre-publication docs commit when Release creation fails."""
-    current = run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+    current = run_git(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
     if current != docs_commit:
         raise RuntimeError(
             f"release docs rollback expected {docs_commit}, found {current}"
         )
     run_git_write(["git", "revert", "--no-edit", docs_commit], cwd=worktree)
-    run_git_network_command(
+    run_git_network(
         ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
         cwd=worktree,
     )
@@ -1620,10 +1620,10 @@ def promote_release_docs_latest(*, worktree: Path, base_branch: str,
              f"docs/zh/release-{tag}.mdx"]
     fd = acquire_base_sync_lock(worktree, 300.0)
     try:
-        run_command(["git", "add", *paths], cwd=worktree)
+        run_git(["git", "add", *paths], cwd=worktree)
         run_git_write(["git", "commit", "-m",
                        f"docs: promote release {tag} as latest"], cwd=worktree)
-        run_git_network_command(
+        run_git_network(
             ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
             cwd=worktree,
         )
@@ -1696,12 +1696,12 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
     # rendering it. Never substitute the commit: the page explicitly says
     # the tag state was verified against origin.
     if local_release_tag_commit(repo_dir, tag) is None:
-        run_git_network_command(
+        run_git_network(
             ["git", "fetch", "origin", f"refs/tags/{tag}:refs/tags/{tag}"],
             cwd=repo_dir,
         )
     try:
-        tag_object = run_command(
+        tag_object = run_git(
             ["git", "rev-parse", f"refs/tags/{tag}"], cwd=repo_dir,
         ).strip()
     except subprocess.CalledProcessError as exc:
@@ -1769,9 +1769,9 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
         ]
     fd = acquire_base_sync_lock(repo_dir, 300.0)
     try:
-        run_command(["git", "add", *expected_paths], cwd=worktree)
+        run_git(["git", "add", *expected_paths], cwd=worktree)
         try:
-            run_command(["git", "diff", "--cached", "--quiet"],
+            run_git(["git", "diff", "--cached", "--quiet"],
                         cwd=worktree)
         except subprocess.CalledProcessError as exc:
             if exc.returncode != 1:
@@ -1794,7 +1794,7 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
             "git", "commit", "-m",
             f"docs: release notes for {tag} (Issue #{issue_number})",
         ], cwd=worktree)
-        run_git_network_command(
+        run_git_network(
             ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
             cwd=worktree,
         )
@@ -2267,7 +2267,7 @@ def process_release(issue: dict, config: RunnerConfig,
                 run_git_write(["git", "tag", "-d", tag], cwd=config.repo_dir)
             raise
         docs_commit = (
-            run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+            run_git(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
             if "committed and pushed" in docs_evidence else None
         )
         # A failed tag push is the only pre-publication state in which the

@@ -541,20 +541,14 @@ def _is_retryable_git_network_failure(
     command: list[str], exc: subprocess.CalledProcessError,
 ) -> bool:
     """Return whether a Git fetch/push failed with a known transient error."""
-    if len(command) < 2 or command[:1] != ["git"]:
-        return False
-    if command[1] not in {"fetch", "push"}:
+    if _git_subcommand(command) not in {"fetch", "push"}:
         return False
     stderr = (exc.stderr or "").lower()
     return any(marker in stderr for marker in GIT_TRANSIENT_ERROR_MARKERS)
 
 
 def _is_git_network_command(command: list[str]) -> bool:
-    return (
-        len(command) >= 2
-        and command[:1] == ["git"]
-        and command[1] in {"fetch", "push"}
-    )
+    return _git_subcommand(command) in {"fetch", "push"}
 
 
 def run_git_network_command(
@@ -593,6 +587,206 @@ def run_git_network_command(
             stderr=single_line(detail),
         )
         time.sleep(delay)
+
+
+# --- git safety (Issue #1366) ------------------------------------------------
+#
+# The Runner calls git itself in worktrees the agent could write to, so
+# local git config can name programs git runs on the Runner's behalf
+# (`core.fsmonitor`, `core.hooksPath`, `diff.external`, `filter.*`) — the
+# GitSpawn class. `run_git` / `run_git_network` prefix every Runner-side
+# git call with the overrides that disable them, so a new call site cannot
+# forget (tests/test_git_safety.py fails a direct `run_command(["git",...)`).
+
+# Config (key, value) turned off on every Runner-side git call. The empty
+# `diff.external` resets the external diff to the built-in one.
+_GIT_SAFETY_CONFIG = (
+    ("core.fsmonitor", "false"),
+    ("core.hooksPath", "/dev/null"),
+    ("diff.external", ""),
+)
+
+# Subcommands that read or write file contents, so a `.gitattributes`
+# filter driver could run during them; `run_git` disables every local
+# filter driver for these.
+_GIT_CONTENT_SUBCOMMANDS = frozenset(
+    {"add", "checkout", "stash", "diff", "commit"},
+)
+
+# Subcommands that accept `--no-textconv` / `--no-ext-diff`.
+_GIT_DIFF_SUBCOMMANDS = frozenset({"diff", "log", "show"})
+
+# Git global options that consume the following token as a value.
+_GIT_GLOBAL_OPTIONS_WITH_VALUE = frozenset({
+    "-c", "--config-env", "-C", "--git-dir", "--work-tree", "--namespace",
+    "--exec-path", "--super-prefix", "--attr-source",
+})
+
+_FILTER_SECTION_RE = re.compile(r'^\[\s*filter\s+"([^"]+)"\s*\]')
+_FILTER_KEY_RE = re.compile(r"^([A-Za-z0-9][\w-]*)\s*=")
+_FILTER_EXEC_KEYS = frozenset({"clean", "smudge", "process"})
+
+
+def _git_subcommand_index(command: list[str]) -> int | None:
+    """The index of a git command's verb, skipping global options.
+
+    A command prefixed with the safety `-c` overrides must still report
+    its verb, both for the retry classifier and for filter neutralisation.
+    """
+    if not command or command[0] != "git":
+        return None
+    index = 1
+    while index < len(command):
+        token = command[index]
+        if token == "--":
+            index += 1
+            break
+        if token.startswith("-") and token != "-":
+            if "=" in token or token not in _GIT_GLOBAL_OPTIONS_WITH_VALUE:
+                index += 1
+            else:
+                index += 2
+            continue
+        break
+    return index if index < len(command) else None
+
+
+def _git_subcommand(command: list[str]) -> str | None:
+    """The git verb of `command`, or None when it is not a git command."""
+    index = _git_subcommand_index(command)
+    return command[index] if index is not None else None
+
+
+def _git_command_cwd(command: list[str], cwd) -> Path | str | None:
+    """The directory a git command runs in, honouring a `-C` option."""
+    directory = cwd
+    index = 1
+    while index < len(command) - 1:
+        if command[index] == "-C":
+            target = command[index + 1]
+            if directory is None or Path(target).is_absolute():
+                directory = target
+            else:
+                directory = Path(directory) / target
+            index += 2
+            continue
+        index += 1
+    return directory
+
+
+def _gitdir_pointer(dot_git: Path, directory: Path) -> Path | None:
+    """Resolve the `gitdir:` a linked worktree's `.git` file points at."""
+    try:
+        content = dot_git.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    if not content.startswith("gitdir:"):
+        return None
+    target = Path(content.split(":", 1)[1].strip())
+    return target if target.is_absolute() else (directory / target).resolve()
+
+
+def _git_config_files(cwd) -> tuple[Path, ...]:
+    """The local config files of the repository `cwd` lives in."""
+    start = Path(cwd).absolute() if cwd is not None else Path.cwd()
+    for directory in (start, *start.parents):
+        dot_git = directory / ".git"
+        if dot_git.is_dir():
+            git_dir = dot_git
+        elif dot_git.is_file():
+            declared = _gitdir_pointer(dot_git, directory)
+            if declared is None:
+                return ()
+            git_dir = declared
+        else:
+            continue
+        common = (git_dir.parent.parent
+                  if git_dir.parent.name == "worktrees" else git_dir)
+        return (common / "config", git_dir / "config.worktree")
+    return ()
+
+
+def _filter_drivers(text: str) -> set[str]:
+    """The filter drivers whose clean/smudge/process a config can run."""
+    drivers: set[str] = set()
+    current: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line[0] in "#;":
+            continue
+        section = _FILTER_SECTION_RE.match(line)
+        if section:
+            current = section.group(1)
+            continue
+        if line.startswith("["):
+            current = None
+            continue
+        if current is None:
+            continue
+        key = _FILTER_KEY_RE.match(line)
+        if key and key.group(1).lower() in _FILTER_EXEC_KEYS:
+            drivers.add(current)
+    return drivers
+
+
+def _local_filter_drivers(cwd) -> list[str]:
+    """The filter drivers defined in the worktree's local git config."""
+    drivers: set[str] = set()
+    for path in _git_config_files(cwd):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        drivers |= _filter_drivers(text)
+    return sorted(drivers)
+
+
+def _neutralise_git(command: list[str], cwd) -> list[str]:
+    """Prefix a git command with the overrides that disable repo programs."""
+    if not command or command[0] != "git":
+        raise ValueError(f"run_git expects a git command, got {command!r}")
+    argv = ["git"]
+    for key, value in _GIT_SAFETY_CONFIG:
+        argv += ["-c", f"{key}={value}"]
+    subcommand = _git_subcommand(command)
+    if subcommand in _GIT_CONTENT_SUBCOMMANDS:
+        for driver in _local_filter_drivers(_git_command_cwd(command, cwd)):
+            argv += ["-c", f"filter.{driver}.clean=",
+                     "-c", f"filter.{driver}.smudge=",
+                     "-c", f"filter.{driver}.process="]
+    rest = list(command[1:])
+    if subcommand in _GIT_DIFF_SUBCOMMANDS:
+        index = _git_subcommand_index(command)
+        rest[index:index] = ["--no-textconv", "--no-ext-diff"]
+    argv += rest
+    return argv
+
+
+def run_git(
+    command: list[str], *, cwd: Path | str | None = None,
+    command_runner: Callable[..., str] | None = None, **kwargs,
+) -> str | subprocess.CompletedProcess[str]:
+    """Run one Runner-side git command with repository programs disabled.
+
+    `-c` overrides neutralise `core.fsmonitor`, `core.hooksPath` and
+    `diff.external`; content commands additionally disable every filter
+    driver the worktree's local config defines. `command_runner` is the
+    injected seam (the engine-source probes); it defaults to `run_command`.
+    """
+    argv = _neutralise_git(list(command), cwd)
+    execute = command_runner or run_command
+    return execute(argv, cwd=cwd, **kwargs)
+
+
+def run_git_network(
+    command: list[str], *, cwd: Path | str | None = None,
+    command_runner: Callable[..., str] | None = None,
+) -> str:
+    """`run_git` for fetch/push, keeping the bounded network retries."""
+    argv = _neutralise_git(list(command), cwd)
+    return run_git_network_command(
+        argv, cwd=cwd, command_runner=command_runner,
+    )
 
 
 # Stop scene: when systemd (or any caller) stops the Runner

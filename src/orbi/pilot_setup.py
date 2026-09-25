@@ -66,7 +66,7 @@ from orbi.delivery_labels import (
 from orbi import git_transport
 from orbi import scheduler
 from orbi.progress import quote_value
-from orbi.journal import event
+from orbi.journal import event, run_git
 
 # Bumped whenever the setup output contract changes shape.
 # 4 (Issue #849): the scheduler session check and its fields are
@@ -710,12 +710,13 @@ def ensure_worktrees_ignored(repo_dir: Path, *, run_command) -> bool:
     if not (Path(repo_dir) / ".worktrees").is_dir():
         return False
     try:
-        run_command(["git", "check-ignore", "--quiet", "--", ".worktrees/"], cwd=repo_dir)
+        run_git(["git", "check-ignore", "--quiet", "--", ".worktrees/"],
+                command_runner=run_command, cwd=repo_dir)
         return False
     except subprocess.CalledProcessError:
-        exclude = Path(run_command(
-            ["git", "rev-parse", "--git-path", "info/exclude"], cwd=repo_dir,
-        ))
+        exclude = Path(run_git(
+            ["git", "rev-parse", "--git-path", "info/exclude"],
+            command_runner=run_command, cwd=repo_dir))
         if not exclude.is_absolute():
             exclude = Path(repo_dir) / exclude
         exclude.parent.mkdir(parents=True, exist_ok=True)
@@ -758,15 +759,13 @@ def check_checkout(repo_dir: Path, base_branch: str,
             repo_dir, source_repos, run_command=run_command,
             migrate=True, mode=mode,
         )
-        branch = run_command(
-            ["git", "branch", "--show-current"], cwd=repo_dir,
-        )
+        branch = run_git(["git", "branch", "--show-current"],
+                         command_runner=run_command, cwd=repo_dir)
         worktrees_exclude_added = ensure_worktrees_ignored(
             repo_dir, run_command=run_command,
         )
-        dirty = run_command(
-            ["git", "status", "--porcelain"], cwd=repo_dir,
-        )
+        dirty = run_git(["git", "status", "--porcelain"],
+                        command_runner=run_command, cwd=repo_dir)
         if dirty:
             raise SetupError(
                 f"checkout is not clean: {repo_dir} (uncommitted "
@@ -782,7 +781,8 @@ def check_checkout(repo_dir: Path, base_branch: str,
             repo_dir, base_branch, command_runner=run_command,
         )
         try:
-            head = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
+            head = run_git(["git", "rev-parse", "HEAD"],
+                           command_runner=run_command, cwd=repo_dir)
         except subprocess.CalledProcessError as exc:
             raise SetupError(
                 f"{repo_dir} must be a git checkout of {source_repos[0]} "
@@ -790,9 +790,8 @@ def check_checkout(repo_dir: Path, base_branch: str,
                 "docker run -v <path>:/work (or mount an empty volume so "
                 "the task pool can be cloned)"
             ) from exc
-        base = run_command(
-            ["git", "rev-parse", f"origin/{base_branch}"], cwd=repo_dir,
-        )
+        base = run_git(["git", "rev-parse", f"origin/{base_branch}"],
+                       command_runner=run_command, cwd=repo_dir)
     except SetupError:
         raise
     except git_transport.TransportError as exc:

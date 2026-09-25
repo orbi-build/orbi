@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from seam import strip_safety
+
 from orbi import cli
 from orbi import pilot_setup
 
@@ -77,7 +79,7 @@ def fake_run_factory(state: dict):
     """A run_command double answering the check probes from `state`."""
 
     def fake_run(command, **kwargs):
-        head = list(command)
+        head = strip_safety(list(command))
         if head[:3] == ["systemctl", "--user", "show"]:
             if not state.get("bus_down"):
                 return "loaded"

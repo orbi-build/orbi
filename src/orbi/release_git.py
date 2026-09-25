@@ -7,9 +7,8 @@ instances preparing the same version race on that push, so
 `push_prepared_release_version` makes the loser idempotent (Issue #1289)
 instead of failing the release ticket on work already landed.
 
-The seams are `orbi.journal.run_command` /
-`orbi.journal.run_git_network_command` and the base-sync-locked base fetch
-of `orbi.gitops`.
+The seams are `orbi.journal.run_git` / `orbi.journal.run_git_network`
+and the base-sync-locked base fetch of `orbi.gitops`.
 """
 from __future__ import annotations
 
@@ -22,7 +21,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from orbi.gitops import fetch_base_ref
-from orbi.journal import run_command, run_git_network_command
+from orbi.journal import run_git, run_git_network
 
 # Identity used for every local Git object written by the release state
 # machine. Cloud sandboxes intentionally do not provide a user Git config.
@@ -41,7 +40,7 @@ def run_git_write(
         "GIT_COMMITTER_NAME": name,
         "GIT_COMMITTER_EMAIL": email,
     })
-    return run_command(args, cwd=cwd, env=env)
+    return run_git(args, cwd=cwd, env=env)
 
 
 # Supported `version_file` declaration values: the ecosystem metadata
@@ -111,7 +110,7 @@ def push_prepared_release_version(
     failure is re-raised.
     """
     try:
-        run_git_network_command(
+        run_git_network(
             ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
             cwd=worktree,
         )
@@ -120,16 +119,16 @@ def push_prepared_release_version(
         if not _push_was_rejected(exc):
             raise
         push_error = exc
-    local_tree = run_command(
+    local_tree = run_git(
         ["git", "rev-parse", "HEAD^{tree}"], cwd=worktree,
     ).strip()
     fetch_base_ref(repo_dir, base_branch, cwd=worktree)
-    remote_tree = run_command(
+    remote_tree = run_git(
         ["git", "rev-parse", f"origin/{base_branch}^{{tree}}"], cwd=worktree,
     ).strip()
     if remote_tree != local_tree:
         raise push_error
-    remote_commit = run_command(
+    remote_commit = run_git(
         ["git", "rev-parse", f"origin/{base_branch}"], cwd=worktree,
     ).strip()
     raise ReleaseVersionAlreadyLanded(tag, base_branch, remote_commit)
@@ -159,7 +158,7 @@ def prepare_release_version(worktree: Path, tag: str,
     if version_file not in RELEASE_VERSION_FILE_OPTIONS:
         raise ValueError("release version_file is not supported")
     if version_file == "none":
-        return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+        return run_git(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
     if version_file in ("package.json", "composer.json"):
         package_json = worktree / version_file
         try:
@@ -180,14 +179,14 @@ def prepare_release_version(worktree: Path, tag: str,
             package_json.write_text(
                 json.dumps(package_data, indent=2) + "\n", encoding="utf-8",
             )
-            run_command(["git", "add", version_file], cwd=worktree)
+            run_git(["git", "add", version_file], cwd=worktree)
             run_git_write([
                 "git", "commit", "-m", f"chore: prepare release {tag}",
             ], cwd=worktree)
             push_prepared_release_version(
                 worktree, tag, base_branch, repo_dir or worktree,
             )
-        return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+        return run_git(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
     if version_file != "pyproject.toml":
         source = worktree / version_file
         try:
@@ -256,14 +255,14 @@ def prepare_release_version(worktree: Path, tag: str,
             ) from exc
         if updated != text:
             source.write_text(updated, encoding="utf-8")
-            run_command(["git", "add", version_file], cwd=worktree)
+            run_git(["git", "add", version_file], cwd=worktree)
             run_git_write([
                 "git", "commit", "-m", f"chore: prepare release {tag}",
             ], cwd=worktree)
             push_prepared_release_version(
                 worktree, tag, base_branch, repo_dir or worktree,
             )
-        return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+        return run_git(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
     pyproject = worktree / version_file
     init_file = worktree / "src" / "orbi" / "__init__.py"
     pyproject_text = pyproject.read_text(encoding="utf-8")
@@ -294,7 +293,7 @@ def prepare_release_version(worktree: Path, tag: str,
     if updated_pyproject != pyproject_text:
         pyproject.write_text(updated_pyproject, encoding="utf-8")
         init_file.write_text(updated_init, encoding="utf-8")
-        run_command([
+        run_git([
             "git", "add", version_file, "src/orbi/__init__.py",
         ], cwd=worktree)
         run_git_write([
@@ -303,6 +302,6 @@ def prepare_release_version(worktree: Path, tag: str,
         push_prepared_release_version(
             worktree, tag, base_branch, repo_dir or worktree,
         )
-    return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+    return run_git(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
 
 

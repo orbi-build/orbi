@@ -43,6 +43,8 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
+from orbi.journal import run_git
+
 GITHUB_HOST = "github.com"
 SSH_USER = "git"
 # The plain migration command the failure message reports and the
@@ -187,8 +189,10 @@ def check_transport(
     # an offline e2e world) stays a data-plane detail, never the
     # transport.
     try:
-        url = run_command(["git", "config", "remote.origin.url"],
-                          cwd=repo_dir)
+        url = run_git(
+            ["git", "config", "remote.origin.url"],
+            command_runner=run_command, cwd=repo_dir,
+        )
     except subprocess.CalledProcessError as exc:
         detail = str(exc)
         if exc.stderr:
@@ -230,8 +234,9 @@ def check_transport(
                 f"`{MIGRATION_ENTRY}` (the human-run setup entry "
                 "performs the migration). No automatic rewrite."
             )
-        run_command(
+        run_git(
             ["git", "remote", "set-url", "origin", expected],
+            command_runner=run_command,
             cwd=repo_dir,
         )
         url = expected
@@ -246,7 +251,10 @@ def check_transport(
     reachable: bool | None
     if probe:
         try:
-            run_command(["git", "ls-remote", expected], cwd=repo_dir)
+            run_git(
+                ["git", "ls-remote", expected],
+                command_runner=run_command, cwd=repo_dir,
+            )
         except subprocess.CalledProcessError as exc:
             detail = str(exc)
             if exc.stderr:

@@ -50,7 +50,7 @@ from orbi.runner import (
     freeze_base,
     list_issues,
     log_format,
-    run_command,
+    run_command, run_git,
     validate_config,
     validate_execution_source_repos,
 )
@@ -381,9 +381,9 @@ def deploy_home_dirty_files(repo_dir: Path, *, run_command) -> list[str]:
     merge CAN still abort the fast-forward — the exclusion is about
     contract parity, not a guarantee they are harmless).
     """
-    status = run_command(
+    status = run_git(
         ["git", "status", "--short", "--untracked-files=no"],
-        cwd=repo_dir,
+        command_runner=run_command, cwd=repo_dir,
     )
     # run_command strips the stdout, so the first porcelain line can lose
     # its leading X field: slice the path from column 2 and strip, never
@@ -438,7 +438,7 @@ def doctor_report(config: config_domain.RunnerConfig, installed_dir: Path | None
         installed_dir = sched.installed_unit_dir()
     lines = [f"repo: {repo_dir}"]
     lines.append(
-        f"commit: {run_command(['git', 'rev-parse', 'HEAD'], cwd=repo_dir)}"
+        f"commit: {run_git(['git', 'rev-parse', 'HEAD'], cwd=repo_dir)}"
     )
     # Engine source update channel: the configured track,
     # the resolved ref/tag and the deployment home's HEAD SHA. Read-only
