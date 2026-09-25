@@ -44,7 +44,7 @@ def _comment(body, *, login="alice", association="MEMBER", cid=1, url=None):
         "body": body,
         "author": {"login": login},
         "authorAssociation": association,
-        "createdAt": "2026-09-22T00:00:00Z",
+        "createdAt": "2026-09-15T00:00:00Z",
     }
     if url is not None:
         comment["url"] = url
@@ -842,7 +842,7 @@ def test_rejected_receipts_name_the_comment_without_an_id(monkeypatch):
             "body": "/milestone v9.9.9",
             "author": {"login": "outsider"},
             "authorAssociation": "NONE",
-            "createdAt": "2026-09-22T01:00:00Z",
+            "createdAt": "2026-09-15T01:00:00Z",
         },
         {
             "id": 0,
@@ -850,7 +850,7 @@ def test_rejected_receipts_name_the_comment_without_an_id(monkeypatch):
             "body": "/milestone v9.9.9",
             "author": {"login": "outsider"},
             "authorAssociation": "NONE",
-            "createdAt": "2026-09-22T02:00:00Z",
+            "createdAt": "2026-09-15T02:00:00Z",
         },
     ]
     posts = []
@@ -866,8 +866,8 @@ def test_rejected_receipts_name_the_comment_without_an_id(monkeypatch):
     )
     assert len(posts) == 2
     bodies = [_receipt_body(posts, index) for index in range(len(posts))]
-    assert "comment=outsider@2026-09-22T01:00:00Z" in bodies[0]
-    assert "comment by @outsider at 2026-09-22T01:00:00Z" in bodies[0]
+    assert "comment=outsider@2026-09-15T01:00:00Z" in bodies[0]
+    assert "comment by @outsider at 2026-09-15T01:00:00Z" in bodies[0]
     assert (
         "comment=https://github.com/owner/repo/issues/436#issuecomment-7"
         in bodies[1]

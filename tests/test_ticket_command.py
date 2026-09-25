@@ -307,7 +307,7 @@ def test_a_receipt_names_the_comment_without_an_id_or_url(monkeypatch):
         "body": "/noop beta",
         "author": {"login": "outsider"},
         "authorAssociation": "NONE",
-        "createdAt": "2026-09-22T01:00:00Z",
+        "createdAt": "2026-09-15T01:00:00Z",
     }]
     posts: list = []
     events: list = []
@@ -317,8 +317,8 @@ def test_a_receipt_names_the_comment_without_an_id_or_url(monkeypatch):
         allowed_targets=["alpha"], applied=[],
     )
     body = posts[0][posts[0].index("--body") + 1]
-    assert "comment=outsider@2026-09-22T01:00:00Z" in body
-    assert "- command comment: comment by @outsider at 2026-09-22T01:00:00Z" in body
+    assert "comment=outsider@2026-09-15T01:00:00Z" in body
+    assert "- command comment: comment by @outsider at 2026-09-15T01:00:00Z" in body
 
 
 def test_a_receipt_names_a_comment_by_its_url_when_it_has_one(monkeypatch):

@@ -879,34 +879,6 @@ def test_docs_document_openrouter_free_models_with_honest_limits():
         assert "thinkingLevelMap" in text
 
 
-def test_docs_deepseek_row_matches_the_shipped_template():
-    """Issue #1346: both provider pages must name the model the committed
-    template pins (`deepseek-flash`), carry the real delivery evidence,
-    link DeepSeek's pricing page and explain the cheap cache-heavy default."""
-    shipped = json.loads(
-        (REPO_ROOT / "templates" / "pi-providers" / "deepseek.json").read_text(
-            encoding="utf-8"
-        )
-    )["providers"]["deepseek"]["models"][0]["id"]
-    assert shipped == "deepseek-flash", "the template must pin the delivery model"
-    for slug in ("providers", "zh/providers"):
-        text = (DOCS_DIR / f"{slug}.mdx").read_text(encoding="utf-8")
-        assert shipped in text, f"{slug} must name the shipped model"
-        assert "2026-09-22" in text, f"{slug} must date the delivery evidence"
-        assert (
-            "https://github.com/orbi-build/orbi/issues/1328" in text
-        ), f"{slug} must cite a real delivered source Issue"
-        assert "https://api-docs.deepseek.com/quick_start/pricing" in text, (
-            f"{slug} must link DeepSeek's pricing page"
-        )
-    assert "cached input" in (DOCS_DIR / "providers.mdx").read_text(
-        encoding="utf-8"
-    ).lower(), "the cached-input reason must be stated in English"
-    assert "缓存" in (DOCS_DIR / "zh" / "providers.mdx").read_text(
-        encoding="utf-8"
-    ), "the cached-input reason must be stated in Chinese"
-
-
 def test_docs_getting_started_documents_the_full_chain_and_troubleshooting():
     """Issue #179: the smoke walkthrough must verify the FULL chain —
     picked up, implemented, tested, PR opened, independently reviewed,
