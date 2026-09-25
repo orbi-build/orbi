@@ -478,6 +478,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `pi_429_attempts_reset` | 持久化的 429 重试计数被重置 |
 | `pi_429_attempts_write_failed` | 持久化 429 重试计数失败 |
 | `pi_429_attempts_clear_failed` | 清除 429 重试计数失败 |
+| `provider_quota` | Pi 因 provider 用量上限停止而退出（journal errorMessage） |
 | `progress_publish_failed` | 进度评论发布失败（纯旁路） |
 | `progress_comment_failed` | 交付后通知评论发布失败（纯旁路） |
 | `progress_finish_missing_next_step` | 终态进度场景缺少下一步 |

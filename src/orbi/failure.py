@@ -198,7 +198,8 @@ def _parse_block(payload: str) -> Failure:
 # classes) passes the type-derived flags that win over these patterns, so
 # a code is never derived from a guess.
 _PROVIDER_QUOTA_RE = re.compile(
-    r"\b429\b|quota|resource_exhausted|retry in", re.IGNORECASE,
+    r"\b429\b|quota|resource_exhausted|retry in|usage limit has been reached",
+    re.IGNORECASE,
 )
 _CREDENTIAL_MISSING_RE = re.compile(
     r"bad credentials|http 401|status 401|authentication (?:failed|required)|"

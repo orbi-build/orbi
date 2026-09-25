@@ -8801,6 +8801,60 @@ def test_stream_pi_early_exit_uses_the_flushed_journal(
     assert "SECRET ISSUE BODY" not in caplog.text
 
 
+def test_stream_pi_logs_the_codex_usage_limit_as_provider_quota(
+        tmp_path, caplog,
+):
+    """Issue #1374: a Codex quota stop is written only in the session
+    journal's newest `errorMessage`, never on stderr. The exit logs one
+    WARNING `provider_quota` line and still raises the recoverable
+    `RecoverablePiProcessError` carrying the message, so a quota stop is
+    not mistaken for a crash and the run keeps retrying."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.0, {"type": "message", "id": "u1",
+               "timestamp": fresh_timestamp(),
+               "message": {"role": "user", "content": [
+                   {"type": "text", "text": "SECRET ISSUE BODY"}]}}),
+        (0.0, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(1),
+               "message": {
+                   "role": "assistant", "content": [],
+                   "stopReason": "error",
+                   "errorMessage": "Codex error: The usage limit "
+                                   "has been reached"}}),
+    ]
+    # Empty stderr: the ONLY place the message exists is the journal.
+    command = make_fake_pi(
+        tmp_path, session_records=records, exit_code=1, stderr="",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(runner.RecoverablePiProcessError) as excinfo:
+            pi_session.stream_pi(
+                command,
+                ctx=RunContext(
+                    run_id="deadbeef", issue=24, branch="b",
+                    worktree=tmp_path, source_repo="xqliu/orbi",
+                ),
+                watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path,
+            )
+    quota = [line for line in caplog.text.splitlines()
+             if "provider_quota" in line]
+    assert len(quota) == 1, caplog.text
+    assert (
+        'detail="Codex error: The usage limit has been reached"'
+        in quota[0]
+    )
+    detail = runner._failure_detail(excinfo.value)
+    assert "usage limit has been reached" in detail.lower()
+    assert runner._classify_failure(
+        excinfo.value, outcome="blocked",
+    ).reason_code == "provider_quota"
+    # The prompt never reaches the journal.
+    assert "SECRET ISSUE BODY" not in caplog.text
+
+
 def test_stream_pi_startup_failed_early_exit_after_first_request(
         tmp_path, caplog,
 ):
