@@ -161,6 +161,10 @@ class SessionWatcher:
         self.last_activity: str | None = None
         self.action: str | None = None
         self.result: str | None = None
+        # The newest assistant `errorMessage` (a provider failure such as
+        # a quota stop) — read at the Pi exit to tell a quota stop from a
+        # crash (Issue #1374).
+        self.error_message: str | None = None
         # The role of the newest message record: a `toolResult` means the
         # model is expected to reply next (model_wait).
         self.last_role: str | None = None
@@ -216,6 +220,7 @@ class SessionWatcher:
         self.last_activity = None
         self.action = None
         self.result = None
+        self.error_message = None
         self.last_role = None
         self.events = 0
         self.start_time = self._now()
@@ -259,6 +264,7 @@ class SessionWatcher:
             "last_activity": self.last_activity,
             "action": self.action,
             "result": self.result,
+            "error_message": self.error_message,
             # True only while the newest session event is a tool result:
             # the model is expected to reply next, so a long silence is a
             # slow model, not a stalled agent. The pending
@@ -320,6 +326,9 @@ class SessionWatcher:
                 self._last_activity_epoch = epoch
 
     def _apply_assistant(self, message: dict) -> None:
+        error = message.get("errorMessage")
+        if isinstance(error, str) and error:
+            self.error_message = error
         content = message.get("content")
         if not isinstance(content, list):
             return
@@ -373,6 +382,40 @@ def session_state(session_dir: Path,
     if watcher.session_file is None:
         return None
     return watcher.state()
+
+
+def refresh_session_evidence(activity: dict, session_dir: Path,
+                             known_files: set[Path]) -> dict:
+    """Refresh the journal-derived fields of `activity` from disk (#656).
+
+    The live watcher polls on the Pi poll interval, so its LAST poll can
+    run while Pi is still alive: Pi flushes its session journal while
+    dying, and the exit decision then used a state that never saw the
+    request (the #655 usage-limit scene — the exit was classified as a
+    startup failure and the terminal `ai-blocked` burned the in-flight
+    delivery). Once the process is dead the journal on disk is
+    authoritative: re-read it with the SAME `known_files` baseline (a
+    resumed run's previous sessions are never counted) and overwrite
+    the journal-derived fields — the session identity, the startup
+    milestones (`first_request` / `first_response`), the selected
+    provider/model, the newest error message (a provider quota stop,
+    Issue #1374) and the scene fields (`phase`, `last_activity`,
+    `action`, `result`) the exit lines render. The scene must describe
+    the SAME journal the decision used; the LIVE-only fields
+    (`stale_seconds`, `model_wait`, `recovery`) keep their last-poll
+    value, because they carry the kill decisions already taken.
+    """
+    final = session_state(session_dir, known_files)
+    if final is None:
+        return activity
+    for key in (
+        "session_id", "session_file", "first_request", "first_response",
+        "provider", "model", "error_message", "phase", "last_activity",
+        "action", "result",
+    ):
+        if final.get(key):
+            activity[key] = final[key]
+    return activity
 
 
 def activity_snapshot(session_dir: Path) -> dict | None:

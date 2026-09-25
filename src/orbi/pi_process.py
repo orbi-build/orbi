@@ -28,7 +28,7 @@ from orbi.pi_activity import (
     SessionWatcher,
     format_duration,
     format_run_scene,
-    session_state,
+    refresh_session_evidence,
 )
 from orbi.journal import (
     RunIdFilter,
@@ -614,36 +614,12 @@ def _startup_failed_reason(activity: dict, *, returncode: int,
     return classified
 
 
-def _refresh_session_evidence(activity: dict, session_dir: Path,
-                              known_files: set[Path]) -> dict:
-    """Refresh the journal-derived fields of `activity` from disk (#656).
-
-    The live watcher polls on `PI_POLL_INTERVAL`, so its LAST poll can
-    run while Pi is still alive: Pi flushes its session journal while
-    dying, and the exit decision then used a state that never saw the
-    request (the #655 usage-limit scene — the exit was classified as a
-    startup failure and the terminal `ai-blocked` burned the in-flight
-    delivery). Once the process is dead the journal on disk is
-    authoritative: re-read it with the SAME `known_files` baseline (a
-    resumed run's previous sessions are never counted) and overwrite
-    the journal-derived fields — the session identity, the startup
-    milestones (`first_request` / `first_response`), the selected
-    provider/model and the scene fields (`phase`, `last_activity`,
-    `action`, `result`) the exit lines render. The scene must describe
-    the SAME journal the decision used; the LIVE-only fields
-    (`stale_seconds`, `model_wait`, `recovery`) keep their last-poll
-    value, because they carry the kill decisions already taken.
-    """
-    final = session_state(session_dir, known_files)
-    if final is None:
-        return activity
-    for key in (
-        "session_id", "session_file", "first_request", "first_response",
-        "provider", "model", "phase", "last_activity", "action", "result",
-    ):
-        if final.get(key):
-            activity[key] = final[key]
-    return activity
+# A provider usage-limit stop (Issue #1374): Pi writes it only into the
+# session journal's assistant `errorMessage` (`Codex error: The usage
+# limit has been reached`) and exits 1. The run stays recoverable — the
+# quota recovers on its own and the normal tick cadence retries — but the
+# journal must show it as a quota stop, not a crash.
+_PROVIDER_QUOTA_MESSAGE = "usage limit has been reached"
 
 
 def _pending_timeout_targets(targets: list[dict]) -> list[tuple[dict, float]]:
@@ -1070,7 +1046,11 @@ def stream_pi(
     dir, so it keeps rising across runner restarts and the limit
     actually bites) — with the `run_failed` scene marked
     `reason=provider_rate_limited`. Long-term quota exhaustion stays out
-    of scope (#313); non-429 failures are untouched.
+    of scope (#313) — no wait window is added. The one annotated non-429
+    exception is a usage-limit stop carried in the session journal's
+    newest `errorMessage`: it logs one `provider_quota` WARNING and rides
+    into the raised failure's detail (Issue #1374); every other non-429
+    exit is untouched.
 
     `progress` is invoked on EVERY poll — an activity change
     or a heartbeat — with the current activity state, while the Pi
@@ -1636,7 +1616,7 @@ def _stream_pi_once(
     # The last live poll can predate the journal Pi flushed
     # while dying — refresh the journal evidence before the startup
     # line and the exit classification read it.
-    activity = _refresh_session_evidence(
+    activity = refresh_session_evidence(
         activity, session_dir, known_files,
     )
     # Startup failure: a failure before the first response
@@ -1719,6 +1699,19 @@ def _stream_pi_once(
                 returncode=process.returncode,
                 stdout=stdout, stderr=stderr, activity=activity,
             )
+        # A provider quota stop is carried only in the session journal's
+        # newest `errorMessage` (stderr stays empty), so without this the
+        # journal reads `returned non-zero exit status 1` and a quota stop
+        # looks like a crash. Log it, put the message into the exception
+        # detail, and keep the existing recoverable raise (Issue #1374).
+        quota_message = activity.get("error_message")
+        if (quota_message is not None
+                and _PROVIDER_QUOTA_MESSAGE in quota_message.lower()):
+            event(
+                "provider_quota", level=logging.WARNING,
+                issue=issue_ref, detail=quota_message,
+            )
+            stderr = f"{stderr}\n{quota_message}".strip()
         # A Pi exit after it created a session is an interrupted run: its
         # work is resumable, including exits after idle recovery.  A
         # pre-session startup failure remains terminal unless it reaches

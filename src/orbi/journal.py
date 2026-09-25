@@ -233,11 +233,12 @@ JOURNAL_EVENTS: dict[str, str] = {
     "steering_limit_reached": "active delivery steering reached its configured round limit",
     "steering_poll_failed": "steering polling failed (pure bypass)",
     "steering_limit_notice_failed": "the post-limit correction notice could not be published (pure bypass)",
-    # Provider rate limiting.
+    # Provider rate limiting and quota stops.
     "pi_retry_429": "a provider 429 triggers an in-run backoff retry",
     "pi_429_attempts_reset": "the persisted 429 attempt counter was reset",
     "pi_429_attempts_write_failed": "persisting the 429 attempt counter failed",
     "pi_429_attempts_clear_failed": "clearing the 429 attempt counter failed",
+    "provider_quota": "Pi exited on a provider usage-limit stop (the journal errorMessage)",
     # Bypass publishing.
     "progress_publish_failed": "the progress comment could not be published (pure bypass)",
     "progress_comment_failed": "a post-delivery notification comment could not be published (pure bypass)",
