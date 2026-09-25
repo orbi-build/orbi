@@ -21,7 +21,14 @@ every 5 minutes, 24 hours a day (`OnCalendar=*-*-* *:00/5`,
 queued) and starts its OWN service instance
 (`orbi@1.timer` → `orbi@1.service`,
 `orbi@2.timer` → `orbi@2.service`, ...), so N independent
-Runner instances can run concurrently. Each tick's service instance:
+Runner instances can run concurrently. The instances do not all fire at
+once: the template sets `RandomizedDelaySec=240` with
+`FixedRandomDelay=true`, so systemd spreads them by a delay derived from
+the machine id, the user and the timer name (`systemd.timer(5)`), stable
+across the timer's firings and manager restarts. The pre-start drift
+self-heal repairs the installed units but never changes a timer's
+enablement — a timer the operator disabled stays disabled. Each tick's
+service instance:
 
 1. **Syncs the engine source first** (`ExecStartPre`, outside the Runner
    process). Two steps, both under a short-lived `flock` on the shared
