@@ -5540,13 +5540,14 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     # The PR URL is only known after verify_pr: the initial POST shows
     # `- PR: -`, the final delivery PATCH carries the URL.
     assert "- PR: -" in progress_posts[0]
-    # The scene comments (started Pi / opened PR) still carry the run scene.
-    scene_comments = [
-        call for call in gh_calls
-        if call[:2] == ["gh", "issue"] and "comment" in call
+    # The scene comments: the started Pi scene is upserted through the
+    # progress publisher (Issue #1369), the opened PR scene still goes
+    # through `comment_issue`.
+    started_bodies = [
+        body for body in posted if "Orbi started Pi:" in body
     ]
-    assert len(scene_comments) == 2
-    start_body = scene_comments[0][-1]
+    assert len(started_bodies) == 1
+    start_body = started_bodies[0]
     assert "Orbi started Pi:" in start_body
     assert "- base_branch: main" in start_body
     assert "- base_sha: abc123def456" in start_body
@@ -5554,7 +5555,13 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     assert "- branch: orbi/xqliu-orbi-backlog-issue-4" in start_body
     assert "- worktree: " + str(tmp_path / "wt") in start_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in start_body
-    opened_body = scene_comments[1][-1]
+    opened_bodies = [
+        call[-1] for call in gh_calls
+        if call[:2] == ["gh", "issue"] and "comment" in call
+        and "Orbi opened PR:" in call[-1]
+    ]
+    assert len(opened_bodies) == 1
+    opened_body = opened_bodies[0]
     assert "Orbi opened PR: https://github.com/orbi-build/orbi/pull/4" in opened_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in opened_body
     # The final delivery summary PATCHed the same progress comment.

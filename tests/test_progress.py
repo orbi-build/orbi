@@ -683,6 +683,147 @@ def test_find_progress_comment_requires_marker_and_header():
     assert progress.find_progress_comment(comments, "deadbeef") is None
 
 
+def make_stateful_publisher(comments=None):
+    """A ProgressPublisher over a stateful fake comment store.
+
+    GET lists, POST appends with a fresh id, PATCH updates the exact
+    comment by id — the real `gh api` shape (Issue #1369).
+    """
+    comments = comments if comments is not None else []
+    posts: list[dict] = []
+    patches: list[tuple[int, str]] = []
+    next_id = iter(range(500, 900))
+
+    def fake_run_command(command, **kwargs):
+        if command[0] == "gh" and command[1] == "api" and "--method" not in command:
+            return json.dumps([dict(c) for c in comments])
+        method = command[command.index("--method") + 1]
+        body = command[command.index("--field") + 1][len("body="):]
+        if method == "POST":
+            comment = {"id": next(next_id), "body": body}
+            comments.append(comment)
+            posts.append(comment)
+            return json.dumps(comment)
+        comment_id = int(command[2].rsplit("/", 1)[1])
+        patches.append((comment_id, body))
+        for comment in comments:
+            if comment["id"] == comment_id:
+                comment["body"] = body
+        return ""
+
+    publisher = progress.ProgressPublisher(
+        18, "xqliu/orbi", "abc12345", run_command=fake_run_command,
+    )
+    return publisher, comments, posts, patches
+
+
+def _started_body(base_sha: str) -> str:
+    return (
+        f"{progress.run_marker('abc12345')}\n"
+        "Orbi started Pi: run_id=abc12345 priority=normal\n"
+        f"- base_sha: {base_sha}\n"
+        "<!-- runner=deadbeef -->"
+    )
+
+
+def test_find_started_comment_requires_marker_and_headline():
+    comments = [
+        {"id": 1, "body": "<!-- orbi:run=abc12345 -->\n**Orbi progress**"},
+        {"id": 2, "body": "Orbi started Pi: run_id=abc12345"},
+        {
+            "id": 3,
+            "body": (
+                "<!-- orbi:run=abc12345 -->\n"
+                "Orbi started Pi: run_id=abc12345 priority=normal"
+            ),
+        },
+        {"id": 4},
+    ]
+    found = progress.find_started_comment(comments, "abc12345")
+    assert found["id"] == 3
+    assert progress.find_started_comment(comments, "deadbeef") is None
+
+
+def test_publisher_started_posts_once_then_patches_on_resume():
+    """Issue #1369: the first tick POSTs the started comment, every
+    resume PATCHes the same comment id (one POST, three PATCHes)."""
+    publisher, comments, posts, patches = make_stateful_publisher()
+    for round_no in range(4):
+        publisher.started(_started_body(f"sha{round_no}"))
+
+    assert len(posts) == 1
+    assert len(patches) == 3
+    assert {cid for cid, _ in patches} == {posts[0]["id"]}
+    assert len(comments) == 1
+    # The updated comment still carries the anchors the engine parses.
+    assert "<!-- orbi:run=abc12345 -->" in comments[0]["body"]
+    assert "<!-- runner=deadbeef -->" in comments[0]["body"]
+    assert "base_sha: sha3" in comments[0]["body"]
+
+
+def test_publisher_started_recreates_a_human_deleted_comment():
+    """When the started comment could not be found (deleted by a human),
+    the resume POSTs one new comment and later resumes update that one."""
+    publisher, comments, posts, patches = make_stateful_publisher()
+    publisher.started(_started_body("sha0"))
+    publisher.started(_started_body("sha1"))
+    # A human deletes the comment: the next resume finds nothing.
+    comments.clear()
+    publisher.started(_started_body("sha2"))
+    publisher.started(_started_body("sha3"))
+
+    assert len(posts) == 2, "a deleted comment must be recreated once"
+    assert [cid for cid, _ in patches] == [
+        posts[0]["id"], posts[1]["id"],
+    ]
+    assert len(comments) == 1
+    assert "base_sha: sha3" in comments[0]["body"]
+
+
+def test_publisher_started_patches_the_started_comment_among_run_comments():
+    """The patch target is the started comment, not the run's other
+    marker-carrying comments (Issue #1369)."""
+    other = {
+        "id": 700,
+        "body": "<!-- orbi:run=abc12345 -->\n**Orbi progress**",
+    }
+    started = {
+        "id": 701,
+        "body": (
+            "<!-- orbi:run=abc12345 -->\n"
+            "Orbi started Pi: run_id=abc12345 priority=normal"
+        ),
+    }
+    publisher, comments, posts, patches = make_stateful_publisher(
+        comments=[other, started],
+    )
+    publisher.started(_started_body("sha9"))
+
+    assert posts == []
+    assert patches == [(701, _started_body("sha9"))]
+    assert comments[0]["body"] == other["body"]
+    assert comments[1]["body"] == _started_body("sha9")
+
+
+def test_publisher_ensure_ignores_the_started_comment():
+    """The started scene is not the live progress comment: `ensure`
+    must create a fresh progress comment instead of hijacking it."""
+    existing_started = {
+        "id": 9,
+        "body": (
+            "<!-- orbi:run=abc12345 -->\n"
+            "Orbi started Pi: run_id=abc12345 priority=normal"
+        ),
+    }
+    publisher, comments, posts, patches = make_stateful_publisher(
+        comments=[existing_started],
+    )
+    comment_id = publisher.ensure("<!-- orbi:run=abc12345 -->\n**Orbi progress**")
+    assert comment_id == posts[0]["id"]
+    assert patches == []
+    assert len(comments) == 2
+
+
 def test_publisher_ensure_rejects_non_list_comment_payload():
     publisher, _ = make_publisher(comments="not a list")
     with pytest.raises(ValueError, match="must be a JSON array"):

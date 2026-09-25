@@ -554,6 +554,19 @@ def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
     assert "<!-- orbi:run=a1b2c3d4 -->" in progress_bodies[0]
     assert "b2c3d4e5" not in progress_bodies[0]
 
+    # Issue #1369: the started scene is upserted across a real resume too
+    # — the restarted tick PATCHes the started comment the first attempt
+    # POSTed (still the first comment, still one of them), instead of
+    # appending a near-identical duplicate for every resume.
+    started_bodies = [
+        body for body in comments if "Orbi started Pi:" in body
+    ]
+    assert len(started_bodies) == 1, (
+        f"restart must not create a second started comment: {comments}"
+    )
+    assert "Orbi started Pi:" in comments[0]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in comments[0]
+
     # The delivery finished: the in-progress label is gone.
     assert "ai-in-progress" not in labels[ISSUE_NUMBER]
     assert "ai-pr-opened" in labels[ISSUE_NUMBER]
