@@ -83,7 +83,7 @@ class FakeScheduler:
 
     def activate_instances(self, run_command, installed_dir,
                            unit_name=None, *, max_concurrency=1,
-                           changed=frozenset()):
+                           changed=frozenset(), enable=True):
         self.calls.append(("activate", max_concurrency))
         if self.damage_on_activate:
             for _, name in self.pairs:
@@ -401,11 +401,12 @@ def test_install_units_passes_only_really_changed_units(tmp_path):
 
         def activate_instances(self, run_command, installed_dir,
                                unit_name=None, *, max_concurrency=1,
-                               changed=frozenset()):
+                               changed=frozenset(), enable=True):
             self.changed_calls.append(changed)
             super().activate_instances(
                 run_command, installed_dir, unit_name,
                 max_concurrency=max_concurrency, changed=changed,
+                enable=enable,
             )
 
     sched = RecordingScheduler(tmp_path)

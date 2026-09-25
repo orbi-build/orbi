@@ -16,8 +16,12 @@ timer 模板 `systemd/orbi@.timer` 部署为 **N 个实例**：
 `MAX_RUNNER_INSTANCES = 5`——Issue #827）。实例 1 每 5 分钟触发
 一次，全天 24 小时（`OnCalendar=*-*-* *:00/5`、`AccuracySec=30s`、
 `Persistent=false`——错过的 tick 被丢弃，从不排队）；实例 2..N 通过各自的
-`orbi@<i>.timer.d/stagger.conf` drop-in 偏移 `(i-1)*(300 // N)` 秒，
-因此不会同时触发。这些 drop-in 属于启动前 drift 检查的一部分，
+`orbi@<i>.timer.d/stagger.conf` drop-in 偏移 `(i-1)*(300 // i)` 秒，
+因此不会同时触发。偏移只取决于实例序号，与本部署的
+`max_concurrency` 无关：共享同一个 unit 目录的多个部署因此写入相同的
+drop-in 并收敛，自愈也不会删除或禁用超出自身容量的实例
+（Issue #1362）。drift 检查会修复 drop-in 文件，但自愈绝不改变
+timer 的 enable 状态——operator 禁用的 timer 保持禁用。
 `orbi doctor` / `orbi status` 从已安装的 unit 读取每个实例的 schedule。
 每个实例各自启动自己的 service 实例（`orbi@1.timer` → `orbi@1.service`，
 `orbi@2.timer` → `orbi@2.service`，……），所以可以同时运行

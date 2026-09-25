@@ -112,19 +112,25 @@ def service_instances(unit_name: str | None = None,
     return tuple(f"{prefix}@{index}.service" for index in range(1, count + 1))
 
 
-def instance_offset_seconds(instance: int, max_concurrency: int) -> int:
+def instance_offset_seconds(instance: int) -> int:
     """The deterministic stagger offset in seconds for one runner instance.
 
-    offset(i) = (i - 1) * (300 // max_concurrency) for i = 1..N.
+    offset(i) = (i - 1) * (300 // i): a function of the instance index
+    ALONE, so instance *i*'s drop-in is byte-identical whichever
+    deployment writes it (Issue #1362). Deployments that share one unit
+    directory — each with its own ``max_concurrency`` — therefore
+    converge instead of overwriting each other's stagger drop-ins on
+    every tick. The index-only offset also keeps the values the #1320
+    tests pin: instance 2 = 150 s, instance 3 = 200 s.
     """
-    if max_concurrency <= 1 or instance <= 1:
+    if instance <= 1:
         return 0
-    return (instance - 1) * (300 // max_concurrency)
+    return (instance - 1) * (300 // instance)
 
 
-def instance_schedule(instance: int, max_concurrency: int) -> str:
+def instance_schedule(instance: int) -> str:
     """The schedule string for one runner instance."""
-    offset = instance_offset_seconds(instance, max_concurrency)
+    offset = instance_offset_seconds(instance)
     if offset == 0:
         return "*-*-* *:00/5"
     m, s = divmod(offset, 60)
@@ -322,7 +328,8 @@ class Scheduler(Protocol):
     def activate_instances(self, run_command, installed_dir: Path,
                            unit_name: str | None = None, *,
                            max_concurrency: int,
-                           changed: frozenset[str] = frozenset()) -> None:
+                           changed: frozenset[str] = frozenset(),
+                           enable: bool = True) -> None:
         """Converge the instance schedules onto ``max_concurrency``.
 
         Activates instances 1..max_concurrency, deactivates the
@@ -330,7 +337,9 @@ class Scheduler(Protocol):
         NEVER stopped or restarted. ``changed`` names the installed
         units whose bytes the install just rewrote; an implementation
         whose platform defers a live instance's reload (launchd)
-        records it through :meth:`reload_pending`.
+        records it through :meth:`reload_pending`. ``enable=False``
+        is the pre-start self-heal: repair the files and reload, but
+        never change enablement the operator set (Issue #1362).
         """
 
     def pre_install(self, run_command, installed_dir: Path,
@@ -549,7 +558,8 @@ def check_unit_drift(repo_dir: Path,
 def install_units(repo_dir: Path, installed_dir: Path | None = None,
                   *, max_concurrency: int,
                   unit_name: str | None = None, run_command,
-                  sched: Scheduler | None = None) -> dict:
+                  sched: Scheduler | None = None,
+                  enable: bool = True) -> dict:
     """Idempotently install the repo templates as the platform units.
 
     Overwrites every managed installed unit with its rendered repo
@@ -561,6 +571,10 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
     instances deactivate, a live Runner is never restarted). Returns
     the deployed commit (the deployment checkout's HEAD) and the
     installed units' content identities.
+
+    ``enable=False`` (the pre-start self-heal, Issue #1362) repairs
+    the files but never toggles enablement: a timer the operator
+    disabled stays disabled.
     """
     sched = sched or detect()
     if not 1 <= max_concurrency <= MAX_RUNNER_INSTANCES:
@@ -608,6 +622,7 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
     sched.activate_instances(
         run_command, installed_dir, unit_name,
         max_concurrency=max_concurrency, changed=frozenset(changed),
+        enable=enable,
     )
     commit = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
     units = {
@@ -665,6 +680,7 @@ def sync_drifted_units(repo_dir: Path,
     result = install_units(
         repo_dir, installed_dir, max_concurrency=max_concurrency,
         unit_name=unit_name, run_command=run_command, sched=sched,
+        enable=False,
     )
     after = unit_status(repo_dir, installed_dir, unit_name,
                         max_concurrency=max_concurrency, sched=sched)
