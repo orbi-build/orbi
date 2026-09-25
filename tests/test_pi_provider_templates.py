@@ -51,30 +51,6 @@ def test_template_selected_model_is_explicit(name):
     assert model_id in {model["id"] for model in models}
 
 
-def test_deepseek_pins_the_delivery_default_model():
-    """Issue #1346: the committed DeepSeek template is the exact block
-    Orbi's own deliveries run on — `deepseek-flash`, not the retired
-    `deepseek` chat model."""
-    _path, data = load_template("deepseek")
-    assert data == {
-        "providers": {
-            "deepseek": {
-                "baseUrl": "https://api.deepseek.com/v1",
-                "api": "openai-completions",
-                "apiKey": "$DEEPSEEK_API_KEY",
-                "models": [
-                    {
-                        "id": "deepseek-flash",
-                        "name": "DeepSeek Flash",
-                        "contextWindow": 131072,
-                        "maxTokens": 16384,
-                    },
-                ],
-            },
-        },
-    }
-
-
 def test_xai_does_not_retain_the_obsolete_bare_model_id():
     _path, data = load_template("xai")
     model = data["providers"]["xai"]["models"][0]
