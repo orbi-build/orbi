@@ -12,7 +12,7 @@
 # managed sandbox renders no `active_milestone` line of its own, and the
 # host value it would otherwise fall back to is not the repository's to
 # assume.
-active_milestone = "v0.5.47"
+active_milestone = "v0.5.48"
 
 # The thin-ticket clarification gate (orbi-build/orbi#1088): a fresh claim
 # asks one no-tools Pi session whether the ticket states an observable
