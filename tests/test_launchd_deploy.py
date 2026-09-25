@@ -438,7 +438,7 @@ def test_install_and_drift_flow_end_to_end_on_the_launchd_impl(
     )
     assert not status[0]["drifted"]
     # A VALUE change is drift, with the structured line naming the plist.
-    reordered["StartCalendarInterval"] = [{"Minute": 4}]
+    reordered["StartInterval"] = 600
     unit.write_bytes(plistlib.dumps(reordered))
     with pytest.raises(scheduler.UnitDriftError) as excinfo:
         scheduler.check_unit_drift(
@@ -536,64 +536,12 @@ def test_instances_status_reports_enabled_active_and_an_honest_next():
     status = sched.instances_status(fake, None, max_concurrency=2)
     assert status == {
         "org.orbi.runner.1": {
-            "enabled": True, "active": True, "next": "-", "schedule": "*-*-* *:00/5",
+            "enabled": True, "active": True, "next": "-",
         },
         "org.orbi.runner.2": {
-            "enabled": False, "active": False, "next": "-", "schedule": "*-*-* *:02/5",
+            "enabled": False, "active": False, "next": "-",
         },
     }
-
-
-def test_launchd_instances_are_staggered_on_the_wall_clock(tmp_path):
-    """Issue #1320: at N > 1 every instance moves off `StartInterval`
-    (which counts from the job's LOAD time, so instances bootstrapped
-    together fire in the same second) onto the wall-clock
-    `StartCalendarInterval` grid, shifted by the deterministic offset.
-
-    `StartCalendarInterval` carries whole minutes only — launchd.plist(5)
-    documents Minute/Hour/Day/Weekday/Month and launchd's parser reads
-    those five, silently ignoring anything else (a `Second` key would
-    make instance 2 fire at the same second as instance 1, only on
-    minute 2). The 150s offset therefore lands as 2 minutes; what the
-    two schedulers must agree on is the wall-clock grid, not a
-    sub-minute value launchd cannot express.
-    """
-    sched = launchd_deploy.LaunchdScheduler()
-    template = (
-        REPO_ROOT / "launchd" / launchd_deploy.TEMPLATE_NAME
-    ).read_text(encoding="utf-8")
-
-    plists = {
-        instance: plistlib.loads(sched.render_unit(
-            template, tmp_path, None, instance=instance, max_concurrency=2,
-        ).encode("utf-8"))
-        for instance in (1, 2)
-    }
-
-    for instance, plist in plists.items():
-        assert "StartInterval" not in plist, instance
-        calendar = plist["StartCalendarInterval"]
-        # Documented keys only: a `Second` entry is not a
-        # calendar-interval key and is ignored by launchd.
-        assert all(set(entry) == {"Minute"} for entry in calendar), calendar
-    # Instance 1 anchors the 5-minute grid (offset 0, the systemd
-    # OnCalendar=*-*-* *:00/5 tick), instance 2 sits two minutes into it.
-    assert [e["Minute"] for e in plists[1]["StartCalendarInterval"]] == list(range(0, 60, 5))
-    assert [e["Minute"] for e in plists[2]["StartCalendarInterval"]] == list(range(2, 60, 5))
-
-    # A single instance has nothing to stagger: the template's
-    # StartInterval is left untouched.
-    alone = plistlib.loads(sched.render_unit(
-        template, tmp_path, None, instance=1, max_concurrency=1,
-    ).encode("utf-8"))
-    assert alone["StartInterval"] == 300
-    assert "StartCalendarInterval" not in alone
-
-    # The schedule the report shows is the one the plist deploys.
-    assert sched.schedule_text(1, 2) == "*-*-* *:00/5"
-    assert sched.schedule_text(2, 2) == "*-*-* *:02/5"
-    assert launchd_deploy.calendar_minute_offset(2, 3) == 1
-    assert launchd_deploy.calendar_minute_offset(3, 3) == 3
 
 
 def test_journal_lines_skip_instances_without_a_log_file(tmp_path):

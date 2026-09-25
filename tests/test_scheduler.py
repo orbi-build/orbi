@@ -52,7 +52,7 @@ class FakeScheduler:
     def timer_instances(self, unit_name=None, count=1):
         return tuple(f"fake@{i}.timer" for i in range(1, count + 1))
 
-    def render_unit(self, template_text, repo_dir, unit_name=None, instance=1, max_concurrency=1):
+    def render_unit(self, template_text, repo_dir, unit_name=None, instance=1):
         return (
             template_text.replace("{{R}}", str(Path(repo_dir).resolve()))
             + f"#rendered-{instance}\n"

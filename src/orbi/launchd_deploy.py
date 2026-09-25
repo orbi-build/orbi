@@ -4,12 +4,10 @@ The macOS member of the scheduler layer (:mod:`orbi.scheduler` owns
 the interface, the platform dispatch and the platform-independent
 orchestration); every ``launchctl`` literal in ``src/orbi/`` lives
 here. One agent plist per Runner instance — the plist IS the
-``.service`` and the ``.timer`` in one. A single instance keeps
-``StartInterval`` (the five-minute cadence, counted from the job's load
-time); at ``max_concurrency > 1`` every instance switches to
-``StartCalendarInterval`` on the wall clock, shifted by its whole-minute
-offset, so the instances are staggered instead of firing together
-(Issue #1320). The templates
+``.service`` and the ``.timer`` in one (``StartInterval`` runs the same
+five-minute cadence as the systemd ``OnCalendar=*-*-* *:00/5`` tick, but
+counts from the job's load time rather than aligning to wall-clock
+boundaries). The templates
 live in ``launchd/`` beside ``systemd/``.
 
 Command contract (modern launchctl(1) / launchd.plist(5), the
@@ -60,42 +58,11 @@ from orbi.scheduler import (
     MAX_RUNNER_INSTANCES,
     REPO_DIR_PLACEHOLDER,
     USER_HOME_PLACEHOLDER,
-    instance_offset_seconds,
 )
 
 TEMPLATE_NAME = "org.orbi.runner.plist"
 LABEL_BASE = "org.orbi.runner"
 LOG_TAIL_LINES = 400
-
-
-def calendar_minute_offset(instance: int, max_concurrency: int) -> int:
-    """The instance's offset in whole minutes inside the 5-minute tick.
-
-    ``StartCalendarInterval`` has whole-minute granularity:
-    launchd.plist(5) documents exactly Minute, Hour, Day, Weekday and
-    Month, and launchd's parser (``calendarinterval_new_from_obj_dict
-    _walk``) reads those five only — an undocumented ``Second`` key is
-    silently ignored, so a sub-minute offset cannot be expressed (the
-    run then lands on the grid minute at second 0). The deterministic
-    offset therefore truncates: N = 2 spreads instance 2 by 2 minutes.
-    """
-    return instance_offset_seconds(instance, max_concurrency) // 60
-
-
-def calendar_interval_entries(instance: int,
-                              max_concurrency: int) -> list[dict[str, int]]:
-    """StartCalendarInterval entries on the wall-clock 5-minute grid.
-
-    One entry per grid minute (a bare ``{"Minute": m}`` fires every
-    hour at minute m), shifted by the instance's whole-minute offset.
-    """
-    offset = calendar_minute_offset(instance, max_concurrency)
-    return [{"Minute": (base + offset) % 60} for base in range(0, 60, 5)]
-
-
-def calendar_schedule(instance: int, max_concurrency: int) -> str:
-    """The instance's launchd schedule in the report's calendar spelling."""
-    return f"*-*-* *:{calendar_minute_offset(instance, max_concurrency):02d}/5"
 
 
 def label_base(unit_name: str | None = None) -> str:
@@ -178,33 +145,15 @@ class LaunchdScheduler:
 
     def render_unit(self, template_text: str, repo_dir: Path,
                     unit_name: str | None = None,
-                    instance: int = 1,
-                    max_concurrency: int = 1) -> str:
+                    instance: int = 1) -> str:
         # launchd expands nothing (no ~, no %h): the render substitutes
         # every machine-specific value as an absolute path.
-        rendered = (
+        return (
             template_text
             .replace(REPO_DIR_PLACEHOLDER, str(Path(repo_dir).resolve()))
             .replace(USER_HOME_PLACEHOLDER, str(Path.home()))
             .replace("{{ORBI_LABEL}}", label_for(unit_name, instance))
         )
-        if max_concurrency > 1:
-            # Issue #1320: StartInterval counts from the job's load
-            # time, so instances bootstrapped together fire in the SAME
-            # second. With more than one instance the whole deployment
-            # moves to the wall clock: instance 1 sits on the
-            # ``*:00/5`` grid and instance i is shifted by its
-            # deterministic offset (truncated to whole minutes — see
-            # calendar_minute_offset), which is the offset the systemd
-            # drop-in carries too. A single instance keeps the template's
-            # StartInterval: nothing to stagger, nothing changes.
-            parsed = plistlib.loads(rendered.encode("utf-8"))
-            parsed.pop("StartInterval", None)
-            parsed["StartCalendarInterval"] = calendar_interval_entries(
-                instance, max_concurrency,
-            )
-            return plistlib.dumps(parsed, fmt=plistlib.FMT_XML).decode("utf-8")
-        return rendered
 
     def content_sha(self, rendered: str) -> str:
         data = _canonical_bytes(rendered.encode("utf-8"))
@@ -277,20 +226,15 @@ class LaunchdScheduler:
         state = self._print_state(run_command, instance)
         return "active" if state == "running" else "inactive"
 
-    def schedule_text(self, instance: int, max_concurrency: int) -> str:
-        """The schedule this platform actually deploys (whole minutes)."""
-        return calendar_schedule(instance, max_concurrency)
-
     def instances_status(self, run_command, unit_name: str | None = None,
                          *, max_concurrency: int) -> dict[str, dict]:
         instances: dict[str, dict] = {}
-        for index, label in enumerate(self.timer_instances(unit_name, max_concurrency), start=1):
+        for label in self.timer_instances(unit_name, max_concurrency):
             instances[label] = {
                 "enabled": self.unit_enabled(run_command, label),
                 "active": self.unit_state(run_command, label) == "active",
                 # launchd exposes no next-fire time; honest dash.
                 "next": "-",
-                "schedule": self.schedule_text(index, max_concurrency),
             }
         return instances
 
