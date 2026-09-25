@@ -369,16 +369,9 @@ class SystemdScheduler:
     def restart_hint(self, unit_name: str | None = None) -> str:
         return f"systemctl --user start {service_instances(unit_name, 1)[0]}"
 
-    def reload_pending(self, installed_dir: Path, name: str) -> bool:
-        # systemd has no deferred reload: the daemon-reload below makes
-        # the new unit effective at the next service start, so there is
-        # never a running instance holding a stale unit file.
-        return False
-
     def activate_instances(self, run_command, installed_dir: Path,
                            unit_name: str | None = None, *,
-                           max_concurrency: int,
-                           changed: frozenset[str] = frozenset()) -> None:
+                           max_concurrency: int) -> None:
         """daemon-reload, then converge the timer instances.
 
         Enables instances through ``max_concurrency`` and disables the

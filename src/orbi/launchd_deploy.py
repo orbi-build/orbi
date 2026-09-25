@@ -26,11 +26,7 @@ Command contract (modern launchctl(1) / launchd.plist(5), the
   never stopped or restarted (the systemd install contract). A loaded
   instance whose plist was just rewritten is booted out and
   re-bootstrapped ONLY when idle (the daemon-reload equivalent); a
-  running instance keeps the old config until it finishes, and the
-  pending reload is RECORDED (Issue #1347): a ``.reload-pending``
-  marker beside its plist — see ``reload_pending`` — makes the drift
-  check flag it, so the next idle tick reloads it instead of keeping
-  the stale schedule forever;
+  running instance keeps the old config until it finishes;
 - ``launchctl print gui/<uid>/<label>`` — state queries; exit 113
   ``Could not find service`` is the documented not-loaded answer;
 - ``launchctl print-disabled gui/<uid>`` — the persistent disabled
@@ -42,13 +38,6 @@ The drift identity is the CANONICAL plist: both sides are parsed and
 re-serialized with sorted keys before hashing, so whitespace and key
 order in the installed XML never fabricate drift (a raw textual
 comparison would).
-
-There is no launchctl command that makes a LOADED job re-read its
-plist (Issue #1347): ``bootstrap`` loads a plist, ``bootout`` unloads
-and kills a running job, and ``kickstart -k`` restarts the process
-without re-reading the plist. The deferred reload is therefore carried
-by the ``.reload-pending`` marker beside the plist (launchd ignores
-sibling non-plist files).
 
 Verified limits (no macOS runner in CI): the command sequences and
 plist shape follow the man pages and are unit-tested here; a real-Mac
@@ -77,10 +66,6 @@ from orbi.scheduler import (
 TEMPLATE_NAME = "org.orbi.runner.plist"
 LABEL_BASE = "org.orbi.runner"
 LOG_TAIL_LINES = 400
-# ``<plist name>.reload-pending`` beside an installed plist records that
-# the RUNNING instance still holds the plist it was loaded with, so the
-# drift check flags it and the next idle tick reloads it (Issue #1347).
-RELOAD_PENDING_SUFFIX = ".reload-pending"
 
 
 def calendar_minute_offset(instance: int, max_concurrency: int) -> int:
@@ -250,22 +235,6 @@ class LaunchdScheduler:
             return None
         return Path(value).expanduser().resolve()
 
-    def reload_marker(self, installed_dir: Path,
-                      name: str) -> Path:
-        """Where the deferred-reload record for one plist lives."""
-        return Path(installed_dir) / f"{name}{RELOAD_PENDING_SUFFIX}"
-
-    def reload_pending(self, installed_dir: Path, name: str) -> bool:
-        """Whether a rewritten plist waits for its running instance.
-
-        True exactly while the (running) instance holds the config it
-        was bootstrapped with: ``activate_instances`` writes the marker
-        for a running changed instance and clears it on every
-        (re)bootstrap, so the drift check flags the stale schedule
-        instead of the running tick being killed.
-        """
-        return self.reload_marker(installed_dir, name).is_file()
-
     def domain(self) -> str:
         return f"gui/{os.getuid()}"
 
@@ -355,55 +324,33 @@ class LaunchdScheduler:
 
     def activate_instances(self, run_command, installed_dir: Path,
                            unit_name: str | None = None, *,
-                           max_concurrency: int,
-                           changed: frozenset[str] = frozenset()) -> None:
+                           max_concurrency: int) -> None:
         """Enable + bootstrap instances 1..max_concurrency, disable the
         surplus up to MAX_RUNNER_INSTANCES. A live instance is never
         booted out (bootout kills the job); an idle loaded instance is
-        re-bootstrapped so the rewritten plist takes effect. A RUNNING
-        instance whose plist is in ``changed`` is not reloaded — it
-        keeps the tick it is executing — but its deferred reload is
-        recorded (``reload_pending``) for the next idle cycle
-        (Issue #1347)."""
+        re-bootstrapped so the rewritten plist takes effect."""
         labels = self.timer_instances(unit_name, MAX_RUNNER_INSTANCES)
         installed_dir = Path(installed_dir)
         for label in labels[:max_concurrency]:
             # Enable FIRST: a stale disabled record fails the bootstrap.
             run_command(["launchctl", "enable", self.target(label)])
-            name = plist_name(label)
-            marker = self.reload_marker(installed_dir, name)
             if self._print_state(run_command, label) is None:
                 run_command([
                     "launchctl", "bootstrap", self.domain(),
-                    str(installed_dir / name),
+                    str(installed_dir / plist_name(label)),
                 ])
-                marker.unlink(missing_ok=True)
             elif self.unit_state(run_command, label) != "active":
                 # Idle: reload the rewritten plist (daemon-reload
                 # equivalent). Running: never — it would kill the task.
                 run_command(["launchctl", "bootout", self.target(label)])
                 run_command([
                     "launchctl", "bootstrap", self.domain(),
-                    str(installed_dir / name),
+                    str(installed_dir / plist_name(label)),
                 ])
-                marker.unlink(missing_ok=True)
-            elif name in changed:
-                # Running with a rewritten plist: no launchctl command
-                # re-reads a loaded plist (kickstart -k restarts the
-                # process, not the config), so record the pending
-                # reload for the next idle tick instead of killing it.
-                marker.write_text(
-                    "this instance is running the plist it was loaded "
-                    "with; the next idle tick reloads it\n",
-                    encoding="utf-8",
-                )
         for label in labels[max_concurrency:]:
             # Disable persists across logins; bootout only unloads an
             # idle instance (bootout on a running job kills it).
             run_command(["launchctl", "disable", self.target(label)])
-            self.reload_marker(
-                installed_dir, plist_name(label),
-            ).unlink(missing_ok=True)
             if (
                 self._print_state(run_command, label) is not None
                 and self.unit_state(run_command, label) != "active"
