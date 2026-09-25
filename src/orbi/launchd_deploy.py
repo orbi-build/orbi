@@ -312,19 +312,6 @@ class LaunchdScheduler:
         """The schedule this platform actually deploys (whole minutes)."""
         return calendar_schedule(instance, max_concurrency)
 
-    def extra_drift(self, installed_dir: Path, unit_name: str | None,
-                    max_concurrency: int) -> list[dict]:
-        # launchd deploys every instance as a plist in the template set;
-        # there is no non-template installed file to compare (Issue #1344).
-        return []
-
-    def installed_schedule(self, installed_dir: Path, unit_name: str | None,
-                           instance: int,
-                           max_concurrency: int) -> str | None:
-        # The installed plist carries this same whole-minute value, so
-        # the disk value equals the expected one by construction.
-        return self.schedule_text(instance, max_concurrency)
-
     def instances_status(self, run_command, unit_name: str | None = None,
                          *, max_concurrency: int) -> dict[str, dict]:
         instances: dict[str, dict] = {}

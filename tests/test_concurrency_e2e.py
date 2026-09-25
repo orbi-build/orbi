@@ -39,7 +39,6 @@ import sys
 import subprocess
 import threading
 import time
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -604,32 +603,18 @@ def write_config(
 _RUNNING: list[subprocess.Popen] = []
 
 
-def install_deployed_units(unit_dir: Path, repo_dir: Path,
-                          max_concurrency: int = 1) -> None:
+def install_deployed_units(unit_dir: Path, repo_dir: Path) -> None:
     """Simulate the deployed machine: the repo templates installed as
     the user units (the idempotent install the README documents). The
     templates are rendered exactly as `orbi install-units` does — the
     {{ORBI_REPO_DIR}} placeholder replaced with the checkout path — so
     the pre-start drift check (which compares against the rendered
-    template) sees a clean deployment. A capacity above one also
-    carries the #1320 stagger drop-ins, now part of that same check
-    (Issue #1344)."""
+    template) sees a clean deployment."""
     unit_dir.mkdir(parents=True, exist_ok=True)
     for name in ("orbi@.service", "orbi@.timer"):
         template = (REPO_ROOT / "systemd" / name).read_text(encoding="utf-8")
         rendered = systemd_deploy.render_unit_template(template, repo_dir)
         (unit_dir / name).write_bytes(rendered.encode("utf-8"))
-    if max_concurrency > 1:
-        systemd_deploy.sync_stagger_dropins(
-            unit_dir, None, max_concurrency=max_concurrency,
-        )
-
-
-def _configured_max_concurrency(config_path: Path) -> int:
-    """The deployment's declared capacity, read from its config file."""
-    return int(tomllib.loads(
-        config_path.read_text(encoding="utf-8"),
-    ).get("max_concurrency", 1))
 
 
 def _drain(pipe, sink) -> None:
@@ -663,10 +648,7 @@ def start_runner(
     # installed), or an explicit dir for the drift scenarios.
     if unit_dir is None:
         unit_dir = config_path.parent / "unit-dir"
-        install_deployed_units(
-            unit_dir, config_path.parent / "clone",
-            max_concurrency=_configured_max_concurrency(config_path),
-        )
+        install_deployed_units(unit_dir, config_path.parent / "clone")
     env["ORBI_UNIT_DIR"] = str(unit_dir)
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
     process = subprocess.Popen(

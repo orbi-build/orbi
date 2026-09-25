@@ -15,15 +15,10 @@ verification, troubleshooting and recovery.
 
 The timer template `systemd/orbi@.timer` is deployed as N
 instances, `orbi@1.timer` through `orbi@N.timer` (N =
-`max_concurrency`, at most `MAX_RUNNER_INSTANCES = 5` — Issue #827).
-Instance 1 fires every 5 minutes, 24 hours a day
-(`OnCalendar=*-*-* *:00/5`, `AccuracySec=30s`, `Persistent=false` — a
-missed tick is dropped, never queued); instances 2..N are shifted by
-`(i-1)*(300 // N)` seconds through a per-instance
-`orbi@<i>.timer.d/stagger.conf` drop-in, so they do not all fire at the
-same instant. The drop-ins are part of the pre-start drift check, and
-`orbi doctor` / `orbi status` read each instance's schedule from the
-installed units. Each instance starts its OWN service instance
+`max_concurrency`, at most `MAX_RUNNER_INSTANCES = 5` — Issue #827). Each fires
+every 5 minutes, 24 hours a day (`OnCalendar=*-*-* *:00/5`,
+`AccuracySec=30s`, `Persistent=false` — a missed tick is dropped, never
+queued) and starts its OWN service instance
 (`orbi@1.timer` → `orbi@1.service`,
 `orbi@2.timer` → `orbi@2.service`, ...), so N independent
 Runner instances can run concurrently. Each tick's service instance:
