@@ -722,14 +722,17 @@ def test_sync_drifted_units_installs_and_reverifies_clean(
         report = scheduler.sync_drifted_units(
             repo, installed, max_concurrency=2, run_command=fake_run,
         )
-    # The install ran: daemon-reload + the file repair, and NEVER an
-    # enable/disable — the self-heal must not change enablement the
-    # operator set (Issue #1362). The service is also NEVER
-    # started/stopped/restarted by the sync.
+    # The install ran: daemon-reload + enable the configured timer
+    # instances @1..@2 + disable the surplus @3..@5 (Issue #827), and
+    # the service is NEVER started/stopped/restarted by the sync.
     assert ["systemctl", "--user", "daemon-reload"] in calls
+    for instance in scheduler.timer_instances(count=2):
+        assert [
+            "systemctl", "--user", "enable", "--now", instance,
+        ] in calls
     for command in calls:
         if command[:2] == ["systemctl", "--user"]:
-            assert command[2] == "daemon-reload"
+            assert command[2] in ("daemon-reload", "enable", "disable")
     # The repo template won: the installed unit matches it again.
     status = scheduler.unit_status(repo, installed, max_concurrency=2)
     assert all(entry["drifted"] is False for entry in status)
@@ -769,16 +772,15 @@ def test_sync_drifted_units_is_a_no_op_when_clean(monkeypatch, tmp_path):
 def test_sync_drifted_units_install_failure_propagates(
     monkeypatch, tmp_path,
 ):
-    """Issue #142: a failing install step (here: the deploy-commit
-    read, after the daemon reload) fails fast — the error propagates,
-    no auto_synced claim is made."""
+    """Issue #142: a failing install step (here: enabling the timer)
+    fails fast — the error propagates, no auto_synced claim is made."""
     repo = make_repo(tmp_path)
     installed = make_installed(
         tmp_path, repo, mutate="orbi@.service", max_concurrency=2,
     )
 
     def fake_run(command, **kwargs):
-        if command == ["git", "rev-parse", "HEAD"]:
+        if command[:3] == ["systemctl", "--user", "enable"]:
             raise subprocess.CalledProcessError(1, command, stderr="nope")
         return ""
 
@@ -1009,12 +1011,9 @@ def test_unmanaged_units_skips_template_form_non_orbi_and_dirs(tmp_path):
 
 
 def test_install_units_staggers_timers_with_deterministic_offsets(tmp_path):
-    """Issue #1320 (Issue #1362 makes the offset count-independent):
-    installing with N = 2 writes exactly one drop-in,
-    orbi@2.timer.d/stagger.conf, with OnCalendar=*-*-* *:02/5:30
-    (preceded by an empty OnCalendar=). With N = 1 it writes none.
-    With N = 3 instance 2 keeps its 150s offset and instance 3 gets
-    200s."""
+    """Issue #1320: installing with N = 2 writes exactly one drop-in, orbi@2.timer.d/stagger.conf,
+    with OnCalendar=*-*-* *:02/5:30 (preceded by an empty OnCalendar=). With N = 1 it writes none.
+    With N = 3 it writes offsets of 100s and 200s."""
     repo = make_repo(tmp_path)
 
     # N = 1 writes none
@@ -1039,7 +1038,7 @@ def test_install_units_staggers_timers_with_deterministic_offsets(tmp_path):
         "[Timer]\nOnCalendar=\nOnCalendar=*-*-* *:02/5:30\n"
     )
 
-    # N = 3 writes instance 2's 150s (*:02/5:30) and instance 3's 200s (*:03/5:20)
+    # N = 3 writes offsets of 100s (*:01/5:40) and 200s (*:03/5:20)
     install_n3 = tmp_path / "install_n3"
     scheduler.install_units(
         repo, install_n3, max_concurrency=3,
@@ -1049,7 +1048,7 @@ def test_install_units_staggers_timers_with_deterministic_offsets(tmp_path):
     dropin_n3_2 = install_n3 / "orbi@2.timer.d" / "stagger.conf"
     assert dropin_n3_2.is_file()
     assert dropin_n3_2.read_text(encoding="utf-8") == (
-        "[Timer]\nOnCalendar=\nOnCalendar=*-*-* *:02/5:30\n"
+        "[Timer]\nOnCalendar=\nOnCalendar=*-*-* *:01/5:40\n"
     )
     dropin_n3_3 = install_n3 / "orbi@3.timer.d" / "stagger.conf"
     assert dropin_n3_3.is_file()
@@ -1058,36 +1057,24 @@ def test_install_units_staggers_timers_with_deterministic_offsets(tmp_path):
     )
 
 
-def test_reinstall_after_concurrency_shrinks_keeps_surplus_stagger_dropin(
-    tmp_path,
-):
-    """Issue #1362: reinstalling after N shrinks from 2 to 1 disables the
-    surplus timer but KEEPS ``orbi@2.timer.d/stagger.conf`` — the file
-    may belong to a co-located deployment sharing the unit directory,
-    and deleting it is what made two deployments ping-pong forever."""
+def test_reinstall_after_concurrency_shrinks_removes_stagger_dropin(tmp_path):
+    """Issue #1320: reinstalling after N shrinks from 2 to 1 removes orbi@2.timer.d/stagger.conf."""
     repo = make_repo(tmp_path)
     install_dir = tmp_path / "install"
-    calls: list[list[str]] = []
-
-    def run(command, **kwargs):
-        calls.append(command)
-        return ""
 
     # Install at N = 2
     scheduler.install_units(
-        repo, install_dir, max_concurrency=2, run_command=run,
+        repo, install_dir, max_concurrency=2,
+        run_command=lambda command, **kwargs: "",
     )
     assert (install_dir / "orbi@2.timer.d" / "stagger.conf").is_file()
 
-    # Reinstall at N = 1: the surplus timer is disabled, its drop-in kept.
-    calls.clear()
+    # Reinstall at N = 1
     scheduler.install_units(
-        repo, install_dir, max_concurrency=1, run_command=run,
+        repo, install_dir, max_concurrency=1,
+        run_command=lambda command, **kwargs: "",
     )
-    assert (install_dir / "orbi@2.timer.d" / "stagger.conf").is_file()
-    assert [
-        "systemctl", "--user", "disable", "--now", "orbi@2.timer",
-    ] in calls
+    assert not (install_dir / "orbi@2.timer.d" / "stagger.conf").exists()
 
 
 # --- Issue #1344: the stagger drop-ins are part of the drift check ---------
@@ -1113,9 +1100,8 @@ def test_missing_stagger_dropin_is_drift_and_self_heals(tmp_path):
     assert dropin["drifted"] is True
     assert dropin["missing"] is True
     assert dropin["installed_sha256"] is None
-    # Instance 1 and the surplus instances carry no drop-in of their
-    # own: they are not part of the status at all while none is
-    # installed (Issue #1362 skips surplus instances outright).
+    # Instance 1 and the surplus instances expect no drop-in: they are
+    # not part of the status at all while none is installed.
     assert [entry["unit"] for entry in status] == [
         *systemd_deploy.UNIT_NAMES, "orbi@2.timer.d/stagger.conf",
     ]
@@ -1134,10 +1120,9 @@ def test_missing_stagger_dropin_is_drift_and_self_heals(tmp_path):
 
 
 def test_stagger_dropins_retune_when_capacity_grows(tmp_path):
-    """Issue #1344 acceptance 2 + Issue #1362: installed at capacity two,
-    the config becomes three: the MISSING instance-3 drop-in is drift,
-    and the self-heal adds it. Instance 2's offset is count-independent,
-    so its existing drop-in is not drift and is not rewritten."""
+    """Issue #1344 acceptance 2: installed at capacity two, the config
+    becomes three: the stale instance-2 drop-in and the missing
+    instance-3 one are drift, and the self-heal rewrites both offsets."""
     repo = make_repo(tmp_path)
     installed = make_installed(tmp_path, repo, max_concurrency=2)
     drifted = {
@@ -1145,13 +1130,15 @@ def test_stagger_dropins_retune_when_capacity_grows(tmp_path):
             repo, installed, max_concurrency=3,
         ) if entry["drifted"]
     }
-    assert drifted == {"orbi@3.timer.d/stagger.conf"}
+    assert drifted == {
+        "orbi@2.timer.d/stagger.conf", "orbi@3.timer.d/stagger.conf",
+    }
     scheduler.sync_drifted_units(
         repo, installed, max_concurrency=3, run_command=_heal_run,
     )
     assert (installed / "orbi@2.timer.d" / "stagger.conf").read_text(
         encoding="utf-8",
-    ) == "[Timer]\nOnCalendar=\nOnCalendar=*-*-* *:02/5:30\n"
+    ) == "[Timer]\nOnCalendar=\nOnCalendar=*-*-* *:01/5:40\n"
     assert (installed / "orbi@3.timer.d" / "stagger.conf").read_text(
         encoding="utf-8",
     ) == "[Timer]\nOnCalendar=\nOnCalendar=*-*-* *:03/5:20\n"
@@ -1246,103 +1233,3 @@ def test_schedule_spellings_report_the_installed_value_and_the_fix(tmp_path):
         "orbi@1.timer=? (expected *-*-* *:00/5; run: orbi install-units)",
         "orbi@2.timer=? (expected *-*-* *:02/5:30; run: orbi install-units)",
     ]
-
-
-# --- Issue #1362: co-located deployments converge; self-heal never
-# --- changes timer enablement ------------------------------------------------
-
-
-def _snapshot_dropins(installed: Path) -> dict[str, tuple[bytes, int]]:
-    """Every stagger drop-in's bytes and mtime, by relative path."""
-    return {
-        path.relative_to(installed).as_posix(): (
-            path.read_bytes(), path.stat().st_mtime_ns,
-        )
-        for path in sorted(installed.rglob("stagger.conf"))
-    }
-
-
-def test_shared_unit_dir_converges_across_deployments(tmp_path):
-    """Issue #1362 acceptance 1: three deployments with max_concurrency
-    1, 2 and 3 sharing one unit directory (all on the default ``orbi@``
-    unit name) stop fighting. Each tick is the real runner order — check
-    for drift, then heal — and after the first full round no deployment
-    sees drift and no drop-in file changes any more. On v0.5.46 the
-    offsets depend on the CALLER's capacity and every deployment's
-    surplus drop-in is drift, so the files ping-pong on every round."""
-    repo = make_repo(tmp_path)
-    shared = tmp_path / "shared-units"
-    shared.mkdir(parents=True)
-    for name in systemd_deploy.UNIT_NAMES:
-        (shared / name).write_bytes((repo / "systemd" / name).read_bytes())
-    counts = (3, 2, 1)
-
-    def drift_for(count: int) -> set[str]:
-        return {
-            entry["unit"] for entry in scheduler.unit_status(
-                repo, shared, max_concurrency=count,
-            ) if entry["drifted"]
-        }
-
-    def tick(count: int) -> None:
-        # The real order: the pre-start check runs before the self-heal.
-        assert drift_for(count) == set(), (
-            f"deployment max_concurrency={count} reports drift: "
-            f"{drift_for(count)}"
-        )
-        systemd_deploy.sync_stagger_dropins(
-            shared, None, max_concurrency=count,
-        )
-
-    # The first round establishes each deployment's owned drop-ins.
-    for count in counts:
-        systemd_deploy.sync_stagger_dropins(
-            shared, None, max_concurrency=count,
-        )
-    first = _snapshot_dropins(shared)
-    assert first, "the first round wrote no stagger drop-ins"
-    assert {name for name in first} == {
-        "orbi@2.timer.d/stagger.conf", "orbi@3.timer.d/stagger.conf",
-    }
-
-    # Later rounds in alternation: clean checks, no file churn.
-    for _round in range(2):
-        for count in counts:
-            tick(count)
-            assert _snapshot_dropins(shared) == first
-
-
-def test_self_heal_never_changes_timer_enablement(tmp_path):
-    """Issue #1362 acceptance 2: the pre-start self-heal repairs drifted
-    FILES but never changes enablement — a timer the operator disabled
-    stays disabled. The harness reports ``disabled`` for ``is-enabled``
-    and records every command; the self-heal must issue no
-    ``enable``/``disable`` (on v0.5.46 it ran ``enable --now`` for every
-    configured instance, re-enabling and starting the disabled timer)."""
-    repo = make_repo(tmp_path)
-    installed = make_installed(
-        tmp_path, repo, mutate="orbi@.timer", max_concurrency=2,
-    )
-    calls: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        if command == ["git", "rev-parse", "HEAD"]:
-            return "0123456789abcdef0123456789abcdef01234567"
-        return ""
-
-    scheduler.sync_drifted_units(
-        repo, installed, max_concurrency=2, run_command=fake_run,
-    )
-    assert [
-        command for command in calls
-        if command[:3] in (
-            ["systemctl", "--user", "enable"],
-            ["systemctl", "--user", "disable"],
-        )
-    ] == []
-    # The file repair itself still ran.
-    assert ["systemctl", "--user", "daemon-reload"] in calls
-    assert (installed / "orbi@.timer").read_bytes() == (
-        repo / "systemd" / "orbi@.timer"
-    ).read_bytes()

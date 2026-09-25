@@ -83,7 +83,7 @@ LOG_TAIL_LINES = 400
 RELOAD_PENDING_SUFFIX = ".reload-pending"
 
 
-def calendar_minute_offset(instance: int) -> int:
+def calendar_minute_offset(instance: int, max_concurrency: int) -> int:
     """The instance's offset in whole minutes inside the 5-minute tick.
 
     ``StartCalendarInterval`` has whole-minute granularity:
@@ -92,26 +92,25 @@ def calendar_minute_offset(instance: int) -> int:
     _walk``) reads those five only — an undocumented ``Second`` key is
     silently ignored, so a sub-minute offset cannot be expressed (the
     run then lands on the grid minute at second 0). The deterministic
-    offset therefore truncates: instance 2 is 2 minutes away. It
-    depends on the instance index alone, so co-located deployments
-    agree (Issue #1362).
+    offset therefore truncates: N = 2 spreads instance 2 by 2 minutes.
     """
-    return instance_offset_seconds(instance) // 60
+    return instance_offset_seconds(instance, max_concurrency) // 60
 
 
-def calendar_interval_entries(instance: int) -> list[dict[str, int]]:
+def calendar_interval_entries(instance: int,
+                              max_concurrency: int) -> list[dict[str, int]]:
     """StartCalendarInterval entries on the wall-clock 5-minute grid.
 
     One entry per grid minute (a bare ``{"Minute": m}`` fires every
     hour at minute m), shifted by the instance's whole-minute offset.
     """
-    offset = calendar_minute_offset(instance)
+    offset = calendar_minute_offset(instance, max_concurrency)
     return [{"Minute": (base + offset) % 60} for base in range(0, 60, 5)]
 
 
-def calendar_schedule(instance: int) -> str:
+def calendar_schedule(instance: int, max_concurrency: int) -> str:
     """The instance's launchd schedule in the report's calendar spelling."""
-    return f"*-*-* *:{calendar_minute_offset(instance):02d}/5"
+    return f"*-*-* *:{calendar_minute_offset(instance, max_concurrency):02d}/5"
 
 
 def label_base(unit_name: str | None = None) -> str:
@@ -217,7 +216,7 @@ class LaunchdScheduler:
             parsed = plistlib.loads(rendered.encode("utf-8"))
             parsed.pop("StartInterval", None)
             parsed["StartCalendarInterval"] = calendar_interval_entries(
-                instance,
+                instance, max_concurrency,
             )
             return plistlib.dumps(parsed, fmt=plistlib.FMT_XML).decode("utf-8")
         return rendered
@@ -311,7 +310,7 @@ class LaunchdScheduler:
 
     def schedule_text(self, instance: int, max_concurrency: int) -> str:
         """The schedule this platform actually deploys (whole minutes)."""
-        return calendar_schedule(instance)
+        return calendar_schedule(instance, max_concurrency)
 
     def extra_drift(self, installed_dir: Path, unit_name: str | None,
                     max_concurrency: int) -> list[dict]:
@@ -370,8 +369,7 @@ class LaunchdScheduler:
     def activate_instances(self, run_command, installed_dir: Path,
                            unit_name: str | None = None, *,
                            max_concurrency: int,
-                           changed: frozenset[str] = frozenset(),
-                           enable: bool = True) -> None:
+                           changed: frozenset[str] = frozenset()) -> None:
         """Enable + bootstrap instances 1..max_concurrency, disable the
         surplus up to MAX_RUNNER_INSTANCES. A live instance is never
         booted out (bootout kills the job); an idle loaded instance is
@@ -379,29 +377,15 @@ class LaunchdScheduler:
         instance whose plist is in ``changed`` is not reloaded — it
         keeps the tick it is executing — but its deferred reload is
         recorded (``reload_pending``) for the next idle cycle
-        (Issue #1347).
-
-        ``enable=False`` is the pre-start self-heal (Issue #1362): the
-        plists and their deferred reloads are repaired, but no
-        ``launchctl enable``/``disable`` runs and a service the operator
-        unloaded is never bootstrapped.
-        """
+        (Issue #1347)."""
         labels = self.timer_instances(unit_name, MAX_RUNNER_INSTANCES)
         installed_dir = Path(installed_dir)
         for label in labels[:max_concurrency]:
             # Enable FIRST: a stale disabled record fails the bootstrap.
-            if enable:
-                run_command(["launchctl", "enable", self.target(label)])
+            run_command(["launchctl", "enable", self.target(label)])
             name = plist_name(label)
             marker = self.reload_marker(installed_dir, name)
-            state = self._print_state(run_command, label)
-            if state is None:
-                if not enable:
-                    # Self-heal: the service is not loaded (disabled by
-                    # the operator); never bootstrap it. Clear any stale
-                    # deferred reload so the drift check does not loop.
-                    marker.unlink(missing_ok=True)
-                    continue
+            if self._print_state(run_command, label) is None:
                 run_command([
                     "launchctl", "bootstrap", self.domain(),
                     str(installed_dir / name),
@@ -426,8 +410,6 @@ class LaunchdScheduler:
                     "with; the next idle tick reloads it\n",
                     encoding="utf-8",
                 )
-        if not enable:
-            return
         for label in labels[max_concurrency:]:
             # Disable persists across logins; bootout only unloads an
             # idle instance (bootout on a running job kills it).

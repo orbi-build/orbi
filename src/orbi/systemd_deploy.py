@@ -203,18 +203,16 @@ def stagger_dropin(installed_dir: Path, timer: str) -> Path:
     return Path(installed_dir) / f"{timer}.d" / "stagger.conf"
 
 
-def stagger_dropin_text(instance: int) -> str:
+def stagger_dropin_text(instance: int, max_concurrency: int) -> str:
     """The exact stagger.conf content for one runner instance.
 
     A bare ``OnCalendar=`` line resets the inherited list, so the
     drop-in REPLACES the template's schedule instead of appending to
-    it (systemd drop-in semantics). The content depends on the
-    instance index alone, so co-located deployments write the same
-    bytes (Issue #1362).
+    it (systemd drop-in semantics).
     """
     return (
         "[Timer]\nOnCalendar=\n"
-        f"OnCalendar={instance_schedule(instance)}\n"
+        f"OnCalendar={instance_schedule(instance, max_concurrency)}\n"
     )
 
 
@@ -237,36 +235,34 @@ def parse_oncalendar(text: str) -> str | None:
 
 def sync_stagger_dropins(installed_dir: Path, unit_name: str | None = None,
                          *, max_concurrency: int) -> None:
-    """Manage THIS deployment's timer stagger drop-ins.
+    """Manage timer stagger drop-ins for enabled and surplus instances.
 
-    Instances 2..max_concurrency get a stagger.conf drop-in with the
-    instance's own OnCalendar; instance 1 keeps the template value, so
-    a stray drop-in under ``orbi@1.timer.d`` is removed. Instances
-    above ``max_concurrency`` are NOT touched: they belong to a
-    co-located deployment sharing the unit directory (Issue #1362 —
-    removing them is what made two deployments ping-pong forever). A
-    drop-in is only rewritten when its content differs, so a
-    converged round touches nothing on disk.
+    Instance 1 keeps the template value (no drop-in).
+    Instances 2..max_concurrency get a stagger.conf drop-in with OnCalendar.
+    Any other instance (1 or surplus) has its stagger.conf drop-in removed,
+    so the installed set converges on the expected one (Issue #1344).
     """
     instances = timer_instances(unit_name, MAX_RUNNER_INSTANCES)
-    # Write (idempotently) the drop-ins for instances 2..max_concurrency.
+    # Write drop-ins for instances 2..max_concurrency
     for idx in range(2, max_concurrency + 1):
         instance = instances[idx - 1]
-        dropin = stagger_dropin(installed_dir, instance)
-        text = stagger_dropin_text(idx)
-        if dropin.is_file() and dropin.read_text(encoding="utf-8") == text:
-            continue
-        dropin.parent.mkdir(parents=True, exist_ok=True)
-        dropin.write_text(text, encoding="utf-8")
+        dropin_dir = installed_dir / f"{instance}.d"
+        dropin_dir.mkdir(parents=True, exist_ok=True)
+        stagger_dropin(installed_dir, instance).write_text(
+            stagger_dropin_text(idx, max_concurrency), encoding="utf-8",
+        )
 
-    # Instance 1 keeps the template value: remove a stray drop-in.
-    first = instances[0]
-    dropin_dir = installed_dir / f"{first}.d"
-    dropin_file = stagger_dropin(installed_dir, first)
-    if dropin_file.is_file():
-        dropin_file.unlink()
-    if dropin_dir.is_dir() and not any(dropin_dir.iterdir()):
-        dropin_dir.rmdir()
+    # Remove drop-ins outside the expected set: instance 1 (the template
+    # value) and the surplus instances (max_concurrency + 1 .. MAX).
+    for idx, instance in enumerate(instances, start=1):
+        if 2 <= idx <= max_concurrency:
+            continue
+        dropin_dir = installed_dir / f"{instance}.d"
+        dropin_file = stagger_dropin(installed_dir, instance)
+        if dropin_file.is_file():
+            dropin_file.unlink()
+        if dropin_dir.is_dir() and not any(dropin_dir.iterdir()):
+            dropin_dir.rmdir()
 
 
 class SystemdScheduler:
@@ -358,12 +354,8 @@ class SystemdScheduler:
         ])
 
     def schedule_text(self, instance: int, max_concurrency: int) -> str:
-        """The ``OnCalendar`` spelling of the deployed instance schedule.
-
-        The offset depends on the instance index alone: deployments
-        sharing a unit directory agree on it (Issue #1362).
-        """
-        return instance_schedule(instance)
+        """The ``OnCalendar`` spelling of the deployed instance schedule."""
+        return instance_schedule(instance, max_concurrency)
 
     def extra_drift(self, installed_dir: Path, unit_name: str | None,
                     max_concurrency: int) -> list[dict]:
@@ -371,25 +363,19 @@ class SystemdScheduler:
 
         The expected set for ``max_concurrency`` is one
         ``orbi@<i>.timer.d/stagger.conf`` for instances 2..N with the
-        exact :func:`stagger_dropin_text` content, and a clean
-        instance 1 (it keeps the template value). A surplus instance
-        (index > ``max_concurrency``) is NOT part of this
-        deployment's set — the drop-in may belong to a co-located
-        deployment sharing the unit directory, so flagging it as
-        drift is what started the ping-pong (Issue #1362).
+        exact :func:`stagger_dropin_text` content, and NO drop-in for
+        instance 1 (it keeps the template value) or a surplus instance
+        (Issue #1344). A missing, stale or unexpected file is drift.
         """
         installed_dir = Path(installed_dir)
         expected = {
-            index: stagger_dropin_text(index)
+            index: stagger_dropin_text(index, max_concurrency)
             for index in range(2, max_concurrency + 1)
         }
         entries: list[dict] = []
         for index, timer in enumerate(
             timer_instances(unit_name, MAX_RUNNER_INSTANCES), start=1,
         ):
-            if index > max_concurrency:
-                # Owned by another deployment: not this one's drift.
-                continue
             installed_path = stagger_dropin(installed_dir, timer)
             installed_sha = self.installed_sha(installed_path)
             wanted = expected.get(index)
@@ -495,8 +481,7 @@ class SystemdScheduler:
     def activate_instances(self, run_command, installed_dir: Path,
                            unit_name: str | None = None, *,
                            max_concurrency: int,
-                           changed: frozenset[str] = frozenset(),
-                           enable: bool = True) -> None:
+                           changed: frozenset[str] = frozenset()) -> None:
         """daemon-reload, then converge the timer instances.
 
         Enables instances through ``max_concurrency`` and disables the
@@ -507,17 +492,9 @@ class SystemdScheduler:
         NEVER started, stopped or restarted: a currently running
         Runner keeps running, and the new config takes effect at the
         next service start.
-
-        ``enable=False`` is the pre-start self-heal (Issue #1362): the
-        drop-ins are synced and the daemon reloaded, but no
-        ``enable``/``disable`` runs — a timer the operator disabled
-        stays disabled instead of being re-enabled (and started) by
-        the self-heal.
         """
         sync_stagger_dropins(installed_dir, unit_name, max_concurrency=max_concurrency)
         run_command(["systemctl", "--user", "daemon-reload"])
-        if not enable:
-            return
         instances = timer_instances(unit_name, MAX_RUNNER_INSTANCES)
         for instance in instances[:max_concurrency]:
             run_command(["systemctl", "--user", "enable", "--now", instance])

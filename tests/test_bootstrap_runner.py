@@ -12007,13 +12007,18 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
     with caplog.at_level("ERROR"):
         with pytest.raises(runner.UnitDriftError, match="unit_drift"):
             runner.main(["--config", str(config)])
-    # The self-heal follows default capacity one: it repairs the files
-    # and reloads the daemon, but NEVER changes enablement (Issue
-    # #1362) — no enable/disable, and never a service instance.
+    # The self-heal follows default capacity one: it enables @1 and
+    # stops only surplus @2.timer, never a service instance.
     assert ["systemctl", "--user", "daemon-reload"] in calls
+    assert [
+        "systemctl", "--user", "enable", "--now", "orbi@1.timer",
+    ] in calls
+    assert [
+        "systemctl", "--user", "disable", "--now", "orbi@2.timer",
+    ] in calls
     for command in calls:
         if command[:2] == ["systemctl", "--user"]:
-            assert command[2] == "daemon-reload"
+            assert command[2] in ("daemon-reload", "enable", "disable")
     # The structured line carries what the Issue requires.
     assert "unit_drift unit=orbi@.timer" in caplog.text
     assert f"repo={repo / 'systemd' / 'orbi@.timer'}" in caplog.text
@@ -12029,14 +12034,13 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
 def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
     monkeypatch, tmp_path, caplog,
 ):
-    """Issue #142 + #1362: the normal scene — a template change merged
-    to main (the ExecStartPre-synced checkout carries the new
-    templates, the installed units are still the old ones). The
-    preflight self-heals with the SAME idempotent install (copy,
-    daemon-reload — never start/stop/restart the service and never an
-    enable/disable), the re-verify is clean, the structured
-    `auto_synced` line is logged and the tick proceeds to the normal
-    claim flow (slot taken, queue scanned).
+    """Issue #142: the normal scene — a template change merged to main
+    (the ExecStartPre-synced checkout carries the new templates, the
+    installed units are still the old ones). The preflight self-heals
+    with the SAME idempotent install (copy, daemon-reload, enable the
+    timer — never start/stop/restart the service), the re-verify is
+    clean, the structured `auto_synced` line is logged and the tick
+    proceeds to the normal claim flow (slot taken, queue scanned).
     No more per-tick drift loop until a human intervenes."""
     from orbi import scheduler, systemd_deploy
 
@@ -12058,12 +12062,17 @@ def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
-    # The self-heal repairs files and reloads, but never changes
-    # enablement (Issue #1362) and never a service.
+    # The self-heal follows default capacity one and never a service.
     assert ["systemctl", "--user", "daemon-reload"] in calls
+    assert [
+        "systemctl", "--user", "enable", "--now", "orbi@1.timer",
+    ] in calls
+    assert [
+        "systemctl", "--user", "disable", "--now", "orbi@2.timer",
+    ] in calls
     for command in calls:
         if command[:2] == ["systemctl", "--user"]:
-            assert command[2] == "daemon-reload"
+            assert command[2] in ("daemon-reload", "enable", "disable")
     # The repo template won: the installed unit matches it again.
     status = scheduler.unit_status(repo, installed)
     assert all(entry["drifted"] is False for entry in status)
@@ -12089,7 +12098,7 @@ def test_main_unit_drift_auto_sync_failure_blocks_claim(
     )
 
     def failing_run(command, **kwargs):
-        if command == ["systemctl", "--user", "daemon-reload"]:
+        if command[:3] == ["systemctl", "--user", "enable"]:
             raise subprocess.CalledProcessError(1, command, stderr="nope")
         return ""
 

@@ -19,16 +19,11 @@ instances, `orbi@1.timer` through `orbi@N.timer` (N =
 Instance 1 fires every 5 minutes, 24 hours a day
 (`OnCalendar=*-*-* *:00/5`, `AccuracySec=30s`, `Persistent=false` — a
 missed tick is dropped, never queued); instances 2..N are shifted by
-`(i-1)*(300 // i)` seconds through a per-instance
+`(i-1)*(300 // N)` seconds through a per-instance
 `orbi@<i>.timer.d/stagger.conf` drop-in, so they do not all fire at the
-same instant. The offset depends on the instance index alone, never on
-the calling deployment's `max_concurrency`: deployments that share one
-unit directory therefore write the same drop-in and converge, and a
-self-heal never deletes or disables an instance above its own capacity
-(Issue #1362). The drop-in files are repaired by the pre-start drift
-check, but that self-heal never changes a timer's enablement — a timer
-the operator disabled stays disabled. `orbi doctor` / `orbi status`
-read each instance's schedule from the installed units. Each instance starts its OWN service instance
+same instant. The drop-ins are part of the pre-start drift check, and
+`orbi doctor` / `orbi status` read each instance's schedule from the
+installed units. Each instance starts its OWN service instance
 (`orbi@1.timer` → `orbi@1.service`,
 `orbi@2.timer` → `orbi@2.service`, ...), so N independent
 Runner instances can run concurrently. Each tick's service instance:
