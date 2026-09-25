@@ -195,26 +195,55 @@ def test_only_the_highest_version_pages_carry_latest_markers():
 PRE_GENERATOR_TAGS = frozenset({"v0.1.0", "v0.1.1"})
 
 
+def release_tags(repo_root: Path) -> set[str]:
+    """Every released tag visible in the checkout. Requires the tag refs
+    (CI provides them with `fetch-tags: true`)."""
+    tags = {
+        tag for tag in git(repo_root, "tag", "--list", "v*").splitlines() if tag.strip()
+    }
+    assert tags, (
+        "no tags found in the checkout — the release pages cannot be "
+        "checked for completeness (CI fetches tags with fetch-tags: true)"
+    )
+    return tags
+
+
+def tags_at_head(repo_root: Path) -> set[str]:
+    """The released tags whose commit is HEAD (Issue #1363).
+
+    The release page is committed one commit AFTER its tag, so on the
+    tagged commit itself HEAD is that tag's commit and the page has not
+    landed yet — only those tags may lack their page. Once HEAD advances
+    to the docs-sync commit the exemption is gone, so a page that never
+    lands still fails the completeness check."""
+    head = git(repo_root, "rev-parse", "HEAD")
+    return {
+        tag for tag in release_tags(repo_root)
+        if git(repo_root, "rev-parse", f"refs/tags/{tag}^{{commit}}") == head
+    }
+
+
 def test_every_released_tag_has_its_release_page():
     """Tag/page completeness (Issue #910): every released tag must have
     a corresponding docs page and vice versa — the file/nav parity tests
     above cannot see a release whose docs sync never ran, which is how
     a version-sequence gap like the skipped v0.5.1 becomes visible in
     the navigation without any test failing. Requires the tag refs in
-    the checkout (CI provides them with `fetch-tags: true`)."""
-    tags = {
-        tag for tag in git(REPO_ROOT, "tag", "--list", "v*").splitlines() if tag.strip()
-    }
-    assert tags, (
-        "no tags found in the checkout — the release pages cannot be "
-        "checked for completeness (CI fetches tags with fetch-tags: true)"
-    )
+    the checkout (CI provides them with `fetch-tags: true`).
+
+    Issue #1363: the page commit follows the tag, so the tag at HEAD is
+    exempt while its page commit has not landed — a normal release tag
+    commit is green, while any older tag without a page still fails."""
+    tags = release_tags(REPO_ROOT)
     expected_slugs = {
         f"release-{tag}" for tag in tags - PRE_GENERATOR_TAGS
     }
+    pending_slugs = {
+        f"release-{tag}" for tag in tags_at_head(REPO_ROOT) - PRE_GENERATOR_TAGS
+    }
     for language_code in ("en", "zh"):
         slugs = release_page_slugs(language_code)
-        missing_pages = expected_slugs - slugs
+        missing_pages = (expected_slugs - pending_slugs) - slugs
         assert not missing_pages, (
             f"released tags without a {language_code} docs page: "
             f"{sorted(missing_pages)}"
@@ -225,6 +254,58 @@ def test_every_released_tag_has_its_release_page():
             f"(the pre-generator records live on the GitHub Releases, "
             f"not in docs/): {sorted(orphan_pages)}"
         )
+
+
+def _release_repo(tmp_path: Path) -> Path:
+    """A throwaway checkout for the tag/page completeness cases (Issue
+    #1363): real git refs, a real HEAD, an empty ``docs/``."""
+    repo = tmp_path / "repo"
+    (repo / "docs" / "zh").mkdir(parents=True)
+    git(repo, "init", "-q")
+    git(repo, "config", "user.email", "release-test@example.com")
+    git(repo, "config", "user.name", "Release Test")
+    return repo
+
+
+def _commit_all(repo: Path, message: str) -> None:
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", message)
+
+
+def test_tag_at_head_without_its_page_yet_passes(tmp_path, monkeypatch):
+    """Issue #1363: the release page commit lands one commit after the
+    tag, so on the tagged commit HEAD is the tag commit and its page is
+    not there yet. The completeness check must pass in that state."""
+    module = sys.modules[__name__]
+    repo = _release_repo(tmp_path)
+    (repo / "README.md").write_text("# repo\n", encoding="utf-8")
+    _commit_all(repo, "chore: prepare release v1.0.0")
+    git(repo, "tag", "-a", "v1.0.0", "-m", "release v1.0.0")
+    monkeypatch.setattr(module, "REPO_ROOT", repo)
+    monkeypatch.setattr(module, "DOCS_DIR", repo / "docs")
+
+    module.test_every_released_tag_has_its_release_page()
+
+
+def test_older_tag_without_its_page_fails(tmp_path, monkeypatch):
+    """Issue #1363: only the tag at HEAD is exempt — an older released
+    tag whose page never landed must still fail the check."""
+    module = sys.modules[__name__]
+    repo = _release_repo(tmp_path)
+    (repo / "README.md").write_text("# repo\n", encoding="utf-8")
+    _commit_all(repo, "chore: prepare release v0.9.0")
+    git(repo, "tag", "-a", "v0.9.0", "-m", "release v0.9.0")
+    (repo / "README.md").write_text("# repo v1\n", encoding="utf-8")
+    _commit_all(repo, "chore: prepare release v1.0.0")
+    git(repo, "tag", "-a", "v1.0.0", "-m", "release v1.0.0")
+    monkeypatch.setattr(module, "REPO_ROOT", repo)
+    monkeypatch.setattr(module, "DOCS_DIR", repo / "docs")
+
+    with pytest.raises(
+        AssertionError,
+        match=r"released tags without a en docs page: \['release-v0\.9\.0'\]",
+    ):
+        module.test_every_released_tag_has_its_release_page()
 
 
 def test_release_pages_carry_no_release_machine_audit_blocks():
