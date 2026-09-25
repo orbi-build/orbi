@@ -16703,6 +16703,55 @@ def test_run_ticket_agent_uses_a_temporary_session_without_git(monkeypatch, tmp_
     assert Path(command[command.index("--session-dir") + 1]).parent == kwargs["cwd"]
 
 
+def test_run_ticket_agent_materializes_provider_dir_and_env(
+    monkeypatch, tmp_path,
+):
+    """Issue #1379: the ONE no-tools helper keeps reaching the configured
+    provider — the materialization the clarify gate used to own still
+    puts the per-run agent dir on `PI_CODING_AGENT_DIR`.
+
+    The judgment session runs in a repo that configures a provider file
+    (the ticket-only content session does too), and the selected model
+    rides on `--provider/--model`: without the materialized catalog Pi
+    could never resolve it, and the gate would silently fail open.
+    """
+    home = tmp_path / "home"
+    _user_agent_dir(home, auth=False, settings=False)
+    monkeypatch.setenv("HOME", str(home))
+    seen: dict = {}
+
+    def fake_stream(command, **kwargs):
+        agent_dir = Path(kwargs["pi_env"]["PI_CODING_AGENT_DIR"])
+        seen["kwargs"] = kwargs
+        seen["models_written"] = (agent_dir / "models.json").is_file()
+        return "copy"
+
+    # The subprocess seam fans out to every binding (Issue #785), and
+    # the patch ratchet forbids a new per-module `pi_session` patch
+    # (Issue #789): the corpus may only shrink.
+    monkeypatch.setattr(seam, "stream_pi", fake_stream)
+    config = config_domain.RunnerConfig(
+        repo_dir=tmp_path, run_id="a1b2c3d4", skills=(),
+        pi_provider="groq", pi_model="qwen/qwen3.8-27b",
+        pi_providers_data=GROQ_PROVIDERS,
+    )
+    assert pi_session.run_ticket_agent(
+        {"number": 99, "title": "Launch thread", "body": "Write copy"},
+        config, "o/r",
+    ) == "copy"
+    kwargs = seen["kwargs"]
+    agent_dir = kwargs["cwd"] / ".orbi" / "pi-agent"
+    # The per-run catalog reaches Pi through the env only...
+    assert kwargs["pi_env"] == {"PI_CODING_AGENT_DIR": str(agent_dir)}
+    assert seen["models_written"] is True
+    # ...never through the journaled command.
+    log = " ".join(kwargs["log_command"])
+    assert str(agent_dir) not in log
+    assert "https://api.groq.com/openai/v1" not in log
+    # Transient OS state: the materialized dir goes with the session.
+    assert not agent_dir.exists()
+
+
 def test_run_ticket_agent_logs_provider_config_loaded(monkeypatch, tmp_path, caplog):
     """Issue #176: the ticket-only session logs the provider config
     line too (role=ticket) — every Pi session has the same startup
