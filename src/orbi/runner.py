@@ -117,6 +117,8 @@ from orbi.repo_config import (
     resolve_policy,
 )
 from orbi.progress import (
+    RUN_MARKER_PATTERN,
+    FAILURE_MARKER_PATTERN,
     ProgressPublisher,
     STARTED_HEADER,
     _progress_body,
@@ -125,6 +127,7 @@ from orbi.progress import (
     _safe_publish,
     bump_failure_repeat,
     failure_marker,
+    failure_repeat_count,
     field_block,
     format_status_comment,
     format_elapsed,
@@ -184,14 +187,6 @@ from orbi.failure import (
     _failure_detail,
     _failure_summary,
     _redact_local_paths,
-)
-# The failure-history scans live in their own lean module (Issues #825,
-# #1351, #1229); these are re-exported so `runner.<name>` keeps working
-# for callers.
-from orbi.failure_history import (
-    _failure_streak,
-    _reported_failure_comment,
-    _transient_failure_seen,
 )
 from orbi.merge_handoff import MergeHandoffRequired, is_maintainer_actionable
 from orbi.cli_source import CliInstallError, refresh_cli_install
@@ -5462,14 +5457,13 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             LOGGER.exception("issue=%s failure reporting failed", number)
         else:
             # The terminal evidence is recorded (journal +
-            # `Orbi failed` comment) and the terminal decision landed —
-            # `ai-blocked`, or the one-shot transient `ai-ready` retry
-            # (Issue #1351). Either way the scene is never needed again
-            # (a retry gets a new run id and worktree), so clean it up.
-            # The recoverable paths (ModelWaitDeadError, ai-fix-needed)
-            # and the simulated-kill scene (blocked transition never
-            # landed) never reach this branch — the worktree is kept for
-            # the same-run resume.
+            # `Orbi failed` comment) and the Issue is genuinely
+            # `ai-blocked` — the scene is never needed again (a retry
+            # gets a new run id and worktree), so clean it up. The
+            # recoverable paths (ModelWaitDeadError, ai-fix-needed) and
+            # the simulated-kill scene (blocked transition never landed)
+            # never reach this branch — the worktree is kept for the
+            # same-run resume.
             if worktree is not None:
                 cleanup_task_worktree(ctx, config.repo_dir)
         # The failure is terminal — the Issue is `ai-blocked`
@@ -5720,6 +5714,63 @@ FAILURE_COMMENT_MAX_CHARS = 20000
 FAILURE_STREAK_LIMIT = 3
 
 
+def _is_line_failure_comment(body: str, run_id: str,
+                             fingerprint: str) -> bool:
+    """True when one comment is the failure record of this exact
+    (run_id, fingerprint) pair — the hidden `orbi:fail` marker plus the
+    run marker (Issue #825)."""
+    fail = FAILURE_MARKER_PATTERN.search(body)
+    return (
+        fail is not None
+        and fail.group(1) == fingerprint
+        and run_id in set(RUN_MARKER_PATTERN.findall(body))
+    )
+
+
+def _reported_failure_comment(comments: list, run_id: str,
+                              fingerprint: str) -> dict | None:
+    """The trusted comment already reporting this exact
+    (run_id, fingerprint) failure, or None — the #825 dedup key. A pure
+    scan over the already-fetched comment list."""
+    for comment in comments:
+        if not _comment_is_trusted(comment):
+            continue
+        body = comment.get("body")
+        if isinstance(body, str) and _is_line_failure_comment(
+                body, run_id, fingerprint):
+            return comment
+    return None
+
+
+def _failure_streak(comments: list, run_id: str,
+                    fingerprint: str) -> int:
+    """The number of CONSECUTIVE identical failures at the tail of the
+    trusted comment history (Issue #825). A pure scan over the
+    already-fetched comment list.
+
+    A matching failure comment adds its repeat count — the dedup keeps
+    ONE comment per (run_id, fingerprint) and bumps its counter in
+    place, so the counter IS the occurrence count. A DIFFERENT failure
+    ends the streak; a scene block (an opened PR, a completed review
+    round) ends it too — the delivery line advanced, the premises
+    changed. Publisher milestones and human chatter in between are
+    skipped: they change no premise."""
+    streak = 0
+    for comment in reversed(comments):
+        if not _comment_is_trusted(comment):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        if _is_line_failure_comment(body, run_id, fingerprint):
+            streak += failure_repeat_count(body)
+            continue
+        if FAILURE_MARKER_PATTERN.search(body) or scene.carries_scene_block(
+                body):
+            break
+    return streak
+
+
 def report_delivery_failure(
     exc: BaseException, *, issue: dict, source_repo: str,
     run_id: str | None, pr_url: str | None, worktree: Path | None,
@@ -5744,22 +5795,7 @@ def report_delivery_failure(
     and the terminal progress scene as a pure bypass. The carried
     failure is named `action`, `reason`, and `diagnosis`; the milestone
     uses the reason so its mobile notification remains useful. Returns
-    the outcome, `"blocked"`, `"requeued"` or `"fix needed"`.
-
-    The one-shot transient retry (Issue #1351): a terminal
-    `github_transient` failure is NOT final. When no prior
-    `github_transient` failure record exists in the Issue's comments, the
-    Issue is re-queued (`EVENT_REQUEUE`: `ai-ready` alone, `ai-blocked`
-    cleared) and the comment carries `failure.AUTO_RETRY_LINE`; the retry
-    comment itself is the record the NEXT failure reads, so the budget is
-    one with no local state and is shared across runner instances. A
-    `github_transient` failure whose budget is already spent stays
-    `ai-blocked` and carries `failure.AUTO_RETRY_SPENT_LINE`.
-    `provider_quota` waits out its window, and every non-`retry_safe`
-    record keeps its current terminal behavior. Without a bound run id or
-    a readable history the Issue stays blocked — a retry is never
-    guessed. The escalated dead loop (#825) is not transient and is never
-    retried.
+    the outcome, `"blocked"` or `"fix needed"`.
 
     `classify=False` forces the terminal branch (the implement-phase
     handler: every failure reaching it is terminal by design — the
@@ -5810,24 +5846,6 @@ def report_delivery_failure(
     if diagnosis is None:
         diagnosis = cause or _failure_detail(exc)
     blocked = not classify or is_unrecoverable_failure(exc)
-    # The machine-readable record travels with every failure comment: a
-    # status reader parses the block, a human reads the hierarchy. The
-    # record is computed once up front so the block and the reader-facing
-    # Action / Reason cannot disagree — and so the #1351 retry can read the
-    # closed reason code before it decides whether the history is needed.
-    failure_record = _classify_failure(
-        exc, outcome="blocked" if blocked else "fix_needed",
-    )
-    # The one-shot transient retry (Issue #1351): a terminal
-    # `github_transient` failure is re-queued once instead of stopping at
-    # `ai-blocked`. The budget is the presence of a prior `github_transient`
-    # record in the Issue's comments, so it survives a host restart and is
-    # shared by every runner instance with no local state. A `provider_quota`
-    # failure waits out its window and a dead-loop escalation (#825) is not
-    # transient, so neither is retried.
-    retry_candidate = (
-        blocked and failure_record.reason_code == "github_transient"
-    )
     # The #825 dead-loop guard, recoverable failures only (blocked is
     # already terminal; `classify=False` is the implement handler's
     # terminal template): the same (run_id, failure fingerprint)
@@ -5837,8 +5855,7 @@ def report_delivery_failure(
     # open: the guard must never break the failure report itself.
     fingerprint = runner_health.failure_fingerprint(exc)
     reported_failure: dict | None = None
-    automatic_retry_used = False
-    if run_id and ((classify and not blocked) or retry_candidate):
+    if classify and not blocked and run_id:
         try:
             history = issue_comments(number, repo=source_repo)
         except Exception:
@@ -5847,39 +5864,29 @@ def report_delivery_failure(
                 "failure_history_read_failed", issue=number,
                 run_id=run_id,
             )
-            # The #1351 retry budget IS this read: no read, no retry.
-            history = None
         else:
             reported_failure = _reported_failure_comment(
                 history, run_id, fingerprint,
             )
-            if retry_candidate:
-                automatic_retry_used = _transient_failure_seen(history)
-            if classify and not blocked:
-                streak = _failure_streak(history, run_id, fingerprint)
-                if streak + 1 >= FAILURE_STREAK_LIMIT:
-                    blocked = True
-                    reason = (
-                        f"{reason}; the same failure has now occurred "
-                        f"{streak + 1} consecutive times for run_id={run_id} "
-                        f"(fingerprint {fingerprint}) with unchanged "
-                        "preconditions — a dead loop, not a transient error"
-                    )
-                    event(
-                        "failure_streak_escalated", level=logging.ERROR,
-                        issue=number, run_id=run_id, streak=streak + 1,
-                        fingerprint=fingerprint,
-                    )
+            streak = _failure_streak(history, run_id, fingerprint)
+            if streak + 1 >= FAILURE_STREAK_LIMIT:
+                blocked = True
+                reason = (
+                    f"{reason}; the same failure has now occurred "
+                    f"{streak + 1} consecutive times for run_id={run_id} "
+                    f"(fingerprint {fingerprint}) with unchanged "
+                    "preconditions — a dead loop, not a transient error"
+                )
+                event(
+                    "failure_streak_escalated", level=logging.ERROR,
+                    issue=number, run_id=run_id, streak=streak + 1,
+                    fingerprint=fingerprint,
+                )
 
-    # Re-queue the first transient failure only; a spent budget, a missing
-    # run id or an unreadable history stays `ai-blocked` (Issue #1351).
-    requeue = (
-        retry_candidate and run_id is not None and history is not None
-        and not automatic_retry_used
-    )
-    retry_spent = retry_candidate and automatic_retry_used
-    # The streak guard above may have escalated `blocked`; re-derive the
-    # record so its `outcome` matches the final decision.
+    # The machine-readable record travels with every failure comment:
+    # a status reader parses the block, a human reads the hierarchy.
+    # `failure_record` is computed once here so the block and the
+    # reader-facing Action / Reason cannot disagree.
     failure_record = _classify_failure(
         exc, outcome="blocked" if blocked else "fix_needed",
     )
@@ -5920,30 +5927,7 @@ def report_delivery_failure(
         else issue_labels(number, source_repo)
     )
     evidence_detail = _failure_evidence(worktree, exc) if evidence else ""
-    if requeue:
-        # The one-shot retry returns the Issue to the ready queue: drop the
-        # delivery labels and `ai-blocked`, add `ai-ready` alone. The retry
-        # comment carries the failure record AND the visible budget line;
-        # the retry replaces the blocked-path action text (Issue #1351).
-        action = failure.AUTO_RETRY_ACTION
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_REQUEUE,
-            current_labels=labels,
-        )
-        event(
-            "failure_requeued", issue=number, run_id=run_id,
-            reason_code=failure_record.reason_code,
-        )
-        scene = scene_line() or "- run: `-`"
-        body = _failure_comment_body(
-            outcome="requeued", action=action, reason=reason,
-            diagnosis=diagnosis, scene=scene, evidence=evidence_detail,
-            pr_url=pr_url, issue=issue_context(source_repo, number),
-            run_id=run_id or "-", failure_record=failure_record,
-            retry_line=failure.AUTO_RETRY_LINE,
-        )
-        outcome = "requeued"
-    elif blocked:
+    if blocked:
         apply_label_patch(
             number, repo=source_repo, event=EVENT_BLOCKED,
             current_labels=labels,
@@ -5954,9 +5938,6 @@ def report_delivery_failure(
             diagnosis=diagnosis, scene=scene, evidence=evidence_detail,
             pr_url=pr_url, issue=issue_context(source_repo, number),
             run_id=run_id or "-", failure_record=failure_record,
-            retry_line=(
-                failure.AUTO_RETRY_SPENT_LINE if retry_spent else ""
-            ),
         )
         if classify:
             body = body.replace(
@@ -6084,19 +6065,7 @@ def report_delivery_failure(
             _safe_publish, run_id=run_id, issue=number,
             source_repo=source_repo, role=role,
         )
-        if outcome == "requeued":
-            publish(action=lambda: target.milestone(
-                f"requeued: {_failure_summary(reason)}",
-                block=failure.render(failure_record),
-            ))
-            finish_failure = reason
-            next_step = (
-                "the Issue returned to ai-ready and the next tick retries "
-                "automatically (the one automatic retry for a transient "
-                "failure)"
-            )
-            finish_outcome = "requeued"
-        elif outcome == "blocked":
+        if outcome == "blocked":
             publish(action=lambda: target.milestone(
                 f"blocked: {_failure_summary(reason)}",
                 block=failure.render(failure_record),

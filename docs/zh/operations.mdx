@@ -533,7 +533,6 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `failure_comment_id_unavailable` | 重复失败评论没有可恢复的 REST ID；已发布新评论 |
 | `failure_streak_escalated` | 同一失败达到连续上限；Issue 转为 ai-blocked |
 | `failure_history_read_failed` | 死循环守卫的失败历史读取失败（fail-open） |
-| `failure_requeued` | 首次 github_transient 失败将 Issue 退回 ai-ready，进行一次性自动重试 |
 | `external_takeover` | 外部 PR 被接管评审 |
 | `external_takeover_skipped` | 外部 PR 不满足接管条件 |
 | `external_takeover_closed` | 外部 PR 未合并被关闭；Issue 重新入队 |
