@@ -4242,12 +4242,18 @@ def test_open_pr_for_branch_rejects_malformed_and_ambiguous_results(
 
 def test_comment_issue_runs_gh_comment(monkeypatch):
     calls = []
-    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append(command))
+
+    def fake_run(command, **kwargs):
+        if command == ["git", "rev-parse", "--short=8", "HEAD"]:
+            # The runner-fingerprint probe (Issue #1366).
+            return "8a12fb1c"
+        return calls.append(command) or ""
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
     runner.comment_issue(3, repo="xqliu/orbi-backlog", body="done")
     assert calls == [[
         "gh", "issue", "comment", "3", "--repo", "xqliu/orbi-backlog",
-        "--body", "done\n\n<!-- runner="
-        + progress.runner_fingerprint() + " -->",
+        "--body", "done\n\n<!-- runner=8a12fb1c -->",
     ]]
 
 
@@ -5624,6 +5630,10 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     gh_calls, posted = make_fake_gh(monkeypatch)
 
     def fake_run(command, **kwargs):
+        if command == ["git", "rev-parse", "--short=8", "HEAD"]:
+            # The runner-fingerprint probe (Issue #1366) — not a
+            # delivery comment.
+            return "8a12fb1c"
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
         if command[:3] == ["gh", "issue", "view"]:
@@ -7575,6 +7585,10 @@ def test_process_issue_failure_without_session_still_carries_scene(
     gh_calls, posted = make_fake_gh(monkeypatch)
 
     def fake_run(command, **kwargs):
+        if command == ["git", "rev-parse", "--short=8", "HEAD"]:
+            # The runner-fingerprint probe (Issue #1366) — not a
+            # delivery comment.
+            return "8a12fb1c"
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
         if command[:3] == ["gh", "issue", "view"]:
@@ -7995,6 +8009,10 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     gh_calls, posted = make_fake_gh(monkeypatch)
 
     def fake_run(command, **kwargs):
+        if command == ["git", "rev-parse", "--short=8", "HEAD"]:
+            # The runner-fingerprint probe (Issue #1366) — not a
+            # delivery comment.
+            return "8a12fb1c"
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
         if command[:3] == ["gh", "issue", "view"]:
@@ -8054,6 +8072,10 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
     gh_calls, posted = make_fake_gh(monkeypatch)
 
     def fake_run(command, **kwargs):
+        if command == ["git", "rev-parse", "--short=8", "HEAD"]:
+            # The runner-fingerprint probe (Issue #1366) — not a
+            # delivery comment.
+            return "8a12fb1c"
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
         if command[:3] == ["gh", "issue", "view"]:
@@ -16156,7 +16178,7 @@ def test_parse_release_declaration_allows_milestone_only_tickets():
 
 def test_resolve_release_declaration_derives_milestone_contract(monkeypatch):
     monkeypatch.setattr(
-        release, "run_command", lambda *args, **kwargs: "pyproject.toml\n",
+        release, "run_git", lambda *args, **kwargs: "pyproject.toml\n",
     )
     config = Mock(base_branch="main", repositories=[])
     declaration = release.resolve_release_declaration(
@@ -16171,7 +16193,7 @@ def test_resolve_release_declaration_derives_milestone_contract(monkeypatch):
 
 def test_resolve_release_declaration_detects_node_version_file(monkeypatch):
     monkeypatch.setattr(
-        release, "run_command", lambda *args, **kwargs: "package.json\n",
+        release, "run_git", lambda *args, **kwargs: "package.json\n",
     )
     config = Mock(base_branch="main", repositories=[])
     result = release.resolve_release_declaration(
@@ -16182,7 +16204,7 @@ def test_resolve_release_declaration_detects_node_version_file(monkeypatch):
 
 
 def test_resolve_release_declaration_requires_explicit_version_file(monkeypatch):
-    monkeypatch.setattr(release, "run_command", lambda *args, **kwargs: "README.md\n")
+    monkeypatch.setattr(release, "run_git", lambda *args, **kwargs: "README.md\n")
     config = Mock(base_branch="main", repositories=[])
     with pytest.raises(ValueError, match="version_file"):
         release.resolve_release_declaration(
@@ -16199,7 +16221,7 @@ def test_resolve_release_declaration_uses_the_fused_base_branch(
     policy=develop + entry=main resolved dev to develop and release to
     main — freezing and pushing the release onto the wrong branch."""
     monkeypatch.setattr(
-        release, "run_command", lambda *args, **kwargs: "pyproject.toml\n",
+        release, "run_git", lambda *args, **kwargs: "pyproject.toml\n",
     )
     config = Mock(
         base_branch="develop",
@@ -16217,7 +16239,7 @@ def test_resolve_release_declaration_rejects_non_version_milestone_titles(
     gates burn their budgets: the only format check used to live in
     prepare_release_version, which runs after two <=1800s waits."""
     monkeypatch.setattr(
-        release, "run_command", lambda *args, **kwargs: "pyproject.toml\n",
+        release, "run_git", lambda *args, **kwargs: "pyproject.toml\n",
     )
     config = Mock(base_branch="main", repositories=[])
     with pytest.raises(ValueError, match="v-prefixed"):
@@ -18993,6 +19015,10 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     }
 
     def fake_run_command(command, **kwargs):
+        if command == ["git", "rev-parse", "--short=8", "HEAD"]:
+            # The runner-fingerprint probe (Issue #1366) is not release
+            # state, so it stays out of `state["commands"]`.
+            return "8a12fb1c"
         state["commands"].append((command, kwargs))
         if command[:3] == ["gh", "pr", "view"]:
             number = int(command[3])
@@ -21753,7 +21779,7 @@ def test_sync_release_docs_resume_after_failed_push_recommits_normally(
     subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
                     "-m", "rel", head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    original = runner.run_git_network_command
+    original = seam.run_git_network_command
 
     def failing_push(command, **kwargs):
         raise subprocess.CalledProcessError(1, command, stderr="boom")
@@ -22058,10 +22084,10 @@ def test_sync_release_docs_refuses_to_fabricate_after_fetch(tmp_path, monkeypatc
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040,
                          tag="v0.9.9")
     monkeypatch.setattr(release, "local_release_tag_commit", lambda *a: None)
-    monkeypatch.setattr(release, "run_git_network_command", lambda *a, **k: "")
+    monkeypatch.setattr(release, "run_git_network", lambda *a, **k: "")
     def missing_tag(command, **kwargs):
         raise subprocess.CalledProcessError(1, command)
-    monkeypatch.setattr(release, "run_command", missing_tag)
+    monkeypatch.setattr(release, "run_git", missing_tag)
     with pytest.raises(RuntimeError, match="refusing to fabricate"):
         release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,

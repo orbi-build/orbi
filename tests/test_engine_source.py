@@ -22,6 +22,8 @@ import pytest
 
 from conftest import git
 
+from seam import strip_safety
+
 from orbi import engine_source
 
 
@@ -405,6 +407,7 @@ def test_sync_fails_closed_when_the_head_cannot_be_verified(engine_repo):
     `engine_source_unverified` (the last-resort fail-closed line)."""
 
     def lying_head_run(command, *, cwd=None, timeout=None, **kwargs):
+        command = strip_safety(command)
         if command[:3] == ["git", "rev-parse", "HEAD"]:
             return engine_repo.c3
         return real_run_command(command, cwd=cwd, timeout=timeout, **kwargs)
@@ -426,6 +429,7 @@ def test_sync_branch_reraises_a_fetch_failure_when_the_ref_exists(
     fail fast, no invented reason."""
 
     def failing_fetch_run(command, *, cwd=None, timeout=None, **kwargs):
+        command = strip_safety(command)
         if command[:2] == ["git", "fetch"]:
             raise subprocess.CalledProcessError(128, command)
         return real_run_command(command, cwd=cwd, timeout=timeout, **kwargs)
@@ -447,6 +451,7 @@ def test_sync_branch_track_fails_closed_when_the_head_cannot_be_verified(
     fetched ref is engine_source_unverified."""
 
     def lying_head_run(command, *, cwd=None, timeout=None, **kwargs):
+        command = strip_safety(command)
         if command[:3] == ["git", "rev-parse", "HEAD"]:
             return "0" * 40
         return real_run_command(command, cwd=cwd, timeout=timeout, **kwargs)

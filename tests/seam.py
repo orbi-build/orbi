@@ -32,6 +32,56 @@ _MODULES = (
     repo_config, clarify,
 )
 
+# Issue #1366: `run_git` prefixes every Runner-side git command with the
+# overrides that disable repository-selected programs. The fakes below
+# were written against the plain argv, so the fan-out normalises them
+# back before a fake sees the command.
+_SAFETY_CONFIG_KEYS = frozenset(key for key, _ in journal._GIT_SAFETY_CONFIG)
+_SAFETY_FLAGS = frozenset({"--no-textconv", "--no-ext-diff"})
+_ORIGINAL_RUN_COMMAND = journal.run_command
+_ORIGINAL_RUN_GIT_NETWORK_COMMAND = journal.run_git_network_command
+_WRAPPED_FAKES: list[tuple] = []
+
+
+def _is_safety_config(assignment: str) -> bool:
+    key = assignment.split("=", 1)[0]
+    return key in _SAFETY_CONFIG_KEYS or key.startswith("filter.")
+
+
+def strip_safety(command):
+    """Remove `run_git`'s neutralising options from a recorded command."""
+    if not isinstance(command, list) or command[:1] != ["git"]:
+        return command
+    stripped = ["git"]
+    index = 1
+    while index < len(command):
+        token = command[index]
+        if (token == "-c" and index + 1 < len(command)
+                and _is_safety_config(command[index + 1])):
+            index += 2
+            continue
+        if token in _SAFETY_FLAGS:
+            index += 1
+            continue
+        stripped.append(token)
+        index += 1
+    return stripped
+
+
+def _normalise_fake(value):
+    """Wrap a seam fake so it sees the plain git argv (idempotent)."""
+    for original, wrapped in _WRAPPED_FAKES:
+        if original is value:
+            return wrapped
+
+    def normalised(*args, **kwargs):
+        if args:
+            args = (strip_safety(args[0]), *args[1:])
+        return value(*args, **kwargs)
+
+    _WRAPPED_FAKES.append((value, normalised))
+    return normalised
+
 
 class Seam:
     """Set/read a seam name across every module that binds it."""
@@ -43,6 +93,11 @@ class Seam:
         raise AttributeError(name)
 
     def __setattr__(self, name: str, value) -> None:
+        if (name == "run_command" and value is not _ORIGINAL_RUN_COMMAND) or (
+            name == "run_git_network_command"
+            and value is not _ORIGINAL_RUN_GIT_NETWORK_COMMAND
+        ):
+            value = _normalise_fake(value)
         for module in _MODULES:
             if name in vars(module):
                 setattr(module, name, value)
