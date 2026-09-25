@@ -380,6 +380,45 @@ def test_downscale_disables_the_surplus_and_bootouts_only_the_idle(
         ] not in fake.commands
 
 
+def test_activate_without_enable_never_touches_operator_state(
+    monkeypatch, tmp_path,
+):
+    """Issue #1364: the self-heal (``enable=False``) issues no
+    ``launchctl enable``/``disable`` and never bootstraps an instance
+    the operator disabled — while an idle loaded instance is still
+    reloaded onto the rewritten plist (the daemon-reload equivalent)."""
+    monkeypatch.setattr(launchd_deploy.os, "getuid", lambda: 501)
+    sched = launchd_deploy.LaunchdScheduler()
+    for _, name in sched.unit_pairs(None, 2):
+        (tmp_path / name).write_bytes(plistlib.dumps({"Label": "x"}))
+    fake = FakeLaunchd()
+    # Instance 1: the operator disabled and unloaded it.
+    fake.disabled.add("org.orbi.runner.1")
+    # Instance 2: loaded but idle.
+    fake.load("org.orbi.runner.2", state="not running")
+    sched.activate_instances(
+        fake, tmp_path, None, max_concurrency=2, enable=False,
+    )
+    launchctl = [command for command in fake.commands
+                 if command[0] == "launchctl"]
+    assert not any(command[1] in ("enable", "disable")
+                   for command in launchctl)
+    # The operator-disabled instance stays disabled and is not loaded.
+    assert "org.orbi.runner.1" in fake.disabled
+    assert "org.orbi.runner.1" not in fake.state
+    # The idle loaded instance is reloaded; the surplus is untouched.
+    assert [
+        "launchctl", "bootout", "gui/501/org.orbi.runner.2",
+    ] in fake.commands
+    assert [
+        "launchctl", "bootstrap", "gui/501",
+        str(tmp_path / "org.orbi.runner.2.plist"),
+    ] in fake.commands
+    for index in (3, 4, 5):
+        assert f"org.orbi.runner.{index}" not in fake.disabled
+        assert f"org.orbi.runner.{index}" not in fake.state
+
+
 def test_restart_hint_targets_the_first_instance(monkeypatch):
     monkeypatch.setattr(launchd_deploy.os, "getuid", lambda: 501)
     sched = launchd_deploy.LaunchdScheduler()

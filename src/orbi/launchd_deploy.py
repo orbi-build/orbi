@@ -268,17 +268,29 @@ class LaunchdScheduler:
 
     def activate_instances(self, run_command, installed_dir: Path,
                            unit_name: str | None = None, *,
-                           max_concurrency: int) -> None:
+                           max_concurrency: int,
+                           enable: bool = True) -> None:
         """Enable + bootstrap instances 1..max_concurrency, disable the
         surplus up to MAX_RUNNER_INSTANCES. A live instance is never
         booted out (bootout kills the job); an idle loaded instance is
-        re-bootstrapped so the rewritten plist takes effect."""
+        re-bootstrapped so the rewritten plist takes effect.
+
+        ``enable=False`` is the pre-start self-heal (Issue #1364): the
+        plists are repaired and an idle loaded instance still reloaded,
+        but no ``launchctl enable``/``disable`` runs and an instance the
+        operator unloaded (disabled) is never bootstrapped.
+        """
         labels = self.timer_instances(unit_name, MAX_RUNNER_INSTANCES)
         installed_dir = Path(installed_dir)
         for label in labels[:max_concurrency]:
             # Enable FIRST: a stale disabled record fails the bootstrap.
-            run_command(["launchctl", "enable", self.target(label)])
+            if enable:
+                run_command(["launchctl", "enable", self.target(label)])
             if self._print_state(run_command, label) is None:
+                if not enable:
+                    # Self-heal: the instance is not loaded (the operator
+                    # disabled it); never bootstrap it.
+                    continue
                 run_command([
                     "launchctl", "bootstrap", self.domain(),
                     str(installed_dir / plist_name(label)),
@@ -291,6 +303,8 @@ class LaunchdScheduler:
                     "launchctl", "bootstrap", self.domain(),
                     str(installed_dir / plist_name(label)),
                 ])
+        if not enable:
+            return
         for label in labels[max_concurrency:]:
             # Disable persists across logins; bootout only unloads an
             # idle instance (bootout on a running job kills it).

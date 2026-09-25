@@ -198,12 +198,18 @@ class Scheduler(Protocol):
 
     def activate_instances(self, run_command, installed_dir: Path,
                            unit_name: str | None = None, *,
-                           max_concurrency: int) -> None:
+                           max_concurrency: int,
+                           enable: bool = True) -> None:
         """Converge the instance schedules onto ``max_concurrency``.
 
         Activates instances 1..max_concurrency, deactivates the
         surplus up to MAX_RUNNER_INSTANCES. A live Runner instance is
-        NEVER stopped or restarted.
+        NEVER stopped or restarted. ``enable=False`` is the pre-start
+        self-heal path: it only makes the platform re-read the
+        rewritten files (systemd ``daemon-reload``; launchd reboots an
+        IDLE loaded instance onto the new plist) and never changes an
+        instance's enabled/disabled state — an operator-disabled timer
+        stays disabled.
         """
 
     def pre_install(self, run_command, installed_dir: Path,
@@ -392,6 +398,7 @@ def check_unit_drift(repo_dir: Path,
 def install_units(repo_dir: Path, installed_dir: Path | None = None,
                   *, max_concurrency: int,
                   unit_name: str | None = None, run_command,
+                  enable: bool = True,
                   sched: Scheduler | None = None) -> dict:
     """Idempotently install the repo templates as the platform units.
 
@@ -401,9 +408,11 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
     before any migration or write. Runs the impl's one-time
     ``pre_install`` migrations, then converges the instance schedules
     onto ``max_concurrency`` (``activate_instances`` — surplus
-    instances deactivate, a live Runner is never restarted). Returns
-    the deployed commit (the deployment checkout's HEAD) and the
-    installed units' content identities.
+    instances deactivate, a live Runner is never restarted).
+    ``enable=False`` is the pre-start self-heal: it re-reads the
+    rewritten files but never re-enables an operator-disabled instance
+    (Issue #1364). Returns the deployed commit (the deployment
+    checkout's HEAD) and the installed units' content identities.
     """
     sched = sched or detect()
     if not 1 <= max_concurrency <= MAX_RUNNER_INSTANCES:
@@ -443,7 +452,7 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
         (installed_dir / name).write_bytes(rendered.encode("utf-8"))
     sched.activate_instances(
         run_command, installed_dir, unit_name,
-        max_concurrency=max_concurrency,
+        max_concurrency=max_concurrency, enable=enable,
     )
     commit = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
     units = {
@@ -478,7 +487,9 @@ def sync_drifted_units(repo_dir: Path,
     ExecStartPre-synced checkout carries the new templates, and the
     installed units are still the old ones. Runs the SAME idempotent
     install (:func:`install_units` — never stops or restarts a live
-    Runner) and re-verifies with the SAME comparison
+    Runner) with ``enable=False``: the platform re-reads the
+    rewritten files, and an instance the operator disabled is never
+    re-enabled (Issue #1364). Re-verifies with the SAME comparison
     (:func:`unit_status`). Clean after the sync: logs one structured
     ``unit_drift auto_synced`` line per unit (unit, before/after
     sha256, deployed commit) and returns the per-unit report. Still
@@ -498,7 +509,8 @@ def sync_drifted_units(repo_dir: Path,
         return []
     result = install_units(
         repo_dir, installed_dir, max_concurrency=max_concurrency,
-        unit_name=unit_name, run_command=run_command, sched=sched,
+        unit_name=unit_name, run_command=run_command, enable=False,
+        sched=sched,
     )
     after = unit_status(repo_dir, installed_dir, unit_name,
                         max_concurrency=max_concurrency, sched=sched)

@@ -332,19 +332,25 @@ class SystemdScheduler:
 
     def activate_instances(self, run_command, installed_dir: Path,
                            unit_name: str | None = None, *,
-                           max_concurrency: int) -> None:
+                           max_concurrency: int,
+                           enable: bool = True) -> None:
         """daemon-reload, then converge the timer instances.
 
-        Enables instances through ``max_concurrency`` and disables the
-        surplus up to ``MAX_RUNNER_INSTANCES`` (Issue #827: the whole
-        1..MAX universe converges onto the configured capacity, so a
-        downscale disables the surplus instance). These operations
+        With ``enable`` (the normal install), enables instances through
+        ``max_concurrency`` and disables the surplus up to
+        ``MAX_RUNNER_INSTANCES`` (Issue #827: the whole 1..MAX universe
+        converges onto the configured capacity, so a downscale disables
+        the surplus instance). With ``enable=False`` (the pre-start
+        self-heal) only ``daemon-reload`` runs: an instance the operator
+        disabled is never re-enabled (Issue #1364). These operations
         activate or stop only timers, never services. The services are
         NEVER started, stopped or restarted: a currently running
         Runner keeps running, and the new config takes effect at the
         next service start.
         """
         run_command(["systemctl", "--user", "daemon-reload"])
+        if not enable:
+            return
         instances = timer_instances(unit_name, MAX_RUNNER_INSTANCES)
         for instance in instances[:max_concurrency]:
             run_command(["systemctl", "--user", "enable", "--now", instance])

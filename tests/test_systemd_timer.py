@@ -104,6 +104,17 @@ def test_timer_template_triggers_its_own_service_instance():
     assert timer["Timer"]["Unit"] == ["orbi@%i.service"]
 
 
+def test_timer_spreads_instances_with_a_fixed_random_delay():
+    """Issue #1377: systemd spreads the instances natively.
+    ``RandomizedDelaySec`` shifts each trigger; ``FixedRandomDelay=true``
+    derives the delay from the machine id, user and timer name
+    (man systemd.timer), so the per-instance offset is stable — no
+    stagger drop-in files, nothing to drift or self-heal."""
+    timer = parse_unit(TIMER_FILE)
+    assert timer["Timer"]["RandomizedDelaySec"] == ["240"]
+    assert timer["Timer"]["FixedRandomDelay"] == ["true"]
+
+
 def test_service_keeps_running_task_without_duration_limit():
     service = parse_unit(SERVICE_FILE)
     section = service["Service"]

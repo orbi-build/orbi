@@ -71,8 +71,9 @@ class FakeScheduler:
         return self.config_override
 
     def activate_instances(self, run_command, installed_dir,
-                           unit_name=None, *, max_concurrency=1):
-        self.calls.append(("activate", max_concurrency))
+                           unit_name=None, *, max_concurrency=1,
+                           enable=True):
+        self.calls.append(("activate", max_concurrency, enable))
         if self.damage_on_activate:
             for _, name in self.pairs:
                 path = Path(installed_dir) / name
@@ -145,7 +146,7 @@ def test_install_units_writes_rendered_units_through_the_hooks(tmp_path):
         )
     assert result["commit"] == "cafecafe"
     assert ("pre_install",) in fake.calls
-    assert ("activate", 2) in fake.calls
+    assert ("activate", 2, True) in fake.calls
 
 
 def test_install_units_rejects_capacity_outside_the_declared_range(tmp_path):
@@ -279,10 +280,14 @@ def test_sync_drifted_units_repairs_and_reports(tmp_path):
     timer.write_text(
         timer.read_text(encoding="utf-8") + "# drift\n", encoding="utf-8",
     )
+    fake.calls.clear()
     report = scheduler.sync_drifted_units(
         repo, fake.installed_root, max_concurrency=1,
         run_command=recording_run_command, sched=fake,
     )
+    # Issue #1364: the self-heal passes enable=False through to the
+    # scheduler hook, so the platform never re-enables a disabled timer.
+    assert ("activate", 1, False) in fake.calls
     # The report covers EVERY managed unit with its before/after
     # identity; only the tampered unit actually changed.
     assert [entry["unit"] for entry in report] == [

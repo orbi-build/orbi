@@ -5,6 +5,13 @@ Description=Orbi — poll both GitHub Issue sources (instance %i)
 OnCalendar=*-*-* *:00/5
 AccuracySec=30s
 Persistent=false
+# Issue #1377: spread the timer instances without per-instance drop-in
+# files. FixedRandomDelay=true derives each timer's delay from the
+# machine id, user and timer name (man systemd.timer), so instances
+# sharing a unit directory get a stable, distinct offset; the claim
+# lock remains the real collision guard.
+RandomizedDelaySec=240
+FixedRandomDelay=true
 # Issue #149: each timer instance triggers its own service instance
 # (orbi@1.timer -> orbi@1.service, ...@2 -> ...@2), so
 # two independent Runner instances can run concurrently; the capacity

@@ -151,6 +151,21 @@ def test_install_units_downscale_disables_the_surplus_timer(tmp_path):
     ] in calls
 
 
+def test_install_units_without_enable_only_reloads(tmp_path):
+    """Issue #1364: the self-heal install path (``enable=False``) only
+    runs ``daemon-reload`` — it never enables or disables a timer, so a
+    timer the operator disabled stays disabled."""
+    repo = make_repo(tmp_path)
+    calls: list[list[str]] = []
+    scheduler.install_units(
+        repo, tmp_path / "install", max_concurrency=2,
+        run_command=lambda command, **kwargs: calls.append(command) or "",
+        enable=False,
+    )
+    assert [call for call in calls if call[0] == "systemctl"] == [
+        ["systemctl", "--user", "daemon-reload"],
+    ]
+
 def test_install_units_rejects_capacity_beyond_max_runner_instances(tmp_path):
     """Issue #827: beyond the declaration cap the install fails fast with
     the REAL cap and reason — never the old "matching Runner timer
@@ -694,8 +709,11 @@ def test_sync_drifted_units_installs_and_reverifies_clean(
 ):
     """Issue #142: a drifted unit (the normal scene after a template
     change merges to main) is synced with the SAME idempotent install
-    (copy, daemon-reload, enable the timer — never start/stop/restart
-    the service) and re-verified: the tick can continue."""
+    (copy, daemon-reload — never start/stop/restart the service) and
+    re-verified: the tick can continue. Issue #1364: the self-heal is
+    ``enable=False`` — exactly one ``daemon-reload`` and NO
+    ``enable``/``disable``, so a timer the operator disabled is never
+    re-enabled."""
     repo = make_repo(tmp_path)
     installed = make_installed(tmp_path, repo, mutate="orbi@.timer")
     before_sha = systemd_deploy.sha256_hex(installed / "orbi@.timer")
@@ -711,17 +729,11 @@ def test_sync_drifted_units_installs_and_reverifies_clean(
         report = scheduler.sync_drifted_units(
             repo, installed, max_concurrency=2, run_command=fake_run,
         )
-    # The install ran: daemon-reload + enable the configured timer
-    # instances @1..@2 + disable the surplus @3..@5 (Issue #827), and
-    # the service is NEVER started/stopped/restarted by the sync.
-    assert ["systemctl", "--user", "daemon-reload"] in calls
-    for instance in scheduler.timer_instances(count=2):
-        assert [
-            "systemctl", "--user", "enable", "--now", instance,
-        ] in calls
-    for command in calls:
-        if command[:2] == ["systemctl", "--user"]:
-            assert command[2] in ("daemon-reload", "enable", "disable")
+    # The install ran the platform re-read only: daemon-reload, nothing
+    # else that touches enablement (the operator's choice is preserved).
+    systemctl = [command for command in calls
+                 if command[:2] == ["systemctl", "--user"]]
+    assert systemctl == [["systemctl", "--user", "daemon-reload"]]
     # The repo template won: the installed unit matches it again.
     status = scheduler.unit_status(repo, installed)
     assert all(entry["drifted"] is False for entry in status)
@@ -760,15 +772,17 @@ def test_sync_drifted_units_is_a_no_op_when_clean(monkeypatch, tmp_path):
 def test_sync_drifted_units_install_failure_propagates(
     monkeypatch, tmp_path,
 ):
-    """Issue #142: a failing install step (here: enabling the timer)
-    fails fast — the error propagates, no auto_synced claim is made."""
+    """Issue #142: a failing install step (here: the very first
+    `systemctl --user daemon-reload`) fails fast — the error propagates,
+    no auto_synced claim is made."""
     repo = make_repo(tmp_path)
     installed = make_installed(tmp_path, repo, mutate="orbi@.service")
 
     def fake_run(command, **kwargs):
-        if command[:3] == ["systemctl", "--user", "enable"]:
-            raise subprocess.CalledProcessError(1, command, stderr="nope")
-        return ""
+        # The FIRST external step of the enable=False install is the
+        # daemon-reload; it is what must fail fast here.
+        assert command == ["systemctl", "--user", "daemon-reload"]
+        raise subprocess.CalledProcessError(1, command, stderr="nope")
 
     with pytest.raises(subprocess.CalledProcessError):
         scheduler.sync_drifted_units(
