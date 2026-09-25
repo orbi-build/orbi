@@ -13,6 +13,12 @@ two things: `run_git` leaves the marker script unwritten, and the same
 repository under a plain `git` invocation DOES write it. The control keeps
 the test honest — without it a green assertion could just mean the trap
 never worked.
+
+The filter overrides ride on every verb, not only the writing ones:
+`status` runs the clean filter and `merge` / `worktree add` / `revert` run
+the smudge filter, so a read executes a repository-selected program too.
+For a name or an `include` the scan cannot read, `run_git` fails fast with
+`unsafe_git_config` instead of running git with the program still live.
 """
 from __future__ import annotations
 
@@ -54,6 +60,12 @@ def _new_repo(tmp_path: Path) -> Path:
     git(repo, "config", "user.email", "runner@localhost")
     git(repo, "config", "user.name", "Runner")
     return repo
+
+
+def _append_config(repo: Path, text: str) -> None:
+    """Append config text a repository (or an injection) could have written."""
+    with (repo / ".git" / "config").open("a", encoding="utf-8") as handle:
+        handle.write(text)
 
 
 def _capture(monkeypatch, command: list[str], **kwargs) -> list[str]:
@@ -150,6 +162,20 @@ def test_run_git_network_neutralises_and_keeps_the_network_retries():
     assert seen[0] == ["git", *SAFETY_OVERRIDES, "fetch", "origin", "main"]
 
 
+def test_every_verb_disables_the_local_filter_drivers(monkeypatch, tmp_path):
+    """A read reaches the filters too (`status`, `merge`), so the overrides
+    follow the verb instead of a list of writing commands."""
+    repo = _new_repo(tmp_path)
+    git(repo, "config", "filter.spy.clean", "cat")
+    argv = _capture(monkeypatch, ["git", "rev-parse", "HEAD"], cwd=repo)
+    assert argv == [
+        "git", *SAFETY_OVERRIDES,
+        "-c", "filter.spy.clean=", "-c", "filter.spy.smudge=",
+        "-c", "filter.spy.process=",
+        "rev-parse", "HEAD",
+    ]
+
+
 def test_the_retry_classifier_sees_through_the_safety_prefix(monkeypatch):
     """A transient fetch failure still retries: the `-c` overrides must not
     hide the verb from `_is_retryable_git_network_failure`."""
@@ -220,6 +246,72 @@ def test_a_gitattributes_filter_never_runs(tmp_path):
     (repo / "b.txt").write_text("two\n")        # control: the filter is live
     git(repo, "add", "b.txt")
     assert marker.exists()
+
+
+def test_a_filter_in_the_deprecated_section_form_is_neutralised(tmp_path):
+    """`[filter.SpY]` names the same driver as `[filter "spy"]` (git
+    lowercases the deprecated form's subsection), so neutralising only the
+    quoted spelling would leave the repository's program live."""
+    repo = _new_repo(tmp_path)
+    marker = tmp_path / "filter.marker"
+    _append_config(repo, "[filter.SpY]\n\tclean = " + _script(
+        tmp_path / "clean.sh", marker, "cat") + "\n")
+    (repo / ".gitattributes").write_text("*.txt filter=spy\n")
+    (repo / "a.txt").write_text("one\n")
+
+    journal.run_git(["git", "add", "a.txt"], cwd=repo)
+    assert not marker.exists()
+
+    (repo / "b.txt").write_text("two\n")        # control: the filter is live
+    git(repo, "add", "b.txt")
+    assert marker.exists()
+
+
+def test_a_repository_filter_never_runs_on_a_read(tmp_path):
+    """`status` compares the worktree against the index through the clean
+    filter, so the neutralisation cannot stop at the writing commands."""
+    repo = _new_repo(tmp_path)
+    marker = tmp_path / "filter.marker"
+    git(repo, "config", "filter.spy.clean", _script(tmp_path / "clean.sh",
+                                                   marker, "cat"))
+    (repo / ".gitattributes").write_text("*.txt filter=spy\n")
+    (repo / "a.txt").write_text("one\n")
+    git(repo, "add", ".gitattributes", "a.txt")
+    git(repo, "commit", "-m", "attrs")
+
+    (repo / "a.txt").touch()                    # force the content compare
+    git(repo, "status", "--porcelain")          # control: the filter is live
+    assert marker.exists()
+    marker.unlink()
+
+    (repo / "a.txt").touch()
+    journal.run_git(["git", "status", "--porcelain"], cwd=repo)
+    assert not marker.exists()
+
+
+def test_an_unaddressable_filter_driver_name_fails_closed(tmp_path):
+    """A name git cannot spell in `-c filter.<name>.<key>=` (it splits
+    there at the first `=`) is refused, never run with the driver live."""
+    repo = _new_repo(tmp_path)
+    _append_config(repo, '[filter "a=b"]\n\tclean = /tmp/clean.sh\n')
+    with pytest.raises(RuntimeError, match="unsafe_git_config"):
+        journal.run_git(["git", "status", "--porcelain"], cwd=repo)
+
+
+def test_an_unreadable_filter_section_header_fails_closed(tmp_path):
+    repo = _new_repo(tmp_path)
+    _append_config(repo, '[filter. "spy"]\n\tclean = /tmp/clean.sh\n')
+    with pytest.raises(RuntimeError, match="unsafe_git_config"):
+        journal.run_git(["git", "add", "a.txt"], cwd=repo)
+
+
+def test_a_config_include_fails_closed(tmp_path):
+    """An `include` hides filter keys from the local scan, so the Runner
+    refuses instead of running git with an unknown program live."""
+    repo = _new_repo(tmp_path)
+    _append_config(repo, "[include]\n\tpath = /tmp/other\n")
+    with pytest.raises(RuntimeError, match="unsafe_git_config"):
+        journal.run_git(["git", "add", "a.txt"], cwd=repo)
 
 
 def test_a_filter_in_a_linked_worktree_is_neutralised(tmp_path):
@@ -310,7 +402,23 @@ def test_the_filter_parser_reads_only_exec_keys_of_filter_sections():
         '[filter "other"]\n'
         "    smudge = cat\n"
     )
-    assert journal._filter_drivers(text) == {"spy", "other"}
+    path = Path("/repo/.git/config")
+    assert journal._filter_drivers(text, path) == {"spy", "other"}
+    # The deprecated form spells the driver git lowercases it to.
+    assert journal._filter_drivers(
+        "[filter.SpY]\n\tclean = cat\n", path) == {"spy"}
+    assert journal._filter_drivers(
+        "[filter.SpY]\n\trequired = true\n", path) == set()
+    # A section that starts like a filter section but does not spell a
+    # readable driver fails closed instead of being skipped.
+    with pytest.raises(RuntimeError, match="unsafe_git_config"):
+        journal._filter_drivers('[filter "a=b"]\n\tclean = cat\n', path)
+    with pytest.raises(RuntimeError, match="unsafe_git_config"):
+        journal._filter_drivers('[filter. "spy"]\n\tclean = cat\n', path)
+    with pytest.raises(RuntimeError, match="unsafe_git_config"):
+        journal._filter_drivers('[include]\n\tpath = /tmp/other\n', path)
+    with pytest.raises(RuntimeError, match="unsafe_git_config"):
+        journal._filter_drivers('[includeIf "gitdir:/x/"]\n', path)
 
 
 def test_the_seam_normaliser_tolerates_a_zero_argument_call(monkeypatch):

@@ -606,13 +606,6 @@ _GIT_SAFETY_CONFIG = (
     ("diff.external", ""),
 )
 
-# Subcommands that read or write file contents, so a `.gitattributes`
-# filter driver could run during them; `run_git` disables every local
-# filter driver for these.
-_GIT_CONTENT_SUBCOMMANDS = frozenset(
-    {"add", "checkout", "stash", "diff", "commit"},
-)
-
 # Subcommands that accept `--no-textconv` / `--no-ext-diff`.
 _GIT_DIFF_SUBCOMMANDS = frozenset({"diff", "log", "show"})
 
@@ -622,9 +615,43 @@ _GIT_GLOBAL_OPTIONS_WITH_VALUE = frozenset({
     "--exec-path", "--super-prefix", "--attr-source",
 })
 
-_FILTER_SECTION_RE = re.compile(r'^\[\s*filter\s+"([^"]+)"\s*\]')
-_FILTER_KEY_RE = re.compile(r"^([A-Za-z0-9][\w-]*)\s*=")
+# Every Runner-side call carries `-c filter.<driver>.<key>=` for each
+# driver the worktree's local config defines — not only the writing
+# commands: `git status` compares the worktree against the index through
+# the clean filter and `git merge` / `git worktree add` / `git revert`
+# check files out through the smudge filter, so a read is enough to run a
+# repository-selected program.
 _FILTER_EXEC_KEYS = frozenset({"clean", "smudge", "process"})
+# `[filter "spy"]` and the deprecated `[filter.spy]` name the same driver;
+# git lowercases the deprecated form's subsection (and only that form).
+_FILTER_SECTION_RE = re.compile(
+    r'^\[\s*filter\s*(?:"([^"]*)"|\.([^\]\s]+))\s*\]', re.IGNORECASE,
+)
+# A section header that starts a filter section but does not spell a
+# driver this scan can read (`[filter. "x"]`, an escaped name, trailing
+# junk): a later key of that section could be a program.
+_FILTER_SECTION_START_RE = re.compile(r'^\[\s*filter\s*[."]', re.IGNORECASE)
+# `include.path` / `includeIf.gitdir` pull in a file this scan never
+# reads, so the drivers it defines would stay hidden.
+_INCLUDE_SECTION_RE = re.compile(r"^\[\s*include", re.IGNORECASE)
+_FILTER_KEY_RE = re.compile(r"^([A-Za-z0-9][\w-]*)\s*=")
+# The driver names a `-c filter.<name>.<key>=` override can address: git
+# splits that argument at the first `=` and matches the key exactly, so an
+# escaped, quoted, spaced or `=`-bearing name cannot be neutralised.
+_FILTER_DRIVER_RE = re.compile(r"\A[A-Za-z0-9_.-]+\Z")
+
+
+class UnsafeGitConfigError(RuntimeError):
+    """The worktree's git config names a program the Runner cannot turn off."""
+
+
+def _unsafe_git_config(path: Path, detail: str) -> UnsafeGitConfigError:
+    """The fail-fast error for a config whose programs stay live."""
+    return UnsafeGitConfigError(
+        f"unsafe_git_config: {detail} in {path}; the Runner refuses to run "
+        "git in a worktree whose repository-selected programs it cannot "
+        "disable"
+    )
 
 
 def _git_subcommand_index(command: list[str]) -> int | None:
@@ -706,7 +733,26 @@ def _git_config_files(cwd) -> tuple[Path, ...]:
     return ()
 
 
-def _filter_drivers(text: str) -> set[str]:
+def _filter_section_driver(line: str, path: Path) -> str | None:
+    """The driver a config section header declares, None for other sections.
+
+    Anything this scan cannot reduce to a plain driver name — an escaped
+    name, an unreadable section spelling, an `include` that hides further
+    keys — fails closed instead of guessing an override that would not
+    neutralise it.
+    """
+    section = _FILTER_SECTION_RE.match(line)
+    if section:
+        quoted, deprecated = section.group(1), section.group(2)
+        return quoted if quoted is not None else deprecated.lower()
+    if _INCLUDE_SECTION_RE.match(line):
+        raise _unsafe_git_config(path, "an include that hides filter keys")
+    if _FILTER_SECTION_START_RE.match(line):
+        raise _unsafe_git_config(path, f"an unreadable filter section {line!r}")
+    return None
+
+
+def _filter_drivers(text: str, path: Path) -> set[str]:
     """The filter drivers whose clean/smudge/process a config can run."""
     drivers: set[str] = set()
     current: str | None = None
@@ -714,12 +760,10 @@ def _filter_drivers(text: str) -> set[str]:
         line = raw.strip()
         if not line or line[0] in "#;":
             continue
-        section = _FILTER_SECTION_RE.match(line)
-        if section:
-            current = section.group(1)
-            continue
         if line.startswith("["):
-            current = None
+            current = _filter_section_driver(line, path)
+            if current is not None and not _FILTER_DRIVER_RE.match(current):
+                raise _unsafe_git_config(path, f"filter driver {current!r}")
             continue
         if current is None:
             continue
@@ -737,7 +781,7 @@ def _local_filter_drivers(cwd) -> list[str]:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        drivers |= _filter_drivers(text)
+        drivers |= _filter_drivers(text, path)
     return sorted(drivers)
 
 
@@ -748,12 +792,11 @@ def _neutralise_git(command: list[str], cwd) -> list[str]:
     argv = ["git"]
     for key, value in _GIT_SAFETY_CONFIG:
         argv += ["-c", f"{key}={value}"]
+    for driver in _local_filter_drivers(_git_command_cwd(command, cwd)):
+        argv += ["-c", f"filter.{driver}.clean=",
+                 "-c", f"filter.{driver}.smudge=",
+                 "-c", f"filter.{driver}.process="]
     subcommand = _git_subcommand(command)
-    if subcommand in _GIT_CONTENT_SUBCOMMANDS:
-        for driver in _local_filter_drivers(_git_command_cwd(command, cwd)):
-            argv += ["-c", f"filter.{driver}.clean=",
-                     "-c", f"filter.{driver}.smudge=",
-                     "-c", f"filter.{driver}.process="]
     rest = list(command[1:])
     if subcommand in _GIT_DIFF_SUBCOMMANDS:
         index = _git_subcommand_index(command)
@@ -769,9 +812,12 @@ def run_git(
     """Run one Runner-side git command with repository programs disabled.
 
     `-c` overrides neutralise `core.fsmonitor`, `core.hooksPath` and
-    `diff.external`; content commands additionally disable every filter
-    driver the worktree's local config defines. `command_runner` is the
-    injected seam (the engine-source probes); it defaults to `run_command`.
+    `diff.external`, and every filter driver the worktree's local config
+    defines (a `status` or a `merge` runs one as well as an `add`). A
+    local config whose driver names or includes `_local_filter_drivers`
+    cannot read raises `unsafe_git_config` instead of running git with a
+    program still live. `command_runner` is the injected seam (the
+    engine-source probes); it defaults to `run_command`.
     """
     argv = _neutralise_git(list(command), cwd)
     execute = command_runner or run_command
