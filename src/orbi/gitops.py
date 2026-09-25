@@ -394,8 +394,13 @@ def pin_git_exclude(repo_dir: Path, pattern: str, *,
     pattern is written at most once.
     """
     try:
+        # Exit 1 is the "not ignored yet" branch handled below, not a
+        # failure: the generic `command_failed` line must not reach the
+        # setup output at ERROR for an expected non-zero probe
+        # (`failure_log_level`, the #341/#730/#1085 contract).
         run_git(["git", "check-ignore", "--quiet", "--", pattern],
-                command_runner=run_command, cwd=repo_dir)
+                command_runner=run_command, cwd=repo_dir,
+                failure_log_level=logging.DEBUG)
         return None
     except subprocess.CalledProcessError:
         pass

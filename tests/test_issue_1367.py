@@ -9,12 +9,13 @@ prove that the local exclude actually hides the runtime dir.
 """
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from orbi import pilot_setup
+from orbi import journal, pilot_setup
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -25,15 +26,17 @@ def _git(repo: Path, *args: str) -> None:
 
 
 def _run(command, **kwargs):
-    """The `run_command` seam: real git, network commands stubbed."""
+    """The `run_command` seam: real git, network commands stubbed.
+
+    The non-network commands go through the REAL `run_command`, so the
+    journal lines its non-zero exits emit (the expected `check-ignore`
+    probe included) are observable in these tests.
+    """
     if "ls-remote" in command:
         return "abc\tHEAD"
     if "fetch" in command:
         return ""
-    result = subprocess.run(
-        command, capture_output=True, text=True, check=True, **kwargs,
-    )
-    return result.stdout.strip()
+    return journal.run_command(command, **kwargs)
 
 
 @pytest.fixture
@@ -104,3 +107,22 @@ def test_orbi_ignored_by_repository_gitignore_leaves_exclude_untouched(checkout)
 
     assert ".orbi/" not in _exclude_lines(checkout)
     assert exclude.read_text(encoding="utf-8") == before
+
+
+def test_the_not_ignored_probe_is_not_reported_as_a_failure(checkout, caplog):
+    """`git check-ignore` exit 1 is the branch the code handles itself
+    ("not ignored yet"), never a failure: a successful `orbi setup` must
+    not print the generic `command_failed` line at ERROR for it (the
+    #341/#730/#1085 no-false-alarm contract for an expected non-zero
+    probe — `run_command`'s `failure_log_level`)."""
+    (checkout / ".orbi").mkdir()
+    (checkout / ".orbi" / "base-sync.lock").write_text("", encoding="utf-8")
+
+    with caplog.at_level(logging.DEBUG):
+        assert _check(checkout)["clean"] is True
+
+    assert [
+        record for record in caplog.records
+        if "command_failed" in record.getMessage()
+        and record.levelno >= logging.ERROR
+    ] == []
