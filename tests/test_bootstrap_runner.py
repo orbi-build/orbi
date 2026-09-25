@@ -18880,6 +18880,14 @@ def test_build_release_changelog_without_contributors_has_no_section(monkeypatch
 - Ship it ([Issue #10](https://github.com/o/r/issues/10); [PR #11](https://github.com/o/r/pull/11))"""
 
 
+def test_build_release_changelog_empty_scope_states_no_deliveries():
+    """Issue #1384: a milestone with no closed Issue or merged PR produces
+    a one-line empty-scope sentence instead of a header-only Changelog."""
+    assert release.build_release_changelog("o/r", []) == (
+        "No deliveries are linked to this milestone."
+    )
+
+
 def test_build_release_changelog_unmerged_pr_author_is_not_a_contributor(monkeypatch):
     """Issue #772: contributors mirror the Changelog's PR links — a
     closedBy PR that is not MERGED never ships, so its author is not a
@@ -19101,6 +19109,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     state = {
         "edits": [], "comments": [], "commands": [],
         "run_ids": [], "active_runs": [], "sync_docs_calls": [],
+        "published": [],
     }
 
     def fake_run_command(command, **kwargs):
@@ -19258,7 +19267,11 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     monkeypatch.setattr(seam, "refresh_cli_install",
         lambda worktree, **kwargs: "installed",
     )
-    monkeypatch.setattr(release, "publish_release", lambda **k: release_url)
+    def fake_publish_release(**kwargs):
+        state["published"].append(kwargs)
+        return release_url
+
+    monkeypatch.setattr(release, "publish_release", fake_publish_release)
     # Issue #275: the docs sync step is covered by its own unit tests
     # (real git repos); here it is stubbed so the orchestration order is
     # what is asserted.
@@ -19877,7 +19890,11 @@ def test_process_release_exempts_release_issue_from_open_evidence(monkeypatch):
     assert "PR #123 merged (mergeCommit=aaa111)" in comment_kwargs["body"]
 
 
-def test_process_release_fails_on_empty_derived_scope(monkeypatch):
+def test_process_release_proceeds_with_empty_derived_scope(monkeypatch):
+    """Issue #1384: a Milestone with no deliveries must not block the
+    release. The derived scope stays empty, the release notes carry the
+    one-line sentence instead of a Changelog list, and the release
+    completes (version bump, tag, GitHub Release, ai-merged close)."""
     state = make_release_process_env(
         monkeypatch,
         body=RELEASE_MILESTONE_DECLARATION_BODY,
@@ -19890,17 +19907,23 @@ def test_process_release_fails_on_empty_derived_scope(monkeypatch):
     )
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_MILESTONE_DECLARATION_BODY,
-             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = release.process_release(
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+             "milestone": {"title": "v0.3.0"}}
+    url = release.process_release(
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
-    assert result == ""
-    # Terminal failure: ai-blocked ALONE, no tag, no close.
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert url == "https://github.com/o/r/releases/tag/v0.3.0"
+    # The release completes: terminal ai-merged, tag and Issue close.
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
                                        "remove": "ai-in-progress"})
     commands = [c for c, _ in state["commands"]]
-    assert not [c for c in commands if c[:2] == ["git", "tag"]]
-    assert not [c for c in commands if c[:3] == ["gh", "issue", "close"]]
+    assert [c for c in commands if c[:2] == ["git", "tag"]]
+    assert [c for c in commands if c[:3] == ["gh", "issue", "close"]]
+    # The one-line empty-scope sentence replaces the Changelog list in
+    # both the docs page and the GitHub Release notes.
+    empty_scope_changelog = "No deliveries are linked to this milestone."
+    assert state["sync_docs_calls"][0]["changelog"] == empty_scope_changelog
+    assert state["published"][0]["changelog"] == empty_scope_changelog
 
 
 def test_process_release_waits_for_pending_ci_and_succeeds(monkeypatch):
