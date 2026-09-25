@@ -740,8 +740,8 @@ def test_launchd_instances_are_staggered_on_the_wall_clock(tmp_path):
     # The schedule the report shows is the one the plist deploys.
     assert sched.schedule_text(1, 2) == "*-*-* *:00/5"
     assert sched.schedule_text(2, 2) == "*-*-* *:02/5"
-    assert launchd_deploy.calendar_minute_offset(2, 3) == 1
-    assert launchd_deploy.calendar_minute_offset(3, 3) == 3
+    assert launchd_deploy.calendar_minute_offset(2) == 2
+    assert launchd_deploy.calendar_minute_offset(3) == 3
 
     # Issue #1344: the report reads the installed schedule (the plist's
     # own whole-minute value), and launchd has no non-template installed
@@ -787,3 +787,44 @@ def test_fake_launchd_mirrors_the_real_launchctl_contract():
     assert [
         "launchctl", "kickstart", "gui/501/org.orbi.runner.1",
     ] in fake.commands
+
+
+def test_self_heal_never_bootstraps_an_unloaded_agent(monkeypatch, tmp_path):
+    """Issue #1362: the pre-start self-heal repairs the plist but never
+    bootstraps a service the operator unloaded/disabled. A stale
+    ``reload-pending`` marker is cleared so the drift check does not
+    loop on an agent nobody is running."""
+    monkeypatch.setattr(launchd_deploy.os, "getuid", lambda: 501)
+    repo = make_repo(tmp_path)
+    installed = tmp_path / "LaunchAgents"
+    sched = launchd_deploy.LaunchdScheduler()
+    fake = FakeLaunchd(commit="beefbeef")
+    scheduler.install_units(
+        repo, installed, max_concurrency=1, run_command=fake, sched=sched,
+    )
+    # The operator unloads the agent (bootstrap/disable state cleared).
+    fake.state.clear()
+    marker = sched.reload_marker(
+        installed, launchd_deploy.plist_name("org.orbi.runner.1"),
+    )
+    marker.write_text("stale\n", encoding="utf-8")
+    # A template change so the self-heal has real file drift to repair.
+    template = repo / "launchd" / launchd_deploy.TEMPLATE_NAME
+    template.write_text(
+        template.read_text(encoding="utf-8").replace(
+            "<integer>300</integer>", "<integer>600</integer>",
+        ),
+        encoding="utf-8",
+    )
+    fake.commands.clear()
+    report = scheduler.sync_drifted_units(
+        repo, installed, max_concurrency=1, run_command=fake, sched=sched,
+    )
+    assert report  # the file drift was repaired
+    assert not any(
+        len(command) > 1 and command[1] in ("bootstrap", "enable")
+        for command in fake.commands
+    )
+    assert sched.reload_pending(
+        installed, launchd_deploy.plist_name("org.orbi.runner.1"),
+    ) is False
