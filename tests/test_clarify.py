@@ -1,13 +1,12 @@
-"""Thin-ticket clarification gate (Issue #1088).
+"""Thin-ticket clarification gate (Issue #1088, trimmed in #1379).
 
 The gate is a model judgment, so the unit tests stub the seam
-(`seam.run_clarify_agent`, `seam.judge_issue_body`, `seam.comment_issue`,
-`seam.edit_issue`, `seam.prepare_pi_agent_dir`, `seam.stream_pi`) and the
-end-to-end tests run the REAL runner against a real local git clone with a
-fake `pi` and a stateful fake `gh`: one per failing check proves a thin
+(`seam.run_ticket_agent`, `seam.judge_issue_body`, `seam.comment_issue`,
+`seam.edit_issue`) and the end-to-end tests run the REAL runner against a
+real local git clone with a fake `pi` and a stateful fake `gh`: a thin
 ticket stops with one comment and a label swap (and no worktree, branch,
-session or PR), one proves a ticket the gate accepts is delivered normally,
-and one proves a failed judgment is a bypass.
+session or PR), a ticket the gate accepts is delivered normally, and a
+failed judgment is a bypass (model error).
 """
 from __future__ import annotations
 
@@ -21,14 +20,13 @@ import pytest
 
 from conftest import git
 
-from orbi import clarify, config as config_domain, pi_session
+from orbi import clarify, config as config_domain
 from orbi import delivery_labels
 
 import orbi.runner as runner
 from seam import seam
 
 from tests.test_run_id_e2e import (
-    FAKE_PI,
     ISSUE_NUMBER,
     PR_URL,
     REPO,
@@ -59,7 +57,7 @@ FAKE_PI_PASSING_GATE = """#!/usr/bin/env python3
 import os, re, subprocess, sys
 args = sys.argv[1:]
 if "--no-tools" in args:
-    sys.stdout.write('{"satisfied": true, "missing": []}')
+    sys.stdout.write('{"missing": []}')
     sys.exit(0)
 prompt = args[args.index("--system-prompt") + 1]
 run_id = re.search(r"Run id: `([0-9a-f]{8})`", prompt).group(1)
@@ -78,10 +76,11 @@ for command in (
 sys.stdout.write("done")
 """
 
+
 # The same fake, but the gate's verdict is the thin-ticket failure. Built
-# per missing set so each of the three checks is exercised by a real run.
+# per missing set so each check is exercised by a real run.
 def fake_pi_thin(missing: list[str]) -> str:
-    verdict = json.dumps({"satisfied": False, "missing": missing})
+    verdict = json.dumps({"missing": missing})
     return (
         "#!/usr/bin/env python3\n"
         "import sys\n"
@@ -149,153 +148,55 @@ def gate_config(clone: Path, tmp_path: Path, **overrides):
 
 # --- parse_verdict ---------------------------------------------------------
 
-def test_parse_verdict_reads_a_passing_answer():
-    assert clarify.parse_verdict('{"satisfied": true, "missing": []}') == (
-        clarify.ClarifyVerdict(passed=True, missing=())
+def test_parse_verdict_reads_the_missing_list():
+    """One field carries the verdict: empty passes, non-empty fails."""
+    assert clarify.parse_verdict('{"missing": []}') == clarify.ClarifyVerdict(
+        passed=True, missing=(),
     )
-
-
-def test_parse_verdict_reads_the_missing_pieces():
     assert clarify.parse_verdict(
-        '{"satisfied": false, "missing": ["single_outcome", "observable_result"]}'
+        '{"missing": ["single_outcome", "observable_result"]}'
     ) == clarify.ClarifyVerdict(
         passed=False, missing=("single_outcome", "observable_result"),
     )
-
-
-def test_parse_verdict_reads_a_verdict_embedded_in_prose():
+    # The `satisfied` field is no longer read (Issue #1379): a stale one
+    # must not change the verdict the `missing` list gives.
     assert clarify.parse_verdict(
-        'My verdict follows: {"satisfied": true, "missing": []} — done.'
+        '{"satisfied": false, "missing": []}'
+    ) == clarify.ClarifyVerdict(passed=True, missing=())
+    assert clarify.parse_verdict(
+        'My verdict follows: {"missing": []} — done.'
     ) == clarify.ClarifyVerdict(passed=True, missing=())
 
 
-def test_parse_verdict_rejects_output_without_a_json_object():
-    assert clarify.parse_verdict("I could not decide.") is None
-
-
-def test_parse_verdict_rejects_broken_json():
-    assert clarify.parse_verdict('{"satisfied": true,') is None
-
-
-def test_parse_verdict_rejects_malformed_json_inside_an_object():
-    # Braces but not valid JSON: the parse itself fails (the fail-open path).
-    assert clarify.parse_verdict('{"satisfied": true "missing": []}') is None
-
-
 @pytest.mark.parametrize("output", [
-    '{"satisfied": "yes", "missing": []}',
-    '{"satisfied": true, "missing": "none"}',
-    '{"satisfied": true}',
-    '{"missing": []}',
+    "I could not decide.",
+    '{"missing": true}',
+    '{"missing": [7]}',
+    '{"missing": ["whatever"]}',
+    '{"missing": []',
+    '{"missing": [] "x": 1}',
 ])
-def test_parse_verdict_rejects_wrong_value_types(output):
+def test_parse_verdict_rejects_unusable_output(output):
     assert clarify.parse_verdict(output) is None
-
-
-@pytest.mark.parametrize("output", [
-    '{"satisfied": false, "missing": ["whatever"]}',
-    '{"satisfied": false, "missing": [7]}',
-])
-def test_parse_verdict_rejects_an_unknown_missing_piece(output):
-    assert clarify.parse_verdict(output) is None
-
-
-@pytest.mark.parametrize("output", [
-    '{"satisfied": true, "missing": ["observable_result"]}',
-    '{"satisfied": false, "missing": []}',
-])
-def test_parse_verdict_rejects_an_inconsistent_answer(output):
-    assert clarify.parse_verdict(output) is None
-
-
-# --- render_comment --------------------------------------------------------
-
-def test_render_comment_names_every_missing_piece_and_the_repair():
-    verdict = clarify.ClarifyVerdict(
-        passed=False, missing=("observable_result", "acceptance_condition"),
-    )
-    body = clarify.render_comment(ISSUE, verdict, RUN_ID)
-    assert body.startswith(f"<!-- orbi:run={RUN_ID} -->")
-    assert clarify.MISSING["observable_result"] in body
-    assert clarify.MISSING["acceptance_condition"] in body
-    assert clarify.MISSING["single_outcome"] not in body
-    assert delivery_labels.READY_LABEL in body
-    assert f"run_id={RUN_ID}" in body
-    # Issue #1088: the comment shows the shape to fill in.
-    assert "Outcome:" in body
-    assert "Acceptance:" in body
-
-
-@pytest.mark.parametrize("missing_piece", [
-    "observable_result", "acceptance_condition", "single_outcome",
-])
-def test_render_comment_covers_each_of_the_three_checks(missing_piece):
-    """Issue #1088: every check has a human-readable gap sentence."""
-    verdict = clarify.ClarifyVerdict(passed=False, missing=(missing_piece,))
-    body = clarify.render_comment(ISSUE, verdict, RUN_ID)
-    assert clarify.MISSING[missing_piece] in body
-    for other, text in clarify.MISSING.items():
-        if other != missing_piece:
-            assert text not in body
-
-
-def test_render_comment_mentions_the_issue_author():
-    """Issue #1336: the first line names the author so GitHub notifies."""
-    verdict = clarify.ClarifyVerdict(
-        passed=False, missing=("observable_result",),
-    )
-    body = clarify.render_comment(
-        dict(ISSUE, author={"login": "alice"}), verdict, RUN_ID,
-    )
-    assert "@alice" in body.splitlines()[0]
-    # The run marker and the visible run id survive the mention.
-    assert f"<!-- orbi:run={RUN_ID} -->" in body
-    assert f"run_id={RUN_ID}" in body
-
-
-@pytest.mark.parametrize("author", [
-    # No `author` key at all (the claim payload did not carry it).
-    "missing",
-    # A present author with no usable login (deleted account).
-    {"login": None},
-    {"login": "ghost"},
-    {"login": "renovate[bot]"},
-])
-def test_render_comment_without_a_usable_author_has_no_mention(author):
-    """Issue #1336: no usable login renders exactly the old comment.
-
-    A missing field, `ghost`, or a bot must not produce a partial or
-    broken mention — the gate is never allowed to fail because of it.
-    """
-    verdict = clarify.ClarifyVerdict(
-        passed=False, missing=("observable_result",),
-    )
-    issue = dict(ISSUE)
-    if author != "missing":
-        issue["author"] = author
-    body = clarify.render_comment(issue, verdict, RUN_ID)
-    assert "@" not in body
-    assert body.startswith(f"<!-- orbi:run={RUN_ID} -->")
-    assert f"run_id={RUN_ID}" in body
 
 
 # --- judge_issue_body ------------------------------------------------------
 
-def test_judge_issue_body_asks_the_model_and_parses_the_answer(monkeypatch):
+def test_judge_issue_body_asks_the_shared_helper_with_a_timeout(monkeypatch):
     calls = []
 
-    def fake_agent(issue, config, source_repo, run_id, **kwargs):
-        calls.append((issue, config, source_repo, run_id, kwargs))
-        return '{"satisfied": false, "missing": ["observable_result"]}'
+    def fake_agent(issue, config, source_repo, **kwargs):
+        calls.append((issue, config, source_repo, kwargs))
+        return '{"missing": []}'
 
-    monkeypatch.setattr(seam, "run_clarify_agent", fake_agent)
+    monkeypatch.setattr(seam, "run_ticket_agent", fake_agent)
     config = config_domain.RunnerConfig()
     verdict = clarify.judge_issue_body(ISSUE, config, REPO, RUN_ID)
-    assert verdict == clarify.ClarifyVerdict(
-        passed=False, missing=("observable_result",),
-    )
-    issue, got_config, repo, run_id, kwargs = calls[0]
-    assert (issue, got_config, repo, run_id) == (ISSUE, config, REPO, RUN_ID)
+    assert verdict == clarify.ClarifyVerdict(passed=True, missing=())
+    issue, got_config, repo, kwargs = calls[0]
+    assert (issue, got_config, repo) == (ISSUE, config, REPO)
+    assert kwargs["run_id"] == RUN_ID
+    assert kwargs["timeout"] == clarify.CLARIFY_TIMEOUT_SECONDS
     assert kwargs["system_prompt"] == clarify.CLARIFY_SYSTEM_PROMPT
     assert ISSUE["body"] in kwargs["context"]
 
@@ -306,7 +207,7 @@ def test_judge_issue_body_fails_open_when_the_agent_raises(
     def boom(*args, **kwargs):
         raise RuntimeError("model unreachable")
 
-    monkeypatch.setattr(seam, "run_clarify_agent", boom)
+    monkeypatch.setattr(seam, "run_ticket_agent", boom)
     caplog.set_level("INFO")
     assert clarify.judge_issue_body(
         ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
@@ -315,11 +216,24 @@ def test_judge_issue_body_fails_open_when_the_agent_raises(
     assert "reason=RuntimeError" in caplog.text
 
 
-def test_judge_issue_body_fails_open_on_a_malformed_verdict(
+def test_judge_issue_body_fails_open_on_a_timeout(monkeypatch, caplog):
+    def timeout(*args, **kwargs):
+        raise TimeoutError("judgment timed out")
+
+    monkeypatch.setattr(seam, "run_ticket_agent", timeout)
+    caplog.set_level("INFO")
+    assert clarify.judge_issue_body(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is None
+    assert "clarify_check_skipped" in caplog.text
+    assert "reason=TimeoutError" in caplog.text
+
+
+def test_judge_issue_body_fails_open_on_an_unparsable_answer(
     monkeypatch, caplog,
 ):
     monkeypatch.setattr(
-        seam, "run_clarify_agent", lambda *a, **k: "not a verdict",
+        seam, "run_ticket_agent", lambda *a, **k: "not a verdict",
     )
     caplog.set_level("INFO")
     assert clarify.judge_issue_body(
@@ -329,7 +243,7 @@ def test_judge_issue_body_fails_open_on_a_malformed_verdict(
     assert "reason=no_verdict" in caplog.text
 
 
-# --- enforce ---------------------------------------------------------------
+# --- enforce / mention -----------------------------------------------------
 
 def _record_writes(monkeypatch):
     comments: list = []
@@ -346,107 +260,7 @@ def _record_writes(monkeypatch):
     return comments, edits
 
 
-def test_enforce_posts_one_comment_and_swaps_the_labels(monkeypatch, caplog):
-    verdict = clarify.ClarifyVerdict(
-        passed=False, missing=("observable_result", "single_outcome"),
-    )
-    monkeypatch.setattr(seam, "judge_issue_body", lambda *a, **k: verdict)
-    comments, edits = _record_writes(monkeypatch)
-    caplog.set_level("INFO")
-
-    assert clarify.enforce(ISSUE, config_domain.RunnerConfig(), REPO,
-                           RUN_ID) is False
-    assert len(comments) == 1
-    number, repo, body = comments[0]
-    assert (number, repo) == (ISSUE["number"], REPO)
-    assert body.startswith(f"<!-- orbi:run={RUN_ID} -->")
-    assert f"run_id={RUN_ID}" in body
-    assert edits == [(
-        ISSUE["number"], REPO,
-        delivery_labels.NEEDS_DETAIL_LABEL, delivery_labels.READY_LABEL,
-    )]
-    assert "clarify_needs_detail" in caplog.text
-    assert "clarify_check_skipped" not in caplog.text
-
-
-def test_enforce_carries_the_claim_payload_author_into_the_comment(
-    monkeypatch,
-):
-    """Issue #1336: the claim scan's `author.login` reaches render_comment.
-
-    `THIN_ISSUE` is the payload shape the ordinary claim scan hands to
-    `enforce()`; its `author.login` must be the mention the stopped
-    ticket receives.
-    """
-    verdict = clarify.ClarifyVerdict(
-        passed=False, missing=("observable_result",),
-    )
-    monkeypatch.setattr(seam, "judge_issue_body", lambda *a, **k: verdict)
-    comments, edits = _record_writes(monkeypatch)
-
-    assert clarify.enforce(
-        THIN_ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
-    ) is False
-    assert "@alice" in comments[0][2].splitlines()[0]
-
-
-@pytest.mark.parametrize("author", [
-    "missing",
-    {"login": None},
-    {"login": "ghost"},
-    {"login": "dependabot[bot]"},
-])
-def test_enforce_stops_without_a_usable_author(monkeypatch, caplog, author):
-    """Issue #1336: no mention must never stop the stop.
-
-    A missing author or `author.login` still posts the ONE comment and
-    swaps the labels — the gate stops the ticket exactly as before.
-    """
-    verdict = clarify.ClarifyVerdict(
-        passed=False, missing=("observable_result",),
-    )
-    monkeypatch.setattr(seam, "judge_issue_body", lambda *a, **k: verdict)
-    comments, edits = _record_writes(monkeypatch)
-    caplog.set_level("INFO")
-    issue = dict(ISSUE)
-    if author != "missing":
-        issue["author"] = author
-
-    assert clarify.enforce(
-        issue, config_domain.RunnerConfig(), REPO, RUN_ID,
-    ) is False
-    assert len(comments) == 1
-    assert "@" not in comments[0][2]
-    assert edits == [(
-        ISSUE["number"], REPO,
-        delivery_labels.NEEDS_DETAIL_LABEL, delivery_labels.READY_LABEL,
-    )]
-    assert "clarify_needs_detail" in caplog.text
-    assert "clarify_check_skipped" not in caplog.text
-
-
-def test_enforce_lets_a_satisfied_verdict_through(monkeypatch):
-    monkeypatch.setattr(
-        seam, "judge_issue_body",
-        lambda *a, **k: clarify.ClarifyVerdict(passed=True, missing=()),
-    )
-    comments, edits = _record_writes(monkeypatch)
-    assert clarify.enforce(ISSUE, config_domain.RunnerConfig(), REPO,
-                           RUN_ID) is True
-    assert comments == [] and edits == []
-
-
-def test_enforce_lets_a_ticket_through_when_the_judge_cannot_decide(
-    monkeypatch,
-):
-    monkeypatch.setattr(seam, "judge_issue_body", lambda *a, **k: None)
-    comments, edits = _record_writes(monkeypatch)
-    assert clarify.enforce(ISSUE, config_domain.RunnerConfig(), REPO,
-                           RUN_ID) is True
-    assert comments == [] and edits == []
-
-
-def test_enforce_removes_the_repositorys_claim_label(monkeypatch, caplog):
+def test_enforce_removes_the_repositorys_dispatch_label(monkeypatch, caplog):
     """Issue #1088/#527: the stop removes the label the claim scan reads.
 
     A custom-label repository's tickets never carry `ai-ready`; removing
@@ -454,7 +268,7 @@ def test_enforce_removes_the_repositorys_claim_label(monkeypatch, caplog):
     would judge (and comment) again on every tick instead of stopping.
     """
     verdict = clarify.ClarifyVerdict(
-        passed=False, missing=("observable_result",),
+        passed=False, missing=("observable_result", "single_outcome"),
     )
     monkeypatch.setattr(seam, "judge_issue_body", lambda *a, **k: verdict)
     comments, edits = _record_writes(monkeypatch)
@@ -464,13 +278,37 @@ def test_enforce_removes_the_repositorys_claim_label(monkeypatch, caplog):
         ISSUE, config_domain.RunnerConfig(dispatch_label="ai-queue"),
         REPO, RUN_ID,
     ) is False
+    assert len(comments) == 1
+    body = comments[0][2]
+    assert body.startswith(f"<!-- orbi:run={RUN_ID} -->")
+    assert clarify.MISSING["observable_result"] in body
+    assert clarify.MISSING["single_outcome"] in body
+    assert "`ai-queue`" in body
+    assert "`ai-ready`" not in body
+    assert f"run_id={RUN_ID}" in body
     assert edits == [(
         ISSUE["number"], REPO,
         delivery_labels.NEEDS_DETAIL_LABEL, "ai-queue",
     )]
-    assert "`ai-queue`" in comments[0][2]
-    assert "`ai-ready`" not in comments[0][2]
     assert "clarify_needs_detail" in caplog.text
+    assert "clarify_check_skipped" not in caplog.text
+
+
+def test_author_mention_mentions_any_login():
+    """Issue #1379: any login is mentioned — no ghost/[bot] special cases."""
+    assert clarify._author_mention(
+        {"author": {"login": "alice"}}
+    ) == "@alice"
+    assert clarify._author_mention(
+        {"author": {"login": "renovate[bot]"}}
+    ) == "@renovate[bot]"
+    assert clarify._author_mention(
+        {"author": {"login": "ghost"}}
+    ) == "@ghost"
+    # No usable login means no mention; a malformed author never fails.
+    assert clarify._author_mention({}) == ""
+    assert clarify._author_mention({"author": None}) == ""
+    assert clarify._author_mention({"author": {"login": "  "}}) == ""
 
 
 @pytest.mark.parametrize("failing_write", ["comment_issue", "edit_issue"])
@@ -497,66 +335,6 @@ def test_enforce_fails_open_when_a_write_fails(
         assert edits == []
     else:
         assert len(comments) == 1
-
-
-# --- pi_session.run_clarify_agent ------------------------------------------
-
-def test_run_clarify_agent_materializes_the_provider_dir(monkeypatch, tmp_path):
-    agent_dir = tmp_path / "agent"
-    monkeypatch.setattr(
-        seam, "prepare_pi_agent_dir",
-        lambda worktree, config, role=None: agent_dir,
-    )
-    calls: list = []
-
-    def fake_stream(command, **kwargs):
-        calls.append((command, kwargs))
-        return '{"satisfied": true, "missing": []}'
-
-    monkeypatch.setattr(seam, "stream_pi", fake_stream)
-    output = pi_session.run_clarify_agent(
-        ISSUE, config_domain.RunnerConfig(pi_providers_data={"providers": {}}),
-        REPO, RUN_ID, system_prompt="PROMPT", context="CONTEXT",
-    )
-    assert output == '{"satisfied": true, "missing": []}'
-    command, kwargs = calls[0]
-    assert "--no-tools" in command
-    assert "PROMPT" in command and "CONTEXT" in command
-    assert kwargs["pi_env"]["PI_CODING_AGENT_DIR"] == str(agent_dir)
-    assert kwargs["role"] == pi_session.ROLE_TICKET
-    assert kwargs["ctx"].run_id == RUN_ID
-    session_dir = Path(command[command.index("--session-dir") + 1])
-    assert session_dir.name == ".pi-session"
-    assert kwargs["cwd"] == session_dir.parent
-    # Transient OS state: the session dir is gone after the call, so a
-    # stopped ticket leaves no session behind under the repository.
-    assert not session_dir.parent.exists()
-
-
-def test_run_clarify_agent_keeps_pis_own_agent_dir_without_a_provider_file(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        seam, "prepare_pi_agent_dir", lambda *a, **k: None,
-    )
-    calls: list = []
-    monkeypatch.setattr(
-        seam, "stream_pi",
-        lambda command, **kwargs: calls.append((command, kwargs)) or "{}",
-    )
-    pi_session.run_clarify_agent(
-        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
-        system_prompt="PROMPT", context="CONTEXT",
-    )
-    assert calls[0][1].get("pi_env") is None
-
-
-def test_needs_detail_is_a_scheduling_marker_not_a_delivery_state():
-    assert delivery_labels.NEEDS_DETAIL_LABEL == "ai-needs-detail"
-    assert (
-        delivery_labels.NEEDS_DETAIL_LABEL
-        not in delivery_labels.LIFECYCLE_STATES
-    )
 
 
 # --- real-runner end to end ------------------------------------------------
@@ -605,6 +383,39 @@ def test_thin_ticket_stops_before_any_worktree_or_session(
     assert not list(clone.glob("**/impl.py"))
 
 
+def test_ticket_the_gate_accepts_is_delivered(clone, tmp_path, monkeypatch):
+    """The gate is a gate, not a wall: a passing verdict delivers.
+
+    The ticket here already carries `ai-needs-detail` from an earlier
+    thin-ticket stop (the author edited the body and re-added
+    `ai-ready`); the claim must clear the stale stop label (Issue #1379).
+    """
+    monkeypatch.setattr(seam, "new_run_id", lambda: RUN_ID)
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI_PASSING_GATE)
+    comments: list[str] = []
+    labels = {ISSUE_NUMBER: [
+        delivery_labels.READY_LABEL, delivery_labels.NEEDS_DETAIL_LABEL,
+    ]}
+    install_fake_gh(monkeypatch, comments, labels)
+    repaired_issue = dict(THIN_ISSUE, labels=[
+        {"name": delivery_labels.READY_LABEL},
+        {"name": delivery_labels.NEEDS_DETAIL_LABEL},
+    ])
+
+    result = runner.process_issue(
+        repaired_issue, gate_config(clone, tmp_path), REPO,
+    )
+
+    assert result.url == PR_URL
+    assert worktree_for(clone, RUN_ID).is_dir()
+    assert delivery_labels.PR_OPENED_LABEL in labels[ISSUE_NUMBER]
+    # The stale gate label is gone once the ticket is claimed.
+    assert delivery_labels.NEEDS_DETAIL_LABEL not in labels[ISSUE_NUMBER]
+    assert all("not ready to deliver" not in body for body in comments)
+    assert len(comments) == 4
+    assert re.search(r"<!-- orbi:run=[0-9a-f]{8} -->", comments[0])
+
+
 def test_model_error_lets_the_ticket_through(
     clone, tmp_path, monkeypatch, caplog,
 ):
@@ -623,59 +434,3 @@ def test_model_error_lets_the_ticket_through(
     assert result.url == PR_URL
     assert delivery_labels.NEEDS_DETAIL_LABEL not in labels[ISSUE_NUMBER]
     assert "clarify_check_skipped" in caplog.text
-
-
-def test_ticket_the_gate_accepts_is_delivered(clone, tmp_path, monkeypatch):
-    """The gate is a gate, not a wall: a passing verdict delivers."""
-    monkeypatch.setattr(seam, "new_run_id", lambda: RUN_ID)
-    install_fake_pi(monkeypatch, tmp_path, FAKE_PI_PASSING_GATE)
-    comments: list[str] = []
-    labels = {ISSUE_NUMBER: [delivery_labels.READY_LABEL]}
-    install_fake_gh(monkeypatch, comments, labels)
-
-    result = runner.process_issue(
-        THIN_ISSUE, gate_config(clone, tmp_path), REPO,
-    )
-
-    assert result.url == PR_URL
-    assert worktree_for(clone, RUN_ID).is_dir()
-    assert delivery_labels.PR_OPENED_LABEL in labels[ISSUE_NUMBER]
-    assert delivery_labels.NEEDS_DETAIL_LABEL not in labels[ISSUE_NUMBER]
-    assert all("not ready to deliver" not in body for body in comments)
-    assert len(comments) == 4
-    assert re.search(r"<!-- orbi:run=[0-9a-f]{8} -->", comments[0])
-
-
-def test_custom_dispatch_label_ticket_stops_and_leaves_the_claim_queue(
-    clone, tmp_path, monkeypatch, caplog,
-):
-    """Issue #1088/#527: a custom-label repository stops on ITS label.
-
-    The ready scan keys on the repository's dispatch label. Removing the
-    hardcoded `ai-ready` (absent here) would leave `ai-queue` in place:
-    the ticket stays claimable and every tick re-judges it and posts
-    another comment instead of waiting for the human.
-    """
-    monkeypatch.setattr(seam, "new_run_id", lambda: RUN_ID)
-    install_fake_pi(monkeypatch, tmp_path, fake_pi_thin(["observable_result"]))
-    comments: list[str] = []
-    labels = {ISSUE_NUMBER: ["ai-queue"]}
-    install_fake_gh(monkeypatch, comments, labels)
-    caplog.set_level("INFO")
-
-    issue = dict(THIN_ISSUE, labels=[{"name": "ai-queue"}])
-    result = runner.process_issue(
-        issue,
-        gate_config(clone, tmp_path, dispatch_label="ai-queue"),
-        REPO,
-    )
-
-    assert result == runner.IssueResult("needs-detail", None)
-    assert len(comments) == 1
-    # The claim label is gone: the ready scan can no longer pick the
-    # ticket up, so the ticket waits instead of being judged again.
-    assert labels[ISSUE_NUMBER] == [delivery_labels.NEEDS_DETAIL_LABEL]
-    assert "`ai-queue`" in comments[0]
-    assert "clarify_needs_detail" in caplog.text
-    assert not worktree_for(clone, RUN_ID).exists()
-    assert git(clone, "branch", "--list", "orbi/*").strip() == ""

@@ -33,6 +33,20 @@ def test_label_patch_claim_clears_fix_needed_from_fix_round():
     assert to_remove == ["ai-fix-needed"]
 
 
+def test_label_patch_claim_clears_needs_detail_after_a_repair():
+    """Issue #1379: the thin-ticket gate's label must go on claim.
+
+    The author edits the body and re-adds the claim label; the claim
+    patch then removes `ai-needs-detail`, so the ticket is no longer
+    reported as waiting for detail while it is being delivered.
+    """
+    to_add, to_remove = dl.label_patch(
+        dl.EVENT_CLAIM, {"ai-ready", "ai-needs-detail"},
+    )
+    assert to_add == ["ai-in-progress"]
+    assert to_remove == ["ai-needs-detail"]
+
+
 def test_label_patch_release_waiting_returns_release_to_ready_queue():
     to_add, to_remove = dl.label_patch(
         dl.EVENT_RELEASE_WAITING, {"ai-ready", "ai-in-progress"},

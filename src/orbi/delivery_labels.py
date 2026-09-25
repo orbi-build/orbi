@@ -76,7 +76,9 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
     inputs always produce the same deterministic, idempotent patch.
 
     - claim: add `ai-in-progress`, remove a stale `ai-fix-needed` from
-      a resumed fix round (the `ai-ready` residue is kept).
+      a resumed fix round and a stale `ai-needs-detail` left by the
+      thin-ticket gate once the author re-readied the ticket (the
+      `ai-ready` residue is kept).
     - pr_opened: add `ai-pr-opened`, remove `ai-in-progress`.
     - fix_needed: add `ai-fix-needed`, remove any stale opened-PR or
       in-flight label.
@@ -94,9 +96,15 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
     """
     current = set(current_labels)
     if event == EVENT_CLAIM:
+        # The thin-ticket gate's `ai-needs-detail` is not a lifecycle
+        # state: a ticket the author edited and re-readied is claimed
+        # normally, so the stop label must go with the claim or the
+        # ticket is delivered while every status surface still says a
+        # human must supply detail (Issue #1379).
         to_remove = [
-            FIX_NEEDED_LABEL,
-        ] if FIX_NEEDED_LABEL in current else []
+            label for label in (FIX_NEEDED_LABEL, NEEDS_DETAIL_LABEL)
+            if label in current
+        ]
         return ([IN_PROGRESS_LABEL], to_remove)
     if event == EVENT_PR_OPENED:
         return ([PR_OPENED_LABEL], [IN_PROGRESS_LABEL])
