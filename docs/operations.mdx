@@ -631,7 +631,6 @@ registry — in both directions (a name only in code or only in docs fails
 | `failure_comment_id_unavailable` | a repeated failure comment had no recoverable REST id; a new comment was posted |
 | `failure_streak_escalated` | the same failure reached the consecutive limit; the Issue goes ai-blocked |
 | `failure_history_read_failed` | the failure-history read for the dead-loop guard failed (fail-open) |
-| `failure_requeued` | a first github_transient failure returned the Issue to ai-ready for one automatic retry |
 | `external_takeover` | an external PR is taken over for review |
 | `external_takeover_skipped` | the external PR is not takeover-eligible |
 | `external_takeover_closed` | the external PR closed without merging; the Issue requeues |

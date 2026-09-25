@@ -335,15 +335,9 @@ def test_apply_label_patch_applies_the_idempotent_patch(monkeypatch):
 
 def test_comment_issue_wraps_the_body_in_the_status_format(monkeypatch):
     captured = []
+    monkeypatch.setattr(seam, "run_command", lambda c, **k: (
+        captured.append(c), "")[1])
 
-    def fake_run(command, **kwargs):
-        if command == ["git", "rev-parse", "--short=8", "HEAD"]:
-            # The runner-fingerprint probe (Issue #1366) answers the
-            # comment marker; it is not a GitHub call.
-            return "8a12fb1c"
-        return captured.append(command) or ""
-
-    monkeypatch.setattr(seam, "run_command", fake_run)
     github.comment_issue(4, repo="o/r", body="hello")
     command = captured[0]
     assert command[:7] == [
@@ -901,14 +895,10 @@ def test_update_issue_comment_patches_the_publisher_route(monkeypatch):
     (`repos/{repo}/issues/comments/{id}` — appending the id to the
     issue-scoped endpoint is not a GitHub route and 404s)."""
     seen = []
-
-    def fake_run(command, **kwargs):
-        if command == ["git", "rev-parse", "--short=8", "HEAD"]:
-            # The runner-fingerprint probe (Issue #1366).
-            return "8a12fb1c"
-        return seen.append(command) or ""
-
-    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: seen.append(command) or "",
+    )
     github.update_issue_comment(4711, repo="owner/repo", body="b")
     assert seen == [
         [

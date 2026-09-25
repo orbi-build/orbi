@@ -26,8 +26,7 @@ from orbi.journal import (
     LOGGER,
     event,
     run_command,
-    run_git,
-    run_git_network,
+    run_git_network_command,
 )
 
 LOGGER = logging.getLogger("orbi.gitops")
@@ -99,7 +98,7 @@ def _is_ancestor(commit: str, base: str, *, cwd: Path) -> bool:
     means the check itself could not be performed and must be surfaced.
     """
     try:
-        run_git(
+        run_command(
             ["git", "merge-base", "--is-ancestor", commit, base], cwd=cwd,
         )
     except subprocess.CalledProcessError as exc:
@@ -111,7 +110,7 @@ def _is_ancestor(commit: str, base: str, *, cwd: Path) -> bool:
 
 def stable_branch_exists(repo_dir: Path, branch: str) -> bool:
     """Return whether the stable delivery branch exists on origin."""
-    raw = run_git(
+    raw = run_command(
         ["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
         cwd=repo_dir, timeout=GIT_NETWORK_TIMEOUT_SECONDS,
     )
@@ -132,7 +131,7 @@ def remote_branch_head(branch: str, *, cwd: Path) -> str | None:
     the remote has no such branch (None); any non-zero exit is a real
     failure (network/auth) and propagates.
     """
-    raw = run_git(
+    raw = run_command(
         ["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
         cwd=cwd, timeout=GIT_NETWORK_TIMEOUT_SECONDS,
     )
@@ -190,17 +189,17 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
             if pr_number is not None
             else f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
         )
-        run_git_network(
+        run_git_network_command(
             ["git", "fetch", "origin", fetch_ref], cwd=repo_dir,
         )
-        local = run_git(
+        local = run_command(
             ["git", "branch", "--list", branch], cwd=repo_dir,
         )
         if local.strip():
-            local_head = run_git(
+            local_head = run_command(
                 ["git", "rev-parse", branch], cwd=repo_dir,
             )
-            remote_head = run_git(
+            remote_head = run_command(
                 ["git", "rev-parse", f"origin/{branch}"], cwd=repo_dir,
             )
             if local_head != remote_head:
@@ -212,15 +211,15 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
                         f"remote={remote_head}) in checkout {repo_dir} "
                         f"on host {socket.gethostname()}"
                     )
-                run_git([
+                run_command([
                     "git", "branch", "--force", branch,
                     f"origin/{branch}",
                 ], cwd=repo_dir)
-            run_git([
+            run_command([
                 "git", "worktree", "add", "--force", str(path), branch,
             ], cwd=repo_dir)
         else:
-            run_git([
+            run_command([
                 "git", "worktree", "add", "--force", "-b", branch,
                 str(path), f"origin/{branch}",
             ], cwd=repo_dir)
@@ -232,15 +231,15 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
         # claim used to be burned into terminal `ai-blocked`.  The branch
         # is the delivery identity, so a local one is reused as-is; only
         # a missing branch is created from the frozen base SHA.
-        local = run_git(
+        local = run_command(
             ["git", "branch", "--list", branch], cwd=repo_dir,
         )
         if local.strip():
-            run_git([
+            run_command([
                 "git", "worktree", "add", str(path), branch,
             ], cwd=repo_dir)
         else:
-            run_git([
+            run_command([
                 "git", "worktree", "add", "-b", branch, str(path), base_sha,
             ], cwd=repo_dir)
     return path
@@ -258,7 +257,7 @@ def create_release_worktree(repo_dir: Path, source_repo: str, number: int,
     release commit), then hard-reset it to the commit whose gates just passed.
     """
     branch = task_branch(source_repo, number, run_id)
-    listing = run_git(
+    listing = run_command(
         ["git", "worktree", "list", "--porcelain"], cwd=repo_dir,
     )
     current_path: Path | None = None
@@ -269,14 +268,14 @@ def create_release_worktree(repo_dir: Path, source_repo: str, number: int,
             current_path = Path(lines[0].removeprefix("worktree "))
             break
     if current_path is None:
-        local = run_git(
+        local = run_command(
             ["git", "branch", "--list", branch], cwd=repo_dir,
         )
         if local.strip():
             current_path = worktree_path(
                 repo_dir, source_repo, number, run_id,
             )
-            run_git([
+            run_command([
                 "git", "worktree", "add", "--force", str(current_path),
                 branch,
             ], cwd=repo_dir)
@@ -284,7 +283,7 @@ def create_release_worktree(repo_dir: Path, source_repo: str, number: int,
             current_path = create_worktree(
                 repo_dir, source_repo, number, run_id, release_commit,
             )
-    run_git(["git", "reset", "--hard", release_commit], cwd=current_path)
+    run_command(["git", "reset", "--hard", release_commit], cwd=current_path)
     return current_path
 
 
@@ -360,7 +359,7 @@ def fetch_base_ref(repo_dir: Path, base_branch: str,
         command_runner = run_command
     fd = acquire_base_sync_lock(repo_dir, lock_timeout_seconds)
     try:
-        run_git_network(
+        run_git_network_command(
             ["git", "fetch", "origin", base_branch],
             cwd=cwd if cwd is not None else repo_dir,
             command_runner=command_runner,
@@ -378,7 +377,7 @@ def freeze_base(repo_dir: Path, base_branch: str) -> str:
     Runner/Pi fetches on that ref.
     """
     fetch_base_ref(repo_dir, base_branch)
-    return run_git(
+    return run_command(
         ["git", "rev-parse", f"origin/{base_branch}"], cwd=repo_dir,
     )
 
@@ -398,15 +397,13 @@ def pin_git_exclude(repo_dir: Path, pattern: str, *,
         # failure: the generic `command_failed` line must not reach the
         # setup output at ERROR for an expected non-zero probe
         # (`failure_log_level`, the #341/#730/#1085 contract).
-        run_git(["git", "check-ignore", "--quiet", "--", pattern],
-                command_runner=run_command, cwd=repo_dir,
-                failure_log_level=logging.DEBUG)
+        run_command(["git", "check-ignore", "--quiet", "--", pattern],
+                    cwd=repo_dir, failure_log_level=logging.DEBUG)
         return None
     except subprocess.CalledProcessError:
         pass
-    exclude = Path(run_git(
-        ["git", "rev-parse", "--git-path", "info/exclude"],
-        command_runner=run_command, cwd=repo_dir))
+    exclude = Path(run_command(
+        ["git", "rev-parse", "--git-path", "info/exclude"], cwd=repo_dir))
     if not exclude.is_absolute():
         exclude = Path(repo_dir) / exclude
     exclude.parent.mkdir(parents=True, exist_ok=True)

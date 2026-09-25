@@ -18,8 +18,6 @@ import pytest
 
 from conftest import git
 
-from seam import strip_safety
-
 from orbi import git_transport
 
 
@@ -107,7 +105,6 @@ def ok_run_factory(state: dict):
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         calls.append(command)
         if command[:2] == ["git", "config"]:
             if state.get("no_origin"):
@@ -338,7 +335,6 @@ def test_check_transport_reports_a_probe_failure_without_stderr(tmp_path):
     the terminal) still carries the exact probe command — the scene is
     never incomplete."""
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         if command[:2] == ["git", "config"]:
             return "git@github.com:xqliu/orbi.git"
         raise subprocess.CalledProcessError(128, command)
@@ -358,7 +354,6 @@ def test_check_transport_fails_fast_on_a_generic_probe_error(tmp_path):
     """A non-git failure of the SSH probe (e.g. a spawn error) fails
     fast as ssh_unreachable — no HTTPS fallback."""
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         if command[:2] == ["git", "config"]:
             return "git@github.com:xqliu/orbi.git"
         raise OSError("spawn failed")
