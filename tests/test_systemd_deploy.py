@@ -17,8 +17,6 @@ from pathlib import Path
 
 import pytest
 
-from seam import strip_safety
-
 from orbi import config as config_domain
 from orbi import scheduler, systemd_deploy
 
@@ -102,7 +100,7 @@ def test_install_units_enables_three_timers_at_capacity_three(tmp_path):
     calls: list[list[str]] = []
     scheduler.install_units(
         repo, tmp_path / "install", max_concurrency=3,
-        run_command=lambda command, **kwargs: calls.append(strip_safety(command)) or "",
+        run_command=lambda command, **kwargs: calls.append(command) or "",
     )
     for index in (1, 2, 3):
         assert [
@@ -123,7 +121,7 @@ def test_install_units_at_max_capacity_enables_every_instance(tmp_path):
     scheduler.install_units(
         repo, tmp_path / "install",
         max_concurrency=scheduler.MAX_RUNNER_INSTANCES,
-        run_command=lambda command, **kwargs: calls.append(strip_safety(command)) or "",
+        run_command=lambda command, **kwargs: calls.append(command) or "",
     )
     # The exact command sequence: reload, enable @1..@5, record the
     # commit — no surplus disable at the cap itself.
@@ -175,7 +173,7 @@ def test_install_units_rejects_capacity_beyond_max_runner_instances(tmp_path):
     ) as excinfo:
         scheduler.install_units(
             repo, tmp_path / "install", max_concurrency=6,
-            run_command=lambda command, **kwargs: calls.append(strip_safety(command)) or "",
+            run_command=lambda command, **kwargs: calls.append(command) or "",
         )
     assert "no greater than 5 (MAX_RUNNER_INSTANCES)" in str(excinfo.value)
     assert calls == []
@@ -431,7 +429,6 @@ def test_install_units_copies_templates_and_reloads(monkeypatch, tmp_path):
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         calls.append(command)
         if command[:3] == ["git", "rev-parse", "HEAD"]:
             return "0123456789abcdef0123456789abcdef01234567"
@@ -481,7 +478,7 @@ def test_install_units_enables_only_configured_timer_instances(tmp_path):
     calls: list[list[str]] = []
     scheduler.install_units(
         repo, tmp_path / "install", max_concurrency=1,
-        run_command=lambda command, **kwargs: calls.append(strip_safety(command)) or "",
+        run_command=lambda command, **kwargs: calls.append(command) or "",
     )
     assert [
         "systemctl", "--user", "enable", "--now", "orbi@1.timer",
@@ -514,7 +511,6 @@ def test_install_units_migrates_the_legacy_units_once(
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         calls.append(command)
         if command[:3] == ["git", "rev-parse", "HEAD"]:
             return "0123456789abcdef0123456789abcdef01234567"
@@ -570,7 +566,6 @@ def test_install_units_legacy_migration_is_idempotent(
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         calls.append(command)
         if command[:3] == ["git", "rev-parse", "HEAD"]:
             return "0123456789abcdef0123456789abcdef01234567"
@@ -603,7 +598,6 @@ def test_migrate_legacy_units_removes_only_the_files_that_exist(
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         calls.append(command)
         return ""
 
@@ -625,7 +619,7 @@ def test_migrate_legacy_units_returns_false_without_legacy_files(
     calls: list[list[str]] = []
     assert systemd_deploy.migrate_legacy_units(
         installed, run_command=lambda command, **kwargs:
-        calls.append(strip_safety(command)) or "",
+        calls.append(command) or "",
     ) is False
     assert calls == []
 
@@ -677,7 +671,6 @@ def test_install_units_fails_fast_when_a_systemctl_step_fails(
     installed = tmp_path / "install"
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         if command[:3] == ["systemctl", "--user", "enable"]:
             raise subprocess.CalledProcessError(1, command, stderr="nope")
         return ""
@@ -720,7 +713,6 @@ def test_sync_drifted_units_installs_and_reverifies_clean(
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         calls.append(command)
         if command[:3] == ["git", "rev-parse", "HEAD"]:
             return "0123456789abcdef0123456789abcdef01234567"
@@ -768,7 +760,7 @@ def test_sync_drifted_units_is_a_no_op_when_clean(monkeypatch, tmp_path):
     calls: list[list[str]] = []
     report = scheduler.sync_drifted_units(
         repo, installed, max_concurrency=2,
-        run_command=lambda command, **kwargs: calls.append(strip_safety(command)) or "",
+        run_command=lambda command, **kwargs: calls.append(command) or "",
     )
     assert report == []
     assert calls == []
@@ -786,7 +778,6 @@ def test_sync_drifted_units_install_failure_propagates(
     )
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         if command == ["git", "rev-parse", "HEAD"]:
             raise subprocess.CalledProcessError(1, command, stderr="nope")
         return ""
@@ -1335,7 +1326,6 @@ def test_self_heal_never_changes_timer_enablement(tmp_path):
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         calls.append(command)
         if command == ["git", "rev-parse", "HEAD"]:
             return "0123456789abcdef0123456789abcdef01234567"

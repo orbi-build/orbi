@@ -33,7 +33,7 @@ from orbi.github import (
     trusted_issue_comments_block,
 )
 from orbi.gitops import base_sync_lock_path
-from orbi.journal import LOGGER, event, issue_context, run_command, run_git
+from orbi.journal import LOGGER, event, issue_context, run_command
 from orbi.pi_activity import activity_snapshot
 from orbi.pi_command import (
     IMPLEMENT_EXCLUDED_SKILLS,
@@ -174,7 +174,7 @@ def render_prompt(template: str, values: dict[str, str]) -> str:
 
 def changed_files(worktree: Path) -> list[str]:
     """The worktree's uncommitted changes (tracked + untracked paths)."""
-    raw = run_git(["git", "status", "--porcelain"], cwd=worktree)
+    raw = run_command(["git", "status", "--porcelain"], cwd=worktree)
     files: list[str] = []
     for line in raw.splitlines():
         if len(line) > 3 and line[:2].strip():

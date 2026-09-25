@@ -258,8 +258,7 @@ from orbi.journal import (
     log_format,
     new_run_id,
     run_command,
-    run_git,
-    run_git_network,
+    run_git_network_command,
     set_active_pi,
     set_active_run,
     set_run_id,
@@ -1453,7 +1452,7 @@ def reclaim_released_worktrees(config: config_domain.RunnerConfig, *,
     # (slug, issue number, path) per orbi-named registered worktree.
     candidates: list[tuple[str, int, Path]] = []
     active = journal.active_run() or {}
-    listing = run_git(
+    listing = run_command(
         ["git", "worktree", "list", "--porcelain"], cwd=repo_dir,
     )
     for line in listing.splitlines():
@@ -1523,7 +1522,7 @@ def reclaim_released_worktrees(config: config_domain.RunnerConfig, *,
     for _closed_at, path in reclaimable[:WORKTREE_RECLAIM_MAX_PER_TICK]:
         try:
             size = _tree_size(path)
-            run_git(
+            run_command(
                 ["git", "worktree", "remove", "--force", str(path)],
                 cwd=repo_dir,
             )
@@ -1808,7 +1807,7 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
     branch: str = ctx.branch
     run_id: str = ctx.run_id
     issue: int = ctx.issue
-    current_branch = run_git(
+    current_branch = run_command(
         ["git", "branch", "--show-current"], cwd=worktree,
     )
     if current_branch != branch:
@@ -1840,7 +1839,7 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
                 f"origin/{base_branch}; merge the latest base, rerun full "
                 "tests and review, then retry"
             )
-    local_head = run_git(
+    local_head = run_command(
         ["git", "rev-parse", "HEAD"], cwd=worktree,
     )
     if expected_url is not None:
@@ -2076,7 +2075,7 @@ def cleanup_task_worktree(ctx: RunContext, repo_dir: Path) -> None:
     try:
         if ctx.worktree.is_dir():
             shutil.rmtree(ctx.worktree)
-        run_git(["git", "worktree", "prune"], cwd=repo_dir)
+        run_command(["git", "worktree", "prune"], cwd=repo_dir)
         event(
             "worktree_cleaned", issue=ctx.issue, run_id=ctx.run_id,
             worktree=ctx.worktree,
@@ -2101,15 +2100,15 @@ def _agent_delivery_boundary(worktree: Path) -> tuple[str, str]:
     (`deliver_pr`) and the ops closeout.
     """
     pi_session.apply_runner_runtime_excludes(worktree)
-    dirty = run_git(["git", "status", "--porcelain"], cwd=worktree)
+    dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
     if dirty and pi_session._is_runner_runtime_only(dirty):
         pi_session.apply_runner_runtime_excludes(worktree)
         event(
             "runner_runtime_exclude_repaired",
             status=" ".join(dirty.splitlines()),
         )
-        dirty = run_git(["git", "status", "--porcelain"], cwd=worktree)
-    head = run_git(["git", "rev-parse", "HEAD"], cwd=worktree)
+        dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
+    head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
     return head, dirty
 
 
@@ -2153,7 +2152,7 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     run_id: str = ctx.run_id
     issue: int = ctx.issue
     source_repo: str = ctx.source_repo
-    current_branch = run_git(
+    current_branch = run_command(
         ["git", "branch", "--show-current"], cwd=worktree,
     )
     if current_branch != branch:
@@ -2199,14 +2198,14 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
         # the review session absorbs the base in-session) handles the
         # rest — the state machine is unchanged.
         try:
-            run_git(
+            run_command(
                 ["git", "merge", f"origin/{base_branch}"], cwd=worktree,
             )
             event(
                 "base_absorbed", base_branch=base_branch, branch=branch,
             )
         except subprocess.CalledProcessError as exc:
-            run_git(["git", "merge", "--abort"], cwd=worktree)
+            run_command(["git", "merge", "--abort"], cwd=worktree)
             event(
                 "base_merge_conflict", level=logging.ERROR,
                 base_branch=base_branch, branch=branch,
@@ -2221,8 +2220,8 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     # branch has no local remote-tracking ref in a checkout whose fetch
     # refspec does not cover it, e.g. a `--single-branch` clone
     # (Issue #898).
-    local_head = run_git(["git", "rev-parse", "HEAD"], cwd=worktree)
-    run_git_network(
+    local_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
+    run_git_network_command(
         ["git", "push", "origin", f"HEAD:{branch}"], cwd=worktree,
     )
     remote_head = gitops.remote_branch_head(branch, cwd=worktree)
@@ -2411,7 +2410,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 worktree=str(worktree),
             )
         if external:
-            branch = run_git(
+            branch = run_command(
                 ["git", "branch", "--show-current"], cwd=worktree,
             )
         verified_url = verify_pr(
@@ -2858,13 +2857,13 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         mergeable=mergeable if mergeable == "MERGEABLE" else None,
     )
     if freshness is BaseFreshness.ABSORBABLE and mergeable == "MERGEABLE":
-        base_sha = run_git(
+        base_sha = run_command(
             ["git", "rev-parse", f"origin/{base_branch}"], cwd=worktree,
         )
         try:
-            run_git(["git", "merge", f"origin/{base_branch}"], cwd=worktree)
+            run_command(["git", "merge", f"origin/{base_branch}"], cwd=worktree)
         except subprocess.CalledProcessError as exc:
-            run_git(["git", "merge", "--abort"], cwd=worktree)
+            run_command(["git", "merge", "--abort"], cwd=worktree)
             event(
                 "base_merge_conflict", level=logging.ERROR,
                 base_branch=base_branch, base_sha=base_sha,
@@ -2876,8 +2875,8 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
                 f"PR #{pr['number']} cannot absorb origin/{base_branch} "
                 f"({base_sha}); resolve the merge conflict and retry"
             ) from None
-        absorbed_head = run_git(["git", "rev-parse", "HEAD"], cwd=worktree)
-        run_git_network(
+        absorbed_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
+        run_git_network_command(
             ["git", "push", "origin", f"HEAD:{pr['head_ref']}"],
             cwd=worktree,
         )
@@ -3048,7 +3047,7 @@ def merge_commit_metrics(worktree: Path, merge_commit: str,
     landed merge and never fabricate a `0`.
     """
     try:
-        commits = int(run_git(
+        commits = int(run_command(
             ["git", "rev-list", "--count", f"{merge_commit}^1..{merge_commit}^2"],
             cwd=worktree,
         ))
@@ -3063,7 +3062,7 @@ def merge_commit_metrics(worktree: Path, merge_commit: str,
                                 cwd=worktree):
                 return "unknown", str(commits)
             command.append(pushed_base)
-        engine = int(run_git(command, cwd=worktree))
+        engine = int(run_command(command, cwd=worktree))
     except (subprocess.CalledProcessError, ValueError):
         return "unknown", "unknown"
     # The engine count's positive set is reachable from `pushed_head`
@@ -3233,8 +3232,8 @@ def _runner_source_git(args: list[str], cwd: Path, *, run_command) -> str | None
     """One LOCAL read-only git probe; None when git cannot answer
     (an expected probe result, logged at DEBUG by run_command)."""
     try:
-        return run_git(
-            ["git", *args], command_runner=run_command, cwd=cwd,
+        return run_command(
+            ["git", *args], cwd=cwd,
             timeout=RUNNER_SOURCE_TIMEOUT_SECONDS,
             failure_log_level=logging.DEBUG,
         )
@@ -3482,17 +3481,17 @@ def sync_base_checkout(repo_dir: Path, base_branch: str,
 def _sync_base_checkout_locked(repo_dir: Path, base_branch: str) -> None:
     """The actual fetch + fast-forward + verify, under the base-sync
     flock (see ``sync_base_checkout``)."""
-    run_git_network(
+    run_git_network_command(
         ["git", "fetch", "origin", base_branch], cwd=repo_dir,
     )
-    local_head = run_git(["git", "rev-parse", "HEAD"], cwd=repo_dir)
-    remote_head = run_git(
+    local_head = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
+    remote_head = run_command(
         ["git", "rev-parse", f"origin/{base_branch}"], cwd=repo_dir,
     )
     if local_head == remote_head:
         return
     try:
-        run_git(
+        run_command(
             ["git", "merge", "--ff-only", f"origin/{base_branch}"],
             cwd=repo_dir,
         )
@@ -3508,7 +3507,7 @@ def _sync_base_checkout_locked(repo_dir: Path, base_branch: str) -> None:
             f"remote={remote_head}); the merged code cannot be loaded "
             "by the next tick"
         ) from None
-    synced = run_git(["git", "rev-parse", "HEAD"], cwd=repo_dir)
+    synced = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
     if synced != remote_head:
         raise RuntimeError(
             f"deployment checkout {repo_dir} is at {synced} after the "
@@ -3745,7 +3744,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     # git call.
     if (not scene.get("external")
             and read_pushed_head(worktree) != pr["head_oid"]
-            and pr["head_oid"] == run_git(
+            and pr["head_oid"] == run_command(
                 ["git", "rev-parse", "HEAD"], cwd=worktree)):
         record_pushed_head(worktree, pr["head_oid"])
         event(
@@ -3895,7 +3894,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         # remains recoverable. An object that is not a commit cannot be a
         # race: it is a malformed/model-invented verdict and retrying the
         # same review would only reproduce the dead loop (Issue #988).
-        object_probe = run_git(
+        object_probe = run_command(
             ["git", "cat-file", "-e", f"{verdict['head']}^{{commit}}"],
             cwd=worktree, check=False, timeout=10,
         )
@@ -4257,7 +4256,7 @@ def _pr_head_repo(pr: dict) -> str:
 
 def delivery_head_advanced(worktree: Path, base_sha: str) -> bool:
     """True when the task branch has commits beyond the frozen base."""
-    head = run_git(["git", "rev-parse", "HEAD"], cwd=worktree)
+    head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
     return head != base_sha
 
 
@@ -4270,7 +4269,7 @@ def delivered_changed_files(worktree: Path, base: str) -> list[str] | None:
     holds (the safe direction: only real evidence can pass it).
     """
     try:
-        raw = run_git(
+        raw = run_command(
             ["git", "diff", "--name-only", f"{base}...HEAD"],
             cwd=worktree,
         )
@@ -4939,7 +4938,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         # slug and no longer match the branch the worktree is on (a
         # second branch would be a second delivery). The worktree's
         # current branch IS the scene's branch.
-        branch = run_git(
+        branch = run_command(
             ["git", "branch", "--show-current"],
             cwd=existing_worktree,
         )
@@ -5059,7 +5058,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             # engine pushes on top of this foreign head, never the head
             # itself. No session has run yet, so HEAD is exactly that
             # head; the record is set once per run.
-            record_pushed_base(worktree, run_git(
+            record_pushed_base(worktree, run_command(
                 ["git", "rev-parse", "HEAD"], cwd=worktree,
             ))
         # The new session starts from the existing work —
@@ -5202,7 +5201,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             )
         )
         ctx = replace(ctx, pr=pr_url)
-        commit = run_git(
+        commit = run_command(
             ["git", "rev-parse", "HEAD"], cwd=worktree,
         )
         if pr_url is None:
@@ -6346,7 +6345,7 @@ def _run_review_round(
         # worktree keeps the whole review/merge loop
         # branch-identity agnostic while the worktree path itself
         # stays comment-independent.
-        branch = run_git(
+        branch = run_command(
             ["git", "branch", "--show-current"], cwd=worktree,
         ) or task_branch(source_repo, number, scene["run_id"])
         review_config = replace(
