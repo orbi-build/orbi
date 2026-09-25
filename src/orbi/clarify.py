@@ -21,7 +21,7 @@ comment/label write, logs `clarify_check_skipped` and lets the delivery
 proceed — a broken bypass must never silently lose a ticket.
 
 The module is the pure judgment layer: the model call is the
-`pi_session.run_clarify_agent` leaf and the GitHub writes are the
+`pi_session.run_ticket_agent` leaf and the GitHub writes are the
 `orbi.github` leaves, both resolved at call time so a test's seam patch
 intercepts them.
 """
@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
 from orbi.github import comment_issue, edit_issue
 from orbi.journal import event
-from orbi.pi_session import run_clarify_agent
+from orbi.pi_session import run_ticket_agent
 from orbi.progress import run_marker
 
 if TYPE_CHECKING:
@@ -74,18 +74,19 @@ CLARIFY_SYSTEM_PROMPT = (
     "3. single_outcome — the ticket is one runtime outcome: one fix or "
     "one change, not several unrelated things.\n\n"
     "Answer with ONE JSON object on one line and nothing else:\n"
-    '{"satisfied": true|false, "missing": []}\n\n'
-    "`satisfied` is true only when all three checks pass. `missing` "
-    'lists the failed checks using exactly these identifiers: '
+    '{"missing": []}\n\n'
+    "`missing` lists the failed checks using exactly these identifiers: "
     '"observable_result", "acceptance_condition", "single_outcome"; it '
-    "is empty when satisfied is true. Do not explain and do not add "
+    "is empty when all three checks pass. Do not explain and do not add "
     "other keys."
 )
 
-_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+# A small fixed bound on the judgment call: a hung model request must
+# not hold the slot. A timeout raises out of the shared helper and the
+# caller's fail-open path lets the delivery proceed (Issue #1379).
+CLARIFY_TIMEOUT_SECONDS = 120
 
-# GitHub's sentinel for a deleted account: there is no user to notify.
-_GHOST_LOGIN = "ghost"
+_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def _author_mention(issue: dict) -> str:
@@ -93,8 +94,8 @@ def _author_mention(issue: dict) -> str:
 
     The login comes from the claim payload's `author.login` — the same
     `gh issue` JSON the claim scan already fetched, so the gate adds no
-    API call. No usable login (a missing/empty field, the deleted-account
-    `ghost`, or a bot `... [bot]`) means no mention: a malformed author
+    API call. Any non-empty login is mentioned, bot or not (#1379); a
+    missing/empty/non-string field means no mention: a malformed author
     must never fail the gate, it only renders the comment as before.
     """
     author = issue.get("author")
@@ -102,7 +103,7 @@ def _author_mention(issue: dict) -> str:
     if not isinstance(login, str):
         return ""
     login = login.strip()
-    if not login or login == _GHOST_LOGIN or login.endswith("[bot]"):
+    if not login:
         return ""
     return f"@{login}"
 
@@ -126,11 +127,12 @@ def build_context(issue: dict) -> str:
 def parse_verdict(output: str) -> ClarifyVerdict | None:
     """Parse one model answer; `None` means "no usable verdict".
 
-    The answer is a JSON object with a boolean `satisfied` and a `missing`
-    list of known check identifiers. Anything else — prose without an
-    object, broken JSON, a wrong type, an unknown identifier, or a
-    `satisfied` value that contradicts `missing` — is `None`, and the
-    caller fails open.
+    The answer is a JSON object with a `missing` list of known check
+    identifiers; an empty list passes and a non-empty one fails. Anything
+    else — prose without an object, broken JSON, a wrong type, or an
+    unknown identifier — is `None`, and the caller fails open. The
+    `satisfied` field is gone (#1379): one field carries the whole
+    verdict.
     """
     match = _JSON_OBJECT_RE.search(output)
     if match is None:
@@ -139,18 +141,15 @@ def parse_verdict(output: str) -> ClarifyVerdict | None:
         data = json.loads(match.group())
     except json.JSONDecodeError:
         return None
-    satisfied = data.get("satisfied")
     missing = data.get("missing")
-    if not isinstance(satisfied, bool) or not isinstance(missing, list):
+    if not isinstance(missing, list):
         return None
     if any(
         not isinstance(item, str) or item not in MISSING
         for item in missing
     ):
         return None
-    if satisfied != (not missing):
-        return None
-    return ClarifyVerdict(passed=satisfied, missing=tuple(missing))
+    return ClarifyVerdict(passed=not missing, missing=tuple(missing))
 
 
 def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
@@ -198,10 +197,12 @@ def judge_issue_body(issue: dict, config: RunnerConfig, source_repo: str,
     the delivery proceeds.
     """
     try:
-        output = run_clarify_agent(
-            issue, config, source_repo, run_id,
+        output = run_ticket_agent(
+            issue, config, source_repo,
             system_prompt=CLARIFY_SYSTEM_PROMPT,
             context=build_context(issue),
+            run_id=run_id,
+            timeout=CLARIFY_TIMEOUT_SECONDS,
         )
     except Exception as exc:
         event(

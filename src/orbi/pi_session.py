@@ -3,8 +3,8 @@
 Extracted unchanged from ``runner.py`` (Issue #1262, Article 3.2): this
 module owns the session boundary — the prompt rendering, the resume
 context, the per-run agent directory, the Runner-owned runtime excludes
-and the four launch functions (``run_pi``, ``run_review``,
-``run_ticket_agent``, ``run_clarify_agent``). It imports no delivery
+and the three launch functions (``run_pi``, ``run_review``,
+``run_ticket_agent``). It imports no delivery
 state machine (Article 3.3): every dependency is a leaf module, and
 ``runner`` imports from here, never the other way round.
 """
@@ -812,72 +812,45 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
     )
 
 
-def run_clarify_agent(issue: dict, config: config_domain.RunnerConfig,
-                      source_repo: str, run_id: str, *, system_prompt: str,
-                      context: str,
-                      progress: Callable[[dict], None] | None = None) -> str:
-    """Ask one no-tools Pi session whether this ticket is deliverable (#1088).
+def run_ticket_agent(
+    issue: dict, config: config_domain.RunnerConfig, source_repo: str, *,
+    system_prompt: str | None = None,
+    context: str | None = None,
+    run_id: str | None = None,
+    timeout: int | None = None,
+    progress: Callable[[dict], None] | None = None,
+) -> str:
+    """Run one no-tools Pi session and return its stdout.
 
-    The gate runs BEFORE any worktree or branch exists, so the session is
-    transient OS state in a temp dir (like the ticket-only session) — a
-    stopped ticket leaves nothing under the repository. When a provider
-    file is configured, the per-run agent dir is materialized inside that
-    temp dir so the judgment reaches the same provider/model a delivery
-    would; without one, Pi keeps its own agent dir. The answer is the
-    session's stdout, parsed by `orbi.clarify.parse_verdict` — a model
-    error or an unusable answer is the caller's fail-open path.
+    The ONE no-tools launcher: the ticket-only content agent (#209) and
+    the thin-ticket clarify judgment (#1088) share this body and differ
+    only in the prompt, context and run identity. `system_prompt` and
+    `context` default to the ticket-only wording; `run_id` defaults to
+    `config.run_id`; `timeout` bounds the session (the clarify gate
+    passes a small fixed one — a timeout fails open through the
+    caller's error path).
+
+    Pi's session is transient OS state, not a task worktree or
+    repository artifact: it runs in a temp dir and leaves nothing
+    behind. When a provider file is configured, the per-run agent dir
+    is materialized inside that temp dir so the session reaches the
+    same provider/model a delivery would; without one, Pi keeps its own
+    agent dir.
     """
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="orbi-clarify-") as directory:
-        clarify_dir = Path(directory)
-        session_dir = clarify_dir / ".pi-session"
-        command, log_command = build_pi_command(
-            config, ROLE_TICKET, IMPLEMENT_EXCLUDED_SKILLS, session_dir,
-            system_prompt, context,
-            context_placeholder="<issue-context-redacted>",
-            tools=False, extensions=False,
+    if system_prompt is None:
+        system_prompt = (
+            "You are a ticket-only content agent. Produce the requested "
+            "final content as your complete stdout response. Do not "
+            "create or modify files, branches, commits, pull requests, "
+            "tests, or use git/gh tools."
         )
-        _log_provider_config_loaded(
-            issue_ref=issue_context(source_repo, int(issue["number"])),
-            role=ROLE_TICKET, config=config,
-            elapsed=time.monotonic() - started,
+    if context is None:
+        context = (
+            f"Issue #{issue['number']}: {issue['title']}\n\n"
+            f"Issue body:\n{issue.get('body', '')}\n\n"
+            "Return only the final content to post on this Issue."
         )
-        agent_dir = prepare_pi_agent_dir(clarify_dir, config, role=ROLE_TICKET)
-        pi_env = _pi_extension_env(config)
-        if agent_dir is not None:
-            pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
-        return stream_pi(
-            command, cwd=clarify_dir,
-            ctx=RunContext(
-                run_id=run_id, issue=int(issue["number"]),
-                branch="-", worktree=Path("-"), source_repo=source_repo,
-            ),
-            role=ROLE_TICKET,
-            log_command=log_command,
-            progress=progress,
-            pi_env=pi_env or None,
-            watch=PiWatchOptions(
-                model_wait_dead_seconds=config.model_wait_dead_seconds,
-                model_wait_probe_url=config.model_wait_probe_url,
-                model_wait_probe_seconds=config.model_wait_probe_seconds,
-            ),
-        )
-
-
-def run_ticket_agent(issue: dict, config: config_domain.RunnerConfig, source_repo: str,
-                     *, progress: Callable[[dict], None] | None = None) -> str:
-    """Generate one ticket-only deliverable without using Git state (#209)."""
-    started = time.monotonic()
-    system_prompt = (
-        "You are a ticket-only content agent. Produce the requested final "
-        "content as your complete stdout response. Do not create or modify "
-        "files, branches, commits, pull requests, tests, or use git/gh tools."
-    )
-    context = (
-        f"Issue #{issue['number']}: {issue['title']}\n\n"
-        f"Issue body:\n{issue.get('body', '')}\n\n"
-        "Return only the final content to post on this Issue."
-    )
     # Pi's session is transient OS state, not a task worktree or repository
     # artifact. Its output and all terminal evidence are kept on the Issue.
     with tempfile.TemporaryDirectory(prefix="orbi-ticket-") as directory:
@@ -889,21 +862,32 @@ def run_ticket_agent(issue: dict, config: config_domain.RunnerConfig, source_rep
             context_placeholder="<issue-context-redacted>",
             tools=False, extensions=False,
         )
-        # Startup phase: the ticket-only session keeps Pi's
-        # own agent dir (no per-run materialization) — the provider
-        # config is still loaded and resolved before the spawn.
+        # Startup phase: the provider config is loaded and resolved
+        # before the spawn; a configured provider file is materialized
+        # into the transient dir (Pi's own agent dir otherwise).
         _log_provider_config_loaded(
             issue_ref=issue_context(source_repo, int(issue["number"])),
             role=ROLE_TICKET, config=config,
             elapsed=time.monotonic() - started,
         )
+        agent_dir = prepare_pi_agent_dir(ticket_dir, config, role=ROLE_TICKET)
+        pi_env = _pi_extension_env(config)
+        if agent_dir is not None:
+            pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
         return stream_pi(
             command, cwd=ticket_dir,
             ctx=RunContext(
-                run_id=config.run_id, issue=int(issue["number"]),
+                run_id=run_id or config.run_id, issue=int(issue["number"]),
                 branch="-", worktree=Path("-"), source_repo=source_repo,
             ),
             role=ROLE_TICKET,
+            timeout=timeout,
             log_command=log_command,
             progress=progress,
+            pi_env=pi_env or None,
+            watch=PiWatchOptions(
+                model_wait_dead_seconds=config.model_wait_dead_seconds,
+                model_wait_probe_url=config.model_wait_probe_url,
+                model_wait_probe_seconds=config.model_wait_probe_seconds,
+            ),
         )
