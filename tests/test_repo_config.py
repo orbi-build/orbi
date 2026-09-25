@@ -842,15 +842,16 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
     )
     starts = []
 
-    def fake_comment(number, repo, body):
+    def fake_started(self, body):
         starts.append(body)
 
-    monkeypatch.setattr(seam, "comment_issue", fake_comment)
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
     monkeypatch.setattr(seam, "set_active_run", lambda *a, **k: None)
     monkeypatch.setattr(
         runner, "ProgressPublisher",
         lambda *a, **k: type("P", (), {
+            "started": fake_started,
             "ensure": lambda self, body: None,
             "patch": lambda self, body: None,
             "milestone": lambda self, body: None,

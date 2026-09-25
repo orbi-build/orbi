@@ -118,6 +118,7 @@ from orbi.repo_config import (
 )
 from orbi.progress import (
     ProgressPublisher,
+    STARTED_HEADER,
     _progress_body,
     _progress_state,
     _run_info_fields,
@@ -773,7 +774,7 @@ def started_pi_comment_body(ctx: RunContext, run_info: str,
     if extra_fields:
         fields.update(extra_fields)
     info = _run_info_fields(run_info)
-    headline = "Orbi started Pi: " + " ".join(
+    headline = f"{STARTED_HEADER} " + " ".join(
         f"{key}={info[key]}" for key in ("run_id", "priority")
         if key in info
     )
@@ -5092,12 +5093,11 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             config = replace(
                 config, prompt=config.prompt.with_name("prompt_ops.md"),
             )
-        comment_issue(
-            number, repo=source_repo,
-            body=started_pi_comment_body(
-                ctx, run_info,
-                extra_fields=repo_config_fields,
-            ),
+        # One `Orbi started Pi:` comment per run; a resume PATCHes it (#1369).
+        publish(
+            action=lambda: publisher.started(started_pi_comment_body(
+                ctx, run_info, extra_fields=repo_config_fields,
+            )),
         )
         # The whole ProgressPublisher path is a bypass — a
         # failure here (404, rate limit) is logged and never skips

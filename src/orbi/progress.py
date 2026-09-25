@@ -48,6 +48,11 @@ MILESTONE_PREFIX = "Orbi:"
 # marker it identifies the run's progress comment among the run's other
 # marker-carrying comments (started Pi / opened PR scenes, milestones).
 PROGRESS_HEADER = "**Orbi progress**"
+# The started scene carries this headline; together with the run marker
+# it identifies the run's single `Orbi started Pi:` comment, so a resume
+# PATCHes it in place instead of appending a near-identical duplicate
+# (Issue #1369).
+STARTED_HEADER = "Orbi started Pi:"
 # Values this long are diagnosis/details rather than concise status fields.
 DETAIL_VALUE_LENGTH = 200
 
@@ -225,6 +230,26 @@ def find_progress_comment(
     return None
 
 
+def find_started_comment(
+    comments: list[dict], run_id: str,
+) -> dict | None:
+    """Return this run's started scene comment, or None.
+
+    The run marker alone is not enough: the run's other comments
+    (progress, opened PR scene, milestones) carry it too. The started
+    comment is the one that also carries the `Orbi started Pi:`
+    headline. A missing comment (deleted by a human) returns None so the
+    caller recreates it once (Issue #1369).
+    """
+    marker = run_marker(run_id)
+    for comment in comments:
+        body = comment.get("body")
+        if (isinstance(body, str) and marker in body
+                and STARTED_HEADER in body):
+            return comment
+    return None
+
+
 def issue_field(issue: int, title: str) -> str:
     """Render the progress comment's issue value: `#<number> <title>`.
 
@@ -377,6 +402,24 @@ class ProgressPublisher:
             ],
             log_command=["gh", "api", endpoint, "--method", "PATCH"],
         )
+
+    def started(self, body: str) -> int:
+        """Create or resume the run's started scene comment; return its id.
+
+        A run has exactly one `Orbi started Pi:` comment (Issue #1369):
+        a resumed run PATCHes the existing comment (located by run marker
+        plus headline) instead of posting a duplicate; a comment that
+        cannot be found (deleted by a human) is created once and later
+        resumes update that new one.
+        """
+        existing = find_started_comment(
+            self._list_comments(), self.run_id,
+        )
+        if existing is not None:
+            comment_id = int(existing["id"])
+            self._patch_comment(comment_id, body)
+            return comment_id
+        return self._post_comment(body)
 
     def ensure(self, body: str) -> int:
         """Create or resume the run's progress comment; return its id.

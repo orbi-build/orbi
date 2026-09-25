@@ -528,11 +528,10 @@ def test_process_issue_p0_progress_comment_and_milestones_carry_priority(
     assert len(progress_posts) == 1
     assert "- priority: p0" in progress_posts[0]
     # The started-Pi scene comment (run_info) carries the priority too.
-    scene_comments = [
-        call for call in calls
-        if call[:2] == ["gh", "issue"] and "comment" in call
+    started_posts = [
+        body for body in posted if "Orbi started Pi:" in body
     ]
-    assert any("priority=p0" in call[-1] for call in scene_comments)
+    assert any("priority=p0" in body for body in started_posts)
 
 
 def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
@@ -650,7 +649,9 @@ def test_process_issue_posts_one_scene_announcement_per_delivery_transition(
         command[-1] for command in calls
         if command[:2] == ["gh", "issue"] and "comment" in command
     ]
-    started = [body for body in comments if "Orbi started Pi:" in body]
+    # The started scene is upserted through the progress publisher
+    # (Issue #1369); the opened scene stays on `gh issue comment`.
+    started = [body for body in posted if "Orbi started Pi:" in body]
     opened = [body for body in comments if "Orbi opened PR:" in body]
     assert len(started) == 1
     assert len(opened) == 1
@@ -813,6 +814,65 @@ def test_process_issue_repeated_recoverable_failure_updates_one_comment(
         call.kwargs == {"repo": "xqliu/orbi", "add": "ai-in-progress"}
         for call in edit.call_args_list
     )
+
+
+def test_process_issue_resumes_update_one_started_comment(monkeypatch, tmp_path):
+    """Issue #1369: a run that starts and then resumes three times keeps
+    exactly ONE `Orbi started Pi:` comment. The first tick POSTs it;
+    every resume PATCHes the same comment id (the recorded API calls:
+    one POST, three PATCHes)."""
+    comments: list[dict] = []
+    next_id = iter(range(101, 400))
+    started_posts: list[dict] = []
+    started_patches: list[tuple[int, str]] = []
+
+    def fake_gh(command, **kwargs):
+        if command[0] == "gh" and command[1] == "api":
+            endpoint = command[2]
+            if "--method" not in command:
+                return json.dumps([dict(c) for c in comments])
+            method = command[command.index("--method") + 1]
+            body = command[command.index("--field") + 1][len("body="):]
+            if method == "POST":
+                comment = {"id": next(next_id), "body": body}
+                comments.append(comment)
+                if "Orbi started Pi:" in body:
+                    started_posts.append(comment)
+                return json.dumps(comment)
+            comment_id = int(endpoint.rsplit("/", 1)[-1])
+            for comment in comments:
+                if comment["id"] == comment_id:
+                    comment["body"] = body
+            if "Orbi started Pi:" in body:
+                started_patches.append((comment_id, body))
+            return ""
+        if (command[0] == "gh" and command[1] == "issue"
+                and command[2] == "view"):
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_gh)
+    patch_process_deps(
+        monkeypatch, tmp_path,
+        run_pi_side_effect=runner.RecoverablePiProcessError(
+            1, ["pi"], stderr="provider unavailable",
+        ),
+    )
+    # The run starts, then resumes three times under the SAME run id.
+    for _ in range(4):
+        assert runner.process_issue(
+            make_issue(), make_config(tmp_path), "xqliu/orbi",
+        ).kind == "failed"
+
+    assert len(started_posts) == 1, started_posts
+    assert len(started_patches) == 3, started_patches
+    assert {cid for cid, _ in started_patches} == {started_posts[0]["id"]}
+    updated = [
+        c for c in comments if c["id"] == started_posts[0]["id"]
+    ][0]
+    # The anchors the engine parses stay in the updated comment.
+    assert "<!-- orbi:run=a1b2c3d4 -->" in updated["body"]
+    assert "Orbi started Pi:" in updated["body"]
 
 
 def test_process_issue_keeps_the_claim_when_the_journal_proves_the_request(
