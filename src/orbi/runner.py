@@ -134,6 +134,19 @@ from orbi.progress import (
     run_marker,
     validate_run_id,
 )
+from orbi.run_state import (
+    provider_quota_wait,
+    read_pushed_base,
+    read_pushed_head,
+    read_run_state,
+    record_pushed_base,
+    record_pushed_head,
+    record_provider_quota_wait,
+    resume_run_id,
+    run_state_path,
+    worktree_resume_scene,
+    write_run_state,
+)
 from orbi import runner_health
 from orbi.scheduler import (
     MAX_RUNNER_INSTANCES,
@@ -1141,258 +1154,6 @@ def _parse_version_title(title: object) -> tuple[int, int, int] | None:
     return tuple(map(int, match.groups())) if match else None
 
 
-def run_state_path(worktree: Path) -> Path:
-    """The run state file of one task worktree.
-
-    It lives in the gitignored `.orbi/` directory, so it never
-    dirties the commit boundary and never reaches the
-    delivery commit.
-    """
-    return worktree / ".orbi" / "run-state.json"
-
-
-def write_run_state(ctx: RunContext) -> None:
-    """Write (or refresh) the run state file of one task worktree.
-
-    The file is the explicit "same run" marker: the
-    worktree directory name alone is not stable across a repo rename
-    (the slug changes), but the state file carries the issue number
-    and the repo — the identity the next tick matches on. A resumed
-    run refreshes the SAME file (same run id): the file is per-run,
-    never per-session.
-
-    An existing `pushed_head`/`pushed_base` (Issue #833: the merge
-    record's `external_commits` inputs — the last engine-pushed head
-    and the foreign head the engine's push line started from) survive
-    the refresh: the resume continues the same delivery line, so its
-    push history is not the refresh's business to drop.
-    """
-    state: dict = {
-        "run_id": ctx.run_id,
-        "issue": ctx.issue,
-        "repo": ctx.source_repo,
-        "branch": ctx.branch,
-        "worktree": str(ctx.worktree),
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    path = run_state_path(ctx.worktree)
-    try:
-        existing = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        existing = None
-    if isinstance(existing, dict):
-        state.update({
-            key: existing[key]
-            for key in ("pushed_head", "pushed_base")
-            if isinstance(existing.get(key), str) and existing[key]
-        })
-    _write_run_state_file(ctx.worktree, state)
-
-
-def _write_run_state_file(worktree: Path, state: dict) -> None:
-    path = run_state_path(worktree)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
-
-
-def record_pushed_head(worktree: Path, head: str) -> None:
-    """Record `head` as the last engine-pushed head of this delivery.
-
-    The three write points are the Runner's own branch-push evidence:
-    the delivery push in `deliver_pr` (the PR-open head), the review
-    session's fix push (the re-frozen advanced head), and the
-    round-start adoption of a head a previous session pushed but whose
-    round ended before the re-freeze record (a findings verdict or a
-    malformed verdict head). An external push never passes through any
-    of them, which is exactly the distinction the merge record's
-    `external_commits` needs. Recording is bypass-safe (Issue #73):
-    the fields only feed the merge record, so a missing or corrupt
-    state file — a recreated worktree, for instance — logs
-    `pushed_head_unrecorded` and continues; the merge record degrades
-    to `unknown` and the delivery is never re-failed by its own
-    observability input.
-    """
-    state = _recordable_state(worktree)
-    if state is None:
-        return
-    state["pushed_head"] = head
-    _write_run_state_file(worktree, state)
-
-
-def record_pushed_base(worktree: Path, base: str) -> None:
-    """Record `base` as the head the engine's push line started from.
-
-    The one write point is the external-takeover claim (Issue #608):
-    the taken-over branch carries the contributor's commits, so the
-    merge record's `external_commits` must subtract only what the
-    engine pushes on top of this foreign head, never the head itself.
-    Set once per run: a re-claim of the same run re-derives a moved
-    HEAD (an interrupted delivery), which is not the line's origin.
-    Bypass-safe like `record_pushed_head`.
-    """
-    state = _recordable_state(worktree)
-    if state is None:
-        return
-    if isinstance(state.get("pushed_base"), str) and state["pushed_base"]:
-        return
-    state["pushed_base"] = base
-    _write_run_state_file(worktree, state)
-
-
-def _recordable_state(worktree: Path) -> dict | None:
-    """The run state to record into, or None when recording must skip.
-
-    A missing file is a normal state here (the #90/#50 worktree
-    recreation loses `.orbi/`), a corrupt one fails the resume readers
-    before any record point can run — neither may fail a push or a
-    merge for the sake of the merge record's own input.
-    """
-    try:
-        state = read_run_state(worktree)
-    except ValueError as exc:
-        state = None
-        error = str(exc)
-    else:
-        error = "the run state file is missing"
-    if state is None:
-        event(
-            "pushed_head_unrecorded", level=logging.WARNING,
-            state_path=str(run_state_path(worktree)), error=error,
-        )
-    return state
-
-
-def _read_pushed(worktree: Path, key: str) -> str | None:
-    """One recorded push-history field, or None when unusable.
-
-    The merge record reads these AFTER the merge landed: a missing or
-    corrupt record must degrade the metric to `unknown`, never fail a
-    landed delivery and never fabricate a count.
-    """
-    try:
-        state = read_run_state(worktree)
-    except ValueError:
-        return None
-    if not state:
-        return None
-    value = state.get(key)
-    return value if isinstance(value, str) and value else None
-
-
-def read_pushed_head(worktree: Path) -> str | None:
-    """The recorded last engine-pushed head, or None when unusable."""
-    return _read_pushed(worktree, "pushed_head")
-
-
-def read_pushed_base(worktree: Path) -> str | None:
-    """The recorded engine push-line base, or None when absent.
-
-    None means the engine's first push created the branch, so the
-    merge record's engine interval starts at the merge's base parent.
-    """
-    return _read_pushed(worktree, "pushed_base")
-
-
-def read_run_state(worktree: Path) -> dict | None:
-    """Read the run state file; None when absent, fail fast when corrupt.
-
-    A corrupt state file is a delivery failure, never a guess: the
-    resume must continue the SAME run, and a wrong continuation is
-    worse than a blocked Issue.
-    """
-    path = run_state_path(worktree)
-    if not path.is_file():
-        return None
-    try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise ValueError(
-            f"run state file {path} is unreadable: {exc}"
-        ) from exc
-    if not isinstance(state, dict):
-        raise ValueError(
-            f"run state file {path} must be a JSON object"
-        )
-    required: dict[str, type] = {
-        "run_id": str, "issue": int, "repo": str,
-        "branch": str, "worktree": str,
-    }
-    for key, expected in required.items():
-        value = state.get(key)
-        if expected is int:
-            valid = isinstance(value, int) and not isinstance(value, bool)
-        else:
-            valid = isinstance(value, expected) and bool(value)
-        if not valid:
-            raise ValueError(
-                f"run state file {path} is malformed: missing or "
-                f"invalid field {key!r}"
-            )
-    return state
-
-
-def worktree_resume_scene(repo_dir: Path, source_repo: str,
-                 number: int) -> tuple[str, Path] | None:
-    """Return the resume scene `(run_id, worktree)` for one Issue, or None.
-
-    The worktrees are matched by the RUN STATE FILE, not
-    by the directory name alone: the directory name carries the
-    source-repo slug, which changes when the repo is renamed, while
-    the state file carries the issue number and the repo NAME (the
-    part after the slash — stable across a rename). The newest
-    matching worktree (by mtime) wins, as before. The
-    scene's worktree path may carry the OLD slug (a rename): it is
-    the scene the run continues in, never a reason for a second
-    worktree.
-
-    A worktree that claims THIS issue number but has a MISSING or
-    CORRUPT run state file cannot be verified as the same run: it
-    fails fast with the exact reason — never a silent fresh redo.
-    A worktree of another issue without a state file
-    (a legacy completed run) is unrelated and skipped.
-    """
-    name = source_repo.rsplit("/", 1)[-1]
-    pattern = re.compile(
-        r"^orbi-.+-issue-" + str(number) + r"-[0-9a-f]{8}$",
-    )
-    candidates: list[Path] = []
-    worktrees = repo_dir / ".worktrees"
-    if worktrees.is_dir():
-        for path in worktrees.iterdir():
-            if not path.is_dir() or not pattern.match(path.name):
-                continue
-            try:
-                state = read_run_state(path)
-            except ValueError as exc:
-                raise RuntimeError(
-                    f"worktree {path} has a corrupt run state file "
-                    f"({exc}): the same run cannot be verified "
-                    "(Issue #219)"
-                ) from exc
-            if state is None:
-                raise RuntimeError(
-                    f"worktree {path} has no run state file "
-                    f"({run_state_path(path)}): the same run cannot "
-                    "be verified (Issue #219)"
-                )
-            if str(state["repo"]).rsplit("/", 1)[-1] != name:
-                continue
-            candidates.append(path)
-    if not candidates:
-        return None
-    newest = max(candidates, key=lambda path: path.stat().st_mtime)
-    return str(read_run_state(newest)["run_id"]), newest
-
-
-def resume_run_id(repo_dir: Path, source_repo: str,
-                  number: int) -> str | None:
-    """Return the run id to resume for one Issue, or None.
-
-    Delegates to `worktree_resume_scene` (the worktree is matched by its run
-    state file, not the directory name).
-    """
-    scene = worktree_resume_scene(repo_dir, source_repo, number)
-    return scene[0] if scene is not None else None
 
 
 def _tree_size(path: Path) -> int:
@@ -4931,6 +4692,21 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             event(
                 "resuming_run", issue=number, run_id=run_id,
             )
+    if existing_worktree is not None:
+        # The provider-quota wait (Issue #1356): the previous attempt of
+        # this run ended on an exhausted provider quota (a Codex usage
+        # limit or a 429), so this tick starts NO Pi — one journal line
+        # and zero Issue comments — until the recorded window passes.
+        # The wait only defers the attempt: once it expires this same
+        # tick starts Pi below and resumes the delivery.
+        wait = provider_quota_wait(existing_worktree)
+        if wait is not None:
+            event(
+                "provider_quota_wait", issue=number,
+                provider=wait.get("provider") or "-",
+                model=wait.get("model") or "-",
+            )
+            return IssueResult("failed", None)
     base_sha = freeze_base(config.repo_dir, base_branch)
     branch = task_branch(source_repo, number, run_id)
     if existing_worktree is not None:
@@ -5354,11 +5130,34 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         # only the label outcome changes — never `ai-blocked`.
         LOGGER.exception("issue=%s %s", number, recoverable_name)
         detail = _failure_detail(exc)
+        # A provider_quota failure (Issue #1356) arms the quiet wait:
+        # the next ticks log `provider_quota_wait` and post nothing
+        # until the window passes, instead of resuming Pi every tick.
+        # The reason code is the SAME one the terminal reporter derives
+        # (`_classify_failure`), so the two paths cannot disagree. The
+        # recorded provider/model are the ones Pi was launched with.
+        quota_wait = worktree is not None and _classify_failure(
+            exc, outcome="fix_needed",
+        ).reason_code == "provider_quota"
+        if quota_wait:
+            record_provider_quota_wait(
+                worktree, provider=config.pi_provider,
+                model=config.pi_model,
+            )
+        # The resume promise the comment makes must match what the next
+        # tick really does: with the quota wait armed it starts no Pi
+        # session and posts nothing until the window passes.
+        next_tick = (
+            "the next tick resumes the same run after that window "
+            f"passes ({run_info})"
+            if quota_wait
+            else f"the next tick resumes the same run ({run_info})"
+        )
         body = (
             f"{run_marker(run_id)}\n"
             f"Orbi {recoverable_name}: {detail}; the run is "
-            "recoverable — the Issue stays ai-in-progress and the next "
-            f"tick resumes the same run ({run_info})"
+            "recoverable — the Issue stays ai-in-progress and "
+            f"{next_tick}"
         )
         # The recovery comment is the delivery record, but the resume
         # does not parse it (the run state file, the worktree and the
@@ -5383,9 +5182,16 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             ), outcome=(
                 f"**Orbi {recoverable_name}**\n\n"
                 f"failure: {detail}\n"
-                "next step: nothing — the Issue stays ai-in-progress "
-                "and the next tick resumes the same run (same run id, "
-                "branch, worktree)"
+                "next step: " + (
+                    "nothing for now — the provider quota is exhausted, "
+                    "so the run waits quietly (no Pi session, no "
+                    "comments) until the window passes, then resumes "
+                    "this same run (same run id, branch, worktree)"
+                    if quota_wait else
+                    "nothing — the Issue stays ai-in-progress and the "
+                    "next tick resumes the same run (same run id, "
+                    "branch, worktree)"
+                )
             ))),
         )
         # The recoverable failure reaches the health history

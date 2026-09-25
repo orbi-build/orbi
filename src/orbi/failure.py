@@ -51,7 +51,8 @@ REASON_CODES = frozenset({
     "human_decision_required",
     # The GitHub/provider credential is missing or rejected.
     "credential_missing",
-    # The model provider quota is exhausted (429/RESOURCE_EXHAUSTED).
+    # The model provider quota is exhausted (429/RESOURCE_EXHAUSTED,
+    # or a subscription usage limit such as Codex's).
     "provider_quota",
     # Any other runner exception the classifier does not recognize.
     "unclassified",
@@ -198,7 +199,12 @@ def _parse_block(payload: str) -> Failure:
 # classes) passes the type-derived flags that win over these patterns, so
 # a code is never derived from a guess.
 _PROVIDER_QUOTA_RE = re.compile(
-    r"\b429\b|quota|resource_exhausted|retry in", re.IGNORECASE,
+    # `usage limit` is the Codex wording ("The usage limit has been
+    # reached", Issue #1356): the subscription window is exhausted
+    # exactly like a 429, so it is the same wait, never an unclassified
+    # resume.
+    r"\b429\b|quota|resource_exhausted|retry in|usage limit",
+    re.IGNORECASE,
 )
 _CREDENTIAL_MISSING_RE = re.compile(
     r"bad credentials|http 401|status 401|authentication (?:failed|required)|"

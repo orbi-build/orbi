@@ -507,7 +507,22 @@ Stable `key=value` lines you will see:
   the terminal clears the persisted counter, so the requeued attempt
   starts with a full budget), marked `reason=provider_rate_limited`.
   Long-term quota exhaustion is NOT handled here (the #313 rotation
-  semantics own it);
+  semantics own it), and neither is a subscription USAGE LIMIT
+  (Codex's `The usage limit has been reached`): that window is hours
+  long, so an in-run retry would only burn the provider's budget —
+  the `provider_quota_wait` path below owns it;
+- `provider_quota_wait` — the quiet provider-quota wait (Issue #1356):
+  a Pi session whose failure classifies `provider_quota` (a 429, or the
+  provider's own wording such as Codex's `The usage limit has been
+  reached`, read from the session journal when stderr does not carry
+  it) records a wait window in the run's `.orbi/run-state.json`. Every
+  tick before that window passes logs one `provider_quota_wait` line
+  (run id, issue, provider, model) and starts no Pi session and posts
+  no comment — instead of resuming Pi on every tick. The window is
+  `PROVIDER_QUOTA_WAIT_SECONDS` (1800 s); the first tick after it
+  starts Pi again and the delivery continues. A wait that cannot be
+  recorded logs `provider_quota_wait_unrecorded` (WARNING, pure
+  bypass) and leaves the ordinary resume cadence in place;
 - `run_failed` — the full scene plus the reason
   (`pi_exit_N`, `timeout_...s`, `model_wait_swallowed_idle_...s` when
   the `/slots` probe confirms every slot idle for the sustained grace
@@ -573,6 +588,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `steering_poll_failed` | steering polling failed (pure bypass) |
 | `steering_limit_notice_failed` | the post-limit correction notice could not be published (pure bypass) |
 | `pi_retry_429` | a provider 429 triggers an in-run backoff retry |
+| `provider_quota_wait` | the provider quota wait is active; Pi was not started |
+| `provider_quota_wait_unrecorded` | the provider quota wait could not be recorded (bypass) |
 | `pi_429_attempts_reset` | the persisted 429 attempt counter was reset |
 | `pi_429_attempts_write_failed` | persisting the 429 attempt counter failed |
 | `pi_429_attempts_clear_failed` | clearing the 429 attempt counter failed |

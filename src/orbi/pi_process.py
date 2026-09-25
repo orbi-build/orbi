@@ -25,10 +25,8 @@ from typing import TYPE_CHECKING, NoReturn
 
 from orbi.delivery_scene import RunContext
 from orbi.pi_activity import (
-    SessionWatcher,
-    format_duration,
-    format_run_scene,
-    session_state,
+    SessionWatcher, format_duration, format_run_scene, session_state,
+    stderr_with_session_error,
 )
 from orbi.journal import (
     RunIdFilter,
@@ -37,14 +35,8 @@ from orbi.journal import (
     set_active_pi,
 )
 from orbi.pi_recovery import (
-    clk_tck,
-    find_idle_descendants,
-    pid_alive,
-    process_ppid,
-    process_start_monotonic,
-    signal_pid,
-    slots_idle,
-    timeout_duration,
+    clk_tck, find_idle_descendants, pid_alive, process_ppid,
+    process_start_monotonic, signal_pid, slots_idle, timeout_duration,
     upstream_alive,
 )
 
@@ -639,7 +631,8 @@ def _refresh_session_evidence(activity: dict, session_dir: Path,
         return activity
     for key in (
         "session_id", "session_file", "first_request", "first_response",
-        "provider", "model", "phase", "last_activity", "action", "result",
+        "provider", "model", "last_error", "phase", "last_activity",
+        "action", "result",
     ):
         if final.get(key):
             activity[key] = final[key]
@@ -1738,7 +1731,8 @@ def _stream_pi_once(
         _fail_run(
             f"pi_exit_{process.returncode}",
             error_type(
-                process.returncode, safe_command, output=stdout, stderr=stderr,
+                process.returncode, safe_command, output=stdout,
+                stderr=stderr_with_session_error(stderr, activity),
             ),
         )
     if stderr:

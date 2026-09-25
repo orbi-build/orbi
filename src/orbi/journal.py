@@ -235,6 +235,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "steering_limit_notice_failed": "the post-limit correction notice could not be published (pure bypass)",
     # Provider rate limiting.
     "pi_retry_429": "a provider 429 triggers an in-run backoff retry",
+    "provider_quota_wait": "the provider quota wait is active; Pi was not started",
+    "provider_quota_wait_unrecorded": "the provider quota wait could not be recorded (bypass)",
     "pi_429_attempts_reset": "the persisted 429 attempt counter was reset",
     "pi_429_attempts_write_failed": "persisting the 429 attempt counter failed",
     "pi_429_attempts_clear_failed": "clearing the 429 attempt counter failed",

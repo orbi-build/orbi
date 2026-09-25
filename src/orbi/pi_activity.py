@@ -179,6 +179,13 @@ class SessionWatcher:
         self.model: str | None = None
         self.first_request = False
         self.first_response = False
+        # The provider's own last error string: the assistant record's
+        # `errorMessage`. Pi can exit on a provider failure after
+        # writing the reason ONLY here (the session journal), so the
+        # exit classification re-reads it from disk instead of guessing
+        # from stderr (Issue #1356: a Codex usage limit must be
+        # classified `provider_quota`, not as an unclassified exit).
+        self.last_error: str | None = None
 
     def poll(self) -> dict:
         """Read new session records; return the current activity state."""
@@ -228,6 +235,7 @@ class SessionWatcher:
         self.model = None
         self.first_request = False
         self.first_response = False
+        self.last_error = None
 
     def state(self, changed: bool = False) -> dict:
         """Return the activity state as a plain dict (no file access)."""
@@ -274,6 +282,9 @@ class SessionWatcher:
             "model": self.model,
             "first_request": self.first_request,
             "first_response": self.first_response,
+            # The provider's own last error string (None until an
+            # error assistant record is read).
+            "last_error": self.last_error,
         }
 
     def _apply(self, record: dict) -> None:
@@ -320,6 +331,12 @@ class SessionWatcher:
                 self._last_activity_epoch = epoch
 
     def _apply_assistant(self, message: dict) -> None:
+        # The provider's own error string: read BEFORE the content
+        # check, because an error record carries an empty (or absent)
+        # content list and would otherwise be dropped (Issue #1356).
+        error = message.get("errorMessage")
+        if isinstance(error, str) and error.strip():
+            self.last_error = error.strip()
         content = message.get("content")
         if not isinstance(content, list):
             return
@@ -378,6 +395,31 @@ def session_state(session_dir: Path,
 def activity_snapshot(session_dir: Path) -> dict | None:
     """Full-scan the newest session file; None when no session exists yet."""
     return session_state(session_dir)
+
+
+def stderr_with_session_error(stderr: str, activity: dict) -> str:
+    """`stderr` plus the session journal's last provider error (#1356).
+
+    Pi can exit on a provider failure after writing the reason ONLY into
+    its session journal (the assistant record's `errorMessage`, tracked
+    as `last_error`): the exit detail then reads as a bare `returned
+    non-zero exit status 1`, the classifier never sees the provider's
+    own wording, and a Codex usage limit is resumed every tick instead
+    of waiting as `provider_quota`. The session error is APPENDED —
+    Pi's own stderr stays byte-identical at the front — so the
+    provider-429 retry decision keeps reading the raw stderr. An
+    empty, absent or already-present session error leaves the stderr
+    untouched.
+    """
+    session_error = activity.get("last_error")
+    if not isinstance(session_error, str) or not session_error.strip():
+        return stderr
+    session_error = session_error.strip()
+    if session_error in stderr:
+        return stderr
+    if stderr.strip():
+        return f"{stderr.rstrip()}\n{session_error}"
+    return session_error
 
 
 def format_duration(seconds: float) -> str:
