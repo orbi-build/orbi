@@ -30,15 +30,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from orbi.journal import event
 from orbi.progress import quote_value
-
-if TYPE_CHECKING:
-    # Annotation-only: ``orbi.config`` imports this module at runtime,
-    # so this module never imports it back.
-    from orbi import config as config_domain
 
 # The honest-failure link carried by every platform-limitation error
 # (install.sh, the dispatch below): platform support status lives here.
@@ -112,89 +107,6 @@ def service_instances(unit_name: str | None = None,
     return tuple(f"{prefix}@{index}.service" for index in range(1, count + 1))
 
 
-def instance_offset_seconds(instance: int) -> int:
-    """The deterministic stagger offset in seconds for one runner instance.
-
-    offset(i) = (i - 1) * (300 // i): a function of the instance index
-    ALONE, so instance *i*'s drop-in is byte-identical whichever
-    deployment writes it (Issue #1362). Deployments that share one unit
-    directory — each with its own ``max_concurrency`` — therefore
-    converge instead of overwriting each other's stagger drop-ins on
-    every tick. The index-only offset also keeps the values the #1320
-    tests pin: instance 2 = 150 s, instance 3 = 200 s.
-    """
-    if instance <= 1:
-        return 0
-    return (instance - 1) * (300 // instance)
-
-
-def instance_schedule(instance: int) -> str:
-    """The schedule string for one runner instance."""
-    offset = instance_offset_seconds(instance)
-    if offset == 0:
-        return "*-*-* *:00/5"
-    m, s = divmod(offset, 60)
-    return f"*-*-* *:{m:02d}/5:{s:02d}"
-
-
-def schedule_spellings(sched: Scheduler,
-                       config: config_domain.RunnerConfig,
-                       installed_dir: Path) -> list[str]:
-    """``<instance>=<schedule>`` for every configured instance.
-
-    The expected schedule is spelled the way THIS platform deploys it
-    (:meth:`Scheduler.schedule_text`). The INSTALLED schedule is read
-    from disk (:meth:`Scheduler.installed_schedule`) and a mismatch
-    reports both values plus the fix command (Issue #1344): the report
-    never claims a schedule that is not deployed.
-    """
-    spellings: list[str] = []
-    for index, unit in enumerate(
-        sched.timer_instances(config.unit_name, config.max_concurrency),
-        start=1,
-    ):
-        expected = sched.schedule_text(index, config.max_concurrency)
-        installed = sched.installed_schedule(
-            installed_dir, config.unit_name, index, config.max_concurrency,
-        )
-        if installed == expected:
-            spellings.append(f"{unit}={expected}")
-        else:
-            shown = installed if installed is not None else "?"
-            spellings.append(
-                f"{unit}={shown} "
-                f"(expected {expected}; run: {FIX_COMMAND})"
-            )
-    return spellings
-
-
-def instance_report_lines(sched: Scheduler, run_command,
-                          config: config_domain.RunnerConfig,
-                          installed_dir: Path) -> list[str]:
-    """The doctor's per-unit state lines and per-instance schedule lines.
-
-    One ``<unit>: <state>`` line per managed unit (the timer names
-    first, then the service names; a name in both sets is listed once),
-    then one ``schedule: <instance>=<schedule>`` line per configured
-    timer instance. The schedule spelling belongs to the scheduler
-    contract, and ``cli`` is frozen by the size ratchet (Issue #1229),
-    so the rendering lives here (Issue #1320). ``installed_dir`` makes
-    the schedule lines read the INSTALLED value (Issue #1344).
-    """
-    lines = [
-        f"{unit}: {sched.unit_state(run_command, unit)}"
-        for unit in dict.fromkeys((
-            *sched.timer_instances(config.unit_name, config.max_concurrency),
-            *sched.service_instances(config.unit_name, config.max_concurrency),
-        ))
-    ]
-    lines.extend(
-        f"schedule: {spelling}"
-        for spelling in schedule_spellings(sched, config, installed_dir)
-    )
-    return lines
-
-
 @runtime_checkable
 class Scheduler(Protocol):
     """The hooks one platform scheduler implements.
@@ -239,8 +151,7 @@ class Scheduler(Protocol):
 
     def render_unit(self, template_text: str, repo_dir: Path,
                     unit_name: str | None = None,
-                    instance: int = 1,
-                    max_concurrency: int = 1) -> str:
+                    instance: int = 1) -> str:
         """Render one template for this deployment and instance."""
 
     def content_sha(self, rendered: str) -> str:
@@ -266,15 +177,6 @@ class Scheduler(Protocol):
     def unit_state(self, run_command, instance: str) -> str:
         """``active`` / ``inactive`` for one instance."""
 
-    def schedule_text(self, instance: int, max_concurrency: int) -> str:
-        """The instance's deployed schedule, spelled for this platform.
-
-        The two schedulers cannot always express the same offset
-        (launchd's ``StartCalendarInterval`` has whole-minute
-        granularity), so the reports read the spelling the platform
-        actually deploys instead of one shared string.
-        """
-
     def instances_status(self, run_command, unit_name: str | None = None,
                          *, max_concurrency: int) -> dict[str, dict]:
         """One {instance: {enabled, active, next}} report entry each."""
@@ -294,52 +196,20 @@ class Scheduler(Protocol):
     def restart_hint(self, unit_name: str | None = None) -> str:
         """The operator command that starts/restarts instance 1."""
 
-    def reload_pending(self, installed_dir: Path, name: str) -> bool:
-        """Whether a rewritten unit waits for its running instance.
-
-        ``True`` only on launchd: a running agent keeps the plist it
-        was loaded with, so a plist rewritten under it is flagged and
-        reloaded at its next idle tick (Issue #1347). systemd's
-        ``daemon-reload`` applies the new unit to the next service
-        start, so its answer is always ``False``.
-        """
-
-    def extra_drift(self, installed_dir: Path, unit_name: str | None,
-                    max_concurrency: int) -> list[dict]:
-        """Installed files outside the template set that drift applies to.
-
-        The entries use the :func:`unit_status` shape (``unit``,
-        ``repo_path``, ``installed_path``, both hashes, ``missing``,
-        ``drifted``, ``reload_pending``) so the same drift report and
-        self-heal path handles them. systemd returns one entry per
-        expected/extra stagger drop-in; launchd returns ``[]``.
-        """
-
-    def installed_schedule(self, installed_dir: Path, unit_name: str | None,
-                           instance: int,
-                           max_concurrency: int) -> str | None:
-        """The instance's schedule as INSTALLED on disk (or ``None``).
-
-        The report reads this instead of the computed
-        :meth:`schedule_text`, so an uninstalled or stale schedule is
-        never reported as deployed (Issue #1344).
-        """
-
     def activate_instances(self, run_command, installed_dir: Path,
                            unit_name: str | None = None, *,
                            max_concurrency: int,
-                           changed: frozenset[str] = frozenset(),
                            enable: bool = True) -> None:
         """Converge the instance schedules onto ``max_concurrency``.
 
         Activates instances 1..max_concurrency, deactivates the
         surplus up to MAX_RUNNER_INSTANCES. A live Runner instance is
-        NEVER stopped or restarted. ``changed`` names the installed
-        units whose bytes the install just rewrote; an implementation
-        whose platform defers a live instance's reload (launchd)
-        records it through :meth:`reload_pending`. ``enable=False``
-        is the pre-start self-heal: repair the files and reload, but
-        never change enablement the operator set (Issue #1362).
+        NEVER stopped or restarted. ``enable=False`` is the pre-start
+        self-heal path: it only makes the platform re-read the
+        rewritten files (systemd ``daemon-reload``; launchd reboots an
+        IDLE loaded instance onto the new plist) and never changes an
+        instance's enabled/disabled state — an operator-disabled timer
+        stays disabled.
         """
 
     def pre_install(self, run_command, installed_dir: Path,
@@ -410,12 +280,11 @@ def unit_status(repo_dir: Path, installed_dir: Path,
                 sched: Scheduler | None = None) -> list[dict]:
     """Compare the installed units against the repo templates.
 
-    One entry per managed unit (the impl's ``unit_pairs`` set) plus the
-    platform's non-template installed files (:meth:`Scheduler.extra_drift`,
-    systemd's stagger drop-ins): the repo and installed paths, both
-    content identities (None when the file is missing) and whether the
-    unit drifted. A missing template or a missing installed unit is
-    drift: the deployment is not verifiable.
+    One entry per managed unit (the impl's ``unit_pairs`` set): the
+    repo and installed paths, both content identities (None when the
+    file is missing) and whether the unit drifted. A missing template
+    or a missing installed unit is drift: the deployment is not
+    verifiable.
     """
     sched = sched or detect()
     repo_dir = Path(repo_dir)
@@ -434,7 +303,6 @@ def unit_status(repo_dir: Path, installed_dir: Path,
             rendered = sched.render_unit(
                 repo_path.read_text(encoding="utf-8"),
                 repo_dir, unit_name, instance=index,
-                max_concurrency=max_concurrency,
             )
             repo_sha = sched.content_sha(rendered)
         else:
@@ -452,15 +320,7 @@ def unit_status(repo_dir: Path, installed_dir: Path,
                 or installed_sha is None
                 or repo_sha != installed_sha
             ),
-            # A rewritten unit a running instance still holds (launchd)
-            # is not file drift, but the next idle tick must reload it.
-            "reload_pending": sched.reload_pending(installed_dir, name),
         })
-    # The platform's non-template installed files (systemd's stagger
-    # drop-ins) are part of the SAME drift set (Issue #1344).
-    entries.extend(
-        sched.extra_drift(installed_dir, unit_name, max_concurrency),
-    )
     return entries
 
 
@@ -518,9 +378,6 @@ def check_unit_drift(repo_dir: Path,
     structured ``unit_drift`` line per drifted unit and raises
     ``UnitDriftError`` — the caller fails fast and claims no Issue
     until the units are synced with the idempotent install command.
-    A deferred reload (a running launchd instance holding a rewritten
-    plist, Issue #1347) is not file drift, but it raises the same way
-    so the caller's self-heal runs and the next idle tick reloads it.
     """
     sched = sched or detect()
     if installed_dir is None:
@@ -529,25 +386,8 @@ def check_unit_drift(repo_dir: Path,
                          max_concurrency=max_concurrency, sched=sched)
     lines = drift_lines(status)
     if not lines:
-        pending = [entry for entry in status if entry["reload_pending"]]
-        if not pending:
-            event("unit_drift", result="clean", installed_dir=installed_dir)
-            return
-        for entry in pending:
-            event(
-                "unit_drift", result="reload_pending", unit=entry["unit"],
-                installed=entry["installed_path"], fix=FIX_COMMAND,
-            )
-        raise UnitDriftError(
-            f"installed {sched.display} units hold a rewritten plist on a "
-            "running instance; the reload is deferred to the next idle "
-            f"tick (sync with: {FIX_COMMAND})\n" + "\n".join(
-                f"unit_drift unit={entry['unit']} "
-                f"installed={quote_value(str(entry['installed_path']))} "
-                f"reload_pending=true fix={FIX_COMMAND}"
-                for entry in pending
-            )
-        )
+        event("unit_drift", result="clean", installed_dir=installed_dir)
+        return
     _log_drifted_units(status)
     raise UnitDriftError(
         f"installed {sched.display} units have drifted from the repo "
@@ -558,8 +398,8 @@ def check_unit_drift(repo_dir: Path,
 def install_units(repo_dir: Path, installed_dir: Path | None = None,
                   *, max_concurrency: int,
                   unit_name: str | None = None, run_command,
-                  sched: Scheduler | None = None,
-                  enable: bool = True) -> dict:
+                  enable: bool = True,
+                  sched: Scheduler | None = None) -> dict:
     """Idempotently install the repo templates as the platform units.
 
     Overwrites every managed installed unit with its rendered repo
@@ -568,13 +408,11 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
     before any migration or write. Runs the impl's one-time
     ``pre_install`` migrations, then converges the instance schedules
     onto ``max_concurrency`` (``activate_instances`` — surplus
-    instances deactivate, a live Runner is never restarted). Returns
-    the deployed commit (the deployment checkout's HEAD) and the
-    installed units' content identities.
-
-    ``enable=False`` (the pre-start self-heal, Issue #1362) repairs
-    the files but never toggles enablement: a timer the operator
-    disabled stays disabled.
+    instances deactivate, a live Runner is never restarted).
+    ``enable=False`` is the pre-start self-heal: it re-reads the
+    rewritten files but never re-enables an operator-disabled instance
+    (Issue #1364). Returns the deployed commit (the deployment
+    checkout's HEAD) and the installed units' content identities.
     """
     sched = sched or detect()
     if not 1 <= max_concurrency <= MAX_RUNNER_INSTANCES:
@@ -601,7 +439,6 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
             )
     installed_dir.mkdir(parents=True, exist_ok=True)
     sched.pre_install(run_command, installed_dir, unit_name)
-    changed: set[str] = set()
     for index, (template_name, name) in enumerate(pairs, start=1):
         # Render the template (substitute the deployment-specific
         # placeholders) so the installed unit points at THIS checkout
@@ -611,18 +448,11 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
         ).read_text(encoding="utf-8")
         rendered = sched.render_unit(
             template_text, repo_dir, unit_name, instance=index,
-            max_concurrency=max_concurrency,
         )
-        # The overwrite is idempotent: only a REAL content change is
-        # handed to the activation hook, which uses it to record a
-        # deferred reload for a live instance (launchd, Issue #1347).
-        if sched.installed_sha(installed_dir / name) != sched.content_sha(rendered):
-            changed.add(name)
         (installed_dir / name).write_bytes(rendered.encode("utf-8"))
     sched.activate_instances(
         run_command, installed_dir, unit_name,
-        max_concurrency=max_concurrency, changed=frozenset(changed),
-        enable=enable,
+        max_concurrency=max_concurrency, enable=enable,
     )
     commit = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
     units = {
@@ -657,7 +487,9 @@ def sync_drifted_units(repo_dir: Path,
     ExecStartPre-synced checkout carries the new templates, and the
     installed units are still the old ones. Runs the SAME idempotent
     install (:func:`install_units` — never stops or restarts a live
-    Runner) and re-verifies with the SAME comparison
+    Runner) with ``enable=False``: the platform re-reads the
+    rewritten files, and an instance the operator disabled is never
+    re-enabled (Issue #1364). Re-verifies with the SAME comparison
     (:func:`unit_status`). Clean after the sync: logs one structured
     ``unit_drift auto_synced`` line per unit (unit, before/after
     sha256, deployed commit) and returns the per-unit report. Still
@@ -673,14 +505,12 @@ def sync_drifted_units(repo_dir: Path,
     installed_dir = Path(installed_dir)
     before = unit_status(repo_dir, installed_dir, unit_name,
                          max_concurrency=max_concurrency, sched=sched)
-    if not any(
-        entry["drifted"] or entry["reload_pending"] for entry in before
-    ):
+    if not any(entry["drifted"] for entry in before):
         return []
     result = install_units(
         repo_dir, installed_dir, max_concurrency=max_concurrency,
-        unit_name=unit_name, run_command=run_command, sched=sched,
-        enable=False,
+        unit_name=unit_name, run_command=run_command, enable=False,
+        sched=sched,
     )
     after = unit_status(repo_dir, installed_dir, unit_name,
                         max_concurrency=max_concurrency, sched=sched)

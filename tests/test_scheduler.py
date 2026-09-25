@@ -45,9 +45,6 @@ class FakeScheduler:
         self.installed_root = tmp_path / "installed"
         self.config_override: Path | None = None
         self.damage_on_activate = False
-        # The deferred-reload signal a live instance would carry
-        # (launchd's marker, Issue #1347).
-        self.reload_pending_units: set[str] = set()
 
     def unit_pairs(self, unit_name, count):
         return list(self.pairs)
@@ -55,7 +52,7 @@ class FakeScheduler:
     def timer_instances(self, unit_name=None, count=1):
         return tuple(f"fake@{i}.timer" for i in range(1, count + 1))
 
-    def render_unit(self, template_text, repo_dir, unit_name=None, instance=1, max_concurrency=1):
+    def render_unit(self, template_text, repo_dir, unit_name=None, instance=1):
         return (
             template_text.replace("{{R}}", str(Path(repo_dir).resolve()))
             + f"#rendered-{instance}\n"
@@ -73,18 +70,10 @@ class FakeScheduler:
     def unit_config(self, path: Path) -> Path | None:
         return self.config_override
 
-    def reload_pending(self, installed_dir, name: str) -> bool:
-        return name in self.reload_pending_units
-
-    def extra_drift(self, installed_dir, unit_name, max_concurrency):
-        # The fake ships no platform-specific extra files (systemd's
-        # stagger drop-ins); its drift set is the template pairs.
-        return []
-
     def activate_instances(self, run_command, installed_dir,
                            unit_name=None, *, max_concurrency=1,
-                           changed=frozenset(), enable=True):
-        self.calls.append(("activate", max_concurrency))
+                           enable=True):
+        self.calls.append(("activate", max_concurrency, enable))
         if self.damage_on_activate:
             for _, name in self.pairs:
                 path = Path(installed_dir) / name
@@ -157,7 +146,7 @@ def test_install_units_writes_rendered_units_through_the_hooks(tmp_path):
         )
     assert result["commit"] == "cafecafe"
     assert ("pre_install",) in fake.calls
-    assert ("activate", 2) in fake.calls
+    assert ("activate", 2, True) in fake.calls
 
 
 def test_install_units_rejects_capacity_outside_the_declared_range(tmp_path):
@@ -291,10 +280,14 @@ def test_sync_drifted_units_repairs_and_reports(tmp_path):
     timer.write_text(
         timer.read_text(encoding="utf-8") + "# drift\n", encoding="utf-8",
     )
+    fake.calls.clear()
     report = scheduler.sync_drifted_units(
         repo, fake.installed_root, max_concurrency=1,
         run_command=recording_run_command, sched=fake,
     )
+    # Issue #1364: the self-heal passes enable=False through to the
+    # scheduler hook, so the platform never re-enables a disabled timer.
+    assert ("activate", 1, False) in fake.calls
     # The report covers EVERY managed unit with its before/after
     # identity; only the tampered unit actually changed.
     assert [entry["unit"] for entry in report] == [
@@ -336,99 +329,6 @@ def test_sync_drifted_units_still_drifted_after_sync_fails_fast(tmp_path):
             repo, fake.installed_root, max_concurrency=1,
             run_command=recording_run_command, sched=fake,
         )
-
-
-def test_unit_status_carries_the_reload_pending_flag(tmp_path):
-    repo = make_repo(tmp_path)
-    fake = FakeScheduler(tmp_path)
-    scheduler.install_units(
-        repo, fake.installed_root, max_concurrency=1,
-        run_command=recording_run_command, sched=fake,
-    )
-    fake.reload_pending_units.add("fake@.timer")
-    status = scheduler.unit_status(repo, fake.installed_root, sched=fake)
-    by_name = {entry["unit"]: entry for entry in status}
-    assert by_name["fake@.timer"]["reload_pending"] is True
-    assert by_name["fake@.timer"]["drifted"] is False
-    assert by_name["fake@.service"]["reload_pending"] is False
-
-
-def test_check_unit_drift_raises_while_a_reload_is_pending(
-    tmp_path, caplog,
-):
-    repo = make_repo(tmp_path)
-    fake = FakeScheduler(tmp_path)
-    scheduler.install_units(
-        repo, fake.installed_root, max_concurrency=1,
-        run_command=recording_run_command, sched=fake,
-    )
-    fake.reload_pending_units.add("fake@.timer")
-    with caplog.at_level("INFO"):
-        with pytest.raises(scheduler.UnitDriftError, match="idle"):
-            scheduler.check_unit_drift(
-                repo, fake.installed_root, sched=fake,
-            )
-    assert "unit_drift result=reload_pending" in caplog.text
-
-
-def test_sync_drifted_units_acts_on_a_pending_reload(tmp_path):
-    repo = make_repo(tmp_path)
-    fake = FakeScheduler(tmp_path)
-    scheduler.install_units(
-        repo, fake.installed_root, max_concurrency=1,
-        run_command=recording_run_command, sched=fake,
-    )
-    fake.reload_pending_units.add("fake@.timer")
-    fake.calls.clear()
-    report = scheduler.sync_drifted_units(
-        repo, fake.installed_root, max_concurrency=1,
-        run_command=recording_run_command, sched=fake,
-    )
-    assert [entry["unit"] for entry in report] == [
-        "fake@.service", "fake@.timer",
-    ]
-    assert ("activate", 1) in fake.calls
-
-
-def test_install_units_passes_only_really_changed_units(tmp_path):
-    repo = make_repo(tmp_path)
-    fake = FakeScheduler(tmp_path)
-
-    class RecordingScheduler(FakeScheduler):
-        def __init__(self, tmp_path):
-            super().__init__(tmp_path)
-            self.changed_calls: list[frozenset] = []
-
-        def activate_instances(self, run_command, installed_dir,
-                               unit_name=None, *, max_concurrency=1,
-                               changed=frozenset(), enable=True):
-            self.changed_calls.append(changed)
-            super().activate_instances(
-                run_command, installed_dir, unit_name,
-                max_concurrency=max_concurrency, changed=changed,
-                enable=enable,
-            )
-
-    sched = RecordingScheduler(tmp_path)
-    scheduler.install_units(
-        repo, fake.installed_root, max_concurrency=1,
-        run_command=recording_run_command, sched=sched,
-    )
-    # First install: every managed unit is new content.
-    assert sched.changed_calls == [frozenset({
-        "fake@.service", "fake@.timer",
-    })]
-    # Re-installing unchanged bytes reports NO change (idempotent).
-    scheduler.install_units(
-        repo, fake.installed_root, max_concurrency=1,
-        run_command=recording_run_command, sched=sched,
-    )
-    assert sched.changed_calls[-1] == frozenset()
-
-
-def test_systemd_impl_never_defers_a_reload(tmp_path):
-    sched = systemd_deploy.SystemdScheduler()
-    assert sched.reload_pending(tmp_path, "orbi@1.service") is False
 
 
 def test_systemd_impl_keeps_the_user_unit_dir_contract(monkeypatch,

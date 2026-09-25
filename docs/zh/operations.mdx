@@ -13,19 +13,17 @@ journal 和 GitHub。正常路径永远不需要 status 命令、轮询或督工
 
 timer 模板 `systemd/orbi@.timer` 部署为 **N 个实例**：
 `orbi@1.timer` 到 `orbi@N.timer`（N = `max_concurrency`，上限
-`MAX_RUNNER_INSTANCES = 5`——Issue #827）。实例 1 每 5 分钟触发
+`MAX_RUNNER_INSTANCES = 5`——Issue #827）。每个实例每 5 分钟触发
 一次，全天 24 小时（`OnCalendar=*-*-* *:00/5`、`AccuracySec=30s`、
-`Persistent=false`——错过的 tick 被丢弃，从不排队）；实例 2..N 通过各自的
-`orbi@<i>.timer.d/stagger.conf` drop-in 偏移 `(i-1)*(300 // i)` 秒，
-因此不会同时触发。偏移只取决于实例序号，与本部署的
-`max_concurrency` 无关：共享同一个 unit 目录的多个部署因此写入相同的
-drop-in 并收敛，自愈也不会删除或禁用超出自身容量的实例
-（Issue #1362）。drift 检查会修复 drop-in 文件，但自愈绝不改变
-timer 的 enable 状态——operator 禁用的 timer 保持禁用。
-`orbi doctor` / `orbi status` 从已安装的 unit 读取每个实例的 schedule。
-每个实例各自启动自己的 service 实例（`orbi@1.timer` → `orbi@1.service`，
+`Persistent=false`——错过的 tick 被丢弃，从不排队），并各自启动自己的
+service 实例（`orbi@1.timer` → `orbi@1.service`，
 `orbi@2.timer` → `orbi@2.service`，……），所以可以同时运行
-N 个独立的 Runner 实例。每个 tick 的 service 实例：
+N 个独立的 Runner 实例。实例不会同时触发：模板设置了
+`RandomizedDelaySec=240` 与 `FixedRandomDelay=true`，systemd 按
+machine id、用户和 timer 名称推导出各自的延迟（`systemd.timer(5)`），
+在该 timer 的多次触发和 manager 重启之间保持稳定。启动前的 drift
+自愈会修复已安装的 unit，但绝不改变 timer 的 enable 状态——operator
+禁用的 timer 保持禁用。每个 tick 的 service 实例：
 
 1. **先同步 engine source**（`ExecStartPre`，在 Runner 进程外）。两个
    步骤，都包在一个短生命周期的 `flock`（共享状态目录下的

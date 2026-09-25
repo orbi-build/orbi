@@ -4,12 +4,10 @@ The macOS member of the scheduler layer (:mod:`orbi.scheduler` owns
 the interface, the platform dispatch and the platform-independent
 orchestration); every ``launchctl`` literal in ``src/orbi/`` lives
 here. One agent plist per Runner instance — the plist IS the
-``.service`` and the ``.timer`` in one. A single instance keeps
-``StartInterval`` (the five-minute cadence, counted from the job's load
-time); at ``max_concurrency > 1`` every instance switches to
-``StartCalendarInterval`` on the wall clock, shifted by its whole-minute
-offset, so the instances are staggered instead of firing together
-(Issue #1320). The templates
+``.service`` and the ``.timer`` in one (``StartInterval`` runs the same
+five-minute cadence as the systemd ``OnCalendar=*-*-* *:00/5`` tick, but
+counts from the job's load time rather than aligning to wall-clock
+boundaries). The templates
 live in ``launchd/`` beside ``systemd/``.
 
 Command contract (modern launchctl(1) / launchd.plist(5), the
@@ -26,11 +24,7 @@ Command contract (modern launchctl(1) / launchd.plist(5), the
   never stopped or restarted (the systemd install contract). A loaded
   instance whose plist was just rewritten is booted out and
   re-bootstrapped ONLY when idle (the daemon-reload equivalent); a
-  running instance keeps the old config until it finishes, and the
-  pending reload is RECORDED (Issue #1347): a ``.reload-pending``
-  marker beside its plist — see ``reload_pending`` — makes the drift
-  check flag it, so the next idle tick reloads it instead of keeping
-  the stale schedule forever;
+  running instance keeps the old config until it finishes;
 - ``launchctl print gui/<uid>/<label>`` — state queries; exit 113
   ``Could not find service`` is the documented not-loaded answer;
 - ``launchctl print-disabled gui/<uid>`` — the persistent disabled
@@ -42,13 +36,6 @@ The drift identity is the CANONICAL plist: both sides are parsed and
 re-serialized with sorted keys before hashing, so whitespace and key
 order in the installed XML never fabricate drift (a raw textual
 comparison would).
-
-There is no launchctl command that makes a LOADED job re-read its
-plist (Issue #1347): ``bootstrap`` loads a plist, ``bootout`` unloads
-and kills a running job, and ``kickstart -k`` restarts the process
-without re-reading the plist. The deferred reload is therefore carried
-by the ``.reload-pending`` marker beside the plist (launchd ignores
-sibling non-plist files).
 
 Verified limits (no macOS runner in CI): the command sequences and
 plist shape follow the man pages and are unit-tested here; a real-Mac
@@ -71,47 +58,11 @@ from orbi.scheduler import (
     MAX_RUNNER_INSTANCES,
     REPO_DIR_PLACEHOLDER,
     USER_HOME_PLACEHOLDER,
-    instance_offset_seconds,
 )
 
 TEMPLATE_NAME = "org.orbi.runner.plist"
 LABEL_BASE = "org.orbi.runner"
 LOG_TAIL_LINES = 400
-# ``<plist name>.reload-pending`` beside an installed plist records that
-# the RUNNING instance still holds the plist it was loaded with, so the
-# drift check flags it and the next idle tick reloads it (Issue #1347).
-RELOAD_PENDING_SUFFIX = ".reload-pending"
-
-
-def calendar_minute_offset(instance: int) -> int:
-    """The instance's offset in whole minutes inside the 5-minute tick.
-
-    ``StartCalendarInterval`` has whole-minute granularity:
-    launchd.plist(5) documents exactly Minute, Hour, Day, Weekday and
-    Month, and launchd's parser (``calendarinterval_new_from_obj_dict
-    _walk``) reads those five only — an undocumented ``Second`` key is
-    silently ignored, so a sub-minute offset cannot be expressed (the
-    run then lands on the grid minute at second 0). The deterministic
-    offset therefore truncates: instance 2 is 2 minutes away. It
-    depends on the instance index alone, so co-located deployments
-    agree (Issue #1362).
-    """
-    return instance_offset_seconds(instance) // 60
-
-
-def calendar_interval_entries(instance: int) -> list[dict[str, int]]:
-    """StartCalendarInterval entries on the wall-clock 5-minute grid.
-
-    One entry per grid minute (a bare ``{"Minute": m}`` fires every
-    hour at minute m), shifted by the instance's whole-minute offset.
-    """
-    offset = calendar_minute_offset(instance)
-    return [{"Minute": (base + offset) % 60} for base in range(0, 60, 5)]
-
-
-def calendar_schedule(instance: int) -> str:
-    """The instance's launchd schedule in the report's calendar spelling."""
-    return f"*-*-* *:{calendar_minute_offset(instance):02d}/5"
 
 
 def label_base(unit_name: str | None = None) -> str:
@@ -194,33 +145,15 @@ class LaunchdScheduler:
 
     def render_unit(self, template_text: str, repo_dir: Path,
                     unit_name: str | None = None,
-                    instance: int = 1,
-                    max_concurrency: int = 1) -> str:
+                    instance: int = 1) -> str:
         # launchd expands nothing (no ~, no %h): the render substitutes
         # every machine-specific value as an absolute path.
-        rendered = (
+        return (
             template_text
             .replace(REPO_DIR_PLACEHOLDER, str(Path(repo_dir).resolve()))
             .replace(USER_HOME_PLACEHOLDER, str(Path.home()))
             .replace("{{ORBI_LABEL}}", label_for(unit_name, instance))
         )
-        if max_concurrency > 1:
-            # Issue #1320: StartInterval counts from the job's load
-            # time, so instances bootstrapped together fire in the SAME
-            # second. With more than one instance the whole deployment
-            # moves to the wall clock: instance 1 sits on the
-            # ``*:00/5`` grid and instance i is shifted by its
-            # deterministic offset (truncated to whole minutes — see
-            # calendar_minute_offset), which is the offset the systemd
-            # drop-in carries too. A single instance keeps the template's
-            # StartInterval: nothing to stagger, nothing changes.
-            parsed = plistlib.loads(rendered.encode("utf-8"))
-            parsed.pop("StartInterval", None)
-            parsed["StartCalendarInterval"] = calendar_interval_entries(
-                instance,
-            )
-            return plistlib.dumps(parsed, fmt=plistlib.FMT_XML).decode("utf-8")
-        return rendered
 
     def content_sha(self, rendered: str) -> str:
         data = _canonical_bytes(rendered.encode("utf-8"))
@@ -250,22 +183,6 @@ class LaunchdScheduler:
         if not isinstance(value, str) or not value:
             return None
         return Path(value).expanduser().resolve()
-
-    def reload_marker(self, installed_dir: Path,
-                      name: str) -> Path:
-        """Where the deferred-reload record for one plist lives."""
-        return Path(installed_dir) / f"{name}{RELOAD_PENDING_SUFFIX}"
-
-    def reload_pending(self, installed_dir: Path, name: str) -> bool:
-        """Whether a rewritten plist waits for its running instance.
-
-        True exactly while the (running) instance holds the config it
-        was bootstrapped with: ``activate_instances`` writes the marker
-        for a running changed instance and clears it on every
-        (re)bootstrap, so the drift check flags the stale schedule
-        instead of the running tick being killed.
-        """
-        return self.reload_marker(installed_dir, name).is_file()
 
     def domain(self) -> str:
         return f"gui/{os.getuid()}"
@@ -309,33 +226,15 @@ class LaunchdScheduler:
         state = self._print_state(run_command, instance)
         return "active" if state == "running" else "inactive"
 
-    def schedule_text(self, instance: int, max_concurrency: int) -> str:
-        """The schedule this platform actually deploys (whole minutes)."""
-        return calendar_schedule(instance)
-
-    def extra_drift(self, installed_dir: Path, unit_name: str | None,
-                    max_concurrency: int) -> list[dict]:
-        # launchd deploys every instance as a plist in the template set;
-        # there is no non-template installed file to compare (Issue #1344).
-        return []
-
-    def installed_schedule(self, installed_dir: Path, unit_name: str | None,
-                           instance: int,
-                           max_concurrency: int) -> str | None:
-        # The installed plist carries this same whole-minute value, so
-        # the disk value equals the expected one by construction.
-        return self.schedule_text(instance, max_concurrency)
-
     def instances_status(self, run_command, unit_name: str | None = None,
                          *, max_concurrency: int) -> dict[str, dict]:
         instances: dict[str, dict] = {}
-        for index, label in enumerate(self.timer_instances(unit_name, max_concurrency), start=1):
+        for label in self.timer_instances(unit_name, max_concurrency):
             instances[label] = {
                 "enabled": self.unit_enabled(run_command, label),
                 "active": self.unit_state(run_command, label) == "active",
                 # launchd exposes no next-fire time; honest dash.
                 "next": "-",
-                "schedule": self.schedule_text(index, max_concurrency),
             }
         return instances
 
@@ -370,21 +269,16 @@ class LaunchdScheduler:
     def activate_instances(self, run_command, installed_dir: Path,
                            unit_name: str | None = None, *,
                            max_concurrency: int,
-                           changed: frozenset[str] = frozenset(),
                            enable: bool = True) -> None:
         """Enable + bootstrap instances 1..max_concurrency, disable the
         surplus up to MAX_RUNNER_INSTANCES. A live instance is never
         booted out (bootout kills the job); an idle loaded instance is
-        re-bootstrapped so the rewritten plist takes effect. A RUNNING
-        instance whose plist is in ``changed`` is not reloaded — it
-        keeps the tick it is executing — but its deferred reload is
-        recorded (``reload_pending``) for the next idle cycle
-        (Issue #1347).
+        re-bootstrapped so the rewritten plist takes effect.
 
-        ``enable=False`` is the pre-start self-heal (Issue #1362): the
-        plists and their deferred reloads are repaired, but no
-        ``launchctl enable``/``disable`` runs and a service the operator
-        unloaded is never bootstrapped.
+        ``enable=False`` is the pre-start self-heal (Issue #1364): the
+        plists are repaired and an idle loaded instance still reloaded,
+        but no ``launchctl enable``/``disable`` runs and an instance the
+        operator unloaded (disabled) is never bootstrapped.
         """
         labels = self.timer_instances(unit_name, MAX_RUNNER_INSTANCES)
         installed_dir = Path(installed_dir)
@@ -392,49 +286,29 @@ class LaunchdScheduler:
             # Enable FIRST: a stale disabled record fails the bootstrap.
             if enable:
                 run_command(["launchctl", "enable", self.target(label)])
-            name = plist_name(label)
-            marker = self.reload_marker(installed_dir, name)
-            state = self._print_state(run_command, label)
-            if state is None:
+            if self._print_state(run_command, label) is None:
                 if not enable:
-                    # Self-heal: the service is not loaded (disabled by
-                    # the operator); never bootstrap it. Clear any stale
-                    # deferred reload so the drift check does not loop.
-                    marker.unlink(missing_ok=True)
+                    # Self-heal: the instance is not loaded (the operator
+                    # disabled it); never bootstrap it.
                     continue
                 run_command([
                     "launchctl", "bootstrap", self.domain(),
-                    str(installed_dir / name),
+                    str(installed_dir / plist_name(label)),
                 ])
-                marker.unlink(missing_ok=True)
             elif self.unit_state(run_command, label) != "active":
                 # Idle: reload the rewritten plist (daemon-reload
                 # equivalent). Running: never — it would kill the task.
                 run_command(["launchctl", "bootout", self.target(label)])
                 run_command([
                     "launchctl", "bootstrap", self.domain(),
-                    str(installed_dir / name),
+                    str(installed_dir / plist_name(label)),
                 ])
-                marker.unlink(missing_ok=True)
-            elif name in changed:
-                # Running with a rewritten plist: no launchctl command
-                # re-reads a loaded plist (kickstart -k restarts the
-                # process, not the config), so record the pending
-                # reload for the next idle tick instead of killing it.
-                marker.write_text(
-                    "this instance is running the plist it was loaded "
-                    "with; the next idle tick reloads it\n",
-                    encoding="utf-8",
-                )
         if not enable:
             return
         for label in labels[max_concurrency:]:
             # Disable persists across logins; bootout only unloads an
             # idle instance (bootout on a running job kills it).
             run_command(["launchctl", "disable", self.target(label)])
-            self.reload_marker(
-                installed_dir, plist_name(label),
-            ).unlink(missing_ok=True)
             if (
                 self._print_state(run_command, label) is not None
                 and self.unit_state(run_command, label) != "active"

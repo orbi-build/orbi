@@ -1321,13 +1321,6 @@ def _deploy_world(
     installed.mkdir()
     for name in ("orbi@.service", "orbi@.timer"):
         shutil.copyfile(repo / "systemd" / name, installed / name)
-    # A clean capacity-two deployment carries the #1320 stagger drop-in
-    # for instance 2 (Issue #1344 adds it to the drift-checked set).
-    (installed / "orbi@2.timer.d").mkdir()
-    (installed / "orbi@2.timer.d" / "stagger.conf").write_text(
-        "[Timer]\nOnCalendar=\nOnCalendar=*-*-* *:02/5:30\n",
-        encoding="utf-8",
-    )
     if drift:
         (installed / "orbi@.service").write_text(
             "[Service]\n# drift\n", encoding="utf-8",
@@ -2039,7 +2032,7 @@ def test_doctor_report_drift_carries_paths_hashes_and_fix(
     assert "unit_drift: DRIFT" in lines
     drifted = [
         e for e in scheduler.unit_status(
-            config.repo_dir, installed, max_concurrency=2,
+            config.repo_dir, installed,
         ) if e["drifted"]
     ]
     assert len(drifted) == 1
@@ -2258,57 +2251,3 @@ def test_doctor_report_reports_configured_model_provider(tmp_path, monkeypatch):
     )
     report = orbi.doctor_report(config, installed)
     assert "model_provider: ok provider=openai model=gpt key=OPENAI_API_KEY=set" in report
-
-
-def test_doctor_and_status_report_list_instance_schedules(tmp_path, monkeypatch):
-    """Issue #1320: orbi doctor / orbi status lists each instance's schedule,
-    so the offsets are visible without systemctl."""
-    config, installed = _deploy_world(tmp_path, drift=False)
-    monkeypatch.setenv("ORBI_UNIT_DIR", str(installed))
-    _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
-    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-
-    # doctor_report lists each instance's schedule
-    report = orbi.doctor_report(config, installed)
-    assert "schedule: orbi@1.timer=*-*-* *:00/5" in report
-    assert "schedule: orbi@2.timer=*-*-* *:02/5:30" in report
-
-    # status_report lists each instance's schedule
-    status = orbi.status_report(config)
-    assert "schedule: orbi@1.timer=*-*-* *:00/5, orbi@2.timer=*-*-* *:02/5:30" in status
-
-
-
-def test_doctor_and_status_show_the_installed_schedule_not_the_computed_one(
-    tmp_path, monkeypatch,
-):
-    """Issue #1344 acceptance 4: with the stagger drop-in missing, doctor
-    and status show the INSTALLED schedule (the template value), the
-    expected value and the fix command — never the computed schedule as
-    if it were deployed."""
-    config, installed = _deploy_world(tmp_path, drift=False)
-    (installed / "orbi@2.timer.d" / "stagger.conf").unlink()
-    monkeypatch.setenv("ORBI_UNIT_DIR", str(installed))
-    _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
-    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-
-    report = orbi.doctor_report(config, installed)
-    assert (
-        "schedule: orbi@2.timer=*-*-* *:00/5 "
-        "(expected *-*-* *:02/5:30; run: orbi install-units)"
-    ) in report
-    # The drop-in drift is reported as drift with the fix.
-    assert "unit_drift: DRIFT" in report
-
-    status = orbi.status_report(config)
-    assert (
-        "orbi@2.timer=*-*-* *:00/5 "
-        "(expected *-*-* *:02/5:30; run: orbi install-units)"
-    ) in status
-    assert "orbi@2.timer=*-*-* *:02/5:30" not in status

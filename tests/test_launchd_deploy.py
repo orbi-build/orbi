@@ -358,154 +358,6 @@ def test_activate_reloads_an_idle_instance_without_touching_a_running_one(
     assert fake.state["org.orbi.runner.1"] == "running"
 
 
-def test_running_instance_with_a_changed_plist_defers_the_reload_to_idle(
-    monkeypatch, tmp_path, caplog,
-):
-    """Issue #1347 acceptance (1): a running instance whose plist
-    changed on upgrade is NOT booted out during its tick; the drift
-    report marks it as pending reload so the next tick reloads it."""
-    monkeypatch.setattr(launchd_deploy.os, "getuid", lambda: 501)
-    repo = make_repo(tmp_path)
-    installed = tmp_path / "LaunchAgents"
-    sched = launchd_deploy.LaunchdScheduler()
-    fake = FakeLaunchd(commit="beefbeef")
-
-    scheduler.install_units(
-        repo, installed, max_concurrency=1, run_command=fake, sched=sched,
-    )
-    assert sched.reload_pending(installed, "org.orbi.runner.1.plist") is False
-
-    # The instance starts executing its tick, then the upgrade rewrites
-    # the rendered plist (a real content change).
-    fake.state["org.orbi.runner.1"] = "running"
-    template = repo / "launchd" / launchd_deploy.TEMPLATE_NAME
-    template.write_text(
-        template.read_text(encoding="utf-8").replace(
-            "<integer>300</integer>", "<integer>600</integer>",
-        ),
-        encoding="utf-8",
-    )
-    fake.commands.clear()
-    report = scheduler.sync_drifted_units(
-        repo, installed, max_concurrency=1, run_command=fake, sched=sched,
-    )
-
-    # The tick in flight is untouched: bootout would kill it.
-    assert not any(
-        len(command) > 1 and command[1] in ("bootout", "bootstrap")
-        for command in fake.commands
-    )
-    assert fake.state["org.orbi.runner.1"] == "running"
-    assert report  # the sync ran (the file drift was repaired)
-    status = scheduler.unit_status(
-        repo, installed, max_concurrency=1, sched=sched,
-    )
-    assert status[0]["drifted"] is False
-    assert status[0]["reload_pending"] is True
-
-    # The drift check sees the deferred reload (and says why).
-    caplog.clear()
-    with caplog.at_level("INFO"):
-        with pytest.raises(
-            scheduler.UnitDriftError, match="deferred to the next idle tick",
-        ) as excinfo:
-            scheduler.check_unit_drift(
-                repo, installed, max_concurrency=1, sched=sched,
-            )
-    assert "reload_pending=true" in str(excinfo.value)
-    assert "unit_drift result=reload_pending" in caplog.text
-
-    # Issue #1347 acceptance (2): the next cycle, with the instance
-    # idle, bootouts + bootstraps it and the drift is clean afterwards.
-    fake.state["org.orbi.runner.1"] = "not running"
-    fake.commands.clear()
-    scheduler.sync_drifted_units(
-        repo, installed, max_concurrency=1, run_command=fake, sched=sched,
-    )
-    assert [
-        "launchctl", "bootout", "gui/501/org.orbi.runner.1",
-    ] in fake.commands
-    assert [
-        "launchctl", "bootstrap", "gui/501",
-        str(installed / "org.orbi.runner.1.plist"),
-    ] in fake.commands
-    status = scheduler.unit_status(
-        repo, installed, max_concurrency=1, sched=sched,
-    )
-    assert status[0]["drifted"] is False
-    assert status[0]["reload_pending"] is False
-
-
-def test_pending_reload_is_applied_on_the_next_idle_cycle(
-    monkeypatch, tmp_path,
-):
-    """Issue #1347 acceptance (2): on the next cycle, with instance 1
-    idle, it is booted out and bootstrapped and the drift is clean."""
-    monkeypatch.setattr(launchd_deploy.os, "getuid", lambda: 501)
-    sched = launchd_deploy.LaunchdScheduler()
-    installed = tmp_path / "LaunchAgents"
-    installed.mkdir()
-    name = "org.orbi.runner.1.plist"
-    (installed / name).write_bytes(plistlib.dumps({"Label": "x"}))
-    # A marker the previous cycle left for the running tick.
-    sched.reload_marker(installed, name).write_text(
-        "pending\n", encoding="utf-8",
-    )
-    assert sched.reload_pending(installed, name) is True
-
-    fake = FakeLaunchd()
-    fake.load("org.orbi.runner.1", state="not running")
-    sched.activate_instances(
-        fake, installed, None, max_concurrency=1,
-        changed=frozenset({name}),
-    )
-
-    assert [
-        "launchctl", "bootout", "gui/501/org.orbi.runner.1",
-    ] in fake.commands
-    assert [
-        "launchctl", "bootstrap", "gui/501", str(installed / name),
-    ] in fake.commands
-    assert sched.reload_pending(installed, name) is False
-
-
-def test_activate_leaves_the_marker_for_a_running_unchanged_instance(
-    monkeypatch, tmp_path,
-):
-    monkeypatch.setattr(launchd_deploy.os, "getuid", lambda: 501)
-    sched = launchd_deploy.LaunchdScheduler()
-    installed = tmp_path
-    name = "org.orbi.runner.1.plist"
-    (installed / name).write_bytes(plistlib.dumps({"Label": "x"}))
-    marker = sched.reload_marker(installed, name)
-    marker.write_text("pending\n", encoding="utf-8")
-    fake = FakeLaunchd()
-    fake.load("org.orbi.runner.1", state="running")
-    # Running and NOT in `changed`: the marker stays (no churn).
-    sched.activate_instances(fake, installed, None, max_concurrency=1)
-    assert marker.is_file()
-    # A fresh bootstrap (not loaded) clears any stale marker.
-    fresh = FakeLaunchd()
-    sched.activate_instances(fresh, installed, None, max_concurrency=1)
-    assert not marker.is_file()
-
-
-def test_downscale_clears_a_pending_marker_for_a_disabled_instance(
-    monkeypatch, tmp_path,
-):
-    monkeypatch.setattr(launchd_deploy.os, "getuid", lambda: 501)
-    sched = launchd_deploy.LaunchdScheduler()
-    installed = tmp_path
-    name = "org.orbi.runner.3.plist"
-    (installed / name).write_bytes(plistlib.dumps({"Label": "x"}))
-    marker = sched.reload_marker(installed, name)
-    marker.write_text("pending\n", encoding="utf-8")
-    fake = FakeLaunchd()
-    sched.activate_instances(fake, installed, None, max_concurrency=2)
-    assert "org.orbi.runner.3" in fake.disabled
-    assert not marker.is_file()
-
-
 def test_downscale_disables_the_surplus_and_bootouts_only_the_idle(
     monkeypatch, tmp_path,
 ):
@@ -526,6 +378,45 @@ def test_downscale_disables_the_surplus_and_bootouts_only_the_idle(
         assert [
             "launchctl", "bootout", f"gui/501/org.orbi.runner.{index}",
         ] not in fake.commands
+
+
+def test_activate_without_enable_never_touches_operator_state(
+    monkeypatch, tmp_path,
+):
+    """Issue #1364: the self-heal (``enable=False``) issues no
+    ``launchctl enable``/``disable`` and never bootstraps an instance
+    the operator disabled — while an idle loaded instance is still
+    reloaded onto the rewritten plist (the daemon-reload equivalent)."""
+    monkeypatch.setattr(launchd_deploy.os, "getuid", lambda: 501)
+    sched = launchd_deploy.LaunchdScheduler()
+    for _, name in sched.unit_pairs(None, 2):
+        (tmp_path / name).write_bytes(plistlib.dumps({"Label": "x"}))
+    fake = FakeLaunchd()
+    # Instance 1: the operator disabled and unloaded it.
+    fake.disabled.add("org.orbi.runner.1")
+    # Instance 2: loaded but idle.
+    fake.load("org.orbi.runner.2", state="not running")
+    sched.activate_instances(
+        fake, tmp_path, None, max_concurrency=2, enable=False,
+    )
+    launchctl = [command for command in fake.commands
+                 if command[0] == "launchctl"]
+    assert not any(command[1] in ("enable", "disable")
+                   for command in launchctl)
+    # The operator-disabled instance stays disabled and is not loaded.
+    assert "org.orbi.runner.1" in fake.disabled
+    assert "org.orbi.runner.1" not in fake.state
+    # The idle loaded instance is reloaded; the surplus is untouched.
+    assert [
+        "launchctl", "bootout", "gui/501/org.orbi.runner.2",
+    ] in fake.commands
+    assert [
+        "launchctl", "bootstrap", "gui/501",
+        str(tmp_path / "org.orbi.runner.2.plist"),
+    ] in fake.commands
+    for index in (3, 4, 5):
+        assert f"org.orbi.runner.{index}" not in fake.disabled
+        assert f"org.orbi.runner.{index}" not in fake.state
 
 
 def test_restart_hint_targets_the_first_instance(monkeypatch):
@@ -586,7 +477,7 @@ def test_install_and_drift_flow_end_to_end_on_the_launchd_impl(
     )
     assert not status[0]["drifted"]
     # A VALUE change is drift, with the structured line naming the plist.
-    reordered["StartCalendarInterval"] = [{"Minute": 4}]
+    reordered["StartInterval"] = 600
     unit.write_bytes(plistlib.dumps(reordered))
     with pytest.raises(scheduler.UnitDriftError) as excinfo:
         scheduler.check_unit_drift(
@@ -684,70 +575,12 @@ def test_instances_status_reports_enabled_active_and_an_honest_next():
     status = sched.instances_status(fake, None, max_concurrency=2)
     assert status == {
         "org.orbi.runner.1": {
-            "enabled": True, "active": True, "next": "-", "schedule": "*-*-* *:00/5",
+            "enabled": True, "active": True, "next": "-",
         },
         "org.orbi.runner.2": {
-            "enabled": False, "active": False, "next": "-", "schedule": "*-*-* *:02/5",
+            "enabled": False, "active": False, "next": "-",
         },
     }
-
-
-def test_launchd_instances_are_staggered_on_the_wall_clock(tmp_path):
-    """Issue #1320: at N > 1 every instance moves off `StartInterval`
-    (which counts from the job's LOAD time, so instances bootstrapped
-    together fire in the same second) onto the wall-clock
-    `StartCalendarInterval` grid, shifted by the deterministic offset.
-
-    `StartCalendarInterval` carries whole minutes only — launchd.plist(5)
-    documents Minute/Hour/Day/Weekday/Month and launchd's parser reads
-    those five, silently ignoring anything else (a `Second` key would
-    make instance 2 fire at the same second as instance 1, only on
-    minute 2). The 150s offset therefore lands as 2 minutes; what the
-    two schedulers must agree on is the wall-clock grid, not a
-    sub-minute value launchd cannot express.
-    """
-    sched = launchd_deploy.LaunchdScheduler()
-    template = (
-        REPO_ROOT / "launchd" / launchd_deploy.TEMPLATE_NAME
-    ).read_text(encoding="utf-8")
-
-    plists = {
-        instance: plistlib.loads(sched.render_unit(
-            template, tmp_path, None, instance=instance, max_concurrency=2,
-        ).encode("utf-8"))
-        for instance in (1, 2)
-    }
-
-    for instance, plist in plists.items():
-        assert "StartInterval" not in plist, instance
-        calendar = plist["StartCalendarInterval"]
-        # Documented keys only: a `Second` entry is not a
-        # calendar-interval key and is ignored by launchd.
-        assert all(set(entry) == {"Minute"} for entry in calendar), calendar
-    # Instance 1 anchors the 5-minute grid (offset 0, the systemd
-    # OnCalendar=*-*-* *:00/5 tick), instance 2 sits two minutes into it.
-    assert [e["Minute"] for e in plists[1]["StartCalendarInterval"]] == list(range(0, 60, 5))
-    assert [e["Minute"] for e in plists[2]["StartCalendarInterval"]] == list(range(2, 60, 5))
-
-    # A single instance has nothing to stagger: the template's
-    # StartInterval is left untouched.
-    alone = plistlib.loads(sched.render_unit(
-        template, tmp_path, None, instance=1, max_concurrency=1,
-    ).encode("utf-8"))
-    assert alone["StartInterval"] == 300
-    assert "StartCalendarInterval" not in alone
-
-    # The schedule the report shows is the one the plist deploys.
-    assert sched.schedule_text(1, 2) == "*-*-* *:00/5"
-    assert sched.schedule_text(2, 2) == "*-*-* *:02/5"
-    assert launchd_deploy.calendar_minute_offset(2) == 2
-    assert launchd_deploy.calendar_minute_offset(3) == 3
-
-    # Issue #1344: the report reads the installed schedule (the plist's
-    # own whole-minute value), and launchd has no non-template installed
-    # file for the drift check to compare.
-    assert sched.installed_schedule(tmp_path, None, 2, 2) == "*-*-* *:02/5"
-    assert sched.extra_drift(tmp_path, None, 2) == []
 
 
 def test_journal_lines_skip_instances_without_a_log_file(tmp_path):
@@ -787,44 +620,3 @@ def test_fake_launchd_mirrors_the_real_launchctl_contract():
     assert [
         "launchctl", "kickstart", "gui/501/org.orbi.runner.1",
     ] in fake.commands
-
-
-def test_self_heal_never_bootstraps_an_unloaded_agent(monkeypatch, tmp_path):
-    """Issue #1362: the pre-start self-heal repairs the plist but never
-    bootstraps a service the operator unloaded/disabled. A stale
-    ``reload-pending`` marker is cleared so the drift check does not
-    loop on an agent nobody is running."""
-    monkeypatch.setattr(launchd_deploy.os, "getuid", lambda: 501)
-    repo = make_repo(tmp_path)
-    installed = tmp_path / "LaunchAgents"
-    sched = launchd_deploy.LaunchdScheduler()
-    fake = FakeLaunchd(commit="beefbeef")
-    scheduler.install_units(
-        repo, installed, max_concurrency=1, run_command=fake, sched=sched,
-    )
-    # The operator unloads the agent (bootstrap/disable state cleared).
-    fake.state.clear()
-    marker = sched.reload_marker(
-        installed, launchd_deploy.plist_name("org.orbi.runner.1"),
-    )
-    marker.write_text("stale\n", encoding="utf-8")
-    # A template change so the self-heal has real file drift to repair.
-    template = repo / "launchd" / launchd_deploy.TEMPLATE_NAME
-    template.write_text(
-        template.read_text(encoding="utf-8").replace(
-            "<integer>300</integer>", "<integer>600</integer>",
-        ),
-        encoding="utf-8",
-    )
-    fake.commands.clear()
-    report = scheduler.sync_drifted_units(
-        repo, installed, max_concurrency=1, run_command=fake, sched=sched,
-    )
-    assert report  # the file drift was repaired
-    assert not any(
-        len(command) > 1 and command[1] in ("bootstrap", "enable")
-        for command in fake.commands
-    )
-    assert sched.reload_pending(
-        installed, launchd_deploy.plist_name("org.orbi.runner.1"),
-    ) is False
