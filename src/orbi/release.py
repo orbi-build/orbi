@@ -717,8 +717,12 @@ def build_release_changelog(repo: str, scope: list[int]) -> str:
     not a release judge — it is skipped with a log line and never fails
     the release, and with no contributors at all no section is written.
     Missing or malformed evidence is an unsafe release input and fails
-    before a tag or Release is created.
+    before a tag or Release is created. An empty scope (Issue #1384: a
+    milestone with no deliveries) is not an error — the notes carry the
+    one-line empty-scope sentence instead of a Changelog list.
     """
+    if not scope:
+        return "No deliveries are linked to this milestone."
     owner, _, name = repo.partition("/")
     grouped: dict[str, list[tuple[int, str]]] = {
         category: [] for category in RELEASE_CHANGELOG_CATEGORIES
@@ -2101,13 +2105,8 @@ def process_release(issue: dict, config: RunnerConfig,
                     release_issue=number,
                 )
             )
-            if not derived_scope:
-                raise RuntimeError(
-                    f"release {declaration['version']}: Milestone "
-                    f"{declaration['scope_from_milestone']!r} has no "
-                    "closed Issue or merged PR — the derived scope is "
-                    "empty and a release needs at least one delivery"
-                )
+            # An empty derived scope is allowed — a milestone with no
+            # deliveries must not block the release (Issue #1384).
             declaration["scope"] = derived_scope
             if open_milestone_evidence:
                 event(
