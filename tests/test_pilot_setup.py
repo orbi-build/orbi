@@ -16,8 +16,6 @@ import tomllib
 from pathlib import Path
 
 import pytest
-
-from seam import strip_safety
 import dataclasses
 
 import orbi.runner as runner
@@ -143,7 +141,6 @@ def fake_run_factory(state: dict):
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         calls.append(command)
         head = list(command)
         if head[:3] == ["git", "rev-parse", "HEAD"]:
@@ -998,7 +995,6 @@ def test_check_checkout_reports_remote_branch_clean_and_fresh(tmp_path):
     repo.mkdir()
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         if command[:2] == ["git", "config"]:
             return "git@github.com:xqliu/orbi.git"
         if command[:2] == ["git", "ls-remote"]:
@@ -1032,7 +1028,6 @@ def test_check_checkout_fails_fast_on_a_dirty_checkout(tmp_path):
     repo.mkdir()
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         if command[:2] == ["git", "config"]:
             return "git@github.com:xqliu/orbi.git"
         if command[:2] == ["git", "ls-remote"]:
@@ -1052,7 +1047,6 @@ def test_check_checkout_reports_a_stale_base(tmp_path):
     repo.mkdir()
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         if command[:2] == ["git", "config"]:
             return "git@github.com:xqliu/orbi.git"
         if command[:2] == ["git", "ls-remote"]:
@@ -1102,7 +1096,6 @@ def test_check_checkout_wraps_a_missing_head_with_mount_guidance(tmp_path):
     repo.mkdir()
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         if command == ["git", "config", "remote.origin.url"]:
             return "git@github.com:xqliu/orbi.git"
         if command == [
@@ -1139,7 +1132,6 @@ def test_check_checkout_migrates_an_https_remote_to_ssh(tmp_path):
     state = {"url": "https://github.com/xqliu/orbi.git"}
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         if command[:2] == ["git", "config"]:
             return state["url"]
         if command[:3] == ["git", "remote", "set-url"]:
@@ -1171,7 +1163,6 @@ def test_check_checkout_https_mode_is_fully_green_over_https(tmp_path):
     repo.mkdir()
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         if command[:2] == ["git", "config"]:
             return "https://github.com/xqliu/orbi.git"
         if command[:2] == ["git", "ls-remote"]:
@@ -1203,7 +1194,6 @@ def test_check_checkout_https_mode_fails_with_the_transport_reason(tmp_path):
     repo.mkdir()
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         if command[:2] == ["git", "config"]:
             return "https://github.com/xqliu/orbi.git"
         if command[:2] == ["git", "ls-remote"]:
@@ -1236,7 +1226,6 @@ def test_check_checkout_fails_fast_when_ssh_is_unreachable(tmp_path):
     repo.mkdir()
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         if command[:2] == ["git", "config"]:
             return "git@github.com:xqliu/orbi.git"
         if command[:2] == ["git", "ls-remote"]:
@@ -1267,7 +1256,6 @@ def test_check_checkout_fails_fast_on_a_generic_git_error(tmp_path):
     repo.mkdir()
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         if command[:2] == ["git", "config"]:
             return "git@github.com:xqliu/orbi.git"
         if command[:2] == ["git", "ls-remote"]:
@@ -1293,7 +1281,6 @@ def test_check_checkout_fails_fast_on_a_remote_repo_mismatch(tmp_path):
     repo.mkdir()
 
     def fake_run(command, **kwargs):
-        command = strip_safety(command)
         if command[:2] == ["git", "config"]:
             return "git@github.com:other/repo.git"
         raise AssertionError(f"unexpected command: {command}")

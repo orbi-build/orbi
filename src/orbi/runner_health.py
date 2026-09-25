@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING
 
 from orbi.delivery_labels import READY_LABEL
 from orbi import scheduler
-from orbi.journal import RunIdFilter, event, run_git
+from orbi.journal import RunIdFilter, event
 from orbi.progress import format_status_comment, run_marker
 
 if TYPE_CHECKING:
@@ -450,9 +450,8 @@ def orbi_repo_from_deploy_home(deploy_home: Path, run_command) -> str | None:
     the configured override or skips — never guesses a repo).
     """
     try:
-        output = run_git(
+        output = run_command(
             ["git", "-C", str(deploy_home), "remote", "get-url", "origin"],
-            command_runner=run_command,
             timeout=30,
         )
     except Exception:

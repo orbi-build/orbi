@@ -32,7 +32,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from orbi.journal import event, run_git
+from orbi.journal import event
 from orbi.progress import quote_value
 
 if TYPE_CHECKING:
@@ -624,10 +624,7 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
         max_concurrency=max_concurrency, changed=frozenset(changed),
         enable=enable,
     )
-    commit = run_git(
-        ["git", "rev-parse", "HEAD"],
-        command_runner=run_command, cwd=repo_dir,
-    )
+    commit = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
     units = {
         name: {
             "installed_path": installed_dir / name,

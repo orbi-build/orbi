@@ -490,19 +490,6 @@ beside the block for a human reader, and the milestone's visible summary
 is the same bounded, host-path free reason — a full command stderr is
 never cut to its first word.
 
-The one-shot transient retry (Issue #1351): the FIRST `github_transient`
-failure of an Issue is not terminal. The engine clears the delivery
-labels and `ai-blocked`, leaves `ai-ready` alone and posts the failure
-comment with one extra visible line —
-`Retrying automatically (transient failure, attempt 1 of 1).` — so the
-next tick claims the same Issue again. The retry budget is derived from
-the Issue's own failure comments (the `orbi:failure:v1` blocks name the
-reason), never from local state: a second `github_transient` failure on
-the same Issue stays `ai-blocked` and its comment says
-`The automatic retry was already used (transient failure, attempt 1 of 1).`
-`provider_quota` keeps waiting out its window, and every non-`retry_safe`
-record keeps its current terminal behavior.
-
 ## PR body contract: `Fixes #N`
 
 The PR description must contain `Fixes #<issue-number>` (it may be on the

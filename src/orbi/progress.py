@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import time
 from importlib import metadata
 from pathlib import Path
@@ -30,7 +31,6 @@ from orbi.journal import (
     issue_context,
     quote_value,
     redact_secrets,
-    run_git,
     validate_run_id,
 )
 from orbi.pi_activity import activity_snapshot, sanitize
@@ -76,10 +76,12 @@ def runner_fingerprint() -> str:
     try:
         checkout = _checkout_root(Path(__file__).resolve().parent)
         if checkout is not None:
-            fingerprint = run_git(
+            result = subprocess.run(
                 ["git", "rev-parse", "--short=8", "HEAD"],
-                cwd=checkout, timeout=5,
+                cwd=checkout, check=True, capture_output=True,
+                text=True, timeout=5,
             )
+            fingerprint = result.stdout.strip()
             if re.fullmatch(r"[0-9a-fA-F]{7,40}", fingerprint):
                 return fingerprint
             return "unknown"

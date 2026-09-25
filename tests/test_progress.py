@@ -10,7 +10,6 @@ import subprocess
 
 import pytest
 
-import orbi.journal as journal
 from orbi import progress, scene
 from orbi.delivery_scene import RunContext
 
@@ -76,22 +75,13 @@ def test_runner_fingerprint_uses_editable_checkout_head(monkeypatch, tmp_path):
     package.mkdir(parents=True)
     (tmp_path / "checkout" / ".git").mkdir()
     monkeypatch.setattr(progress, "__file__", str(package / "progress.py"))
-    seen: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        seen.append(command)
-        return subprocess.CompletedProcess(
-            command, 0, stdout="8a12fb1c\n", stderr="",
-        )
-
-    monkeypatch.setattr(journal.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        progress.subprocess, "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout="8a12fb1c\n", stderr="",
+        ),
+    )
     assert progress.runner_fingerprint() == "8a12fb1c"
-    # The probe is a Runner-side git call (Issue #1366): it reaches the
-    # process boundary carrying the repository-program overrides.
-    assert seen == [[
-        "git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
-        "-c", "diff.external=", "rev-parse", "--short=8", "HEAD",
-    ]]
 
 
 def test_runner_fingerprint_uses_package_version_when_not_editable(
@@ -119,7 +109,7 @@ def test_runner_fingerprint_returns_unknown_for_invalid_git_output(
     (tmp_path / "checkout" / ".git").mkdir()
     monkeypatch.setattr(progress, "__file__", str(package / "progress.py"))
     monkeypatch.setattr(
-        journal.subprocess, "run",
+        progress.subprocess, "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(
             args[0], 0, stdout="not-a-sha\n", stderr="",
         ),
@@ -135,7 +125,7 @@ def test_runner_fingerprint_returns_unknown_when_detection_fails(
     (tmp_path / "checkout" / ".git").mkdir()
     monkeypatch.setattr(progress, "__file__", str(package / "progress.py"))
     monkeypatch.setattr(
-        journal.subprocess, "run",
+        progress.subprocess, "run",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             subprocess.CalledProcessError(128, args[0]),
         ),
@@ -190,7 +180,7 @@ def test_comment_rendering_degrades_to_runner_unknown(monkeypatch):
     # returns ``unknown``), so the failure is injected one layer below.
     def _raise(*args, **kwargs):
         raise RuntimeError("git unavailable")
-    monkeypatch.setattr(journal.subprocess, "run", _raise)
+    monkeypatch.setattr(progress.subprocess, "run", _raise)
     for body in (
         progress.progress_body({
             "run_id": "abc12345", "issue": 18,

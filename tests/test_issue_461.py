@@ -1,6 +1,4 @@
 from orbi import config as config_domain
-from seam import strip_safety
-
 import subprocess
 from pathlib import Path
 
@@ -28,7 +26,6 @@ def test_named_units_are_distinct_and_install_without_touching_default(tmp_path)
     calls = []
 
     def run(command, **kwargs):
-        command = strip_safety(command)
         calls.append(command)
         return "deadbeef" if command[:3] == ["git", "rev-parse", "HEAD"] else ""
 
@@ -82,7 +79,6 @@ def test_setup_excludes_runner_worktrees_and_reports_structured_change(tmp_path)
     calls = []
 
     def run(command, **kwargs):
-        command = strip_safety(command)
         calls.append(command)
         if command[:3] == ["git", "check-ignore", "--quiet"]:
             raise subprocess.CalledProcessError(1, command)
@@ -102,7 +98,6 @@ def test_setup_does_not_duplicate_a_local_exclude_entry(tmp_path):
     exclude.parent.mkdir(parents=True)
     exclude.write_text(".worktrees/\n")
     def run(command, **kwargs):
-        command = strip_safety(command)
         if command[:3] == ["git", "check-ignore", "--quiet"]:
             if command[-1] == ".orbi/":
                 return "ignored"

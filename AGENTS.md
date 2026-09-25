@@ -194,7 +194,15 @@ Check this before you touch anything:
 |---|---|
 | An Issue assigned to you | Deliver it; carry on to `Read first` |
 | "X looks bad" / "X is broken" / "change X" from a person | **File an Issue, then stop** |
-| A problem you spotted yourself | **File an Issue, then stop** |
+| A problem you spotted yourself | **Ask the maintainer first** — file only after they agree (exception below) |
+
+**New Issues need the maintainer's approval, in every orbi-build repository.**
+Before filing, send the maintainer the repository, the problem and the smallest
+fix, and wait for a yes. The only exception is a bug you reproduced yourself
+while testing and are 100% sure of: file it, then tell the maintainer. Never
+file "preventive" tickets for incidents that might recur or for theoretical
+risks (new probes, gates, self-healing layers, retry budgets, dashboards). One
+maintainer with no paying users: fix what a user actually hit, the smallest way.
 
 The test is **whether this repo is on Orbi**, not how small the change is or
 whether you know how to make it. Being able to make it is not a reason to.
