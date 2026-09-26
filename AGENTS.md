@@ -208,6 +208,10 @@ file "preventive" tickets for incidents that might recur or for theoretical
 risks (new probes, gates, self-healing layers, retry budgets, dashboards). One
 maintainer with no paying users: fix what a user actually hit, the smallest way.
 
+**What counts as a bug.** Behavior that contradicts its own rule, ticket or documentation. "I think this should not happen" is a design judgment, not a bug: ask the maintainer first.
+
+**Division of work with the maintainer.** Do it yourself: write and merge AGENTS.md; deploy to beta, verify, write the screenshot report, promote a verified version. Ask first: filing an Issue that is not a bug; any change wider than the maintainer's own words (do not widen it for them); stopping or deleting work in progress. When interrupted, state the reasoning behind a plan you already worked out and carry on; do not hand the decision back.
+
 **Growth is one test for how a feature behaves.** Prefer the option that gets a new user to a first result fastest, with no dead ends.
 
 **No ad hoc special cases** (basic maintainability). When one specific case seems to need an exception, pick one: avoid the special case and let the existing general rule handle it; make the behavior extensible, so the decision lives in data or configuration; or do not support it.
