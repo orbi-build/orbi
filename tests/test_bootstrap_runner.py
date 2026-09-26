@@ -18697,6 +18697,16 @@ def test_release_tag_commit_never_reads_a_network_failure_as_missing_tag(
 
 def test_release_git_writes_use_identity_without_git_config(tmp_path, monkeypatch):
     """Cloud-like empty Git config still yields attributable tag and commit."""
+    # An in-process `runner.main()` pins the bot identity in `os.environ`
+    # (Issue #1416), so a test that runs after one carries it too. Clear
+    # it here: only then does this test prove the identity
+    # `release_git.run_git_write` passes explicitly — without it, a
+    # release fails with "Committer identity unknown".
+    for name in (
+        "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+    ):
+        monkeypatch.delenv(name, raising=False)
     work = tmp_path / "release"
     work.mkdir()
     clean_env = {**os.environ, "HOME": str(tmp_path / "empty-home"),
