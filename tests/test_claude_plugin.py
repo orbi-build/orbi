@@ -1,13 +1,16 @@
 """Contract tests for the Claude plugin (Issue #1389).
 
-The plugin at ``integrations/claude-plugin/`` is Markdown-and-JSON-only: no
-hooks, no MCP server, no scripts and no package installs. It leans on the
-user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
-directory and the repository's contract require, and they carry four
+The plugin at ``integrations/claude-plugin/`` is Markdown and JSON only, plus
+the repository ``LICENSE`` and the one non-Markdown asset the claude.com
+directory reads at its default path, ``.claude-plugin/icon.svg`` (Issue
+#1399): no hooks, no MCP server, no scripts and no package installs. It leans
+on the user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
+directory and the repository's contract require, and they carry five
 counter-proofs (a fixture copy with ``hooks/``, a fixture copy without
-``homepage``, a fixture copy missing the ``author.url`` ref, and a fixture
-copy reading the config from the working tree) so a
-future change cannot silently turn the assertions into no-ops.
+``homepage``, a fixture copy missing the ``author.url`` ref, a fixture copy
+with ``skills/x/logo.svg``, and a fixture copy reading the config from the
+working tree) so a future change cannot silently turn the assertions into
+no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
 """
@@ -155,7 +158,7 @@ def check_icon(plugin_dir: Path = PLUGIN_DIR) -> None:
 
 def check_no_forbidden_entries(plugin_dir: Path = PLUGIN_DIR) -> None:
     """No hooks, no MCP file, no bin/ and no editor/archive droppings: the
-    plugin is Markdown and JSON only (Issue #1389)."""
+    plugin carries no executable or configuration payload (Issue #1389)."""
     for path in sorted(plugin_dir.rglob("*")):
         rel = path.relative_to(plugin_dir)
         assert path.name not in FORBIDDEN_NAMES, f"forbidden file: {rel}"
@@ -331,7 +334,7 @@ def test_no_file_over_256_kib():
         assert size <= MAX_FILE_BYTES, f"{path} is {size} bytes (max 256 KiB)"
 
 
-def test_only_markdown_json_and_license_files():
+def test_only_markdown_json_license_and_icon_files():
     check_allowed_file_types()
 
 
