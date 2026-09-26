@@ -153,3 +153,12 @@ local, with no timing heuristic. It cannot catch deployments on different machin
 3. #1358 → direct docs edit (one-task-pool rule), reply on the Issue, close as not planned (unsupported topology).
 4. #1359 → reply with the reasoning, relabel `enhancement`, leave open.
 5. #1420 → close as not planned (the fork PR's author closed it before the triage ran).
+
+## Milestones assigned (2026-09-26)
+
+Rule from the maintainer: bugs go into a new 0.5.x milestone, new features into v0.6.0.
+
+- #1361 (bug) → **v0.5.51** (new milestone; v0.5.50 is already releasing).
+- #1358, #1359, #1360 (feature / unsupported topology) → **v0.6.0**.
+
+No `ai-ready` label was added; the maintainer labels each ticket when its body is final.
