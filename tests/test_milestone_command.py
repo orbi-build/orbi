@@ -1312,6 +1312,19 @@ def test_classify_milestone_waiting_table():
     ) == milestone.MILESTONE_NOTHING_TO_DO
 
 
+def test_is_closed_unscoped_outcome_only_matches_that_outcome():
+    """Issue #1391: the Runner retries unscoped ONLY for the closed-unscoped
+    outcome; a mocked/None or a different outcome keeps the scope."""
+    assert milestone.is_closed_unscoped_outcome(
+        (milestone.MILESTONE_CLOSED_UNSCOPED, None),
+    )
+    assert not milestone.is_closed_unscoped_outcome(None)
+    assert not milestone.is_closed_unscoped_outcome(())
+    assert not milestone.is_closed_unscoped_outcome(
+        ("closed", "v0.5.41"),
+    )
+
+
 def test_no_release_notice_without_the_opt_in(monkeypatch, tmp_path):
     """Issue #856: the absent/false key keeps the pre-#856 silent wait,
     and the extra release-ticket search is never paid for."""
@@ -1465,7 +1478,7 @@ def test_release_notice_is_closed_once_its_milestone_closes(
     assert milestone.advance_active_milestone_on_idle(
         "owner/repo", "v0.5.40", config, release_confirmation=True,
         parse_version_title=runner._parse_version_title,
-    ) == ("closed", None)
+    ) == (milestone.MILESTONE_CLOSED_UNSCOPED, None)
     assert fake.notices == []
     assert len(fake.comments) == 1
     assert "不再等待发布确认" in fake.comments[0]["body"]
@@ -1545,7 +1558,7 @@ def test_reconcile_milestone_on_idle_arm_failure_is_bypassed(
         assert milestone.reconcile_milestone_on_idle(
             "owner/repo", "v0.5.40", tmp_path / "orbi.toml",
             parse_version_title=runner._parse_version_title,
-        ) == ("closed", None)
+        ) == (milestone.MILESTONE_CLOSED_UNSCOPED, None)
     assert "release_ticket_arm_failed" in caplog.text
     assert "invalid issue number" in caplog.text
 

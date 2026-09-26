@@ -6930,28 +6930,30 @@ def main(argv: list[str] | None = None) -> int:
                         config, idle_repo, repo_policy,
                     )
                     try:
-                        milestone_bookkeeping.reconcile_milestone_on_idle(
-                            idle_repo,
-                            effective_milestone,
-                            config.config_path,
-                            config.repo_dir,
-                            auto_next_milestone=(
-                                fused_idle.auto_next_milestone
-                            ),
-                            release_confirmation=(
-                                repo_policy.release_confirmation
-                                if repo_policy is not None
-                                and repo_policy.release_confirmation is not None
-                                else False
-                            ),
-                            parse_version_title=_parse_version_title,
-                            policy=repo_policy,
-                            policy_path=config_domain.repository_config_path(
-                                config, idle_repo,
-                            ),
-                            base_branch=fused_idle.base_branch,
-                            dispatch_label=dispatch_label,
-                            version_file=config.version_file,
+                        idle_outcome = (
+                            milestone_bookkeeping.reconcile_milestone_on_idle(
+                                idle_repo,
+                                effective_milestone,
+                                config.config_path,
+                                config.repo_dir,
+                                auto_next_milestone=(
+                                    fused_idle.auto_next_milestone
+                                ),
+                                release_confirmation=(
+                                    repo_policy.release_confirmation
+                                    if repo_policy is not None
+                                    and repo_policy.release_confirmation is not None
+                                    else False
+                                ),
+                                parse_version_title=_parse_version_title,
+                                policy=repo_policy,
+                                policy_path=config_domain.repository_config_path(
+                                    config, idle_repo,
+                                ),
+                                base_branch=fused_idle.base_branch,
+                                dispatch_label=dispatch_label,
+                                version_file=config.version_file,
+                            )
                         )
                     except Exception:
                         LOGGER.exception(
@@ -6959,7 +6961,35 @@ def main(argv: list[str] | None = None) -> int:
                             idle_repo,
                             effective_milestone,
                         )
-                return 0
+                    else:
+                        if milestone_bookkeeping.is_closed_unscoped_outcome(
+                            idle_outcome,
+                        ):
+                            # Issue #1391: the active Milestone is closed and
+                            # no newer open one exists, so this tick has no
+                            # scope. Re-run the FRESH ready scan WITHOUT the
+                            # Milestone filter — the repository policy's value
+                            # included, since it wins over the host one —
+                            # keeping the repo's own `dispatch_label` resolved
+                            # above. The resume scans already ran in the first
+                            # claim; the folded `selected` falls through to
+                            # the ordinary delivery path below, and the
+                            # configured value is never written or cleared.
+                            # The lock is released by the same `finally` as the
+                            # first scan, so the scan -> identity-write window
+                            # stays serialized against a co-runner.
+                            claim_lock = acquire_claim_lock(config.slot_dir)
+                            issue = claim.pick_issue(
+                                idle_repo, None,
+                                dispatch_label=dispatch_label,
+                                held=slot_held_deliveries(
+                                    config.slot_dir, config.max_concurrency,
+                                ),
+                            )
+                            if issue is not None:
+                                selected = (idle_repo, issue, None)
+                if selected is None:
+                    return 0
             source_repo, issue, scene = selected
             # Name THIS delivery in the held slot file — the
             # earliest point after selection, before any verification work.
