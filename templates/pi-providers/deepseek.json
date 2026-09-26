@@ -5,7 +5,7 @@
       "api": "openai-completions",
       "apiKey": "$DEEPSEEK_API_KEY",
       "models": [
-        {"id": "deepseek-flash", "name": "DeepSeek Flash", "contextWindow": 131072, "maxTokens": 16384}
+        {"id": "deepseek-flash", "name": "DeepSeek Flash", "contextWindow": 1000000, "maxTokens": 16384}
       ]
     }
   }

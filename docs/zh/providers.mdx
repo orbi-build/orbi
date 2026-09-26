@@ -32,11 +32,18 @@ pi_model = "glm-5.3-flash"
 ### DeepSeek：Orbi 自身交付使用的配置
 
 DeepSeek 的[价格页](https://api-docs.deepseek.com/quick_start/pricing)
-（2026-09-24 核对）列出两个 API 模型 id，均为 1M 上下文：
+（2026-09-26 核对）列出两个 API 模型 id，均为 1M 上下文：
 `deepseek-flash`（DeepSeek-V4.1-Flash）和 `deepseek-v4-pro`。仓库模板固定
-`deepseek-flash`，`contextWindow` 131,072、`maxTokens` 16,384——正是 Orbi
-自身交付自 **2026-09-22** 起使用的配置（截至 2026-09-24 合并的交付，例如
-来源 Issue [#1328](https://github.com/orbi-build/orbi/issues/1328)）。
+`deepseek-flash`，采用模型完整的 `contextWindow` 1,000,000，`maxTokens`
+16,384；Orbi 自身交付自 **2026-09-22** 起选择该模型（例如来源 Issue
+[#1328](https://github.com/orbi-build/orbi/issues/1328)）。
+
+使用完整窗口。当 `contextTokens` 超过 `contextWindow` 减去
+`reserveTokens`（默认 16,384）时，Pi 会压缩会话，并且只保留约 20,000
+个近期 token。因此 131,072 的窗口会在约 114.7K token 处触发压缩；在
+2026-09-22 以来的 77 个交付会话中，有 **32 个（42%）** 带有
+`"type":"compaction"` 记录。压缩后的交付会丢失已读取的文件内容和已看到的
+测试输出，只能重新读取、重新运行；完整的 1M 窗口避免了这些额外轮次。
 
 缓存输入（cached input）的计费远低于未缓存输入，因此这个默认模型对 Orbi
 这类缓存密集的会话成本很低；具体价格以价格页为准，会随时变化。

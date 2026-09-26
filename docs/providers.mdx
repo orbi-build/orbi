@@ -32,12 +32,20 @@ A template being listed is not a promise of quota, availability, speed, or model
 ### DeepSeek: the configuration Orbi's own deliveries run on
 
 DeepSeek's [pricing page](https://api-docs.deepseek.com/quick_start/pricing)
-(checked 2026-09-24) lists two API model ids with a 1M context,
+(checked 2026-09-26) lists two API model ids with a 1M context,
 `deepseek-flash` (DeepSeek-V4.1-Flash) and `deepseek-v4-pro`. The committed
-template pins `deepseek-flash` with `contextWindow` 131,072 and `maxTokens`
-16,384 — the exact block Orbi's own deliveries have run since **2026-09-22**
-(the deliveries merged between then and 2026-09-24, e.g. source Issue
+template pins `deepseek-flash` with the model's full `contextWindow`
+1,000,000 and `maxTokens` 16,384, and Orbi's own deliveries have selected it
+since **2026-09-22** (e.g. source Issue
 [#1328](https://github.com/orbi-build/orbi/issues/1328)).
+
+Use the full window. Pi compacts a session once `contextTokens` exceeds
+`contextWindow` minus `reserveTokens` (16,384 by default), and keeps only
+about 20,000 recent tokens. A 131,072 window therefore compacted at roughly
+114.7K tokens, and **32 of the 77 delivery sessions since 2026-09-22 (42%)**
+carry a `"type":"compaction"` entry. A compacted delivery loses the files it
+read and the test output it saw, so it re-reads and re-runs; the full 1M
+window avoids those extra rounds.
 
 Cached input is billed far below uncached input, which is why this default
 model stays cheap for Orbi's cache-heavy sessions; the pricing page carries
