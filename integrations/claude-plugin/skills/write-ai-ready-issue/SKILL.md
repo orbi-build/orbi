@@ -55,8 +55,29 @@ If it exists:
    gh issue create --title "…" --body-file <path> --label ai-ready
    ```
 
-   If `.github/orbi.toml` in the repository declares `active_milestone`, add
-   `--milestone <value>`.
+   Orbi restricts fresh claims to one Milestone when the target repository
+   declares `active_milestone` in `.github/orbi.toml`. Read that file from the
+   default branch on GitHub, never from a local checkout — a stale checkout can
+   name a Milestone that is already closed, and an Issue filed there is never
+   claimed:
+
+   ```
+   gh api repos/<owner>/<repo>/contents/.github/orbi.toml \
+     -H "Accept: application/vnd.github.raw"
+   ```
+
+   Take the `active_milestone` value from that response. Then check it is
+   still open:
+
+   ```
+   gh api --paginate "repos/<owner>/<repo>/milestones?state=open&per_page=100" \
+     --jq '.[].title'
+   ```
+
+   Add `--milestone <value>` only when the value is among the open
+   Milestones. If the file or the key is missing, or the value is not among
+   the open Milestones, create the Issue without `--milestone` and say in one
+   line: "no open active milestone, the Issue was filed without one."
 
 3. Reply with the Issue URL.
 
