@@ -210,6 +210,8 @@ maintainer with no paying users: fix what a user actually hit, the smallest way.
 
 **Growth is one test for how a feature behaves.** Prefer the option that gets a new user to a first result fastest, with no dead ends.
 
+**No ad hoc special cases** (basic maintainability). When one specific case seems to need an exception, pick one: avoid the special case and let the existing general rule handle it; make the behavior extensible, so the decision lives in data or configuration; or do not support it.
+
 The test is **whether this repo is on Orbi**, not how small the change is or
 whether you know how to make it. Being able to make it is not a reason to.
 
