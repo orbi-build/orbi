@@ -5,12 +5,13 @@ the repository ``LICENSE`` and the one non-Markdown asset the claude.com
 directory reads at its default path, ``.claude-plugin/icon.svg`` (Issue
 #1399): no hooks, no MCP server, no scripts and no package installs. It leans
 on the user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
-directory and the repository's contract require, and they carry five
-counter-proofs (a fixture copy with ``hooks/``, a fixture copy without
-``homepage``, a fixture copy missing the ``author.url`` ref, a fixture copy
-with ``skills/x/logo.svg``, and a fixture copy reading the config from the
-working tree) so a future change cannot silently turn the assertions into
-no-ops.
+directory, the Agent Plugins 1.0 root manifest (Issue #1404) and the
+repository's contract require, and they carry six counter-proofs (a fixture
+copy with ``hooks/``, a fixture copy without ``homepage``, a fixture copy
+missing the ``author.url`` ref, a fixture copy with ``skills/x/logo.svg``, a
+fixture copy with a ``logo`` key in the root manifest, and a fixture copy
+reading the config from the working tree) so a future change cannot silently
+turn the assertions into no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
 """
@@ -26,13 +27,40 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_DIR = REPO_ROOT / "integrations" / "claude-plugin"
 MANIFEST_REL = Path(".claude-plugin") / "plugin.json"
+# Agent Plugins 1.0 root manifest (Issue #1404): the same folder loads in
+# GitHub Copilot, Cursor and Codex, which read this file at the plugin root.
+AGENT_MANIFEST_REL = Path("plugin.json")
+AGENT_PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+AGENT_PLUGIN_HOMEPAGE = "https://orbi.build/?ref=agent-plugins"
+# Agent Plugins 1.0 schema is closed (additionalProperties: false).
+AGENT_PLUGIN_ALLOWED_KEYS = {
+    "$schema",
+    "name",
+    "version",
+    "description",
+    "author",
+    "homepage",
+    "repository",
+    "license",
+    "keywords",
+    "extensions",
+}
+# Agent Plugins 1.0 name rule: no `--`, no `..`, starts and ends alphanumeric.
+AGENT_PLUGIN_NAME_RE = re.compile(
+    r"^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$"
+)
 
 # claude.com plugin name rule: lowercase alphanumeric and hyphens, 1-64
 # chars, must start and end alphanumeric.
 NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$")
 HOMEPAGE = "https://orbi.build/?ref=plugin-listing"
 AUTHOR_URL = "https://orbi.build/?ref=plugin-listing"
-ALLOWED_REF_TOKENS = {"plugin-listing", "plugin-readme", "plugin-skill"}
+ALLOWED_REF_TOKENS = {
+    "plugin-listing",
+    "plugin-readme",
+    "plugin-skill",
+    "agent-plugins",
+}
 FORBIDDEN_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini", "__MACOSX"}
 FORBIDDEN_ENTRIES = {"hooks", "bin", ".mcp.json"}
 ALLOWED_SUFFIXES = {".md", ".json"}
@@ -60,7 +88,12 @@ CREDENTIAL_MARKERS = (
 ORBI_BUILD_LINK_RE = re.compile(r"https?://\S*orbi\.build\S*")
 FRONT_MATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 REF_RE = re.compile(r"[?&]ref=([a-z0-9_-]+)")
-PLUGIN_TOKEN_ROWS = ("plugin-listing", "plugin-readme", "plugin-skill")
+PLUGIN_TOKEN_ROWS = (
+    "plugin-listing",
+    "plugin-readme",
+    "plugin-skill",
+    "agent-plugins",
+)
 
 
 def plugin_files(plugin_dir: Path = PLUGIN_DIR) -> list[Path]:
@@ -69,6 +102,41 @@ def plugin_files(plugin_dir: Path = PLUGIN_DIR) -> list[Path]:
 
 def load_manifest(plugin_dir: Path = PLUGIN_DIR) -> dict:
     return json.loads((plugin_dir / MANIFEST_REL).read_text(encoding="utf-8"))
+
+
+def load_agent_manifest(plugin_dir: Path = PLUGIN_DIR) -> dict:
+    return json.loads((plugin_dir / AGENT_MANIFEST_REL).read_text(encoding="utf-8"))
+
+
+def check_agent_manifest_keys(plugin_dir: Path = PLUGIN_DIR) -> None:
+    """The Agent Plugins 1.0 schema is closed: the root manifest's key set
+    must stay inside the 10 allowed keys and carry the two required ones
+    (Issue #1404)."""
+    manifest = load_agent_manifest(plugin_dir)
+    assert isinstance(manifest, dict), "root plugin.json must be an object"
+    extra = set(manifest) - AGENT_PLUGIN_ALLOWED_KEYS
+    assert not extra, (
+        f"root plugin.json has keys outside the schema: {sorted(extra)}"
+    )
+    assert "$schema" in manifest, "root plugin.json missing $schema"
+    assert "name" in manifest, "root plugin.json missing name"
+
+
+def check_agent_manifest_matches_claude_manifest(
+    plugin_dir: Path = PLUGIN_DIR,
+) -> None:
+    """The two manifests are bumped together and always carry the same
+    version and description (Issue #1404)."""
+    agent = load_agent_manifest(plugin_dir)
+    claude = load_manifest(plugin_dir)
+    assert agent.get("version") == claude.get("version"), (
+        "version differs: root plugin.json "
+        f"{agent.get('version')!r} != .claude-plugin/plugin.json "
+        f"{claude.get('version')!r}"
+    )
+    assert agent.get("description") == claude.get("description"), (
+        "description differs between the two manifests"
+    )
 
 
 def read_front_matter(path: Path) -> dict:
@@ -211,8 +279,50 @@ def test_manifest_author_url():
     check_manifest_author_url()
 
 
-def test_manifest_version_is_0_1_3():
-    assert load_manifest().get("version") == "0.1.3"
+def test_manifest_version_is_0_1_4():
+    assert load_manifest().get("version") == "0.1.4"
+
+
+# --- Agent Plugins 1.0 root manifest (Issue #1404) ---------------------------
+
+
+def test_agent_manifest_parses():
+    assert isinstance(load_agent_manifest(), dict)
+
+
+def test_agent_manifest_keys_stay_within_the_closed_schema():
+    check_agent_manifest_keys()
+
+
+def test_agent_manifest_carries_schema_and_name():
+    manifest = load_agent_manifest()
+    assert manifest.get("$schema") == AGENT_PLUGIN_SCHEMA
+    assert manifest.get("name") == "orbi"
+
+
+def test_agent_manifest_name_matches_agent_plugins_rule():
+    name = load_agent_manifest().get("name")
+    assert isinstance(name, str) and AGENT_PLUGIN_NAME_RE.match(name), (
+        f"invalid Agent Plugins name: {name!r}"
+    )
+
+
+def test_agent_manifest_version_and_description_match_claude_manifest():
+    check_agent_manifest_matches_claude_manifest()
+
+
+def test_agent_manifest_homepage_and_author_url_carry_agent_plugins_ref():
+    manifest = load_agent_manifest()
+    assert manifest.get("homepage") == AGENT_PLUGIN_HOMEPAGE, (
+        f"root homepage must be {AGENT_PLUGIN_HOMEPAGE!r}, "
+        f"got {manifest.get('homepage')!r}"
+    )
+    author = manifest.get("author")
+    assert isinstance(author, dict), "root plugin.json author must be a mapping"
+    assert author.get("url") == AGENT_PLUGIN_HOMEPAGE, (
+        f"root author.url must be {AGENT_PLUGIN_HOMEPAGE!r}, "
+        f"got {author.get('url')!r}"
+    )
 
 
 # --- README and license -------------------------------------------------------
@@ -234,6 +344,17 @@ def test_readme_has_data_section():
     assert re.search(r"^##\s+Data\b", text, re.MULTILINE), (
         "README is missing its '## Data' section"
     )
+
+
+def test_readme_documents_the_copilot_and_cursor_install():
+    """The same folder is listable in the Copilot and Cursor marketplaces, so
+    the README must name that install path (Issue #1404)."""
+    text = (PLUGIN_DIR / "README.md").read_text(encoding="utf-8")
+    assert (
+        "copilot plugin install orbi-build/orbi:integrations/claude-plugin"
+        in text
+    ), "README must document the GitHub Copilot install command"
+    assert "Cursor" in text, "README must name Cursor as a supported host"
 
 
 def test_readme_data_section_lists_gh_api():
@@ -488,6 +609,19 @@ def test_fixture_copy_with_svg_outside_the_icon_path_fails_the_type_assertion(
     (skill_dir / "logo.svg").write_text("<svg/>", encoding="utf-8")
     with pytest.raises(AssertionError):
         check_allowed_file_types(fixture)
+
+
+def test_fixture_agent_manifest_with_logo_key_fails_the_key_set_assertion(
+    tmp_path,
+):
+    fixture = tmp_path / "plugin"
+    shutil.copytree(PLUGIN_DIR, fixture)
+    manifest_path = fixture / AGENT_MANIFEST_REL
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["logo"] = "icon.svg"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_agent_manifest_keys(fixture)
 
 
 def test_fixture_skill_reading_the_working_tree_fails_the_default_branch_assertion(
