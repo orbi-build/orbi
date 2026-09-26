@@ -650,6 +650,67 @@ def test_merge_gate_preflight_reports_non_404_read_failures(
     assert message in github.merge_gate_preflight("acme/project", "main")[0]
 
 
+def test_merge_gate_preflight_rulesets_unavailable_on_plan_limit(monkeypatch, caplog):
+    """Issue #1361: GitHub Free plan 403 on rulesets should treat rulesets as unavailable (empty)
+    and emit merge_gate_rulesets_unavailable reason=plan instead of UNKNOWN or ERROR."""
+    from orbi import github
+
+    plan_limit_stderr = (
+        'gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)'
+    )
+    plan_limit_stdout = (
+        '{"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.",'
+        '"documentation_url":"https://docs.github.com/rest/repos/rules#get-rules-for-a-branch","status":"403"}'
+    )
+
+    def fake(command, **kwargs):
+        if (command[-1].endswith("branches/main")
+                and "/rules/" not in command[-1]):
+            return '{"protected": false}'
+        if "rules/branches/" in command[-1]:
+            raise subprocess.CalledProcessError(
+                1, command, output=plan_limit_stdout, stderr=plan_limit_stderr,
+            )
+        return "{}"
+
+    monkeypatch.setattr(github, "run_command", fake)
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
+        report = github.merge_gate_preflight("acme/private-repo", "main")
+
+    assert report[0].startswith("merge_gate: PASS repo=acme/private-repo branch=main")
+    assert any("merge_gate_rulesets_unavailable reason=plan" in r.message for r in caplog.records)
+    assert not any(r.levelno >= logging.ERROR for r in caplog.records)
+
+
+def test_merge_gate_preflight_rulesets_plan_limit_evaluates_classic_protection(monkeypatch, caplog):
+    """Issue #1361: with rulesets unavailable on the plan, classic protection blockers are still evaluated."""
+    from orbi import github
+
+    plan_limit_stdout = (
+        '{"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.","status":"403"}'
+    )
+
+    def fake(command, **kwargs):
+        if (command[-1].endswith("branches/main")
+                and "/rules/" not in command[-1]):
+            return '{"protected": true}'
+        if "branches/main/protection" in command[-1]:
+            return json.dumps({"required_pull_request_reviews": {"required_approving_review_count": 2}})
+        if "rules/branches/" in command[-1]:
+            raise subprocess.CalledProcessError(
+                1, command, output=plan_limit_stdout, stderr="",
+            )
+        return "{}"
+
+    monkeypatch.setattr(github, "run_command", fake)
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
+        report = github.merge_gate_preflight("acme/private-repo", "main")
+
+    assert any("merge_gate: FAILED classic protection requires 2 approving review(s)" in line for line in report)
+    assert any("merge_gate_rulesets_unavailable reason=plan" in r.message for r in caplog.records)
+    assert not any(r.levelno >= logging.ERROR for r in caplog.records)
+
+
 def test_merge_gate_preflight_rules_without_approvals(monkeypatch):
     from orbi import github
 

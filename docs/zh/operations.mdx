@@ -576,6 +576,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `merge_gate_behind_base` | 合并门发现 PR 落后于 base |
 | `merge_gate_head_moved` | PR head 在评审之后被移动 |
 | `merge_gate_not_mergeable` | PR 不可合并（冲突或检查失败） |
+| `merge_gate_rulesets_unavailable` | 规则集 API 在该仓库套餐上不可用（Issue #1361） |
 | `merged` | PR 合并精确落在被评审的 head 上 |
 | `confirm_merged_missing_on_base` | 合并提交不在 base 分支上 |
 | `confirm_merged_not_merged` | PR 声称已合并但 GitHub 状态矛盾 |

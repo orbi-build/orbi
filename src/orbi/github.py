@@ -74,11 +74,21 @@ def _not_found(exc: subprocess.CalledProcessError) -> bool:
     ), re.IGNORECASE) is not None
 
 
-def _merge_gate_api(repo: str, path: str, *, timeout: int = 30) -> object:
+def _is_ruleset_plan_limit(exc: subprocess.CalledProcessError) -> bool:
+    """Whether a failed rulesets read was due to plan limitations (e.g. GitHub Free)."""
+    text = " ".join(str(part or "") for part in (exc.stderr, exc.stdout)).lower()
+    return "upgrade to github pro" in text
+
+
+def _merge_gate_api(
+    repo: str, path: str, *, timeout: int = 30,
+    failure_log_level: int = logging.ERROR,
+) -> object:
     """Read one merge-gate endpoint through the read-only gh seam."""
     suffix = f"/{path}" if path else ""
     raw = run_gh_read_command(
         ["gh", "api", f"repos/{repo}{suffix}"], timeout=timeout,
+        failure_log_level=failure_log_level,
     )
     return json.loads(raw)
 
@@ -120,13 +130,32 @@ def merge_gate_preflight(repo: str, branch: str) -> list[str]:
             return ["merge_gate: UNKNOWN cannot parse branch protection response"]
 
     try:
-        rules = _merge_gate_api(repo, f"rules/branches/{encoded_branch}")
+        rules = _merge_gate_api(
+            repo, f"rules/branches/{encoded_branch}",
+            failure_log_level=logging.DEBUG,
+        )
     except subprocess.CalledProcessError as exc:
-        if _not_found(exc):
+        if _is_ruleset_plan_limit(exc):
+            event("merge_gate_rulesets_unavailable", reason="plan")
+            rules = []
+        elif _not_found(exc):
+            event(
+                "command_failed", level=logging.ERROR,
+                returncode=exc.returncode,
+                stdout=(exc.stdout or "").rstrip(),
+                stderr=(exc.stderr or "").rstrip(),
+            )
             return ["merge_gate: UNKNOWN protection is unreadable; "
                     "grant the token repository administration permission"]
-        return ["merge_gate: UNKNOWN cannot read rulesets; "
-                "requires repository administration permission"]
+        else:
+            event(
+                "command_failed", level=logging.ERROR,
+                returncode=exc.returncode,
+                stdout=(exc.stdout or "").rstrip(),
+                stderr=(exc.stderr or "").rstrip(),
+            )
+            return ["merge_gate: UNKNOWN cannot read rulesets; "
+                    "requires repository administration permission"]
     except (json.JSONDecodeError, TypeError, ValueError):
         return ["merge_gate: UNKNOWN cannot parse ruleset response"]
     if not isinstance(rules, list) or not all(
