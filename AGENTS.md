@@ -207,6 +207,8 @@ file "preventive" tickets for incidents that might recur or for theoretical
 risks (new probes, gates, self-healing layers, retry budgets, dashboards). One
 maintainer with no paying users: fix what a user actually hit, the smallest way.
 
+**Growth is one test for how a feature behaves.** Prefer the option that gets a new user to a first result fastest, with no dead ends.
+
 The test is **whether this repo is on Orbi**, not how small the change is or
 whether you know how to make it. Being able to make it is not a reason to.
 
