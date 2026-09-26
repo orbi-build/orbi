@@ -58,6 +58,17 @@ def test_xai_does_not_retain_the_obsolete_bare_model_id():
     assert model["contextWindow"] == 1_000_000
 
 
+def test_deepseek_uses_the_models_full_context_window():
+    """Issue #1411: `deepseek-flash` publishes a 1M-token window; the
+    template must pin that full window, not a 131,072 cap that made Pi
+    compact (contextWindow - reserveTokens) at ~114.7K tokens."""
+    _path, data = load_template("deepseek")
+    model = data["providers"]["deepseek"]["models"][0]
+    assert model["id"] == "deepseek-flash"
+    assert model["contextWindow"] == 1_000_000
+    assert model["maxTokens"] == 16384
+
+
 def test_gemini_uses_model_default_thinking_mapping():
     _path, data = load_template("gemini")
     model = data["providers"]["google"]["models"][0]

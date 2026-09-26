@@ -879,6 +879,29 @@ def test_docs_document_openrouter_free_models_with_honest_limits():
         assert "thinkingLevelMap" in text
 
 
+def test_docs_deepseek_context_window_matches_the_template():
+    """Issue #1411: both provider pages must state the DeepSeek template's
+    full published context window (the model reports 1M) and must no longer
+    present the 131,072 cap as the committed configuration."""
+    template = json.loads(
+        (REPO_ROOT / "templates" / "pi-providers" / "deepseek.json").read_text(
+            encoding="utf-8")
+    )
+    window = template["providers"]["deepseek"]["models"][0]["contextWindow"]
+    assert window == 1_000_000, "the DeepSeek template must use the full 1M window"
+    for slug in ("providers", "zh/providers"):
+        text = page_text(slug)
+        match = re.search(r"### DeepSeek.*?(?=\n### )", text, re.DOTALL)
+        assert match, f"{slug} must carry the DeepSeek section"
+        section = match.group(0)
+        assert f"{window:,}" in section, (
+            f"{slug} must name the template's 1,000,000 window"
+        )
+        assert "`contextWindow` 131,072" not in section, (
+            f"{slug} must not present 131,072 as the DeepSeek setting"
+        )
+
+
 def test_docs_getting_started_documents_the_full_chain_and_troubleshooting():
     """Issue #179: the smoke walkthrough must verify the FULL chain —
     picked up, implemented, tested, PR opened, independently reviewed,
