@@ -3,10 +3,10 @@
 The plugin at ``integrations/claude-plugin/`` is Markdown-and-JSON-only: no
 hooks, no MCP server, no scripts and no package installs. It leans on the
 user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
-directory and the repository's contract require, and they carry two
-counter-proofs (a fixture copy with ``hooks/`` and a fixture copy without
-``homepage``) so a future change cannot silently turn the assertions into
-no-ops.
+directory and the repository's contract require, and they carry three
+counter-proofs (a fixture copy with ``hooks/``, a fixture copy without
+``homepage``, and a fixture copy reading the config from the working tree) so a
+future change cannot silently turn the assertions into no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
 """
@@ -303,6 +303,9 @@ def test_skill_checks_the_milestone_is_open():
     )
     assert "per_page=100" in text, (
         "SKILL.md must page the milestone query so a later open milestone is seen"
+    )
+    assert "--paginate" in text, (
+        "SKILL.md must paginate the milestone query, not only widen its page size"
     )
     assert re.search(r"among\s+the\s+open\s+Milestones", text), (
         "SKILL.md must say the value must be among the open milestones"

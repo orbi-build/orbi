@@ -15,7 +15,7 @@ branch, never from a working copy:
 gh api repos/<owner>/<repo>/contents/.github/orbi.toml \
   -H "Accept: application/vnd.github.raw"
 
-gh api "repos/<owner>/<repo>/milestones?state=open&per_page=100" \
+gh api --paginate "repos/<owner>/<repo>/milestones?state=open&per_page=100" \
   --jq '.[].title'
 ```
 

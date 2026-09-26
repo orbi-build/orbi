@@ -70,7 +70,7 @@ If it exists:
    still open:
 
    ```
-   gh api "repos/<owner>/<repo>/milestones?state=open&per_page=100" \
+   gh api --paginate "repos/<owner>/<repo>/milestones?state=open&per_page=100" \
      --jq '.[].title'
    ```
 
