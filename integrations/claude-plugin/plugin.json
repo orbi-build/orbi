@@ -1,10 +1,10 @@
 {
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "orbi",
-  "displayName": "Orbi",
   "version": "0.1.4",
   "description": "Write GitHub Issues an autonomous agent can deliver without supervision, then hand them to Orbi: it implements, gets an independent review, merges the reviewed head and cuts a tagged release.",
-  "author": { "name": "Orbi", "url": "https://orbi.build/?ref=plugin-listing" },
-  "homepage": "https://orbi.build/?ref=plugin-listing",
+  "author": { "name": "Orbi", "url": "https://orbi.build/?ref=agent-plugins" },
+  "homepage": "https://orbi.build/?ref=agent-plugins",
   "repository": "https://github.com/orbi-build/orbi",
   "license": "AGPL-3.0-only",
   "keywords": ["github-issues", "autonomous-coding-agent", "ai-code-review", "auto-merge", "release-automation"]

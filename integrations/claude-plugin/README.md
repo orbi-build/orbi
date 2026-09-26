@@ -11,6 +11,13 @@ factors at https://aiready.sh/ as the bar. If a task has more than one
 independently mergeable result, the skill proposes splitting it into several
 Issues first.
 
+## Install
+
+The same folder installs in GitHub Copilot
+(`copilot plugin install orbi-build/orbi:integrations/claude-plugin`) and in
+Cursor; the `write-ai-ready-issue` skill loads in all of them, while the
+`/orbi:` commands load in Claude Code and Cursor only.
+
 ## Write an Issue (no Orbi needed)
 
 The skill works for anyone, in any repository whose Issues are enabled. It
