@@ -20,12 +20,12 @@ gh issue list --limit 200 --state all \
   --json number,title,labels,updatedAt,url --label ai-blocked
 ```
 
-Then the Issues merged in the last 7 days:
+Then the Issues labeled `ai-merged`: keep the ones whose `updatedAt` falls
+within the last 7 days.
 
 ```
 gh issue list --limit 200 --state all \
-  --json number,title,labels,updatedAt,url --label ai-merged \
-  --search "updated:>=$(date -d '7 days ago' +%Y-%m-%d)"
+  --json number,title,labels,updatedAt,url --label ai-merged
 ```
 
 Show a short table with the state read from the labels, the linked PR if the
