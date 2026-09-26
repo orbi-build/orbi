@@ -18239,8 +18239,10 @@ def test_prepare_release_version_updates_sources_and_commits(tmp_path, monkeypat
         "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME",
         "GIT_COMMITTER_EMAIL",
     )} == {
-        "GIT_AUTHOR_NAME": "Orbi", "GIT_AUTHOR_EMAIL": "orbi@localhost",
-        "GIT_COMMITTER_NAME": "Orbi", "GIT_COMMITTER_EMAIL": "orbi@localhost",
+        "GIT_AUTHOR_NAME": "orbi-build[bot]",
+        "GIT_AUTHOR_EMAIL": "327503608+orbi-build[bot]@users.noreply.github.com",
+        "GIT_COMMITTER_NAME": "orbi-build[bot]",
+        "GIT_COMMITTER_EMAIL": "327503608+orbi-build[bot]@users.noreply.github.com",
     }
     assert calls[2] == (["git", "push", "origin", "HEAD:refs/heads/main"], {
         "cwd": work, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
@@ -18267,8 +18269,12 @@ def test_prepare_release_version_updates_package_json(tmp_path, monkeypatch):
     assert calls[0] == (["git", "add", "package.json"], {"cwd": work})
     commit_call = calls[1]
     assert commit_call[0] == ["git", "commit", "-m", "chore: prepare release v0.3.0"]
-    assert commit_call[1]["env"]["GIT_COMMITTER_EMAIL"] == "orbi@localhost"
-    assert commit_call[1]["env"]["GIT_AUTHOR_EMAIL"] == "orbi@localhost"
+    assert commit_call[1]["env"]["GIT_COMMITTER_EMAIL"] == (
+        "327503608+orbi-build[bot]@users.noreply.github.com"
+    )
+    assert commit_call[1]["env"]["GIT_AUTHOR_EMAIL"] == (
+        "327503608+orbi-build[bot]@users.noreply.github.com"
+    )
     assert calls[2] == (["git", "push", "origin", "HEAD:refs/heads/main"], {
         "cwd": work, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
     })
@@ -18719,7 +18725,9 @@ def test_release_git_writes_use_identity_without_git_config(tmp_path, monkeypatc
          "refs/tags/v0.1.0"], check=True, capture_output=True, text=True,
         env=clean_env,
     ).stdout.strip()
-    assert tagger == "Orbi <orbi@localhost>"
+    assert tagger == (
+        "orbi-build[bot] <327503608+orbi-build[bot]@users.noreply.github.com>"
+    )
 
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "--bare", str(remote)],
@@ -18734,7 +18742,57 @@ def test_release_git_writes_use_identity_without_git_config(tmp_path, monkeypatc
         ["git", "-C", str(work), "show", "-s", "--format=%an <%ae> %cn <%ce>"],
         check=True, capture_output=True, text=True, env=clean_env,
     ).stdout.strip()
-    assert commit_identity == "Orbi <orbi@localhost> Orbi <orbi@localhost>"
+    assert commit_identity == (
+        "orbi-build[bot] <327503608+orbi-build[bot]@users.noreply.github.com> "
+        "orbi-build[bot] <327503608+orbi-build[bot]@users.noreply.github.com>"
+    )
+
+
+def test_bot_git_identity_overrides_git_config(tmp_path):
+    """The startup identity owns a commit even when `-c user.*` is given.
+
+    Git's `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables take precedence over
+    `user.*` config, including `-c user.*`, so a Pi session can no longer
+    credit its commits to a stranger's account (Issue #1416).
+    """
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_"))
+    }
+    runner.set_bot_git_identity(env)
+    work = tmp_path / "repo"
+    subprocess.run(["git", "init", "-b", "main", str(work)],
+                   check=True, capture_output=True, env=env)
+    subprocess.run(
+        ["git", "-C", str(work), "-c", "user.name=x",
+         "-c", "user.email=x@example.com", "commit", "--allow-empty",
+         "-m", "t"],
+        check=True, capture_output=True, env=env,
+    )
+    identity = subprocess.run(
+        ["git", "-C", str(work), "log", "-1",
+         "--format=%an <%ae>|%cn <%ce>"],
+        check=True, capture_output=True, text=True, env=env,
+    ).stdout.strip()
+    assert identity == (
+        "orbi-build[bot] <327503608+orbi-build[bot]@users.noreply.github.com>|"
+        "orbi-build[bot] <327503608+orbi-build[bot]@users.noreply.github.com>"
+    )
+
+
+def test_runner_main_pins_bot_git_identity(monkeypatch, tmp_path):
+    """A run pins Orbi's identity before any git call or Pi session."""
+    for name in (
+        "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    missing = tmp_path / "missing.toml"
+    assert runner.main(["--config", str(missing)]) == 1
+    assert os.environ["GIT_AUTHOR_EMAIL"] == (
+        "327503608+orbi-build[bot]@users.noreply.github.com"
+    )
+    assert os.environ["GIT_COMMITTER_NAME"] == "orbi-build[bot]"
 
 
 def test_ensure_release_tag_pushed_creates_and_pushes_when_no_local_tag(
@@ -19729,8 +19787,10 @@ def test_process_release_success_end_to_end(monkeypatch):
     tag_calls = [item for item in state["commands"] if item[0][:3] == ["git", "tag", "-a"]]
     tag_call = next(item for item in tag_calls if item[0][-1] == "abc123")
     assert tag_call[0] == ["git", "tag", "-a", "v0.3.0", "-m", "Release v0.3.0", "abc123"]
-    assert tag_call[1]["env"]["GIT_AUTHOR_NAME"] == "Orbi"
-    assert tag_call[1]["env"]["GIT_COMMITTER_EMAIL"] == "orbi@localhost"
+    assert tag_call[1]["env"]["GIT_AUTHOR_NAME"] == "orbi-build[bot]"
+    assert tag_call[1]["env"]["GIT_COMMITTER_EMAIL"] == (
+        "327503608+orbi-build[bot]@users.noreply.github.com"
+    )
     assert (["git", "push", "origin", "refs/tags/v0.3.0"], {
         "cwd": Path("/r"),
         "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
