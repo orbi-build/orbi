@@ -21,12 +21,18 @@ import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from orbi.git_identity import BOT_GIT_IDENTITY
 from orbi.gitops import fetch_base_ref
 from orbi.journal import run_command, run_git_network_command
 
 # Identity used for every local Git object written by the release state
-# machine. Cloud sandboxes intentionally do not provide a user Git config.
-RELEASE_GIT_IDENTITY = ("Orbi", "orbi@localhost")
+# machine. Cloud sandboxes intentionally do not provide a user Git config,
+# so the machine passes these variables explicitly. It is the same
+# `orbi-build[bot]` App identity the Runner sets at startup (Issue #1416).
+RELEASE_GIT_IDENTITY = (
+    BOT_GIT_IDENTITY["GIT_AUTHOR_NAME"],
+    BOT_GIT_IDENTITY["GIT_AUTHOR_EMAIL"],
+)
 
 
 def run_git_write(

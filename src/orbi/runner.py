@@ -57,6 +57,7 @@ from orbi import milestone as milestone_bookkeeping
 from orbi import claim, clarify
 from orbi import config as config_domain
 from orbi.engine_source import EngineSourceError
+from orbi.git_identity import set_bot_git_identity
 from orbi.git_transport import TransportError, check_transport
 from orbi.pilot_slots import (
     acquire_claim_lock, acquire_slot, mark_slot_delivery, slot_dir_for,
@@ -6826,6 +6827,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     configure_logging()
+    set_bot_git_identity(os.environ)
     # Stop scene: install the SIGTERM handler BEFORE any
     # other step so every phase of the tick (pre-claim, claim,
     # implement, delivery wait) stops with the active Issue context
