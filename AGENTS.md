@@ -114,6 +114,9 @@ x-<yymmddhhmm>   an X post, to the minute — dozens ship per day, so a date
 hn-<postid>      Hacker News
 tg               the Telegram group
 email-<batch>    an email batch
+plugin-listing   the homepage link on the claude.com plugin listing page
+plugin-readme    a link inside the Claude plugin's README
+plugin-skill     the hand-off hint the Claude plugin shows for a repo not yet on Orbi
 ```
 
 The channel is read back with `substr`, so the schema never grows a column:
