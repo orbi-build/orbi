@@ -6874,16 +6874,6 @@ def main(argv: list[str] | None = None) -> int:
         # crash in the `finally` below on `None.release()`.
         return 0
     try:
-        # The resume hooks are reusable: the closed-unscoped idle path
-        # re-runs the claim scan (Issue #1391) with the same scene wiring.
-        resume_hooks = claim.ResumeHooks(
-            resume_scene=resume_scene,
-            route_external_pr_ticket=_route_external_pr_ticket,
-            block_scene_failure=block_scene_failure,
-            recover_missing_pr_scene=_recover_missing_pr_scene,
-            has_recoverable_pr_scene=_has_recoverable_pr_scene,
-            comment_pr=comment_pr,
-        )
         claim_lock = acquire_claim_lock(config.slot_dir)
         try:
             selected = claim.pick_next_delivery(
@@ -6891,7 +6881,14 @@ def main(argv: list[str] | None = None) -> int:
                 config.max_concurrency,
                 config.active_milestone,
                 config=config,
-                hooks=resume_hooks,
+                hooks=claim.ResumeHooks(
+                    resume_scene=resume_scene,
+                    route_external_pr_ticket=_route_external_pr_ticket,
+                    block_scene_failure=block_scene_failure,
+                    recover_missing_pr_scene=_recover_missing_pr_scene,
+                    has_recoverable_pr_scene=_has_recoverable_pr_scene,
+                    comment_pr=comment_pr,
+                ),
             )
             if selected is None:
                 # Nothing was selected: the claim window is over, so release
@@ -6970,21 +6967,27 @@ def main(argv: list[str] | None = None) -> int:
                         ):
                             # Issue #1391: the active Milestone is closed and
                             # no newer open one exists, so this tick has no
-                            # scope. Run the claim again WITHOUT the Milestone
-                            # filter; the folded `selected` then falls through
-                            # to the ordinary delivery path below. The
+                            # scope. Re-run the FRESH ready scan WITHOUT the
+                            # Milestone filter — the repository policy's value
+                            # included, since it wins over the host one —
+                            # keeping the repo's own `dispatch_label` resolved
+                            # above. The resume scans already ran in the first
+                            # claim; the folded `selected` falls through to
+                            # the ordinary delivery path below, and the
                             # configured value is never written or cleared.
+                            # The lock is released by the same `finally` as the
+                            # first scan, so the scan -> identity-write window
+                            # stays serialized against a co-runner.
                             claim_lock = acquire_claim_lock(config.slot_dir)
-                            try:
-                                selected = claim.pick_next_delivery(
-                                    config.source_repos, config.slot_dir,
-                                    config.max_concurrency,
-                                    None,
-                                    config=config,
-                                    hooks=resume_hooks,
-                                )
-                            finally:
-                                claim_lock.release()
+                            issue = claim.pick_issue(
+                                idle_repo, None,
+                                dispatch_label=dispatch_label,
+                                held=slot_held_deliveries(
+                                    config.slot_dir, config.max_concurrency,
+                                ),
+                            )
+                            if issue is not None:
+                                selected = (idle_repo, issue, None)
                 if selected is None:
                     return 0
             source_repo, issue, scene = selected
