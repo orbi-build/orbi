@@ -394,7 +394,10 @@ JOURNAL_EVENTS: dict[str, str] = {
     "pending_milestone_issue_failed": "the pending-milestone Issue state could not be applied",
     "pending_milestone_issue_deduplicated": "duplicate pending-milestone Issues were closed",
     "active_milestone_advanced": "the active Milestone advanced to the next pending one",
-    "active_milestone_advance_none": "no pending Milestone to advance to",
+    "active_milestone_closed_unscoped": (
+        "the active Milestone is closed with no newer open one, so the tick "
+        "claims without a Milestone scope"
+    ),
     "active_milestone_advance_pending": "a pending Milestone candidate is waiting",
     "active_milestone_release_pending": (
         "a finished Milestone still needs its release ticket confirmed"

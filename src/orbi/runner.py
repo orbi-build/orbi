@@ -6874,6 +6874,16 @@ def main(argv: list[str] | None = None) -> int:
         # crash in the `finally` below on `None.release()`.
         return 0
     try:
+        # The resume hooks are reusable: the closed-unscoped idle path
+        # re-runs the claim scan (Issue #1391) with the same scene wiring.
+        resume_hooks = claim.ResumeHooks(
+            resume_scene=resume_scene,
+            route_external_pr_ticket=_route_external_pr_ticket,
+            block_scene_failure=block_scene_failure,
+            recover_missing_pr_scene=_recover_missing_pr_scene,
+            has_recoverable_pr_scene=_has_recoverable_pr_scene,
+            comment_pr=comment_pr,
+        )
         claim_lock = acquire_claim_lock(config.slot_dir)
         try:
             selected = claim.pick_next_delivery(
@@ -6881,14 +6891,7 @@ def main(argv: list[str] | None = None) -> int:
                 config.max_concurrency,
                 config.active_milestone,
                 config=config,
-                hooks=claim.ResumeHooks(
-                    resume_scene=resume_scene,
-                    route_external_pr_ticket=_route_external_pr_ticket,
-                    block_scene_failure=block_scene_failure,
-                    recover_missing_pr_scene=_recover_missing_pr_scene,
-                    has_recoverable_pr_scene=_has_recoverable_pr_scene,
-                    comment_pr=comment_pr,
-                ),
+                hooks=resume_hooks,
             )
             if selected is None:
                 # Nothing was selected: the claim window is over, so release
@@ -6930,28 +6933,30 @@ def main(argv: list[str] | None = None) -> int:
                         config, idle_repo, repo_policy,
                     )
                     try:
-                        milestone_bookkeeping.reconcile_milestone_on_idle(
-                            idle_repo,
-                            effective_milestone,
-                            config.config_path,
-                            config.repo_dir,
-                            auto_next_milestone=(
-                                fused_idle.auto_next_milestone
-                            ),
-                            release_confirmation=(
-                                repo_policy.release_confirmation
-                                if repo_policy is not None
-                                and repo_policy.release_confirmation is not None
-                                else False
-                            ),
-                            parse_version_title=_parse_version_title,
-                            policy=repo_policy,
-                            policy_path=config_domain.repository_config_path(
-                                config, idle_repo,
-                            ),
-                            base_branch=fused_idle.base_branch,
-                            dispatch_label=dispatch_label,
-                            version_file=config.version_file,
+                        idle_outcome = (
+                            milestone_bookkeeping.reconcile_milestone_on_idle(
+                                idle_repo,
+                                effective_milestone,
+                                config.config_path,
+                                config.repo_dir,
+                                auto_next_milestone=(
+                                    fused_idle.auto_next_milestone
+                                ),
+                                release_confirmation=(
+                                    repo_policy.release_confirmation
+                                    if repo_policy is not None
+                                    and repo_policy.release_confirmation is not None
+                                    else False
+                                ),
+                                parse_version_title=_parse_version_title,
+                                policy=repo_policy,
+                                policy_path=config_domain.repository_config_path(
+                                    config, idle_repo,
+                                ),
+                                base_branch=fused_idle.base_branch,
+                                dispatch_label=dispatch_label,
+                                version_file=config.version_file,
+                            )
                         )
                     except Exception:
                         LOGGER.exception(
@@ -6959,7 +6964,29 @@ def main(argv: list[str] | None = None) -> int:
                             idle_repo,
                             effective_milestone,
                         )
-                return 0
+                    else:
+                        if milestone_bookkeeping.is_closed_unscoped_outcome(
+                            idle_outcome,
+                        ):
+                            # Issue #1391: the active Milestone is closed and
+                            # no newer open one exists, so this tick has no
+                            # scope. Run the claim again WITHOUT the Milestone
+                            # filter; the folded `selected` then falls through
+                            # to the ordinary delivery path below. The
+                            # configured value is never written or cleared.
+                            claim_lock = acquire_claim_lock(config.slot_dir)
+                            try:
+                                selected = claim.pick_next_delivery(
+                                    config.source_repos, config.slot_dir,
+                                    config.max_concurrency,
+                                    None,
+                                    config=config,
+                                    hooks=resume_hooks,
+                                )
+                            finally:
+                                claim_lock.release()
+                if selected is None:
+                    return 0
             source_repo, issue, scene = selected
             # Name THIS delivery in the held slot file — the
             # earliest point after selection, before any verification work.

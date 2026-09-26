@@ -6725,9 +6725,13 @@ def test_advance_active_milestone_open_reconciles_notifications_without_write(
     assert config.read_text() == 'active_milestone = "v0.3.0"\n'
 
 
-def test_advance_active_milestone_closed_without_candidate_logs_and_keeps_value(
+def test_advance_active_milestone_closed_without_candidate_is_unscoped(
     monkeypatch, tmp_path, caplog,
 ):
+    """Issue #1391: a closed active Milestone with no higher open candidate
+    means no scope. The advance reports the closed-unscoped outcome and logs
+    one line, and the configured value is left untouched (the maintainer may
+    still create the next Milestone)."""
     config = tmp_path / "orbi.toml"
     config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
     monkeypatch.setattr(seam, "run_command",
@@ -6740,9 +6744,12 @@ def test_advance_active_milestone_closed_without_candidate_logs_and_keeps_value(
     with caplog.at_level("INFO"):
         assert _advance_active_milestone_on_idle(
             "owner/repo", "v0.3.0", config,
-        ) == ("closed", None)
+        ) == (milestone.MILESTONE_CLOSED_UNSCOPED, None)
     assert config.read_text() == 'active_milestone = "v0.3.0"\n'
-    assert "active_milestone_advance_none" in caplog.text
+    assert (
+        "active_milestone_closed_unscoped repo=owner/repo closed=v0.3.0"
+        in caplog.text
+    )
 
 
 def test_advance_active_milestone_missing_lists_open_milestones(monkeypatch, tmp_path):
@@ -7276,6 +7283,103 @@ def test_main_passes_none_active_milestone_when_unconfigured(
     monkeypatch.setattr(claim, "pick_next_delivery", fake_pick)
     assert runner.main(["--config", str(config)]) == 0
     assert seen["milestone"] is None
+
+
+def _stub_idle_milestone_path(monkeypatch, outcome):
+    """Stub the idle Milestone path down to one resolved outcome."""
+    monkeypatch.setitem(
+        milestone.__dict__, "validate_active_milestone", lambda *args: None,
+    )
+    monkeypatch.setitem(
+        milestone.__dict__, "sync_active_milestone_variable",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(
+        milestone.__dict__, "reconcile_milestone_on_idle",
+        lambda *args, **kwargs: outcome,
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "log_ready_outside_milestone",
+        lambda *args, **kwargs: False,
+    )
+
+
+def test_main_retries_the_claim_unscoped_when_active_milestone_closed(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #1391 user journey: the configured Milestone is closed with no
+    newer open one, so the idle tick's claim scan runs again WITHOUT the
+    Milestone filter and the open `ai-ready` Issue is claimed.
+
+    Counter-test: remove the unscoped retry and the second scan never runs,
+    `claimed` stays empty and this assertion fails."""
+    _stub_idle_milestone_path(
+        monkeypatch, (milestone.MILESTONE_CLOSED_UNSCOPED, None),
+    )
+    monkeypatch.setattr(seam, "load_repo_policy", lambda *args, **kwargs: None)
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v0.1.0"\n',
+        encoding="utf-8",
+    )
+    issue = {"number": 2, "title": "after the first release", "body": "b"}
+    scopes: list[str | None] = []
+
+    def fake_pick(
+        repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs,
+    ):
+        scopes.append(active_milestone)
+        if active_milestone is None:
+            return "owner/repo", issue, None
+        return None
+
+    monkeypatch.setitem(claim.__dict__, "pick_next_delivery", fake_pick)
+    claimed: list[int] = []
+    monkeypatch.setitem(
+        runner.__dict__, "process_issue",
+        lambda selected, *args, **kwargs: claimed.append(selected["number"])
+        or runner.IssueResult(
+            "pr", "https://github.com/owner/repo/pull/2",
+        ),
+    )
+    with caplog.at_level(logging.INFO):
+        assert runner.main(["--config", str(config)]) == 0
+    # The scoped scan found nothing, the unscoped retry claimed the Issue.
+    assert scopes == ["v0.1.0", None]
+    assert claimed == [2]
+
+
+@pytest.mark.parametrize("outcome", [("open", None), ("closed", "v0.2.0")])
+def test_main_keeps_the_scope_without_the_unscoped_outcome(
+    monkeypatch, tmp_path, outcome,
+):
+    """Acceptance: while the active Milestone is open (or the engine can
+    advance to a newer open one), the tick never drops the Milestone filter
+    and an Issue outside it is not claimed."""
+    _stub_idle_milestone_path(monkeypatch, outcome)
+    monkeypatch.setattr(seam, "load_repo_policy", lambda *args, **kwargs: None)
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v0.1.0"\n',
+        encoding="utf-8",
+    )
+    scopes: list[str | None] = []
+
+    def fake_pick(
+        repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs,
+    ):
+        scopes.append(active_milestone)
+        return None
+
+    monkeypatch.setitem(claim.__dict__, "pick_next_delivery", fake_pick)
+    monkeypatch.setitem(
+        runner.__dict__, "process_issue",
+        lambda *args, **kwargs: pytest.fail("nothing is claimable"),
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert scopes == ["v0.1.0"]
 
 
 def test_main_processes_one_issue(monkeypatch, tmp_path):

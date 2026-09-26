@@ -41,6 +41,9 @@ MILESTONE_IN_PROGRESS = "in_progress"
 MILESTONE_AWAITING_RELEASE = "awaiting_release"
 MILESTONE_AWAITING_NEXT = "awaiting_next"
 MILESTONE_NOTHING_TO_DO = "nothing_to_do"
+# Issue #1391: the active Milestone is closed and no higher open Milestone
+# exists — there is no scope, so the tick's claim scan runs unscoped.
+MILESTONE_CLOSED_UNSCOPED = "closed_unscoped"
 
 # The waiting state an existing decision notice was opened for. Only
 # `next` matches the pre-#856 notice; `release` is the release-ticket
@@ -172,6 +175,15 @@ def reconcile_milestone_on_idle(
         policy=policy, policy_path=policy_path,
         base_branch=base_branch, dispatch_label=dispatch_label,
         version_file=version_file,
+    )
+
+
+def is_closed_unscoped_outcome(outcome: object) -> bool:
+    """Whether an idle reconcile outcome is the closed-unscoped one
+    (Issue #1391): the active Milestone is closed and no newer open one
+    exists, so the Runner's claim scan for the tick must run unscoped."""
+    return isinstance(outcome, tuple) and outcome[:1] == (
+        MILESTONE_CLOSED_UNSCOPED,
     )
 
 
@@ -772,11 +784,16 @@ def advance_active_milestone_on_idle(
         if version is not None and current is not None and version > current:
             candidates.append((version, milestone.get("title")))
     if not candidates:
+        # Issue #1391: a closed active Milestone with no newer open one means
+        # no scope. Report it so the Runner's claim scan for this tick runs
+        # without the Milestone filter; the configured value is left in place
+        # so the existing advance still moves it when the user creates the
+        # next Milestone.
         event(
-            "active_milestone_advance_none", current=active_milestone,
-            closed=active_milestone, repo=repo,
+            "active_milestone_closed_unscoped", repo=repo,
+            closed=active_milestone,
         )
-        return "closed", None
+        return MILESTONE_CLOSED_UNSCOPED, None
     candidates.sort()
     candidate_details = [
         milestone for _, title in candidates

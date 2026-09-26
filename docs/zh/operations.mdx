@@ -619,7 +619,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `pending_milestone_issue_failed` | 待确认 milestone Issue 状态未能应用 |
 | `pending_milestone_issue_deduplicated` | 重复的待确认 milestone Issue 已关闭 |
 | `active_milestone_advanced` | active Milestone 已推进到下一个待定版本 |
-| `active_milestone_advance_none` | 没有可推进的待定 Milestone |
+| `active_milestone_closed_unscoped` | active Milestone 已关闭且没有更新的开放 Milestone，因此该 tick 不限定 Milestone 范围地认领 |
 | `active_milestone_advance_pending` | 存在待定的 Milestone 候选在等待 |
 | `active_milestone_release_pending` | 已完成的 Milestone 仍在等待确认创建 release 票 |
 | `milestone_command_applied` | 票内 `/milestone` 命令已完成全部三步 |
