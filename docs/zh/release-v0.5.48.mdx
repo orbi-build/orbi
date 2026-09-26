@@ -1,0 +1,30 @@
+# v0.5.48 发布（最新）
+
+`v0.5.48` 的 GitHub Release 发布说明：[v0.5.48](https://github.com/orbi-build/orbi/releases/tag/v0.5.48)（release task：Issue #1397）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.5.48` | 注解 tag `8cf5db62d564e3df8e321b8b8ac70698dfa8ac3c` | 提交 `99bbd402cdbfa3d5d4c16f1d7e2b5b6cd91b1016` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Claude plugin: write ai-ready Issues from a conversation and hand them to Orbi (/orbi:ship, /orbi:status) — listing gives a claude.com backlink ([Issue #1389](https://github.com/orbi-build/orbi/issues/1389); [PR #1390](https://github.com/orbi-build/orbi/pull/1390))
+
+### Reliability and recovery
+
+- Allow a release whose milestone has no deliveries (a new user's first release is blocked) ([Issue #1384](https://github.com/orbi-build/orbi/issues/1384); [PR #1387](https://github.com/orbi-build/orbi/pull/1387))
+- Claude plugin reads active_milestone from the local working tree: a stale checkout files the Issue into a closed milestone and it is never claimed ([Issue #1395](https://github.com/orbi-build/orbi/issues/1395); [PR #1396](https://github.com/orbi-build/orbi/pull/1396))
+
+### Bug fixes
+
+- A closed active milestone with no newer milestone should mean no scope, so ai-ready Issues are claimed after the first release ([Issue #1391](https://github.com/orbi-build/orbi/issues/1391); [PR #1394](https://github.com/orbi-build/orbi/pull/1394))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
