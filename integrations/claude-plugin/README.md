@@ -42,10 +42,10 @@ publishes a tagged GitHub release.
 
 ## Data
 
-The plugin runs only `gh repo view`, `gh label list`, `gh issue create` and
-`gh issue list`. All four talk to GitHub for the current repository through
-your own `gh` authentication. The plugin sends nothing to any other service
-and stores nothing.
+The plugin runs only `gh repo view`, `gh label list`, `gh api`,
+`gh issue create` and `gh issue list`. All of them talk to GitHub for the
+current repository through your own `gh` authentication. The plugin sends
+nothing to any other service and stores nothing.
 
 ## License
 
