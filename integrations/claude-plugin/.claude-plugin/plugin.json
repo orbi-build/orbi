@@ -1,7 +1,7 @@
 {
   "name": "orbi",
   "displayName": "Orbi",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Write GitHub Issues an autonomous agent can deliver without supervision, then hand them to Orbi: it implements, gets an independent review, merges the reviewed head and cuts a tagged release.",
   "author": { "name": "Orbi", "url": "https://orbi.build/?ref=plugin-listing" },
   "homepage": "https://orbi.build/?ref=plugin-listing",

@@ -3,9 +3,10 @@
 The plugin at ``integrations/claude-plugin/`` is Markdown-and-JSON-only: no
 hooks, no MCP server, no scripts and no package installs. It leans on the
 user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
-directory and the repository's contract require, and they carry three
+directory and the repository's contract require, and they carry four
 counter-proofs (a fixture copy with ``hooks/``, a fixture copy without
-``homepage``, and a fixture copy reading the config from the working tree) so a
+``homepage``, a fixture copy missing the ``author.url`` ref, and a fixture
+copy reading the config from the working tree) so a
 future change cannot silently turn the assertions into no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
@@ -26,6 +27,7 @@ MANIFEST_REL = Path(".claude-plugin") / "plugin.json"
 # chars, must start and end alphanumeric.
 NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$")
 HOMEPAGE = "https://orbi.build/?ref=plugin-listing"
+AUTHOR_URL = "https://orbi.build/?ref=plugin-listing"
 ALLOWED_REF_TOKENS = {"plugin-listing", "plugin-readme", "plugin-skill"}
 FORBIDDEN_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini", "__MACOSX"}
 FORBIDDEN_ENTRIES = {"hooks", "bin", ".mcp.json"}
@@ -70,6 +72,17 @@ def check_manifest_homepage(plugin_dir: Path = PLUGIN_DIR) -> None:
     homepage = load_manifest(plugin_dir).get("homepage")
     assert homepage == HOMEPAGE, (
         f"plugin homepage must be {HOMEPAGE!r}, got {homepage!r}"
+    )
+
+
+def check_manifest_author_url(plugin_dir: Path = PLUGIN_DIR) -> None:
+    """The claude.com listing links the author to orbi.build, so the
+    manifest ``author.url`` must carry the attribution token (Issue #1398)."""
+    author = load_manifest(plugin_dir).get("author")
+    assert isinstance(author, dict), "manifest author must be a mapping"
+    url = author.get("url")
+    assert url == AUTHOR_URL, (
+        f"plugin author.url must be {AUTHOR_URL!r}, got {url!r}"
     )
 
 
@@ -124,8 +137,12 @@ def test_manifest_homepage():
     check_manifest_homepage()
 
 
-def test_manifest_version_is_0_1_1():
-    assert load_manifest().get("version") == "0.1.1"
+def test_manifest_author_url():
+    check_manifest_author_url()
+
+
+def test_manifest_version_is_0_1_2():
+    assert load_manifest().get("version") == "0.1.2"
 
 
 # --- README and license -------------------------------------------------------
@@ -157,6 +174,44 @@ def test_readme_data_section_lists_gh_api():
     assert match, "README is missing its '## Data' section"
     assert "gh api" in match.group(1), (
         "README '## Data' must list the `gh api` command the plugin runs"
+    )
+
+
+def requirements_section(text: str) -> str:
+    match = re.search(
+        r"^##\s+Requirements\b(.*?)(?=^##\s|\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match, "README is missing its '## Requirements' section"
+    return match.group(1)
+
+
+def test_readme_declares_both_tiers():
+    text = (PLUGIN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "## Write an Issue (no Orbi needed)" in text, (
+        "README must head the no-Orbi tier explicitly"
+    )
+    assert "## Hand it to Orbi (repositories Orbi delivers)" in text, (
+        "README must head the Orbi tier explicitly"
+    )
+
+
+def test_readme_drops_the_commands_only_work_with_orbi_claim():
+    text = (PLUGIN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "These two commands only add behavior" not in text, (
+        "README must not claim /orbi:ship only works in a repository Orbi delivers"
+    )
+
+
+def test_readme_requirements_qualifies_gh_to_claude_code():
+    section = requirements_section(
+        (PLUGIN_DIR / "README.md").read_text(encoding="utf-8")
+    )
+    gh_bullets = [line for line in section.splitlines() if "`gh`" in line]
+    assert gh_bullets, "README '## Requirements' must mention `gh`"
+    assert any("Claude Code" in line for line in gh_bullets), (
+        "README '## Requirements' must qualify the `gh` line to the Claude Code path"
     )
 
 
@@ -337,6 +392,17 @@ def test_fixture_copy_without_homepage_fails_the_homepage_assertion(tmp_path):
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(AssertionError):
         check_manifest_homepage(fixture)
+
+
+def test_fixture_copy_without_author_url_ref_fails_the_author_assertion(tmp_path):
+    fixture = tmp_path / "plugin"
+    shutil.copytree(PLUGIN_DIR, fixture)
+    manifest_path = fixture / MANIFEST_REL
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["author"]["url"] = "https://orbi.build/"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_manifest_author_url(fixture)
 
 
 def test_fixture_skill_reading_the_working_tree_fails_the_default_branch_assertion(
