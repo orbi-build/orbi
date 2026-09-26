@@ -1,19 +1,23 @@
 """Contract tests for the Claude plugin (Issue #1389).
 
-The plugin at ``integrations/claude-plugin/`` is Markdown-and-JSON-only: no
-hooks, no MCP server, no scripts and no package installs. It leans on the
-user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
-directory and the repository's contract require, and they carry four
+The plugin at ``integrations/claude-plugin/`` is Markdown and JSON only, plus
+the repository ``LICENSE`` and the one non-Markdown asset the claude.com
+directory reads at its default path, ``.claude-plugin/icon.svg`` (Issue
+#1399): no hooks, no MCP server, no scripts and no package installs. It leans
+on the user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
+directory and the repository's contract require, and they carry five
 counter-proofs (a fixture copy with ``hooks/``, a fixture copy without
-``homepage``, a fixture copy missing the ``author.url`` ref, and a fixture
-copy reading the config from the working tree) so a
-future change cannot silently turn the assertions into no-ops.
+``homepage``, a fixture copy missing the ``author.url`` ref, a fixture copy
+with ``skills/x/logo.svg``, and a fixture copy reading the config from the
+working tree) so a future change cannot silently turn the assertions into
+no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
 """
 import json
 import re
 import shutil
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -32,7 +36,19 @@ ALLOWED_REF_TOKENS = {"plugin-listing", "plugin-readme", "plugin-skill"}
 FORBIDDEN_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini", "__MACOSX"}
 FORBIDDEN_ENTRIES = {"hooks", "bin", ".mcp.json"}
 ALLOWED_SUFFIXES = {".md", ".json"}
+# Issue #1399: the claude.com directory reads the plugin icon from this exact
+# default path. It is the single permitted non-Markdown/JSON, non-LICENSE asset.
+ICON_REL = Path(".claude-plugin") / "icon.svg"
+ALLOWED_SVG_RELS = {ICON_REL}
 MAX_FILE_BYTES = 256 * 1024
+ICON_VIEWBOX = "0 0 512 512"
+ICON_MIN_PX = 128
+# An ``href``/``xlink:href`` whose value names a scheme or a protocol-relative
+# URL is external; an in-document fragment (``#...``) is not (Issue #1399).
+EXTERNAL_HREF_RE = re.compile(
+    r"""(?:xlink:)?href\s*=\s*["'](?:[a-z][a-z0-9+.-]*:|//)""",
+    re.IGNORECASE,
+)
 CREDENTIAL_MARKERS = (
     "GITHUB_TOKEN",
     "GH_TOKEN",
@@ -86,9 +102,63 @@ def check_manifest_author_url(plugin_dir: Path = PLUGIN_DIR) -> None:
     )
 
 
+def check_allowed_file_types(plugin_dir: Path = PLUGIN_DIR) -> None:
+    """Markdown, JSON and the repository LICENSE only, plus the single
+    directory icon ``.claude-plugin/icon.svg`` (Issue #1399). Any other
+    ``.svg`` — e.g. under ``skills/`` — fails."""
+    for path in plugin_files(plugin_dir):
+        rel = path.relative_to(plugin_dir)
+        if rel.suffix == ".svg":
+            assert rel in ALLOWED_SVG_RELS, (
+                f"unexpected .svg file in plugin: {rel}"
+            )
+            continue
+        assert rel.suffix in ALLOWED_SUFFIXES or rel.name == "LICENSE", (
+            f"unexpected file type in plugin: {rel}"
+        )
+
+
+def viewbox_size(viewbox: str) -> tuple[float, float]:
+    parts = viewbox.split()
+    assert len(parts) == 4, f"viewBox needs 4 numbers, got {viewbox!r}"
+    return float(parts[2]), float(parts[3])
+
+
+def check_icon(plugin_dir: Path = PLUGIN_DIR) -> None:
+    """The directory icon must exist, parse as XML, be a square >= 128px
+    SVG with no script and no external href (Issue #1399)."""
+    icon_path = plugin_dir / ICON_REL
+    assert icon_path.is_file(), f"plugin icon missing: {ICON_REL}"
+    raw = icon_path.read_bytes()
+    assert len(raw) <= MAX_FILE_BYTES, (
+        f"{ICON_REL} is {len(raw)} bytes (max 256 KiB)"
+    )
+    root = ET.fromstring(raw)
+    tag = root.tag.rsplit("}", 1)[-1]
+    assert tag == "svg", f"{ICON_REL}: root must be <svg>, got <{tag}>"
+    viewbox = root.get("viewBox")
+    assert viewbox == ICON_VIEWBOX, (
+        f"{ICON_REL}: viewBox must be {ICON_VIEWBOX!r}, got {viewbox!r}"
+    )
+    width, height = viewbox_size(viewbox)
+    assert width == height, (
+        f"{ICON_REL}: viewBox must be square, got {width}x{height}"
+    )
+    assert width >= ICON_MIN_PX, (
+        f"{ICON_REL}: viewBox must be >= {ICON_MIN_PX}px, got {width}x{height}"
+    )
+    text = raw.decode("utf-8")
+    assert "<script" not in text.lower(), (
+        f"{ICON_REL}: must not contain <script>"
+    )
+    assert not EXTERNAL_HREF_RE.search(text), (
+        f"{ICON_REL}: must not link an external href"
+    )
+
+
 def check_no_forbidden_entries(plugin_dir: Path = PLUGIN_DIR) -> None:
     """No hooks, no MCP file, no bin/ and no editor/archive droppings: the
-    plugin is Markdown and JSON only (Issue #1389)."""
+    plugin carries no executable or configuration payload (Issue #1389)."""
     for path in sorted(plugin_dir.rglob("*")):
         rel = path.relative_to(plugin_dir)
         assert path.name not in FORBIDDEN_NAMES, f"forbidden file: {rel}"
@@ -141,8 +211,8 @@ def test_manifest_author_url():
     check_manifest_author_url()
 
 
-def test_manifest_version_is_0_1_2():
-    assert load_manifest().get("version") == "0.1.2"
+def test_manifest_version_is_0_1_3():
+    assert load_manifest().get("version") == "0.1.3"
 
 
 # --- README and license -------------------------------------------------------
@@ -264,12 +334,15 @@ def test_no_file_over_256_kib():
         assert size <= MAX_FILE_BYTES, f"{path} is {size} bytes (max 256 KiB)"
 
 
-def test_only_markdown_json_and_license_files():
-    for path in plugin_files():
-        rel = path.relative_to(PLUGIN_DIR)
-        assert rel.suffix in ALLOWED_SUFFIXES or rel.name == "LICENSE", (
-            f"unexpected file type in plugin: {rel}"
-        )
+def test_only_markdown_json_license_and_icon_files():
+    check_allowed_file_types()
+
+
+# --- Directory icon (Issue #1399) ---------------------------------------------
+
+
+def test_directory_icon_is_a_valid_square_svg():
+    check_icon()
 
 
 # --- Links and credentials ----------------------------------------------------
@@ -403,6 +476,18 @@ def test_fixture_copy_without_author_url_ref_fails_the_author_assertion(tmp_path
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(AssertionError):
         check_manifest_author_url(fixture)
+
+
+def test_fixture_copy_with_svg_outside_the_icon_path_fails_the_type_assertion(
+    tmp_path,
+):
+    fixture = tmp_path / "plugin"
+    shutil.copytree(PLUGIN_DIR, fixture)
+    skill_dir = fixture / "skills" / "x"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "logo.svg").write_text("<svg/>", encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_allowed_file_types(fixture)
 
 
 def test_fixture_skill_reading_the_working_tree_fails_the_default_branch_assertion(
