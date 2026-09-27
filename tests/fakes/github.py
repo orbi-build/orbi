@@ -36,6 +36,13 @@ _SEARCH_TOKEN_RE = re.compile(r'milestone:"([^"]+)"|(\S+)')
 _MILESTONE_JQ_RE = re.compile(
     r'^\.\[\] \| select\(\.title=="([^"]+)"\) \| \.open_issues$'
 )
+# GitHub's answer to the branch-rules read of a private repository on a
+# plan without rulesets (Issue #1361). It is a 403 like a permission
+# failure; only this documented message tells them apart.
+_PLAN_LIMIT_403 = (
+    "gh: Upgrade to GitHub Pro or make this repository public to enable "
+    "this feature. (HTTP 403)"
+)
 
 
 class FakeGh:
@@ -49,6 +56,8 @@ class FakeGh:
         self.milestones: dict[int, dict] = {}
         self.check_runs: dict[str, list] = {}
         self.repo_config: str | None = None
+        self.branches: dict[str, dict] = {}
+        self.rulesets_failure: str | None = None
         self._clock = 0
 
     # --- state arrangement (what a test does instead of patching) -------
@@ -119,6 +128,25 @@ class FakeGh:
 
     def add_check_runs(self, commit: str, runs: list[dict]) -> None:
         self.check_runs[commit] = runs
+
+    def add_branch(self, name: str, *, protected: bool = False,
+                   protection: dict | None = None) -> None:
+        """Seed one branch as the merge-gate preflight reads it: the
+        branch's `protected` flag and, for a protected branch, the
+        classic protection resource. `protection=None` on a protected
+        branch is GitHub's 404 for protection the token cannot see
+        (Issue #1174); an unseeded branch is a 404 too — the fake never
+        invents protection state."""
+        self.branches[name] = {"protected": protected,
+                               "protection": protection}
+
+    def set_rulesets_failure(self, mode: str) -> None:
+        """Make the branch-rules endpoint fail as GitHub does: `plan`
+        is the documented plan-limit 403 (a private repository on
+        GitHub Free cannot carry rulesets, Issue #1361), `forbidden`
+        the permission 403 of a token without administration
+        permission."""
+        self.rulesets_failure = mode
 
     def set_repo_config(self, text: str) -> None:
         """Seed the repository's default `.github/orbi.toml` — the
@@ -423,6 +451,34 @@ class FakeGh:
                     self.repo_config.encode("utf-8"),
                 ).decode("ascii"),
             })
+        match = re.fullmatch(
+            r"repos/([^/]+/[^/]+)/branches/([^/]+)/protection", path,
+        )
+        if match:
+            self._repo_or_fail(match.group(1))
+            protection = self._branch_or_fail(match.group(2))["protection"]
+            if protection is None:
+                self._fail(1, "gh: HTTP 404: Branch not protected")
+            return json.dumps(protection)
+        match = re.fullmatch(r"repos/([^/]+/[^/]+)/branches/([^/]+)", path)
+        if match:
+            self._repo_or_fail(match.group(1))
+            branch = self._branch_or_fail(match.group(2))
+            return json.dumps({"protected": branch["protected"]})
+        match = re.fullmatch(
+            r"repos/([^/]+/[^/]+)/rules/branches/([^/]+)", path,
+        )
+        if match:
+            self._repo_or_fail(match.group(1))
+            if self.rulesets_failure == "plan":
+                self._fail(1, _PLAN_LIMIT_403)
+            if self.rulesets_failure == "forbidden":
+                self._fail(
+                    1, "gh: Resource not accessible by integration (HTTP 403)"
+                )
+            # The documented empty result: no rule applies to the branch
+            # (or the rulesets answered, and none blocks it).
+            return "[]"
         return self._unsupported(["gh", "api", path])
 
     def _api_put(self, args: list[str]) -> str:
@@ -479,6 +535,12 @@ class FakeGh:
             self._fail(
                 1, f"fake-gh: repository mismatch: {repo} != {self.repo}"
             )
+
+    def _branch_or_fail(self, name: str) -> dict:
+        branch = self.branches.get(name)
+        if branch is None:
+            self._fail(1, f"gh: HTTP 404: Branch not found: {name}")
+        return branch
 
     def _known_flags(self, flags: dict[str, list[str]], known,
                      context: list[str]) -> None:
