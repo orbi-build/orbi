@@ -193,13 +193,31 @@ review_pi_model = "groq/compound"
 
 ## 合并账本：`external_commits` 与 `commits`
 
-Runner 合并交付 PR 时，`Orbi merged PR:` Issue 评论与 `Orbi: merged`
-milestone 行以与现有字段相同的 `key=value` 格式，带上「合并前人有没有
-改过一行」这一事实（Issue #833）：
+Runner 合并交付 PR 时，`Orbi merged PR:` Issue 评论只展示用户真正
+要行动的三件事——PR 链接、review 结果与目标分支——并把
+merged-as-is 事实（Issue #833）收进一个折叠的 `Run details` 块：
 
 ```
-Orbi merged PR: <url> (merge_commit=… review_rounds=N external_commits=K commits=M base_branch=… run_id=…)
+Orbi merged PR: <url>
+- review: pass, no findings (2 review rounds)
+- merged into: main
+
+<details><summary>Run details</summary>
+
+- merge_commit=…
+- review_rounds=N
+- commits=M
+- external_commits=K
+- run_id=…
+
+</details>
 ```
+
+`Run details` 行保持 `key=value` 形式（等号，不是冒号），因为它们是
+机器读的锚点：orbi-cloud 的 `mergeCommentFields` 读取器与本仓库的
+comment-reader 契约精确匹配 `external_commits=K`、`review_rounds=N`
+与 `run_id=…`。`Orbi: merged` milestone 行以同样的 `key=value` 形式
+带上这些事实。
 
 - `commits` —— 合并时 PR 分支相对 base 的全部 commit 数（比例的分母）。
 - `external_commits` —— 不在引擎自己推送历史里的 commit 数（开 PR 时的

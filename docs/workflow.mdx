@@ -232,12 +232,32 @@ review_pi_model = "groq/compound"
 ## The merge record: `external_commits` and `commits`
 
 When the Runner merges a delivery PR, the `Orbi merged PR:` Issue
-comment and the `Orbi: merged` milestone line carry the merged-as-is
-fact (Issue #833) in the same `key=value` format as the other fields:
+comment shows the user only what they act on — the PR link, the review
+result and the target branch — and folds the merged-as-is facts
+(Issue #833) into one collapsed `Run details` block:
 
 ```
-Orbi merged PR: <url> (merge_commit=… review_rounds=N external_commits=K commits=M base_branch=… run_id=…)
+Orbi merged PR: <url>
+- review: pass, no findings (2 review rounds)
+- merged into: main
+
+<details><summary>Run details</summary>
+
+- merge_commit=…
+- review_rounds=N
+- commits=M
+- external_commits=K
+- run_id=…
+
+</details>
 ```
+
+The `Run details` rows keep the `key=value` form (equals sign, not
+colon) because they are machine-read anchors: the orbi-cloud
+`mergeCommentFields` reader and the repository's comment-reader
+contracts match `external_commits=K`, `review_rounds=N` and `run_id=…`
+exactly. The `Orbi: merged` milestone line carries the same facts in the
+same `key=value` form.
 
 - `commits` — all commits of the PR branch relative to the base at
   merge time (the denominator of the ratio).

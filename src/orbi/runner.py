@@ -825,19 +825,29 @@ def merged_pr_comment_body(run_id: str, pr_url: str, merge_commit: str,
                            review_rounds: int, external_commits: object,
                            commits: object, base_branch: str,
                            review: str) -> str:
-    """Render the final delivery record without exposing detail rows."""
+    """Render the final delivery record.
+
+    The visible part carries only what the user acts on: the PR
+    headline, the review result and the target branch. Every other field
+    lives once, in `key=value` form, inside the single `Run details`
+    fold — those rows are machine-read anchors (orbi-cloud
+    `mergeCommentFields`, the reader contracts), so they keep the `=`
+    form while the visible review/merged-into rows use the human `:`.
+    """
+    visible_review = f"- review: {review}"
+    if int(review_rounds) > 1:
+        visible_review += f" ({review_rounds} review rounds)"
     return (
         f"{run_marker(run_id)}\n"
-        f"Orbi merged PR: {pr_url} "
-        f"(merge_commit={merge_commit} "
-        f"review_rounds={review_rounds} "
-        f"external_commits={external_commits} "
-        f"commits={commits} "
-        f"base_branch={base_branch} run_id={run_id})\n"
-        f"review: {review}\n\n"
+        f"Orbi merged PR: {pr_url}\n"
+        f"{visible_review}\n"
+        f"- merged into: {base_branch}\n\n"
         "<details><summary>Run details</summary>\n\n"
-        f"- merge_commit: {merge_commit}\n"
-        f"- base_branch: {base_branch}\n\n"
+        f"- merge_commit={merge_commit}\n"
+        f"- review_rounds={review_rounds}\n"
+        f"- commits={commits}\n"
+        f"- external_commits={external_commits}\n"
+        f"- run_id={run_id}\n\n"
         "</details>"
     )
 
