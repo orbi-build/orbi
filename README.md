@@ -8,7 +8,9 @@ Orbi is a self-hosted, open-source autonomous coding agent: label a GitHub Issue
 
 **Ledger:** [merged PRs](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [closed Issues](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged releases](https://github.com/orbi-build/orbi/releases) — the repository is the record.
 
-**Inspect one loop:** [Issue #1018](https://github.com/orbi-build/orbi/issues/1018) → [PR #1023](https://github.com/orbi-build/orbi/pull/1023) → [Release v0.5.17](https://github.com/orbi-build/orbi/releases/tag/v0.5.17)
+[![Watch the 95-second film](https://img.youtube.com/vi/zfX-UDlZCPc/maxresdefault.jpg)](https://youtu.be/zfX-UDlZCPc)
+
+**Inspect the loop in the film:** [Issue #1367](https://github.com/orbi-build/orbi/issues/1367) → [PR #1370](https://github.com/orbi-build/orbi/pull/1370) → [Release v0.5.47](https://github.com/orbi-build/orbi/releases/tag/v0.5.47)
 
 Website <https://orbi.build> ｜ [Orbi Managed Cloud](https://orbi.build/cloud/?ref=gh-readme) ｜ Documentation <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions) ｜ Docker [GHCR](https://ghcr.io/orbi-build/orbi) · [Docker Hub](https://hub.docker.com/r/orbibuild/orbi)
 
@@ -16,10 +18,10 @@ Website <https://orbi.build> ｜ [Orbi Managed Cloud](https://orbi.build/cloud/?
 
 ```bash
 git clone https://github.com/orbi-build/orbi.git && cd orbi
-uv tool install --force --reinstall --editable --python python3 .  # compatible system Python (>= 3.14, e.g. Fedora 43 / current Arch); older system Python (e.g. Ubuntu 24.04 ships 3.12): --python 3.14 so uv provisions it
+uv tool install --force --reinstall --editable --python python3 .  # compatible system Python (>= 3.14, e.g. Fedora 43 / current Arch); older (e.g. Ubuntu 24.04's 3.12): --python 3.14 so uv provisions it
 ```
 
-Want just the CLI? Published on PyPI as [`orbi-cli`](https://pypi.org/project/orbi-cli/) (requires Python ≥ 3.14; the installed command stays `orbi`): `uv tool install orbi-cli` (on an older system Python, e.g. Ubuntu 24.04's 3.12, add `--python 3.14` so uv provisions a compatible interpreter) or `pip install orbi-cli` inside an activated Python ≥ 3.14 environment; verify with `orbi --version` → `orbi <version>`, uninstall with `uv tool uninstall orbi-cli`. To run Orbi itself, use the one-line installer at the top of [Getting started](docs/getting-started.mdx) — it creates the editable install Orbi's deployment drives.
+Want just the CLI? It's on PyPI as [`orbi-cli`](https://pypi.org/project/orbi-cli/) (requires Python ≥ 3.14; the command stays `orbi`): `uv tool install orbi-cli` (older system Python: add `--python 3.14` so uv provisions one) or `pip install orbi-cli` in a Python ≥ 3.14 environment; verify with `orbi --version` → `orbi <version>`, uninstall with `uv tool uninstall orbi-cli`. To run Orbi itself, use the one-line installer at the top of [Getting started](docs/getting-started.mdx) — it creates the editable install Orbi's deployment drives.
 
 ### Ready check (before setup)
 
@@ -88,7 +90,7 @@ GitHub Issue (ai-ready)
 
 ## Development and contribution
 
-See the development contract in [AGENTS.md](AGENTS.md), and [Contributing](docs/contributing.mdx) for dispatching Issues, reporting bugs, and submitting PRs. Runtime code lives in the `src/orbi/` package (Issue #168 src layout; the editable finder maps the entire package directory, so new modules need no reinstall). The checkout root has no `orbi.py` (to avoid shadowing the installed package); the direct-execution compatibility entry point is `python3 -m orbi.cli`, not the formal usage path.
+See the development contract in [AGENTS.md](AGENTS.md), and [Contributing](docs/contributing.mdx) for dispatching Issues, reporting bugs, and submitting PRs. Runtime code lives in the `src/orbi/` package (Issue #168 src layout; the editable finder maps the whole package, so new modules need no reinstall). The checkout root has no `orbi.py` (it would shadow the installed package); the compatibility entry point is `python3 -m orbi.cli`, not the formal usage path.
 
 ## License
 

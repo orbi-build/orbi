@@ -161,6 +161,31 @@ def test_readme_stays_within_the_homepage_budget():
     )
 
 
+def test_readmes_link_the_95_second_film_and_its_run():
+    """Issue #1424: both READMEs link the 95-second film's poster to the
+    video and show the run the film follows (#1367 -> #1370 -> v0.5.47),
+    and no longer link the superseded #1018 -> #1023 -> v0.5.17 loop."""
+    poster = (
+        "[![{alt}](https://img.youtube.com/vi/zfX-UDlZCPc/maxresdefault.jpg)]"
+        "(https://youtu.be/zfX-UDlZCPc)"
+    )
+    for path, alt, label in (
+        (README, "Watch the 95-second film", "**Inspect the loop in the film:**"),
+        (README_ZH, "观看 95 秒短片", "**查看片中这条完整链路：**"),
+    ):
+        text = path.read_text(encoding="utf-8")
+        assert poster.format(alt=alt) in text, (
+            f"{path.name} is missing the 95-second film poster image link"
+        )
+        assert label in text, f"{path.name} is missing the film run line label"
+        for url in ("issues/1367", "pull/1370", "releases/tag/v0.5.47"):
+            assert url in text, f"{path.name} is missing the film run link: {url}"
+        for url in ("issues/1018", "pull/1023", "releases/tag/v0.5.17"):
+            assert url not in text, (
+                f"{path.name} still links the superseded loop: {url}"
+            )
+
+
 def test_readme_carries_every_required_docs_entry_link():
     """Issue #241: the docs entry must list the docs home and every core
     topic page (getting-started, setup, workflow, operations, testing,
