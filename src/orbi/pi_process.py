@@ -1046,11 +1046,11 @@ def stream_pi(
     dir, so it keeps rising across runner restarts and the limit
     actually bites) — with the `run_failed` scene marked
     `reason=provider_rate_limited`. Long-term quota exhaustion stays out
-    of scope (#313) — no wait window is added. The one annotated non-429
-    exception is a usage-limit stop carried in the session journal's
-    newest `errorMessage`: it logs one `provider_quota` WARNING and rides
-    into the raised failure's detail (Issue #1374); every other non-429
-    exit is untouched.
+    of scope (#313) — no wait window is added. Two other non-429 exits are
+    annotated: a usage-limit stop carried in the session journal's
+    newest `errorMessage` logs one `provider_quota` WARNING and rides
+    into the raised failure's detail (Issue #1374), and a provider
+    credential rejection exits TERMINAL instead of resuming (Issue #1450).
 
     `progress` is invoked on EVERY poll — an activity change
     or a heartbeat — with the current activity state, while the Pi
@@ -1699,6 +1699,13 @@ def _stream_pi_once(
                 returncode=process.returncode,
                 stdout=stdout, stderr=stderr, activity=activity,
             )
+        # A provider credential rejection (HTTP 401/403) is TERMINAL, not
+        # the recoverable resume: retrying against the same bad key every
+        # tick never succeeds and never tells the owner (Issue #1450).
+        if _classify_startup_exit(stderr, process.returncode) == "auth_failure":
+            _fail_run("pi_auth_failure", subprocess.CalledProcessError(
+                process.returncode, safe_command, output=stdout, stderr=stderr,
+            ))
         # A provider quota stop is carried only in the session journal's
         # newest `errorMessage` (stderr stays empty), so without this the
         # journal reads `returned non-zero exit status 1` and a quota stop
