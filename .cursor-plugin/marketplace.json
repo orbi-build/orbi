@@ -2,6 +2,7 @@
   "name": "orbi",
   "owner": { "name": "Orbi", "email": "support@orbi.build" },
   "metadata": { "description": "Orbi plugins" },
+  "logo": "integrations/claude-plugin/.claude-plugin/icon.svg",
   "plugins": [
     {
       "name": "orbi",
