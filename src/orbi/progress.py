@@ -138,6 +138,14 @@ def format_status_comment(body: str) -> str:
     )
     if not first.startswith(prefixes):
         return _with_runner_marker((marker + "\n" + body) if marker else body)
+    if (
+        first.startswith("Orbi merged PR:")
+        # A pre-#1431 one-liner carries its fields in parentheses and is
+        # still expanded below; the new merged body has no such group
+        # and is already in its final, idempotent shape (Issue #1431).
+        and not re.search(r"\((?=[^)]*=)[^)]*\)", first)
+    ):
+        return _with_runner_marker((marker + "\n" + body) if marker else body)
     fields: dict[str, object] = {}
     for key, value in re.findall(r"([A-Za-z_][\w-]*)=([^\s)]+)", first):
         fields[key] = value
