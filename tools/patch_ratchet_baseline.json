@@ -17,6 +17,7 @@
     "human_review": 0,
     "journal": 84,
     "launchd_deploy": 0,
+    "merge_gate": 0,
     "merge_handoff": 0,
     "milestone": 9,
     "milestone_command": 0,

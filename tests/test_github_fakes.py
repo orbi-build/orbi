@@ -318,6 +318,24 @@ def test_commit_check_runs_reads_the_ci_evidence(fake_gh):
         github.commit_check_runs("owner/repo", "missing")
 
 
+def test_merge_gate_preflight_fails_closed_on_protection_it_cannot_read(
+        fake_gh):
+    """The preflight reads the branch state GitHub really serves: an
+    unseeded branch, and a protected branch whose classic protection the
+    token cannot see, both answer 404 — the fake never invents state,
+    and the preflight reports the hidden protection instead of a PASS
+    (Issue #1174)."""
+    assert github.merge_gate_preflight("owner/repo", "main") == [
+        "merge_gate: UNKNOWN cannot read target branch",
+    ]
+    fake_gh.add_branch("main", protected=True)
+    assert github.merge_gate_preflight("owner/repo", "main") == [
+        "merge_gate: UNKNOWN classic protection returned 404 for a "
+        "protected branch; grant the token repository administration "
+        "permission",
+    ]
+
+
 def test_milestone_counter_fails_on_an_unknown_title(fake_gh):
     # GitHub's own counter for a Milestone that does not exist yields
     # empty output: the adapter must raise (a failed check), never

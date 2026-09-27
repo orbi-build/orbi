@@ -14,6 +14,8 @@ import pytest
 from orbi import github
 from seam import seam
 
+from tests.fakes.github import FakeGh
+
 
 def test_module_is_a_leaf_and_never_imports_runner_release_pi_process():
     source = (github.__file__ and
@@ -648,6 +650,75 @@ def test_merge_gate_preflight_reports_non_404_read_failures(
 
     monkeypatch.setattr(github, "run_command", fake)
     assert message in github.merge_gate_preflight("acme/project", "main")[0]
+
+
+def test_merge_gate_preflight_rulesets_unavailable_on_plan_limit(
+        monkeypatch, caplog):
+    """Issue #1361: a private repository on GitHub Free answers the
+    branch-rules read with the documented plan-limit 403. No ruleset can
+    exist on that plan, so the unprotected branch is the whole gate: the
+    run reports a result without UNKNOWN, and one informational line
+    replaces the raw command_failed ERROR (which cannot be repaired by
+    granting permission the token already has)."""
+    fake = FakeGh("acme/private-repo")
+    fake.add_branch("main")
+    fake.set_rulesets_failure("plan")
+    monkeypatch.setattr(seam, "run_command", fake)
+
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
+        report = github.merge_gate_preflight("acme/private-repo", "main")
+
+    assert report == [
+        "merge_gate: PASS repo=acme/private-repo branch=main "
+        "protection readable",
+    ]
+    assert "merge_gate_rulesets_unavailable reason=plan" in caplog.text
+    assert not any(record.levelno >= logging.ERROR
+                   for record in caplog.records)
+
+
+def test_merge_gate_preflight_plan_limit_keeps_the_classic_result(
+        monkeypatch, caplog):
+    """Issue #1361: the plan limit empties the ruleset dimension only —
+    the classic-protection result still decides the gate."""
+    fake = FakeGh("acme/private-repo")
+    fake.add_branch("main", protected=True, protection={
+        "required_pull_request_reviews": {
+            "required_approving_review_count": 2,
+        },
+    })
+    fake.set_rulesets_failure("plan")
+    monkeypatch.setattr(seam, "run_command", fake)
+
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
+        report = github.merge_gate_preflight("acme/private-repo", "main")
+
+    assert any("classic protection requires 2 approving review(s)" in line
+               for line in report)
+    assert "merge_gate_rulesets_unavailable reason=plan" in caplog.text
+    assert not any(record.levelno >= logging.ERROR
+                   for record in caplog.records)
+
+
+def test_merge_gate_preflight_keeps_the_permission_403_unknown(
+        monkeypatch, caplog):
+    """Issue #1361: a token without administration permission gets a 403
+    on the same endpoint, and it keeps the UNKNOWN that names the real
+    repair (granting it) plus the raw ERROR line."""
+    fake = FakeGh("acme/pro-repo")
+    fake.add_branch("main")
+    fake.set_rulesets_failure("forbidden")
+    monkeypatch.setattr(seam, "run_command", fake)
+
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
+        report = github.merge_gate_preflight("acme/pro-repo", "main")
+
+    assert report == [
+        "merge_gate: UNKNOWN cannot read rulesets; requires repository "
+        "administration permission",
+    ]
+    assert "merge_gate_rulesets_unavailable" not in caplog.text
+    assert any(record.levelno >= logging.ERROR for record in caplog.records)
 
 
 def test_merge_gate_preflight_rules_without_approvals(monkeypatch):

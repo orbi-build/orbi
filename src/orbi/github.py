@@ -31,6 +31,7 @@ from orbi.delivery_labels import (
 )
 from orbi.journal import (LOGGER, MilestoneReconcileError,
                           classify_milestone_error, event, run_command, single_line)
+from orbi.merge_gate import classify_protection
 from orbi.progress import (
     RUN_MARKER_PATTERN,
     format_status_comment,
@@ -74,11 +75,28 @@ def _not_found(exc: subprocess.CalledProcessError) -> bool:
     ), re.IGNORECASE) is not None
 
 
-def _merge_gate_api(repo: str, path: str, *, timeout: int = 30) -> object:
+def _is_ruleset_plan_limit(exc: subprocess.CalledProcessError) -> bool:
+    """Whether a failed branch-rules read hit GitHub's plan limitation.
+
+    GitHub answers the branch-rules endpoint of a private repository on
+    a plan without rulesets with a documented 403, and its message is
+    the only thing that separates it from a permission 403 (Issue
+    #1361): the status alone cannot.
+    """
+    return "upgrade to github pro" in " ".join(
+        str(part or "") for part in (exc.stderr, exc.stdout)
+    ).lower()
+
+
+def _merge_gate_api(
+    repo: str, path: str, *, timeout: int = 30,
+    failure_log_level: int = logging.ERROR,
+) -> object:
     """Read one merge-gate endpoint through the read-only gh seam."""
     suffix = f"/{path}" if path else ""
     raw = run_gh_read_command(
         ["gh", "api", f"repos/{repo}{suffix}"], timeout=timeout,
+        failure_log_level=failure_log_level,
     )
     return json.loads(raw)
 
@@ -90,6 +108,9 @@ def merge_gate_preflight(repo: str, branch: str) -> list[str]:
     protection hidden from the token.  The branch resource's documented
     ``protected`` boolean distinguishes those cases before the detailed read;
     an empty branch-rules response alone is not sufficient (Issue #1174).
+    The reads and the token's failure handling live here; the rule that
+    turns what they returned into blocker lines is
+    `orbi.merge_gate.classify_protection`.
     """
     encoded_branch = quote(branch, safe="")
     try:
@@ -120,77 +141,40 @@ def merge_gate_preflight(repo: str, branch: str) -> list[str]:
             return ["merge_gate: UNKNOWN cannot parse branch protection response"]
 
     try:
-        rules = _merge_gate_api(repo, f"rules/branches/{encoded_branch}")
+        rules = _merge_gate_api(
+            repo, f"rules/branches/{encoded_branch}",
+            failure_log_level=logging.DEBUG,
+        )
     except subprocess.CalledProcessError as exc:
-        if _not_found(exc):
-            return ["merge_gate: UNKNOWN protection is unreadable; "
-                    "grant the token repository administration permission"]
-        return ["merge_gate: UNKNOWN cannot read rulesets; "
-                "requires repository administration permission"]
+        if _is_ruleset_plan_limit(exc):
+            # The plan cannot carry rulesets, so none can block this
+            # merge and the classic result above stands (Issue #1361).
+            event("merge_gate_rulesets_unavailable", reason="plan")
+            rules = []
+        else:
+            # The read logged at DEBUG because a plan limit is expected
+            # here; every other failure keeps its raw ERROR line.
+            event(
+                "command_failed", level=logging.ERROR,
+                returncode=exc.returncode,
+                stdout=(exc.stdout or "").rstrip(),
+                stderr=(exc.stderr or "").rstrip(),
+            )
+            if _not_found(exc):
+                return ["merge_gate: UNKNOWN protection is unreadable; "
+                        "grant the token repository administration permission"]
+            return ["merge_gate: UNKNOWN cannot read rulesets; "
+                    "requires repository administration permission"]
     except (json.JSONDecodeError, TypeError, ValueError):
         return ["merge_gate: UNKNOWN cannot parse ruleset response"]
     if not isinstance(rules, list) or not all(
             isinstance(rule, dict) for rule in rules):
         return ["merge_gate: UNKNOWN ruleset response is not an object array"]
 
-    blockers: list[str] = []
-    if classic is not None:
-        reviews = classic.get("required_pull_request_reviews")
-        if reviews is None:
-            reviews = {}
-        if not isinstance(reviews, dict):
-            return ["merge_gate: UNKNOWN review protection is not an object"]
-        approvals = reviews.get("required_approving_review_count", 0)
-        if isinstance(approvals, int) and approvals >= 1:
-            blockers.append(
-                f"merge_gate: FAILED classic protection requires "
-                f"{approvals} approving review(s) the configured merge "
-                "identity cannot supply (self-approval is forbidden); "
-                "repair: add a different approving reviewer; after approval "
-                "Orbi retries the merge"
-            )
-        admins = classic.get("enforce_admins") or {}
-        if isinstance(admins, dict) and admins.get("enabled") is True:
-            blockers.append(
-                "merge_gate: FAILED classic protection enforces admins; "
-                "repair: disable 'Do not allow bypassing the above settings' "
-                "or configure a repository-governance merge path for Orbi; "
-                "after the policy change Orbi retries the merge"
-            )
-
-    for rule in rules:
-        parameters = rule.get("parameters")
-        if parameters is None:
-            parameters = {}
-        if not isinstance(parameters, dict):
-            return ["merge_gate: UNKNOWN ruleset parameters are not an object"]
-        approvals = parameters.get("required_approving_review_count")
-        if isinstance(approvals, int) and approvals >= 1:
-            source = rule.get("ruleset_source") or "ruleset"
-            ruleset_id = rule.get("ruleset_id")
-            location = (
-                f"https://github.com/{repo}/settings/rules/{ruleset_id}"
-                if isinstance(ruleset_id, int)
-                else f"https://github.com/{repo}/settings/rules"
-            )
-            blockers.append(
-                f"merge_gate: FAILED {source} requires {approvals} "
-                "approving review(s) the configured merge identity cannot "
-                "supply (self-approval is forbidden); repair: add a different "
-                "approving reviewer or change the ruleset at "
-                f"{location}; after the action Orbi retries the merge"
-            )
-
-    if classic_unreadable:
-        blockers.append(
-            "merge_gate: UNKNOWN classic protection returned 404 for a "
-            "protected branch; grant the token repository administration "
-            "permission"
-        )
-
-    if blockers:
-        return blockers
-    return [f"merge_gate: PASS repo={repo} branch={branch} protection readable"]
+    return classify_protection(
+        repo, branch, classic=classic, rules=rules,
+        classic_unreadable=classic_unreadable,
+    )
 
 
 def _is_readonly_gh_command(command: list[str]) -> bool:
