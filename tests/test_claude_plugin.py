@@ -5,13 +5,16 @@ the repository ``LICENSE`` and the one non-Markdown asset the claude.com
 directory reads at its default path, ``.claude-plugin/icon.svg`` (Issue
 #1399): no hooks, no MCP server, no scripts and no package installs. It leans
 on the user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
-directory, the Agent Plugins 1.0 root manifest (Issue #1404) and the
-repository's contract require, and they carry six counter-proofs (a fixture
-copy with ``hooks/``, a fixture copy without ``homepage``, a fixture copy
-missing the ``author.url`` ref, a fixture copy with ``skills/x/logo.svg``, a
-fixture copy with a ``logo`` key in the root manifest, and a fixture copy
-reading the config from the working tree) so a future change cannot silently
-turn the assertions into no-ops.
+directory, the Agent Plugins 1.0 root manifest (Issue #1404), the Cursor
+marketplace manifest (Issue #1437) and the repository's contract require,
+and they carry nine counter-proofs (six for the claude.com and Agent
+Plugins manifests: a fixture copy with ``hooks/``, one without
+``homepage``, one missing the ``author.url`` ref, one with
+``skills/x/logo.svg``, one with a ``logo`` key in the root manifest, and
+one reading the config from the working tree; three for the Cursor
+marketplace manifest: one without ``skills/``, one with a version mismatch,
+and one without the ``cursor-marketplace`` ref) so a future change cannot
+silently turn the assertions into no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
 """
