@@ -1,0 +1,17 @@
+{
+  "name": "orbi",
+  "owner": { "name": "Orbi", "email": "support@orbi.build" },
+  "metadata": { "description": "Orbi plugins" },
+  "plugins": [
+    {
+      "name": "orbi",
+      "source": "integrations/claude-plugin",
+      "description": "Write GitHub Issues an autonomous agent can deliver without supervision, then hand them to Orbi: it implements, gets an independent review, merges the reviewed head and cuts a tagged release.",
+      "version": "0.1.4",
+      "homepage": "https://orbi.build/?ref=cursor-marketplace",
+      "repository": "https://github.com/orbi-build/orbi",
+      "license": "AGPL-3.0-only",
+      "logo": ".claude-plugin/icon.svg"
+    }
+  ]
+}
