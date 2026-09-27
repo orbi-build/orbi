@@ -166,8 +166,8 @@ def test_readmes_link_the_95_second_film_and_its_run():
     video and show the run the film follows (#1367 -> #1370 -> v0.5.47),
     and no longer link the superseded #1018 -> #1023 -> v0.5.17 loop."""
     poster = (
-        "[![{alt}](https://img.youtube.com/vi/zfX-UDlZCPc/maxresdefault.jpg)]"
-        "(https://youtu.be/zfX-UDlZCPc)"
+        "[![{alt}](https://img.youtube.com/vi/dItDIq4v3EU/maxresdefault.jpg)]"
+        "(https://youtu.be/dItDIq4v3EU)"
     )
     for path, alt, label in (
         (README, "Watch the 95-second film", "**Inspect the loop in the film:**"),

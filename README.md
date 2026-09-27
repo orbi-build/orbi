@@ -8,7 +8,7 @@ Orbi is a self-hosted, open-source autonomous coding agent: label a GitHub Issue
 
 **Ledger:** [merged PRs](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [closed Issues](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged releases](https://github.com/orbi-build/orbi/releases) — the repository is the record.
 
-[![Watch the 95-second film](https://img.youtube.com/vi/zfX-UDlZCPc/maxresdefault.jpg)](https://youtu.be/zfX-UDlZCPc)
+[![Watch the 95-second film](https://img.youtube.com/vi/dItDIq4v3EU/maxresdefault.jpg)](https://youtu.be/dItDIq4v3EU)
 
 **Inspect the loop in the film:** [Issue #1367](https://github.com/orbi-build/orbi/issues/1367) → [PR #1370](https://github.com/orbi-build/orbi/pull/1370) → [Release v0.5.47](https://github.com/orbi-build/orbi/releases/tag/v0.5.47)
 
