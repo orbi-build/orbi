@@ -8,7 +8,7 @@ Orbi 是一个自托管、开源的自主编程 agent：给 GitHub Issue 打上 
 
 **公开账本：** [已合并 PR](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [已关闭 Issue](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged release](https://github.com/orbi-build/orbi/releases) — 仓库就是记录。
 
-[![观看 95 秒短片](https://img.youtube.com/vi/zfX-UDlZCPc/maxresdefault.jpg)](https://youtu.be/zfX-UDlZCPc)
+[![观看 95 秒短片](https://img.youtube.com/vi/zvPnE2whb08/maxresdefault.jpg)](https://youtu.be/zvPnE2whb08)
 
 **查看片中这条完整链路：** [Issue #1367](https://github.com/orbi-build/orbi/issues/1367) → [PR #1370](https://github.com/orbi-build/orbi/pull/1370) → [Release v0.5.47](https://github.com/orbi-build/orbi/releases/tag/v0.5.47)
 
