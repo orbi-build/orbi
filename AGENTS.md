@@ -216,6 +216,8 @@ maintainer with no paying users: fix what a user actually hit, the smallest way.
 
 **No ad hoc special cases** (basic maintainability). When one specific case seems to need an exception, pick one: avoid the special case and let the existing general rule handle it; make the behavior extensible, so the decision lives in data or configuration; or do not support it.
 
+**Never handle browsers without JavaScript.** Pages may assume JavaScript is available: no no-JS fallbacks, no backup controls kept for that case, and no "works without JS" acceptance items.
+
 The test is **whether this repo is on Orbi**, not how small the change is or
 whether you know how to make it. Being able to make it is not a reason to.
 
