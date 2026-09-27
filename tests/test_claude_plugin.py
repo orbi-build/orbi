@@ -5,13 +5,16 @@ the repository ``LICENSE`` and the one non-Markdown asset the claude.com
 directory reads at its default path, ``.claude-plugin/icon.svg`` (Issue
 #1399): no hooks, no MCP server, no scripts and no package installs. It leans
 on the user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
-directory, the Agent Plugins 1.0 root manifest (Issue #1404) and the
-repository's contract require, and they carry six counter-proofs (a fixture
-copy with ``hooks/``, a fixture copy without ``homepage``, a fixture copy
-missing the ``author.url`` ref, a fixture copy with ``skills/x/logo.svg``, a
-fixture copy with a ``logo`` key in the root manifest, and a fixture copy
-reading the config from the working tree) so a future change cannot silently
-turn the assertions into no-ops.
+directory, the Agent Plugins 1.0 root manifest (Issue #1404), the Cursor
+marketplace manifest (Issue #1437) and the repository's contract require,
+and they carry nine counter-proofs (six for the claude.com and Agent
+Plugins manifests: a fixture copy with ``hooks/``, one without
+``homepage``, one missing the ``author.url`` ref, one with
+``skills/x/logo.svg``, one with a ``logo`` key in the root manifest, and
+one reading the config from the working tree; three for the Cursor
+marketplace manifest: one without ``skills/``, one with a version mismatch,
+and one without the ``cursor-marketplace`` ref) so a future change cannot
+silently turn the assertions into no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
 """
@@ -323,6 +326,143 @@ def test_agent_manifest_homepage_and_author_url_carry_agent_plugins_ref():
         f"root author.url must be {AGENT_PLUGIN_HOMEPAGE!r}, "
         f"got {author.get('url')!r}"
     )
+
+
+# --- Cursor marketplace manifest (Issue #1437) --------------------------------
+# The plugin lives in integrations/claude-plugin, not at the repository root,
+# so Cursor only finds it through a multi-plugin marketplace manifest at
+# .cursor-plugin/marketplace.json (cursor.com/docs/reference/plugins).
+CURSOR_MARKETPLACE_REL = Path(".cursor-plugin") / "marketplace.json"
+CURSOR_PLUGIN_REL = Path("integrations") / "claude-plugin"
+CURSOR_REF = "cursor-marketplace"
+
+
+def load_cursor_marketplace(repo_root: Path = REPO_ROOT) -> dict:
+    path = repo_root / CURSOR_MARKETPLACE_REL
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def check_cursor_marketplace(repo_root: Path = REPO_ROOT) -> None:
+    """Pin the Cursor multi-plugin manifest to the real plugin folder
+    (Issue #1437): every listed source exists with a skills/ folder, the
+    names are kebab-case, version and description match the plugin
+    manifest, the homepage carries the cursor-marketplace ref and the
+    logo resolves relative to the source directory."""
+    marketplace = load_cursor_marketplace(repo_root)
+    assert isinstance(marketplace, dict), "marketplace.json must be an object"
+    name = marketplace.get("name")
+    assert isinstance(name, str) and NAME_RE.match(name), (
+        f"invalid marketplace name: {name!r}"
+    )
+    plugins = marketplace.get("plugins")
+    assert isinstance(plugins, list) and plugins, (
+        "marketplace must list at least one plugin"
+    )
+    manifest_path = repo_root / CURSOR_PLUGIN_REL / "plugin.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for entry in plugins:
+        assert isinstance(entry, dict), "each plugin entry must be an object"
+        entry_name = entry.get("name")
+        assert isinstance(entry_name, str) and NAME_RE.match(entry_name), (
+            f"invalid plugin entry name: {entry_name!r}"
+        )
+        source = entry.get("source")
+        assert isinstance(source, str) and source, (
+            "plugin entry source must be a non-empty string"
+        )
+        source_dir = repo_root / source
+        assert source_dir.is_dir(), (
+            f"plugins[].source directory does not exist: {source}"
+        )
+        assert (source_dir / "skills").is_dir(), (
+            f"plugins[].source has no skills/ folder: {source}"
+        )
+        assert entry.get("version") == manifest.get("version"), (
+            f"plugins[].version {entry.get('version')!r} != "
+            f"plugin.json {manifest.get('version')!r}"
+        )
+        assert entry.get("description") == manifest.get("description"), (
+            "plugins[].description must equal the plugin.json description"
+        )
+        homepage = entry.get("homepage")
+        assert isinstance(homepage, str) and f"?ref={CURSOR_REF}" in homepage, (
+            f"plugins[].homepage must carry ?ref={CURSOR_REF}: {homepage!r}"
+        )
+        logo = entry.get("logo")
+        assert isinstance(logo, str) and logo, (
+            "plugin entry logo must be a non-empty string"
+        )
+        assert (source_dir / logo).is_file(), (
+            f"plugins[].logo does not resolve relative to source: "
+            f"{source}/{logo}"
+        )
+
+
+def test_cursor_marketplace_exists_and_parses():
+    assert isinstance(load_cursor_marketplace(), dict)
+
+
+def test_cursor_marketplace_matches_the_plugin_folder():
+    check_cursor_marketplace()
+
+
+def write_cursor_marketplace_repo(tmp_path: Path) -> Path:
+    """Minimal fake repository root whose marketplace manifest is valid,
+    so the counter-proofs can break exactly one field at a time."""
+    plugin_dir = tmp_path / CURSOR_PLUGIN_REL
+    (plugin_dir / "skills").mkdir(parents=True)
+    icon_dir = plugin_dir / ".claude-plugin"
+    icon_dir.mkdir()
+    (icon_dir / "icon.svg").write_text("<svg/>", encoding="utf-8")
+    description = "A delivered plugin."
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps({"version": "1.0.0", "description": description}),
+        encoding="utf-8",
+    )
+    marketplace = {
+        "name": "orbi",
+        "plugins": [
+            {
+                "name": "orbi",
+                "source": CURSOR_PLUGIN_REL.as_posix(),
+                "version": "1.0.0",
+                "description": description,
+                "homepage": f"https://orbi.build/?ref={CURSOR_REF}",
+                "logo": ".claude-plugin/icon.svg",
+            }
+        ],
+    }
+    marketplace_path = tmp_path / CURSOR_MARKETPLACE_REL
+    marketplace_path.parent.mkdir(parents=True)
+    marketplace_path.write_text(json.dumps(marketplace), encoding="utf-8")
+    return tmp_path
+
+
+def test_fixture_marketplace_without_skills_fails(tmp_path):
+    repo_root = write_cursor_marketplace_repo(tmp_path)
+    (repo_root / CURSOR_PLUGIN_REL / "skills").rmdir()
+    with pytest.raises(AssertionError):
+        check_cursor_marketplace(repo_root)
+
+
+def test_fixture_marketplace_version_mismatch_fails(tmp_path):
+    repo_root = write_cursor_marketplace_repo(tmp_path)
+    path = repo_root / CURSOR_MARKETPLACE_REL
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["plugins"][0]["version"] = "9.9.9"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_cursor_marketplace(repo_root)
+
+
+def test_fixture_marketplace_without_cursor_ref_fails(tmp_path):
+    repo_root = write_cursor_marketplace_repo(tmp_path)
+    path = repo_root / CURSOR_MARKETPLACE_REL
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["plugins"][0]["homepage"] = "https://orbi.build/"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_cursor_marketplace(repo_root)
 
 
 # --- README and license -------------------------------------------------------
