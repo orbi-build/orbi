@@ -279,6 +279,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "delivery_takeover": "an existing PR delivery is taken over for review",
     "delivery_awaiting": "the delivery waits for its PR to become mergeable",
     "delivery_awaiting_human_merge": "the reviewed PR awaits a maintainer merge",
+    "delivery_awaiting_human_merge_unchanged": "the awaiting-merge retry found the same waiting state already announced; no comment, no label patch",
     "delivery_ci": "the PR CI status observed",
     "delivery_auto_merged": "the PR was auto-merged (content-only or trivial)",
     "delivery_merged": "the PR merged; the slot is released",

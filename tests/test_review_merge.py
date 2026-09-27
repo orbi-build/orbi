@@ -1310,6 +1310,155 @@ def test_review_handoff_marks_issue_awaiting_merge(monkeypatch, tmp_path):
                    if isinstance(call, dict))
 
 
+def _drive_merge_handoff(monkeypatch, tmp_path, state, *, preflight=None,
+                         head="h1"):
+    """Drive one `ai-awaiting-merge` retry through the handoff handler.
+
+    `state` holds the GitHub truth the handler reads (`labels`,
+    `comments`) and records its writes (`comments_posted`,
+    `label_patches`), so the same state can be retried across calls
+    (Issue #1422).
+    """
+    from unittest.mock import patch
+    blocker = preflight or ["merge_gate: FAILED exact repair action"]
+
+    def fake_comment_issue(number, *, repo, body):
+        state["comments_posted"].append(body)
+        state["comments"].append(
+            {"body": body, "authorAssociation": "MEMBER"},
+        )
+
+    monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: state["labels"])
+    monkeypatch.setattr(
+        seam, "issue_comments", lambda *a, **k: state["comments"],
+    )
+    monkeypatch.setattr(seam, "comment_issue", fake_comment_issue)
+    monkeypatch.setattr(
+        seam, "edit_issue",
+        lambda *a, **k: state["label_patches"].append(k),
+    )
+    make_fake_gh(monkeypatch)
+    with patch.object(
+                runner, "freeze_pr",
+                lambda *a, **k: {**_pr(), "head_oid": head},
+            ), patch.object(
+                pi_session, "run_review",
+                side_effect=AssertionError("merge retry must not start review"),
+            ), patch.object(
+                runner, "merge_gate",
+                lambda *a, **k: (_ for _ in ()).throw(
+                    runner.MergeHandoffRequired(
+                        "approval required", preflight=blocker,
+                    ),
+                ),
+            ):
+        return runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4, title="Review task", priority="normal",
+            scene=_scene(), merge_only=True,
+        )
+
+
+def _handoff_state(labels):
+    return {
+        "labels": list(labels), "comments": [],
+        "comments_posted": [], "label_patches": [],
+    }
+
+
+def test_awaiting_merge_retry_does_not_repost_the_same_wait(
+        monkeypatch, tmp_path, caplog):
+    """Issue #1422: the same head + blocker announces once, then only
+    journals; the retry posts no comment and applies no label patch."""
+    state = _handoff_state(["ai-awaiting-merge"])
+    with caplog.at_level("INFO", logger="orbi.bootstrap"):
+        assert _drive_merge_handoff(monkeypatch, tmp_path, state) is False
+        assert _drive_merge_handoff(monkeypatch, tmp_path, state) is False
+    assert len(state["comments_posted"]) == 1
+    assert len(state["label_patches"]) == 1
+    assert "delivery_awaiting_human_merge " in caplog.text
+    assert "delivery_awaiting_human_merge_unchanged" in caplog.text
+
+
+def test_awaiting_merge_retry_posts_again_when_the_head_changes(
+        monkeypatch, tmp_path):
+    state = _handoff_state(["ai-awaiting-merge"])
+    assert _drive_merge_handoff(monkeypatch, tmp_path, state, head="h1") is False
+    assert _drive_merge_handoff(monkeypatch, tmp_path, state, head="h2") is False
+    assert len(state["comments_posted"]) == 2
+    assert "head `h2`" in state["comments_posted"][1]
+
+
+def test_awaiting_merge_retry_posts_again_when_the_blocker_changes(
+        monkeypatch, tmp_path):
+    state = _handoff_state(["ai-awaiting-merge"])
+    assert _drive_merge_handoff(
+        monkeypatch, tmp_path, state,
+        preflight=["merge_gate: FAILED action one"],
+    ) is False
+    assert _drive_merge_handoff(
+        monkeypatch, tmp_path, state,
+        preflight=["merge_gate: FAILED action two"],
+    ) is False
+    assert len(state["comments_posted"]) == 2
+    assert "merge_gate: FAILED action two" in state["comments_posted"][1]
+
+
+def test_awaiting_merge_first_entry_still_posts_and_labels(
+        monkeypatch, tmp_path):
+    """First entry (not yet labelled) keeps today's behavior."""
+    state = _handoff_state(["ai-pr-opened"])
+    assert _drive_merge_handoff(monkeypatch, tmp_path, state) is False
+    assert len(state["comments_posted"]) == 1
+    assert any(
+        patch.get("add") == "ai-awaiting-merge"
+        for patch in state["label_patches"]
+    )
+
+
+def test_awaiting_merge_retry_ignores_a_public_comment_copy(
+        monkeypatch, tmp_path):
+    """Only the runner's own trusted handoff announces the wait."""
+    state = _handoff_state(["ai-awaiting-merge"])
+    state["comments"] = [{
+        "authorAssociation": "NONE",
+        "body": (
+            "Orbi: PR #4 is delivered and waiting for a maintainer action.\n\n"
+            "PR #4 at head `h1` is blocked by this repository policy:\n"
+            "````\nmerge_gate: FAILED exact repair action\n````\n"
+        ),
+    }]
+    assert _drive_merge_handoff(monkeypatch, tmp_path, state) is False
+    assert len(state["comments_posted"]) == 1
+
+
+def test_awaiting_merge_retry_scans_past_unrelated_trusted_comments(
+        monkeypatch, tmp_path):
+    """A trusted non-handoff (or bodyless) comment is not the anchor."""
+    state = _handoff_state(["ai-awaiting-merge"])
+    state["comments"] = [
+        {"authorAssociation": "MEMBER", "body": "unrelated note"},
+        {"authorAssociation": "MEMBER", "body": None},
+    ]
+    assert _drive_merge_handoff(monkeypatch, tmp_path, state) is False
+    assert len(state["comments_posted"]) == 1
+
+
+def test_awaiting_merge_retry_reannounces_a_malformed_handoff(
+        monkeypatch, tmp_path):
+    """A handoff comment missing the head/blocker frame is not the anchor."""
+    state = _handoff_state(["ai-awaiting-merge"])
+    state["comments"] = [{
+        "authorAssociation": "MEMBER",
+        "body": (
+            "Orbi: PR #4 is delivered and waiting for a maintainer "
+            "action.\n\nPR #4 at head `h1` is blocked."
+        ),
+    }]
+    assert _drive_merge_handoff(monkeypatch, tmp_path, state) is False
+    assert len(state["comments_posted"]) == 1
+
+
 def test_resumed_awaiting_merge_succeeds_without_review(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(

@@ -57,6 +57,7 @@ from orbi import milestone as milestone_bookkeeping
 from orbi import claim, clarify
 from orbi import config as config_domain
 from orbi.engine_source import EngineSourceError
+from orbi.git_identity import set_bot_git_identity
 from orbi.git_transport import TransportError, check_transport
 from orbi.pilot_slots import (
     acquire_claim_lock, acquire_slot, mark_slot_delivery, slot_dir_for,
@@ -84,7 +85,6 @@ from orbi.delivery_labels import (
     READY_LABEL,
     RELEASE_LABEL,
     EVENT_BLOCKED,
-    EVENT_AWAITING_MERGE,
     EVENT_CLAIM,
     EVENT_FIX_NEEDED,
     EVENT_HUMAN_REVIEW_WAITING,
@@ -188,7 +188,11 @@ from orbi.failure import (
     _failure_summary,
     _redact_local_paths,
 )
-from orbi.merge_handoff import MergeHandoffRequired, is_maintainer_actionable
+from orbi.merge_handoff import (
+    MergeHandoffRequired,
+    handle_merge_handoff,
+    is_maintainer_actionable,
+)
 from orbi.cli_source import CliInstallError, refresh_cli_install
 from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
@@ -4054,27 +4058,10 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         )
     except MergeHandoffRequired as exc:
         # A known policy blocker is a successful, resumable handoff.
-        handoff_head = refrozen["head_oid"]
-        failed_lines = "\n".join(exc.preflight)
-        handoff_body = (
-            f"{marker}\n"
-            f"Orbi: PR #{refrozen['number']} is delivered and waiting for "
-            "a maintainer action.\n\n"
-            f"PR #{refrozen['number']} at head `{handoff_head}` is blocked "
-            "by this repository policy:\n````\n"
-            f"{failed_lines}\n````\n\n"
-            "After the named policy action, Orbi will resume and merge the PR."
+        return handle_merge_handoff(
+            number=number, repo=source_repo, pr_number=refrozen["number"],
+            head=refrozen["head_oid"], preflight=exc.preflight, marker=marker,
         )
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_AWAITING_MERGE,
-            current_labels=issue_labels(number, source_repo),
-        )
-        comment_issue(number, repo=source_repo, body=handoff_body)
-        event(
-            "delivery_awaiting_human_merge", issue=number,
-            pr=refrozen["number"], head=handoff_head,
-        )
-        return False
     except DeliveryDeferred as exc:
         # A pending check or an UNKNOWN mergeability on the
         # reviewed head is an intermediate state, not a failure — the
@@ -6826,6 +6813,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     configure_logging()
+    set_bot_git_identity(os.environ)
     # Stop scene: install the SIGTERM handler BEFORE any
     # other step so every phase of the tick (pre-claim, claim,
     # implement, delivery wait) stops with the active Issue context
