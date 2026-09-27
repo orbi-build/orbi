@@ -7,15 +7,16 @@ directory reads at its default path, ``.claude-plugin/icon.svg`` (Issue
 on the user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
 directory, the Agent Plugins 1.0 root manifest (Issue #1404), the Cursor
 marketplace manifest (Issue #1437) and the repository's contract require,
-and they carry ten counter-proofs (six for the claude.com and Agent
+and they carry twelve counter-proofs (six for the claude.com and Agent
 Plugins manifests: a fixture copy with ``hooks/``, one without
 ``homepage``, one missing the ``author.url`` ref, one with
 ``skills/x/logo.svg``, one with a ``logo`` key in the root manifest, and
-one reading the config from the working tree; four for the Cursor
+one reading the config from the working tree; six for the Cursor
 marketplace manifest: one without ``skills/``, one with a version mismatch,
-one without the ``cursor-marketplace`` ref, and one without the top-level
-``logo`` that cursor.directory reads) so a future change cannot
-silently turn the assertions into no-ops.
+one without the ``cursor-marketplace`` ref, one without the top-level
+``logo`` that cursor.directory reads, one without the top-level
+``homepage``, and one without the top-level ``author.url``) so a future
+change cannot silently turn the assertions into no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
 """
@@ -336,6 +337,11 @@ def test_agent_manifest_homepage_and_author_url_carry_agent_plugins_ref():
 CURSOR_MARKETPLACE_REL = Path(".cursor-plugin") / "marketplace.json"
 CURSOR_PLUGIN_REL = Path("integrations") / "claude-plugin"
 CURSOR_REF = "cursor-marketplace"
+# cursor.directory builds the plugin page from the ROOT manifest's top level:
+# `homepage` and the author link `author.url` must sit there too (Issue #1446),
+# distinct from the plugin-entry homepage Cursor Marketplace reads.
+CURSOR_DIRECTORY_REF = "cursor-directory"
+CURSOR_DIRECTORY_HOMEPAGE = f"https://orbi.build/?ref={CURSOR_DIRECTORY_REF}"
 
 
 def load_cursor_marketplace(repo_root: Path = REPO_ROOT) -> dict:
@@ -349,8 +355,9 @@ def check_cursor_marketplace(repo_root: Path = REPO_ROOT) -> None:
     names are kebab-case, version and description match the plugin
     manifest, the homepage carries the cursor-marketplace ref, the
     top-level logo cursor.directory reads resolves relative to the
-    repository root and the plugin-entry logo resolves relative to the
-    source directory."""
+    repository root, the top-level homepage and author link carry the
+    cursor-directory ref, and the plugin-entry logo resolves relative to
+    the source directory."""
     marketplace = load_cursor_marketplace(repo_root)
     assert isinstance(marketplace, dict), "marketplace.json must be an object"
     name = marketplace.get("name")
@@ -367,6 +374,29 @@ def check_cursor_marketplace(repo_root: Path = REPO_ROOT) -> None:
     assert (repo_root / top_level_logo).is_file(), (
         "marketplace top-level logo does not resolve relative to the "
         f"repository root: {top_level_logo}"
+    )
+    # cursor.directory takes the plugin page's homepage and author link from
+    # the ROOT manifest's top level (never from a plugin entry); both must
+    # point at orbi.build with the cursor-directory ref (Issue #1446).
+    top_level_homepage = marketplace.get("homepage")
+    assert (
+        isinstance(top_level_homepage, str)
+        and top_level_homepage.startswith(CURSOR_DIRECTORY_HOMEPAGE)
+    ), (
+        "marketplace top-level homepage must start with "
+        f"{CURSOR_DIRECTORY_HOMEPAGE!r}: {top_level_homepage!r}"
+    )
+    top_level_author = marketplace.get("author")
+    assert isinstance(top_level_author, dict), (
+        "marketplace top-level author must be a mapping"
+    )
+    top_level_author_url = top_level_author.get("url")
+    assert (
+        isinstance(top_level_author_url, str)
+        and top_level_author_url.startswith(CURSOR_DIRECTORY_HOMEPAGE)
+    ), (
+        "marketplace top-level author.url must start with "
+        f"{CURSOR_DIRECTORY_HOMEPAGE!r}: {top_level_author_url!r}"
     )
     plugins = marketplace.get("plugins")
     assert isinstance(plugins, list) and plugins, (
@@ -436,6 +466,8 @@ def write_cursor_marketplace_repo(tmp_path: Path) -> Path:
     marketplace = {
         "name": "orbi",
         "logo": "integrations/claude-plugin/.claude-plugin/icon.svg",
+        "homepage": CURSOR_DIRECTORY_HOMEPAGE,
+        "author": {"name": "Orbi", "url": CURSOR_DIRECTORY_HOMEPAGE},
         "plugins": [
             {
                 "name": "orbi",
@@ -485,6 +517,26 @@ def test_fixture_marketplace_without_top_level_logo_fails(tmp_path):
     path = repo_root / CURSOR_MARKETPLACE_REL
     data = json.loads(path.read_text(encoding="utf-8"))
     del data["logo"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_cursor_marketplace(repo_root)
+
+
+def test_fixture_marketplace_without_top_level_homepage_fails(tmp_path):
+    repo_root = write_cursor_marketplace_repo(tmp_path)
+    path = repo_root / CURSOR_MARKETPLACE_REL
+    data = json.loads(path.read_text(encoding="utf-8"))
+    del data["homepage"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_cursor_marketplace(repo_root)
+
+
+def test_fixture_marketplace_without_top_level_author_url_fails(tmp_path):
+    repo_root = write_cursor_marketplace_repo(tmp_path)
+    path = repo_root / CURSOR_MARKETPLACE_REL
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["author"]["url"] = "https://orbi.build/"
     path.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(AssertionError):
         check_cursor_marketplace(repo_root)

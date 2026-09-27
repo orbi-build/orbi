@@ -3,6 +3,8 @@
   "owner": { "name": "Orbi", "email": "support@orbi.build" },
   "metadata": { "description": "Orbi plugins" },
   "logo": "integrations/claude-plugin/.claude-plugin/icon.svg",
+  "homepage": "https://orbi.build/?ref=cursor-directory",
+  "author": { "name": "Orbi", "url": "https://orbi.build/?ref=cursor-directory" },
   "plugins": [
     {
       "name": "orbi",
