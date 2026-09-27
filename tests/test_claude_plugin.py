@@ -7,13 +7,14 @@ directory reads at its default path, ``.claude-plugin/icon.svg`` (Issue
 on the user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
 directory, the Agent Plugins 1.0 root manifest (Issue #1404), the Cursor
 marketplace manifest (Issue #1437) and the repository's contract require,
-and they carry nine counter-proofs (six for the claude.com and Agent
+and they carry ten counter-proofs (six for the claude.com and Agent
 Plugins manifests: a fixture copy with ``hooks/``, one without
 ``homepage``, one missing the ``author.url`` ref, one with
 ``skills/x/logo.svg``, one with a ``logo`` key in the root manifest, and
-one reading the config from the working tree; three for the Cursor
+one reading the config from the working tree; four for the Cursor
 marketplace manifest: one without ``skills/``, one with a version mismatch,
-and one without the ``cursor-marketplace`` ref) so a future change cannot
+one without the ``cursor-marketplace`` ref, and one without the top-level
+``logo`` that cursor.directory reads) so a future change cannot
 silently turn the assertions into no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
@@ -346,13 +347,26 @@ def check_cursor_marketplace(repo_root: Path = REPO_ROOT) -> None:
     """Pin the Cursor multi-plugin manifest to the real plugin folder
     (Issue #1437): every listed source exists with a skills/ folder, the
     names are kebab-case, version and description match the plugin
-    manifest, the homepage carries the cursor-marketplace ref and the
-    logo resolves relative to the source directory."""
+    manifest, the homepage carries the cursor-marketplace ref, the
+    top-level logo cursor.directory reads resolves relative to the
+    repository root and the plugin-entry logo resolves relative to the
+    source directory."""
     marketplace = load_cursor_marketplace(repo_root)
     assert isinstance(marketplace, dict), "marketplace.json must be an object"
     name = marketplace.get("name")
     assert isinstance(name, str) and NAME_RE.match(name), (
         f"invalid marketplace name: {name!r}"
+    )
+    # cursor.directory reads the icon from the ROOT manifest's top-level
+    # `logo` (never from a plugin entry) and resolves a relative path
+    # against the repository root on HEAD (Issue #1440).
+    top_level_logo = marketplace.get("logo")
+    assert isinstance(top_level_logo, str) and top_level_logo, (
+        "marketplace top-level logo must be a non-empty string"
+    )
+    assert (repo_root / top_level_logo).is_file(), (
+        "marketplace top-level logo does not resolve relative to the "
+        f"repository root: {top_level_logo}"
     )
     plugins = marketplace.get("plugins")
     assert isinstance(plugins, list) and plugins, (
@@ -421,6 +435,7 @@ def write_cursor_marketplace_repo(tmp_path: Path) -> Path:
     )
     marketplace = {
         "name": "orbi",
+        "logo": "integrations/claude-plugin/.claude-plugin/icon.svg",
         "plugins": [
             {
                 "name": "orbi",
@@ -460,6 +475,16 @@ def test_fixture_marketplace_without_cursor_ref_fails(tmp_path):
     path = repo_root / CURSOR_MARKETPLACE_REL
     data = json.loads(path.read_text(encoding="utf-8"))
     data["plugins"][0]["homepage"] = "https://orbi.build/"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_cursor_marketplace(repo_root)
+
+
+def test_fixture_marketplace_without_top_level_logo_fails(tmp_path):
+    repo_root = write_cursor_marketplace_repo(tmp_path)
+    path = repo_root / CURSOR_MARKETPLACE_REL
+    data = json.loads(path.read_text(encoding="utf-8"))
+    del data["logo"]
     path.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(AssertionError):
         check_cursor_marketplace(repo_root)
