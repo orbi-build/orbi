@@ -1699,6 +1699,13 @@ def _stream_pi_once(
                 returncode=process.returncode,
                 stdout=stdout, stderr=stderr, activity=activity,
             )
+        # A provider credential rejection (HTTP 401/403) is TERMINAL, not
+        # the recoverable resume: retrying against the same bad key every
+        # tick never succeeds and never tells the owner (Issue #1450).
+        if _classify_startup_exit(stderr, process.returncode) == "auth_failure":
+            _fail_run("pi_auth_failure", subprocess.CalledProcessError(
+                process.returncode, safe_command, output=stdout, stderr=stderr,
+            ))
         # A provider quota stop is carried only in the session journal's
         # newest `errorMessage` (stderr stays empty), so without this the
         # journal reads `returned non-zero exit status 1` and a quota stop
