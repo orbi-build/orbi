@@ -23,6 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from orbi import failure
 from orbi.delivery_scene import RunContext
 from orbi.delivery_labels import (
     EPIC_LABEL,
@@ -1859,19 +1860,18 @@ def release_success_comment_body(run_id: str, run_info: str,
 
 
 def release_failure_comment_body(run_id: str, run_info: str,
-                                 error: str) -> str:
+                                 error: BaseException) -> str:
     """The terminal failure comment: the blocked scene.
 
     A release failure is terminal (`ai-blocked` ALONE, no automatic
-    retry): the comment carries the run marker and the concrete
-    reason, so the recoverable scene is on GitHub, not only in the
-    journal.
+    retry): the comment carries the run marker, the same
+    machine-readable `orbi:failure:v1` block the delivery path emits
+    (`failure.classify`, Issue #1323), and the concrete reason.
     """
-    return field_block(
-        run_id, "Orbi release failed (ai-blocked)", {
-            **_run_info_fields(run_info), "failure": error,
-        },
-    )
+    detail = failure._failure_detail(error)
+    body = field_block(run_id, "Orbi release failed (ai-blocked)",
+                       {**_run_info_fields(run_info), "failure": detail})
+    return body.replace("\n", f"\n{failure.render(failure.classify(detail))}\n", 1)
 
 
 def process_release(issue: dict, config: RunnerConfig,
@@ -2445,7 +2445,7 @@ def process_release(issue: dict, config: RunnerConfig,
         )
         comment_issue(
             number, repo=source_repo,
-            body=release_failure_comment_body(run_id, run_info, str(exc)),
+            body=release_failure_comment_body(run_id, run_info, exc),
         )
         publish(
             action=lambda: publisher.finish(progress_body(progress())),

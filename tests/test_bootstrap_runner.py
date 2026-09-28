@@ -26,7 +26,7 @@ import orbi.milestone as milestone
 import orbi.release as release
 import orbi.release_git as release_git
 import orbi.github as github
-from orbi import pi_activity, pi_command, pi_process, progress
+from orbi import failure, pi_activity, pi_command, pi_process, progress
 from tests.fakes.github import FakeGh
 from tests.fakes.gitops import remote_head_answer
 from tests.test_progress_wiring import make_fake_gh
@@ -20034,6 +20034,42 @@ def test_process_release_failure_comment_carries_base_branch(monkeypatch):
     assert "run_id=a1b2c3d4" in comment_kwargs["body"]
     assert "base_branch: main" in comment_kwargs["body"]
     assert "failure: freeze failed" in comment_kwargs["body"]
+
+
+def test_process_release_failure_comment_carries_failure_block(monkeypatch):
+    """Issue #1462: a failed release run posts the machine-readable
+    `orbi:failure:v1` block, built by the SAME classifier the delivery
+    path uses, directly under the run marker, so a status reader
+    (Orbi Cloud) can classify the stop without reading prose."""
+    state = make_release_process_env(monkeypatch)
+
+    def broken_freeze(repo_dir, base_branch):
+        raise RuntimeError("HTTP 401: bad credentials")
+
+    monkeypatch.setattr(seam, "freeze_base", broken_freeze)
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    result = release.process_release(
+        issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
+    )
+    assert result == ""
+    (comment_number, comment_kwargs), = state["comments"]
+    assert comment_number == 99
+    body = comment_kwargs["body"]
+    # The delivery path would classify this same cause the same way.
+    expected = failure.classify(
+        failure._failure_detail(RuntimeError("HTTP 401: bad credentials")),
+    )
+    assert failure.parse(body) == expected
+    assert expected.reason_code in failure.REASON_CODES
+    assert expected.action_code in failure.ACTION_CODES
+    # Exactly one block, marker first, block directly under it.
+    assert body.count("<!-- orbi:failure:v1") == 1
+    lines = body.splitlines()
+    assert lines[0] == "<!-- orbi:run=a1b2c3d4 -->"
+    assert lines[1] == failure.render(expected)
+    assert "Orbi release failed (ai-blocked)" in body
 
 
 def test_process_release_refreshes_deployment_cli_after_version_bump(
