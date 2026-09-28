@@ -851,15 +851,8 @@ def _stateful_comments(monkeypatch):
             target["body"] = body
             return json.dumps(target)
         if (command[0] == "gh" and command[1] == "issue"
-                and "comment" in command):
-            comments.append({"id": next(next_id), "body": command[-1]})
-            return ""
-        if (command[0] == "gh" and command[1] == "issue"
                 and command[2] == "view"):
             return json.dumps({"labels": [{"name": "ai-ready"}]})
-        if (command[0] == "gh" and command[1] == "issue"
-                and command[2] == "list"):
-            return "[]"
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_gh)

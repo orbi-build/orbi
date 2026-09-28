@@ -1097,17 +1097,34 @@ def test_publisher_failure_scene_updates_the_same_cause_comment():
 def test_publisher_failure_scene_posts_a_different_cause():
     """Issue #1465: a DIFFERENT reason_code is a different cause: it
     posts its own comment, so the previous cause's evidence is never
-    rewritten or lost."""
+    rewritten or lost. A comment without a body is skipped, never
+    matched."""
     existing = progress.format_status_comment(
         _recovered_body("provider_quota", "429 quota"),
     )
-    publisher, calls = make_publisher(comments=[{"id": 5, "body": existing}])
+    publisher, calls = make_publisher(comments=[
+        {"id": 5, "body": existing},
+        {"id": 6},
+    ])
     new_body = _recovered_body("credential_missing", "401 rejected")
     publisher.failure_scene(new_body)
     assert calls[-1] == [
         "gh", "api", "repos/xqliu/orbi/issues/18/comments",
         "--method", "POST", "--field",
         f"body={progress.format_status_comment(new_body)}",
+    ]
+
+
+def test_publisher_failure_scene_posts_a_body_without_a_cause_marker():
+    """Issue #1465: a body that carries no `orbi:recovered` cause marker
+    always posts — a failure comment is never lost."""
+    publisher, calls = make_publisher(comments=[{"id": 5, "body": "x"}])
+    body = "<!-- orbi:run=abc12345 -->\nOrbi something: legible"
+    publisher.failure_scene(body)
+    assert calls[-1] == [
+        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "--method", "POST", "--field",
+        f"body={progress.format_status_comment(body)}",
     ]
 
 
