@@ -236,6 +236,7 @@ from orbi.github import (
     _check_summaries,
     pr_view,
 )
+from orbi.checks import _classify_rollup, _render_check
 from orbi.gitops import (
     acquire_base_sync_lock,
     create_release_worktree,
@@ -2762,48 +2763,6 @@ def _raise_if_preexisting_ci_failure(
             f"delivery gate: main is already red on check '{name}' — "
             f"fix main first{suffix}"
         )
-
-
-def _render_check(entry: dict) -> str:
-    """Render one classified check entry for humans, from the data.
-
-    The rendered string is presentation only — never parsed back
-    (Issue #906): callers that need the name/status read the entry.
-    """
-    if entry["status"] == "COMPLETED":
-        return (f"check '{entry['name']}' is "
-                f"{entry['status']}/{entry['conclusion']}")
-    return f"check '{entry['name']}' is {entry['status'] or 'UNKNOWN'}"
-
-
-def _classify_rollup(rollup: list) -> tuple[list[dict], list[dict]]:
-    """Split one PR status check rollup into (pending, failed) evidence.
-
-    Returns STRUCTURED entries carrying `name`, `status` and `conclusion`
-    (Issue #906) — callers read the fields; `_render_check` derives the
-    human wording from them. A check is pending while its status is
-    anything but a final one (GitHub recomputes mergeability and
-    registers new CheckRuns asynchronously); a completed check with a
-    non-passing conclusion — or a legacy status-context FAILURE/ERROR —
-    is failed. Pure: the pre-review CI gate and the merge gate classify
-    the same rollup the same way.
-    """
-    pending: list[dict] = []
-    failed: list[dict] = []
-    for check in rollup:
-        status = str(check.get("status", check.get("state", "")) or "").upper()
-        conclusion = str(check.get("conclusion") or "").upper()
-        name = check.get("name", check.get("context", "check"))
-        entry = {"name": name, "status": status, "conclusion": conclusion}
-        if status not in ("COMPLETED", "SUCCESS", "FAILURE", "ERROR"):
-            pending.append(entry)
-        elif status == "COMPLETED" and conclusion not in (
-            "SUCCESS", "NEUTRAL", "SKIPPED",
-        ):
-            failed.append(entry)
-        elif status in ("FAILURE", "ERROR"):
-            failed.append(entry)
-    return pending, failed
 
 
 class DeliveryDeferred(Exception):
