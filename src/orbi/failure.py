@@ -201,9 +201,23 @@ _PROVIDER_QUOTA_RE = re.compile(
     r"\b429\b|quota|resource_exhausted|retry in|usage limit has been reached",
     re.IGNORECASE,
 )
+# The word markers of a provider authentication failure. `pi_process`'s
+# early-exit classifier (`_classify_startup_exit`) matches this SAME
+# tuple (plus the 401/403 status codes), so the two classifications
+# cannot drift into two lists (Issue #1465).
+PROVIDER_AUTH_WORDS = ("unauthorized", "forbidden", "api key")
+
 _CREDENTIAL_MISSING_RE = re.compile(
-    r"bad credentials|http 401|status 401|authentication (?:failed|required)|"
-    r"credential",
+    r"bad credentials"
+    r"|(?:http|status)\s+401\b"
+    # A bare `401` only counts in provider-error shape (`401: {...}`): a
+    # pytest output line like `test_401_handling ... FAILED` must not be
+    # relabelled as a credential problem (Issue #1465).
+    r"|(?:^|[\s\"'(])401:"
+    r"|authentication (?:failed|required|fails)"
+    r"|incorrect api key"
+    r"|" + "|".join(re.escape(word) for word in PROVIDER_AUTH_WORDS)
+    + r"|credential",
     re.IGNORECASE,
 )
 _TESTS_FAILED_RE = re.compile(

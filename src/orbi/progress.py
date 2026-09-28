@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Callable
 
 from orbi.delivery_scene import RunContext
+from orbi.failure import Failure, REASON_CODES, _redact_local_paths
 from orbi.journal import (
     LOGGER,
     RUN_ID_PATTERN,
@@ -98,9 +99,27 @@ def _with_runner_marker(body: str) -> str:
     return body + "\n\n" + marker
 
 
-def _without_runner_marker(body: str) -> str:
-    """Return the body with the hidden runner fingerprint marker removed."""
-    return _RUNNER_MARKER_PATTERN.sub("", body).rstrip()
+def _fenced(content: str, *, cap: int = 4000) -> str:
+    """One raw-output segment inside a CommonMark code fence.
+
+    GitHub renders fenced content literally and monospaced, so coverage
+    tables and escaped JSONL survive a failure comment unread by the
+    markdown parser. The fence is one backtick longer than every run in
+    the content, so a payload containing markdown fences can never close
+    it; content past `cap` is cut and the cut is noted after the fence.
+    """
+    omitted = 0
+    if len(content) > cap:
+        omitted = len(content) - cap
+        content = content[:cap]
+    fence = "`" * max(
+        3,
+        1 + max((len(run) for run in re.findall(r"`+", content)), default=0),
+    )
+    block = f"{fence}\n{content}\n{fence}"
+    if omitted:
+        block += f"\n_[truncated, {omitted} chars omitted]_"
+    return block
 
 
 def field_block(run_id: str, headline: str, fields: dict[str, object], *,
@@ -218,6 +237,87 @@ def bump_failure_repeat(body: str, fingerprint: str) -> str:
         f"{body[:match.start()]}"
         f"<!-- orbi:fail={fingerprint}:{int(match.group(2) or 1) + 1} -->"
         f"{body[match.end():]}"
+    )
+
+
+# One hidden marker per RECOVERABLE FAILURE CAUSE (Issue #1465): the fold
+# key `failure_scene` matches is `(run_id, reason_code)`. This marker
+# carries the reason_code and an optional `:<count>` repeat suffix. It is
+# deliberately NOT `orbi:fail=`: that marker feeds the #825 streak
+# escalation, and a recoverable failure never escalates.
+RECOVERED_MARKER_PATTERN = re.compile(
+    r"<!-- orbi:recovered=([a-z_]+)(?::(\d+))? -->")
+RECOVERED_MARKER_TEMPLATE = "<!-- orbi:recovered={reason_code} -->"
+
+
+def recovered_marker(reason_code: str) -> str:
+    """Return the hidden fold marker for one recoverable-failure cause."""
+    if (not isinstance(reason_code, str)
+            or reason_code not in REASON_CODES):
+        raise ValueError(
+            f"invalid recoverable reason code: {reason_code!r}"
+        )
+    return RECOVERED_MARKER_TEMPLATE.format(reason_code=reason_code)
+
+
+def recovered_repeat_count(body: str) -> int:
+    """The repeat count of the body's recovered marker (a count-less
+    marker counts 1); 0 when the body carries no marker at all."""
+    if not isinstance(body, str):
+        return 0
+    match = RECOVERED_MARKER_PATTERN.search(body)
+    if match is None:
+        return 0
+    return int(match.group(2) or 1)
+
+
+def bump_recovered_repeat(body: str, reason_code: str, previous: int) -> str:
+    """Return the body with the recovered marker's repeat count set to
+    `previous + 1` — the same cause's next occurrence (Issue #1465)."""
+    if not isinstance(body, str):
+        raise ValueError("recovered comment body must be a string")
+    match = RECOVERED_MARKER_PATTERN.search(body)
+    if match is None or match.group(1) != reason_code:
+        raise ValueError(
+            f"body does not carry the recovered marker for {reason_code!r}"
+        )
+    return (
+        f"{body[:match.start()]}"
+        f"<!-- orbi:recovered={reason_code}:{previous + 1} -->"
+        f"{body[match.end():]}"
+    )
+
+
+def recoverable_scene_body(
+    *, run_id: str, recoverable_name: str, record: Failure,
+    detail: str, run_info: str,
+) -> str:
+    """Render the classified recoverable-failure comment (Issue #1465).
+
+    A recoverable failure retries on the next tick under the same run
+    id; the headline names the CLASSIFIED reason — the same
+    `failure.classify` code the blocked path uses — plus the retry, and
+    the raw provider detail moves into a collapsed `<details>`. The
+    comment carries the hidden `<!-- orbi:recovered=<reason_code> -->`
+    fold marker and deliberately no `orbi:failure:v1` block and no
+    `orbi:fail=` marker: a recoverable failure never escalates, whatever
+    the count, so the Issue stays `ai-in-progress` (#1455/#227).
+    `failure_scene` folds the same `(run_id, reason_code)` into one
+    comment and gives a different cause its own.
+    """
+    return (
+        f"{run_marker(run_id)}\n"
+        f"{recovered_marker(record.reason_code)}\n"
+        f"Orbi {recoverable_name}: {record.reason_code}; retrying on the "
+        "next tick\n\n"
+        "The Issue stays ai-in-progress and the next tick resumes the "
+        f"same run ({run_info}).\n\n"
+        "<details><summary>Diagnosis</summary>\n\n"
+        f"- reason_code: {record.reason_code}\n"
+        f"- action: {record.action_code}\n"
+        f"- retry_safe: {str(record.retry_safe).lower()}\n\n"
+        f"{_fenced(_redact_local_paths(detail))}\n\n"
+        "</details>"
     )
 
 
@@ -491,26 +591,43 @@ class ProgressPublisher:
         self._post_comment(body)
 
     def failure_scene(self, body: str) -> None:
-        """Update this run's identical recoverable-failure comment in place.
+        """Create or update this run's recoverable-failure comment.
 
-        A recoverable failure retries every tick while the
-        provider quota window lasts (hours), so re-posting the identical
-        scene comment each tick buries the delivery progress. When this
-        run already has a comment carrying the exact same rendered body
-        (only the hidden runner fingerprint is ignored), that comment is
-        PATCHed; otherwise the scene is posted as a new comment. The
-        comparison is exact, so a genuinely different failure always
-        gets its own comment and the provider's original error string is
-        preserved verbatim.
+        A recoverable failure (a provider 401, a timeout, a hung model
+        request) retries on the next tick under the same run id. The fold
+        key is `(run_id, reason_code)`, carried by the hidden
+        `<!-- orbi:recovered=<reason_code> -->` marker: the same cause
+        PATCHes ITS comment in place (the marker's repeat count rises and
+        the body carries the newest occurrence — the last-seen detail),
+        while a different reason_code posts its own comment. The run
+        marker scopes the fold, so another run's comment is never
+        hijacked. A body without a marker always posts, so a failure
+        comment is never lost.
         """
         rendered = format_status_comment(body)
-        key = _without_runner_marker(rendered)
+        match = RECOVERED_MARKER_PATTERN.search(rendered)
+        if match is None:
+            self._post_comment(rendered)
+            return
+        reason_code = match.group(1)
         for comment in self._list_comments():
             existing = comment.get("body")
-            if (isinstance(existing, str)
-                    and _without_runner_marker(existing) == key):
-                self._patch_comment(int(comment["id"]), rendered)
-                return
+            if not isinstance(existing, str):
+                continue
+            if run_marker(self.run_id) not in existing:
+                continue
+            existing_match = RECOVERED_MARKER_PATTERN.search(existing)
+            if (existing_match is None
+                    or existing_match.group(1) != reason_code):
+                continue
+            self._patch_comment(
+                int(comment["id"]),
+                bump_recovered_repeat(
+                    rendered, reason_code,
+                    recovered_repeat_count(existing),
+                ),
+            )
+            return
         self._post_comment(rendered)
 
     def finish(self, body: str) -> None:
