@@ -5835,80 +5835,6 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     )
 
 
-def test_process_issue_provider_401_blocks_as_credential_missing(
-    monkeypatch, tmp_path,
-):
-    """Issue #1450 acceptance: a Pi implement failure whose stderr shows
-    the provider rejected the API key is TERMINAL — the Issue is marked
-    `ai-blocked` (removing `ai-in-progress`) and the failure comment's
-    hidden block reads `credential_missing` / `check_credentials`. The
-    owner is told to fix the key instead of the tick re-running the same
-    Issue against the same bad key."""
-    calls = []
-    monkeypatch.setattr(seam, "edit_issue",
-        lambda *args, **kwargs: calls.append(kwargs),
-    )
-    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path)
-    stderr = (
-        '401: {"message":"Authentication Fails, Your api key: '
-        '****lder is invalid (request_id: abc)"}'
-    )
-    rejected = subprocess.CalledProcessError(
-        1, ["pi", "--provider", "deepseek", "--model", "deepseek-v4-pro"],
-        output="", stderr=stderr,
-    )
-
-    def rejected_run_pi(*args, **kwargs):
-        raise rejected
-
-    monkeypatch.setattr(seam, "run_pi", rejected_run_pi)
-    posted = []
-
-    def fake_run(command, **kwargs):
-        if command[0] == "gh" and command[1] == "api":
-            return _gh_api(command, posted)
-        if command[0:3] == ["gh", "issue", "view"]:
-            return json.dumps({"labels": [{"name": "ai-ready"}]})
-        calls.append(("comment", (), {"body": command[-1]}))
-        return ""
-
-    monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.process_issue(
-        {"number": 1450, "title": "Bad model key", "body": ""},
-        config_domain.RunnerConfig(
-            repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
-            base_branch="main",
-        ),
-        "xqliu/orbi",
-    ).kind == "failed"
-    # Terminal: `ai-blocked` replaces `ai-in-progress`; the run is never
-    # resumed against the same rejected key.
-    edits = [entry for entry in calls if isinstance(entry, dict)]
-    assert edits == [
-        {"repo": "xqliu/orbi", "add": "ai-in-progress"},
-        {"repo": "xqliu/orbi", "add": "ai-blocked",
-         "remove": "ai-in-progress"},
-    ]
-    comment_bodies = [
-        entry[2]["body"] for entry in calls
-        if isinstance(entry, tuple) and entry[0] == "comment"
-    ] + list(posted)
-    record = next(
-        runner.failure.parse(body) for body in comment_bodies
-        if "Orbi: blocked" in body
-    )
-    assert record.reason_code == "credential_missing"
-    assert record.action_code == "check_credentials"
-    assert record.retry_safe is False
-    assert record.outcome == "blocked"
-    # The recoverable scene comment never appears.
-    assert not any(
-        "Pi failure recovered" in body for body in comment_bodies
-    )
-
-
 def _health_runs(repo_dir):
     from orbi import runner_health
     return runner_health.load_health_state(
@@ -9498,49 +9424,18 @@ def test_stream_pi_startup_failed_auth_failure(tmp_path, caplog):
     assert "session_created=false" in lines[0]
 
 
-def test_stream_pi_midrun_provider_401_is_terminal_credential_rejection(
-    tmp_path, caplog,
-):
-    """Issue #1450: a provider 401 after the first request is a rejected
-    credential — TERMINAL, never the recoverable resume against the same
-    bad key. The terminal `subprocess.CalledProcessError` carries the
-    provider's stderr so the classifier reads `credential_missing`."""
+def test_stream_pi_midrun_provider_401_stays_recoverable(tmp_path, caplog):
+    """Issue #1455 acceptance: a provider 401 after the first request
+    (the rejected/expired model API key) is again a RECOVERABLE Pi
+    failure — `RecoverablePiProcessError`, so `process_issue` keeps the
+    Issue `ai-in-progress` and the next tick resumes the same run. It is
+    never the terminal `ai-blocked` of the reverted #1450/#1453."""
     stderr = (
         '401: {"message":"Authentication Fails, Your api key: '
         '****lder is invalid (request_id: abc)"}'
     )
     command = make_fake_pi(
         tmp_path, session_records=fake_session_records(), stderr=stderr,
-        exit_code=1,
-    )
-    with caplog.at_level("INFO"):
-        with pytest.raises(subprocess.CalledProcessError) as excinfo:
-            pi_session.stream_pi(
-                command,
-                ctx=RunContext(
-                    run_id="deadbeef", issue=24, branch="b",
-                    worktree=tmp_path, source_repo="xqliu/orbi",
-                ),
-                watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path,
-            )
-    # Terminal by type: never the recoverable resume.
-    assert not isinstance(excinfo.value, pi_process.RecoverablePiFailure)
-    # The provider's own wording reaches the classifier.
-    assert runner._classify_failure(
-        excinfo.value, outcome="blocked",
-    ).reason_code == "credential_missing"
-
-
-def test_stream_pi_midrun_non_credential_failure_stays_recoverable(
-    tmp_path, caplog,
-):
-    """Issue #1450 acceptance: a Pi failure without a credential
-    signature (a network timeout) keeps the pre-#1450 recoverable
-    behaviour — `RecoverablePiProcessError`, the next tick resumes the
-    same run."""
-    command = make_fake_pi(
-        tmp_path, session_records=fake_session_records(),
-        stderr="Error: connect ETIMEDOUT (request timed out)",
         exit_code=1,
     )
     with caplog.at_level("INFO"):
@@ -9553,7 +9448,10 @@ def test_stream_pi_midrun_non_credential_failure_stays_recoverable(
                 ),
                 watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path,
             )
+    # Recoverable by type: the next tick resumes the same run.
     assert isinstance(excinfo.value, pi_process.RecoverablePiFailure)
+    # The provider's own wording is preserved on the raised failure.
+    assert "Authentication Fails" in excinfo.value.stderr
 
 
 def test_stream_pi_startup_failed_network_timeout(tmp_path, caplog):

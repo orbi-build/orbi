@@ -292,36 +292,6 @@ CLASSIFY_CASES = (
         "blocked",
     ),
     (
-        # Issue #1450: the provider's own 401 wording, mid-run
-        # (`401:` prefix + `Authentication Fails`), is a missing/rejected
-        # credential — a terminal human repair, never a retry.
-        "credential_missing",
-        lambda: subprocess.CalledProcessError(
-            1, ["pi", "--provider", "deepseek"],
-            stderr=(
-                '401: {"message":"Authentication Fails, Your api key: '
-                '****lder is invalid (request_id: abc)"}'
-            ),
-        ),
-        "check_credentials",
-        False,
-        "blocked",
-    ),
-    (
-        # Issue #1450: the OpenAI-style 401 wording.
-        "credential_missing",
-        lambda: subprocess.CalledProcessError(
-            1, ["pi", "--provider", "openai"],
-            stderr=(
-                "Error code: 401 - Incorrect API key provided: sk-***. "
-                "You can find your API key at https://platform.openai.com"
-            ),
-        ),
-        "check_credentials",
-        False,
-        "blocked",
-    ),
-    (
         "provider_quota",
         lambda: RateLimitExhaustedError("provider quota exhausted"),
         "wait_quota",
@@ -380,23 +350,6 @@ def test_classify_failure_reads_a_provider_quota_marker():
     assert record.reason_code == "provider_quota"
     assert record.action_code == "wait_quota"
     assert record.retry_safe is True
-
-
-@pytest.mark.parametrize(
-    "detail",
-    (
-        # Issue #1450: the DeepSeek provider wording quoted on the
-        # ticket.
-        'Command returned non-zero exit status 1. stderr=401: '
-        '{"message":"Authentication Fails, Your api key: ****lder is '
-        'invalid (request_id: abc)"}',
-        # The OpenAI-style 401 wording.
-        "Command returned non-zero exit status 1. stderr=Error code: 401 "
-        "- Incorrect API key provided: sk-***",
-    ),
-)
-def test_credential_missing_re_matches_the_provider_wordings(detail):
-    assert failure._CREDENTIAL_MISSING_RE.search(detail)
 
 
 def test_classify_failure_dispositions_cover_the_closed_reason_set():

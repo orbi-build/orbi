@@ -202,10 +202,7 @@ _PROVIDER_QUOTA_RE = re.compile(
     re.IGNORECASE,
 )
 _CREDENTIAL_MISSING_RE = re.compile(
-    r"bad credentials|http 401|status 401|\b401\s*:|"
-    r"authentication (?:failed|required|fails?)|"
-    r"invalid api key|incorrect api key|"
-    r"api key[^\n]*is invalid|"
+    r"bad credentials|http 401|status 401|authentication (?:failed|required)|"
     r"credential",
     re.IGNORECASE,
 )
