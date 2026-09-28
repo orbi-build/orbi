@@ -1,0 +1,32 @@
+# v0.5.55 发布（最新）
+
+`v0.5.55` 的 GitHub Release 发布说明：[v0.5.55](https://github.com/orbi-build/orbi/releases/tag/v0.5.55)（release task：Issue #1464）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.5.55` | 注解 tag `fe6bb437f696ecabf8e57eeb1804a477e010dbc7` | 提交 `51f158c0eb0720b46b2791e3768a264b4d3ac583` |
+
+## Release notes
+
+## Changelog
+
+### Reliability and recovery
+
+- A failed release run's blocked comment has no orbi:failure:v1 block ([Issue #1462](https://github.com/orbi-build/orbi/issues/1462); [PR #1468](https://github.com/orbi-build/orbi/pull/1468))
+- Recoverable Pi failures are never classified: every cause reads 'Pi failure recovered' and each tick posts a new comment ([Issue #1465](https://github.com/orbi-build/orbi/issues/1465); [PR #1467](https://github.com/orbi-build/orbi/pull/1467))
+
+### Deployment and operations
+
+- orbi setup's deployment conflict guard reads --installed-dir, not the unit systemd loads ([Issue #1459](https://github.com/orbi-build/orbi/issues/1459); [PR #1471](https://github.com/orbi-build/orbi/pull/1471))
+
+### Bug fixes
+
+- A /milestone command from the Runner's own account is silently ignored (self-hosted, same gh account) ([Issue #1460](https://github.com/orbi-build/orbi/issues/1460); [PR #1470](https://github.com/orbi-build/orbi/pull/1470))
+- Release with version_file pyproject.toml fails outside Orbi: it hardcodes src/orbi/__init__.py ([Issue #1461](https://github.com/orbi-build/orbi/issues/1461); [PR #1469](https://github.com/orbi-build/orbi/pull/1469))
+- Milestone decision notices are written in Chinese, against the Language contract ([Issue #1463](https://github.com/orbi-build/orbi/issues/1463); [PR #1466](https://github.com/orbi-build/orbi/pull/1466))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
