@@ -1,0 +1,1 @@
+Redaction: trim trailing backslashes from findings so a JWT before an escaped quote redacts only the JWT (upstream `chainloop-dev/chainloop issue 3481`)
