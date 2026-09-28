@@ -19,6 +19,7 @@ import pytest
 from orbi import delivery_labels as dl
 from orbi import human_review
 
+import orbi.failure_report as failure_report
 import orbi.runner as runner
 from seam import seam
 import orbi.journal as journal
@@ -142,7 +143,7 @@ def test_rendered_checklist_never_counts_as_a_review_round():
     `Orbi review round ` — `review_rounds_so_far` counts such lines and
     a checklist would burn the bounded review budget."""
     body = _render()
-    assert runner.review_rounds_so_far([
+    assert failure_report.review_rounds_so_far([
         {"body": body, "authorAssociation": "OWNER"},
     ]) == 0
     assert not any(
@@ -361,7 +362,7 @@ def test_gate_hold_does_not_consume_the_review_round_budget(gate_env,
     review finds is the budget the delivery had before the wait."""
     _round(_gate_config(tmp_path))
     comments = _scene_comments()
-    assert runner.review_rounds_so_far(comments, run_id=RUN_ID) == 0
+    assert failure_report.review_rounds_so_far(comments, run_id=RUN_ID) == 0
 
 
 def test_delivered_changed_files_failure_is_missing_evidence(

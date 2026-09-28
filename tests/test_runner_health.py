@@ -28,6 +28,7 @@ from unittest.mock import Mock
 import pytest
 from subprocess import CalledProcessError
 
+import orbi.failure_report as failure_report
 from orbi import runner
 import orbi.pi_session as pi_session
 from orbi import runner_health
@@ -1139,7 +1140,7 @@ def test_process_issue_failure_record_failure_is_bypass(
         Mock(side_effect=RuntimeError("git failed")),
     )
     monkeypatch.setattr(
-        runner, "activity_snapshot", lambda session_dir: None,
+        failure_report, "activity_snapshot", lambda session_dir: None,
     )
     gh_calls, posted = make_fake_gh(monkeypatch)
 

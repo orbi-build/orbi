@@ -19,6 +19,7 @@ from unittest.mock import Mock
 import pytest
 import dataclasses
 
+import orbi.failure_report as failure_report
 import orbi.runner as runner
 import orbi.gitops as gitops
 import orbi.pi_session as pi_session
@@ -72,7 +73,7 @@ def test_review_round_comment_body_marks_identical_previous_findings():
     )
     assert "Findings are the same as round 1." in second
     trusted = {"authorAssociation": "MEMBER"}
-    assert runner.review_rounds_so_far(
+    assert failure_report.review_rounds_so_far(
         [{**trusted, "body": first}, {**trusted, "body": second}],
         pr_number=477,
     ) == 2
@@ -802,7 +803,7 @@ def test_merge_gate_rejects_preexisting_failed_ci_as_unrecoverable(
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    with pytest.raises(runner.PreExistingCIFailure, match="main is already red"):
+    with pytest.raises(failure_report.PreExistingCIFailure, match="main is already red"):
         runner.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
@@ -827,7 +828,7 @@ def test_merge_gate_preexisting_failure_matches_apostrophe_name(
             "conclusion": "failure",
         }],
     ))
-    with pytest.raises(runner.PreExistingCIFailure,
+    with pytest.raises(failure_report.PreExistingCIFailure,
                        match="main is already red on check 'Bob's lint'"):
         runner.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
@@ -911,27 +912,27 @@ def test_merge_gate_merges_after_green_ci(monkeypatch, tmp_path):
 
 def test_preexisting_ci_triage_lookup_is_best_effort(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda *_args, **_kwargs: "{}")
-    assert runner._main_ci_triage_url("owner/repo", "tests") is None
+    assert failure_report._main_ci_triage_url("owner/repo", "tests") is None
 
     monkeypatch.setattr(seam, "run_command", lambda *_args, **_kwargs: "not json")
-    assert runner._main_ci_triage_url("owner/repo", "tests") is None
+    assert failure_report._main_ci_triage_url("owner/repo", "tests") is None
 
     monkeypatch.setattr(seam, "run_command",
         lambda *_args, **_kwargs: json.dumps([{"title": "other", "url": ""}]),
     )
-    assert runner._main_ci_triage_url("owner/repo", "tests") is None
+    assert failure_report._main_ci_triage_url("owner/repo", "tests") is None
 
     monkeypatch.setattr(seam, "run_command",
         lambda *_args, **_kwargs: json.dumps([{
             "title": "CI failure: tests on branch main (push)", "url": 42,
         }]),
     )
-    assert runner._main_ci_triage_url("owner/repo", "tests") is None
+    assert failure_report._main_ci_triage_url("owner/repo", "tests") is None
 
 
 def test_preexisting_ci_check_skips_base_lookup_without_base(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda *_args, **_kwargs: "unused")
-    runner._raise_if_preexisting_ci_failure("owner/repo", ["tests"], None)
+    failure_report._raise_if_preexisting_ci_failure("owner/repo", ["tests"], None)
 
 
 def test_merge_gate_reads_the_state_once(monkeypatch, tmp_path):
@@ -1681,7 +1682,7 @@ def test_comment_pr_runs_gh_pr_comment_from_unrelated_cwd(
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append(command),
     )
-    runner.comment_pr(
+    failure_report.comment_pr(
         4, repo="owner/repo",
         body=(
             "<!-- orbi:run=abc12345 -->\n"
@@ -1724,11 +1725,11 @@ def test_review_rounds_so_far_counts_recorded_rounds():
         _round_comment(2),
         {"body": None, "authorAssociation": "OWNER"},
     ]
-    assert runner.review_rounds_so_far(comments) == 2
+    assert failure_report.review_rounds_so_far(comments) == 2
 
 
 def test_review_rounds_so_far_ignores_comments_without_round_line():
-    assert runner.review_rounds_so_far([
+    assert failure_report.review_rounds_so_far([
         {"body": "Orbi started Pi: ...", "authorAssociation": "OWNER"},
         {"body": "some public comment", "authorAssociation": "OWNER"},
     ]) == 0
@@ -1738,11 +1739,11 @@ def test_review_rounds_so_far_ignores_untrusted_comments():
     # Public comments must not exhaust the 5-round budget (same trust
     # filter as resume_scene). Five NONE round comments still count as 0.
     untrusted = [_round_comment(i, association="NONE") for i in range(1, 6)]
-    assert runner.review_rounds_so_far(untrusted) == 0
+    assert failure_report.review_rounds_so_far(untrusted) == 0
     trusted = [_round_comment(i, association="OWNER") for i in range(1, 6)]
-    assert runner.review_rounds_so_far(trusted) == 5
+    assert failure_report.review_rounds_so_far(trusted) == 5
     mixed = untrusted + [_round_comment(1, association="MEMBER")]
-    assert runner.review_rounds_so_far(mixed) == 1
+    assert failure_report.review_rounds_so_far(mixed) == 1
 
 
 def test_review_rounds_so_far_scopes_new_attempt_away_from_closed_pr_history():
@@ -1751,7 +1752,7 @@ def test_review_rounds_so_far_scopes_new_attempt_away_from_closed_pr_history():
     current["body"] = current["body"].replace(
         "run=run1", "run=deadbeef",
     )
-    assert runner.review_rounds_so_far(
+    assert failure_report.review_rounds_so_far(
         [old, current], run_id="deadbeef", pr_number=49,
     ) == 1
 
@@ -1762,7 +1763,7 @@ def test_review_rounds_so_far_keeps_budget_for_same_attempt_and_pr():
         comment["body"] = comment["body"].replace(
             "run=run1", "run=a1b2c3d4",
         )
-    assert runner.review_rounds_so_far(
+    assert failure_report.review_rounds_so_far(
         comments, run_id="a1b2c3d4", pr_number=4,
     ) == 2
 
@@ -2577,7 +2578,7 @@ def test_unknown_verdict_head_budget_resets_after_clean_review_round(
     )
     monkeypatch.setattr(seam, "comment_issue",
                         lambda *a, **k: calls.append(k["body"]))
-    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
     make_fake_gh(monkeypatch)
     # Keep the GitHub fake while making the repository object probe fail.
@@ -2711,7 +2712,7 @@ def test_review_and_merge_findings_labels_fix_needed_and_comments(
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -2756,7 +2757,7 @@ def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -2834,7 +2835,7 @@ def test_review_and_merge_absorb_abandon_is_machine_named(
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -2897,7 +2898,7 @@ def test_review_and_merge_unreadable_base_probe_leaves_round_unarmed(
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -2939,7 +2940,7 @@ def test_review_and_merge_gate_time_probe_unreadable_keeps_plain_comment(
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -2983,7 +2984,7 @@ def test_review_and_merge_midround_base_advance_is_not_a_violation(
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -3000,7 +3001,7 @@ def test_review_and_merge_midround_base_advance_is_not_a_violation(
     assert "Orbi review round" not in calls[0][1]
     assert '"review_round": 0' in calls[0][1]
     assert '"base_advance_round": 1' in calls[0][1]
-    assert runner.review_rounds_so_far(
+    assert failure_report.review_rounds_so_far(
         [{"body": calls[0][1], "authorAssociation": "OWNER"}],
         run_id="a1b2c3d4",
     ) == 0
@@ -3032,7 +3033,7 @@ def test_review_and_merge_absorbed_head_is_not_a_violation(
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -3070,7 +3071,7 @@ def test_review_and_merge_ci_failure_labels_fix_needed(monkeypatch, tmp_path):
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: calls.append(("edit", k)),
     )
@@ -3114,7 +3115,7 @@ def test_review_and_merge_ci_failure_comment_counts_toward_round_budget(
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: calls.append(("edit", k)),
     )
@@ -3130,7 +3131,7 @@ def test_review_and_merge_ci_failure_comment_counts_toward_round_budget(
     assert "CI merge gate blocked" in calls[0][1]
     # The emitted comment is exactly the counting carrier: a trusted
     # comment with this run's marker is counted as one round.
-    assert runner.review_rounds_so_far(
+    assert failure_report.review_rounds_so_far(
         [{"body": calls[0][1], "authorAssociation": "OWNER"}],
         run_id="a1b2c3d4",
     ) == 1
@@ -3155,7 +3156,7 @@ def test_review_and_merge_preexisting_ci_failure_is_not_swallowed(
     monkeypatch.setattr(
         seam, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            runner.PreExistingCIFailure(
+            failure_report.PreExistingCIFailure(
                 "delivery gate: CI main is already red on check 'tests' "
                 "— fix main first"
             ),
@@ -3165,12 +3166,12 @@ def test_review_and_merge_preexisting_ci_failure_is_not_swallowed(
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: calls.append(("edit", k)),
     )
     make_fake_gh(monkeypatch)
-    with pytest.raises(runner.PreExistingCIFailure):
+    with pytest.raises(failure_report.PreExistingCIFailure):
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4, title="Review task", priority="normal",
@@ -3306,7 +3307,7 @@ def test_base_advance_budget_exhausts_separately(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(seam, "comment_issue",
                         lambda *a, **k: calls.append(k.get("body")))
-    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
     make_fake_gh(monkeypatch)
     with pytest.raises(runner.UnrecoverableDeliveryError, match="base-advance retry loop exhausted"):
@@ -3344,7 +3345,7 @@ def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
-        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+        failure_report, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -3578,7 +3579,7 @@ def _run_merge_round(monkeypatch, clone: Path, *, session=None,
     monkeypatch.setattr(seam, "stream_pi",
                         lambda command, **kwargs: session())
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
     _install_merge_record_gh(
         monkeypatch, clone, repo_settings=repo_settings,

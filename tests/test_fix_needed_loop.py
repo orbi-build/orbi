@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+import orbi.failure_report as failure_report
 import orbi.runner as runner
 import orbi.pi_session as pi_session
 import orbi.runner_health as runner_health
@@ -106,7 +107,7 @@ def _config(tmp_path):
 
 
 def test_is_unrecoverable_failure_true_only_for_explicit_error():
-    assert runner.is_unrecoverable_failure(
+    assert failure_report.is_unrecoverable_failure(
         runner.UnrecoverableDeliveryError("human decision needed"),
     )
 
@@ -117,8 +118,8 @@ def test_is_unrecoverable_failure_true_for_rate_limit_exhaustion():
     # classification would resume the open-PR review with the persisted
     # counter already at the limit — one 429 exit per tick, forever:
     # exactly the unbounded loop the issue bans.
-    assert runner.is_unrecoverable_failure(
-        runner.RateLimitExhaustedError(
+    assert failure_report.is_unrecoverable_failure(
+        failure_report.RateLimitExhaustedError(
             "provider rate limit retries exhausted",
         ),
     )
@@ -146,7 +147,7 @@ def test_is_unrecoverable_failure_true_for_rate_limit_exhaustion():
 def test_is_unrecoverable_failure_false_for_recoverable_failures(exc):
     # Issue #50: every failure the AI can still diagnose, fix and
     # verify on the same run/PR stays in the automatic fix loop.
-    assert not runner.is_unrecoverable_failure(exc)
+    assert not failure_report.is_unrecoverable_failure(exc)
 
 
 # --------------------------------------------- snapshot placeholder (Issue #288)
@@ -156,7 +157,7 @@ def test_snapshot_or_placeholder_returns_the_watcher_state(tmp_path):
     """Issue #288: a readable session dir yields the real snapshot —
     the same state the failure comment's scene has always shown."""
     _write_session(tmp_path)
-    snapshot = runner._snapshot_or_placeholder(
+    snapshot = failure_report._snapshot_or_placeholder(
         tmp_path / ".pi-session", number=39,
     )
     assert snapshot["session_id"] == "sess-1"
@@ -171,7 +172,7 @@ def test_snapshot_or_placeholder_returns_placeholder_without_session(
     """Issue #288: no session file yet (the Pi never started or the dir
     is gone) yields the placeholder scene, fresh per call — the shared
     constant is never handed out for mutation."""
-    first = runner._snapshot_or_placeholder(
+    first = failure_report._snapshot_or_placeholder(
         tmp_path / ".pi-session", number=39,
     )
     assert first == {
@@ -180,7 +181,7 @@ def test_snapshot_or_placeholder_returns_placeholder_without_session(
         "action": None, "result": None,
     }
     first["phase"] = "mutated"
-    assert runner._snapshot_or_placeholder(
+    assert failure_report._snapshot_or_placeholder(
         tmp_path / ".pi-session", number=39,
     )["phase"] == "starting"
 
@@ -195,9 +196,9 @@ def test_snapshot_or_placeholder_logs_a_failed_read(
     def failing_snapshot(*args, **kwargs):
         raise OSError("session file unreadable")
 
-    monkeypatch.setattr(runner, "activity_snapshot", failing_snapshot)
+    monkeypatch.setattr(failure_report, "activity_snapshot", failing_snapshot)
     caplog.set_level("INFO")
-    snapshot = runner._snapshot_or_placeholder(
+    snapshot = failure_report._snapshot_or_placeholder(
         tmp_path / ".pi-session", number=39,
     )
     assert snapshot["session_id"] is None
@@ -245,7 +246,7 @@ def test_delivery_step_recoverable_review_failure_stays_fix_needed(
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
     )
     monkeypatch.setattr(
-        runner, "comment_pr",
+        failure_report, "comment_pr",
         lambda *args, **kwargs: pr_comments.append((args, kwargs)),
     )
     reviews = []
@@ -342,7 +343,7 @@ def test_delivery_step_recoverable_failure_while_fix_needed_keeps_label(
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
 
     def failing_review(*args, **kwargs):
         raise RuntimeError("pi_exit_1: the review Pi failed")
@@ -386,7 +387,7 @@ def test_delivery_step_recoverable_failure_with_session_file_includes_session_sc
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
     )
-    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
 
     def failing_review(*args, **kwargs):
         raise RuntimeError("pi_exit_3: the review Pi failed")
@@ -420,7 +421,7 @@ def test_delivery_step_recoverable_failure_scene_snapshot_failure_is_logged(
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
     )
-    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
 
     def failing_review(*args, **kwargs):
         raise RuntimeError("pi_exit_3: the review Pi failed")
@@ -429,7 +430,7 @@ def test_delivery_step_recoverable_failure_scene_snapshot_failure_is_logged(
         raise OSError("session file unreadable")
 
     monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
-    monkeypatch.setattr(runner, "activity_snapshot", failing_snapshot)
+    monkeypatch.setattr(failure_report, "activity_snapshot", failing_snapshot)
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     caplog.set_level("INFO")
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
@@ -466,7 +467,7 @@ def test_delivery_step_recoverable_failure_without_bound_run_id(
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
     )
-    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
 
     def failing_review(*args, **kwargs):
         raise RuntimeError("pi_exit_3: the review Pi failed")
@@ -506,7 +507,7 @@ def test_delivery_step_unrecoverable_failure_marks_blocked_with_reason(
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
     )
-    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
     reason = (
         "the review/fix loop is bounded (5 rounds) and exhausted "
         "without a clean verdict; the remaining findings need a human "
@@ -567,7 +568,7 @@ def test_delivery_step_real_unrecoverable_failure_keeps_traceback(
     make_wait_failure_fake(monkeypatch)
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
 
     def failing_review(*args, **kwargs):
         raise runner.UnrecoverableDeliveryError("credential revoked")
@@ -611,7 +612,7 @@ def test_delivery_step_base_branch_mismatch_marks_blocked_with_reason(
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
     )
-    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
     reviews = []
     monkeypatch.setattr(
         runner, "review_and_merge_if_clean",
@@ -886,7 +887,7 @@ def test_verify_resumed_pr_recoverable_failure_scene_snapshot_failure_is_logged(
         raise OSError("session file unreadable")
 
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
-    monkeypatch.setattr(runner, "activity_snapshot", failing_snapshot)
+    monkeypatch.setattr(failure_report, "activity_snapshot", failing_snapshot)
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(RuntimeError, match="not pushed"):
@@ -980,7 +981,7 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
     monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: posted.append(kwargs["body"]),
     )
-    runner.block_scene_failure(
+    failure_report.block_scene_failure(
         issue, scene.SceneError("opened PR comment is missing run_id"),
         "owner/repo", comments,
     )
@@ -1011,7 +1012,7 @@ def test_review_rounds_after_human_recovery_ignores_old_run():
         {"body": "Orbi review round 5 for PR #46: findings",
          "authorAssociation": "OWNER", "createdAt": "2026-01-02T00:00:00Z"},
     ]
-    assert runner.review_rounds_so_far(
+    assert failure_report.review_rounds_so_far(
         comments, after="2026-01-01T12:00:00Z",
     ) == 1
 
@@ -1206,7 +1207,7 @@ def _external_review_env(monkeypatch, tmp_path, *, external: bool):
     comments: list = []
     monkeypatch.setattr(seam, "comment_issue",
                         lambda *args, **kwargs: comments.append(kwargs))
-    monkeypatch.setattr(runner, "comment_pr",
+    monkeypatch.setattr(failure_report, "comment_pr",
                         lambda *args, **kwargs: comments.append(kwargs))
     patches: list = []
     monkeypatch.setattr(seam, "issue_labels",
@@ -1400,7 +1401,7 @@ def make_report_fake(monkeypatch, *, history=None, labels=("ai-fix-needed",),
     monkeypatch.setattr(seam, "comment_issue", post_issue_comment)
     monkeypatch.setattr(seam, "update_issue_comment",
                         update_stored_comment)
-    monkeypatch.setattr(runner, "comment_pr",
+    monkeypatch.setattr(failure_report, "comment_pr",
         lambda number, *, repo, body:
             captured["pr_comments"].append(body))
     monkeypatch.setattr(seam, "edit_issue",
@@ -1411,7 +1412,7 @@ def make_report_fake(monkeypatch, *, history=None, labels=("ai-fix-needed",),
 
 def _report(exc, monkeypatch_unused=None, **kwargs):
     """One classified recoverable report of the resume-verify failure."""
-    runner.report_delivery_failure(
+    failure_report.report_delivery_failure(
         exc, issue={"number": 39, "title": "task", "body": ""},
         source_repo="owner/repo", run_id=RUN_ID, pr_url=PR_URL,
         worktree=Path("/nonexistent"), branch=BRANCH,
@@ -1617,7 +1618,7 @@ def test_human_decision_failure_is_terminal_with_decision_details(
         "fix: choose the authoritative address source"
     )
     action = "Choose the authoritative address source."
-    outcome = runner.report_delivery_failure(
+    outcome = failure_report.report_delivery_failure(
         runner.HumanDecisionRequired(decision, action=action),
         issue={"number": 39, "title": "task", "body": ""},
         source_repo="owner/repo", run_id=RUN_ID, pr_url=PR_URL,
@@ -1642,7 +1643,7 @@ def test_report_failure_without_run_id_keeps_the_plain_path(
     correlate — no fingerprint marker, no dedup, no streak; the report
     still goes out once."""
     captured = make_report_fake(monkeypatch)
-    runner.report_delivery_failure(
+    failure_report.report_delivery_failure(
         _failure_exc(), issue={"number": 39, "title": "task", "body": ""},
         source_repo="owner/repo", run_id=None, pr_url=PR_URL,
         worktree=Path("/nonexistent"), branch=BRANCH,
@@ -1676,17 +1677,17 @@ def test_streak_and_dedup_scans_skip_non_failure_noise(
         {"body": f"{MARKER}\n**Orbi progress**\n\nfix needed",
          "authorAssociation": "OWNER"},
     ]
-    assert runner._failure_streak(history, RUN_ID, fp) == 1
-    assert runner._reported_failure_comment(
+    assert failure_report._failure_streak(history, RUN_ID, fp) == 1
+    assert failure_report._reported_failure_comment(
         history, RUN_ID, fp) is history[0]
     # The public copy alone never satisfies the dedup.
     public_only = [
         {"body": failure_body, "authorAssociation": "NONE"},
     ]
-    assert runner._reported_failure_comment(
+    assert failure_report._reported_failure_comment(
         public_only, RUN_ID, fp,
     ) is None
-    assert runner._failure_streak(public_only, RUN_ID, fp) == 0
+    assert failure_report._failure_streak(public_only, RUN_ID, fp) == 0
     # The hidden `:count` suffix IS the occurrence count: one comment
     # stamped `:2` (two deduped failures) counts 2, and the bump
     # helper raises it in place.
@@ -1697,10 +1698,10 @@ def test_streak_and_dedup_scans_skip_non_failure_noise(
         ),
         "authorAssociation": "OWNER",
     }
-    assert runner._failure_streak([counted], RUN_ID, fp) == 2
+    assert failure_report._failure_streak([counted], RUN_ID, fp) == 2
     bumped = progress.bump_failure_repeat(counted["body"], fp)
     assert f"<!-- orbi:fail={fp}:3 -->" in bumped
-    assert runner._failure_streak([{"body": bumped,
+    assert failure_report._failure_streak([{"body": bumped,
                                     "authorAssociation": "OWNER"}],
                                  RUN_ID, fp) == 3
 

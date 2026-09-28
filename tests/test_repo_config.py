@@ -17,6 +17,7 @@ import pytest
 
 import orbi.repo_config as repo_config
 import orbi.claim as claim
+import orbi.failure_report as failure_report
 import orbi.runner as runner
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
@@ -945,7 +946,7 @@ def test_main_blocks_a_claim_when_the_repo_config_is_invalid(
     )
     blocked = []
     monkeypatch.setattr(
-        runner, "block_repo_config_failure",
+        failure_report, "block_repo_config_failure",
         lambda *a, **k: blocked.append((a, k)),
     )
 
@@ -1027,7 +1028,7 @@ def test_block_repo_config_failure_is_best_effort(monkeypatch, caplog):
         raise RuntimeError("github down")
 
     monkeypatch.setattr(seam, "apply_label_patch", broken)
-    runner.block_repo_config_failure(
+    failure_report.block_repo_config_failure(
         1, "owner/repo", ValueError("bad"), "a1b2c3d4",
     )
     assert "repo_config_failure_report_failed" in caplog.text
@@ -1087,7 +1088,7 @@ def test_process_issue_accepts_a_pre_resolved_record(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "create_worktree",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("git failed")),
     )
-    monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: None)
+    monkeypatch.setattr(failure_report, "activity_snapshot", lambda session_dir: None)
     monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)

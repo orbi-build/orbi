@@ -16,6 +16,7 @@ from unittest.mock import Mock, call as mock_call
 
 import pytest
 
+import orbi.failure_report as failure_report
 import orbi.runner as runner
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
@@ -101,7 +102,7 @@ def patch_process_deps(monkeypatch, tmp_path, *, run_pi_side_effect=None):
 
     monkeypatch.setattr(seam, "create_worktree", fake_create_worktree)
     monkeypatch.setattr(
-        runner, "activity_snapshot",
+        failure_report, "activity_snapshot",
         lambda session_dir: {
             "session_id": "sess-1",
             "session_file": str(derived_wt(tmp_path) / ".pi-session" / "s.jsonl"),
@@ -1868,7 +1869,7 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
         lambda number, **kwargs: edits.append(kwargs),
     )
     monkeypatch.setattr(seam, "comment_issue", Mock())
-    monkeypatch.setattr(runner, "comment_pr", Mock())
+    monkeypatch.setattr(failure_report, "comment_pr", Mock())
     if "pass" in verdict:
         monkeypatch.setattr(runner, "merge_gate", lambda *a, **k: {
             "number": 4, "url": "https://github.com/xqliu/orbi/pull/40",
@@ -2584,7 +2585,7 @@ def test_delivery_step_external_closed_requeues_for_internal_redo(
     )
     pr_commented = []
     monkeypatch.setattr(
-        runner, "comment_pr",
+        failure_report, "comment_pr",
         lambda number, **kwargs: pr_commented.append(
             (number, kwargs["body"]),
         ),
