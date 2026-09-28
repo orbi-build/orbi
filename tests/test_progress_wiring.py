@@ -816,6 +816,163 @@ def test_process_issue_repeated_recoverable_failure_updates_one_comment(
     )
 
 
+PROVIDER_401_A = (
+    '401: {"message":"Authentication Fails, Your api key: '
+    '****lder is invalid (request_id: A)"}'
+)
+PROVIDER_401_B = PROVIDER_401_A.replace("request_id: A", "request_id: B")
+
+
+def _stateful_comments(monkeypatch):
+    """A stateful gh comment store: GET lists, POST appends (returning
+    the comment object), PATCH updates in place. Returns the live
+    comments, the PATCH log and the POST log — exactly the traffic the
+    runner makes against the real Issue (Issue #1465 acceptance)."""
+    comments: list[dict] = []
+    next_id = iter(range(301, 900))
+    patches: list[tuple[int, str]] = []
+    posts: list[dict] = []
+
+    def fake_gh(command, **kwargs):
+        if command[0] == "gh" and command[1] == "api":
+            endpoint = command[2]
+            if "--method" not in command:
+                return json.dumps([dict(c) for c in comments])
+            method = command[command.index("--method") + 1]
+            body = command[command.index("--field") + 1][len("body="):]
+            if method == "POST":
+                comment = {"id": next(next_id), "body": body}
+                comments.append(comment)
+                posts.append(comment)
+                return json.dumps(comment)
+            comment_id = int(endpoint.rsplit("/", 1)[-1])
+            patches.append((comment_id, body))
+            target = next(c for c in comments if c["id"] == comment_id)
+            target["body"] = body
+            return json.dumps(target)
+        if (command[0] == "gh" and command[1] == "issue"
+                and "comment" in command):
+            comments.append({"id": next(next_id), "body": command[-1]})
+            return ""
+        if (command[0] == "gh" and command[1] == "issue"
+                and command[2] == "view"):
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
+        if (command[0] == "gh" and command[1] == "issue"
+                and command[2] == "list"):
+            return "[]"
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_gh)
+    return comments, patches, posts
+
+
+def _recoverable_scenes(comments):
+    return [
+        comment for comment in comments
+        if "Orbi Pi failure recovered:" in comment["body"]
+    ]
+
+
+def _pi_401(stderr: str):
+    return runner.RecoverablePiProcessError(1, ["pi"], stderr=stderr)
+
+
+def test_recoverable_401_posts_one_classified_comment(monkeypatch, tmp_path):
+    """Issue #1465 acceptance: a recoverable provider 401 posts ONE
+    comment whose headline names the credential rejection and the retry,
+    carries no `orbi:failure:v1` block and no `orbi:fail=` marker, and
+    leaves the Issue `ai-in-progress`."""
+    comments, _, _ = _stateful_comments(monkeypatch)
+    patch_process_deps(
+        monkeypatch, tmp_path, run_pi_side_effect=_pi_401(PROVIDER_401_A),
+    )
+    assert runner.process_issue(
+        make_issue(), make_config(tmp_path), "xqliu/orbi",
+    ).kind == "failed"
+    scenes = _recoverable_scenes(comments)
+    assert len(scenes) == 1, scenes
+    body = scenes[0]["body"]
+    assert "credential_missing" in body
+    assert "retrying on the next tick" in body
+    assert "<!-- orbi:recovered=credential_missing -->" in body
+    assert "<!-- orbi:failure:v1" not in body
+    assert "<!-- orbi:fail=" not in body
+    # The Issue stays ai-in-progress: the only label edit is the claim.
+    edits = [call.kwargs for call in runner.edit_issue.call_args_list]
+    assert edits == [{"repo": "xqliu/orbi", "add": "ai-in-progress"}]
+
+
+def test_recoverable_401_next_tick_patches_the_same_comment(
+    monkeypatch, tmp_path,
+):
+    """Issue #1465 acceptance: the same 401 on the next tick with a new
+    request id PATCHes the same comment (no second comment)."""
+    comments, patches, _ = _stateful_comments(monkeypatch)
+    patch_process_deps(
+        monkeypatch, tmp_path,
+        run_pi_side_effect=[_pi_401(PROVIDER_401_A), _pi_401(PROVIDER_401_B)],
+    )
+    for _ in range(2):
+        assert runner.process_issue(
+            make_issue(), make_config(tmp_path), "xqliu/orbi",
+        ).kind == "failed"
+    scenes = _recoverable_scenes(comments)
+    assert len(scenes) == 1, scenes
+    scene_id = scenes[0]["id"]
+    assert any(
+        comment_id == scene_id
+        and "Orbi Pi failure recovered:" in body
+        for comment_id, body in patches
+    ), patches
+    updated = next(
+        comment["body"] for comment in comments
+        if comment["id"] == scene_id
+    )
+    assert "request_id: B" in updated
+    assert "<!-- orbi:recovered=credential_missing:2 -->" in updated
+
+
+def test_recoverable_401_five_ticks_never_block(monkeypatch, tmp_path):
+    """Issue #1465 acceptance: the same 401 on five consecutive ticks
+    never makes the Issue `ai-blocked` (Issue #1455 stays in force)."""
+    comments, _, _ = _stateful_comments(monkeypatch)
+    patch_process_deps(
+        monkeypatch, tmp_path, run_pi_side_effect=[_pi_401(PROVIDER_401_A)] * 5,
+    )
+    for _ in range(5):
+        assert runner.process_issue(
+            make_issue(), make_config(tmp_path), "xqliu/orbi",
+        ).kind == "failed"
+    assert len(_recoverable_scenes(comments)) == 1
+    assert all(
+        "ai-blocked" not in str(call.kwargs)
+        for call in runner.edit_issue.call_args_list
+    )
+
+
+def test_recoverable_timeout_posts_its_own_comment(monkeypatch, tmp_path):
+    """Issue #1465 acceptance: a DIFFERENT cause (a timeout) in the same
+    run posts its own comment with its own reason — both remain."""
+    comments, _, _ = _stateful_comments(monkeypatch)
+    patch_process_deps(
+        monkeypatch, tmp_path,
+        run_pi_side_effect=[
+            _pi_401(PROVIDER_401_A),
+            _pi_401("request timed out after 30s"),
+        ],
+    )
+    for _ in range(2):
+        assert runner.process_issue(
+            make_issue(), make_config(tmp_path), "xqliu/orbi",
+        ).kind == "failed"
+    scenes = _recoverable_scenes(comments)
+    assert len(scenes) == 2, scenes
+    bodies = "\n\n".join(comment["body"] for comment in scenes)
+    assert "credential_missing" in bodies
+    assert "github_transient" in bodies
+    assert "request timed out" in bodies
+
+
 def test_process_issue_resumes_update_one_started_comment(monkeypatch, tmp_path):
     """Issue #1369: a run that starts and then resumes three times keeps
     exactly ONE `Orbi started Pi:` comment. The first tick POSTs it;

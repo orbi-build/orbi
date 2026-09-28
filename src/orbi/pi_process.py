@@ -24,6 +24,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
 from orbi.delivery_scene import RunContext
+# One auth-wording list shared with the delivery failure classifier
+# (`failure._CREDENTIAL_MISSING_RE`), so the two cannot drift (Issue #1465).
+from orbi.failure import PROVIDER_AUTH_WORDS
 from orbi.pi_activity import (
     SessionWatcher,
     format_duration,
@@ -479,8 +482,8 @@ def _classify_startup_exit(stderr: str, returncode: int) -> str:
     if _is_rate_limited(stderr):
         return "provider_rate_limited"
     lowered = stderr.lower()
-    if ("401" in lowered or "403" in lowered or "unauthorized" in lowered
-            or "forbidden" in lowered or "api key" in lowered):
+    if ("401" in lowered or "403" in lowered
+            or any(word in lowered for word in PROVIDER_AUTH_WORDS)):
         return "auth_failure"
     if ("timed out" in lowered or "timeout" in lowered
             or "etimedout" in lowered or "econnrefused" in lowered

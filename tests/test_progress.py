@@ -1062,43 +1062,47 @@ def test_publisher_finish_resumes_existing_comment_without_tracked_one():
     ), "a resumed finish must not post a duplicate comment"
 
 
-def test_publisher_failure_scene_updates_identical_failure_comment():
-    """Issue #645: the same run's identical recoverable-failure scene
-    comment is updated in place (the progress patch path), never
-    appended a second time."""
-    body = (
+def _recovered_body(reason_code: str, detail: str = "boom") -> str:
+    return (
         "<!-- orbi:run=abc12345 -->\n"
-        "Orbi Pi failure recovered: 429 quota; the run is recoverable"
+        f"<!-- orbi:recovered={reason_code} -->\n"
+        f"Orbi Pi failure recovered: {reason_code}; retrying on the next "
+        "tick\n\n"
+        "<details><summary>Diagnosis</summary>\n\n"
+        f"- failure detail: {detail}\n\n</details>"
     )
-    # The stored comment went through the same rendering as the new one
-    # (the hidden runner fingerprint is appended by every publish).
+
+
+def test_publisher_failure_scene_updates_the_same_cause_comment():
+    """Issue #1465: the same run's repeated SAME cause (the hidden
+    `orbi:recovered` key) is PATCHed in place — the repeat count rises,
+    the body carries the newest occurrence, and no second comment is
+    appended."""
+    body = _recovered_body("credential_missing")
     publisher, calls = make_publisher(comments=[
         {"id": 5, "body": progress.format_status_comment(body)},
     ])
     publisher.failure_scene(body)
+    rendered = progress.format_status_comment(body)
+    expected = progress.bump_recovered_repeat(
+        rendered, "credential_missing", 1,
+    )
     assert calls[-1] == [
         "gh", "api", "repos/xqliu/orbi/issues/comments/5",
-        "--method", "PATCH", "--field",
-        f"body={progress.format_status_comment(body)}",
+        "--method", "PATCH", "--field", f"body={expected}",
     ]
+    assert "<!-- orbi:recovered=credential_missing:2 -->" in expected
 
 
-def test_publisher_failure_scene_posts_when_failure_content_differs():
-    """A DIFFERENT failure (or a comment without a body) never matches:
-    the new scene is posted as its own comment — no failure evidence is
-    lost or rewritten."""
+def test_publisher_failure_scene_posts_a_different_cause():
+    """Issue #1465: a DIFFERENT reason_code is a different cause: it
+    posts its own comment, so the previous cause's evidence is never
+    rewritten or lost."""
     existing = progress.format_status_comment(
-        "<!-- orbi:run=abc12345 -->\n"
-        "Orbi Pi failure recovered: old error; the run is recoverable",
+        _recovered_body("provider_quota", "429 quota"),
     )
-    publisher, calls = make_publisher(comments=[
-        {"id": 5, "body": existing},
-        {"id": 6},
-    ])
-    new_body = (
-        "<!-- orbi:run=abc12345 -->\n"
-        "Orbi Pi failure recovered: new error; the run is recoverable"
-    )
+    publisher, calls = make_publisher(comments=[{"id": 5, "body": existing}])
+    new_body = _recovered_body("credential_missing", "401 rejected")
     publisher.failure_scene(new_body)
     assert calls[-1] == [
         "gh", "api", "repos/xqliu/orbi/issues/18/comments",
@@ -1108,17 +1112,16 @@ def test_publisher_failure_scene_posts_when_failure_content_differs():
 
 
 def test_publisher_failure_scene_never_touches_another_run():
-    """The update is scoped to THIS run's comments: an identical-looking
-    scene comment of another run is never hijacked."""
+    """The fold is scoped by the run marker too: another run's comment
+    with the same cause is never hijacked (Issue #1465)."""
     other_run = progress.format_status_comment(
         "<!-- orbi:run=deadbeef -->\n"
-        "Orbi Pi failure recovered: 429 quota; the run is recoverable",
+        "<!-- orbi:recovered=credential_missing -->\n"
+        "Orbi Pi failure recovered: credential_missing; retrying on the "
+        "next tick",
     )
     publisher, calls = make_publisher(comments=[{"id": 5, "body": other_run}])
-    new_body = (
-        "<!-- orbi:run=abc12345 -->\n"
-        "Orbi Pi failure recovered: 429 quota; the run is recoverable"
-    )
+    new_body = _recovered_body("credential_missing")
     publisher.failure_scene(new_body)
     assert calls[-1] == [
         "gh", "api", "repos/xqliu/orbi/issues/18/comments",
@@ -1140,6 +1143,49 @@ def test_progress_state_survives_an_activity_snapshot_failure(monkeypatch, tmp_p
     assert state["phase"] == "starting"
     assert state["last_activity"] is None
     assert state["session"] is None
+
+
+def test_recovered_marker_renders_and_validates_the_reason_code():
+    """Issue #1465: the recoverable-failure fold marker carries a closed
+    reason_code and rejects anything else."""
+    marker = progress.recovered_marker("credential_missing")
+    assert marker == "<!-- orbi:recovered=credential_missing -->"
+    with pytest.raises(ValueError, match="invalid recoverable reason code"):
+        progress.recovered_marker("not a code")
+    with pytest.raises(ValueError, match="invalid recoverable reason code"):
+        progress.recovered_marker("made_up")
+
+
+def test_recovered_repeat_count_and_bump_round_trip():
+    """Issue #1465: the optional `:<count>` suffix is the recovered
+    cause's occurrence count — a count-less marker counts 1, the bump
+    sets it from the previous count, a body without the marker counts 0
+    and refuses to bump."""
+    body = (
+        "<!-- orbi:run=01e1f4a3 -->\n"
+        "<!-- orbi:recovered=credential_missing -->\n"
+        "Orbi Pi failure recovered: credential_missing; retrying on the "
+        "next tick"
+    )
+    assert progress.recovered_repeat_count(body) == 1
+    once = progress.bump_recovered_repeat(body, "credential_missing", 1)
+    assert once == body.replace(
+        "<!-- orbi:recovered=credential_missing -->",
+        "<!-- orbi:recovered=credential_missing:2 -->",
+    )
+    assert progress.recovered_repeat_count(once) == 2
+    twice = progress.bump_recovered_repeat(once, "credential_missing", 2)
+    assert "<!-- orbi:recovered=credential_missing:3 -->" in twice
+    assert progress.recovered_repeat_count(
+        "<!-- orbi:recovered=provider_quota -->\nx") == 1
+    assert progress.recovered_repeat_count("no marker") == 0
+    assert progress.recovered_repeat_count(None) == 0
+    with pytest.raises(ValueError, match="does not carry the recovered"):
+        progress.bump_recovered_repeat("no marker", "credential_missing", 1)
+    with pytest.raises(ValueError, match="does not carry the recovered"):
+        progress.bump_recovered_repeat(body, "provider_quota", 1)
+    with pytest.raises(ValueError, match="must be a string"):
+        progress.bump_recovered_repeat(None, "credential_missing", 1)
 
 
 def test_failure_marker_renders_and_validates_the_fingerprint():

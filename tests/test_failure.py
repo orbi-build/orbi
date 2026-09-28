@@ -352,6 +352,49 @@ def test_classify_failure_reads_a_provider_quota_marker():
     assert record.retry_safe is True
 
 
+@pytest.mark.parametrize(
+    "wording",
+    [
+        # DeepSeek's rejected-key wording (Issue #1465).
+        '401: {"message":"Authentication Fails, Your api key: **** is '
+        'invalid (request_id: A)"}',
+        # OpenAI's rejected-key wording.
+        "401 Incorrect API key provided: sk-abc",
+        "Error: 401 Unauthorized",
+        "HTTP 401: Bad credentials",
+        "status 401",
+    ],
+)
+def test_classify_maps_provider_401_wordings_to_credential_missing(wording):
+    record = failure.classify(wording)
+    assert record.reason_code == "credential_missing"
+    assert record.action_code == "check_credentials"
+    assert record.retry_safe is False
+
+
+def test_classify_leaves_a_pytest_401_line_out_of_credential_missing():
+    """A bare `401` in test output (e.g. `test_401_handling ... FAILED`)
+    is not a provider credential rejection: only the provider-error shape
+    (`401:` / `status 401` / `HTTP 401`) counts (Issue #1465)."""
+    detail = (
+        "Command '['pytest']' returned non-zero exit status 1 "
+        "stderr=FAILED tests/test_auth.py::test_401_handling - "
+        "AssertionError: expected 200"
+    )
+    assert failure.classify(detail).reason_code != "credential_missing"
+
+
+def test_auth_wording_is_shared_with_the_pi_startup_classifier():
+    """Issue #1465: `failure` and `pi_process` match ONE auth wording
+    list, so the two classifiers cannot drift."""
+    from orbi import pi_process
+
+    assert pi_process.PROVIDER_AUTH_WORDS is failure.PROVIDER_AUTH_WORDS
+    assert pi_process._classify_startup_exit(
+        "Bad unauthorized: the api key was rejected", 1,
+    ) == "auth_failure"
+
+
 def test_classify_failure_dispositions_cover_the_closed_reason_set():
     assert set(failure.DISPOSITIONS) == failure.REASON_CODES
     assert {

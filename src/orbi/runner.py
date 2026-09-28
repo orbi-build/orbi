@@ -125,6 +125,7 @@ from orbi.progress import (
     _progress_state,
     _run_info_fields,
     _safe_publish,
+    _fenced,
     bump_failure_repeat,
     failure_marker,
     failure_repeat_count,
@@ -134,6 +135,7 @@ from orbi.progress import (
     progress_body,
     quote_value,
     read_test_result,
+    recoverable_scene_body,
     run_marker,
     validate_run_id,
 )
@@ -4381,29 +4383,6 @@ def _latest_session_file(worktree: Path | None) -> Path | None:
     return session_files[-1] if session_files else None
 
 
-def _fenced(content: str, *, cap: int = 4000) -> str:
-    """One raw-output segment inside a CommonMark code fence.
-
-    GitHub renders fenced content literally and monospaced, so coverage
-    tables and escaped JSONL survive a failure comment unread by the
-    markdown parser. The fence is one backtick longer than every run in
-    the content, so a payload containing markdown fences can never close
-    it; content past `cap` is cut and the cut is noted after the fence.
-    """
-    omitted = 0
-    if len(content) > cap:
-        omitted = len(content) - cap
-        content = content[:cap]
-    fence = "`" * max(
-        3,
-        1 + max((len(run) for run in re.findall(r"`+", content)), default=0),
-    )
-    block = f"{fence}\n{content}\n{fence}"
-    if omitted:
-        block += f"\n_[truncated, {omitted} chars omitted]_"
-    return block
-
-
 # The number of session records a failure comment summarizes.
 SESSION_SUMMARY_LIMIT = 20
 
@@ -5344,12 +5323,15 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         # cleanly below, the slot is released by `main`'s `finally`);
         # only the label outcome changes — never `ai-blocked`.
         LOGGER.exception("issue=%s %s", number, recoverable_name)
+        # The recoverable path classifies its cause exactly like the
+        # terminal one (Issue #1465), but the classification never
+        # decides whether the run blocks: the recovery stays
+        # `ai-in-progress` (#1455/#227).
+        record = _classify_failure(exc, outcome="blocked")
         detail = _failure_detail(exc)
-        body = (
-            f"{run_marker(run_id)}\n"
-            f"Orbi {recoverable_name}: {detail}; the run is "
-            "recoverable — the Issue stays ai-in-progress and the next "
-            f"tick resumes the same run ({run_info})"
+        body = recoverable_scene_body(
+            run_id=run_id, recoverable_name=recoverable_name, record=record,
+            detail=detail, run_info=run_info,
         )
         # The recovery comment is the delivery record, but the resume
         # does not parse it (the run state file, the worktree and the
@@ -5373,7 +5355,8 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 pr_url=None, review_round=0, priority=priority,
             ), outcome=(
                 f"**Orbi {recoverable_name}**\n\n"
-                f"failure: {detail}\n"
+                f"- reason_code: `{record.reason_code}`\n"
+                f"- action: `{record.action_code}`\n"
                 "next step: nothing — the Issue stays ai-in-progress "
                 "and the next tick resumes the same run (same run id, "
                 "branch, worktree)"
