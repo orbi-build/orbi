@@ -83,7 +83,7 @@ BRANCH = "orbi/orbi-build-orbi-issue-42"
 SESSION_RECORD = '{"type": "message", "timestamp": "2026-09-28T10:00:00Z", "message": {"role": "assistant", "toolName": "bash", "content": [{"type": "text", "text": "working"}, {"type": "toolCall", "name": "bash"}]}}'
 TEST_LOG = "collecting ...\n1 failed, 3 passed in 1.20s\n"
 
-GOLDEN = GOLDEN = {
+GOLDEN = {
     "classify": {
         "outcome": """blocked""",
         "issue_comment": """<!-- orbi:run=abcdef12 -->
