@@ -772,16 +772,17 @@ def advance_active_milestone_on_idle(
             release_ticket_exists=release_ticket_exists,
         )
         return state, None
-    if release_confirmation:
-        # Issue #856: the release notice's wait also ends when its Milestone
-        # closes — the release shipped, or the decision went another way —
-        # and the closed path never swept notices before #856. Key-gated so
-        # an unopted repository keeps the pre-#856 closed path unchanged;
-        # the pre-#856 advance notice (``candidates != [old]``) is kept
-        # either way, exactly like the open path.
-        _close_stale_milestone_issues_safely(
-            repo, active_milestone, keep_release_notice=False,
-        )
+    # The closed path always sweeps obsolete decision notices: an advance
+    # notice old= differs from the current active Milestone, and the Issue
+    # #856 release notice (old= == its only candidate) is closed once its
+    # Milestone closes — the release shipped, or the decision went another
+    # way. Running the sweep unconditionally (Issue #1475) also clears
+    # duplicate notices for the same old Milestone and keeps an unopted
+    # repository from accumulating stale notices that only an idle open
+    # Milestone tick would ever close.
+    _close_stale_milestone_issues_safely(
+        repo, active_milestone, keep_release_notice=False,
+    )
     current = parse_version_title(active_milestone)
     candidates = []
     for milestone in milestones:

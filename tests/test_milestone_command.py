@@ -1633,6 +1633,38 @@ def test_release_notice_is_closed_once_its_milestone_closes(
     assert "不再等待发布确认" in fake.comments[0]["body"]
 
 
+def test_closed_milestone_closes_stale_notice_without_release_confirmation(
+    monkeypatch, tmp_path,
+):
+    """Issue #1475: the closed-Milestone sweep runs regardless of the
+    release-confirmation opt-in, so an obsolete advance notice left behind
+    when `active_milestone` moved on is closed on the next idle tick."""
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.52"\n', encoding="utf-8")
+    fake = FakeMilestoneGh(current="v0.5.52")
+    fake.milestones[0].update(state="closed")
+    fake.notices.append({
+        "number": 1445,
+        "title": "Milestone v0.5.51 complete, awaiting confirmation to advance",
+        "body": (
+            "orbi-milestone-advance old=v0.5.51 candidates=v0.5.52"
+        ),
+    })
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
+    monkeypatch.setattr(seam, "process_commands", lambda *a, **k: None)
+
+    assert milestone.advance_active_milestone_on_idle(
+        "owner/repo", "v0.5.52", config,
+        parse_version_title=runner._parse_version_title,
+    ) == (milestone.MILESTONE_CLOSED_UNSCOPED, None)
+
+    assert fake.notices == []
+    assert len(fake.comments) == 1
+    assert fake.comments[0]["number"] == 1445
+    assert "v0.5.52" in fake.comments[0]["body"]
+
+
 def test_release_notice_close_receipt_never_claims_a_missing_ticket(
     monkeypatch, tmp_path,
 ):
