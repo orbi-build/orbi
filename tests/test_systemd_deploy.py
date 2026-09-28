@@ -23,6 +23,12 @@ from orbi import scheduler, systemd_deploy
 # host (the conftest fixture documents the seam).
 pytestmark = pytest.mark.usefixtures("systemd_scheduler")
 
+# Issue #1459: the read-only probe resolving the unit systemd loads.
+FRAGMENT_PROBE = [
+    "systemctl", "--user", "show", "orbi@1.service",
+    "-p", "FragmentPath", "--value",
+]
+
 
 def make_repo(tmp_path: Path) -> Path:
     """A deployment checkout carrying the two unit templates."""
@@ -114,9 +120,11 @@ def test_install_units_at_max_capacity_enables_every_instance(tmp_path):
         max_concurrency=scheduler.MAX_RUNNER_INSTANCES,
         run_command=lambda command, **kwargs: calls.append(command) or "",
     )
-    # The exact command sequence: reload, enable @1..@5, record the
-    # commit — no surplus disable at the cap itself.
+    # The exact command sequence: the read-only loaded-unit probe
+    # (Issue #1459), reload, enable @1..@5, record the commit — no
+    # surplus disable at the cap itself.
     assert calls == [
+        FRAGMENT_PROBE,
         ["systemctl", "--user", "daemon-reload"],
         *[
             ["systemctl", "--user", "enable", "--now", f"orbi@{index}.timer"]
@@ -162,9 +170,10 @@ def test_install_units_without_enable_only_reloads(tmp_path):
         run_command=lambda command, **kwargs: calls.append(command) or "",
         enable=False,
     )
-    assert [call for call in calls if call[0] == "systemctl"] == [
-        ["systemctl", "--user", "daemon-reload"],
-    ]
+    # Issue #1459: the read-only FragmentPath probe is allowed; the
+    # enable=False contract is that no enable/disable is ever issued.
+    assert [call for call in calls if call[2] in ("enable", "disable")] == []
+    assert ["systemctl", "--user", "daemon-reload"] in calls
 
 def test_install_units_rejects_capacity_beyond_max_runner_instances(tmp_path):
     """Issue #827: beyond the declaration cap the install fails fast with
@@ -377,6 +386,12 @@ def test_install_units_rejects_an_existing_deployment_for_another_config(
         for name in systemd_deploy.UNIT_NAMES
     }
 
+    second_calls: list[list[str]] = []
+
+    def second_run(command, **kwargs):
+        second_calls.append(command)
+        return ""
+
     with caplog.at_level("ERROR"):
         with pytest.raises(
             scheduler.UnitConflictError,
@@ -384,9 +399,7 @@ def test_install_units_rejects_an_existing_deployment_for_another_config(
         ):
             scheduler.install_units(
                 second_repo, installed, max_concurrency=2,
-                run_command=lambda command, **kwargs: pytest.fail(
-                    "conflicting install must stop before systemctl"
-                ),
+                run_command=second_run,
             )
 
     assert {
@@ -394,6 +407,110 @@ def test_install_units_rejects_an_existing_deployment_for_another_config(
         for name in systemd_deploy.UNIT_NAMES
     } == before
     assert "unit_conflict" in caplog.text
+    # The conflict stopped the install before any state change.
+    assert [
+        command for command in second_calls
+        if command[2] in ("enable", "disable", "start", "stop")
+    ] == []
+
+
+def test_install_units_reads_the_loaded_unit_not_the_installed_dir(
+    tmp_path, caplog,
+):
+    """Issue #1459: setup refuses when the unit systemd LOADS belongs to
+    another deployment, even though ``--installed-dir`` is an empty dir.
+    The read-only FragmentPath probe is allowed; no enable/disable/start/
+    stop is issued and nothing is written."""
+    repo = make_repo(tmp_path)
+    foreign_unit = tmp_path / "other" / "orbi@.service"
+    foreign_config = tmp_path / "other-deploy" / "orbi.toml"
+    foreign_unit.parent.mkdir(parents=True)
+    foreign_unit.write_text(
+        f'[Service]\nEnvironment="ORBI_CONFIG={foreign_config}"\n',
+        encoding="utf-8",
+    )
+    empty = tmp_path / "empty-installed"
+    empty.mkdir()
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        # The guard resolves the loaded unit on its first call; the
+        # conflict then aborts before any further command.
+        return str(foreign_unit)
+
+    with caplog.at_level("ERROR"):
+        with pytest.raises(scheduler.UnitConflictError) as excinfo:
+            scheduler.install_units(
+                repo, empty, max_concurrency=1, run_command=fake_run,
+            )
+    message = str(excinfo.value)
+    assert str(foreign_config.resolve()) in message
+    assert "unit_name" in message
+    assert "unit_conflict" in caplog.text
+    # The conflict stopped the install before any write or activation.
+    assert calls == [FRAGMENT_PROBE]
+    assert list(empty.iterdir()) == []
+
+
+def test_install_units_accepts_the_loaded_unit_with_the_same_config(
+    tmp_path,
+):
+    """Issue #1459: a loaded unit that points at THIS checkout is not a
+    conflict — the install proceeds normally."""
+    repo = make_repo(tmp_path)
+    loaded_unit = tmp_path / "loaded" / "orbi@.service"
+    loaded_unit.parent.mkdir(parents=True)
+    loaded_unit.write_text(
+        f'[Service]\nEnvironment="ORBI_CONFIG={repo}/orbi.toml"\n',
+        encoding="utf-8",
+    )
+    installed = tmp_path / "install"
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == FRAGMENT_PROBE:
+            return str(loaded_unit)
+        return ""
+
+    scheduler.install_units(
+        repo, installed, max_concurrency=1, run_command=fake_run,
+    )
+    assert [
+        "systemctl", "--user", "enable", "--now", "orbi@1.timer",
+    ] in calls
+    assert (installed / "orbi@.service").is_file()
+
+
+def test_install_units_falls_back_to_the_installed_dir_when_nothing_loads(
+    tmp_path,
+):
+    """Issue #1459: an empty FragmentPath (nothing loaded) keeps the old
+    installed-dir conflict check."""
+    first_repo = make_repo(tmp_path / "first")
+    second_repo = make_repo(tmp_path / "second")
+    for repo in (first_repo, second_repo):
+        (repo / "systemd" / "orbi@.service").write_text(
+            '[Service]\nEnvironment="ORBI_CONFIG='
+            '{{ORBI_REPO_DIR}}/orbi.toml"\n',
+            encoding="utf-8",
+        )
+    installed = tmp_path / "install"
+    scheduler.install_units(
+        first_repo, installed, max_concurrency=1,
+        run_command=lambda command, **kwargs: "",
+    )
+
+    def nothing_loaded(command, **kwargs):
+        assert command == FRAGMENT_PROBE
+        return ""
+
+    with pytest.raises(scheduler.UnitConflictError):
+        scheduler.install_units(
+            second_repo, installed, max_concurrency=1,
+            run_command=nothing_loaded,
+        )
 
 
 def test_installed_config_resolves_systemd_home_specifier(monkeypatch, tmp_path):
@@ -463,7 +580,9 @@ def test_install_units_copies_templates_and_reloads(monkeypatch, tmp_path):
         ] in calls
     for command in calls:
         if command[:2] == ["systemctl", "--user"]:
-            assert command[2] in ("daemon-reload", "enable", "disable")
+            assert command[2] in (
+                "show", "daemon-reload", "enable", "disable",
+            )
     # The deployed commit is the deployment checkout's HEAD.
     assert result["commit"] == "0123456789abcdef0123456789abcdef01234567"
     assert result["installed_dir"] == installed
@@ -544,7 +663,9 @@ def test_install_units_migrates_the_legacy_units_once(
     # TIMER and the surplus timer instances are disabled).
     for command in calls:
         if command[:2] == ["systemctl", "--user"]:
-            assert command[2] in ("daemon-reload", "enable", "disable")
+            assert command[2] in (
+                "show", "daemon-reload", "enable", "disable",
+            )
             if command[2] == "disable":
                 assert command[4] in (
                     "orbi.timer", "orbi@3.timer", "orbi@4.timer",
@@ -729,11 +850,12 @@ def test_sync_drifted_units_installs_and_reverifies_clean(
         report = scheduler.sync_drifted_units(
             repo, installed, max_concurrency=2, run_command=fake_run,
         )
-    # The install ran the platform re-read only: daemon-reload, nothing
-    # else that touches enablement (the operator's choice is preserved).
-    systemctl = [command for command in calls
+    # The install ran the platform re-read only: the read-only
+    # FragmentPath probe plus daemon-reload, nothing that touches
+    # enablement (the operator's choice is preserved).
+    systemctl = [command[2] for command in calls
                  if command[:2] == ["systemctl", "--user"]]
-    assert systemctl == [["systemctl", "--user", "daemon-reload"]]
+    assert systemctl == ["show", "daemon-reload"]
     # The repo template won: the installed unit matches it again.
     status = scheduler.unit_status(repo, installed)
     assert all(entry["drifted"] is False for entry in status)
@@ -779,8 +901,11 @@ def test_sync_drifted_units_install_failure_propagates(
     installed = make_installed(tmp_path, repo, mutate="orbi@.service")
 
     def fake_run(command, **kwargs):
-        # The FIRST external step of the enable=False install is the
-        # daemon-reload; it is what must fail fast here.
+        # The read-only loaded-unit probe comes first (Issue #1459);
+        # the daemon-reload of the enable=False install is what must
+        # fail fast here.
+        if command == FRAGMENT_PROBE:
+            return ""
         assert command == ["systemctl", "--user", "daemon-reload"]
         raise subprocess.CalledProcessError(1, command, stderr="nope")
 
