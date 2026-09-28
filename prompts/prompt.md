@@ -98,6 +98,11 @@ Regression guard for changed behavior (differential and property testing):
      prescribes disagrees with the reference on some input class, that is a
      regression to fix within the Issue's constraints, not a reason to trust
      the Issue's method.
+     When more than one reference implementation is installed, run them all
+     and compare them with each other first: where they disagree, find which
+     one follows the newer data or spec (for example the Unicode version its
+     tables are built from) and use that one, and list the disagreeing input
+     classes in `.orbi/regression.md`.
   2. A generated corpus. Build inputs programmatically across the whole
      domain the code path receives: every caller, producer or rule that
      reaches it (not only the one the Issue names), sizes from empty to long,

@@ -179,6 +179,9 @@ change is safe. Run a differential or property check yourself:
    and use it; otherwise a spec or an invariant the Issue implies (what must
    be removed, what must be kept byte for byte). A prescribed method that
    disagrees with the reference is a finding, not a tie-breaker.
+   When more than one reference implementation is installed, cross-check
+   them; where they disagree, use the one built on the newer data or spec
+   (for example the newer Unicode version) and report the disagreement.
 3. Run base (`git show {{BASE_SHA}}:<file>` in a scratch copy) and head over
    the corpus against the oracle. Report the counts and up to five concrete
    failing inputs.
