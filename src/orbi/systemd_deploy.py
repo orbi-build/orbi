@@ -247,6 +247,27 @@ class SystemdScheduler:
     def unit_config(self, path: Path) -> Path | None:
         return installed_config(path)
 
+    def loaded_unit_config(self, run_command,
+                           unit_name: str | None = None) -> Path | None:
+        """The ORBI_CONFIG of the unit systemd actually loads.
+
+        Activation runs through ``systemctl``, which resolves the unit
+        on its own search path (the user unit directory), never the
+        caller's ``--installed-dir``. ``FragmentPath`` names that file;
+        systemd reports an empty path for a unit it cannot find, which
+        means there is nothing to conflict with. The first instance's
+        service is the probe — every instance of one template shares the
+        same ``FragmentPath``.
+        """
+        instance = service_instances(unit_name, 1)[0]
+        fragment = run_command([
+            "systemctl", "--user", "show", instance,
+            "-p", "FragmentPath", "--value",
+        ]).strip()
+        if not fragment:
+            return None
+        return installed_config(Path(fragment))
+
     def probe_args(self, unit_name: str | None = None) -> list[str]:
         """The `systemctl --user` probe command proving the user bus.
 

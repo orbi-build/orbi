@@ -12226,12 +12226,13 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
     with caplog.at_level("ERROR"):
         with pytest.raises(runner.UnitDriftError, match="unit_drift"):
             runner.main(["--config", str(config)])
-    # The self-heal is enable=False (Issue #1364): exactly one
-    # daemon-reload that re-reads the rewritten templates, and NO
-    # enable/disable — a timer the operator disabled stays disabled.
-    assert [command for command in calls
+    # The self-heal is enable=False (Issue #1364): the read-only
+    # FragmentPath probe plus exactly one daemon-reload that re-reads
+    # the rewritten templates, and NO enable/disable — a timer the
+    # operator disabled stays disabled.
+    assert [command[2] for command in calls
             if command[:2] == ["systemctl", "--user"]] == [
-        ["systemctl", "--user", "daemon-reload"],
+        "show", "daemon-reload",
     ]
     # The structured line carries what the Issue requires.
     assert "unit_drift unit=orbi@.timer" in caplog.text
@@ -12278,10 +12279,11 @@ def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
     # The self-heal only re-reads the rewritten units (enable=False):
-    # exactly one daemon-reload, no enable/disable, no service command.
-    assert [command for command in calls
+    # the read-only FragmentPath probe plus exactly one daemon-reload,
+    # no enable/disable, no service command.
+    assert [command[2] for command in calls
             if command[:2] == ["systemctl", "--user"]] == [
-        ["systemctl", "--user", "daemon-reload"],
+        "show", "daemon-reload",
     ]
     # The repo template won: the installed unit matches it again.
     status = scheduler.unit_status(repo, installed)
@@ -12308,8 +12310,11 @@ def test_main_unit_drift_auto_sync_failure_blocks_claim(
     )
 
     def failing_run(command, **kwargs):
-        # The FIRST external step of the enable=False install is the
-        # daemon-reload; it is what must fail fast here.
+        # The read-only loaded-unit probe comes first (Issue #1459);
+        # the daemon-reload of the enable=False install is what must
+        # fail fast here.
+        if command[2] == "show":
+            return ""
         assert command == ["systemctl", "--user", "daemon-reload"]
         raise subprocess.CalledProcessError(1, command, stderr="nope")
 

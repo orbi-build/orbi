@@ -168,6 +168,18 @@ class Scheduler(Protocol):
     def unit_config(self, path: Path) -> Path | None:
         """The ORBI_CONFIG an installed unit points at (conflict check)."""
 
+    def loaded_unit_config(self, run_command,
+                           unit_name: str | None = None) -> Path | None:
+        """The ORBI_CONFIG of the unit the platform actually loads.
+
+        Activation resolves the unit on the platform's own search path,
+        which may differ from the caller's ``installed_dir``
+        (``--installed-dir``): this hook reads the RESOLVED unit so the
+        conflict guard never trusts a directory the platform will not
+        load. ``None`` when the platform has no such loaded unit —
+        then the caller falls back to the installed directory.
+        """
+
     def probe_args(self, unit_name: str | None = None) -> list[str]:
         """The read-only probe proving the scheduler session exists."""
 
@@ -251,11 +263,21 @@ def repo_template_dir(repo_dir: Path, sched: Scheduler) -> Path:
 
 def reject_different_deployment(repo_dir: Path, installed_dir: Path,
                                 unit_name: str | None = None, *,
+                                run_command,
                                 sched: Scheduler | None = None) -> None:
-    """Refuse to overwrite units owned by another checkout."""
+    """Refuse to overwrite units owned by another checkout.
+
+    The unit the platform ACTUALLY loads is authoritative: activation
+    goes through the scheduler's own search path, not the caller's
+    ``--installed-dir``. Only when that unit is absent does the guard
+    fall back to the file in ``installed_dir`` (the pre-existing
+    behavior).
+    """
     sched = sched or detect()
     first_installed = sched.unit_pairs(unit_name, 1)[0][1]
-    existing = sched.unit_config(Path(installed_dir) / first_installed)
+    existing = sched.loaded_unit_config(run_command, unit_name)
+    if existing is None:
+        existing = sched.unit_config(Path(installed_dir) / first_installed)
     if existing is None:
         return
     expected = (Path(repo_dir).resolve() / "orbi.toml").resolve()
@@ -263,13 +285,14 @@ def reject_different_deployment(repo_dir: Path, installed_dir: Path,
         return
     message = (
         f"existing {sched.display} deployment points at a different "
-        f"ORBI_CONFIG: {existing} (this checkout uses {expected}); "
-        "uninstall the existing deployment before installing this checkout"
+        f"ORBI_CONFIG: {existing} (this checkout uses {expected}); that "
+        f"deployment owns the unit name: {UNMANAGED_FIX}, or uninstall "
+        "the existing deployment if it is being replaced"
     )
     event(
         "unit_conflict", level=logging.ERROR,
         unit=first_installed, installed_config=existing,
-        expected_config=expected, action="uninstall_existing_deployment",
+        expected_config=expected, action="set_unit_name",
     )
     raise UnitConflictError(message)
 
@@ -429,7 +452,7 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
     installed_dir = Path(installed_dir)
     pairs = sched.unit_pairs(unit_name, max_concurrency)
     reject_different_deployment(repo_dir, installed_dir, unit_name,
-                                sched=sched)
+                                run_command=run_command, sched=sched)
     for template_name, _ in pairs:
         template = repo_template_dir(repo_dir, sched) / template_name
         if not template.is_file():

@@ -184,6 +184,18 @@ class LaunchdScheduler:
             return None
         return Path(value).expanduser().resolve()
 
+    def loaded_unit_config(self, run_command,
+                           unit_name: str | None = None) -> Path | None:
+        """launchd has no separate unit search path.
+
+        ``activate_instances`` bootstraps the explicit plist path
+        (``installed_dir / <label>.plist``), so the caller's
+        ``installed_dir`` IS the loaded unit. Returning ``None`` lets
+        the conflict guard read it there — the same fallback the
+        systemd hook uses when no unit is loaded.
+        """
+        return None
+
     def domain(self) -> str:
         return f"gui/{os.getuid()}"
 

@@ -269,6 +269,15 @@ def test_unit_config_reads_the_env_dict(tmp_path):
     assert sched.unit_config(plain) is None
 
 
+def test_loaded_unit_config_has_no_separate_search_path(tmp_path):
+    """Issue #1459: launchd bootstraps the explicit installed plist, so
+    the guard falls back to the caller's installed dir (None here)."""
+    sched = launchd_deploy.LaunchdScheduler()
+    assert sched.loaded_unit_config(
+        lambda command, **kwargs: "", None,
+    ) is None
+
+
 def test_probe_args_print_the_gui_domain(monkeypatch):
     monkeypatch.setattr(launchd_deploy.os, "getuid", lambda: 501)
     sched = launchd_deploy.LaunchdScheduler()

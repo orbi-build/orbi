@@ -44,6 +44,7 @@ class FakeScheduler:
         self.calls: list[tuple] = []
         self.installed_root = tmp_path / "installed"
         self.config_override: Path | None = None
+        self.loaded_config: Path | None = None
         self.damage_on_activate = False
 
     def unit_pairs(self, unit_name, count):
@@ -69,6 +70,12 @@ class FakeScheduler:
 
     def unit_config(self, path: Path) -> Path | None:
         return self.config_override
+
+    def loaded_unit_config(self, run_command, unit_name=None) -> Path | None:
+        # Issue #1459: the unit the platform actually loads. A read-only
+        # probe, so it is not recorded in ``calls`` (which asserts the
+        # mutating actions).
+        return self.loaded_config
 
     def activate_instances(self, run_command, installed_dir,
                            unit_name=None, *, max_concurrency=1,
@@ -179,6 +186,50 @@ def test_install_units_rejects_a_foreign_deployment(tmp_path):
             repo, fake.installed_root, max_concurrency=1,
             run_command=recording_run_command, sched=fake,
         )
+
+
+def test_install_units_rejects_the_unit_the_platform_actually_loads(
+    tmp_path,
+):
+    """Issue #1459: the loaded unit wins over --installed-dir.
+
+    An empty installed dir must NOT hide a foreign deployment whose unit
+    the platform resolves on its own search path; the guard refuses and
+    issues no enable/disable/start/stop.
+    """
+    repo = make_repo(tmp_path)
+    fake = FakeScheduler(tmp_path)
+    foreign = tmp_path / "other" / "orbi.toml"
+    fake.loaded_config = foreign
+    empty = tmp_path / "empty-installed"
+    empty.mkdir()
+    with pytest.raises(scheduler.UnitConflictError) as excinfo:
+        scheduler.install_units(
+            repo, empty, max_concurrency=1,
+            run_command=recording_run_command, sched=fake,
+        )
+    message = str(excinfo.value)
+    assert str(foreign) in message
+    assert "unit_name" in message
+    # The read-only probe ran, but nothing was installed or activated.
+    assert fake.calls == []
+
+
+def test_install_units_accepts_the_loaded_unit_with_the_same_config(
+    tmp_path,
+):
+    """Issue #1459: the same deployment reloading its own loaded unit is
+    not a conflict (behaviour unchanged)."""
+    repo = make_repo(tmp_path)
+    fake = FakeScheduler(tmp_path)
+    fake.loaded_config = (repo.resolve() / "orbi.toml").resolve()
+    empty = tmp_path / "empty-installed"
+    empty.mkdir()
+    scheduler.install_units(
+        repo, empty, max_concurrency=1,
+        run_command=recording_run_command, sched=fake,
+    )
+    assert ("activate", 1, True) in fake.calls
 
 
 def test_unit_status_reports_clean_drifted_and_missing(tmp_path):
