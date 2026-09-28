@@ -459,28 +459,32 @@ def _pending_milestone_issue(
     titles = [str(candidate["title"]) for candidate in candidates]
     fingerprint = f"orbi-milestone-advance old={old} candidates={','.join(titles)}"
     if waiting_state == _WAITING_RELEASE:
-        title = f"Milestone {old} 已完成，等待确认发布"
+        title = f"Milestone {old} complete, awaiting release confirmation"
         intro = [
-            "## Milestone 已完成，等待人工确认发布",
+            "## Milestone complete, awaiting manual release confirmation",
             "",
             fingerprint,
             "",
-            f"当前 milestone `{old}` 的 Issue 已全部关闭，但尚未创建 release ticket。",
-            "本 Issue 不会自动创建 release 票，需要你确认后才会开票。",
+            f"All Issues in the current milestone `{old}` are closed, but no "
+            "release ticket has been created yet.",
+            "This Issue does not create the release ticket automatically; it "
+            "is opened only after you confirm.",
             "",
-            f"请在本 Issue 评论 `/milestone {old}` 创建 release 票"
-            "（按 `.github/release-ticket-template.md` 渲染并附上 `"
-            f"{RELEASE_LABEL}` 标签，三步各自幂等）。",
-            "评论者需对该仓有 write 权限。",
+            f"Comment `/milestone {old}` on this Issue to create the release "
+            "ticket (rendered from `.github/release-ticket-template.md` and "
+            f"carrying the `{RELEASE_LABEL}` label; each of the three steps "
+            "is idempotent).",
+            "The commenter needs write permission on the repository.",
         ]
     else:
-        title = f"Milestone {old} 已完成，等待确认推进到 {titles[0]}"
+        title = f"Milestone {old} complete, awaiting confirmation to advance to {titles[0]}"
         intro = [
-            "## Milestone 自动推进待人工确认",
+            "## Milestone auto-advance awaiting manual confirmation",
             "",
             fingerprint,
             "",
-            f"当前 milestone `{old}` 已完成，等待确认推进到以下候选版本：",
+            f"The current milestone `{old}` is complete; waiting for "
+            "confirmation to advance to one of the candidate versions:",
             "",
         ]
     fd = acquire_base_sync_lock(repo_dir, 300.0)
@@ -494,15 +498,18 @@ def _pending_milestone_issue(
         lines = list(intro)
         if waiting_state != _WAITING_RELEASE:
             lines.extend(
-                f"- `{candidate['title']}`：{candidate.get('open_issues', 0)} open issues"
+                f"- `{candidate['title']}`: {candidate.get('open_issues', 0)} open issues"
                 for candidate in candidates
             )
             lines.extend([
                 "",
-                "请在本 Issue 评论 `/milestone <目标版本>`（对候选标题精确匹配）：",
-                "命令会创建 milestone、按 `.github/release-ticket-template.md`"
-                " 开一张 release 票，并落地 `active_milestone`；三步各自幂等。",
-                "评论者需对该仓有 write 权限。也可恢复自动推进，然后关闭本 Issue。",
+                "Comment `/milestone <version>` on this Issue (exact match "
+                "against a candidate title):",
+                "the command creates the milestone, opens a release ticket "
+                "from `.github/release-ticket-template.md`, and lands "
+                "`active_milestone`; each of the three steps is idempotent.",
+                "The commenter needs write permission on the repository. "
+                "You can also restore auto-advance and close this Issue.",
             ])
         run_command([
             "gh", "issue", "create", "--repo", repo,

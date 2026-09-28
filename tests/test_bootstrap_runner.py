@@ -6380,7 +6380,7 @@ def test_advance_active_milestone_pending_creates_one_p0_ready_issue(
     create = [command for command in calls if command[:3] == ["gh", "issue", "create"]]
     assert len(create) == 1
     assert "--label" not in create[0]
-    assert "`v0.3.1`：2 open issues" in create[0][create[0].index("--body") + 1]
+    assert "`v0.3.1`: 2 open issues" in create[0][create[0].index("--body") + 1]
     # Issue #1290: the human instruction names the in-ticket command a
     # hosted tenant can actually use (no host CLI, no config edit).
     assert "/milestone" in create[0][create[0].index("--body") + 1]
