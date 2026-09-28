@@ -119,7 +119,7 @@ def test_select_rejects_a_malformed_command_with_a_readable_reason():
     comments = [_comment("/milestone")]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND,
-        candidate_titles=["v0.5.41"], runner_login="orbi-build",
+        candidate_titles=["v0.5.41"],
     )
     assert target is None
     assert len(rejections) == 1
@@ -143,7 +143,7 @@ def test_select_requires_write_permission_and_reports_the_reason():
     )]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND,
-        candidate_titles=["v0.5.41"], runner_login="orbi-build",
+        candidate_titles=["v0.5.41"],
     )
     assert target is None
     assert len(rejections) == 1
@@ -155,7 +155,7 @@ def test_select_rejects_a_version_outside_the_candidate_set():
     comments = [_comment("/milestone v9.9.9")]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND,
-        candidate_titles=["v0.5.41", "v0.6.0"], runner_login="orbi-build",
+        candidate_titles=["v0.5.41", "v0.6.0"],
     )
     assert target is None
     assert "not an open milestone above the current one" in rejections[0][2]
@@ -165,20 +165,52 @@ def test_select_rejects_a_version_outside_the_candidate_set():
 def test_select_reports_an_empty_candidate_set_readably():
     _target, rejections = ticket_command.select_command(
         [_comment("/milestone v0.5.41")], milestone_command.MILESTONE_COMMAND,
-        candidate_titles=[], runner_login="orbi-build",
+        candidate_titles=[],
     )
     assert "(none)" in rejections[0][2]
 
 
-def test_select_skips_the_runners_own_comments_silently():
-    # The bot must never trigger itself off its own receipt text; a silent
-    # skip is what keeps that from becoming a rejection loop.
+def test_select_skips_a_runner_marker_comment_silently():
+    # The bot must never trigger itself off its own output; a silent skip is
+    # what keeps that from becoming a rejection loop. The `<!-- orbi` marker
+    # — not the author login — is the signal (Issue #1460).
     comments = [_comment(
-        "/milestone v0.5.41", login="orbi-build[bot]", association="NONE",
+        "<!-- orbi:run=deadbeef -->\n/milestone v0.5.41",
+        login="orbi-build[bot]", association="NONE",
     )]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND,
-        candidate_titles=["v0.5.41"], runner_login="orbi-build",
+        candidate_titles=["v0.5.41"],
+    )
+    assert target is None
+    assert rejections == []
+
+
+def test_select_applies_a_command_from_the_runners_own_login():
+    # Self-hosted: the Runner authenticates as the maintainer's own account.
+    # A plain `/milestone` comment with no marker is a real, trusted command,
+    # not Runner output (Issue #1460).
+    comments = [_comment(
+        "/milestone v0.5.41", login="orbi-build", association="MEMBER",
+    )]
+    target, rejections = ticket_command.select_command(
+        comments, milestone_command.MILESTONE_COMMAND,
+        candidate_titles=["v0.5.41"],
+    )
+    assert rejections == []
+    assert target is not None and target[1] == "v0.5.41"
+
+
+def test_select_ignores_a_runner_comment_quoting_the_command():
+    comments = [_comment(
+        "<!-- orbi:run=deadbeef -->\n"
+        "progress: the ticket now carries\n"
+        "/milestone v0.5.41\n",
+        login="orbi-build", association="MEMBER",
+    )]
+    target, rejections = ticket_command.select_command(
+        comments, milestone_command.MILESTONE_COMMAND,
+        candidate_titles=["v0.5.41"],
     )
     assert target is None
     assert rejections == []
@@ -188,7 +220,7 @@ def test_select_accepts_a_trusted_author():
     comments = [_comment("/milestone v0.5.41")]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND,
-        candidate_titles=["v0.5.41"], runner_login="orbi-build",
+        candidate_titles=["v0.5.41"],
     )
     assert rejections == []
     assert target is not None
@@ -202,7 +234,7 @@ def test_select_lets_the_last_command_win():
     ]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND,
-        candidate_titles=["v0.5.41", "v0.6.0"], runner_login="orbi-build",
+        candidate_titles=["v0.5.41", "v0.6.0"],
     )
     assert rejections == []
     assert target is not None and target[1] == "v0.6.0"
@@ -216,7 +248,7 @@ def test_select_lets_a_later_bad_command_shadow_an_earlier_good_one():
     ]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND,
-        candidate_titles=["v0.5.41"], runner_login="orbi-build",
+        candidate_titles=["v0.5.41"],
     )
     assert target is None
     assert len(rejections) == 1 and rejections[0][1] == "v9.9.9"
@@ -225,7 +257,7 @@ def test_select_lets_a_later_bad_command_shadow_an_earlier_good_one():
 def test_select_ignores_non_comment_entries():
     target, rejections = ticket_command.select_command(
         ["not-a-dict", None], milestone_command.MILESTONE_COMMAND,
-        candidate_titles=["v0.5.41"], runner_login="orbi-build",
+        candidate_titles=["v0.5.41"],
     )
     assert target is None and rejections == []
 
@@ -776,25 +808,13 @@ def test_apply_milestone_command_reports_all_three_steps(monkeypatch):
 # --- receipts -------------------------------------------------------------
 
 
-def test_identity_helpers_reject_unreadable_input(monkeypatch):
-    # The active account comes from `gh auth status`; stub that credential
-    # read so the assertion pins this module's delegation and the gh argument
-    # list instead of whichever account happens to be logged into the machine
-    # running the suite (CI machines have none, and the real call fails there).
-    commands = []
-    monkeypatch.setattr(
-        seam, "run_gh_read_command",
-        lambda command, **kwargs: commands.append(command) or (
-            "account orbi-build[bot]\nActive account: true\n"),
-    )
-    assert ticket_command.authenticated_login() == "orbi-build[bot]"
-    assert commands == [["gh", "auth", "status", "--hostname", "github.com"]]
+def test_identity_helpers_reject_unreadable_input():
     assert ticket_command.comment_author_login(None) is None
     assert ticket_command.comment_author_login("just a body") is None
-    assert ticket_command.same_github_identity(None, "orbi-build") is False
-    assert ticket_command.same_github_identity("orbi-build", 7) is False
-    assert ticket_command.same_github_identity(
-        "orbi-build[bot]", "orbi-build",
+    assert ticket_command.is_runner_comment(None) is False
+    assert ticket_command.is_runner_comment({"body": "/milestone v0.5.41"}) is False
+    assert ticket_command.is_runner_comment(
+        {"body": "<!-- orbi:run=deadbeef -->"},
     ) is True
 
 
@@ -809,7 +829,6 @@ def test_process_posts_one_reason_per_rejected_command(monkeypatch):
     )]
     posts = []
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
-    monkeypatch.setattr(seam, "authenticated_login", lambda: "orbi-build")
     monkeypatch.setattr(
         seam, "run_command", lambda command, **kwargs: posts.append(command) or "",
     )
@@ -856,7 +875,6 @@ def test_rejected_receipts_name_the_comment_without_an_id(monkeypatch):
     ]
     posts = []
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
-    monkeypatch.setattr(seam, "authenticated_login", lambda: "orbi-build")
     monkeypatch.setattr(
         seam, "run_command", lambda command, **kwargs: posts.append(command) or "",
     )
@@ -880,7 +898,6 @@ def test_process_answers_a_malformed_command_on_the_ticket(monkeypatch):
     comments = [_comment("/milestone v0.5.41 extra")]
     posts = []
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
-    monkeypatch.setattr(seam, "authenticated_login", lambda: "orbi-build")
     monkeypatch.setattr(
         seam, "run_command", lambda command, **kwargs: posts.append(command) or "",
     )
@@ -905,7 +922,6 @@ def test_process_receipts_are_idempotent_per_command_comment(monkeypatch):
     comments = [first]
     posts = []
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
-    monkeypatch.setattr(seam, "authenticated_login", lambda: "orbi-build")
     monkeypatch.setattr(
         seam, "run_command", lambda command, **kwargs: posts.append(command) or "",
     )
@@ -928,7 +944,6 @@ def test_process_names_the_failed_step_on_the_ticket(monkeypatch, caplog):
     comments = [_comment("/milestone v0.5.41", cid=21)]
     posts = []
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
-    monkeypatch.setattr(seam, "authenticated_login", lambda: "orbi-build")
     monkeypatch.setattr(
         seam, "run_command", lambda command, **kwargs: posts.append(command) or "",
     )
@@ -959,7 +974,6 @@ def test_process_posts_the_version_file_fix_and_creates_no_ticket(
     comments = [_comment("/milestone v0.5.41", cid=41)]
     fake = FakeMilestoneGh(tree=("README.md",))
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
-    monkeypatch.setattr(seam, "authenticated_login", lambda: "orbi-build")
     monkeypatch.setattr(seam, "run_command", fake.run)
     monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
     with caplog.at_level(logging.ERROR):
@@ -987,7 +1001,6 @@ def test_process_applies_the_winning_command_and_logs_it(monkeypatch, caplog):
     comments = [_comment("/milestone v0.5.41", cid=31)]
     applied = []
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
-    monkeypatch.setattr(seam, "authenticated_login", lambda: "orbi-build")
     monkeypatch.setattr(
         seam, "run_command",
         lambda command, **kwargs: pytest.fail("no receipt expected"),
@@ -1017,12 +1030,96 @@ def test_process_applies_the_winning_command_and_logs_it(monkeypatch, caplog):
     assert "milestone_command_applied" in caplog.text
 
 
+def test_process_applies_a_command_from_the_runners_own_login(monkeypatch, caplog):
+    # Self-hosted: the authenticated account IS the maintainer. A plain
+    # `/milestone` comment from that login must run, not be dropped as
+    # Runner output (Issue #1460).
+    comments = [_comment(
+        "/milestone v0.5.41", login="orbi-build", association="MEMBER", cid=31,
+    )]
+    applied = []
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: pytest.fail("no receipt expected"),
+    )
+    monkeypatch.setattr(
+        seam, "apply_milestone_command",
+        lambda repo, version, **kwargs: applied.append((repo, version, kwargs)),
+    )
+    with caplog.at_level(logging.INFO):
+        ticket_command.process_commands(
+            "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND],
+            candidate_titles=["v0.5.41"], config_path=Path("/cfg"),
+            policy=RepoPolicy(active_milestone="v0.5.40"),
+            policy_path=".github/orbi.toml", base_branch="main",
+            dispatch_label=READY_LABEL, version_file=None,
+        )
+    assert applied == [(
+        "owner/repo", "v0.5.41",
+        {
+            "config_path": Path("/cfg"),
+            "policy": RepoPolicy(active_milestone="v0.5.40"),
+            "policy_path": ".github/orbi.toml",
+            "base_branch": "main",
+            "dispatch_label": READY_LABEL,
+            "version_file": None,
+        },
+    )]
+    assert "milestone_command_applied" in caplog.text
+
+
+def test_a_real_receipt_authored_by_the_runner_is_ignored(monkeypatch):
+    # A receipt quotes the command it rejected. It is Runner output (it
+    # carries `<!-- orbi-<command>-command-rejected` and no `orbi:run=`), so
+    # the runner's own login must never earn it a second receipt — even when
+    # that login is the maintainer's own account (Issue #1460).
+    posts = []
+    monkeypatch.setattr(
+        seam, "run_command", lambda command, **kwargs: posts.append(command) or "",
+    )
+    rejected = _comment(
+        "/milestone v9.9.9", login="orbi-build", association="MEMBER", cid=11,
+    )
+    ticket_command._post_command_receipt(
+        "owner/repo", 436, [], rejected,
+        spec=milestone_command.MILESTONE_COMMAND,
+        marker="orbi-milestone-command-rejected",
+        summary="**`/milestone` command not applied**",
+        argument="v9.9.9", reason="not a candidate",
+    )
+    body = _receipt_body(posts)
+    assert "<!-- orbi-milestone-command-rejected comment=11 -->" in body
+    receipt = {
+        "id": 12,
+        "body": body,
+        "author": {"login": "orbi-build"},
+        "authorAssociation": "MEMBER",
+        "createdAt": "2026-09-15T00:10:00Z",
+    }
+    monkeypatch.setattr(
+        seam, "issue_comments", lambda number, repo: [rejected, receipt],
+    )
+    monkeypatch.setattr(
+        seam, "apply_milestone_command",
+        lambda *args, **kwargs: pytest.fail("nothing to apply"),
+    )
+    ticket_command.process_commands(
+        "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND],
+        candidate_titles=["v0.5.41"], config_path=Path("/nope"),
+        policy=None, policy_path=".github/orbi.toml", base_branch="main",
+        dispatch_label=READY_LABEL, version_file=None,
+    )
+    # Only the first receipt; the receipt comment and its marker never
+    # trigger a second one.
+    assert len(posts) == 1
+
+
 def test_process_ignores_a_ticket_without_any_command(monkeypatch):
     monkeypatch.setattr(
         seam, "issue_comments",
         lambda number, repo: [_comment("thanks!")],
     )
-    monkeypatch.setattr(seam, "authenticated_login", lambda: "orbi-build")
     monkeypatch.setattr(
         seam, "run_command", lambda command, **kwargs: pytest.fail("nothing to post"),
     )
