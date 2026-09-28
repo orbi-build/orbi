@@ -579,6 +579,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `merge_gate_not_mergeable` | PR 不可合并（冲突或检查失败） |
 | `merge_gate_rulesets_unavailable` | 规则集 API 在该仓库套餐上不可用（Issue #1361） |
 | `merged` | PR 合并精确落在被评审的 head 上 |
+| `merge_method_unknown` | 无法读取仓库合并设置；使用 `--merge`（Issue #1480） |
 | `confirm_merged_missing_on_base` | 合并提交不在 base 分支上 |
 | `confirm_merged_not_merged` | PR 声称已合并但 GitHub 状态矛盾 |
 | `human_review_waiting` | 交付等待人工评审标签 |
@@ -595,6 +596,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `worktree_recreated` | 恢复交付时缺失的 worktree 已从远端分支重建 |
 | `worktree_reclaimed` | 批量回收了已释放的任务 worktree |
 | `worktree_reclaim_failed` | worktree 回收的一步失败（旁路；扫描继续） |
+| `branches_reclaimed` | 批量删除了已合并 PR 的远端交付分支 |
+| `branch_reclaim_failed` | 远端分支回收的一步失败（旁路；扫描继续） |
 | `worktrees_exclude_added` | 一个 worktrees 路径已加入本地 git exclude |
 | `orbi_exclude_added` | 一个 `.orbi/` 运行时路径已加入本地 git exclude |
 | `runner_runtime_exclude_skipped` | 运行时 exclude 修复被跳过（已正确） |
@@ -937,6 +940,25 @@ worktree 过去只增不减：每次交付都会留下
 `worktree_reclaim_failed reason=...` 且一个都不删，单个移除失败记录
 `worktree_reclaim_failed path=... reason=...` 后继续，有移除的 tick
 记录结构化 `worktree_reclaimed count=N freed=<bytes>` 行。
+
+### 远端交付分支回收（Issue #1479）
+
+已合并的交付过去会把它的 `orbi/<slug>-issue-<n>` 分支永久留在远端
+（2026-09-28 有 255 个这样的分支）。每个 tick 开始时，紧挨 worktree
+回收，Runner 运行一个有界、幂等的扫描
+（`reclaim_merged_delivery_branches`）：它列出远端 `orbi/*` 头
+（`git ls-remote --heads origin 'orbi/*'`）与 source repo 的已合并 PR
+（`gh pr list --state merged`），仅当某个分支**当前**的远端 oid 等于
+某个已合并 PR 的 `headRefOid` 时才删除它
+（`gh api -X DELETE repos/<repo>/git/refs/heads/<ref>`）。oid 匹配保护
+重新打开的 Issue 的新尝试：交付分支名按 Issue 固定，因此新尝试会推到
+同名分支，而旧的已合并 PR 仍在报告该名字。只有一个 OPEN、
+CLOSED-unmerged 或根本没有 PR 的分支永远不会进入已合并映射，也就
+永远不会被碰。每次 tick 最多删除 25 个，积压在多个 tick 内消化。整个
+扫描是纯旁路：读取失败记录
+`branch_reclaim_failed reason=... (deleting nothing)`，单个删除失败
+记录 `branch_reclaim_failed branch=... reason=...` 后继续，有删除的
+tick 记录 `branches_reclaimed count=N`。
 
 ## 故障恢复
 

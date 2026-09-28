@@ -350,6 +350,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "merge_gate_not_mergeable": "the PR is not mergeable (conflict or failing checks)",
     "merge_gate_rulesets_unavailable": "the rulesets API is unavailable on the repository plan (Issue #1361)",
     "merged": "the PR merge landed on the reviewed head",
+    "merge_method_unknown": "the repository merge settings could not be read; --merge is used",
     "confirm_merged_missing_on_base": "the merged commit is missing from the base branch",
     "confirm_merged_not_merged": "the PR reports merged but GitHub contradicts the state",
     # Human review gate.
@@ -368,6 +369,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "worktree_recreated": "a resumed delivery's missing worktree was rebuilt from the remote branch",
     "worktree_reclaimed": "released task worktrees were reclaimed in bulk",
     "worktree_reclaim_failed": "a worktree reclamation step failed (bypass; the pass continues)",
+    "branches_reclaimed": "merged-PR remote delivery branches were deleted in bulk",
+    "branch_reclaim_failed": "a remote-branch reclamation step failed (bypass; the pass continues)",
     "worktrees_exclude_added": "a worktrees path was added to the local git exclude",
     "orbi_exclude_added": "an .orbi runtime path was added to the local git exclude",
     "runner_runtime_exclude_skipped": "the runtime exclude repair was skipped (already correct)",

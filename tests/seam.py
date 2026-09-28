@@ -11,6 +11,7 @@ old-value capture) and writing fans the value out to all bindings, so
 monkeypatch's teardown fans the original back.
 """
 import orbi.cli_source as cli_source
+import orbi.branch_reclaim as branch_reclaim
 import orbi.clarify as clarify
 import orbi.claim as claim
 import orbi.github as github
@@ -29,7 +30,7 @@ import orbi.runner as runner
 _MODULES = (
     journal, github, gitops, milestone, milestone_command, ticket_command,
     progress, cli_source, release, release_git, pi_session, runner, claim,
-    repo_config, clarify,
+    repo_config, clarify, branch_reclaim,
 )
 
 
