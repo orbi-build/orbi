@@ -35,16 +35,18 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from orbi.github import (
-    TRUSTED_COMMENT_ASSOCIATIONS, _authenticated_github_login,
-    _strip_bot_suffix, issue_comments,
-)
+from orbi.github import TRUSTED_COMMENT_ASSOCIATIONS, issue_comments
 from orbi.journal import event, run_command
 
 
-def authenticated_login() -> str:
-    """Public accessor for the login represented by the active credential."""
-    return _authenticated_github_login()
+# Every Runner-authored comment carries one of these hidden markers: the run
+# markers `<!-- orbi:run=… -->`, the failure blocks `<!-- orbi:failure:v1 … -->`
+# and the command receipts `<!-- orbi-<command>-command-rejected|failed … -->`
+# (which carry no `orbi:run=`). The marker — never the author login —
+# identifies Runner output, so a self-hosted install where the Runner and the
+# maintainer share one `gh` account can still send a `/milestone` command
+# (Issue #1460).
+RUNNER_COMMENT_MARKER = "<!-- orbi"
 
 
 def comment_author_login(comment: object) -> str | None:
@@ -56,11 +58,12 @@ def comment_author_login(comment: object) -> str | None:
     return login if isinstance(login, str) and login else None
 
 
-def same_github_identity(login: object, other: object) -> bool:
-    """True when two logins name the same account (``[bot]`` normalized)."""
-    if not isinstance(login, str) or not isinstance(other, str):
+def is_runner_comment(comment: object) -> bool:
+    """True when a comment carries a hidden ``<!-- orbi`` Runner marker."""
+    if not isinstance(comment, dict):
         return False
-    return _strip_bot_suffix(login) == _strip_bot_suffix(other)
+    body = comment.get("body")
+    return isinstance(body, str) and RUNNER_COMMENT_MARKER in body
 
 
 # The permission levels a CommandSpec may declare, level -> the comment
@@ -213,8 +216,7 @@ def _malformed_reason(spec: CommandSpec) -> str:
 
 
 def select_command(
-    comments: list[dict], spec: CommandSpec, *, runner_login: str,
-    **context: object,
+    comments: list[dict], spec: CommandSpec, **context: object,
 ) -> tuple[tuple[dict, str] | None, list[tuple[dict, str | None, str]]]:
     """Resolve the ticket's occurrences of ``spec`` to one executable command.
 
@@ -222,22 +224,21 @@ def select_command(
     is authorized, well-formed and accepted by the command's ``validate``
     callback — the last word wins, so an operator can correct a typo by
     commenting again. Every rejected occurrence is returned with a readable
-    reason so the caller can leave one receipt each. The runner's own
-    comments are skipped silently: the bot must never trigger itself off its
-    own receipt text.
+    reason so the caller can leave one receipt each. A comment carrying a
+    hidden ``<!-- orbi`` Runner marker is skipped silently: the bot must
+    never trigger itself off its own output, and a self-hosted maintainer
+    whose own account is the Runner is evaluated like anyone else
+    (Issue #1460).
     """
     occurrences: list[tuple[dict, str | None]] = []
     for comment in comments:
-        if not isinstance(comment, dict):
+        if not isinstance(comment, dict) or is_runner_comment(comment):
             continue
         for argument in parse_commands(comment.get("body"), spec):
             occurrences.append((comment, argument))
     rejections: list[tuple[dict, str | None, str]] = []
     target: tuple[dict, str] | None = None
     for comment, argument in occurrences:
-        login = comment_author_login(comment)
-        if login is not None and same_github_identity(login, runner_login):
-            continue
         if comment.get("authorAssociation") not in PERMISSION_LEVELS[spec.permission]:
             target = None
             rejections.append((
@@ -317,11 +318,8 @@ def process_commands(
     occurrence reaches ``apply`` only through here.
     """
     comments = issue_comments(issue_number, repo=repo)
-    runner_login = authenticated_login()
     for spec in commands:
-        target, rejections = select_command(
-            comments, spec, runner_login=runner_login, **context,
-        )
+        target, rejections = select_command(comments, spec, **context)
         for comment, argument, reason in rejections:
             _post_command_receipt(
                 repo, issue_number, comments, comment, spec=spec,

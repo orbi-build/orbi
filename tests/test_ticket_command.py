@@ -154,7 +154,6 @@ def test_selection_enforces_the_declared_permission():
     )]
     target, rejections = ticket_command.select_command(
         comments, _noop_spec(), allowed_targets=["alpha"],
-        runner_login="orbi-build",
     )
     assert target is None
     assert len(rejections) == 1
@@ -165,22 +164,23 @@ def test_selection_enforces_the_declared_permission():
 def test_selection_reports_the_commands_own_validation_reason():
     target, rejections = ticket_command.select_command(
         [_comment("/noop beta")], _noop_spec(), allowed_targets=["alpha"],
-        runner_login="orbi-build",
     )
     assert target is None
     assert "not an allowed target" in rejections[0][2]
     assert "alpha" in rejections[0][2]
 
 
-def test_selection_lets_the_last_word_win_and_skips_the_runner():
+def test_selection_skips_comments_carrying_the_runner_marker():
     comments = [
-        _comment("/noop alpha", login="orbi-build[bot]", association="NONE", cid=1),
+        _comment(
+            "<!-- orbi:run=deadbeef -->\n/noop alpha",
+            login="orbi-build[bot]", association="NONE", cid=1,
+        ),
         _comment("/noop alpha", cid=2),
         _comment("/noop beta", cid=3),
     ]
     target, rejections = ticket_command.select_command(
         comments, _noop_spec(), allowed_targets=["alpha", "beta"],
-        runner_login="orbi-build",
     )
     assert rejections == []
     assert target is not None and target[1] == "beta"
@@ -191,7 +191,7 @@ def test_selection_ignores_unreadable_comments_and_unreadable_authors():
     target, rejections = ticket_command.select_command(
         ["not-a-dict", None, {"body": "/noop alpha", "authorAssociation": "MEMBER"},
          _comment("thanks")],
-        _noop_spec(), allowed_targets=["alpha"], runner_login="orbi-build",
+        _noop_spec(), allowed_targets=["alpha"],
     )
     assert target is not None
     assert target[1] == "alpha"
@@ -208,8 +208,19 @@ def test_identity_helpers_tolerate_unreadable_input():
     assert ticket_command.comment_author_login(
         {"author": {"login": "alice"}},
     ) == "alice"
-    assert ticket_command.same_github_identity(None, "alice") is False
-    assert ticket_command.same_github_identity("alice[bot]", "alice") is True
+
+
+def test_runner_comment_recognition_tolerates_unreadable_input():
+    assert ticket_command.is_runner_comment(None) is False
+    assert ticket_command.is_runner_comment("not-a-dict") is False
+    assert ticket_command.is_runner_comment({"body": None}) is False
+    assert ticket_command.is_runner_comment({"body": "thanks"}) is False
+    assert ticket_command.is_runner_comment(
+        {"body": "<!-- orbi:run=deadbeef -->\nhi"},
+    ) is True
+    assert ticket_command.is_runner_comment(
+        {"body": "<!-- orbi-milestone-command-rejected comment=7 -->"},
+    ) is True
 
 
 # --- dispatch: receipts, idempotency, events -----------------------------
@@ -217,7 +228,6 @@ def test_identity_helpers_tolerate_unreadable_input():
 
 def _patch_dispatch(monkeypatch, comments, posts, events):
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
-    monkeypatch.setattr(seam, "authenticated_login", lambda: "orbi-build")
     monkeypatch.setattr(
         seam, "run_command", lambda command, **kwargs: posts.append(command) or "",
     )
