@@ -350,6 +350,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "merge_gate_not_mergeable": "the PR is not mergeable (conflict or failing checks)",
     "merge_gate_rulesets_unavailable": "the rulesets API is unavailable on the repository plan (Issue #1361)",
     "merged": "the PR merge landed on the reviewed head",
+    "merge_method_unknown": "the repository merge settings could not be read; --merge is used",
     "confirm_merged_missing_on_base": "the merged commit is missing from the base branch",
     "confirm_merged_not_merged": "the PR reports merged but GitHub contradicts the state",
     # Human review gate.

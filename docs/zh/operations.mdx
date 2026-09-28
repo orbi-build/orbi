@@ -579,6 +579,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `merge_gate_not_mergeable` | PR 不可合并（冲突或检查失败） |
 | `merge_gate_rulesets_unavailable` | 规则集 API 在该仓库套餐上不可用（Issue #1361） |
 | `merged` | PR 合并精确落在被评审的 head 上 |
+| `merge_method_unknown` | 无法读取仓库合并设置；使用 `--merge`（Issue #1480） |
 | `confirm_merged_missing_on_base` | 合并提交不在 base 分支上 |
 | `confirm_merged_not_merged` | PR 声称已合并但 GitHub 状态矛盾 |
 | `human_review_waiting` | 交付等待人工评审标签 |
