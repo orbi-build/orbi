@@ -1,0 +1,79 @@
+# Release docs pipeline (Issue #1482).
+#
+# This repository's own Mintlify release pages (`docs/release-<tag>.mdx`,
+# `docs/zh/release-<tag>.mdx`, the `Releases` / `发布` navigation entries and
+# the `(latest)` marker) are generated here, on `release: published`, by
+# `tools/release_docs.py`. They used to be written by the engine's release
+# state machine (`orbi.release`); the pages are this repository's own
+# docs-site business, so they follow the same Actions pattern as the
+# packaging side (`.github/workflows/publish.yml`).
+#
+# Manual backfill / re-run:
+#
+#   gh workflow run release-docs.yml -f tag=v0.5.56
+#
+# The workflow is idempotent: when both pages for the tag already exist the
+# script changes nothing and exits 0, so it is safe while the engine still
+# writes the same pages. The pages are committed straight to `main` (no PR),
+# like the engine's docs commit; a non-fast-forward rejection is rebased and
+# retried at most 3 times.
+
+name: Release docs
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v* release tag to (re)generate docs for, e.g. v0.5.56"
+        required: true
+        type: string
+
+permissions:
+  # The push to `main` needs write; the script also reads the release
+  # task Issue (`gh issue list --label ai-release`).
+  contents: write
+  issues: read
+
+jobs:
+  release-docs:
+    runs-on: ubuntu-latest
+    steps:
+      # `main` plus every tag: the script reads the annotated tag object and
+      # its commit, and the push targets `main`.
+      - name: Check out main with tags
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Generate the release pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: python3 tools/release_docs.py "$TAG"
+
+      - name: Commit and push the release pages
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/
+          if git diff --cached --quiet; then
+            echo "release docs for $TAG already in sync — nothing to commit"
+            exit 0
+          fi
+          git commit -m "docs: release notes for $TAG"
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "release docs for $TAG pushed to main"
+              exit 0
+            fi
+            echo "push rejected (attempt $attempt) — rebasing onto origin/main"
+            git pull --rebase origin main
+          done
+          echo "release docs for $TAG could not be pushed to main after 3 attempts" >&2
+          exit 1

@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
 DOCS_CONFIG = DOCS_DIR / "docs.json"
 RELEASE_SLUG_PATTERN = re.compile(r"^(release-v(\d+)\.(\d+)\.(\d+))$")
+TAG_PATTERN = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 
 
@@ -40,6 +41,12 @@ def release_version(slug: str) -> tuple[int, int, int]:
     match = RELEASE_SLUG_PATTERN.fullmatch(slug)
     assert match is not None, f"invalid release slug: {slug!r}"
     return tuple(int(match.group(index)) for index in (2, 3, 4))
+
+
+def tag_version(tag: str) -> tuple[int, int, int]:
+    match = TAG_PATTERN.fullmatch(tag)
+    assert match is not None, f"invalid release tag: {tag!r}"
+    return tuple(int(match.group(index)) for index in (1, 2, 3))
 
 
 def release_group_pages(language_code: str) -> list[str]:
@@ -208,19 +215,15 @@ def release_tags(repo_root: Path) -> set[str]:
     return tags
 
 
-def tags_at_head(repo_root: Path) -> set[str]:
-    """The released tags whose commit is HEAD (Issue #1363).
+def highest_release_tag(repo_root: Path) -> str:
+    """The highest released version tag (Issue #1482).
 
-    The release page is committed one commit AFTER its tag, so on the
-    tagged commit itself HEAD is that tag's commit and the page has not
-    landed yet — only those tags may lack their page. Once HEAD advances
-    to the docs-sync commit the exemption is gone, so a page that never
-    lands still fails the completeness check."""
-    head = git(repo_root, "rev-parse", "HEAD")
-    return {
-        tag for tag in release_tags(repo_root)
-        if git(repo_root, "rev-parse", f"refs/tags/{tag}^{{commit}}") == head
-    }
+    The page for a release now lands minutes AFTER its tag is pushed by a
+    GitHub Actions `release: published` workflow, and other PRs may merge in
+    between, so the exemption from tag/page completeness is the highest
+    released version — never the tag whose commit happens to be HEAD. Any
+    older tag without a page still fails."""
+    return max(release_tags(repo_root), key=tag_version)
 
 
 def test_every_released_tag_has_its_release_page():
@@ -231,15 +234,17 @@ def test_every_released_tag_has_its_release_page():
     the navigation without any test failing. Requires the tag refs in
     the checkout (CI provides them with `fetch-tags: true`).
 
-    Issue #1363: the page commit follows the tag, so the tag at HEAD is
-    exempt while its page commit has not landed — a normal release tag
-    commit is green, while any older tag without a page still fails."""
+    Issue #1482: the page commit now lands minutes after the tag through a
+    GitHub Actions workflow, and other PRs may merge in between — only the
+    highest released version is exempt while its page has not landed. A tag
+    at HEAD that is not the highest is NOT exempt."""
     tags = release_tags(REPO_ROOT)
     expected_slugs = {
         f"release-{tag}" for tag in tags - PRE_GENERATOR_TAGS
     }
-    pending_slugs = {
-        f"release-{tag}" for tag in tags_at_head(REPO_ROOT) - PRE_GENERATOR_TAGS
+    highest = highest_release_tag(REPO_ROOT)
+    pending_slugs = {f"release-{highest}"} - {
+        f"release-{tag}" for tag in PRE_GENERATOR_TAGS
     }
     for language_code in ("en", "zh"):
         slugs = release_page_slugs(language_code)
@@ -272,15 +277,18 @@ def _commit_all(repo: Path, message: str) -> None:
     git(repo, "commit", "-q", "-m", message)
 
 
-def test_tag_at_head_without_its_page_yet_passes(tmp_path, monkeypatch):
-    """Issue #1363: the release page commit lands one commit after the
-    tag, so on the tagged commit HEAD is the tag commit and its page is
-    not there yet. The completeness check must pass in that state."""
+def test_highest_tag_without_its_page_yet_passes(tmp_path, monkeypatch):
+    """Issue #1482: the release page lands minutes after the tag through a
+    GitHub Actions workflow and other PRs may merge in between, so the
+    highest released version is exempt while its page has not landed — even
+    once HEAD has advanced past the tag commit."""
     module = sys.modules[__name__]
     repo = _release_repo(tmp_path)
     (repo / "README.md").write_text("# repo\n", encoding="utf-8")
     _commit_all(repo, "chore: prepare release v1.0.0")
     git(repo, "tag", "-a", "v1.0.0", "-m", "release v1.0.0")
+    (repo / "README.md").write_text("# repo after the tag\n", encoding="utf-8")
+    _commit_all(repo, "chore: unrelated merge after the tag")
     monkeypatch.setattr(module, "REPO_ROOT", repo)
     monkeypatch.setattr(module, "DOCS_DIR", repo / "docs")
 
@@ -288,8 +296,8 @@ def test_tag_at_head_without_its_page_yet_passes(tmp_path, monkeypatch):
 
 
 def test_older_tag_without_its_page_fails(tmp_path, monkeypatch):
-    """Issue #1363: only the tag at HEAD is exempt — an older released
-    tag whose page never landed must still fail the check."""
+    """Issue #1482: only the highest released version is exempt — an older
+    released tag whose page never landed must still fail the check."""
     module = sys.modules[__name__]
     repo = _release_repo(tmp_path)
     (repo / "README.md").write_text("# repo\n", encoding="utf-8")
@@ -298,6 +306,28 @@ def test_older_tag_without_its_page_fails(tmp_path, monkeypatch):
     (repo / "README.md").write_text("# repo v1\n", encoding="utf-8")
     _commit_all(repo, "chore: prepare release v1.0.0")
     git(repo, "tag", "-a", "v1.0.0", "-m", "release v1.0.0")
+    monkeypatch.setattr(module, "REPO_ROOT", repo)
+    monkeypatch.setattr(module, "DOCS_DIR", repo / "docs")
+
+    with pytest.raises(
+        AssertionError,
+        match=r"released tags without a en docs page: \['release-v0\.9\.0'\]",
+    ):
+        module.test_every_released_tag_has_its_release_page()
+
+
+def test_tag_at_head_that_is_not_the_highest_fails(tmp_path, monkeypatch):
+    """Issue #1482: the exemption is the highest released version, NOT the
+    tag whose commit is HEAD. A tag at HEAD that is not the highest still
+    needs its page."""
+    module = sys.modules[__name__]
+    repo = _release_repo(tmp_path)
+    (repo / "README.md").write_text("# repo\n", encoding="utf-8")
+    _commit_all(repo, "chore: prepare release v1.0.0")
+    git(repo, "tag", "-a", "v1.0.0", "-m", "release v1.0.0")
+    (repo / "README.md").write_text("# repo again\n", encoding="utf-8")
+    _commit_all(repo, "chore: prepare release v0.9.0")
+    git(repo, "tag", "-a", "v0.9.0", "-m", "release v0.9.0")
     monkeypatch.setattr(module, "REPO_ROOT", repo)
     monkeypatch.setattr(module, "DOCS_DIR", repo / "docs")
 
