@@ -658,7 +658,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `release_success_comment_failed` | 发布成功评论失败（旁路） |
 | `release_changelog_issue_excluded` | 一个 Issue 被排除出发布 changelog |
 | `release_changelog_contributor_skipped` | 一个 changelog 贡献者条目被跳过 |
-| `release_changelog_pr_link_dropped` | 一个 changelog PR 链接被丢弃（未合并 PR） |
+| `release_changelog_pr_link_dropped` | 一个 changelog PR 链接被丢弃（PR 不在带 tag 的 release commit 区间内） |
 | `command_failed` | 外部命令以非零退出（fail fast） |
 | `command_timeout` | 外部命令超时（fail fast） |
 | `command_spawn_failed` | 外部命令无法启动 |

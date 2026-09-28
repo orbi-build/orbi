@@ -80,6 +80,14 @@ from orbi.release_git import (
     prepare_release_version,
     run_git_write,
 )
+from orbi.release_notes import (
+    RELEASE_CHANGELOG_CATEGORIES,
+    build_release_changelog,
+    previous_release_tag,
+    release_changelog_category,
+    release_changelog_scope,
+    release_range_prs,
+)
 from orbi.journal import (
     LOGGER,
     event,
@@ -578,10 +586,12 @@ def derive_release_scope_from_milestone(
     The release scope is the Milestone's COMPLETED Issues under the
     Milestone whose title is EXACTLY `milestone_title` (the same
     exact-title rule as `close_release_milestone` — never guessed,
-    never fuzzy-matched, never a different Milestone). Pull requests are
-    obtained from each scoped Issue's closing references by
-    `build_release_changelog`; the REST `/pulls` list endpoint does not
-    support milestone filtering:
+    never fuzzy-matched, never a different Milestone). The Milestone
+    decides whether a release may run (gates and scope evidence), not
+    what its notes say: the Changelog is derived from the tagged commit
+    range by `orbi.release_notes` (Issue #1492), so a PR merged after
+    the tag never reaches the notes and a PR in the tag that is not on
+    the Milestone still does.
 
     - no Milestone with that exact title -> fail fast;
     - several Milestones with that exact title -> fail fast
@@ -642,214 +652,6 @@ def derive_release_scope_from_milestone(
     return scope, open_evidence
 
 
-RELEASE_CHANGELOG_CATEGORIES = (
-    "Features", "Reliability and recovery", "Deployment and operations",
-    "Observability", "Documentation", "Bug fixes",
-)
-
-
-def release_changelog_category(item: dict) -> str:
-    """Classify one live scoped Issue into a stable reader-facing group."""
-    labels = item.get("labels")
-    label_names = {
-        label.get("name", "").lower() for label in labels
-        if isinstance(label, dict) and isinstance(label.get("name"), str)
-    } if isinstance(labels, list) else set()
-    title = item.get("title")
-    text = title.lower() if isinstance(title, str) else ""
-    if "documentation" in label_names or any(
-        term in text for term in ("documentation", "docs", "readme", "文档")
-    ):
-        return "Documentation"
-    if any(term in text for term in (
-        "deploy", "deployment", "systemd", "install", " cli", "ssh",
-        "service", "timer", "packaging", "setup",
-    )):
-        return "Deployment and operations"
-    if any(term in text for term in (
-        "recovery", "recover", "resume", "timeout", "concurren", "reliab",
-        "stale", "dead", "hang", "lock",
-    )):
-        return "Reliability and recovery"
-    if any(term in text for term in (
-        "observability", "prometheus", "grafana", "dashboard", "metrics",
-        "exporter", "journal", "progress",
-    )):
-        return "Observability"
-    if "bug" in label_names:
-        return "Bug fixes"
-    return "Features"
-
-
-RELEASE_ISSUE_EVIDENCE_QUERY = """query($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) {
-    issue: issueOrPullRequest(number: $number) {
-      __typename
-      ... on Issue {
-        number title body url stateReason
-        labels(first: 100) { nodes { name } }
-        closedByPullRequestsReferences(first: 100) {
-          nodes { number url author { login avatarUrl } }
-        }
-      }
-      ... on PullRequest { number title body url labels(first: 100) { nodes { name } } }
-    }
-  }
-}"""
-
-
-def build_release_changelog(repo: str, scope: list[int]) -> str:
-    """Render deterministic readable notes from live scoped Issue evidence.
-
-    Each scope number is resolved with one `gh api graphql` round trip
-    (`issueOrPullRequest`, the same access path `gh issue view` uses):
-    the Issue fields, labels and closing-PR
-    references — now including each PR's author login and avatar so the
-    Contributors section costs zero extra API calls.  A title is the
-    concise change description; when it is absent, the first non-empty
-    body line is usable summary evidence.  A NOT_PLANNED-closed Issue is
-    not released work — it is excluded from the Changelog
-    (the Scope evidence annotates the exclusion).  A closing PR's link
-    is written only when `gh pr view` reports the PR MERGED: an unmerged
-    PR never appears in the release notes, and its author is not a
-    contributor.  The `## Contributors` section lists every merged
-    closing-PR author exactly once (deduped by login, sorted by login)
-    as a linked avatar; a null or malformed author is display evidence,
-    not a release judge — it is skipped with a log line and never fails
-    the release, and with no contributors at all no section is written.
-    Missing or malformed evidence is an unsafe release input and fails
-    before a tag or Release is created. An empty scope (Issue #1384: a
-    milestone with no deliveries) is not an error — the notes carry the
-    one-line empty-scope sentence instead of a Changelog list.
-    """
-    if not scope:
-        return "No deliveries are linked to this milestone."
-    owner, _, name = repo.partition("/")
-    grouped: dict[str, list[tuple[int, str]]] = {
-        category: [] for category in RELEASE_CHANGELOG_CATEGORIES
-    }
-    contributors: dict[str, str] = {}
-    for number in scope:
-        raw = run_command([
-            "gh", "api", "graphql",
-            "-f", f"query={RELEASE_ISSUE_EVIDENCE_QUERY}",
-            "-f", f"owner={owner}", "-f", f"name={name}",
-            "-F", f"number={number}",
-        ], log_command=["gh", "api", "graphql", f"issue={number}"])
-        issue = (json.loads(raw).get("data") or {}).get(
-            "repository", {},
-        ).get("issue") or {}
-        # Reshape the GraphQL payload into the field keys the strict
-        # evidence validation below has always asserted; the closedBy
-        # nodes (number/url/author) pass through raw.  The PullRequest
-        # branch carries no closedBy field (schema: Issue-only) and no
-        # stateReason — the same shape `gh issue view` produced for a
-        # PR number.
-        references = issue.get("closedByPullRequestsReferences") or {}
-        item = {
-            "number": issue.get("number"),
-            "title": issue.get("title"),
-            "body": issue.get("body"),
-            "url": issue.get("url"),
-            "labels": [
-                {"name": label.get("name")}
-                for label in (issue.get("labels") or {}).get("nodes") or []
-                if isinstance(label, dict)
-            ],
-            "closedByPullRequestsReferences": (
-                references.get("nodes") or []
-                if isinstance(references, dict) else None
-            ),
-        }
-        if issue.get("__typename") == "Issue":
-            item["stateReason"] = issue.get("stateReason")
-        if item.get("stateReason") == "NOT_PLANNED":
-            event(
-                "release_changelog_issue_excluded", number=number,
-                reason="NOT_PLANNED",
-            )
-            continue
-        issue_url = item.get("url")
-        issue_path = f"https://github.com/{repo}/issues/{number}"
-        pull_path = f"https://github.com/{repo}/pull/{number}"
-        if item.get("number") != number or issue_url not in (issue_path, pull_path):
-            raise ValueError(
-                f"release changelog Issue #{number} has malformed Issue evidence"
-            )
-        title = item.get("title")
-        body = item.get("body")
-        summary = title.strip() if isinstance(title, str) else ""
-        if not summary and isinstance(body, str):
-            summary = next((line.strip() for line in body.splitlines()
-                            if line.strip()), "")
-        if not summary or re.fullmatch(r"Issue #\d+ closed", summary, re.I):
-            raise ValueError(
-                f"release changelog Issue #{number} has no usable title/summary evidence"
-            )
-        source_kind = "PR" if issue_url == pull_path else "Issue"
-        links = [f"[{source_kind} #{number}]({issue_url})"]
-        pull_requests = item.get("closedByPullRequestsReferences")
-        if not isinstance(pull_requests, list):
-            raise ValueError(
-                f"release changelog Issue #{number} has malformed PR evidence"
-            )
-        for pull_request in sorted(pull_requests, key=lambda pr: pr.get("number", 0)
-                                   if isinstance(pr, dict) else 0):
-            pr_number = pull_request.get("number") if isinstance(pull_request, dict) else None
-            pr_url = pull_request.get("url") if isinstance(pull_request, dict) else None
-            if (not isinstance(pr_number, int) or pr_number < 1 or
-                    pr_url != f"https://github.com/{repo}/pull/{pr_number}"):
-                raise ValueError(
-                    f"release changelog Issue #{number} has malformed PR evidence"
-                )
-            # An unmerged PR is not released content — its
-            # link never enters the release notes.
-            pr_state = pr_view(pr_number, "state", repo=repo).get("state")
-            if pr_state != "MERGED":
-                event(
-                    "release_changelog_pr_link_dropped", issue=number,
-                    pr=pr_number, state=pr_state,
-                )
-                continue
-            links.append(f"[PR #{pr_number}]({pr_url})")
-            author = (pull_request.get("author")
-                      if isinstance(pull_request, dict) else None)
-            login = author.get("login") if isinstance(author, dict) else None
-            avatar = (author.get("avatarUrl")
-                      if isinstance(author, dict) else None)
-            if isinstance(login, str) and login and \
-                    isinstance(avatar, str) and avatar:
-                contributors.setdefault(login, avatar)
-            else:
-                # A ghosted/malformed author is display evidence, never a
-                # release judge: skip the contributor, keep the release.
-                event(
-                    "release_changelog_contributor_skipped", issue=number,
-                    pr=pr_number,
-                )
-        grouped[release_changelog_category(item)].append(
-            (number, f"- {summary} ({'; '.join(links)})")
-        )
-    sections = ["## Changelog"]
-    for category in RELEASE_CHANGELOG_CATEGORIES:
-        entries = grouped[category]
-        if entries:
-            sections.extend(["", f"### {category}", "",
-                             *(entry for _, entry in sorted(entries))])
-    if contributors:
-        avatar_rows = []
-        for login in sorted(contributors):
-            avatar = contributors[login]
-            sized = avatar + ("&s=48" if "?" in avatar else "?s=48")
-            avatar_rows.append(
-                f'<a href="https://github.com/{login}">'
-                f'<img src="{sized}" width="32" height="32" alt="{login}" /></a>'
-            )
-        # One source line for all avatars (Issue #835): GitHub renders
-        # each raw-HTML line as its own markdown block, so separated
-        # lines stacked the avatars vertically instead of inline.
-        sections.extend(["", "## Contributors", "", " ".join(avatar_rows)])
-    return "\n".join(sections)
 
 
 def check_release_gates(repo: str, release_commit: str,
@@ -2126,7 +1928,6 @@ def process_release(issue: dict, config: RunnerConfig,
                 f"{declaration['scope_from_milestone']}): {item}"
                 for item in open_milestone_evidence
             ]
-        changelog = build_release_changelog(source_repo, declaration["scope"])
         publish(
             action=lambda: publisher.milestone(
                 f"**Orbi release scope verified**: "
@@ -2235,6 +2036,21 @@ def process_release(issue: dict, config: RunnerConfig,
                 local_tag_commit=local_release_tag_commit(config.repo_dir, tag),
                 release_commit=release_commit, repo_dir=config.repo_dir,
             )
+        # Release notes come from the tagged commit range, never the
+        # Milestone Issue list (Issue #1492). Compute them only now that
+        # the release commit is final — after the tag-conflict and
+        # local-tag resume handling above — so a resume for the same
+        # version reproduces the same notes byte for byte.
+        range_prs = release_range_prs(
+            config.repo_dir, source_repo, release_commit, base_branch,
+        )
+        changelog = build_release_changelog(
+            source_repo,
+            release_changelog_scope(
+                source_repo, range_prs, release_issue=number,
+            ),
+            range_prs,
+        )
         # Create the annotated object locally, but do not publish the tag
         # until the docs commit is on the base branch. This keeps the docs
         # invariant true at every point visible to CI.
