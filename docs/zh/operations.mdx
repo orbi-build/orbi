@@ -598,6 +598,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `worktree_reclaim_failed` | worktree 回收的一步失败（旁路；扫描继续） |
 | `branches_reclaimed` | 批量删除了已合并 PR 的远端交付分支 |
 | `branch_reclaim_failed` | 远端分支回收的一步失败（旁路；扫描继续） |
+| `delivery_branch_deleted` | 已合并交付的远端 head 分支已删除 |
+| `delivery_branch_delete_failed` | 已合并交付的远端 head 分支删除失败（旁路；合并已经落地） |
 | `worktrees_exclude_added` | 一个 worktrees 路径已加入本地 git exclude |
 | `orbi_exclude_added` | 一个 `.orbi/` 运行时路径已加入本地 git exclude |
 | `runner_runtime_exclude_skipped` | 运行时 exclude 修复被跳过（已正确） |

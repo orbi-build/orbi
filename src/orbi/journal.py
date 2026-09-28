@@ -371,6 +371,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "worktree_reclaim_failed": "a worktree reclamation step failed (bypass; the pass continues)",
     "branches_reclaimed": "merged-PR remote delivery branches were deleted in bulk",
     "branch_reclaim_failed": "a remote-branch reclamation step failed (bypass; the pass continues)",
+    "delivery_branch_deleted": "a merged delivery's remote head branch was deleted",
+    "delivery_branch_delete_failed": "a merged delivery's remote head branch could not be deleted (bypass; the merge already landed)",
     "worktrees_exclude_added": "a worktrees path was added to the local git exclude",
     "orbi_exclude_added": "an .orbi runtime path was added to the local git exclude",
     "runner_runtime_exclude_skipped": "the runtime exclude repair was skipped (already correct)",
