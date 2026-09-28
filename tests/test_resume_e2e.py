@@ -604,10 +604,12 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
     # — no fixer, no fresh claim (Issue #82). The gh calls of the
     # awaiting-review tick: the opened-PR scan (fix-needed OR
     # pr-opened) finds the stranded delivery, the scene is recovered
-    # from the comment history, the resume verification reads the open
-    # PR of the derived branch, and the Issue #178 backfill re-adds
-    # `ai-in-progress` (the PR-opened transition removed it) — then
-    # the wait (stubbed below) takes over. The in-flight and ready
+    # from the comment history, the Issue #1473 CI read answers the
+    # candidate's PR state + rollup (completed/success — the resumed
+    # candidate is not CI-pending), the resume verification reads the
+    # open PR of the derived branch, and the Issue #178 backfill
+    # re-adds `ai-in-progress` (the PR-opened transition removed it) —
+    # then the wait (stubbed below) takes over. The in-flight and ready
     # scans never run (the delivery is resumed, so nothing is
     # claimed), and the fake rejects anything else.
     def fake_run(command, **kwargs):
@@ -642,6 +644,19 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
                 # backfill of the resumed delivery.
                 edits.append(command)
                 return ""
+        if command[1] == "pr" and command[2] == "view":
+            # Issue #1473: the resumable scan reads the candidate's PR
+            # state and check rollup before resuming it. A
+            # completed/success rollup is the normal resume branch;
+            # this fake answers it explicitly instead of letting the
+            # call raise into the read-failure fallback.
+            return json.dumps({
+                "state": "OPEN",
+                "statusCheckRollup": [
+                    {"name": "tests", "status": "COMPLETED",
+                     "conclusion": "SUCCESS"},
+                ],
+            })
         if command[:2] == ["gh", "pr"] and command[2] == "list":
             # The resume verification (Issue #89): exactly one open PR
             # of the derived branch, in the source repo, on the

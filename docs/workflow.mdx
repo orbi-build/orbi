@@ -61,8 +61,11 @@ ai-ready                a task is dispatched (orbi add, or a human
                         awaits its review tick
   -> review             one tick, one step: the resumable scan
                         classifies the opened-PR delivery RESUME_REVIEW;
-                        if the PR head's CI is still pending the tick
-                        journals it and returns (no sleep); otherwise an
+                        a PR head whose CI is still pending is journaled
+                        (`delivery_ci_pending`) and the candidate is
+                        SKIPPED (Issue #1473) — the tick goes on to the
+                        in-flight and fresh-claim scans instead of ending
+                        here (bounded delay, no loss). Otherwise an
                         independent Pi session — the ONLY blocking phase,
                         so the slot is held for exactly the Pi run —
                         reviews the exact base/head SHAs and FIXES
@@ -183,6 +186,8 @@ Rules of the chain:
   wait is the waiting primitive — write the state, return, release the
   slot, and the next tick re-reads (`delivery_ci_pending`,
   `merge_gate_ci_pending`, `merge_gate_mergeable_unknown`). The
+  resumable scan skips a CI-pending candidate outright (Issue #1473),
+  so a pending PR never costs a whole tick. The
   crash-recovery path IS the path.
 - Base advances are absorbed by a plain `git merge` of the latest
   `origin/<base>` on the task branch (conflicts resolved manually),

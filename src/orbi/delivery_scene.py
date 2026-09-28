@@ -88,6 +88,19 @@ def body_markers(body: object) -> frozenset[str]:
     return frozenset()
 
 
+def _issue_label_set(issue: dict) -> frozenset[str]:
+    """The Issue's label names (the scans fetch `labels`).
+
+    The fact shape `classify` reads; a missing or malformed `labels`
+    field yields the empty set — the classification then sees an
+    unlabelled ticket, never a crash.
+    """
+    return frozenset(
+        label.get("name") for label in issue.get("labels", [])
+        if isinstance(label, dict) and isinstance(label.get("name"), str)
+    )
+
+
 def classify(
     labels, scene, pr_state, body_markers, *, ready_label: str = READY_LABEL,
     human_review_hold: bool = False,

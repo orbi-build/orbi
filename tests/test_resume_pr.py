@@ -190,7 +190,22 @@ def test_pick_missing_pr_scene_recovers_or_defers_or_blocks(monkeypatch, tmp_pat
     monkeypatch.setitem(runner.__dict__, "_route_external_pr_ticket", lambda *_args: False)
     monkeypatch.setattr(seam, "apply_label_patch", lambda *args, **kwargs: None)
     monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None)
-    monkeypatch.setitem(runner.__dict__, "_recover_missing_pr_scene", lambda *args: {"run_id": FAKE_RUN_ID})
+    # Issue #1473: the recovered scene carries its PR URL (the real
+    # recovery projects `parse_pr_comment`, which always sets it) and
+    # the scan's CI read is answered with a completed/success rollup,
+    # so the RESUME_REVIEW route runs its normal branch instead of the
+    # read-failure fallback.
+    monkeypatch.setitem(
+        claim.__dict__, "pr_delivery_rollup",
+        lambda pr_url, repo: ("OPEN", [
+            {"name": "tests", "status": "COMPLETED",
+             "conclusion": "SUCCESS"},
+        ]),
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "_recover_missing_pr_scene",
+        lambda *args: {"run_id": FAKE_RUN_ID, "pr_url": FAKE_PR_URL},
+    )
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1, tmp_path,
         hooks=resume_deps(),
@@ -735,19 +750,27 @@ def issue_payload(state: str = "OPEN",
     ])
 
 
-def make_pick_fake(list_payload: str, view_payload: str | None = None,
+def make_pick_fake(list_payload: str, view_payload=None,
                    edits: list[list[str]] | None = None,
                    comments: list[str] | None = None):
     """Fake `gh` for the resumable scan; guard rejects anything else.
 
     `edits`/`comments` (when given) capture the label edits and comments
-    posted by the scene-failure blocked transition.
+    posted by the scene-failure blocked transition. `view_payload` may be
+    a callable of the Issue number when each candidate needs its own
+    `gh issue view` answer (Issue #1473's two-candidate scan). Since
+    Issue #1473 the scan reads `gh pr view --json state,statusCheckRollup`
+    for a RESUME_REVIEW candidate, so a default completed/success rollup
+    is answered here — the fakes exercise the normal branch, never the
+    read-failure fallback.
     """
     def fake_run(command, **kwargs):
         if command[1] == "issue":
             if command[2] == "list":
                 return list_payload
             if command[2] == "view":
+                if callable(view_payload):
+                    return view_payload(command[3])
                 return view_payload
             if command[2] == "edit":
                 if edits is not None:
@@ -757,6 +780,14 @@ def make_pick_fake(list_payload: str, view_payload: str | None = None,
                 if comments is not None:
                     comments.append(command[-1])
                 return ""
+        if command[1] == "pr" and command[2] == "view":
+            return json.dumps({
+                "state": "OPEN",
+                "statusCheckRollup": [
+                    {"name": "tests", "status": "COMPLETED",
+                     "conclusion": "SUCCESS"},
+                ],
+            })
         raise AssertionError(f"unexpected command: {command}")
 
     return fake_run
@@ -977,6 +1008,16 @@ def test_pick_resumable_delivery_skips_held_and_reviews_next_free(
                 return gh_comments_payload(
                     [opened_pr_comment(run_id="b2c3d4e5")],
                 )
+        if command[1] == "pr" and command[2] == "view":
+            # Issue #1473: the resumed candidate's PR read answers a
+            # completed rollup so the test exercises the normal branch.
+            return json.dumps({
+                "state": "OPEN",
+                "statusCheckRollup": [
+                    {"name": "tests", "status": "COMPLETED",
+                     "conclusion": "SUCCESS"},
+                ],
+            })
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "slot_held_deliveries",
@@ -1603,6 +1644,167 @@ def test_pick_next_delivery_returns_none_when_nothing_to_do(
         ["owner/repo"], tmp_path / "slots", 1,
         hooks=resume_deps(),
     ) is None
+
+
+# ---------------------- CI-pending candidates are skipped (Issue #1473)
+
+
+def _pending_rollup(pr_url, repo):
+    return ("OPEN", [
+        {"name": "tests", "status": "IN_PROGRESS", "conclusion": None},
+    ])
+
+
+def _success_rollup(pr_url, repo):
+    return ("OPEN", [
+        {"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
+    ])
+
+
+def test_pick_resumable_delivery_skips_ci_pending_candidate(
+    monkeypatch, caplog, tmp_path,
+):
+    """Issue #1473: an OPEN delivery whose PR checks have not concluded is
+    not resumed. The scan emits the existing `delivery_ci_pending` event and
+    skips the candidate, so the tick falls through to the fresh-claim scan
+    instead of ending on a delivery the pre-review gate would only defer."""
+    monkeypatch.setattr(seam, "run_command", make_pick_fake(
+        issue_payload(), gh_comments_payload([opened_pr_comment()]),
+    ))
+    monkeypatch.setitem(claim.__dict__, "pr_delivery_rollup", _pending_rollup)
+    caplog.set_level("INFO")
+    assert claim.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
+    ) is None
+    assert "delivery_ci_pending" in caplog.text
+
+
+def test_pick_resumable_delivery_skips_pending_and_returns_next_candidate(
+    monkeypatch, tmp_path,
+):
+    """Issue #1473: the first candidate is CI-pending; the scan continues
+    and returns the next candidate whose rollup is completed/success."""
+    issues = [
+        {"number": 9, "title": "pending", "state": "OPEN",
+         "url": "https://github.com/owner/repo/issues/9",
+         "labels": [{"name": "ai-pr-opened"}]},
+        {"number": 10, "title": "green", "state": "OPEN",
+         "url": "https://github.com/owner/repo/issues/10",
+         "labels": [{"name": "ai-pr-opened"}]},
+    ]
+
+    def view_for(number):
+        return gh_comments_payload([
+            opened_pr_comment(
+                run_id="b2c3d4e5" if number == "10" else FAKE_RUN_ID,
+                pr_url=f"https://github.com/owner/repo/pull/{number}",
+            ),
+        ])
+
+    monkeypatch.setattr(seam, "run_command", make_pick_fake(
+        json.dumps(issues), view_for,
+    ))
+    monkeypatch.setitem(
+        claim.__dict__, "pr_delivery_rollup",
+        lambda pr_url, repo: (
+            _pending_rollup(pr_url, repo)
+            if pr_url.endswith("/pull/9")
+            else _success_rollup(pr_url, repo)
+        ),
+    )
+    issue, scene = claim.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 2,
+        hooks=resume_deps(),
+    )
+    assert issue["number"] == 10
+    assert scene["run_id"] == "b2c3d4e5"
+
+
+def test_pick_resumable_delivery_returns_completed_success_candidate(
+    monkeypatch, tmp_path,
+):
+    """Issue #1473: the normal branch — a completed/success rollup is
+    returned (never confused with the read-failure fallback)."""
+    monkeypatch.setattr(seam, "run_command", make_pick_fake(
+        issue_payload(), gh_comments_payload([opened_pr_comment()]),
+    ))
+    monkeypatch.setitem(claim.__dict__, "pr_delivery_rollup", _success_rollup)
+    issue, _scene = claim.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
+    )
+    assert issue["number"] == 9
+
+
+@pytest.mark.parametrize("state", ["CLOSED", "MERGED"])
+def test_pick_resumable_delivery_never_skips_terminal_pr(
+    monkeypatch, tmp_path, state,
+):
+    """Issue #1473: a MERGED/CLOSED PR is returned even with pending
+    checks — the runner's terminal handling must still see it, or the
+    delivery would be stranded forever."""
+    monkeypatch.setattr(seam, "run_command", make_pick_fake(
+        issue_payload(), gh_comments_payload([opened_pr_comment()]),
+    ))
+    monkeypatch.setitem(
+        claim.__dict__, "pr_delivery_rollup",
+        lambda pr_url, repo: (state, [
+            {"name": "tests", "status": "IN_PROGRESS", "conclusion": None},
+        ]),
+    )
+    issue, _scene = claim.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
+    )
+    assert issue["number"] == 9
+
+
+def test_pick_resumable_delivery_returns_candidate_when_rollup_read_raises(
+    monkeypatch, tmp_path,
+):
+    """Issue #1473: a rollup read failure must never hide a delivery — the
+    candidate is returned and the runner's own gate handles it."""
+    monkeypatch.setattr(seam, "run_command", make_pick_fake(
+        issue_payload(), gh_comments_payload([opened_pr_comment()]),
+    ))
+
+    def boom(pr_url, repo):
+        raise RuntimeError("gh down")
+
+    monkeypatch.setitem(claim.__dict__, "pr_delivery_rollup", boom)
+    issue, _scene = claim.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(),
+    )
+    assert issue["number"] == 9
+
+
+def test_pick_next_delivery_falls_through_when_resumable_ci_pending(
+    monkeypatch, tmp_path,
+):
+    """Issue #1473: a CI-pending resumable candidate no longer consumes the
+    tick — `pick_next_delivery` continues to the fresh-claim scan and returns
+    the `ai-ready` Issue instead of None."""
+    ready = {"number": 10, "title": "new"}
+    monkeypatch.setattr(seam, "run_command", make_pick_fake(
+        issue_payload(labels=["ai-pr-opened"]),
+        gh_comments_payload([opened_pr_comment()]),
+    ))
+    monkeypatch.setitem(claim.__dict__, "pr_delivery_rollup", _pending_rollup)
+    monkeypatch.setitem(claim.__dict__, "reconcile_open_epics", lambda *a, **k: [])
+    monkeypatch.setitem(
+        claim.milestone_bookkeeping.__dict__, "milestone_reconcile_due",
+        lambda *a, **k: False,
+    )
+    monkeypatch.setitem(claim.__dict__, "reconcile_orphan_prs", lambda *a, **k: [])
+    monkeypatch.setitem(claim.__dict__, "pick_in_progress_issue", lambda *a, **k: None)
+    monkeypatch.setitem(claim.__dict__, "pick_issue", lambda *a, **k: ready)
+    result = claim.pick_next_delivery(
+        ["owner/repo"], tmp_path / "slots", 1,
+        hooks=resume_deps(),
+    )
+    assert result == ("owner/repo", ready, None)
 
 
 

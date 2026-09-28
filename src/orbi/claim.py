@@ -18,6 +18,7 @@ from typing import NamedTuple
 
 from orbi import milestone as milestone_bookkeeping
 from orbi import scene
+from orbi.checks import _classify_rollup, _render_check
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL, BLOCKED_LABEL, EPIC_LABEL, EVENT_BLOCKED,
@@ -25,13 +26,14 @@ from orbi.delivery_labels import (
     PR_OPENED_LABEL, READY_LABEL, RELEASE_LABEL,
 )
 from orbi.delivery_scene import (
-    EXTERNAL_PR_MARKER, DeliveryScene, body_markers, classify,
+    EXTERNAL_PR_MARKER, DeliveryScene, _issue_label_set, body_markers, classify,
 )
 from orbi.github import (
     _epic_audit, _verify_epic_complete, apply_label_patch, close_issue,
     comment_issue, issue_comments, issue_priority, issue_view,
     latest_run_marker, list_issues, milestone_open_issue_count,
-    open_blocker_numbers, open_pr_for_branch, pr_comments, run_gh_read_command,
+    open_blocker_numbers, open_pr_for_branch, pr_comments,
+    pr_delivery_rollup, run_gh_read_command,
 )
 from orbi.gitops import task_branch
 from orbi.journal import LOGGER, current_run_id, event, new_run_id, set_run_id
@@ -152,19 +154,6 @@ def external_takeover_search(dispatch_label: str = READY_LABEL) -> str:
     return (
         f'label:{label} "orbi:external-pr" in:body '
         f"{READY_SCAN_EXCLUSIONS}"
-    )
-
-
-def _issue_label_set(issue: dict) -> frozenset[str]:
-    """The Issue's label names (the scans fetch `labels`).
-
-    The fact shape the scene classification (`orbi.delivery_scene`)
-    reads; a missing or malformed `labels` field yields the empty set —
-    the classification then sees an unlabelled ticket, never a crash.
-    """
-    return frozenset(
-        label.get("name") for label in issue.get("labels", [])
-        if isinstance(label, dict) and isinstance(label.get("name"), str)
     )
 
 
@@ -696,11 +685,12 @@ def pick_resumable_delivery(
     excluded: `main` took it before the claim scan and holds it for the
     whole delivery.
 
-    The query page is `max_concurrency + 1` candidates: at most
+    The query page is `max_concurrency + 1` candidates. At most
     `max_concurrency` deliveries can be held by live co-runners, so a
-    free candidate is always inside the page when one exists. The scan
-    reviews the newest FREE candidate (held ones are skipped before any
-    candidate read — an in-flight delivery is never touched).
+    free candidate is inside the page when one exists; one whose OPEN PR
+    still waits for CI (Issue #1473) is skipped too. The scan reviews the
+    newest FREE candidate (held ones are skipped before any candidate
+    read — an in-flight delivery is never touched).
     """
     held = slot_held_deliveries(slot_dir, max_concurrency)
     # `label:a,b` is GitHub's OR within one label qualifier
@@ -838,6 +828,17 @@ def pick_resumable_delivery(
                     reason=f"scene_{found_scene.value}",
                 )
                 continue
+        # Issue #1473: skip a CI-pending OPEN PR; MERGED/CLOSED and a
+        # failed rollup read still return the candidate.
+        try:
+            pr_state, rollup = pr_delivery_rollup(found["pr_url"], repo)
+        except Exception:
+            return issue, found
+        pending = _classify_rollup(rollup)[0] if pr_state == "OPEN" else []
+        if pending:
+            event("delivery_ci_pending", issue=int(issue["number"]),
+                  pr=found["pr_url"], pending="; ".join(map(_render_check, pending)))
+            continue
         return issue, found
     return None
 
