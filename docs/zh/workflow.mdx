@@ -90,9 +90,7 @@ ai-ready                任务被派发（orbi add，或人工加标签）
                         完成后 Orbi 在后续 tick 恢复并合并 PR
 ```
 
-已有 run/PR 的失败被分类（Issue #50）：**可恢复失败**（Pi 执行失败——
-除非模型 provider 拒绝了 API key，那会以 `credential_missing` 阻塞并
-要求所有者修复凭据——、
+已有 run/PR 的失败被分类（Issue #50）：**可恢复失败**（Pi 执行失败、
 验证失败、未推送本地 commit、会话内未能修复的 finding）
 留在自动修复循环——Issue 标记 `ai-fix-needed`，失败 comment 写入 Issue
 和 PR（带完整现场），下一个 tick 在同一 run、branch、worktree、PR 上

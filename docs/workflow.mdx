@@ -100,10 +100,7 @@ ai-ready                a task is dispatched (orbi add, or a human
 ```
 
 A failure of an existing run/PR is classified (Issue #50): an
-AI-recoverable failure (a Pi execution failure — unless the model
-provider rejected the API key, which blocks as
-`credential_missing` and asks the owner to repair it — a verification
-failure, an
+AI-recoverable failure (a Pi execution failure, a verification failure, an
 unpushed local commit, a finding that could not be
 fixed) keeps the Issue in the automatic fix loop — `ai-fix-needed` with
 the failure comment on the Issue AND the PR carrying the full scene — and
