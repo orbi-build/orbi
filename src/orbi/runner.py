@@ -2776,6 +2776,41 @@ class DeliveryDeferred(Exception):
     """
 
 
+# The repository's GitHub settings are the only source of the merge
+# method (Issue #1480): the first enabled flag in GitHub's own
+# precedence order wins, so an Orbi-side option can never disagree
+# with the repository.
+MERGE_METHOD_FIELDS = (
+    ("allow_merge_commit", "--merge"),
+    ("allow_squash_merge", "--squash"),
+    ("allow_rebase_merge", "--rebase"),
+)
+
+
+def select_merge_method(repo: str) -> str:
+    """Pick the `gh pr merge` flag from the repository's GitHub settings.
+
+    Reads `gh api repos/<repo>` and takes the first enabled boolean in
+    GitHub's precedence order (`allow_merge_commit`, then
+    `allow_squash_merge`, then `allow_rebase_merge`). A failed read, a
+    payload that is not an object, or a payload where none of the three
+    fields is an enabled boolean falls back to `--merge` (today's
+    behavior) with a `merge_method_unknown` warning — never a guessed
+    method.
+    """
+    try:
+        payload = json.loads(run_command(["gh", "api", f"repos/{repo}"]))
+    except (subprocess.CalledProcessError, json.JSONDecodeError,
+            TypeError, ValueError):
+        payload = None
+    if isinstance(payload, dict):
+        for field, flag in MERGE_METHOD_FIELDS:
+            if payload.get(field) is True:
+                return flag
+    event("merge_method_unknown", level=logging.WARNING, repo=repo)
+    return "--merge"
+
+
 def merge_gate(worktree: Path, pr: dict, base_branch: str,
                *, repo_dir: Path,
                source_repo: str | None = None) -> dict:
@@ -2791,7 +2826,10 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
     but an intermediate state — the gate raises `DeliveryDeferred`, the caller
     returns, and the next tick re-reads. A failed check or a not-mergeable PR
     prevents the merge. Then merge with `--match-head-commit` so only that
-    exact head can land. No force push, no direct push of the protected branch.
+    exact head can land, using the merge method the repository's own GitHub
+    settings allow (Issue #1480: `gh api repos/<repo>` — merge commit, else
+    squash, else rebase, else `--merge` with a `merge_method_unknown`
+    warning). No force push, no direct push of the protected branch.
     The base fetch updates the shared remote-tracking ref, so it runs under the
     base-sync lock with the deployment checkout as the lock location.
     """
@@ -2931,14 +2969,16 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
     # `assess_base_freshness` has already classified the mergeable and
     # reviewed-head states above; only a fresh, mergeable head reaches the
     # actual merge command.
+    merge_repo = source_repo or pr.get("_source_repo", "")
+    merge_method = select_merge_method(merge_repo)
     try:
         run_command([
             "gh", "pr", "merge", str(pr["number"]),
-            "--match-head-commit", pr["head_oid"], "--merge",
+            "--match-head-commit", pr["head_oid"], merge_method,
         ], cwd=worktree)
     except subprocess.CalledProcessError as exc:
         preflight = github.merge_gate_preflight(
-            source_repo or pr.get("_source_repo", ""), base_branch,
+            merge_repo, base_branch,
         )
         stderr = str(exc.stderr or "")
         if is_maintainer_actionable(stderr, preflight):
@@ -2951,8 +2991,9 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
                 preflight=failed_preflight,
             ) from None
         raise
-    event("merged", pr=pr["number"], head=pr["head_oid"])
-    return {**pr, "merged": True}
+    event("merged", pr=pr["number"], head=pr["head_oid"],
+          method=merge_method)
+    return {**pr, "merged": True, "merge_method": merge_method}
 
 
 def confirm_merged(worktree: Path, pr: dict, base_branch: str,
@@ -2992,7 +3033,8 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str,
 
 def merge_commit_metrics(worktree: Path, merge_commit: str,
                          pushed_head: str | None,
-                         pushed_base: str | None) -> tuple[str, str]:
+                         pushed_base: str | None,
+                         *, merge_method: str = "--merge") -> tuple[str, str]:
     """The merge record's `(external_commits, commits)` field values.
 
     Issue #833: `commits` is the PR branch's total commit count
@@ -3015,7 +3057,13 @@ def merge_commit_metrics(worktree: Path, merge_commit: str,
     are `"unknown"` only when a git read itself fails (a missing
     object, any git failure). A degraded metric must never fail a
     landed merge and never fabricate a `0`.
+
+    A squash or rebase merge (Issue #1480) has no second parent, so the
+    `M^1..M^2` window does not exist: both metrics are recorded as
+    `"unknown"` directly, without a doomed git read.
     """
+    if merge_method != "--merge":
+        return "unknown", "unknown"
     try:
         commits = int(run_command(
             ["git", "rev-list", "--count", f"{merge_commit}^1..{merge_commit}^2"],
@@ -4083,6 +4131,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     external_commits, pr_commits = merge_commit_metrics(
         worktree, confirmed["merge_commit"], read_pushed_head(worktree),
         read_pushed_base(worktree),
+        merge_method=merged.get("merge_method", "--merge"),
     )
     # The merged publishing is bypass — the GitHub merge
     # already landed; a 404 here must not stop the `ai-merged`

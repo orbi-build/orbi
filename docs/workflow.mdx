@@ -279,8 +279,10 @@ same `key=value` form.
 - `external_commits=unknown` — the push history is unverifiable (a
   recreated worktree lost the run-state record, a fix push's round
   ended before its record and the history is incomplete, or a recorded
-  head or base is not an ancestor of the merged head). An uncountable
-  history is never written as `0`.
+  head or base is not an ancestor of the merged head). A squash or
+  rebase merge (Issue #1480) has no `M^2`, so both metrics are
+  `unknown` there as well. An uncountable history is never written as
+  `0`.
 
 The engine's pushed heads are recorded in the task worktree's run state
 (`pushed_head`, Issue #219 file) at three points — the delivery push,
