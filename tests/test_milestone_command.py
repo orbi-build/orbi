@@ -15,6 +15,7 @@ plus the idle-path wiring in `advance_active_milestone_on_idle`.
 import base64
 import json
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -1404,7 +1405,9 @@ def test_advance_release_confirmation_opens_one_notice_and_processes_commands(
 
     assert len(fake.notices) == 1
     notice = fake.notices[0]
-    assert notice["title"] == "Milestone v0.5.40 已完成，等待确认发布"
+    assert notice["title"] == (
+        "Milestone v0.5.40 complete, awaiting release confirmation"
+    )
     assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.40" in notice["body"]
     assert "/milestone v0.5.40" in notice["body"]
     assert [entry[2]["candidate_titles"] for entry in processed] == [
@@ -1414,6 +1417,55 @@ def test_advance_release_confirmation_opens_one_notice_and_processes_commands(
     # The wait is intentional: the engine never creates the ticket itself.
     assert config.read_text() == 'active_milestone = "v0.5.40"\n'
     assert fake.release_issues == []
+
+
+_CJK_RE = re.compile("[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]")
+
+
+def test_decision_notices_render_english_without_cjk(monkeypatch, tmp_path):
+    """Issue #1463: both Milestone decision notices follow the Language
+    contract — English title and body with no CJK characters — while
+    keeping the `orbi-milestone-advance` fingerprint and the `/milestone`
+    reply so existing notices are still matched and acted on."""
+    release_config = tmp_path / "release.toml"
+    release_config.write_text(
+        'active_milestone = "v0.5.40"\n', encoding="utf-8",
+    )
+    release_fake = FakeMilestoneGh(current="v0.5.40")
+    release_fake.milestones[0].update(state="open", open_issues=0)
+    monkeypatch.setattr(seam, "run_command", release_fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", release_fake.run)
+    monkeypatch.setattr(seam, "process_commands", lambda *a, **k: None)
+    milestone.advance_active_milestone_on_idle(
+        "owner/repo", "v0.5.40", release_config,
+        release_confirmation=True,
+        parse_version_title=runner._parse_version_title,
+    )
+
+    advance_config = tmp_path / "advance.toml"
+    advance_config.write_text(
+        'active_milestone = "v0.5.40"\n', encoding="utf-8",
+    )
+    advance_fake = FakeMilestoneGh()
+    advance_fake.milestones.append(
+        {"title": "v0.5.41", "state": "open", "open_issues": 0},
+    )
+    monkeypatch.setattr(seam, "run_command", advance_fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", advance_fake.run)
+    milestone.advance_active_milestone_on_idle(
+        "owner/repo", "v0.5.40", advance_config,
+        auto_next_milestone=False,
+        parse_version_title=runner._parse_version_title,
+    )
+
+    released, advanced = release_fake.notices[0], advance_fake.notices[0]
+    assert released["title"].startswith("Milestone v0.5.40")
+    assert advanced["title"].startswith("Milestone v0.5.40")
+    for notice in (released, advanced):
+        text = notice["title"] + "\n" + notice["body"]
+        assert _CJK_RE.search(text) is None, notice
+        assert "orbi-milestone-advance old=v0.5.40" in notice["body"]
+        assert "/milestone" in notice["body"]
 
 
 def test_advance_release_notice_is_kept_then_closed_once_its_ticket_exists(
