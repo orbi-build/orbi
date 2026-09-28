@@ -369,6 +369,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "worktree_recreated": "a resumed delivery's missing worktree was rebuilt from the remote branch",
     "worktree_reclaimed": "released task worktrees were reclaimed in bulk",
     "worktree_reclaim_failed": "a worktree reclamation step failed (bypass; the pass continues)",
+    "branches_reclaimed": "merged-PR remote delivery branches were deleted in bulk",
+    "branch_reclaim_failed": "a remote-branch reclamation step failed (bypass; the pass continues)",
     "worktrees_exclude_added": "a worktrees path was added to the local git exclude",
     "orbi_exclude_added": "an .orbi runtime path was added to the local git exclude",
     "runner_runtime_exclude_skipped": "the runtime exclude repair was skipped (already correct)",

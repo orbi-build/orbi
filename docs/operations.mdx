@@ -693,6 +693,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `worktree_recreated` | a resumed delivery's missing worktree was rebuilt from the remote branch |
 | `worktree_reclaimed` | released task worktrees were reclaimed in bulk |
 | `worktree_reclaim_failed` | a worktree reclamation step failed (bypass; the pass continues) |
+| `branches_reclaimed` | merged-PR remote delivery branches were deleted in bulk |
+| `branch_reclaim_failed` | a remote-branch reclamation step failed (bypass; the pass continues) |
 | `worktrees_exclude_added` | a worktrees path was added to the local git exclude |
 | `orbi_exclude_added` | an `.orbi/` runtime path was added to the local git exclude |
 | `runner_runtime_exclude_skipped` | the runtime exclude repair was skipped (already correct) |
@@ -1097,6 +1099,27 @@ The pass is a pure bypass: a GitHub read failure logs
 removal failure logs `worktree_reclaim_failed path=... reason=...` and
 the pass continues, and a successful tick with removals logs the
 structured `worktree_reclaimed count=N freed=<bytes>` line.
+
+### Remote delivery-branch reclamation (Issue #1479)
+
+A merged delivery used to leave its `orbi/<slug>-issue-<n>` branch on
+the remote forever (255 such branches on 2026-09-28). At every tick
+start, beside the worktree reclamation, the Runner runs one bounded,
+idempotent pass (`reclaim_merged_delivery_branches`): it lists the
+remote `orbi/*` heads (`git ls-remote --heads origin 'orbi/*'`) and the
+source repo's MERGED PRs (`gh pr list --state merged`), and deletes a
+branch only when its CURRENT remote oid equals a merged PR's
+`headRefOid` (`gh api -X DELETE repos/<repo>/git/refs/heads/<ref>`).
+The oid match protects a reopened Issue's new attempt: the delivery
+branch name is fixed per Issue, so the new attempt pushes to the same
+name while the old merged PR still reports it. A branch whose only PR
+is OPEN, CLOSED-unmerged or absent is never in the merged map and is
+never touched. Deletions are capped at 25 per tick, so a backlog drains
+over ticks. The pass is a pure bypass: a read failure logs
+`branch_reclaim_failed reason=... (deleting nothing)`, a single delete
+failure logs `branch_reclaim_failed branch=... reason=...` and the pass
+continues, and a successful tick with deletions logs
+`branches_reclaimed count=N`.
 
 ## Failure recovery
 
