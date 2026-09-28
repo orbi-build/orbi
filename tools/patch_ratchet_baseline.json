@@ -1,6 +1,7 @@
 {
   "command_shape_asserts": 513,
   "monkeypatch_setattr_modules": {
+    "branch_reclaim": 0,
     "checks": 0,
     "claim": 94,
     "clarify": 0,

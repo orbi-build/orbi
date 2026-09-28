@@ -56,6 +56,7 @@ from orbi import engine_source
 from orbi import milestone as milestone_bookkeeping
 from orbi import claim, clarify
 from orbi import config as config_domain
+from orbi.branch_reclaim import reclaim_merged_delivery_branches
 from orbi.engine_source import EngineSourceError
 from orbi.git_identity import set_bot_git_identity
 from orbi.git_transport import TransportError, check_transport
@@ -6671,6 +6672,15 @@ def _preflight(config: config_domain.RunnerConfig) -> None:
         reclaim_released_worktrees(config)
     except Exception:
         LOGGER.exception("worktree_reclaim_failed")
+    # Remote delivery-branch reclamation: a merged PR's `orbi/*` branch
+    # is unreachable evidence and otherwise stays on the remote forever.
+    # Bounded, idempotent and never fatal: a read failure deletes
+    # nothing and a single delete failure is a warning, never a failed
+    # start.
+    try:
+        reclaim_merged_delivery_branches(config)
+    except Exception:
+        LOGGER.exception("branch_reclaim_failed")
     # Git transport preflight: BEFORE any slot or
     # claim the deployment checkout's git transport must be the
     # CONFIGURED one (orbi.toml `git_transport`, default "ssh") and
