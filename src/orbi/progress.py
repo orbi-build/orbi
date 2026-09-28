@@ -17,6 +17,7 @@ fast on any error. There is no fallback or retry.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 import time
@@ -29,6 +30,7 @@ from orbi.failure import Failure, REASON_CODES, _redact_local_paths
 from orbi.journal import (
     LOGGER,
     RUN_ID_PATTERN,
+    event,
     issue_context,
     quote_value,
     redact_secrets,
@@ -828,3 +830,86 @@ def _safe_publish(*, run_id: str, issue: int, source_repo: str,
             "progress_publish_failed run=%s issue=%s role=%s",
             run_id, issue_context(source_repo, issue), role,
         )
+
+
+def _finish_outcome_body(*, outcome: str, detail: str,
+                         next_step: str, pr_url: str | None,
+                         number: int, source_repo: str,
+                         action: str | None = None,
+                         reason: str | None = None,
+                         diagnosis: str | None = None) -> str:
+    """Render a terminal outcome with action, reason, and diagnosis."""
+    if not next_step:
+        event(
+            "progress_finish_missing_next_step", level=logging.WARNING,
+            call_point="_finish_progress_body", issue=number,
+            repo=source_repo, outcome=outcome,
+        )
+    legacy_action = action is None
+    blocked = outcome == "blocked"
+    disposition = (
+        "waiting on a human decision" if blocked
+        else "the engine will retry"
+    )
+    if reason is None:
+        reason = (
+            "Orbi could not complete the delivery because a required "
+            "operation failed." if blocked else
+            "Orbi found a problem that must be fixed before it can continue."
+        )
+    if diagnosis is None:
+        diagnosis = detail
+    paragraphs = [f"**Orbi {outcome} — {disposition}**"]
+    if legacy_action:
+        user_action = next_step if blocked and next_step else "Nothing"
+        paragraphs.append(f"What you need to do: {user_action}")
+    elif action:
+        paragraphs.append(f"What you need to do: {action}")
+    if reason:
+        paragraphs.append(f"What happened: {reason}")
+    else:
+        paragraphs.append("What happened: No reason was provided.")
+    if legacy_action:
+        if blocked and pr_url:
+            engine_action = (
+                "Orbi will wait for the required action; the open PR is "
+                f"{pr_url}."
+            )
+        elif blocked:
+            engine_action = "Orbi will wait for a human to resolve this Issue."
+        else:
+            engine_action = (
+                next_step or "Orbi will wait for a human to resolve this Issue."
+            )
+        paragraphs.append(f"What Orbi will do next: {engine_action}")
+    elif not action and next_step:
+        paragraphs.append(f"What Orbi will do next: {next_step}")
+    paragraphs.append(
+        "<details><summary>Raw error</summary>\n"
+        f"{diagnosis}\n"
+        "</details>"
+    )
+    return "\n\n".join(paragraphs)
+
+
+def _finish_progress_body(*, number: int, title: str, run_id: str,
+                          role: str, branch: str | None,
+                          worktree: Path | None, pr_url: str | None,
+                          review_round: int, priority: str, detail: str,
+                          next_step: str, outcome: str,
+                          source_repo: str, action: str | None = None,
+                          reason: str | None = None,
+                          diagnosis: str | None = None) -> str:
+    """Render the terminal progress scene shared by every finish path."""
+    return _progress_body(_progress_state(
+        RunContext(
+            run_id=run_id, issue=number, branch=branch or "-",
+            worktree=worktree or Path("-"), source_repo=source_repo,
+        ),
+        title=title, role=role, started=time.monotonic(), pr_url=pr_url,
+        review_round=review_round, priority=priority,
+    ), outcome=_finish_outcome_body(
+        outcome=outcome, detail=detail, next_step=next_step, pr_url=pr_url,
+        number=number, source_repo=source_repo, action=action,
+        reason=reason, diagnosis=diagnosis,
+    ))

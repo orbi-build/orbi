@@ -12,6 +12,7 @@
     "delivery_scene": 0,
     "engine_source": 0,
     "failure": 0,
+    "failure_report": 63,
     "git_identity": 0,
     "git_transport": 0,
     "github": 21,
@@ -40,6 +41,6 @@
     "systemd_deploy": 0,
     "ticket_command": 0
   },
-  "monkeypatch_setattr_runner": 257,
+  "monkeypatch_setattr_runner": 207,
   "monkeypatch_setattr_runner_string": 6
 }

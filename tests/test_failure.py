@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+import orbi.failure_report as failure_report
 import orbi.runner as runner
 from orbi import failure, progress
 from orbi.pi_process import RateLimitExhaustedError
@@ -407,7 +408,7 @@ def test_classify_failure_dispositions_cover_the_closed_reason_set():
 # --------------------------------------------------------------------------
 
 def test_failure_comment_body_renders_the_block_before_the_headline():
-    body = runner._failure_comment_body(
+    body = failure._failure_comment_body(
         outcome="blocked", action="relabel ai-ready", reason="boom",
         diagnosis="boom", scene="- run: `a1b2c3d4`", evidence="",
         pr_url=None, issue="orbi-build/orbi#7", run_id="a1b2c3d4",
@@ -433,7 +434,7 @@ def test_every_reason_code_renders_a_parsable_comment(
     record = runner._classify_failure(
         factory(), outcome="fix_needed" if outcome == "fix_needed" else "blocked",
     )
-    body = runner._failure_comment_body(
+    body = failure._failure_comment_body(
         outcome="fix needed" if outcome == "fix_needed" else "blocked",
         action="do the thing", reason="boom", diagnosis="boom",
         scene="- run: `-`", evidence="", pr_url=None,
@@ -452,7 +453,7 @@ def test_every_reason_code_renders_a_parsable_comment(
 
 
 def test_failure_comment_body_renders_a_fix_needed_block():
-    body = runner._failure_comment_body(
+    body = failure._failure_comment_body(
         outcome="fix needed", action="", reason="boom", diagnosis="boom",
         scene="- run: `-`", evidence="",
         pr_url=None, issue="orbi-build/orbi#7", run_id="-",
@@ -469,7 +470,7 @@ def test_failure_comment_body_renders_a_fix_needed_block():
 
 
 def test_failure_comment_body_defaults_to_unclassified_without_a_record():
-    body = runner._failure_comment_body(
+    body = failure._failure_comment_body(
         outcome="blocked", action="", reason="boom", diagnosis="boom",
         scene="- run: `-`", evidence="",
         pr_url=None, issue="orbi-build/orbi#7", run_id="-",
@@ -498,7 +499,7 @@ def _capture_comment(monkeypatch):
 
 def test_report_delivery_failure_classifies_a_transient_github_error(monkeypatch):
     posted = _capture_comment(monkeypatch)
-    outcome = runner.report_delivery_failure(
+    outcome = failure_report.report_delivery_failure(
         github_transient_error(),
         issue={"number": 1322, "title": "t", "labels": []},
         source_repo="orbi-build/orbi", run_id=None, pr_url=None,
@@ -524,7 +525,7 @@ def test_report_delivery_failure_keeps_full_bounded_stderr(monkeypatch):
         "D1F4ED5C in your report."
     )
     error = subprocess.CalledProcessError(1, ["gh", "pr", "create"], stderr=stderr)
-    runner.report_delivery_failure(
+    failure_report.report_delivery_failure(
         error,
         issue={"number": 1322, "title": "t", "labels": []},
         source_repo="orbi-build/orbi", run_id=None, pr_url=None,
@@ -540,7 +541,7 @@ def test_report_delivery_failure_keeps_full_bounded_stderr(monkeypatch):
 
 def test_report_delivery_failure_unknown_exception_is_unclassified(monkeypatch):
     posted = _capture_comment(monkeypatch)
-    outcome = runner.report_delivery_failure(
+    outcome = failure_report.report_delivery_failure(
         RuntimeError("totally unexpected"),
         issue={"number": 1322, "title": "t", "labels": []},
         source_repo="orbi-build/orbi", run_id=None, pr_url=None,
@@ -567,7 +568,7 @@ def test_report_delivery_failure_recoverable_is_fix_needed(monkeypatch):
     posted = _capture_comment(monkeypatch)
     monkeypatch.setattr(seam, "comment_pr", lambda *a, **k: None)
     error = subprocess.CalledProcessError(1, ["pytest"], stderr="3 failed")
-    outcome = runner.report_delivery_failure(
+    outcome = failure_report.report_delivery_failure(
         error,
         issue={"number": 1322, "title": "t", "labels": []},
         source_repo="orbi-build/orbi", run_id=None,
@@ -623,7 +624,7 @@ def test_report_delivery_failure_milestone_is_machine_readable(monkeypatch):
     error = subprocess.CalledProcessError(
         1, ["gh", "pr", "create"], stderr=stderr,
     )
-    runner.report_delivery_failure(
+    failure_report.report_delivery_failure(
         error,
         issue={"number": 1322, "title": "t", "labels": []},
         source_repo="orbi-build/orbi", run_id="c517c8c7", pr_url=None,
@@ -655,7 +656,7 @@ def test_report_delivery_failure_fix_needed_milestone_is_machine_readable(
     monkeypatch.setattr(seam, "comment_pr", lambda *a, **k: None)
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     error = subprocess.CalledProcessError(1, ["pytest"], stderr="3 failed")
-    outcome = runner.report_delivery_failure(
+    outcome = failure_report.report_delivery_failure(
         error,
         issue={"number": 1322, "title": "t", "labels": []},
         source_repo="orbi-build/orbi", run_id="c517c8c7",

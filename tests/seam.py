@@ -14,6 +14,7 @@ import orbi.cli_source as cli_source
 import orbi.branch_reclaim as branch_reclaim
 import orbi.clarify as clarify
 import orbi.claim as claim
+import orbi.failure_report as failure_report
 import orbi.github as github
 import orbi.gitops as gitops
 import orbi.journal as journal
@@ -30,7 +31,7 @@ import orbi.runner as runner
 _MODULES = (
     journal, github, gitops, milestone, milestone_command, ticket_command,
     progress, cli_source, release, release_git, pi_session, runner, claim,
-    repo_config, clarify, branch_reclaim,
+    repo_config, clarify, branch_reclaim, failure_report,
 )
 
 
@@ -52,11 +53,16 @@ class Seam:
 seam = Seam()
 
 
+def _module_hook(module, name: str):
+    """Resolve one delivered hook from its owning module at call time."""
+    def call(*args, **kwargs):
+        return getattr(module, name)(*args, **kwargs)
+    return call
+
+
 def _runner_hook(name: str):
     """Resolve one runner-owned resume hook at call time."""
-    def call(*args, **kwargs):
-        return getattr(runner, name)(*args, **kwargs)
-    return call
+    return _module_hook(runner, name)
 
 
 def resume_deps() -> claim.ResumeHooks:
@@ -66,14 +72,16 @@ def resume_deps() -> claim.ResumeHooks:
     delivery-side scene helpers arrive as `ResumeHooks`. A test that calls
     a claim scan directly wires the same callables here; the lookup
     happens per call, so a `monkeypatch.setitem(runner.__dict__, ...)`
-    still intercepts the real delivery path. `comment_pr` is in the bag
-    because `reconcile_orphan_prs` reports through the runner's writer.
+    still intercepts the real delivery path. `comment_pr` and
+    `block_scene_failure` come from `orbi.failure_report` (Issue #1260):
+    `reconcile_orphan_prs` reports through the same failure-report writer
+    the delivery failure path uses.
     """
     return claim.ResumeHooks(
         resume_scene=_runner_hook("resume_scene"),
         route_external_pr_ticket=_runner_hook("_route_external_pr_ticket"),
-        block_scene_failure=_runner_hook("block_scene_failure"),
+        block_scene_failure=_module_hook(failure_report, "block_scene_failure"),
         recover_missing_pr_scene=_runner_hook("_recover_missing_pr_scene"),
         has_recoverable_pr_scene=_runner_hook("_has_recoverable_pr_scene"),
-        comment_pr=_runner_hook("comment_pr"),
+        comment_pr=_module_hook(failure_report, "comment_pr"),
     )
