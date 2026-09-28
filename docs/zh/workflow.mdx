@@ -58,7 +58,10 @@ ai-ready                任务被派发（orbi add，或人工加标签）
                         交付等待它的评审 tick
   -> review             一个 tick 一步：可恢复扫描把 opened-PR 交付分类
                         为 RESUME_REVIEW；PR head 的 CI 仍 pending 时记
-                        一行 journal 直接返回（不 sleep）；否则独立
+                        一行 journal（`delivery_ci_pending`）并跳过该候选
+                        （Issue #1473）——tick 继续走 in-flight 与
+                        fresh-claim 扫描，而不是就此结束（有界延迟，不丢
+                        交付）。否则独立
                         Pi session——唯一的阻塞阶段，槽位只被占用一段
                         Pi 运行时长——审查精确的 base/head SHA，并在
                         会话内修复 findings（代码、完整测试、分层
@@ -153,7 +156,9 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
   对 CI/mergeability 的轮询、`release_ci_wait_seconds` /
   `mergeable_wait_seconds`）已移除。所有等待都走 waiting 原语——写状态、
   返回、释放槽位，下一 tick 重读（`delivery_ci_pending`、
-  `merge_gate_ci_pending`、`merge_gate_mergeable_unknown`）。崩溃恢复
+  `merge_gate_ci_pending`、`merge_gate_mergeable_unknown`）。可恢复
+  扫描直接跳过 CI 仍 pending 的候选（Issue #1473），pending 的 PR
+  因此不再占掉一整个 tick。崩溃恢复
   路径就是主路径。
 - base 前进由 task branch 上对最新 `origin/<base>` 的普通 `git merge`
   吸收（冲突手工解决），然后重跑完整测试。不 force push、不自动解决

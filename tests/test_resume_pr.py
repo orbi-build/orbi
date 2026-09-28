@@ -190,7 +190,22 @@ def test_pick_missing_pr_scene_recovers_or_defers_or_blocks(monkeypatch, tmp_pat
     monkeypatch.setitem(runner.__dict__, "_route_external_pr_ticket", lambda *_args: False)
     monkeypatch.setattr(seam, "apply_label_patch", lambda *args, **kwargs: None)
     monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None)
-    monkeypatch.setitem(runner.__dict__, "_recover_missing_pr_scene", lambda *args: {"run_id": FAKE_RUN_ID})
+    # Issue #1473: the recovered scene carries its PR URL (the real
+    # recovery projects `parse_pr_comment`, which always sets it) and
+    # the scan's CI read is answered with a completed/success rollup,
+    # so the RESUME_REVIEW route runs its normal branch instead of the
+    # read-failure fallback.
+    monkeypatch.setitem(
+        claim.__dict__, "pr_delivery_rollup",
+        lambda pr_url, repo: ("OPEN", [
+            {"name": "tests", "status": "COMPLETED",
+             "conclusion": "SUCCESS"},
+        ]),
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "_recover_missing_pr_scene",
+        lambda *args: {"run_id": FAKE_RUN_ID, "pr_url": FAKE_PR_URL},
+    )
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1, tmp_path,
         hooks=resume_deps(),

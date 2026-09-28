@@ -501,6 +501,17 @@ def test_pick_resumable_delivery_resumes_a_scene_candidate(
     RESUME_REVIEW and is returned with its scene."""
     monkeypatch.setattr(runner_seam, "slot_occupancy",
                         lambda *a, **k: [])
+    # Issue #1473: the RESUME_REVIEW route reads the candidate's PR
+    # state + rollup before resuming. The read is answered with a
+    # completed/success rollup (never left to raise), so this test
+    # exercises the normal branch and not the read-failure fallback.
+    monkeypatch.setitem(
+        claim.__dict__, "pr_delivery_rollup",
+        lambda pr_url, repo: ("OPEN", [
+            {"name": "tests", "status": "COMPLETED",
+             "conclusion": "SUCCESS"},
+        ]),
+    )
     monkeypatch.setattr(
         runner_seam, "issue_comments",
         lambda number, repo: [_trusted_scene_comment()],
