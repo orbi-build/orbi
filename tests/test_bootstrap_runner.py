@@ -18280,6 +18280,36 @@ def test_prepare_release_version_updates_sources_and_commits(tmp_path, monkeypat
     assert calls[3] == (["git", "rev-parse", "HEAD"], {"cwd": work})
 
 
+def test_prepare_release_version_updates_pyproject_without_orbi_init(
+    tmp_path, monkeypatch,
+):
+    """A non-Orbi repo has no src/orbi/__init__.py (Issue #1461)."""
+    work = tmp_path / "release"
+    work.mkdir()
+    (work / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\nversion = "0.0.0"\n', encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(seam, "run_command",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "newsha",
+    )
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "newsha")
+
+    assert release.prepare_release_version(
+        work, "v0.1.0", "main",
+    ) == "newsha"
+    assert 'version = "0.1.0"' in (work / "pyproject.toml").read_text()
+    assert calls[0] == (["git", "add", "pyproject.toml"], {"cwd": work})
+    commit_call = calls[1]
+    assert commit_call[0] == [
+        "git", "commit", "-m", "chore: prepare release v0.1.0",
+    ]
+    assert calls[2] == (["git", "push", "origin", "HEAD:refs/heads/main"], {
+        "cwd": work, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
+    })
+    assert calls[3] == (["git", "rev-parse", "HEAD"], {"cwd": work})
+
+
 def test_prepare_release_version_updates_package_json(tmp_path, monkeypatch):
     work = tmp_path / "release"
     work.mkdir()
