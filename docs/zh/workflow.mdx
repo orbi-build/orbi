@@ -234,8 +234,9 @@ comment-reader 契约精确匹配 `external_commits=K`、`review_rounds=N`
   commit 保持为外部。
 - `external_commits=unknown` —— 推送历史无法证实（重建的 worktree 丢了
   run-state 记录；某轮 fix 推送在记录之前回合已结束且历史不完整；或
-  记录的 head/base 不是合并 head 的祖先）。数不出来的历史绝不写成
-  `0`。
+  记录的 head/base 不是合并 head 的祖先）。squash 或 rebase 合并
+  （Issue #1480）没有 `M^2`，两项指标同样为 `unknown`。数不出来的历史
+  绝不写成 `0`。
 
 引擎推送 head 在三个点记入 task worktree 的 run state（`pushed_head`，
 Issue #219 文件）——交付推送、verdict 覆盖的 review/fix 推送、以及

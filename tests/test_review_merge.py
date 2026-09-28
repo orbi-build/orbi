@@ -1085,6 +1085,56 @@ def test_merge_gate_merges_reviewed_head_with_match_head_commit(monkeypatch, tmp
     assert "--merge" in merge_cmd
 
 
+@pytest.mark.parametrize("settings, expected", [
+    ({"allow_merge_commit": True, "allow_squash_merge": True,
+      "allow_rebase_merge": True}, "--merge"),
+    ({"allow_merge_commit": False, "allow_squash_merge": True,
+      "allow_rebase_merge": True}, "--squash"),
+    ({"allow_merge_commit": False, "allow_squash_merge": False,
+      "allow_rebase_merge": True}, "--rebase"),
+])
+def test_select_merge_method_reads_the_repository_settings(
+        monkeypatch, settings, expected):
+    """Issue #1480: the repository's GitHub settings are the only source
+    of the merge method, read from the documented `gh api repos/<repo>`
+    endpoint in GitHub's own precedence order."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return json.dumps(settings)
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    assert runner.select_merge_method("owner/repo") == expected
+    assert calls == [["gh", "api", "repos/owner/repo"]]
+
+
+def test_select_merge_method_falls_back_and_warns_on_a_failed_read(
+        monkeypatch, caplog):
+    """Issue #1480: an unreadable settings payload keeps today's `--merge`
+    behavior and names the degradation in the journal."""
+    def boom(command, **kwargs):
+        raise subprocess.CalledProcessError(1, command, stderr="HTTP 403")
+
+    monkeypatch.setattr(seam, "run_command", boom)
+    with caplog.at_level("WARNING"):
+        assert runner.select_merge_method("owner/repo") == "--merge"
+    assert "merge_method_unknown" in caplog.text
+
+
+def test_select_merge_method_falls_back_when_no_field_is_boolean(
+        monkeypatch, caplog):
+    """Issue #1480: a payload where none of the three fields is an enabled
+    boolean is unknown, not a guess."""
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: json.dumps({"allow_merge_commit": "yes"}),
+    )
+    with caplog.at_level("WARNING"):
+        assert runner.select_merge_method("owner/repo") == "--merge"
+    assert "merge_method_unknown" in caplog.text
+
+
 def test_merge_gate_requires_the_repo_dir_lock_location(
     monkeypatch, tmp_path,
 ):
@@ -3414,16 +3464,23 @@ def _delivery_commit(clone: Path, name: str, message: str) -> str:
     return git(clone, "rev-parse", "HEAD")
 
 
-def _install_merge_record_gh(monkeypatch, clone: Path) -> dict:
+def _install_merge_record_gh(monkeypatch, clone: Path, *, repo_settings=None,
+                             merge_style: str = "merge",
+                             calls_out: list | None = None) -> dict:
     """Stateful `gh` fake: `gh pr list` answers the ONE open PR of the
     task branch with the CURRENT remote head (the real freeze_pr reads
     it); `gh pr view` answers per stage (merge gate vs confirm);
     `gh pr merge` performs a REAL local merge pushed to origin, so the
     merge commit is a genuine git object on origin/main; `gh api`
     (progress comment, label writes) is answered minimally. Real git
-    runs for everything else."""
+    runs for everything else.
+
+    `repo_settings` is the `gh api repos/<repo>` payload the merge method
+    selection reads (Issue #1480); `merge_style="squash"` performs a real
+    squash merge so the landed commit has a single parent.
+    """
     real_run = runner.run_command
-    commands: list = []
+    commands: list = calls_out if calls_out is not None else []
 
     def fake_run(command, **kwargs):
         commands.append(command)
@@ -3469,11 +3526,20 @@ def _install_merge_record_gh(monkeypatch, clone: Path) -> dict:
                 and command[2] == "merge":
             head = command[command.index("--match-head-commit") + 1]
             git(clone, "checkout", "main")
-            git(clone, "merge", "--no-ff", head)
+            if merge_style == "squash":
+                git(clone, "merge", "--squash", head)
+                git(clone, "commit", "-m", "squash merge")
+            else:
+                git(clone, "merge", "--no-ff", head)
             git(clone, "push", "origin", "main")
             git(clone, "checkout", TASK_BRANCH)
             return ""
         if command[0] == "gh" and command[1] == "api":
+            if command[2] == "repos/owner/repo":
+                return json.dumps(repo_settings if repo_settings is not None
+                                  else {"allow_merge_commit": True,
+                                        "allow_squash_merge": True,
+                                        "allow_rebase_merge": True})
             if "--method" not in command:
                 return json.dumps([])
             if command[command.index("--method") + 1] == "POST":
@@ -3492,7 +3558,10 @@ def _remote_head(clone: Path) -> str:
 
 def _run_merge_round(monkeypatch, clone: Path, *, session=None,
                      scene_review_round: int = 0, external: bool = False,
-                     comments_out: list | None = None):
+                     comments_out: list | None = None,
+                     repo_settings: dict | None = None,
+                     merge_style: str = "merge",
+                     calls_out: list | None = None):
     """One review/merge call against the real git clone; returns the
     `Orbi merged PR:` comment body (None when the round does not
     merge). The review session ends at the `stream_pi` seam: `session`
@@ -3511,7 +3580,10 @@ def _run_merge_round(monkeypatch, clone: Path, *, session=None,
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
-    _install_merge_record_gh(monkeypatch, clone)
+    _install_merge_record_gh(
+        monkeypatch, clone, repo_settings=repo_settings,
+        merge_style=merge_style, calls_out=calls_out,
+    )
     comments: list = []
 
     def fake_comment(number, *, repo, body):
@@ -3557,6 +3629,36 @@ def test_merge_record_zero_external_for_a_clean_engine_delivery(
     body = _run_merge_round(monkeypatch, merge_clone)
     assert "external_commits=0" in body
     assert "commits=1" in body
+
+
+def test_squash_merged_delivery_completes_with_unknown_metrics(
+        merge_clone, monkeypatch, caplog):
+    """Issue #1480: a repository that disallows merge commits delivers via
+    `--squash`. The single squashed commit on main is the PR's `mergeCommit`,
+    so `confirm_merged` still resolves it, and the merge record skips the
+    non-existent `M^1..M^2` window (metrics `unknown`) instead of failing."""
+    delivery = _delivery_commit(merge_clone, "fix.txt", "delivery")
+    runner.write_run_state(RunContext(
+        run_id="a1b2c3d4", issue=4, branch=TASK_BRANCH,
+        worktree=merge_clone, source_repo="owner/repo",
+    ))
+    runner.record_pushed_head(merge_clone, delivery)
+    calls: list = []
+    with caplog.at_level("INFO"):
+        body = _run_merge_round(
+            monkeypatch, merge_clone,
+            repo_settings={"allow_merge_commit": False,
+                           "allow_squash_merge": True,
+                           "allow_rebase_merge": False},
+            merge_style="squash", calls_out=calls,
+        )
+    assert body is not None
+    assert "commits=unknown" in body
+    assert "external_commits=unknown" in body
+    merge_cmd = [c for c in calls if c[:3] == ["gh", "pr", "merge"]][0]
+    assert merge_cmd[-1] == "--squash"
+    assert merge_cmd[merge_cmd.index("--match-head-commit") + 1] == delivery
+    assert "merged " in caplog.text and "method=--squash" in caplog.text
 
 
 def test_merge_record_counts_an_external_push_before_the_merge(
