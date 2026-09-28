@@ -172,6 +172,10 @@ change is safe. Run a differential or property check yourself:
    backslash-n) and very short values next to it, from every producer whose
    definition allows it (read the rule or pattern definitions), not only the
    one the Issue names.
+   Include collisions: when the change alters the text used to search,
+   match, replace or look up, add inputs where the altered text also occurs
+   elsewhere in the same document, and check that only the intended
+   occurrence changes.
 2. Pick the oracle, independent of the change: never the rule the change
    implements and never the Issue's description of it. List the installed
    dependency tree (`uv pip list`, `go list -m all`, `npm ls`, ...) and the

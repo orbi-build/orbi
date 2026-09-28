@@ -123,6 +123,12 @@ Regression guard for changed behavior (differential and property testing):
      to it. Enumerate every producer that can emit such data by reading its
      configuration or definitions (for example every rule whose pattern allows
      the character), not only the one the Issue names.
+  5. Collisions. When your change alters the text used to search, match,
+     replace or look up (a needle, key, pattern or normalised value), add
+     inputs where the altered text also occurs elsewhere in the same document
+     or value, and check that only the intended occurrence changes. Prefer
+     keeping the original matched text as the search needle and adjusting
+     what is written back, over shortening the needle.
 - If a prescribed approach in the Issue cannot meet the oracle for some input
   class, keep to the Issue's constraints but extend the implementation until
   the regression count is zero (for example handle the missing class
