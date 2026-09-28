@@ -56,7 +56,7 @@ from orbi import engine_source
 from orbi import milestone as milestone_bookkeeping
 from orbi import claim, clarify
 from orbi import config as config_domain
-from orbi.branch_reclaim import reclaim_merged_delivery_branches
+from orbi.branch_reclaim import delete_merged_delivery_branch, reclaim_merged_delivery_branches
 from orbi.engine_source import EngineSourceError
 from orbi.git_identity import set_bot_git_identity
 from orbi.git_transport import TransportError, check_transport
@@ -2994,6 +2994,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         raise
     event("merged", pr=pr["number"], head=pr["head_oid"],
           method=merge_method)
+    delete_merged_delivery_branch(merge_repo, pr["number"], pr["head_ref"])
     return {**pr, "merged": True, "merge_method": merge_method}
 
 
