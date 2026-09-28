@@ -273,19 +273,23 @@ def prepare_release_version(worktree: Path, tag: str,
     pyproject = worktree / version_file
     init_file = worktree / "src" / "orbi" / "__init__.py"
     pyproject_text = pyproject.read_text(encoding="utf-8")
-    init_text = init_file.read_text(encoding="utf-8")
+    init_text = (
+        init_file.read_text(encoding="utf-8") if init_file.exists() else None
+    )
     py_matches = re.findall(
         r'(?m)^version\s*=\s*"([^"]+)"\s*$', pyproject_text,
     )
     init_matches = re.findall(
-        r'(?m)^__version__\s*=\s*"([^"]+)"\s*$', init_text,
+        r'(?m)^__version__\s*=\s*"([^"]+)"\s*$', init_text or "",
     )
-    if len(py_matches) != 1 or len(init_matches) != 1:
+    if len(py_matches) != 1 or (
+        init_text is not None and len(init_matches) != 1
+    ):
         raise RuntimeError(
             "release version sources must contain exactly one version "
             "declaration each"
         )
-    if py_matches[0] != init_matches[0]:
+    if init_text is not None and py_matches[0] != init_matches[0]:
         raise RuntimeError(
             "release version sources disagree before release preparation"
         )
@@ -293,16 +297,19 @@ def prepare_release_version(worktree: Path, tag: str,
         r'(?m)^(version\s*=\s*)"[^"]+"(\s*)$',
         rf'\g<1>"{version}"\g<2>', pyproject_text, count=1,
     )
-    updated_init = re.sub(
-        r'(?m)^(__version__\s*=\s*)"[^"]+"(\s*)$',
-        rf'\g<1>"{version}"\g<2>', init_text, count=1,
-    )
+    updated_init = None
+    if init_text is not None:
+        updated_init = re.sub(
+            r'(?m)^(__version__\s*=\s*)"[^"]+"(\s*)$',
+            rf'\g<1>"{version}"\g<2>', init_text, count=1,
+        )
     if updated_pyproject != pyproject_text:
         pyproject.write_text(updated_pyproject, encoding="utf-8")
-        init_file.write_text(updated_init, encoding="utf-8")
-        run_command([
-            "git", "add", version_file, "src/orbi/__init__.py",
-        ], cwd=worktree)
+        added = [version_file]
+        if updated_init is not None:
+            init_file.write_text(updated_init, encoding="utf-8")
+            added.append("src/orbi/__init__.py")
+        run_command(["git", "add", *added], cwd=worktree)
         run_git_write([
             "git", "commit", "-m", f"chore: prepare release {tag}",
         ], cwd=worktree)
