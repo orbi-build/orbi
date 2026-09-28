@@ -507,8 +507,11 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
   4. 逐项验证 scope：`gh pr view` 必须报告 `MERGED`，否则
      `gh issue view` 必须报告 `CLOSED` 且 `stateReason` 为
      `COMPLETED`——`NOT_PLANNED` 关闭（重复/不做）的票在 Scope 证据里
-     标注为排除、绝不进入 Changelog，Changelog 的 PR 链接只在 PR 已
-     合并时才写入（Issue #707）。对于 Milestone-derived scope，
+     标注为排除、绝不进入 Changelog，Changelog 的 PR 链接只在 PR 位于
+     带 tag 的 commit 区间内时才写入（Issue #1492）。Changelog 本身源自带
+     tag 的 commit 区间（`prev_tag..release_commit`），绝不源自 Milestone
+     Issue 列表：Milestone scope 只决定能否发版，不决定 notes 内容。
+     对于 Milestone-derived scope，
      `open_milestone_evidence` 不等待：仍 open 的 Milestone Issue 会被
      排除，并记录为 `NOT released (still open in milestone <name>): <item>`。
      禁止解析复选框——每个 scope 项都对照 live API 检查。

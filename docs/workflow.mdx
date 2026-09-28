@@ -625,7 +625,11 @@ DAG, no priority numbers, no separate queues:
      `COMPLETED` — a `NOT_PLANNED` closure (duplicate / won't fix) is
      annotated in the Scope evidence as excluded and never enters the
      Changelog, and a Changelog PR link is written only when its PR is
-     merged (Issue #707). For milestone-derived scope,
+     contained in the tagged commit range (Issue #1492). The Changelog
+     itself is derived from the tagged commit range
+     (`prev_tag..release_commit`), never from the Milestone Issue list:
+     the Milestone scope decides only whether a release may run, not
+     what its notes say. For milestone-derived scope,
      `open_milestone_evidence` does not wait: still-open milestone Issues are
      excluded and recorded as `NOT released (still open in milestone <name>):
      <item>`. Checkbox parsing is forbidden — every scope item is checked

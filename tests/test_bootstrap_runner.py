@@ -19000,10 +19000,9 @@ def test_build_release_changelog_groups_descriptions_links_and_orders(monkeypatc
     graphql_calls = []
 
     def fake_run_command(command, **kwargs):
-        # Issue #707: every closedBy PR link is merged-checked before it
-        # is written; this test's PRs are all merged.
-        if command[:3] == ["gh", "pr", "view"]:
-            return json.dumps({"number": int(command[3]), "state": "MERGED"})
+        # Issue #1492: PR links are filtered by membership in the tagged
+        # commit range, not by a per-PR state lookup; every closedBy PR
+        # here is in range.
         assert command[:3] == ["gh", "api", "graphql"], command
         # Issue #772: author data rides the SAME per-Issue round trip —
         # no second query, and the variables travel as gh api graphql
@@ -19018,7 +19017,7 @@ def test_build_release_changelog_groups_descriptions_links_and_orders(monkeypatc
 
     monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(seam, "run_command", fake_run_command)
-    changelog = release.build_release_changelog("o/r", [30, 10, 20])
+    changelog = release.build_release_changelog("o/r", [30, 10, 20], {301})
     assert changelog == """## Changelog
 
 ### Deployment and operations
@@ -19066,7 +19065,7 @@ def test_build_release_changelog_skips_not_planned_issues(monkeypatch):
 
     monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(seam, "run_command", fake_run_command)
-    changelog = release.build_release_changelog("o/r", [702])
+    changelog = release.build_release_changelog("o/r", [702], {705})
     assert "#702" not in changelog
     assert "#705" not in changelog
     assert "Duplicate delivery ticket" not in changelog
@@ -19074,9 +19073,10 @@ def test_build_release_changelog_skips_not_planned_issues(monkeypatch):
     assert "## Contributors" not in changelog
 
 
-def test_build_release_changelog_omits_unmerged_pr_links(monkeypatch):
-    """Issue #707: a closedBy PR link is written only when the PR is
-    actually MERGED — an OPEN PR never appears in the release notes."""
+def test_build_release_changelog_omits_out_of_range_pr_links(monkeypatch):
+    """Issue #1492: a closedBy PR link is written only when the PR is
+    contained in the tagged commit range — a PR merged after the tag (or
+    otherwise outside it) never appears in the release notes."""
     source = {
         10: {
             "__typename": "Issue", "number": 10,
@@ -19093,18 +19093,13 @@ def test_build_release_changelog_omits_unmerged_pr_links(monkeypatch):
             ]},
         },
     }
-    pr_states = {11: "MERGED", 705: "OPEN"}
-
     def fake_run_command(command, **kwargs):
-        if command[:3] == ["gh", "pr", "view"]:
-            number = int(command[3])
-            return json.dumps({"number": number, "state": pr_states[number]})
         assert command[:3] == ["gh", "api", "graphql"], command
         return json.dumps({"data": {"repository": {"issue": source[10]}}})
 
     monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(seam, "run_command", fake_run_command)
-    changelog = release.build_release_changelog("o/r", [10])
+    changelog = release.build_release_changelog("o/r", [10], {11})
     assert "[PR #11](https://github.com/o/r/pull/11)" in changelog
     assert "#705" not in changelog
 
@@ -19150,8 +19145,6 @@ def test_build_release_changelog_lists_deduped_sorted_contributor_avatars(monkey
     }
 
     def fake_run_command(command, **kwargs):
-        if command[:3] == ["gh", "pr", "view"]:
-            return json.dumps({"number": int(command[3]), "state": "MERGED"})
         assert command[:3] == ["gh", "api", "graphql"], command
         number = int(next(
             a for a in command if a.startswith("number=")
@@ -19160,7 +19153,7 @@ def test_build_release_changelog_lists_deduped_sorted_contributor_avatars(monkey
 
     monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(seam, "run_command", fake_run_command)
-    changelog = release.build_release_changelog("o/r", [10, 20])
+    changelog = release.build_release_changelog("o/r", [10, 20], {11, 12, 13, 21, 22})
     assert changelog == """## Changelog
 
 ### Features
@@ -19188,14 +19181,12 @@ def test_build_release_changelog_without_contributors_has_no_section(monkeypatch
     }
 
     def fake_run_command(command, **kwargs):
-        if command[:3] == ["gh", "pr", "view"]:
-            return json.dumps({"number": int(command[3]), "state": "MERGED"})
         assert command[:3] == ["gh", "api", "graphql"], command
         return json.dumps({"data": {"repository": {"issue": item}}})
 
     monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(seam, "run_command", fake_run_command)
-    changelog = release.build_release_changelog("o/r", [10])
+    changelog = release.build_release_changelog("o/r", [10], {11})
     assert changelog == """## Changelog
 
 ### Features
@@ -19206,15 +19197,15 @@ def test_build_release_changelog_without_contributors_has_no_section(monkeypatch
 def test_build_release_changelog_empty_scope_states_no_deliveries():
     """Issue #1384: a milestone with no closed Issue or merged PR produces
     a one-line empty-scope sentence instead of a header-only Changelog."""
-    assert release.build_release_changelog("o/r", []) == (
+    assert release.build_release_changelog("o/r", [], set()) == (
         "No deliveries are linked to this milestone."
     )
 
 
-def test_build_release_changelog_unmerged_pr_author_is_not_a_contributor(monkeypatch):
-    """Issue #772: contributors mirror the Changelog's PR links — a
-    closedBy PR that is not MERGED never ships, so its author is not a
-    contributor of this release."""
+def test_build_release_changelog_out_of_range_pr_author_is_not_a_contributor(monkeypatch):
+    """Issue #1492: contributors mirror the Changelog's PR links — a
+    closedBy PR outside the tagged commit range never ships, so its
+    author is not a contributor of this release."""
     item = {
         "__typename": "Issue", "number": 10, "title": "Ship it",
         "body": "detail", "url": "https://github.com/o/r/issues/10",
@@ -19228,18 +19219,13 @@ def test_build_release_changelog_unmerged_pr_author_is_not_a_contributor(monkeyp
                         "avatarUrl": "https://avatars.githubusercontent.com/u/3?v=4"}},
         ]},
     }
-    pr_states = {11: "MERGED", 12: "OPEN"}
-
     def fake_run_command(command, **kwargs):
-        if command[:3] == ["gh", "pr", "view"]:
-            number = int(command[3])
-            return json.dumps({"number": number, "state": pr_states[number]})
         assert command[:3] == ["gh", "api", "graphql"], command
         return json.dumps({"data": {"repository": {"issue": item}}})
 
     monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(seam, "run_command", fake_run_command)
-    changelog = release.build_release_changelog("o/r", [10])
+    changelog = release.build_release_changelog("o/r", [10], {11})
     assert "alice" in changelog
     assert "bob" not in changelog
 
@@ -19273,7 +19259,7 @@ def test_build_release_changelog_fails_on_empty_or_malformed_evidence(monkeypatc
                 {"data": {"repository": {"issue": issue}}}),
         )
         with pytest.raises(ValueError, match="release changelog"):
-            release.build_release_changelog("o/r", [10])
+            release.build_release_changelog("o/r", [10], {10})
     monkeypatch.setattr(seam, "run_command", lambda *args, **kwargs: json.dumps({
         "data": {"repository": {"issue": {
             "__typename": "Issue", "number": 10, "title": "",
@@ -19292,7 +19278,7 @@ def test_build_release_changelog_fails_on_empty_or_malformed_evidence(monkeypatc
             "closedByPullRequestsReferences": {"nodes": []},
         }}},
     }))
-    assert "Concrete summary" in release.build_release_changelog("o/r", [10])
+    assert "Concrete summary" in release.build_release_changelog("o/r", [10], set())
     # A PR number in scope resolves through the PullRequest branch: no
     # stateReason, no closedBy references (verified against the real
     # GraphQL schema — the field only exists on Issue).
@@ -19313,8 +19299,391 @@ def test_build_release_changelog_fails_on_empty_or_malformed_evidence(monkeypatc
         }}},
     }))
     assert "[PR #10](https://github.com/o/r/pull/10)" in (
-        release.build_release_changelog("o/r", [10])
+        release.build_release_changelog("o/r", [10], {10})
     )
+
+
+def make_release_range_repo(tmp_path):
+    """A real `main` repository for the tagged-range tests (Issue #1492)."""
+    work = tmp_path / "range"
+    subprocess.run(["git", "init", "-b", "main", str(work)],
+                   check=True, capture_output=True)
+    for key, value in (("user.email", "t@t"), ("user.name", "t"),
+                       ("commit.gpgsign", "false"), ("tag.gpgsign", "false")):
+        subprocess.run(["git", "-C", str(work), "config", key, value],
+                       check=True, capture_output=True)
+    return work
+
+
+def commit_file(work, name, message):
+    (work / name).write_text(message, encoding="utf-8")
+    subprocess.run(["git", "-C", str(work), "add", name],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(work), "commit", "-m", message],
+                   check=True, capture_output=True)
+    return git_out(work, "rev-parse", "HEAD")
+
+
+def mock_release_range_gh(monkeypatch, by_commit, calls=None):
+    """Answer `GET repos/o/r/commits/{sha}/pulls` from a sha -> list map;
+    every other command (git included) runs for real."""
+    real = runner.run_command
+
+    def fake_run_command(command, **kwargs):
+        if not (command[0] == "gh" and command[1] == "api" and
+                command[2].startswith("repos/o/r/commits/") and \
+                command[2].endswith("/pulls")):
+            return real(command, **kwargs)
+        sha = command[2].split("/")[-2]
+        if calls is not None:
+            calls.append(sha)
+        return json.dumps(by_commit.get(sha, []))
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+
+
+def test_release_range_prs_keeps_merged_in_range_prs_on_the_release_branch(
+        tmp_path, monkeypatch):
+    """Issue #1492: only PRs merged into the release branch and contained
+    in `<previous v* tag>..<release commit>` count. A commit with no PR —
+    a direct push, `chore: prepare release`, `chore: point
+    active_milestone` — produces no entry, a PR targeting another branch
+    is dropped, and an unmerged PR is dropped."""
+    work = make_release_range_repo(tmp_path)
+    commit_file(work, "base.txt", "base")
+    git_out(work, "tag", "-a", "v0.2.0", "-m", "v0.2.0")
+    squashed = commit_file(work, "squash.txt", "feat: squashed delivery")
+    direct = commit_file(work, "direct.txt", "chore: prepare release")
+    rebased = commit_file(work, "rebase.txt", "feat: rebased delivery")
+    other_branch = commit_file(work, "other.txt", "feat: other branch")
+    release_commit = commit_file(work, "chore.txt", "chore: point milestone")
+    by_commit = {
+        squashed: [{"number": 10, "merged_at": "2026-01-01T00:00:00Z",
+                    "base": {"ref": "main"}}],
+        direct: [],
+        rebased: [
+            {"number": 11, "merged_at": "2026-01-02T00:00:00Z",
+             "base": {"ref": "main"}},
+            {"number": 99, "merged_at": None, "base": {"ref": "main"}},
+        ],
+        other_branch: [{"number": 12, "merged_at": "2026-01-03T00:00:00Z",
+                        "base": {"ref": "release"}}],
+        release_commit: [],
+    }
+    calls = []
+    mock_release_range_gh(monkeypatch, by_commit, calls)
+    assert release.release_range_prs(
+        work, "o/r", release_commit, "main",
+    ) == {10, 11}
+    # The range starts at the previous tag, not at the repository root.
+    assert set(calls) == {
+        squashed, direct, rebased, other_branch, release_commit,
+    }
+
+
+def test_previous_release_tag_ignores_a_side_branch_v_tag(tmp_path):
+    """Issue #1492: `--first-parent` keeps a `v*` tag that lives only on a
+    merged side branch from becoming the range's lower bound."""
+    work = make_release_range_repo(tmp_path)
+    base = commit_file(work, "base.txt", "base")
+    git_out(work, "tag", "-a", "v0.2.0", "-m", "v0.2.0")
+    commit_file(work, "m1.txt", "feat: main one")
+    subprocess.run(["git", "-C", str(work), "checkout", "-b", "side", base],
+                   check=True, capture_output=True)
+    commit_file(work, "s1.txt", "feat: side one")
+    git_out(work, "tag", "-a", "v0.2.5", "-m", "v0.2.5")
+    subprocess.run(["git", "-C", str(work), "checkout", "main"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(work), "merge", "--no-ff", "-m",
+                    "Merge side", "side"], check=True, capture_output=True)
+    release_commit = commit_file(work, "m2.txt", "feat: main two")
+    assert release.previous_release_tag(work, release_commit) == "v0.2.0"
+
+
+def test_release_range_prs_without_a_previous_tag_covers_full_history(
+        tmp_path, monkeypatch):
+    """Issue #1492: the first release has no lower bound, so every
+    first-parent commit is in range."""
+    work = make_release_range_repo(tmp_path)
+    first = commit_file(work, "a.txt", "feat: first delivery")
+    second = commit_file(work, "b.txt", "feat: second delivery")
+    by_commit = {
+        first: [{"number": 10, "merged_at": "2026-01-01T00:00:00Z",
+                 "base": {"ref": "main"}}],
+        second: [{"number": 11, "merged_at": "2026-01-02T00:00:00Z",
+                  "base": {"ref": "main"}}],
+    }
+    calls = []
+    mock_release_range_gh(monkeypatch, by_commit, calls)
+    assert release.release_range_prs(work, "o/r", second, "main") == {10, 11}
+    assert set(calls) == {first, second}
+
+
+def test_release_range_prs_defaults_to_the_current_branch(tmp_path, monkeypatch):
+    """Issue #1492: without an explicit release branch, the checkout's
+    current branch (`main`) is the base filter."""
+    work = make_release_range_repo(tmp_path)
+    commit_file(work, "base.txt", "base")
+    git_out(work, "tag", "-a", "v0.2.0", "-m", "v0.2.0")
+    sha = commit_file(work, "s.txt", "feat: delivery")
+    mock_release_range_gh(monkeypatch, {sha: [
+        {"number": 7, "merged_at": "2026-01-01T00:00:00Z",
+         "base": {"ref": "main"}},
+        {"number": 8, "merged_at": "2026-01-02T00:00:00Z",
+         "base": {"ref": "other"}},
+    ]})
+    assert release.release_range_prs(work, "o/r", sha) == {7}
+
+
+def test_release_range_prs_fails_fast_on_malformed_commit_evidence(
+        tmp_path, monkeypatch):
+    work = make_release_range_repo(tmp_path)
+    commit_file(work, "base.txt", "base")
+    git_out(work, "tag", "-a", "v0.2.0", "-m", "v0.2.0")
+    sha = commit_file(work, "s.txt", "feat: delivery")
+    mock_release_range_gh(monkeypatch, {sha: {"not": "a list"}})
+    with pytest.raises(ValueError, match="malformed pull-request"):
+        release.release_range_prs(work, "o/r", sha, "main")
+
+
+def test_release_range_prs_skips_non_dict_and_baseless_entries(
+        tmp_path, monkeypatch):
+    """A malformed entry that cannot be a PR is skipped, never guessed;
+    a PR without a base object is not on the release branch."""
+    work = make_release_range_repo(tmp_path)
+    commit_file(work, "base.txt", "base")
+    git_out(work, "tag", "-a", "v0.2.0", "-m", "v0.2.0")
+    sha = commit_file(work, "s.txt", "feat: delivery")
+    mock_release_range_gh(monkeypatch, {sha: [
+        "not-a-dict",
+        {"number": 5, "merged_at": "2026-01-01T00:00:00Z"},
+        {"number": 6, "merged_at": "2026-01-01T00:00:00Z",
+         "base": "not-a-dict"},
+    ]})
+    assert release.release_range_prs(work, "o/r", sha, "main") == set()
+
+
+def test_release_range_prs_fails_fast_on_malformed_pr_number(
+        tmp_path, monkeypatch):
+    work = make_release_range_repo(tmp_path)
+    commit_file(work, "base.txt", "base")
+    git_out(work, "tag", "-a", "v0.2.0", "-m", "v0.2.0")
+    sha = commit_file(work, "s.txt", "feat: delivery")
+    mock_release_range_gh(monkeypatch, {sha: [
+        {"number": "bad", "merged_at": "2026-01-01T00:00:00Z",
+         "base": {"ref": "main"}},
+    ]})
+    with pytest.raises(ValueError, match="number evidence"):
+        release.release_range_prs(work, "o/r", sha, "main")
+
+
+def test_previous_release_tag_treats_empty_describe_output_as_no_tag(
+        monkeypatch):
+    """A `git describe` that succeeds with empty output carries no tag
+    name; the range has no lower bound."""
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k: "")
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k: "")
+    assert release.previous_release_tag(Path("/r"), "abc123") is None
+
+
+def test_release_changelog_scope_maps_range_prs_to_closing_issues(monkeypatch):
+    """Issue #1492: each range PR's closing Issues become Changelog items;
+    a PR with no closing Issue is listed by its own PR number."""
+    payloads = {
+        10: {"__typename": "PullRequest", "number": 10,
+             "closingIssuesReferences": {"nodes": [
+                 {"number": 100}, {"number": 101}]}},
+        11: {"__typename": "PullRequest", "number": 11,
+             "closingIssuesReferences": {"nodes": []}},
+    }
+
+    def fake_run_command(command, **kwargs):
+        assert command[:3] == ["gh", "api", "graphql"], command
+        number = int(next(
+            a for a in command if a.startswith("number=")
+        ).split("=", 1)[1])
+        return json.dumps({"data": {"repository": {
+            "issueOrPullRequest": payloads[number]}}})
+
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    assert release.release_changelog_scope("o/r", {10, 11}) == [11, 100, 101]
+
+
+def test_release_changelog_scope_never_lists_the_release_issue(monkeypatch):
+    """Issue #1492: the release Issue drives the release, it is not
+    released work; a PR whose only closing Issue is that ticket falls
+    back to its own PR number so no shipped work is lost."""
+    payloads = {
+        10: {"closingIssuesReferences": {"nodes": [{"number": 99}]}},
+        11: {"closingIssuesReferences": {"nodes": [
+            {"number": 200}, {"number": 99}]}},
+    }
+
+    def fake_run_command(command, **kwargs):
+        number = int(next(
+            a for a in command if a.startswith("number=")
+        ).split("=", 1)[1])
+        return json.dumps({"data": {"repository": {
+            "issueOrPullRequest": payloads[number]}}})
+
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    assert release.release_changelog_scope(
+        "o/r", {10, 11}, release_issue=99,
+    ) == [10, 200]
+
+
+def test_release_changelog_scope_fails_on_malformed_closing_evidence(monkeypatch):
+    def fake_run_command(command, **kwargs):
+        return json.dumps({"data": {"repository": {"issueOrPullRequest": {
+            "closingIssuesReferences": {"nodes": [{"title": "no number"}]},
+        }}}})
+
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    with pytest.raises(ValueError, match="closing-Issue evidence"):
+        release.release_changelog_scope("o/r", {10})
+
+
+def test_release_notes_exclude_post_tag_work_and_the_release_issue(
+        tmp_path, monkeypatch):
+    """Issue #1492 reproduction (orbi-cloud v0.6.89): a second run derived
+    scope from the milestone against an advanced beta HEAD. The published
+    notes listed #1564 (merged after the tag) and the release Issue #1555,
+    and omitted PR #1551 (in the tag, never on the milestone)."""
+    work = make_release_range_repo(tmp_path)
+    commit_file(work, "base.txt", "base")
+    git_out(work, "tag", "-a", "v0.6.88", "-m", "v0.6.88")
+    shipped = commit_file(work, "shipped.txt", "feat: #1551")
+    release_commit = commit_file(work, "version.txt", "chore: v0.6.89")
+    post_tag = commit_file(work, "post.txt", "feat: #1564")
+    by_commit = {
+        shipped: [{"number": 1551, "merged_at": "2026-01-01T00:00:00Z",
+                   "base": {"ref": "main"}}],
+        release_commit: [],
+        post_tag: [{"number": 1564, "merged_at": "2026-01-02T00:00:00Z",
+                    "base": {"ref": "main"}}],
+    }
+    issues = {
+        1551: {"__typename": "PullRequest", "number": 1551,
+               "closingIssuesReferences": {"nodes": [{"number": 1500}]}},
+        1500: {"__typename": "Issue", "number": 1500,
+               "title": "Recover a stalled delivery",
+               "body": "detail",
+               "url": "https://github.com/o/r/issues/1500",
+               "stateReason": "COMPLETED", "labels": {"nodes": []},
+               "closedByPullRequestsReferences": {"nodes": [
+                   {"number": 1551,
+                    "url": "https://github.com/o/r/pull/1551",
+                    "author": None}]}},
+    }
+
+    def fake_run_command(command, **kwargs):
+        if command[0] == "gh" and command[1] == "api" and \
+                command[2].startswith("repos/o/r/commits/") and \
+                command[2].endswith("/pulls"):
+            sha = command[2].split("/")[-2]
+            return json.dumps(by_commit.get(sha, []))
+        if command[:3] != ["gh", "api", "graphql"]:
+            return real(command, **kwargs)
+        number = int(next(
+            a for a in command if a.startswith("number=")
+        ).split("=", 1)[1])
+        node = issues[number]
+        return json.dumps({"data": {"repository": {
+            "issueOrPullRequest": node, "issue": node}}})
+
+    real = runner.run_command
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    range_prs = release.release_range_prs(work, "o/r", release_commit, "main")
+    assert range_prs == {1551}
+    scope = release.release_changelog_scope(
+        "o/r", range_prs, release_issue=1555,
+    )
+    assert scope == [1500]
+    changelog = release.build_release_changelog("o/r", scope, range_prs)
+    assert "#1500" in changelog
+    assert "[PR #1551]" in changelog
+    assert "#1564" not in changelog
+    assert "#1555" not in changelog
+
+
+def test_release_notes_are_stable_when_a_second_run_recovers_the_tag(
+        tmp_path, monkeypatch):
+    """Issue #1492: after the base advanced past the tag, a resume
+    recovers the tag commit as the release commit, recomputes identical
+    notes, and an unchanged Release is never rewritten."""
+    work = make_release_range_repo(tmp_path)
+    commit_file(work, "base.txt", "base")
+    git_out(work, "tag", "-a", "v0.6.88", "-m", "v0.6.88")
+    shipped = commit_file(work, "shipped.txt", "feat: #1551")
+    tag_commit = commit_file(work, "version.txt", "chore: v0.6.89")
+    # The docs push advanced the base past the tag commit.
+    commit_file(work, "docs.txt", "docs: release notes")
+    by_commit = {
+        shipped: [{"number": 1551, "merged_at": "2026-01-01T00:00:00Z",
+                   "base": {"ref": "main"}}],
+        tag_commit: [],
+    }
+    issues = {
+        1551: {"__typename": "PullRequest", "number": 1551,
+               "closingIssuesReferences": {"nodes": [{"number": 1500}]}},
+        1500: {"__typename": "Issue", "number": 1500,
+               "title": "Recover a stalled delivery",
+               "body": "detail",
+               "url": "https://github.com/o/r/issues/1500",
+               "stateReason": "COMPLETED", "labels": {"nodes": []},
+               "closedByPullRequestsReferences": {"nodes": [
+                   {"number": 1551,
+                    "url": "https://github.com/o/r/pull/1551",
+                    "author": None}]}},
+    }
+
+    def fake_run_command(command, **kwargs):
+        if command[0] == "gh" and command[1] == "api" and \
+                command[2].startswith("repos/o/r/commits/") and \
+                command[2].endswith("/pulls"):
+            sha = command[2].split("/")[-2]
+            return json.dumps(by_commit.get(sha, []))
+        if command[:3] != ["gh", "api", "graphql"]:
+            return real(command, **kwargs)
+        number = int(next(
+            a for a in command if a.startswith("number=")
+        ).split("=", 1)[1])
+        node = issues[number]
+        return json.dumps({"data": {"repository": {
+            "issueOrPullRequest": node, "issue": node}}})
+
+    real = runner.run_command
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    expected = None
+    for _ in range(2):
+        range_prs = release.release_range_prs(work, "o/r", tag_commit, "main")
+        changelog = release.build_release_changelog(
+            "o/r",
+            release.release_changelog_scope(
+                "o/r", range_prs, release_issue=1555,
+            ),
+            range_prs,
+        )
+        if expected is None:
+            expected = changelog
+        else:
+            assert changelog == expected
+    calls = make_release_gh(
+        monkeypatch, release_exists=True, release_body=expected,
+    )
+    url = release.publish_release(
+        repo="o/r", tag="v0.6.89", version="v0.6.89",
+        release_commit=tag_commit, changelog=expected,
+        scope_evidence=["PR #1551 merged"], gate_evidence=["gates passed"],
+        test_evidence="tests passed", run_id="a1b2c3d4", issue_number=1555,
+    )
+    assert url == "https://github.com/o/r/releases/tag/v0.6.89"
+    assert not [c for c in calls if c[:3] == ["gh", "release", "edit"]]
 
 
 def test_publish_release_creates_when_missing_and_returns_url(monkeypatch):
@@ -19412,7 +19781,8 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                              check_run_pages=None, milestone_items=None,
                              leftover_labels=None, leftover_milestones=None,
                              release_tree_files=("pyproject.toml", "package.json"),
-                             prepare_release_version_error=None):
+                             prepare_release_version_error=None,
+                             range_prs=None, range_commit_sink=None):
     """Full fake environment for `process_release`.
 
     Returns a dict of captured state: edit_issue / comment_issue calls,
@@ -19437,6 +19807,25 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
 
     def fake_run_command(command, **kwargs):
         state["commands"].append((command, kwargs))
+        # Issue #1492: the release notes come from the tagged commit range,
+        # computed by real git against a real checkout in production. This
+        # fake env has no repository, so the range is modelled here from
+        # `resolved_range_prs`; `range_commit_sink` records the release
+        # commit the range was computed against.
+        if command[0] == "git" and command[1] == "describe":
+            raise subprocess.CalledProcessError(1, command)
+        if command[0] == "git" and command[1] == "rev-list":
+            if range_commit_sink is not None:
+                range_commit_sink.append(command[-1])
+            return "range1"
+        if command[0] == "gh" and command[1] == "api" and \
+                command[2].startswith("repos/o/r/commits/") and \
+                command[2].endswith("/pulls"):
+            return json.dumps([
+                {"number": n, "merged_at": "2026-01-01T00:00:00Z",
+                 "base": {"ref": "main"}}
+                for n in sorted(resolved_range_prs)
+            ])
         if command[:3] == ["gh", "pr", "view"]:
             number = int(command[3])
             if number == 123:
@@ -19579,6 +19968,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     monkeypatch.setattr(release, "LOGGER", Mock())
     monkeypatch.setattr(release, "release_tag_commit",
                         lambda r, t: tag_commit)
+    resolved_range_prs = {123} if range_prs is None else set(range_prs)
 
     def fake_prepare_release_version(worktree, tag, base_branch, **kwargs):
         if prepare_release_version_error is not None:
@@ -20259,6 +20649,9 @@ def test_process_release_proceeds_with_empty_derived_scope(monkeypatch):
     state = make_release_process_env(
         monkeypatch,
         body=RELEASE_MILESTONE_DECLARATION_BODY,
+        # Issue #1492: the notes come from the tagged commit range; an
+        # empty range yields the same one-line empty-scope sentence.
+        range_prs=set(),
         milestone_items={5: {
             "issues_open": [
                 {"number": 255, "title": "Still open work",
@@ -20775,7 +21168,13 @@ def test_process_release_reuses_a_matching_existing_tag(monkeypatch):
 
 
 def test_process_release_recovers_existing_ancestor_tag(monkeypatch):
-    state = make_release_process_env(monkeypatch, tag_commit="tag123")
+    """Issue #1492: the tagged commit range is computed against the release
+    commit the tag-conflict/resume handling settled on, never the advanced
+    base HEAD."""
+    sink = []
+    state = make_release_process_env(
+        monkeypatch, tag_commit="tag123", range_commit_sink=sink,
+    )
     monkeypatch.setattr(
         release, "tag_commit_is_ancestor_of_base", lambda *args: True,
     )
@@ -20786,6 +21185,10 @@ def test_process_release_recovers_existing_ancestor_tag(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     ) == "https://github.com/o/r/releases/tag/v0.3.0"
     assert state["sync_docs_calls"][0]["release_commit"] == "tag123"
+    assert sink == ["tag123"]
+    assert state["sync_docs_calls"][0]["changelog"] == (
+        state["published"][0]["changelog"]
+    )
 
 
 def test_process_release_fails_on_scope_violation(monkeypatch):

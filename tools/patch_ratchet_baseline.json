@@ -1,5 +1,5 @@
 {
-  "command_shape_asserts": 513,
+  "command_shape_asserts": 509,
   "monkeypatch_setattr_modules": {
     "branch_reclaim": 0,
     "checks": 0,
@@ -34,6 +34,7 @@
     "progress": 12,
     "release": 45,
     "release_git": 0,
+    "release_notes": 0,
     "repo_config": 0,
     "runner_health": 14,
     "scene": 0,
