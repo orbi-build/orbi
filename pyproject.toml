@@ -83,3 +83,14 @@ orbi = ["example_config.toml"]
 # checkout (Issue #168).
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+
+# Issue #1501: the `bench/oss-upstream/` harness is developer tooling. It
+# runs by hand on the maintainer's machine against private snapshot repos
+# (paths under `~/orbi-bench`) and is never imported by the suite, so it is
+# outside the tiered coverage contract (the docs say "Python business code").
+# The `omit` below is the single place that decision lives: the whole-repo
+# report leaves the tree out, and `tools/diff_coverage_gate.py` reads these
+# patterns and skips coverage-omitted files instead of demanding 100% for
+# code the configuration deliberately does not measure.
+[tool.coverage.run]
+omit = ["bench/*"]
