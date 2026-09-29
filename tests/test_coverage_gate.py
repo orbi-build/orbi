@@ -765,6 +765,87 @@ def test_diff_gate_main_passes_when_every_changed_line_is_covered_in_process(
         os.chdir(old_cwd)
 
 
+def test_diff_gate_skips_coverage_omitted_files(tmp_path):
+    """Issue #1501: a changed file the coverage configuration omits is
+    skipped by the real gate (the same subprocess CI runs), while a
+    changed file with no coverage data and no omit still fails."""
+    repo = make_git_fixture(tmp_path)
+    (repo / "bench").mkdir()
+    (repo / "bench" / "stats.py").write_text("print('bench')\n",
+                                              encoding="utf-8")
+    (repo / ".coveragerc").write_text("[run]\nomit = bench/*\n",
+                                       encoding="utf-8")
+    (repo / "module.py").write_text(
+        DIFF_FIXTURE + "\n\ndef tested():\n    return 7\n",
+        encoding="utf-8",
+    )
+    git("add", "-A", cwd=repo)
+    git("commit", "-m", "covered change + omitted bench script", cwd=repo)
+    # Coverage exists for module.py only; bench/stats.py has no data,
+    # exactly like the real run (the suite never imports it).
+    coverage_json_for(repo, [(2, -1), (5, 6), (6, -5)])
+    result = run_gate(DIFF_GATE, "main", data_file=repo / ".coverage",
+                      cwd=repo)
+    assert result.returncode == 0, (
+        f"a coverage-omitted changed file must be skipped, got exit "
+        f"{result.returncode}: {result.stdout!r} {result.stderr!r}"
+    )
+    assert "skipped coverage-omitted files" in result.stdout
+    assert "bench/stats.py" in result.stdout
+
+
+def test_diff_gate_main_skips_coverage_omitted_files_in_process(
+        tmp_path, monkeypatch):
+    """In-process twin of the subprocess test above: the omitted file is
+    skipped and a covered non-omitted change still passes."""
+    module = load_gate_module("diff_coverage_gate")
+    monkeypatch.delenv("COVERAGE_FILE", raising=False)
+    repo = make_git_fixture(tmp_path)
+    (repo / "bench").mkdir()
+    (repo / "bench" / "stats.py").write_text("print('bench')\n",
+                                              encoding="utf-8")
+    (repo / ".coveragerc").write_text("[run]\nomit = bench/*\n",
+                                       encoding="utf-8")
+    (repo / "module.py").write_text(
+        DIFF_FIXTURE + "\n\ndef tested():\n    return 7\n",
+        encoding="utf-8",
+    )
+    git("add", "-A", cwd=repo)
+    git("commit", "-m", "covered change + omitted bench script", cwd=repo)
+    coverage_json_for(repo, [(2, -1), (5, 6), (6, -5)])
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(repo)
+        assert module.main(["diff_coverage_gate.py", "main"]) == 0
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_diff_gate_main_passes_when_all_changed_files_are_omitted(
+        tmp_path, monkeypatch):
+    """A change that ONLY touches coverage-omitted files passes: there
+    is no measured Python left to require coverage for."""
+    module = load_gate_module("diff_coverage_gate")
+    monkeypatch.delenv("COVERAGE_FILE", raising=False)
+    repo = make_git_fixture(tmp_path)
+    (repo / "bench").mkdir()
+    (repo / "bench" / "stats.py").write_text("print('bench')\n",
+                                              encoding="utf-8")
+    (repo / ".coveragerc").write_text("[run]\nomit = bench/*\n",
+                                       encoding="utf-8")
+    git("add", "-A", cwd=repo)
+    git("commit", "-m", "bench-only change", cwd=repo)
+    # No coverage data at all for the changed file — the omit makes
+    # that irrelevant.
+    coverage_json_for(repo, [(2, -1)])
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(repo)
+        assert module.main(["diff_coverage_gate.py", "main"]) == 0
+    finally:
+        os.chdir(old_cwd)
+
+
 # --- the pragma rule (Issue #234 requirement 6) -----------------------------
 
 # The only allowed `# pragma: no cover` sites: the `__main__` entry

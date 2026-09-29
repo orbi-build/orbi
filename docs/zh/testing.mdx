@@ -44,7 +44,11 @@ COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/diff_coverage_gate.py origi
 （它分别读取 coverage JSON 的 `percent_statements_covered` 和
 `percent_branches_covered`——JSON 字段 `percent_covered` 是行+分支合并
 百分比，绝不作为门禁），`tools/diff_coverage_gate.py` 在 base ref 之后变更的
-Python 行或分支未达 100% 覆盖时退出非零。
+Python 行或分支未达 100% 覆盖时退出非零。它只度量 coverage 配置度量的
+集合：匹配已配置 `run.omit` 模式（`pyproject.toml` 的
+`[tool.coverage.run]`——`bench/oss-upstream/` 开发者 harness，测试套件从不
+导入）的变更文件会被跳过并在门禁输出中点名，而不是为契约有意不度量的
+代码要求 100%（Issue #1501）。
 
 ## 远端 CI（GitHub Actions）
 

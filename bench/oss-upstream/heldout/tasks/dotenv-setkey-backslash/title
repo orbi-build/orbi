@@ -1,0 +1,1 @@
+set_key corrupts values containing backslashes (Windows paths, regexes) on round-trip
