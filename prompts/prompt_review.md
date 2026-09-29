@@ -159,7 +159,8 @@ Decide first whether the change alters how text or bytes are parsed, escaped
 or unescaped, trimmed or stripped, split, measured, matched, searched,
 replaced, encoded or redacted, or changes a function other code calls with
 inputs the Issue does not mention. Check the implementer's `Regression guard:`
-line in the PR body against the diff: if they wrote `not needed` for a change
+line (the first line of `.orbi/plan.md`) against the diff; a missing line
+counts as `not needed`: if they wrote `not needed` for a change
 that does touch text handling, that is a Major finding. If the change does not
 touch text handling, skip steps 1–5 and do step 6 only. Otherwise, tests
 passing on the Issue's example, and hand-picked probes, do not show the change

@@ -81,8 +81,9 @@ Minimal implementation — KISS/LEAN (Issue #118):
 Regression guard for changed behavior (differential and property testing).
 
 First decide whether it applies, and write the decision and the reason as the
-first line of the PR body (`Regression guard: applies` or `Regression guard:
-not needed`). It applies when your change alters how text or bytes are
+first line of `.orbi/plan.md` (`Regression guard: applies — <reason>` or
+`Regression guard: not needed — <reason>`); the Runner, not you, writes the PR
+body, and the reviewer reads `.orbi/plan.md`. It applies when your change alters how text or bytes are
 parsed, escaped or unescaped, trimmed or stripped, split, measured (width,
 length, columns), matched, searched, replaced, encoded or redacted, or when it
 changes a function that other code calls with inputs the Issue does not
@@ -144,7 +145,7 @@ the reported case plus the existing suite is enough, and do not write
 - If a prescribed approach in the Issue cannot meet the oracle for some input
   class, keep to the Issue's constraints but extend the implementation until
   the regression count is zero (for example handle the missing class
-  explicitly); if that is impossible, say so in the PR body with the counts.
+  explicitly); if that is impossible, say so in `.orbi/regression.md` and in your final Issue comment, with the counts.
 - Claims about library, Unicode, regex or encoding behavior are verified by
   running code, never from memory.
 - Read the target repository's contribution rules before the first commit:
