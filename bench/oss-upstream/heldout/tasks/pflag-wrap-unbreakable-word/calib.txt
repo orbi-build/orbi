@@ -1,0 +1,35 @@
+### BASE 5c5ea33422a1c5081e1c899cee9a3acf822e1ee8 + hidden tests (expect FAIL)
+--- grade.sh summary
+FAIL: target test (^TestFlagUsagesWrappedContinuesAfterUnbreakableWord$)
+FAIL: package tests (.)
+PASS: go vet (.)
+FAIL: some checks failed
+grade.sh exit=1
+--- target test output tail (go test -v -run '^TestFlagUsagesWrappedContinuesAfterUnbreakableWord$' .)
+=== RUN   TestFlagUsagesWrappedContinuesAfterUnbreakableWord
+    printusage_test.go:88: FlagUsagesWrapped(60)
+        want:
+        "      --mount string   a mount specification e.g.\n                       'type=bind,source=/opt,destination=/hostopt'.\n                       The rest of this description is\n                       never wrapped.\n"
+        got:
+        "      --mount string   a mount specification e.g.\n                       'type=bind,source=/opt,destination=/hostopt'. The rest of this description is never wrapped.\n"
+--- FAIL: TestFlagUsagesWrappedContinuesAfterUnbreakableWord (0.00s)
+FAIL
+FAIL	github.com/spf13/pflag	0.002s
+FAIL
+ M printusage_test.go
+
+### FIX 161f35afe1f44bfbdeee0d5509401f2065491189 (expect PASS)
+--- grade.sh summary
+PASS: target test (^TestFlagUsagesWrappedContinuesAfterUnbreakableWord$)
+PASS: package tests (.)
+PASS: go vet (.)
+PASS: all checks
+grade.sh exit=0
+--- target test output tail (go test -v -run '^TestFlagUsagesWrappedContinuesAfterUnbreakableWord$' .)
+=== RUN   TestFlagUsagesWrappedContinuesAfterUnbreakableWord
+--- PASS: TestFlagUsagesWrappedContinuesAfterUnbreakableWord (0.00s)
+PASS
+ok  	github.com/spf13/pflag	0.002s
+
+# re-run on FIX (idempotency check)
+second run exit=0

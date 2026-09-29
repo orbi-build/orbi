@@ -17,3 +17,34 @@ defects, and scores the merged result with hidden oracles.
 - `agg.sh` prints pass/total per variant and repo; `export.py` writes `results.json`.
 
 Paths assume `~/orbi-bench` as the working root.
+
+## Held-out tasks (added 2026-09-29)
+
+`heldout/tasks/<name>/` holds issues the harness was never tuned on. Each is a real
+bug fix merged upstream after 2026-08-10; the hidden grader is the maintainer's own
+test from the fix.
+
+- `meta.env`: `REPO`, `BASE` (commit before the fix), `FIX` (commit after),
+  and for regression-prone tasks `FIX_A` (the first upstream fix, which
+  introduced a regression that `FIX` repaired).
+- `issue.md` / `title`: the ticket Orbi sees. Rewritten with no upstream links,
+  numbers or hints at the fix.
+- `grade.sh <checkout>`: overlays `hidden/`, installs deps inside the checkout,
+  runs the target tests plus the affected module's suite. Exit 0 = pass.
+- `hidden.list`: the test files taken from `FIX`. We don't vendor upstream
+  tests; `heldout/fetch_hidden.sh <tasks-dir> <cache-dir>` fetches them.
+- `calib.txt`: evidence that the grader fails on `BASE` (and on `FIX_A` for
+  regression-prone tasks) and passes on `FIX`.
+
+Pipeline: `mkinst2.sh <task> <instance> <variant-dir>` → `run2.sh` →
+`score2.sh` → `export_ho.py` / `stats.py` → `charts.py`. Scripts assume the
+bench lives at `~/orbi-bench` (tasks under `~/orbi-bench/tasks`).
+
+Isolation: `guard/gh` and `guard/git` go first on each held-out run's `PATH`
+and refuse every repository except the run's own `xqliu/obench-*`, so an agent
+can't look up the upstream fix. Snapshots are committed with `git add -A -f`
+(ignored-but-tracked files) and include submodule contents.
+
+Resources: run one instance at a time on a shared machine. `memguard.sh` kills
+benchmark processes when available memory or free swap runs low, and `run2.sh`
+points `TMPDIR` at the instance directory instead of a RAM-backed `/tmp`.

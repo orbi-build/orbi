@@ -1,0 +1,67 @@
+# Calibration for mdit-blockquote-table-eof (executablebooks/markdown-it-py)
+# date: 2026-09-29 08:10:24 +08  python: Python 3.13.15
+
+================ BASE c92ed7b02d090a900abfc1f683b919a9e37806f9 (+ hidden tests overlaid) ================
+$ grade.sh <checkout@BASE>
+FAIL target
+FAIL module
+FAIL overall
+exit=1
+---- pytest tail (target) ----
+        pos = state.bMarks[startLine] + state.tShift[startLine]
+        maximum = state.eMarks[startLine]
+    
+        if state.is_code_block(startLine):
+            return False
+    
+>       ch: str | None = state.src[pos]
+                         ^^^^^^^^^^^^^^
+E       IndexError: string index out of range
+
+markdown_it/rules_block/heading.py:22: IndexError
+=========================== short test summary info ============================
+FAILED tests/test_fuzzer.py::test_gh_415_table_in_blockquote_at_eof_html_block
+FAILED tests/test_fuzzer.py::test_gh_415_table_in_blockquote_at_eof_heading
+2 failed in 0.04s
+---- pytest tail (module) ----
+        pos = state.bMarks[startLine] + state.tShift[startLine]
+        maximum = state.eMarks[startLine]
+    
+        if state.is_code_block(startLine):
+            return False
+    
+>       ch: str | None = state.src[pos]
+                         ^^^^^^^^^^^^^^
+E       IndexError: string index out of range
+
+markdown_it/rules_block/heading.py:22: IndexError
+=========================== short test summary info ============================
+FAILED tests/test_fuzzer.py::test_gh_415_table_in_blockquote_at_eof_html_block
+FAILED tests/test_fuzzer.py::test_gh_415_table_in_blockquote_at_eof_heading
+2 failed, 978 passed in 0.58s
+
+================ FIX 1b7ef6563902ab22deb8d4f3a9ce519bc382d190 (+ hidden tests overlaid) ================
+$ grade.sh <checkout@FIX>
+PASS target
+PASS module
+PASS overall
+exit=0
+---- pytest tail (target) ----
+..                                                                       [100%]
+2 passed in 0.01s
+---- pytest tail (module) ----
+........................................................................ [  7%]
+........................................................................ [ 14%]
+........................................................................ [ 22%]
+........................................................................ [ 29%]
+........................................................................ [ 36%]
+........................................................................ [ 44%]
+........................................................................ [ 51%]
+........................................................................ [ 58%]
+........................................................................ [ 66%]
+........................................................................ [ 73%]
+........................................................................ [ 80%]
+........................................................................ [ 88%]
+........................................................................ [ 95%]
+............................................                             [100%]
+980 passed in 0.55s

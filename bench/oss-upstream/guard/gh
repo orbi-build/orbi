@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# benchmark guard: only the benchmark's own xqliu/obench-* repos are reachable
+for a in "$@"; do
+  case "$a" in
+    xqliu/obench-*|*repos/xqliu/obench-*) ;;
+    search) echo "gh: search is disabled in this environment" >&2; exit 1;;
+    */*/*) ;;
+    [A-Za-z0-9_.-]*/[A-Za-z0-9_.-]*)
+      [[ "$prev" =~ ^(--repo|-R)$ ]] && { echo "gh: repository $a is not reachable from this environment" >&2; exit 1; };;
+  esac
+  case "$a" in repos/*) [[ "$a" == repos/xqliu/obench-* ]] || { echo "gh: $a is not reachable from this environment" >&2; exit 1; };; esac
+  case "$a" in https://github.com/*) [[ "$a" == https://github.com/xqliu/obench-* ]] || { echo "gh: $a is not reachable from this environment" >&2; exit 1; };; esac
+  prev=$a
+done
+exec /usr/bin/gh "$@"

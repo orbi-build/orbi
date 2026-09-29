@@ -1,0 +1,65 @@
+# Calibration for pyjwt-base64url-padding (jpadilla/pyjwt)
+# date: 2026-09-29 08:10:26 +08  python: Python 3.13.15
+
+================ BASE 1d41a6478e1562e68ff667fcd703356acf085f68 (+ hidden tests overlaid) ================
+$ grade.sh <checkout@BASE>
+FAIL target
+FAIL module
+FAIL overall
+exit=1
+---- pytest tail (target) ----
+    @staticmethod
+    def _decode_base64url_segment(segment: bytes, name: str) -> bytes:
+        if len(segment) % 4 == 1 or any(
+            character not in _BASE64URL_ALPHABET for character in segment
+        ):
+>           raise DecodeError(f"Invalid {name} padding")
+E           jwt.exceptions.DecodeError: Invalid crypto padding
+
+jwt/api_jws.py:331: DecodeError
+=========================== short test summary info ============================
+FAILED tests/test_api_jws.py::TestJWS::test_decode_accepts_padded_crypto_segment
+FAILED tests/test_api_jws.py::TestJWS::test_decode_accepts_canonical_base64url_padding[Zg==-f]
+FAILED tests/test_api_jws.py::TestJWS::test_decode_accepts_canonical_base64url_padding[Zm8=-fo]
+FAILED tests/test_api_jwt.py::TestJWT::test_decodes_valid_es256_jwt[alb-padded]
+4 failed, 9 passed in 0.11s
+---- pytest tail (module) ----
+        ):
+>           raise DecodeError(f"Invalid {name} padding")
+E           jwt.exceptions.DecodeError: Invalid crypto padding
+
+jwt/api_jws.py:331: DecodeError
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_api_jwk.py:214: Requires cryptography library not installed
+SKIPPED [1] tests/test_api_jwk.py:220: Requires cryptography library not installed
+SKIPPED [1] tests/test_api_jwk.py:388: Requires cryptography library not installed
+SKIPPED [1] tests/test_api_jws.py:564: Requires cryptography library not installed
+FAILED tests/test_api_jws.py::TestJWS::test_decode_accepts_padded_crypto_segment
+FAILED tests/test_api_jws.py::TestJWS::test_decode_accepts_canonical_base64url_padding[Zg==-f]
+FAILED tests/test_api_jws.py::TestJWS::test_decode_accepts_canonical_base64url_padding[Zm8=-fo]
+FAILED tests/test_api_jwt.py::TestJWT::test_decodes_valid_es256_jwt[alb-padded]
+4 failed, 467 passed, 4 skipped in 5.28s
+
+================ FIX 7bf32526738fe837387bdedd4849a4a525c33a79 (+ hidden tests overlaid) ================
+$ grade.sh <checkout@FIX>
+PASS target
+PASS module
+PASS overall
+exit=0
+---- pytest tail (target) ----
+.............                                                            [100%]
+13 passed in 0.07s
+---- pytest tail (module) ----
+........................................................................ [ 15%]
+........................................................................ [ 30%]
+.............................................ss............s............ [ 45%]
+.............................s.......................................... [ 60%]
+........................................................................ [ 75%]
+........................................................................ [ 90%]
+...........................................                              [100%]
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_api_jwk.py:214: Requires cryptography library not installed
+SKIPPED [1] tests/test_api_jwk.py:220: Requires cryptography library not installed
+SKIPPED [1] tests/test_api_jwk.py:388: Requires cryptography library not installed
+SKIPPED [1] tests/test_api_jws.py:564: Requires cryptography library not installed
+471 passed, 4 skipped in 5.22s

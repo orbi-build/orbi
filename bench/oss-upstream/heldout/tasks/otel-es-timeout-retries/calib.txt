@@ -1,0 +1,126 @@
+===== BASE (7f544651820e191a59e5fdaaf928769fd61972f8) expect-FAIL -> grade.sh exit=1
+--- summary
+--- FAIL: TestExporterTimeout_Independent (0.06s)
+FAIL: target tests (TestExporterTimeout_*)
+PASS: module tests (exporter/elasticsearchexporter/...)
+PASS: go vet
+FAIL: some checks failed
+--- output tail
+--- FAIL: TestExporterTimeout_Independent (0.06s)
+    exporter_test.go:3812: 
+        	Error Trace:	/tmp/rb/wt-otel-es-timeout-retries-BASE/exporter/elasticsearchexporter/exporter_test.go:3812
+        	Error:      	Should be in error chain:
+        	            	expected: docappender.ErrorFlushFailed
+        	            	in chain: "failed to execute the request: context deadline exceeded" (*errors.joinError)
+        	            		"failed to execute the request: context deadline exceeded" (*fmt.wrapError)
+        	            		"context deadline exceeded" (context.deadlineExceededError)
+        	Test:       	TestExporterTimeout_Independent
+    exporter_test.go:3813: 
+        	Error Trace:	/tmp/rb/wt-otel-es-timeout-retries-BASE/exporter/elasticsearchexporter/exporter_test.go:3813
+        	Error:      	Error "failed to execute the request: context deadline exceeded" does not contain "418"
+        	Test:       	TestExporterTimeout_Independent
+    exporter_test.go:3814: 
+        	Error Trace:	/tmp/rb/wt-otel-es-timeout-retries-BASE/exporter/elasticsearchexporter/exporter_test.go:3814
+        	Error:      	Not equal: 
+        	            	expected: 3
+        	            	actual  : 1
+        	Test:       	TestExporterTimeout_Independent
+FAIL
+FAIL	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter	0.122s
+FAIL
+FAIL: target tests (TestExporterTimeout_*)
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter	4.672s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/datapoints	0.005s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/elasticsearch	0.005s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/exphistogram	0.005s
+?   	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/logging	[no test files]
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/lru	0.005s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadata	0.005s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadatatest	0.006s
+?   	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metricgroup	[no test files]
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/objmodel	0.005s
+?   	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/pool	[no test files]
+?   	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/serializer	[no test files]
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/serializer/otelserializer	0.006s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/serializer/otelserializer/serializeprofiles	0.002s
+PASS: module tests (exporter/elasticsearchexporter/...)
+PASS: go vet
+FAIL: some checks failed
+
+===== FIX_A (4ff1212f399832ca16ee19450e99c0ac97c24bb8) expect-FAIL -> grade.sh exit=1
+--- summary
+panic: test timed out after 1m0s
+FAIL: target tests (TestExporterTimeout_*)
+PASS: module tests (exporter/elasticsearchexporter/...)
+PASS: go vet
+FAIL: some checks failed
+--- output tail
+net/http.HandlerFunc.ServeHTTP(...)
+	/home/xqianliu/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.6.linux-amd64/src/net/http/server.go:2284
+github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter.newESTestServerBulkHandlerFunc.func2({0x129d9d0, 0x19120a63a000}, 0x19120a7c6000)
+	/tmp/rb/wt-otel-es-timeout-retries-FIX_A/exporter/elasticsearchexporter/utils_test.go:225 +0x10d
+net/http.HandlerFunc.ServeHTTP(0x19120a5ea300?, {0x129d9d0?, 0x19120a63a000?}, 0x19120a693b20?)
+	/home/xqianliu/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.6.linux-amd64/src/net/http/server.go:2284 +0x29
+net/http.(*ServeMux).ServeHTTP(0x427fc5?, {0x129d9d0, 0x19120a63a000}, 0x19120a7c6000)
+	/home/xqianliu/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.6.linux-amd64/src/net/http/server.go:2826 +0x1c7
+net/http.serverHandler.ServeHTTP({0x1299130?}, {0x129d9d0?, 0x19120a63a000?}, 0x1?)
+	/home/xqianliu/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.6.linux-amd64/src/net/http/server.go:3309 +0x8e
+net/http.(*conn).serve(0x19120a7b0090, {0x12a0b70, 0x19120a7a2120})
+	/home/xqianliu/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.6.linux-amd64/src/net/http/server.go:2067 +0x690
+created by net/http.(*Server).Serve in goroutine 9
+	/home/xqianliu/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.6.linux-amd64/src/net/http/server.go:3462 +0x485
+
+goroutine 16 [select]:
+net/http.(*persistConn).writeLoop(0x19120a757540)
+	/home/xqianliu/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.6.linux-amd64/src/net/http/transport.go:2652 +0xe6
+created by net/http.(*Transport).dialConn in goroutine 14
+	/home/xqianliu/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.6.linux-amd64/src/net/http/transport.go:1995 +0x16fe
+FAIL	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter	60.013s
+FAIL
+FAIL: target tests (TestExporterTimeout_*)
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter	4.747s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/datapoints	0.003s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/elasticsearch	0.003s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/exphistogram	0.003s
+?   	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/logging	[no test files]
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/lru	0.002s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadata	0.003s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadatatest	0.003s
+?   	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metricgroup	[no test files]
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/objmodel	0.003s
+?   	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/pool	[no test files]
+?   	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/serializer	[no test files]
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/serializer/otelserializer	0.006s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/serializer/otelserializer/serializeprofiles	0.003s
+PASS: module tests (exporter/elasticsearchexporter/...)
+PASS: go vet
+FAIL: some checks failed
+
+===== FIX (b7f4f425a7d9b811d5c5d8863363c40a2c0c01c1) expect-PASS -> grade.sh exit=0
+--- summary
+PASS: target tests (TestExporterTimeout_*)
+PASS: module tests (exporter/elasticsearchexporter/...)
+PASS: go vet
+PASS: all checks
+--- output tail
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter	0.204s
+PASS: target tests (TestExporterTimeout_*)
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter	5.512s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/datapoints	0.003s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/elasticsearch	0.003s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/exphistogram	0.003s
+?   	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/logging	[no test files]
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/lru	0.003s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadata	0.003s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadatatest	0.003s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metricgroup	0.003s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/objmodel	0.003s
+?   	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/pool	[no test files]
+?   	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/serializer	[no test files]
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/serializer/otelserializer	0.006s
+ok  	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/serializer/otelserializer/serializeprofiles	0.003s
+PASS: module tests (exporter/elasticsearchexporter/...)
+PASS: go vet
+PASS: all checks
+
+# re-run on FIX (idempotency check): second run exit=0

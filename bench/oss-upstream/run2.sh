@@ -5,6 +5,7 @@ I=~/orbi-bench/runs/$N; GH=xqliu/obench-$N
 export ORBI_CONFIG=$I/orbi.toml PATH="$HOME/.local/bin:$HOME/.npm-global/bin:/usr/bin:/bin"
 [ -f $I/pathprefix ] && export PATH="$(cat $I/pathprefix):$PATH"
 [ -f $I/env ] && set -a && . $I/env && set +a
+mkdir -p $I/tmp; export TMPDIR=$I/tmp
 start=$(date +%s)
 while :; do
   labels=$(gh api repos/$GH/issues/1 --jq '[.labels[].name]|join(",")' 2>/dev/null)
