@@ -7,14 +7,15 @@ directory reads at its default path, ``.claude-plugin/icon.svg`` (Issue
 on the user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
 directory, the Agent Plugins 1.0 root manifest (Issue #1404), the Cursor
 marketplace manifest (Issue #1437) and the repository's contract require,
-and they carry fourteen counter-proofs (six for the claude.com and Agent
+and they carry fifteen counter-proofs (six for the claude.com and Agent
 Plugins manifests: a fixture copy with ``hooks/``, one without
 ``homepage``, one missing the ``author.url`` ref, one with
 ``skills/x/logo.svg``, one with a ``logo`` key in the root manifest, and
-one reading the config from the working tree; eight for the Cursor
+one reading the config from the working tree; nine for the Cursor
 marketplace manifest: one without ``skills/``, one with a version mismatch,
 one without the ``cursor-marketplace`` ref, one without the top-level
-``logo`` that cursor.directory reads, one without the top-level
+``logo`` that cursor.directory reads, one with a top-level ``.svg`` logo,
+one without the top-level
 ``homepage``, one without the top-level ``author.url``, one without the
 top-level ``description``, and one with mismatched top-level
 ``keywords``) so a future change cannot silently turn the assertions into
@@ -22,6 +23,7 @@ no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
 """
+import hashlib
 import json
 import re
 import shutil
@@ -339,6 +341,16 @@ def test_agent_manifest_homepage_and_author_url_carry_agent_plugins_ref():
 CURSOR_MARKETPLACE_REL = Path(".cursor-plugin") / "marketplace.json"
 CURSOR_PLUGIN_REL = Path("integrations") / "claude-plugin"
 CURSOR_REF = "cursor-marketplace"
+# cursor.directory applies `filter: invert(1)` to every SVG logo
+# (`isSvgLogo(plugin.logo) && "invert"` in plugin-card.tsx /
+# plugin-leaderboard.tsx), turning our dark tile into a near-white square,
+# so the top-level logo must be a raster PNG (Issue #1499).
+CURSOR_LOGO_REL = Path(".cursor-plugin") / "logo.png"
+CURSOR_LOGO_SHA256 = (
+    "573f6e812b8ba54337b5f08c4dc28df6f104c2c3695e4e8443846788f38ed621"
+)
+PNG_MAGIC = b"\x89PNG"
+CURSOR_LOGO_PX = 512
 # cursor.directory builds the plugin page from the ROOT manifest's top level:
 # `homepage` and the author link `author.url` must sit there too (Issue #1446),
 # distinct from the plugin-entry homepage Cursor Marketplace reads.
@@ -356,8 +368,8 @@ def check_cursor_marketplace(repo_root: Path = REPO_ROOT) -> None:
     (Issue #1437): every listed source exists with a skills/ folder, the
     names are kebab-case, version and description match the plugin
     manifest, the homepage carries the cursor-marketplace ref, the
-    top-level logo cursor.directory reads resolves relative to the
-    repository root, the top-level homepage and author link carry the
+    top-level logo cursor.directory reads is a PNG that resolves relative
+    to the repository root, the top-level homepage and author link carry the
     cursor-directory ref, the top-level description, keywords and license
     are the listing text cursor.directory reads (Issue #1497), and the
     plugin-entry logo resolves relative to the source directory."""
@@ -373,6 +385,12 @@ def check_cursor_marketplace(repo_root: Path = REPO_ROOT) -> None:
     top_level_logo = marketplace.get("logo")
     assert isinstance(top_level_logo, str) and top_level_logo, (
         "marketplace top-level logo must be a non-empty string"
+    )
+    # cursor.directory inverts every SVG logo, so the listing logo must be a
+    # raster PNG (Issue #1499).
+    assert top_level_logo.endswith(".png"), (
+        "marketplace top-level logo must be a PNG because cursor.directory "
+        f"inverts every SVG logo: {top_level_logo!r}"
     )
     assert (repo_root / top_level_logo).is_file(), (
         "marketplace top-level logo does not resolve relative to the "
@@ -476,6 +494,28 @@ def test_cursor_marketplace_matches_the_plugin_folder():
     check_cursor_marketplace()
 
 
+def test_cursor_logo_is_the_512_png():
+    """The top-level logo cursor.directory reads is the exact 512x512 PNG
+    (Issue #1499), pinned by magic bytes and sha256. The IHDR chunk carries
+    width at byte 16 and height at byte 20 (8-byte signature + 4-byte
+    length + 4-byte type), so no image library is needed."""
+    path = REPO_ROOT / CURSOR_LOGO_REL
+    assert path.is_file(), f"cursor logo missing: {CURSOR_LOGO_REL}"
+    raw = path.read_bytes()
+    assert raw[:4] == PNG_MAGIC, (
+        f"{CURSOR_LOGO_REL} is not a PNG: {raw[:4]!r}"
+    )
+    assert hashlib.sha256(raw).hexdigest() == CURSOR_LOGO_SHA256, (
+        f"{CURSOR_LOGO_REL} sha256 does not match the release asset"
+    )
+    width = int.from_bytes(raw[16:20], "big")
+    height = int.from_bytes(raw[20:24], "big")
+    assert (width, height) == (CURSOR_LOGO_PX, CURSOR_LOGO_PX), (
+        f"{CURSOR_LOGO_REL} must be {CURSOR_LOGO_PX}x{CURSOR_LOGO_PX}, "
+        f"got {width}x{height}"
+    )
+
+
 def write_cursor_marketplace_repo(tmp_path: Path) -> Path:
     """Minimal fake repository root whose marketplace manifest is valid,
     so the counter-proofs can break exactly one field at a time."""
@@ -484,6 +524,9 @@ def write_cursor_marketplace_repo(tmp_path: Path) -> Path:
     icon_dir = plugin_dir / ".claude-plugin"
     icon_dir.mkdir()
     (icon_dir / "icon.svg").write_text("<svg/>", encoding="utf-8")
+    logo_path = tmp_path / CURSOR_LOGO_REL
+    logo_path.parent.mkdir(parents=True, exist_ok=True)
+    logo_path.write_bytes(PNG_MAGIC)
     description = "A delivered plugin."
     keywords = ["github-issues", "auto-merge"]
     (plugin_dir / "plugin.json").write_text(
@@ -501,7 +544,7 @@ def write_cursor_marketplace_repo(tmp_path: Path) -> Path:
         "description": description,
         "keywords": keywords,
         "license": "AGPL-3.0-only",
-        "logo": "integrations/claude-plugin/.claude-plugin/icon.svg",
+        "logo": CURSOR_LOGO_REL.as_posix(),
         "homepage": CURSOR_DIRECTORY_HOMEPAGE,
         "author": {"name": "Orbi", "url": CURSOR_DIRECTORY_HOMEPAGE},
         "plugins": [
@@ -518,7 +561,7 @@ def write_cursor_marketplace_repo(tmp_path: Path) -> Path:
         ],
     }
     marketplace_path = tmp_path / CURSOR_MARKETPLACE_REL
-    marketplace_path.parent.mkdir(parents=True)
+    marketplace_path.parent.mkdir(parents=True, exist_ok=True)
     marketplace_path.write_text(json.dumps(marketplace), encoding="utf-8")
     return tmp_path
 
@@ -555,6 +598,20 @@ def test_fixture_marketplace_without_top_level_logo_fails(tmp_path):
     path = repo_root / CURSOR_MARKETPLACE_REL
     data = json.loads(path.read_text(encoding="utf-8"))
     del data["logo"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_cursor_marketplace(repo_root)
+
+
+def test_fixture_marketplace_with_top_level_svg_logo_fails(tmp_path):
+    """A top-level SVG logo resolves but cursor.directory would invert it,
+    so the check must reject it (Issue #1499)."""
+    repo_root = write_cursor_marketplace_repo(tmp_path)
+    path = repo_root / CURSOR_MARKETPLACE_REL
+    data = json.loads(path.read_text(encoding="utf-8"))
+    svg = CURSOR_PLUGIN_REL / ".claude-plugin" / "icon.svg"
+    assert (repo_root / svg).is_file()
+    data["logo"] = svg.as_posix()
     path.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(AssertionError):
         check_cursor_marketplace(repo_root)
