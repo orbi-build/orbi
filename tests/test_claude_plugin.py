@@ -7,16 +7,18 @@ directory reads at its default path, ``.claude-plugin/icon.svg`` (Issue
 on the user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
 directory, the Agent Plugins 1.0 root manifest (Issue #1404), the Cursor
 marketplace manifest (Issue #1437) and the repository's contract require,
-and they carry twelve counter-proofs (six for the claude.com and Agent
+and they carry fourteen counter-proofs (six for the claude.com and Agent
 Plugins manifests: a fixture copy with ``hooks/``, one without
 ``homepage``, one missing the ``author.url`` ref, one with
 ``skills/x/logo.svg``, one with a ``logo`` key in the root manifest, and
-one reading the config from the working tree; six for the Cursor
+one reading the config from the working tree; eight for the Cursor
 marketplace manifest: one without ``skills/``, one with a version mismatch,
 one without the ``cursor-marketplace`` ref, one without the top-level
 ``logo`` that cursor.directory reads, one without the top-level
-``homepage``, and one without the top-level ``author.url``) so a future
-change cannot silently turn the assertions into no-ops.
+``homepage``, one without the top-level ``author.url``, one without the
+top-level ``description``, and one with mismatched top-level
+``keywords``) so a future change cannot silently turn the assertions into
+no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
 """
@@ -356,8 +358,9 @@ def check_cursor_marketplace(repo_root: Path = REPO_ROOT) -> None:
     manifest, the homepage carries the cursor-marketplace ref, the
     top-level logo cursor.directory reads resolves relative to the
     repository root, the top-level homepage and author link carry the
-    cursor-directory ref, and the plugin-entry logo resolves relative to
-    the source directory."""
+    cursor-directory ref, the top-level description, keywords and license
+    are the listing text cursor.directory reads (Issue #1497), and the
+    plugin-entry logo resolves relative to the source directory."""
     marketplace = load_cursor_marketplace(repo_root)
     assert isinstance(marketplace, dict), "marketplace.json must be an object"
     name = marketplace.get("name")
@@ -398,12 +401,31 @@ def check_cursor_marketplace(repo_root: Path = REPO_ROOT) -> None:
         "marketplace top-level author.url must start with "
         f"{CURSOR_DIRECTORY_HOMEPAGE!r}: {top_level_author_url!r}"
     )
+    # cursor.directory takes the plugin page's description, tags and license
+    # from the ROOT manifest's top level (parse.ts:607-614): without them a
+    # rescan overwrites the listing with the `"<repo> plugin for Cursor"`
+    # fallback and drops the tags (Issue #1497).
+    top_level_description = marketplace.get("description")
+    assert (
+        isinstance(top_level_description, str)
+        and len(top_level_description) >= 10
+        and not top_level_description.endswith("plugin for Cursor")
+    ), (
+        "marketplace top-level description must be a real listing text of at "
+        f"least 10 characters and not the cursor.directory fallback: "
+        f"{top_level_description!r}"
+    )
     plugins = marketplace.get("plugins")
     assert isinstance(plugins, list) and plugins, (
         "marketplace must list at least one plugin"
     )
     manifest_path = repo_root / CURSOR_PLUGIN_REL / "plugin.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    top_level_keywords = marketplace.get("keywords")
+    assert top_level_keywords == manifest.get("keywords"), (
+        "marketplace top-level keywords must equal the plugin.json keywords: "
+        f"{top_level_keywords!r} != {manifest.get('keywords')!r}"
+    )
     for entry in plugins:
         assert isinstance(entry, dict), "each plugin entry must be an object"
         entry_name = entry.get("name")
@@ -440,6 +462,10 @@ def check_cursor_marketplace(repo_root: Path = REPO_ROOT) -> None:
             f"plugins[].logo does not resolve relative to source: "
             f"{source}/{logo}"
         )
+    assert marketplace.get("license") == plugins[0].get("license"), (
+        "marketplace top-level license must equal plugins[0].license: "
+        f"{marketplace.get('license')!r} != {plugins[0].get('license')!r}"
+    )
 
 
 def test_cursor_marketplace_exists_and_parses():
@@ -459,12 +485,22 @@ def write_cursor_marketplace_repo(tmp_path: Path) -> Path:
     icon_dir.mkdir()
     (icon_dir / "icon.svg").write_text("<svg/>", encoding="utf-8")
     description = "A delivered plugin."
+    keywords = ["github-issues", "auto-merge"]
     (plugin_dir / "plugin.json").write_text(
-        json.dumps({"version": "1.0.0", "description": description}),
+        json.dumps(
+            {
+                "version": "1.0.0",
+                "description": description,
+                "keywords": keywords,
+            }
+        ),
         encoding="utf-8",
     )
     marketplace = {
         "name": "orbi",
+        "description": description,
+        "keywords": keywords,
+        "license": "AGPL-3.0-only",
         "logo": "integrations/claude-plugin/.claude-plugin/icon.svg",
         "homepage": CURSOR_DIRECTORY_HOMEPAGE,
         "author": {"name": "Orbi", "url": CURSOR_DIRECTORY_HOMEPAGE},
@@ -474,6 +510,8 @@ def write_cursor_marketplace_repo(tmp_path: Path) -> Path:
                 "source": CURSOR_PLUGIN_REL.as_posix(),
                 "version": "1.0.0",
                 "description": description,
+                "keywords": keywords,
+                "license": "AGPL-3.0-only",
                 "homepage": f"https://orbi.build/?ref={CURSOR_REF}",
                 "logo": ".claude-plugin/icon.svg",
             }
@@ -537,6 +575,26 @@ def test_fixture_marketplace_without_top_level_author_url_fails(tmp_path):
     path = repo_root / CURSOR_MARKETPLACE_REL
     data = json.loads(path.read_text(encoding="utf-8"))
     data["author"]["url"] = "https://orbi.build/"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_cursor_marketplace(repo_root)
+
+
+def test_fixture_marketplace_without_top_level_description_fails(tmp_path):
+    repo_root = write_cursor_marketplace_repo(tmp_path)
+    path = repo_root / CURSOR_MARKETPLACE_REL
+    data = json.loads(path.read_text(encoding="utf-8"))
+    del data["description"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(AssertionError):
+        check_cursor_marketplace(repo_root)
+
+
+def test_fixture_marketplace_keywords_mismatch_fails(tmp_path):
+    repo_root = write_cursor_marketplace_repo(tmp_path)
+    path = repo_root / CURSOR_MARKETPLACE_REL
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["keywords"] = ["github-issues"]
     path.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(AssertionError):
         check_cursor_marketplace(repo_root)
