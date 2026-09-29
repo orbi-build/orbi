@@ -78,7 +78,19 @@ Minimal implementation — KISS/LEAN (Issue #118):
 - This does not relax the MVP boundary: no database, queue, DAG, daemon,
   risk engine or fallback.
 
-Regression guard for changed behavior (differential and property testing):
+Regression guard for changed behavior (differential and property testing).
+
+First decide whether it applies, and write the decision and the reason as the
+first line of the PR body (`Regression guard: applies` or `Regression guard:
+not needed`). It applies when your change alters how text or bytes are
+parsed, escaped or unescaped, trimmed or stripped, split, measured (width,
+length, columns), matched, searched, replaced, encoded or redacted, or when it
+changes a function that other code calls with inputs the Issue does not
+mention. For any other change (a config value, a new option, a crash on one
+specific state, wiring), skip the rest of this section: a targeted test for
+the reported case plus the existing suite is enough, and do not write
+`.orbi/regression.md`. When it applies:
+
 
 - A change to existing behavior must leave every input it was not asked to
   change as it was and must not make any input worse. The Issue's example is
