@@ -2,7 +2,10 @@
   "name": "orbi",
   "owner": { "name": "Orbi", "email": "support@orbi.build" },
   "metadata": { "description": "Orbi plugins" },
-  "logo": "integrations/claude-plugin/.claude-plugin/icon.svg",
+  "description": "Skill and commands that draft ai-ready GitHub Issues and send them to Orbi, an open-source agent that ships each one as a merged PR.",
+  "keywords": ["github-issues", "autonomous-coding-agent", "ai-code-review", "auto-merge", "release-automation"],
+  "license": "AGPL-3.0-only",
+  "logo": ".cursor-plugin/logo.png",
   "homepage": "https://orbi.build/?ref=cursor-directory",
   "author": { "name": "Orbi", "url": "https://orbi.build/?ref=cursor-directory" },
   "plugins": [

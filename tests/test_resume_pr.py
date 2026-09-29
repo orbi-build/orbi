@@ -19,6 +19,7 @@ import pytest
 
 import orbi.gitops as gitops
 import orbi.claim as claim
+import orbi.failure_report as failure_report
 import orbi.runner as runner
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
@@ -1298,7 +1299,7 @@ def test_pick_resumable_delivery_blocks_on_a_corrupted_v1_block(
     )
     blocked = []
     monkeypatch.setattr(
-        runner, "block_scene_failure",
+        failure_report, "block_scene_failure",
         lambda issue, error, repo, comments: blocked.append(
             issue["number"],
         ),

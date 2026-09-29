@@ -19,6 +19,7 @@ from unittest.mock import Mock
 import pytest
 
 import orbi.claim as claim
+import orbi.failure_report as failure_report
 import orbi.runner as runner
 import orbi.gitops as gitops
 import orbi.pi_session as pi_session
@@ -5627,7 +5628,7 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(seam, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
-    monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: None)
+    monkeypatch.setattr(failure_report, "activity_snapshot", lambda session_dir: None)
     gh_calls, posted = make_fake_gh(monkeypatch)
 
     def fake_run(command, **kwargs):
@@ -5698,7 +5699,7 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
 
     monkeypatch.setattr(runner, "deliver_pr", dead_deliver_pr)
     monkeypatch.setattr(
-        runner, "activity_snapshot", lambda session_dir: None,
+        failure_report, "activity_snapshot", lambda session_dir: None,
     )
     posted = []
 
@@ -5779,7 +5780,7 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
 
     monkeypatch.setattr(pi_session, "run_pi", dead_run_pi)
     monkeypatch.setattr(
-        runner, "activity_snapshot", lambda session_dir: None,
+        failure_report, "activity_snapshot", lambda session_dir: None,
     )
     posted = []
 
@@ -5866,7 +5867,7 @@ def test_process_issue_model_wait_failure_records_health_attempt(
 
     monkeypatch.setattr(pi_session, "run_pi", dead_run_pi)
     monkeypatch.setattr(
-        runner, "activity_snapshot", lambda session_dir: None,
+        failure_report, "activity_snapshot", lambda session_dir: None,
     )
     gh_calls, posted = make_fake_gh(monkeypatch)
 
@@ -5920,7 +5921,7 @@ def test_process_issue_three_recoverable_failures_raise_health_finding(
 
     monkeypatch.setattr(pi_session, "run_pi", dead_run_pi)
     monkeypatch.setattr(
-        runner, "activity_snapshot", lambda session_dir: None,
+        failure_report, "activity_snapshot", lambda session_dir: None,
     )
     gh_calls, posted = make_fake_gh(monkeypatch)
 
@@ -6026,7 +6027,7 @@ def test_process_issue_recoverable_health_record_failure_is_bypassed(
 
     monkeypatch.setattr(pi_session, "run_pi", dead_run_pi)
     monkeypatch.setattr(
-        runner, "activity_snapshot", lambda session_dir: None,
+        failure_report, "activity_snapshot", lambda session_dir: None,
     )
     gh_calls, posted = make_fake_gh(monkeypatch)
 
@@ -6133,7 +6134,7 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
 
     monkeypatch.setattr(pi_session, "run_pi", dead_run_pi)
     monkeypatch.setattr(
-        runner, "activity_snapshot", lambda session_dir: None,
+        failure_report, "activity_snapshot", lambda session_dir: None,
     )
     posted = []
 
@@ -6211,7 +6212,7 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
 
     monkeypatch.setattr(pi_session, "run_pi", dead_run_pi)
     monkeypatch.setattr(
-        runner, "activity_snapshot", lambda session_dir: None,
+        failure_report, "activity_snapshot", lambda session_dir: None,
     )
     posted = []
 
@@ -7767,7 +7768,7 @@ def test_process_issue_failure_without_session_still_carries_scene(
         pi_session, "run_pi",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("pi died")),
     )
-    monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: None)
+    monkeypatch.setattr(failure_report, "activity_snapshot", lambda session_dir: None)
     gh_calls, posted = make_fake_gh(monkeypatch)
 
     def fake_run(command, **kwargs):
@@ -7803,7 +7804,7 @@ def test_tail_text_strips_raw_and_caret_sgr_sequences(tmp_path):
         b"^[[32m\xe2\x9c\x93^[[39m tests/cta-ref.test.js\n"
     )
 
-    result = runner._tail_text(log)
+    result = failure_report._tail_text(log)
 
     assert "Test Files  10 passed" in result
     assert "tests/cta-ref.test.js" in result
@@ -7816,7 +7817,7 @@ def test_tail_text_preserves_plain_text_byte_for_byte(tmp_path):
     content = b"plain output  \ntrailing whitespace\t"
     log.write_bytes(content)
 
-    assert runner._tail_text(log) == content.decode()
+    assert failure_report._tail_text(log) == content.decode()
 
 
 def test_tail_text_preserves_non_sgr_lookalikes(tmp_path):
@@ -7824,11 +7825,11 @@ def test_tail_text_preserves_non_sgr_lookalikes(tmp_path):
     content = "^[[1] [32m literal \x1b without bracket"
     log.write_text(content, encoding="utf-8")
 
-    assert runner._tail_text(log) == content
+    assert failure_report._tail_text(log) == content
 
 
 def test_failure_summary_removes_command_and_stderr_duplication():
-    summary = runner._failure_summary(
+    summary = failure._failure_summary(
         "Review failed: Command ['pi', '--session', '/home/runner/session'] "
         "returned non-zero exit status 1; stderr=provider exploded",
     )
@@ -7838,17 +7839,17 @@ def test_failure_summary_removes_command_and_stderr_duplication():
     assert "/home/" not in summary
     assert summary.count("provider exploded") == 1
     assert "delivery command failed" in summary
-    assert runner._failure_summary(
+    assert failure._failure_summary(
         "provider exploded stderr=provider exploded"
     ) == "provider exploded"
 
 
 def test_failure_summary_defaults_when_reason_has_no_readable_content():
-    assert runner._failure_summary(" stderr=") == "the delivery command failed"
+    assert failure._failure_summary(" stderr=") == "the delivery command failed"
 
 
 def test_failure_summary_uses_concrete_final_stderr_line_and_redacts_it():
-    summary = runner._failure_summary(
+    summary = failure._failure_summary(
         "the independent review failed: Command ['pi', '--session-dir', "
         "'/home/runner/session'] returned non-zero exit status 1. "
         "stderr=mise installed 0 tools\n"
@@ -7865,7 +7866,7 @@ def test_failure_summary_uses_concrete_final_stderr_line_and_redacts_it():
 
 
 def test_failure_scene_is_structured_and_redacts_local_paths():
-    rendered = runner._failure_scene(
+    rendered = failure_report._failure_scene(
         {"session_id": "s1", "session_file": "/home/a/.pi-session/s.jsonl",
          "phase": "review", "last_activity": "2026-09-20T18:00:00Z",
          "action": "run tests", "result": "failed"},
@@ -7881,7 +7882,7 @@ def test_failure_scene_is_structured_and_redacts_local_paths():
 
 
 def test_failure_comment_layout_keeps_raw_evidence_collapsed():
-    body = runner._failure_comment_body(
+    body = failure._failure_comment_body(
         outcome="fix needed", action="Repair the delivery.",
         reason="the provider rejected the request",
         diagnosis="provider rejected the request",
@@ -7901,7 +7902,7 @@ def test_failure_comment_layout_keeps_raw_evidence_collapsed():
     assert "```" in collapsed
     assert body.endswith("</details>")
 
-    without_diagnosis = runner._failure_comment_body(
+    without_diagnosis = failure._failure_comment_body(
         outcome="fix needed", action="", reason="provider failed",
         diagnosis="", scene="- run: `abcdef12`", evidence="",
         pr_url=None, issue="o/r#1221", run_id="abcdef12",
@@ -7918,7 +7919,7 @@ def test_blocked_failure_suffix_stays_inside_closed_diagnostics(
     monkeypatch.setattr(seam, "comment_issue",
                         lambda number, *, repo, body: posted.append(body))
 
-    runner.report_delivery_failure(
+    failure_report.report_delivery_failure(
         runner.UnrecoverableDeliveryError("cannot recover"),
         issue={"number": 1, "title": "t", "labels": []},
         source_repo="owner/repo", run_id="abcdef12", pr_url=None,
@@ -7940,7 +7941,7 @@ def test_no_run_id_failure_still_preserves_action_and_evidence(
     monkeypatch.setattr(seam, "comment_issue",
                         lambda number, *, repo, body: posted.append(body))
 
-    runner.report_delivery_failure(
+    failure_report.report_delivery_failure(
         subprocess.CalledProcessError(2, ["pi"], stderr="provider failed"),
         issue={"number": 1, "title": "t", "labels": []},
         source_repo="owner/repo", run_id=None, pr_url=None,
@@ -7961,7 +7962,7 @@ def test_failure_evidence_handles_binary_streams_and_unavailable_files(tmp_path)
         2, ["pi"], output=b"binary stdout", stderr=b"binary stderr",
     )
 
-    evidence = runner._failure_evidence(tmp_path / "missing", error)
+    evidence = failure_report._failure_evidence(tmp_path / "missing", error)
 
     assert "exit_code=2" in evidence
     assert "stderr_tail:\n```" in evidence
@@ -7973,7 +7974,7 @@ def test_failure_evidence_handles_binary_streams_and_unavailable_files(tmp_path)
     assert "test_log_tail:\n```\n<unavailable>\n```" in evidence
     assert "session_last_events (last 20 records; full log: <unavailable>):" \
         in evidence
-    assert runner._tail_text(tmp_path / "missing.log") == "<unavailable>"
+    assert failure_report._tail_text(tmp_path / "missing.log") == "<unavailable>"
 
 
 def test_failure_evidence_includes_streams_session_and_test_tail(tmp_path):
@@ -7999,7 +8000,7 @@ def test_failure_evidence_includes_streams_session_and_test_tail(tmp_path):
     )
     error = subprocess.CalledProcessError(1, ["pi"], output="stdout tail", stderr="")
 
-    evidence = runner._failure_evidence(worktree, error)
+    evidence = failure_report._failure_evidence(worktree, error)
 
     assert "exit_code=1" in evidence
     assert "stdout tail" in evidence
@@ -8031,7 +8032,7 @@ def test_failure_evidence_keeps_coverage_table_literal_inside_fence(tmp_path):
     )
     error = subprocess.CalledProcessError(1, ["pi"])
 
-    evidence = runner._failure_evidence(worktree, error)
+    evidence = failure_report._failure_evidence(worktree, error)
 
     # Every raw segment opens its fence directly under the label.
     for label in ("stderr_tail:", "stdout_tail:", "test_log_tail:"):
@@ -8067,7 +8068,7 @@ def test_failure_evidence_dedupes_repeated_session_text_block(tmp_path):
         encoding="utf-8",
     )
 
-    evidence = runner._failure_evidence(
+    evidence = failure_report._failure_evidence(
         worktree, subprocess.CalledProcessError(1, ["pi"]),
     )
 
@@ -8092,7 +8093,7 @@ def test_session_summary_skips_malformed_records_and_respects_limit(tmp_path):
         encoding="utf-8",
     )
 
-    assert runner._session_summary(path, limit=1) == (
+    assert failure_report._session_summary(path, limit=1) == (
         "t message role=assistant content=toolCall:Bash"
     )
 
@@ -8101,22 +8102,22 @@ def test_session_summary_skips_malformed_records_and_respects_limit(tmp_path):
         json.dumps({"type": f"r{i}", "timestamp": f"t{i}"}) + "\n"
         for i in range(5)
     ), encoding="utf-8")
-    assert runner._session_summary(many, limit=2) == "t3 r3\nt4 r4"
+    assert failure_report._session_summary(many, limit=2) == "t3 r3\nt4 r4"
 
     bad = tmp_path / "bad.jsonl"
     bad.write_text("nope\n[1]\n", encoding="utf-8")
-    assert runner._session_summary(bad) == "<unparsable>"
+    assert failure_report._session_summary(bad) == "<unparsable>"
 
     # An unreadable/missing file is the placeholder (also the race path
     # where the session vanishes between the glob and this read).
-    assert runner._session_summary(tmp_path / "missing.jsonl") == "<unavailable>"
+    assert failure_report._session_summary(tmp_path / "missing.jsonl") == "<unavailable>"
 
 
 def test_failure_evidence_truncates_oversized_segment_with_note(tmp_path):
     worktree = tmp_path / "wt"
     worktree.mkdir()
 
-    evidence = runner._failure_evidence(
+    evidence = failure_report._failure_evidence(
         worktree,
         subprocess.CalledProcessError(1, ["pi"], stderr="x" * 9000),
     )
@@ -8141,7 +8142,7 @@ def test_report_delivery_failure_caps_comment_and_names_session_log(
     session_file.parent.mkdir(parents=True)
     session_file.write_text("{}\n", encoding="utf-8")
 
-    outcome = runner.report_delivery_failure(
+    outcome = failure_report.report_delivery_failure(
         error, issue={"number": 775, "title": "t", "labels": []},
         source_repo="orbi-build/orbi", run_id=None, pr_url=None,
         worktree=worktree, branch="b", role=runner.ROLE_IMPLEMENT,
@@ -8157,7 +8158,7 @@ def test_report_delivery_failure_caps_comment_and_names_session_log(
     assert body.startswith("<!-- orbi:failure:v1 ")
     assert "\n\nOrbi: blocked — waiting on a human decision" in body
     assert "**Reason:** " + "x" * 500 in body
-    assert len(body) < runner.FAILURE_COMMENT_MAX_CHARS
+    assert len(body) < failure_report.FAILURE_COMMENT_MAX_CHARS
     assert "full log: local session log" in body
     assert body.endswith("</details>")
 
@@ -8205,7 +8206,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: {
+    monkeypatch.setattr(failure_report, "activity_snapshot", lambda session_dir: {
         "session_id": "sess-9",
         "session_file": str(tmp_path / "wt" / ".pi-session" / "s.jsonl"),
         "phase": "test",
@@ -8274,7 +8275,7 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
             return None
         raise OSError("disk error")
 
-    monkeypatch.setattr(runner, "activity_snapshot", flaky_snapshot)
+    monkeypatch.setattr(failure_report, "activity_snapshot", flaky_snapshot)
     # The main-path scene read now lives in `pi_session.resume_context`
     # (Issue #1262): patch the same flaky snapshot there too so the
     # first (resume-context) call succeeds and the runner's
@@ -12765,7 +12766,7 @@ def test_pr_delivery_status_ignores_malformed_check_entry(monkeypatch):
 
 
 def test_terminal_failure_parts_render_action_before_reason_and_diagnosis():
-    body = runner._finish_outcome_body(
+    body = progress._finish_outcome_body(
         outcome="blocked", action="Approve the PR manually.",
         reason="Branch protection requires one human approval.",
         diagnosis="rounds=3; mergeable=CONFLICTING",
@@ -12782,7 +12783,7 @@ def test_terminal_failure_parts_render_action_before_reason_and_diagnosis():
 
 
 def test_terminal_failure_parts_omit_empty_action_and_show_disposition():
-    body = runner._finish_outcome_body(
+    body = progress._finish_outcome_body(
         outcome="blocked", action="", reason="No human action is required.",
         diagnosis="engine retry state", detail="ignored", next_step="",
         pr_url=None, number=39, source_repo="owner/repo",
@@ -12793,7 +12794,7 @@ def test_terminal_failure_parts_omit_empty_action_and_show_disposition():
 
 
 def test_terminal_failure_parts_render_missing_reason_explicitly():
-    body = runner._finish_outcome_body(
+    body = progress._finish_outcome_body(
         outcome="blocked", action="Inspect the PR.", reason="",
         diagnosis="raw state", detail="ignored", next_step="",
         pr_url=None, number=39, source_repo="owner/repo",
@@ -12802,7 +12803,7 @@ def test_terminal_failure_parts_render_missing_reason_explicitly():
 
 
 def test_finish_progress_body_uses_fixed_sections_for_blocked_error(caplog):
-    body = runner._finish_progress_body(
+    body = progress._finish_progress_body(
         number=39, title="Blocked task", run_id="a1b2c3d4",
         role=runner.ROLE_REVIEW, branch=None, worktree=None,
         pr_url="https://github.com/owner/repo/pull/46", review_round=0,
@@ -12822,7 +12823,7 @@ def test_finish_progress_body_uses_fixed_sections_for_blocked_error(caplog):
 
 
 def test_finish_progress_body_keeps_next_step_in_user_section():
-    body = runner._finish_progress_body(
+    body = progress._finish_progress_body(
         number=39, title="Blocked task", run_id="a1b2c3d4",
         role=runner.ROLE_REVIEW, branch=None, worktree=None, pr_url=None,
         review_round=0, priority="normal", detail="failure detail",
@@ -12835,7 +12836,7 @@ def test_finish_progress_body_keeps_next_step_in_user_section():
 
 
 def test_finish_progress_body_defaults_orbi_action_when_fix_step_missing(caplog):
-    body = runner._finish_progress_body(
+    body = progress._finish_progress_body(
         number=39, title="Fix task", run_id="a1b2c3d4",
         role=runner.ROLE_REVIEW, branch=None, worktree=None, pr_url=None,
         review_round=0, priority="normal", detail="failure detail",
@@ -14264,7 +14265,7 @@ def _review_round_env(
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     monkeypatch.setattr(
-        runner, "comment_pr",
+        failure_report, "comment_pr",
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     reviews: list = []
@@ -17179,7 +17180,7 @@ def test_process_issue_keeps_normal_flow_without_release_label(
     monkeypatch.setattr(runner, "delivery_step", Mock())
     monkeypatch.setattr(seam, "edit_issue", Mock())
     monkeypatch.setattr(seam, "LOGGER", Mock())
-    monkeypatch.setattr(runner, "activity_snapshot", lambda p: None)
+    monkeypatch.setattr(failure_report, "activity_snapshot", lambda p: None)
     monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
     monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
     monkeypatch.setattr(seam, "issue_context", lambda r, n: "#n")
@@ -17216,7 +17217,7 @@ def _ops_issue_mocks(monkeypatch, tmp_path, *, head_sha: str, dirty: str):
     monkeypatch.setattr(seam, "create_worktree", lambda *a, **k: worktree)
     monkeypatch.setattr(seam, "comment_issue", Mock())
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
-    monkeypatch.setattr(runner, "activity_snapshot", lambda p: None)
+    monkeypatch.setattr(failure_report, "activity_snapshot", lambda p: None)
     monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
     monkeypatch.setattr(
         pi_session, "run_pi",
@@ -21888,7 +21889,7 @@ def test_reconcile_orphan_prs_reports_an_open_pr_of_a_closed_issue(monkeypatch, 
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(seam, "pr_comments", lambda number, *, repo: pr_comments)
     monkeypatch.setattr(
-        runner, "comment_pr",
+        failure_report, "comment_pr",
         lambda number, *, repo, body: posted.append((number, repo, body)),
     )
     result = claim.reconcile_orphan_prs("o/r", "abc12345", hooks=resume_deps())
@@ -21943,16 +21944,16 @@ def test_pr_comments_reads_and_validates(monkeypatch):
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps({"comments": [{"body": "x"}]}),
     )
-    assert runner.pr_comments(9, repo="o/r") == [{"body": "x"}]
+    assert github.pr_comments(9, repo="o/r") == [{"body": "x"}]
     monkeypatch.setattr(seam, "run_command", lambda *a, **k: json.dumps([{"comments": []}]),
     )
     with pytest.raises(ValueError, match="pr view must be a JSON object"):
-        runner.pr_comments(9, repo="o/r")
+        github.pr_comments(9, repo="o/r")
     monkeypatch.setattr(seam, "run_command",
         lambda *a, **k: json.dumps({"comments": "bad"}),
     )
     with pytest.raises(ValueError, match="pr comments must be a JSON array"):
-        runner.pr_comments(9, repo="o/r")
+        github.pr_comments(9, repo="o/r")
 
 
 def test_reconcile_orphan_prs_skips_open_issues_and_non_delivery_branches(monkeypatch):
@@ -21975,7 +21976,7 @@ def test_reconcile_orphan_prs_skips_open_issues_and_non_delivery_branches(monkey
         raise AssertionError(command)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no comment")))
+    monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no comment")))
     assert claim.reconcile_orphan_prs("o/r", "abc12345", hooks=resume_deps()) == []
     assert read_issues == [4]
     with pytest.raises(AssertionError):
