@@ -1,0 +1,1 @@
+match($re; "g") drops an empty match that follows a non-empty one

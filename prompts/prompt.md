@@ -78,6 +78,85 @@ Minimal implementation — KISS/LEAN (Issue #118):
 - This does not relax the MVP boundary: no database, queue, DAG, daemon,
   risk engine or fallback.
 
+Regression guard for changed behavior (differential and property testing).
+
+First decide whether it applies, and write the decision and the reason as the
+first line of `.orbi/plan.md` (`Regression guard: applies — <reason>` or
+`Regression guard: not needed — <reason>`); the Runner, not you, writes the PR
+body, and the reviewer reads `.orbi/plan.md`. It applies when your change alters how text or bytes are
+parsed, escaped or unescaped, trimmed or stripped, split, measured (width,
+length, columns), matched, searched, replaced, encoded or redacted, or when it
+changes a function that other code calls with inputs the Issue does not
+mention. For any other change (a config value, a new option, a crash on one
+specific state, wiring), skip the rest of this section: a targeted test for
+the reported case plus the existing suite is enough, and do not write
+`.orbi/regression.md`. When it applies:
+
+
+- A change to existing behavior must leave every input it was not asked to
+  change as it was and must not make any input worse. The Issue's example is
+  one input, not the specification of the code path. Hand-picked samples are
+  not evidence: models and people pick samples that already pass.
+- Before committing, write `.orbi/regression.md` and a throwaway generated
+  test (not committed unless it is a real regression test), in this order:
+  1. The oracle. Name what defines correct output for ANY input, and make it
+     independent of your change: never the rule you implemented and never the
+     Issue's description of that rule (comparing a rule with itself always
+     passes). First list the installed dependency tree (`uv pip list`,
+     `pip list`, `go list -m all`, `npm ls`, `deno info`) and the standard
+     library for a reference implementation of the same computation (for
+     example a text-width, parsing, escaping or encoding library) and use it;
+     otherwise use a spec or an invariant the Issue implies (what must be
+     removed, what must be kept byte for byte). When a method the Issue
+     prescribes disagrees with the reference on some input class, that is a
+     regression to fix within the Issue's constraints, not a reason to trust
+     the Issue's method.
+     When more than one reference implementation is installed, run them all
+     and compare them with each other first: where they disagree, find which
+     one follows the newer data or spec (for example the Unicode version its
+     tables are built from) and use that one, and list the disagreeing input
+     classes in `.orbi/regression.md`.
+  2. A generated corpus. Build inputs programmatically across the whole
+     domain the code path receives: every caller, producer or rule that
+     reaches it (not only the one the Issue names), sizes from empty to long,
+     every relevant character class (for text: ASCII, CJK/fullwidth, combining
+     marks, modifiers, zero-width and multi-code-point sequences, control and
+     ANSI codes; for syntax: escapes, even and odd backslash runs, quotes,
+     delimiters), and counts zero/one/many. Hundreds of inputs, not a handful.
+  3. The comparison. Run the base and your change against the oracle over the
+     corpus and record, in `.orbi/regression.md`, the counts: inputs where
+     head is wrong, inputs where base was wrong, and every input where head is
+     wrong but base was right (a regression). Fix every regression before
+     committing, then keep regression tests for the classes you fixed.
+  4. Data that looks like syntax. For every character or pattern your change
+     strips, trims, unescapes, splits on or treats specially, add inputs where
+     that character is legitimate data rather than syntax: a secret, value or
+     name that itself contains or ends with it (for example a password that
+     ends with a literal backslash or backslash-n), and very short values next
+     to it. Enumerate every producer that can emit such data by reading its
+     configuration or definitions (for example every rule whose pattern allows
+     the character), not only the one the Issue names.
+  5. Collisions. When your change alters the text used to search, match,
+     replace or look up (a needle, key, pattern or normalised value), add
+     inputs where the altered text also occurs elsewhere in the same document
+     or value, and check that only the intended occurrence changes. Prefer
+     keeping the original matched text as the search needle and adjusting
+     what is written back, over shortening the needle.
+- If a prescribed approach in the Issue cannot meet the oracle for some input
+  class, keep to the Issue's constraints but extend the implementation until
+  the regression count is zero (for example handle the missing class
+  explicitly); if that is impossible, say so in `.orbi/regression.md` and in your final Issue comment, with the counts.
+- Claims about library, Unicode, regex or encoding behavior are verified by
+  running code, never from memory.
+- Read the target repository's contribution rules before the first commit:
+  `CONTRIBUTING.md`, `AI_POLICY.md` (or equivalent) and its changelog
+  convention, and follow them. Where the repository ships its own tooling for
+  a rule (a changelog manager such as `sacho`, `changeset` or `towncrier`, a
+  lint or check task in `mise.toml`, `Makefile`, `package.json` or
+  `deno.json`), run that tooling and its check command instead of
+  reproducing the rule by hand, and fix what it reports. The repository's own
+  checks are the authority, not your reading of the prose.
+
 Hard rules for external behavior (Issue #73):
 
 - Before writing an external interface, CLI, config, or HTTP path, verify it
