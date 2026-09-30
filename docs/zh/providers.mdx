@@ -336,6 +336,103 @@ Workers AI 是托管服务：Cloudflare 提供推理服务和账号 Neurons 额�
 
 GitHub Models PAT 及其免费原型额度，与 GitHub Copilot 订阅、Copilot 请求和 Copilot premium-request 额度相互独立。拥有 Copilot 不代表拥有 GitHub Models 额度，GitHub Models 使用也不消耗 Copilot 订阅请求。计费、资格、限流和重置规则以 GitHub Models 当前条款为准；不要假定两种产品共用计数器。
 
+## 使用 Sign in with ChatGPT：消耗 ChatGPT Plus/Pro 订阅额度
+
+Pi 原生 `openai` provider 支持 **Sign in with ChatGPT**：符合条件的 ChatGPT Plus/Pro 账号只需授权 Pi CLI 一次，Orbi 之后的交付就会消耗用户的 ChatGPT 订阅额度与 credits，而**不是** OpenAI API 账单。这条路径不需要 `pi_providers` 文件，也不需要 `OPENAI_API_KEY`；Orbi 的 per-run Pi agent 目录会复用 Pi 原生的 `~/.pi/agent/auth.json`。
+
+<Note>
+本次交付没有可用的 ChatGPT Plus/Pro 账号。登录菜单文案、callback、凭据文件和 OAuth scope 均已对照 Pi CLI 包（`@earendil-works/pi-coding-agent` **0.99.1**）和 OpenAI 的 Sign in with ChatGPT 文档核实；端到端登录、订阅额度、特定账号的模型可用性以及 Orbi 实际运行结果**未实测**。不要把下文的示例理解为你的订阅一定有可用额度。
+</Note>
+
+这条路径需要 **Pi ≥ 0.99.1**。文档环境安装的 Pi 是 **0.85.1**，没有 Sign in with ChatGPT 流程：0.99.0 已带 `openai` OAuth 模式但没有完整打包该流程，0.99.1 才是第一个完整发布的版本（`dynamic_agent_client` 注册、`chatgpt.tokens.use.direct` scope 和 `/auth/callback` 监听）。请先升级 Pi。
+
+### 第一次登录：必须按这个顺序
+
+1. 启动交互式 Pi 会话：`pi`。
+2. 在 Pi 提示符中执行 **`/login openai`**。Pi 会询问 `Select authentication method for OpenAI:`——选择 **Sign in with ChatGPT**（订阅路径；另一个选项是 **Sign in with an API key**）。不带 provider 参数的 `/login` 会先询问 `Select authentication method:`：选择 **Sign in with an account**，随后才会列出 provider **OpenAI**。
+3. 在浏览器完成授权，并同意该 app 使用你的 ChatGPT 订阅额度。
+4. 配置 Orbi 之前先检查登录：
+
+   ```bash
+   pi auth check --provider openai --model <slug-from-your-model-list> --json
+   ```
+
+   成功时应报告：
+
+   ```text
+   {"status":"ready","provider":"openai","authType":"oauth"}
+   ```
+
+   `"authType":"oauth"` 说明正在使用已保存的 ChatGPT OAuth 凭据。若显示 `"authType":"api_key"`，说明 Pi 找到了 `OPENAI_API_KEY`；通常已保存的 OAuth 凭据优先，但如果要明确只用订阅，请从 `.orbi/env` 删除该变量。该命令默认会刷新过期 OAuth 凭据；不要在共享终端或 transcript 中使用 `--credentials`。
+
+### 最小 Orbi 配置
+
+保持 `pi_providers` **未设置**——`openai` 是 Pi 原生 provider。不要在任何 provider JSON 文件里创建 `openai` 条目。
+
+```toml
+source_repos = ["OWNER/YOUR-REPO"]
+repo_dir = "/path/to/your-repo"
+deploy_home = "/path/to/orbi"
+workspace_root = "/path/to"
+base_branch = "main"
+max_concurrency = 1
+
+# 不要写 pi_providers = ...
+pi_provider = "openai"
+pi_model = "<slug-from-your-model-list>"
+```
+
+### 选择账号可用的模型
+
+模型可用性取决于账号，因此不要猜 slug，而要用 OAuth access token 从 OpenAI 的模型列表读取：`GET https://api.openai.com/v1/models` 会返回该账号可调用模型的 `models` 数组，本流程支持的条目带有 `visibility: "list"`。把该条目的 `slug` 用作 `pi_model`。
+
+```bash
+ACCESS_TOKEN=$(jq -r '.openai.access' ~/.pi/agent/auth.json)
+curl -sS https://api.openai.com/v1/models \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  | jq -r '.models[] | select(.visibility == "list") | .slug'
+```
+
+`$ACCESS_TOKEN` 是 Pi 为 `openai` provider 保存在 `~/.pi/agent/auth.json` 的 OAuth access token（字段 `access`）；不要把 token 写进共享 shell 历史或 transcript。只有在所选模型确实支持时才设置 `pi_thinking`。
+
+### 与 Codex OAuth 一节的差别
+
+两条路径都使用 ChatGPT 订阅、都不需要 `pi_providers` 文件，但 provider 和 endpoint 不同：
+
+- **Sign in with ChatGPT** 使用 Pi 原生的 `openai` provider，走公网 Responses API `https://api.openai.com/v1`。这是 OpenAI 为 ChatGPT Plus/Pro 订阅额度记录的路径，新装 Orbi 应优先选择。
+- **Codex OAuth** 使用 Pi 原生的 `openai-codex` provider，走 `https://chatgpt.com/backend-api`（Codex app-server 路由）。它仍是已有 Codex 环境的正确路径。
+
+每套 Orbi 只配置一个 provider；不要同时配置两个选择项。
+
+### 无头/服务器安装
+
+Pi 在 `http://127.0.0.1:1455/auth/callback` 监听 OAuth 回调，并在运行 Pi 的机器上打开系统浏览器。若浏览器无法访问该监听端口（远程 VM、容器），Pi 会提示："Complete login in your browser, or paste the final redirect URL here:"——在浏览器完成登录，复制最终的 `http://127.0.0.1:1455/auth/callback?code=...` URL，粘贴回 Pi 提示符。
+
+也可以先在带浏览器的机器登录一次，再复制凭据文件（Pi 以 `0600` 权限写入）：
+
+```bash
+ssh user@vm 'mkdir -p ~/.pi/agent'
+scp -p ~/.pi/agent/auth.json user@vm:~/.pi/agent/auth.json
+```
+
+host 身份按 OpenAI 的 [自托管 VM 指南](https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms)处理：Pi 的 host ID 来自 `~/.pi/agent/settings.json` 中的 device ID，因此除非你确实想沿用被复制机器的 host，否则应保留每台 VM 自己的 agent 目录身份。refresh token 有效期 30 天，每次刷新都会更换，因此只要 VM 持续刷新，复制过去的文件就能一直使用。
+
+### 额度与计费边界
+
+根据 OpenAI 的 [Sign in with ChatGPT 文档](https://developers.openai.com/siwc/token-sharing-open-source)：登录授权的是计入用户 **ChatGPT 订阅额度和 credits** 的 AI 请求，不是 OpenAI API 账单，OpenAI 也不会把请求静默转到其他计费路径。ChatGPT **Plus** 的五小时用量上限由所有使用该订阅的 app 共享——一个 app 的用量计入同一个五小时总量——Pro 不适用该上限。用户可在 [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage) 查看 app 用量、为每个 app 设置每周用量上限（10%–100%），并选择是否在超出订阅额度后使用 credits；Pi 注册了 `agent_name_hint="Pi"`，因此在那里显示为 **Pi**。这些是 OpenAI 的订阅规则，不是 Orbi 的承诺；依赖额度前请查阅当时的官方文档。
+
+### 失败路径与修复
+
+- **订阅额度用尽。** OpenAI 返回 `subscription_sharing_usage_limit_exceeded`（HTTP `429`）或 `subscription_sharing_usage_unavailable`（HTTP `503`）。Pi session 失败，Orbi 记录错误并把 Issue 标为 `ai-blocked`。修复：等待共享额度重置，在 ChatGPT Settings → Usage 调整该 app 的限额，或切换到另一家已配置的 provider。Orbi 永不回退到 API 账单。
+- **未授予权限。** 如果授权页未授予订阅用量权限，Pi 会以 `OpenAI OAuth grant did not include chatgpt.tokens.use.direct` 失败。修复：重新执行 `/login openai` 并同意订阅用量权限。
+- **凭据过期或被撤销。** refresh token 过期（闲置 30 天）、在 ChatGPT 设置中断开该 app，或 Pi session 出现认证错误，都说明需要重新登录。修复：重新执行 `/login openai`。切换 provider 不会修复失效的 ChatGPT session。
+
+绝不要把 OAuth token 或 `auth.json` 写入仓库、Issue、PR body 或 journal。
+
+### 证据边界
+
+本节记录的是契约，不是已验证的运行。登录文案、`pi auth check` 的 JSON 形状、`http://127.0.0.1:1455/auth/callback`、`0600` 权限的 `~/.pi/agent/auth.json`、`agent_name_hint="Pi"` 以及 `chatgpt.tokens.use.direct` scope 均已对照 `@earendil-works/pi-coding-agent` 0.99.1 核实；模型列表 endpoint、额度规则和错误码来自 OpenAI 的 Sign in with ChatGPT 文档。登录、额度、特定账号的模型可用性以及 Orbi 实际运行结果**未实测**。登录成功后，只保留真实 Issue 运行的非秘密证据（journal 的 `provider=openai model=<slug> run_id=<id>`、PR URL、耗时），绝不保留 token 或 session JSONL。
+
 ## Codex OAuth：使用 ChatGPT/Codex 订阅额度
 
 这条路径使用 Pi 原生的 `openai-codex` provider 和 OAuth 凭据。**不使用 `OPENAI_API_KEY`，也不需要第二份 `pi_providers` JSON**。它消耗的是订阅/Codex 额度，不是 OpenAI API 账单。

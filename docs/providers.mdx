@@ -339,6 +339,103 @@ This repository has not made a real GitHub Models request or measured exhaustion
 
 A GitHub Models PAT and its free prototyping allowance are separate from a GitHub Copilot subscription, Copilot requests, and Copilot premium-request allowance. Having Copilot does not establish GitHub Models quota, and GitHub Models usage does not consume Copilot subscription requests. Billing, eligibility, rate limits, and reset rules are controlled by the current GitHub Models terms; check the official pages rather than assuming the two products share a counter.
 
+## Sign in with ChatGPT: use a ChatGPT Plus/Pro plan
+
+Pi's native `openai` provider supports **Sign in with ChatGPT**: an eligible ChatGPT Plus/Pro account authorizes the Pi CLI once, and Orbi then runs deliveries against the user's ChatGPT plan usage and credits — **not** OpenAI API billing. This needs no `pi_providers` file and no `OPENAI_API_KEY`; Orbi's per-run Pi agent directory reuses Pi's native `~/.pi/agent/auth.json`.
+
+<Note>
+No ChatGPT Plus/Pro account was available for this delivery. The login menu wording, the callback, the credential file, and the OAuth scopes were verified against the Pi CLI package (`@earendil-works/pi-coding-agent` **0.99.1**) and OpenAI's Sign in with ChatGPT documentation; the end-to-end sign-in, plan quota, model availability for a particular account, and the resulting Orbi run were **not tested**. Do not read the examples below as a promise of available capacity for your plan.
+</Note>
+
+This path needs **Pi ≥ 0.99.1**. The installed Pi in the documented environment is **0.85.1**, which has no Sign in with ChatGPT flow: 0.99.0 already carries the `openai` OAuth mode but not the bundled flow, and 0.99.1 is the first release that ships it complete (`dynamic_agent_client` registration, the `chatgpt.tokens.use.direct` scope, and the `/auth/callback` listener). Upgrade Pi first.
+
+### First login: do this in order
+
+1. Start an interactive Pi session with `pi`.
+2. At the Pi prompt, run **`/login openai`**. Pi asks `Select authentication method for OpenAI:` — choose **Sign in with ChatGPT** (the subscription path; the other option is **Sign in with an API key**). A bare `/login` without the provider argument asks `Select authentication method:` first: choose **Sign in with an account**, which then lists the provider **OpenAI**.
+3. Complete the consent in the browser and approve this app's access to your ChatGPT plan.
+4. Verify the login before configuring Orbi:
+
+   ```bash
+   pi auth check --provider openai --model <slug-from-your-model-list> --json
+   ```
+
+   A successful check reports:
+
+   ```text
+   {"status":"ready","provider":"openai","authType":"oauth"}
+   ```
+
+   `"authType":"oauth"` proves the stored ChatGPT OAuth credential is in use. If it instead reports `"authType":"api_key"`, Pi found an `OPENAI_API_KEY`; a stored OAuth credential normally wins, but remove the variable from `.orbi/env` if you want an unambiguous subscription-only setup. This command refreshes expired OAuth credentials by default; do not use `--credentials` in a shared terminal or transcript.
+
+### Minimal Orbi configuration
+
+Leave `pi_providers` **unset** — the `openai` provider is native to Pi. Do not create an `openai` entry in a provider JSON file.
+
+```toml
+source_repos = ["OWNER/YOUR-REPO"]
+repo_dir = "/path/to/your-repo"
+deploy_home = "/path/to/orbi"
+workspace_root = "/path/to"
+base_branch = "main"
+max_concurrency = 1
+
+# No pi_providers = ... line.
+pi_provider = "openai"
+pi_model = "<slug-from-your-model-list>"
+```
+
+### Choose a model the account can use
+
+Model availability depends on the account, so read it from OpenAI's model list with the OAuth access token instead of guessing a slug: `GET https://api.openai.com/v1/models` returns a `models` array of the models the account may call, and the entries this flow supports carry `visibility: "list"`. Use that entry's `slug` as `pi_model`.
+
+```bash
+ACCESS_TOKEN=$(jq -r '.openai.access' ~/.pi/agent/auth.json)
+curl -sS https://api.openai.com/v1/models \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  | jq -r '.models[] | select(.visibility == "list") | .slug'
+```
+
+`$ACCESS_TOKEN` is the OAuth access token Pi stored for the `openai` provider in `~/.pi/agent/auth.json` (field `access`); do not put a token into a shared shell history or a transcript. Set `pi_thinking` only to a level the chosen model actually supports.
+
+### How this differs from the Codex OAuth section
+
+Both paths use a ChatGPT subscription and need no `pi_providers` file, but they are different providers and endpoints:
+
+- **Sign in with ChatGPT** uses Pi's native `openai` provider against the public Responses API at `https://api.openai.com/v1`. That is the path OpenAI documents for ChatGPT Plus/Pro plan usage, and the one to prefer for a new Orbi install.
+- **Codex OAuth** uses Pi's native `openai-codex` provider against `https://chatgpt.com/backend-api` (the Codex app-server route). It remains the correct path for an existing Codex setup.
+
+Use one provider per Orbi install; do not configure both selectors.
+
+### Headless and server installs
+
+Pi listens for the OAuth redirect on `http://127.0.0.1:1455/auth/callback` and opens the system browser on the machine running Pi. When no browser can reach that listener (a remote VM, a container), Pi prompts: "Complete login in your browser, or paste the final redirect URL here:" — complete the sign-in in a browser, copy the final `http://127.0.0.1:1455/auth/callback?code=...` URL, and paste it into the Pi prompt.
+
+Alternatively, sign in once on a machine that has a browser and copy the credential file (Pi writes it with mode `0600`):
+
+```bash
+ssh user@vm 'mkdir -p ~/.pi/agent'
+scp -p ~/.pi/agent/auth.json user@vm:~/.pi/agent/auth.json
+```
+
+Follow OpenAI's [self-hosted VM guidance](https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms) for the host identity: Pi derives its host ID from the device ID in `~/.pi/agent/settings.json`, so keep each VM's own agent directory identity unless you deliberately want the copied host. The refresh token stays valid for 30 days and is replaced on each refresh, so the copied file keeps working while the VM renews it.
+
+### Quota and billing boundary
+
+Per OpenAI's [Sign in with ChatGPT documentation](https://developers.openai.com/siwc/token-sharing-open-source): sign-in authorizes AI requests that count against the user's **ChatGPT plan and credits**, not OpenAI API billing, and OpenAI does not silently move a request to another billing path. For ChatGPT **Plus** the five-hour usage limit is shared across every app that uses the plan — usage in one app contributes to the same total — and it does not apply to Pro. Users review app usage, set each app's weekly limit (10%–100%), and choose whether it may use credits after plan limits at [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage); Pi registers `agent_name_hint="Pi"`, so the app appears there as **Pi**. These are OpenAI's plan rules, not an Orbi guarantee; check the current documentation before relying on a quota.
+
+### Failure paths and repair actions
+
+- **Plan usage limit reached.** OpenAI returns `subscription_sharing_usage_limit_exceeded` (HTTP `429`) or `subscription_sharing_usage_unavailable` (HTTP `503`). The Pi session fails, Orbi logs the error and marks the Issue `ai-blocked`. Repair: wait for the shared limit to reset, adjust the app's limit in ChatGPT Settings → Usage, or switch to another configured provider. Orbi never falls back to API billing.
+- **Permission not granted.** If the consent screen did not grant plan usage, Pi fails with `OpenAI OAuth grant did not include chatgpt.tokens.use.direct`. Repair: run `/login openai` again and approve the plan-usage permission.
+- **Stale or revoked session.** An expired refresh token (30 days idle), a disconnected app in ChatGPT settings, or an auth error in the Pi session means the credential must be renewed. Repair: run `/login openai` again. Switching providers does not repair a broken ChatGPT session.
+
+Never put the OAuth token or `auth.json` into the repository, an Issue, a PR body, or a journal.
+
+### Evidence boundary
+
+This section documents the contract, not a verified run. The exact login wording, the `pi auth check` JSON shape, `http://127.0.0.1:1455/auth/callback`, the `0600` `~/.pi/agent/auth.json`, `agent_name_hint="Pi"`, and the `chatgpt.tokens.use.direct` scope were verified against `@earendil-works/pi-coding-agent` 0.99.1; the model-list endpoint, quota rules, and error codes come from OpenAI's Sign in with ChatGPT documentation. The sign-in, quota, model availability for a given account, and the resulting Orbi run are **not tested** here. After you sign in, retain only non-secret evidence of a real Issue run (journal `provider=openai model=<slug> run_id=<id>`, PR URL, elapsed time), never the tokens or the session JSONL.
+
 ## Codex OAuth: use a ChatGPT/Codex subscription
 
 This path uses Pi's native `openai-codex` provider and OAuth credentials. It does **not** use `OPENAI_API_KEY` and it does **not** need a second `pi_providers` JSON file. It is subscription/Codex quota, not OpenAI API billing.
