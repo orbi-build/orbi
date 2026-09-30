@@ -12,9 +12,9 @@ Orbi 是一个自托管、开源的自主编程 agent：给 GitHub Issue 打上 
 
 **查看片中这条完整链路：** [Issue #1367](https://github.com/orbi-build/orbi/issues/1367) → [PR #1370](https://github.com/orbi-build/orbi/pull/1370) → [Release v0.5.47](https://github.com/orbi-build/orbi/releases/tag/v0.5.47)
 
-官网 <https://orbi.build> ｜ [Orbi Managed Cloud](https://orbi.build/cloud/?ref=gh-readme) ｜ 文档 <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions)
+官网 <https://orbi.build> ｜ [Orbi Managed Cloud](https://orbi.build/zh/cloud/?ref=gh-readme) ｜ 文档 <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions)
 
-**不想自己部署？** [Orbi Cloud](https://orbi.build/cloud/?ref=gh-readme) 在你的仓库上跑同一套流程，一个仓库免费。创始会员永久 5 折，结账时输入 `FOUNDING50`（限 6 位）。
+**不想自己部署？** [Orbi Cloud](https://orbi.build/zh/cloud/?ref=gh-readme) 在你的仓库上跑同一套流程，一个仓库免费。创始会员永久 5 折，结账时输入 `FOUNDING50`（限 6 位）。
 
 ## 快速开始
 

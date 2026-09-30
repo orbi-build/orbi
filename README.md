@@ -14,6 +14,8 @@ Orbi is a self-hosted, open-source autonomous coding agent: label a GitHub Issue
 
 Website <https://orbi.build> ｜ [Orbi Cloud (free for 1 repo)](https://orbi.build/cloud/?ref=gh-readme) ｜ Documentation <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions) ｜ Docker [GHCR](https://ghcr.io/orbi-build/orbi) · [Docker Hub](https://hub.docker.com/r/orbibuild/orbi)
 
+**Don't want to run it yourself?** [Orbi Cloud](https://orbi.build/cloud/?ref=gh-readme) runs the same loop on your repository, free for one repository. Founding members get 50% off forever with the code `FOUNDING50` at checkout (6 places).
+
 ## Quick start
 
 ```bash
