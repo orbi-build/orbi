@@ -1,5 +1,5 @@
 {
-  "command_shape_asserts": 509,
+  "command_shape_asserts": 503,
   "monkeypatch_setattr_modules": {
     "branch_reclaim": 0,
     "checks": 0,
@@ -32,7 +32,7 @@
     "pilot_setup": 18,
     "pilot_slots": 0,
     "progress": 12,
-    "release": 45,
+    "release": 19,
     "release_git": 0,
     "release_notes": 0,
     "repo_config": 0,

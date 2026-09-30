@@ -3,15 +3,16 @@
 
 This repository's own Mintlify release pages (`docs/release-<tag>.mdx`,
 `docs/zh/release-<tag>.mdx`, the `Releases`/`发布` navigation entries and the
-`(latest)` marker) used to be written by the engine's release state machine
-(`orbi.release.sync_release_docs` / `promote_release_docs_latest`). The pages
-are this repository's own docs-site business, so they move here into a
+`(latest)` marker) used to be written by the engine's release state machine;
+Issue #1483 removed that engine step. The pages
+are this repository's own docs-site business, so they live here in a
 standalone script that the `.github/workflows/release-docs.yml` workflow runs
 on `release: published` and on manual dispatch.
 
 There is NO `orbi` import: the tool is the repository's own docs tooling and
-must keep working while the engine code changes. The rendering is copied from
-`orbi.release` with the same output format; the one addition is that the
+must keep working while the engine code changes. The rendering was copied from
+the engine's former release-docs page builder with the same output format; the
+one addition is that the
 "release task" clause is omitted when no matching `ai-release` Issue exists.
 
 Input: one tag. The script reads the published GitHub Release
@@ -20,8 +21,7 @@ and its commit (git), and the release task Issue (the `ai-release` Issue titled
 exactly `Release <tag>`).
 
 Idempotent and never destructive: when both pages for the tag already exist it
-changes nothing and exits 0, so the transition is safe while the engine still
-writes the same pages. An existing page with different content is never
+changes nothing and exits 0. An existing page with different content is never
 overwritten.
 
 Usage:  python3 tools/release_docs.py <tag> [--repo <checkout root>]
@@ -76,8 +76,8 @@ def release_docs_page(*, version: str, tag_object: str,
                       latest: bool = True) -> str:
     """Build one docs-site Release notes page for a published release.
 
-    The rendering matches `orbi.release.release_docs_page` byte for byte for
-    the same input; `issue_number=None` omits the "release task" clause
+    The rendering was copied from the engine's former release-docs page
+    builder; `issue_number=None` omits the "release task" clause
     (a release whose task Issue is not found).
     """
     notes = body.strip()

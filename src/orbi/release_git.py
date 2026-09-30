@@ -150,7 +150,7 @@ def prepare_release_version(worktree: Path, tag: str,
     The release tag is the public identity (for example ``v0.3.0``), while
     metadata version fields omit the leading ``v``.  The selected source
     must be structurally recognizable before it is changed; the commit is
-    pushed directly to the release base, matching the release docs-sync step.
+    pushed directly to the release base, like the other release writes.
     A push rejected by a concurrent release instance that already landed the
     same version commit yields (`ReleaseVersionAlreadyLanded`); `repo_dir`
     names the deployment checkout that owns the shared base-sync lock (it
