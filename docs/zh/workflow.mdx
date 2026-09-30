@@ -528,37 +528,31 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
      force-push。
   7. 发布 GitHub Release（幂等），notes 带完整验证证据：version、
      tag、release commit、逐项 scope 证据、门禁证据、测试证据和 run
-     marker。
-  8. 同步文档站 Release notes（Issue #275）——在 GitHub Release 发布
-     之后、关闭 Milestone 之前：用已发布的 Release body 生成
-     `docs/release-<version>.mdx` 与 `docs/zh/release-<version>.mdx`
-     （不重复实现 changelog 生成——#204 已完成那部分），补上现有
-     release 页共有的元信息：tag/release commit 对应关系、发布时间、
-     release task 的 Issue 编号；在 `docs/docs.json` 的 `Releases`/
-     `发布` 导航分组首位插入新版本（中英文两处，最新在前）；自
-     Issue #1096 起两个分组各嵌套一个折叠的 `Earlier releases`
-     （历史版本）子分组——自动同步把新版本插到可见页首位，并将超过
-     最新三个版本的可见条目移入该子分组，让可见分组始终保持最新三个
-     版本；把
-     `(latest)` 标题标记从上一版页面转移到新版本页面（只有最新页面
-     带该标记）。这些文件改动直接提交进 base 分支（release 路径无
-     PR）并普通 push。幂等：已有页面内容一致时不重复生成、不覆盖，
-     无改动时不提交；已有页面内容不一致则 fail fast。任何失败都让
-     整个 release 失败（`ai-blocked`），绝不静默跳过。
-  9. 给 release Issue 打上 `ai-merged` 并关闭它（交付终态转换）。
-  10. 关闭 title 与发布 version 精确一致的 Milestone（Issue #214），
-      然后写成功评论（release URL、tag、commit、证据、文档站 Release
-      notes 证据、Milestone 证据）。只按 title 精确匹配（不猜测、不
-      模糊匹配、绝不关别的 Milestone）：0 个 open Issue 时关闭；已关闭
-      是幂等成功（不重开）；Milestone 缺失或仍有 open Issue 则 fail
-      fast，带上 version、Milestone 编号/链接和 open issue 列表（绝不
-      静默跳过）。release 票自己永不算未完成工作（Issue #808）：它正被
-      本次发版关闭，issue 索引落后关票几秒（Issue #754）造成的
-      「只剩 release 票自己」的陈旧读既不阻止也不拖延关闭；其余任何
-      open Issue 仍然拒绝关闭。
-      任何失败：单独进入 `ai-blocked`（release 是人工决策
-      点——不自动重试），失败评论带 run marker 和具体原因，异常向上传
-      播让 tick fail fast。
+     marker。文档站 Release 页**不由**状态机写入（Issue #1483）：仓库
+     自己的 `.github/workflows/release-docs.yml`（Issue #1482）在
+     Release 发布时用其 body 生成 `docs/release-<version>.mdx` 与
+     `docs/zh/release-<version>.mdx`，把新版本插到 `docs/docs.json`
+     的 `Releases`/`发布` 导航分组首位（中英文两处，最新在前），并
+     转移 `(latest)` 标题标记。自 Issue #1096 起两个分组各嵌套一个
+     折叠的 `Earlier releases`（历史版本）子分组——自动同步把新版本
+     插到可见页首位，并将超过最新三个版本的可见条目移入该子分组，
+     让可见分组始终保持最新三个版本。幂等：已有页面内容一致时不重复
+     生成、不覆盖，无改动时不提交；已有页面内容不一致则 fail fast——
+     workflow 运行失败，绝不静默跳过。
+  8. 给 release Issue 打上 `ai-merged` 并关闭它（交付终态转换）。
+  9. 关闭 title 与发布 version 精确一致的 Milestone（Issue #214），
+     然后写成功评论（release URL、tag、commit、证据、Milestone
+     证据）。只按 title 精确匹配（不猜测、不模糊匹配、绝不关别的
+     Milestone）：0 个 open Issue 时关闭；已关闭
+     是幂等成功（不重开）；Milestone 缺失或仍有 open Issue 则 fail
+     fast，带上 version、Milestone 编号/链接和 open issue 列表（绝不
+     静默跳过）。release 票自己永不算未完成工作（Issue #808）：它正被
+     本次发版关闭，issue 索引落后关票几秒（Issue #754）造成的
+     「只剩 release 票自己」的陈旧读既不阻止也不拖延关闭；其余任何
+     open Issue 仍然拒绝关闭。
+     任何失败：单独进入 `ai-blocked`（release 是人工决策
+     点——不自动重试），失败评论带 run marker 和具体原因，异常向上传
+     播让 tick fail fast。
 
   `ai-release` 标签是类型标记，**不是**交付状态：它不属于交付状态机、
   不是 ready 扫描的排除条件，Runner 从不增删它——只有人在派发时

@@ -19315,8 +19315,10 @@ def make_release_range_repo(tmp_path):
     return work
 
 
-def commit_file(work, name, message):
-    (work / name).write_text(message, encoding="utf-8")
+def commit_file(work, name, message, content=None):
+    (work / name).write_text(
+        message if content is None else content, encoding="utf-8",
+    )
     subprocess.run(["git", "-C", str(work), "add", name],
                    check=True, capture_output=True)
     subprocess.run(["git", "-C", str(work), "commit", "-m", message],
@@ -19620,8 +19622,8 @@ def test_release_notes_are_stable_when_a_second_run_recovers_the_tag(
     git_out(work, "tag", "-a", "v0.6.88", "-m", "v0.6.88")
     shipped = commit_file(work, "shipped.txt", "feat: #1551")
     tag_commit = commit_file(work, "version.txt", "chore: v0.6.89")
-    # The docs push advanced the base past the tag commit.
-    commit_file(work, "docs.txt", "docs: release notes")
+    # A later commit landed on the base past the tag commit.
+    commit_file(work, "later.txt", "chore: later commit")
     by_commit = {
         shipped: [{"number": 1551, "merged_at": "2026-01-01T00:00:00Z",
                    "base": {"ref": "main"}}],
@@ -19801,7 +19803,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     leftover_milestones = leftover_milestones or {}
     state = {
         "edits": [], "comments": [], "commands": [],
-        "run_ids": [], "active_runs": [], "sync_docs_calls": [],
+        "run_ids": [], "active_runs": [],
         "published": [],
     }
 
@@ -19985,14 +19987,6 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
         return release_url
 
     monkeypatch.setattr(release, "publish_release", fake_publish_release)
-    # Issue #275: the docs sync step is covered by its own unit tests
-    # (real git repos); here it is stubbed so the orchestration order is
-    # what is asserted.
-    def fake_sync_docs(**kwargs):
-        state["sync_docs_calls"].append(kwargs)
-        return "docs release notes for " + kwargs["tag"] + " synced to base"
-
-    monkeypatch.setattr(release, "sync_release_docs", fake_sync_docs)
     return state
 
 
@@ -20279,22 +20273,6 @@ def test_process_release_success_end_to_end(monkeypatch):
     # the `timeout`-wrapped declared command is gone; test acceptance is
     # the CI-wait gate evidence only.
     assert not [c for c, _ in state["commands"] if c[:1] == ["timeout"]]
-    # Issue #998: docs sync runs before the tag is pushed, with the
-    # release identity and changelog.
-    assert len(state["sync_docs_calls"]) == 1
-    sync_call = state["sync_docs_calls"][0]
-    assert {key: sync_call[key] for key in (
-        "source_repo", "repo_dir", "worktree", "base_branch", "tag",
-        "release_commit", "issue_number",
-    )} == {
-        "source_repo": "o/r", "repo_dir": Path("/r"),
-        "worktree": Path("/wt"), "base_branch": "main", "tag": "v0.3.0",
-        "release_commit": "abc123", "issue_number": 99,
-    }
-    assert sync_call["changelog"].startswith("## Changelog")
-    # The docs commit must already establish the latest-marker invariant;
-    # publication promotion is only a no-op/resume compatibility step.
-    assert sync_call["latest"] is True
     # The success comment carries the run marker and the release URL.
     (comment_number, comment_kwargs), = state["comments"]
     assert comment_number == 99
@@ -20308,102 +20286,64 @@ def test_process_release_success_end_to_end(monkeypatch):
     assert "- base_sha: abc123" in comment_kwargs["body"]
     assert "PR #123 merged (mergeCommit=aaa111)" in comment_kwargs["body"]
     assert "Issue #124 closed" in comment_kwargs["body"]
-    assert "docs release notes for v0.3.0 synced to base" \
-        in comment_kwargs["body"]
     assert state["run_ids"][0] == "a1b2c3d4"
 
 
-def test_process_release_preserves_marker_free_resume_compatibility(monkeypatch):
-    """An older interrupted run may already have committed its unmarked
-    page; route that state through post-publication promotion instead of
-    rejecting the page when the upgraded runner resumes."""
-    state = make_release_process_env(monkeypatch, tag_commit="abc123")
-    docs_page = Path("/wt/docs/release-v0.3.0.mdx")
-    original_is_file = Path.is_file
-    monkeypatch.setattr(
-        Path, "is_file",
-        lambda path: path == docs_page or original_is_file(path),
-    )
-    issue = {"number": 99, "title": "Release v0.3.0",
-             "body": RELEASE_DECLARATION_BODY,
-             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-
-    assert release.process_release(
-        issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
-    ) == "https://github.com/o/r/releases/tag/v0.3.0"
-    assert state["sync_docs_calls"][0]["latest"] is False
-
-
-def test_process_release_syncs_docs_before_pushing_tag(monkeypatch):
+def test_release_run_pushes_no_docs_commit(monkeypatch):
+    """Issue #1483 acceptance: a full release run performs no git commit
+    and no remote write under `docs/` — the engine's release path never
+    reads or writes the docs site (the repository's own
+    `.github/workflows/release-docs.yml` owns the pages, Issue #1482)."""
     state = make_release_process_env(monkeypatch)
-    steps = []
-    monkeypatch.setattr(
-        release, "ensure_release_tag_created",
-        lambda *args: steps.append("tag-created"),
-    )
-    monkeypatch.setattr(
-        release, "sync_release_docs",
-        lambda **kwargs: steps.append("docs") or "docs synced",
-    )
-    monkeypatch.setattr(
-        release, "ensure_release_tag_pushed",
-        lambda *args: steps.append("tag-pushed"),
-    )
-    monkeypatch.setattr(
-        release, "publish_release",
-        lambda **kwargs: steps.append("release-published") or "https://example/release",
-    )
-    issue = {"number": 99, "title": "Release v0.3.0",
-             "body": RELEASE_DECLARATION_BODY,
-             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    assert release.process_release(
-        issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
-    ) == "https://example/release"
-    assert steps == ["tag-created", "docs", "tag-pushed", "release-published"]
-
-
-def test_process_release_resumes_with_local_tag_after_docs_push(monkeypatch):
-    state = make_release_process_env(monkeypatch)
-    steps = []
-    monkeypatch.setattr(release, "local_release_tag_commit",
-                        lambda *args: "release-commit")
-    monkeypatch.setattr(release, "tag_commit_is_ancestor_of_base",
-                        lambda *args: True)
-    monkeypatch.setattr(
-        release, "ensure_release_tag_created",
-        lambda *args: steps.append(("tag-created", args[-1])),
-    )
-    monkeypatch.setattr(
-        release, "sync_release_docs",
-        lambda **kwargs: steps.append(("docs", kwargs["release_commit"]))
-        or "docs synced",
-    )
-    monkeypatch.setattr(
-        release, "ensure_release_tag_pushed",
-        lambda *args: steps.append(("tag-pushed", args[-1])),
-    )
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     assert release.process_release(
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     ) == "https://github.com/o/r/releases/tag/v0.3.0"
-    assert steps == [
-        ("tag-created", "release-commit"),
-        ("docs", "release-commit"),
-        ("tag-pushed", "release-commit"),
+    commands = [c for c, _ in state["commands"]]
+    assert not [c for c in commands if c[:2] == ["git", "commit"]]
+    assert not [
+        c for c in commands
+        if c[:2] == ["git", "push"] and any("docs" in arg for arg in c)
     ]
 
 
-def test_resume_release_commit_rejects_unrelated_local_tag(monkeypatch):
-    monkeypatch.setattr(release, "tag_commit_is_ancestor_of_base",
-                        lambda *args: False)
-    with pytest.raises(RuntimeError, match="existing tag is never moved"):
-        release.resume_release_commit(
-            local_tag_commit="unrelated-commit", release_commit="base-commit",
-            repo_dir=Path("/r"),
-        )
+def test_release_tag_push_leaves_a_docs_site_without_a_releases_group_alone(
+        tmp_path):
+    """Issue #1483 acceptance: on a repository whose `docs/docs.json` has
+    no `Releases` navigation group, publishing the release tag succeeds
+    without touching the docs site — the base branch does not move and no
+    docs file changes (the repository's own workflow writes the pages)."""
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)],
+                   check=True, capture_output=True)
+    work = make_release_range_repo(tmp_path)
+    subprocess.run(["git", "-C", str(work), "remote", "add", "origin",
+                    str(remote)], check=True, capture_output=True)
+    (work / "docs").mkdir()
+    commit_file(work, "docs/docs.json", "docs: site without a Releases group",
+                content=json.dumps({
+                    "name": "Orbi",
+                    "navigation": {"languages": [{
+                        "language": "en", "default": True,
+                        "groups": [{"group": "Guides", "pages": ["start"]}],
+                    }]},
+                }))
+    release_commit = commit_file(work, "version.txt", "chore: v0.3.0")
+    base_head = git_out(work, "rev-parse", "HEAD")
+    subprocess.run(["git", "-C", str(work), "push", "origin", "main"],
+                   check=True, capture_output=True)
 
+    release.ensure_release_tag_pushed(work, "v0.3.0", release_commit)
+
+    assert git_out(remote, "rev-parse", "refs/heads/main") == base_head
+    assert git_out(work, "ls-remote", "origin", "refs/tags/v0.3.0").split()[0] == \
+        git_out(work, "rev-parse", "refs/tags/v0.3.0")
+    assert git_out(work, "status", "--porcelain") == ""
+    assert "Releases" not in (work / "docs" / "docs.json").read_text(
+        encoding="utf-8",
+    )
 
 def test_process_release_started_milestone_carries_base_branch(monkeypatch):
     """Issue #811: the `**Orbi release started**` milestone names the
@@ -20674,9 +20614,8 @@ def test_process_release_proceeds_with_empty_derived_scope(monkeypatch):
     assert [c for c in commands if c[:2] == ["git", "tag"]]
     assert [c for c in commands if c[:3] == ["gh", "issue", "close"]]
     # The one-line empty-scope sentence replaces the Changelog list in
-    # both the docs page and the GitHub Release notes.
+    # the GitHub Release notes.
     empty_scope_changelog = "No deliveries are linked to this milestone."
-    assert state["sync_docs_calls"][0]["changelog"] == empty_scope_changelog
     assert state["published"][0]["changelog"] == empty_scope_changelog
 
 
@@ -20923,29 +20862,15 @@ def test_process_release_closes_milestone_despite_stale_release_ticket(monkeypat
     assert "release ticket #99 excluded" in comment_kwargs["body"]
 
 
-def test_process_release_publish_failure_preserves_docs_after_tag_push(monkeypatch):
+def test_process_release_publish_failure_blocks_with_the_reason(monkeypatch):
+    """The tag is published but the GitHub Release failed: the release is
+    NOT reported successful — the terminal state is ai-blocked with the
+    concrete reason on the Issue."""
     state = make_release_process_env(monkeypatch)
-    original_run = seam.run_command
-    monkeypatch.setattr(
-        seam, "run_command",
-        lambda command, **kwargs: (
-            "docs-commit\n"
-            if command == ["git", "rev-parse", "HEAD"]
-            and kwargs.get("cwd") == Path("/wt")
-            else original_run(command, **kwargs)
-        ),
-    )
-    monkeypatch.setattr(release, "sync_release_docs",
-                        lambda **kwargs: "docs committed and pushed")
     monkeypatch.setattr(
         release, "publish_release",
         lambda **kwargs: (_ for _ in ()).throw(RuntimeError("publish down")),
     )
-    rolled_back = []
-    monkeypatch.setattr(
-        release, "rollback_release_docs",
-        lambda **kwargs: rolled_back.append(kwargs),
-    )
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -20953,35 +20878,21 @@ def test_process_release_publish_failure_preserves_docs_after_tag_push(monkeypat
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
         "o/r",
     ) == ""
-    assert rolled_back == []
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
+    assert not any(k.get("add") == "ai-merged" for _, k in state["edits"])
+    (comment_number, comment_kwargs), = state["comments"]
+    assert comment_number == 99
+    assert "Orbi release failed (ai-blocked)" in comment_kwargs["body"]
+    assert "publish down" in comment_kwargs["body"]
 
 
-def test_process_release_tag_push_failure_rolls_back_docs_when_tag_absent(monkeypatch):
+def test_process_release_tag_push_failure_blocks(monkeypatch):
     state = make_release_process_env(monkeypatch)
-    original_run = seam.run_command
-    monkeypatch.setattr(
-        seam, "run_command",
-        lambda command, **kwargs: (
-            "docs-commit\n"
-            if command == ["git", "rev-parse", "HEAD"]
-            and kwargs.get("cwd") == Path("/wt")
-            else original_run(command, **kwargs)
-        ),
-    )
-    monkeypatch.setattr(release, "sync_release_docs",
-                        lambda **kwargs: "docs committed and pushed")
     monkeypatch.setattr(
         release, "ensure_release_tag_pushed",
         lambda *args: (_ for _ in ()).throw(RuntimeError("tag push down")),
     )
-    monkeypatch.setattr(release, "release_tag_commit", lambda *args: None)
-    rolled_back = []
-    monkeypatch.setattr(
-        release, "rollback_release_docs",
-        lambda **kwargs: rolled_back.append(kwargs),
-    )
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -20989,94 +20900,11 @@ def test_process_release_tag_push_failure_rolls_back_docs_when_tag_absent(monkey
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
         "o/r",
     ) == ""
-    assert rolled_back == [{"worktree": Path("/wt"), "base_branch": "main",
-                            "docs_commit": "docs-commit"}]
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
-
-
-def test_process_release_tag_push_failure_preserves_docs_if_tag_is_visible(monkeypatch):
-    state = make_release_process_env(monkeypatch)
-    original_run = seam.run_command
-    monkeypatch.setattr(
-        seam, "run_command",
-        lambda command, **kwargs: (
-            "docs-commit\n"
-            if command == ["git", "rev-parse", "HEAD"]
-            and kwargs.get("cwd") == Path("/wt")
-            else original_run(command, **kwargs)
-        ),
-    )
-    calls = iter([None, "remote-tag"])
-    monkeypatch.setattr(release, "release_tag_commit", lambda *args: next(calls))
-    monkeypatch.setattr(release, "sync_release_docs",
-                        lambda **kwargs: "docs committed and pushed")
-    monkeypatch.setattr(
-        release, "ensure_release_tag_pushed",
-        lambda *args: (_ for _ in ()).throw(RuntimeError("push uncertain")),
-    )
-    rolled_back = []
-    monkeypatch.setattr(release, "rollback_release_docs",
-                        lambda **kwargs: rolled_back.append(kwargs))
-    issue = {"number": 99, "title": "Release v0.3.0",
-             "body": RELEASE_DECLARATION_BODY,
-             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    assert release.process_release(
-        issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
-        "o/r",
-    ) == ""
-    assert rolled_back == []
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
-                                        "remove": "ai-in-progress"})
-
-
-def test_process_release_docs_sync_failure_fails_fast_and_blocks(monkeypatch):
-    state = make_release_process_env(monkeypatch)
-
-    def sync_failing(**kwargs):
-        raise RuntimeError(
-            "release v0.3.0: docs release notes commit push rejected "
-            "(non-fast-forward)"
-        )
-
-    monkeypatch.setattr(release, "sync_release_docs", sync_failing)
-    monkeypatch.setattr(release, "ensure_release_tag_created",
-                        lambda *args: None)
-    issue = {"number": 99, "title": "Release v0.3.0",
-             "body": RELEASE_DECLARATION_BODY,
-             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = release.process_release(
-        issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
-    )
-    assert result == ""
-    # The GitHub Release was published (step 7 succeeded) but the docs
-    # sync failed: the release is NOT reported successful — the terminal
-    # state is ai-blocked with the concrete reason on the Issue.
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
-                                       "remove": "ai-in-progress"})
-    assert not any(k.get("add") == "ai-merged" for _, k in state["edits"])
-    assert not [c for c, _ in state["commands"]
-                if c[:2] == ["gh", "api"] and "PATCH" in c]
     (comment_number, comment_kwargs), = state["comments"]
     assert comment_number == 99
-    assert "Orbi release failed (ai-blocked)" in comment_kwargs["body"]
-    assert "non-fast-forward" in comment_kwargs["body"]
-    assert "<!-- orbi:run=a1b2c3d4 -->" in comment_kwargs["body"]
-
-
-def test_process_release_docs_failure_with_existing_tag_skips_cleanup(monkeypatch):
-    state = make_release_process_env(monkeypatch, tag_commit="remote-tag")
-    monkeypatch.setattr(release, "sync_release_docs",
-                        lambda **kwargs: (_ for _ in ()).throw(
-                            RuntimeError("docs down")))
-    issue = {"number": 99, "title": "Release v0.3.0",
-             "body": RELEASE_DECLARATION_BODY,
-             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    assert release.process_release(
-        issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
-        "o/r",
-    ) == ""
-    assert state["edits"][-1][1]["add"] == "ai-blocked"
+    assert "tag push down" in comment_kwargs["body"]
 
 
 def test_process_release_reuses_the_run_id_on_resume(monkeypatch):
@@ -21184,11 +21012,8 @@ def test_process_release_recovers_existing_ancestor_tag(monkeypatch):
     assert release.process_release(
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     ) == "https://github.com/o/r/releases/tag/v0.3.0"
-    assert state["sync_docs_calls"][0]["release_commit"] == "tag123"
+    assert state["published"][0]["release_commit"] == "tag123"
     assert sink == ["tag123"]
-    assert state["sync_docs_calls"][0]["changelog"] == (
-        state["published"][0]["changelog"]
-    )
 
 
 def test_process_release_fails_on_scope_violation(monkeypatch):
@@ -22157,96 +21982,6 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
         fake_run(["unexpected"])
 
 
-# ---------------------------------------------------------------------------
-# Release docs sync — state machine step 8 (Issue #275)
-# ---------------------------------------------------------------------------
-
-RELEASE_DOCS_BODY_V040 = (
-    "# v0.4.0\n\n"
-    "- tag: `v0.4.0`\n"
-    "- release commit: `" + "c" * 40 + "`\n\n"
-    "## Changelog\n\n"
-    "- A useful change ([Issue #123](https://github.com/o/r/issues/123))\n\n"
-    "## Scope (verified item by item)\n\n"
-    "- Issue #123 closed (mergeCommit=" + "c" * 40 + "…)\n\n"
-    "## Pre-release gates\n\n"
-    "- no open Issue in milestone 'v0.4.0' carries ai-in-progress\n\n"
-    "## Tests\n\n"
-    "- release tests gated by GitHub Actions CI on the release commit\n\n"
-    "run_id=a1b2c3d4"
-)
-
-
-def release_docs_fixture_config(latest_slug="release-v0.1.2") -> str:
-    """The minimal Mintlify config the docs tests use: two languages,
-    each with one release group listing `latest_slug` first."""
-    return json.dumps({
-        "$schema": "https://mintlify.com/docs.json",
-        "name": "Orbi",
-        "navigation": {
-            "languages": [
-                {
-                    "language": "en",
-                    "default": True,
-                    "groups": [
-                        {"group": "Getting Started",
-                         "pages": ["index"]},
-                        {"group": "Releases",
-                         "pages": [latest_slug, "release-v0.1.1"]},
-                    ],
-                },
-                {
-                    "language": "zh",
-                    "groups": [
-                        {"group": "快速开始",
-                         "pages": ["zh/index"]},
-                        {"group": "发布",
-                         "pages": [f"zh/{latest_slug}", "zh/release-v0.1.1"]},
-                    ],
-                },
-            ],
-        },
-    }, indent=2, ensure_ascii=False) + "\n"
-
-
-def make_release_docs_repo(tmp_path, latest_slug="release-v0.1.2"):
-    """A real bare remote + clone carrying the release docs layout on
-    `main`: docs.json (latest-first nav), the previous latest page with
-    its `(latest)` marker (EN + ZH). Returns the clone path."""
-    remote = tmp_path / "remote.git"
-    work = tmp_path / "work"
-    subprocess.run(["git", "init", "--bare", str(remote)],
-                   check=True, capture_output=True)
-    subprocess.run(["git", "init", "-b", "main", str(work)],
-                   check=True, capture_output=True)
-    for key, value in (("user.email", "t@t"), ("user.name", "t"),
-                       ("commit.gpgsign", "false"), ("tag.gpgsign", "false")):
-        subprocess.run(["git", "-C", str(work), "config", key, value],
-                       check=True, capture_output=True)
-    docs = work / "docs"
-    zh = docs / "zh"
-    zh.mkdir(parents=True)
-    (docs / "docs.json").write_text(
-        release_docs_fixture_config(latest_slug), encoding="utf-8",
-    )
-    (docs / f"{latest_slug}.mdx").write_text(
-        f"# v0.1.2 release (latest)\n\nprevious latest content\n",
-        encoding="utf-8",
-    )
-    (zh / f"{latest_slug}.mdx").write_text(
-        "# v0.1.2 发布（最新）\n\n上一版内容\n", encoding="utf-8",
-    )
-    subprocess.run(["git", "-C", str(work), "add", "docs"],
-                   check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(work), "commit", "-m", "docs baseline"],
-                   check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(work), "remote", "add", "origin",
-                    str(remote)], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(work), "push", "origin", "main"],
-                   check=True, capture_output=True)
-    return work
-
-
 def git_out(work: Path, *args: str) -> str:
     result = subprocess.run(["git", "-C", str(work), *args],
                            capture_output=True, text=True)
@@ -22265,990 +22000,43 @@ def test_git_out_helper_fails_fast_on_nonzero_exit(tmp_path):
         git_out(tmp_path, "rev-parse", "no-such-ref")
 
 
-def fake_gh_release_view(monkeypatch, *, body: str, tag: str = "v0.4.0",
-                         raise_not_found: bool = False):
-    """Answer `gh release view` with canned JSON; everything else goes to
-    the REAL run_command (real git)."""
-    real = runner.run_command
-
-    def mixed(command, **kwargs):
-        if command[:3] == ["gh", "release", "view"]:
-            if raise_not_found:
-                raise subprocess.CalledProcessError(
-                    1, command, stderr="release not found",
-                )
-            return json.dumps({
-                "tagName": tag,
-                "publishedAt": "2026-09-08T12:00:00Z",
-                "url": f"https://github.com/o/r/releases/tag/{tag}",
-                "body": body,
-            })
-        return real(command, **kwargs)
-
-    monkeypatch.setattr(seam, "run_command", mixed)
-    monkeypatch.setattr(seam, "run_command", mixed)
-    return real
-
-
-def test_release_docs_page_en_carries_meta_and_body_without_duplicate_heading():
-    tag_object = "t" * 40
-    release_commit = "c" * 40
-    page = release.release_docs_page(
-        version="v0.4.0", tag_object=tag_object,
-        release_commit=release_commit,
-        published_at="2026-09-08T12:00:00Z",
-        release_url="https://github.com/o/r/releases/tag/v0.4.0",
-        issue_number=77, body=RELEASE_DOCS_BODY_V040, language="en",
-    )
-    assert page.startswith("# v0.4.0 release (latest)\n")
-    assert "2026-09-08T12:00:00Z" in page
-    assert "Issue #77" in page
-    assert f"annotated tag `{tag_object}`" in page
-    assert f"commit `{release_commit}`" in page
-    assert "https://github.com/o/r/releases/tag/v0.4.0" in page
-    assert "- A useful change" in page
-    # The release body's own `# v0.4.0` heading is dropped: exactly one H1.
-    assert page.count("# v0.4.0") == 1
-
-
-def test_release_docs_page_zh_uses_the_chinese_title_and_table():
-    page = release.release_docs_page(
-        version="v0.4.0", tag_object="t" * 40, release_commit="c" * 40,
-        published_at="2026-09-08T12:00:00Z",
-        release_url="https://github.com/o/r/releases/tag/v0.4.0",
-        issue_number=77, body=RELEASE_DOCS_BODY_V040, language="zh",
-    )
-    assert page.startswith("# v0.4.0 发布（最新）\n")
-    assert "注解 tag" in page
-    assert "提交" in page
-    assert "release task：Issue #77" in page
-    assert "2026-09-08T12:00:00Z" in page
-    assert "- A useful change" in page
-    assert page.count("# v0.4.0") == 1
-
-
-def test_release_docs_page_keeps_a_body_without_leading_heading():
-    page = release.release_docs_page(
-        version="v0.4.0", tag_object="t" * 40, release_commit="c" * 40,
-        published_at="2026-09-08T12:00:00Z",
-        release_url="https://github.com/o/r/releases/tag/v0.4.0",
-        issue_number=77, body="## Changelog\n\n- Legacy body", language="en",
-    )
-    assert "## Changelog" in page
-    assert "- Legacy body" in page
-    assert page.count("# v0.4.0") == 1
-
-
-def test_update_release_navigation_inserts_the_new_version_first_in_both_groups():
-    config_text = release_docs_fixture_config()
-    new_text, changed = release.update_release_navigation(
-        config_text, "release-v0.4.0",
-    )
-    assert changed is True
-    config = json.loads(new_text)
-    languages = config["navigation"]["languages"]
-    en_pages = languages[0]["groups"][1]["pages"]
-    zh_pages = languages[1]["groups"][1]["pages"]
-    assert en_pages == [
-        "release-v0.4.0", "release-v0.1.2", "release-v0.1.1",
-    ]
-    assert zh_pages == [
-        "zh/release-v0.4.0", "zh/release-v0.1.2", "zh/release-v0.1.1",
-    ]
-
-
-def test_update_release_navigation_demotes_older_visible_releases_in_both_groups():
-    config = json.loads(release_docs_fixture_config())
-    en_group = config["navigation"]["languages"][0]["groups"][1]
-    zh_group = config["navigation"]["languages"][1]["groups"][1]
-    for group, prefix in ((en_group, ""), (zh_group, "zh/")):
-        group["pages"].append(f"{prefix}release-v0.1.0")
-        group["pages"].append({
-            "group": "Earlier releases" if not prefix else "历史版本",
-            "icon": "history",
-            "expanded": False,
-            "pages": [f"{prefix}release-v0.0.9"],
-        })
-    config_text = json.dumps(config, indent=2, ensure_ascii=False) + "\n"
-
-    new_text, changed = release.update_release_navigation(
-        config_text, "release-v0.4.0",
-    )
-    assert changed is True
-    result = json.loads(new_text)
-    assert result["navigation"]["languages"][0]["groups"][1]["pages"] == [
-        "release-v0.4.0", "release-v0.1.2", "release-v0.1.1",
-        {
-            "group": "Earlier releases", "icon": "history",
-            "expanded": False,
-            "pages": ["release-v0.1.0", "release-v0.0.9"],
-        },
-    ]
-    assert result["navigation"]["languages"][1]["groups"][1]["pages"] == [
-        "zh/release-v0.4.0", "zh/release-v0.1.2", "zh/release-v0.1.1",
-        {
-            "group": "历史版本", "icon": "history",
-            "expanded": False,
-            "pages": ["zh/release-v0.1.0", "zh/release-v0.0.9"],
-        },
-    ]
-    second_text, second_changed = release.update_release_navigation(
-        new_text, "release-v0.4.0",
-    )
-    assert second_changed is False
-    assert second_text == new_text
-
-
-def test_update_release_navigation_is_idempotent_when_already_listed():
-    config_text = release_docs_fixture_config("release-v0.4.0")
-    new_text, changed = release.update_release_navigation(
-        config_text, "release-v0.4.0",
-    )
-    assert changed is False
-    assert new_text == config_text
-
-
-def test_move_latest_marker_strips_the_marker_from_both_previous_pages(tmp_path):
-    work = tmp_path / "work"
-    (work / "docs" / "zh").mkdir(parents=True)
-    en = work / "docs" / "release-v0.1.2.mdx"
-    zh = work / "docs" / "zh" / "release-v0.1.2.mdx"
-    en.write_text("# v0.1.2 release (latest)\n\nrest\n", encoding="utf-8")
-    zh.write_text("# v0.1.2 发布（最新）\n\n余下内容\n", encoding="utf-8")
-    changed = release.move_latest_marker(
-        work, "release-v0.1.2", "release-v0.4.0", resume=False,
-    )
-    assert changed == ["docs/release-v0.1.2.mdx",
-                      "docs/zh/release-v0.1.2.mdx"]
-    assert en.read_text(encoding="utf-8") == "# v0.1.2 release\n\nrest\n"
-    assert zh.read_text(encoding="utf-8") == "# v0.1.2 发布\n\n余下内容\n"
-
-
-def test_move_latest_marker_fails_fast_when_the_marker_is_missing(tmp_path):
-    work = tmp_path / "work"
-    (work / "docs" / "zh").mkdir(parents=True)
-    (work / "docs" / "release-v0.1.2.mdx").write_text(
-        "# v0.1.2 release\n\nrest\n", encoding="utf-8",
-    )
-    (work / "docs" / "zh" / "release-v0.1.2.mdx").write_text(
-        "# v0.1.2 发布\n\n余下内容\n", encoding="utf-8",
-    )
-    with pytest.raises(RuntimeError, match=r"does not carry the \(latest\)"):
-        release.move_latest_marker(
-            work, "release-v0.1.2", "release-v0.4.0", resume=False,
-        )
-
-
-def test_move_latest_marker_accepts_an_already_moved_marker_on_resume(
-        tmp_path):
-    """Resume after a partial step: the old page already lost its marker
-    and the new page already carries it — the move is a no-op, not an
-    error (a permanent ai-blocked deadlock would be worse)."""
-    work = tmp_path / "work"
-    (work / "docs" / "zh").mkdir(parents=True)
-    (work / "docs" / "release-v0.1.2.mdx").write_text(
-        "# v0.1.2 release\n\nrest\n", encoding="utf-8",
-    )
-    (work / "docs" / "zh" / "release-v0.1.2.mdx").write_text(
-        "# v0.1.2 发布\n\n余下内容\n", encoding="utf-8",
-    )
-    (work / "docs" / "release-v0.4.0.mdx").write_text(
-        "# v0.4.0 release (latest)\n\nnew\n", encoding="utf-8",
-    )
-    (work / "docs" / "zh" / "release-v0.4.0.mdx").write_text(
-        "# v0.4.0 发布（最新）\n\n新\n", encoding="utf-8",
-    )
-    assert release.move_latest_marker(
-        work, "release-v0.1.2", "release-v0.4.0", resume=True,
-    ) == []
-
-
-def test_move_latest_marker_fails_fast_when_the_previous_page_is_missing(
-        tmp_path):
-    work = tmp_path / "work"
-    (work / "docs").mkdir(parents=True)
-    with pytest.raises(RuntimeError, match="is missing"):
-        release.move_latest_marker(
-            work, "release-v0.1.2", "release-v0.4.0", resume=False,
-        )
-
-
-def test_promote_release_docs_latest_after_publication(tmp_path, monkeypatch):
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    release.sync_release_docs(
-        source_repo="o/r", repo_dir=work, worktree=work,
-        base_branch="main", tag="v0.4.0", release_commit=head,
-        issue_number=77, changelog=RELEASE_DOCS_BODY_V040, latest=False,
-    )
-    release.promote_release_docs_latest(
-        worktree=work, base_branch="main", tag="v0.4.0",
-    )
-    assert "(latest)" in (work / "docs" / "release-v0.4.0.mdx").read_text()
-    assert "(latest)" not in (work / "docs" / "release-v0.1.2.mdx").read_text()
-
-
-def test_promote_release_docs_latest_handles_resume_and_missing_docs(tmp_path):
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    assert release.promote_release_docs_latest(
-        worktree=empty, base_branch="main", tag="v0.4.0",
-    ).endswith("no Mintlify docs in repo)")
-
-    resume_root = tmp_path / "resume"
-    resume_root.mkdir()
-    work = make_release_docs_repo(resume_root)
-    # The new page is already the marked page: promotion is idempotent.
-    assert release.promote_release_docs_latest(
-        worktree=work, base_branch="main", tag="v0.1.2",
-    ).endswith("already promoted")
-
-
-def test_promote_release_docs_latest_covers_marker_resume_paths(tmp_path):
-    root = tmp_path / "marker"
-    root.mkdir()
-    work = make_release_docs_repo(root)
-    config = json.loads((work / "docs" / "docs.json").read_text())
-    # Make the navigation scan inspect a non-latest page before finding the
-    # marker, and leave the new page already marked so move_latest_marker is
-    # an idempotent no-op.
-    config["navigation"]["languages"][0]["groups"][1]["pages"] = [
-        "release-v0.1.1", "release-v0.1.2"
-    ]
-    config["navigation"]["languages"].append({
-        "language": "en", "groups": [],
-    })
-    (work / "docs" / "release-v0.1.1.mdx").write_text(
-        "# old\n", encoding="utf-8")
-    (work / "docs" / "zh" / "release-v0.1.1.mdx").write_text(
-        "# old\n", encoding="utf-8")
-    (work / "docs" / "release-v0.1.2.mdx").write_text(
-        "# v0.1.2 release\n", encoding="utf-8")
-    (work / "docs" / "release-v0.4.0.mdx").write_text(
-        "# v0.4.0 release (latest)\n", encoding="utf-8")
-    (work / "docs" / "zh" / "release-v0.4.0.mdx").write_text(
-        "# v0.4.0 发布（最新）\n", encoding="utf-8")
-    (work / "docs" / "docs.json").write_text(
-        json.dumps(config), encoding="utf-8")
-    assert release.promote_release_docs_latest(
-        worktree=work, base_branch="main", tag="v0.4.0",
-    ).endswith("already promoted")
-
-
-def test_sync_release_docs_accepts_marker_only_resume(tmp_path, monkeypatch):
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    kwargs = dict(source_repo="o/r", repo_dir=work, worktree=work,
-                  base_branch="main", tag="v0.4.0", release_commit=head,
-                  issue_number=77, changelog=RELEASE_DOCS_BODY_V040,
-                  latest=False)
-    release.sync_release_docs(**kwargs)
-    release.promote_release_docs_latest(worktree=work, base_branch="main",
-                                        tag="v0.4.0")
-    release.sync_release_docs(**kwargs)
-
-
-def test_sync_release_docs_generates_pages_navigation_marker_and_commits(
-        tmp_path, monkeypatch):
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    evidence = release.sync_release_docs(
-        source_repo="o/r", repo_dir=work, worktree=work,
-        base_branch="main", tag="v0.4.0", release_commit=head,
-        issue_number=77,
-    )
-    assert "v0.4.0" in evidence
-    en = (work / "docs" / "release-v0.4.0.mdx").read_text(encoding="utf-8")
-    zh = (work / "docs" / "zh" / "release-v0.4.0.mdx").read_text(encoding="utf-8")
-    tag_object = git_out(work, "rev-parse", "refs/tags/v0.4.0")
-    assert en.startswith("# v0.4.0 release (latest)\n")
-    assert f"annotated tag `{tag_object}`" in en
-    assert f"commit `{head}`" in en
-    assert "Issue #77" in en
-    assert "- A useful change" in en
-    assert zh.startswith("# v0.4.0 发布（最新）\n")
-    assert f"注解 tag `{tag_object}`" in zh
-    # Navigation: the new version is first in BOTH languages.
-    config = json.loads(
-        (work / "docs" / "docs.json").read_text(encoding="utf-8"),
-    )
-    languages = config["navigation"]["languages"]
-    assert languages[0]["groups"][1]["pages"][0] == "release-v0.4.0"
-    assert languages[1]["groups"][1]["pages"][0] == "zh/release-v0.4.0"
-    # The (latest) marker moved off the previous latest page.
-    old_en = (work / "docs" / "release-v0.1.2.mdx").read_text(encoding="utf-8")
-    old_zh = (work / "docs" / "zh" / "release-v0.1.2.mdx").read_text(encoding="utf-8")
-    assert "(latest)" not in old_en
-    assert "（最新）" not in old_zh
-    assert old_en.startswith("# v0.1.2 release\n")
-    # The change was committed to the base branch and pushed. The docs
-    # invariant is complete in this one commit, rather than waiting for a
-    # second promotion commit.
-    remote_head = git_out(
-        work, "ls-remote", "origin", "refs/heads/main",
-    ).split()[0]
-    assert remote_head == git_out(work, "rev-parse", "HEAD")
-    assert remote_head != head
-    assert git_out(work, "rev-list", "--count", f"{head}..HEAD") == "1"
-    assert "(latest)" in en.splitlines()[0]
-    assert "（最新）" in zh.splitlines()[0]
-    message = git_out(work, "log", "-1", "--format=%s")
-    assert "v0.4.0" in message and "#77" in message
-    committed = git_out(work, "show", "--name-only", "--format=", "HEAD")
-    assert committed.split() == [
-        "docs/docs.json", "docs/release-v0.1.2.mdx",
-        "docs/release-v0.4.0.mdx", "docs/zh/release-v0.1.2.mdx",
-        "docs/zh/release-v0.4.0.mdx",
-    ]
-
-
-def test_sync_release_docs_is_idempotent_on_rerun(tmp_path, monkeypatch):
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    first = release.sync_release_docs(
-        source_repo="o/r", repo_dir=work, worktree=work,
-        base_branch="main", tag="v0.4.0", release_commit=head,
-        issue_number=77,
-    )
-    after_first_head = git_out(work, "rev-parse", "HEAD")
-    en_before = (work / "docs" / "release-v0.4.0.mdx").read_text(encoding="utf-8")
-    second = release.sync_release_docs(
-        source_repo="o/r", repo_dir=work, worktree=work,
-        base_branch="main", tag="v0.4.0", release_commit=head,
-        issue_number=77,
-    )
-    assert "already in sync" in second
-    assert first != second
-    # No second commit, no overwrite: the remote head and the page
-    # content are exactly what the first run produced.
-    assert git_out(work, "rev-parse", "HEAD") == after_first_head
-    assert (work / "docs" / "release-v0.4.0.mdx").read_text(encoding="utf-8") == en_before
-
-
-def test_sync_release_docs_resume_after_failed_push_recommits_normally(
-    tmp_path, monkeypatch,
-):
-    """真实 resume 路径（Issue #623）：上一轮 commit 成功、push 失败后，
-    发布状态机下一轮先经 create_release_worktree 把 worktree
-    hard-reset 回 release_commit（结尾的 `git reset --hard`），未推送的
-    本地 docs commit 连同页面一起消失；随后 sync_release_docs 重新生成
-    页面 → 有可暂存内容 → 走正常的 commit + push 路径。恢复不是（也不
-    需要是）一条特殊分支。"""
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    original = runner.run_git_network_command
-
-    def failing_push(command, **kwargs):
-        raise subprocess.CalledProcessError(1, command, stderr="boom")
-
-    monkeypatch.setattr(seam, "run_git_network_command", failing_push)
-    monkeypatch.setattr(seam, "run_git_network_command", failing_push)
-    with pytest.raises(subprocess.CalledProcessError):
-        release.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=work,
-            base_branch="main", tag="v0.4.0", release_commit=head,
-            issue_number=77,
-        )
-    orphaned = git_out(work, "rev-parse", "HEAD")
-    remote_stuck = git_out(work, "rev-parse", "origin/main")
-    assert orphaned != head           # the commit did happen locally
-    assert orphaned != remote_stuck   # ...but never reached the remote
-    # 下一轮 create_release_worktree 的 hard-reset——此处按真实时序原样
-    # 重放（对 release_commit 的一条 `git reset --hard`）。
-    subprocess.run(["git", "-C", str(work), "reset", "--hard", head],
-                   check=True, capture_output=True)
-    monkeypatch.setattr(seam, "run_git_network_command", original)
-    monkeypatch.setattr(seam, "run_git_network_command", original)
-    evidence = release.sync_release_docs(
-        source_repo="o/r", repo_dir=work, worktree=work,
-        base_branch="main", tag="v0.4.0", release_commit=head,
-        issue_number=77,
-    )
-    assert "committed and pushed" in evidence
-    assert "recovered" not in evidence
-    new_head = git_out(work, "rev-parse", "HEAD")
-    assert new_head != head           # a fresh docs commit was created
-    assert git_out(work, "rev-parse", "origin/main") == new_head
-
-
-def test_sync_release_docs_stale_tracking_ref_is_not_a_false_recovery(
-    tmp_path, monkeypatch,
-):
-    """无可暂存内容但 origin/<base> 跟踪引用陈旧（落后于真实远端）的
-    世界（Issue #623）：真实远端其实已有 docs commit，补推是一个
-    no-op，宣称 "recovered — the previous local commit had not been
-    pushed" 是与事实不符的证据。hard-reset 保证没有未推送的本地 commit
-    能活到无暂存分支，唯一诚实的回答是 already in sync，且不应发起
-    任何网络 push。"""
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    release.sync_release_docs(
-        source_repo="o/r", repo_dir=work, worktree=work,
-        base_branch="main", tag="v0.4.0", release_commit=head,
-        issue_number=77,
-    )
-    docs_head = git_out(work, "rev-parse", "HEAD")
-    # The push above landed on the real remote; rewind ONLY the tracking
-    # ref — the remote still has the docs commit.
-    git_out(work, "update-ref", "refs/remotes/origin/main", head)
-
-    # A Mock (not a raiser): the fake must leave no dead line behind in
-    # the fixed world where the push never happens — the assertion below
-    # is what fails if it ever does.
-    no_push = Mock()
-    monkeypatch.setattr(seam, "run_git_network_command", no_push)
-    monkeypatch.setattr(seam, "run_git_network_command", no_push)
-    evidence = release.sync_release_docs(
-        source_repo="o/r", repo_dir=work, worktree=work,
-        base_branch="main", tag="v0.4.0", release_commit=head,
-        issue_number=77,
-    )
-    no_push.assert_not_called()
-    assert "already in sync" in evidence
-    assert "recovered" not in evidence
-    assert git_out(work, "rev-parse", "HEAD") == docs_head
-
-
-def test_sync_release_docs_resumes_after_a_partial_step(tmp_path, monkeypatch):
-    """Resume after a partial step: the pages are written and the marker
-    moved, but the navigation was never updated (a crash mid-step). The
-    re-run must finish the job instead of deadlocking on the moved
-    marker."""
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    original_real = runner.run_command
-    release_json = json.dumps({
-        "tagName": "v0.4.0",
-        "publishedAt": "2026-09-08T12:00:00Z",
-        "url": "https://github.com/o/r/releases/tag/v0.4.0",
-        "body": RELEASE_DOCS_BODY_V040,
-    })
-
-    def gh_view(command, **kwargs):
-        if command[:3] == ["gh", "release", "view"]:
-            return release_json
-        return original_real(command, **kwargs)
-
-    def crash_before_commit(command, **kwargs):
-        if command[:2] == ["git", "commit"]:
-            raise subprocess.CalledProcessError(
-                1, command, stderr="simulated crash",
-            )
-        return gh_view(command, **kwargs)
-
-    monkeypatch.setattr(seam, "run_command", crash_before_commit)
-    monkeypatch.setattr(seam, "run_command", crash_before_commit)
-    with pytest.raises(subprocess.CalledProcessError):
-        release.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=work,
-            base_branch="main", tag="v0.4.0", release_commit=head,
-            issue_number=77,
-        )
-    # The pages exist, the marker moved, but nothing was committed.
-    assert (work / "docs" / "release-v0.4.0.mdx").is_file()
-    assert "(latest)" not in (
-        work / "docs" / "release-v0.1.2.mdx"
-    ).read_text(encoding="utf-8")
-    assert git_out(work, "rev-parse", "origin/main") == \
-        git_out(work, "rev-parse", "HEAD")
-    # The re-run finishes: marker move is a lenient no-op, the nav is
-    # updated, one commit lands on main.
-    monkeypatch.setattr(seam, "run_command", gh_view)
-    monkeypatch.setattr(seam, "run_command", gh_view)
-    evidence = release.sync_release_docs(
-        source_repo="o/r", repo_dir=work, worktree=work,
-        base_branch="main", tag="v0.4.0", release_commit=head,
-        issue_number=77,
-    )
-    assert "committed and pushed" in evidence
-    config = json.loads(
-        (work / "docs" / "docs.json").read_text(encoding="utf-8"),
-    )
-    assert config["navigation"]["languages"][0]["groups"][1]["pages"][0] \
-        == "release-v0.4.0"
-
-
-def test_sync_release_docs_fails_fast_when_the_existing_page_differs(
-        tmp_path, monkeypatch):
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    (work / "docs" / "release-v0.4.0.mdx").write_text(
-        "# v0.4.0 release (latest)\n\nhuman-edited content\n",
-        encoding="utf-8",
-    )
-    subprocess.run(["git", "-C", str(work), "add",
-                    "docs/release-v0.4.0.mdx"], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(work), "commit", "-m", "manual page"],
-                   check=True, capture_output=True)
-    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    with pytest.raises(RuntimeError, match="already exists with different"):
-        release.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=work,
-            base_branch="main", tag="v0.4.0", release_commit=head,
-            issue_number=77,
-        )
-    # Nothing was committed over the human edit.
-    assert git_out(work, "log", "-1", "--format=%s") == "manual page"
-
-
-def test_sync_release_docs_fails_fast_when_the_previous_latest_lacks_the_marker(
-        tmp_path, monkeypatch):
-    work = make_release_docs_repo(tmp_path)
-    # Break the invariant: the previous latest page lost its marker.
-    en = work / "docs" / "release-v0.1.2.mdx"
-    en.write_text(en.read_text(encoding="utf-8").replace(" (latest)", ""),
-                  encoding="utf-8")
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    with pytest.raises(RuntimeError, match=r"does not carry the \(latest\)"):
-        release.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=work,
-            base_branch="main", tag="v0.4.0", release_commit=head,
-            issue_number=77,
-        )
-
-
-def test_sync_release_docs_fails_fast_on_an_empty_release_body(
-        tmp_path, monkeypatch):
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    fake_gh_release_view(monkeypatch, body="   ")
-    with pytest.raises(RuntimeError, match="body is empty"):
-        release.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=work,
-            base_branch="main", tag="v0.4.0", release_commit=head,
-            issue_number=77,
-        )
-    assert not (work / "docs" / "release-v0.4.0.mdx").exists()
-
-
-def test_sync_release_docs_propagates_a_missing_release(tmp_path, monkeypatch):
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    fake_gh_release_view(monkeypatch, body="x", raise_not_found=True)
-    with pytest.raises(subprocess.CalledProcessError):
-        release.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=work,
-            base_branch="main", tag="v0.4.0", release_commit=head,
-            issue_number=77,
-        )
-
-
-def test_sync_release_docs_fails_fast_when_the_base_advanced(
-        tmp_path, monkeypatch):
-    work = make_release_docs_repo(tmp_path)
-    old_head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", old_head], check=True, capture_output=True)
-    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    release.sync_release_docs(
-        source_repo="o/r", repo_dir=work, worktree=work,
-        base_branch="main", tag="v0.4.0", release_commit=old_head,
-        issue_number=77,
-    )
-    # A second release worktree frozen at the OLD commit: the push to
-    # main must be rejected (non-fast-forward) — never force-pushed.
-    stale = tmp_path / "stale"
-    subprocess.run(["git", "-C", str(work), "worktree", "add",
-                    "-b", "stale-branch", str(stale), old_head],
-                   check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(stale), "tag", "-a", "v0.4.1",
-                    "-m", "rel", old_head], check=True, capture_output=True)
-
-    real_run = runner.run_command
-
-    def view_v041(command, **kwargs):
-        if command[:3] == ["gh", "release", "view"]:
-            return json.dumps({
-                "tagName": "v0.4.1",
-                "publishedAt": "2026-09-09T12:00:00Z",
-                "url": "https://github.com/o/r/releases/tag/v0.4.1",
-                "body": "# v0.4.1\n\n- Another change",
-            })
-        return real_run(command, **kwargs)
-
-    monkeypatch.setattr(seam, "run_command", view_v041)
-    monkeypatch.setattr(seam, "run_command", view_v041)
-    with pytest.raises(subprocess.CalledProcessError):
-        release.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=stale,
-            base_branch="main", tag="v0.4.1", release_commit=old_head,
-            issue_number=78,
-        )
-    # Remote main still points at the v0.4.0 docs commit.
-    remote_head = git_out(
-        work, "ls-remote", "origin", "refs/heads/main",
-    ).split()[0]
-    assert remote_head == git_out(work, "rev-parse", "HEAD")
-
-
-def test_rollback_release_docs_reverts_only_the_docs_commit(tmp_path):
-    work = make_release_docs_repo(tmp_path)
-    path = work / "docs" / "rollback-marker.txt"
-    path.write_text("temporary\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(work), "add", str(path)], check=True,
-                   capture_output=True)
-    subprocess.run(["git", "-C", str(work), "commit", "-m", "temporary docs"],
-                   check=True, capture_output=True)
-    docs_commit = git_out(work, "rev-parse", "HEAD")
-
-    release.rollback_release_docs(
-        worktree=work, base_branch="main", docs_commit=docs_commit,
-    )
-
-    assert git_out(work, "rev-parse", "HEAD^") == docs_commit
-    assert not path.exists()
-
-
-def test_rollback_release_docs_rejects_a_changed_worktree(tmp_path):
-    work = make_release_docs_repo(tmp_path)
-    with pytest.raises(RuntimeError, match="rollback expected"):
-        release.rollback_release_docs(
-            worktree=work, base_branch="main", docs_commit="wrong-head",
-        )
-
-
-def test_sync_release_docs_fails_when_tag_object_is_missing(
-        tmp_path, monkeypatch):
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040,
-                         tag="v0.9.9")
-    with pytest.raises(subprocess.CalledProcessError):
-        release.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=work,
-            base_branch="main", tag="v0.9.9", release_commit=head,
-            issue_number=77,
-        )
-    assert not (work / "docs" / "release-v0.9.9.mdx").exists()
-
-
-def test_sync_release_docs_refuses_to_fabricate_after_fetch(tmp_path, monkeypatch):
-    work = make_release_docs_repo(tmp_path)
-    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040,
-                         tag="v0.9.9")
-    monkeypatch.setattr(release, "local_release_tag_commit", lambda *a: None)
-    monkeypatch.setattr(release, "run_git_network_command", lambda *a, **k: "")
-    def missing_tag(command, **kwargs):
-        raise subprocess.CalledProcessError(1, command)
-    monkeypatch.setattr(release, "run_command", missing_tag)
-    with pytest.raises(RuntimeError, match="refusing to fabricate"):
-        release.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=work,
-            base_branch="main", tag="v0.9.9", release_commit="c" * 40,
-            issue_number=77,
-        )
-
-
-def test_release_docs_page_rejects_an_unknown_language():
-    with pytest.raises(ValueError, match="not supported"):
-        release.release_docs_page(
-            version="v0.4.0", tag_object="t" * 40,
-            release_commit="c" * 40, published_at="2026-09-08T12:00:00Z",
-            release_url="https://github.com/o/r/releases/tag/v0.4.0",
-            issue_number=77, body=RELEASE_DOCS_BODY_V040, language="fr",
-        )
-
-
-def test_release_docs_page_drops_html_comments_audit_blocks_and_run_id():
-    """The Mintlify MDX parser rejects `<!-- ... -->` comment lines
-    (mint validate: 'Unexpected character `!`'), so the run-marker
-    comments of the release body must be dropped — and the docs page is
-    for readers, not the release machine's audit trail (Issue #910):
-    the `## Scope (verified item by item)` and `## Pre-release gates`
-    sections and the `run_id=` lines stay on the GitHub Release, while
-    the changelog, the meta bullets and the `## Tests` section stay."""
-    page = release.release_docs_page(
-        version="v0.4.0", tag_object="t" * 40, release_commit="c" * 40,
-        published_at="2026-09-08T12:00:00Z",
-        release_url="https://github.com/o/r/releases/tag/v0.4.0",
-        issue_number=77, body=RELEASE_DOCS_BODY_V040, language="en",
-    )
-    assert "<!--" not in page
-    assert "## Scope (verified item by item)" not in page
-    assert "## Pre-release gates" not in page
-    assert "mergeCommit=" not in page
-    assert "run_id=" not in page
-    assert "## Changelog" in page
-    assert "- A useful change" in page
-    assert "- tag: `v0.4.0`" in page
-    assert "## Tests" in page
-    assert "release tests gated by GitHub Actions CI" in page
-
-
-def test_release_docs_page_handles_a_body_without_any_lines():
-    page = release.release_docs_page(
-        version="v0.4.0", tag_object="t" * 40, release_commit="c" * 40,
-        published_at="2026-09-08T12:00:00Z",
-        release_url="https://github.com/o/r/releases/tag/v0.4.0",
-        issue_number=77, body="", language="en",
-    )
-    assert page.startswith("# v0.4.0 release (latest)\n")
-    assert page.count("# v0.4.0") == 1
-
-
-def test_current_latest_release_slug_returns_the_first_en_release_page():
-    config_text = release_docs_fixture_config()
-    assert release.current_latest_release_slug(config_text) == \
-        "release-v0.1.2"
-
-
-def test_current_latest_release_slug_fails_fast_on_an_empty_release_group():
-    config_text = release_docs_fixture_config()
-    config = json.loads(config_text)
-    config["navigation"]["languages"][0]["groups"][1]["pages"] = []
-    with pytest.raises(RuntimeError, match="has no pages"):
-        release.current_latest_release_slug(
-            json.dumps(config),
-        )
-
-
-def test_current_latest_release_slug_fails_fast_without_an_en_release_group():
-    config_text = release_docs_fixture_config()
-    config = json.loads(config_text)
-    config["navigation"]["languages"] = [
-        config["navigation"]["languages"][1],
-    ]
-    with pytest.raises(RuntimeError, match="no English Releases group"):
-        release.current_latest_release_slug(
-            json.dumps(config, ensure_ascii=False),
-        )
-
-
-def test_current_latest_release_slug_fails_fast_when_en_lacks_a_release_group():
-    """An en language that exists but carries no Releases group: the
-    group loop runs and exhausts, then the lookup fails fast."""
-    config_text = release_docs_fixture_config()
-    config = json.loads(config_text)
-    config["navigation"]["languages"][0]["groups"] = [
-        {"group": "Getting Started", "pages": ["index"]},
-    ]
-    with pytest.raises(RuntimeError, match="no English Releases group"):
-        release.current_latest_release_slug(json.dumps(config))
-
-
-def test_update_release_navigation_fails_fast_when_only_one_group_exists():
-    config_text = release_docs_fixture_config()
-    config = json.loads(config_text)
-    config["navigation"]["languages"] = [
-        config["navigation"]["languages"][0],
-    ]
-    with pytest.raises(RuntimeError, match="expected exactly two release"):
-        release.update_release_navigation(
-            json.dumps(config), "release-v0.4.0",
-        )
-
-
-def test_update_release_navigation_fails_fast_without_collapsed_subgroup():
-    config = json.loads(release_docs_fixture_config())
-    for language in config["navigation"]["languages"]:
-        language["groups"][1]["pages"].append(
-            "zh/release-v0.1.0" if language["language"] == "zh"
-            else "release-v0.1.0"
-        )
-
-    with pytest.raises(
-        RuntimeError,
-        match="more than three visible pages but no collapsed subgroup",
-    ):
-        release.update_release_navigation(
-            json.dumps(config), "release-v0.4.0",
-        )
-
-
-def test_move_latest_marker_fails_fast_on_resume_when_the_new_page_is_missing(
-        tmp_path):
-    """resume=True but the new page does not exist: the marker was lost,
-    not moved — fail fast."""
-    work = tmp_path / "work"
-    (work / "docs" / "zh").mkdir(parents=True)
-    (work / "docs" / "release-v0.1.2.mdx").write_text(
-        "# v0.1.2 release\n\nrest\n", encoding="utf-8",
-    )
-    (work / "docs" / "zh" / "release-v0.1.2.mdx").write_text(
-        "# v0.1.2 发布\n\n余下内容\n", encoding="utf-8",
-    )
-    with pytest.raises(RuntimeError, match=r"does not carry the \(latest\)"):
-        release.move_latest_marker(
-            work, "release-v0.1.2", "release-v0.4.0", resume=True,
-        )
-
-
-def test_sync_release_docs_uses_prepublication_changelog(tmp_path):
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    evidence = release.sync_release_docs(
-        source_repo="o/r", repo_dir=work, worktree=work,
-        base_branch="main", tag="v0.4.0", release_commit=head,
-        issue_number=77, changelog="## Changelog\n\n- shipped\n",
-    )
-    assert "committed and pushed" in evidence
-    page = (work / "docs" / "release-v0.4.0.mdx").read_text(encoding="utf-8")
-    assert "GitHub Release [v0.4.0]" in page
-    assert "published" not in page.split("\n", 4)[2]
-
-
-def test_sync_release_docs_rejects_empty_prepublication_changelog(tmp_path):
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    with pytest.raises(RuntimeError, match="changelog is empty"):
-        release.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=work,
-            base_branch="main", tag="v0.4.0", release_commit=head,
-            issue_number=77, changelog="  ",
-        )
-
-
-def test_sync_release_docs_fails_fast_when_the_body_is_not_a_string(
-        tmp_path, monkeypatch):
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    real = runner.run_command
-
-    def bad_body(command, **kwargs):
-        if command[:3] == ["gh", "release", "view"]:
-            return json.dumps({
-                "tagName": "v0.4.0",
-                "publishedAt": "2026-09-08T12:00:00Z",
-                "url": "https://github.com/o/r/releases/tag/v0.4.0",
-                "body": 123,
-            })
-        return real(command, **kwargs)
-
-    monkeypatch.setattr(seam, "run_command", bad_body)
-    monkeypatch.setattr(seam, "run_command", bad_body)
-    with pytest.raises(RuntimeError, match="body is empty"):
-        release.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=work,
-            base_branch="main", tag="v0.4.0", release_commit=head,
-            issue_number=77,
-        )
-    # The fall-through path answers real git commands (sync_release_docs
-    # never reaches it in this test — the body check fails first).
-    assert bad_body(["git", "rev-parse", "HEAD"], cwd=work)
-
-
-def test_sync_release_docs_skips_when_docs_json_is_missing(tmp_path):
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    (work / "docs" / "docs.json").unlink()
-    evidence = release.sync_release_docs(
-        source_repo="o/r", repo_dir=work, worktree=work,
-        base_branch="main", tag="v0.4.0", release_commit=head,
-        issue_number=77,
-    )
-    assert evidence == "docs sync skipped (no Mintlify docs in repo)"
-
-
-def test_sync_release_docs_fails_fast_on_a_real_git_diff_error(
-        tmp_path, monkeypatch):
-    work = make_release_docs_repo(tmp_path)
-    head = git_out(work, "rev-parse", "HEAD")
-    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
-                    "-m", "rel", head], check=True, capture_output=True)
-    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    real = runner.run_command
-
-    def diff_failing(command, **kwargs):
-        if command[:3] == ["git", "diff", "--cached"]:
-            raise subprocess.CalledProcessError(
-                2, command, stderr="fatal: not a git repository",
-            )
-        return real(command, **kwargs)
-
-    monkeypatch.setattr(seam, "run_command", diff_failing)
-    monkeypatch.setattr(seam, "run_command", diff_failing)
-    with pytest.raises(subprocess.CalledProcessError):
-        release.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=work,
-            base_branch="main", tag="v0.4.0", release_commit=head,
-            issue_number=77,
-        )
-
-
 def test_tag_commit_is_ancestor_of_base_true_when_ancestor(tmp_path):
-    """Issue #275: the docs-sync step advances the base past the tag
-    commit; the tag commit is an ancestor of the base (and not vice
-    versa)."""
-    work = make_release_docs_repo(tmp_path)
-    tag_commit = git_out(work, "rev-parse", "HEAD")
-    (work / "docs" / "extra.mdx").write_text("extra", encoding="utf-8")
-    subprocess.run(["git", "-C", str(work), "add", "docs/extra.mdx"],
-                   check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(work), "commit", "-m", "docs"],
-                   check=True, capture_output=True)
-    docs_head = git_out(work, "rev-parse", "HEAD")
+    """The tag commit is an ancestor of the advanced base (and not vice
+    versa) — the resume case the release state machine recovers."""
+    work = make_release_range_repo(tmp_path)
+    tag_commit = commit_file(work, "version.txt", "chore: v0.4.0")
+    base = commit_file(work, "later.txt", "later")
     assert release.tag_commit_is_ancestor_of_base(
-        tag_commit, docs_head, work) is True
+        tag_commit, base, work) is True
     assert release.tag_commit_is_ancestor_of_base(
-        docs_head, tag_commit, work) is False
+        base, tag_commit, work) is False
 
 
 def test_tag_commit_is_ancestor_of_base_false_on_unrelated_commits(
         tmp_path):
-    """Issue #275: a tag commit on an unrelated side branch is NOT an
-    ancestor of the base — the genuine tag mismatch that must fail
-    fast."""
-    work = make_release_docs_repo(tmp_path)
-    base = git_out(work, "rev-parse", "HEAD")
+    """A tag commit on an unrelated side branch is NOT an ancestor of the
+    base — the genuine tag mismatch that must fail fast."""
+    work = make_release_range_repo(tmp_path)
+    base = commit_file(work, "base.txt", "base")
     subprocess.run(["git", "-C", str(work), "checkout", "-b", "side"],
                    check=True, capture_output=True)
-    (work / "side.txt").write_text("side", encoding="utf-8")
-    subprocess.run(["git", "-C", str(work), "add", "side.txt"],
-                   check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(work), "commit", "-m", "side"],
-                   check=True, capture_output=True)
+    commit_file(work, "side.txt", "side")
     side_head = git_out(work, "rev-parse", "HEAD")
     assert release.tag_commit_is_ancestor_of_base(
         side_head, base, work) is False
 
 
-def test_process_release_resumes_after_docs_sync_advanced_the_base(
+def test_process_release_recovers_the_tag_when_the_base_advanced(
         monkeypatch):
-    """Issue #275: the docs-sync step pushes the release notes to the base
-    branch, advancing origin/<base> past the tag commit. On a resume the
-    frozen base is the docs commit; the release must recover the tag commit
-    as the canonical release commit instead of deadlocking on the tag
-    check."""
+    """A previous attempt pushed the tag and the base advanced past it
+    afterwards (for example a merge landed while the release was in
+    flight). On a resume the frozen base is that later commit; the release
+    must recover the tag commit as the canonical release commit instead of
+    deadlocking on the tag check."""
     state = make_release_process_env(monkeypatch, tag_commit="abc123")
-    # The frozen base is the docs commit (a descendant of the tag commit);
-    # the env's fake_run_command answers "ancestor" for the merge-base
-    # check.
-    monkeypatch.setattr(seam, "freeze_base", lambda r, b: "docs456")
+    # The frozen base is a descendant of the tag commit; the env's
+    # fake_run_command answers "ancestor" for the merge-base check.
+    monkeypatch.setattr(seam, "freeze_base", lambda r, b: "later456")
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -23257,7 +22045,7 @@ def test_process_release_resumes_after_docs_sync_advanced_the_base(
     )
     assert release_url == "https://github.com/o/r/releases/tag/v0.3.0"
     # The tag commit was recovered as the canonical release commit.
-    assert state["sync_docs_calls"][0]["release_commit"] == "abc123"
+    assert state["published"][0]["release_commit"] == "abc123"
     # The release succeeded (ai-merged), not blocked.
     assert any(k.get("add") == "ai-merged" for _, k in state["edits"])
 

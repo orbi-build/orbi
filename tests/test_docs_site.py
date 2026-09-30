@@ -956,28 +956,30 @@ def test_release_docs_explain_ci_failure_bump_recovery():
 
 
 def test_release_state_contract_matches_terminal_code_order():
-    """The release contract must describe the implemented terminal order."""
+    """The release contract must describe the implemented terminal order.
+    Issue #1483 removed the docs-site sync step, so `ai-merged`/close is
+    step 8 and the Milestone close is step 9."""
     contracts = (
         page_text("workflow"),
         (DOCS_DIR / "zh" / "workflow.mdx").read_text(encoding="utf-8"),
         inspect.getdoc(release.process_release),
     )
     for text in contracts:
+        step8 = re.search(
+            r"^\s*8\..*?(?=^\s*9\.)",
+            text, re.MULTILINE | re.DOTALL,
+        )
         step9 = re.search(
-            r"^\s*9\..*?(?=^\s*10\.)",
+            r"^\s*9\..*?(?=^\s*10\.|\Z)",
             text, re.MULTILINE | re.DOTALL,
         )
-        step10 = re.search(
-            r"^\s*10\..*?(?=^\s*11\.|\Z)",
-            text, re.MULTILINE | re.DOTALL,
+        assert step8 and step9, (
+            "release contract must have terminal steps 8 and 9"
         )
-        assert step9 and step10, (
-            "release contract must have terminal steps 9 and 10"
-        )
-        assert "ai-merged" in step9.group()
-        assert "release Issue" in step9.group()
-        assert "Milestone" in step10.group()
-        assert "success comment" in step10.group() or "成功评论" in step10.group()
+        assert "ai-merged" in step8.group()
+        assert "release Issue" in step8.group()
+        assert "Milestone" in step9.group()
+        assert "success comment" in step9.group() or "成功评论" in step9.group()
 
 
 def test_docs_document_labels_run_marker_epic_release_task_and_p0():

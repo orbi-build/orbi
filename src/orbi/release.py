@@ -2,7 +2,7 @@
 
 The deterministic release state machine the Runner executes for an
 `ai-release` Issue: declaration parsing, scope verification, gates,
-version preparation, tag, GitHub Release publish, docs sync, Milestone
+version preparation, tag, GitHub Release publish, Milestone
 close, and the `process_release` orchestration. Its GitHub and git data
 access goes through the `orbi.github` / `orbi.gitops` leaves and the
 `orbi.journal` seam; the runner-side entry is the dispatch
@@ -920,22 +920,9 @@ def ensure_release_tag_pushed(repo_dir: Path, tag: str,
 
 def tag_commit_is_ancestor_of_base(tag_commit: str, base_commit: str,
                                    repo_dir: Path) -> bool:
-    """Compatibility wrapper for the release state machine."""
+    """True when the tag commit is an ancestor of the base commit — the
+    resume case where an existing tag is behind an advanced base."""
     return _is_ancestor(tag_commit, base_commit, cwd=repo_dir)
-
-
-def resume_release_commit(*, local_tag_commit: str | None,
-                          release_commit: str, repo_dir: Path) -> str:
-    """Keep a resumed release tag on its original commit."""
-    if local_tag_commit is None or local_tag_commit == release_commit:
-        return release_commit
-    if not tag_commit_is_ancestor_of_base(
-            local_tag_commit, release_commit, repo_dir):
-        raise RuntimeError(
-            f"local tag points at {local_tag_commit}, not the release commit "
-            f"{release_commit} — an existing tag is never moved or overwritten"
-        )
-    return local_tag_commit
 
 
 def publish_release(*, repo: str, tag: str, version: str,
@@ -1135,500 +1122,19 @@ def close_release_milestone(repo: str, version: str, *, run_id: str | None = Non
     )
 
 
-RELEASE_DOCS_LATEST_MARKER_EN = " (latest)"
-RELEASE_DOCS_LATEST_MARKER_ZH = "（最新）"
-
-# The release-machine audit blocks the GitHub Release body carries for
-# the release state machine's own evidence trail (#204). They stay on
-# the GitHub Release; the docs site is for readers, so the docs page
-# drops them (#910) — the changelog and the rest of the body stay.
-RELEASE_BODY_DROP_SECTION_HEADINGS = (
-    "## Scope (verified item by item)",
-    "## Pre-release gates",
-)
-
-
-def strip_release_audit_sections(notes: str) -> str:
-    """Drop the release-machine audit blocks from a release body: the
-    `## Scope (verified item by item)` and `## Pre-release gates`
-    sections and the standalone `run_id=` lines. Everything else — the
-    changelog, the meta bullets, the `## Tests` section — stays."""
-    dropping = False
-    kept: list[str] = []
-    for line in notes.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("## "):
-            dropping = stripped in RELEASE_BODY_DROP_SECTION_HEADINGS
-            if dropping:
-                continue
-        if dropping or stripped.startswith("run_id="):
-            continue
-        kept.append(line)
-    return "\n".join(kept).strip()
-
-
-def release_docs_page(*, version: str, tag_object: str,
-                      release_commit: str, published_at: str | None,
-                      release_url: str, issue_number: int,
-                      body: str, language: str,
-                      latest: bool = True) -> str:
-    """Build one docs-site Release notes page for a published release.
-
-     The page content is the published GitHub Release body
-    (no changelog re-implementation — #204 owns that) plus the meta the
-    existing release pages share: the tag/release-commit mapping, the
-    publish time and the release task Issue number. Mechanical
-    adaptations only: the body's own leading `# <version>` heading is
-    dropped because the page carries its own title with the `(latest)`
-    marker; HTML comment lines (`<!-- ... -->`, the run markers) are
-    dropped because the Mintlify MDX parser rejects them; and the
-    release-machine audit blocks (`## Scope (verified item by item)`,
-    `## Pre-release gates`, the `run_id=` lines) are dropped because
-    they are the release state machine's evidence trail, which belongs
-    on the GitHub Release, not on the docs site (#910) — the changelog
-    and the rest of the body stay.
-    """
-    notes = body.strip()
-    lines = notes.splitlines()
-    if lines and lines[0].strip() == f"# {version}":
-        lines = lines[1:]
-    lines = [
-        line for line in lines
-        if not line.strip().startswith("<!--")
-    ]
-    notes = strip_release_audit_sections("\n".join(lines))
-    if language == "en":
-        title = f"# {version} release" + (" (latest)" if latest else "")
-        intro = (
-            f"`{version}` release notes for the GitHub Release "
-            f"[{version}]({release_url}) (release task: Issue #{issue_number})."
-            if published_at is None else
-            f"`{version}` was published {published_at} as the GitHub "
-            f"Release [{version}]({release_url}) (release task: "
-            f"Issue #{issue_number})."
-        )
-        heading = "## Tag state (verified against origin)"
-        table = (
-            "| Ref | Object | Points at |\n"
-            "|---|---|---|\n"
-            f"| `{version}` | annotated tag `{tag_object}` "
-            f"| commit `{release_commit}` |"
-        )
-    elif language == "zh":
-        title = f"# {version} 发布" + ("（最新）" if latest else "")
-        intro = (
-            f"`{version}` 的 GitHub Release 发布说明："
-            f"[{version}]({release_url})（release task：Issue #{issue_number}）。"
-            if published_at is None else
-            f"`{version}` 于 {published_at} 发布为 GitHub Release "
-            f"[{version}]({release_url})（release task："
-            f"Issue #{issue_number}）。"
-        )
-        heading = "## Tag 状态（对 origin 验证）"
-        table = (
-            "| Ref | 对象 | 指向 |\n"
-            "|---|---|---|\n"
-            f"| `{version}` | 注解 tag `{tag_object}` "
-            f"| 提交 `{release_commit}` |"
-        )
-    else:
-        raise ValueError(
-            f"release docs page language {language!r} is not supported "
-            "(use 'en' or 'zh')"
-        )
-    return "\n".join([
-        title, "",
-        intro, "",
-        heading, "",
-        table, "",
-        "## Release notes", "",
-        notes, "",
-    ])
-
-
-def current_latest_release_slug(config_text: str) -> str:
-    """The first page of the English `Releases` group — the current
-    latest release (the groups are latest-first)."""
-    config = json.loads(config_text)
-    for lang in config["navigation"]["languages"]:
-        if lang.get("language") != "en":
-            continue
-        for group in lang["groups"]:
-            if group.get("group") == "Releases":
-                pages = group["pages"]
-                if not pages:
-                    raise RuntimeError(
-                        "release docs sync: the Releases group has no "
-                        "pages — cannot determine the current latest "
-                        "release"
-                    )
-                return str(pages[0])
-    raise RuntimeError(
-        "release docs sync: docs.json has no English Releases group — "
-        "cannot determine the current latest release"
-    )
-
-
-def update_release_navigation(config_text: str, slug: str) -> tuple[str, bool]:
-    """Insert a release and keep only the three newest pages visible.
-
-    The `Releases` (en) and `发布` (zh) groups list releases latest-first.
-    Older visible pages move to the head of the existing collapsed subgroup,
-    preserving their order. A slug already listed in either group's visible
-    pages or subgroup leaves the config untouched (idempotent). Exactly one
-    group updated means a broken config — fail fast, never guess.
-    """
-    config = json.loads(config_text)
-    updated = 0
-    for lang in config["navigation"]["languages"]:
-        for group in lang["groups"]:
-            if group.get("group") not in ("Releases", "发布"):
-                continue
-            pages = group["pages"]
-            entry = f"zh/{slug}" if group["group"] == "发布" else slug
-            subgroup = next(
-                (page for page in pages
-                 if isinstance(page, dict) and not page.get("expanded", True)),
-                None,
-            )
-            listed = entry in pages or (
-                subgroup is not None and entry in subgroup.get("pages", [])
-            )
-            if listed:
-                continue
-            pages.insert(0, entry)
-            if len([page for page in pages if isinstance(page, str)]) > 3:
-                if subgroup is None:
-                    raise RuntimeError(
-                        "release docs sync: release navigation has more "
-                        "than three visible pages but no collapsed subgroup"
-                    )
-                visible = [page for page in pages if isinstance(page, str)]
-                subgroup["pages"] = visible[3:] + subgroup.get("pages", [])
-                pages[:] = visible[:3] + [subgroup]
-            updated += 1
-    if updated == 0:
-        return config_text, False
-    if updated != 2:
-        raise RuntimeError(
-            f"release docs sync: expected exactly two release groups "
-            f"(Releases + 发布) but updated {updated} — the docs.json "
-            "navigation is not the expected Mintlify i18n layout"
-        )
-    return json.dumps(config, indent=2, ensure_ascii=False) + "\n", True
-
-
-def move_latest_marker(worktree: Path, old_slug: str,
-                       new_slug: str, *, resume: bool) -> list[str]:
-    """Move the `(latest)` title marker off the previous latest page.
-
-     Only the newest release page may carry the marker:
-    ` (latest)` (en) / `（最新）` (zh) is stripped from the previous
-    latest page's H1. When the old page already lacks the marker the
-    move is only accepted on a resume (`resume=True`: the new page
-    already carries the marker — a partial step of an earlier attempt
-    already moved it); otherwise the invariant is broken and the step
-    fails fast — a broken state is never silently repaired. Returns the
-    changed relative paths.
-    """
-    changed: list[str] = []
-    for directory, marker in (("docs", RELEASE_DOCS_LATEST_MARKER_EN),
-                              ("docs/zh", RELEASE_DOCS_LATEST_MARKER_ZH)):
-        path = worktree / directory / f"{old_slug}.mdx"
-        if not path.is_file():
-            raise RuntimeError(
-                f"release docs sync: previous latest page {path} is "
-                "missing — cannot move the (latest) marker"
-            )
-        text = path.read_text(encoding="utf-8")
-        first_line, _, rest = text.partition("\n")
-        if marker in first_line:
-            path.write_text(
-                first_line.replace(marker, "", 1) + "\n" + rest,
-                encoding="utf-8",
-            )
-            changed.append(f"{directory}/{old_slug}.mdx")
-            continue
-        if resume:
-            new_path = worktree / directory / f"{new_slug}.mdx"
-            new_first = (
-                new_path.read_text(encoding="utf-8").splitlines()[0]
-                if new_path.is_file() else ""
-            )
-            if marker in new_first:
-                continue
-        raise RuntimeError(
-            f"release docs sync: {path} does not carry the (latest) "
-            "marker in its title and the move did not happen yet — "
-            "the latest-marker invariant is broken, refusing to guess"
-        )
-    return changed
-
-
-def rollback_release_docs(*, worktree: Path, base_branch: str,
-                          docs_commit: str) -> None:
-    """Remove a pre-publication docs commit when Release creation fails."""
-    current = run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
-    if current != docs_commit:
-        raise RuntimeError(
-            f"release docs rollback expected {docs_commit}, found {current}"
-        )
-    run_git_write(["git", "revert", "--no-edit", docs_commit], cwd=worktree)
-    run_git_network_command(
-        ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
-        cwd=worktree,
-    )
-
-
-def promote_release_docs_latest(*, worktree: Path, base_branch: str,
-                                tag: str) -> str:
-    """Promote a successfully published release to the docs latest slot."""
-    config = worktree / "docs" / "docs.json"
-    if not config.is_file():
-        return "docs latest promotion skipped (no Mintlify docs in repo)"
-    config_text = config.read_text(encoding="utf-8")
-    old_slug = current_latest_release_slug(config_text)
-    # Navigation is latest-first, but the new pre-publication page is already
-    # at its head. Find the actual marker owner instead of treating that
-    # navigation entry as the old latest page.
-    nav = json.loads(config_text)
-    for lang in nav["navigation"]["languages"]:
-        if lang.get("language") != "en":
-            continue
-        for group in lang["groups"]:
-            if group.get("group") != "Releases":
-                continue
-            for slug in group["pages"]:
-                page = worktree / "docs" / f"{slug}.mdx"
-                if page.is_file() and " (latest)" in page.read_text(encoding="utf-8").split("\n", 1)[0]:
-                    old_slug = slug
-                    break
-            break
-    new_slug = f"release-{tag}"
-    if old_slug == new_slug:
-        return f"docs release {tag} latest marker already promoted"
-    # The pre-publication page is intentionally not latest. Promote it only
-    # after the GitHub Release exists, then remove the old marker in the same
-    # docs commit.
-    for directory, marker in (("docs", RELEASE_DOCS_LATEST_MARKER_EN),
-                              ("docs/zh", RELEASE_DOCS_LATEST_MARKER_ZH)):
-        path = worktree / directory / f"{new_slug}.mdx"
-        lines = path.read_text(encoding="utf-8").splitlines()
-        if marker in lines[0]:
-            continue
-        lines[0] += marker
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    changed = move_latest_marker(
-        worktree, old_slug, new_slug, resume=True,
-    )
-    if not changed:
-        return f"docs release {tag} latest marker already promoted"
-    paths = [*changed, f"docs/release-{tag}.mdx",
-             f"docs/zh/release-{tag}.mdx"]
-    fd = acquire_base_sync_lock(worktree, 300.0)
-    try:
-        run_command(["git", "add", *paths], cwd=worktree)
-        run_git_write(["git", "commit", "-m",
-                       f"docs: promote release {tag} as latest"], cwd=worktree)
-        run_git_network_command(
-            ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
-            cwd=worktree,
-        )
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
-    return f"docs release {tag} latest marker promoted"
-
-
-def sync_release_docs(*, source_repo: str, repo_dir: Path,
-                      worktree: Path, base_branch: str, tag: str,
-                      release_commit: str, issue_number: int,
-                      changelog: str | None = None,
-                      latest: bool = True) -> str:
-    """Sync the docs-site Release notes for one published release.
-
-     Release state machine step 8 — runs BEFORE the tag is pushed and
-    before the GitHub Release is created, so CI never observes a released
-    tag without its docs page. Direct callers may omit `changelog` to sync
-    an already-published release using its GitHub Release body.
-
-    - uses the supplied changelog for the pre-publication path; the legacy
-      path fetches the published Release (`gh release view`);
-    - generates `docs/release-<tag>.mdx` and
-      `docs/zh/release-<tag>.mdx` in the release worktree with the meta
-      the existing release pages share (tag/release-commit mapping,
-      publish time, release task Issue number);
-    - moves the `(latest)` title marker from the previous latest page;
-    - inserts the new version at the head of the `Releases`/`发布`
-      navigation groups in `docs/docs.json` (both languages), or skips
-      this Mintlify-only step when that file is absent;
-    - commits exactly those docs paths in the release worktree and
-      pushes `HEAD:refs/heads/<base_branch>` under the base-sync lock
-      (the release path has no PR — a direct commit to the base branch,
-      never a force push).
-
-    Idempotent: an existing page with identical content is neither
-    regenerated nor overwritten, and a run with nothing to change
-    commits nothing. An existing page with DIFFERENT content fails fast
-    (never overwritten). Any failure propagates so the release fails
-    fast and enters `ai-blocked` like every other step.
-    """
-    docs_config = worktree / "docs" / "docs.json"
-    if not docs_config.is_file():
-        return "docs sync skipped (no Mintlify docs in repo)"
-
-    if changelog is None:
-        # Compatibility for callers that sync an already-published release.
-        release = release_view(source_repo, tag,
-                               fields="tagName,publishedAt,url,body")
-        body = release.get("body")
-        if not isinstance(body, str) or not body.strip():
-            raise RuntimeError(
-                f"release {tag}: the GitHub Release body is empty — the "
-                "docs page would be fabricated, refusing"
-            )
-        published_at = release["publishedAt"]
-        release_url = release["url"]
-    else:
-        if not changelog.strip():
-            raise RuntimeError(
-                f"release {tag}: the changelog is empty — the docs page "
-                "would be fabricated, refusing"
-            )
-        body = changelog
-        published_at = None
-        release_url = f"https://github.com/{source_repo}/releases/tag/{tag}"
-    # A resumed release may know the remote tag through ls-remote while the
-    # checkout has no tag object (fresh clone). Fetch the exact tag before
-    # rendering it. Never substitute the commit: the page explicitly says
-    # the tag state was verified against origin.
-    if local_release_tag_commit(repo_dir, tag) is None:
-        run_git_network_command(
-            ["git", "fetch", "origin", f"refs/tags/{tag}:refs/tags/{tag}"],
-            cwd=repo_dir,
-        )
-    try:
-        tag_object = run_command(
-            ["git", "rev-parse", f"refs/tags/{tag}"], cwd=repo_dir,
-        ).strip()
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(
-            f"release {tag}: remote tag exists but its local tag object "
-            "could not be fetched; refusing to fabricate verified docs"
-        ) from exc
-    new_slug = f"release-{tag}"
-    en_path = worktree / "docs" / f"{new_slug}.mdx"
-    zh_path = worktree / "docs" / "zh" / f"{new_slug}.mdx"
-    en_content = release_docs_page(
-        version=tag, tag_object=tag_object, release_commit=release_commit,
-        published_at=published_at, release_url=release_url,
-        issue_number=issue_number, body=body, language="en", latest=latest,
-    )
-    zh_content = release_docs_page(
-        version=tag, tag_object=tag_object, release_commit=release_commit,
-        published_at=published_at, release_url=release_url,
-        issue_number=issue_number, body=body, language="zh", latest=latest,
-    )
-    # A pre-existing identical page means this is a resume after a
-    # partial step — the marker move may then be lenient (it already
-    # happened). A page created by THIS run demands the strict move.
-    new_page_preexisting = (
-        en_path.is_file()
-        and en_path.read_text(encoding="utf-8") == en_content
-    )
-    for path, content in ((en_path, en_content), (zh_path, zh_content)):
-        if path.is_file():
-            existing = path.read_text(encoding="utf-8")
-            if existing == content:
-                continue
-            # A process can die after publication and after the promotion
-            # commit. On resume the pre-publication sync is deliberately
-            # marker-free, so accept the same page with only its title
-            # marker changed.
-            if not latest and existing.split("\n", 1)[-1] == content.split("\n", 1)[-1]:
-                continue
-            raise RuntimeError(
-                f"release {tag}: {path} already exists with different "
-                "content — an existing release page is never overwritten"
-            )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-    config_text = docs_config.read_text(encoding="utf-8")
-    old_slug = current_latest_release_slug(config_text)
-    if latest and old_slug != new_slug:
-        move_latest_marker(
-            worktree, old_slug, new_slug, resume=new_page_preexisting,
-        )
-    new_config_text, nav_changed = update_release_navigation(
-        config_text, new_slug,
-    )
-    if nav_changed:
-        docs_config.write_text(new_config_text, encoding="utf-8")
-    expected_paths = [
-        f"docs/{new_slug}.mdx",
-        f"docs/zh/{new_slug}.mdx",
-        "docs/docs.json",
-    ]
-    if old_slug != new_slug:
-        expected_paths += [
-            f"docs/{old_slug}.mdx",
-            f"docs/zh/{old_slug}.mdx",
-        ]
-    fd = acquire_base_sync_lock(repo_dir, 300.0)
-    try:
-        run_command(["git", "add", *expected_paths], cwd=worktree)
-        try:
-            run_command(["git", "diff", "--cached", "--quiet"],
-                        cwd=worktree)
-        except subprocess.CalledProcessError as exc:
-            if exc.returncode != 1:
-                raise
-        else:
-            # Nothing staged can only mean the docs commit of a previous
-            # run is already part of this tick's frozen base: the release
-            # state machine hard-resets the worktree to release_commit in
-            # create_release_worktree BEFORE this function runs, so a
-            # local docs commit whose push failed cannot survive to this
-            # point — the resume regenerates the pages below and takes
-            # the normal commit+push path (#623; the #587 world is
-            # unreachable, and a stale origin/<base> tracking ref must
-            # not be answered with a false "recovered" no-op push).
-            return (
-                f"docs release notes for {tag} already in sync — "
-                "idempotent no-op, nothing committed"
-            )
-        run_git_write([
-            "git", "commit", "-m",
-            f"docs: release notes for {tag} (Issue #{issue_number})",
-        ], cwd=worktree)
-        run_git_network_command(
-            ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
-            cwd=worktree,
-        )
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
-    return (
-        f"docs release notes for {tag} committed and pushed to "
-        f"{base_branch}"
-    )
-
-
 def release_success_comment_body(run_id: str, run_info: str,
                                  release_url: str, tag: str,
                                  release_commit: str,
                                  scope_evidence: list[str],
                                  gate_evidence: list[str],
                                  test_evidence: str,
-                                 docs_evidence: str,
                                  milestone_evidence: str) -> str:
     """The terminal success comment: the full verification evidence.
 
      The comment is the auditable record of the release:
     run marker, release URL, version/tag/release commit, the
-    per-item scope evidence, the gate evidence, the test evidence, the
-    docs-site Release notes evidence and the Milestone
-    evidence (the Milestone whose title is the released
+    per-item scope evidence, the gate evidence, the test evidence and
+    the Milestone evidence (the Milestone whose title is the released
     version is closed on the success path).
     """
     info = _run_info_fields(run_info)
@@ -1648,10 +1154,6 @@ def release_success_comment_body(run_id: str, run_info: str,
         "## Tests",
         "",
         f"- {test_evidence}",
-        "",
-        "## Release notes (docs site)",
-        "",
-        f"- {docs_evidence}",
         "",
         "## Milestone",
         "",
@@ -1712,28 +1214,22 @@ def process_release(issue: dict, config: RunnerConfig,
     6. Tag: the remote tag must not exist or must point EXACTLY at
        the release commit (a mismatch fails — an existing tag is
        never moved; one exception: a tag pointing at an ancestor of
-       the frozen base resumes the docs-sync path by rewinding the
-       release commit to the tag); otherwise create an annotated tag
-       at the release commit and push it with a plain push (never
+       the frozen base resumes the release by rewinding the release
+       commit to the tag); otherwise create an annotated tag at the
+       release commit and push it with a plain push (never
        `--force`).
     7. Publish the GitHub Release (idempotent) with the full
        verification evidence.
-    8. Sync the docs-site Release notes: generate
-       `docs/release-<version>.mdx` + `docs/zh/release-<version>.mdx`
-       from the published Release body, update both navigation groups,
-       move the `(latest)` marker, and commit + push those docs changes
-       to the base branch directly. Idempotent: identical pages are not
-       overwritten; anything else fails fast.
-    9. Apply `ai-merged` and close the release Issue (terminal delivery
+    8. Apply `ai-merged` and close the release Issue (terminal delivery
        transition).
-    10. Close the Milestone whose title is EXACTLY the released
+    9. Close the Milestone whose title is EXACTLY the released
         version, then write the success comment (release
-        URL, tag, commit, evidence, docs-site Release notes evidence,
-        Milestone evidence). Exact title match only; close it only when
-        it has 0 open Issues; already-closed is idempotent. A missing
-        Milestone or remaining open Issues fails fast. Any failure is
-        `ai-blocked` ALONE, with a concrete failure comment, and the
-        handled failure returns cleanly so the tick does not crash.
+        URL, tag, commit, evidence, Milestone evidence). Exact title
+        match only; close it only when it has 0 open Issues;
+        already-closed is idempotent. A missing Milestone or remaining
+        open Issues fails fast. Any failure is `ai-blocked` ALONE, with
+        a concrete failure comment, and the handled failure returns
+        cleanly so the tick does not crash.
     """
     number = int(issue["number"])
     title = issue["title"]
@@ -2009,12 +1505,10 @@ def process_release(issue: dict, config: RunnerConfig,
             elif tag_commit_is_ancestor_of_base(
                     existing_tag_commit, release_commit,
                     config.repo_dir):
-                # The docs-sync step (step 8) pushed the release
-                # notes to the base branch, advancing origin/<base> past the
-                # tag commit. On a resume the frozen base is the docs commit;
-                # the tag commit is the canonical release commit — recover it
-                # so the release resumes instead of deadlocking on the tag
-                # check.
+                # A previous attempt pushed the tag and the frozen base
+                # advanced past it afterwards. The tag commit is the
+                # canonical release commit — recover it so the release
+                # resumes instead of deadlocking on the tag check.
                 event(
                     "release_base_advanced_past_tag", issue=number, tag=tag,
                     tag_commit=existing_tag_commit, base_commit=release_commit,
@@ -2027,20 +1521,11 @@ def process_release(issue: dict, config: RunnerConfig,
                     f"release commit {release_commit} — an existing "
                     "tag is never moved or overwritten"
                 )
-        else:
-            # A docs push can succeed before the process dies while the tag
-            # is still local. On resume the frozen base is now the docs
-            # commit; the local tag is the only durable identity of the
-            # release commit and must not be retagged onto that docs commit.
-            release_commit = resume_release_commit(
-                local_tag_commit=local_release_tag_commit(config.repo_dir, tag),
-                release_commit=release_commit, repo_dir=config.repo_dir,
-            )
         # Release notes come from the tagged commit range, never the
         # Milestone Issue list (Issue #1492). Compute them only now that
-        # the release commit is final — after the tag-conflict and
-        # local-tag resume handling above — so a resume for the same
-        # version reproduces the same notes byte for byte.
+        # the release commit is final — after the tag-conflict handling
+        # above — so a resume for the same version reproduces the same
+        # notes byte for byte.
         range_prs = release_range_prs(
             config.repo_dir, source_repo, release_commit, base_branch,
         )
@@ -2051,88 +1536,26 @@ def process_release(issue: dict, config: RunnerConfig,
             ),
             range_prs,
         )
-        # Create the annotated object locally, but do not publish the tag
-        # until the docs commit is on the base branch. This keeps the docs
-        # invariant true at every point visible to CI.
+        # Publish the tag with a plain push (never `--force`); the annotated
+        # object is created locally by `ensure_release_tag_pushed`.
         if existing_tag_commit is None:
-            ensure_release_tag_created(
+            ensure_release_tag_pushed(
                 config.repo_dir, tag, release_commit,
             )
-        try:
-            # A page already in the frozen base can come from an older,
-            # interrupted release run whose first docs commit was marker-free.
-            # Preserve that compatibility path so post-publication promotion
-            # can finish it; fresh runs establish the invariant atomically.
-            docs_page_preexists = (
-                worktree / "docs" / f"release-{tag}.mdx"
-            ).is_file()
-            docs_evidence = sync_release_docs(
-                source_repo=source_repo, repo_dir=config.repo_dir,
-                worktree=worktree, base_branch=base_branch, tag=tag,
-                release_commit=release_commit, issue_number=number,
-                changelog=changelog,
-                latest=not docs_page_preexists,
-            )
-        except Exception:
-            # The tag is intentionally local until docs are on the base
-            # branch. Do not leave that disposable object behind when the
-            # docs push fails; a retry must be able to create the tag for
-            # the same release commit without hitting a residue conflict.
-            if existing_tag_commit is None:
-                run_git_write(["git", "tag", "-d", tag], cwd=config.repo_dir)
-            raise
-        docs_commit = (
-            run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
-            if "committed and pushed" in docs_evidence else None
-        )
-        # A failed tag push is the only pre-publication state in which the
-        # docs commit must be compensated.  The push can be partially
-        # successful, so probe the remote before deciding to revert: once a
-        # tag is visible, preserving the docs is the hard invariant.
-        if existing_tag_commit is None:
-            try:
-                ensure_release_tag_pushed(
-                    config.repo_dir, tag, release_commit,
-                )
-            except Exception:
-                tag_pushed = release_tag_commit(config.repo_dir, tag) is not None
-                if not tag_pushed and docs_commit is not None:
-                    rollback_release_docs(
-                        worktree=worktree, base_branch=base_branch,
-                        docs_commit=docs_commit,
-                    )
-                raise
             event(
                 "release_tag_pushed", issue=number, tag=tag,
                 commit=release_commit,
             )
-        try:
-            release_url = publish_release(
-                repo=source_repo, tag=tag, version=tag,
-                release_commit=release_commit, changelog=changelog,
-                scope_evidence=scope_evidence, gate_evidence=gate_evidence,
-                test_evidence=test_evidence, run_id=run_id, issue_number=number,
-                attribution_footer=config.attribution_footer,
-            )
-        except Exception:
-            # The tag is already visible before publication is attempted.
-            # Keep the docs commit: a released tag without its docs page is
-            # the irreversible failure, and a retry can finish publication
-            # for this same tag. The tag-push exception path above handles
-            # the only case where compensation is safe.
-            raise
-        docs_latest_evidence = promote_release_docs_latest(
-            worktree=worktree, base_branch=base_branch, tag=tag,
+        release_url = publish_release(
+            repo=source_repo, tag=tag, version=tag,
+            release_commit=release_commit, changelog=changelog,
+            scope_evidence=scope_evidence, gate_evidence=gate_evidence,
+            test_evidence=test_evidence, run_id=run_id, issue_number=number,
+            attribution_footer=config.attribution_footer,
         )
-        docs_evidence = f"{docs_evidence}; {docs_latest_evidence}"
         publish(
             action=lambda: publisher.milestone(
                 f"**Orbi released**: {release_url}",
-            ),
-        )
-        publish(
-            action=lambda: publisher.milestone(
-                f"**Orbi release docs synced**: {docs_evidence}",
             ),
         )
         try:
@@ -2174,7 +1597,7 @@ def process_release(issue: dict, config: RunnerConfig,
                 body=release_success_comment_body(
                     run_id, run_info, release_url, tag, release_commit,
                     scope_evidence, gate_evidence, test_evidence,
-                    docs_evidence, milestone_evidence,
+                    milestone_evidence,
                 ),
             )
         except Exception:
@@ -2197,7 +1620,7 @@ def process_release(issue: dict, config: RunnerConfig,
         # The version commit is already on the base branch: a concurrent
         # release instance won the push race (Issue #1289). This run yields
         # — the ticket returns to the ready queue and the next tick resumes
-        # the release from the landed commit (tag/release/docs) instead of
+        # the release from the landed commit (tag/release) instead of
         # rewriting work that is already done as `ai-blocked`.
         event(
             "claim_yield", issue=number,

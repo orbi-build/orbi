@@ -5,8 +5,7 @@ state machine. They now come from `tools/release_docs.py`, run by
 `.github/workflows/release-docs.yml` on `release: published`. These tests
 pin the two contracts:
 
-- the script renders EN/ZH pages byte-identical to `orbi.release`
-  `release_docs_page` for the same input, inserts the `docs.json`
+- the script renders the EN/ZH pages, inserts the `docs.json`
   navigation entries, moves the `(latest)` marker and is idempotent;
 - the workflow file is structurally valid (the equivalent of an
   `actionlint` pass that is not installed in the sandbox): the published
@@ -21,8 +20,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-
-from orbi.release import release_docs_page as engine_release_docs_page
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "tools" / "release_docs.py"
@@ -52,11 +49,11 @@ class _Result:
 
 
 # ---------------------------------------------------------------------------
-# Page rendering: byte-identical to the engine's release_docs_page.
+# Page rendering
 # ---------------------------------------------------------------------------
 
 
-def test_release_docs_page_matches_engine_rendering():
+def test_release_docs_page_renders_en_and_zh_titles():
     script = load_script()
     kwargs = dict(
         version=TAG,
@@ -76,15 +73,19 @@ def test_release_docs_page_matches_engine_rendering():
             "- gate\n"
         ),
     )
-    assert script.release_docs_page(**kwargs, language="en") == (
-        engine_release_docs_page(**kwargs, language="en")
-    )
-    assert script.release_docs_page(**kwargs, language="zh") == (
-        engine_release_docs_page(**kwargs, language="zh")
-    )
+    en_page = script.release_docs_page(**kwargs, language="en")
+    zh_page = script.release_docs_page(**kwargs, language="zh")
+    assert en_page.startswith(f"# {TAG} release (latest)")
+    assert f"(release task: Issue #42)" in en_page
+    assert zh_page.startswith(f"# {TAG} 发布（最新）")
+    # The engine audit blocks (Scope / Pre-release gates / run_id) are
+    # dropped from the reader-facing page.
+    assert "Scope (verified item by item)" not in en_page
+    assert "run_id=deadbeef" not in en_page
+    assert "- A change ([Issue #1](https://example.test/1))" in en_page
 
 
-def test_release_docs_page_matches_engine_without_published_at():
+def test_release_docs_page_renders_without_published_at():
     script = load_script()
     kwargs = dict(
         version=TAG,
@@ -95,12 +96,10 @@ def test_release_docs_page_matches_engine_without_published_at():
         issue_number=7,
         body=f"# {TAG}\n\n- no publish time\n",
     )
-    assert script.release_docs_page(**kwargs, language="en") == (
-        engine_release_docs_page(**kwargs, language="en")
-    )
-    assert script.release_docs_page(**kwargs, language="zh") == (
-        engine_release_docs_page(**kwargs, language="zh")
-    )
+    for language in ("en", "zh"):
+        page = script.release_docs_page(**kwargs, language=language)
+        assert RELEASE_URL in page
+        assert "- no publish time" in page
 
 
 def test_release_docs_page_omits_the_release_task_clause_without_an_issue():
@@ -472,12 +471,8 @@ def test_generate_writes_pages_marker_and_navigation(tmp_path, monkeypatch):
     zh_page = (
         repo / "docs" / "zh" / f"release-{TAG}.mdx"
     ).read_text(encoding="utf-8")
-    assert en_page == engine_release_docs_page(
-        version=TAG, tag_object=TAG_OBJECT, release_commit=RELEASE_COMMIT,
-        published_at=PUBLISHED_AT, release_url=RELEASE_URL, issue_number=42,
-        body=f"# {TAG}\n\n## Changelog\n\n- work\n",
-        language="en", latest=True,
-    )
+    assert en_page.startswith(f"# {TAG} release (latest)")
+    assert f"(release task: Issue #42)" in en_page
     assert zh_page.startswith(f"# {TAG} 发布（最新）")
     old_en = (repo / "docs" / "release-v0.9.0.mdx").read_text(encoding="utf-8")
     old_zh = (
@@ -516,7 +511,7 @@ def test_generate_keeps_an_identical_existing_page(tmp_path, monkeypatch):
     repo = _release_repo(tmp_path)
     _stub_github(script, monkeypatch)
     body = f"# {TAG}\n\n## Changelog\n\n- work\n"
-    en_content = engine_release_docs_page(
+    en_content = script.release_docs_page(
         version=TAG, tag_object=TAG_OBJECT, release_commit=RELEASE_COMMIT,
         published_at=PUBLISHED_AT, release_url=RELEASE_URL, issue_number=42,
         body=body, language="en", latest=True,
