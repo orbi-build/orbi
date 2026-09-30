@@ -11,16 +11,8 @@ starts at a changed line and is missing. A change with no modified
 Python file (doc-only) passes: the gate must not invent a Python
 coverage requirement for it.
 
-The coverage configuration's `run.omit` patterns drive the measured set
-(Issue #1501): a changed file the configuration omits (the
-`bench/oss-upstream/` developer harness, never imported by the suite) is
-skipped instead of demanding 100% for code the contract deliberately does
-not measure. The decision lives in the configuration, not in a path list
-hardcoded here.
-
 Usage:  python3 tools/diff_coverage_gate.py [base_ref]   (default: origin/main)
 """
-import fnmatch
 import json
 import os
 import re
@@ -103,39 +95,6 @@ def changed_python_lines(base_ref: str) -> dict[str, set[int]] | None:
     return changed
 
 
-def omitted_patterns() -> list[str]:
-    """The coverage configuration's `run.omit` patterns.
-
-    Read through the coverage API so the gate and `coverage run` share one
-    decision (pyproject.toml / .coveragerc — whatever coverage itself
-    reads). A configuration that cannot be read fails fast: the gate must
-    not silently fall back to requiring coverage for omitted code.
-    """
-    from coverage import Coverage
-    return list(Coverage().config.run_omit)
-
-
-def apply_omits(
-    changed: dict[str, set[int]], patterns: list[str],
-) -> tuple[dict[str, set[int]], list[str]]:
-    """Drop changed files matching an `run.omit` pattern.
-
-    Returns the remaining map and the sorted paths that were skipped, so
-    the gate can name what it left out (evidence, never a silent pass).
-    With no configured pattern the map is returned unchanged.
-    """
-    if not patterns:
-        return changed, []
-    kept: dict[str, set[int]] = {}
-    skipped: list[str] = []
-    for path, lines in changed.items():
-        if any(fnmatch.fnmatch(path, pattern) for pattern in patterns):
-            skipped.append(path)
-        else:
-            kept[path] = lines
-    return kept, sorted(skipped)
-
-
 def coverage_files() -> dict | None:
     """The per-file section of `coverage json` (the same numbers the
     report shows). Returns None when the report cannot be produced."""
@@ -159,20 +118,10 @@ def main(argv: list[str]) -> int:
     changed = changed_python_lines(base_ref)
     if changed is None:
         return 1
-    changed, omitted = apply_omits(changed, omitted_patterns())
-    if omitted:
-        print(
-            f"diff gate (Issue #234): skipped coverage-omitted files "
-            f"({base_ref}...HEAD): " + ", ".join(omitted)
-        )
     if not changed:
-        detail = (
-            "all changed Python files are coverage-omitted"
-            if omitted else "doc-only change"
-        )
         print(
             f"diff gate (Issue #234): no changed Python files "
-            f"({base_ref}...HEAD) — {detail}, gate passes"
+            f"({base_ref}...HEAD) — doc-only change, gate passes"
         )
         return 0
     files = coverage_files()

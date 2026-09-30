@@ -1,1 +1,0 @@
-Results table: size columns by display width so CJK text does not shift columns (upstream `pyinfra-dev/pyinfra issue 1438`)
