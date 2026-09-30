@@ -1379,8 +1379,8 @@ def test_docs_document_sign_in_with_chatgpt_plan_usage():
         )
         # The model list and the token extraction must match the real
         # contracts: OpenAI's SIWC model-list response carries a `models`
-        # array, and Pi stores the OAuth token under `access` (the current
-        # README `access_token`/`.data[]` pair returns nothing).
+        # array, and Pi stores the OAuth token under `access` (the earlier
+        # `access_token`/`.data[]` pair returned nothing).
         assert "access_token" not in text, (
             f"{slug} must not send the user to a non-existent auth.json field"
         )
