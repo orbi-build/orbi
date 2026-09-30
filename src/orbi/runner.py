@@ -2573,6 +2573,16 @@ class DeliveryDeferred(Exception):
     """
 
 
+class MergeBlockedByIssueLabel(Exception):
+    """The gate refused to merge because the source Issue is `ai-blocked`.
+
+    A maintainer's terminal label wins over a fully green gate: the skip
+    comment is posted by `merge_gate`, the PR stays open and the labels
+    stay as the human set them (no `ai-merged`), so the caller only stops
+    the round.
+    """
+
+
 # The repository's GitHub settings are the only source of the merge
 # method (Issue #1480): the first enabled flag in GitHub's own
 # precedence order wins, so an Orbi-side option can never disagree
@@ -2610,12 +2620,18 @@ def select_merge_method(repo: str) -> str:
 
 def merge_gate(worktree: Path, pr: dict, base_branch: str,
                *, repo_dir: Path,
-               source_repo: str | None = None) -> dict:
+               source_repo: str | None = None,
+               issue_number: int | None = None,
+               run_id: str | None = None) -> dict:
     """Merge the reviewed PR only if the gate still holds against latest base.
 
     Re-fetch the latest remote base, require the PR head to contain it, the PR
     to be mergeable, the remote head to still be the reviewed head, and the
-    exact head's GitHub CI checks to be completed successfully. If the base
+    exact head's GitHub CI checks to be completed successfully, and the
+    source Issue to still NOT carry `ai-blocked` (Issue #1504: the label is
+    re-read immediately before the merge, so a maintainer's terminal label
+    added while the PR was in review stops the merge; one skip comment names
+    the reviewed head and the PR/labels stay untouched). If the base
     advanced but GitHub reports a conflict-free PR, absorb it with a plain
     merge and push the task branch, then read only the absorbed head's CI gate
     again; this does not start another review round. Every state is read once
@@ -2767,6 +2783,45 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
     # reviewed-head states above; only a fresh, mergeable head reaches the
     # actual merge command.
     merge_repo = source_repo or pr.get("_source_repo", "")
+    if issue_number is not None:
+        # Issue #1504: re-read the Issue's labels at the last possible
+        # moment. `ai-blocked` is otherwise only honoured at claim time, so
+        # a maintainer label added while the run was in review used to be
+        # merged over. It is a human decision: the PR stays open and the
+        # labels stay as the human set them.
+        labels = issue_labels(issue_number, merge_repo)
+        if BLOCKED_LABEL in labels:
+            marker = run_marker(run_id)
+            event(
+                "merge_gate_issue_blocked", level=logging.ERROR,
+                issue=issue_number, pr=pr["number"], head=pr["head_oid"],
+            )
+            try:
+                comment_issue(
+                    issue_number, repo=merge_repo,
+                    body=(
+                        f"{marker}\n"
+                        f"Orbi merge skipped for PR #{pr['number']}: the "
+                        f"source Issue is labelled `{BLOCKED_LABEL}`, so the "
+                        f"reviewed head {pr['head_oid']} was not merged "
+                        f"(run_id={run_id}).\n\n"
+                        "The PR is left open and the labels are unchanged; a "
+                        "human decides the next step."
+                    ),
+                )
+            except Exception:
+                # The skip comment is a bypass: publishing it must never
+                # turn the human's `ai-blocked` decision into a merge or a
+                # label change. The gate still refuses the merge.
+                LOGGER.exception(
+                    "merge_skip_comment_publish_failed issue=%s pr=%s "
+                    "run_id=%s", issue_number, pr["number"], run_id,
+                )
+            raise MergeBlockedByIssueLabel(
+                f"Issue #{issue_number} is labelled {BLOCKED_LABEL}; the "
+                f"reviewed head {pr['head_oid']} of PR #{pr['number']} was "
+                "not merged"
+            )
     merge_method = select_merge_method(merge_repo)
     try:
         run_command([
@@ -3833,6 +3888,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             worktree,
             {**refrozen, "_source_repo": source_repo},
             base_branch, repo_dir=config.repo_dir,
+            issue_number=number, run_id=config.run_id,
         )
     except MergeHandoffRequired as exc:
         # A known policy blocker is a successful, resumable handoff.
@@ -3848,6 +3904,17 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         event(
             "review_merge_deferred", pr=refrozen["number"], round=round,
             reason=str(exc),
+        )
+        return False
+    except MergeBlockedByIssueLabel as exc:
+        # Issue #1504: a maintainer labelled the source Issue `ai-blocked`
+        # while the PR was in review. The gate already posted the skip
+        # comment; the labels stay as the human set them and the PR stays
+        # open (no `ai-merged`, no `ai-fix-needed`). The Issue is terminal
+        # for the engine, so no next tick re-claims it.
+        event(
+            "review_merge_skipped_issue_blocked",
+            pr=refrozen["number"], round=round, reason=str(exc),
         )
         return False
     except RecoverableMergeGateError as exc:

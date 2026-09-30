@@ -570,6 +570,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `review_findings_unfixed` | 评审发现未修复；Issue 转入 ai-fix-needed |
 | `review_absorb_abandoned` | 落后 base 的一轮发出 pass 却未合并 base、也未上报放弃合并（Issue #877） |
 | `review_merge_deferred` | 合并门把合并顺延到下一 tick |
+| `review_merge_skipped_issue_blocked` | 因 Issue 处于 ai-blocked，合并门拒绝合并（Issue #1504） |
 | `review_recovery_ci_status` | 观察到用于评审恢复的 CI 状态 |
 | `review_recovery_ci_status_failed` | 评审恢复所需的 CI 状态读取失败 |
 | `merge_gate_ci_pending` | 合并门发现 CI pending；合并顺延到下一 tick |
@@ -577,6 +578,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `merge_gate_behind_base` | 合并门发现 PR 落后于 base |
 | `merge_gate_head_moved` | PR head 在评审之后被移动 |
 | `merge_gate_not_mergeable` | PR 不可合并（冲突或检查失败） |
+| `merge_gate_issue_blocked` | 源 Issue 处于 ai-blocked；已跳过合并（Issue #1504） |
 | `merge_gate_rulesets_unavailable` | 规则集 API 在该仓库套餐上不可用（Issue #1361） |
 | `merged` | PR 合并精确落在被评审的 head 上 |
 | `merge_method_unknown` | 无法读取仓库合并设置；使用 `--merge`（Issue #1480） |

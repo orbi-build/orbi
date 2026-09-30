@@ -1086,6 +1086,115 @@ def test_merge_gate_merges_reviewed_head_with_match_head_commit(monkeypatch, tmp
     assert "--merge" in merge_cmd
 
 
+def test_merge_gate_skips_merge_when_issue_is_blocked(monkeypatch, tmp_path):
+    """Issue #1504: a maintainer's `ai-blocked` label added while the PR
+    was in review must stop the merge at the gate — the merge command is
+    never invoked, `ai-merged` is never added, and exactly one skip
+    comment names the reviewed head with the run marker."""
+    calls = []
+    comments = []
+    monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: [
+        "ai-ready", "ai-pr-opened", "ai-blocked",
+    ])
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda *a, **k: comments.append(k))
+    monkeypatch.setattr(seam, "edit_issue",
+                        lambda *a, **k: calls.append(("edit", k)))
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return _merge_gate_fake()(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    with pytest.raises(runner.MergeBlockedByIssueLabel, match="ai-blocked"):
+        runner.merge_gate(
+            tmp_path,
+            {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
+             "head_ref": "h", "head_oid": "h1"},
+            "main", repo_dir=tmp_path, source_repo="owner/repo",
+            issue_number=4, run_id="a1b2c3d4",
+        )
+    # The merge command is never invoked...
+    assert not [c for c in calls
+                if isinstance(c, list) and c[:2] == ["gh", "pr"]
+                and "merge" in c]
+    # ...no label is added (the human's labels stay as they are)...
+    assert [c for c in calls if isinstance(c, tuple)] == []
+    # ...and exactly one skip comment names the reviewed head.
+    assert len(comments) == 1
+    assert comments[0]["repo"] == "owner/repo"
+    body = comments[0]["body"]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in body
+    assert "ai-blocked" in body
+    assert "h1" in body
+
+
+def test_merge_gate_issue_blocked_comment_failure_is_bypass(
+        monkeypatch, tmp_path):
+    """Issue #1504/#79: the skip comment is a bypass — a publishing
+    failure must neither merge nor change the human's labels; the gate
+    still refuses the merge for the `ai-blocked` Issue."""
+    calls = []
+    monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: [
+        "ai-ready", "ai-pr-opened", "ai-blocked",
+    ])
+
+    def failing_comment(*a, **k):
+        raise RuntimeError("comment endpoint down")
+
+    monkeypatch.setattr(seam, "comment_issue", failing_comment)
+    monkeypatch.setattr(seam, "edit_issue",
+                        lambda *a, **k: calls.append(("edit", k)))
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return _merge_gate_fake()(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    with pytest.raises(runner.MergeBlockedByIssueLabel, match="ai-blocked"):
+        runner.merge_gate(
+            tmp_path,
+            {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
+             "head_ref": "h", "head_oid": "h1"},
+            "main", repo_dir=tmp_path, source_repo="owner/repo",
+            issue_number=4, run_id="a1b2c3d4",
+        )
+    assert not [c for c in calls
+                if isinstance(c, list) and c[:2] == ["gh", "pr"]
+                and "merge" in c]
+    assert [c for c in calls if isinstance(c, tuple)] == []
+
+
+def test_merge_gate_merges_when_issue_is_not_blocked(monkeypatch, tmp_path):
+    """Issue #1504: labels without `ai-blocked` keep the existing merge
+    path — the gate merges the reviewed head as before."""
+    calls = []
+    comments = []
+    monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: [
+        "ai-ready", "ai-pr-opened",
+    ])
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda *a, **k: comments.append(k))
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return _merge_gate_fake()(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    pr = runner.merge_gate(
+        tmp_path,
+        {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
+         "head_ref": "h", "head_oid": "h1"},
+        "main", repo_dir=tmp_path, source_repo="owner/repo",
+        issue_number=4, run_id="a1b2c3d4",
+    )
+    assert pr["merged"] is True
+    assert [c for c in calls
+            if isinstance(c, list) and c[:2] == ["gh", "pr"]
+            and "merge" in c]
+    assert comments == []
+
+
 @pytest.mark.parametrize("settings, expected", [
     ({"allow_merge_commit": True, "allow_squash_merge": True,
       "allow_rebase_merge": True}, "--merge"),
@@ -2266,6 +2375,30 @@ def test_review_and_merge_human_decision_stops_without_fix_round(
     assert "decide which address source is authoritative" in str(raised.value)
 
 
+def test_review_and_merge_skips_ai_merged_when_issue_blocked(
+        budget_review_env, monkeypatch, tmp_path):
+    """Issue #1504: when the gate refuses because the Issue carries
+    `ai-blocked`, the caller stops the round without adding `ai-merged`
+    (or any other label) and without touching the PR."""
+    calls = []
+
+    def blocked_gate(*a, **k):
+        raise runner.MergeBlockedByIssueLabel(
+            "Issue #4 is labelled ai-blocked; not merged"
+        )
+
+    monkeypatch.setattr(seam, "merge_gate", blocked_gate)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: calls.append(k))
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
+    merged = runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+        scene=_scene(),
+    )
+    assert merged is False
+    assert calls == []
+
+
 def test_review_and_merge_clean_verdict_merges_and_labels_merged(
         monkeypatch, tmp_path):
     calls = []
@@ -2458,7 +2591,7 @@ def test_review_and_merge_refreezes_head_after_in_session_fix(
         lambda *a, **k: _pass_verdict_text(head="h2"),
     )
 
-    def fake_gate(worktree, pr, base_branch, *, repo_dir):
+    def fake_gate(worktree, pr, base_branch, *, repo_dir, **_kwargs):
         calls.append(("gate", pr["head_oid"], repo_dir))
         return {**pr, "merged": True}
 
@@ -2628,7 +2761,7 @@ def test_review_and_merge_clean_verdict_without_head_advance_keeps_frozen_head(
     )
     monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _pass_verdict_text())
 
-    def fake_gate(worktree, pr, base_branch, *, repo_dir):
+    def fake_gate(worktree, pr, base_branch, *, repo_dir, **_kwargs):
         calls.append(("gate", pr["head_oid"], repo_dir))
         return {**pr, "merged": True}
 
