@@ -135,11 +135,11 @@ from orbi.progress import (
 )
 from orbi import runner_health
 from orbi.scheduler import (
-    MAX_RUNNER_INSTANCES,
     UnitDriftError,
     check_unit_drift,
     sync_drifted_units,
 )
+from orbi.scheduler_units import MAX_RUNNER_INSTANCES
 
 
 from orbi import pi_process

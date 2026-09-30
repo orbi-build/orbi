@@ -35,7 +35,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from orbi.scheduler import (
+from orbi.scheduler_units import (
     MAX_RUNNER_INSTANCES,
     REPO_DIR_PLACEHOLDER,
     service_instances,

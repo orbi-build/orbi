@@ -21,7 +21,7 @@ from orbi.release_git import RELEASE_VERSION_FILE_OPTIONS
 # (the module that owns the policy file); the path resolver stays
 # re-exported here for the modules that resolve it through the config.
 from orbi.repo_config import REPO_CONFIG_PATH, repository_config_path
-from orbi.scheduler import MAX_RUNNER_INSTANCES
+from orbi.scheduler_units import MAX_RUNNER_INSTANCES
 
 ISSUE_COMMENTS_LIMIT = 200
 WORKTREE_RETAIN_HOURS = 72
