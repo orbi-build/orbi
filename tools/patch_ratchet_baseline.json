@@ -39,6 +39,7 @@
     "runner_health": 14,
     "scene": 0,
     "scheduler": 17,
+    "scheduler_units": 0,
     "systemd_deploy": 0,
     "ticket_command": 0
   },
