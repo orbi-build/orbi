@@ -352,10 +352,9 @@ This path needs **Pi ≥ 0.99.1**. The installed Pi in the documented environmen
 ### First login: do this in order
 
 1. Start an interactive Pi session with `pi`.
-2. At the Pi prompt, run **`/login openai`**. Without the argument, `/login` first asks for the authentication method (`Select authentication method:`) — choose **Sign in with ChatGPT**, which then lists the provider **OpenAI**.
-3. At `Select authentication method for OpenAI:`, choose **Sign in with ChatGPT** (the subscription path; the other option is **Sign in with an API key**).
-4. Complete the consent in the browser and approve this app's access to your ChatGPT plan.
-5. Verify the login before configuring Orbi:
+2. At the Pi prompt, run **`/login openai`**. Pi asks `Select authentication method for OpenAI:` — choose **Sign in with ChatGPT** (the subscription path; the other option is **Sign in with an API key**). A bare `/login` without the provider argument asks `Select authentication method:` first: choose **Sign in with an account**, which then lists the provider **OpenAI**.
+3. Complete the consent in the browser and approve this app's access to your ChatGPT plan.
+4. Verify the login before configuring Orbi:
 
    ```bash
    pi auth check --provider openai --model <slug-from-your-model-list> --json

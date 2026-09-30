@@ -349,10 +349,9 @@ Pi 原生 `openai` provider 支持 **Sign in with ChatGPT**：符合条件的 Ch
 ### 第一次登录：必须按这个顺序
 
 1. 启动交互式 Pi 会话：`pi`。
-2. 在 Pi 提示符中执行 **`/login openai`**。不带参数时，`/login` 会先询问认证方式（`Select authentication method:`）——选择 **Sign in with ChatGPT**，随后才会列出 provider **OpenAI**。
-3. 在 `Select authentication method for OpenAI:` 处选择 **Sign in with ChatGPT**（订阅路径；另一个选项是 **Sign in with an API key**）。
-4. 在浏览器完成授权，并同意该 app 使用你的 ChatGPT 订阅额度。
-5. 配置 Orbi 之前先检查登录：
+2. 在 Pi 提示符中执行 **`/login openai`**。Pi 会询问 `Select authentication method for OpenAI:`——选择 **Sign in with ChatGPT**（订阅路径；另一个选项是 **Sign in with an API key**）。不带 provider 参数的 `/login` 会先询问 `Select authentication method:`：选择 **Sign in with an account**，随后才会列出 provider **OpenAI**。
+3. 在浏览器完成授权，并同意该 app 使用你的 ChatGPT 订阅额度。
+4. 配置 Orbi 之前先检查登录：
 
    ```bash
    pi auth check --provider openai --model <slug-from-your-model-list> --json

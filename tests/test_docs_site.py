@@ -1338,6 +1338,8 @@ def test_docs_document_sign_in_with_chatgpt_plan_usage():
         text = page_text(slug)
         for fact in (
             "Sign in with ChatGPT",
+            "Select authentication method for OpenAI:",
+            "Sign in with an account",
             "/login openai",
             "pi auth check --provider openai",
             '"status":"ready"',
