@@ -12,7 +12,7 @@ Orbi is a self-hosted, open-source autonomous coding agent: label a GitHub Issue
 
 **Inspect the loop in the film:** [Issue #1367](https://github.com/orbi-build/orbi/issues/1367) → [PR #1370](https://github.com/orbi-build/orbi/pull/1370) → [Release v0.5.47](https://github.com/orbi-build/orbi/releases/tag/v0.5.47)
 
-Website <https://orbi.build> ｜ [Orbi Managed Cloud](https://orbi.build/cloud/?ref=gh-readme) ｜ Documentation <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions) ｜ Docker [GHCR](https://ghcr.io/orbi-build/orbi) · [Docker Hub](https://hub.docker.com/r/orbibuild/orbi)
+Website <https://orbi.build> ｜ [Orbi Cloud (free for 1 repo)](https://orbi.build/cloud/?ref=gh-readme) ｜ Documentation <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions) ｜ Docker [GHCR](https://ghcr.io/orbi-build/orbi) · [Docker Hub](https://hub.docker.com/r/orbibuild/orbi)
 
 ## Quick start
 
