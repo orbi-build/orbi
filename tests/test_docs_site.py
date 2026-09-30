@@ -1321,3 +1321,58 @@ def test_docs_only_reference_existing_labels_everywhere():
         assert not unknown, (
             f"{path.name} references unknown labels: {sorted(unknown)}"
         )
+
+
+def test_docs_document_sign_in_with_chatgpt_plan_usage():
+    """Issue #1510: both providers pages must document Pi's native `openai`
+    provider with Sign in with ChatGPT (ChatGPT Plus/Pro plan usage) — the
+    exact login wording and command, the `pi auth check` verification with
+    its expected JSON, the minimal Orbi config with `pi_providers` unset,
+    the public Responses API vs the `openai-codex` `chatgpt.com/backend-api`
+    path, the account-scoped model list, the headless callback/credential
+    transfer, the OpenAI-sourced quota/error boundary, and the honest
+    not-tested note (no Plus/Pro account was available for this delivery)."""
+    # Facts that carry no translation: the exact Pi CLI surface (verified
+    # against Pi 0.99.1), the OpenAI endpoints, and the upstream error codes.
+    for slug in ("providers", "zh/providers"):
+        text = page_text(slug)
+        for fact in (
+            "Sign in with ChatGPT",
+            "/login openai",
+            "pi auth check --provider openai",
+            '"status":"ready"',
+            '"authType":"oauth"',
+            'pi_provider = "openai"',
+            "pi_providers",
+            "unset" if slug == "providers" else "未设置",
+            "https://api.openai.com/v1",
+            "chatgpt.com/backend-api",
+            "openai-codex",
+            "https://api.openai.com/v1/models",
+            "visibility",
+            "http://127.0.0.1:1455/auth/callback",
+            "~/.pi/agent/auth.json",
+            "OPENAI_API_KEY",
+            "chatgpt.com/settings/usage",
+            "subscription_sharing_usage_limit_exceeded",
+            "subscription_sharing_usage_unavailable",
+            "chatgpt.tokens.use.direct",
+            "0.99.1",
+        ):
+            assert fact in text, f"{slug} must document Sign in with ChatGPT ({fact!r})"
+        # Pi derives its agent_name_hint so the plan usage shows as "Pi".
+        assert "agent_name_hint" in text, (
+            f"{slug} must explain how the app appears in ChatGPT settings"
+        )
+        # The section is not a verified run: no Plus/Pro account was available.
+        honest = "not tested" if slug == "providers" else "未实测"
+        assert honest in text.lower(), (
+            f"{slug} must mark the Sign in with ChatGPT section as not tested"
+        )
+        assert "0.85.1" in text, (
+            f"{slug} must state the installed Pi version the boundary was "
+            f"verified against"
+        )
+        # The Codex section stays documented; the SIWC section must not
+        # replace it (regression guard for the existing guide).
+        assert "Codex OAuth" in text or "Codex" in text
