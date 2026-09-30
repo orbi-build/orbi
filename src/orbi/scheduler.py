@@ -23,6 +23,12 @@ The layer carries:
   branch unit-testable on a Linux CI runner (inject a fake or the
   launchd implementation — no macOS required).
 
+The platform-independent unit facts every member shares (the naming
+rules, the template placeholders, the instance cap) live in the
+:mod:`orbi.scheduler_units` leaf, imported (and re-exported) here for
+the historic call sites; the implementations take them from the leaf
+directly, so this module stays a one-way dispatcher.
+
 No database, queue, daemon or second state store: the installed files
 and the platform scheduler itself are the only state.
 """
@@ -34,6 +40,15 @@ from typing import Protocol, runtime_checkable
 
 from orbi.journal import event
 from orbi.progress import quote_value
+from orbi.scheduler_units import (
+    MAX_RUNNER_INSTANCES,
+    REPO_DIR_PLACEHOLDER,
+    USER_HOME_PLACEHOLDER,
+    service_instances,
+    timer_instances,
+    unit_names,
+    unit_prefix,
+)
 
 # The honest-failure link carried by every platform-limitation error
 # (install.sh, the dispatch below): platform support status lives here.
@@ -58,20 +73,6 @@ UNMANAGED_FIX = (
     "set unit_name in each deployment config and run `orbi install-units`"
 )
 
-# The config declaration cap (Issue #827): a deployment may declare up to
-# MAX_RUNNER_INSTANCES concurrent Runner instances. It is NOT a machine-
-# capacity assertion and NOT derived from any unit-name list — the names
-# are generated per count below, and the real concurrency boundary stays
-# the flock slots in the Runner (max_concurrency).
-MAX_RUNNER_INSTANCES = 5
-
-# The unit templates are machine-independent. The machine-specific
-# values (the deployment checkout path and the user home) are carried
-# as placeholders and substituted at install time; the templates never
-# hardcode machine paths.
-REPO_DIR_PLACEHOLDER = "{{ORBI_REPO_DIR}}"
-USER_HOME_PLACEHOLDER = "{{ORBI_USER_HOME}}"
-
 
 class UnitDriftError(RuntimeError):
     """The installed units have drifted from the repo templates."""
@@ -83,28 +84,6 @@ class UnitConflictError(RuntimeError):
 
 class UnsupportedPlatformError(RuntimeError):
     """This machine has no scheduler implementation (not Linux/macOS)."""
-
-
-def unit_prefix(unit_name: str | None = None) -> str:
-    """The systemd-shape name prefix shared by every generated name."""
-    return "orbi" if unit_name is None else f"orbi-{unit_name}"
-
-
-def unit_names(unit_name: str | None = None) -> tuple[str, str]:
-    prefix = unit_prefix(unit_name)
-    return f"{prefix}@.service", f"{prefix}@.timer"
-
-
-def timer_instances(unit_name: str | None = None,
-                    count: int = 1) -> tuple[str, ...]:
-    prefix = unit_prefix(unit_name)
-    return tuple(f"{prefix}@{index}.timer" for index in range(1, count + 1))
-
-
-def service_instances(unit_name: str | None = None,
-                      count: int = 1) -> tuple[str, ...]:
-    prefix = unit_prefix(unit_name)
-    return tuple(f"{prefix}@{index}.service" for index in range(1, count + 1))
 
 
 @runtime_checkable

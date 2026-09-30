@@ -54,7 +54,7 @@ import subprocess
 from pathlib import Path
 from xml.parsers.expat import ExpatError
 
-from orbi.scheduler import (
+from orbi.scheduler_units import (
     MAX_RUNNER_INSTANCES,
     REPO_DIR_PLACEHOLDER,
     USER_HOME_PLACEHOLDER,
