@@ -385,15 +385,16 @@ pi_model = "<slug-from-your-model-list>"
 
 ### 选择账号可用的模型
 
-模型可用性取决于账号，因此不要猜 slug，而要用 OAuth access token 从 OpenAI 的模型列表读取：`GET https://api.openai.com/v1/models` 会返回该账号可调用的模型，本流程支持的条目带有 `visibility: "list"`。把该条目的 `slug` 用作 `pi_model`。
+模型可用性取决于账号，因此不要猜 slug，而要用 OAuth access token 从 OpenAI 的模型列表读取：`GET https://api.openai.com/v1/models` 会返回该账号可调用模型的 `models` 数组，本流程支持的条目带有 `visibility: "list"`。把该条目的 `slug` 用作 `pi_model`。
 
 ```bash
+ACCESS_TOKEN=$(jq -r '.openai.access' ~/.pi/agent/auth.json)
 curl -sS https://api.openai.com/v1/models \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
-  | jq -r '.data[] | select(.visibility == "list") | .slug'
+  | jq -r '.models[] | select(.visibility == "list") | .slug'
 ```
 
-`$ACCESS_TOKEN` 来自 `~/.pi/agent/auth.json` 的 `access_token` 字段；不要把 token 写进共享 shell 历史或 transcript。只有在所选模型确实支持时才设置 `pi_thinking`。
+`$ACCESS_TOKEN` 是 Pi 为 `openai` provider 保存在 `~/.pi/agent/auth.json` 的 OAuth access token（字段 `access`）；不要把 token 写进共享 shell 历史或 transcript。只有在所选模型确实支持时才设置 `pi_thinking`。
 
 ### 与 Codex OAuth 一节的差别
 
@@ -406,7 +407,7 @@ curl -sS https://api.openai.com/v1/models \
 
 ### 无头/服务器安装
 
-Pi 在 `http://127.0.0.1:1455/auth/callback` 监听 OAuth 回调，并在运行 Pi 的机器上打开系统浏览器。若浏览器无法访问该监听端口（远程 VM、容器），Pi 会提示："If the browser is on another machine, paste the final redirect URL here."——在浏览器完成登录，复制最终的 `http://127.0.0.1:1455/auth/callback?code=...` URL，粘贴回 Pi 提示符。
+Pi 在 `http://127.0.0.1:1455/auth/callback` 监听 OAuth 回调，并在运行 Pi 的机器上打开系统浏览器。若浏览器无法访问该监听端口（远程 VM、容器），Pi 会提示："Complete login in your browser, or paste the final redirect URL here:"——在浏览器完成登录，复制最终的 `http://127.0.0.1:1455/auth/callback?code=...` URL，粘贴回 Pi 提示符。
 
 也可以先在带浏览器的机器登录一次，再复制凭据文件（Pi 以 `0600` 权限写入）：
 

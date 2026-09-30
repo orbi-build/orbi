@@ -1349,6 +1349,8 @@ def test_docs_document_sign_in_with_chatgpt_plan_usage():
             "chatgpt.com/backend-api",
             "openai-codex",
             "https://api.openai.com/v1/models",
+            ".models[]",
+            ".openai.access",
             "visibility",
             "http://127.0.0.1:1455/auth/callback",
             "~/.pi/agent/auth.json",
@@ -1373,6 +1375,18 @@ def test_docs_document_sign_in_with_chatgpt_plan_usage():
             f"{slug} must state the installed Pi version the boundary was "
             f"verified against"
         )
+        # The model list and the token extraction must match the real
+        # contracts: OpenAI's SIWC model-list response carries a `models`
+        # array, and Pi stores the OAuth token under `access` (the current
+        # README `access_token`/`.data[]` pair returns nothing).
+        assert "access_token" not in text, (
+            f"{slug} must not send the user to a non-existent auth.json field"
+        )
+        assert ".data[]" not in text, (
+            f"{slug} must not query the standard-API `data` array"
+        )
         # The Codex section stays documented; the SIWC section must not
         # replace it (regression guard for the existing guide).
-        assert "Codex OAuth" in text or "Codex" in text
+        assert "## Codex OAuth" in text, (
+            f"{slug} must keep the Codex OAuth section"
+        )

@@ -388,15 +388,16 @@ pi_model = "<slug-from-your-model-list>"
 
 ### Choose a model the account can use
 
-Model availability depends on the account, so read it from OpenAI's model list with the OAuth access token instead of guessing a slug: `GET https://api.openai.com/v1/models` returns the models the account may call, and the entries this flow supports carry `visibility: "list"`. Use that entry's `slug` as `pi_model`.
+Model availability depends on the account, so read it from OpenAI's model list with the OAuth access token instead of guessing a slug: `GET https://api.openai.com/v1/models` returns a `models` array of the models the account may call, and the entries this flow supports carry `visibility: "list"`. Use that entry's `slug` as `pi_model`.
 
 ```bash
+ACCESS_TOKEN=$(jq -r '.openai.access' ~/.pi/agent/auth.json)
 curl -sS https://api.openai.com/v1/models \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
-  | jq -r '.data[] | select(.visibility == "list") | .slug'
+  | jq -r '.models[] | select(.visibility == "list") | .slug'
 ```
 
-`$ACCESS_TOKEN` is the OAuth access token from `~/.pi/agent/auth.json` (field `access_token`); do not put a token into a shared shell history or a transcript. Set `pi_thinking` only to a level the chosen model actually supports.
+`$ACCESS_TOKEN` is the OAuth access token Pi stored for the `openai` provider in `~/.pi/agent/auth.json` (field `access`); do not put a token into a shared shell history or a transcript. Set `pi_thinking` only to a level the chosen model actually supports.
 
 ### How this differs from the Codex OAuth section
 
@@ -409,7 +410,7 @@ Use one provider per Orbi install; do not configure both selectors.
 
 ### Headless and server installs
 
-Pi listens for the OAuth redirect on `http://127.0.0.1:1455/auth/callback` and opens the system browser on the machine running Pi. When no browser can reach that listener (a remote VM, a container), Pi prompts: "If the browser is on another machine, paste the final redirect URL here." — complete the sign-in in a browser, copy the final `http://127.0.0.1:1455/auth/callback?code=...` URL, and paste it into the Pi prompt.
+Pi listens for the OAuth redirect on `http://127.0.0.1:1455/auth/callback` and opens the system browser on the machine running Pi. When no browser can reach that listener (a remote VM, a container), Pi prompts: "Complete login in your browser, or paste the final redirect URL here:" — complete the sign-in in a browser, copy the final `http://127.0.0.1:1455/auth/callback?code=...` URL, and paste it into the Pi prompt.
 
 Alternatively, sign in once on a machine that has a browser and copy the credential file (Pi writes it with mode `0600`):
 
