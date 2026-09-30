@@ -340,6 +340,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "review_findings_unfixed": "review findings survive; the Issue goes ai-fix-needed",
     "review_absorb_abandoned": "a behind-base round emitted pass without absorbing or reporting the abandoned absorb (Issue #877)",
     "review_merge_deferred": "the merge gate deferred the merge to the next tick",
+    "review_merge_skipped_issue_blocked": "the merge gate refused because the Issue is ai-blocked (Issue #1504)",
     "review_recovery_ci_status": "CI status for review recovery observed",
     "review_recovery_ci_status_failed": "the CI status read for review recovery failed",
     # Merge gate.
@@ -348,6 +349,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "merge_gate_behind_base": "the merge gate found the PR behind the base",
     "merge_gate_head_moved": "the PR head moved since the review",
     "merge_gate_not_mergeable": "the PR is not mergeable (conflict or failing checks)",
+    "merge_gate_issue_blocked": "the source Issue is ai-blocked; the merge was skipped (Issue #1504)",
     "merge_gate_rulesets_unavailable": "the rulesets API is unavailable on the repository plan (Issue #1361)",
     "merged": "the PR merge landed on the reviewed head",
     "merge_method_unknown": "the repository merge settings could not be read; --merge is used",
