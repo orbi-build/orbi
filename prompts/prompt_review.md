@@ -80,8 +80,7 @@ Review the exact diff from base `{{BASE_SHA}}` to head `{{HEAD_SHA}}` (run
 `git diff {{BASE_SHA}}...{{HEAD_SHA}}` in the worktree; do not review a moving
 `HEAD`). Read only what the review needs, in this priority order (Issue
 #180): the current GitHub Issue body and trusted comments supplied above, the
-repository `AGENTS.md` and its contribution rules (`CONTRIBUTING.md`, `AI_POLICY.md`
-or equivalent), the PR diff, the changed files plus their callers,
+repository `AGENTS.md`, the PR diff, the changed files plus their callers,
 and the related tests. `README.md`, build files and history are read only when the
 task is actually about them — a normal Issue never requires a full
 repository scan, and re-reading the same large files is what triggers the
@@ -152,63 +151,6 @@ compaction.
 - Only report findings this diff introduces or exposes. Every finding needs a
   concrete `file:line`, a reproducible trigger, actual vs expected, and a
   minimal fix direction. No speculative findings.
-
-## Regression hunt (before any verdict, when the change touches text handling)
-
-Decide first whether the change alters how text or bytes are parsed, escaped
-or unescaped, trimmed or stripped, split, measured, matched, searched,
-replaced, encoded or redacted, or changes a function other code calls with
-inputs the Issue does not mention. Check the implementer's `Regression guard:`
-line (the first line of `.orbi/plan.md`) against the diff; a missing line
-counts as `not needed`: if they wrote `not needed` for a change
-that does touch text handling, that is a Major finding. If the change does not
-touch text handling, skip steps 1–5 and do step 6 only. Otherwise, tests
-passing on the Issue's example, and hand-picked probes, do not show the change
-is safe; run a differential or property check yourself:
-
-1. Read `.orbi/regression.md` from the implementer if present, but do not
-   trust its corpus: build your own generated corpus across the whole domain
-   the changed code path receives (every caller, producer or rule that
-   reaches it; sizes from empty to long; every relevant character class, for
-   text including combining marks, modifiers, zero-width and
-   multi-code-point sequences; for syntax including escapes, even and odd
-   backslash runs, quotes and delimiters). Hundreds of inputs.
-   Include data that looks like syntax: for every character or pattern the
-   change strips, trims, unescapes, splits on or treats specially, inputs where
-   that character is legitimate data (a secret or value that itself contains or
-   ends with it, for example a password ending with a literal backslash or
-   backslash-n) and very short values next to it, from every producer whose
-   definition allows it (read the rule or pattern definitions), not only the
-   one the Issue names.
-   Include collisions: when the change alters the text used to search,
-   match, replace or look up, add inputs where the altered text also occurs
-   elsewhere in the same document, and check that only the intended
-   occurrence changes.
-2. Pick the oracle, independent of the change: never the rule the change
-   implements and never the Issue's description of it. List the installed
-   dependency tree (`uv pip list`, `go list -m all`, `npm ls`, ...) and the
-   standard library for a reference implementation of the same computation
-   and use it; otherwise a spec or an invariant the Issue implies (what must
-   be removed, what must be kept byte for byte). A prescribed method that
-   disagrees with the reference is a finding, not a tie-breaker.
-   When more than one reference implementation is installed, cross-check
-   them; where they disagree, use the one built on the newer data or spec
-   (for example the newer Unicode version) and report the disagreement.
-3. Run base (`git show {{BASE_SHA}}:<file>` in a scratch copy) and head over
-   the corpus against the oracle. Report the counts and up to five concrete
-   failing inputs.
-4. Any input where head is wrong and base was right is a Major finding (a
-   Blocker when the code guards secrets, security or data integrity); fix it
-   in this session per "Fix in this session" and rerun the check. "Out of
-   scope" is never a reason to skip a class.
-5. Claims about library, Unicode, regex or encoding behavior are verified by
-   running code, never from memory.
-6. Check the diff against the target repository's contribution rules
-   (`CONTRIBUTING.md`, `AI_POLICY.md` or equivalent, changelog convention). Run
-   the repository's own check tooling for them (for example a changelog
-   manager's `check` command, or the `check`/`lint` task in `mise.toml`,
-   `Makefile`, `package.json` or `deno.json`) rather than judging the rule from
-   prose; a failing repository check is a Major finding; fix it.
 
 ## Test ladder (Issue #180)
 
