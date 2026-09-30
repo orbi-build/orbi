@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-for a in "$@"; do
-  case "$a" in *github.com[:/]xqliu/obench-*) ;; *github.com[:/]*|*gitlab.com*) echo "git: $a is not reachable from this environment" >&2; exit 128;; esac
-done
-exec /usr/bin/git "$@"

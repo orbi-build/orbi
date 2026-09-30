@@ -1,1 +1,0 @@
-Mock actor setters return the setters object, and add mapActorAlias() (upstream `fedify-dev/fedify issue 1098`)

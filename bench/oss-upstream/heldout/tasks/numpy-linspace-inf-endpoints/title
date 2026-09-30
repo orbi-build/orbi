@@ -1,1 +1,0 @@
-np.linspace returns NaN when start and stop are the same infinity

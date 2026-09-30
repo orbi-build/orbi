@@ -51,12 +51,7 @@ the coverage JSON totals `percent_statements_covered` and
 `percent_branches_covered` separately — the JSON field `percent_covered`
 is the merged line+branch percentage and is never the gate), and
 `tools/diff_coverage_gate.py` exits non-zero when a Python line or branch
-changed since the base ref is not 100% covered. It measures only what the
-coverage configuration measures: a changed file matching the configured
-`run.omit` patterns (`[tool.coverage.run]` in `pyproject.toml` — the
-`bench/oss-upstream/` developer harness, never imported by the suite) is
-skipped and named in the gate output instead of demanding 100% for code the
-contract deliberately does not measure (Issue #1501).
+changed since the base ref is not 100% covered.
 
 ## Remote CI (GitHub Actions)
 

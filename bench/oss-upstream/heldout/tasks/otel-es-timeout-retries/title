@@ -1,1 +1,0 @@
-elasticsearch exporter: retries share one `timeout` deadline, so data is dropped while Elasticsearch is down

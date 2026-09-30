@@ -1,1 +1,0 @@
-stringify() collapses a stepped range like `6-18/6` into the non-standard `6/6`
