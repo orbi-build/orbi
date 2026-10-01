@@ -56,6 +56,10 @@ from orbi.runner import (
 )
 from orbi import pilot_setup
 from orbi.pilot_slots import HELD_PID_UNKNOWN, slot_occupancy
+from orbi.source_pool import (
+    installed_unit_configs as _installed_unit_configs,
+    source_pool_lines,
+)
 from orbi.pi_activity import activity_snapshot
 
 LOGGER = logging.getLogger("orbi.cli")
@@ -430,7 +434,9 @@ def doctor_report(config: config_domain.RunnerConfig, installed_dir: Path | None
     the pre-start check uses), timer/service active state, Runner
     slots, the live Pi session, the current Issue per source repo and
     the recent journal activity. Read-only: no labels, no units, no
-    git mutation. A failed command fails fast (run_command).
+    git mutation; the task-pool overlap check (Issue #1519) reads only
+    the other deployments' `source_repos`. A failed command fails fast
+    (run_command).
     """
     sched = scheduler.detect()
     repo_dir = config.repo_dir
@@ -542,6 +548,12 @@ def doctor_report(config: config_domain.RunnerConfig, installed_dir: Path | None
         )
     if unmanaged:
         lines.append(f"  fix: {scheduler.UNMANAGED_FIX}")
+    # Task-pool overlap across the installed deployments (Issue #1519):
+    # two differently named deployments that serve the same GitHub
+    # repository are a topology the scheduler cannot coordinate, so the
+    # operator must pick one for the pool. Read-only: only `source_repos`
+    # is read from the other configs (never their env/provider secrets).
+    lines.extend(source_pool_lines(config, installed_dir))
     finding = config.pi_provider_key_finding
     if finding and finding.get("variable") != "-":
         lines.append(
@@ -634,41 +646,6 @@ def status_report(config: config_domain.RunnerConfig) -> str:
             issue = lookup(repo)
             lines.append(f"  {name}: {format_issue(issue) if issue else '-'}")
     return "\n".join(lines)
-
-
-def _installed_unit_configs(
-    installed_dir: Path | None = None,
-) -> tuple[tuple[Path, str], ...]:
-    """Return the ORBI_CONFIG values declared by installed units.
-
-    This is deliberately a filesystem read: resolving a missing default must
-    not invoke a scheduler command or mutate the user's installation.
-    """
-    sched = scheduler.detect()
-    installed_dir = installed_dir or sched.installed_unit_dir()
-    if not installed_dir.is_dir():
-        return ()
-    found: dict[Path, list[str]] = {}
-    for unit in sorted(installed_dir.iterdir(), key=lambda path: path.name):
-        # Only inspect files belonging to Orbi's scheduler namespace.  User
-        # unit directories commonly contain unrelated services; accepting an
-        # arbitrary service's ORBI_CONFIG could select the wrong deployment.
-        is_systemd_unit = (
-            unit.name.startswith("orbi")
-            and unit.name.endswith((".service", ".timer"))
-        )
-        is_launchd_unit = (
-            unit.name.startswith("org.orbi.") and unit.name.endswith(".plist")
-        )
-        if not unit.is_file() or not (is_systemd_unit or is_launchd_unit):
-            continue
-        config = sched.unit_config(unit)
-        if config is not None:
-            found.setdefault(config, []).append(unit.name)
-    return tuple(
-        (path, ", ".join(units))
-        for path, units in sorted(found.items(), key=lambda item: str(item[0]))
-    )
 
 
 def _config_was_explicit(argv: list[str] | None) -> bool:
