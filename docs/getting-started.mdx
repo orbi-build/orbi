@@ -371,6 +371,32 @@ The repair is the fix line: set the deployment's `unit_name`, run
 `orbi install-units` so the managed `@` units take over, then retire
 the hand-written files.
 
+#### One deployment per task pool (Issue #1518)
+
+Independent deployments may coexist only when their task pools are
+disjoint: **each `source_repos` task pool is served by exactly one
+deployment**, whether the deployments run on one machine or on different
+machines. A different checkout, a different `unit_name` or a different
+`active_milestone` does NOT isolate a shared pool — those deployments
+still scan and claim the same Issues, and the local slots and claim
+locks of separate deployment directories cannot coordinate. Deployments
+with disjoint `source_repos` — for example one deployment per repository
+— remain fully supported.
+
+For parallel deliveries on the same repository, use ONE deployment and
+raise its `max_concurrency` (step 8 and
+[Operations](/operations#concurrency)): the extra Runner instances share
+that deployment's slots and its claim/recovery state, so the slots still
+serialize claims correctly. Raising `max_concurrency` adds concurrency
+only — it does not widen the fresh-claim scope and does not move the
+`active_milestone` boundary (step 6).
+
+The failure is concrete: an independent deployment cannot see another
+deployment's live delivery, so it may mistake that run for a lost one and
+restart it — the two deployments then fight over the same Issue. Give
+each deployment disjoint `source_repos`; when one repository needs more
+concurrency, keep one deployment and raise `max_concurrency` instead.
+
 ## 4. Configure the model provider
 
 The Runner never starts or manages the model process — it launches Pi,

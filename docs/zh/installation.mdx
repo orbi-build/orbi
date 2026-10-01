@@ -12,8 +12,10 @@ description: "如何安装运行 Orbi?"
 | PyPI（`orbi-cli`） | 只想要 `orbi` 命令，Python ≥ 3.14 | `uv tool install orbi-cli` | [上手指南](/zh/getting-started) |
 | Docker（社区维护） | 宿主机没有 systemd user session | `docker pull ghcr.io/orbi-build/orbi:latest` | [Docker](/zh/docker) |
 
-三条注意事项让这个选择保持诚实：
+以下注意事项让这个选择保持诚实：
 
 - Managed Cloud 与自托管 runner 不得服务同一个任务池——二选一，绝不两者都用。
+- 每个 GitHub 任务池只能由一个部署服务（Issue #1518）。两个相互独立的自托管部署——无论在同一台机器还是不同机器上——必须使用互不相交的 `source_repos`；Managed Cloud、Docker 与安装脚本三者之间同理。不同的 checkout、`unit_name` 或 milestone 都不能隔离共享的任务池；面向不同仓库的部署仍然受支持。
+- 要在同一个仓库上并行交付，请只用一个部署并调高它的 `max_concurrency`——第二个部署会把第一个部署正在进行的交付误判为丢失运行并重启它；见[上手指南](/zh/getting-started#每个任务池一个部署issue-1518)。
 - PyPI 只提供 `orbi` 命令本身；运行 Orbi 要用安装脚本或 editable checkout 安装。
 - Docker 是社区维护、非官方支持的封装；宿主机有 systemd user session 时优先走官方安装脚本——两条路径二选一，同一个任务池绝不两者都用。
