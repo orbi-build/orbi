@@ -371,7 +371,7 @@ The repair is the fix line: set the deployment's `unit_name`, run
 `orbi install-units` so the managed `@` units take over, then retire
 the hand-written files.
 
-#### One deployment per task pool (Issue #1518)
+#### One deployment per task pool
 
 Independent deployments may coexist only when their task pools are
 disjoint: **each `source_repos` task pool is served by exactly one
@@ -381,7 +381,7 @@ machines. A different checkout, a different `unit_name` or a different
 still scan and claim the same Issues, and the local slots and claim
 locks of separate deployment directories cannot coordinate. Deployments
 with disjoint `source_repos` — for example one deployment per repository
-— remain fully supported.
+— remain fully supported (Issue #1518).
 
 For parallel deliveries on the same repository, use ONE deployment and
 raise its `max_concurrency` (step 8 and

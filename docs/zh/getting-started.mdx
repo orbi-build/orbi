@@ -313,14 +313,14 @@ unmanaged_units: 2
 修复就是 fix 行：给部署配好 `unit_name`，运行 `orbi install-units`
 让受管理的 `@` 单元接管，然后移除手写的单元文件。
 
-#### 每个任务池一个部署（Issue #1518）
+#### 每个任务池一个部署
 
 多个独立部署只有在任务池互不相交时才能共存：**每个 `source_repos`
 任务池只能由一个部署服务**，无论这些部署在同一台机器还是不同机器
 上。不同的 checkout、不同的 `unit_name` 或不同的 `active_milestone`
 都不能隔离共享的任务池——这些部署仍然扫描并领取同一批 Issue，而各自
 部署目录下的本地 slot 和领取锁无法互相协调。`source_repos` 互不相交
-的部署——例如每个仓库一个部署——完全受支持。
+的部署——例如每个仓库一个部署——完全受支持（Issue #1518）。
 
 要在同一个仓库上并发交付，请只用一个部署并调高它的
 `max_concurrency`（第 8 步与 [Operations](/zh/operations#并发)）：多出来

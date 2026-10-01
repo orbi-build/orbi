@@ -16,6 +16,6 @@ These caveats keep the choice honest:
 
 - Managed Cloud and a self-hosted runner must not both serve the same task pool — pick one, never both.
 - Every GitHub task pool is served by exactly one deployment (Issue #1518). Two independent self-hosted deployments — on the same machine or on different machines — must have disjoint `source_repos`, and the same holds for Managed Cloud, Docker and an installer run. A different checkout, `unit_name` or milestone does not isolate a shared pool; deployments for different repositories remain supported.
-- For parallel deliveries on the same repository, use one deployment and raise its `max_concurrency` — a second deployment would mistake the first one's live deliveries for lost runs and restart them; see [Getting started](/getting-started#one-deployment-per-task-pool-issue-1518).
+- For parallel deliveries on the same repository, use one deployment and raise its `max_concurrency` — a second deployment would mistake the first one's live deliveries for lost runs and restart them; see [Getting started](/getting-started#one-deployment-per-task-pool).
 - PyPI gives you the `orbi` command only; running Orbi itself uses the installer or the editable checkout install.
 - Docker is community-maintained and unofficial; on a host that has a systemd user session the official installer path is preferred — pick one of the two, never both for the same task pool.
