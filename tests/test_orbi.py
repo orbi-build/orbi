@@ -2190,6 +2190,307 @@ def test_doctor_report_shows_current_issue_and_session(tmp_path, monkeypatch):
     assert f"pi: {session}" in report
 
 
+def _write_orbi_unit(installed: Path, name: str, config: Path) -> Path:
+    """One installed systemd unit pointing ORBI_CONFIG at ``config``."""
+    unit = installed / name
+    unit.write_text(
+        f"[Service]\nEnvironment=ORBI_CONFIG={config}\n",
+        encoding="utf-8",
+    )
+    return unit
+
+
+def _source_pool_world(tmp_path, repos=("xqliu/orbi",)):
+    """A deployment world with an on-disk current config path."""
+    config, installed = _deploy_world(tmp_path, drift=False)
+    this_config = tmp_path / "this-deploy" / "orbi.toml"
+    this_config.parent.mkdir()
+    this_config.write_text(
+        "source_repos = [" + ", ".join(f'"{repo}"' for repo in repos)
+        + "]\n",
+        encoding="utf-8",
+    )
+    config = dataclasses.replace(
+        config, config_path=this_config, source_repos=tuple(repos),
+    )
+    return config, installed, this_config
+
+
+def _other_config(
+    path: Path, repos=("xqliu/orbi",), *, body: str | None = None,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if body is None:
+        body = (
+            "source_repos = ["
+            + ", ".join(f'"{repo}"' for repo in repos)
+            + "]\n"
+        )
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_doctor_source_pool_reports_overlap_between_named_deployments(
+    tmp_path, monkeypatch,
+):
+    """Issue #1519 acceptance 1: two differently named deployments that
+    serve the same repository are reported as FAILED with the repository,
+    both config paths and the repair action."""
+    config, installed, this_config = _source_pool_world(tmp_path)
+    _write_orbi_unit(installed, "orbi-this.service", this_config)
+    other_config = _other_config(
+        tmp_path / "other-deploy" / "orbi.toml", ("xqliu/orbi",),
+    )
+    _write_orbi_unit(installed, "orbi-other.service", other_config)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    report = orbi.doctor_report(config, installed)
+    lines = report.splitlines()
+    failed = [
+        line for line in lines if line.startswith("source_pool: FAILED")
+    ]
+    assert len(failed) == 1, report
+    assert "repo=xqliu/orbi" in failed[0]
+    assert f"this_config={this_config.resolve()}" in failed[0]
+    assert f"other_config={other_config.resolve()}" in failed[0]
+    assert "max_concurrency" in failed[0]
+    assert not any(
+        line.startswith("source_pool: healthy") for line in lines
+    )
+
+
+def test_doctor_source_pool_is_healthy_for_slots_and_aliases(
+    tmp_path, monkeypatch,
+):
+    """Issue #1519 acceptance 2: one deployment referenced by several
+    slots and a symlink alias is a single deployment — no false conflict."""
+    config, installed, this_config = _source_pool_world(tmp_path)
+    _write_orbi_unit(installed, "orbi-this-1.service", this_config)
+    _write_orbi_unit(installed, "orbi-this-2.service", this_config)
+    alias = tmp_path / "this-deploy" / "alias.toml"
+    alias.symlink_to(this_config)
+    _write_orbi_unit(installed, "orbi-alias.service", alias)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    report = orbi.doctor_report(config, installed)
+    lines = report.splitlines()
+    assert "source_pool: healthy deployments=1" in lines
+    assert not any(line.startswith("source_pool: FAILED") for line in lines)
+
+
+def test_doctor_source_pool_is_healthy_for_disjoint_pools(
+    tmp_path, monkeypatch,
+):
+    """Issue #1519: disjoint task pools report a healthy result."""
+    config, installed, this_config = _source_pool_world(tmp_path)
+    _write_orbi_unit(installed, "orbi-this.service", this_config)
+    other_config = _other_config(
+        tmp_path / "other-deploy" / "orbi.toml", ("someone/else",),
+    )
+    _write_orbi_unit(installed, "orbi-other.service", other_config)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    report = orbi.doctor_report(config, installed)
+    assert "source_pool: healthy deployments=2" in report.splitlines()
+
+
+def test_doctor_source_pool_detects_repository_case_variants(
+    tmp_path, monkeypatch,
+):
+    """Issue #1519 acceptance 3: GitHub repository identifiers are
+    compared case-insensitively."""
+    config, installed, this_config = _source_pool_world(tmp_path)
+    _write_orbi_unit(installed, "orbi-this.service", this_config)
+    other_config = _other_config(
+        tmp_path / "other-deploy" / "orbi.toml", ("XQLIU/Orbi",),
+    )
+    _write_orbi_unit(installed, "orbi-other.service", other_config)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    report = orbi.doctor_report(config, installed)
+    failed = [
+        line for line in report.splitlines()
+        if line.startswith("source_pool: FAILED")
+    ]
+    assert len(failed) == 1, report
+    assert "repo=xqliu/orbi" in failed[0]
+    assert f"other_config={other_config.resolve()}" in failed[0]
+
+
+@pytest.mark.parametrize(
+    ("kind", "marker", "body"),
+    (
+        ("missing", "reason=missing", None),
+        ("unreadable", "reason=unreadable", None),
+        ("malformed", "reason=malformed", "source_repos = [\n"),
+        ("invalid_empty_list", "reason=invalid_source_repos", "source_repos = []\n"),
+        ("invalid_type", "reason=invalid_source_repos", 'source_repos = "xqliu/orbi"\n'),
+        ("invalid_element", "reason=invalid_source_repos", 'source_repos = ["xqliu/orbi", 3]\n'),
+        ("invalid_empty_string", "reason=invalid_source_repos", 'source_repos = [""]\n'),
+    ),
+)
+def test_doctor_source_pool_reports_incomplete_discovered_config(
+    tmp_path, monkeypatch, kind, marker, body,
+):
+    """Issue #1519 acceptance 4: a missing/unreadable/malformed/invalid
+    discovered config is an explicit INCOMPLETE diagnosis, never an
+    all-clear."""
+    config, installed, this_config = _source_pool_world(tmp_path)
+    _write_orbi_unit(installed, "orbi-this.service", this_config)
+    other_config = tmp_path / "other-deploy" / "orbi.toml"
+    if kind == "unreadable":
+        # A directory can never be a config: read_text raises OSError.
+        other_config.mkdir(parents=True)
+    elif body is not None:
+        _other_config(other_config, body=body)
+    # "missing": the unit points at a path that is never created.
+    _write_orbi_unit(installed, "orbi-other.service", other_config)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    report = orbi.doctor_report(config, installed)
+    lines = report.splitlines()
+    incomplete = [
+        line for line in lines if line.startswith("source_pool: INCOMPLETE")
+    ]
+    assert len(incomplete) == 1, report
+    assert f"config={other_config.resolve()}" in incomplete[0]
+    assert marker in incomplete[0]
+    assert "fix=" in incomplete[0]
+    assert not any(
+        line.startswith("source_pool: healthy") for line in lines
+    )
+
+
+def test_doctor_source_pool_reports_each_overlap_once(
+    tmp_path, monkeypatch,
+):
+    """Issue #1519: a duplicate repository entry in a discovered config
+    and two overlapping deployments each produce exactly one FAILED line
+    per (repository, config) pair, deterministically."""
+    config, installed, this_config = _source_pool_world(tmp_path)
+    _write_orbi_unit(installed, "orbi-this.service", this_config)
+    first = _other_config(
+        tmp_path / "b-deploy" / "orbi.toml",
+        body='source_repos = ["xqliu/orbi", "XQLIU/orbi"]\n',
+    )
+    second = _other_config(
+        tmp_path / "a-deploy" / "orbi.toml", ("xqliu/orbi",),
+    )
+    _write_orbi_unit(installed, "orbi-b.service", first)
+    _write_orbi_unit(installed, "orbi-a.service", second)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    report = orbi.doctor_report(config, installed)
+    failed = [
+        line for line in report.splitlines()
+        if line.startswith("source_pool: FAILED")
+    ]
+    assert len(failed) == 2, report
+    # Deterministic: sorted by other config path, one line per pair.
+    assert f"other_config={second.resolve()}" in failed[0]
+    assert f"other_config={first.resolve()}" in failed[1]
+
+
+def test_installed_unit_configs_discovers_systemd_and_launchd_fixtures(
+    tmp_path,
+):
+    """Issue #1519 acceptance 5: systemd and launchd fixtures both
+    discover their ORBI_CONFIG through the existing abstraction."""
+    import plistlib
+
+    from orbi import launchd_deploy
+
+    other_config = _other_config(
+        tmp_path / "other-deploy" / "orbi.toml", ("xqliu/orbi",),
+    )
+
+    systemd_dir = tmp_path / "systemd-units"
+    systemd_dir.mkdir()
+    _write_orbi_unit(systemd_dir, "orbi-other.service", other_config)
+    assert orbi._installed_unit_configs(systemd_dir) == (
+        (other_config.resolve(), "orbi-other.service"),
+    )
+
+    launchd_dir = tmp_path / "launchd-units"
+    launchd_dir.mkdir()
+    (launchd_dir / "org.orbi.other.runner.1.plist").write_bytes(
+        plistlib.dumps({
+            "Label": "org.orbi.other.runner.1",
+            "EnvironmentVariables": {"ORBI_CONFIG": str(other_config)},
+        }),
+    )
+    assert orbi._installed_unit_configs(
+        launchd_dir, launchd_deploy.LaunchdScheduler(),
+    ) == (
+        (other_config.resolve(), "org.orbi.other.runner.1.plist"),
+    )
+
+
+def test_main_doctor_reports_source_pool_overlap_via_cli(
+    tmp_path, monkeypatch, capsys,
+):
+    """Issue #1519: the user-facing `orbi doctor` command reaches the
+    task-pool diagnosis — the real public CLI entry point, not only the
+    helper it calls."""
+    config, installed, this_config = _source_pool_world(tmp_path)
+    _write_prompts(this_config.parent)
+    _write_orbi_unit(installed, "orbi-this.service", this_config)
+    other_config = _other_config(
+        tmp_path / "other-deploy" / "orbi.toml", ("xqliu/orbi",),
+    )
+    _write_orbi_unit(installed, "orbi-other.service", other_config)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    assert orbi.main([
+        "doctor", "--config", str(this_config),
+        "--installed-dir", str(installed),
+    ]) == 0
+    out = capsys.readouterr().out
+    assert (
+        f"source_pool: FAILED repo=xqliu/orbi "
+        f"this_config={this_config.resolve()}" in out
+    )
+    assert f"other_config={other_config.resolve()}" in out
+    assert "fix=" in out
+
+
+def test_doctor_source_pool_never_loads_or_mutates_other_deployments(
+    tmp_path, monkeypatch,
+):
+    """Issue #1519 acceptance 6: comparing pools reads only source_repos;
+    it never loads another deployment's env file or provider secrets."""
+    config, installed, this_config = _source_pool_world(tmp_path)
+    _write_orbi_unit(installed, "orbi-this.service", this_config)
+    other_home = tmp_path / "other-deploy"
+    (other_home / ".orbi").mkdir(parents=True)
+    (other_home / ".orbi" / "env").write_text(
+        "PI_MODEL_API_KEY=secret-value\n", encoding="utf-8",
+    )
+    other_config = _other_config(
+        other_home / "orbi.toml", ("xqliu/orbi",),
+        body=(
+            'source_repos = ["xqliu/orbi"]\n'
+            f'repo_dir = "{other_home}"\n'
+            'pi_provider = "openai"\n'
+        ),
+    )
+    _write_orbi_unit(installed, "orbi-other.service", other_config)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+
+    calls: list = []
+    monkeypatch.setattr(
+        config_domain, "load_config",
+        lambda *args, **kwargs: calls.append(args),
+    )
+    before = dict(os.environ)
+    report = orbi.doctor_report(config, installed)
+    assert "source_pool: FAILED" in report
+    assert calls == []
+    assert "PI_MODEL_API_KEY" not in os.environ
+    assert dict(os.environ) == before
+
+
 def test_fake_doctor_commands_rejects_unexpected_commands(
     tmp_path, monkeypatch,
 ):

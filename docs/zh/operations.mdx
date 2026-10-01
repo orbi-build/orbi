@@ -699,7 +699,8 @@ orbi status --config orbi.toml
 # clean / DRIFT + 结构化 cli_source_drift 行）、git transport（配置的
 # origin URL、protocol、配置的 git_transport 的期望 URL、可达性探测——传输失败报告为
 # `transport: FAILED ...`，不抛出）、timer/service 实例状态、slots、
-# Pi session、当前 Issue、最近 journal
+# Pi session、当前 Issue、最近 journal，以及跨已安装部署的
+# task-pool 重叠诊断（source_pool: healthy / FAILED / INCOMPLETE）
 orbi doctor --config orbi.toml
 
 # 只读前置条件门禁（Issue #163）：Python 版本、必需命令
@@ -732,6 +733,28 @@ orbi session --pretty --config orbi.toml   # 一行摘要
 所有命令通过 `--config` 或 `ORBI_CONFIG` 环境变量接收配置
 （默认 `orbi.toml`）。`status` 和 `session` 是调试附件——
 journal 和 GitHub 仍是正常可观测路径。
+
+### 跨部署的 task pool 重叠（Issue #1519）
+
+Runner 没有跨部署锁：两个不同命名的部署若服务同一个 GitHub 仓库，
+会争抢同一批 Issue。`orbi doctor` 把本部署的 `source_repos` 与当前
+用户已安装 Orbi 单元中发现的其他部署比对（`--installed-dir` 可覆盖
+标准单元目录）。比对**只**读取那些配置里的 `source_repos`——从不加载
+它们的 `.orbi/env`、解析其 provider 密钥，也不发起 GitHub/模型调用。
+配置路径会做规范化：重复的 service/timer 实例、符号链接别名以及本
+部署自己的配置都算作**一个**部署；GitHub 仓库标识符按大小写不敏感
+比较：
+
+- `source_pool: healthy deployments=N` —— 没有别的部署共享该 pool。
+- `source_pool: FAILED repo=<owner/name> this_config=... other_config=... fix=...`
+  —— 两个部署服务同一个 task pool；为该 pool **只选一个**部署，并用它的
+  `max_concurrency` 控制并发。
+- `source_pool: INCOMPLETE config=... reason=... fix=...` —— 发现的配置
+  缺失、不可读或格式错误。修复或移除该单元的 `ORBI_CONFIG` 引用；
+  pool 不可读时 doctor 绝不报告 all-clear。
+
+边界：只检测当前用户可见的已安装单元。手动启动的 tick、其他 Unix
+用户和远程机器不在范围内，因此“每个 pool 一个部署”的规则仍然适用。
 
 ### 人工推进 active milestone
 

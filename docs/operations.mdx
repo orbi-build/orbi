@@ -813,7 +813,9 @@ orbi status --config orbi.toml
 # for the configured git_transport, its reachability probe — a failed
 # transport is reported as `transport:
 # FAILED ...`, not raised), timer/service instance state, slots, Pi
-# session, current Issue, recent journal
+# session, current Issue, recent journal, and the task-pool overlap
+# diagnosis across the installed deployments
+# (source_pool: healthy / FAILED / INCOMPLETE)
 orbi doctor --config orbi.toml
 
 # Read-only prerequisite gate (Issue #163): the Python version, the
@@ -851,6 +853,33 @@ All commands accept the config via `--config` or the
 `ORBI_CONFIG` environment variable (default
 `orbi.toml`). `status` and `session` are debug attachments — the
 journal and GitHub remain the normal observability path.
+
+### Overlapping task pools across deployments (Issue #1519)
+
+A Runner has no cross-deployment lock: two differently named
+deployments that serve the same GitHub repository would compete for the
+same Issues. `orbi doctor` compares this deployment's `source_repos`
+with the other deployments discoverable from the Orbi units installed
+for the current user (`--installed-dir` overrides the standard unit
+directory). The comparison reads ONLY `source_repos` from those configs
+— it never loads their `.orbi/env`, resolves their provider secrets or
+makes GitHub/model calls. Config paths are canonicalized, so repeated
+service/timer slots, symlink aliases and this deployment's own config
+count as ONE deployment, and GitHub repository identifiers compare
+case-insensitively:
+
+- `source_pool: healthy deployments=N` — nothing else serves this pool.
+- `source_pool: FAILED repo=<owner/name> this_config=... other_config=... fix=...`
+  — both deployments serve the same task pool; choose ONE deployment for
+  that pool and use its `max_concurrency` for concurrency.
+- `source_pool: INCOMPLETE config=... reason=... fix=...` — a discovered
+  config is missing, unreadable or malformed. Fix or remove the unit's
+  `ORBI_CONFIG` reference; doctor never reports all-clear while a pool is
+  unreadable.
+
+Boundary: only installed units visible to the current user are
+detected. Hand-started ticks, other Unix users and remote machines are
+out of scope, so the one-deployment-per-pool rule still applies.
 
 ### Advance the active milestone manually
 
