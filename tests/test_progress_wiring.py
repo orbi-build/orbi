@@ -2182,6 +2182,17 @@ def _wait_delivery_fake_gh(monkeypatch, *, pr_state, labels, comments,
     }
 
     def fake_run(command, **kwargs):
+        if command[0:3] == ["gh", "api", "graphql"]:
+            # Issue #1534: the delivery reads the PR state through the
+            # workflowRun-free GraphQL query.
+            return json.dumps({"data": {"repository": {"pullRequest": {
+                "state": pr_state, "mergeable": "MERGEABLE",
+                "headRefOid": "h1",
+                "statusCheckRollup": {"contexts": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [],
+                }},
+            }}}})
         if command[:2] == ["gh", "pr"]:
             return json.dumps({"state": pr_state})
         if command[:2] == ["gh", "issue"]:
@@ -2510,8 +2521,17 @@ def _external_wait_fake(monkeypatch, *, pr_state, fail_progress=None):
     comments: list = []
 
     def fake_run(command, **kwargs):
-        if command[:3] == ["gh", "pr", "view"]:
-            return json.dumps({"state": pr_state})
+        if command[0:3] == ["gh", "api", "graphql"]:
+            # Issue #1534: the delivery reads the PR state through the
+            # workflowRun-free GraphQL query.
+            return json.dumps({"data": {"repository": {"pullRequest": {
+                "state": pr_state, "mergeable": "MERGEABLE",
+                "headRefOid": "h1",
+                "statusCheckRollup": {"contexts": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [],
+                }},
+            }}}})
         if command[:3] == ["gh", "issue", "close"]:
             close_calls.append(command)
             return ""
@@ -2550,7 +2570,16 @@ def test_delivery_step_external_close_failure_never_rewrites(monkeypatch,
     def failing_close(command, **kwargs):
         if command[:3] == ["gh", "issue", "close"]:
             raise subprocess.CalledProcessError(1, command, stderr="boom")
-        return json.dumps({"state": "MERGED"})
+        # The only other read of this scene is the PR-status GraphQL
+        # query (Issue #1534): answer it with the merged PR.
+        return json.dumps({"data": {"repository": {"pullRequest": {
+            "state": "MERGED", "mergeable": "MERGEABLE",
+            "headRefOid": "h1",
+            "statusCheckRollup": {"contexts": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [],
+            }},
+        }}}})
 
     monkeypatch.setattr(seam, "run_command", failing_close)
     monkeypatch.setattr(seam, "comment_issue", Mock())

@@ -406,6 +406,8 @@ class FakeGh:
     def _api(self, args: list[str]) -> str:
         if args[:2] == ["--method", "PUT"]:
             return self._api_put(args[2:])
+        if args[:1] == ["graphql"]:
+            return self._api_graphql(args[1:])
         path = args[0]
         flags = self._flags(args[1:])
         match = re.fullmatch(
@@ -480,6 +482,44 @@ class FakeGh:
             # (or the rulesets answered, and none blocks it).
             return "[]"
         return self._unsupported(["gh", "api", path])
+
+    def _api_graphql(self, args: list[str]) -> str:
+        """Answer the PR status-rollup GraphQL read (Issue #1534).
+
+        Only that one query is modelled, and only when it does NOT select
+        the App-permission-locked checkSuite.workflowRun: the fake answers
+        exactly the fields the adapter's query asks for, so a regression
+        back to a workflowRun selection fails fast instead of returning a
+        plausible-but-unreadable rollup.
+        """
+        fields: dict[str, str] = {}
+        index = 0
+        while index < len(args):
+            if args[index] not in ("-f", "-F") or index + 1 >= len(args):
+                return self._unsupported(["gh", "api", "graphql", *args])
+            key, _, value = args[index + 1].partition("=")
+            fields[key] = value
+            index += 2
+        query = fields.get("query") or ""
+        if "statusCheckRollup" not in query or "workflowRun" in query:
+            return self._unsupported(["gh", "api", "graphql", *args])
+        self._repo_or_fail(f"{fields.get('owner')}/{fields.get('name')}")
+        number = int(fields["number"])
+        pr = self.prs.get(number)
+        if pr is None:
+            self._fail(
+                1, f"gh: Could not resolve to a pull request with the "
+                f"number of {number}."
+            )
+        return json.dumps({"data": {"repository": {"pullRequest": {
+            "state": pr["state"],
+            "mergeable": pr.get("mergeable", "MERGEABLE"),
+            "headRefOid": pr["headRefOid"],
+            "statusCheckRollup": {"contexts": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": list(pr["statusCheckRollup"]),
+            }},
+        }}}})
 
     def _api_put(self, args: list[str]) -> str:
         """The contents API PUT (create/update a file): `gh api --method

@@ -1,8 +1,10 @@
 """Classify and render one PR status check rollup (Issue #1473).
 
 The claim scan's pending skip, the runner's pre-review CI gate and the
-merge gate all read the same `gh pr view --json statusCheckRollup` data
-and must reach the same conclusion. These pure helpers are the shared,
+merge gate all read the same `statusCheckRollup` contexts and must reach
+the same conclusion. Since Issue #1534 the read is `orbi.pr_status`'s
+`gh api graphql` query (never `gh pr view`'s App-locked
+`checkSuite.workflowRun` field). These pure helpers are the shared,
 cycle-free home (the scan cannot import `runner.py` back): `github.py`
 stays the I/O leaf and no domain module owns a private copy.
 """

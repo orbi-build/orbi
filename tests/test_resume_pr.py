@@ -781,14 +781,18 @@ def make_pick_fake(list_payload: str, view_payload=None,
                 if comments is not None:
                     comments.append(command[-1])
                 return ""
-        if command[1] == "pr" and command[2] == "view":
-            return json.dumps({
-                "state": "OPEN",
-                "statusCheckRollup": [
-                    {"name": "tests", "status": "COMPLETED",
-                     "conclusion": "SUCCESS"},
-                ],
-            })
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return json.dumps({"data": {"repository": {"pullRequest": {
+                "state": "OPEN", "mergeable": "MERGEABLE",
+                "headRefOid": "h1",
+                "statusCheckRollup": {"contexts": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [{
+                        "name": "tests", "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    }],
+                }},
+            }}}})
         raise AssertionError(f"unexpected command: {command}")
 
     return fake_run
@@ -1009,16 +1013,21 @@ def test_pick_resumable_delivery_skips_held_and_reviews_next_free(
                 return gh_comments_payload(
                     [opened_pr_comment(run_id="b2c3d4e5")],
                 )
-        if command[1] == "pr" and command[2] == "view":
-            # Issue #1473: the resumed candidate's PR read answers a
-            # completed rollup so the test exercises the normal branch.
-            return json.dumps({
-                "state": "OPEN",
-                "statusCheckRollup": [
-                    {"name": "tests", "status": "COMPLETED",
-                     "conclusion": "SUCCESS"},
-                ],
-            })
+        if command[0:3] == ["gh", "api", "graphql"]:
+            # Issue #1473 / #1534: the resumed candidate's PR read
+            # answers a completed rollup so the test exercises the
+            # normal branch.
+            return json.dumps({"data": {"repository": {"pullRequest": {
+                "state": "OPEN", "mergeable": "MERGEABLE",
+                "headRefOid": "h1",
+                "statusCheckRollup": {"contexts": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [{
+                        "name": "tests", "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    }],
+                }},
+            }}}})
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "slot_held_deliveries",

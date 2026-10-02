@@ -65,6 +65,17 @@ def make_pr(head_oid: str, *, mergeable="MERGEABLE", state="OPEN",
     })
 
 
+def graphql_pr_json(oid, *, mergeable="MERGEABLE", state="OPEN") -> str:
+    """The PR-status GraphQL answer the merge gate now reads (Issue #1534)."""
+    return json.dumps({"data": {"repository": {"pullRequest": {
+        "state": state, "mergeable": mergeable, "headRefOid": oid,
+        "statusCheckRollup": {"contexts": {
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+            "nodes": [],
+        }},
+    }}}})
+
+
 def install_fake_gh(monkeypatch, clone: Path, pr_json: str) -> list:
     """Run real git; answer `gh pr view` with pr_json and perform a real
     local merge for `gh pr merge` so the merge commit is a genuine git
@@ -73,6 +84,14 @@ def install_fake_gh(monkeypatch, clone: Path, pr_json: str) -> list:
     commands: list = []
 
     def fake_run(command, **kwargs):
+        if command[0:3] == ["gh", "api", "graphql"]:
+            commands.append(command)
+            view = json.loads(pr_json)
+            return graphql_pr_json(
+                view.get("headRefOid"),
+                mergeable=view.get("mergeable", "MERGEABLE"),
+                state=view.get("state", "OPEN"),
+            )
         if command[:1] == ["gh"]:
             commands.append(command)
             if command[0] == "gh" and command[1] == "pr" and "view" in command:
@@ -99,7 +118,7 @@ def test_merge_gate_merges_head_containing_latest_base(clone, monkeypatch):
           "head_ref": "orbi/owner-repo-issue-4",
           "head_oid": head_oid}
     commands = install_fake_gh(monkeypatch, clone, make_pr(head_oid))
-    merged = runner.merge_gate(clone, pr, "main", repo_dir=clone)
+    merged = runner.merge_gate(clone, pr, "main", repo_dir=clone, source_repo="owner/repo")
     assert merged["merged"] is True
     # The merge used --match-head-commit with the reviewed head SHA.
     merge_cmd = [c for c in commands if c[:2] == ["gh", "pr"]
@@ -142,10 +161,10 @@ def test_merge_gate_absorbs_clean_behind_base_and_rechecks_ci(
     def fake_run(command, **kwargs):
         nonlocal absorbed_head, views
         commands.append(command)
-        if command[0] == "gh" and command[1] == "pr" and "view" in command:
+        if command[0:3] == ["gh", "api", "graphql"]:
             views += 1
             oid = head_oid if views == 1 else absorbed_head
-            return make_pr(oid)
+            return graphql_pr_json(oid)
         if command[0] == "gh" and command[1] == "pr" and "merge" in command:
             git(clone, "checkout", "main")
             git(clone, "merge", "--no-ff", command[command.index(
@@ -163,7 +182,7 @@ def test_merge_gate_absorbs_clean_behind_base_and_rechecks_ci(
           "base_oid": git(clone, "rev-parse", "origin/main~1"),
           "head_ref": "orbi/owner-repo-issue-4", "head_oid": head_oid}
     with caplog.at_level("INFO"):
-        merged = runner.merge_gate(clone, pr, "main", repo_dir=clone)
+        merged = runner.merge_gate(clone, pr, "main", repo_dir=clone, source_repo="owner/repo")
     assert merged["merged"] is True
     assert views == 2
     merge_cmd = [c for c in commands if c[:2] == ["gh", "pr"]
@@ -183,8 +202,8 @@ def test_merge_gate_conflicted_absorb_stays_recoverable(clone, monkeypatch):
     real_run = runner.run_command
 
     def fake_run(command, **kwargs):
-        if command[0] == "gh" and command[1] == "pr" and "view" in command:
-            return make_pr(head_oid, mergeable="MERGEABLE")
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return graphql_pr_json(head_oid)
         return real_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -192,7 +211,7 @@ def test_merge_gate_conflicted_absorb_stays_recoverable(clone, monkeypatch):
           "base_oid": git(clone, "rev-parse", "origin/main~1"),
           "head_ref": "orbi/owner-repo-issue-4", "head_oid": head_oid}
     with pytest.raises(runner.RecoverableMergeGateError, match="cannot absorb"):
-        runner.merge_gate(clone, pr, "main", repo_dir=clone)
+        runner.merge_gate(clone, pr, "main", repo_dir=clone, source_repo="owner/repo")
     assert git(clone, "status", "--porcelain", "--untracked-files=no") == ""
 
 
@@ -211,7 +230,7 @@ def test_merge_gate_rejects_conflicting_pr_reports_mergeable(
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="mergeable=DIRTY",
     ):
-        runner.merge_gate(clone, pr, "main", repo_dir=clone)
+        runner.merge_gate(clone, pr, "main", repo_dir=clone, source_repo="owner/repo")
     assert "merge_gate_not_mergeable" in caplog.text
 
 
@@ -242,7 +261,7 @@ def test_deployment_checkout_fast_forwards_after_independent_merge(
           "head_ref": "orbi/owner-repo-issue-4",
           "head_oid": head_oid}
     install_fake_gh(monkeypatch, clone, make_pr(head_oid))
-    merged = runner.merge_gate(clone, pr, "main", repo_dir=clone)
+    merged = runner.merge_gate(clone, pr, "main", repo_dir=clone, source_repo="owner/repo")
     assert merged["merged"] is True
     merge_commit = git(clone, "rev-parse", "origin/main")
     # The remote advanced; the deployment checkout has not yet.

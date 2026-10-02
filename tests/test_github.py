@@ -11,7 +11,7 @@ import subprocess
 
 import pytest
 
-from orbi import github
+from orbi import github, pr_status
 from seam import seam
 
 from tests.fakes.github import FakeGh
@@ -820,24 +820,127 @@ def test_has_in_progress_label_reads_the_live_label_state(monkeypatch):
     assert github.has_in_progress_label(4, "o/r") is False
 
 
+def _rollup_graphql(state="OPEN", nodes=(), *, page_info=None,
+                    mergeable="MERGEABLE", head_oid="h1"):
+    """One statusCheckRollup GraphQL answer (the shape the new query gets)."""
+    return json.dumps({"data": {"repository": {"pullRequest": {
+        "state": state,
+        "mergeable": mergeable,
+        "headRefOid": head_oid,
+        "statusCheckRollup": {"contexts": {
+            "pageInfo": page_info or {"hasNextPage": False, "endCursor": None},
+            "nodes": list(nodes),
+        }},
+    }}}})
+
+
 def test_pr_delivery_status_parses_state_and_check_summaries(monkeypatch):
-    payload = json.dumps({
-        "state": "OPEN",
-        "statusCheckRollup": [
-            {"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"},
-            {"context": "legacy", "state": "PENDING"},
-        ],
-    })
-    monkeypatch.setattr(seam, "run_command", lambda c, **k: payload)
+    payload = _rollup_graphql(nodes=[
+        {"__typename": "CheckRun", "name": "ci", "status": "COMPLETED",
+         "conclusion": "SUCCESS"},
+        {"__typename": "StatusContext", "context": "legacy",
+         "state": "PENDING"},
+    ])
+    seen: list = []
+    monkeypatch.setattr(seam, "run_command",
+                        lambda c, **k: seen.append(c) or payload)
     state, summaries = github.pr_delivery_status(
         "https://github.com/o/r/pull/9", "o/r")
     assert state == "OPEN"
     assert summaries == ["ci=COMPLETED/SUCCESS", "legacy=PENDING"]
+    # The one read is the workflowRun-free GraphQL query (Issue #1534).
+    assert seen[0][:3] == ["gh", "api", "graphql"]
+    assert "workflowRun" not in " ".join(seen[0])
 
-    bad = json.dumps({"state": "WEIRD", "statusCheckRollup": None})
+    bad = _rollup_graphql(state="WEIRD")
     monkeypatch.setattr(seam, "run_command", lambda c, **k: bad)
     with pytest.raises(ValueError, match="unexpected PR state"):
         github.pr_delivery_status("https://github.com/o/r/pull/9", "o/r")
+
+
+def test_pr_status_check_rollup_query_never_selects_workflowrun():
+    query = pr_status.PR_STATUS_CHECK_ROLLUP_QUERY
+    assert "workflowRun" not in query
+    assert "statusCheckRollup" in query
+    assert "CheckRun { name status conclusion }" in query
+    assert "StatusContext { context state }" in query
+
+
+def test_classify_rollup_reads_the_graphql_and_pr_view_shapes_identically():
+    from orbi.checks import _classify_rollup
+    graphql_shape = [
+        {"__typename": "CheckRun", "name": "ci", "status": "COMPLETED",
+         "conclusion": "SUCCESS"},
+        {"__typename": "CheckRun", "name": "tests", "status": "IN_PROGRESS",
+         "conclusion": None},
+        {"__typename": "StatusContext", "context": "legacy",
+         "state": "FAILURE"},
+        {"__typename": "CheckRun", "name": "flake", "status": "COMPLETED",
+         "conclusion": "CANCELLED"},
+    ]
+    pr_view_shape = [
+        {**node, "detailsUrl": "u", "startedAt": "t",
+         "completedAt": "t"}
+        if node["__typename"] == "CheckRun"
+        else {**node, "targetUrl": "u", "createdAt": "t"}
+        for node in graphql_shape
+    ]
+    assert _classify_rollup(graphql_shape) == _classify_rollup(pr_view_shape)
+    assert _classify_rollup(pr_view_shape) == (
+        [{"name": "tests", "status": "IN_PROGRESS", "conclusion": ""}],
+        [{"name": "legacy", "status": "FAILURE", "conclusion": ""},
+         {"name": "flake", "status": "COMPLETED", "conclusion": "CANCELLED"}],
+    )
+
+
+def test_pr_status_rollup_follows_contexts_pageinfo(monkeypatch):
+    pages = [
+        _rollup_graphql(
+            nodes=[{"name": "a", "status": "COMPLETED",
+                    "conclusion": "SUCCESS"}],
+            page_info={"hasNextPage": True, "endCursor": "c1"},
+        ),
+        _rollup_graphql(nodes=[{"context": "b", "state": "SUCCESS"}]),
+    ]
+    calls: list = []
+
+    def fake(command, **kwargs):
+        calls.append(command)
+        return pages[len(calls) - 1]
+
+    monkeypatch.setattr(seam, "run_command", fake)
+    view = pr_status.pr_status_rollup(9, repo="o/r")
+    assert view["state"] == "OPEN"
+    assert [node.get("name", node.get("context"))
+            for node in view["statusCheckRollup"]] == ["a", "b"]
+    assert "cursor=c1" in " ".join(calls[1])
+
+
+def test_pr_status_rollup_rejects_a_repo_without_owner_and_name():
+    with pytest.raises(ValueError, match="requires owner/name repo"):
+        pr_status.pr_status_rollup(9, repo="nope")
+
+
+def test_pr_status_rollup_rejects_a_response_without_the_pull_request(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda *a, **k: json.dumps({"data": {"repository": {}}}),
+    )
+    with pytest.raises(ValueError, match="no pullRequest in response"):
+        pr_status.pr_status_rollup(9, repo="o/r")
+
+
+def test_pr_status_rollup_rejects_a_page_without_an_end_cursor(monkeypatch):
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda *a, **k: _rollup_graphql(
+            page_info={"hasNextPage": True, "endCursor": None},
+        ),
+    )
+    with pytest.raises(ValueError, match="no endCursor"):
+        pr_status.pr_status_rollup(9, repo="o/r")
 
 
 def test_issue_priority_reads_the_p0_label():

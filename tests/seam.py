@@ -27,12 +27,14 @@ import orbi.release as release
 import orbi.release_git as release_git
 import orbi.release_notes as release_notes
 import orbi.pi_session as pi_session
+import orbi.pr_status as pr_status
 import orbi.runner as runner
 
 _MODULES = (
     journal, github, gitops, milestone, milestone_command, ticket_command,
     progress, cli_source, release, release_git, release_notes, pi_session,
-    runner, claim, repo_config, clarify, branch_reclaim, failure_report,
+    pr_status, runner, claim, repo_config, clarify, branch_reclaim,
+    failure_report,
 )
 
 

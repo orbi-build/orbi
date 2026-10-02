@@ -210,6 +210,23 @@ elif args[:2] == ["pr", "comment"]:
         {"pr": args[2], "body": args[args.index("--body") + 1]}
     )
     save()
+elif args[:2] == ["api", "graphql"]:
+    # Issue #1534: the status gates read the PR through the
+    # workflowRun-free GraphQL query; the PR head is the current HEAD
+    # of the delivery branch (same per-branch state as `pr view`).
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    pr_state = state.setdefault("pr_states", {}).get(
+        branch, state.get("pr_state", "OPEN"),
+    )
+    print(json.dumps({"data": {"repository": {"pullRequest": {
+        "state": pr_state,
+        "mergeable": "MERGEABLE",
+        "headRefOid": git("rev-parse", "HEAD"),
+        "statusCheckRollup": {"contexts": {
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+            "nodes": [],
+        }},
+    }}}}))
 elif args[:2] == ["pr", "view"]:
     # The merge gate and confirm_merged read the full PR state: the
     # head is the current HEAD of the delivery branch (the fake world

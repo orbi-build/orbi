@@ -240,6 +240,26 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     return "[]"
                 return ""
             if command[1] == "api":
+                if command[2] == "graphql":
+                    # Issue #1534: the delivery reads the PR status
+                    # through the workflowRun-free GraphQL query.
+                    cwd = kwargs.get("cwd")
+                    pull = {
+                        "state": ("MERGED" if pr.get("merged")
+                                  else pr["state"]),
+                        "mergeable": "MERGEABLE",
+                        "headRefOid": (real_run(
+                            ["git", "rev-parse", "HEAD"], cwd=cwd,
+                        ) if cwd is not None else None),
+                        "statusCheckRollup": {"contexts": {
+                            "pageInfo": {"hasNextPage": False,
+                                         "endCursor": None},
+                            "nodes": [],
+                        }},
+                    }
+                    return json.dumps({"data": {"repository": {
+                        "pullRequest": pull,
+                    }}})
                 if "check-runs" in command[2]:
                     return json.dumps([{
                         "name": "tests", "status": "completed",

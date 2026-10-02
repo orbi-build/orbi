@@ -47,15 +47,18 @@ def _merge_fake(*, delete_error=None):
 
     def fake_run(command, **kwargs):
         calls.append(list(command))
-        if _starts_with(command, ["gh", "pr"]) and "view" in command:
-            return json.dumps({
+        if _starts_with(command, ["gh", "api", "graphql"]):
+            return json.dumps({"data": {"repository": {"pullRequest": {
                 "state": "OPEN", "mergeable": "MERGEABLE",
                 "headRefOid": "h1",
-                "statusCheckRollup": [{
-                    "name": "tests", "status": "COMPLETED",
-                    "conclusion": "SUCCESS",
-                }],
-            })
+                "statusCheckRollup": {"contexts": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [{
+                        "name": "tests", "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                    }],
+                }},
+            }}}})
         if _starts_with(command, ["gh", "api", "-X"]):
             if delete_error is not None:
                 raise delete_error

@@ -231,6 +231,7 @@ from orbi.github import (
     pr_delivery_status,
     pr_delivery_rollup,
     _check_summaries,
+    pr_status_rollup,
     pr_view,
 )
 from orbi.checks import _classify_rollup, _render_check
@@ -2649,13 +2650,18 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
     The base fetch updates the shared remote-tracking ref, so it runs under the
     base-sync lock with the deployment checkout as the lock location.
     """
+    repo = pr.get("_source_repo") or source_repo
+    if not repo:
+        raise ValueError(
+            f"merge_gate requires the source repo for PR #{pr['number']}"
+        )
     fetch_base_ref(repo_dir, base_branch, cwd=worktree)
     # Read GitHub mergeability before rejecting a stale head.  A clean PR can
     # absorb the base here without changing its reviewed diff; a conflicted
-    # PR still follows the existing fix-needed path below.
-    state = pr_view(pr["number"],
-                    "state,mergeable,headRefOid,statusCheckRollup",
-                    cwd=worktree)
+    # PR still follows the existing fix-needed path below.  Issue #1534: the
+    # status rollup comes from a GraphQL query that never selects
+    # checkSuite.workflowRun, so a private repository's App token can read it.
+    state = pr_status_rollup(pr["number"], repo=repo, cwd=worktree)
     mergeable = state.get("mergeable")
     if mergeable != "MERGEABLE" and mergeable != "UNKNOWN":
         # Keep the existing mergeability policy and message. The assessment
@@ -2719,9 +2725,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         # The push starts a new CI run. Read the state once more, but do not
         # start another review round: only the absorbed head's CI gate is
         # needed before the exact-head merge below.
-        state = pr_view(pr["number"],
-                        "state,mergeable,headRefOid,statusCheckRollup",
-                        cwd=worktree)
+        state = pr_status_rollup(pr["number"], repo=repo, cwd=worktree)
         mergeable = state.get("mergeable")
         if state.get("headRefOid") != absorbed_head:
             raise RuntimeError(

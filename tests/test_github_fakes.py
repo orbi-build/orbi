@@ -318,6 +318,32 @@ def test_commit_check_runs_reads_the_ci_evidence(fake_gh):
         github.commit_check_runs("owner/repo", "missing")
 
 
+def test_fake_gh_graphql_rejects_a_malformed_request(fake_gh):
+    with pytest.raises(subprocess.CalledProcessError):
+        fake_gh(["gh", "api", "graphql", "--bogus"])
+
+
+def test_fake_gh_graphql_rejects_a_query_without_the_rollup(fake_gh):
+    with pytest.raises(subprocess.CalledProcessError):
+        fake_gh(["gh", "api", "graphql", "-f",
+                 "query=query { viewer { login } }"])
+
+
+def test_fake_gh_graphql_rejects_a_workflowrun_query(fake_gh):
+    """A regression back to the App-locked field fails fast."""
+    with pytest.raises(subprocess.CalledProcessError):
+        fake_gh(["gh", "api", "graphql", "-f",
+                 "query=statusCheckRollup { checkSuite { workflowRun } }"])
+
+
+def test_fake_gh_graphql_unknown_pr_fails_fast(fake_gh):
+    with pytest.raises(subprocess.CalledProcessError):
+        fake_gh([
+            "gh", "api", "graphql", "-f", "query=statusCheckRollup",
+            "-f", "owner=owner", "-f", "name=repo", "-F", "number=999",
+        ])
+
+
 def test_merge_gate_preflight_fails_closed_on_protection_it_cannot_read(
         fake_gh):
     """The preflight reads the branch state GitHub really serves: an

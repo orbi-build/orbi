@@ -70,6 +70,17 @@ def make_wait_failure_fake(monkeypatch, *, labels=("ai-pr-opened",),
     api_calls = []
 
     def fake_run(command, **kwargs):
+        if command[0:3] == ["gh", "api", "graphql"]:
+            # Issue #1534: the delivery reads the PR state through the
+            # workflowRun-free GraphQL query.
+            return json.dumps({"data": {"repository": {"pullRequest": {
+                "state": "OPEN", "mergeable": "MERGEABLE",
+                "headRefOid": "h1",
+                "statusCheckRollup": {"contexts": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [],
+                }},
+            }}}})
         if command[:2] == ["gh", "pr"]:
             return json.dumps({"state": "OPEN"})
         if command[:3] == ["git", "branch", "--show-current"]:

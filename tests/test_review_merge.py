@@ -745,19 +745,44 @@ def test_assess_base_freshness_moved_reviewed_head_is_conflicted(
     ) is runner.BaseFreshness.CONFLICTED
 
 
+def _merge_gate(worktree, pr, base_branch, **kwargs):
+    """Call the real merge_gate with the test source-repo default.
+
+    The gate reads the PR status through a GraphQL query, so it needs the
+    repository slug the production caller always supplies; these unit tests
+    pin it once here.
+    """
+    kwargs.setdefault("source_repo", "owner/repo")
+    return runner.merge_gate(worktree, pr, base_branch, **kwargs)
+
+
+def _graphql_rollup(state="OPEN", mergeable="MERGEABLE", head_oid="h1",
+                    checks=()):
+    """One page of the PR-status GraphQL answer (Issue #1534)."""
+    return json.dumps({"data": {"repository": {"pullRequest": {
+        "state": state, "mergeable": mergeable, "headRefOid": head_oid,
+        "statusCheckRollup": {"contexts": {
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+            "nodes": list(checks),
+        }},
+    }}}})
+
+
+def _is_rollup_read(command):
+    return command[0:3] == ["gh", "api", "graphql"]
+
+
 def _merge_gate_fake(pr_state="MERGEABLE", head_oid="h1",
                      check_runs=None, base_check_runs=None):
     def fake_run(command, **kwargs):
-        if command[0] == "gh" and command[1] == "pr" and "view" in command:
-            return json.dumps({
-                "number": 4, "url": "u", "state": "OPEN",
-                "mergeable": pr_state, "headRefOid": head_oid,
-                "statusCheckRollup": ([{
+        if _is_rollup_read(command):
+            return _graphql_rollup(
+                mergeable=pr_state, head_oid=head_oid,
+                checks=([{
                     "name": "tests", "status": "COMPLETED",
                     "conclusion": "SUCCESS",
                 }] if check_runs is None else check_runs),
-                "mergedAt": None, "mergeCommit": None,
-            })
+            )
         if command[:2] == ["gh", "api"] and "check-runs" in command[2]:
             return json.dumps([] if base_check_runs is None
                               else base_check_runs)
@@ -775,7 +800,7 @@ def test_merge_gate_rejects_failed_github_ci(monkeypatch, tmp_path):
     # (GateCIFailure), never by matching text inside the message.
     with pytest.raises(runner.GateCIFailure,
                        match="delivery gate: CI check 'tests'"):
-        runner.merge_gate(tmp_path, {"number": 4, "url": "u",
+        _merge_gate(tmp_path, {"number": 4, "url": "u",
                                      "base_ref": "main", "base_oid": "b1",
                                      "head_ref": "h", "head_oid": "h1"},
                           "main", repo_dir=tmp_path, source_repo="owner/repo")
@@ -784,14 +809,11 @@ def test_merge_gate_rejects_failed_github_ci(monkeypatch, tmp_path):
 def test_merge_gate_rejects_preexisting_failed_ci_as_unrecoverable(
         monkeypatch, tmp_path):
     def fake_run(command, **kwargs):
-        if command[0] == "gh" and command[1] == "pr" and "view" in command:
-            return json.dumps({
-                "state": "OPEN", "mergeable": "MERGEABLE", "headRefOid": "h1",
-                "statusCheckRollup": [{
-                    "name": "tests", "status": "COMPLETED",
-                    "conclusion": "FAILURE",
-                }],
-            })
+        if _is_rollup_read(command):
+            return _graphql_rollup(checks=[{
+                "name": "tests", "status": "COMPLETED",
+                "conclusion": "FAILURE",
+            }])
         if command[:2] == ["gh", "api"] and "check-runs" in command[2]:
             return json.dumps([{
                 "name": "tests", "status": "completed",
@@ -804,7 +826,7 @@ def test_merge_gate_rejects_preexisting_failed_ci_as_unrecoverable(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(failure_report.PreExistingCIFailure, match="main is already red"):
-        runner.merge_gate(
+        _merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path, source_repo="owner/repo",
@@ -830,7 +852,7 @@ def test_merge_gate_preexisting_failure_matches_apostrophe_name(
     ))
     with pytest.raises(failure_report.PreExistingCIFailure,
                        match="main is already red on check 'Bob's lint'"):
-        runner.merge_gate(
+        _merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path, source_repo="owner/repo",
@@ -844,7 +866,7 @@ def test_merge_gate_rejects_failed_status_context(monkeypatch, tmp_path):
         }]),
     )
     with pytest.raises(runner.GateCIFailure, match="CI check 'status'"):
-        runner.merge_gate(
+        _merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path,
@@ -903,7 +925,7 @@ def test_merge_gate_merges_after_green_ci(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command", _merge_gate_fake(check_runs=[{
         "name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS",
     }]))
-    result = runner.merge_gate(tmp_path, {"number": 4, "url": "u",
+    result = _merge_gate(tmp_path, {"number": 4, "url": "u",
                                           "base_ref": "main", "base_oid": "b1",
                                           "head_ref": "h", "head_oid": "h1"},
                                "main", repo_dir=tmp_path)
@@ -942,20 +964,17 @@ def test_merge_gate_reads_the_state_once(monkeypatch, tmp_path):
     views = []
 
     def fake_run(command, **kwargs):
-        if command[0] == "gh" and command[1] == "pr" and "view" in command:
+        if _is_rollup_read(command):
             views.append(command)
-            return json.dumps({
-                "state": "OPEN", "mergeable": "MERGEABLE", "headRefOid": "h1",
-                "statusCheckRollup": [{
-                    "name": "tests", "status": "IN_PROGRESS",
-                    "conclusion": None,
-                }],
-            })
+            return _graphql_rollup(checks=[{
+                "name": "tests", "status": "IN_PROGRESS",
+                "conclusion": None,
+            }])
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(runner.DeliveryDeferred):
-        runner.merge_gate(tmp_path, {"number": 4, "url": "u",
+        _merge_gate(tmp_path, {"number": 4, "url": "u",
                                      "base_ref": "main", "base_oid": "b1",
                                      "head_ref": "h", "head_oid": "h1"},
                           "main", repo_dir=tmp_path)
@@ -967,8 +986,8 @@ def _absorb_merge_command_fake(states, remote_head="h2"):
     views = iter(states)
 
     def fake_run(command, **kwargs):
-        if command[0:3] == ["gh", "pr", "view"]:
-            return json.dumps(next(views))
+        if _is_rollup_read(command):
+            return _graphql_rollup(**next(views))
         if command[0:3] == ["git", "merge-base", "--is-ancestor"]:
             raise subprocess.CalledProcessError(1, command, stderr="behind")
         if command[0:3] == ["git", "rev-parse", "origin/main"]:
@@ -988,13 +1007,14 @@ def _absorb_merge_command_fake(states, remote_head="h2"):
 
 
 def _absorb_pr_state(head, mergeable="MERGEABLE"):
-    return {"state": "OPEN", "mergeable": mergeable, "headRefOid": head,
-            "statusCheckRollup": []}
+    return {"state": "OPEN", "mergeable": mergeable, "head_oid": head}
 
 
 def test_absorb_fake_dispatch_covers_command_results():
     fake = _absorb_merge_command_fake([_absorb_pr_state("h1")])
-    assert json.loads(fake(["gh", "pr", "view"]))["headRefOid"] == "h1"
+    graphql = json.loads(fake(["gh", "api", "graphql"]))
+    pull = graphql["data"]["repository"]["pullRequest"]
+    assert pull["headRefOid"] == "h1"
     with pytest.raises(subprocess.CalledProcessError):
         fake(["git", "merge-base", "--is-ancestor"])
     assert fake(["git", "rev-parse", "origin/main"]) == "base-2"
@@ -1017,7 +1037,7 @@ def test_merge_gate_absorb_remote_head_mismatch_is_fail_fast(monkeypatch, tmp_pa
                         _absorb_merge_command_fake([_absorb_pr_state("h1")],
                                                     remote_head="other"))
     with pytest.raises(RuntimeError, match="does not match absorbed head"):
-        runner.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
+        _merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
                                      "head_ref": "h", "base_oid": "b1"},
                           "main", repo_dir=tmp_path)
 
@@ -1033,7 +1053,7 @@ def test_merge_gate_absorb_detects_head_moved_after_push(monkeypatch, tmp_path):
                             _absorb_pr_state("h1"), _absorb_pr_state("other"),
                         ]))
     with pytest.raises(RuntimeError, match="head moved after base absorb"):
-        runner.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
+        _merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
                                      "head_ref": "h", "base_oid": "b1"},
                           "main", repo_dir=tmp_path)
 
@@ -1050,7 +1070,7 @@ def test_merge_gate_absorb_rejects_newly_dirty_pr(monkeypatch, tmp_path):
                             _absorb_pr_state("h2", mergeable="DIRTY"),
                         ]))
     with pytest.raises(runner.RecoverableMergeGateError, match="not mergeable"):
-        runner.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
+        _merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
                                      "head_ref": "h", "base_oid": "b1"},
                           "main", repo_dir=tmp_path)
 
@@ -1059,7 +1079,7 @@ def test_merge_gate_without_ci_proceeds_to_mergeable_gate(monkeypatch, tmp_path)
     monkeypatch.setattr(seam, "run_command",
         _merge_gate_fake(check_runs=[]),
     )
-    result = runner.merge_gate(tmp_path, {"number": 4, "url": "u",
+    result = _merge_gate(tmp_path, {"number": 4, "url": "u",
                                           "base_ref": "main", "base_oid": "b1",
                                           "head_ref": "h", "head_oid": "h1"},
                                "main", repo_dir=tmp_path)
@@ -1074,7 +1094,7 @@ def test_merge_gate_merges_reviewed_head_with_match_head_commit(monkeypatch, tmp
         return _merge_gate_fake()(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    pr = runner.merge_gate(tmp_path, {"number": 4, "url": "u",
+    pr = _merge_gate(tmp_path, {"number": 4, "url": "u",
                                       "base_ref": "main", "base_oid": "b1",
                                       "head_ref": "h", "head_oid": "h1"},
                            "main", repo_dir=tmp_path)
@@ -1107,7 +1127,7 @@ def test_merge_gate_skips_merge_when_issue_is_blocked(monkeypatch, tmp_path):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(runner.MergeBlockedByIssueLabel, match="ai-blocked"):
-        runner.merge_gate(
+        _merge_gate(
             tmp_path,
             {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
              "head_ref": "h", "head_oid": "h1"},
@@ -1152,7 +1172,7 @@ def test_merge_gate_issue_blocked_comment_failure_is_bypass(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(runner.MergeBlockedByIssueLabel, match="ai-blocked"):
-        runner.merge_gate(
+        _merge_gate(
             tmp_path,
             {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
              "head_ref": "h", "head_oid": "h1"},
@@ -1181,7 +1201,7 @@ def test_merge_gate_merges_when_issue_is_not_blocked(monkeypatch, tmp_path):
         return _merge_gate_fake()(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    pr = runner.merge_gate(
+    pr = _merge_gate(
         tmp_path,
         {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
          "head_ref": "h", "head_oid": "h1"},
@@ -1253,10 +1273,24 @@ def test_merge_gate_requires_the_repo_dir_lock_location(
     # dir) must be explicit — there is no bypass path.
     monkeypatch.setattr(seam, "run_command", _merge_gate_fake())
     with pytest.raises(TypeError):
-        runner.merge_gate(tmp_path, {"number": 4, "url": "u",
+        _merge_gate(tmp_path, {"number": 4, "url": "u",
                                      "base_ref": "main", "base_oid": "b1",
                                      "head_ref": "h", "head_oid": "h1"},
                          "main")
+
+
+def test_merge_gate_requires_the_source_repo_for_the_status_read(
+    monkeypatch, tmp_path,
+):
+    """Issue #1534: the status read is a GraphQL query carrying the
+    repository slug; without one the gate fails fast before any read."""
+    monkeypatch.setattr(seam, "run_command",
+                        lambda *a, **k: pytest.fail("no read expected"))
+    with pytest.raises(ValueError, match="requires the source repo"):
+        runner.merge_gate(
+            tmp_path, {"number": 4, "head_oid": "h1"}, "main",
+            repo_dir=tmp_path,
+        )
 
 
 def test_merge_gate_fetches_under_the_base_sync_lock(
@@ -1275,7 +1309,7 @@ def test_merge_gate_fetches_under_the_base_sync_lock(
         return _merge_gate_fake()(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    runner.merge_gate(tmp_path, {"number": 4, "url": "u",
+    _merge_gate(tmp_path, {"number": 4, "url": "u",
                                  "base_ref": "main", "base_oid": "b1",
                                  "head_ref": "h", "head_oid": "h1"},
                       "main", repo_dir=tmp_path)
@@ -1287,16 +1321,13 @@ def test_merge_gate_reraises_merge_base_errors(monkeypatch, tmp_path):
     def fake_run(command, **kwargs):
         if command[:3] == ["git", "merge-base", "--is-ancestor"]:
             raise subprocess.CalledProcessError(128, command, stderr="bad ref")
-        if command[0] == "gh" and command[1] == "pr" and "view" in command:
-            return json.dumps({
-                "state": "OPEN", "mergeable": "MERGEABLE",
-                "headRefOid": "h1", "statusCheckRollup": [],
-            })
+        if _is_rollup_read(command):
+            return _graphql_rollup()
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
-        runner.merge_gate(
+        _merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1"}, "main",
             repo_dir=tmp_path,
         )
@@ -1308,17 +1339,14 @@ def test_merge_gate_behind_conflicted_pr_remains_recoverable(
     def fake_run(command, **kwargs):
         if command[:3] == ["git", "merge-base", "--is-ancestor"]:
             raise subprocess.CalledProcessError(1, command, stderr="not ancestor")
-        if command[0] == "gh" and command[1] == "pr" and "view" in command:
-            return json.dumps({
-                "state": "OPEN", "mergeable": "DIRTY", "headRefOid": "h1",
-                "statusCheckRollup": [],
-            })
+        if _is_rollup_read(command):
+            return _graphql_rollup(mergeable="DIRTY")
         return ""
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         runner.RecoverableMergeGateError, match="not mergeable",
     ):
-        runner.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
+        _merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
                                      "head_oid": "h1"}, "main",
                           repo_dir=tmp_path)
@@ -1333,7 +1361,7 @@ def test_merge_gate_defers_when_ci_pending(monkeypatch, tmp_path, caplog):
         "name": "tests", "status": "QUEUED", "conclusion": None,
     }]))
     with caplog.at_level("INFO"), pytest.raises(runner.DeliveryDeferred):
-        runner.merge_gate(
+        _merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path,
@@ -1347,7 +1375,7 @@ def test_merge_gate_defers_when_mergeable_unknown(monkeypatch, tmp_path, caplog)
     failure, one journal line."""
     monkeypatch.setattr(seam, "run_command", _merge_gate_fake(pr_state="UNKNOWN"))
     with caplog.at_level("INFO"), pytest.raises(runner.DeliveryDeferred):
-        runner.merge_gate(
+        _merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path,
@@ -1358,7 +1386,7 @@ def test_merge_gate_defers_when_mergeable_unknown(monkeypatch, tmp_path, caplog)
 def test_merge_gate_rejects_non_mergeable_pr(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command", _merge_gate_fake(pr_state="DIRTY"))
     with pytest.raises(runner.RecoverableMergeGateError, match="not mergeable"):
-        runner.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
+        _merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
                                      "head_oid": "h1"}, "main",
                           repo_dir=tmp_path)
@@ -1368,7 +1396,7 @@ def test_merge_gate_rejects_head_that_moved_since_review(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command", _merge_gate_fake(head_oid="moved"),
     )
     with pytest.raises(RuntimeError, match="head moved since review"):
-        runner.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
+        _merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
                                      "head_oid": "h1"}, "main",
                           repo_dir=tmp_path)
@@ -1383,11 +1411,8 @@ def test_merge_gate_hands_off_each_actionable_policy_rejection(
         monkeypatch, tmp_path, failed_line):
     """Every known policy blocker is a normal delivered handoff."""
     def fake_run(command, **kwargs):
-        if command[0] == "gh" and command[1] == "pr" and "view" in command:
-            return json.dumps({
-                "state": "OPEN", "mergeable": "MERGEABLE", "headRefOid": "h1",
-                "statusCheckRollup": [],
-            })
+        if _is_rollup_read(command):
+            return _graphql_rollup()
         if command[0] == "gh" and command[1] == "pr" and "merge" in command:
             raise subprocess.CalledProcessError(
                 1, command, stderr="the base branch policy prohibits the merge",
@@ -1399,7 +1424,7 @@ def test_merge_gate_hands_off_each_actionable_policy_rejection(
         "merge_gate: UNKNOWN unrelated unreadable protection",
     ])
     with pytest.raises(runner.MergeHandoffRequired) as raised:
-        runner.merge_gate(
+        _merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1", "head_ref": "h",
                        "base_oid": "b1", "_source_repo": "owner/repo"},
             "main", repo_dir=tmp_path,
@@ -1417,16 +1442,15 @@ def test_merge_gate_does_not_hand_off_without_failed_preflight(
         (_ for _ in ()).throw(subprocess.CalledProcessError(
             1, command, stderr="the base branch policy prohibits the merge",
         )) if command[0] == "gh" and command[1] == "pr" and "merge" in command else (
-            json.dumps({"state": "OPEN", "mergeable": "MERGEABLE",
-                        "headRefOid": "h1", "statusCheckRollup": []})
-            if command[0] == "gh" and command[1] == "pr" and "view" in command else ""
+            _graphql_rollup()
+            if _is_rollup_read(command) else ""
         )
     ))
     monkeypatch.setattr(
         runner.github, "merge_gate_preflight", lambda *a: preflight,
     )
     with pytest.raises(subprocess.CalledProcessError):
-        runner.merge_gate(
+        _merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1", "head_ref": "h",
                        "base_oid": "b1", "_source_repo": "owner/repo"},
             "main", repo_dir=tmp_path,
@@ -3635,6 +3659,10 @@ def _install_merge_record_gh(monkeypatch, clone: Path, *, repo_settings=None,
                 "headRefOid": git(clone, "rev-parse",
                                   f"origin/{TASK_BRANCH}"),
             }])
+        if _is_rollup_read(command):
+            return _graphql_rollup(
+                head_oid=git(clone, "rev-parse", f"origin/{TASK_BRANCH}"),
+            )
         if command[0] == "gh" and command[1] == "pr" \
                 and command[2] == "view":
             if "baseRefName" in command[-1]:
@@ -3649,14 +3677,6 @@ def _install_merge_record_gh(monkeypatch, clone: Path, *, repo_settings=None,
                     "headRepository": {"name": "repo-fork"},
                     "headRepositoryOwner": {"login": "contributor"},
                     "body": "external contribution",
-                })
-            if "mergeable" in command[-1]:
-                return json.dumps({
-                    "number": 4, "state": "OPEN",
-                    "mergeable": "MERGEABLE",
-                    "headRefOid": git(clone, "rev-parse",
-                                      f"origin/{TASK_BRANCH}"),
-                    "statusCheckRollup": [],
                 })
             return json.dumps({
                 "number": 4, "state": "MERGED", "mergedAt": "now",

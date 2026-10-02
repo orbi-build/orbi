@@ -32,6 +32,7 @@ from orbi.delivery_labels import (
 from orbi.journal import (LOGGER, MilestoneReconcileError,
                           classify_milestone_error, event, run_command, single_line)
 from orbi.merge_gate import classify_protection
+from orbi.pr_status import pr_status_rollup
 from orbi.progress import (
     RUN_MARKER_PATTERN,
     format_status_comment,
@@ -1128,16 +1129,11 @@ def pr_delivery_rollup(pr_url: str, source_repo: str) -> tuple[str, list]:
     checks defer the delivery to the next tick instead of sleeping.
     """
     number = _pr_number(pr_url)
-    data = pr_view(number, "state,statusCheckRollup", repo=source_repo)
+    data = pr_status_rollup(number, repo=source_repo)
     state = data.get("state")
     if state not in ("OPEN", "MERGED", "CLOSED"):
         raise ValueError(f"unexpected PR state: {state!r}")
-    rollup = data.get("statusCheckRollup")
-    if rollup is None:
-        rollup = []
-    if not isinstance(rollup, list):
-        raise ValueError("pr statusCheckRollup must be a JSON array")
-    return state, rollup
+    return state, data["statusCheckRollup"]
 
 
 def pr_delivery_status(pr_url: str, source_repo: str) -> tuple[str, list[str]]:

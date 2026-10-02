@@ -12714,24 +12714,34 @@ def test_main_cli_install_failure_fails_fast_before_slot_and_claim(
 PR_URL = "https://github.com/owner/repo/pull/46"
 
 
-def fake_pr_view(monkeypatch, state: str) -> tuple[list, object]:
-    """Answer `gh pr view <n> --repo owner/repo with delivery fields`.
+def graphql_rollup(state: str = "OPEN", checks=()) -> str:
+    """One page of the PR-status GraphQL answer (Issue #1534)."""
+    return json.dumps({"data": {"repository": {"pullRequest": {
+        "state": state, "mergeable": "MERGEABLE", "headRefOid": "h1",
+        "statusCheckRollup": {"contexts": {
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+            "nodes": list(checks),
+        }},
+    }}}})
 
-    Returns the command log and the fake itself (so a test can prove
-    the fake rejects unexpected commands).
+
+def fake_pr_view(monkeypatch, state: str) -> tuple[list, object]:
+    """Answer the delivery step's PR-status GraphQL read.
+
+    The read carries the source repo and PR number as GraphQL variables
+    (Issue #1534: the query never selects checkSuite.workflowRun).  Returns
+    the command log and the fake itself (so a test can prove the fake
+    rejects unexpected commands).
     """
     seen: list = []
 
     def fake_run(command, **kwargs):
-        if command[:1] == ["gh"] and command[1] == "pr" \
-                and command[2] == "view":
+        if command[0:3] == ["gh", "api", "graphql"]:
             seen.append(command)
-            assert command[3] == "46"
-            assert command[4:] == [
-                "--repo", "owner/repo", "--json",
-                "state,statusCheckRollup",
-            ]
-            return json.dumps({"state": state, "statusCheckRollup": []})
+            assert "owner=owner" in command
+            assert "name=repo" in command
+            assert "number=46" in command
+            return graphql_rollup(state)
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -12750,17 +12760,24 @@ def test_fake_pr_view_rejects_unexpected_commands(monkeypatch):
 
 def test_pr_delivery_status_rejects_non_array_check_rollup(monkeypatch):
     monkeypatch.setattr(seam, "run_command",
-        lambda *a, **k: json.dumps({"state": "OPEN", "statusCheckRollup": {}}),
+        lambda *a, **k: json.dumps({"data": {"repository": {"pullRequest": {
+            "state": "OPEN",
+            "statusCheckRollup": {"contexts": {"nodes": {}}},
+        }}}}),
     )
-    with pytest.raises(ValueError, match="statusCheckRollup must be a JSON array"):
+    with pytest.raises(ValueError, match="contexts must be a JSON array"):
         runner.pr_delivery_status(PR_URL, "owner/repo")
 
 
 def test_pr_delivery_status_ignores_malformed_check_entry(monkeypatch):
     monkeypatch.setattr(seam, "run_command",
-        lambda *a, **k: json.dumps({
-            "state": "OPEN", "statusCheckRollup": [None],
-        }),
+        lambda *a, **k: json.dumps({"data": {"repository": {"pullRequest": {
+            "state": "OPEN",
+            "statusCheckRollup": {"contexts": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [None],
+            }},
+        }}}}),
     )
     assert runner.pr_delivery_status(PR_URL, "owner/repo") == ("OPEN", [])
 
@@ -13024,9 +13041,9 @@ def test_delivery_step_runs_one_review_per_tick(
     calls = {"pr": 0, "labels": 0}
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and command[2] == "view":
+        if command[0:3] == ["gh", "api", "graphql"]:
             calls["pr"] += 1
-            return json.dumps({"state": "OPEN", "statusCheckRollup": []})
+            return graphql_rollup()
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "comments":
                 return json.dumps({"comments": [
@@ -13087,15 +13104,12 @@ def test_delivery_step_defers_when_ci_pending(
     calls = {"pr": 0}
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and command[2] == "view":
+        if command[0:3] == ["gh", "api", "graphql"]:
             calls["pr"] += 1
-            return json.dumps({
-                "state": "OPEN",
-                "statusCheckRollup": [
-                    {"name": "tests", "status": "IN_PROGRESS",
-                     "conclusion": None},
-                ],
-            })
+            return graphql_rollup(checks=[
+                {"name": "tests", "status": "IN_PROGRESS",
+                 "conclusion": None},
+            ])
         # The defer path performs exactly ONE PR read: no Issue read
         # (comments or labels), no mutation — the fake rejects the rest.
         raise AssertionError(f"unexpected command: {command}")
@@ -13120,6 +13134,8 @@ def test_delivery_step_defers_when_ci_pending(
     assert reviews == []
     assert edits == []
     assert "delivery_ci_pending" in caplog.text
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "list"])
 
 
 def test_delivery_step_auto_merges_on_clean_review(
@@ -13132,9 +13148,9 @@ def test_delivery_step_auto_merges_on_clean_review(
     pr_calls = {"n": 0}
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and command[2] == "view":
+        if command[0:3] == ["gh", "api", "graphql"]:
             pr_calls["n"] += 1
-            return json.dumps({"state": "OPEN"})
+            return graphql_rollup("OPEN")
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "comments":
                 return json.dumps({"comments": [
@@ -13189,8 +13205,8 @@ def test_delivery_step_passes_p0_priority_to_the_review(
     review_calls = []
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and command[2] == "view":
-            return json.dumps({"state": "OPEN"})
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return graphql_rollup("OPEN")
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "comments":
                 return json.dumps({"comments": [
@@ -13267,8 +13283,8 @@ def test_delivery_step_marks_blocked_when_review_fails(
     }
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"]:
-            return json.dumps({"state": "OPEN"})
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return graphql_rollup("OPEN")
         if command[:2] == ["gh", "api"]:
             api_calls.append(command)
             if "--method" not in command:
@@ -13382,8 +13398,8 @@ def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
     }
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"]:
-            return json.dumps({"state": "OPEN"})
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return graphql_rollup("OPEN")
         if command[:2] == ["gh", "api"]:
             api_calls.append(command)
             if "--method" not in command:
@@ -13483,9 +13499,9 @@ def test_delivery_step_blocks_when_scene_base_differs_from_config(
     pr_calls = {"n": 0}
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"]:
+        if command[0:3] == ["gh", "api", "graphql"]:
             pr_calls["n"] += 1
-            return json.dumps({"state": states[pr_calls["n"] - 1]})
+            return graphql_rollup(states[pr_calls["n"] - 1])
         if command[:2] == ["gh", "api"]:
             api_calls.append(command)
             if "--method" not in command:
@@ -13607,6 +13623,8 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
         # The fake rejects anything that is not a pr/issue view, the
         # PR failure comment or the progress API: a missing worktree
         # must not spawn git/gh.
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return graphql_rollup("OPEN")
         if command[:2] == ["gh", "pr"]:
             if command[2] == "comment":
                 pr_comments.append(command[-1])
@@ -13751,6 +13769,8 @@ def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
     }
 
     def fake_run(command, **kwargs):
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return graphql_rollup("OPEN")
         if command[:2] == ["gh", "pr"]:
             if command[2] == "comment":
                 return ""
@@ -13824,8 +13844,8 @@ def test_delivery_step_runs_review_when_fix_needed(
     step runs the round ONCE and returns; the next tick resumes."""
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and command[2] == "view":
-            return json.dumps({"state": "OPEN", "statusCheckRollup": []})
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return graphql_rollup()
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "labels":
                 return json.dumps({
@@ -13923,8 +13943,8 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
     }
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"]:
-            return json.dumps({"state": "CLOSED"})
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return graphql_rollup("CLOSED")
         if command[:2] == ["gh", "issue"]:
             # The blocked scene derives the role from the delivery label
             # and the round from the trusted review-round comments
@@ -14031,8 +14051,8 @@ def test_delivery_step_review_failure_without_bound_run_id(
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and command[2] == "view":
-            return json.dumps({"state": "OPEN"})
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return graphql_rollup("OPEN")
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "comments":
                 return json.dumps({"comments": []})
@@ -14075,16 +14095,13 @@ def test_delivery_step_repairs_in_progress_label_and_logs_ci(
 
     def fake_run(command, **kwargs):
         calls.append(command)
-        if command[:2] == ["gh", "pr"] and command[2] == "view":
-            return json.dumps({
-                "state": "OPEN",
-                "statusCheckRollup": [
-                    {"name": "tests", "status": "COMPLETED",
-                     "conclusion": "SUCCESS"},
-                    {"name": "lint", "status": "COMPLETED",
-                     "conclusion": "SKIPPED"},
-                ],
-            })
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return graphql_rollup(checks=[
+                {"name": "tests", "status": "COMPLETED",
+                 "conclusion": "SUCCESS"},
+                {"name": "lint", "status": "COMPLETED",
+                 "conclusion": "SKIPPED"},
+            ])
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "comments":
                 return json.dumps({"comments": [{
@@ -14120,8 +14137,8 @@ def test_delivery_step_blocks_when_in_progress_label_repair_fails(
         monkeypatch, caplog,
 ):
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and command[2] == "view":
-            return json.dumps({"state": "OPEN", "statusCheckRollup": []})
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return graphql_rollup()
         return json.dumps({"labels": [{"name": "ai-in-progress"}]})
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -14151,9 +14168,9 @@ def test_delivery_step_keeps_holding_when_no_delivery_label(
     pr_calls = {"n": 0}
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and command[2] == "view":
+        if command[0:3] == ["gh", "api", "graphql"]:
             pr_calls["n"] += 1
-            return json.dumps({"state": states[pr_calls["n"] - 1]})
+            return graphql_rollup(states[pr_calls["n"] - 1])
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "edit"]:
@@ -14183,8 +14200,8 @@ def test_delivery_step_logs_awaiting_without_bound_run_id(monkeypatch, caplog):
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and command[2] == "view":
-            return json.dumps({"state": "CLOSED"})
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return graphql_rollup("CLOSED")
         if command[:2] == ["gh", "issue"] and command[-1] == "labels":
             # No leftover fix-needed label: only ai-pr-opened is removed.
             return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
@@ -19856,7 +19873,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                     "number": 124, "state": "CLOSED",
                     "stateReason": "COMPLETED",
                 })
-        if command[:3] == ["gh", "api", "graphql"]:
+        if command[0:3] == ["gh", "api", "graphql"]:
             number = int(next(
                 a for a in command if a.startswith("number=")
             ).split("=", 1)[1])
@@ -23213,8 +23230,8 @@ def test_delivery_step_never_closes_triage_issue_after_review(
     （旧的 auto-merge 关票分支已随自动合并一起移除）；关票只发生在
     轮询发现人工已合并（MERGED）的分支。"""
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and command[2] == "view":
-            return json.dumps({"state": "OPEN"})
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return graphql_rollup("OPEN")
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "comments":
                 return json.dumps({"comments": [
@@ -23389,8 +23406,8 @@ def test_delivery_step_closes_triage_issue_on_merged_poll(
     states = ["MERGED"]
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and command[2] == "view":
-            return json.dumps({"state": states[0]})
+        if command[0:3] == ["gh", "api", "graphql"]:
+            return graphql_rollup(states[0])
         if command[:3] == ["gh", "issue", "comment"]:
             return ""
         if command[:3] == ["gh", "issue", "close"]:
