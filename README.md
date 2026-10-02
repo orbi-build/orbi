@@ -2,19 +2,21 @@ English | [简体中文](README.zh-CN.md)
 
 # Orbi
 
-**GitHub Issues in, tagged releases out.**
+**Label a GitHub Issue. Get back a reviewed, merged PR — and a release.**
 
-Orbi is a self-hosted, open-source autonomous coding agent: label a GitHub Issue `ai-ready`, and it writes the code in an isolated worktree, opens a PR, has an independent review session check it against the Issue's acceptance criteria, merges only the reviewed head, and cuts a tagged release. GitHub Issues are the only state store—no database, queue, or daemon.
-
-**Ledger:** [merged PRs](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [closed Issues](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged releases](https://github.com/orbi-build/orbi/releases) — the repository is the record.
+[Try Orbi Cloud — free for 1 repository](https://orbi.build/cloud/?ref=gh-readme) · no server, no credit card
 
 [![Watch the 95-second film](https://img.youtube.com/vi/zvPnE2whb08/maxresdefault.jpg)](https://youtu.be/zvPnE2whb08)
 
-**Inspect the loop in the film:** [Issue #1367](https://github.com/orbi-build/orbi/issues/1367) → [PR #1370](https://github.com/orbi-build/orbi/pull/1370) → [Release v0.5.47](https://github.com/orbi-build/orbi/releases/tag/v0.5.47)
+**See one real loop:** [Issue #1367](https://github.com/orbi-build/orbi/issues/1367) → [PR #1370](https://github.com/orbi-build/orbi/pull/1370) → [Release v0.5.47](https://github.com/orbi-build/orbi/releases/tag/v0.5.47)
 
-Website <https://orbi.build> ｜ [Orbi Cloud (free for 1 repo)](https://orbi.build/cloud/?ref=gh-readme) ｜ Documentation <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions) ｜ Docker [GHCR](https://ghcr.io/orbi-build/orbi) · [Docker Hub](https://hub.docker.com/r/orbibuild/orbi)
+Orbi is an open-source autonomous coding agent: label a GitHub Issue `ai-ready`, and it writes the code in an isolated worktree, opens a PR, has an independent review session check it against the Issue's acceptance criteria, merges only the reviewed head, and cuts a tagged release. GitHub Issues are the only state store—no database, queue, or daemon.
 
-**Don't want to run it yourself?** [Orbi Cloud](https://orbi.build/cloud/?ref=gh-readme) runs the same loop on your repository, free for one repository. Founding members get 50% off forever with the code `FOUNDING50` at checkout (6 places).
+**Ledger:** [merged PRs](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [closed Issues](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged releases](https://github.com/orbi-build/orbi/releases) — the repository is the record.
+
+Website <https://orbi.build> ｜ Documentation <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions) ｜ Docker [GHCR](https://ghcr.io/orbi-build/orbi) · [Docker Hub](https://hub.docker.com/r/orbibuild/orbi)
+
+**Prefer to run it yourself?** Follow the Quick start below. Cloud founding members get 50% off forever with the code `FOUNDING50` at checkout (6 places).
 
 ## Quick start
 
