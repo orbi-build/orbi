@@ -137,6 +137,7 @@ class RunnerConfig:
     allow_stale_runner: bool = False
     human_review_gate: bool = False
     attribution_footer: bool = True
+    attribution_link: str = "https://github.com/orbi-build/orbi"
     slot_dir: Path | None = None
     pi_provider: str | None = None
     pi_model: str | None = None
@@ -256,6 +257,15 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     attribution_footer = data.get("attribution_footer", True)
     if not isinstance(attribution_footer, bool):
         raise ValueError("attribution_footer must be a boolean")
+    # The single link the attribution footers carry (Issue #1537). The
+    # open-source engine defaults to its own GitHub repository; a
+    # self-hosted operator points it wherever they want. Reject a
+    # non-string like the boolean switch above.
+    attribution_link = data.get(
+        "attribution_link", "https://github.com/orbi-build/orbi",
+    )
+    if not isinstance(attribution_link, str):
+        raise ValueError("attribution_link must be a string")
     # Engine source update channel: what the deploy home
     # checkout follows at the next start — origin/main by default (the
     # exact pre-#535 dogfood behavior), a branch, the newest official
@@ -449,6 +459,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         allow_stale_runner=allow_stale_runner,
         human_review_gate=human_review_gate,
         attribution_footer=attribution_footer,
+        attribution_link=attribution_link,
         slot_dir=slot_dir_for(repo_dir),
         pi_provider=pi_provider,
         pi_model=pi_model,

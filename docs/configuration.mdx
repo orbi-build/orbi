@@ -58,6 +58,7 @@ The three `review_pi_*` rows let the independent review run on a different model
 | `skills` | list of paths | `[]` | absolute, `~`, or config-relative paths | Optional Pi skill paths (absolute, `~`, or relative to the config file) |
 | `context_files` | list of paths | `[]` | paths | Optional Markdown context files injected into the prompt as paths |
 | `attribution_footer` | boolean | `true` | `true \| false` | Append a one-line `Built by Orbi` backlink to Orbi-created PR bodies and Release notes. Set to `false` to omit it; must be a boolean |
+| `attribution_link` | string | `https://github.com/orbi-build/orbi` | any URL | The single link the attribution footer carries. Defaults to Orbi's GitHub repository; point it elsewhere on a self-hosted install; must be a string |
 
 ## Delivery behaviour
 

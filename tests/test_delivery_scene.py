@@ -9,7 +9,6 @@ the classified scene — no `gh` stub, no I/O: the module is pure.
 from orbi import config as config_domain
 import dataclasses
 import json
-import re
 
 import pytest
 
@@ -575,29 +574,3 @@ def test_pick_issue_claims_a_fresh_candidate(monkeypatch):
         "blockedBy": {"nodes": [], "totalCount": 0},
         "labels": [{"name": "ai-ready"}],
     }
-
-
-def test_attribution_ref_names_the_repo_owner():
-    """The footer ref carries the GitHub owner of the delivered repo
-    (Issue #1524)."""
-    assert delivery_scene.attribution_ref(
-        "prfoot-", "orbi-build/orbi",
-    ) == "prfoot-orbi-build"
-    assert delivery_scene.attribution_ref(
-        "relfoot-", "orbi-build/orbi",
-    ) == "relfoot-orbi-build"
-
-
-def test_attribution_ref_normalizes_the_owner_to_token_rules():
-    """Lowercase and every character outside `[a-z0-9_-]` -> `-`."""
-    assert delivery_scene.attribution_ref(
-        "prfoot-", "Some_Org.Name/repo",
-    ) == "prfoot-some_org-name"
-
-
-def test_attribution_ref_truncates_the_whole_token_to_32_chars():
-    """A long owner is truncated so the token matches the AGENTS.md
-    contract `^[a-z0-9_-]{1,32}$` (Issue #1524)."""
-    token = delivery_scene.attribution_ref("relfoot-", "A" * 40 + "/r")
-    assert token == "relfoot-" + "a" * 24
-    assert re.fullmatch(r"[a-z0-9_-]{1,32}", token)

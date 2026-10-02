@@ -58,6 +58,7 @@ Orbi 从部署 home 读取 `orbi.toml`；设置 `ORBI_CONFIG` 可选择其他文
 | `skills` | 路径列表 | `[]` | 绝对、`~` 或相对配置文件路径 | 可选 Pi skill 路径（绝对、`~`，或相对配置文件） |
 | `context_files` | 路径列表 | `[]` | 路径 | 可选 Markdown 上下文文件，以路径形式注入 prompt |
 | `attribution_footer` | 布尔值 | `true` | `true \| false` | 在 Orbi 创建的 PR 正文和 Release notes 末尾追加一行回链；设为 `false` 可关闭，必须是布尔值 |
+| `attribution_link` | 字符串 | `https://github.com/orbi-build/orbi` | 任意 URL | 回链唯一携带的链接。默认指向 Orbi 的 GitHub 仓库；自托管部署可改为其他地址；必须是字符串 |
 
 ## 交付行为
 

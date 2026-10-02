@@ -95,6 +95,8 @@ engine_source_track = "release"
 # Add a one-line backlink to Orbi on generated PRs and Releases.
 # Default: true; set false to omit the attribution footer.
 # attribution_footer = true
+# The single link the footer carries. Defaults to Orbi's GitHub repo.
+# attribution_link = "https://github.com/orbi-build/orbi"
 # Claim scope: the active GitHub Milestone title (e.g.
 # "v0.2.0") that the fresh-claim scans (p0, bug, plain) are restricted
 # to. The milestone:"<title>" qualifier is part of the gh search query,
