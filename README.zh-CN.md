@@ -2,20 +2,21 @@
 
 # Orbi
 
-**GitHub Issues in, tagged releases out.**
+**给 GitHub Issue 打个标签，拿回一个审过、已合并的 PR，外加一次发版。**
 
-Orbi 是一个自托管、开源的自主编程 agent：给 GitHub Issue 打上 `ai-ready`，它在独立的 worktree 里写代码、开 PR，由独立的评审会话对照 Issue 验收项审查，只合并审过的那个 head，最后打 tag 发版。GitHub Issue 是唯一状态存储——没有数据库、队列或 daemon。
-
-**公开账本：** [已合并 PR](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [已关闭 Issue](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged release](https://github.com/orbi-build/orbi/releases) — 仓库就是记录。
+[试用 Orbi Cloud：前 3 次成功合并的交付免费](https://orbi.build/zh/?ref=gh-readme) · 不用自己的服务器，不用绑定信用卡
 
 [![观看 95 秒短片](https://img.youtube.com/vi/zvPnE2whb08/maxresdefault.jpg)](https://youtu.be/zvPnE2whb08)
 
-**查看片中这条完整链路：** [Issue #1367](https://github.com/orbi-build/orbi/issues/1367) → [PR #1370](https://github.com/orbi-build/orbi/pull/1370) → [Release v0.5.47](https://github.com/orbi-build/orbi/releases/tag/v0.5.47)
+**看一条真实链路：** [Issue #1367](https://github.com/orbi-build/orbi/issues/1367) → [PR #1370](https://github.com/orbi-build/orbi/pull/1370) → [Release v0.5.47](https://github.com/orbi-build/orbi/releases/tag/v0.5.47)
 
-官网 <https://orbi.build> ｜ [Orbi Managed Cloud](https://orbi.build/zh/cloud/?ref=gh-readme) ｜ 文档 <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions)
+Orbi 是一个开源的自主编程 agent：给 GitHub Issue 打上 `ai-ready`，它在独立的 worktree 里写代码、开 PR，由独立的评审会话对照 Issue 验收项审查，只合并审过的那个 head，最后打 tag 发版。GitHub Issue 是唯一状态存储——没有数据库、队列或 daemon。
 
-**不想自己部署？** [Orbi Cloud](https://orbi.build/zh/cloud/?ref=gh-readme) 在你的仓库上跑同一套流程，一个仓库免费。创始会员永久 5 折，结账时输入 `FOUNDING50`（限 6 位）。
+**公开账本：** [已合并 PR](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [已关闭 Issue](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged release](https://github.com/orbi-build/orbi/releases) — 仓库就是记录。
 
+官网 <https://orbi.build> ｜ 文档 <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions)
+
+**想自己部署？** 按下面的「快速开始」来。Cloud 创始会员永久 5 折，结账时输入 `FOUNDING50`（限 6 位）。
 ## 快速开始
 
 ```bash
