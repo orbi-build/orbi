@@ -85,7 +85,10 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
     - merged: add `ai-merged`, remove the current delivery-state label
       (the one present in `current_labels`): `ai-pr-opened` for the
       normal PR delivery, `ai-in-progress` for the release state
-      machine (which never enters the PR states).
+      machine (which never enters the PR states). `ai-ready` is cleared
+      too: the ready label is the queue entry, not a delivery state, so
+      a merged Issue must not keep showing it (Issue #1526) — the
+      terminal state is `ai-merged` ALONE.
     - blocked: add `ai-blocked`, remove every delivery-state label that
       is present (so the terminal state is `ai-blocked` ALONE).
     - awaiting_merge: add `ai-awaiting-merge`, remove every delivery-state
@@ -147,6 +150,13 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
             label for label in (*_DELIVERY_STATE_LABELS, AWAITING_MERGE_LABEL)
             if label in current
         ]
+        # The ready label is the queue entry, not a delivery state: a
+        # merged terminal must clear it too, or the merged Issue still
+        # shows `ai-ready` and reads as "still queued" (Issue #1526).
+        # The terminal state is `ai-merged` ALONE. Existing merged Issues
+        # are not backfilled.
+        if READY_LABEL in current:
+            to_remove.append(READY_LABEL)
         return ([MERGED_LABEL], to_remove)
     if event == EVENT_BLOCKED:
         # A handoff writes its terminal label before its required Issue

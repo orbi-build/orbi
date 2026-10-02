@@ -20244,8 +20244,10 @@ def test_process_release_success_end_to_end(monkeypatch):
     # Claim first, terminal ai-merged at the end (ai-in-progress removed).
     assert state["edits"][0] == (99, {"repo": "o/r",
                                       "add": "ai-in-progress"})
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
                                        "remove": "ai-in-progress"})
+    # Issue #1526: the release merge also clears the ready queue entry.
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     # The tag was created at the release commit and pushed plainly.
     commands = [c for c, _ in state["commands"]]
     tag_calls = [item for item in state["commands"] if item[0][:3] == ["git", "tag", "-a"]]
@@ -20578,8 +20580,10 @@ def test_process_release_exempts_release_issue_from_open_evidence(monkeypatch):
     # The release still completes terminally, and the auditable scope
     # evidence (the same list the Release notes carry) carries the
     # derived delivery but NO self-referential NOT released line.
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
                                        "remove": "ai-in-progress"})
+    # Issue #1526: the release merge also clears the ready queue entry.
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     (comment_number, comment_kwargs), = state["comments"]
     assert "NOT released" not in comment_kwargs["body"]
     assert "PR #123 merged (mergeCommit=aaa111)" in comment_kwargs["body"]
@@ -20612,8 +20616,10 @@ def test_process_release_proceeds_with_empty_derived_scope(monkeypatch):
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     # The release completes: terminal ai-merged, tag and Issue close.
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
                                        "remove": "ai-in-progress"})
+    # Issue #1526: the release merge also clears the ready queue entry.
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     commands = [c for c, _ in state["commands"]]
     assert [c for c in commands if c[:2] == ["git", "tag"]]
     assert [c for c in commands if c[:3] == ["gh", "issue", "close"]]
@@ -20650,8 +20656,10 @@ def test_process_release_waits_for_pending_ci_and_succeeds(monkeypatch):
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     assert not any(k.get("add") == "ai-blocked" for _, k in state["edits"])
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
                                        "remove": "ai-in-progress"})
+    # Issue #1526: the release merge also clears the ready queue entry.
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     publisher = release.ProgressPublisher.return_value
     patched = [c.args[0] for c in publisher.patch.call_args_list]
     assert any("waiting CI: check 'tests' is in_progress/None" in body
@@ -20767,8 +20775,10 @@ def test_process_release_success_comment_failure_keeps_release_result(
     # The published release result stands; the failed evidence comment
     # never rewrote it as blocked.
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
                                        "remove": "ai-in-progress"})
+    # Issue #1526: the release merge also clears the ready queue entry.
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     assert not any(k.get("add") == "ai-blocked" for _, k in state["edits"])
     # The success comment never landed and its failure is logged.
     assert not state["comments"]
@@ -20814,8 +20824,10 @@ def test_process_release_milestone_failure_keeps_release_successful(monkeypatch)
     # is retained as evidence in the success comment and does not rewrite
     # the terminal state.
     assert not [c for c in commands if "PATCH" in c]
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
                                        "remove": "ai-in-progress"})
+    # Issue #1526: the release merge also clears the ready queue entry.
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     (comment_number, comment_kwargs), = state["comments"]
     assert "Orbi released" in comment_kwargs["body"]
     # Issue #808: the wording states the third criterion's miss plainly —
@@ -20859,8 +20871,10 @@ def test_process_release_closes_milestone_despite_stale_release_ticket(monkeypat
     commands = [c for c, _ in state["commands"]]
     assert ["gh", "api", "repos/o/r/milestones/5",
             "--method", "PATCH", "-f", "state=closed"] in commands
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
                                        "remove": "ai-in-progress"})
+    # Issue #1526: the release merge also clears the ready queue entry.
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     (comment_number, comment_kwargs), = state["comments"]
     assert "closed after release v0.3.0" in comment_kwargs["body"]
     assert "release ticket #99 excluded" in comment_kwargs["body"]

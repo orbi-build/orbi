@@ -87,8 +87,10 @@ ai-ready                任务被派发（orbi add，或人工加标签）
                         CI 已有结论、PR mergeable、远端 head 未变——
                         每项只读一次：CI pending 或 mergeable UNKNOWN
                         把合并顺延到下一 tick，Issue #788）
-  -> ai-merged          Orbi 自动合并模式：成功终态；PR body 的 Fixes #N
-                        原生关闭 Issue
+  -> ai-merged          Orbi 自动合并模式：成功终态；合并同时清除
+                        `ai-ready`，合并后的 Issue 只剩 `ai-merged`
+                        （Issue #1526；不回溯已合并的 Issue）；
+                        PR body 的 Fixes #N 原生关闭 Issue
   -> ai-awaiting-merge  已知策略阻塞：Issue 评论写明维护者要做的一件事；
                         完成后 Orbi 在后续 tick 恢复并合并 PR
 ```
@@ -258,7 +260,7 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 | `ai-in-progress` | 已领取、正在执行。resume opened-PR 交付时 Runner 先幂等回填该标签再继续（Issue #178）；被杀后的残留由下一 tick 接回 |
 | `ai-pr-opened` | PR 已创建并验收；等待独立审查 |
 | `ai-fix-needed` | PR head 尚不可合并，或已有 run/PR 的可恢复失败（Issue #50）；下一 tick 在同一 run、branch、worktree、PR 上继续 |
-| `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支 |
+| `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支。合并同时清除 `ai-ready`，因此合并后的 Issue 只剩 `ai-merged`（Issue #1526；不回溯已合并的 Issue） |
 | `ai-awaiting-merge` | 评审和检查已通过，但已知仓库策略仍阻塞合并；评论写明维护者动作，完成后 Orbi 恢复并合并指定 PR head |
 | `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50）；blocked comment 写明为什么不能自动恢复；人工必须决定下一步 |
 | `ai-human-review` | 人工验收门禁（Issue #763）：人已确认该交付的验收清单。只有人能打或摘——Runner 永不增删 |
@@ -539,7 +541,9 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
      让可见分组始终保持最新三个版本。幂等：已有页面内容一致时不重复
      生成、不覆盖，无改动时不提交；已有页面内容不一致则 fail fast——
      workflow 运行失败，绝不静默跳过。
-  8. 给 release Issue 打上 `ai-merged` 并关闭它（交付终态转换）。
+  8. 给 release Issue 打上 `ai-merged` 并关闭它（交付终态转换）；merged
+     事件同时清除 `ai-ready` 与 `ai-in-progress`，发布后的 Issue 只剩
+     `ai-merged`（Issue #1526）。
   9. 关闭 title 与发布 version 精确一致的 Milestone（Issue #214），
      然后写成功评论（release URL、tag、commit、证据、Milestone
      证据）。只按 title 精确匹配（不猜测、不模糊匹配、绝不关别的

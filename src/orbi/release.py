@@ -34,6 +34,7 @@ from orbi.delivery_labels import (
     FIX_NEEDED_LABEL,
     IN_PROGRESS_LABEL,
     PR_OPENED_LABEL,
+    READY_LABEL,
 )
 from orbi.progress import (
     ProgressPublisher,
@@ -1562,9 +1563,15 @@ def process_release(issue: dict, config: RunnerConfig,
             ),
         )
         try:
+            # A release ticket is claimed through `label:ai-ready` and the
+            # claim keeps the ready queue entry, so the real labels at
+            # this point are `{ai-ready, ai-in-progress}`. The merged
+            # event clears both, so the released Issue ends
+            # `ai-merged` ALONE — never `ai-merged` plus a stale
+            # `ai-ready` that reads as "still queued" (Issue #1526).
             apply_label_patch(
                 number, repo=source_repo, event=EVENT_MERGED,
-                current_labels={IN_PROGRESS_LABEL},
+                current_labels={READY_LABEL, IN_PROGRESS_LABEL},
             )
             close_issue(int(number), repo=source_repo)
         except Exception:

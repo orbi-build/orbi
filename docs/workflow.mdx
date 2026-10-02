@@ -96,8 +96,11 @@ ai-ready                a task is dispatched (orbi add, or a human
                         remote head unchanged — each read ONCE: pending
                         CI or an UNKNOWN mergeability defers the merge
                         to the next tick, Issue #788)
-  -> ai-merged          Orbi merge mode: success terminal state; the PR
-                        body's Fixes #N closes the Issue natively
+  -> ai-merged          Orbi merge mode: success terminal state; the
+                        merge also clears `ai-ready`, so the merged Issue
+                        is `ai-merged` alone (Issue #1526; existing
+                        merged Issues are not backfilled); the PR body's
+                        Fixes #N closes the Issue natively
   -> ai-awaiting-merge  known policy blocker: the Issue comment names the
                         one maintainer action; Orbi resumes and merges after it
 ```
@@ -308,7 +311,7 @@ commits — initialize them per repository (see
 | `ai-in-progress` | Claimed and running. The Runner idempotently backfills it before continuing a resumed opened-PR delivery (Issue #178); a leftover after a kill is resumed by the next tick |
 | `ai-pr-opened` | PR created and verified; awaiting the independent review |
 | `ai-fix-needed` | The PR head is not mergeable yet, or an AI-recoverable failure of the run/PR (Issue #50); the next tick resumes the same run, branch, worktree and PR |
-| `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch |
+| `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch. The merge also clears `ai-ready`, so a merged Issue is `ai-merged` alone (Issue #1526; existing merged Issues are not backfilled) |
 | `ai-awaiting-merge` | Review and checks passed, but a known repository policy blocker remains; the comment names the maintainer action and Orbi resumes to merge the named PR head |
 | `ai-blocked` | Only an external precondition the AI cannot safely judge or fix (Issue #50); the blocked comment states why automatic recovery is impossible; a human must decide the next step |
 | `ai-human-review` | The human acceptance gate (Issue #763): a person confirmed the delivery's acceptance checklist. Only a human applies or removes it — the Runner never touches it |
@@ -667,7 +670,8 @@ DAG, no priority numbers, no separate queues:
      change commits nothing; an existing page with different content
      fails fast — the workflow run fails, never a silent skip.
   8. Apply `ai-merged` and close the release Issue (terminal delivery
-     transition).
+     transition); the merged event clears `ai-ready` and `ai-in-progress`,
+     so the released Issue ends `ai-merged` ALONE (Issue #1526).
   9. Close the Milestone whose title is EXACTLY the released version
      (Issue #214), then write the success comment (release URL, tag,
      commit, evidence, Milestone evidence). Exact title match only (no
