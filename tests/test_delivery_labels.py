@@ -164,26 +164,30 @@ def test_label_patch_fix_round_sequence_leaves_only_merged():
     add, remove = dl.label_patch(dl.EVENT_MERGED, labels)
     labels.update(add)
     labels.difference_update(remove)
-    assert labels == {"ai-ready", "ai-merged"}
+    # Issue #1526: the merge terminal is `ai-merged` ALONE — the ready
+    # queue entry goes with the merge.
+    assert labels == {"ai-merged"}
 
 
 def test_label_patch_merged_removes_pr_opened():
+    # Issue #1526: a merged Issue must not keep `ai-ready` (it would read
+    # as "still queued"); the normal PR delivery ends `ai-merged` alone.
     to_add, to_remove = dl.label_patch(
         dl.EVENT_MERGED, {"ai-ready", "ai-pr-opened"},
     )
     assert to_add == ["ai-merged"]
-    assert to_remove == ["ai-pr-opened"]
+    assert to_remove == ["ai-pr-opened", "ai-ready"]
 
 
 def test_label_patch_merged_removes_in_progress_for_release_flow():
     # The release state machine never enters the PR states: its merged
     # transition clears `ai-in-progress` (the claim label), not
-    # `ai-pr-opened`.
+    # `ai-pr-opened` — and (Issue #1526) the ready queue entry too.
     to_add, to_remove = dl.label_patch(
         dl.EVENT_MERGED, {"ai-ready", "ai-in-progress"},
     )
     assert to_add == ["ai-merged"]
-    assert to_remove == ["ai-in-progress"]
+    assert to_remove == ["ai-in-progress", "ai-ready"]
 
 
 def test_label_patch_blocked_clears_every_present_delivery_state_label():

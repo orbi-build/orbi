@@ -2436,6 +2436,10 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     assert "sync" in calls
     assert ("edit", {"repo": "owner/repo", "add": "ai-merged",
                      "remove": "ai-pr-opened"}) in calls
+    # Issue #1526: the merge also clears the ready queue entry, so the
+    # Issue ends `ai-merged` ALONE (the extra remove is a second,
+    # remove-only edit_issue call).
+    assert ("edit", {"repo": "owner/repo", "remove": "ai-ready"}) in calls
     comment = [c for c in calls if c[0] == "comment"][0][1]
     assert "Orbi merged PR: u" in comment
     assert "merge_commit=m1" in comment
@@ -2561,6 +2565,9 @@ def test_review_and_merge_fix_round_clears_live_delivery_labels(
         {"repo": "owner/repo", "add": "ai-merged",
          "remove": "ai-in-progress"},
         {"repo": "owner/repo", "remove": "ai-fix-needed"},
+        # Issue #1526: the merge clears the ready queue entry too, so a
+        # resumed fix round ends `ai-merged` ALONE.
+        {"repo": "owner/repo", "remove": "ai-ready"},
     ]
 
 
