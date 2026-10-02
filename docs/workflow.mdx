@@ -670,7 +670,8 @@ DAG, no priority numbers, no separate queues:
      change commits nothing; an existing page with different content
      fails fast — the workflow run fails, never a silent skip.
   8. Apply `ai-merged` and close the release Issue (terminal delivery
-     transition).
+     transition); the merged event clears `ai-ready` and `ai-in-progress`,
+     so the released Issue ends `ai-merged` ALONE (Issue #1526).
   9. Close the Milestone whose title is EXACTLY the released version
      (Issue #214), then write the success comment (release URL, tag,
      commit, evidence, Milestone evidence). Exact title match only (no

@@ -541,7 +541,9 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
      让可见分组始终保持最新三个版本。幂等：已有页面内容一致时不重复
      生成、不覆盖，无改动时不提交；已有页面内容不一致则 fail fast——
      workflow 运行失败，绝不静默跳过。
-  8. 给 release Issue 打上 `ai-merged` 并关闭它（交付终态转换）。
+  8. 给 release Issue 打上 `ai-merged` 并关闭它（交付终态转换）；merged
+     事件同时清除 `ai-ready` 与 `ai-in-progress`，发布后的 Issue 只剩
+     `ai-merged`（Issue #1526）。
   9. 关闭 title 与发布 version 精确一致的 Milestone（Issue #214），
      然后写成功评论（release URL、tag、commit、证据、Milestone
      证据）。只按 title 精确匹配（不猜测、不模糊匹配、绝不关别的
