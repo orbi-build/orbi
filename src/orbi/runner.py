@@ -104,7 +104,6 @@ from orbi.delivery_scene import (
     DeliveryFacts,
     DeliveryScene,
     RunContext,
-    attribution_ref,
     body_markers,
     classify,
 )
@@ -1967,7 +1966,9 @@ def _agent_delivery_boundary(worktree: Path) -> tuple[str, str]:
 
 def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
                issue_title: str, repo_dir: Path,
-               attribution_footer: bool = True) -> str | None:
+               attribution_footer: bool = True,
+               attribution_link: str = "https://github.com/orbi-build/orbi",
+               ) -> str | None:
     """The Runner completes the deterministic delivery closeout.
 
     The Agent stops at the committed delivery (code, tests,
@@ -2130,9 +2131,7 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
         if attribution_footer:
             body += (
                 "\nBuilt by Orbi from Issue #"
-                f"{issue} · https://github.com/orbi-build/orbi"
-                " · https://orbi.build/?ref="
-                f"{attribution_ref('prfoot-', source_repo)}\n"
+                f"{issue} · {attribution_link}\n"
             )
         # A transient GitHub hiccup must not throw away a finished
         # delivery: the create goes through the bounded write retry, and
@@ -4769,6 +4768,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 ctx, base_branch, base_sha,
                 issue_title=title, repo_dir=config.repo_dir,
                 attribution_footer=config.attribution_footer,
+                attribution_link=config.attribution_link,
             )
         )
         ctx = replace(ctx, pr=pr_url)

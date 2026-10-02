@@ -143,6 +143,7 @@ def test_load_config_returns_the_frozen_runner_config(tmp_path):
     assert config.human_review_gate is False
     assert config.clarify_thin_tickets is False
     assert config.attribution_footer is True
+    assert config.attribution_link == "https://github.com/orbi-build/orbi"
     assert config.model_wait_dead_seconds == 1800.0
     assert config.issue_comments_limit == 200
     assert config.repositories == ()
@@ -161,6 +162,30 @@ def test_load_config_rejects_invalid_attribution_footer(tmp_path, value):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="attribution_footer must be a boolean"):
+        config_domain.load_config(config_path)
+
+
+def test_load_config_reads_a_custom_attribution_link(tmp_path):
+    """Issue #1537: the footer link is configurable, so a self-hosted
+    Orbi points it wherever the operator wants."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        'attribution_link = "https://example.com/x"\n',
+        encoding="utf-8",
+    )
+    config = config_domain.load_config(config_path)
+    assert config.attribution_link == "https://example.com/x"
+
+
+@pytest.mark.parametrize("value", ["1", "true"])
+def test_load_config_rejects_a_non_string_attribution_link(tmp_path, value):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        f'source_repos = ["owner/repo"]\nattribution_link = {value}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="attribution_link must be a string"):
         config_domain.load_config(config_path)
 
 

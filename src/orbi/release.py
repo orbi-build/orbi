@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orbi import failure
-from orbi.delivery_scene import RunContext, attribution_ref
+from orbi.delivery_scene import RunContext
 from orbi.delivery_labels import (
     EPIC_LABEL,
     EVENT_BLOCKED,
@@ -930,7 +930,9 @@ def publish_release(*, repo: str, tag: str, version: str,
                     release_commit: str, changelog: str,
                     scope_evidence: list[str], gate_evidence: list[str], test_evidence: str,
                     run_id: str, issue_number: int,
-                    attribution_footer: bool = True) -> str:
+                    attribution_footer: bool = True,
+                    attribution_link: str = "https://github.com/orbi-build/orbi",
+                    ) -> str:
     """Create the GitHub Release for the tag — idempotently.
 
     When a Release for the tag already exists (a restart after a
@@ -968,10 +970,7 @@ def publish_release(*, repo: str, tag: str, version: str,
         "",
         run_marker(run_id),
         f"run_id={run_id}",
-        *(["",
-           "Released by Orbi · https://github.com/orbi-build/orbi"
-           " · https://orbi.build/?ref="
-           f"{attribution_ref('relfoot-', repo)}"]
+        *(["", f"Released by Orbi · {attribution_link}"]
           if attribution_footer else []),
     ])
     try:
@@ -1556,6 +1555,7 @@ def process_release(issue: dict, config: RunnerConfig,
             scope_evidence=scope_evidence, gate_evidence=gate_evidence,
             test_evidence=test_evidence, run_id=run_id, issue_number=number,
             attribution_footer=config.attribution_footer,
+            attribution_link=config.attribution_link,
         )
         publish(
             action=lambda: publisher.milestone(

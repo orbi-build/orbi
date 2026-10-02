@@ -74,28 +74,6 @@ class DeliveryScene(Enum):
 EXTERNAL_PR_MARKER = "orbi:external-pr"
 EXTERNAL_PR_RE = re.compile(r"<!--\s*orbi:external-pr:(\d+)\s*-->")
 
-# The outbound orbi.build link contract (AGENTS.md "Outbound links carry
-# their origin"): one flat lowercase token `^[a-z0-9_-]{1,32}$`, layered
-# by prefix. The attribution footers name the owner of the repository the
-# delivery happened in, so the token is `prefix + <owner>` — normalized
-# and truncated as a whole.
-REF_TOKEN_MAX_LENGTH = 32
-_REF_TOKEN_UNSAFE_RE = re.compile(r"[^a-z0-9_-]")
-
-
-def attribution_ref(prefix: str, repo: str) -> str:
-    """The `?ref=` token naming the owner of the delivered repository.
-
-    `repo` is GitHub's `owner/name` slug: the owner is lowercased, every
-    character outside `[a-z0-9_-]` becomes `-`, and the whole
-    `prefix + owner` token is truncated to the 32-character maximum.
-    """
-    owner = repo.split("/", 1)[0].lower()
-    return f"{prefix}{_REF_TOKEN_UNSAFE_RE.sub('-', owner)}"[
-        :REF_TOKEN_MAX_LENGTH
-    ]
-
-
 def body_markers(body: object) -> frozenset[str]:
     """The delivery markers one Issue body carries (a pure text scan).
 
