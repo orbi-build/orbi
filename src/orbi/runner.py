@@ -104,6 +104,7 @@ from orbi.delivery_scene import (
     DeliveryFacts,
     DeliveryScene,
     RunContext,
+    attribution_ref,
     body_markers,
     classify,
 )
@@ -2129,7 +2130,9 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
         if attribution_footer:
             body += (
                 "\nBuilt by Orbi from Issue #"
-                f"{issue} · https://github.com/orbi-build/orbi\n"
+                f"{issue} · https://github.com/orbi-build/orbi"
+                " · https://orbi.build/?ref="
+                f"{attribution_ref('prfoot-', source_repo)}\n"
             )
         # A transient GitHub hiccup must not throw away a finished
         # delivery: the create goes through the bounded write retry, and
