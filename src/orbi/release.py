@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orbi import failure
-from orbi.delivery_scene import RunContext
+from orbi.delivery_scene import RunContext, attribution_ref
 from orbi.delivery_labels import (
     EPIC_LABEL,
     EVENT_BLOCKED,
@@ -967,7 +967,10 @@ def publish_release(*, repo: str, tag: str, version: str,
         "",
         run_marker(run_id),
         f"run_id={run_id}",
-        *(["", "Released by Orbi · https://github.com/orbi-build/orbi"]
+        *(["",
+           "Released by Orbi · https://github.com/orbi-build/orbi"
+           " · https://orbi.build/?ref="
+           f"{attribution_ref('relfoot-', repo)}"]
           if attribution_footer else []),
     ])
     try:

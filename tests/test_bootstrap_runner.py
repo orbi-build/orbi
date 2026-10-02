@@ -19716,7 +19716,10 @@ def test_publish_release_creates_when_missing_and_returns_url(monkeypatch):
     assert "<!-- orbi:run=a1b2c3d4 -->" in notes
     assert "run_id=a1b2c3d4" in notes
     assert "Issue #99" in notes
-    assert notes.endswith("Released by Orbi · https://github.com/orbi-build/orbi")
+    assert notes.endswith(
+        "Released by Orbi · https://github.com/orbi-build/orbi"
+        " · https://orbi.build/?ref=relfoot-o"
+    )
 
 
 def test_publish_release_omits_attribution_when_disabled(monkeypatch):
@@ -19730,6 +19733,7 @@ def test_publish_release_omits_attribution_when_disabled(monkeypatch):
     create = next(c for c in calls if c[:3] == ["gh", "release", "create"])
     notes = create[create.index("--notes") + 1]
     assert "Released by Orbi" not in notes
+    assert "orbi.build" not in notes
 
 
 def test_publish_release_reuses_the_existing_release(monkeypatch):
@@ -22508,7 +22512,13 @@ def test_deliver_pr_creates_the_pr_when_absent(
     body = command[command.index("--body") + 1]
     assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in body
     assert "Fixes #4" in body
-    assert ("Built by Orbi from Issue #4 · https://github.com/orbi-build/orbi" in body) is expected_footer
+    footer = (
+        "Built by Orbi from Issue #4 · https://github.com/orbi-build/orbi"
+        " · https://orbi.build/?ref=prfoot-o"
+    )
+    assert (footer in body) is expected_footer
+    if not expected_footer:
+        assert "orbi.build" not in body
 
 
 def test_deliver_pr_fails_fast_when_pr_create_fails(monkeypatch, tmp_path):
