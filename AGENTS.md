@@ -223,10 +223,11 @@ maintainer with no paying users: fix what a user actually hit, the smallest way.
 The test is **whether this repo is on Orbi**, not how small the change is or
 whether you know how to make it. Being able to make it is not a reason to.
 
-**"It's only a doc" is the hole to close.** What you may edit directly is plain
-prose only: `.md` files under `docs/`, the README, this file, ticket bodies and
-comments. **Everything else is a ticket**, including:
+**"It's only a doc" is the hole to close.** What you may edit directly is
+this file, ticket bodies and comments — nothing users read. **Everything else
+is a ticket**, including:
 
+- The README and `docs/` — users read them; Orbi delivers them like code
 - Source under `src/`, prompts under `prompts/` — that is code
 - Build scripts, CI config, tests — that is code
 - "It's one line", "just a rename", "while I'm here" — still code
