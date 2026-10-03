@@ -51,6 +51,7 @@ update in the same PR; a silent change is a defect even when all tests pass.
 | Naming | Branch `orbi/<owner>-<repo>-issue-<N>`; worktree `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>` |
 | GitHub markers | `<!-- orbi:run=<run_id> -->` in every run-scoped comment and PR body; `Fixes #<N>` in the PR body |
 | Run scene | the hidden versioned block `<!-- orbi:scene:v1 {json} -->` in the trusted `Orbi opened PR` comment, rendered and parsed by `src/orbi/scene.py`; the only machine-readable recovery record of a delivery (the human-readable text beside it is display only) |
+| Requirements skill | the directory `integrations/claude-plugin/skills/write-ai-ready-issue/` — `SKILL.md` (how an agent turns a one-line idea into a deliverable Issue) and `fidelity-pass.md` (the independent check that the draft asks for exactly what the person asked) |
 
 Anything not in this table is internal and may change without notice.
 Adding a row is an amendment.
