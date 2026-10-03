@@ -13,7 +13,13 @@ Issues first.
 
 ## Install
 
-The same folder installs in GitHub Copilot
+The `write-ai-ready-issue` skill has one install line per harness:
+
+- **Claude Code** — the plugin, or `.claude/skills/write-ai-ready-issue/`.
+- **Codex** — `.agents/skills/write-ai-ready-issue/`.
+- **Pi** — `--skill <path to the skill folder>`.
+
+The same folder also installs in GitHub Copilot
 (`copilot plugin install orbi-build/orbi:integrations/claude-plugin`) and in
 Cursor; the `write-ai-ready-issue` skill loads in all of them, while the
 `/orbi:` commands load in Claude Code and Cursor only.
