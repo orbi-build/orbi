@@ -15010,43 +15010,48 @@ def test_prepare_pi_agent_dir_repo_providers_win_on_collision(
     )
 
 
-def test_prepare_pi_agent_dir_expands_api_key_env_reference(
+def test_prepare_pi_agent_dir_keeps_api_key_env_reference_verbatim(
     tmp_path, monkeypatch,
 ):
-    """The per-run catalog carries the REAL key (Issue #303).
+    """The per-run catalog keeps the literal `$VAR` reference (Issue #1554).
 
-    `_load_pi_providers` validates that the selected provider's
-    `$VAR` reference resolves; the materialized per-run `models.json`
-    must close the validate/use gap and write the resolved value,
-    otherwise the provider has no usable credential and the run
-    cannot authenticate. The loaded config data keeps the literal
-    reference (only the gitignored per-run copy materializes it).
+    Pi 1.0 interpolates `apiKey` from the environment it inherits at
+    request time, so the per-run `models.json` must never carry the
+    plaintext key resolved into a file inside the worktree. Config load
+    still validates that the selected provider's reference resolves.
     """
     home = tmp_path / "home"
     _user_agent_dir(home)
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("GROQ_API_KEY", "sk-real-key-value")
-    config = _model_config(
-        tmp_path, pi_providers_data=GROQ_PROVIDERS,
-        pi_provider="groq", pi_model="qwen/qwen3.8-27b",
+    monkeypatch.setenv("ORBI_TEST_KEY", "secret-value")
+    providers = {
+        "providers": {
+            "testprov": {
+                "baseUrl": "http://127.0.0.1:18084/v1",
+                "api": "openai-completions",
+                "apiKey": "$ORBI_TEST_KEY",
+                "models": [{"id": "test-model"}],
+            },
+        }
+    }
+    config_path = _providers_config(
+        tmp_path, providers,
+        pi_provider='"testprov"', pi_model='"test-model"',
     )
+    config = config_domain.load_config(config_path)
     agent_dir = pi_session.prepare_pi_agent_dir(tmp_path, config)
-    merged = json.loads(
-        (agent_dir / "models.json").read_text(encoding="utf-8"),
-    )
-    assert merged["providers"]["groq"]["apiKey"] == "sk-real-key-value"
-    # The loaded provider data (and the user's file behind it) keeps
-    # the env-var reference: only the per-run copy materializes it.
-    assert config.pi_providers_data["providers"]["groq"][
-        "apiKey"
-    ] == "$GROQ_API_KEY"
+    raw = (agent_dir / "models.json").read_text(encoding="utf-8")
+    merged = json.loads(raw)
+    assert merged["providers"]["testprov"]["apiKey"] == "$ORBI_TEST_KEY"
+    assert "secret-value" not in raw
 
 
-def test_prepare_pi_agent_dir_expands_braced_and_embedded_references(
+def test_prepare_pi_agent_dir_keeps_braced_and_embedded_references(
     tmp_path, monkeypatch,
 ):
-    """`${VAR}` and references embedded in larger literals expand too
-    (Pi's documented interpolation syntax, `docs/models.md`)."""
+    """`${VAR}` and references embedded in larger literals stay verbatim
+    too (Pi resolves its documented interpolation syntax at request
+    time, `docs/models.md`)."""
     home = tmp_path / "home"
     _user_agent_dir(home)
     monkeypatch.setenv("HOME", str(home))
@@ -15070,15 +15075,17 @@ def test_prepare_pi_agent_dir_expands_braced_and_embedded_references(
     merged = json.loads(
         (agent_dir / "models.json").read_text(encoding="utf-8"),
     )
-    assert merged["providers"]["local"]["apiKey"] == "alpha_mid_omega"
+    assert merged["providers"]["local"]["apiKey"] == (
+        "${TEST_PREFIX}_mid_$TEST_SUFFIX"
+    )
 
 
-def test_prepare_pi_agent_dir_unresolved_reference_stays_verbatim(
+def test_prepare_pi_agent_dir_keeps_every_reference_verbatim(
     tmp_path, monkeypatch,
 ):
-    """Only the SELECTED provider's key must resolve: an unselected
-    provider whose variable is missing keeps the literal reference and
-    stays unavailable in Pi (the pre-#303 behavior, never an error)."""
+    """Every provider's reference is copied verbatim, selected or not:
+    a variable missing from the environment is resolved (or rejected)
+    by Pi/config load, never materialized here."""
     home = tmp_path / "home"
     _user_agent_dir(home)
     monkeypatch.setenv("HOME", str(home))
@@ -15103,7 +15110,7 @@ def test_prepare_pi_agent_dir_unresolved_reference_stays_verbatim(
     merged = json.loads(
         (agent_dir / "models.json").read_text(encoding="utf-8"),
     )
-    assert merged["providers"]["groq"]["apiKey"] == "sk-real-key-value"
+    assert merged["providers"]["groq"]["apiKey"] == "$GROQ_API_KEY"
     assert merged["providers"]["other"]["apiKey"] == "$MISSING_PROVIDER_KEY"
 
 
@@ -15112,7 +15119,7 @@ def test_prepare_pi_agent_dir_leaves_non_string_api_keys_untouched(
 ):
     """Entries without a string `apiKey` (absent, or a malformed
     non-object entry from the user's own models.json) pass through
-    unchanged — expansion never invents or crashes on them."""
+    unchanged — the verbatim copy never invents or crashes on them."""
     home = tmp_path / "home"
     _user_agent_dir(
         home,
@@ -15134,12 +15141,12 @@ def test_prepare_pi_agent_dir_leaves_non_string_api_keys_untouched(
     assert merged["providers"]["junk"] == "not-an-object"
 
 
-def test_prepare_pi_agent_dir_expands_zai_scene_from_load_config(
+def test_prepare_pi_agent_dir_keeps_zai_scene_reference_from_load_config(
     tmp_path, monkeypatch,
 ):
-    """The Issue #303 scene end to end: a z.ai-shaped provider file
-    (`apiKey: "$ZAI_API_KEY"`) loaded through `load_config` then
-    materialized must carry the real key in the per-run catalog."""
+    """The z.ai-shaped provider file (`apiKey: "$ZAI_API_KEY"`) loaded
+    through `load_config` must reach the per-run catalog verbatim, so
+    the plaintext key is never written into the worktree (Issue #1554)."""
     home = tmp_path / "home"
     _user_agent_dir(home)
     monkeypatch.setenv("HOME", str(home))
@@ -15163,7 +15170,7 @@ def test_prepare_pi_agent_dir_expands_zai_scene_from_load_config(
     merged = json.loads(
         (agent_dir / "models.json").read_text(encoding="utf-8"),
     )
-    assert merged["providers"]["z-ai"]["apiKey"] == "sk-zai-real-key"
+    assert merged["providers"]["z-ai"]["apiKey"] == "$ZAI_API_KEY"
     assert merged["providers"]["z-ai"]["baseUrl"] == (
         "https://api.z.ai/api/paas/v4"
     )
@@ -15708,8 +15715,8 @@ def test_load_config_api_key_from_deploy_env_file_ok(tmp_path, monkeypatch):
     )
     config = config_domain.load_config(config_path)
     assert config.pi_providers_data == GROQ_PROVIDERS
-    # The variable must be visible to the process so the per-run Pi agent
-    # dir expansion (_expand_pi_api_key_refs) resolves it too.
+    # The variable must be visible to the process so Pi can interpolate
+    # the verbatim `$GROQ_API_KEY` reference in the per-run catalog.
     assert os.environ.get("GROQ_API_KEY") == "file-key"
 
 

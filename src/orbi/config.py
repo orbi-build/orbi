@@ -828,25 +828,6 @@ def _pi_provider_api_key_finding(path: Path, provider_id: str,
     return None
 
 
-def _expand_pi_api_key_refs(api_key: str) -> str:
-    """Resolve `$VAR` / `${VAR}` references in an `apiKey`.
-
-    Same reference syntax `_pi_provider_api_key_finding` validates (Pi's
-    `docs/models.md`): every reference whose environment variable is
-    set and non-empty is replaced by the real value; a reference whose
-    variable is missing or empty — only possible for a non-selected
-    provider, the selected one already failed config load otherwise —
-    stays verbatim (that provider stays unavailable in Pi, the exact
-    pre-#303 behavior). The value itself is never logged.
-    """
-    return re.sub(
-        r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)",
-        lambda match: os.environ.get(match.group(1) or match.group(2))
-        or match.group(0),
-        api_key,
-    )
-
-
 def parse_repositories(entries: object, base: Path) -> list[dict]:
     """Parse the explicit multi-repo registry.
 
