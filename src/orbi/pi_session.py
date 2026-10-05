@@ -332,16 +332,17 @@ def prepare_pi_agent_dir(worktree: Path, config: config_domain.RunnerConfig,
     exists: stored auth for providers present in the merged catalog is
     still valid.
 
-    `apiKey` env-var references (`$VAR` / `${VAR}`) are resolved into
-    the per-run copy: config load already required the
-    SELECTED provider's references to resolve, so the materialized
-    catalog carries a usable real credential — without it Pi would
-    hold the literal `$VAR` string and the request could never
-    authenticate. References whose variable is missing or empty (only
-    possible for non-selected providers) stay verbatim. The user's
-    provider file and user agent dir are never modified, and the
-    resolved key never reaches the journal, a comment, or a commit:
-    the per-run dir is the gitignored `<worktree>/.orbi/pi-agent/`.
+    `apiKey` env-var references (`$VAR` / `${VAR}`) are copied
+    VERBATIM into the per-run catalog: Pi 1.0 interpolates them from
+    the process environment it inherits at request time (Pi
+    `docs/models.md`: "For an authenticated endpoint, `apiKey` and
+    header values can use `$NAME` or `${NAME}` environment
+    interpolation"), so the plaintext key is never written into the
+    worktree. Config load still requires the SELECTED provider's
+    references to resolve, so an unusable reference fails fast before
+    a run starts. The user's provider file and user agent dir are
+    never modified; the per-run dir is the gitignored
+    `<worktree>/.orbi/pi-agent/`.
     """
     providers_data = config.pi_providers_data
     if providers_data is None:
@@ -366,17 +367,13 @@ def prepare_pi_agent_dir(worktree: Path, config: config_domain.RunnerConfig,
             user_providers = {}
         merged_providers.update(user_providers)
     merged_providers.update(providers_data["providers"])
-    # The per-run copy carries the resolved `apiKey` values
-    # (entries with a string key are copied, so the loaded config data
-    # keeps its literal references).
-    resolved_providers: dict = {}
-    for provider_id, entry in merged_providers.items():
-        api_key = entry.get("apiKey") if isinstance(entry, dict) else None
-        if isinstance(api_key, str) and api_key:
-            entry = {**entry, "apiKey": config_domain._expand_pi_api_key_refs(api_key)}
-        resolved_providers[provider_id] = entry
+    # The per-run catalog is written verbatim: an `apiKey` env-var
+    # reference stays a reference, so no plaintext credential is ever
+    # written into the worktree. Pi 1.0 interpolates `$NAME` /
+    # `${NAME}` from the process environment it inherits at request
+    # time (Pi `docs/models.md`).
     (agent_dir / "models.json").write_text(
-        json.dumps({"providers": resolved_providers}, indent=2),
+        json.dumps({"providers": merged_providers}, indent=2),
         encoding="utf-8",
     )
     # Per-run settings.json: a real file consistent with

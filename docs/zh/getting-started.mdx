@@ -356,10 +356,11 @@ pi --print "reply with the single word: ok"
 （`<worktree>/.orbi/pi-agent/`，gitignored），其 `models.json`
 把你的用户 provider 与文件的 provider 合并（id 冲突时文件胜）——你
 已有的 provider 继续可用，文件只做添加或覆盖——并为该 run 选中配置
-的 provider/model。物化出的副本会把 `apiKey` 中的 `$VAR` /
-`${VAR}` 引用解析成真实环境变量值（Issue #303），使选中的 provider
-具备可用凭证；你的文件本身绝不被修改，未解析的引用（仅非选中
-provider）保持原样，解析出的值只存在于 gitignored 的 per-run 目录内。
+的 provider/model。这份副本按**原样**写入——`apiKey` 中的
+`$VAR` / `${VAR}` 保持引用本身，由 Pi 1.0 在请求时从 Runner 传给
+Pi 进程的环境中插值（Pi 自己的 docs/models.md），所以明文 key 绝不
+写进工作目录（Issue #1554）。你的文件本身绝不被修改；选中 provider
+的引用无法解析时，配置加载仍然 fail fast。
 
 一个 OpenAI-compatible 远程 endpoint（key 不进文件——引用环境变量）：
 
