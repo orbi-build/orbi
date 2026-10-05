@@ -24,10 +24,12 @@ Apply these rules in order:
    single failure path of that behaviour. Move every other item, one line
    each, to `Not included (suggestions)`. Do not delete an item silently and
    do not invent a replacement.
-3. **A bigger reading of an ambiguity is replaced by the smallest reading
-   plus one question.** If the draft resolved an ambiguous request towards the
-   larger interpretation, rewrite it to the smallest reading and add the
-   question that would settle it.
+3. **A bigger reading of an ambiguity is replaced by the smallest reading,
+   recorded under `Assumptions`.** If the draft resolved an ambiguous request
+   towards the larger interpretation, rewrite it to the smallest reading and
+   add one line to `Assumptions` naming the ambiguity and the reading chosen.
+   Never add a question to the draft: the draft is the future Issue body, and
+   the question that would settle it belongs in the reply to the person.
 4. **Every other section is kept as is** — `Request`, `Current state`,
    `Preconditions`, `Evidence`, `Out of scope`, `Assumptions`, `Decisions`,
    the named commit and the section order are not changed.

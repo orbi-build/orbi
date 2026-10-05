@@ -60,7 +60,7 @@ KNOWN_LABELS = frozenset({
     NEEDS_DETAIL_LABEL,
 })
 
-LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")
+LABEL_PATTERN = re.compile(r"(?<![\w-])ai-[a-z][a-z-]*\b")
 
 # Config fields the implementation understands (bootstrap_config_domain.load_config
 # plus the committed example) — the Chinese field table may document
