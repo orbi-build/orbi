@@ -46,7 +46,17 @@ KNOWN_LABELS = frozenset({
     NEEDS_DETAIL_LABEL,
 })
 
-LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")
+LABEL_PATTERN = re.compile(r"(?<![\w-])ai-[a-z][a-z-]*\b")
+
+
+def test_label_pattern_ignores_hyphenated_names_containing_ai():
+    """Issue #1552: a hyphenated skill name like `write-ai-ready-issue`
+    contains the substring `ai-ready-issue`, which is not a label. Only a
+    standalone `ai-*` token preceded by a non-word/non-hyphen boundary
+    counts."""
+    assert LABEL_PATTERN.findall("the write-ai-ready-issue skill and ai-ready") == [
+        "ai-ready"
+    ]
 
 
 def test_docs_only_reference_existing_labels():
