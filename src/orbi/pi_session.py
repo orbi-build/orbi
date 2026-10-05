@@ -857,7 +857,7 @@ def run_ticket_agent(
             config, ROLE_TICKET, IMPLEMENT_EXCLUDED_SKILLS, session_dir,
             system_prompt, context,
             context_placeholder="<issue-context-redacted>",
-            tools=False, extensions=False,
+            tools=False, extensions=True,
         )
         # Startup phase: the provider config is loaded and resolved
         # before the spawn; a configured provider file is materialized

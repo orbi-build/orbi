@@ -63,17 +63,18 @@ def test_ticket_command_and_log_with_everything_configured():
         pi_command.IMPLEMENT_EXCLUDED_SKILLS, SESSION_DIR,
         SYSTEM_PROMPT, CONTEXT,
         context_placeholder="<issue-context-redacted>",
-        tools=False, extensions=False,
+        tools=False, extensions=True,
     )
     assert command == [
-        "pi", "--no-tools", *IMPLEMENT_SKILL_ARGS,
+        "pi", "--no-tools", *EXTENSION_ARGS, *IMPLEMENT_SKILL_ARGS,
         "--provider", "openai", "--model", "gpt-5.6-sol",
         "--thinking", "medium",
         "--print", "--session-dir", str(SESSION_DIR),
         "--system-prompt", SYSTEM_PROMPT, CONTEXT,
     ]
     assert log_command == [
-        "pi", "--provider", "openai", "--model", "gpt-5.6-sol",
+        "pi", *EXTENSION_ARGS,
+        "--provider", "openai", "--model", "gpt-5.6-sol",
         "--thinking", "medium",
         "--print", "--session-dir", str(SESSION_DIR),
         "--system-prompt", "<redacted>", "<issue-context-redacted>",
@@ -131,7 +132,7 @@ def test_review_command_and_log_with_everything_configured():
      "placeholder", "expect_no_tools"),
     [
         (pi_command.ROLE_TICKET, pi_command.IMPLEMENT_EXCLUDED_SKILLS,
-         False, False, "<issue-context-redacted>", True),
+         False, True, "<issue-context-redacted>", True),
         (ROLE_IMPLEMENT, pi_command.IMPLEMENT_EXCLUDED_SKILLS,
          True, True, "<issue-context-redacted>", False),
         (pi_command.ROLE_REVIEW, pi_command.REVIEW_EXCLUDED_SKILLS,

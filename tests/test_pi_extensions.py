@@ -76,16 +76,35 @@ def test_pi_extension_args_and_env_isolate_disabled_and_secrets():
     assert "secret" not in " ".join(args)
 
 
-def test_run_pi_and_review_share_extension_contract(monkeypatch, tmp_path):
+def test_run_pi_review_and_ticket_share_extension_contract(monkeypatch, tmp_path):
     (tmp_path / "prompt.md").write_text("system", encoding="utf-8")
     (tmp_path / "prompt_review.md").write_text("review", encoding="utf-8")
+    disabled = tmp_path / "disabled.mjs"
+    disabled.write_text("export default () => {}", encoding="utf-8")
     calls = []
     monkeypatch.setattr(pi_session, "stream_pi", lambda command, **kw: calls.append((command, kw)) or "ok")
-    config = config_domain.RunnerConfig(prompt=tmp_path / "prompt.md", prompt_review=tmp_path / "prompt_review.md", repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc", run_id="deadbeef", pi_extensions=({"source": "npm:fixture@1.2.3", "enabled": True, "env": {"FIXTURE_TOKEN": "secret"}},))
+    config = config_domain.RunnerConfig(prompt=tmp_path / "prompt.md", prompt_review=tmp_path / "prompt_review.md", repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc", run_id="deadbeef", pi_extensions=({"source": "npm:fixture@1.2.3", "enabled": True, "env": {"FIXTURE_TOKEN": "secret"}}, {"source": str(disabled), "enabled": False, "env": {}}))
+    extension_args = pi_command._pi_extension_args(config)
+    assert extension_args == ["--no-extensions", "--extension", "npm:fixture@1.2.3"]
     pi_session.run_pi({"number": 1, "title": "t", "body": ""}, RunContext(run_id=config.run_id, issue={"number": 1, "title": "t", "body": ""}["number"], branch="b", worktree=tmp_path, source_repo="owner/repo"), config)
     pi_session.run_review(RunContext(run_id=config.run_id, issue=1, branch="b", worktree=tmp_path, source_repo="owner/repo"), {"number": 1, "url": "u", "base_oid": "b", "head_oid": "h", "head_ref": "r"}, config, 1)
     for command, kwargs in calls:
-        assert command[1:4] == ["--no-extensions", "--extension", "npm:fixture@1.2.3"]
+        assert command[1:4] == extension_args
         assert kwargs["pi_env"] == {"FIXTURE_TOKEN": "secret"}
         assert "secret" not in " ".join(kwargs["log_command"])
         assert kwargs["log_command"][1:4] == command[1:4]
+    assert len(calls) == 2
+    # The ticket role (#1558) keeps the --no-tools boundary and passes the
+    # SAME isolated extension flags implement/review use.
+    pi_session.run_ticket_agent(
+        {"number": 1558, "title": "t", "body": ""}, config, "owner/repo",
+    )
+    command, kwargs = calls[2]
+    assert command[:2 + len(extension_args)] == [
+        "pi", "--no-tools", *extension_args,
+    ]
+    assert kwargs["log_command"][:1 + len(extension_args)] == [
+        "pi", *extension_args,
+    ]
+    assert kwargs["pi_env"] == {"FIXTURE_TOKEN": "secret"}
+    assert "secret" not in " ".join(kwargs["log_command"])
