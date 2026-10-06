@@ -9752,6 +9752,40 @@ def test_stream_pi_drains_pipe_data_written_after_exit(
     assert "stderr=late stderr data" in caplog.text
 
 
+def test_stream_pi_spawns_pi_with_stdin_devnull(
+    monkeypatch, tmp_path,
+):
+    """Issue #1562: the Pi child must never inherit the Runner's stdin.
+
+    Pi's print/JSON mode reads piped stdin until it closes and prepends it
+    to the prompt; started from an open pipe (ssh host orbi without -t,
+    a shell pipeline into orbi, a wrapper that forgets stdin) an inherited
+    stdin makes the session wait forever with no output, no error and no
+    model request. The session Popen therefore has to pass
+    stdin=subprocess.DEVNULL."""
+    command = make_fake_pi(
+        tmp_path, session_records=fake_session_records(),
+        stdout="final answer",
+    )
+    captured: list[dict] = []
+    real_popen = subprocess.Popen
+
+    def recording_popen(*args, **kwargs):
+        captured.append(kwargs)
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(pi_process.subprocess, "Popen", recording_popen)
+    result = pi_session.stream_pi(
+        command,
+        ctx=RunContext(run_id="deadbeef", issue=1562, branch="b",
+                       worktree=tmp_path, source_repo="xqliu/orbi"),
+        watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path,
+    )
+    assert result == "final answer"
+    assert captured, "stream_pi must start the Pi session through Popen"
+    assert captured[0]["stdin"] is subprocess.DEVNULL
+
+
 def test_stream_pi_hung_model_request_killed_when_upstream_gone(
     tmp_path, caplog,
 ):

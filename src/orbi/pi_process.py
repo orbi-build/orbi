@@ -1258,6 +1258,10 @@ def _stream_pi_once(
     # inherits the Runner's environment unchanged (pre-#157 shape).
     process = subprocess.Popen(
         command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        # Pi's print mode reads piped stdin until it closes and prepends
+        # it to the prompt (Issue #1562): the child must get /dev/null,
+        # never the Runner's possibly-open stdin pipe.
+        stdin=subprocess.DEVNULL,
         env=None if pi_env is None else {**os.environ, **pi_env},
     )
     # Track the live Pi child for the stop handler: a
