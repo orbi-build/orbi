@@ -18,6 +18,7 @@ import pytest
 
 import orbi.failure_report as failure_report
 import orbi.runner as runner
+import orbi.review_merge as review_merge
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 import orbi.release as release
@@ -1855,7 +1856,7 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
         fake_run_command(["gh", "release", "list"])
     monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
-    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: {
+    monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: {
         "number": 4, "url": "https://github.com/xqliu/orbi/pull/40",
         "base_ref": "main", "base_oid": "b1",
         "head_ref": "h", "head_oid": "h1",
@@ -1871,22 +1872,22 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
     monkeypatch.setattr(seam, "comment_issue", Mock())
     monkeypatch.setattr(failure_report, "comment_pr", Mock())
     if "pass" in verdict:
-        monkeypatch.setattr(runner, "merge_gate", lambda *a, **k: {
+        monkeypatch.setattr(review_merge, "merge_gate", lambda *a, **k: {
             "number": 4, "url": "https://github.com/xqliu/orbi/pull/40",
             "base_ref": "main", "base_oid": "b1",
             "head_ref": "h", "head_oid": "h1", "merged": True,
         })
-        monkeypatch.setattr(runner, "confirm_merged", lambda *a, **k: {
+        monkeypatch.setattr(review_merge, "confirm_merged", lambda *a, **k: {
             "state": "MERGED", "merge_commit": "m1",
         })
-        monkeypatch.setattr(runner, "sync_base_checkout", Mock())
+        monkeypatch.setattr(review_merge, "sync_base_checkout", Mock())
     else:
         # Findings: the merge gate must never be reached (the Issue
         # moves to ai-fix-needed instead).
-        monkeypatch.setattr(runner, "merge_gate",
+        monkeypatch.setattr(review_merge, "merge_gate",
                             lambda *a, **k: (_ for _ in ()).throw(
                                 AssertionError("no merge")))
-    merged = runner.review_and_merge_if_clean(
+    merged = review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main",
         config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main", base_sha="b1", run_id="a1b2c3d4"),
         "xqliu/orbi", 18, title="Publish progress",

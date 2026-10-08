@@ -21,6 +21,8 @@ import orbi.gitops as gitops
 import orbi.claim as claim
 import orbi.failure_report as failure_report
 import orbi.runner as runner
+import orbi.review_merge as review_merge
+import orbi.run_state as run_state
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 from orbi import progress
@@ -48,7 +50,7 @@ def test_missing_pr_scene_recovery_republishes_from_run_state(monkeypatch):
         runner.__dict__, "worktree_resume_scene",
         lambda *_args: (FAKE_RUN_ID, worktree),
     )
-    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: state)
+    monkeypatch.setitem(run_state.__dict__, "read_run_state", lambda _path: state)
     monkeypatch.setattr(
         seam, "open_pr_for_branch",
         lambda *_args: {"baseRefName": "main", "baseRefOid": "a" * 40,
@@ -71,7 +73,7 @@ def test_missing_pr_scene_retry_stays_recoverable_on_write_failure(monkeypatch):
         runner.__dict__, "worktree_resume_scene",
         lambda *_args: (FAKE_RUN_ID, worktree),
     )
-    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
+    monkeypatch.setitem(run_state.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
     monkeypatch.setattr(
         seam, "open_pr_for_branch",
         lambda *_args: {"baseRefName": "main", "baseRefOid": "a" * 40,
@@ -86,9 +88,9 @@ def test_missing_pr_scene_helper_handles_unavailable_state_pr_and_bad_pr(monkeyp
     issue = {"number": 9}
     worktree = Path("/tmp/delivery")
     monkeypatch.setitem(runner.__dict__, "worktree_resume_scene", lambda *_args: (FAKE_RUN_ID, worktree))
-    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: None)
+    monkeypatch.setitem(run_state.__dict__, "read_run_state", lambda _path: None)
     assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
-    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
+    monkeypatch.setitem(run_state.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
     monkeypatch.setattr(seam, "open_pr_for_branch", lambda *_args: None)
     assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
     monkeypatch.setattr(seam, "open_pr_for_branch", lambda *_args: {"url": FAKE_PR_URL})
@@ -100,12 +102,12 @@ def test_missing_pr_scene_helper_handles_no_resume_and_unparseable_scene(monkeyp
     monkeypatch.setitem(runner.__dict__, "worktree_resume_scene", lambda *_args: None)
     assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
     monkeypatch.setitem(runner.__dict__, "worktree_resume_scene", lambda *_args: (FAKE_RUN_ID, Path("/tmp/delivery")))
-    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
+    monkeypatch.setitem(run_state.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
     monkeypatch.setattr(seam, "open_pr_for_branch", lambda *_args: {
         "baseRefName": "main", "baseRefOid": "a" * 40, "url": FAKE_PR_URL,
     })
     monkeypatch.setattr(seam, "comment_issue", lambda *_args, **_kwargs: None)
-    monkeypatch.setitem(runner.__dict__, "parse_pr_comment", lambda _body: None)
+    monkeypatch.setitem(run_state.__dict__, "parse_pr_comment", lambda _body: None)
     assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
 
 
@@ -116,7 +118,7 @@ def test_has_recoverable_pr_scene_handles_probe_failure(monkeypatch):
         lambda *_args: (FAKE_RUN_ID, worktree),
     )
     monkeypatch.setitem(
-        runner.__dict__, "read_run_state",
+        run_state.__dict__, "read_run_state",
         lambda _path: {"branch": "branch"},
     )
     monkeypatch.setattr(
@@ -144,7 +146,7 @@ def test_has_recoverable_pr_scene_handles_missing_state(monkeypatch):
         runner.__dict__, "worktree_resume_scene",
         lambda *_args: (FAKE_RUN_ID, worktree),
     )
-    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: None)
+    monkeypatch.setitem(run_state.__dict__, "read_run_state", lambda _path: None)
     assert not runner._has_recoverable_pr_scene(
         {"number": 9}, "owner/repo", Path("/tmp/repo"),
     )
@@ -157,7 +159,7 @@ def test_has_recoverable_pr_scene_rejects_missing_pr(monkeypatch):
         lambda *_args: (FAKE_RUN_ID, worktree),
     )
     monkeypatch.setitem(
-        runner.__dict__, "read_run_state",
+        run_state.__dict__, "read_run_state",
         lambda _path: {"branch": "branch"},
     )
     monkeypatch.setattr(
@@ -170,13 +172,13 @@ def test_has_recoverable_pr_scene_rejects_missing_pr(monkeypatch):
 
 def test_missing_pr_scene_recovery_clears_scene_timestamp(monkeypatch):
     monkeypatch.setitem(runner.__dict__, "worktree_resume_scene", lambda *_args: (FAKE_RUN_ID, Path("/tmp/delivery")))
-    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
+    monkeypatch.setitem(run_state.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
     monkeypatch.setattr(seam, "open_pr_for_branch", lambda *_args: {
         "baseRefName": "main", "baseRefOid": "a" * 40, "url": FAKE_PR_URL,
     })
     monkeypatch.setattr(seam, "comment_issue", lambda *_args, **_kwargs: None)
     recovered = {"run_id": FAKE_RUN_ID, "scene_at": "old"}
-    monkeypatch.setitem(runner.__dict__, "parse_pr_comment", lambda _body: recovered)
+    monkeypatch.setitem(run_state.__dict__, "parse_pr_comment", lambda _body: recovered)
     assert runner._recover_missing_pr_scene(
         {"number": 9}, "owner/repo", Path("/tmp/repo"),
     ) == {"run_id": FAKE_RUN_ID, "scene_at": None}
@@ -272,7 +274,7 @@ def test_parse_pr_comment_returns_scene_for_multiline_opened_pr_comment():
         FAKE_RUN_ID, "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4",
         FAKE_PR_URL,
     )
-    scene = runner.parse_pr_comment(body)
+    scene = run_state.parse_pr_comment(body)
     assert scene == scene_for()
     # Issue #786: the machine-readable record is the hidden
     # `orbi:scene:v1` block right under the run marker; the field lines
@@ -310,7 +312,7 @@ def test_parse_pr_comment_preserves_unknown_head_counter():
         base_sha="abc123def456", pr_url=FAKE_PR_URL,
         verdict_head_unknown_round=2,
     )
-    parsed = runner.parse_pr_comment(
+    parsed = run_state.parse_pr_comment(
         body.split(scene_mod.render(scene_mod.Scene(
             run_id=FAKE_RUN_ID, base_branch="main",
             base_sha="abc123def456", pr_url=FAKE_PR_URL,
@@ -320,7 +322,7 @@ def test_parse_pr_comment_preserves_unknown_head_counter():
 
 
 def test_parse_pr_comment_returns_scene_for_legacy_opened_pr_comment():
-    scene = runner.parse_pr_comment(opened_pr_comment())
+    scene = run_state.parse_pr_comment(opened_pr_comment())
     assert scene == scene_for()
 
 
@@ -329,7 +331,7 @@ def test_parse_pr_comment_ignores_unrelated_new_format_line():
         FAKE_RUN_ID, "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4",
         FAKE_PR_URL,
     ) + "\nnot a field"
-    assert runner.parse_pr_comment(body) == scene_for()
+    assert run_state.parse_pr_comment(body) == scene_for()
 
 
 def test_started_pi_comment_uses_multiline_field_block():
@@ -364,7 +366,7 @@ def test_parse_pr_comment_ignores_legacy_branch_and_worktree_fields():
     body = opened_pr_comment().replace(
         ")", f" branch={FAKE_BRANCH} worktree={FAKE_WORKTREE})", 1,
     )
-    scene = runner.parse_pr_comment(body)
+    scene = run_state.parse_pr_comment(body)
     assert scene["run_id"] == FAKE_RUN_ID
     assert "branch" not in scene
     assert "worktree" not in scene
@@ -376,7 +378,7 @@ def test_parse_pr_comment_returns_none_for_started_comment():
         f"Orbi started Pi: base_branch=main base_sha=abc123def456 "
         f"run_id={FAKE_RUN_ID} branch={FAKE_BRANCH} worktree={FAKE_WORKTREE}"
     )
-    assert runner.parse_pr_comment(body) is None
+    assert run_state.parse_pr_comment(body) is None
 
 
 def test_parse_pr_comment_returns_none_for_failed_comment():
@@ -385,11 +387,11 @@ def test_parse_pr_comment_returns_none_for_failed_comment():
         f"Orbi failed: boom (base_branch=main base_sha=abc123def456 "
         f"run_id={FAKE_RUN_ID})"
     )
-    assert runner.parse_pr_comment(body) is None
+    assert run_state.parse_pr_comment(body) is None
 
 
 def test_parse_pr_comment_returns_none_for_empty_body():
-    assert runner.parse_pr_comment("") is None
+    assert run_state.parse_pr_comment("") is None
 
 
 def test_parse_pr_comment_fails_fast_when_a_field_is_missing():
@@ -402,19 +404,19 @@ def test_parse_pr_comment_fails_fast_when_a_field_is_missing():
     for field, needle in needles.items():
         body = opened_pr_comment().replace(needle, "", 1)
         with pytest.raises(ValueError, match=f"missing {field}"):
-            runner.parse_pr_comment(body)
+            run_state.parse_pr_comment(body)
 
 
 def test_parse_pr_comment_fails_fast_on_invalid_run_id():
     body = opened_pr_comment(run_id="run1")
     with pytest.raises(ValueError, match="invalid run id"):
-        runner.parse_pr_comment(body)
+        run_state.parse_pr_comment(body)
 
 
 def test_parse_pr_comment_fails_fast_on_empty_field_value():
     body = opened_pr_comment(pr_url="")
     with pytest.raises(ValueError, match="missing pr_url"):
-        runner.parse_pr_comment(body)
+        run_state.parse_pr_comment(body)
 
 
 def comment(body: str, association: str | None = "OWNER") -> dict:
@@ -429,7 +431,7 @@ def test_resume_scene_returns_latest_trusted_opened_pr_scene():
         comment("unrelated human comment"),
         comment(opened_pr_comment(base_sha="newsha123456")),
     ]
-    scene = runner.resume_scene(comments)
+    scene = run_state.resume_scene(comments)
     assert scene["base_sha"] == "newsha123456"
     assert scene["run_id"] == FAKE_RUN_ID
 
@@ -437,7 +439,7 @@ def test_resume_scene_returns_latest_trusted_opened_pr_scene():
 def test_resume_scene_fails_fast_when_no_opened_pr_comment_exists():
     comments = [comment("no PR here")]
     with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
-        runner.resume_scene(comments)
+        run_state.resume_scene(comments)
 
 
 def test_resume_scene_skips_non_dict_comments():
@@ -446,7 +448,7 @@ def test_resume_scene_skips_non_dict_comments():
         comment(opened_pr_comment()),
         "not a dict",
     ]
-    scene = runner.resume_scene(comments)
+    scene = run_state.resume_scene(comments)
     assert scene["run_id"] == FAKE_RUN_ID
 
 
@@ -551,7 +553,7 @@ def test_resume_scene_accepts_the_authenticated_runner_app_bot(monkeypatch):
         )
 
     monkeypatch.setattr(seam, "run_command", gh_status)
-    scene = runner.resume_scene(comments)
+    scene = run_state.resume_scene(comments)
     assert scene["run_id"] == FAKE_RUN_ID
 
 
@@ -566,7 +568,7 @@ def test_resume_scene_rejects_another_app_bot_even_with_the_marker(monkeypatch):
         lambda: "orbi-dev-test[bot]",
     )
     with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
-        runner.resume_scene(comments)
+        run_state.resume_scene(comments)
 
 
 # Issue #655: `gh issue view --json comments` (GraphQL) returns
@@ -612,7 +614,7 @@ def test_resume_scene_accepts_graphql_shaped_runner_app_bot(monkeypatch):
         seam, "_authenticated_github_login",
         lambda: "orbi-dev-test[bot]",
     )
-    scene = runner.resume_scene(comments)
+    scene = run_state.resume_scene(comments)
     assert scene["run_id"] == FAKE_RUN_ID
 
 
@@ -648,7 +650,7 @@ def test_resume_scene_ignores_public_comment_with_scene():
         comment(opened_pr_comment(), association="NONE"),
     ]
     with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
-        runner.resume_scene(comments)
+        run_state.resume_scene(comments)
 
 
 def test_resume_scene_ignores_public_comment_even_when_newest():
@@ -658,7 +660,7 @@ def test_resume_scene_ignores_public_comment_even_when_newest():
         comment(opened_pr_comment(base_sha="attacker12345"),
                 association="NONE"),
     ]
-    scene = runner.resume_scene(comments)
+    scene = run_state.resume_scene(comments)
     assert scene["base_sha"] == "trusted123456"
 
 
@@ -667,7 +669,7 @@ def test_resume_scene_ignores_comment_without_association():
     # value (OWNER/MAINTAINER/MEMBER/COLLABORATOR) passes.
     comments = [comment(opened_pr_comment(), association=None)]
     with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
-        runner.resume_scene(comments)
+        run_state.resume_scene(comments)
 
 
 @pytest.mark.parametrize("association", [
@@ -675,14 +677,14 @@ def test_resume_scene_ignores_comment_without_association():
 ])
 def test_resume_scene_accepts_every_trusted_association(association):
     comments = [comment(opened_pr_comment(), association=association)]
-    scene = runner.resume_scene(comments)
+    scene = run_state.resume_scene(comments)
     assert scene["run_id"] == FAKE_RUN_ID
 
 
 def test_resume_scene_skips_non_dict_trusted_comment():
     # A non-dict entry cannot carry an association, so it is skipped.
     comments = ["not a dict", comment(opened_pr_comment())]
-    scene = runner.resume_scene(comments)
+    scene = run_state.resume_scene(comments)
     assert scene["run_id"] == FAKE_RUN_ID
 
 
@@ -720,7 +722,7 @@ def test_issue_comments_rejects_payload_without_comments_array(monkeypatch):
 
 def test_parse_pr_comment_ignores_field_part_without_key():
     body = opened_pr_comment().replace(")", " =keyless)", 1)
-    scene = runner.parse_pr_comment(body)
+    scene = run_state.parse_pr_comment(body)
     assert scene["run_id"] == FAKE_RUN_ID
 
 
@@ -2754,7 +2756,7 @@ def test_verify_resumed_pr_backfill_label_api_failure_fails_fast(
     monkeypatch.setattr(seam, "edit_issue", failing_edit)
     reviews: list = []
     monkeypatch.setattr(
-        runner, "review_and_merge_if_clean",
+        review_merge, "review_and_merge_if_clean",
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     expected_resume_worktree(tmp_path).mkdir(parents=True)
@@ -2826,7 +2828,7 @@ def test_verify_resumed_pr_missing_fixes_stays_fix_needed(
     reviews: list = []
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
     monkeypatch.setattr(
-        runner, "review_and_merge_if_clean",
+        review_merge, "review_and_merge_if_clean",
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     expected_resume_worktree(tmp_path).mkdir(parents=True)

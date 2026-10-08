@@ -26,13 +26,16 @@ import orbi.repo_config as repo_config
 import orbi.release as release
 import orbi.release_git as release_git
 import orbi.release_notes as release_notes
+import orbi.review_merge as review_merge
 import orbi.pi_session as pi_session
+import orbi.run_state as run_state
 import orbi.runner as runner
 
 _MODULES = (
     journal, github, gitops, milestone, milestone_command, ticket_command,
     progress, cli_source, release, release_git, release_notes, pi_session,
-    runner, claim, repo_config, clarify, branch_reclaim, failure_report,
+    runner, review_merge, run_state, claim, repo_config, clarify, branch_reclaim,
+    failure_report,
 )
 
 
@@ -79,7 +82,7 @@ def resume_deps() -> claim.ResumeHooks:
     the delivery failure path uses.
     """
     return claim.ResumeHooks(
-        resume_scene=_runner_hook("resume_scene"),
+        resume_scene=_module_hook(run_state, "resume_scene"),
         route_external_pr_ticket=_runner_hook("_route_external_pr_ticket"),
         block_scene_failure=_module_hook(failure_report, "block_scene_failure"),
         recover_missing_pr_scene=_runner_hook("_recover_missing_pr_scene"),
