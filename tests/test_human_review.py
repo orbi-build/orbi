@@ -21,6 +21,7 @@ from orbi import human_review
 
 import orbi.failure_report as failure_report
 import orbi.runner as runner
+import orbi.review_merge as review_merge
 from seam import seam
 import orbi.journal as journal
 
@@ -262,13 +263,13 @@ def gate_env(tmp_path, monkeypatch):
     monkeypatch.setattr(seam, "edit_issue",
         lambda number, **kwargs: calls["edit"].append(kwargs),
     )
-    monkeypatch.setattr(runner, "review_and_merge_if_clean", fake_review)
+    monkeypatch.setattr(review_merge, "review_and_merge_if_clean", fake_review)
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     return {"worktree": worktree, "calls": calls, "reviews": reviews}
 
 
 def _round(config):
-    return runner._run_review_round(
+    return review_merge._run_review_round(
         PR_URL, {"number": 39, "title": "task"}, config, REPO,
     )
 
@@ -375,7 +376,7 @@ def test_delivered_changed_files_failure_is_missing_evidence(
         raise RuntimeError("git down")
 
     monkeypatch.setattr(seam, "run_command", boom)
-    assert runner.delivered_changed_files(worktree, "main") is None
+    assert review_merge.delivered_changed_files(worktree, "main") is None
     # Missing evidence lands in column 2 (the gate holds).
     checklist = human_review.build_checklist(
         test_result="10 passed", changed_files=None,

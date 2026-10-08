@@ -19,6 +19,8 @@ import orbi.repo_config as repo_config
 import orbi.claim as claim
 import orbi.failure_report as failure_report
 import orbi.runner as runner
+import orbi.review_merge as review_merge
+import orbi.run_state as run_state
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 from seam import resume_deps, seam
@@ -830,7 +832,7 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
     )
     monkeypatch.setattr(seam, "create_worktree", lambda *a, **k: tmp_path / "wt",
     )
-    monkeypatch.setattr(runner, "write_run_state", lambda *a, **k: None)
+    monkeypatch.setattr(run_state, "write_run_state", lambda *a, **k: None)
     monkeypatch.setattr(pi_session, "resume_context", lambda worktree: None)
     monkeypatch.setattr(pi_session, "apply_runner_runtime_excludes", lambda *a: None)
     monkeypatch.setattr(

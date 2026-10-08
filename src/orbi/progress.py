@@ -913,3 +913,73 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
         number=number, source_repo=source_repo, action=action,
         reason=reason, diagnosis=diagnosis,
     ))
+
+# Automatic observability: the GitHub progress comment is
+# PATCHed on every activity change and at most every 30 seconds while a
+# Pi session runs, so a mobile user sees live progress without any
+# command. The journal cadence is the poll interval above.
+PI_HEARTBEAT_SECONDS = 30.0
+
+def _live_progress(ctx: RunContext, publisher: ProgressPublisher, *,
+                   title: str, role: str, started: float,
+                   pr_url: str | None, review_round: int, priority: str,
+                   activity: dict | None = None) -> None:
+    """One live GitHub progress update while a Pi session is running.
+
+    Called from the `stream_pi` poll loop (every activity change or
+    heartbeat): the same run-marker comment is PATCHed in
+    place at most every `PI_HEARTBEAT_SECONDS` or when the visible
+    activity changed. `activity` is the watcher state of that poll, so
+    the live comment shows the session exactly as the journal reports
+    it. The publisher already knows the comment id after `ensure`, so a
+    callback before it would fail fast here — and the wiring always
+    ensures first.
+    """
+    state = _progress_state(
+        ctx, title=title, role=role, started=started,
+        pr_url=pr_url, review_round=review_round, priority=priority,
+        activity=activity,
+    )
+    publisher.patch(_progress_body(state))
+
+class LiveProgressThrottle:
+    """Throttle live GitHub PATCHes to change-driven or <=30-second cadence.
+
+    The `stream_pi` poll loop fires on every poll (15 s default); PATCHing
+    GitHub on every poll would double the traffic for no visible gain.
+    The throttle passes an update through when the visible activity
+    (phase, action, result, model_wait) changed since the last PATCH or
+    when at least `PI_HEARTBEAT_SECONDS` passed since it.
+    """
+
+    def __init__(self, ctx: RunContext, publisher: ProgressPublisher, *,
+                 title: str, role: str, started: float,
+                 pr_url: str | None, review_round: int,
+                 priority: str) -> None:
+        def publish(activity: dict) -> None:
+            _live_progress(
+                ctx, publisher, title=title, role=role,
+                started=started, pr_url=pr_url,
+                review_round=review_round, priority=priority,
+                activity=activity,
+            )
+
+        self._publish = publish
+        self._last_visible: tuple | None = None
+        self._last_patch = 0.0
+
+    def __call__(self, activity: dict) -> None:
+        visible = (
+            activity["phase"], activity["action"], activity["result"],
+            activity["model_wait"],
+            # The idle-recovery state is visible progress:
+            # entering/leaving it PATCHes the live comment immediately.
+            activity.get("recovery"),
+        )
+        now = time.monotonic()
+        if visible == self._last_visible and \
+                now - self._last_patch < PI_HEARTBEAT_SECONDS:
+            return
+        self._last_visible = visible
+        self._last_patch = now
+        self._publish(activity)

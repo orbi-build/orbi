@@ -6,8 +6,8 @@ import pytest
 
 from orbi import progress, scene
 from orbi.delivery_scene import RunContext
+from orbi.review_merge import merged_pr_comment_body
 from orbi.runner import (
-    merged_pr_comment_body,
     opened_pr_comment_body,
     started_pi_comment_body,
 )

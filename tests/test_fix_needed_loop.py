@@ -19,6 +19,8 @@ import pytest
 
 import orbi.failure_report as failure_report
 import orbi.runner as runner
+import orbi.review_merge as review_merge
+import orbi.run_state as run_state
 import orbi.pi_session as pi_session
 import orbi.runner_health as runner_health
 from orbi import progress, scene
@@ -255,7 +257,7 @@ def test_delivery_step_recoverable_review_failure_stays_fix_needed(
         reviews.append((args, kwargs))
         raise exc
 
-    monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
+    monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     caplog.set_level("INFO")
     # The wait returns (the slot is released by the caller); the next
@@ -348,7 +350,7 @@ def test_delivery_step_recoverable_failure_while_fix_needed_keeps_label(
     def failing_review(*args, **kwargs):
         raise RuntimeError("pi_exit_1: the review Pi failed")
 
-    monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
+    monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
     # The current label set contains only ai-fix-needed, so the
@@ -392,7 +394,7 @@ def test_delivery_step_recoverable_failure_with_session_file_includes_session_sc
     def failing_review(*args, **kwargs):
         raise RuntimeError("pi_exit_3: the review Pi failed")
 
-    monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
+    monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
     body = issue_comments[0][1]["body"]
@@ -429,7 +431,7 @@ def test_delivery_step_recoverable_failure_scene_snapshot_failure_is_logged(
     def failing_snapshot(*args, **kwargs):
         raise OSError("session file unreadable")
 
-    monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
+    monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
     monkeypatch.setattr(failure_report, "activity_snapshot", failing_snapshot)
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     caplog.set_level("INFO")
@@ -472,7 +474,7 @@ def test_delivery_step_recoverable_failure_without_bound_run_id(
     def failing_review(*args, **kwargs):
         raise RuntimeError("pi_exit_3: the review Pi failed")
 
-    monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
+    monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
     # The autouse fixture resets the run id to None; do not re-bind it.
     assert runner.current_run_id() is None
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
@@ -517,7 +519,7 @@ def test_delivery_step_unrecoverable_failure_marks_blocked_with_reason(
     def failing_review(*args, **kwargs):
         raise runner.ReviewRoundsExhausted(reason)
 
-    monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
+    monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     caplog.set_level("INFO")
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
@@ -573,7 +575,7 @@ def test_delivery_step_real_unrecoverable_failure_keeps_traceback(
     def failing_review(*args, **kwargs):
         raise runner.UnrecoverableDeliveryError("credential revoked")
 
-    monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
+    monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     caplog.set_level("ERROR")
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
@@ -615,7 +617,7 @@ def test_delivery_step_base_branch_mismatch_marks_blocked_with_reason(
     monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
     reviews = []
     monkeypatch.setattr(
-        runner, "review_and_merge_if_clean",
+        review_merge, "review_and_merge_if_clean",
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
@@ -1028,14 +1030,14 @@ def test_human_recovery_requires_blocked_removal_then_fix_needed(monkeypatch):
              "created_at": "2026-01-02T01:00:00Z"},
         ]),
     )
-    assert runner.human_review_recovery_at(39, "owner/repo") == \
+    assert review_merge.human_review_recovery_at(39, "owner/repo") == \
         "2026-01-02T01:00:00Z"
 
 
 def test_human_review_recovery_ignores_unrelated_label_history(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda *a, **k: '{"event":"labeled"}\n',
     )
-    assert runner.human_review_recovery_at(39, "owner/repo") is None
+    assert review_merge.human_review_recovery_at(39, "owner/repo") is None
 
 
 def test_human_review_recovery_requires_latest_blocked_removal(monkeypatch):
@@ -1048,13 +1050,13 @@ def test_human_review_recovery_requires_latest_blocked_removal(monkeypatch):
              "created_at": "2026-01-02T01:00:00Z"},
         ]),
     )
-    assert runner.human_review_recovery_at(39, "owner/repo") is None
+    assert review_merge.human_review_recovery_at(39, "owner/repo") is None
 
 
 def test_human_review_recovery_skips_non_object_events(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda *a, **k: "1\n",
     )
-    assert runner.human_review_recovery_at(39, "owner/repo") is None
+    assert review_merge.human_review_recovery_at(39, "owner/repo") is None
 
 
 def test_log_recovery_ci_status_logs_malformed_response_and_continues(
@@ -1063,7 +1065,7 @@ def test_log_recovery_ci_status_logs_malformed_response_and_continues(
     monkeypatch.setattr(seam, "run_command", lambda *a, **k: json.dumps({}),
     )
     caplog.set_level("WARNING")
-    runner.log_recovery_ci_status(
+    review_merge.log_recovery_ci_status(
         {"number": 46, "head_oid": "head-sha"}, "owner/repo",
     )
     assert "review_recovery_ci_status_failed pr=46" in caplog.text
@@ -1074,7 +1076,7 @@ def test_log_recovery_ci_status_logs_only_check_summary(monkeypatch, caplog):
         lambda *a, **k: json.dumps([]),
     )
     caplog.set_level("INFO")
-    runner.log_recovery_ci_status(
+    review_merge.log_recovery_ci_status(
         {"number": 46, "head_oid": "head-sha"}, "owner/repo",
     )
     assert "review_recovery_ci_status pr=46 checks=none" in caplog.text
@@ -1087,22 +1089,22 @@ def test_exhausted_review_enters_new_budget_after_human_recovery(
     transition AFTER the recovered scene starts a fresh budget — the
     round runs (the freeze proves it)."""
     from tests.test_resume_pr import FAKE_RUN_ID
-    monkeypatch.setattr(runner, "human_review_recovery_at",
+    monkeypatch.setattr(review_merge, "human_review_recovery_at",
                         lambda *a: "2026-02-01T00:00:00Z")
     frozen = {"number": 46, "url": PR_URL, "base_ref": "main",
               "base_oid": "abc", "head_ref": "b", "head_oid": "def"}
     freezes = []
-    monkeypatch.setattr(runner, "freeze_pr",
+    monkeypatch.setattr(review_merge, "freeze_pr",
                         lambda *a, **k: freezes.append(1) or frozen)
     # The frozen head is the delivery's recorded engine push (the
     # normal in-flight state, Issue #833): the round-start adoption
     # short-circuits before any git call on the bare worktree.
-    runner.write_run_state(runner.RunContext(
+    run_state.write_run_state(runner.RunContext(
         run_id=FAKE_RUN_ID, issue=39, branch="branch",
         worktree=tmp_path, source_repo="owner/repo",
     ))
-    runner.record_pushed_head(tmp_path, "def")
-    monkeypatch.setattr(runner, "log_recovery_ci_status", lambda *a, **k: None)
+    run_state.record_pushed_head(tmp_path, "def")
+    monkeypatch.setattr(review_merge, "log_recovery_ci_status", lambda *a, **k: None)
     monkeypatch.setattr(seam, "_safe_publish", lambda *a, **k: None)
     monkeypatch.setattr(
         pi_session, "run_review",
@@ -1110,7 +1112,7 @@ def test_exhausted_review_enters_new_budget_after_human_recovery(
     )
     config = config_domain.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main", repo_dir=tmp_path)
     with pytest.raises(RuntimeError, match="review started"):
-        runner.review_and_merge_if_clean(
+        review_merge.review_and_merge_if_clean(
             tmp_path, "branch", "main", config, "owner/repo", 39,
             title="task", priority="normal",
             # Five completed rounds in the scene, but the recovery
@@ -1131,11 +1133,11 @@ def test_review_rounds_exhausted_raises_unrecoverable(monkeypatch, tmp_path):
     UnrecoverableDeliveryError (the caller marks the Issue ai-blocked
     with the reason). Issue #788: the budget is the scene's round
     counter — exhausted BEFORE any freeze or review."""
-    monkeypatch.setattr(runner, "human_review_recovery_at", lambda *a: None)
+    monkeypatch.setattr(review_merge, "human_review_recovery_at", lambda *a: None)
     from tests.test_resume_pr import FAKE_RUN_ID
 
     freezes = []
-    monkeypatch.setattr(runner, "freeze_pr",
+    monkeypatch.setattr(review_merge, "freeze_pr",
                         lambda *a, **k: freezes.append(1) or {
                             "number": 46, "url": PR_URL, "base_ref": "main",
                             "base_oid": "abc", "head_ref": "b",
@@ -1145,7 +1147,7 @@ def test_review_rounds_exhausted_raises_unrecoverable(monkeypatch, tmp_path):
     with pytest.raises(
         runner.UnrecoverableDeliveryError, match="exhausted",
     ):
-        runner.review_and_merge_if_clean(
+        review_merge.review_and_merge_if_clean(
             tmp_path, "branch", "main", config, "owner/repo", 39,
             title="task", priority="normal",
             scene={
@@ -1199,11 +1201,11 @@ def _external_review_env(monkeypatch, tmp_path, *, external: bool):
     # The frozen head is the delivery's recorded engine push (the normal
     # in-flight state, Issue #833): the round-start adoption
     # short-circuits before any git call on the bare worktree.
-    runner.write_run_state(runner.RunContext(
+    run_state.write_run_state(runner.RunContext(
         run_id=FAKE_RUN_ID, issue=39, branch="contributor-patch",
         worktree=tmp_path, source_repo="owner/repo",
     ))
-    runner.record_pushed_head(tmp_path, "def")
+    run_state.record_pushed_head(tmp_path, "def")
     comments: list = []
     monkeypatch.setattr(seam, "comment_issue",
                         lambda *args, **kwargs: comments.append(kwargs))
@@ -1238,7 +1240,7 @@ def test_external_takeover_clean_verdict_stops_at_triage(
     comments, patches = _external_review_env(monkeypatch, tmp_path,
                                              external=True)
     caplog.set_level("INFO")
-    merged = runner.review_and_merge_if_clean(
+    merged = review_merge.review_and_merge_if_clean(
         tmp_path, "contributor-patch", "main",
         config_domain.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main",
                             repo_dir=tmp_path),
@@ -1282,7 +1284,7 @@ def test_internal_clean_verdict_still_merges(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "merge_commit_metrics",
                         lambda *a, **k: (0, 1))
     monkeypatch.setattr(seam, "sync_base_checkout", lambda *a, **k: None)
-    merged = runner.review_and_merge_if_clean(
+    merged = review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main",
         config_domain.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main",
                             repo_dir=tmp_path),

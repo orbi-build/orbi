@@ -20,6 +20,7 @@ import pytest
 
 from orbi import branch_reclaim
 from orbi import runner
+import orbi.review_merge as review_merge
 from seam import seam
 
 LOGGER_NAME = "orbi.bootstrap"
@@ -75,7 +76,7 @@ def _delete_calls(calls: list[list[str]]) -> list[list[str]]:
 def test_merge_deletes_the_orbi_head_branch_after_merging(monkeypatch, tmp_path):
     fake, calls = _merge_fake()
     monkeypatch.setattr(seam, "run_command", fake)
-    pr = runner.merge_gate(
+    pr = review_merge.merge_gate(
         tmp_path, _orbi_pr(), "main", repo_dir=tmp_path, source_repo="o/r",
     )
     assert pr["merged"] is True
@@ -95,7 +96,7 @@ def test_merge_deletes_the_orbi_head_branch_after_merging(monkeypatch, tmp_path)
 def test_merge_keeps_a_non_orbi_head_branch(monkeypatch, tmp_path):
     fake, calls = _merge_fake()
     monkeypatch.setattr(seam, "run_command", fake)
-    pr = runner.merge_gate(
+    pr = review_merge.merge_gate(
         tmp_path, _orbi_pr("feature/external"), "main",
         repo_dir=tmp_path, source_repo="o/r",
     )
@@ -114,7 +115,7 @@ def test_missing_reference_is_treated_as_success(monkeypatch, tmp_path,
     ))
     monkeypatch.setattr(seam, "run_command", fake)
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
-        pr = runner.merge_gate(
+        pr = review_merge.merge_gate(
             tmp_path, _orbi_pr(), "main", repo_dir=tmp_path, source_repo="o/r",
         )
     assert pr["merged"] is True
@@ -132,7 +133,7 @@ def test_other_delete_failure_warns_but_still_merges(monkeypatch, tmp_path,
     ))
     monkeypatch.setattr(seam, "run_command", fake)
     with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
-        pr = runner.merge_gate(
+        pr = review_merge.merge_gate(
             tmp_path, _orbi_pr(), "main", repo_dir=tmp_path, source_repo="o/r",
         )
     assert pr["merged"] is True
@@ -149,7 +150,7 @@ def test_delete_timeout_warns_but_still_merges(monkeypatch, tmp_path, caplog):
     )
     monkeypatch.setattr(seam, "run_command", fake)
     with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
-        pr = runner.merge_gate(
+        pr = review_merge.merge_gate(
             tmp_path, _orbi_pr(), "main", repo_dir=tmp_path, source_repo="o/r",
         )
     assert pr["merged"] is True

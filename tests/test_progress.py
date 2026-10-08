@@ -10,7 +10,7 @@ import subprocess
 
 import pytest
 
-from orbi import progress, scene
+from orbi import progress, run_state, scene
 from orbi.delivery_scene import RunContext
 
 
@@ -45,8 +45,8 @@ def test_failure_comment_redacts_evidence_and_preserves_resume_scene():
         pr_url="https://github.com/owner/repo/pull/9",
     ))
     comment = progress.format_status_comment(scene_body)
-    from orbi import runner
-    assert runner.parse_pr_comment(comment)["run_id"] == "a1b2c3d4"
+    from orbi import review_merge
+    assert run_state.parse_pr_comment(comment)["run_id"] == "a1b2c3d4"
 
 
 def test_format_status_comment_expands_marked_failure():

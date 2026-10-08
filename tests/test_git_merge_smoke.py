@@ -22,6 +22,7 @@ import pytest
 from conftest import git
 
 import orbi.runner as runner
+import orbi.review_merge as review_merge
 from seam import seam
 
 
@@ -99,7 +100,7 @@ def test_merge_gate_merges_head_containing_latest_base(clone, monkeypatch):
           "head_ref": "orbi/owner-repo-issue-4",
           "head_oid": head_oid}
     commands = install_fake_gh(monkeypatch, clone, make_pr(head_oid))
-    merged = runner.merge_gate(clone, pr, "main", repo_dir=clone)
+    merged = review_merge.merge_gate(clone, pr, "main", repo_dir=clone)
     assert merged["merged"] is True
     # The merge used --match-head-commit with the reviewed head SHA.
     merge_cmd = [c for c in commands if c[:2] == ["gh", "pr"]
@@ -119,7 +120,7 @@ def test_merge_gate_merges_head_containing_latest_base(clone, monkeypatch):
             else ""
         ),
     )
-    confirmed = runner.confirm_merged(clone, merged, "main", repo_dir=clone)
+    confirmed = review_merge.confirm_merged(clone, merged, "main", repo_dir=clone)
     assert confirmed["state"] == "MERGED"
     assert confirmed["merge_commit"] == merge_commit
 
@@ -163,7 +164,7 @@ def test_merge_gate_absorbs_clean_behind_base_and_rechecks_ci(
           "base_oid": git(clone, "rev-parse", "origin/main~1"),
           "head_ref": "orbi/owner-repo-issue-4", "head_oid": head_oid}
     with caplog.at_level("INFO"):
-        merged = runner.merge_gate(clone, pr, "main", repo_dir=clone)
+        merged = review_merge.merge_gate(clone, pr, "main", repo_dir=clone)
     assert merged["merged"] is True
     assert views == 2
     merge_cmd = [c for c in commands if c[:2] == ["gh", "pr"]
@@ -191,8 +192,8 @@ def test_merge_gate_conflicted_absorb_stays_recoverable(clone, monkeypatch):
     pr = {"number": 4, "url": "u", "base_ref": "main",
           "base_oid": git(clone, "rev-parse", "origin/main~1"),
           "head_ref": "orbi/owner-repo-issue-4", "head_oid": head_oid}
-    with pytest.raises(runner.RecoverableMergeGateError, match="cannot absorb"):
-        runner.merge_gate(clone, pr, "main", repo_dir=clone)
+    with pytest.raises(review_merge.RecoverableMergeGateError, match="cannot absorb"):
+        review_merge.merge_gate(clone, pr, "main", repo_dir=clone)
     assert git(clone, "status", "--porcelain", "--untracked-files=no") == ""
 
 
@@ -211,7 +212,7 @@ def test_merge_gate_rejects_conflicting_pr_reports_mergeable(
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="mergeable=DIRTY",
     ):
-        runner.merge_gate(clone, pr, "main", repo_dir=clone)
+        review_merge.merge_gate(clone, pr, "main", repo_dir=clone)
     assert "merge_gate_not_mergeable" in caplog.text
 
 
@@ -242,7 +243,7 @@ def test_deployment_checkout_fast_forwards_after_independent_merge(
           "head_ref": "orbi/owner-repo-issue-4",
           "head_oid": head_oid}
     install_fake_gh(monkeypatch, clone, make_pr(head_oid))
-    merged = runner.merge_gate(clone, pr, "main", repo_dir=clone)
+    merged = review_merge.merge_gate(clone, pr, "main", repo_dir=clone)
     assert merged["merged"] is True
     merge_commit = git(clone, "rev-parse", "origin/main")
     # The remote advanced; the deployment checkout has not yet.
@@ -257,11 +258,11 @@ def test_deployment_checkout_fast_forwards_after_independent_merge(
         return real_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    confirmed = runner.confirm_merged(clone, merged, "main", repo_dir=clone)
+    confirmed = review_merge.confirm_merged(clone, merged, "main", repo_dir=clone)
     assert confirmed["merge_commit"] == merge_commit
 
     # The deployment checkout now fast-forwards to the merged base.
-    runner.sync_base_checkout(checkout, "main")
+    review_merge.sync_base_checkout(checkout, "main")
     synced = git(checkout, "rev-parse", "HEAD")
     assert synced == merge_commit
     git(checkout, "merge-base", "--is-ancestor", head_oid, "HEAD")
@@ -289,4 +290,4 @@ def test_sync_base_checkout_fails_fast_on_drifted_checkout(
     git(clone, "push", "origin", "main")
 
     with pytest.raises(RuntimeError, match="cannot fast-forward"):
-        runner.sync_base_checkout(checkout, "main")
+        review_merge.sync_base_checkout(checkout, "main")
