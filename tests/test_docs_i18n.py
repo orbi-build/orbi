@@ -258,16 +258,30 @@ def test_chinese_homepage_carries_a_real_frontmatter_title():
     )
 
 
-def test_english_homepage_keeps_its_existing_title_behavior():
-    """Issue #128 scope: the English page behavior is unaffected — the
-    English index keeps no frontmatter title (the renderer keeps its
-    pre-Issue-128 filename fallback "Index")."""
+def test_english_homepage_carries_a_descriptive_frontmatter_title():
+    """Issue #1567 supersedes the Issue #128 English-index scope: the
+    live site rendered `<title>Index - Orbi</title>` for the docs home,
+    a title that does not say what the page is. The English index now
+    carries a descriptive frontmatter title — the same page-metadata
+    mechanism the Chinese index uses. The rendered-title budget (<= 60
+    characters including Mintlify's `" - Orbi"` suffix) and the
+    uniqueness of the seven SEO titles are pinned in
+    tests/test_docs_site.py."""
     text = (DOCS_DIR / "index.mdx").read_text(encoding="utf-8")
     match = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
-    assert match is not None, "the English index may carry metadata"
-    assert not re.search(r"^title\s*:", match.group(1), re.MULTILINE), (
-        "the English index must not gain a frontmatter title "
-        "(English behavior stays unchanged)"
+    assert match is not None, "the English index must start with frontmatter"
+    title_match = re.search(
+        r'^title:\s*["\']?([^"\'\n]+?)["\']?\s*$',
+        match.group(1),
+        re.MULTILINE,
+    )
+    assert title_match is not None, "the English index must carry a title"
+    title = title_match.group(1).strip()
+    assert "Orbi" in title, (
+        f"the English home title must name the project, got: {title!r}"
+    )
+    assert " " in title, (
+        f"the English home title must describe the page, got: {title!r}"
     )
 
 

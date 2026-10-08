@@ -1392,3 +1392,99 @@ def test_docs_document_sign_in_with_chatgpt_plan_usage():
         assert "## Codex OAuth" in text, (
             f"{slug} must keep the Codex OAuth section"
         )
+
+
+
+# Issue #1567 (SEO audit 2026-10-08): Mintlify renders the document
+# <title> as "<frontmatter title> - Orbi" — the verified live behavior
+# (curl -sSL https://docs.orbi.build/ -> <title>Index - Orbi</title>,
+# /configuration -> <title>Configuration reference - Orbi</title>).
+MINTLIFY_TITLE_SUFFIX = " - Orbi"
+RENDERED_TITLE_LIMIT = 60
+
+# Issue #1567: the docs home page plus the pages with the most search
+# impressions must render a title that names the task, not the one-word
+# filename fallback (Setup - Orbi, Index - Orbi, ...).
+DESCRIPTIVE_TITLE_PAGES = (
+    "index",
+    "getting-started",
+    "operations",
+    "setup",
+    "security",
+    "optional-kv-cache",
+    "quickstart",
+)
+
+
+def frontmatter_title(path: Path) -> str:
+    """The title: value of a page's YAML frontmatter."""
+    text = path.read_text(encoding="utf-8")
+    match = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
+    assert match is not None, f"{path} needs YAML frontmatter"
+    title_match = re.search(
+        r'^title:\s*["\']?([^"\'\n]+?)["\']?\s*$',
+        match.group(1),
+        re.MULTILINE,
+    )
+    assert title_match is not None, (
+        f"{path} needs a descriptive frontmatter title"
+    )
+    title = title_match.group(1).strip()
+    assert title, f"{path} needs a non-empty frontmatter title"
+    return title
+
+
+def test_seo_pages_carry_descriptive_titles_within_the_rendered_limit():
+    """Issue #1567: the docs home and the seven high-impression pages
+    must render a <title> that names the task (the verified Mintlify
+    suffix included), each within 60 characters and unique. The Chinese
+    counterparts carry their own descriptive title. The release pages are
+    deliberately out of scope."""
+    rendered: list[str] = []
+    for slug in DESCRIPTIVE_TITLE_PAGES:
+        for path in (DOCS_DIR / f"{slug}.mdx", DOCS_DIR / "zh" / f"{slug}.mdx"):
+            assert path.is_file(), f"missing docs page: {path}"
+            title = frontmatter_title(path)
+            full = f"{title}{MINTLIFY_TITLE_SUFFIX}"
+            assert len(full) <= RENDERED_TITLE_LIMIT, (
+                f"{path}: rendered title {full!r} is {len(full)} characters "
+                f"(limit {RENDERED_TITLE_LIMIT})"
+            )
+            if path.parent == DOCS_DIR:
+                assert " " in title, (
+                    f"{path}: the title must name the task, not one word: "
+                    f"{title!r}"
+                )
+                rendered.append(full)
+    assert len(rendered) == len(set(rendered)), (
+        f"duplicate page titles: {sorted(rendered)}"
+    )
+
+
+def test_seo_title_check_rejects_a_missing_or_overlong_title(
+    tmp_path, monkeypatch
+):
+    """A missing title or one over the rendered budget fails with the
+    page and the offending string named."""
+    zh = tmp_path / "zh"
+    zh.mkdir()
+    (zh / "index.mdx").write_text(
+        '---\ntitle: "Q"\ndescription: "Q?"\n---\n# T\n', encoding="utf-8"
+    )
+    monkeypatch.setitem(globals(), "DOCS_DIR", tmp_path)
+    monkeypatch.setitem(globals(), "DESCRIPTIVE_TITLE_PAGES", ("index",))
+
+    (tmp_path / "index.mdx").write_text(
+        '---\ndescription: "Q?"\n---\n# T\n', encoding="utf-8"
+    )
+    with pytest.raises(
+        AssertionError, match="needs a descriptive frontmatter title"
+    ):
+        test_seo_pages_carry_descriptive_titles_within_the_rendered_limit()
+
+    (tmp_path / "index.mdx").write_text(
+        '---\ntitle: "' + "x" * 54 + '"\ndescription: "Q?"\n---\n# T\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(AssertionError, match="rendered title"):
+        test_seo_pages_carry_descriptive_titles_within_the_rendered_limit()
