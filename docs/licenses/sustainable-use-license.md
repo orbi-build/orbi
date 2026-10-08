@@ -1,8 +1,7 @@
 ---
 title: "Sustainable Use License"
+description: "Orbi is dual-licensed: AGPL-3.0, or the Sustainable Use License for teams whose policy rules out AGPL. Self-hosting is free under either."
 ---
-
-# License
 
 Orbi is **dual-licensed**: you choose either license.
 

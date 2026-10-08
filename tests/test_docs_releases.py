@@ -183,12 +183,23 @@ def test_release_pages_pin_resolvable_tag_objects_and_commits():
             assert commit in hashes, f"{path} must record {version}'s release commit"
 
 
+def page_frontmatter_title(path: Path) -> str:
+    """The frontmatter `title` of a docs page (Issue #1571: the title is
+    the page's single rendered H1; the body no longer opens with `# …`)."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert lines and lines[0].strip() == "---", f"{path} needs frontmatter"
+    end = lines.index("---", 1)
+    titles = [line for line in lines[1:end] if line.startswith("title:")]
+    assert len(titles) == 1, f"{path} needs exactly one frontmatter title"
+    return titles[0].split(":", 1)[1].strip().strip('"')
+
+
 def test_only_the_highest_version_pages_carry_latest_markers():
     slugs = release_page_slugs("en")
     latest = max(slugs, key=release_version)
     for slug in slugs:
-        en_title = (DOCS_DIR / f"{slug}.mdx").read_text(encoding="utf-8").splitlines()[0]
-        zh_title = (DOCS_DIR / "zh" / f"{slug}.mdx").read_text(encoding="utf-8").splitlines()[0]
+        en_title = page_frontmatter_title(DOCS_DIR / f"{slug}.mdx")
+        zh_title = page_frontmatter_title(DOCS_DIR / "zh" / f"{slug}.mdx")
         is_latest = slug == latest
         assert ("(latest)" in en_title) is is_latest
         assert ("（最新）" in zh_title) is is_latest
@@ -355,8 +366,8 @@ def test_release_pages_carry_no_release_machine_audit_blocks():
 def test_release_pages_have_matching_version_titles():
     for slug in release_page_slugs("en"):
         version = slug.removeprefix("release-")
-        en_title = (DOCS_DIR / f"{slug}.mdx").read_text(encoding="utf-8").splitlines()[0]
-        zh_title = (DOCS_DIR / "zh" / f"{slug}.mdx").read_text(encoding="utf-8").splitlines()[0]
+        en_title = page_frontmatter_title(DOCS_DIR / f"{slug}.mdx")
+        zh_title = page_frontmatter_title(DOCS_DIR / "zh" / f"{slug}.mdx")
         assert version in en_title
         assert version in zh_title
 

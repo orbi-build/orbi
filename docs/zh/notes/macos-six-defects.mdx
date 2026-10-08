@@ -4,8 +4,6 @@ description: "一个通过 CI 的 launchd 移植为什么仍会在真实 Mac 上
 date: 2026-09-17
 ---
 
-# 我们合并了 macOS 支持，却在每台真实 Mac 上的六个地方失败了
-
 Orbi 自己运行自己：runner 的每项变更都由 runner 交付，经第二个会话审查，由 gate 合并，并作为带标签的 release 发布。2026-09-14，这个循环交付了 macOS 支持（Issue #849、PR #851）：在 systemd 实现旁增加了 launchd 实现的调度层、按平台限制的 `install.sh`，新增 2,510 行代码，3,083 个测试通过。
 
 没有人曾在 Mac 上运行过它。审查会话通过注入 fake 验证了 launchd 分支，这正是工单要求的内容。第二天早上，逐行对照 `launchctl(1)` 和真实的 `/bin/sh` 阅读后，发现了六个在任何真实 Mac 上都会失败的缺陷。
