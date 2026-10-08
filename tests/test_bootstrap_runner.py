@@ -21,6 +21,8 @@ import pytest
 import orbi.claim as claim
 import orbi.failure_report as failure_report
 import orbi.runner as runner
+import orbi.review_merge as review_merge
+import orbi.run_state as run_state
 import orbi.gitops as gitops
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
@@ -2887,7 +2889,7 @@ def test_latest_run_id_returns_the_run_id_of_the_newest_worktree(tmp_path):
 
 def test_run_state_path_lives_in_the_gitignored_orbi_dir(tmp_path):
     worktree = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
-    assert runner.run_state_path(worktree) == (
+    assert run_state.run_state_path(worktree) == (
         worktree / ".orbi" / "run-state.json"
     )
 
@@ -2895,13 +2897,13 @@ def test_run_state_path_lives_in_the_gitignored_orbi_dir(tmp_path):
 def test_write_run_state_writes_the_run_identity(tmp_path):
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    runner.write_run_state(
+    run_state.write_run_state(
         runner.RunContext(
             run_id="a1b2c3d4", issue=3, branch="orbi/owner-repo-issue-3",
             worktree=worktree, source_repo="owner/repo",
         ),
     )
-    state = json.loads(runner.run_state_path(worktree).read_text())
+    state = json.loads(run_state.run_state_path(worktree).read_text())
     assert state["run_id"] == "a1b2c3d4"
     assert state["issue"] == 3
     assert state["repo"] == "owner/repo"
@@ -2915,36 +2917,36 @@ def test_write_run_state_is_idempotent_for_a_resumed_run(tmp_path):
     file is the same-run marker, never a per-session artifact."""
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    runner.write_run_state(
+    run_state.write_run_state(
         runner.RunContext(
             run_id="a1b2c3d4", issue=3, branch="orbi/owner-repo-issue-3",
             worktree=worktree, source_repo="owner/repo",
         ),
     )
-    runner.write_run_state(
+    run_state.write_run_state(
         runner.RunContext(
             run_id="a1b2c3d4", issue=3, branch="orbi/owner-repo-issue-3",
             worktree=worktree, source_repo="owner/repo",
         ),
     )
-    state = json.loads(runner.run_state_path(worktree).read_text())
+    state = json.loads(run_state.run_state_path(worktree).read_text())
     assert state["run_id"] == "a1b2c3d4"
 
 
 def test_read_run_state_returns_none_without_the_file(tmp_path):
-    assert runner.read_run_state(tmp_path) is None
+    assert run_state.read_run_state(tmp_path) is None
 
 
 def test_read_run_state_round_trips_the_written_state(tmp_path):
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    runner.write_run_state(
+    run_state.write_run_state(
         runner.RunContext(
             run_id="a1b2c3d4", issue=3, branch="orbi/owner-repo-issue-3",
             worktree=worktree, source_repo="owner/repo",
         ),
     )
-    state = runner.read_run_state(worktree)
+    state = run_state.read_run_state(worktree)
     assert state["run_id"] == "a1b2c3d4"
     assert state["issue"] == 3
     assert state["repo"] == "owner/repo"
@@ -2955,17 +2957,17 @@ def test_read_run_state_fails_fast_on_unreadable_or_malformed_state(tmp_path):
     resume must continue the SAME run (Issue #219)."""
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    path = runner.run_state_path(worktree)
+    path = run_state.run_state_path(worktree)
     path.parent.mkdir(parents=True)
     path.write_text("not json", encoding="utf-8")
     with pytest.raises(ValueError, match="run state"):
-        runner.read_run_state(worktree)
+        run_state.read_run_state(worktree)
     path.write_text("[1, 2]", encoding="utf-8")
     with pytest.raises(ValueError, match="run state"):
-        runner.read_run_state(worktree)
+        run_state.read_run_state(worktree)
     path.write_text(json.dumps({"run_id": "a1b2c3d4"}), encoding="utf-8")
     with pytest.raises(ValueError, match="run state"):
-        runner.read_run_state(worktree)
+        run_state.read_run_state(worktree)
 
 
 def test_write_run_state_preserves_the_push_history(tmp_path):
@@ -2973,22 +2975,22 @@ def test_write_run_state_preserves_the_push_history(tmp_path):
     refresh — the same delivery line keeps its recorded heads."""
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    runner.write_run_state(
+    run_state.write_run_state(
         runner.RunContext(
             run_id="a1b2c3d4", issue=3, branch="orbi/owner-repo-issue-3",
             worktree=worktree, source_repo="owner/repo",
         ),
     )
-    runner.record_pushed_head(worktree, "h1")
-    runner.record_pushed_base(worktree, "b1")
-    runner.write_run_state(
+    run_state.record_pushed_head(worktree, "h1")
+    run_state.record_pushed_base(worktree, "b1")
+    run_state.write_run_state(
         runner.RunContext(
             run_id="a1b2c3d4", issue=3, branch="orbi/owner-repo-issue-3",
             worktree=worktree, source_repo="owner/repo",
         ),
     )
-    assert runner.read_pushed_head(worktree) == "h1"
-    assert runner.read_pushed_base(worktree) == "b1"
+    assert review_merge.read_pushed_head(worktree) == "h1"
+    assert review_merge.read_pushed_base(worktree) == "b1"
 
 
 def test_record_pushed_base_is_set_once_per_run(tmp_path):
@@ -2996,15 +2998,15 @@ def test_record_pushed_base_is_set_once_per_run(tmp_path):
     not the push line's origin — the first recorded base wins."""
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    runner.write_run_state(
+    run_state.write_run_state(
         runner.RunContext(
             run_id="a1b2c3d4", issue=3, branch="orbi/owner-repo-issue-3",
             worktree=worktree, source_repo="owner/repo",
         ),
     )
-    runner.record_pushed_base(worktree, "b1")
-    runner.record_pushed_base(worktree, "b2")
-    assert runner.read_pushed_base(worktree) == "b1"
+    run_state.record_pushed_base(worktree, "b1")
+    run_state.record_pushed_base(worktree, "b2")
+    assert review_merge.read_pushed_base(worktree) == "b1"
 
 
 def test_record_pushed_head_degrades_without_the_state_file(
@@ -3016,10 +3018,10 @@ def test_record_pushed_head_degrades_without_the_state_file(
     worktree = tmp_path / "wt"
     worktree.mkdir()
     caplog.set_level("WARNING")
-    runner.record_pushed_head(worktree, "h1")
-    runner.record_pushed_base(worktree, "b1")
-    assert runner.read_pushed_head(worktree) is None
-    assert runner.read_pushed_base(worktree) is None
+    run_state.record_pushed_head(worktree, "h1")
+    run_state.record_pushed_base(worktree, "b1")
+    assert review_merge.read_pushed_head(worktree) is None
+    assert review_merge.read_pushed_base(worktree) is None
     assert "pushed_head_unrecorded" in caplog.text
 
 
@@ -3030,13 +3032,13 @@ def test_record_pushed_head_degrades_on_a_corrupt_state_file(
     only logs and degrades the merge record to `unknown`."""
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    path = runner.run_state_path(worktree)
+    path = run_state.run_state_path(worktree)
     path.parent.mkdir(parents=True)
     path.write_text("{not json", encoding="utf-8")
     caplog.set_level("WARNING")
-    runner.record_pushed_head(worktree, "h1")
-    runner.record_pushed_base(worktree, "b1")
-    assert runner.read_pushed_head(worktree) is None
+    run_state.record_pushed_head(worktree, "h1")
+    run_state.record_pushed_base(worktree, "b1")
+    assert review_merge.read_pushed_head(worktree) is None
     assert "pushed_head_unrecorded" in caplog.text
 
 
@@ -3155,7 +3157,7 @@ def test_resume_run_id_matches_by_issue_and_repo_name_across_a_rename(
     worktree (Issue #219)."""
     old = tmp_path / ".worktrees" / "orbi-xqliu-orbi-issue-42-aaaa1111"
     old.mkdir(parents=True)
-    runner.write_run_state(RunContext(run_id="aaaa1111", issue=42, branch="orbi/xqliu-orbi-issue-42", worktree=old, source_repo="xqliu/orbi"))
+    run_state.write_run_state(RunContext(run_id="aaaa1111", issue=42, branch="orbi/xqliu-orbi-issue-42", worktree=old, source_repo="xqliu/orbi"))
     assert runner.resume_run_id(
         tmp_path, "orbi-build/orbi", 42,
     ) == "aaaa1111"
@@ -3171,8 +3173,8 @@ def test_resume_run_id_returns_newest_matching_worktree(tmp_path):
     second = tmp_path / ".worktrees" / f"orbi-{slug}-issue-3-2e222222"
     first.mkdir(parents=True)
     second.mkdir(parents=True)
-    runner.write_run_state(RunContext(run_id="0d111111", issue=3, branch="b1", worktree=first, source_repo="owner/repo"))
-    runner.write_run_state(RunContext(run_id="2e222222", issue=3, branch="b2", worktree=second, source_repo="owner/repo"))
+    run_state.write_run_state(RunContext(run_id="0d111111", issue=3, branch="b1", worktree=first, source_repo="owner/repo"))
+    run_state.write_run_state(RunContext(run_id="2e222222", issue=3, branch="b2", worktree=second, source_repo="owner/repo"))
     os.utime(first, (300, 300))
     os.utime(second, (100, 100))
     assert runner.resume_run_id(tmp_path, "owner/repo", 3) == "0d111111"
@@ -3186,8 +3188,8 @@ def test_resume_run_id_excludes_other_issues_and_repos(tmp_path):
     other_repo = tmp_path / ".worktrees" / f"orbi-other-other-issue-3-ffff1111"
     other_issue.mkdir(parents=True)
     other_repo.mkdir(parents=True)
-    runner.write_run_state(RunContext(run_id="ffff0000", issue=4, branch="b1", worktree=other_issue, source_repo="owner/repo"))
-    runner.write_run_state(RunContext(run_id="ffff1111", issue=3, branch="b2", worktree=other_repo, source_repo="other/other"))
+    run_state.write_run_state(RunContext(run_id="ffff0000", issue=4, branch="b1", worktree=other_issue, source_repo="owner/repo"))
+    run_state.write_run_state(RunContext(run_id="ffff1111", issue=3, branch="b2", worktree=other_repo, source_repo="other/other"))
     assert runner.resume_run_id(tmp_path, "owner/repo", 3) is None
 
 
@@ -3204,7 +3206,7 @@ def test_resume_run_id_fails_fast_on_missing_state_file(tmp_path):
 def test_resume_run_id_fails_fast_on_corrupt_state_file(tmp_path):
     worktree = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-aaaa1111"
     worktree.mkdir(parents=True)
-    state = runner.run_state_path(worktree)
+    state = run_state.run_state_path(worktree)
     state.parent.mkdir(parents=True)
     state.write_text("corrupt", encoding="utf-8")
     with pytest.raises(RuntimeError, match="run state"):
@@ -3222,7 +3224,7 @@ def test_resume_run_id_skips_unrelated_worktrees_without_a_state_file(
     other.mkdir(parents=True)
     mine = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-aaaa1111"
     mine.mkdir(parents=True)
-    runner.write_run_state(RunContext(run_id="aaaa1111", issue=3, branch="b1", worktree=mine, source_repo="owner/repo"))
+    run_state.write_run_state(RunContext(run_id="aaaa1111", issue=3, branch="b1", worktree=mine, source_repo="owner/repo"))
     assert runner.resume_run_id(tmp_path, "owner/repo", 3) == "aaaa1111"
 
 
@@ -4083,7 +4085,7 @@ def test_process_issue_writes_run_state_and_resume_context(
         "xqliu/orbi-backlog",
     )
     # The run state file marks the worktree as the same run.
-    state = runner.read_run_state(worktree)
+    state = run_state.read_run_state(worktree)
     assert state["run_id"] == "a1b2c3d4"
     assert state["issue"] == 4
     assert state["repo"] == "xqliu/orbi-backlog"
@@ -4130,7 +4132,7 @@ def test_process_issue_fresh_run_has_no_resume_context(
         config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
         "xqliu/orbi-backlog",
     )
-    state = runner.read_run_state(worktree)
+    state = run_state.read_run_state(worktree)
     assert state["run_id"] == "ffffeeee"
     assert resume_contexts == [None]
     assert "resume_continue" not in caplog.text
@@ -5301,12 +5303,12 @@ def test_opened_pr_comment_round_trips_the_external_flag():
         "priority=normal",
         "https://github.com/xqliu/orbi/pull/592", external=True,
     )
-    scene = runner.parse_pr_comment(body)
+    scene = run_state.parse_pr_comment(body)
     assert scene["pr_url"] == "https://github.com/xqliu/orbi/pull/592"
     assert scene["run_id"] == "a1b2c3d4"
     assert bool(scene["external"]) is True
 
-    own = runner.parse_pr_comment(runner.opened_pr_comment_body(
+    own = run_state.parse_pr_comment(runner.opened_pr_comment_body(
         "a1b2c3d4",
         "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4 "
         "priority=normal",
@@ -11611,7 +11613,7 @@ def test_stream_pi_live_progress_patches_github_before_child_exits(
             patches.append(body)
 
     publisher = FakePublisher()
-    throttle = runner.LiveProgressThrottle(RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner/repo"), publisher, title="Live progress", role="implement", started=time.monotonic(), pr_url=None, review_round=0, priority="normal")
+    throttle = progress.LiveProgressThrottle(RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="owner/repo"), publisher, title="Live progress", role="implement", started=time.monotonic(), pr_url=None, review_round=0, priority="normal")
     result = pi_session.stream_pi(command, ctx=RunContext(run_id="deadbeef", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path, progress=throttle)
     assert result == "done"
     # At least one PATCH happened while the child was still running
@@ -11659,7 +11661,7 @@ def test_live_progress_throttle_patches_on_change_and_cadence():
             calls.append(body)
 
     publisher = FakePublisher()
-    throttle = runner.LiveProgressThrottle(RunContext(run_id="deadbeef", issue=1, branch="b", worktree=Path("/w"), source_repo="owner/repo"), publisher, title="Throttle task", role="implement", started=time.monotonic(), pr_url=None, review_round=0, priority="normal")
+    throttle = progress.LiveProgressThrottle(RunContext(run_id="deadbeef", issue=1, branch="b", worktree=Path("/w"), source_repo="owner/repo"), publisher, title="Throttle task", role="implement", started=time.monotonic(), pr_url=None, review_round=0, priority="normal")
     first = {
         "phase": "starting", "action": None, "result": None,
         "model_wait": False, "session_id": None,
@@ -11679,7 +11681,7 @@ def test_live_progress_throttle_patches_on_change_and_cadence():
     throttle(changed)
     assert len(calls) == 2
     # ...until the 30 s cadence elapses: passed as a heartbeat update.
-    throttle._last_patch -= runner.PI_HEARTBEAT_SECONDS + 1
+    throttle._last_patch -= progress.PI_HEARTBEAT_SECONDS + 1
     throttle(changed)
     assert len(calls) == 3
     # The rendered body carries the live state.
@@ -11701,7 +11703,7 @@ def test_live_progress_throttle_patches_on_recovery_change():
             calls.append(body)
 
     publisher = FakePublisher()
-    throttle = runner.LiveProgressThrottle(RunContext(run_id="deadbeef", issue=94, branch="b", worktree=Path("/w"), source_repo="owner/repo"), publisher, title="Idle recovery", role="implement", started=time.monotonic(), pr_url=None, review_round=0, priority="normal")
+    throttle = progress.LiveProgressThrottle(RunContext(run_id="deadbeef", issue=94, branch="b", worktree=Path("/w"), source_repo="owner/repo"), publisher, title="Idle recovery", role="implement", started=time.monotonic(), pr_url=None, review_round=0, priority="normal")
     first = {
         "phase": "test", "action": "bash pytest tests/", "result": None,
         "model_wait": False, "session_id": None,
@@ -13090,7 +13092,7 @@ def test_delivery_step_runs_one_review_per_tick(
     # mock reports findings so the next tick runs the next round.
     reviews = []
     monkeypatch.setattr(
-        runner, "review_and_merge_if_clean",
+        review_merge, "review_and_merge_if_clean",
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     issue = {"number": 39, "title": "task", "body": ""}
@@ -13138,7 +13140,7 @@ def test_delivery_step_defers_when_ci_pending(
     config = config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main")
     reviews = []
     monkeypatch.setattr(
-        runner, "review_and_merge_if_clean",
+        review_merge, "review_and_merge_if_clean",
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     edits = []
@@ -13192,7 +13194,7 @@ def test_delivery_step_auto_merges_on_clean_review(
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
     monkeypatch.setattr(
-        runner, "review_and_merge_if_clean",
+        review_merge, "review_and_merge_if_clean",
         lambda *args, **kwargs: True,
     )
     # The derived worktree exists: a normal resume reaches the review
@@ -13254,7 +13256,7 @@ def test_delivery_step_passes_p0_priority_to_the_review(
         review_calls.append(kwargs)
         return True
 
-    monkeypatch.setattr(runner, "review_and_merge_if_clean", fake_review)
+    monkeypatch.setattr(review_merge, "review_and_merge_if_clean", fake_review)
     (tmp_path / ".worktrees"
      / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     issue = {
@@ -13560,7 +13562,7 @@ def test_delivery_step_blocks_when_scene_base_differs_from_config(
     # terminal before any git/Pi mutation.
     reviews: list = []
     monkeypatch.setattr(
-        runner, "review_and_merge_if_clean",
+        review_merge, "review_and_merge_if_clean",
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     issue = {"number": 39, "title": "task", "body": ""}
@@ -13693,7 +13695,7 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
     # terminal before any git/Pi mutation.
     reviews: list = []
     monkeypatch.setattr(
-        runner, "review_and_merge_if_clean",
+        review_merge, "review_and_merge_if_clean",
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     issue = {"number": 39, "title": "task", "body": ""}
@@ -13826,7 +13828,7 @@ def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
     )
     reviews: list = []
     monkeypatch.setattr(
-        runner, "review_and_merge_if_clean",
+        review_merge, "review_and_merge_if_clean",
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     issue = {"number": 39, "title": "task", "body": ""}
@@ -13892,7 +13894,7 @@ def test_delivery_step_runs_review_when_fix_needed(
     # #82) and reports findings; the next tick runs the next round.
     reviews = []
     monkeypatch.setattr(
-        runner, "review_and_merge_if_clean",
+        review_merge, "review_and_merge_if_clean",
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     issue = {"number": 39, "title": "task", "body": "stale body"}
@@ -14135,7 +14137,7 @@ def test_delivery_step_repairs_in_progress_label_and_logs_ci(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
-    monkeypatch.setattr(runner, "review_and_merge_if_clean", lambda *a, **k: True)
+    monkeypatch.setattr(review_merge, "review_and_merge_if_clean", lambda *a, **k: True)
     (tmp_path / ".worktrees" /
      "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     caplog.set_level("INFO")
@@ -14304,7 +14306,7 @@ def _review_round_env(
     )
     reviews: list = []
     monkeypatch.setattr(
-        runner, "review_and_merge_if_clean",
+        review_merge, "review_and_merge_if_clean",
         lambda *args, **kwargs: reviews.append((args, kwargs))
         or review_result,
     )
@@ -14325,7 +14327,7 @@ def test_run_review_round_returns_true_when_review_merges(
         monkeypatch, tmp_path, review_result=True,
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    outcome = runner._run_review_round(
+    outcome = review_merge._run_review_round(
         PR_URL, issue,
         config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
     )
@@ -14352,7 +14354,7 @@ def test_run_review_round_returns_false_on_findings(
     the cadence and polls the next round."""
     edits, comments, reviews, _ = _review_round_env(monkeypatch, tmp_path)
     issue = {"number": 39, "title": "task", "body": ""}
-    outcome = runner._run_review_round(
+    outcome = review_merge._run_review_round(
         PR_URL, issue,
         config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
     )
@@ -14369,7 +14371,7 @@ def test_run_review_round_passes_prior_comments_after_first_round(
         monkeypatch, tmp_path, scene_round=1,
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    assert runner._run_review_round(
+    assert review_merge._run_review_round(
         PR_URL, issue,
         config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
     ) is False
@@ -14388,7 +14390,7 @@ def test_run_review_round_returns_none_when_scene_base_differs(
         monkeypatch, tmp_path, scene_base="develop",
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    outcome = runner._run_review_round(
+    outcome = review_merge._run_review_round(
         PR_URL, issue,
         config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
     )
@@ -14415,7 +14417,7 @@ def test_run_review_round_returns_none_when_worktree_missing(
         monkeypatch, tmp_path, with_worktree=False,
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    outcome = runner._run_review_round(
+    outcome = review_merge._run_review_round(
         PR_URL, issue,
         config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
     )
@@ -22457,7 +22459,7 @@ def test_deliver_pr_completes_the_closeout(monkeypatch, tmp_path):
             f"refs/heads/{DELIVER_BRANCH}"] in calls
     # The pushed head is the delivery's first recorded engine-pushed
     # head (Issue #833): the merge record subtracts exactly these.
-    assert runner.read_pushed_head(tmp_path) == FAKE_HEAD_SHA
+    assert review_merge.read_pushed_head(tmp_path) == FAKE_HEAD_SHA
     assert any(
         command[:2] == ["gh", "pr"] and command[2] == "list"
         for command in calls
@@ -23316,7 +23318,7 @@ def test_delivery_step_never_closes_triage_issue_after_review(
     # False is the D2 triage stop's return (the round ends without a
     # merge — the ticket is now the maintainer's).
     monkeypatch.setattr(
-        runner, "review_and_merge_if_clean",
+        review_merge, "review_and_merge_if_clean",
         lambda *args, **kwargs: False,
     )
     (tmp_path / ".worktrees"

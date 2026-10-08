@@ -40,6 +40,7 @@ from conftest import git
 
 import orbi.claim as claim
 import orbi.runner as runner
+import orbi.review_merge as review_merge
 from orbi import human_review
 from seam import resume_deps, seam
 import orbi.journal as journal
@@ -504,7 +505,7 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
         base_sha=scene["base_sha"],
         run_id=scene["run_id"],
     )
-    merged = runner.review_and_merge_if_clean(
+    merged = review_merge.review_and_merge_if_clean(
         worktree, branch, "main", review_config, REPO, ISSUE_NUMBER,
         title=issue()["title"],
         # Issue #101: the step derives the priority from the scanned
@@ -968,7 +969,7 @@ def test_e2e_human_review_checklist_failure_is_a_bypass(
     def boom(*args, **kwargs):
         raise RuntimeError("github down")
 
-    monkeypatch.setattr(runner, "human_review_checklist", boom)
+    monkeypatch.setattr(review_merge, "human_review_checklist", boom)
     result = runner.process_issue(issue(), config, REPO)
     assert result.url == PR_URL
     assert not [
