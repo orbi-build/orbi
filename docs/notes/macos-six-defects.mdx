@@ -4,8 +4,6 @@ description: "Why did a launchd port that passed CI still fail on a real Mac, an
 date: 2026-09-17
 ---
 
-# We merged macOS support. It failed on every real Mac in six places.
-
 Orbi runs itself: every change to the runner is delivered by the runner, reviewed by a second session, merged by a gate, and shipped as a tagged release. On 2026-09-14 that loop delivered macOS support (Issue #849, PR #851): a scheduler layer with a launchd implementation next to the systemd one, a platform-gated `install.sh`, 2,510 lines added, 3,083 tests green.
 
 Nobody had run it on a Mac. The review session had verified the launchd branch through an injected fake, which is what the ticket asked for. The next morning a line-by-line read against `launchctl(1)` and a real `/bin/sh` found six defects that would have failed on any real Mac.

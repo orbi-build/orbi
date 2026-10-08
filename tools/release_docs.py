@@ -15,6 +15,11 @@ the engine's former release-docs page builder with the same output format; the
 one addition is that the
 "release task" clause is omitted when no matching `ai-release` Issue exists.
 
+Issue #1571: the page carries its visible title and a meta description as YAML
+frontmatter (Mintlify renders the frontmatter `title` as the page's single H1)
+instead of opening with a body `# …` heading; the description is built from
+that release's own changelog.
+
 Input: one tag. The script reads the published GitHub Release
 (`gh release view <tag> --json body,publishedAt,url`), the annotated tag object
 and its commit (git), and the release task Issue (the `ai-release` Issue titled
@@ -29,12 +34,30 @@ Usage:  python3 tools/release_docs.py <tag> [--repo <checkout root>]
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 RELEASE_DOCS_LATEST_MARKER_EN = " (latest)"
 RELEASE_DOCS_LATEST_MARKER_ZH = "（最新）"
+
+# Meta description budget (Issue #1571): the language models truncate a
+# search snippet around here.
+RELEASE_DOCS_DESCRIPTION_MAX_CHARS = 155
+
+# A Markdown link: the URL goes, the link text stays (a changelog bullet
+# reads as prose in the meta description).
+_MARKDOWN_LINK = re.compile(r"\[([^\[\]]*)\]\([^()]*\)")
+# One Issue/PR reference token: `Issue #12`, `PR #34` or a bare `#56`.
+_REFERENCE = r"(?:(?:Issue|PR)\s*#\d+|#\d+)"
+_REFERENCE_SEPARATOR = r"\s*[;,、，/]\s*"
+# The trailing `([Issue #12](…); [PR #34](…))` reference list of a bullet.
+_TRAILING_REFERENCES = re.compile(
+    rf"\s*\(\s*{_REFERENCE}"
+    rf"(?:{_REFERENCE_SEPARATOR}{_REFERENCE})*"
+    r"\s*\)\s*[.。]?\s*$"
+)
 
 # The release-machine audit blocks the GitHub Release body carries for
 # the release state machine's own evidence trail (#204). They stay on
@@ -69,6 +92,98 @@ def strip_release_audit_sections(notes: str) -> str:
     return "\n".join(kept).strip()
 
 
+def changelog_bullets(notes: str) -> list[str]:
+    """The Markdown bullet texts of the release's `## Changelog` section.
+
+    The section runs from its `## Changelog` heading to the next `## …`
+    heading; a fenced code block contributes no bullets. No section (a
+    release with nothing linked to its Milestone) means no bullets.
+    """
+    lines = notes.splitlines()
+    start = next(
+        (index for index, line in enumerate(lines)
+         if line.strip() == "## Changelog"),
+        None,
+    )
+    if start is None:
+        return []
+    bullets: list[str] = []
+    in_fence = False
+    for line in lines[start + 1:]:
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if line.startswith("## "):
+            break
+        match = re.match(r"^\s*[-*+]\s+(.*\S)\s*$", line)
+        if match:
+            bullets.append(match.group(1))
+    return bullets
+
+
+def description_text(bullet: str) -> str:
+    """One changelog bullet as meta-description prose: Markdown links
+    reduced to their text and the trailing Issue/PR reference list gone."""
+    text = _MARKDOWN_LINK.sub(r"\1", bullet)
+    text = _TRAILING_REFERENCES.sub("", text)
+    return text.strip()
+
+
+def truncate_at_word_boundary(text: str, limit: int) -> str:
+    """Cut `text` to at most `limit` characters at a word boundary."""
+    if len(text) <= limit:
+        return text
+    clipped = text[:limit]
+    last_space = clipped.rfind(" ")
+    if last_space > 0:
+        clipped = clipped[:last_space]
+    return clipped.rstrip()
+
+
+def release_docs_description(*, version: str, language: str,
+                             notes: str) -> str:
+    """The meta description for one release page (Issue #1571).
+
+    Built from that release's own changelog, so no two pages share one:
+    the first bullet plus the count of the other bullets, truncated at a
+    word boundary to at most `RELEASE_DOCS_DESCRIPTION_MAX_CHARS`.
+    """
+    bullets = changelog_bullets(notes)
+    if language == "en":
+        prefix = f"Orbi {version} release notes: "
+        if not bullets:
+            return prefix + "tag and verification for the GitHub Release."
+        other = len(bullets) - 1
+        suffix = (
+            f" and {other} more change{'s' if other != 1 else ''}."
+            if other else ""
+        )
+    elif language == "zh":
+        prefix = f"Orbi {version} 发布说明："
+        if not bullets:
+            return prefix + "GitHub Release 的 tag 与验证记录。"
+        other = len(bullets) - 1
+        suffix = f"，另有 {other} 项改动。" if other else ""
+    else:
+        raise ReleaseDocsError(
+            f"release docs page language {language!r} is not supported "
+            "(use 'en' or 'zh')"
+        )
+    budget = RELEASE_DOCS_DESCRIPTION_MAX_CHARS - len(prefix) - len(suffix)
+    first = truncate_at_word_boundary(
+        description_text(bullets[0]), max(budget, 1),
+    )
+    return prefix + first + suffix
+
+
+def yaml_scalar(value: str) -> str:
+    """One YAML double-quoted scalar for frontmatter: a JSON string is a
+    valid YAML double-quoted scalar, with the same escaping."""
+    return json.dumps(value, ensure_ascii=False)
+
+
 def release_docs_page(*, version: str, tag_object: str,
                       release_commit: str, published_at: str | None,
                       release_url: str, issue_number: int | None,
@@ -89,6 +204,9 @@ def release_docs_page(*, version: str, tag_object: str,
         if not line.strip().startswith("<!--")
     ]
     notes = strip_release_audit_sections("\n".join(lines))
+    description = release_docs_description(
+        version=version, language=language, notes=notes,
+    )
     task_en = (
         f" (release task: Issue #{issue_number})"
         if issue_number is not None else ""
@@ -98,7 +216,7 @@ def release_docs_page(*, version: str, tag_object: str,
         if issue_number is not None else ""
     )
     if language == "en":
-        title = f"# {version} release" + (" (latest)" if latest else "")
+        title = f"{version} release" + (" (latest)" if latest else "")
         intro = (
             f"`{version}` release notes for the GitHub Release "
             f"[{version}]({release_url}){task_en}."
@@ -113,8 +231,9 @@ def release_docs_page(*, version: str, tag_object: str,
             f"| `{version}` | annotated tag `{tag_object}` "
             f"| commit `{release_commit}` |"
         )
-    elif language == "zh":
-        title = f"# {version} 发布" + ("（最新）" if latest else "")
+    else:
+        # release_docs_description() above rejected any other language.
+        title = f"{version} 发布" + ("（最新）" if latest else "")
         intro = (
             f"`{version}` 的 GitHub Release 发布说明："
             f"[{version}]({release_url}){task_zh}。"
@@ -129,13 +248,14 @@ def release_docs_page(*, version: str, tag_object: str,
             f"| `{version}` | 注解 tag `{tag_object}` "
             f"| 提交 `{release_commit}` |"
         )
-    else:
-        raise ReleaseDocsError(
-            f"release docs page language {language!r} is not supported "
-            "(use 'en' or 'zh')"
-        )
+    frontmatter = "\n".join([
+        "---",
+        f"title: {yaml_scalar(title)}",
+        f"description: {yaml_scalar(description)}",
+        "---",
+    ])
     return "\n".join([
-        title, "",
+        frontmatter, "",
         intro, "",
         heading, "",
         table, "",
@@ -222,12 +342,15 @@ def move_latest_marker(repo_root: Path, old_slug: str,
 
     Only the newest release page may carry the marker:
     ` (latest)` (en) / `（最新）` (zh) is stripped from the previous
-    latest page's H1. When the old page already lacks the marker the
-    move is only accepted on a resume (`resume=True`: the new page
-    already carries the marker — a partial step of an earlier attempt
-    already moved it); otherwise the invariant is broken and the step
-    fails fast — a broken state is never silently repaired. Returns the
-    changed relative paths.
+    latest page's frontmatter `title` (Issue #1571: the title is the
+    page's single H1, so the marker lives in the frontmatter, and the
+    replacement is confined to that line — a description may quote the
+    `(latest)` marker without owning it). When the old page already
+    lacks the marker the move is only accepted on a resume
+    (`resume=True`: the new page already carries the marker — a partial
+    step of an earlier attempt already moved it); otherwise the
+    invariant is broken and the step fails fast — a broken state is
+    never silently repaired. Returns the changed relative paths.
     """
     changed: list[str] = []
     for directory, marker in (("docs", RELEASE_DOCS_LATEST_MARKER_EN),
@@ -238,28 +361,29 @@ def move_latest_marker(repo_root: Path, old_slug: str,
                 f"release docs sync: previous latest page {path} is "
                 "missing — cannot move the (latest) marker"
             )
-        text = path.read_text(encoding="utf-8")
-        first_line, _, rest = text.partition("\n")
-        if marker in first_line:
-            path.write_text(
-                first_line.replace(marker, "", 1) + "\n" + rest,
-                encoding="utf-8",
-            )
-            changed.append(f"{directory}/{old_slug}.mdx")
-            continue
-        if resume:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            if line.startswith("title:") and marker in line:
+                lines[index] = line.replace(marker, "", 1)
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                changed.append(f"{directory}/{old_slug}.mdx")
+                break
+        else:
             new_path = repo_root / directory / f"{new_slug}.mdx"
-            new_first = (
-                new_path.read_text(encoding="utf-8").splitlines()[0]
+            new_text = (
+                new_path.read_text(encoding="utf-8")
                 if new_path.is_file() else ""
             )
-            if marker in new_first:
+            if resume and any(
+                line.startswith("title:") and marker in line
+                for line in new_text.splitlines()
+            ):
                 continue
-        raise ReleaseDocsError(
-            f"release docs sync: {path} does not carry the (latest) "
-            "marker in its title and the move did not happen yet — "
-            "the latest-marker invariant is broken, refusing to guess"
-        )
+            raise ReleaseDocsError(
+                f"release docs sync: {path} does not carry the (latest) "
+                "marker in its title and the move did not happen yet — "
+                "the latest-marker invariant is broken, refusing to guess"
+            )
     return changed
 
 

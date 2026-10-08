@@ -48,9 +48,138 @@ class _Result:
         self.stderr = stderr
 
 
+def _page_fields(page: str) -> tuple[dict[str, str], list[str]]:
+    """Parse a generated page's YAML frontmatter (key -> unquoted value)
+    and return it with the body lines (Issue #1571)."""
+    lines = page.splitlines()
+    assert lines and lines[0] == "---", "the page must open with frontmatter"
+    end = lines.index("---", 1)
+    fields: dict[str, str] = {}
+    for line in lines[1:end]:
+        key, _, value = line.partition(":")
+        fields[key.strip()] = value.strip().strip('"')
+    return fields, lines[end + 1:]
+
+
+def _changelog_body(first_bullet: str, *more_bullets: str) -> str:
+    bullets = "\n".join(f"- {bullet}" for bullet in (first_bullet, *more_bullets))
+    return f"# {TAG}\n\n## Changelog\n\n{bullets}\n"
+
+
 # ---------------------------------------------------------------------------
 # Page rendering
 # ---------------------------------------------------------------------------
+
+
+def test_release_docs_page_emits_frontmatter_title_and_derived_description():
+    """Issue #1571: the generated page carries the title in YAML
+    frontmatter (Mintlify renders it as the single H1) and a meta
+    description built from the first changelog bullet; no body line
+    opens a second `# …` H1."""
+    script = load_script()
+    body = _changelog_body(
+        "First change ([Issue #1](https://example.test/1); "
+        "[PR #2](https://example.test/2))",
+        "Second change ([Issue #3](https://example.test/3))",
+    )
+    for language, title, tail in (
+        ("en", f"{TAG} release (latest)", " and 1 more change."),
+        ("zh", f"{TAG} 发布（最新）", "，另有 1 项改动。"),
+    ):
+        page = script.release_docs_page(
+            version=TAG, tag_object=TAG_OBJECT, release_commit=RELEASE_COMMIT,
+            published_at=PUBLISHED_AT, release_url=RELEASE_URL,
+            issue_number=42, body=body, language=language,
+        )
+        fields, body_lines = _page_fields(page)
+        assert fields["title"] == title
+        description = fields["description"]
+        assert description, "the description must not be empty"
+        assert len(description) <= 155, description
+        assert "First change" in description
+        assert "Second change" not in description
+        assert description.endswith(tail)
+        assert not any(line.startswith("# ") for line in body_lines)
+
+
+def test_release_docs_page_description_pluralizes_the_other_changes():
+    script = load_script()
+    body = _changelog_body("Only change", "Another", "And a third")
+    en_page = script.release_docs_page(
+        version=TAG, tag_object=TAG_OBJECT, release_commit=RELEASE_COMMIT,
+        published_at=PUBLISHED_AT, release_url=RELEASE_URL, issue_number=42,
+        body=body, language="en",
+    )
+    zh_page = script.release_docs_page(
+        version=TAG, tag_object=TAG_OBJECT, release_commit=RELEASE_COMMIT,
+        published_at=PUBLISHED_AT, release_url=RELEASE_URL, issue_number=42,
+        body=body, language="zh",
+    )
+    en_description = _page_fields(en_page)[0]["description"]
+    zh_description = _page_fields(zh_page)[0]["description"]
+    assert en_description == (
+        f"Orbi {TAG} release notes: Only change and 2 more changes."
+    )
+    assert zh_description == (
+        f"Orbi {TAG} 发布说明：Only change，另有 2 项改动。"
+    )
+
+
+def test_release_docs_page_description_truncates_at_a_word_boundary():
+    script = load_script()
+    body = _changelog_body(
+        " ".join(["alpha"] * 60) + " ([Issue #1](https://example.test/1))",
+    )
+    for language in ("en", "zh"):
+        page = script.release_docs_page(
+            version=TAG, tag_object=TAG_OBJECT, release_commit=RELEASE_COMMIT,
+            published_at=PUBLISHED_AT, release_url=RELEASE_URL,
+            issue_number=42, body=body, language=language,
+        )
+        description = _page_fields(page)[0]["description"]
+        assert len(description) <= 155
+        assert "alpha" in description
+        assert description.split()[-1] == "alpha"
+
+
+def test_truncate_at_word_boundary_keeps_a_space_less_text_whole():
+    script = load_script()
+    assert script.truncate_at_word_boundary("short", 50) == "short"
+    assert script.truncate_at_word_boundary("a" * 200, 50) == "a" * 50
+    assert script.truncate_at_word_boundary("one two three", 8) == "one two"
+
+
+def test_changelog_bullets_ignore_code_fences_and_later_sections():
+    script = load_script()
+    notes = (
+        f"# {TAG}\n\n## Changelog\n\n"
+        "```text\n- not a bullet\n```\n\n"
+        "- real bullet\n\n"
+        "## Contributors\n\n- tag: v1.2.3\n"
+    )
+    assert script.changelog_bullets(notes) == ["real bullet"]
+
+
+def test_release_docs_page_description_falls_back_without_changelog_bullets():
+    script = load_script()
+    page = script.release_docs_page(
+        version=TAG, tag_object=TAG_OBJECT, release_commit=RELEASE_COMMIT,
+        published_at=PUBLISHED_AT, release_url=RELEASE_URL, issue_number=42,
+        body=f"# {TAG}\n\nNo deliveries are linked to this milestone.\n",
+        language="en",
+    )
+    zh_page = script.release_docs_page(
+        version=TAG, tag_object=TAG_OBJECT, release_commit=RELEASE_COMMIT,
+        published_at=PUBLISHED_AT, release_url=RELEASE_URL, issue_number=42,
+        body=f"# {TAG}\n\nNo deliveries are linked to this milestone.\n",
+        language="zh",
+    )
+    assert _page_fields(page)[0]["description"] == (
+        f"Orbi {TAG} release notes: tag and verification for the GitHub Release."
+    )
+    assert _page_fields(zh_page)[0]["description"] == (
+        f"Orbi {TAG} 发布说明：GitHub Release 的 tag 与验证记录。"
+    )
 
 
 def test_release_docs_page_renders_en_and_zh_titles():
@@ -75,9 +204,9 @@ def test_release_docs_page_renders_en_and_zh_titles():
     )
     en_page = script.release_docs_page(**kwargs, language="en")
     zh_page = script.release_docs_page(**kwargs, language="zh")
-    assert en_page.startswith(f"# {TAG} release (latest)")
+    assert _page_fields(en_page)[0]["title"] == f"{TAG} release (latest)"
     assert f"(release task: Issue #42)" in en_page
-    assert zh_page.startswith(f"# {TAG} 发布（最新）")
+    assert _page_fields(zh_page)[0]["title"] == f"{TAG} 发布（最新）"
     # The engine audit blocks (Scope / Pre-release gates / run_id) are
     # dropped from the reader-facing page.
     assert "Scope (verified item by item)" not in en_page
@@ -128,7 +257,7 @@ def test_release_docs_page_drops_html_comments_and_the_leading_heading():
         body=f"# {TAG}\n\n<!-- orbi:run=abc -->\n\n- change\n",
         language="en",
     )
-    assert page.splitlines()[0] == f"# {TAG} release (latest)"
+    assert _page_fields(page)[0]["title"] == f"{TAG} release (latest)"
     assert "orbi:run" not in page
 
 
@@ -257,16 +386,20 @@ def test_update_release_navigation_fails_fast_on_a_single_release_group():
         script.update_release_navigation(config, "release-v0.9.0")
 
 
+def _release_page(title: str, extra: str = "") -> str:
+    return f'---\ntitle: "{title}"\ndescription: "d"\n---\n\n{extra}\n'
+
+
 def _write_marker_pages(tmp_path: Path) -> None:
     (tmp_path / "docs" / "zh").mkdir(parents=True)
     (tmp_path / "docs" / "release-v0.9.0.mdx").write_text(
-        "# v0.9.0 release (latest)\n\nold\n", encoding="utf-8")
+        _release_page("v0.9.0 release (latest)", "old"), encoding="utf-8")
     (tmp_path / "docs" / "zh" / "release-v0.9.0.mdx").write_text(
-        "# v0.9.0 发布（最新）\n\n旧\n", encoding="utf-8")
+        _release_page("v0.9.0 发布（最新）", "旧"), encoding="utf-8")
     (tmp_path / "docs" / "release-v1.0.0.mdx").write_text(
-        "# v1.0.0 release (latest)\n\nnew\n", encoding="utf-8")
+        _release_page("v1.0.0 release (latest)", "new"), encoding="utf-8")
     (tmp_path / "docs" / "zh" / "release-v1.0.0.mdx").write_text(
-        "# v1.0.0 发布（最新）\n\n新\n", encoding="utf-8")
+        _release_page("v1.0.0 发布（最新）", "新"), encoding="utf-8")
 
 
 def test_move_latest_marker_moves_the_marker_off_the_old_page(tmp_path):
@@ -278,10 +411,10 @@ def test_move_latest_marker_moves_the_marker_off_the_old_page(tmp_path):
     assert changed == ["docs/release-v0.9.0.mdx", "docs/zh/release-v0.9.0.mdx"]
     old_en = (tmp_path / "docs" / "release-v0.9.0.mdx").read_text()
     old_zh = (tmp_path / "docs" / "zh" / "release-v0.9.0.mdx").read_text()
-    assert old_en.splitlines()[0] == "# v0.9.0 release"
-    assert old_zh.splitlines()[0] == "# v0.9.0 发布"
+    assert _page_fields(old_en)[0]["title"] == "v0.9.0 release"
+    assert _page_fields(old_zh)[0]["title"] == "v0.9.0 发布"
     new_en = (tmp_path / "docs" / "release-v1.0.0.mdx").read_text()
-    assert new_en.splitlines()[0] == "# v1.0.0 release (latest)"
+    assert _page_fields(new_en)[0]["title"] == "v1.0.0 release (latest)"
 
 
 def test_move_latest_marker_fails_fast_when_the_old_page_is_missing(tmp_path):
@@ -296,13 +429,13 @@ def test_move_latest_marker_fails_fast_without_the_marker_on_a_fresh_move(tmp_pa
     script = load_script()
     (tmp_path / "docs" / "zh").mkdir(parents=True)
     (tmp_path / "docs" / "release-v0.9.0.mdx").write_text(
-        "# v0.9.0 release\n", encoding="utf-8")
+        _release_page("v0.9.0 release"), encoding="utf-8")
     (tmp_path / "docs" / "zh" / "release-v0.9.0.mdx").write_text(
-        "# v0.9.0 发布\n", encoding="utf-8")
+        _release_page("v0.9.0 发布"), encoding="utf-8")
     (tmp_path / "docs" / "release-v1.0.0.mdx").write_text(
-        "# v1.0.0 release (latest)\n", encoding="utf-8")
+        _release_page("v1.0.0 release (latest)"), encoding="utf-8")
     (tmp_path / "docs" / "zh" / "release-v1.0.0.mdx").write_text(
-        "# v1.0.0 发布（最新）\n", encoding="utf-8")
+        _release_page("v1.0.0 发布（最新）"), encoding="utf-8")
     with pytest.raises(script.ReleaseDocsError, match="does not carry"):
         script.move_latest_marker(
             tmp_path, "release-v0.9.0", "release-v1.0.0", resume=False,
@@ -313,13 +446,13 @@ def test_move_latest_marker_accepts_a_resumed_move(tmp_path):
     script = load_script()
     (tmp_path / "docs" / "zh").mkdir(parents=True)
     (tmp_path / "docs" / "release-v0.9.0.mdx").write_text(
-        "# v0.9.0 release\n", encoding="utf-8")
+        _release_page("v0.9.0 release"), encoding="utf-8")
     (tmp_path / "docs" / "zh" / "release-v0.9.0.mdx").write_text(
-        "# v0.9.0 发布\n", encoding="utf-8")
+        _release_page("v0.9.0 发布"), encoding="utf-8")
     (tmp_path / "docs" / "release-v1.0.0.mdx").write_text(
-        "# v1.0.0 release (latest)\n", encoding="utf-8")
+        _release_page("v1.0.0 release (latest)"), encoding="utf-8")
     (tmp_path / "docs" / "zh" / "release-v1.0.0.mdx").write_text(
-        "# v1.0.0 发布（最新）\n", encoding="utf-8")
+        _release_page("v1.0.0 发布（最新）"), encoding="utf-8")
     assert script.move_latest_marker(
         tmp_path, "release-v0.9.0", "release-v1.0.0", resume=True,
     ) == []
@@ -329,13 +462,26 @@ def test_move_latest_marker_rejects_an_unmoved_marker_on_resume(tmp_path):
     script = load_script()
     (tmp_path / "docs" / "zh").mkdir(parents=True)
     (tmp_path / "docs" / "release-v0.9.0.mdx").write_text(
-        "# v0.9.0 release\n", encoding="utf-8")
+        _release_page("v0.9.0 release"), encoding="utf-8")
     (tmp_path / "docs" / "zh" / "release-v0.9.0.mdx").write_text(
-        "# v0.9.0 发布\n", encoding="utf-8")
+        _release_page("v0.9.0 发布"), encoding="utf-8")
     (tmp_path / "docs" / "release-v1.0.0.mdx").write_text(
-        "# v1.0.0 release\n", encoding="utf-8")
+        _release_page("v1.0.0 release"), encoding="utf-8")
     (tmp_path / "docs" / "zh" / "release-v1.0.0.mdx").write_text(
-        "# v1.0.0 发布\n", encoding="utf-8")
+        _release_page("v1.0.0 发布"), encoding="utf-8")
+    with pytest.raises(script.ReleaseDocsError, match="does not carry"):
+        script.move_latest_marker(
+            tmp_path, "release-v0.9.0", "release-v1.0.0", resume=True,
+        )
+
+
+def test_move_latest_marker_rejects_a_resume_without_the_new_page(tmp_path):
+    script = load_script()
+    (tmp_path / "docs" / "zh").mkdir(parents=True)
+    (tmp_path / "docs" / "release-v0.9.0.mdx").write_text(
+        _release_page("v0.9.0 release"), encoding="utf-8")
+    (tmp_path / "docs" / "zh" / "release-v0.9.0.mdx").write_text(
+        _release_page("v0.9.0 发布"), encoding="utf-8")
     with pytest.raises(script.ReleaseDocsError, match="does not carry"):
         script.move_latest_marker(
             tmp_path, "release-v0.9.0", "release-v1.0.0", resume=True,
@@ -437,9 +583,9 @@ def _release_repo(tmp_path: Path) -> Path:
     docs = tmp_path / "docs"
     (docs / "zh").mkdir(parents=True)
     (docs / "release-v0.9.0.mdx").write_text(
-        "# v0.9.0 release (latest)\n\nold\n", encoding="utf-8")
+        _release_page("v0.9.0 release (latest)", "old"), encoding="utf-8")
     (docs / "zh" / "release-v0.9.0.mdx").write_text(
-        "# v0.9.0 发布（最新）\n\n旧\n", encoding="utf-8")
+        _release_page("v0.9.0 发布（最新）", "旧"), encoding="utf-8")
     (docs / "docs.json").write_text(json.dumps(_release_groups(
         ["release-v0.9.0"], ["zh/release-v0.9.0"],
     )), encoding="utf-8")
@@ -471,15 +617,16 @@ def test_generate_writes_pages_marker_and_navigation(tmp_path, monkeypatch):
     zh_page = (
         repo / "docs" / "zh" / f"release-{TAG}.mdx"
     ).read_text(encoding="utf-8")
-    assert en_page.startswith(f"# {TAG} release (latest)")
+    assert _page_fields(en_page)[0]["title"] == f"{TAG} release (latest)"
+    assert _page_fields(en_page)[0]["description"]
     assert f"(release task: Issue #42)" in en_page
-    assert zh_page.startswith(f"# {TAG} 发布（最新）")
+    assert _page_fields(zh_page)[0]["title"] == f"{TAG} 发布（最新）"
     old_en = (repo / "docs" / "release-v0.9.0.mdx").read_text(encoding="utf-8")
     old_zh = (
         repo / "docs" / "zh" / "release-v0.9.0.mdx"
     ).read_text(encoding="utf-8")
-    assert old_en.splitlines()[0] == "# v0.9.0 release"
-    assert old_zh.splitlines()[0] == "# v0.9.0 发布"
+    assert _page_fields(old_en)[0]["title"] == "v0.9.0 release"
+    assert _page_fields(old_zh)[0]["title"] == "v0.9.0 发布"
     config = json.loads((repo / "docs" / "docs.json").read_text(encoding="utf-8"))
     en_pages = config["navigation"]["languages"][0]["groups"][0]["pages"]
     zh_pages = config["navigation"]["languages"][1]["groups"][0]["pages"]
@@ -543,7 +690,7 @@ def test_generate_skips_the_marker_move_when_the_tag_is_the_nav_head(
 
     assert script.generate(TAG, repo) == f"release notes for {TAG} generated"
     old_en = (repo / "docs" / "release-v0.9.0.mdx").read_text(encoding="utf-8")
-    assert old_en.splitlines()[0] == "# v0.9.0 release (latest)"
+    assert _page_fields(old_en)[0]["title"] == "v0.9.0 release (latest)"
 
 
 def test_generate_fails_fast_without_a_mintlify_docs_site(tmp_path):

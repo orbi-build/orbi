@@ -260,11 +260,62 @@ def test_mdx_prose_rejects_known_tag_without_opener(tmp_path, monkeypatch):
         test_mdx_prose_has_no_bare_closing_tags()
 
 
+FRONTMATTER_DELIMITER = "---"
+
+
+def page_frontmatter(path: Path) -> tuple[dict[str, str], list[str]]:
+    """Parse a docs page's YAML frontmatter (key -> raw value) and body."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert lines and lines[0].strip() == FRONTMATTER_DELIMITER, (
+        f"{path} must start with YAML frontmatter"
+    )
+    assert FRONTMATTER_DELIMITER in lines[1:], (
+        f"{path} frontmatter is not closed"
+    )
+    end = lines.index(FRONTMATTER_DELIMITER, 1)
+    frontmatter: dict[str, str] = {}
+    for line in lines[1:end]:
+        key, _, value = line.partition(":")
+        frontmatter[key.strip()] = value.strip()
+    return frontmatter, lines[end + 1:]
+
+
+def test_every_docs_page_has_one_h1_and_a_meta_description():
+    """Issue #1571: Mintlify renders the frontmatter `title` as the page
+    `<h1>`, and the body used to open with another Markdown `# …` heading,
+    so every page rendered two H1s; generated release pages and the license
+    page had no meta description at all. Every page carries a `title` and a
+    `description`, and no body line outside a code fence opens an H1."""
+    checked = 0
+    for path in docs_files():
+        frontmatter, body = page_frontmatter(path)
+        assert frontmatter.get("title"), f"{path} needs a frontmatter title"
+        assert frontmatter.get("description"), (
+            f"{path} needs a frontmatter description"
+        )
+        in_fence = False
+        for line_number, line in enumerate(body, 1):
+            if line.startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            assert not line.startswith("# "), (
+                f"{path}: body line {line_number} opens a second <h1>: "
+                f"{line!r}"
+            )
+        checked += 1
+    assert checked, "docs/ contains no Markdown/MDX pages"
+
+
 def test_non_release_docs_have_question_metadata_and_answer_opening():
     """Issue #1028: searchable pages open with a question and its answer.
 
     Keep this check over both language trees so adding a page without the
     question-shaped metadata or direct answer fails close to the edit.
+
+    Issue #1571: the visible title is now the frontmatter `title` (the body
+    `# …` line is gone), so the answer is the first body line.
     """
     # Include long-form note pages under the language subdirectories too
     # (Issue #1036); release pages intentionally use their existing metadata.
@@ -281,10 +332,13 @@ def test_non_release_docs_have_question_metadata_and_answer_opening():
         assert len(descriptions) == 1, f"{path} needs one description"
         description = descriptions[0].split(":", 1)[1].strip().strip('"')
         assert description.endswith("?"), f"{path} description must end with '?': {description}"
+        titles = [line for line in lines[1:end] if line.startswith("title:")]
+        assert len(titles) == 1, f"{path} needs one frontmatter title"
+        assert titles[0].split(":", 1)[1].strip().strip('"'), (
+            f"{path} frontmatter title must not be empty"
+        )
 
-        h1 = next((i for i, line in enumerate(lines) if line.startswith("# ")), None)
-        assert h1 is not None, f"{path} needs an H1"
-        opening = next((line.strip() for line in lines[h1 + 1:] if line.strip()), "")
+        opening = next((line.strip() for line in lines[end + 1:] if line.strip()), "")
         assert opening and not opening.startswith("#"), f"{path} needs an answer paragraph"
         assert opening[-1] in ".。!?！？", f"{path} answer must be one sentence: {opening}"
         assert not re.search(r"[!?。！？]\\s+", opening), (
