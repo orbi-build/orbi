@@ -498,6 +498,21 @@ orbi setup
 错误、权限不足、checkout 不干净或缺 systemd user bus 都会带具体原因
 停下）。完整输出契约、成功和失败示例见[一次性 setup](/zh/setup)。
 
+对于 Orbi 从未交付过的仓库，setup 还会提供 `orbi suggest`。只有在
+终端上——并且模型 provider 为 `ok`、仓库没有任何带交付标签的 Issue
+（`ai-ready`、`ai-in-progress`、`ai-pr-opened`、`ai-merged` 或仓库
+自己的 `dispatch_label`）时——它才会问一次：
+
+`Scan OWNER/REPO and suggest three Issues to deliver? [Y/n]`
+
+`Y`（或回车）运行交互式 `orbi suggest` 流程：读取仓库、提出最多三个
+Issue、每个建议问一次，把你确认的 Issue 创建或打标签，最后打印它创建
+或标记的每个 Issue 的 URL。没有终端的调用者永远不会看到提示：setup 打印
+`Run 'orbi suggest --repo OWNER/REPO' to get three suggested Issues.`，
+而 `--json` 既不打印问题也不打印该提示。之后任何时候
+`orbi suggest --json` 都会把 Suggestions 文档（repo、base_sha、
+session_dir 与 suggestions）打印到 stdout 且不写任何东西。
+
 ## 6. 手工运行一个 tick
 
 手工命令只用于首次验证和排查——正常运行由 timer 调度（第 8 步）：

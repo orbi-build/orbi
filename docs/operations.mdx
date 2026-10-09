@@ -764,6 +764,9 @@ registry — in both directions (a name only in code or only in docs fails
 | `git_network_retry` | a transient git fetch/push failure is retried with backoff |
 | `gh_read_retry` | a transient `gh` read failure is retried with backoff |
 | `gh_write_retry` | a transient `gh` write failure is retried with backoff |
+| `suggest_started` | an `orbi suggest` run started (first line of its run) |
+| `suggest_created` | `orbi suggest` filed or labeled an Issue |
+| `suggest_failed` | an `orbi suggest` run failed (invalid result or failed `gh` call) |
 
 The idle warning, the idle recovery and the hung-model-request kill are
 log/health thresholds — they are not the 5-minute schedule and not a
@@ -800,6 +803,13 @@ development/compatibility path.
 # Create an Issue in a configured source repo and label it ai-ready
 orbi add "task title" --body "task body" --config orbi.toml
 orbi add "task title" --repo OWNER/BACKLOG-REPO --config orbi.toml
+
+# Read the repository and propose up to three Issues to deliver: the
+# interactive flow asks once per suggestion and files/labels the ones
+# you confirm; --json prints the Suggestions document (repo, base_sha,
+# session_dir, suggestions) to stdout and writes nothing
+orbi suggest --config orbi.toml
+orbi suggest --repo OWNER/REPO --json --config orbi.toml
 
 # Read-only queue view: current (ai-in-progress) task with live Pi
 # activity, the next ready Issue, and the most recent result per source
@@ -1054,10 +1064,16 @@ The following interfaces and persisted names are public surfaces. Changes to
 any of them must be called out in the release notes so downstream automation
 can migrate deliberately:
 
-- **CLI:** the bare `orbi` tick and the `add`, `status`, `doctor`, `setup`,
-  `install-units`, `session`, `milestone set`, `check`, and
+- **CLI:** the bare `orbi` tick and the `add`, `suggest`, `status`, `doctor`,
+  `setup`, `install-units`, `session`, `milestone set`, `check`, and
   `sync-engine-source` subcommands, including `--config` and the `ORBI_CONFIG`
   environment variable.
+- **Suggestions:** the document `orbi suggest --json` prints (`repo`,
+  `base_sha`, `session_dir` and up to three suggestions), the kept run
+  directory `<deploy_home>/.orbi/suggest/<run_id>/` and the skill
+  `integrations/claude-plugin/skills/suggest-ai-ready-issues/` that produces
+  it (Issue #1576); the `orbi setup` offer only runs on a terminal and prints
+  the one-line hint otherwise.
 - **Configuration:** every key in the [Configuration
   reference](/configuration) is public surface, plus the gitignored
   `.orbi/env` file loaded by the systemd `EnvironmentFile`.

@@ -581,6 +581,24 @@ dirty checkout or a missing systemd user bus stops it with the concrete
 reason). See [One-time setup](/setup) for the full output contract,
 success and failure examples.
 
+On a repository Orbi has never delivered, setup also offers
+`orbi suggest`. On a terminal — and only when the model provider is
+`ok` and the repository has no Issue carrying a delivery label
+(`ai-ready`, `ai-in-progress`, `ai-pr-opened`, `ai-merged` or the
+repository's own `dispatch_label`) — it asks once:
+
+`Scan OWNER/REPO and suggest three Issues to deliver? [Y/n]`
+
+`Y` (or Enter) runs the interactive `orbi suggest` flow: it reads the
+repository, proposes up to three Issues, asks once per suggestion, and
+files or labels the ones you confirm, printing the URL of every Issue it
+filed or labeled at the end. A caller without a terminal never sees the
+prompt: setup prints `Run 'orbi suggest --repo OWNER/REPO' to get three
+suggested Issues.` and `--json` prints neither the question nor the
+hint. At any later time `orbi suggest --json` prints the Suggestions
+document (repo, base_sha, session_dir and the suggestions) to stdout and
+writes nothing.
+
 ## 6. Run one tick manually
 
 The manual command is for first verification and troubleshooting only —

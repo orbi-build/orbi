@@ -42,7 +42,9 @@
     "scene": 0,
     "scheduler": 17,
     "scheduler_units": 0,
+    "session_command": 0,
     "source_pool": 0,
+    "suggest": 0,
     "systemd_deploy": 0,
     "ticket_command": 0
   },

@@ -294,6 +294,10 @@ JOURNAL_EVENTS: dict[str, str] = {
     "delivery_ci_evidence_publish_failed": "the CI evidence comment could not be published (bypass)",
     "delivery_ci_triage_lookup_failed": "the CI-failure triage Issue lookup failed",
     "delivery_review_failed": "the review session failed",
+    # Suggestions (Issue #1576, `orbi suggest`).
+    "suggest_started": "an orbi suggest run started (first line of its run)",
+    "suggest_created": "orbi suggest filed or labeled an Issue",
+    "suggest_failed": "an orbi suggest run failed (invalid result or failed gh call)",
     # Dead-loop guard (Issue #825).
     "failure_comment_deduplicated": "an identical failure repeat bumped the existing comment's counter; no second comment",
     "failure_comment_update_failed": "the existing failure comment could not be resolved or updated; the tick continues",

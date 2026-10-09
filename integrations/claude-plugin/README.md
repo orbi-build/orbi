@@ -11,6 +11,11 @@ factors at https://aiready.sh/ as the bar. If a task has more than one
 independently mergeable result, the skill proposes splitting it into several
 Issues first.
 
+The `suggest-ai-ready-issues` skill reads a repository read-only and proposes
+at most three Issues worth delivering, preferring an open Issue that already
+describes the change. `orbi suggest` runs it for a configured repository and
+turns the answer into ready-to-deliver Issues.
+
 ## Install
 
 The `write-ai-ready-issue` skill has one install line per harness:
@@ -18,6 +23,9 @@ The `write-ai-ready-issue` skill has one install line per harness:
 - **Claude Code** — the plugin, or `.claude/skills/write-ai-ready-issue/`.
 - **Codex** — `.agents/skills/write-ai-ready-issue/`.
 - **Pi** — `--skill <path to the skill folder>`.
+
+The `suggest-ai-ready-issues` skill installs the same way: use the same
+paths with `suggest-ai-ready-issues` as the skill folder name.
 
 The same folder also installs in GitHub Copilot
 (`copilot plugin install orbi-build/orbi:integrations/claude-plugin`) and in
@@ -72,7 +80,7 @@ release.
 ## Data
 
 The plugin runs only `gh repo view`, `gh label list`, `gh api`,
-`gh issue create` and `gh issue list`. All of them talk to GitHub for the
+`gh issue create`, `gh issue list` and `gh pr list`. All of them talk to GitHub for the
 current repository through your own `gh` authentication. The plugin sends
 nothing to any other service and stores nothing.
 
