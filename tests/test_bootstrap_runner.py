@@ -5841,17 +5841,15 @@ def test_process_issue_empty_commit_marks_blocked_without_crashing(
     def fake_run(command, **kwargs):
         # The commit boundary runs against the REAL git worktree; every
         # gh call is answered here, so nothing reaches the network.
-        if command and command[0] == "git":
+        if command[0:1] == ["git"]:
             return real_run_command(command, **kwargs)
         if command[0:2] == ["gh", "api"]:
             return _gh_api(command, posted)
         if command[0:3] == ["gh", "issue", "view"]:
             return json.dumps({"labels": [{"name": "ai-ready"}]})
-        if command[0:3] == ["gh", "issue", "list"]:
-            return "[]"
-        if command[0:3] == ["gh", "issue", "comment"]:
-            comments.append(command[-1])
-            return ""
+        # The delivered branch stops before any further GitHub traffic:
+        # the only remaining call is the blocked comment itself.
+        comments.append(command[-1])
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
