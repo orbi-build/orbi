@@ -435,6 +435,30 @@ def test_suggest_interactive_omits_a_closed_milestone(tmp_path, monkeypatch):
     ] in world.recorder.commands
 
 
+def test_suggest_interactive_enter_skips_every_suggestion(
+    tmp_path, monkeypatch,
+):
+    """The prompt says `[y/N]`: an empty answer is the shown default and
+    must skip the suggestion (Issue #1576: "any other answer skips")."""
+    world, _stub = _interactive_world(tmp_path, monkeypatch)
+    out = Tty(True)
+    assert suggest.run_suggest(
+        _loaded(world), "o/r", json_output=False,
+        dispatch_issue=cli.dispatch_issue,
+        stdin=Tty(True), stdout=out,
+        ask=lambda prompt: "",
+    ) == 0
+    rendered = world.recorder.rendered()
+    assert not any(
+        line.startswith("gh issue edit") or line.startswith("gh issue create")
+        for line in rendered
+    )
+    assert not any(
+        "https://github.com/o/r/issues/" in line
+        for line in out.text.splitlines()
+    )
+
+
 def test_suggest_interactive_with_no_suggestions(tmp_path, monkeypatch):
     world = _world(tmp_path, monkeypatch)
     monkeypatch.setattr(seam, "stream_pi", PiStub(_answer_json()))
@@ -652,7 +676,11 @@ def test_suggest_fails_fast_when_a_gh_command_fails(
     assert "suggest_failed" in capsys.readouterr().err
     assert "returncode=1" in caplog.text
     assert chr(34) + "gh boom" + chr(34) in caplog.text
-    assert "command=-" in caplog.text
+    # The failure line carries the COMMAND that failed, not a
+    # placeholder: the stdlib CalledProcessError exposes it as cmd.
+    failure = caplog.text.split("suggest_failed", 1)[-1]
+    assert "gh pr list" in failure
+    assert "command=-" not in failure
 
 
 def test_setup_offer_is_silent_without_a_provider(tmp_path, monkeypatch):

@@ -66,7 +66,13 @@ SYSTEM_PROMPT = (
 )
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*?)\n```$", re.DOTALL)
+# The "orbi setup" offer prompt is [Y/n]: there Enter IS "yes".
 _ASK_YES = frozenset({"", "y", "yes"})
+# The per-suggestion prompt is [y/N] and the contract is: nothing is
+# written before a y/Y, any other answer skips that suggestion. An
+# empty answer (Enter, the shown default) therefore skips and must
+# never reach GitHub.
+_CONFIRM_YES = frozenset({"y", "yes"})
 
 
 class SuggestError(RuntimeError):
@@ -364,7 +370,11 @@ def _log_failure(repo: str, exc) -> None:
     result) or the `subprocess.CalledProcessError` of a failed command.
     Every field falls back to `-` so the line shape is stable.
     """
-    command = getattr(exc, "command", None)
+    # A SuggestError carries the argv it failed with; the stdlib
+    # subprocess.CalledProcessError carries it as "cmd" (there is no
+    # "command" attribute), so a failed gh call logs the real command
+    # instead of the "-" placeholder.
+    command = getattr(exc, "command", None) or getattr(exc, "cmd", None)
     event(
         "suggest_failed", level=logging.ERROR, repo=repo, reason=exc,
         command=" ".join(command) if command else "-",
@@ -396,7 +406,7 @@ def _interactive(config: RunnerConfig, repo: str, document: dict,
             prompt = f"Label #{item['issue']} {dispatch_label}? [y/N] "
         else:
             prompt = f"File this Issue as {dispatch_label}? [y/N] "
-        if ask(prompt).strip().lower() not in _ASK_YES:
+        if ask(prompt).strip().lower() not in _CONFIRM_YES:
             continue
         if item["kind"] == "existing":
             command = [
