@@ -1645,15 +1645,12 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
             f"({dirty.strip()}); the runner never commits uncommitted "
             "changes or expands the agent's commit boundary"
         )
-    if local_head == base_sha:
-        event(
-            "delivery_no_commit", level=logging.ERROR,
-            branch=branch, head=local_head,
-        )
-        raise RuntimeError(
-            f"the agent delivered no commit on the task branch (HEAD "
-            f"{local_head} is still the frozen base {base_sha})"
-        )
+    # Commit boundary: an empty commit advances HEAD past the frozen
+    # base without changing a file, and a HEAD still on the base is no
+    # delivery either — both stop here (Issue #1581).
+    run_state.delivery_commit_guard(
+        worktree, local_head=local_head, base_sha=base_sha, branch=branch,
+    )
     # Base freshness: the fetch updates the shared
     # remote-tracking ref, so it runs under the base-sync lock with the
     # deployment checkout as the lock location. A lock timeout or a

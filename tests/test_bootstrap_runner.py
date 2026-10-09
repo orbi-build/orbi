@@ -3610,7 +3610,9 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
         if command[:3] == ["git", "branch", "--show-current"]:
             return branch
         if command[:2] == ["git", "rev-parse"]:
-            return head
+            # Issue #1581: the tree probes get their own ref back, so
+            # the delivered head tree differs from the frozen base tree.
+            return command[2] if command[2].endswith("^{tree}") else head
         # Issue #898: the pushed head is read from the remote itself.
         answer = remote_head_answer(command, head)
         if answer is not None:
@@ -3724,7 +3726,9 @@ def test_process_issue_second_tick_behind_the_index_resumes_not_reclaims(
         if command[:3] == ["git", "branch", "--show-current"]:
             return branch
         if command[:2] == ["git", "rev-parse"]:
-            return head
+            # Issue #1581: the tree probes get their own ref back, so
+            # the delivered head tree differs from the frozen base tree.
+            return command[2] if command[2].endswith("^{tree}") else head
         # Issue #898: the pushed head is read from the remote itself.
         answer = remote_head_answer(command, head)
         if answer is not None:
@@ -3815,7 +3819,9 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
         if command[:3] == ["git", "branch", "--show-current"]:
             return branch
         if command[:2] == ["git", "rev-parse"]:
-            return head
+            # Issue #1581: the tree probes get their own ref back, so
+            # the delivered head tree differs from the frozen base tree.
+            return command[2] if command[2].endswith("^{tree}") else head
         # Issue #898: the pushed head is read from the remote itself.
         answer = remote_head_answer(command, head)
         if answer is not None:
@@ -3889,7 +3895,9 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
         if command[:3] == ["git", "branch", "--show-current"]:
             return "orbi/xqliu-orbi-backlog-issue-4"
         if command[:2] == ["git", "rev-parse"]:
-            return head
+            # Issue #1581: the tree probes get their own ref back, so
+            # the delivered head tree differs from the frozen base tree.
+            return command[2] if command[2].endswith("^{tree}") else head
         # Issue #898: the pushed head is read from the remote itself.
         answer = remote_head_answer(command, head)
         if answer is not None:
@@ -3959,7 +3967,9 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
         if command[:3] == ["git", "branch", "--show-current"]:
             return "orbi/xqliu-orbi-backlog-issue-4"
         if command[:2] == ["git", "rev-parse"]:
-            return head
+            # Issue #1581: the tree probes get their own ref back, so
+            # the delivered head tree differs from the frozen base tree.
+            return command[2] if command[2].endswith("^{tree}") else head
         # Issue #898: the pushed head is read from the remote itself.
         answer = remote_head_answer(command, head)
         if answer is not None:
@@ -4824,6 +4834,10 @@ def test_verify_pr_rejects_wrong_branch(monkeypatch, tmp_path):
 
 
 FAKE_HEAD_SHA = "0123456789abcdef0123456789abcdef01234567"
+# Issue #1581: the commit-boundary tree comparison needs a delivered head
+# tree distinct from the frozen base tree on the happy path.
+FAKE_HEAD_TREE_SHA = "1111111111111111111111111111111111111111"
+FAKE_BASE_TREE_SHA = "2222222222222222222222222222222222222222"
 FAKE_RUN_ID = "e07383c2"
 
 
@@ -5507,7 +5521,9 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
         if command[:3] == ["git", "branch", "--show-current"]:
             return branch
         if command[:2] == ["git", "rev-parse"]:
-            return head
+            # Issue #1581: the tree probes get their own ref back, so
+            # the delivered head tree differs from the frozen base tree.
+            return command[2] if command[2].endswith("^{tree}") else head
         # Issue #898: the pushed head is read from the remote itself.
         answer = remote_head_answer(command, head)
         if answer is not None:
@@ -5746,6 +5762,123 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     assert blocked
     assert "delivered no commit" in blocked[0]
     assert "<!-- orbi:run=a1b2c3d4 -->" in blocked[0]
+
+
+def test_process_issue_empty_commit_marks_blocked_without_crashing(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #1581: the agent delivered a commit that changes no file
+    (git commit --allow-empty). The REAL commit boundary detects the tree
+    equal to the frozen base, logs the delivery_no_file_change event, and
+    the Issue is marked ai-blocked through the normal terminal failure
+    path: no branch is pushed, no PR is opened, and the blocked comment
+    carries the last commit subject. The pre-#1581 HEAD == base test
+    alone would have pushed a zero-file branch and merged it."""
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith("GIT_")
+    }
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main", str(repo)],
+                   check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "config",
+                    "user.email", "t@example.com"],
+                   check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "config",
+                    "user.name", "test"],
+                   check=True, capture_output=True, env=env)
+    (repo / "index.html").write_text("", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "index.html"],
+                   check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "base"],
+                   check=True, capture_output=True, env=env)
+    base_sha = _git_output(repo, "rev-parse", "HEAD")
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)],
+                   check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "remote", "add",
+                    "origin", str(remote)],
+                   check=True, capture_output=True, env=env)
+    worktree = repo / ".worktrees" / "wt"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-b",
+         "orbi/xqliu-orbi-issue-239", str(worktree), "HEAD"],
+        check=True, capture_output=True, env=env,
+    )
+    subject = (
+        "Blocked: home page (index.html) is committed empty — "
+        "no page to measure"
+    )
+    subprocess.run(
+        ["git", "-C", str(worktree), "commit", "--allow-empty",
+         "-m", subject],
+        check=True, capture_output=True, env=env,
+    )
+    edits = []
+    monkeypatch.setattr(seam, "edit_issue",
+        lambda *args, **kwargs: edits.append(kwargs),
+    )
+    monkeypatch.setattr(seam, "freeze_base",
+        lambda repo_dir, base_branch: base_sha,
+    )
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree",
+        lambda *args, **kwargs: worktree,
+    )
+    # The subprocess seam is patched through the fan-out target so the
+    # ratcheted module-patch counts do not rise (Issue #789).
+    monkeypatch.setattr(seam, "run_pi",
+        lambda *args, **kwargs: "done",
+    )
+    monkeypatch.setattr(
+        seam, "activity_snapshot", lambda session_dir: None,
+    )
+    real_run_command = journal.run_command
+    comments = []
+    posted = []
+
+    def fake_run(command, **kwargs):
+        # The commit boundary runs against the REAL git worktree; every
+        # gh call is answered here, so nothing reaches the network.
+        if command[0:1] == ["git"]:
+            return real_run_command(command, **kwargs)
+        if command[0:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[0:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
+        # The delivered branch stops before any further GitHub traffic:
+        # the only remaining call is the blocked comment itself.
+        comments.append(command[-1])
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        result = runner.process_issue(
+            {"number": 239, "title": "Empty commit", "body": ""},
+            config_domain.RunnerConfig(
+                repo_dir=repo, prompt=tmp_path / "prompt.md",
+                base_branch="main",
+            ),
+            "xqliu/orbi",
+        )
+    assert result.kind == "failed"
+    assert {"repo": "xqliu/orbi", "add": "ai-blocked",
+            "remove": "ai-in-progress"} in edits
+    blocked = [body for body in comments if "Orbi: blocked" in body]
+    assert len(blocked) == 1
+    assert "no file change" in blocked[0]
+    assert subject in blocked[0]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in blocked[0]
+    assert "delivery_no_file_change" in caplog.text
+    # The stop is terminal BEFORE the push: the bare remote never saw the
+    # task branch, and no PR was created.
+    remote_refs = subprocess.run(
+        ["git", "-C", str(remote), "for-each-ref",
+         "--format=%(refname)", "refs/heads/"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert remote_refs == ""
 
 
 def test_process_issue_model_wait_dead_failure_stays_in_progress(
@@ -17272,7 +17405,9 @@ def _ops_issue_mocks(monkeypatch, tmp_path, *, head_sha: str, dirty: str):
     def fake_run(command, **kwargs):
         commands.append(command)
         if command[:2] == ["git", "rev-parse"]:
-            return head_sha
+            # Issue #1581: the tree probes get their own ref back, so
+            # the delivered head tree differs from the frozen base tree.
+            return command[2] if command[2].endswith("^{tree}") else head_sha
         if command[:2] == ["git", "status"]:
             return dirty
         return ""
@@ -22352,6 +22487,14 @@ def fake_deliver_run(command, **kwargs):
         return ""
     if command[:3] == ["git", "rev-parse", "HEAD"]:
         return FAKE_HEAD_SHA
+    # Issue #1581: the commit-boundary tree comparison. The delivered
+    # head tree differs from the frozen base tree, so the happy path has
+    # a real file change (a distinct constant keeps the two apart).
+    if command[0:3] == ["git", "rev-parse", "HEAD^{tree}"]:
+        return FAKE_HEAD_TREE_SHA
+    if (command[0:2] == ["git", "rev-parse"]
+            and command[2].endswith("^{tree}")):
+        return FAKE_BASE_TREE_SHA
     if command[:3] == ["git", "fetch", "origin"]:
         return ""
     if command[:3] == ["git", "merge-base", "--is-ancestor"]:
@@ -22432,6 +22575,51 @@ def test_deliver_pr_rejects_delivery_without_a_commit(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="no commit"):
         runner.deliver_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=DELIVER_BRANCH, worktree=tmp_path, source_repo="o/r"), "main", base_sha, issue_title="t", repo_dir=tmp_path)
+
+
+def test_deliver_pr_rejects_an_empty_commit_as_no_file_change(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #1581: HEAD advanced past the frozen base, but the delivered
+    tree equals the base tree (an empty commit). The commit boundary logs
+    delivery_no_file_change and raises before any fetch, push or PR — the
+    same terminal path as delivery_no_commit, so the run ends ai-blocked
+    with the last commit subject in the reason."""
+    base_sha = "9" * 40
+    subject = (
+        "Blocked: home page (index.html) is committed empty — "
+        "no page to measure"
+    )
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[0:3] == ["git", "rev-parse", "HEAD^{tree}"]:
+            return FAKE_BASE_TREE_SHA
+        if command[0:3] == ["git", "rev-parse", f"{base_sha}^{{tree}}"]:
+            return FAKE_BASE_TREE_SHA
+        if command[0:4] == ["git", "log", "-1", "--format=%s"]:
+            return subject
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        with pytest.raises(RuntimeError, match="no file change") as failure:
+            runner.deliver_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=DELIVER_BRANCH, worktree=tmp_path, source_repo="o/r"), "main", base_sha, issue_title="t", repo_dir=tmp_path)
+    # The reason names both SHAs and quotes the last commit subject.
+    assert FAKE_HEAD_SHA in str(failure.value)
+    assert base_sha in str(failure.value)
+    assert subject in str(failure.value)
+    # The event carries the branch/head/base scene.
+    assert "delivery_no_file_change" in caplog.text
+    assert f"head={FAKE_HEAD_SHA}" in caplog.text
+    assert f"base={base_sha}" in caplog.text
+    # Nothing was pushed and no PR was touched: the stop is terminal.
+    assert not any(
+        command[0:2] == ["git", "push"] for command in calls
+    )
+    assert not any(command[0:2] == ["gh", "pr"] for command in calls)
+    assert ["git", "fetch", "origin", "main"] not in calls
 
 
 def test_deliver_pr_completes_the_closeout(monkeypatch, tmp_path):
