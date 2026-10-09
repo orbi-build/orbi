@@ -109,9 +109,6 @@ class Tty:
     def write(self, text: str) -> None:
         self.text += text
 
-    def flush(self) -> None:
-        pass
-
 
 def _answer_json(*suggestions) -> str:
     return json.dumps({"suggestions": list(suggestions)})
@@ -636,7 +633,7 @@ def test_suggest_fails_fast_when_a_gh_command_fails(
 
     def failing(command, **kwargs):
         argv = list(command)
-        if argv[0:3] == ["gh", "issue", "list"]:
+        if argv[0:3] == ["gh", "pr", "list"]:
             raise subprocess.CalledProcessError(
                 1, command, output="", stderr="gh boom",
             )
@@ -706,3 +703,45 @@ def test_suggest_interactive_without_a_resolved_milestone(
     assert not any(
         "--milestone" in command for command in world.recorder.commands
     )
+
+
+def test_suggest_fails_fast_when_the_pi_session_fails(
+    tmp_path, monkeypatch, capsys, caplog,
+):
+    world = _world(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        seam, "stream_pi", PiStub(RuntimeError("pi session exploded")),
+    )
+    with caplog.at_level("INFO", logger="orbi.bootstrap"):
+        assert cli.main([
+            "suggest", "--json", "--config", str(world.config_path),
+        ]) == 1
+    assert "suggest_failed" in capsys.readouterr().err
+    assert "pi session exploded" in caplog.text
+
+
+def test_fake_gh_creates_an_issue_without_a_milestone(tmp_path, monkeypatch, capsys):
+    world = _world(tmp_path, monkeypatch)
+    assert cli.main([
+        "add", "A task", "--body", "Do it",
+        "--config", str(world.config_path),
+    ]) == 0
+    out = capsys.readouterr().out
+    assert "created: https://github.com/o/r/issues/1" in out
+    assert "label: ai-ready" in out
+    assert [
+        "gh", "issue", "create", "--repo", "o/r",
+        "--title", "A task", "--body", "Do it",
+    ] in world.recorder.commands
+    assert world.gh.issues[1]["labels"] == ["ai-ready"]
+
+
+def test_fake_gh_resolves_and_rejects_a_milestone(tmp_path, monkeypatch):
+    world = _world(tmp_path, monkeypatch)
+    gh = world.gh
+    gh.add_milestone(1, title="v1")
+    gh.add_milestone(2, title="v2")
+    assert gh._milestone_number("v2") == 2
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        gh._milestone_number("missing")
+    assert "missing" in str(excinfo.value.stderr)

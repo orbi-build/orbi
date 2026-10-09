@@ -57,12 +57,11 @@ class Seam:
         # `journal.LOGGER` — must be left alone: rewriting it to the
         # journal object in teardown breaks the CLI's own log records
         # (Issue #1576, the #785 fan-out's one blind spot).
-        try:
-            original = self.__getattr__(name)
-        except AttributeError:
-            return
+        # `getattr(self, name, None)` keeps an unknown name a no-op (the
+        # membership check below then matches no module).
+        original = getattr(self, name, None)
         for module in _MODULES:
-            if vars(module).get(name) is original:
+            if name in vars(module) and vars(module)[name] is original:
                 setattr(module, name, value)
 
 

@@ -465,6 +465,12 @@ def run_suggest(config: RunnerConfig, repo: str, *, json_output: bool,
         _log_failure(repo, exc)
         print(f"suggest_failed reason={exc}", file=sys.stderr)
         return 1
+    except Exception as exc:  # noqa: BLE001 - fail fast, logged and non-zero
+        # A failed Pi session (stream_pi raises): logged like every other
+        # failure, non-zero exit, no fallback and no partial retry.
+        _log_failure(repo, exc)
+        print(f"suggest_failed reason={exc}", file=sys.stderr)
+        return 1
 
 
 def _setup_repo(config: RunnerConfig, result: object) -> str:
