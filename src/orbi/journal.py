@@ -289,6 +289,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "delivery_label_repair_failed": "the delivery label repair failed",
     "delivery_behind_base": "the task branch is behind the base branch",
     "delivery_no_commit": "the task worktree carries no commit to deliver",
+    "delivery_no_file_change": "the task worktree carries commits but changes no file",
     "delivery_uncommitted_changes": "the task worktree carries uncommitted changes",
     "delivery_issue_closed": "the source Issue was closed mid-delivery",
     "delivery_ci_evidence_publish_failed": "the CI evidence comment could not be published (bypass)",

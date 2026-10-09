@@ -3606,6 +3606,10 @@ def test_deliver_closeout_continues_on_the_creating_runs_existing_pr(
 
     def run(command, **kwargs):
         if command[0] == "git":
+            # Issue #1581: the commit-boundary tree probes get their own
+            # ref back, so the delivered tree differs from the base tree.
+            if command[1] == "rev-parse" and command[2].endswith("^{tree}"):
+                return command[2]
             return git_reads[command[1]]
         return fake(command, **kwargs)
 

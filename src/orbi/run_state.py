@@ -27,7 +27,7 @@ from orbi.github import (
     run_gh_read_command,
 )
 from orbi.gitops import _is_ancestor
-from orbi.journal import event
+from orbi.journal import event, run_command
 
 
 class BaseFreshness(Enum):
@@ -56,6 +56,51 @@ def assess_base_freshness(worktree: Path, base_branch: str, *,
     if mergeable is not None and mergeable != "MERGEABLE":
         return BaseFreshness.CONFLICTED
     return BaseFreshness.ABSORBABLE
+
+
+def delivery_commit_guard(worktree: Path, *, local_head: str,
+                          base_sha: str, branch: str) -> None:
+    """Fail the delivery when the task branch carries no real change.
+
+    The agent's delivery is the committed worktree state: HEAD must have
+    advanced past the frozen base AND change at least one file. An empty
+    commit (``git commit --allow-empty``) advances HEAD while its tree
+    equals the base tree, and without this guard it would be pushed and
+    merged as a zero-file PR (Issue #1581). Both stops share one terminal
+    path — ``delivery_no_commit`` for a HEAD still on the base,
+    ``delivery_no_file_change`` for an equal tree — so the run ends
+    ``ai-blocked`` before anything is fetched, pushed or PR'd.
+    """
+    if local_head == base_sha:
+        event(
+            "delivery_no_commit", level=logging.ERROR,
+            branch=branch, head=local_head,
+        )
+        raise RuntimeError(
+            f"the agent delivered no commit on the task branch (HEAD "
+            f"{local_head} is still the frozen base {base_sha})"
+        )
+    head_tree = run_command(
+        ["git", "rev-parse", "HEAD^{tree}"], cwd=worktree,
+    )
+    base_tree = run_command(
+        ["git", "rev-parse", f"{base_sha}^{{tree}}"], cwd=worktree,
+    )
+    if head_tree == base_tree:
+        subject = run_command(
+            ["git", "log", "-1", "--format=%s"], cwd=worktree,
+        )
+        event(
+            "delivery_no_file_change", level=logging.ERROR,
+            branch=branch, head=local_head, base=base_sha,
+        )
+        raise RuntimeError(
+            f"the agent delivered no file change on the task branch "
+            f"(HEAD {local_head} tree {head_tree} equals the frozen base "
+            f"{base_sha} tree {base_tree}; last commit subject: "
+            f"{subject!r})"
+        )
+
 
 def parse_pr_comment(body: str) -> dict | None:
     """Parse one `Orbi opened PR:` comment into a resume scene.

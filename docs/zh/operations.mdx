@@ -523,6 +523,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `delivery_label_repair_failed` | 交付标签修复失败 |
 | `delivery_behind_base` | 任务分支落后于 base 分支 |
 | `delivery_no_commit` | 任务 worktree 没有可交付的提交 |
+| `delivery_no_file_change` | 任务 worktree 有提交但没有改动任何文件 |
 | `delivery_uncommitted_changes` | 任务 worktree 存在未提交改动 |
 | `delivery_issue_closed` | 源 Issue 在交付中途被关闭 |
 | `delivery_ci_evidence_publish_failed` | CI 证据评论发布失败（旁路） |
