@@ -316,6 +316,10 @@ def test_suggest_fails_fast_on_an_invalid_result(
     assert "suggest_failed" in caplog.text
     assert "returncode=0" in caplog.text
     assert "stdout=" in caplog.text
+    # The run directory is kept after the command exits, on failure too.
+    run_dirs = _run_dirs(world)
+    assert len(run_dirs) == 1
+    assert RUN_ID_RE.match(run_dirs[0].name)
 
 
 def test_suggest_rejects_an_existing_issue_with_a_delivery_label(

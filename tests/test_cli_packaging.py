@@ -530,7 +530,7 @@ def test_docs_document_the_full_cli_command_set():
     pages — the README homepage keeps the quickstart plus a one-sentence
     summary. `orbi check` is the Issue #163 prerequisite gate."""
     operations = (REPO_ROOT / "docs" / "operations.mdx").read_text(encoding="utf-8")
-    for command in ("orbi add", "orbi status",
+    for command in ("orbi add", "orbi suggest", "orbi status",
                     "orbi session", "orbi install-units",
                     "orbi doctor", "orbi check", "orbi setup"):
         assert command in operations, (
