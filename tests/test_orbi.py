@@ -1681,6 +1681,12 @@ def test_main_setup_prints_key_value_lines_and_returns_zero(
     assert seen["config"].source_repos == ("xqliu/orbi",)
     out = capsys.readouterr().out
     assert "setup=ok" in out
+    # Issue #1576: without a terminal, setup prints the suggest hint
+    # instead of asking (and makes no extra call).
+    assert (
+        "Run 'orbi suggest --repo xqliu/orbi' to get three suggested Issues."
+        in out
+    )
 
 
 def test_main_setup_json_prints_the_equivalent_document(

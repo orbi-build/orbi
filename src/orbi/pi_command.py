@@ -28,9 +28,11 @@ if TYPE_CHECKING:
 
 
 # Non-implement Pi session roles. `ROLE_IMPLEMENT` is the default role of
-# a delivery Pi session and lives in `orbi.pi_process`.
+# a delivery Pi session and lives in `orbi.pi_process`. `ROLE_SUGGEST`
+# (Issue #1576) is the read-only role of `orbi suggest`.
 ROLE_REVIEW = "review"
 ROLE_TICKET = "ticket"
+ROLE_SUGGEST = "suggest"
 
 
 # Role-specific skill filtering: the review session ends with a single
@@ -120,30 +122,52 @@ def build_pi_command(
     context: str,
     *,
     context_placeholder: str,
-    tools: bool,
+    tools: bool | str,
     extensions: bool,
+    no_skills: bool = False,
+    no_context_files: bool = False,
+    skills: list[str | Path] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Return one Pi session's `(command, log_command)` argv pair.
 
-    `command` is the real argv in the fixed order every role has always
-    used: the optional `--no-tools` boundary, the isolated extension
-    flags, the role's `--skill` entries, the provider/model flags, then
+    `command` is the real argv in the fixed order every role uses: the
+    tool boundary, the optional skill/context-file boundaries, the
+    isolated extension flags, the role's `--skill` entries, the
+    provider/model flags, then
     `--print --session-dir <dir> --system-prompt <prompt> <context>`.
-    `tools=False` adds `--no-tools`; `extensions=False` omits the
-    extension flags.
+    `tools=True` leaves Pi's default tool set, `tools=False` adds
+    `--no-tools`, and `tools="<a,b,c>"` adds `--tools <a,b,c>` — the
+    read-only allowlist of one role (Issue #1576, `orbi suggest`).
+    `no_skills`/`no_context_files` add Pi's `--no-skills`/
+    `--no-context-files`; `skills` overrides the configured skill list
+    (the suggest role loads exactly its own skill, not
+    `config.skills`); `extensions=False` omits the extension flags.
 
     `log_command` is derived here from the SAME extension flags, model
     flags and session dir as `command`, so the two cannot drift. The
     system prompt and context are replaced by `<redacted>` and the
-    caller's context placeholder; skill paths and `--no-tools` are never
-    logged (matching the frozen pre-#1231 journal shape).
+    caller's context placeholder; skill paths and the tool/skill/context
+    boundary flags are never logged (matching the frozen pre-#1231
+    journal shape).
     """
     extension_args = _pi_extension_args(config) if extensions else []
-    skill_args = _skill_args(_skills_for(config, excluded_skills))
+    if skills is None:
+        skills = _skills_for(config, excluded_skills)
+    skill_args = _skill_args(skills)
     model_args = _pi_model_args(config, role)
-    tools_args = [] if tools else ["--no-tools"]
+    if isinstance(tools, str):
+        tools_args = ["--tools", tools]
+    elif tools:
+        tools_args = []
+    else:
+        tools_args = ["--no-tools"]
+    boundary_args = [
+        *tools_args,
+        *(["--no-skills"] if no_skills else []),
+        *(["--no-context-files"] if no_context_files else []),
+    ]
     command = [
-        "pi", *tools_args, *extension_args, *skill_args, *model_args,
+        "pi", *boundary_args, *extension_args, *skill_args, *model_args,
         "--print", "--session-dir", str(session_dir),
         "--system-prompt", system_prompt, context,
     ]

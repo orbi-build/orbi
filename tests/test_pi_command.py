@@ -219,3 +219,46 @@ def test_extension_args_isolate_disabled_and_secrets():
     args = pi_command._pi_extension_args(config)
     assert args == EXTENSION_ARGS
     assert "secret" not in " ".join(args)
+
+
+SUGGEST_SKILL = Path(
+    "/deploy/integrations/claude-plugin/skills/"
+    "suggest-ai-ready-issues/SKILL.md"
+)
+SUGGEST_COMMAND_ARGS = [
+    "pi", "--tools", "read,grep,find,ls", "--no-skills",
+    "--no-context-files", *EXTENSION_ARGS, "--skill", str(SUGGEST_SKILL),
+    "--provider", "openai", "--model", "gpt-5.6-sol",
+    "--thinking", "medium",
+    "--print", "--session-dir", str(SESSION_DIR),
+    "--system-prompt", SYSTEM_PROMPT, CONTEXT,
+]
+
+
+def test_suggest_command_uses_a_tool_allowlist_and_one_skill():
+    """Issue #1576: the suggest role is the ONE builder with a tool
+    allowlist (no bash/edit/write), no auto-discovered skills, no
+    context files and exactly the suggest skill."""
+    command, log_command = pi_command.build_pi_command(
+        _configured(), pi_command.ROLE_SUGGEST,
+        pi_command.IMPLEMENT_EXCLUDED_SKILLS, SESSION_DIR,
+        SYSTEM_PROMPT, CONTEXT,
+        context_placeholder="<suggest-context-redacted>",
+        tools="read,grep,find,ls", extensions=True,
+        no_skills=True, no_context_files=True, skills=[SUGGEST_SKILL],
+    )
+    assert command == SUGGEST_COMMAND_ARGS
+    for forbidden in ("bash", "edit", "write"):
+        assert forbidden not in " ".join(command)
+    assert log_command == [
+        "pi", *EXTENSION_ARGS,
+        "--provider", "openai", "--model", "gpt-5.6-sol",
+        "--thinking", "medium",
+        "--print", "--session-dir", str(SESSION_DIR),
+        "--system-prompt", "<redacted>", "<suggest-context-redacted>",
+    ]
+    rendered = " ".join(log_command)
+    assert str(SUGGEST_SKILL) not in rendered
+    assert "--tools" not in log_command
+    assert "--no-skills" not in log_command
+    assert "--no-context-files" not in log_command

@@ -10,8 +10,10 @@ does exactly that: reading resolves the current binding (monkeypatch's
 old-value capture) and writing fans the value out to all bindings, so
 monkeypatch's teardown fans the original back.
 """
+import orbi.cli as cli
 import orbi.cli_source as cli_source
 import orbi.branch_reclaim as branch_reclaim
+import orbi.suggest as suggest
 import orbi.clarify as clarify
 import orbi.claim as claim
 import orbi.failure_report as failure_report
@@ -35,7 +37,7 @@ _MODULES = (
     journal, github, gitops, milestone, milestone_command, ticket_command,
     progress, cli_source, release, release_git, release_notes, pi_session,
     runner, review_merge, run_state, claim, repo_config, clarify, branch_reclaim,
-    failure_report,
+    failure_report, suggest, cli,
 )
 
 
@@ -49,8 +51,18 @@ class Seam:
         raise AttributeError(name)
 
     def __setattr__(self, name: str, value) -> None:
+        # Rebind only the modules whose CURRENT binding is the same
+        # object as the first resolved one. A module's own same-named
+        # object — `cli.LOGGER` is `orbi.cli`'s own logger, not
+        # `journal.LOGGER` — must be left alone: rewriting it to the
+        # journal object in teardown breaks the CLI's own log records
+        # (Issue #1576, the #785 fan-out's one blind spot).
+        try:
+            original = self.__getattr__(name)
+        except AttributeError:
+            return
         for module in _MODULES:
-            if name in vars(module):
+            if vars(module).get(name) is original:
                 setattr(module, name, value)
 
 

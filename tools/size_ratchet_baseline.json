@@ -1,6 +1,5 @@
 {
   "oversized_modules": {
-    "cli.py": 1017,
     "github.py": 1146,
     "pi_process.py": 1749,
     "pilot_setup.py": 1326,

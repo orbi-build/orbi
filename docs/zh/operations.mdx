@@ -667,6 +667,9 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `git_network_retry` | git fetch/push 瞬时网络失败，退避重试 |
 | `gh_read_retry` | `gh` 只读命令瞬时失败，退避重试 |
 | `gh_write_retry` | `gh` 写命令瞬时失败，退避重试 |
+| `suggest_started` | `orbi suggest` 运行开始（该 run 的第一行） |
+| `suggest_created` | `orbi suggest` 创建或标记了一个 Issue |
+| `suggest_failed` | `orbi suggest` 运行失败（结果无效或 `gh` 调用失败） |
 
 idle 告警和模型请求挂死 kill 是日志/健康阈值——它们不是每 5 分钟
 调度，也不是业务任务 timeout。
@@ -689,6 +692,12 @@ checkout 导入，即使交付 checkout 是外部仓库 X。checkout 根目录**
 # 在配置的 source repo 创建 Issue 并加 ai-ready 标签
 orbi add "task title" --body "task body" --config orbi.toml
 orbi add "task title" --repo OWNER/BACKLOG-REPO --config orbi.toml
+
+# 读取仓库并最多提出三个待交付 Issue：交互流程对每个建议问一次，
+# 把你确认的创建或打标签；--json 把 Suggestions 文档（repo、base_sha、
+# session_dir、suggestions）打印到 stdout 且不写任何东西
+orbi suggest --config orbi.toml
+orbi suggest --repo OWNER/REPO --json --config orbi.toml
 
 # 只读队列视图：当前（ai-in-progress）任务带实时 Pi 活动、下一个 ready
 # Issue、每个 source repo 的最近结果（ai-pr-opened / ai-fix-needed /
@@ -901,9 +910,14 @@ Issue #856：active Milestone 已无 open Issue，却没人开它的 release 票
 以下接口和持久化命名都是公开表面。任何变更都必须在 release notes
 中声明，以便下游自动化有计划地迁移：
 
-- **CLI：**裸 `orbi` tick，以及 `add`、`status`、`doctor`、`setup`、
-  `install-units`、`session`、`milestone set`、`check`、
+- **CLI：**裸 `orbi` tick，以及 `add`、`suggest`、`status`、`doctor`、
+  `setup`、`install-units`、`session`、`milestone set`、`check`、
   `sync-engine-source` 子命令，包括 `--config` 和 `ORBI_CONFIG` 环境变量。
+- **Suggestions：**`orbi suggest --json` 打印的文档（`repo`、`base_sha`、
+  `session_dir` 与最多三条建议）、保留的运行目录
+  `<deploy_home>/.orbi/suggest/<run_id>/`，以及产出它的 skill
+  `integrations/claude-plugin/skills/suggest-ai-ready-issues/`（Issue
+  #1576）；`orbi setup` 的提议只在终端上运行，否则只打印一行提示。
 - **配置：**[配置参考](/zh/configuration)中的每个 key 都是公开表面，
   另加由 systemd `EnvironmentFile` 加载的 gitignored `.orbi/env` 文件。
 - **部署：**`systemd/orbi@.service` 和 `systemd/orbi@.timer` 模板，及其

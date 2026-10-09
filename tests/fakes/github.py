@@ -96,10 +96,12 @@ class FakeGh:
     def add_pr(self, number: int, *, head: str, base: str = "main",
                state: str = "OPEN", oid: str = "0" * 40,
                url: str | None = None, checks: tuple[dict, ...] = (),
-               merged_at: str | None = None, body: str = "") -> None:
+               merged_at: str | None = None, body: str = "",
+               title: str = "Pull request") -> None:
         owner, name = self.repo.split("/", 1)
         self.prs[number] = {
-            "number": number, "state": state, "headRefName": head,
+            "number": number, "title": title, "state": state,
+            "headRefName": head,
             "baseRefName": base, "headRefOid": oid,
             "url": url or f"https://github.com/{self.repo}/pull/{number}",
             "statusCheckRollup": list(checks), "comments": [],
@@ -189,15 +191,18 @@ class FakeGh:
     # uninterpreted search qualifier).
     _ISSUE_FLAGS = {
         "view": ("--repo", "--json"),
-        "edit": ("--repo", "--add-label", "--remove-label"),
+        "edit": ("--repo", "--add-label", "--remove-label", "--milestone"),
         "comment": ("--repo", "--body"),
         "close": ("--repo",),
+        "create": ("--repo", "--title", "--body", "--milestone"),
     }
 
     def _issue(self, args: list[str]) -> str:
         sub = args[0]
         if sub == "list":
             return self._issue_list(args[1:])
+        if sub == "create":
+            return self._issue_create(args[1:])
         if sub not in self._ISSUE_FLAGS:
             self._unsupported(["gh", "issue", sub])
         number = int(args[1])
@@ -226,6 +231,37 @@ class FakeGh:
         issue["state"] = "closed"
         return ""
 
+    def _issue_create(self, args: list[str]) -> str:
+        """`gh issue create` for the `orbi add`/`orbi suggest` path.
+
+        The new Issue takes the next free number and the requested
+        Milestone (by title, the way the real CLI resolves it); the
+        returned URL is the observable result.
+        """
+        flags = self._flags(args)
+        self._known_flags(
+            flags, self._ISSUE_FLAGS["create"], ["gh", "issue", "create"],
+        )
+        self._repo_or_fail((flags.get("--repo") or [self.repo])[0])
+        title = (flags.get("--title") or [""])[0]
+        body = (flags.get("--body") or [""])[0]
+        milestone = None
+        if "--milestone" in flags:
+            milestone = self._milestone_number(flags["--milestone"][0])
+        number = max(self.issues) + 1 if self.issues else 1
+        self.add_issue(number, title=title, body=body, milestone=milestone)
+        return f"https://github.com/{self.repo}/issues/{number}"
+
+    def _milestone_number(self, title: str) -> int:
+        for milestone in self.milestones.values():
+            if milestone["title"] == title:
+                return milestone["number"]
+        self._fail(
+            1,
+            f"gh: Could not resolve to a Milestone with the title of "
+            f"{title!r}.",
+        )
+
     def _issue_list(self, args: list[str]) -> str:
         flags = self._flags(args)
         self._known_flags(
@@ -252,10 +288,15 @@ class FakeGh:
         ])
 
     def _parse_search(self, search: str | None):
-        """Split a search string into include/exclude labels plus the
-        Milestone title. An unrecognized qualifier fails fast: a scan
-        the fake cannot interpret must never silently match nothing."""
-        include: list[str] = []
+        """Split a search string into label groups plus the Milestone title.
+
+        One `label:` qualifier may carry a comma-separated OR group
+        (`label:a,b` — GitHub's documented OR within one qualifier, the
+        same contract `orbi.claim` relies on); groups AND together. An
+        unrecognized qualifier fails fast: a scan the fake cannot
+        interpret must never silently match nothing.
+        """
+        include: list[list[str]] = []
         exclude: list[str] = []
         milestone_title: str | None = None
         if not search:
@@ -270,7 +311,7 @@ class FakeGh:
             elif token.startswith("-label:"):
                 exclude.append(token[len("-label:"):])
             elif token.startswith("label:"):
-                include.append(token[len("label:"):])
+                include.append(token[len("label:"):].split(","))
             else:
                 self._fail(
                     1, f"fake-gh: unsupported search qualifier: {search!r}"
@@ -278,14 +319,17 @@ class FakeGh:
         return include, exclude, milestone_title
 
     def _matches(self, issue: dict, state: str, label: str | None,
-                 include: list[str], exclude: list[str],
+                 include: list[list[str]], exclude: list[str],
                  milestone_title: str | None) -> bool:
-        if issue["state"] != state:
+        # `--state all` lists both states (GitHub has no state filter to
+        # apply); "open"/"closed" filter exactly.
+        if state != "all" and issue["state"] != state:
             return False
         if label is not None and label not in issue["labels"]:
             return False
-        if any(name not in issue["labels"] for name in include):
-            return False
+        for group in include:
+            if not set(group) & set(issue["labels"]):
+                return False
         if any(name in issue["labels"] for name in exclude):
             return False
         if milestone_title is not None:
@@ -310,6 +354,10 @@ class FakeGh:
         for label in flags.get("--remove-label") or []:
             if label in issue["labels"]:
                 issue["labels"].remove(label)
+        if "--milestone" in flags:
+            issue["milestone"] = self._milestone_number(
+                flags["--milestone"][0]
+            )
 
     def _issue_fields(self, issue: dict, fields: list[str]) -> dict:
         rendered: dict = {}
@@ -352,9 +400,10 @@ class FakeGh:
         if sub == "list":
             flags = self._flags(args[1:])
             self._known_flags(
-                flags, ("--state", "--head", "--json", "--limit"),
+                flags, ("--repo", "--state", "--head", "--json", "--limit"),
                 ["gh", "pr", "list"],
             )
+            self._repo_or_fail((flags.get("--repo") or [self.repo])[0])
             state = (flags.get("--state") or ["open"])[0]
             head = (flags.get("--head") or [None])[0]
             fields = flags["--json"][0].split(",")
