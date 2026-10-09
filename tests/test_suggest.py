@@ -185,6 +185,25 @@ def _no_github_writes(command: str) -> bool:
     )
 
 
+def _repo_files(root: Path) -> list[Path]:
+    """Every path under `root` except git's own bookkeeping.
+
+    A raw `rglob("*")` snapshot is not stable: git runs its
+    auto-maintenance detached after `git commit` and creates and removes
+    `.git/objects/maintenance.lock` (repacking loose objects too) while
+    the test runs — the two snapshots differed by exactly that lock on
+    the macOS CI runner. The contract under test is that `orbi suggest`
+    writes nothing under `repo_dir`, so git's own bookkeeping is not part
+    of the snapshot; every other path still is, and the recorded
+    commands below cover git's internals (a fetch or a checkout would
+    run `git` through the one subprocess seam).
+    """
+    return sorted(
+        path.relative_to(root) for path in root.rglob("*")
+        if path.relative_to(root).parts[0] != ".git"
+    )
+
+
 # --- the command -------------------------------------------------------------
 
 
@@ -196,7 +215,9 @@ def test_orbi_suggest_json_prints_the_document(
     world.gh.add_pr(1, head="feature", body="pr body")
     stub = PiStub(_answer_json(EXISTING, NEW_TWO, NEW_THREE))
     monkeypatch.setattr(seam, "stream_pi", stub)
-    before = sorted(p.relative_to(world.repo) for p in world.repo.rglob("*"))
+    before = _repo_files(world.repo)
+    # The snapshot must actually see the checkout, not an empty set.
+    assert Path("README.md") in before
 
     with caplog.at_level("INFO", logger="orbi.bootstrap"):
         assert cli.main([
@@ -236,6 +257,13 @@ def test_orbi_suggest_json_prints_the_document(
     assert all(line.startswith(f"[{run_id}] ") for line in lines)
 
     assert all(_no_github_writes(c) for c in world.recorder.rendered())
+    # The only git command is the read behind `base_sha`: no fetch, no
+    # checkout and no worktree (their writes would sit in `.git/`,
+    # which the file snapshot below excludes as git's own churn).
+    assert [
+        line for line in world.recorder.rendered()
+        if line.startswith("git ")
+    ] == ["git rev-parse HEAD"]
 
     command = stub.command
     assert command[command.index("--tools") + 1] == "read,grep,find,ls"
@@ -251,7 +279,7 @@ def test_orbi_suggest_json_prints_the_document(
     assert stub.kwargs["cwd"] == run_dirs[0]
     assert str(run_dirs[0] / "context.json") in command[-1]
 
-    after = sorted(p.relative_to(world.repo) for p in world.repo.rglob("*"))
+    after = _repo_files(world.repo)
     assert after == before
 
 
