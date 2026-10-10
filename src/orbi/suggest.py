@@ -9,6 +9,10 @@ file), validates the session's answer against the *Suggestions* document
 of CONSTITUTION Article 2, and either prints that document (`--json`) or
 asks the operator once per suggestion and files/labels what they confirm.
 
+The run directory keeps `context.json` and, once the answer
+validates, `suggestions.json` — the batch the NEXT run avoids repeating
+(Issue #1586), handed to the session as `already_suggested`.
+
 The same module owns the `orbi setup` offer (Issue #1576): on a fresh
 repository, after setup's result, a TTY operator is asked once whether to
 run the interactive flow; a caller without a terminal only gets the hint
@@ -59,6 +63,10 @@ CONTEXT_LIMIT = 200
 SUGGESTIONS_MAX = 3
 # The Suggestions document keys, in one place.
 SUGGESTION_KEYS = {"kind", "issue", "title", "why", "body"}
+# The kept batch: `<run_dir>/suggestions.json`, the subset of the
+# Suggestions document the NEXT run must not propose again.
+SUGGESTIONS_FILE = "suggestions.json"
+BATCH_KEYS = ("kind", "issue", "title")
 
 SYSTEM_PROMPT = (
     "You are the orbi suggest session: read-only, no shell. Read the "
@@ -110,8 +118,44 @@ def _label_names(labels) -> list[str]:
     return names
 
 
+def _suggest_root(config: RunnerConfig) -> Path:
+    return (Path(config.deploy_home) / ".orbi" / "suggest").resolve()
+
+
 def _run_dir(config: RunnerConfig, run_id: str) -> Path:
-    return (Path(config.deploy_home) / ".orbi" / "suggest" / run_id).resolve()
+    return _suggest_root(config) / run_id
+
+
+def _earlier_batch(config: RunnerConfig, run_id: str) -> list[dict] | None:
+    """The most recent earlier run's batch, or None when there is none.
+
+    Every run directory is kept after the command exits, on failure too,
+    but only a validated run wrote `suggestions.json` — a failed run is
+    therefore skipped. Run ids are random hex, so the directory's own
+    mtime (updated when the batch file is created) orders the recency;
+    the name only breaks a tie.
+    """
+    candidates = [
+        path for path in _suggest_root(config).iterdir()
+        if path.name != run_id and (path / SUGGESTIONS_FILE).is_file()
+    ]
+    if not candidates:
+        return None
+    latest = max(
+        candidates, key=lambda path: (path.stat().st_mtime_ns, path.name),
+    )
+    return json.loads((latest / SUGGESTIONS_FILE).read_text(encoding="utf-8"))
+
+
+def _write_batch(run_dir: Path, suggestions: list[dict]) -> None:
+    """Keep the validated batch for the next run's `already_suggested`."""
+    (run_dir / SUGGESTIONS_FILE).write_text(
+        json.dumps(
+            [{key: item[key] for key in BATCH_KEYS} for item in suggestions],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _prompt(context_path: Path, repo_dir: Path, repo: str) -> str:
@@ -126,7 +170,8 @@ def _prompt(context_path: Path, repo_dir: Path, repo: str) -> str:
         f"Propose deliverable GitHub Issues for {repo}.\n\n"
         f"1. Read {context_path} with your read tool. It is JSON: the "
         "repository's open Issues and open PRs (number, title, body, "
-        "labels).\n"
+        "labels), plus the batches earlier runs proposed "
+        "(already_suggested, when it is there).\n"
         f"2. Read the repository itself under {repo_dir} by absolute "
         "path (README, AGENTS.md, the source tree, TODO/FIXME comments, "
         "tests, CI configuration).\n"
@@ -324,6 +369,9 @@ def _build_document(config: RunnerConfig, repo: str, run_id: str,
                     run_dir: Path) -> tuple[dict, dict, str, str | None]:
     """Read, run the session and validate; return the document and facts."""
     context = _gather_context(repo)
+    earlier = _earlier_batch(config, run_id)
+    if earlier is not None:
+        context["already_suggested"] = earlier
     context_path = run_dir / "context.json"
     context_path.write_text(
         json.dumps(context, indent=2), encoding="utf-8",
@@ -342,6 +390,7 @@ def _build_document(config: RunnerConfig, repo: str, run_id: str,
             str(exc), command=log_command, returncode=0,
             stdout=output, stderr="",
         ) from exc
+    _write_batch(run_dir, suggestions)
     document = {
         "repo": repo,
         "base_sha": _base_sha(Path(config.repo_dir)),

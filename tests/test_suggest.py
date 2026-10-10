@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -348,6 +349,8 @@ def test_suggest_fails_fast_on_an_invalid_result(
     run_dirs = _run_dirs(world)
     assert len(run_dirs) == 1
     assert RUN_ID_RE.match(run_dirs[0].name)
+    # A run that failed validation has no batch for the next run to read.
+    assert not (run_dirs[0] / "suggestions.json").exists()
 
 
 def test_suggest_rejects_an_existing_issue_with_a_delivery_label(
@@ -386,6 +389,147 @@ def test_suggest_interactive_requires_a_tty(tmp_path, monkeypatch, capsys):
     assert "--json" in capsys.readouterr().err
     assert stub.calls == []
     assert world.recorder.commands == []
+
+
+# --- the kept batch (Issue #1586) --------------------------------------------
+
+
+def _seed_run(world, run_id: str, entries, *, mtime: int) -> Path:
+    """One earlier kept run directory; `entries=None` writes no batch."""
+    path = world.deploy / SUGGEST_DIR / run_id
+    path.mkdir(parents=True)
+    if entries is not None:
+        (path / "suggestions.json").write_text(
+            json.dumps(entries), encoding="utf-8",
+        )
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def _run_context(stub) -> dict:
+    return json.loads(
+        (Path(stub.kwargs["cwd"]) / "context.json").read_text(encoding="utf-8"),
+    )
+
+
+def test_suggest_keeps_the_validated_batch_in_the_run_dir(
+    tmp_path, monkeypatch, capsys,
+):
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    stub = PiStub(_answer_json(EXISTING, NEW_TWO))
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 0
+    assert json.loads(
+        (Path(stub.kwargs["cwd"]) / "suggestions.json").read_text(
+            encoding="utf-8",
+        ),
+    ) == [
+        {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
+        {"kind": "new", "issue": None, "title": "Second thing"},
+    ]
+    assert capsys.readouterr().out.strip()  # the document still prints
+
+
+def test_suggest_context_skips_a_newer_run_without_a_batch(
+    tmp_path, monkeypatch,
+):
+    """Acceptance: the newer of two earlier directories failed validation,
+    so the next run gets the older directory's batch."""
+    world = _world(tmp_path, monkeypatch)
+    older = [
+        {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
+        {"kind": "new", "issue": None, "title": "Second thing"},
+    ]
+    _seed_run(world, "aaaaaaaa", older, mtime=1_000)
+    _seed_run(world, "bbbbbbbb", None, mtime=2_000)
+    stub = PiStub(_answer_json(NEW_THREE))
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 0
+    context = _run_context(stub)
+    assert context["already_suggested"] == older
+    assert set(context) == {"repo", "issues", "prs", "already_suggested"}
+
+
+def test_suggest_context_takes_the_most_recent_batch(
+    tmp_path, monkeypatch,
+):
+    """Run ids are random hex: the kept batch that decides is the most
+    recent directory, not the one whose name sorts last."""
+    world = _world(tmp_path, monkeypatch)
+    newest = [{"kind": "new", "issue": None, "title": "Most recent"}]
+    _seed_run(
+        world, "zzzzzzzz",
+        [{"kind": "new", "issue": None, "title": "Older"}], mtime=1_000,
+    )
+    _seed_run(world, "aaaaaaaa", newest, mtime=2_000)
+    stub = PiStub(_answer_json(NEW_TWO))
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 0
+    assert _run_context(stub)["already_suggested"] == newest
+
+
+def test_two_real_runs_hand_the_first_batch_to_the_second(
+    tmp_path, monkeypatch, capsys,
+):
+    """The user journey: run `orbi suggest` twice for one repository. The
+    first batch is kept, and the second run's `context.json` carries it so
+    the session cannot propose the same work again."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    first = PiStub(_answer_json(EXISTING, NEW_TWO))
+    monkeypatch.setattr(seam, "stream_pi", first)
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 0
+    first_run = Path(first.kwargs["cwd"])
+    batch = [
+        {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
+        {"kind": "new", "issue": None, "title": "Second thing"},
+    ]
+    assert json.loads(
+        (first_run / "suggestions.json").read_text(encoding="utf-8"),
+    ) == batch
+    # Recency is the directory mtime: pin the first run firmly into the
+    # past so the assertion never depends on the filesystem timestamp
+    # resolution of the machine running the suite.
+    os.utime(first_run, (1_000, 1_000))
+
+    second = PiStub(_answer_json(NEW_THREE))
+    monkeypatch.setattr(seam, "stream_pi", second)
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 0
+    assert second.kwargs["cwd"] != first.kwargs["cwd"]
+    assert _run_context(second)["already_suggested"] == batch
+    capsys.readouterr()
+
+
+def test_suggest_context_has_no_already_suggested_without_a_batch(
+    tmp_path, monkeypatch,
+):
+    world = _world(tmp_path, monkeypatch)
+    stub = PiStub(_answer_json(NEW_TWO))
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 0
+    assert "already_suggested" not in _run_context(stub)
+
+
+def test_skill_scopes_the_already_suggested_rule_to_orbi_suggest():
+    skill = (
+        Path(__file__).resolve().parent.parent / SKILL_REL
+    ).read_text(encoding="utf-8")
+    inputs = skill.split("## Inputs", 1)[1].split("## What to read", 1)[0]
+    assert "already_suggested" in inputs
+    assert "orbi suggest" in inputs
 
 
 # --- the interactive flow ----------------------------------------------------
