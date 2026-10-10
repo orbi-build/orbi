@@ -12,6 +12,7 @@ optional proxy never blocks the core setup.
 from orbi import config as config_domain
 import json
 import subprocess
+import threading
 import tomllib
 from pathlib import Path
 
@@ -753,6 +754,74 @@ def test_align_labels_fails_fast_on_a_label_write_error(tmp_path):
             pilot_setup.load_label_defs(repo / "labels.toml"),
             run_command=failing,
         )
+
+
+def test_align_labels_creates_concurrently_with_at_most_six_in_flight(
+    tmp_path,
+):
+    """Contention evidence (Issue #1599): six creates meet a barrier of
+    six, so the creates really overlap and never exceed 6 in flight."""
+    state = {"existing_labels": []}
+    fake_run, calls = fake_run_factory(state)
+    repo = make_repo(tmp_path)
+    lock = threading.Lock()
+    barrier = threading.Barrier(6, timeout=5)
+    inflight = 0
+    peak = 0
+    first = True
+
+    def tracking_run(command, **kwargs):
+        nonlocal inflight, peak, first
+        # The single `gh label list` read is the first call; every
+        # create afterwards blocks on the barrier.
+        if first:
+            first = False
+            return fake_run(command, **kwargs)
+        with lock:
+            inflight += 1
+            peak = max(peak, inflight)
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            pass
+        finally:
+            with lock:
+                inflight -= 1
+        return ""
+
+    result = pilot_setup.align_labels(
+        "xqliu/orbi",
+        pilot_setup.load_label_defs(repo / "labels.toml"),
+        run_command=tracking_run,
+    )
+    assert result["aligned"] == 14
+    # Exactly 6: sequential would peak at 1, unbounded at 14.
+    assert peak == 6
+
+
+def test_align_labels_names_the_first_failure_by_definition_order(tmp_path):
+    """Issue #1599: when several creates fail, the reported label is the
+    first one in definition order, with the unchanged message format."""
+    state = {"existing_labels": []}
+    calls = []
+
+    def failing(command, **kwargs):
+        calls.append(command)
+        # The single `gh label list` read is the first call; every
+        # create afterwards fails.
+        if len(calls) == 1:
+            return json.dumps(state["existing_labels"])
+        raise subprocess.CalledProcessError(1, command, stderr="boom")
+
+    repo = make_repo(tmp_path)
+    defs = pilot_setup.load_label_defs(repo / "labels.toml")
+    with pytest.raises(pilot_setup.SetupError) as excinfo:
+        pilot_setup.align_labels("xqliu/orbi", defs, run_command=failing)
+    first = defs[0]["name"]
+    assert str(excinfo.value).startswith(
+        f"label alignment failed for xqliu/orbi: {first} "
+        "(gh label create failed: ",
+    )
 
 
 # --- units -------------------------------------------------------------------
