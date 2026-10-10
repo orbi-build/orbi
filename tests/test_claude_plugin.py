@@ -896,6 +896,40 @@ def test_skill_checks_the_milestone_is_open():
     )
 
 
+# --- Nearest deliverable version (Issue #1597) --------------------------------
+
+# The draft must not be a request the code cannot deliver as asked: it becomes
+# the nearest version the code can deliver, said in the first line, asked with
+# that version as the recommended answer.
+NEAREST_DELIVERABLE_SENTENCE = (
+    "If reading the code shows the request cannot be done as asked (the file "
+    "it is about is empty or missing, or the thing it would change does not "
+    "exist), draft the nearest version of the request that the code can "
+    "actually deliver, say in the draft's first line what you changed and "
+    "why, and ask about it as a question whose recommended answer is that "
+    "deliverable version. Never write a draft whose only possible delivery "
+    "changes no file."
+)
+DRAFT_FIRST_PARAGRAPH = "Draft the Issue before asking anything."
+
+
+def test_skill_drafts_the_nearest_version_the_code_can_deliver():
+    """Issue #1597: when the code cannot deliver the request as asked, the
+    draft is the nearest deliverable version — never a draft whose only
+    possible delivery changes no file."""
+    flat = " ".join(read_plugin_file(PLUGIN_DIR, SKILL_REL).split())
+    assert NEAREST_DELIVERABLE_SENTENCE in flat, (
+        "SKILL.md must draft the nearest deliverable version when the code "
+        "cannot deliver the request as asked (Issue #1597)"
+    )
+    assert flat.index(NEAREST_DELIVERABLE_SENTENCE) < flat.index(
+        DRAFT_FIRST_PARAGRAPH
+    ), (
+        "the nearest-deliverable-version sentence must come before "
+        f"{DRAFT_FIRST_PARAGRAPH!r}"
+    )
+
+
 # --- Counter-proof ------------------------------------------------------------
 
 

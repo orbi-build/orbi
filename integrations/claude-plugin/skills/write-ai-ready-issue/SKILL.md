@@ -83,6 +83,13 @@ Before drafting, state the route in one line, then follow it:
 
 ## Draft first
 
+If reading the code shows the request cannot be done as asked (the file it is
+about is empty or missing, or the thing it would change does not exist), draft
+the nearest version of the request that the code can actually deliver, say in
+the draft's first line what you changed and why, and ask about it as a question
+whose recommended answer is that deliverable version. Never write a draft whose
+only possible delivery changes no file.
+
 Draft the Issue before asking anything. Then ask at most three numbered
 questions in one reply, each in this form:
 
