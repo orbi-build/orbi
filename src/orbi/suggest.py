@@ -9,9 +9,16 @@ file), validates the session's answer against the *Suggestions* document
 of CONSTITUTION Article 2, and either prints that document (`--json`) or
 asks the operator once per suggestion and files/labels what they confirm.
 
-The run directory keeps `context.json` and, once the answer
-validates, `suggestions.json` — the batch the NEXT run avoids repeating
-(Issue #1586), handed to the session as `already_suggested`.
+In parallel with that session a second, short read-only Pi session
+(Issue #1600, tools `read,ls,find`) writes at most three plain sentences
+describing the repository to `<run_dir>/understanding.md` — available
+while the suggestions are still being chosen. Its failure or 60-second
+timeout is a bypass: it writes nothing, logs one line, and never affects
+the Suggestions document.
+
+The run directory keeps `context.json`, `understanding.md` and, once
+the answer validates, `suggestions.json` — the batch the NEXT run avoids
+repeating (Issue #1586), handed to the session as `already_suggested`.
 
 The same module owns the `orbi setup` offer (Issue #1576): on a fresh
 repository, after setup's result, a TTY operator is asked once whether to
@@ -27,6 +34,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from orbi import journal
@@ -58,6 +66,18 @@ SUGGEST_SKILL_REL = Path(
 )
 # The read-only tool allowlist: no `bash`, `edit` or `write`.
 SUGGEST_TOOLS = "read,grep,find,ls"
+# The understanding session (Issue #1600): a second, short read-only Pi
+# session started in parallel with the suggestions session; it describes
+# the repository while the suggestions are still being chosen.
+UNDERSTANDING_TOOLS = "read,ls,find"
+UNDERSTANDING_FILE = "understanding.md"
+UNDERSTANDING_MAX_CHARS = 600
+UNDERSTANDING_TIMEOUT_SECONDS = 60
+# Its own cwd under the run directory: `stream_pi` follows
+# `<cwd>/.pi-session`, so sharing the run directory would make the two
+# concurrent sessions bind to each other's JSONL (and the run document's
+# `session_dir` points at the suggestions session's directory).
+UNDERSTANDING_DIR = ".understanding"
 # The gh context read is bounded like the ticket pool (up to 200 each).
 CONTEXT_LIMIT = 200
 SUGGESTIONS_MAX = 3
@@ -71,6 +91,11 @@ BATCH_KEYS = ("kind", "issue", "title")
 SYSTEM_PROMPT = (
     "You are the orbi suggest session: read-only, no shell. Read the "
     "repository and propose the Issues most worth delivering."
+)
+
+UNDERSTANDING_SYSTEM_PROMPT = (
+    "You are the orbi understanding session: read-only, no shell. "
+    "Describe what a repository is in at most three plain sentences."
 )
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*?)\n```$", re.DOTALL)
@@ -187,6 +212,22 @@ def _prompt(context_path: Path, repo_dir: Path, repo: str) -> str:
     )
 
 
+def _understanding_prompt(repo_dir: Path) -> str:
+    """The understanding session's prompt: describe, never recommend.
+
+    Plain sentences only, written from the repository's own files, so a
+    caller can show them while the suggestions session is still running.
+    """
+    return (
+        f"Read the repository at {repo_dir} and describe it in at most "
+        "three plain sentences: what it is, what it is built with, and "
+        "where its tests and CI are (or that it has none). Write only "
+        "from the repository's own files. Do not recommend anything. "
+        "If the repository has no code, answer with one sentence saying "
+        "so."
+    )
+
+
 def _list_open_prs(repo: str) -> list[dict]:
     raw = run_command([
         "gh", "pr", "list", "--repo", repo, "--state", "open",
@@ -230,7 +271,8 @@ def _gather_context(repo: str) -> dict:
 
 
 def _run_session(config: RunnerConfig, repo: str, run_id: str,
-                 run_dir: Path, context_path: Path
+                 run_dir: Path, context_path: Path,
+                 agent_dir: Path | None
                  ) -> tuple[str, list[str]]:
     """Run the ONE read-only suggest Pi session; return (stdout, log argv)."""
     session_dir = run_dir / ".pi-session"
@@ -247,7 +289,6 @@ def _run_session(config: RunnerConfig, repo: str, run_id: str,
         tools=SUGGEST_TOOLS, extensions=True,
         no_skills=True, no_context_files=True, skills=[skill],
     )
-    agent_dir = prepare_pi_agent_dir(run_dir, config)
     pi_env = _pi_extension_env(config)
     if agent_dir is not None:
         pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
@@ -267,6 +308,70 @@ def _run_session(config: RunnerConfig, repo: str, run_id: str,
         ),
     )
     return output, log_command
+
+
+def _write_understanding(run_dir: Path, output: str) -> None:
+    """Write the understanding session's text, trimmed and capped.
+
+    UTF-8, at most `UNDERSTANDING_MAX_CHARS` characters (Issue #1600).
+    An empty answer writes nothing: there is no text to show.
+    """
+    text = output.strip()[:UNDERSTANDING_MAX_CHARS]
+    if not text:
+        return
+    (run_dir / UNDERSTANDING_FILE).write_text(text, encoding="utf-8")
+
+
+def _run_understanding(config: RunnerConfig, repo: str, run_id: str,
+                       run_dir: Path, agent_dir: Path | None) -> None:
+    """Run the short understanding session; write `understanding.md`.
+
+    Best-effort bypass (Issue #79): a non-zero exit, a spawn failure,
+    the 60-second timeout or a write error logs ONE
+    `suggest_understanding_failed` line and writes nothing. The
+    suggestions session and the Suggestions document are never affected.
+    """
+    try:
+        # Its own cwd/session dir under the run directory: `stream_pi`
+        # follows `<cwd>/.pi-session`, so the two concurrent sessions
+        # must not share one (they would bind to each other's JSONL).
+        session_cwd = run_dir / UNDERSTANDING_DIR
+        session_dir = session_cwd / ".pi-session"
+        session_dir.mkdir(parents=True, exist_ok=True)
+        repo_dir = Path(config.repo_dir).resolve()
+        command, log_command = build_pi_command(
+            config, ROLE_SUGGEST, IMPLEMENT_EXCLUDED_SKILLS, session_dir,
+            UNDERSTANDING_SYSTEM_PROMPT, _understanding_prompt(repo_dir),
+            context_placeholder="<suggest-understanding-redacted>",
+            tools=UNDERSTANDING_TOOLS, extensions=False, no_extensions=True,
+            no_skills=True, no_context_files=True, skills=[],
+        )
+        pi_env = (
+            {} if agent_dir is None
+            else {"PI_CODING_AGENT_DIR": str(agent_dir)}
+        )
+        output = stream_pi(
+            command, cwd=session_cwd,
+            ctx=RunContext(
+                run_id=run_id, issue=0, branch="", worktree=session_cwd,
+                source_repo=repo,
+            ),
+            role=ROLE_SUGGEST,
+            timeout=UNDERSTANDING_TIMEOUT_SECONDS,
+            log_command=log_command,
+            pi_env=pi_env or None,
+            watch=PiWatchOptions(
+                model_wait_dead_seconds=config.model_wait_dead_seconds,
+                model_wait_probe_url=config.model_wait_probe_url,
+                model_wait_probe_seconds=config.model_wait_probe_seconds,
+            ),
+        )
+        _write_understanding(run_dir, output)
+    except Exception as exc:  # noqa: BLE001 - bypass, never fails the run
+        event(
+            "suggest_understanding_failed", level=logging.WARNING,
+            repo=repo, reason=exc,
+        )
 
 
 def _parse_output(output: str) -> list:
@@ -376,9 +481,18 @@ def _build_document(config: RunnerConfig, repo: str, run_id: str,
     context_path.write_text(
         json.dumps(context, indent=2), encoding="utf-8",
     )
-    output, log_command = _run_session(
-        config, repo, run_id, run_dir, context_path,
-    )
+    agent_dir = prepare_pi_agent_dir(run_dir, config)
+    # The understanding session runs IN PARALLEL (Issue #1600): its
+    # `understanding.md` is available while the suggestions session is
+    # still choosing, so a caller can show it long before the document.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        understanding = pool.submit(
+            _run_understanding, config, repo, run_id, run_dir, agent_dir,
+        )
+        output, log_command = _run_session(
+            config, repo, run_id, run_dir, context_path, agent_dir,
+        )
+        understanding.result()
     milestone, dispatch_label = _repo_scan_keys(
         config, repo, config.active_milestone,
     )

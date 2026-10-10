@@ -75,26 +75,54 @@ class GhRecorder:
         return [" ".join(command) for command in self.commands]
 
 
-class PiStub:
-    """The stream_pi seam: record the argv, return one canned answer."""
+UNDERSTANDING_TEXT = "A tiny repository used by the suggest tests."
 
-    def __init__(self, result) -> None:
+
+def _tools_of(command: list[str]) -> str:
+    return command[command.index("--tools") + 1]
+
+
+class PiStub:
+    """The stream_pi seam: record every argv, answer per session role.
+
+    `orbi suggest` starts TWO Pi sessions in parallel (Issue #1600): the
+    suggestions session (`read,grep,find,ls`) and the short
+    understanding session (`read,ls,find`). Each gets its own canned
+    answer, so an assertion on one session never depends on the other's
+    scheduling. `command`/`kwargs` select the suggestions session;
+    `understanding_call` selects the understanding one.
+    """
+
+    def __init__(self, result, understanding=UNDERSTANDING_TEXT) -> None:
         self.result = result
+        self.understanding = understanding
         self.calls: list[tuple[list[str], dict]] = []
+        self.sessions: dict[str, tuple[list[str], dict]] = {}
 
     def __call__(self, command, **kwargs):
-        self.calls.append((list(command), kwargs))
-        if isinstance(self.result, Exception):
-            raise self.result
-        return self.result
+        recorded = (list(command), kwargs)
+        self.calls.append(recorded)
+        self.sessions[_tools_of(command)] = recorded
+        answer = (
+            self.understanding
+            if _tools_of(command) == suggest.UNDERSTANDING_TOOLS
+            else self.result
+        )
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    @property
+    def understanding_call(self) -> tuple[list[str], dict]:
+        return self.sessions[suggest.UNDERSTANDING_TOOLS]
 
     @property
     def command(self) -> list[str]:
-        return self.calls[0][0]
+        return self.sessions[suggest.SUGGEST_TOOLS][0]
 
     @property
     def kwargs(self) -> dict:
-        return self.calls[0][1]
+        return self.sessions[suggest.SUGGEST_TOOLS][1]
 
 
 class Tty:
@@ -282,6 +310,115 @@ def test_orbi_suggest_json_prints_the_document(
 
     after = _repo_files(world.repo)
     assert after == before
+
+
+# --- the understanding session (Issue #1600) ---------------------------------
+
+
+def test_suggest_runs_the_understanding_session_in_parallel(
+    tmp_path, monkeypatch, capsys,
+):
+    """Two Pi sessions start; the second describes the repository with
+    the read-only `read,ls,find` allowlist and writes its text while the
+    suggestions session is still choosing."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    stub = PiStub(_answer_json(EXISTING))
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 0
+    capsys.readouterr()
+    assert len(stub.calls) == 2
+
+    command, kwargs = stub.understanding_call
+    assert command[command.index("--tools") + 1] == "read,ls,find"
+    assert "--no-skills" in command
+    assert "--no-context-files" in command
+    assert "--no-extensions" in command
+    assert "--skill" not in command
+    assert kwargs["timeout"] == suggest.UNDERSTANDING_TIMEOUT_SECONDS
+    assert "at most three plain sentences" in command[-1]
+    assert str(world.repo.resolve()) in command[-1]
+
+    run_dir = _run_dirs(world)[0]
+    assert (run_dir / "understanding.md").read_text(
+        encoding="utf-8",
+    ) == UNDERSTANDING_TEXT
+    # Its session files stay under the run directory, next to the
+    # suggestions session's `.pi-session`.
+    assert run_dir in Path(kwargs["cwd"]).parents
+
+
+def test_suggest_trims_the_understanding_to_600_characters(
+    tmp_path, monkeypatch, capsys,
+):
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, labels=())
+    stub = PiStub(
+        _answer_json(EXISTING),
+        understanding="  " + "x" * 700 + "  " + chr(10),
+    )
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 0
+    capsys.readouterr()
+    run_dir = _run_dirs(world)[0]
+    content = (run_dir / "understanding.md").read_text(encoding="utf-8")
+    assert content == "x" * suggest.UNDERSTANDING_MAX_CHARS
+    assert len(content) == 600
+
+
+@pytest.mark.parametrize(
+    "failure", [
+        RuntimeError("understanding session exploded"),
+        TimeoutError("understanding session timed out"),
+    ],
+)
+def test_suggest_understanding_failure_writes_nothing(
+    failure, tmp_path, monkeypatch, capsys, caplog,
+):
+    """Acceptance: a failed or timed-out understanding session writes no
+    file and logs ONE line; the Suggestions document is produced."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    stub = PiStub(_answer_json(EXISTING), understanding=failure)
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    with caplog.at_level("INFO", logger="orbi.bootstrap"):
+        assert cli.main([
+            "suggest", "--json", "--config", str(world.config_path),
+        ]) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert [item["title"] for item in document["suggestions"]] == [
+        "Fix the existing thing",
+    ]
+    run_dir = _run_dirs(world)[0]
+    assert not (run_dir / "understanding.md").exists()
+    lines = [
+        record.message for record in caplog.records
+        if record.name == "orbi.bootstrap"
+        and "suggest_understanding_failed" in record.message
+    ]
+    assert len(lines) == 1
+    assert f'reason="{failure}"' in lines[0]
+
+
+def test_suggest_understanding_writes_nothing_on_blank_text(
+    tmp_path, monkeypatch, capsys,
+):
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, labels=())
+    stub = PiStub(
+        _answer_json(EXISTING), understanding="   " + chr(10) + "  ",
+    )
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 0
+    capsys.readouterr()
+    run_dir = _run_dirs(world)[0]
+    assert not (run_dir / "understanding.md").exists()
 
 
 def test_suggest_accepts_a_fenced_json_block(tmp_path, monkeypatch, capsys):
