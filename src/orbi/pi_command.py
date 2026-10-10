@@ -127,6 +127,7 @@ def build_pi_command(
     no_skills: bool = False,
     no_context_files: bool = False,
     skills: list[str | Path] | None = None,
+    no_extensions: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Return one Pi session's `(command, log_command)` argv pair.
 
@@ -142,6 +143,10 @@ def build_pi_command(
     `--no-context-files`; `skills` overrides the configured skill list
     (the suggest role loads exactly its own skill, not
     `config.skills`); `extensions=False` omits the extension flags.
+    `no_extensions` (Issue #1600) adds Pi's `--no-extensions` alone —
+    auto-discovery denied and NONE of the configured `--extension`
+    entries (the understanding session of `orbi suggest`); it is
+    ignored when `extensions=True`.
 
     `log_command` is derived here from the SAME extension flags, model
     flags and session dir as `command`, so the two cannot drift. The
@@ -150,7 +155,10 @@ def build_pi_command(
     boundary flags are never logged (matching the frozen pre-#1231
     journal shape).
     """
-    extension_args = _pi_extension_args(config) if extensions else []
+    extension_args = (
+        _pi_extension_args(config) if extensions
+        else (["--no-extensions"] if no_extensions else [])
+    )
     if skills is None:
         skills = _skills_for(config, excluded_skills)
     skill_args = _skill_args(skills)
