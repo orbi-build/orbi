@@ -18,6 +18,12 @@ three Issues a person can file.
   repository's open Issues and open PRs (`number`, `title`, `body`,
   `labels`). Then read the repository itself under the absolute `repo_dir`
   path named in the prompt.
+- The same `context.json` may carry `already_suggested`: what earlier
+  `orbi suggest` runs already proposed (`kind`, `issue`, `title`). When it
+  is there, do not propose those Issues again, and do not propose a `new`
+  task that describes the same change as one of those titles. Outside
+  `orbi suggest` there is no `context.json` and the key is absent, so this
+  rule does not apply.
 - Outside `orbi suggest` (this skill also ships in the Claude plugin): work
   from the open checkout in the current directory. When no `context.json` is
   given, read the open Issues and PRs yourself:
