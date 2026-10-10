@@ -19895,7 +19895,7 @@ def test_publish_release_creates_when_missing_and_returns_url(monkeypatch):
     assert "run_id=a1b2c3d4" in notes
     assert "Issue #99" in notes
     assert notes.endswith(
-        "Released by Orbi · https://github.com/orbi-build/orbi"
+        "Released by [Orbi](https://github.com/orbi-build/orbi)"
     )
     assert "orbi.build" not in notes
     assert "?ref=" not in notes
@@ -19928,7 +19928,7 @@ def test_publish_release_uses_the_configured_attribution_link(monkeypatch):
     )
     create = next(c for c in calls if c[:3] == ["gh", "release", "create"])
     notes = create[create.index("--notes") + 1]
-    assert notes.endswith("Released by Orbi · https://example.com/x")
+    assert notes.endswith("Released by [Orbi](https://example.com/x)")
     assert "orbi.build" not in notes
     assert "?ref=" not in notes
 
@@ -22725,10 +22725,14 @@ def test_deliver_pr_absorbs_an_advanced_base(monkeypatch, tmp_path, caplog):
     "attribution_footer, attribution_link, expected_footer, foreign_pr",
     [
         (True, "https://github.com/orbi-build/orbi",
-         "Built by Orbi from Issue #4 · https://github.com/orbi-build/orbi",
+         "Built by [Orbi](https://github.com/orbi-build/orbi) from Issue #4",
          False),
         (True, "https://example.com/x",
-         "Built by Orbi from Issue #4 · https://example.com/x", False),
+         "Built by [Orbi](https://example.com/x) from Issue #4", False),
+        # Issue #1590: a link carrying its ?ref= query stays byte-identical.
+        (True, "https://orbi.build/?ref=prfoot-owner",
+         "Built by [Orbi](https://orbi.build/?ref=prfoot-owner)"
+         " from Issue #4", False),
         (False, "https://github.com/orbi-build/orbi", None, False),
         (False, "https://github.com/orbi-build/orbi", None, True),
     ],
@@ -22789,8 +22793,9 @@ def test_deliver_pr_creates_the_pr_when_absent(
         assert "Built by Orbi" not in body
     else:
         assert expected_footer in body
-    assert "orbi.build" not in body
-    assert "?ref=" not in body
+    if "?ref=" not in attribution_link:
+        assert "orbi.build" not in body
+        assert "?ref=" not in body
 
 
 def test_deliver_pr_fails_fast_when_pr_create_fails(monkeypatch, tmp_path):

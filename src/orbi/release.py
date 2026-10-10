@@ -970,7 +970,7 @@ def publish_release(*, repo: str, tag: str, version: str,
         "",
         run_marker(run_id),
         f"run_id={run_id}",
-        *(["", f"Released by Orbi · {attribution_link}"]
+        *(["", f"Released by [Orbi]({attribution_link})"]
           if attribution_footer else []),
     ])
     try:
