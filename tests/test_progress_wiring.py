@@ -2503,6 +2503,48 @@ def test_process_issue_external_pr_closed_claims_fresh(monkeypatch, tmp_path):
     assert pi_session.run_pi.called
 
 
+def test_process_issue_claims_fresh_with_surviving_stable_branch(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #1594: a requeued Issue whose stable delivery branch survived
+    the earlier blocked run (present on origin, no open PR, no
+    ai-in-progress label) is resumed by implementation ON that branch.
+
+    The pre-claim race guard must not mistake the pre-existing branch for
+    one that 'appeared' in the claim window and yield forever: the same
+    Issue would be re-picked every tick and every Issue queued behind it
+    would starve."""
+    make_fake_gh(monkeypatch, in_progress=False)
+    patch_process_deps(monkeypatch, tmp_path)
+    # The branch is present at the scan AND at the pre-claim recheck.
+    monkeypatch.setattr(seam, "stable_branch_exists", lambda *a, **k: True)
+    worktree_calls = []
+
+    def fake_create_worktree(*args, **kwargs):
+        worktree_calls.append(kwargs)
+        path = derived_wt(tmp_path)
+        path.mkdir(parents=True, exist_ok=True)
+        (path / ".orbi").mkdir(exist_ok=True)
+        return path
+
+    monkeypatch.setattr(seam, "create_worktree", fake_create_worktree)
+    issue = {
+        "number": 18, "title": "requeued blocked delivery", "body": "body",
+        "labels": [{"name": "ai-ready"}],
+    }
+    with caplog.at_level("INFO"):
+        result = runner.process_issue(
+            issue, make_config(tmp_path), "xqliu/orbi",
+        )
+
+    # The claim proceeded to implementation on the existing branch...
+    assert worktree_calls, "the claim never reached worktree creation"
+    assert worktree_calls[0].get("existing_branch") is True
+    assert result.kind == "pr"
+    # ...and the false race guard never fired.
+    assert "claim_yield" not in caplog.text
+
+
 def _external_wait_fake(monkeypatch, *, pr_state, fail_progress=None):
     """delivery_step fake for the external takeover scenes: the PR
     state drives the MERGED / CLOSED branches; issue close and comments
