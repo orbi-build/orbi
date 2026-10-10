@@ -338,6 +338,10 @@ def test_suggest_runs_the_understanding_session_in_parallel(
     assert "--no-extensions" in command
     assert "--skill" not in command
     assert kwargs["timeout"] == suggest.UNDERSTANDING_TIMEOUT_SECONDS
+    # No provider-429 retry budget: stream_pi's backoff loop would
+    # otherwise hold the command far past that 60-second budget
+    # (Issue #1600).
+    assert kwargs["rate_limit_retries"] == 0
     assert "at most three plain sentences" in command[-1]
     assert str(world.repo.resolve()) in command[-1]
 

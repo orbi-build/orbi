@@ -358,6 +358,11 @@ def _run_understanding(config: RunnerConfig, repo: str, run_id: str,
             ),
             role=ROLE_SUGGEST,
             timeout=UNDERSTANDING_TIMEOUT_SECONDS,
+            # No provider-429 retry budget for this bypass (Issue #1600):
+            # stream_pi's backoff loop (30 s ... 300 s per retry) would
+            # otherwise hold the command — and its Suggestions
+            # document — far past the 60-second budget above.
+            rate_limit_retries=0,
             log_command=log_command,
             pi_env=pi_env or None,
             watch=PiWatchOptions(
