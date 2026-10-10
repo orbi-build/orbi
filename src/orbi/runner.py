@@ -1746,8 +1746,8 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
         )
         if attribution_footer:
             body += (
-                "\nBuilt by Orbi from Issue #"
-                f"{issue} · {attribution_link}\n"
+                f"\nBuilt by [Orbi]({attribution_link})"
+                f" from Issue #{issue}\n"
             )
         # A transient GitHub hiccup must not throw away a finished
         # delivery: the create goes through the bounded write retry, and
