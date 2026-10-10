@@ -9340,6 +9340,40 @@ def test_stream_pi_rate_limited_exhausted_takes_existing_failure_path(
     assert "relabel the Issue ai-ready" in message
 
 
+def test_stream_pi_rate_limit_retries_zero_fails_on_the_first_429(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #1600: a session with a zero retry budget — the short
+    auxiliary understanding session of `orbi suggest` — fails on its
+    FIRST 429 exit: no backoff sleep and no re-spawn, so the bypass can
+    never hold the command past its own timeout."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(pi_process.time, "sleep", sleeps.append)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99,
+        stderr="Error: 429 RESOURCE_EXHAUSTED. Please retry in 36.5s",
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(pi_process.RateLimitExhaustedError) as exc_info:
+            pi_session.stream_pi(
+                command,
+                ctx=RunContext(
+                    run_id="deadbeef", issue=0, branch="",
+                    worktree=tmp_path, source_repo="xqliu/orbi",
+                ),
+                rate_limit_retries=0,
+                watch=PiWatchOptions(poll_interval=0.05), cwd=tmp_path,
+            )
+    # The response's own 36.5 s hint was never waited out.
+    assert sleeps == []
+    assert "pi_retry_429" not in caplog.text
+    assert len([line for line in caplog.text.splitlines()
+                if " run_start " in line]) == 1
+    message = str(exc_info.value)
+    assert "1 consecutive 429 exits" in message
+    assert "limit=0" in message
+
+
 def test_stream_pi_rate_limited_exhausted_mid_session_terminates(
     tmp_path, monkeypatch, caplog,
 ):

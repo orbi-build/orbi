@@ -262,3 +262,52 @@ def test_suggest_command_uses_a_tool_allowlist_and_one_skill():
     assert "--tools" not in log_command
     assert "--no-skills" not in log_command
     assert "--no-context-files" not in log_command
+
+
+UNDERSTANDING_COMMAND_ARGS = [
+    "pi", "--tools", "read,ls,find", "--no-skills", "--no-context-files",
+    "--no-extensions",
+    "--provider", "openai", "--model", "gpt-5.6-sol",
+    "--thinking", "medium",
+    "--print", "--session-dir", str(SESSION_DIR),
+    "--system-prompt", SYSTEM_PROMPT, CONTEXT,
+]
+
+
+def test_understanding_command_denies_extensions_without_loading_any():
+    """Issue #1600: the parallel understanding session of `orbi suggest`
+    carries `--no-extensions` and NONE of the configured `--extension`
+    entries, and loads no skill."""
+    command, log_command = pi_command.build_pi_command(
+        _configured(), pi_command.ROLE_SUGGEST,
+        pi_command.IMPLEMENT_EXCLUDED_SKILLS, SESSION_DIR,
+        SYSTEM_PROMPT, CONTEXT,
+        context_placeholder="<suggest-understanding-redacted>",
+        tools="read,ls,find", extensions=False, no_extensions=True,
+        no_skills=True, no_context_files=True, skills=[],
+    )
+    assert command == UNDERSTANDING_COMMAND_ARGS
+    assert "--extension" not in command
+    assert "--skill" not in command
+    assert log_command == [
+        "pi", "--no-extensions",
+        "--provider", "openai", "--model", "gpt-5.6-sol",
+        "--thinking", "medium",
+        "--print", "--session-dir", str(SESSION_DIR),
+        "--system-prompt", "<redacted>", "<suggest-understanding-redacted>",
+    ]
+
+
+def test_extension_flags_are_omitted_when_extensions_is_false():
+    """`extensions=False` without `no_extensions` keeps the pre-#1600
+    behavior: no extension flag at all."""
+    command, log_command = pi_command.build_pi_command(
+        _configured(), ROLE_IMPLEMENT,
+        pi_command.IMPLEMENT_EXCLUDED_SKILLS, SESSION_DIR,
+        SYSTEM_PROMPT, CONTEXT,
+        context_placeholder="<issue-context-redacted>",
+        tools=True, extensions=False,
+    )
+    assert "--no-extensions" not in command
+    assert "--extension" not in command
+    assert "--no-extensions" not in log_command

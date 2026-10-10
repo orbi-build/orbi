@@ -993,7 +993,7 @@ def stream_pi(
     cwd: Path,
     ctx: RunContext,
     role: str = ROLE_IMPLEMENT,
-    timeout: int | None = None,
+    timeout: int | None = None, rate_limit_retries: int = PI_RATE_LIMIT_RETRIES,
     watch: PiWatchOptions = PiWatchOptions(),
     log_command: list[str] | None = None,
     progress: Callable[[dict], None] | None = None,
@@ -1043,8 +1043,8 @@ def stream_pi(
     (`retry in Ns` / `retryDelay: Ns`) capped at 5 minutes; without a
     hint it doubles from 30 s to the same cap. Every retry logs one
     `pi_retry_429` line (run id, attempt, next_retry_in). Only after
-    `PI_RATE_LIMIT_RETRIES` (default 5) CUMULATIVE backoff retries still
-    end in a 429 exit does the terminal failure run —
+    the session's backoff budget `rate_limit_retries` (default 5;
+    `orbi suggest`'s auxiliary session passes 0, #1600) is exhausted —
     `RateLimitExhaustedError`, never a recoverable resume (the attempt count is persisted per run in the worktree's `.orbi/`
     dir, so it keeps rising across runner restarts and the limit
     actually bites) — with the `run_failed` scene marked
@@ -1137,11 +1137,11 @@ def stream_pi(
             )
             continue
         except ProviderRateLimitedError as exc:
-            if attempt >= PI_RATE_LIMIT_RETRIES:
+            if attempt >= rate_limit_retries:
                 _fail_rate_limited(
-                    exc, attempts=attempt, run_id=run_id,
-                    issue_ref=issue_ref, role=role, branch=branch,
-                    cwd=cwd,
+                    exc, attempts=attempt, limit=rate_limit_retries,
+                    run_id=run_id, issue_ref=issue_ref, role=role,
+                    branch=branch, cwd=cwd,
                 )
             delay = _backoff_seconds(attempt, exc.stderr)
             attempt += 1
@@ -1152,7 +1152,7 @@ def stream_pi(
                 "pi_retry_429", level=logging.WARNING,
                 run_id=run_id, issue=issue_ref, role=role,
                 attempt=attempt, next_retry_in=f"{int(delay)}s",
-                limit=PI_RATE_LIMIT_RETRIES,
+                limit=rate_limit_retries,
                 session=exc.activity.get("session_id") or "-",
             )
             time.sleep(delay)
@@ -1176,13 +1176,13 @@ def _log_run_failed(activity: dict, *, run_id: str, issue_ref: str,
 
 
 def _fail_rate_limited(
-    exc: ProviderRateLimitedError, *, attempts: int, run_id: str,
-    issue_ref: str, role: str, branch: str, cwd: Path,
+    exc: ProviderRateLimitedError, *, attempts: int, limit: int,
+    run_id: str, issue_ref: str, role: str, branch: str, cwd: Path,
 ) -> NoReturn:
     """The exhausted-retries terminal failure: `attempts` cumulative 429 exits (the RUN's count, persisted
-    across restarts) have burned the backoff budget, so the delivery
-    terminates — `RateLimitExhaustedError` is never a recoverable resume
-    (the classification is terminal in both phases, implement and
+    across restarts) have burned the session's `limit`-retry backoff
+    budget, so the delivery terminates — `RateLimitExhaustedError`, never
+    a recoverable resume (terminal in both phases, implement and
     opened-PR review). The terminal also CLEARS the persisted counter:
     this attempt's budget is spent and reported on the Issue, and the
     documented repair (relabel ai-ready) must start a FULL fresh budget
@@ -1205,7 +1205,7 @@ def _fail_rate_limited(
         )
     raise RateLimitExhaustedError(
         f"provider rate limit retries exhausted: {attempts + 1} "
-        f"consecutive 429 exits (limit={PI_RATE_LIMIT_RETRIES} retries); "
+        f"consecutive 429 exits (limit={limit} retries); "
         "the cause is the provider quota, not the task; repair: relabel "
         "the Issue ai-ready to retry after the quota window resets"
     )

@@ -671,6 +671,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `suggest_started` | `orbi suggest` 运行开始（该 run 的第一行） |
 | `suggest_created` | `orbi suggest` 创建或标记了一个 Issue |
 | `suggest_failed` | `orbi suggest` 运行失败（结果无效或 `gh` 调用失败） |
+| `suggest_understanding_failed` | `orbi suggest` 的并行理解会话失败或超时（旁路：不写 `understanding.md`） |
 
 idle 告警和模型请求挂死 kill 是日志/健康阈值——它们不是每 5 分钟
 调度，也不是业务任务 timeout。
