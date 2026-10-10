@@ -36,6 +36,7 @@ agents and scripts can parse it.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import importlib.resources
 import json
 import logging
@@ -632,7 +633,7 @@ def align_labels(repo: str, defs: list[dict], run_command) -> dict:
         for entry in existing
         if isinstance(entry, dict)
     }
-    aligned = 0
+    pending = []
     for entry in defs:
         current = by_name.get(entry["name"])
         matches = (
@@ -640,24 +641,23 @@ def align_labels(repo: str, defs: list[dict], run_command) -> dict:
             and (current.get("color") or "").lower() == entry["color"].lower()
             and current.get("description") == entry["description"]
         )
-        if matches:
-            aligned += 1
-            continue
+        if not matches:
+            pending.append(entry)
+    def create(entry):
         try:
             run_command([
-                "gh", "label", "create", entry["name"],
-                "--repo", repo,
+                "gh", "label", "create", entry["name"], "--repo", repo,
                 "--color", entry["color"],
-                "--description", entry["description"],
-                "--force",
-            ])
+                "--description", entry["description"], "--force"])
         except Exception as exc:
             raise SetupError(
                 f"label alignment failed for {repo}: {entry['name']} "
                 f"(gh label create failed: {exc})"
             ) from exc
-        aligned += 1
-    return {"repo": repo, "aligned": aligned, "total": len(defs)}
+    # Overlap the writes, at most 6 in flight (Issue #1599); `map` yields and fails in definition order.
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        list(executor.map(create, pending))
+    return {"repo": repo, "aligned": len(defs), "total": len(defs)}
 
 
 def install_units_step(repo_dir: Path, installed_dir: Path | None,
