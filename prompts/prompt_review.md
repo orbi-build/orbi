@@ -181,9 +181,14 @@ preserve real exit codes: do not use `&&` to hide which command failed.
 2. Reproduce the failing cases locally (the exact tests CI failed on),
    fix them, and rerun them until green.
 3. Run the related tests of the changed code.
-4. Run exactly one full suite with the tiered coverage gate (Issue #234)
-   (when Python changed) before emitting the verdict. Do not repeat the full
-   suite: it is the final gate of the round, not a debugging tool.
+4. Full-suite evidence with the tiered coverage gate (Issue #234). When
+   this session commits no change, the PR's green current-head CI is the
+   full-suite evidence: read it with `gh pr checks {{PR_NUMBER}}` and
+   record the result in `.orbi/test.log`; do not run the full suite
+   locally. Run exactly one full suite (when Python changed) only when
+   this session committed a fix, before emitting the verdict. Do not
+   repeat the full suite: it is the final gate of the round, not a
+   debugging tool.
 
 ## Fix in this session
 
