@@ -144,10 +144,9 @@ compaction.
   finding. Every such finding states the minimal fix direction: delete or
   shrink the out-of-scope part until only the acceptance criteria remain.
 - Verify the run evidence: the real test/build commands were run and pass in
-  the repository's declared runtime; Python business code keeps the tiered
-  coverage gate (Issue #234: whole repository line >= 95% and branch >= 95%
-  checked separately, changed Python code at 100% line/branch) when Python
-  changed.
+  the repository's declared runtime; tests meet the coverage and test
+  requirements the repository itself declares (its CI and its context files
+  such as `AGENTS.md`).
 - Only report findings this diff introduces or exposes. Every finding needs a
   concrete `file:line`, a reproducible trigger, actual vs expected, and a
   minimal fix direction. No speculative findings.
@@ -181,12 +180,12 @@ preserve real exit codes: do not use `&&` to hide which command failed.
 2. Reproduce the failing cases locally (the exact tests CI failed on),
    fix them, and rerun them until green.
 3. Run the related tests of the changed code.
-4. Full-suite evidence with the tiered coverage gate (Issue #234).
+4. Full-suite evidence.
    Decide which evidence covers the code that will be merged — the PR
    head — and run the full suite locally only when none does:
    a. **The repository has CI that runs the project's test suite on pull
-      requests** (read `.github/workflows/`; when Python changed it must
-      also enforce the tiered coverage gate): CI on the current head is
+      requests** (read `.github/workflows/`; it must enforce whatever
+      coverage the repository declares): CI on the current head is
       the full-suite evidence. If its checks have not appeared or
       finished yet, wait for them (`gh pr checks {{PR_NUMBER}} --watch`)
       instead of running the suite locally. When this session commits a
@@ -199,7 +198,7 @@ preserve real exit codes: do not use `&&` to hide which command failed.
       `.orbi/test.log`, that run is the evidence; do not rerun it.
       Otherwise — the base merge or this session changed the tree — run
       exactly one full suite before emitting the verdict, whatever the
-      language, with the tiered coverage gate when Python changed.
+      language.
 
    Do not repeat the full suite: it is the final gate of the round, not
    a debugging tool.
@@ -220,7 +219,7 @@ another session: fix them here, in this same session.
   `refs/remotes/origin/{{BASE_BRANCH}}` ref; a fetch error or a lock timeout
   fails fast — never retry the bare fetch or bypass the lock), plain
   `git merge origin/{{BASE_BRANCH}}`, resolve conflicts manually, rerun the
-  full test suite with coverage, and push the task branch.
+  full test suite, and push the task branch.
 - Absorb contract (machine-checked by the Runner): a round that starts
   behind `origin/{{BASE_BRANCH}}` or facing a merge conflict must end in
   exactly one of two states — (a) the task branch contains

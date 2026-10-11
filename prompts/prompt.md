@@ -136,14 +136,12 @@ re-read every context file: the artifacts carry the current plan, the
 last test result and the open findings, and a full re-scan is what
 triggers the next pointless compaction.
 
-Use the configured skills for implementation. Use TDD and the tiered
-coverage gate (Issue #234): the whole repository keeps line >= 95% and
-branch >= 95% (checked separately, never a merged single percentage),
-the Python lines/branches you change keep 100% line/branch, and the core
-state machines keep 100% through their existing tests. Do NOT run a
-review-fix loop or any independent review before opening the PR
-(Issue #78): the independent review happens
-AFTER the PR is open, run by the Runner — catch problems early with TDD
+Use the configured skills for implementation. Use TDD. Meet the
+coverage and test requirements the repository itself declares (its CI and
+its context files such as `AGENTS.md`); do not invent a coverage
+threshold. Do NOT run a review-fix loop or any independent review before
+opening the PR (Issue #78): the independent review happens AFTER the PR is
+open, run by the Runner — catch problems early with TDD
 and the real test suite, not by reviewing yourself.
 
 Work through this exact loop:

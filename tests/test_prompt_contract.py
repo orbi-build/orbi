@@ -709,3 +709,64 @@ def test_prompt_review_md_takes_the_full_suite_evidence_from_step_4():
         f"prompt_review.md 'Fix in this session' first bullet is missing the "
         f"step 4 evidence rule (Issue #1608): {missing}"
     )
+
+
+# --- Issue #1617: coverage requirements come from the repository itself -------
+
+# Issue #234 wrote orbi's OWN Python coverage policy (whole repository
+# line/branch >= 95%, changed code and core paths 100%) into the SHARED prompts,
+# so every customer repository was held to numbers nobody there agreed to.
+# Issue #805 makes the repository's own CI/context files the test authority:
+# the shared prompts must take the coverage requirement from the repository and
+# must not invent a threshold. These tests fail if the #234 wording comes back.
+PROMPT_COVERAGE_FROM_REPO_ITEMS = (
+    ("coverage-from-repo-tdd", "use tdd"),
+    ("coverage-from-repo-declared",
+     "meet the coverage and test requirements the repository itself declares"),
+    ("coverage-from-repo-ci", "its ci and its context files"),
+    ("coverage-from-repo-context", "context files such as `agents.md`"),
+    ("coverage-from-repo-no-invent", "do not invent a coverage threshold"),
+)
+
+
+def test_prompt_md_takes_coverage_from_the_repository():
+    text = _text(PROMPT)
+    missing = _missing(text, PROMPT_COVERAGE_FROM_REPO_ITEMS)
+    assert not missing, (
+        f"prompt.md must take coverage from the repository (Issue #1617): "
+        f"{missing}"
+    )
+    # orbi's own #234 numbers must not be imposed on other repositories.
+    assert "tiered" not in text, (
+        "prompt.md still imposes the #234 tiered coverage gate (Issue #1617)"
+    )
+    assert "issue #234" not in text, (
+        "prompt.md still cites Issue #234's coverage policy (Issue #1617)"
+    )
+
+
+PROMPT_REVIEW_COVERAGE_FROM_REPO_ITEMS = (
+    ("review-coverage-from-repo-declared",
+     "tests meet the coverage and test requirements the repository itself "
+     "declares"),
+    ("review-coverage-from-repo-ci", "its ci and its context files"),
+)
+
+
+def test_prompt_review_md_takes_coverage_from_the_repository():
+    text = _text(PROMPT_REVIEW)
+    missing = _missing(text, PROMPT_REVIEW_COVERAGE_FROM_REPO_ITEMS)
+    assert not missing, (
+        f"prompt_review.md must take coverage from the repository "
+        f"(Issue #1617): {missing}"
+    )
+    # The R-check and the test ladder must not carry the #234 tiered gate.
+    assert "tiered" not in text, (
+        "prompt_review.md still imposes the #234 tiered coverage gate "
+        "(Issue #1617)"
+    )
+    assert "issue #234" not in text, (
+        "prompt_review.md still cites Issue #234's coverage policy "
+        "(Issue #1617)"
+    )
+
