@@ -181,22 +181,36 @@ preserve real exit codes: do not use `&&` to hide which command failed.
 2. Reproduce the failing cases locally (the exact tests CI failed on),
    fix them, and rerun them until green.
 3. Run the related tests of the changed code.
-4. Full-suite evidence with the tiered coverage gate (Issue #234). When
-   this session commits no change, the PR's green current-head CI is the
-   full-suite evidence: read it with `gh pr checks {{PR_NUMBER}}` and
-   record the result in `.orbi/test.log`; do not run the full suite
-   locally. Run exactly one full suite (when Python changed) only when
-   this session committed a fix, before emitting the verdict. Do not
-   repeat the full suite: it is the final gate of the round, not a
-   debugging tool.
+4. Full-suite evidence with the tiered coverage gate (Issue #234).
+   Decide which evidence covers the code that will be merged — the PR
+   head — and run the full suite locally only when none does:
+   a. **The repository has CI that runs the project's test suite on pull
+      requests** (read `.github/workflows/`; when Python changed it must
+      also enforce the tiered coverage gate): CI on the current head is
+      the full-suite evidence. If its checks have not appeared or
+      finished yet, wait for them (`gh pr checks {{PR_NUMBER}} --watch`)
+      instead of running the suite locally. When this session commits a
+      fix, run the tests related to the fix locally and let CI on the new
+      head be the full-suite evidence — the Runner merges only after the
+      current head's checks pass. Append (`>>`, never `>`) the
+      `gh pr checks` output and its exit code to `.orbi/test.log`.
+   b. **No CI runs the test suite**: when `git rev-parse HEAD^{tree}`
+      equals the tree recorded before the last passing full run in
+      `.orbi/test.log`, that run is the evidence; do not rerun it.
+      Otherwise — the base merge or this session changed the tree — run
+      exactly one full suite before emitting the verdict, whatever the
+      language, with the tiered coverage gate when Python changed.
+
+   Do not repeat the full suite: it is the final gate of the round, not
+   a debugging tool.
 
 ## Fix in this session
 
 When you find Blocker or Major issues, do **not** stop and hand the work to
 another session: fix them here, in this same session.
 
-- Modify the code on the task branch, rerun the full test suite with the
-  tiered coverage gate (Issue #234) (when Python changed), and commit the fix.
+- Modify the code on the task branch, rerun the tests related to the fix,
+  commit it, and take the full-suite evidence as Test ladder step 4 says.
 - Push ONLY the task branch (the PR head branch); never force push, never
   push the protected branch, never create or close a PR.
 - If the head is behind the latest remote base or has a merge conflict,

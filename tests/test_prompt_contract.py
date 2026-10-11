@@ -597,70 +597,115 @@ def test_prompt_review_md_keeps_the_variable_set_unchanged():
     }, f"prompt_review.md prompt variables drifted: {found}"
 
 
-# --- Issue #1604: no redundant full-suite run on unchanged code ---------------
+# --- Issue #1608: the full-run evidence rule (tightened after #1604) -----------
 
-# Two of four full suite runs per ticket were redundant (orbi-cloud#2169, run
-# 3b366d84): the implement session re-ran the full suite after editing only
-# the .orbi/plan.md run artifact (no tracked file changed), and the review
-# session re-ran it although the PR's current-head CI had already passed.
-# The contract is now: the full suite is not re-run unless a tracked file
-# changed since the last passing full run (.orbi/ artifact edits do not
-# count), and a review round that commits nothing reads the PR's current-head
-# CI instead of running the suite locally. The wording is locked here so the
-# rule cannot silently drift back into the redundant runs.
+# Issue #1604 (v0.6.11, PR #1607) skipped redundant full-suite runs, but its
+# wording had two holes found reviewing v0.6.11: "unless a tracked file
+# changed" ignored newly added untracked files and left no recorded commit to
+# compare against after a resume, and the review ladder accepted the PR's
+# "green current-head CI" as full-suite evidence even when that CI runs no
+# tests (or has no checks at all). Issue #1608 tightens the wording: the
+# implementer records the tested TREE (not the commit) right before the final
+# full run and skips a re-run only while that tree is unchanged AND
+# `git status --porcelain` is empty, and every run is APPENDED so
+# `.orbi/test.log` keeps the recorded tree and the last full run's real output.
 IMPLEMENT_FULL_RUN_ITEMS = (
-    # The full suite is not re-run on an unchanged tracked tree.
-    ("full-run-no-repeat",
-     "do not run the full suite again unless a tracked file changed"),
-    # The check is git status/git diff against the tested commit or tree.
+    # The tree (not the commit) is recorded right before the final full run,
+    # so a later merge that changes nothing still matches.
+    ("full-run-record-tree", "git rev-parse HEAD^{tree}"),
+    ("full-run-before-that-run", "right before that run"),
+    ("full-run-tree-not-commit", "the tree, not the commit"),
+    # A re-run is skipped only while the tree is unchanged ...
+    ("full-run-no-repeat", "do not run it again while"),
     ("full-run-status", "git status --porcelain"),
-    ("full-run-diff", "git diff"),
-    # Editing the .orbi/ run artifacts (plan.md, test.log) is not a change.
-    ("full-run-orbi-artifacts", "editing `.orbi/` artifacts"),
-    ("full-run-does-not-count", "does not count"),
-    # test.log keeps the last full run's real output (no fabricated rerun).
-    ("full-run-test-log-last", "keeps the last full run's real output"),
+    ("full-run-status-empty", "prints nothing"),
+    # ... and any change, tracked or newly added, needs a new full run.
+    ("full-run-any-change", "any change, tracked or newly added"),
+    # Editing the .orbi/ run artifacts never shows up in git status.
+    ("full-run-orbi-artifacts", "editing `.orbi/plan.md` never shows up there"),
+    # Every run is appended: test.log keeps the recorded tree and the last run.
+    ("full-run-append", "append every run with `>>`"),
+    ("full-run-never-overwritten", "`.orbi/test.log` is never overwritten"),
+    ("full-run-test-log-last",
+     "keeps the recorded tree and the last full run's real output"),
 )
 
 
 def test_prompt_md_does_not_repeat_a_full_suite_on_unchanged_code():
     missing = _missing(_text(PROMPT), IMPLEMENT_FULL_RUN_ITEMS)
     assert not missing, (
-        f"prompt.md is missing the no-repeat full-run rule (Issue #1604): "
+        f"prompt.md is missing the no-repeat full-run rule (Issue #1608): "
         f"{missing}"
     )
 
 
 # The review ladder is section-scoped: the gh pr checks needle already
 # appears in the ladder's step 1 (CI first), so only a section assertion
-# proves step 4 itself carries the CI-as-evidence rule rather than
-# inheriting step 1's needle.
+# proves step 4 itself carries the evidence rule rather than inheriting
+# step 1's needle.
 REVIEW_FULL_RUN_ITEMS = (
-    # No committed change -> the PR's current-head CI is the full-suite
-    # evidence, read with gh pr checks and recorded in .orbi/test.log.
-    ("review-full-no-commit", "commits no change"),
+    # Step 4 starts from the evidence that covers what will be merged.
+    ("review-full-decide",
+     "decide which evidence covers the code that will be merged"),
+    ("review-full-pr-head", "the pr head"),
+    # Branch (a): CI that runs the project's test suite on pull requests is
+    # the full-suite evidence; wait for it instead of running it locally.
+    ("review-full-ci-branch", "has ci that runs the project"),
+    ("review-full-read-workflows", "read `.github/workflows/`"),
     ("review-full-current-head-ci",
-     "current-head ci is the full-suite evidence"),
-    ("review-full-gh-pr-checks", "gh pr checks {{PR_NUMBER}}"),
-    ("review-full-record-test-log", "record the result in `.orbi/test.log`"),
-    ("review-full-no-local", "do not run the full suite locally"),
-    # Exactly one local full suite runs only after a committed fix.
-    ("review-full-only-after-fix",
-     "only when this session committed a fix"),
+     "ci on the current head is the full-suite evidence"),
+    ("review-full-watch", "gh pr checks {{PR_NUMBER}} --watch"),
+    ("review-full-wait", "instead of running the suite locally"),
+    # A committed fix runs the related tests; CI on the new head is the
+    # full-suite evidence (the Runner merges only after it passes).
+    ("review-full-related-tests", "run the tests related to the fix locally"),
+    ("review-full-merge-gate", "merges only after the current head"),
+    # Appending, never overwriting, keeps the real output in test.log.
+    ("review-full-append", "append (`>>`, never `>`)"),
+    ("review-full-record-test-log", "`.orbi/test.log`"),
+    # Branch (b): no CI runs the test suite -> reuse the recorded tree's run,
+    # otherwise exactly one full suite, whatever the language.
+    ("review-full-no-ci-branch", "no ci runs the test suite"),
+    ("review-full-recorded-tree", "git rev-parse HEAD^{tree}"),
+    ("review-full-reuse", "that run is the evidence; do not rerun it"),
+    ("review-full-any-language", "whatever the language"),
     # The pre-existing ladder rules stay in the same step.
-    ("review-full-exactly-one", "exactly one full"),
+    ("review-full-exactly-one", "exactly one full suite"),
     ("review-full-before-verdict", "before emitting the verdict"),
     ("review-full-no-repeat", "do not repeat the full suite"),
 )
 
 
-def test_prompt_review_md_uses_current_head_ci_when_it_commits_nothing():
+def test_prompt_review_md_decides_the_full_suite_evidence_for_the_pr_head():
     text = _text(PROMPT_REVIEW)
     ladder = text.split("## test ladder", 1)
     assert len(ladder) == 2, "prompt_review.md is missing the test ladder"
     step4 = ladder[1].split("## fix in this session", 1)[0]
     missing = _missing(step4, REVIEW_FULL_RUN_ITEMS)
     assert not missing, (
-        f"prompt_review.md Test ladder step 4 is missing the CI-as-evidence "
-        f"rule (Issue #1604): {missing}"
+        f"prompt_review.md Test ladder step 4 is missing the evidence rule "
+        f"(Issue #1608): {missing}"
+    )
+
+
+# Issue #1608: after committing a fix the review session runs the tests related
+# to the fix and takes the full-suite evidence from Test ladder step 4 — it is
+# no longer an unconditional local rerun.
+REVIEW_FIX_IN_SESSION_ITEMS = (
+    ("fix-rerun-related-tests", "rerun the tests related to the fix"),
+    ("fix-commit", "commit it"),
+    ("fix-step4-evidence",
+     "take the full-suite evidence as test ladder step 4 says"),
+)
+
+
+def test_prompt_review_md_takes_the_full_suite_evidence_from_step_4():
+    text = _text(PROMPT_REVIEW)
+    section = text.split("## fix in this session", 1)
+    assert len(section) == 2, "prompt_review.md is missing 'Fix in this session'"
+    first_bullet = section[1].split("push only the task branch", 1)[0]
+    missing = _missing(first_bullet, REVIEW_FIX_IN_SESSION_ITEMS)
+    assert not missing, (
+        f"prompt_review.md 'Fix in this session' first bullet is missing the "
+        f"step 4 evidence rule (Issue #1608): {missing}"
     )
