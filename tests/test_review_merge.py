@@ -2395,12 +2395,25 @@ def _scene(**overrides):
 def budget_review_env(monkeypatch):
     """freeze/run_review stubs shared by the scene-budget tests (Issue
     #788): one patch site, a mutable cell per test — tests set
-    `env["verdict"]` before acting."""
-    env = {"frozen": _pr(), "verdict": _pass_verdict_text()}
+    `env["verdict"]` before acting.
+
+    `env["live"]` is the activity frame the fake review session feeds
+    through its progress callback (None: no callback), and `env["calls"]`
+    carries the fake gh commands, so a test can read what the round
+    published (Issue #1613: the progress comment's `tests` field).
+    """
+    env = {"frozen": _pr(), "verdict": _pass_verdict_text(), "live": None,
+           "calls": []}
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: env["frozen"])
-    monkeypatch.setattr(pi_session, "run_review",
-                        lambda *a, **k: env["verdict"])
-    make_fake_gh(monkeypatch)
+
+    def fake_run_review(*args, **kwargs):
+        callback = kwargs.get("progress")
+        if env["live"] is not None and callback is not None:
+            callback(env["live"])
+        return env["verdict"]
+
+    monkeypatch.setattr(pi_session, "run_review", fake_run_review)
+    env["calls"] = make_fake_gh(monkeypatch)[0]
     return env
 
 
@@ -2427,6 +2440,43 @@ def test_review_and_merge_human_decision_stops_without_fix_round(
     assert calls == []
     assert "same failure repeated" in str(raised.value)
     assert "decide which address source is authoritative" in str(raised.value)
+
+
+def test_review_round_live_progress_keeps_the_ci_check_status(
+        budget_review_env, tmp_path,
+):
+    """Issue #1613: the review round's LIVE progress PATCHes keep the
+    round's PR CI test status — the field the user watches while the
+    session runs must not fall back to `-`, dropping the `passed` the
+    round's own ensure just published."""
+    budget_review_env["live"] = {"phase": "test", "action": "bash",
+                                 "result": None, "model_wait": False}
+    budget_review_env["verdict"] = "REVIEW_VERDICT " + json.dumps({
+        "verdict": "blocked_on_human_decision", "head": "h1",
+        "blockers": 0, "majors": 1, "minors": 0,
+        "findings": [{"level": "Major", "location": "PR round comments",
+                      "note": "decide", "fix": "decide it"}],
+    })
+
+    with pytest.raises(runner.HumanDecisionRequired):
+        review_merge.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4, title="Review task", priority="normal",
+            scene=_scene(),
+            checks=[{"name": "tests", "status": "COMPLETED",
+                     "conclusion": "SUCCESS"}],
+        )
+
+    # The round's ensure (POST) and its live heartbeat (PATCH) are the
+    # only body-carrying gh writes on this path.
+    bodies = [
+        command[command.index("--field") + 1][len("body="):]
+        for command in budget_review_env["calls"]
+        if "--method" in command
+    ]
+    assert len(bodies) == 2, bodies
+    assert all("- tests: passed" in body for body in bodies)
+    assert not any("- tests: -" in body for body in bodies)
 
 
 def test_review_and_merge_skips_ai_merged_when_issue_blocked(

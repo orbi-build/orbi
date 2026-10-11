@@ -161,16 +161,12 @@ pipe a test, build or smoke command through `tail`, `head`, `grep` or
 any other filter that drops the exit code — redirect to a file
 (`pytest ... > .orbi/test.log 2>&1;` `echo "exit=$?" >> .orbi/test.log`)
 and then `tail` the file, or run the pipeline with `set -o pipefail`.
-`.orbi/test.log` (the excluded run dir, Issue #302) must contain the
-real pytest output (the summary line), never a self-declared "tests
-passed": the Runner reads it for the progress comment and the `tests
-passed/failed` milestone, and it must stay consistent with CI.
 
 Local test commands in this ladder are advisory debugging only. The Runner
 accepts a clean review only after the PR's current-head GitHub Actions checks
 pass; do not invent or copy a repository-specific gate command into this
-shared prompt. Keep local test output in `.orbi/test.log` as evidence and
-preserve real exit codes: do not use `&&` to hide which command failed.
+shared prompt. Preserve real exit codes: do not use `&&` to hide which
+command failed.
 
 1. CI first: when the PR has CI failures, read the CI failure logs
    BEFORE running any local test — `gh pr checks {{PR_NUMBER}}` (the
@@ -180,28 +176,10 @@ preserve real exit codes: do not use `&&` to hide which command failed.
 2. Reproduce the failing cases locally (the exact tests CI failed on),
    fix them, and rerun them until green.
 3. Run the related tests of the changed code.
-4. Full-suite evidence.
-   Decide which evidence covers the code that will be merged — the PR
-   head — and run the full suite locally only when none does:
-   a. **The repository has CI that runs the project's test suite on pull
-      requests** (read `.github/workflows/`; it must enforce whatever
-      coverage the repository declares): CI on the current head is
-      the full-suite evidence. If its checks have not appeared or
-      finished yet, wait for them (`gh pr checks {{PR_NUMBER}} --watch`)
-      instead of running the suite locally. When this session commits a
-      fix, run the tests related to the fix locally and let CI on the new
-      head be the full-suite evidence — the Runner merges only after the
-      current head's checks pass. Append (`>>`, never `>`) the
-      `gh pr checks` output and its exit code to `.orbi/test.log`.
-   b. **No CI runs the test suite**: when `git rev-parse HEAD^{tree}`
-      equals the tree recorded before the last passing full run in
-      `.orbi/test.log`, that run is the evidence; do not rerun it.
-      Otherwise — the base merge or this session changed the tree — run
-      exactly one full suite before emitting the verdict, whatever the
-      language.
-
-   Do not repeat the full suite: it is the final gate of the round, not
-   a debugging tool.
+4. The PR's GitHub Actions checks are the test authority: read them with
+   `gh pr checks {{PR_NUMBER}}`. Do not run the full suite locally to
+   produce evidence. Run tests locally only to reproduce a failing check
+   or to verify a fix you make in this session.
 
 ## Fix in this session
 
@@ -209,7 +187,7 @@ When you find Blocker or Major issues, do **not** stop and hand the work to
 another session: fix them here, in this same session.
 
 - Modify the code on the task branch, rerun the tests related to the fix,
-  commit it, and take the full-suite evidence as Test ladder step 4 says.
+  and commit it; CI on the new head is the test authority.
 - Push ONLY the task branch (the PR head branch); never force push, never
   push the protected branch, never create or close a PR.
 - If the head is behind the latest remote base or has a merge conflict,
@@ -218,8 +196,8 @@ another session: fix them here, in this same session.
   so an unlocked concurrent fetch races on the shared
   `refs/remotes/origin/{{BASE_BRANCH}}` ref; a fetch error or a lock timeout
   fails fast — never retry the bare fetch or bypass the lock), plain
-  `git merge origin/{{BASE_BRANCH}}`, resolve conflicts manually, rerun the
-  full test suite, and push the task branch.
+  `git merge origin/{{BASE_BRANCH}}`, resolve conflicts manually, and push
+  the task branch.
 - Absorb contract (machine-checked by the Runner): a round that starts
   behind `origin/{{BASE_BRANCH}}` or facing a merge conflict must end in
   exactly one of two states — (a) the task branch contains

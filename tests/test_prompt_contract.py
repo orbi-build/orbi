@@ -322,10 +322,6 @@ EXIT_CODE_ITEMS = (
     ("exit-redirect-file", "> .orbi/test.log 2>&1"),
     ("exit-record-code", "exit=$?"),
     ("exit-pipefail", "set -o pipefail"),
-    # test.log carries the real pytest output, never a self-declared
-    # "tests passed".
-    ("exit-real-output", "real pytest output"),
-    ("exit-no-claim", "self-declared"),
 )
 
 
@@ -361,12 +357,16 @@ TEST_LADDER_ITEMS = (
     ("ladder-failing-cases", "failing cases"),
     # Step 3: after the fix, the related tests run.
     ("ladder-related-tests", "related tests"),
-    # Step 4: exactly ONE full suite + coverage run before the verdict.
-    ("ladder-full-once", "exactly one full"),
-    ("ladder-coverage", "coverage"),
-    ("ladder-before-verdict", "before emitting the verdict"),
-    # Repeated full-suite runs are the named anti-pattern.
-    ("ladder-no-repeat", "do not repeat the full suite"),
+    # Step 4: the PR's GitHub Actions checks are the test authority
+    # (Issue #1613) — no local full-suite evidence production.
+    ("ladder-ci-authority",
+     "the pr's github actions checks are the test authority"),
+    ("ladder-read-checks", "read them with `gh pr checks {{pr_number}}`"),
+    ("ladder-no-local-full",
+     "do not run the full suite locally to produce evidence"),
+    ("ladder-local-only",
+     "run tests locally only to reproduce a failing check or to verify a "
+     "fix you make in this session"),
 )
 
 
@@ -597,109 +597,89 @@ def test_prompt_review_md_keeps_the_variable_set_unchanged():
     }, f"prompt_review.md prompt variables drifted: {found}"
 
 
-# --- Issue #1608: the full-run evidence rule (tightened after #1604) -----------
+# --- Issue #1613: test status comes from the PR's GitHub Actions checks -------
 
-# Issue #1604 (v0.6.11, PR #1607) skipped redundant full-suite runs, but its
-# wording had two holes found reviewing v0.6.11: "unless a tracked file
-# changed" ignored newly added untracked files and left no recorded commit to
-# compare against after a resume, and the review ladder accepted the PR's
-# "green current-head CI" as full-suite evidence even when that CI runs no
-# tests (or has no checks at all). Issue #1608 tightens the wording: the
-# implementer records the tested TREE (not the commit) right before the final
-# full run and skips a re-run only while that tree is unchanged AND
-# `git status --porcelain` is empty, and every run is APPENDED so
-# `.orbi/test.log` keeps the recorded tree and the last full run's real output.
-IMPLEMENT_FULL_RUN_ITEMS = (
-    # The tree (not the commit) is recorded right before the final full run,
-    # so a later merge that changes nothing still matches.
-    ("full-run-record-tree", "git rev-parse HEAD^{tree}"),
-    ("full-run-before-that-run", "right before that run"),
-    ("full-run-tree-not-commit", "the tree, not the commit"),
-    # A re-run is skipped only while the tree is unchanged ...
-    ("full-run-no-repeat", "do not run it again while"),
-    ("full-run-status", "git status --porcelain"),
-    ("full-run-status-empty", "prints nothing"),
-    # ... and any change, tracked or newly added, needs a new full run.
-    ("full-run-any-change", "any change, tracked or newly added"),
-    # Editing the .orbi/ run artifacts never shows up in git status.
-    ("full-run-orbi-artifacts", "editing `.orbi/plan.md` never shows up there"),
-    # Every run is appended: test.log keeps the recorded tree and the last run.
-    ("full-run-append", "append every run with `>>`"),
-    ("full-run-never-overwritten", "`.orbi/test.log` is never overwritten"),
-    ("full-run-test-log-last",
-     "keeps the recorded tree and the last full run's real output"),
+# The v0.6.12 wording (#1604/#1608) made the implementer maintain a
+# `.orbi/test.log` layout (recorded tree, `>>` appends) and made the review
+# ladder branch on CI presence and coverage gates. Issue #1613's direction
+# correction drops that: test status comes only from the PR's GitHub Actions
+# checks, the engine never parses local test output, and the prompts stop
+# prescribing how or when the agent runs tests. The key sentences are locked
+# here so they cannot be silently deleted.
+IMPLEMENT_TEST_AUTHORITY_ITEMS = (
+    ("impl-step5-ci-and-docs", "the way its ci and its docs run them"),
+    ("impl-step5-local-not-evidence",
+     "local runs are your own verification, not evidence the runner reads"),
+    ("impl-step5-ci-authority",
+     "the pr's github actions checks are the test authority"),
+    ("impl-step5-no-rerun",
+     "do not rerun the full suite on code you have already seen pass"),
+    ("impl-step5-no-fail-commit",
+     "do not commit a change whose tests you saw fail"),
 )
 
 
-def test_prompt_md_does_not_repeat_a_full_suite_on_unchanged_code():
-    missing = _missing(_text(PROMPT), IMPLEMENT_FULL_RUN_ITEMS)
-    assert not missing, (
-        f"prompt.md is missing the no-repeat full-run rule (Issue #1608): "
-        f"{missing}"
+def test_prompt_md_step_5_takes_the_test_status_from_ci():
+    text = _text(PROMPT)
+    steps = text.split(
+        "5. verify the change with the repository's own tests", 1,
     )
+    assert len(steps) == 2, "prompt.md is missing the new step 5"
+    step5 = steps[1].split("6. verify the result yourself", 1)[0]
+    missing = _missing(step5, IMPLEMENT_TEST_AUTHORITY_ITEMS)
+    assert not missing, (
+        f"prompt.md step 5 is missing the CI test-authority rule "
+        f"(Issue #1613): {missing}"
+    )
+    # The dropped v0.6.x local-test-log wording.
+    assert "git rev-parse head^{tree}" not in text
+    assert "append every run with `>>`" not in text
+    assert "`.orbi/test.log` is never overwritten" not in text
+    assert "tests passed/failed" not in text
 
 
-# The review ladder is section-scoped: the gh pr checks needle already
-# appears in the ladder's step 1 (CI first), so only a section assertion
-# proves step 4 itself carries the evidence rule rather than inheriting
-# step 1's needle.
-REVIEW_FULL_RUN_ITEMS = (
-    # Step 4 starts from the evidence that covers what will be merged.
-    ("review-full-decide",
-     "decide which evidence covers the code that will be merged"),
-    ("review-full-pr-head", "the pr head"),
-    # Branch (a): CI that runs the project's test suite on pull requests is
-    # the full-suite evidence; wait for it instead of running it locally.
-    ("review-full-ci-branch", "has ci that runs the project"),
-    ("review-full-read-workflows", "read `.github/workflows/`"),
-    ("review-full-current-head-ci",
-     "ci on the current head is the full-suite evidence"),
-    ("review-full-watch", "gh pr checks {{PR_NUMBER}} --watch"),
-    ("review-full-wait", "instead of running the suite locally"),
-    # A committed fix runs the related tests; CI on the new head is the
-    # full-suite evidence (the Runner merges only after it passes).
-    ("review-full-related-tests", "run the tests related to the fix locally"),
-    ("review-full-merge-gate", "merges only after the current head"),
-    # Appending, never overwriting, keeps the real output in test.log.
-    ("review-full-append", "append (`>>`, never `>`)"),
-    ("review-full-record-test-log", "`.orbi/test.log`"),
-    # Branch (b): no CI runs the test suite -> reuse the recorded tree's run,
-    # otherwise exactly one full suite, whatever the language.
-    ("review-full-no-ci-branch", "no ci runs the test suite"),
-    ("review-full-recorded-tree", "git rev-parse HEAD^{tree}"),
-    ("review-full-reuse", "that run is the evidence; do not rerun it"),
-    ("review-full-any-language", "whatever the language"),
-    # The pre-existing ladder rules stay in the same step.
-    ("review-full-exactly-one", "exactly one full suite"),
-    ("review-full-before-verdict", "before emitting the verdict"),
-    ("review-full-no-repeat", "do not repeat the full suite"),
+# The review ladder is section-scoped: `gh pr checks` already appears in step 1
+# (CI failure logs first), so only a section assertion proves step 4 itself
+# carries the test-authority rule rather than inheriting step 1's needle.
+REVIEW_TEST_AUTHORITY_ITEMS = (
+    ("review-ladder-ci-authority",
+     "the pr's github actions checks are the test authority"),
+    ("review-ladder-read-checks",
+     "read them with `gh pr checks {{pr_number}}`"),
+    ("review-ladder-no-local-full",
+     "do not run the full suite locally to produce evidence"),
+    ("review-ladder-local-only",
+     "run tests locally only to reproduce a failing check or to verify a "
+     "fix you make in this session"),
 )
 
 
-def test_prompt_review_md_decides_the_full_suite_evidence_for_the_pr_head():
+def test_prompt_review_md_test_ladder_takes_the_test_status_from_ci():
     text = _text(PROMPT_REVIEW)
     ladder = text.split("## test ladder", 1)
     assert len(ladder) == 2, "prompt_review.md is missing the test ladder"
     step4 = ladder[1].split("## fix in this session", 1)[0]
-    missing = _missing(step4, REVIEW_FULL_RUN_ITEMS)
+    missing = _missing(step4, REVIEW_TEST_AUTHORITY_ITEMS)
     assert not missing, (
-        f"prompt_review.md Test ladder step 4 is missing the evidence rule "
-        f"(Issue #1608): {missing}"
+        f"prompt_review.md Test ladder step 4 is missing the CI "
+        f"test-authority rule (Issue #1613): {missing}"
     )
+    # The dropped v0.6.x local-test-log wording, scoped to the ladder.
+    assert "tiered coverage gate" not in step4
+    assert "git rev-parse head^{tree}" not in step4
+    assert "append (`>>`, never `>`)" not in step4
 
 
-# Issue #1608: after committing a fix the review session runs the tests related
-# to the fix and takes the full-suite evidence from Test ladder step 4 — it is
-# no longer an unconditional local rerun.
+# Issue #1613: a fix committed in the review session takes the CI test
+# authority on the new head — no unconditional local full-suite rerun.
 REVIEW_FIX_IN_SESSION_ITEMS = (
-    ("fix-rerun-related-tests", "rerun the tests related to the fix"),
-    ("fix-commit", "commit it"),
-    ("fix-step4-evidence",
-     "take the full-suite evidence as test ladder step 4 says"),
+    ("fix-related-tests", "rerun the tests related to the fix"),
+    ("fix-commit", "and commit it"),
+    ("fix-ci-authority", "ci on the new head is the test authority"),
 )
 
 
-def test_prompt_review_md_takes_the_full_suite_evidence_from_step_4():
+def test_prompt_review_md_fix_in_session_takes_the_ci_test_authority():
     text = _text(PROMPT_REVIEW)
     section = text.split("## fix in this session", 1)
     assert len(section) == 2, "prompt_review.md is missing 'Fix in this session'"
@@ -707,7 +687,7 @@ def test_prompt_review_md_takes_the_full_suite_evidence_from_step_4():
     missing = _missing(first_bullet, REVIEW_FIX_IN_SESSION_ITEMS)
     assert not missing, (
         f"prompt_review.md 'Fix in this session' first bullet is missing the "
-        f"step 4 evidence rule (Issue #1608): {missing}"
+        f"CI test-authority rule (Issue #1613): {missing}"
     )
 
 
@@ -770,3 +750,13 @@ def test_prompt_review_md_takes_coverage_from_the_repository():
         "(Issue #1617)"
     )
 
+
+# Issue #1613: the base-absorb bullet drops the unconditional local full-suite
+# rerun; the PR's checks remain the test authority.
+def test_prompt_review_md_absorb_bullet_drops_the_full_suite_rerun():
+    text = _text(PROMPT_REVIEW)
+    section = text.split("- if the head is behind the latest remote base", 1)
+    assert len(section) == 2, "prompt_review.md is missing the base-absorb bullet"
+    bullet = section[1].split("- absorb contract", 1)[0]
+    assert "rerun the full test suite with coverage" not in bullet
+    assert "resolve conflicts manually" in bullet

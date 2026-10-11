@@ -13436,8 +13436,9 @@ def test_delivery_step_passes_p0_priority_to_the_review(
         PR_URL, issue, config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
-    # The review receives the priority AND the recovered scene (the
-    # round budget reads the scene, Issue #788).
+    # The review receives the priority, the recovered scene (the round
+    # budget reads the scene, Issue #788) and the PR head's check rollup
+    # (Issue #1613: the tests field comes from CI, never a local log).
     assert review_calls == [{
         "title": "p0 task", "priority": "p0",
         "scene": {
@@ -13445,6 +13446,7 @@ def test_delivery_step_passes_p0_priority_to_the_review(
             "base_sha": "abc123def456", "pr_url": PR_URL,
             "external": "", "review_round": 0, "scene_at": None,
         },
+        "checks": [],
         "merge_only": True,
     }]
     # The awaiting log line carries the explicit priority field.

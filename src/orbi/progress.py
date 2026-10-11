@@ -6,7 +6,7 @@ Issue. The comment carries a hidden HTML run marker
 (`<!-- orbi:run=<run_id> -->`) so a restarted process finds the same
 comment again and keeps PATCHing it in place — no database, no new
 heartbeat comments. Milestone events without a resume scene (plan
-ready, tests passed/failed, review findings, merged, blocked) are
+ready, review findings, merged, blocked) are
 published as short standalone comments so GitHub Mobile pushes a
 notification for each one.
 
@@ -36,7 +36,8 @@ from orbi.journal import (
     redact_secrets,
     validate_run_id,
 )
-from orbi.pi_activity import activity_snapshot, sanitize
+from orbi.checks import test_status
+from orbi.pi_activity import activity_snapshot
 
 # One marker per run: hidden in the rendered comment, exact for lookup.
 # The run-id pattern and its validator live in `orbi.journal` (the run
@@ -648,100 +649,8 @@ class ProgressPublisher:
         self.patch(body)
 
 
-# --- test evidence and run-scene helpers (the progress state belongs
+# --- run-scene helpers (the progress state belongs
 # --- to the progress module) ----
-
-
-# pytest's final summary line: `1 failed, 155 passed in 4.43s` (the
-# counts and the `in <seconds>` part are optional; the line is NOT
-# wrapped in `=` section padding).
-_Pytest_SUMMARY_RE = re.compile(
-    r"^\d+ (?:failed|passed|error|errors|skipped|xfailed|xpassed"
-    r"|deselected)(?:, \d+ \w+)*(?: in [\d.]+s)?$")
-
-
-def _is_section_header(line: str) -> bool:
-    """True for pytest section headers like `=== FAILURES ===`.
-
-    A header is `=`-delimited at both ends (padding may be absent on
-    one side for short titles) and its title carries no digits; the
-    real summary line (`1 failed, 155 passed in 4.43s`, bare or
-    `=`-padded) and the `FAILED`/`ERROR` evidence lines never match.
-    """
-    if not line.startswith("="):
-        return False
-    core = line.strip("=").strip()
-    return core == "" or not any(ch.isdigit() for ch in core)
-
-
-# A pytest summary line reports an outcome only when its FIRST count
-# category is failed/passed/errors: pytest always renders the outcome
-# counts (failed/passed) before the auxiliary ones (skipped,
-# deselected, xfailed, xpassed, warnings, errors last), so a
-# run that collected tests always leads with failed or passed (or a
-# collection error). `no tests ran in 0.01s` matches no summary regex
-# at all; `3 deselected in 0.02s` / `2 skipped in 0.01s` match but
-# carry no outcome — reporting them as a pass is a false notification
-# (review round 3, PR #42).
-_OUTCOME_FIRST_RE = re.compile(
-    r"^\d+ (?:failed|passed|error|errors)\b",
-)
-_NO_TESTS_RE = re.compile(r"no tests (?:ran|collected)")
-
-
-def _is_no_result(line: str) -> bool:
-    """True for pytest lines that verified nothing (no tests ran)."""
-    if _NO_TESTS_RE.search(line):
-        return True
-    stripped = line.strip("=").strip()
-    return bool(_Pytest_SUMMARY_RE.match(stripped)) \
-        and not _OUTCOME_FIRST_RE.match(stripped)
-
-
-def read_test_result(worktree: Path) -> str | None:
-    """Summarize the worktree's `.orbi/test.log`, or None when it does
-    not exist (the contract test command writes the log
-    into the excluded run dir, never at the worktree root).
-
-    Prefers the pytest summary line (`1 failed, 155 passed in 4.43s`):
-    the LAST one with an outcome when the log holds several runs (TDD
-    red, then green), so the progress comment and the `tests
-    passed/failed` milestone report the most recent run that actually
-    collected tests. Section headers (`=== FAILURES ===`) are never
-    reported: the fallback takes the first `FAILED`/`ERROR` evidence
-    line or the last non-empty line instead, and a log holding nothing
-    but headers yields None (no result info to report). Lines that
-    verified nothing (`no tests ran`, `N deselected`, `N skipped`) are
-    never reported either: a run that collected no tests is no result,
-    and posting `tests passed` for it is a false notification (review
-    round 3, PR #42).
-    """
-    path = worktree / ".orbi" / "test.log"
-    if not path.is_file():
-        return None
-    text = path.read_text(encoding="utf-8", errors="replace")
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    for line in reversed(lines):
-        # The summary line is bare in pytest 9; some runners wrap it in
-        # `=` padding, so the stripped form is matched as well.
-        stripped = line.strip("=").strip()
-        if _Pytest_SUMMARY_RE.match(line) \
-                or _Pytest_SUMMARY_RE.match(stripped):
-            if _is_no_result(line):
-                # No tests collected in this run: keep looking for an
-                # earlier run that did (or report nothing at all).
-                continue
-            return sanitize(stripped)
-    for line in lines:
-        if _is_section_header(line) or _is_no_result(line):
-            continue
-        if line.startswith(("FAILED", "ERROR")) or "passed" in line:
-            return sanitize(line)
-    last = lines[-1] if lines else None
-    if last is not None and (_is_section_header(last)
-                             or _is_no_result(last)):
-        return None
-    return sanitize(last) if last is not None else None
 
 
 def _run_info_fields(run_info: str) -> dict[str, str]:
@@ -755,6 +664,7 @@ def _run_info_fields(run_info: str) -> dict[str, str]:
 def _progress_state(ctx: RunContext, *, title: str, role: str,
                     started: float, pr_url: str | None,
                     review_round: int, priority: str,
+                    checks: list | None = None,
                     activity: dict | None = None,
                     review: str = "pending") -> dict:
     """Collect the current run state for the GitHub progress comment.
@@ -767,6 +677,9 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
     fabricating one.
     `priority` is the pickup priority of the issue (`p0` or `normal`)
     derived from the issue's labels at claim/resume time.
+    `checks` is the PR's `statusCheckRollup` when the caller has read it:
+    the `tests` field reports the head's CI status (`passed` / `failed:
+    <names>` / `pending` / `-`), never a local log parse (Issue #1613).
     `activity` is the live state from the `stream_pi` watcher while a Pi
     session runs (fresh and already read); without it the newest session
     file is full-scanned. Activity snapshotting is best-effort
@@ -789,7 +702,7 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
         "elapsed": format_elapsed(time.monotonic() - started),
         "last_activity": (activity or {}).get("last_activity"),
         "last_action": (activity or {}).get("action"),
-        "tests": read_test_result(ctx.worktree),
+        "tests": test_status(checks),
         "review_round": review_round,
         "review": review,
         "branch": ctx.branch,
@@ -923,6 +836,7 @@ PI_HEARTBEAT_SECONDS = 30.0
 def _live_progress(ctx: RunContext, publisher: ProgressPublisher, *,
                    title: str, role: str, started: float,
                    pr_url: str | None, review_round: int, priority: str,
+                   checks: list | None = None,
                    activity: dict | None = None) -> None:
     """One live GitHub progress update while a Pi session is running.
 
@@ -934,11 +848,14 @@ def _live_progress(ctx: RunContext, publisher: ProgressPublisher, *,
     it. The publisher already knows the comment id after `ensure`, so a
     callback before it would fail fast here — and the wiring always
     ensures first.
+    `checks` is the round's PR rollup (Issue #1613): the same one the
+    round's own `ensure` reports, so a heartbeat never falls back to `-`
+    while the session runs.
     """
     state = _progress_state(
         ctx, title=title, role=role, started=started,
         pr_url=pr_url, review_round=review_round, priority=priority,
-        activity=activity,
+        checks=checks, activity=activity,
     )
     publisher.patch(_progress_body(state))
 
@@ -955,13 +872,13 @@ class LiveProgressThrottle:
     def __init__(self, ctx: RunContext, publisher: ProgressPublisher, *,
                  title: str, role: str, started: float,
                  pr_url: str | None, review_round: int,
-                 priority: str) -> None:
+                 priority: str, checks: list | None = None) -> None:
         def publish(activity: dict) -> None:
             _live_progress(
                 ctx, publisher, title=title, role=role,
                 started=started, pr_url=pr_url,
                 review_round=review_round, priority=priority,
-                activity=activity,
+                checks=checks, activity=activity,
             )
 
         self._publish = publish

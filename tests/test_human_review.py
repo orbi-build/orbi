@@ -34,12 +34,14 @@ BASE_SHA = "abc123def456"
 
 # ------------------------------------------------------- pure: classification
 
-def test_build_checklists_column1_carries_test_evidence_and_layer():
+def test_build_checklists_column1_carries_the_ci_result_and_layer():
+    # Issue #1613: only a passing PR CI result is evidence the run
+    # verified; column 1 carries it.
     checklist = human_review.build_checklist(
-        test_result="156 passed in 4.43s",
+        test_status="passed",
         changed_files=["src/orbi/runner.py"],
     )
-    assert any("156 passed in 4.43s" in item for item in checklist["column1"])
+    assert any("PR CI passed" in item for item in checklist["column1"])
     # Issue #805: no declared test command — the suite wording is the
     # repository's own test suite.
     assert any("仓库测试套件" in item for item in checklist["column1"])
@@ -50,7 +52,7 @@ def test_build_checklists_column1_carries_test_evidence_and_layer():
 
 def test_build_checklists_column2_adds_ui_and_deploy_dimensions():
     checklist = human_review.build_checklist(
-        test_result="10 passed in 0.1s",
+        test_status="passed",
         changed_files=[
             "src/orbi/runner.py",
             "templates/index.html",
@@ -68,7 +70,7 @@ def test_build_checklists_docs_changes_do_not_trigger_the_intent_item():
     item (the classifier stays data-driven; the issue's column-2
     dimensions are intent, UI, external environment)."""
     checklist = human_review.build_checklist(
-        test_result="10 passed in 0.1s",
+        test_status="passed",
         changed_files=["docs/workflow.mdx", "README.md"],
     )
     assert checklist["column2"] == []
@@ -78,24 +80,27 @@ def test_build_checklists_tests_only_delivery_has_an_empty_column2():
     """A tests-only delivery changed no machine-unverifiable dimension:
     the empty column 2 is the target state and must be expressible."""
     checklist = human_review.build_checklist(
-        test_result="10 passed in 0.1s",
+        test_status="passed",
         changed_files=["tests/test_new.py", "tests/conftest.py"],
     )
     assert checklist["column1"]
     assert checklist["column2"] == []
 
 
-def test_build_checklists_missing_test_evidence_lands_in_column2():
-    checklist = human_review.build_checklist(
-        test_result=None,
-        changed_files=["tests/test_new.py"],
-    )
-    assert any("测试证据" in item for item in checklist["column2"])
+def test_build_checklists_missing_check_status_lands_in_column2():
+    """A head with no checks (or none yet) has no test evidence: the
+    item stays in column 2 and the gate holds (Issue #1613)."""
+    for test_status in (None, "-", "pending"):
+        checklist = human_review.build_checklist(
+            test_status=test_status,
+            changed_files=["tests/test_new.py"],
+        )
+        assert any("测试证据" in item for item in checklist["column2"])
 
 
 def test_build_checklists_unreadable_diff_lands_in_column2():
     checklist = human_review.build_checklist(
-        test_result="10 passed in 0.1s",
+        test_status="passed",
         changed_files=None,
     )
     assert any("改动文件" in item for item in checklist["column2"])
@@ -106,7 +111,7 @@ def test_build_checklists_degenerate_paths_never_crash_the_classifier():
     test/docs/UI/deploy-shaped — the conservative intent item still
     fires (garbage in holds the gate, it never passes it)."""
     checklist = human_review.build_checklist(
-        test_result="10 passed in 0.1s",
+        test_status="passed",
         changed_files=["", "//"],
     )
     assert any("业务意图" in item for item in checklist["column2"])
@@ -218,15 +223,12 @@ def _gate_config(tmp_path, *, gate=True):
 
 @pytest.fixture()
 def gate_env(tmp_path, monkeypatch):
-    """A delivered worktree with real test evidence on disk plus the
-    label/scene/diff fakes `_run_review_round` reads. The review session
-    is a Mock: the gate must start none."""
+    """A delivered worktree plus the label/scene/diff fakes
+    `_run_review_round` reads. Issue #1613: only the PR head's CI check
+    status is test evidence, so the fixture writes no local test log. The
+    review session is a Mock: the gate must start none."""
     worktree = runner.worktree_path(tmp_path, REPO, 39, RUN_ID)
     (worktree / ".orbi").mkdir(parents=True)
-    (worktree / ".orbi" / "test.log").write_text(
-        "================= 156 passed in 4.43s =================\n",
-        encoding="utf-8",
-    )
     calls = {"edit": [], "comments": 0, "diff": 0}
 
     def fake_run(command, **kwargs):
@@ -269,8 +271,12 @@ def gate_env(tmp_path, monkeypatch):
 
 
 def _round(config):
+    # Issue #1613: the PR head's checks are the test evidence; a passing
+    # rollup is what the gate needs to treat the delivery as verified.
     return review_merge._run_review_round(
         PR_URL, {"number": 39, "title": "task"}, config, REPO,
+        checks=[{"name": "tests", "status": "COMPLETED",
+                 "conclusion": "SUCCESS"}],
     )
 
 
@@ -335,6 +341,28 @@ def test_gate_on_with_empty_column2_passes_without_the_label(
     assert gate_env["calls"]["edit"] == []
 
 
+def test_gate_on_without_checks_holds_on_the_missing_evidence(
+    gate_env, tmp_path, monkeypatch,
+):
+    """Issue #1613: the test evidence is the PR head's CI status — a head
+    with no checks has none, so the evidence item stays in column 2 and
+    the gate holds even for a tests-only delivery (it never fell back to
+    a local test log)."""
+    monkeypatch.setattr(seam, "issue_labels",
+        lambda *a, **k: ["ai-pr-opened"],
+    )
+    monkeypatch.setattr(seam, "run_command",
+        lambda command, **kwargs: "tests/test_new.py\n",
+    )
+    outcome = review_merge._run_review_round(
+        PR_URL, {"number": 39, "title": "task"}, _gate_config(tmp_path), REPO,
+        checks=[],
+    )
+    assert outcome is None
+    assert gate_env["reviews"] == []
+    assert gate_env["calls"]["edit"] == [{"repo": REPO, "add": "ai-ready"}]
+
+
 def test_gate_on_with_missing_worktree_falls_through_to_recovery(
     gate_env, tmp_path,
 ):
@@ -379,6 +407,6 @@ def test_delivered_changed_files_failure_is_missing_evidence(
     assert review_merge.delivered_changed_files(worktree, "main") is None
     # Missing evidence lands in column 2 (the gate holds).
     checklist = human_review.build_checklist(
-        test_result="10 passed", changed_files=None,
+        test_status="passed", changed_files=None,
     )
     assert any("改动文件" in item for item in checklist["column2"])
