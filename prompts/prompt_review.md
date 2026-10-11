@@ -144,10 +144,9 @@ compaction.
   finding. Every such finding states the minimal fix direction: delete or
   shrink the out-of-scope part until only the acceptance criteria remain.
 - Verify the run evidence: the real test/build commands were run and pass in
-  the repository's declared runtime; Python business code keeps the tiered
-  coverage gate (Issue #234: whole repository line >= 95% and branch >= 95%
-  checked separately, changed Python code at 100% line/branch) when Python
-  changed.
+  the repository's declared runtime; tests meet the coverage and test
+  requirements the repository itself declares (its CI and its context files
+  such as `AGENTS.md`).
 - Only report findings this diff introduces or exposes. Every finding needs a
   concrete `file:line`, a reproducible trigger, actual vs expected, and a
   minimal fix direction. No speculative findings.
