@@ -323,7 +323,7 @@ provider failed
 
 - role: review
 - last activity: 2026-09-28T10:00:00Z
-- tests: 1 failed, 3 passed in 1.20s
+- tests: -
 - PR: https://github.com/orbi-build/orbi/pull/7
 
 <details><summary>Run details</summary>

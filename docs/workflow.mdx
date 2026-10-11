@@ -338,14 +338,16 @@ Every delivery then posts ONE acceptance checklist comment to the Issue
 when its PR opens, split in two columns:
 
 - **Column 1 — what the run already verified** (evidence, not todos):
-  the real test result from `.orbi/test.log`, the covered layer (the
-  repository test suite), the delivered file count.
+  the PR head's CI check status (Issue #1613: the engine never parses a
+  local test log), the covered layer (the repository test suite), the
+  delivered file count.
 - **Column 2 — the machine-unverifiable minimum**, derived per
   delivery from the changed paths and the available evidence (never a
   hardcoded human-items template): business intent (tests prove the
   implementation matches the tests, not that the tests match the
   intent), UI visuals and copy, external-environment verification, and
-  missing-evidence items when the test log or the diff cannot be read.
+  missing-evidence items when the head's checks have not passed or the
+  diff cannot be read.
 
 While column 2 is non-empty, it is a GATE: the review round
 short-circuits before any Pi session — the ticket returns to

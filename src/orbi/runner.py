@@ -17,7 +17,7 @@ Throughout the whole lifecycle the Runner publishes live progress
 automatically: one per-run GitHub progress comment carrying a
 hidden run marker is PATCHed in place on every activity change and at most
 every 30 seconds while any Pi session (implementer or reviewer) runs, and
-short milestone comments (plan ready, tests passed/failed, review findings,
+short milestone comments (plan ready, review findings,
 merged, blocked) notify GitHub Mobile; started and PR-opened scene comments
 also notify while remaining available for resume parsing. No human
 command, poll or status check is part of the normal workflow.
@@ -129,7 +129,6 @@ from orbi.progress import (
     format_elapsed,
     progress_body,
     quote_value,
-    read_test_result,
     recoverable_scene_body,
     run_marker,
     validate_run_id,
@@ -235,7 +234,7 @@ from orbi.github import (
     _check_summaries,
     pr_view,
 )
-from orbi.checks import _classify_rollup, _render_check
+from orbi.checks import _classify_rollup, _render_check, test_status
 from orbi.gitops import (
     acquire_base_sync_lock,
     create_release_worktree,
@@ -2358,32 +2357,6 @@ def delivery_head_advanced(worktree: Path, base_sha: str) -> bool:
 
 
 
-
-_TEST_EXIT_RE = re.compile(r"\bexit\s*[:=]\s*(-?\d+)\b", re.IGNORECASE)
-_TEST_OUTCOME_COUNT_RE = re.compile(
-    r"\b(\d+)\s+(?:failed|failures?|errors?)\b", re.IGNORECASE,
-)
-_TEST_FAILURE_EVIDENCE_RE = re.compile(
-    r"^\s*(?:FAILED|ERROR)\b", re.IGNORECASE,
-)
-
-
-def _test_result_failed(result: str) -> bool:
-    """Classify a test result without treating prose or zero counts as errors."""
-    exits = [int(value) for value in _TEST_EXIT_RE.findall(result)]
-    if any(value != 0 for value in exits):
-        return True
-
-    counts = _TEST_OUTCOME_COUNT_RE.findall(result)
-    if any(int(count) > 0 for count in counts):
-        return True
-    return bool(_TEST_FAILURE_EVIDENCE_RE.search(result))
-
-
-
-
-
-
 class IssueResult(NamedTuple):
     """The single outcome contract returned by :func:`process_issue`."""
 
@@ -2862,11 +2835,6 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         publish(
             action=lambda: milestone_bookkeeping._publish_plan_milestone(publisher, worktree),
         )
-        publish(
-            action=lambda: milestone_bookkeeping._publish_test_milestone(
-                publisher, worktree, _test_result_failed,
-            ),
-        )
         if ops:
             # An ops delivery without a commit is COMPLETE —
             # the evidence the session posted on the Issue (per-step real
@@ -3027,6 +2995,9 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                     body=review_merge.human_review_checklist(
                         worktree, config,
                         run_id=run_id, pr_url=pr_url,
+                        test_status=test_status(
+                            pr_delivery_rollup(pr_url, source_repo)[1],
+                        ),
                     ),
                 )
             except Exception as exc:
@@ -3579,7 +3550,9 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
     # verdict ends at the triage stop inside
     # `review_and_merge_if_clean` — `ai-blocked`, the maintainer
     # decides the merge.
-    review_merge._run_review_round(pr_url, issue, config, source_repo)
+    review_merge._run_review_round(
+        pr_url, issue, config, source_repo, checks=rollup,
+    )
 
 
 def _preflight(config: config_domain.RunnerConfig) -> None:

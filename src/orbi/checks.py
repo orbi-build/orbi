@@ -49,3 +49,23 @@ def _classify_rollup(rollup: list) -> tuple[list[dict], list[dict]]:
         elif status in ("FAILURE", "ERROR"):
             failed.append(entry)
     return pending, failed
+
+
+def test_status(rollup: list | None) -> str:
+    """The PR head's test status, from the same status check rollup the
+    gates classify (Issue #1613).
+
+    `passed` when every check concluded successfully, `failed: <name,
+    ...>` when one or more concluded otherwise, `pending` while any check
+    has not concluded, and `-` when there is no PR or the head has no
+    checks. A known failure is decisive and read before pending: the run
+    cannot pass while a check is red.
+    """
+    if not rollup:
+        return "-"
+    pending, failed = _classify_rollup(rollup)
+    if failed:
+        return "failed: " + ", ".join(entry["name"] for entry in failed)
+    if pending:
+        return "pending"
+    return "passed"
