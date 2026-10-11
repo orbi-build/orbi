@@ -599,6 +599,11 @@ def main(argv: list[str] | None = None) -> int:
         "--json", action="store_true",
         help="print the Suggestions document to stdout and write nothing",
     )
+    suggest_parser.add_argument(
+        "--locale", choices=["zh", "en"], default=None,
+        help="write the suggestions and the repository summary in this "
+             "language (default: the repository's own language)",
+    )
     subparsers.add_parser(
         "status", parents=[common],
         help="show current Issue (with live Pi activity), ready queue and recent result",
@@ -822,7 +827,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"--repo must be one of: {', '.join(config.source_repos)}"
             )
         return suggest.run_suggest(
-            config, repo, json_output=args.json,
+            config, repo, json_output=args.json, locale=args.locale,
             dispatch_issue=dispatch_issue,
         )
     elif args.command == "session":
