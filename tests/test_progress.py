@@ -1162,6 +1162,70 @@ def test_progress_state_survives_an_activity_snapshot_failure(monkeypatch, tmp_p
     assert state["session"] is None
 
 
+# --- Issue #1613: the tests field is the PR head's CI check status -----------
+
+
+def _progress_state_for(tmp_path, **overrides):
+    kwargs = dict(
+        ctx=RunContext(
+            run_id="a1b2c3d4", issue=4, branch="b",
+            worktree=tmp_path, source_repo="owner/repo",
+        ),
+        title="t", role="review", started=0.0, pr_url=None,
+        review_round=0, priority="normal",
+    )
+    kwargs.update(overrides)
+    return progress._progress_state(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("rollup", "expected"),
+    [
+        (
+            [{"name": "tests", "status": "COMPLETED",
+              "conclusion": "SUCCESS"}],
+            "passed",
+        ),
+        (
+            [{"name": "tests", "status": "COMPLETED",
+              "conclusion": "FAILURE"}],
+            "failed: tests",
+        ),
+        (
+            [
+                {"name": "tests", "status": "COMPLETED",
+                 "conclusion": "FAILURE"},
+                {"name": "lint", "status": "COMPLETED",
+                 "conclusion": "FAILURE"},
+            ],
+            "failed: tests, lint",
+        ),
+        (
+            [{"name": "tests", "status": "IN_PROGRESS",
+              "conclusion": None}],
+            "pending",
+        ),
+        ([], "-"),
+        (None, "-"),
+    ],
+)
+def test_progress_state_tests_field_reports_the_ci_check_status(
+    tmp_path, rollup, expected,
+):
+    """Issue #1613: the tests field comes only from the PR's GitHub
+    Actions checks (the rollup the gates classify), never a local log
+    parse; a failed check is decisive over a pending one."""
+    state = _progress_state_for(tmp_path, checks=rollup)
+    assert state["tests"] == expected
+
+
+def test_progress_state_tests_field_is_dash_without_a_pr_or_checks(tmp_path):
+    """No PR / no checks is no test result, not a fabricated pass."""
+    assert _progress_state_for(tmp_path)["tests"] == "-"
+    assert _progress_state_for(tmp_path, pr_url=None, checks=[])[
+        "tests"] == "-"
+
+
 def test_recovered_marker_renders_and_validates_the_reason_code():
     """Issue #1465: the recoverable-failure fold marker carries a closed
     reason_code and rejects anything else."""

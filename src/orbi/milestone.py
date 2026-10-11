@@ -25,7 +25,7 @@ from orbi.journal import (
 from orbi.milestone_command import (
     _land_active_milestone, rewrite_active_milestone_line,
 )
-from orbi.progress import ProgressPublisher, read_test_result
+from orbi.progress import ProgressPublisher
 from orbi.repo_config import REPO_CONFIG_PATH, RepoPolicy
 from orbi.ticket_command import TICKET_COMMANDS, process_commands
 
@@ -847,17 +847,3 @@ def _publish_plan_milestone(publisher: ProgressPublisher, worktree: Path) -> Non
     artifact."""
     if (worktree / ".orbi" / "plan.md").is_file():
         publisher.milestone("plan ready")
-
-def _publish_test_milestone(
-    publisher: ProgressPublisher,
-    worktree: Path,
-    test_result_failed: Callable[[str], bool],
-) -> None:
-    """Post `tests passed` / `tests failed` from the worktree's test.log."""
-    result = read_test_result(worktree)
-    if result is None:
-        return
-    if test_result_failed(result):
-        publisher.milestone(f"tests failed: {result}")
-    else:
-        publisher.milestone(f"tests passed: {result}")

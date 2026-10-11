@@ -32,7 +32,7 @@ from pathlib import Path
 from orbi import config as config_domain
 from orbi import failure_report, github, gitops, human_review, pi_session, run_state, scene
 from orbi.branch_reclaim import delete_merged_delivery_branch
-from orbi.checks import _classify_rollup, _render_check
+from orbi.checks import _classify_rollup, _render_check, test_status
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL,
     BLOCKED_LABEL,
@@ -100,7 +100,6 @@ from orbi.progress import (
     _progress_body,
     _progress_state,
     _safe_publish,
-    read_test_result,
     run_marker,
 )
 # Machine-readable verdict line the reviewer session must end with, and the
@@ -108,10 +107,6 @@ from orbi.progress import (
 VERDICT_MARKER = "REVIEW_VERDICT"
 MAX_REVIEW_ROUNDS = 5
 MAX_BASE_ADVANCE_ROUNDS = 5
-
-
-
-
 
 
 class RecoverableMergeGateError(RuntimeError):
@@ -154,10 +149,6 @@ def merged_pr_comment_body(run_id: str, pr_url: str, merge_commit: str,
     )
 
 
-
-
-
-
 def _read_pushed(worktree: Path, key: str) -> str | None:
     """One recorded push-history field, or None when unusable.
 
@@ -187,8 +178,6 @@ def read_pushed_base(worktree: Path) -> str | None:
     merge record's engine interval starts at the merge's base parent.
     """
     return _read_pushed(worktree, "pushed_base")
-
-
 
 
 def _is_code_fence_line(line: str) -> bool:
@@ -971,7 +960,8 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                               number: int, title: str, priority: str,
                               *, scene: dict,
                               previous_comments: list[dict] | None = None,
-                              merge_only: bool = False) -> bool:
+                              merge_only: bool = False,
+                              checks: list | None = None) -> bool:
     """Run one independent review round; merge when the verdict is clean.
 
     `title` is the issue's GitHub title: the review
@@ -1126,6 +1116,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         action=lambda: publisher.ensure(_progress_body(_progress_state(
             ctx, title=title, role=ROLE_REVIEW, started=started,
             pr_url=pr["url"], review_round=round, priority=priority,
+            checks=checks,
         ))),
     )
     if merge_only:
@@ -1140,7 +1131,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             progress=LiveProgressThrottle(
                 ctx, publisher, title=title, role=ROLE_REVIEW,
                 started=started, pr_url=pr["url"], review_round=round,
-                priority=priority,
+                priority=priority, checks=checks,
             ),
         )
         verdict = parse_review_verdict(output)
@@ -1206,7 +1197,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                 _progress_state(
                     ctx, title=title, role=ROLE_REVIEW, started=started,
                     pr_url=pr["url"], review_round=round,
-                    priority=priority,
+                    priority=priority, checks=checks,
                 ), outcome=(
                     "**Orbi review findings**\n\n"
                     f"round {round}: {verdict['blockers']} blocker(s), "
@@ -1496,7 +1487,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             _progress_state(
                 ctx, title=title, role=ROLE_REVIEW, started=started,
                 pr_url=merged["url"], review_round=round,
-                priority=priority, review=review_summary,
+                priority=priority, review=review_summary, checks=checks,
             ), outcome=(
                 "**Orbi delivered**\n\n"
                 f"PR {merged['url']} merged "
@@ -1593,46 +1584,48 @@ def delivered_changed_files(worktree: Path, base: str) -> list[str] | None:
 
 def human_review_checklist(
     worktree: Path, config: config_domain.RunnerConfig, *, run_id: str, pr_url: str,
+    test_status: str | None,
 ) -> str:
     """Build the human acceptance checklist comment for one delivery.
 
-    Evidence is read from the delivery worktree only (the test log plus
-    the committed diff against the frozen base) — no session, no extra
-    GitHub read. `base_sha` is always present on the same run that
-    posts the checklist; a resumed re-derivation falls back to the
-    configured base branch.
+    Evidence is read from the delivery worktree (the committed diff
+    against the frozen base) plus the PR head's CI check status read by
+    the caller (Issue #1613: local logs are no longer parsed) — no
+    session, no extra GitHub read here. `base_sha` is always present on
+    the same run that posts the checklist; a resumed re-derivation falls
+    back to the configured base branch.
     """
     base = config.base_sha or config.base_branch
     return human_review.render_checklist_comment(
         run_id=run_id,
         pr_url=pr_url,
         checklist=human_review.build_checklist(
-            test_result=read_test_result(worktree),
+            test_status=test_status,
             changed_files=delivered_changed_files(worktree, base),
         ),
     )
 
 
-def _human_review_column2(worktree: Path, config: config_domain.RunnerConfig) -> list[str]:
-    """Recompute the checklist's column 2 from local delivery evidence.
+def _human_review_column2(
+    worktree: Path, config: config_domain.RunnerConfig, *, test_status: str | None,
+) -> list[str]:
+    """Recompute the checklist's column 2 from delivery evidence.
 
-    The review-round gate's per-tick cost: local file reads only — no
-    session, no GitHub write. Missing evidence lands IN column 2 (the
-    gate holds), so only real evidence can pass it.
+    The review-round gate's per-tick cost: local file reads plus the
+    caller's CI check status — no session, no GitHub write here. Missing
+    evidence lands IN column 2 (the gate holds), so only real evidence
+    can pass it.
     """
     base = config.base_sha or config.base_branch
     return human_review.build_checklist(
-        test_result=read_test_result(worktree),
+        test_status=test_status,
         changed_files=delivered_changed_files(worktree, base),
     )["column2"]
 
 
-
-
-
-
 def _run_review_round(
     pr_url: str, issue: dict, config: config_domain.RunnerConfig, source_repo: str,
+    *, checks: list | None = None,
 ) -> bool | None:
     """Run ONE review round of an open-PR delivery.
 
@@ -1721,7 +1714,7 @@ def _run_review_round(
             config.repo_dir, source_repo, number, run_id,
         )
         if gate_worktree.is_dir() and _human_review_column2(
-            gate_worktree, config,
+            gate_worktree, config, test_status=test_status(checks),
         ):
             if READY_LABEL not in labels:
                 apply_label_patch(
@@ -1849,6 +1842,7 @@ def _run_review_round(
             worktree, branch, config.base_branch,
             review_config, source_repo, number,
             title=title, priority=priority, scene=scene,
+            checks=checks,
             **review_kwargs,
         )
     except Exception as exc:

@@ -113,28 +113,33 @@ def _is_deploy_path(path: str) -> bool:
     return name in _DEPLOY_NAMES or name.endswith(_DEPLOY_SUFFIXES)
 
 
-def build_checklist(*, test_result: str | None,
+def build_checklist(*, test_status: str | None,
                     changed_files: list[str] | None) -> dict:
     """Split the delivery's evidence into the two checklist columns.
 
-    `test_result` is the worktree's `.orbi/test.log` summary (or None);
-    `changed_files` are the paths the delivered commits changed against
-    the frozen base (None when the diff cannot be read). Column 1 is
-    what the run actually verified; column 2 lists the dimensions the
-    machine evidence cannot close — empty only when the delivery really
-    carries none (the target state).
+    `test_status` is the PR head's CI check status (Issue #1613:
+    `passed` / `failed: <names>` / `pending` / `-`); `changed_files` are
+    the paths the delivered commits changed against the frozen base
+    (None when the diff cannot be read). Column 1 is what the run
+    actually verified; column 2 lists the dimensions the machine
+    evidence cannot close — empty only when the delivery really carries
+    none (the target state).
+
+    Only a passing CI result is evidence: with no PR, no checks, pending
+    checks or a failed check the evidence item stays in column 2 and the
+    gate holds.
     """
     column1: list[str] = []
     column2: list[str] = []
-    if test_result:
-        column1.append(f"测试结果：{test_result}")
+    if test_status == "passed":
+        column1.append(f"测试结果：PR CI {test_status}")
         # No declared test command — the suite is the
         # repository's own test suite (the agent infers the method).
         column1.append(
             f"覆盖层：仓库测试套件 —— 自动化断言覆盖到代码与接口层；"
             f"改动共 {len(changed_files or [])} 个文件"
         )
-    if test_result is None:
+    else:
         column2.append(_EVIDENCE_ITEM)
     if changed_files is None:
         column2.append(_DIFF_ITEM)

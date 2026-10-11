@@ -117,14 +117,6 @@ Hard rules for test evidence (Issue #180):
   `echo "exit=$?" >> .orbi/test.log`) and then `tail` the file, or run
   the pipeline with `set -o pipefail`. The pytest exit code — not the
   pipeline's — is the result.
-- `.orbi/test.log` must contain the real pytest output (the summary
-  line, e.g. `156 passed in 4.43s` or `1 failed, 155 passed in 4.43s`),
-  never a self-declared "tests passed": the Runner reads `.orbi/test.log`
-  for the `tests passed/failed` milestone and the progress comment, and
-  it must stay consistent with CI.
-- A failed run must be fixed before the delivery is committed: a
-  delivery whose last test result in `test.log` is a failure is not a
-  delivery.
 
 Context recovery after compaction (Issue #180):
 
@@ -152,7 +144,7 @@ Work through this exact loop:
 2. Write `.orbi/plan.md` with the goal, inspected context, repository decision, tasks, and verification commands.
 3. Implement the smallest complete change.
 4. Add or update tests. For UI work, use Playwright against the real running application, assert the changed flow, check browser errors, and save screenshots under the run artifacts. Verify the defined User Journey at the matching real entry point; pytest alone is not completion evidence.
-5. Run the real project tests/build/smoke checks and record the commands and results in `.orbi/test.log` inside the task worktree (the automatic `tests passed/failed` milestone and the progress comment's tests field read that file). During iteration run the tests related to the change. Run the full suite when a project-wide gate needs it (the coverage threshold) and once as the final check after you commit the change: append the output of `git rev-parse HEAD^{tree}` to `.orbi/test.log` right before that run (the tree, not the commit, so a later merge that changes nothing still matches). Once a full run has passed, do not run it again while `git rev-parse HEAD^{tree}` still equals the recorded tree and `git status --porcelain` prints nothing (`.orbi/` is excluded, so editing `.orbi/plan.md` never shows up there); any change, tracked or newly added, needs a new full run. Append every run with `>>`: `.orbi/test.log` is never overwritten, so it keeps the recorded tree and the last full run's real output.
+5. Verify the change with the repository's own tests, the way its CI and its docs run them. Local runs are your own verification, not evidence the Runner reads; the PR's GitHub Actions checks are the test authority. Do not rerun the full suite on code you have already seen pass. Do not commit a change whose tests you saw fail.
 6. Verify the result yourself.
 7. Commit the change on the task branch. Your job ends at the committed delivery: you do not fetch the base, push, or create the PR. The Runner then completes the deterministic closeout (Issue #186): it re-fetches the base under the shared base-sync lock, absorbs a base advance with a plain merge, pushes the task branch, and opens exactly one PR for this Issue whose body contains the run marker and `Fixes #{{ISSUE_NUMBER}}` (it may be on the first line) so GitHub natively closes the source Issue when the PR merges into the default branch. After the PR is open, the Runner runs an independent review/fix loop and merges it itself; you do not review, fix, or merge.
 
