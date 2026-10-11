@@ -91,7 +91,7 @@ pointless compactions of long sessions.
 Review the same User Journey as the implementer: User outcome, Preconditions,
 Acceptance, and Evidence. Confirm the real user path reaches the success result
 the user sees, and that the failure path names the concrete error and repair
-action. Pytest alone is not proof. Check verification depth against impact:
+action. Unit tests alone are not proof. Check verification depth against impact:
 documentation rendered page/preview and link checks, provider/config,
 concurrency contention, setup entry point, real Playwright UI flow, or the
 existing public caller for an internal refactor. Require observable
@@ -129,9 +129,9 @@ compaction.
   interactive tools) without a `timeout <seconds>` wrapper, or that tests an
   unbounded-loop function (`while True` poller) without a termination guard
   (monkeypatched `time.sleep` raising on the Nth call, an injected iteration
-  cap, or pytest-timeout), is a **Blocker** — the red phase must fail fast,
-  never hang (the 99% CPU spin / forever `next(g)` class of hang must be
-  caught here, not shipped).
+  cap, or the test runner's per-test timeout), is a **Blocker** — the red
+  phase must fail fast, never hang (the 99% CPU spin / forever `next(g)`
+  class of hang must be caught here, not shipped).
 - Out-of-scope and over-engineering (R8, Issue #118): the diff may only
   implement the Issue's acceptance criteria — the smallest complete
   change. A speculative feature, no-benefit abstraction, extra framework
@@ -155,12 +155,13 @@ compaction.
 
 Verify with the smallest run that answers the question, in this order —
 and with the real exit code as the test evidence: a pipeline exits with
-the exit code of the last command, so `pytest ... | tail` exits 0 even
-when pytest fails and the failure is disguised as a shell success. Never
-pipe a test, build or smoke command through `tail`, `head`, `grep` or
-any other filter that drops the exit code — redirect to a file
-(`pytest ... > .orbi/test.log 2>&1;` `echo "exit=$?" >> .orbi/test.log`)
-and then `tail` the file, or run the pipeline with `set -o pipefail`.
+the exit code of the last command, so a test command piped through `tail`
+exits 0 even when the tests fail and the failure is disguised as a shell
+success. Never pipe a test, build or smoke command through `tail`, `head`,
+`grep` or any other filter that drops the exit code — redirect to a file
+(`<test command> > .orbi/test.log 2>&1;` `echo "exit=$?" >> .orbi/test.log`)
+and then `tail` the file, or run the pipeline with `set -o pipefail`. The
+test command's exit code — not the pipeline's — is the result.
 
 Local test commands in this ladder are advisory debugging only. The Runner
 accepts a clean review only after the PR's current-head GitHub Actions checks

@@ -325,7 +325,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
   期间的实时 Pi 活动（phase、最近动作、elapsed、idle）。首个响应到达
   前 `phase` 是启动子阶段：`session_pending`（Pi 已启动但还没创建
   session 文件）和 `request_pending`（session 已存在、首个响应还没
-  到）；首个响应到达后按原规则用工具 phase（`test`、`pr`、`bash`…）；
+  到）；首个响应到达后按原规则用工具 phase（`pr`、`bash`…）；
 - `process_spawned` / `provider_config_loaded` / `session_created` /
   `first_request_started` / `first_response_received` — 启动阶段行
   （Issue #176）：每个阶段一行、按顺序，每行带 issue、role、Pi 实际

@@ -37,7 +37,6 @@ MAX_SUMMARY_LENGTH = 200
 
 # Ordered: the first matching rule wins for a bash command.
 PHASE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"\b(pytest|coverage)\b"), "test"),
     (re.compile(r"\bgh\s+pr\b"), "pr"),
     (re.compile(r"\bgit\s+push\b"), "push"),
     (re.compile(r"\bgit\s+commit\b"), "commit"),

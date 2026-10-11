@@ -1176,7 +1176,7 @@ def test_live_activity_lines_with_session(tmp_path):
         {"number": 3, "title": "task", "url": "u3"},
     )
     assert lines == [
-        "    live: phase=test last_activity=2026-08-25T02:00:01Z "
+        "    live: phase=bash last_activity=2026-08-25T02:00:01Z "
         "action=bash pytest tests/ result=-",
         f"    session: {session_dir / 's.jsonl'}",
         f"    worktree: {worktree}",
