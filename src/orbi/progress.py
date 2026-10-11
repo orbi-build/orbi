@@ -836,6 +836,7 @@ PI_HEARTBEAT_SECONDS = 30.0
 def _live_progress(ctx: RunContext, publisher: ProgressPublisher, *,
                    title: str, role: str, started: float,
                    pr_url: str | None, review_round: int, priority: str,
+                   checks: list | None = None,
                    activity: dict | None = None) -> None:
     """One live GitHub progress update while a Pi session is running.
 
@@ -847,11 +848,14 @@ def _live_progress(ctx: RunContext, publisher: ProgressPublisher, *,
     it. The publisher already knows the comment id after `ensure`, so a
     callback before it would fail fast here — and the wiring always
     ensures first.
+    `checks` is the round's PR rollup (Issue #1613): the same one the
+    round's own `ensure` reports, so a heartbeat never falls back to `-`
+    while the session runs.
     """
     state = _progress_state(
         ctx, title=title, role=role, started=started,
         pr_url=pr_url, review_round=review_round, priority=priority,
-        activity=activity,
+        checks=checks, activity=activity,
     )
     publisher.patch(_progress_body(state))
 
@@ -868,13 +872,13 @@ class LiveProgressThrottle:
     def __init__(self, ctx: RunContext, publisher: ProgressPublisher, *,
                  title: str, role: str, started: float,
                  pr_url: str | None, review_round: int,
-                 priority: str) -> None:
+                 priority: str, checks: list | None = None) -> None:
         def publish(activity: dict) -> None:
             _live_progress(
                 ctx, publisher, title=title, role=role,
                 started=started, pr_url=pr_url,
                 review_round=review_round, priority=priority,
-                activity=activity,
+                checks=checks, activity=activity,
             )
 
         self._publish = publish

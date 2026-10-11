@@ -1131,7 +1131,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             progress=LiveProgressThrottle(
                 ctx, publisher, title=title, role=ROLE_REVIEW,
                 started=started, pr_url=pr["url"], review_round=round,
-                priority=priority,
+                priority=priority, checks=checks,
             ),
         )
         verdict = parse_review_verdict(output)
