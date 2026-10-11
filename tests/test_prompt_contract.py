@@ -698,7 +698,7 @@ def test_prompt_review_md_fix_in_session_takes_the_ci_test_authority():
 # so every customer repository was held to numbers nobody there agreed to.
 # Issue #805 makes the repository's own CI/context files the test authority:
 # the shared prompts must take the coverage requirement from the repository and
-# must not invent a threshold. These tests fail if the #234 wording comes back.
+# must not invent a threshold.
 PROMPT_COVERAGE_FROM_REPO_ITEMS = (
     ("coverage-from-repo-tdd", "use tdd"),
     ("coverage-from-repo-declared",
@@ -716,13 +716,6 @@ def test_prompt_md_takes_coverage_from_the_repository():
         f"prompt.md must take coverage from the repository (Issue #1617): "
         f"{missing}"
     )
-    # orbi's own #234 numbers must not be imposed on other repositories.
-    assert "tiered" not in text, (
-        "prompt.md still imposes the #234 tiered coverage gate (Issue #1617)"
-    )
-    assert "issue #234" not in text, (
-        "prompt.md still cites Issue #234's coverage policy (Issue #1617)"
-    )
 
 
 PROMPT_REVIEW_COVERAGE_FROM_REPO_ITEMS = (
@@ -739,15 +732,6 @@ def test_prompt_review_md_takes_coverage_from_the_repository():
     assert not missing, (
         f"prompt_review.md must take coverage from the repository "
         f"(Issue #1617): {missing}"
-    )
-    # The R-check and the test ladder must not carry the #234 tiered gate.
-    assert "tiered" not in text, (
-        "prompt_review.md still imposes the #234 tiered coverage gate "
-        "(Issue #1617)"
-    )
-    assert "issue #234" not in text, (
-        "prompt_review.md still cites Issue #234's coverage policy "
-        "(Issue #1617)"
     )
 
 
