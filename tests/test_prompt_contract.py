@@ -20,13 +20,14 @@ here so the constraint cannot be silently deleted or weakened.
 
 Issue #180 adds the guard for the context and test-evidence contract:
 long implement/review sessions re-read the same large context files and
-trigger pointless compactions, and `pytest ... | tail` swallows the real
-exit code (the pipeline exits with `tail`'s 0), so a failed run is
-reported as passed and the progress comment disagrees with CI. The
-contract is now: task-relevant files first (Issue, AGENTS.md, changed
-files + callers, related tests), a minimal post-compaction recovery
-protocol from the run artifacts, a CI-failure-first test ladder in the
-review session, and the real pytest exit code as the only test result.
+trigger pointless compactions, and a test command piped through `tail`
+swallows the real exit code (the pipeline exits with `tail`'s 0), so a
+failed run is reported as passed and the progress comment disagrees with
+CI. The contract is now: task-relevant files first (Issue, AGENTS.md,
+changed files + callers, related tests), a minimal post-compaction
+recovery protocol from the run artifacts, a CI-failure-first test ladder
+in the review session, and the test command's real exit code as the only
+test result.
 The key wording is locked here so it cannot be silently deleted or
 weakened.
 """
@@ -68,7 +69,7 @@ PROMPT_ITEMS = (
     ("loop-while-true", "while true"),
     ("loop-guard-sleep", "time.sleep"),
     ("loop-guard-cap", "iteration cap"),
-    ("loop-guard-pytest-timeout", "pytest-timeout"),
+    ("loop-guard-per-test-timeout", "per-test timeout"),
     # 4. The TDD red phase must fail fast, never hang.
     ("red-fail-fast", "fail fast"),
     ("red-no-hang", "hung test"),
@@ -305,14 +306,16 @@ def test_prompt_review_md_keeps_the_compact_recovery_protocol():
 
 # --- Issue #180: the real test exit code is the result (both prompts) ----------
 
-# `pytest ... | tail` exits with `tail`'s code (0): without this rule a
-# failed run is disguised as a shell success and the progress comment
-# disagrees with CI. The rule locks the wording in both prompts.
+# a test command piped through `tail` exits with `tail`'s code (0):
+# without this rule a failed run is disguised as a shell success and the
+# progress comment disagrees with CI. The rule locks the wording in both
+# prompts (Issue #180) without naming one framework (Issue #1616).
 EXIT_CODE_ITEMS = (
     ("exit-section", "test evidence"),
     # The pipeline exit code is the LAST command's — the named bug.
     ("exit-pipeline-last", "exit code of the last command"),
-    ("exit-tail-named", "pytest ... | tail"),
+    ("exit-tail-named", "test command piped through `tail`"),
+    ("exit-test-command-code", "the test command's exit code"),
     # The forbidden pipe family is explicit.
     ("exit-no-pipe", "never pipe a test"),
     ("exit-pipe-tail", "tail"),
@@ -760,3 +763,59 @@ def test_prompt_review_md_absorb_bullet_drops_the_full_suite_rerun():
     bullet = section[1].split("- absorb contract", 1)[0]
     assert "rerun the full test suite with coverage" not in bullet
     assert "resolve conflicts manually" in bullet
+
+
+# --- Issue #1616: the shared test rules are framework-neutral -----------------
+
+# The engine's general test rules apply to every repository (Issue #805), so
+# they must not be written around one test framework: the red-phase rule names
+# the runner's per-test timeout (not `pytest-timeout`), the exit-code rule
+# names "a test command"/"the test command's exit code" (not `pytest ... | tail`
+# / "the pytest exit code"), and "unit tests alone are not proof" replaces
+# "Pytest alone is not proof." The positive wording is locked here and the old
+# framework-specific wording must be gone, so the contract cannot drift back.
+
+FRAMEWORK_NEUTRAL_ITEMS = (
+    ("neutral-per-test-timeout", "per-test timeout"),
+    ("neutral-test-command", "test command"),
+    ("neutral-test-command-code", "the test command's exit code"),
+    ("neutral-piped-tail", "test command piped through `tail`"),
+)
+
+
+def test_prompt_md_keeps_the_framework_neutral_test_rules():
+    text = _text(PROMPT)
+    missing = _missing(text, FRAMEWORK_NEUTRAL_ITEMS)
+    assert not missing, (
+        f"prompt.md is missing the framework-neutral test rules "
+        f"(Issue #1616): {missing}"
+    )
+    assert "pytest" not in text, (
+        "prompt.md still names pytest in a general test rule (Issue #1616)"
+    )
+
+
+def test_prompt_review_md_keeps_the_framework_neutral_test_rules():
+    text = _text(PROMPT_REVIEW)
+    missing = _missing(text, FRAMEWORK_NEUTRAL_ITEMS)
+    assert not missing, (
+        f"prompt_review.md is missing the framework-neutral test rules "
+        f"(Issue #1616): {missing}"
+    )
+    assert "unit tests alone are not proof" in text
+    assert "pytest" not in text, (
+        "prompt_review.md still names pytest in a general test rule "
+        "(Issue #1616)"
+    )
+
+
+def test_prompt_review_md_does_not_use_pytest_as_the_only_proof():
+    text = _text(PROMPT_REVIEW)
+    assert "unit tests alone are not proof" in text
+    assert "pytest alone is not proof" not in text
+
+
+def test_prompt_md_step_4_does_not_use_pytest_as_completion_evidence():
+    text = _text(PROMPT)
+    assert "unit tests alone are not completion evidence" in text
+    assert "pytest alone is not completion evidence" not in text

@@ -217,12 +217,6 @@ def test_tool_args_summary_returns_empty_without_known_keys():
 
 def test_phase_for_maps_bash_commands_to_key_phases():
     assert pi_activity.phase_for(
-        "bash", {"command": "/usr/bin/python3 -m pytest tests/ -q"},
-    ) == "test"
-    assert pi_activity.phase_for(
-        "bash", {"command": "python3 -m coverage run -m pytest"},
-    ) == "test"
-    assert pi_activity.phase_for(
         "bash", {"command": "gh pr create --fill"},
     ) == "pr"
     assert pi_activity.phase_for(
@@ -247,6 +241,13 @@ def test_phase_for_maps_bash_commands_to_key_phases():
 
 def test_phase_for_falls_back_to_bash_for_plain_commands():
     assert pi_activity.phase_for("bash", {"command": "ls -la"}) == "bash"
+
+
+def test_phase_for_treats_test_commands_like_any_other_shell_command():
+    """Issue #1616: the classifier is framework-neutral, so a test command
+    gets the same phase as any other shell command."""
+    assert pi_activity.phase_for("bash", {"command": "npm test"}) == "bash"
+    assert pi_activity.phase_for("bash", {"command": "pytest -q"}) == "bash"
 
 
 def test_phase_for_uses_tool_name_for_non_bash_tools():
@@ -283,7 +284,7 @@ def test_watcher_tracks_session_activity_and_phase(tmp_path):
     assert state["session_id"] == "sess-1"
     assert state["session_file"] == str(session)
     assert state["events"] == 5
-    assert state["phase"] == "test"
+    assert state["phase"] == "bash"
     assert state["last_activity"] == "2026-01-01T00:00:03Z"
     # The tool result reports the outcome without hiding the real action.
     assert state["action"] == "bash pytest tests/"
@@ -441,7 +442,7 @@ def test_watcher_reads_new_records_incrementally(tmp_path):
         handle.write(json.dumps(ASSISTANT_TOOL_CALL) + "\n")
     state = watcher.poll()
     assert state["events"] == 2
-    assert state["phase"] == "test"
+    assert state["phase"] == "bash"
     assert state["changed"] is True
 
 
@@ -899,7 +900,7 @@ def test_activity_snapshot_scans_newest_session_file(tmp_path):
     write_records(tmp_path / "s.jsonl", [SESSION_RECORD, ASSISTANT_TOOL_CALL])
     snapshot = pi_activity.activity_snapshot(tmp_path)
     assert snapshot["session_id"] == "sess-1"
-    assert snapshot["phase"] == "test"
+    assert snapshot["phase"] == "bash"
     assert snapshot["action"] == "bash pytest tests/"
     assert snapshot["result"] is None
     assert snapshot["changed"] is False

@@ -8596,7 +8596,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     activities = [line for line in lines if " activity " in line]
     heartbeats = [line for line in lines if " heartbeat " in line]
     # Issue #176: the visible fields change twice (request_pending ->
-    # test): the startup sub-phase line, then the tool-call line;
+    # bash): the startup sub-phase line, then the tool-call line;
     # unchanged polls must not repeat them (Issue #40).
     assert len(activities) == 2
     assert "phase=request_pending" in activities[0]
@@ -8607,7 +8607,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     assert "run=deadbeef" not in line
     assert "issue=xqliu/orbi#24" in line
     assert "role=implement" in line
-    assert "phase=test" in line
+    assert "phase=bash" in line
     assert 'action="bash pytest tests/"' in line
     assert "result=-" in line  # no tool result in this fake session
     assert "idle=" in line
@@ -8622,7 +8622,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
         assert "run=deadbeef" not in line
         assert "role=implement" in line
         assert ("phase=request_pending" in line
-                or "phase=test" in line)
+                or "phase=bash" in line)
         assert "elapsed=" in line
         assert "idle=" in line
         assert "branch=" not in line
@@ -8842,7 +8842,7 @@ def test_stream_pi_logs_run_failed_with_full_scene_and_reraises(
     assert "run=deadbeef" in failure
     assert "issue=xqliu/orbi#24" in failure
     assert "role=implement" in failure
-    assert "phase=test" in failure
+    assert "phase=bash" in failure
     assert "reason=pi_exit_3" in failure
     # The full scene is the debug entry again: worktree and session file.
     assert f"worktree={tmp_path}" in failure
@@ -8993,7 +8993,7 @@ def test_stream_pi_activity_lines_show_startup_sub_phase(tmp_path, caplog):
     assert any("phase=session_pending" in line for line in live)
     assert any("phase=request_pending" in line for line in live)
     # After the first response the tool-based phase applies as before.
-    assert any("phase=test" in line for line in live)
+    assert any("phase=bash" in line for line in live)
 
 
 def test_stream_pi_startup_failed_without_session_file(tmp_path, caplog):
@@ -9697,7 +9697,7 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     assert "run=deadbeef" not in wait
     assert "issue=xqliu/orbi#24" in wait
     assert "role=implement" in wait
-    assert "phase=test" in wait
+    assert "phase=bash" in wait
     assert "state=model_wait" in wait
     # The full scene never rides on the transition lines.
     assert "branch=" not in wait
@@ -9705,7 +9705,7 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     resume = resumed[0]
     assert "run=deadbeef" not in resume
     assert "state=resumed" in resume
-    assert "phase=test" in resume
+    assert "phase=bash" in resume
     # While waiting, the heartbeats carry the model_wait state and the
     # idle time (the wait duration is visible on the line itself)...
     wait_heartbeats = [
@@ -9874,7 +9874,7 @@ def test_stream_pi_resumed_run_follows_new_session_file(tmp_path, caplog):
     # The journal follows the NEW session created by this invocation: its
     # tool call is reported (the old session has no messages, so binding to
     # it would show no phase/action at all)...
-    assert "phase=test" in caplog.text
+    assert "phase=bash" in caplog.text
     assert 'action="bash pytest tests/"' in caplog.text
     # ...and never reports the pre-existing session as the live one.
     assert "old-session" not in caplog.text
@@ -11698,7 +11698,7 @@ def test_stream_pi_invokes_progress_callback_while_child_is_running(
     # The callback fired many times during the run (polls at 0.1 s while
     # the child sleeps 1.2 s after the last session record)...
     assert len(seen) >= 4
-    # ...and it saw the activity change (starting -> test) live, before
+    # ...and it saw the activity change (starting -> bash) live, before
     # the child exited: the tool call is visible in an early snapshot,
     # not only in a final state.
     # Issue #176: the live snapshots show the startup sub-phases
@@ -11711,13 +11711,13 @@ def test_stream_pi_invokes_progress_callback_while_child_is_running(
     # appear, and before the tool phase.
     phases = [entry["phase"] for entry in seen]
     assert "request_pending" in phases
-    assert "test" in phases
-    assert phases.index("request_pending") < phases.index("test")
-    assert phases.index("test") < len(phases) - 1
-    test_entries = [entry for entry in seen if entry["phase"] == "test"]
+    assert "bash" in phases
+    assert phases.index("request_pending") < phases.index("bash")
+    assert phases.index("bash") < len(phases) - 1
+    tool_entries = [entry for entry in seen if entry["phase"] == "bash"]
     assert any(
         entry["action"] == "bash pytest tests/"
-        for entry in test_entries
+        for entry in tool_entries
     )
 
 
@@ -11755,8 +11755,8 @@ def test_stream_pi_progress_first_frame_may_be_session_pending(tmp_path):
     # visible and ordered — request_pending appears, before the tool
     # phase — regardless of which frame the sampling started in.
     assert "request_pending" in phases
-    assert "test" in phases
-    assert phases.index("request_pending") < phases.index("test")
+    assert "bash" in phases
+    assert phases.index("request_pending") < phases.index("bash")
 
 
 def test_stream_pi_live_progress_patches_github_before_child_exits(
@@ -11791,7 +11791,7 @@ def test_stream_pi_live_progress_patches_github_before_child_exits(
         body.startswith("<!-- orbi:run=deadbeef -->")
         for body in patches
     )
-    assert any("- phase: test" in body for body in patches)
+    assert any("- phase: bash" in body for body in patches)
     assert any("- last action: bash pytest tests/" in body for body in patches)
 
 
@@ -16119,7 +16119,7 @@ def test_prepare_pi_agent_dir_is_idempotent_on_resume(
 # ---------------------------------------------------------------------------
 
 def _write_session_file(worktree: Path, session_id: str = "sess-1") -> None:
-    """A session JSONL with a tool call so the snapshot shows phase=test."""
+    """A session JSONL with a tool call so the snapshot shows phase=bash."""
     session_dir = worktree / ".pi-session"
     session_dir.mkdir(exist_ok=True)
     records = [
@@ -16226,7 +16226,7 @@ def test_stop_handler_active_run_uses_activity_snapshot_for_scene(
         runner._handle_stop(signal.SIGTERM, None)
     line = [line for line in caplog.text.splitlines()
             if " run_stopping " in line][0]
-    assert "phase=test" in line
+    assert "phase=bash" in line
     assert "session=sess-48" in line
     assert 128 + died["signum"] == 143
 
@@ -16482,7 +16482,7 @@ def test_real_subprocess_sigterm_logs_stop_scene_and_shuts_down_pi(
     assert "signal=SIGTERM" in line
     # phase/session from the existing activity snapshot of the
     # worktree's .pi-session.
-    assert "phase=test" in line
+    assert "phase=bash" in line
     assert "session=sess-48" in line
     assert "branch=orbi/owner-repo-issue-48" in line
     assert f"worktree={worktree}" in line

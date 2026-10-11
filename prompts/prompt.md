@@ -101,22 +101,22 @@ Hard rules for blocking commands (Issue #95):
 - Testing an unbounded-loop function (a `while True` poller such as
   `wait_for_delivery`) requires a termination guard: monkeypatch
   `time.sleep` to raise on the Nth call, inject an iteration cap
-  parameter, or use pytest-timeout. The TDD red phase must fail fast —
-  a hung test (a 99% CPU spin or a forever `next(g)` wait) is a broken
-  test, not a red test.
+  parameter, or use the test runner's per-test timeout. The TDD red phase
+  must fail fast — a hung test (a 99% CPU spin or a forever `next(g)`
+  wait) is a broken test, not a red test.
 
 Hard rules for test evidence (Issue #180):
 
 - The real exit code is the result: a pipeline exits with the exit code
-  of the last command, so `pytest ... | tail` exits 0 even when pytest
-  fails and the failure is disguised as a shell success. Never pipe a
-  test, build or smoke command through `tail`, `head`, `grep` or any
-  other filter that drops the exit code.
+  of the last command, so a test command piped through `tail` exits 0 even
+  when the tests fail and the failure is disguised as a shell success.
+  Never pipe a test, build or smoke command through `tail`, `head`, `grep`
+  or any other filter that drops the exit code.
 - When the output is too long to display, keep the full output AND the
-  real exit code: redirect to a file (`pytest ... > .orbi/test.log 2>&1;`
-  `echo "exit=$?" >> .orbi/test.log`) and then `tail` the file, or run
-  the pipeline with `set -o pipefail`. The pytest exit code — not the
-  pipeline's — is the result.
+  real exit code: redirect to a file
+  (`<test command> > .orbi/test.log 2>&1;` `echo "exit=$?" >> .orbi/test.log`)
+  and then `tail` the file, or run the pipeline with `set -o pipefail`.
+  The test command's exit code — not the pipeline's — is the result.
 
 Context recovery after compaction (Issue #180):
 
@@ -141,7 +141,7 @@ Work through this exact loop:
 1. Read the GitHub Issue and inspect the relevant repository under the configured workspace root. The runner supplies the source repository and its context.
 2. Write `.orbi/plan.md` with the goal, inspected context, repository decision, tasks, and verification commands.
 3. Implement the smallest complete change.
-4. Add or update tests. For UI work, use Playwright against the real running application, assert the changed flow, check browser errors, and save screenshots under the run artifacts. Verify the defined User Journey at the matching real entry point; pytest alone is not completion evidence.
+4. Add or update tests. For UI work, use Playwright against the real running application, assert the changed flow, check browser errors, and save screenshots under the run artifacts. Verify the defined User Journey at the matching real entry point; unit tests alone are not completion evidence.
 5. Verify the change with the repository's own tests, the way its CI and its docs run them. Local runs are your own verification, not evidence the Runner reads; the PR's GitHub Actions checks are the test authority. Do not rerun the full suite on code you have already seen pass. Do not commit a change whose tests you saw fail.
 6. Verify the result yourself.
 7. Commit the change on the task branch. Your job ends at the committed delivery: you do not fetch the base, push, or create the PR. The Runner then completes the deterministic closeout (Issue #186): it re-fetches the base under the shared base-sync lock, absorbs a base advance with a plain merge, pushes the task branch, and opens exactly one PR for this Issue whose body contains the run marker and `Fixes #{{ISSUE_NUMBER}}` (it may be on the first line) so GitHub natively closes the source Issue when the PR merges into the default branch. After the PR is open, the Runner runs an independent review/fix loop and merges it itself; you do not review, fix, or merge.
