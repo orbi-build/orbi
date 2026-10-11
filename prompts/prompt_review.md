@@ -165,9 +165,11 @@ test command's exit code — not the pipeline's — is the result.
 
 Local test commands in this ladder are advisory debugging only. The Runner
 accepts a clean review only after the PR's current-head GitHub Actions checks
-pass; do not invent or copy a repository-specific gate command into this
-shared prompt. Preserve real exit codes: do not use `&&` to hide which
-command failed.
+pass, and the Runner reads those checks itself before it merges; after you
+push a fix, end this round with the verdict — do **not** poll or wait for the
+new head's checks. Do not invent or copy a repository-specific gate command
+into this shared prompt. Preserve real exit codes: do not use `&&` to hide
+which command failed.
 
 1. CI first: when the PR has CI failures, read the CI failure logs
    BEFORE running any local test — `gh pr checks {{PR_NUMBER}}` (the
@@ -192,16 +194,20 @@ another session: fix them here, in this same session.
 - Push ONLY the task branch (the PR head branch); never force push, never
   push the protected branch, never create or close a PR.
 - If the head is behind the latest remote base or has a merge conflict,
-  absorb it here: `flock {{BASE_SYNC_LOCK}} git fetch origin {{BASE_BRANCH}}`
+  absorb `origin/{{BASE_BRANCH}}` in-session ONLY when GitHub reports the PR
+  as `CONFLICTING` (`gh pr view {{PR_NUMBER}} --json mergeable`); a head
+  that is merely behind is absorbed by the Runner's merge gate, so do not
+  merge the base for a behind-only head. To absorb a conflicted PR:
+  `flock {{BASE_SYNC_LOCK}} git fetch origin {{BASE_BRANCH}}`
   (Issue #171: the worktree shares the deployment checkout's git common dir,
   so an unlocked concurrent fetch races on the shared
   `refs/remotes/origin/{{BASE_BRANCH}}` ref; a fetch error or a lock timeout
   fails fast — never retry the bare fetch or bypass the lock), plain
   `git merge origin/{{BASE_BRANCH}}`, resolve conflicts manually, and push
   the task branch.
-- Absorb contract (machine-checked by the Runner): a round that starts
-  behind `origin/{{BASE_BRANCH}}` or facing a merge conflict must end in
-  exactly one of two states — (a) the task branch contains
+- Absorb contract (machine-checked by the Runner): a round that starts with
+  the PR `CONFLICTING` must end in exactly one of two states — (a) the task
+  branch contains
   `origin/{{BASE_BRANCH}}` (`git merge-base --is-ancestor
   origin/{{BASE_BRANCH}} HEAD` exits 0) after your in-session absorb; or
   (b) a `findings` verdict whose findings state that you attempted the

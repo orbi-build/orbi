@@ -6,8 +6,10 @@ prove the merge-gate acceptance criteria:
 
 - a PR head that contains the latest ``origin/<base>`` is merged with
   ``--match-head-commit`` and the merge commit lands on ``origin/<base>``;
-- a PR head that is behind the latest ``origin/<base>`` is absorbed and
-  merged when conflict-free, while a real conflict remains recoverable.
+- a PR head that is behind the latest ``origin/<base>`` is absorbed when
+  conflict-free and the pushed head is deferred (Issue #1626); the next
+  gate pass merges it once its CI is green, while a real conflict remains
+  recoverable.
 
 ``gh`` is faked: ``gh pr view`` answers the PR state and ``gh pr merge``
 performs a real local merge (``git merge``) so the merge commit is a real git
@@ -125,9 +127,10 @@ def test_merge_gate_merges_head_containing_latest_base(clone, monkeypatch):
     assert confirmed["merge_commit"] == merge_commit
 
 
-def test_merge_gate_absorbs_clean_behind_base_and_rechecks_ci(
+def test_merge_gate_absorbs_clean_behind_base_then_defers(
         clone, monkeypatch, caplog):
-    """A clean stale PR is absorbed and merged without a review restart."""
+    """A clean stale PR is absorbed; the pushed head is deferred (Issue
+    #1626) and merges on the next gate pass."""
     git(clone, "checkout", "-b", "orbi/owner-repo-issue-4",
         git(clone, "rev-parse", "origin/main~1"))
     head_oid = commit_file(clone, "delivery.txt", "delivery")
@@ -164,13 +167,26 @@ def test_merge_gate_absorbs_clean_behind_base_and_rechecks_ci(
           "base_oid": git(clone, "rev-parse", "origin/main~1"),
           "head_ref": "orbi/owner-repo-issue-4", "head_oid": head_oid}
     with caplog.at_level("INFO"):
-        merged = review_merge.merge_gate(clone, pr, "main", repo_dir=clone)
-    assert merged["merged"] is True
+        with pytest.raises(review_merge.DeliveryDeferred):
+            review_merge.merge_gate(clone, pr, "main", repo_dir=clone)
+    # Issue #1626: the gate absorbed the base and pushed the merged head,
+    # then deferred instead of reading the new head's CI. No merge command
+    # ran in this tick.
     assert views == 2
+    assert absorbed_head is not None
+    assert "base_absorbed" in caplog.text
+    assert not [c for c in commands if c[:2] == ["gh", "pr"]
+                and "merge" in c]
+
+    # The next gate pass (the branch now contains the base) merges the
+    # absorbed head with --match-head-commit.
+    merged = review_merge.merge_gate(
+        clone, {**pr, "head_oid": absorbed_head}, "main", repo_dir=clone,
+    )
+    assert merged["merged"] is True
     merge_cmd = [c for c in commands if c[:2] == ["gh", "pr"]
                  and "merge" in c][0]
     assert merge_cmd[merge_cmd.index("--match-head-commit") + 1] == absorbed_head
-    assert "base_absorbed" in caplog.text
 
 
 def test_merge_gate_conflicted_absorb_stays_recoverable(clone, monkeypatch):

@@ -4,8 +4,8 @@
     "pi_process.py": 1749,
     "pilot_setup.py": 1326,
     "release.py": 1763,
-    "review_merge.py": 1913,
-    "runner.py": 4089
+    "review_merge.py": 2013,
+    "runner.py": 4060
   },
-  "runner_top_level_defs": 59
+  "runner_top_level_defs": 58
 }

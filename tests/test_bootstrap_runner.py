@@ -14424,6 +14424,7 @@ def test_delivery_step_logs_awaiting_without_bound_run_id(monkeypatch, caplog):
 def _review_round_env(
     monkeypatch, tmp_path, *, scene_base="main", label="ai-pr-opened",
     with_worktree=True, review_result=False, scene_round=0,
+    external="", record=None,
 ):
     """Shared fake GitHub/git scene for one direct `_run_review_round`
     call. Returns (edits, comments, reviews, publishes) capture lists;
@@ -14438,7 +14439,7 @@ def _review_round_env(
                     + ("<!-- orbi:scene:v1 " + json.dumps({
                         "base_branch": scene_base,
                         "base_sha": "abc123def456",
-                        "external": "", "pr_url": PR_URL,
+                        "external": external, "pr_url": PR_URL,
                         "review_round": scene_round,
                         "run_id": "a1b2c3d4", "schema": 1,
                     }) + " -->\n" if scene_round else "")
@@ -14459,8 +14460,21 @@ def _review_round_env(
         fake_run(["gh", "pr", "list"])
     monkeypatch.setattr(seam, "run_command", fake_run)
     if with_worktree:
-        (tmp_path / ".worktrees"
-         / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
+        worktree = (tmp_path / ".worktrees"
+                    / "orbi-owner-repo-issue-39-a1b2c3d4")
+        worktree.mkdir(parents=True)
+        if record is not None:
+            (worktree / ".orbi").mkdir(parents=True, exist_ok=True)
+            (worktree / ".orbi" / "run-state.json").write_text(
+                json.dumps({
+                    "run_id": "a1b2c3d4", "issue": 39, "repo": "owner/repo",
+                    "branch": "orbi/owner-repo-issue-39",
+                    "worktree": str(worktree),
+                    "reviewed_head": record[0],
+                    "reviewed_issue_body_sha256": record[1],
+                }),
+                encoding="utf-8",
+            )
     edits: list = []
     comments: list = []
     monkeypatch.setattr(seam, "edit_issue",
@@ -14546,6 +14560,61 @@ def test_run_review_round_passes_prior_comments_after_first_round(
     ) is False
     assert "previous_comments" in reviews[0][1]
     assert reviews[0][1]["previous_comments"]
+
+
+def test_run_review_round_passes_a_recorded_pass(monkeypatch, tmp_path):
+    """Issue #1626: a recorded pass with the same rendered Issue body is
+    passed to the round, which merges without a session."""
+    prompt = tmp_path / "prompt_review.md"
+    prompt.write_text("Review.\n{{ISSUE_BODY}}\n", encoding="utf-8")
+    body = "the issue body"
+    body_sha = pi_session.issue_body_sha256(body)
+    edits, comments, reviews, _ = _review_round_env(
+        monkeypatch, tmp_path, record=("h1", body_sha),
+    )
+    issue = {"number": 39, "title": "task", "body": body}
+    outcome = review_merge._run_review_round(
+        PR_URL, issue,
+        config_domain.RunnerConfig(
+            repo_dir=tmp_path, base_branch="main", prompt_review=prompt,
+        ),
+        "owner/repo",
+    )
+    assert outcome is False
+    assert reviews[0][1]["review_record"] == ("h1", body_sha)
+    assert reviews[0][1]["issue_body_sha256"] == body_sha
+
+
+def test_run_review_round_skips_the_record_for_an_external_takeover(
+        monkeypatch, tmp_path):
+    """Issue #1626: an external takeover is never merge-only, so the
+    record is not passed."""
+    edits, comments, reviews, _ = _review_round_env(
+        monkeypatch, tmp_path, scene_round=1, external="true",
+        record=("h1", "b" * 64),
+    )
+    issue = {"number": 39, "title": "task", "body": "body"}
+    assert review_merge._run_review_round(
+        PR_URL, issue,
+        config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
+        "owner/repo",
+    ) is False
+    assert "review_record" not in reviews[0][1]
+
+
+def test_run_review_round_marks_awaiting_merge_as_merge_only(
+        monkeypatch, tmp_path):
+    """Issue #1216/#1626: the ai-awaiting-merge retry stays merge_only."""
+    edits, comments, reviews, _ = _review_round_env(
+        monkeypatch, tmp_path, label="ai-awaiting-merge",
+    )
+    issue = {"number": 39, "title": "task", "body": "body"}
+    assert review_merge._run_review_round(
+        PR_URL, issue,
+        config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
+        "owner/repo",
+    ) is False
+    assert reviews[0][1]["merge_only"] is True
 
 
 def test_run_review_round_returns_none_when_scene_base_differs(

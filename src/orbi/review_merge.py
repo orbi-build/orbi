@@ -426,8 +426,10 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
     added while the PR was in review stops the merge; one skip comment names
     the reviewed head and the PR/labels stay untouched). If the base
     advanced but GitHub reports a conflict-free PR, absorb it with a plain
-    merge and push the task branch, then read only the absorbed head's CI gate
-    again; this does not start another review round. Every state is read once
+    merge and push the task branch, then record the absorbed head and raise
+    `DeliveryDeferred` (Issue #1626: never merge a head this tick
+    pushed; its CI has not registered yet and this does not start another
+    review round). Every state is read once
     per gate pass: a pending check or an UNKNOWN mergeability is not a failure
     but an intermediate state — the gate raises `DeliveryDeferred`, the caller
     returns, and the next tick re-reads. A failed check or a not-mergeable PR
@@ -506,9 +508,11 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             old_head=pr["head_oid"], head=absorbed_head,
         )
         pr = {**pr, "head_oid": absorbed_head}
-        # The push starts a new CI run. Read the state once more, but do not
-        # start another review round: only the absorbed head's CI gate is
-        # needed before the exact-head merge below.
+        # The push starts a new CI run whose checks may not be registered
+        # yet, and an empty rollup counts as neither pending nor failed.
+        # The state read still verifies GitHub sees the pushed head and
+        # stays mergeable, then the gate defers (Issue #1626): never merge
+        # a head this tick pushed. A merge-only resume merges after CI.
         state = pr_view(pr["number"],
                         "state,mergeable,headRefOid,statusCheckRollup",
                         cwd=worktree)
@@ -527,9 +531,15 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
                 f"PR #{pr['number']} is not mergeable (mergeable={mergeable}); "
                 "resolve conflicts and retry"
             )
-        freshness = run_state.assess_base_freshness(
-            worktree, base_branch, head=absorbed_head,
-            reviewed_head=absorbed_head,
+        run_state.update_reviewed_head(worktree, absorbed_head)
+        event(
+            "base_absorbed_deferred", pr=pr["number"],
+            base_branch=base_branch, base_sha=base_sha, head=absorbed_head,
+        )
+        raise DeliveryDeferred(
+            f"PR #{pr['number']} absorbed origin/{base_branch} ({base_sha}) "
+            f"and pushed {absorbed_head}; the merge is deferred until that "
+            "head's CI concludes"
         )
     if freshness is run_state.BaseFreshness.CONFLICTED:
         event(
@@ -961,7 +971,44 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                               *, scene: dict,
                               previous_comments: list[dict] | None = None,
                               merge_only: bool = False,
-                              checks: list | None = None) -> bool:
+                              checks: list | None = None,
+                              review_record: tuple[str, str] | None = None,
+                              issue_body_sha256: str | None = None) -> bool:
+    """Run one independent review round; merge when the verdict is clean.
+
+    Issue #1626: the review record (reviewed_head plus the hash of the
+    Issue body the session rendered) authorizes exactly one later
+    merge-only tick. Every exit drops it except a deferral (pending CI,
+    UNKNOWN mergeability, or a head pushed in this tick): findings, a
+    malformed verdict, an exception, a gate failure, the ai-blocked skip
+    and the completed merge all clear it, so a stale pass can never
+    authorize a later merge.
+    """
+    keep_review_record: list[bool] = []
+    try:
+        return _review_and_merge_round(
+            worktree, branch, base_branch, config, source_repo, number,
+            title, priority, scene=scene,
+            previous_comments=previous_comments, merge_only=merge_only,
+            checks=checks, review_record=review_record,
+            issue_body_sha256=issue_body_sha256,
+            keep_review_record=keep_review_record,
+        )
+    finally:
+        if not keep_review_record:
+            run_state.clear_reviewed(worktree)
+
+
+def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
+                            config: config_domain.RunnerConfig, source_repo: str,
+                            number: int, title: str, priority: str,
+                            *, scene: dict,
+                            previous_comments: list[dict] | None = None,
+                            merge_only: bool = False,
+                            checks: list | None = None,
+                            review_record: tuple[str, str] | None = None,
+                            issue_body_sha256: str | None = None,
+                            keep_review_record: list[bool]) -> bool:
     """Run one independent review round; merge when the verdict is clean.
 
     `title` is the issue's GitHub title: the review
@@ -1061,18 +1108,29 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         worktree, branch, base_branch,
         external_pr_url=external_pr_url, source_repo=source_repo,
     )
-    # Issue #877: a round that STARTS behind the base is under the absorb
-    # contract — the session must end with the branch containing
-    # origin/<base> or with a findings verdict reporting the abandoned
-    # absorb, never a bare `pass` over an unrelated push. An unreadable
-    # local ref leaves the round unarmed (the gate's own ancestor check
-    # against the fresh fetch still guards the merge either way).
-    try:
-        absorb_required = not merge_only and not _is_ancestor(
-            f"origin/{base_branch}", pr["head_oid"], cwd=worktree,
-        )
-    except subprocess.CalledProcessError:
-        absorb_required = False
+    # Issue #1626: a record whose reviewed head and rendered-Issue-body hash
+    # both still match authorizes THIS tick to merge without a session.
+    merge_only_from_record = (
+        review_record is not None
+        and not merge_only
+        and not scene.get("external")
+        and issue_body_sha256 == review_record[1]
+        and pr["head_oid"] == review_record[0]
+    )
+    # Issue #877: the absorb contract is armed only when GitHub reports the
+    # PR CONFLICTING at round start (one mergeable read, Issue #1626). A
+    # head that is merely behind is absorbed by the Runner's gate, not by
+    # the session; UNKNOWN does not arm, and an unreadable read leaves the
+    # round unarmed (the gate's own fresh-fetch ancestor check still guards
+    # the merge).
+    absorb_required = False
+    if not merge_only and not merge_only_from_record:
+        try:
+            absorb_required = pr_view(
+                pr["number"], "mergeable", cwd=worktree,
+            ).get("mergeable") == "CONFLICTING"
+        except (subprocess.CalledProcessError, ValueError, TypeError):
+            absorb_required = False
     # A fix push whose round ended before the re-freeze record (a
     # findings verdict, or a malformed verdict head) still left an
     # engine-pushed head on the remote (Issue #833). When the frozen
@@ -1119,14 +1177,21 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             checks=checks,
         ))),
     )
-    if merge_only:
+    if merge_only or merge_only_from_record:
         verdict = {
             "verdict": "pass", "head": pr["head_oid"],
             "findings": [], "blockers": 0, "majors": 0,
         }
-        review_summary = "maintainer-actionable merge retry"
+        review_summary = (
+            "maintainer-actionable merge retry" if merge_only
+            else f"pass recorded on {pr['head_oid']}; merged after CI"
+        )
+        reviewed_body_sha256 = None
     else:
-        output = pi_session.run_review(
+        # Issue #1626: a record must never outlive the session that
+        # replaces it, even if the process dies mid-session.
+        run_state.clear_reviewed(worktree)
+        result = pi_session.run_review(
             ctx, pr, config, round,
             progress=LiveProgressThrottle(
                 ctx, publisher, title=title, role=ROLE_REVIEW,
@@ -1134,6 +1199,11 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                 priority=priority, checks=checks,
             ),
         )
+        # Drop any record the session wrote: only the Runner's own record
+        # (written below on a pass) may authorize a later merge.
+        run_state.clear_reviewed(worktree)
+        output = result.output
+        reviewed_body_sha256 = result.issue_body_sha256
         verdict = parse_review_verdict(output)
         fixed_findings = len(verdict["findings"])
         review_summary = (
@@ -1273,6 +1343,24 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         # head (Issue #833): the merge record's external_commits must
         # not count the session's own fixes as external commits.
         run_state.record_pushed_head(worktree, refrozen["head_oid"])
+    if (not scene.get("external")
+            and not merge_only and not merge_only_from_record
+            and refrozen["head_oid"] != pr["head_oid"]):
+        # Issue #1626: a head pushed in this tick is never merged in this
+        # tick — its CI has not registered yet. Record the pass and defer;
+        # the next tick with green CI on that head merges without a session.
+        run_state.record_reviewed(
+            worktree, refrozen["head_oid"], reviewed_body_sha256,
+        )
+        keep_review_record.append(True)
+        event(
+            "review_merge_deferred", pr=refrozen["number"], round=round,
+            reason=(
+                f"the review session pushed head {refrozen['head_oid']}; "
+                "its CI is not read in this tick"
+            ),
+        )
+        return False
     if scene.get("external"):
         # D2 (Issue #842): an external contribution's clean verdict is
         # the engine's FINAL output — the PR is NEVER auto-merged and
@@ -1394,6 +1482,12 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                 "is a human decision, so the AI cannot safely continue this PR"
             )
 
+    # Issue #1626: record the pass before the gate, so the gate's own base
+    # absorb can point the record at the pushed head and defer.
+    if not merge_only and not merge_only_from_record:
+        run_state.record_reviewed(
+            worktree, refrozen["head_oid"], reviewed_body_sha256,
+        )
     try:
         merged = merge_gate(
             worktree,
@@ -1416,6 +1510,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             "review_merge_deferred", pr=refrozen["number"], round=round,
             reason=str(exc),
         )
+        keep_review_record.append(True)
         return False
     except MergeBlockedByIssueLabel as exc:
         # Issue #1504: a maintainer labelled the source Issue `ai-blocked`
@@ -1838,6 +1933,17 @@ def _run_review_round(
             review_kwargs["previous_comments"] = comments
         if AWAITING_MERGE_LABEL in labels:
             review_kwargs["merge_only"] = True
+        elif not scene.get("external"):
+            # Issue #1626: a recorded pass on this head and this Issue
+            # body lets this round merge without starting a session.
+            review_record = run_state.read_reviewed(worktree)
+            if review_record is not None:
+                review_kwargs["review_record"] = review_record
+                review_kwargs["issue_body_sha256"] = (
+                    pi_session.rendered_issue_body_sha256(
+                        config.prompt_review, issue.get("body") or "",
+                    )
+                )
         merged = review_and_merge_if_clean(
             worktree, branch, config.base_branch,
             review_config, source_repo, number,
