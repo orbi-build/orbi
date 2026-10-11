@@ -1,0 +1,44 @@
+---
+title: "v0.6.13 release (latest)"
+description: "Orbi v0.6.13 release notes: Engine prompts and activity display name pytest in rules that apply to every repository: make them and 4 more changes."
+---
+
+`v0.6.13` was published 2026-10-11T06:32:35Z as the GitHub Release [v0.6.13](https://github.com/orbi-build/orbi/releases/tag/v0.6.13).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.6.13` | annotated tag `3e1962771436957ffd3a2e818796f943adffa678` | commit `95915f35042773447d57cd86666d475234faec3c` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Engine prompts and activity display name pytest in rules that apply to every repository: make them framework-neutral ([Issue #1616](https://github.com/orbi-build/orbi/issues/1616); [PR #1624](https://github.com/orbi-build/orbi/pull/1624))
+- Shared prompts impose orbi's own coverage policy (#234) on every repository: take coverage requirements from the repository itself ([Issue #1617](https://github.com/orbi-build/orbi/issues/1617); [PR #1619](https://github.com/orbi-build/orbi/pull/1619))
+- orbi suggest --locale zh|en: write suggestions and the repository summary in the caller's language ([Issue #1620](https://github.com/orbi-build/orbi/issues/1620); [PR #1622](https://github.com/orbi-build/orbi/pull/1622))
+- Remove the negative "tiered" / "issue #234" assertions added by #1619 from the prompt contract tests ([Issue #1621](https://github.com/orbi-build/orbi/issues/1621); [PR #1623](https://github.com/orbi-build/orbi/pull/1623))
+
+### Bug fixes
+
+- Report test status from the PR's GitHub Actions checks only: stop parsing local test logs and stop prescribing how the agent tests (#805) ([Issue #1613](https://github.com/orbi-build/orbi/issues/1613); [PR #1618](https://github.com/orbi-build/orbi/pull/1618))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
+
+- tag: `v0.6.13`
+- release commit: `95915f35042773447d57cd86666d475234faec3c`
+- release task: Issue #1615
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 95915f35042773447d57cd86666d475234faec3c (the #268 CI-wait gate; no local test execution)
+
+
+Released by [Orbi](https://orbi.build/?ref=prfoot-orbi-build)
+
+[![Download Orbi](https://a.fsdn.com/con/app/sf-download-button)](https://sourceforge.net/projects/orbi/files/v0.6.13/v0.6.13%20source%20code.zip/download)
