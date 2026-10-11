@@ -1176,11 +1176,14 @@ def _external_review_env(monkeypatch, tmp_path, *, external: bool):
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: frozen)
     monkeypatch.setattr(
         pi_session, "run_review",
-        lambda *a, **k: (
-            "Review of the contributor diff: the change is minimal and "
-            "tested.\nREVIEW_VERDICT "
-            '{"verdict":"pass","head":"def","blockers":0,"majors":0,'
-            '"minors":1,"findings":[]}'
+        lambda *a, **k: pi_session.ReviewSessionResult(
+            output=(
+                "Review of the contributor diff: the change is minimal and "
+                "tested.\nREVIEW_VERDICT "
+                '{"verdict":"pass","head":"def","blockers":0,"majors":0,'
+                '"minors":1,"findings":[]}'
+            ),
+            issue_body_sha256="0" * 64,
         ),
     )
     monkeypatch.setattr(seam, "merge_gate",

@@ -588,6 +588,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `human_review_waiting` | 交付等待人工评审标签 |
 | `human_review_checklist_failed` | 人工评审清单发布失败（旁路） |
 | `human_review_diff_read_failed` | 人工评审 diff 读取失败 |
+| `base_absorbed_deferred` | 合并门吸收了 base、推送了吸收后的 head 并顺延到下一 tick（Issue #1626） |
 | `base_absorbed` | 前进的 base 分支已被合入任务分支 |
 | `base_merge_conflict` | base 合并冲突；已中止且不自动解决 |
 | `base_checkout_synced` | repo_dir base checkout 已快进到远端 base |

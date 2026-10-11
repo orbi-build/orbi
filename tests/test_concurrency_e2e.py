@@ -812,15 +812,14 @@ def test_capacity_one_slot_serves_the_review_tick(
     assert read_state(state)["issues"]["8"]["labels"] == ["ai-ready"]
 
     # Release the review: the finding is fixed IN THE SESSION (Issue
-    # #82), the head is re-frozen and merged by the SAME holder.
+    # #82). Issue #1626: the session pushed a new head, so the round
+    # defers; the next tick merges the recorded head without a session.
     review_gate.write_text("go", encoding="utf-8")
-    wait_for(
-        lambda: "ai-merged" in read_state(state)["issues"]["7"]["labels"],
-        timeout=180,
-        what="the resumed review to fix in-session and merge",
-    )
     out, err = second.communicate(timeout=120)
     assert second.returncode == 0, err
+    merge_tick = start_runner(config, bin_dir, state, pi_log)
+    out, err = merge_tick.communicate(timeout=120)
+    assert merge_tick.returncode == 0, err
     assert "delivery_auto_merged" in err
     assert slots_held(clone) == [(1, None)], (
         "slot must be released after the merge"
@@ -983,26 +982,27 @@ def test_capacity_two_allows_two_runners_and_rejects_third(clone, tmp_path):
     # process taking the freed slot): the finding is fixed in-session
     # (Issues #34/#82) and the PR merges.
     resume_7 = start_runner(config, bin_dir, state, pi_log)
-    wait_for(
-        lambda: "ai-merged" in read_state(state)["issues"]["7"]["labels"],
-        timeout=180,
-        what="the first resume tick to review and merge issue 7",
-    )
     out, err = resume_7.communicate(timeout=120)
     assert resume_7.returncode == 0, err
+    # Issue #1626: the review session pushed its in-session fix, so the
+    # round deferred; the next tick merges the recorded head.
+    merge_7 = start_runner(config, bin_dir, state, pi_log)
+    out, err = merge_7.communicate(timeout=120)
+    assert merge_7.returncode == 0, err
     assert "delivery_auto_merged" in err
 
     # The review of issue 8 follows as the next resume tick: its review
     # session absorbs the freshly advanced base in-session (the fake
     # review does the same base absorb the real prompt instructs).
     resume_8 = start_runner(config, bin_dir, state, pi_log)
-    wait_for(
-        lambda: "ai-merged" in read_state(state)["issues"]["8"]["labels"],
-        timeout=180,
-        what="the second resume tick to review and merge issue 8",
-    )
     out, err = resume_8.communicate(timeout=120)
     assert resume_8.returncode == 0, err
+    # Issue #1626: the review session pushed (absorbing issue 7's merged
+    # base), so the round deferred; the next tick merges the record.
+    merge_8 = start_runner(config, bin_dir, state, pi_log)
+    out, err = merge_8.communicate(timeout=120)
+    assert merge_8.returncode == 0, err
+    assert "delivery_auto_merged" in err
     assert slots_held(clone, 2) == [(1, None), (2, None)]
     # One Pi per phase of each delivery (implement, review — the review
     # fixes in-session, Issue #82): exactly four invocations, none a
@@ -1396,18 +1396,24 @@ def test_killed_runner_is_resumed_by_the_next_claim_scan(clone, tmp_path):
     assert "capacity_full" not in err
     assert slots_held(clone) == [(1, None)], "slot must be released on exit"
 
-    # The final tick: the resumable scan classifies issue 7
-    # RESUME_REVIEW on the SAME run and delivers (review -> fix ->
-    # auto-merge in the fake world).
+    # The review tick: the resumable scan classifies issue 7
+    # RESUME_REVIEW on the SAME run and runs the independent review
+    # (the fake fixes in-session and pushes).
     third = start_runner(config, bin_dir, state, pi_log)
-    wait_for(
-        lambda: "ai-merged" in read_state(state)["issues"]["7"]["labels"],
-        timeout=180,
-        what="resumed run to review, fix and merge",
-    )
+    out, err = third.communicate(timeout=120)
+    assert third.returncode == 0, err
+    assert "no_ready_issue" not in err
+    assert "capacity_full" not in err
+    # Issue #1626: the review session pushed its fix, so third deferred;
+    # the next tick merges the recorded head without a session.
+    fourth = start_runner(config, bin_dir, state, pi_log)
+    out, err = fourth.communicate(timeout=120)
+    assert fourth.returncode == 0, err
+    assert "no_ready_issue" not in err
+    assert "capacity_full" not in err
+    assert "delivery_auto_merged" in err
     # The final delivery summary PATCHed the SAME progress comment (the
-    # summary lands after the ai-pr-opened transition, so it is checked
-    # here, once the delivery is terminal).
+    # summary lands with the merge, so it is checked here).
     snap = read_state(state)
     progress_bodies = [
         c["body"] for c in snap["comments"]
@@ -1416,11 +1422,6 @@ def test_killed_runner_is_resumed_by_the_next_claim_scan(clone, tmp_path):
     assert len(progress_bodies) == 1
     assert f"<!-- orbi:run={dead_run_id} -->" in progress_bodies[0]
     assert "Orbi delivered" in progress_bodies[0]
-    out, err = third.communicate(timeout=120)
-    assert third.returncode == 0, err
-    assert "no_ready_issue" not in err
-    assert "capacity_full" not in err
-    assert "delivery_auto_merged" in err
     assert slots_held(clone) == [(1, None)], "slot must be released on exit"
 
 
@@ -1473,15 +1474,15 @@ def test_stranded_pr_opened_delivery_is_resumed_to_review_and_merge(
     # stranded `ai-pr-opened` delivery, recovers the scene, and runs the
     # independent review — no fixer for a clean PR, no fresh claim.
     second = start_runner(config, bin_dir, state, pi_log)
-    wait_for(
-        lambda: "ai-merged" in read_state(state)["issues"]["7"]["labels"],
-        timeout=180,
-        what="second runner to resume the review and merge the same PR",
-    )
     out, err = second.communicate(timeout=120)
     assert second.returncode == 0, err
     assert "capacity_full" not in err
     assert "no_ready_issue" not in err
+    # Issue #1626: the review session pushed its fix, so the review tick
+    # deferred; the next tick merges the recorded head without a session.
+    merge_tick = start_runner(config, bin_dir, state, pi_log)
+    out, err = merge_tick.communicate(timeout=120)
+    assert merge_tick.returncode == 0, err
     assert "delivery_auto_merged" in err
 
     snap = read_state(state)
@@ -1587,12 +1588,16 @@ def test_live_review_tick_is_not_resumed_by_second_runner(
     # (issue 8's PR was verified before the fake merge could advance
     # main — no freshness race masks the scan contract).
     review_gate.write_text("go", encoding="utf-8")
-    # The resumed review is the process holding the gate.  Wait for that
-    # process to finish rather than polling the label while it is still
-    # racing through the post-review merge path; the process exit is the
-    # deterministic completion signal for this fixture.
+    # The resumed review is the process holding the gate; the process
+    # exit is the deterministic completion signal for this fixture.
     out, err = second.communicate(timeout=120)
     assert second.returncode == 0, err
+    # Issue #1626: the review session pushed its in-session fix, so the
+    # round deferred; the next tick merges issue 7's recorded head (the
+    # scan sees issue 7 first). Issue 8's own review stays open.
+    merge_tick = start_runner(config, bin_dir, state, pi_log)
+    out, err = merge_tick.communicate(timeout=120)
+    assert merge_tick.returncode == 0, err
     assert "delivery_auto_merged" in err
     snap = read_state(state)
     assert "ai-merged" in snap["issues"]["7"]["labels"]
@@ -1702,13 +1707,16 @@ def test_review_of_free_pr_is_not_starved_by_an_in_flight_delivery(
     # pre-#809 whole-slot-dir guard this tick ended in `no_ready_issue`
     # — the starvation this test pins.
     reviewer_8 = start_runner(config, bin_dir, state, pi_log)
-    wait_for(
-        lambda: "ai-merged" in read_state(state)["issues"]["8"]["labels"],
-        timeout=180,
-        what="the concurrent tick to review and merge the FREE delivery",
-    )
     out, err = reviewer_8.communicate(timeout=120)
     assert reviewer_8.returncode == 0, err
+    assert "no_ready_issue" not in err
+    assert "capacity_full" not in err
+    # Issue #1626: the review session pushed its fix, so it deferred; the
+    # next tick merges the recorded head without a session (issue 7 is
+    # still held, so the scan resumes the free issue 8).
+    merge_8 = start_runner(config, bin_dir, state, pi_log)
+    out, err = merge_8.communicate(timeout=120)
+    assert merge_8.returncode == 0, err
     assert "delivery_auto_merged" in err
     assert "no_ready_issue" not in err
     assert "capacity_full" not in err
@@ -1727,18 +1735,16 @@ def test_review_of_free_pr_is_not_starved_by_an_in_flight_delivery(
     # issue 8's merge advanced (in-session, Issue #82) and merges.
     review_gate.write_text("go", encoding="utf-8")
     # The review holder must absorb issue 8's merge before it can finish.
-    # Under CI's coverage-instrumented, shared-host load this serialized
-    # base-sync path can exceed the earlier three-minute test bound even
-    # though the runner is making progress (the failure that prompted
-    # Issue #980). Keep the bound finite, but allow the real user path
-    # enough time to complete instead of reporting a false starvation.
-    wait_for(
-        lambda: "ai-merged" in read_state(state)["issues"]["7"]["labels"],
-        timeout=300,
-        what="issue 7's review to finish and merge after the gate",
-    )
-    out, err = reviewer_7.communicate(timeout=120)
+    # Issue #980: under CI's coverage-instrumented, shared-host load this
+    # serialized base-sync path can be slow even though the runner is
+    # making progress, so the process wait keeps a generous bound.
+    out, err = reviewer_7.communicate(timeout=300)
     assert reviewer_7.returncode == 0, err
+    # Issue #1626: the review session absorbed the base and pushed, so it
+    # deferred; the next tick merges the recorded head without a session.
+    merge_7 = start_runner(config, bin_dir, state, pi_log)
+    out, err = merge_7.communicate(timeout=120)
+    assert merge_7.returncode == 0, err
     assert "delivery_auto_merged" in err
     snap = read_state(state)
     assert "ai-merged" in snap["issues"]["7"]["labels"]

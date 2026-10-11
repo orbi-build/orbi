@@ -745,7 +745,7 @@ def test_run_review_launches_independent_readonly_pi_session(monkeypatch, tmp_pa
     pr = {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
           "head_ref": "h", "head_oid": "h1"}
     out = pi_session.run_review(RunContext(run_id=_review_config(tmp_path).run_id, issue=4, branch="orbi/owner-repo-issue-4", worktree=tmp_path, source_repo="owner/repo"), pr, _review_config(tmp_path), 1)
-    assert out == "done"
+    assert out.output == "done"
     command, kwargs = calls[0]
     # Review skill, shared flat session dir (so the same live activity
     # pipeline can follow the new JSONL), redacted log.
@@ -2351,6 +2351,16 @@ def _pr():
             "head_ref": "h", "head_oid": "h1"}
 
 
+_REVIEW_BODY_SHA = "0" * 64
+
+
+def _review_session(text, body_sha=_REVIEW_BODY_SHA):
+    """The review session result (Issue #1626): stdout plus body hash."""
+    return pi_session.ReviewSessionResult(
+        output=text, issue_body_sha256=body_sha,
+    )
+
+
 def _review_merge_config(tmp_path):
     return config_domain.RunnerConfig(
         repo_dir=tmp_path, deploy_home=tmp_path, base_branch="main",
@@ -2410,7 +2420,7 @@ def budget_review_env(monkeypatch):
         callback = kwargs.get("progress")
         if env["live"] is not None and callback is not None:
             callback(env["live"])
-        return env["verdict"]
+        return _review_session(env["verdict"])
 
     monkeypatch.setattr(pi_session, "run_review", fake_run_review)
     env["calls"] = make_fake_gh(monkeypatch)[0]
@@ -2513,7 +2523,7 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [],
     )
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
         review_merge, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
     )
@@ -2574,7 +2584,7 @@ def test_review_and_merge_skips_checkout_sync_for_a_locked_engine_source(
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [],
     )
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
         review_merge, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
     )
@@ -2611,7 +2621,7 @@ def test_review_and_merge_skips_checkout_sync_for_split_deployment(
     calls = []
     caplog.set_level("INFO")
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(seam, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(seam, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
         seam, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
     )
@@ -2646,7 +2656,7 @@ def test_review_and_merge_fix_round_clears_live_delivery_labels(
         "ai-ready", "ai-in-progress", "ai-fix-needed",
     ])
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
         review_merge, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
     )
@@ -2675,17 +2685,21 @@ def test_review_and_merge_fix_round_clears_live_delivery_labels(
     ]
 
 
-def test_review_and_merge_refreezes_head_after_in_session_fix(
+def test_review_and_merge_defers_a_head_pushed_in_the_same_tick(
         monkeypatch, tmp_path, caplog):
-    """Issue #82: the review session fixes findings in the same session
-    and pushes the task branch, so the head the verdict covers is NEWER
-    than the frozen head. The PR must be RE-FROZEN before the merge
-    gate: the gate (and the `--match-head-commit` merge) run against
-    the fixed head, not the frozen one."""
+    """Issue #82/#1626: the review session fixes findings in the same
+    session and pushes the task branch, so the head the verdict covers is
+    NEWER than the frozen head. The PR is RE-FROZEN before the gate, but a
+    head pushed in this tick is never merged in this tick: the round
+    records the pass (verdict-covered re-frozen head) and defers. The next
+    tick with the same head and Issue body merges without a session."""
     calls = []
     frozen = _pr()
     fixed = {**_pr(), "head_oid": "h2"}
-    heads = iter([frozen, fixed])
+    # Round 1: freeze h1 (start), re-freeze h2 (the pushed fix).
+    # Round 2: freeze h2 (start), re-freeze h2 (merge-only resume).
+    heads = iter([frozen, fixed, fixed, fixed])
+    review_calls = []
     _seed_run_state(tmp_path)
 
     def fake_freeze(*a, **k):
@@ -2694,13 +2708,15 @@ def test_review_and_merge_refreezes_head_after_in_session_fix(
     monkeypatch.setattr(review_merge, "freeze_pr", fake_freeze)
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [],
     )
+
     # The verdict carries the FIXED head (the reviewer re-emits it for
-    # the pushed fix, Issue #591): the gate binds it to the re-frozen
+    # the pushed fix, Issue #591): the merge binds it to the re-frozen
     # head, not the frozen one.
-    monkeypatch.setattr(
-        pi_session, "run_review",
-        lambda *a, **k: _pass_verdict_text(head="h2"),
-    )
+    def fake_review(*a, **k):
+        review_calls.append(1)
+        return _review_session(_pass_verdict_text(head="h2"))
+
+    monkeypatch.setattr(pi_session, "run_review", fake_review)
 
     def fake_gate(worktree, pr, base_branch, *, repo_dir, **_kwargs):
         calls.append(("gate", pr["head_oid"], repo_dir))
@@ -2716,16 +2732,16 @@ def test_review_and_merge_refreezes_head_after_in_session_fix(
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     caplog.set_level("INFO")
     make_fake_gh(monkeypatch)
-    merged = review_merge.review_and_merge_if_clean(
-        tmp_path, "branch", "main", _review_merge_config(tmp_path),
-        "owner/repo", 4, title="Review task",
-        priority="normal",
-        scene=_scene(),
+    config = _review_merge_config(tmp_path)
+    deferred = review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", config, "owner/repo", 4,
+        title="Review task", priority="normal", scene=_scene(),
     )
-    assert merged is True
-    # The merge gate ran against the RE-FROZEN (fixed) head... with the
-    # deployment checkout as the base-sync lock location (Issue #171).
-    assert calls == [("gate", "h2", tmp_path)]
+    assert deferred is False
+    # A head pushed in this tick is never merged in this tick: the gate
+    # did not run and the pass is recorded for a later merge-only tick.
+    assert calls == []
+    assert run_state.read_reviewed(tmp_path) == ("h2", _REVIEW_BODY_SHA)
     # ...and the head advance is logged for the journal.
     assert "review_head_advanced" in caplog.text
     assert "frozen=h1" in caplog.text
@@ -2733,6 +2749,18 @@ def test_review_and_merge_refreezes_head_after_in_session_fix(
     # The verdict-covered fix head is the engine's own push (Issue
     # #833): it is recorded as such for the merge record.
     assert review_merge.read_pushed_head(tmp_path) == "h2"
+
+    # The next tick (same head, same Issue body) is a merge-only resume:
+    # no session, and the gate runs against the pushed head.
+    merged = review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", config, "owner/repo", 4,
+        title="Review task", priority="normal", scene=_scene(),
+        review_record=run_state.read_reviewed(tmp_path),
+        issue_body_sha256=_REVIEW_BODY_SHA,
+    )
+    assert merged is True
+    assert len(review_calls) == 1
+    assert calls == [("gate", "h2", tmp_path)]
 
 
 def test_review_and_merge_verdict_head_mismatch_real_commit_is_recoverable(
@@ -2743,7 +2771,7 @@ def test_review_and_merge_verdict_head_mismatch_real_commit_is_recoverable(
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(
         pi_session, "run_review",
-        lambda *a, **k: _pass_verdict_text(head="other-real-commit"),
+        lambda *a, **k: _review_session(_pass_verdict_text(head="other-real-commit")),
     )
     monkeypatch.setattr(review_merge, "merge_gate", gate)
     make_fake_gh(monkeypatch)
@@ -2770,7 +2798,7 @@ def test_review_and_merge_unknown_verdict_head_retries_then_is_terminal(
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(
         seam, "run_review",
-        lambda *a, **k: _pass_verdict_text(head="unknown-object"),
+        lambda *a, **k: _review_session(_pass_verdict_text(head="unknown-object")),
     )
     monkeypatch.setattr(seam, "merge_gate", gate)
     make_fake_gh(monkeypatch)
@@ -2814,7 +2842,7 @@ def test_unknown_verdict_head_budget_resets_after_clean_review_round(
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(
-        seam, "run_review", lambda *a, **k: verdict["text"],
+        seam, "run_review", lambda *a, **k: _review_session(verdict["text"]),
     )
     monkeypatch.setattr(
         seam, "run_command",
@@ -2870,7 +2898,7 @@ def test_review_and_merge_clean_verdict_without_head_advance_keeps_frozen_head(
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [],
     )
-    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
 
     def fake_gate(worktree, pr, base_branch, *, repo_dir, **_kwargs):
         calls.append(("gate", pr["head_oid"], repo_dir))
@@ -2903,7 +2931,7 @@ def test_review_and_merge_keeps_merged_when_checkout_sync_fails(
     calls = []
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
         review_merge, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
     )
@@ -2948,7 +2976,7 @@ def test_review_and_merge_findings_labels_fix_needed_and_comments(
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(
-        pi_session, "run_review", lambda *a, **k: _findings_verdict_text(),
+        pi_session, "run_review", lambda *a, **k: _review_session(_findings_verdict_text()),
     )
     monkeypatch.setattr(review_merge, "merge_gate", lambda *a, **k:
                         (_ for _ in ()).throw(AssertionError("no merge")))
@@ -2989,7 +3017,7 @@ def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
         review_merge, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
@@ -3036,7 +3064,7 @@ def test_review_gate_comment_outage_never_blocks_fix_needed(
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(
-        pi_session, "run_review", lambda *a, **k: _pass_verdict_text())
+        pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
         review_merge, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
@@ -3069,13 +3097,16 @@ def test_review_gate_comment_outage_never_blocks_fix_needed(
                         "remove": "ai-pr-opened"}
 
 
-def _install_base_probe(monkeypatch, ancestor: list) -> None:
-    """Reuse `make_fake_gh` and answer the round-start merge-base probe.
+def _install_base_probe(monkeypatch, ancestor: list, *,
+                        pr_mergeable: str = "CONFLICTING") -> None:
+    """Answer the absorb arm and the gate-time merge-base re-read.
 
-    `ancestor` is a per-read queue: one entry per
-    `git merge-base --is-ancestor` the runner issues. True = the base is
-    contained; an int is the exit code (1 = behind — real git's normal
-    negative, 128 = unreadable — the non-answer `_is_ancestor`
+    Issue #1626: the round-start absorb arm reads GitHub's mergeability
+    (`gh pr view --json mergeable`), so `pr_mergeable` answers that read.
+    `ancestor` is a per-read queue for the gate-time
+    `git merge-base --is-ancestor` re-read: one entry per call. True = the
+    base is contained; an int is the exit code (1 = behind — real git's
+    normal negative, 128 = unreadable — the non-answer `_is_ancestor`
     re-raises). The runner's `_is_ancestor` resolves the command through
     the same seam, so this drives the REAL gitops check with no
     runner-module patch (the patch ratchet, Issue #789)."""
@@ -3083,6 +3114,9 @@ def _install_base_probe(monkeypatch, ancestor: list) -> None:
     gh_fake = seam.run_command
 
     def fake_run(command, **kwargs):
+        if (command[0] == "gh" and command[1] == "pr"
+                and command[2] == "view"):
+            return json.dumps({"mergeable": pr_mergeable})
         if command[0] == "git" and command[1] == "merge-base":
             answer = ancestor.pop(0)
             if answer is True:
@@ -3106,9 +3140,9 @@ def test_review_and_merge_absorb_abandon_is_machine_named(
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(seam, "run_review",
-                        lambda *a, **k: _pass_verdict_text())
-    # Behind at round start (the arm) and still behind at gate time.
-    _install_base_probe(monkeypatch, [1, 1])
+                        lambda *a, **k: _review_session(_pass_verdict_text()))
+    # CONFLICTING at round start (the arm) and still behind at gate time.
+    _install_base_probe(monkeypatch, [1])
     monkeypatch.setattr(
         seam, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
@@ -3150,24 +3184,25 @@ def test_review_and_merge_absorb_abandon_is_machine_named(
                                  "remove": "ai-pr-opened"})
 
 
-def test_review_and_merge_unreadable_base_probe_leaves_round_unarmed(
+def test_review_and_merge_unreadable_mergeability_leaves_round_unarmed(
         monkeypatch, tmp_path):
-    """Issue #877: an unreadable local ref (merge-base exits 128, the
-    non-answer `_is_ancestor` re-raises) degrades the arm, never invents a
-    violation — the round keeps today's plain recoverable comment and the
-    gate's own fresh-fetch ancestor check still guards the merge."""
+    """Issue #877/#1626: an unreadable mergeability read degrades the arm,
+    never invents a violation — the round keeps today's plain recoverable
+    comment and the gate's own fresh-fetch ancestor check still guards the
+    merge."""
     calls = []
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(seam, "run_review",
-                        lambda *a, **k: _pass_verdict_text())
+                        lambda *a, **k: _review_session(_pass_verdict_text()))
     make_fake_gh(monkeypatch)
     gh_fake = seam.run_command
 
     def fake_run(command, **kwargs):
-        if command[0] == "git" and command[1] == "merge-base":
+        if (command[0] == "gh" and command[1] == "pr"
+                and command[2] == "view"):
             raise subprocess.CalledProcessError(
-                128, command, output="", stderr="fatal: not a git repository",
+                1, command, output="", stderr="gh: not found",
             )
         return gh_fake(command, **kwargs)
 
@@ -3211,9 +3246,10 @@ def test_review_and_merge_gate_time_probe_unreadable_keeps_plain_comment(
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(seam, "run_review",
-                        lambda *a, **k: _pass_verdict_text())
-    # Armed at round start (exit 1); the gate-time re-read is unreadable.
-    _install_base_probe(monkeypatch, [1, 128])
+                        lambda *a, **k: _review_session(_pass_verdict_text()))
+    # Armed at round start (CONFLICTING); the gate-time re-read is
+    # unreadable (exit 128).
+    _install_base_probe(monkeypatch, [128])
     monkeypatch.setattr(
         seam, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
@@ -3254,10 +3290,10 @@ def test_review_and_merge_midround_base_advance_is_not_a_violation(
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(seam, "run_review",
-                        lambda *a, **k: _pass_verdict_text())
-    # The base is contained at round start (the only probe the runner
-    # issues on this path — the gate itself is a stub).
-    _install_base_probe(monkeypatch, [True])
+                        lambda *a, **k: _review_session(_pass_verdict_text()))
+    # Behind but MERGEABLE at round start: the round is not armed, so the
+    # gate-time probe is never issued (the gate itself is a stub).
+    _install_base_probe(monkeypatch, [], pr_mergeable="MERGEABLE")
     monkeypatch.setattr(
         seam, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
@@ -3305,9 +3341,9 @@ def test_review_and_merge_absorbed_head_is_not_a_violation(
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(seam, "run_review",
-                        lambda *a, **k: _pass_verdict_text())
-    # Behind at round start (the arm), contains the base at gate time.
-    _install_base_probe(monkeypatch, [1, True])
+                        lambda *a, **k: _review_session(_pass_verdict_text()))
+    # CONFLICTING at round start (the arm), contains the base at gate time.
+    _install_base_probe(monkeypatch, [True])
     monkeypatch.setattr(
         seam, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
@@ -3341,7 +3377,7 @@ def test_review_and_merge_ci_failure_labels_fix_needed(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     # Issue #788: the merge gate's one-shot CI read is the only gate.
     # Issue #906: a red check raises the typed GateCIFailure and the
     # message is REWORDED here — control flow must follow the type,
@@ -3389,7 +3425,7 @@ def test_review_and_merge_ci_failure_comment_counts_toward_round_budget(
     calls = []
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
         review_merge, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
@@ -3440,7 +3476,7 @@ def test_review_and_merge_preexisting_ci_failure_is_not_swallowed(
     calls = []
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(seam, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(seam, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
         seam, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
@@ -3497,6 +3533,392 @@ def test_review_and_merge_deferred_gate_writes_nothing(
         scene=_scene(),
     ) is False
     assert calls == []
+
+def test_review_record_records_the_reviewed_head_and_body_hash_on_deferral(
+        monkeypatch, tmp_path):
+    """Issue #1626: a pass whose merge is deferred records the re-frozen
+    head and the hash of the Issue body the session was rendered against,
+    so the next tick can merge without another session."""
+    _seed_run_state(tmp_path)
+    body_sha = "b" * 64
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(
+        pi_session, "run_review",
+        lambda *a, **k: _review_session(_pass_verdict_text(), body_sha),
+    )
+    monkeypatch.setattr(
+        review_merge, "merge_gate",
+        lambda *a, **k: (_ for _ in ()).throw(
+            review_merge.DeliveryDeferred("CI pending"),
+        ),
+    )
+    make_fake_gh(monkeypatch)
+    assert review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+        scene=_scene(),
+    ) is False
+    assert run_state.read_reviewed(tmp_path) == ("h1", body_sha)
+
+
+def test_review_record_is_dropped_on_findings_even_if_the_session_wrote_one(
+        monkeypatch, tmp_path):
+    """Issue #1626: only a pass may authorize a merge; a findings round
+    deletes the record even when the session wrote one."""
+    _seed_run_state(tmp_path)
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
+
+    def forged_session(*a, **k):
+        run_state.record_reviewed(tmp_path, "h1", "f" * 64)
+        return _review_session(_findings_verdict_text())
+
+    monkeypatch.setattr(pi_session, "run_review", forged_session)
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
+    monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    make_fake_gh(monkeypatch)
+    assert review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+        scene=_scene(),
+    ) is False
+    assert run_state.read_reviewed(tmp_path) is None
+
+
+def test_review_record_is_dropped_on_a_malformed_verdict(
+        monkeypatch, tmp_path):
+    """Issue #1626: a raise (here a malformed verdict) deletes the record
+    even when the session wrote one."""
+    _seed_run_state(tmp_path)
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
+
+    def forged_session(*a, **k):
+        run_state.record_reviewed(tmp_path, "h1", "f" * 64)
+        return _review_session("review without a verdict")
+
+    monkeypatch.setattr(pi_session, "run_review", forged_session)
+    make_fake_gh(monkeypatch)
+    with pytest.raises(ValueError, match="no REVIEW_VERDICT"):
+        review_merge.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4, title="Review task", priority="normal",
+            scene=_scene(),
+        )
+    assert run_state.read_reviewed(tmp_path) is None
+
+
+def test_review_record_is_dropped_when_the_gate_skips_ai_blocked(
+        monkeypatch, tmp_path):
+    """Issue #1626: the ai-blocked gate skip deletes the record; a human
+    decision never inherits a stale pass."""
+    _seed_run_state(tmp_path)
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(
+        pi_session, "run_review",
+        lambda *a, **k: _review_session(_pass_verdict_text()),
+    )
+    monkeypatch.setattr(
+        review_merge, "merge_gate",
+        lambda *a, **k: (_ for _ in ()).throw(
+            review_merge.MergeBlockedByIssueLabel("issue is ai-blocked"),
+        ),
+    )
+    make_fake_gh(monkeypatch)
+    assert review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+        scene=_scene(),
+    ) is False
+    assert run_state.read_reviewed(tmp_path) is None
+
+
+def test_merge_only_resume_merges_without_a_session_and_new_summary(
+        monkeypatch, tmp_path):
+    """Issue #1626: green CI on the recorded head with the same Issue body
+    merges without a review session and reports the deferred pass round."""
+    _seed_run_state(tmp_path)
+    run_state.record_reviewed(tmp_path, "h1", _REVIEW_BODY_SHA)
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
+
+    monkeypatch.setattr(
+        pi_session, "run_review",
+        lambda *a, **k: pytest.fail("no session for a recorded pass"),
+    )
+    gates = []
+    monkeypatch.setattr(
+        review_merge, "merge_gate",
+        lambda *a, **k: gates.append("gate") or {**_pr(), "merged": True},
+    )
+    monkeypatch.setattr(
+        review_merge, "confirm_merged",
+        lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
+    )
+    monkeypatch.setattr(review_merge, "sync_base_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    comment = {}
+    monkeypatch.setattr(
+        seam, "comment_issue",
+        lambda number, *, repo, body: comment.update(body=body),
+    )
+    make_fake_gh(monkeypatch)
+    merged = review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+        scene=_scene(),
+        review_record=run_state.read_reviewed(tmp_path),
+        issue_body_sha256=_REVIEW_BODY_SHA,
+    )
+    assert merged is True
+    assert gates == ["gate"]
+    assert "pass recorded on h1; merged after CI" in comment["body"]
+    # Issue #1626: the merge record reports the deferred pass round
+    # (rounds + 1), not the previous count.
+    assert "review_rounds=1" in comment["body"]
+    assert run_state.read_reviewed(tmp_path) is None
+
+
+def test_merge_only_from_record_requires_the_recorded_head(
+        monkeypatch, tmp_path):
+    """Issue #1626: a moved head is not the reviewed one, so a session runs."""
+    _seed_run_state(tmp_path)
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
+    sessions = []
+    monkeypatch.setattr(
+        pi_session, "run_review",
+        lambda *a, **k: sessions.append(1) or _review_session(_pass_verdict_text()),
+    )
+    monkeypatch.setattr(
+        review_merge, "merge_gate",
+        lambda *a, **k: {**_pr(), "merged": True},
+    )
+    monkeypatch.setattr(
+        review_merge, "confirm_merged",
+        lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
+    )
+    monkeypatch.setattr(review_merge, "sync_base_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
+    make_fake_gh(monkeypatch)
+    assert review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+        scene=_scene(),
+        review_record=("other-head", _REVIEW_BODY_SHA),
+        issue_body_sha256=_REVIEW_BODY_SHA,
+    ) is True
+    assert sessions == [1]
+
+
+def test_merge_only_from_record_requires_the_rendered_issue_body(
+        monkeypatch, tmp_path):
+    """Issue #1626: an edited Issue body is a new review input; the record
+    no longer authorizes a merge-only resume."""
+    _seed_run_state(tmp_path)
+    run_state.record_reviewed(tmp_path, "h1", "b" * 64)
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
+    sessions = []
+    monkeypatch.setattr(
+        pi_session, "run_review",
+        lambda *a, **k: sessions.append(1) or _review_session(_pass_verdict_text()),
+    )
+    monkeypatch.setattr(
+        review_merge, "merge_gate",
+        lambda *a, **k: {**_pr(), "merged": True},
+    )
+    monkeypatch.setattr(
+        review_merge, "confirm_merged",
+        lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
+    )
+    monkeypatch.setattr(review_merge, "sync_base_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
+    make_fake_gh(monkeypatch)
+    assert review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+        scene=_scene(),
+        review_record=run_state.read_reviewed(tmp_path),
+        issue_body_sha256="c" * 64,
+    ) is True
+    assert sessions == [1]
+
+
+def test_external_takeover_never_uses_a_record_for_merge_only(
+        monkeypatch, tmp_path):
+    """Issue #1626: an external takeover is never merge-only; the session
+    runs and the triage stop is reached, never the merge gate."""
+    _seed_run_state(tmp_path)
+    run_state.record_reviewed(tmp_path, "def", _REVIEW_BODY_SHA)
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: {
+        "number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
+        "head_ref": "contributor", "head_oid": "def",
+    })
+    sessions = []
+    monkeypatch.setattr(
+        pi_session, "run_review",
+        lambda *a, **k: sessions.append(1) or _review_session(
+            _pass_verdict_text(head="def"),
+        ),
+    )
+    monkeypatch.setattr(
+        review_merge, "merge_gate",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("external must not merge"),
+        ),
+    )
+    monkeypatch.setattr(seam, "pr_delivery_rollup", lambda *a, **k: ("OPEN", []))
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    make_fake_gh(monkeypatch)
+    assert review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+        scene=_scene(external="true", pr_url="u"),
+        review_record=run_state.read_reviewed(tmp_path),
+        issue_body_sha256=_REVIEW_BODY_SHA,
+    ) is False
+    assert sessions == [1]
+
+
+def test_merge_only_gate_failure_clears_the_record_for_the_next_review(
+        monkeypatch, tmp_path):
+    """Issue #1626: a merge-only round that hits red CI still labels
+    ai-fix-needed and clears the record, so the next round reviews rather
+    than merge-only retrying forever."""
+    _seed_run_state(tmp_path)
+    run_state.record_reviewed(tmp_path, "h1", _REVIEW_BODY_SHA)
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(
+        pi_session, "run_review",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("a merge-only round must not run a session"),
+        ),
+    )
+    monkeypatch.setattr(
+        review_merge, "merge_gate",
+        lambda *a, **k: (_ for _ in ()).throw(
+            runner.GateCIFailure("check 'tests' failed on PR #4"),
+        ),
+    )
+    edits = []
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
+    monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: edits.append(k))
+    make_fake_gh(monkeypatch)
+    assert review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+        scene=_scene(),
+        review_record=run_state.read_reviewed(tmp_path),
+        issue_body_sha256=_REVIEW_BODY_SHA,
+    ) is False
+    assert {"repo": "owner/repo", "add": "ai-fix-needed",
+            "remove": "ai-pr-opened"} in edits
+    assert run_state.read_reviewed(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    "mergeable,expect_violation",
+    [("CONFLICTING", True), ("MERGEABLE", False), ("UNKNOWN", False)],
+)
+def test_absorb_contract_arms_only_on_a_conflicting_pr(
+        monkeypatch, tmp_path, mergeable, expect_violation):
+    """Issue #1626: the absorb contract is armed only when the PR is
+    CONFLICTING at round start; a behind-only head is absorbed by the
+    Runner's gate and must not be reported as a violation."""
+    calls = []
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(
+        pi_session, "run_review",
+        lambda *a, **k: _review_session(_pass_verdict_text()),
+    )
+    # The gate-time ancestor re-read says the head is behind.
+    _install_base_probe(monkeypatch, [1], pr_mergeable=mergeable)
+    monkeypatch.setattr(
+        seam, "merge_gate",
+        lambda *a, **k: (_ for _ in ()).throw(
+            review_merge.RecoverableMergeGateError(
+                "PR #4 head h1 is behind latest remote base origin/main (b2)",
+            ),
+        ),
+    )
+    monkeypatch.setattr(seam, "comment_issue",
+        lambda *a, **k: calls.append(("issue", k.get("body"))),
+    )
+    monkeypatch.setattr(failure_report, "comment_pr",
+        lambda *a, **k: calls.append(("pr", k.get("body"))),
+    )
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    assert review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+        scene=_scene(),
+    ) is False
+    assert ("Absorb contract violated" in calls[0][1]) is expect_violation
+
+
+def test_merge_gate_absorb_records_the_absorbed_head_and_defers(
+        monkeypatch, tmp_path):
+    """Issue #1626: the gate's own base absorb updates an existing record
+    to the absorbed head and defers instead of reading the new CI."""
+    _seed_run_state(tmp_path)
+    run_state.record_reviewed(tmp_path, "h1", _REVIEW_BODY_SHA)
+    monkeypatch.setattr(seam, "fetch_base_ref", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "orbi.run_state.assess_base_freshness",
+        lambda _w, _b, *, head, **_k: (
+            run_state.BaseFreshness.ABSORBABLE if head == "h1"
+            else run_state.BaseFreshness.FRESH
+        ),
+    )
+    monkeypatch.setattr(
+        seam, "run_command",
+        _absorb_merge_command_fake([
+            _absorb_pr_state("h1"), _absorb_pr_state("h2"),
+        ]),
+    )
+    with pytest.raises(review_merge.DeliveryDeferred):
+        review_merge.merge_gate(
+            tmp_path, {"number": 4, "head_oid": "h1",
+                       "head_ref": "h", "base_oid": "b1"},
+            "main", repo_dir=tmp_path,
+        )
+    assert run_state.read_reviewed(tmp_path) == ("h2", _REVIEW_BODY_SHA)
+
+
+def test_pending_ci_tick_leaves_the_review_record_untouched(
+        monkeypatch, tmp_path):
+    """Issue #1626: the pre-review CI gate's pending early return never
+    reaches the review round, so the record survives for the merge tick."""
+    _seed_run_state(tmp_path)
+    run_state.record_reviewed(tmp_path, "h2", _REVIEW_BODY_SHA)
+    monkeypatch.setattr(
+        seam, "pr_delivery_rollup",
+        lambda *a, **k: ("OPEN", [{
+            "name": "tests", "status": "IN_PROGRESS", "conclusion": None,
+        }]),
+    )
+    rounds = []
+    monkeypatch.setattr(review_merge, "_run_review_round",
+                        lambda *a, **k: rounds.append(1))
+    monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    runner.delivery_step(
+        PR_URL, {"number": 4, "title": "task"},
+        _review_merge_config(tmp_path), "owner/repo",
+    )
+    assert rounds == []
+    assert run_state.read_reviewed(tmp_path) == ("h2", _REVIEW_BODY_SHA)
 
 
 def test_review_budget_reads_the_scene_round(
@@ -3584,7 +4006,7 @@ def test_base_advance_budget_exhausts_separately(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(seam, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(seam, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
         seam, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
@@ -3619,7 +4041,7 @@ def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
         review_merge, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
@@ -3658,7 +4080,7 @@ def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
 def test_review_and_merge_reraises_non_fixable_gate_error(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
         review_merge, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
@@ -3682,7 +4104,7 @@ def test_review_and_merge_missing_verdict_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(
-        pi_session, "run_review", lambda *a, **k: "review without a verdict",
+        pi_session, "run_review", lambda *a, **k: _review_session("review without a verdict"),
     )
     with pytest.raises(ValueError, match="no REVIEW_VERDICT"):
         make_fake_gh(monkeypatch)
@@ -3891,6 +4313,10 @@ def _run_merge_round(monkeypatch, clone: Path, *, session=None,
         _review_merge_config(clone),
         prompt_review=prompt_file,
     )
+    # Issue #1626: a recorded pass on the same head and rendered body
+    # (this fixture's prompt has no ISSUE_BODY placeholder, so the rendered
+    # body is empty) drives the merge-only resume, exactly like the next
+    # tick's _run_review_round.
     merged = review_merge.review_and_merge_if_clean(
         clone, TASK_BRANCH, "main", config,
         "owner/repo", 4, title="Review task", priority="normal",
@@ -3899,6 +4325,8 @@ def _run_merge_round(monkeypatch, clone: Path, *, session=None,
             external="true" if external else "",
             pr_url=PR_URL if external else "u",
         ),
+        review_record=run_state.read_reviewed(clone),
+        issue_body_sha256=pi_session.issue_body_sha256(""),
     )
     if not merged:
         return None
@@ -4016,9 +4444,20 @@ def test_merge_record_two_engine_fix_rounds_stay_external_zero(
         git(merge_clone, "push", "origin", TASK_BRANCH)
         return _pass_verdict_text(head=_remote_head(merge_clone))
 
-    body = _run_merge_round(
+    # Issue #1626: the pushed fix is never merged in the tick that pushed
+    # it — the round records the pass and defers.
+    assert _run_merge_round(
         monkeypatch, merge_clone, session=fix_session,
         scene_review_round=1,
+    ) is None
+    assert run_state.read_reviewed(merge_clone) == (
+        _remote_head(merge_clone), pi_session.issue_body_sha256(""),
+    )
+
+    # Round 3 (next tick): the merge-only resume on the recorded head — no
+    # session; both fix pushes are the engine's own.
+    body = _run_merge_round(
+        monkeypatch, merge_clone, scene_review_round=1,
     )
     assert body is not None
     assert "external_commits=0" in body
@@ -4244,3 +4683,77 @@ def test_record_pushed_head_degrades_without_the_run_state(
     assert review_merge.read_pushed_head(tmp_path) is None
     assert review_merge.read_pushed_base(tmp_path) is None
     assert "pushed_head_unrecorded" in caplog.text
+
+
+def test_rendered_issue_body_hash_follows_the_template(tmp_path):
+    """Issue #1626: the hash a session records and a merge-only tick
+    compares comes from the same template rule — a prompt that does not
+    consume the Issue body renders an empty one."""
+    body = "the issue body"
+    template = tmp_path / "prompt_review.md"
+    template.write_text("Review.\n{{ISSUE_BODY}}\n", encoding="utf-8")
+    assert pi_session.rendered_issue_body_sha256(template, body) == (
+        pi_session.issue_body_sha256(body)
+    )
+    template.write_text("Review only.\n", encoding="utf-8")
+    assert pi_session.rendered_issue_body_sha256(template, body) == (
+        pi_session.issue_body_sha256("")
+    )
+
+
+def test_run_state_review_record_lifecycle(tmp_path):
+    """Issue #1626: the review record lives in the run state; it is only
+    readable when both fields are non-empty and a corrupt or missing file
+    authorizes nothing."""
+    # No state file: nothing to record, clear, update or read.
+    run_state.record_reviewed(tmp_path, "h1", "b" * 64)
+    run_state.clear_reviewed(tmp_path)
+    run_state.update_reviewed_head(tmp_path, "h2")
+    assert run_state.read_reviewed(tmp_path) is None
+
+    # A valid state with no record: clear/update are no-ops.
+    _seed_run_state(tmp_path)
+    run_state.clear_reviewed(tmp_path)
+    run_state.update_reviewed_head(tmp_path, "h2")
+    assert run_state.read_reviewed(tmp_path) is None
+
+    # A record with both fields reads back and updates.
+    run_state.record_reviewed(tmp_path, "h1", "b" * 64)
+    assert run_state.read_reviewed(tmp_path) == ("h1", "b" * 64)
+    run_state.update_reviewed_head(tmp_path, "h2")
+    assert run_state.read_reviewed(tmp_path) == ("h2", "b" * 64)
+
+    # A partial record authorizes nothing (and update is a no-op).
+    state_path = tmp_path / ".orbi" / "run-state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.pop("reviewed_issue_body_sha256")
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    assert run_state.read_reviewed(tmp_path) is None
+    run_state.update_reviewed_head(tmp_path, "h3")
+    assert run_state.read_reviewed(tmp_path) is None
+
+    # clear_reviewed removes both fields.
+    run_state.record_reviewed(tmp_path, "h1", "b" * 64)
+    run_state.clear_reviewed(tmp_path)
+    assert run_state.read_reviewed(tmp_path) is None
+
+    # A corrupt state file authorizes nothing and never fails the record
+    # lifecycle (the resume readers fail the run separately).
+    state_path.write_text("{bad", encoding="utf-8")
+    assert run_state.read_reviewed(tmp_path) is None
+    run_state.clear_reviewed(tmp_path)
+    run_state.record_reviewed(tmp_path, "h1", "x")
+    run_state.update_reviewed_head(tmp_path, "h2")
+    assert run_state.read_reviewed(tmp_path) is None
+
+
+def test_write_run_state_preserves_the_review_record(tmp_path):
+    """Issue #1626: a run-state refresh keeps the recorded pass and body
+    hash, like the push history."""
+    _seed_run_state(tmp_path)
+    run_state.record_reviewed(tmp_path, "h1", "b" * 64)
+    run_state.write_run_state(RunContext(
+        run_id="99fe00db", issue=4, branch="branch",
+        worktree=tmp_path, source_repo="owner/repo",
+    ))
+    assert run_state.read_reviewed(tmp_path) == ("h1", "b" * 64)

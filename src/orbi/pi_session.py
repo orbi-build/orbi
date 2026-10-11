@@ -10,6 +10,7 @@ state machine (Article 3.3): every dependency is a leaf module, and
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -17,6 +18,7 @@ import os
 import tempfile
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from orbi import config as config_domain
@@ -684,9 +686,41 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
     )
 
 
+@dataclass(frozen=True)
+class ReviewSessionResult:
+    """One review session's stdout plus the Issue body it rendered.
+
+    Issue #1626: the caller records the hash of the body the session was
+    actually given (not a later re-read), so a deferred merge on an
+    unchanged body and head can resume without a second review session.
+    """
+
+    output: str
+    issue_body_sha256: str
+
+
+def issue_body_sha256(issue_body: str) -> str:
+    """The SHA-256 of one review prompt's rendered Issue body (Issue #1626)."""
+    return hashlib.sha256(issue_body.encode("utf-8")).hexdigest()
+
+
+def rendered_issue_body_sha256(prompt_review: Path, issue_body: str) -> str:
+    """The hash of the Issue body a review prompt will render (Issue #1626).
+
+    The template is the authority: when it does not consume
+    {{ISSUE_BODY}} the rendered body is empty, so the hash a session
+    records and the hash a later merge-only tick compares share one rule
+    (a custom prompt without the placeholder keeps the same behavior).
+    """
+    template = prompt_review.read_text(encoding="utf-8")
+    if "{{ISSUE_BODY}}" not in template:
+        return issue_body_sha256("")
+    return issue_body_sha256(issue_body)
+
+
 def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, round: int,
                timeout: int | None = None,
-               progress: Callable[[dict], None] | None = None) -> str:
+               progress: Callable[[dict], None] | None = None) -> ReviewSessionResult:
     """Run one independent review session for a frozen PR.
 
     The session is independent (new process, `prompts/prompt_review.md`, a new
@@ -787,7 +821,7 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
         pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
     if pi_env:
         extra["pi_env"] = pi_env
-    return stream_pi(
+    stream_output = stream_pi(
         command,
         cwd=worktree,
         ctx=ctx,
@@ -806,6 +840,14 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
             model_wait_probe_seconds=config.model_wait_probe_seconds,
         ),
         **extra,
+    )
+    # Issue #1626: the caller records the EXACT body hash this session was
+    # rendered against, so a later tick can merge-only without a session.
+    # The hash is of the rendered body, not a later re-read: the Issue body
+    # may be edited while the session runs.
+    return ReviewSessionResult(
+        output=stream_output,
+        issue_body_sha256=issue_body_sha256(issue_body),
     )
 
 

@@ -209,7 +209,10 @@ def write_run_state(ctx: RunContext) -> None:
     if isinstance(existing, dict):
         state.update({
             key: existing[key]
-            for key in ("pushed_head", "pushed_base")
+            for key in (
+                "pushed_head", "pushed_base",
+                "reviewed_head", "reviewed_issue_body_sha256",
+            )
             if isinstance(existing.get(key), str) and existing[key]
         })
     _write_run_state_file(ctx.worktree, state)
@@ -286,6 +289,91 @@ def _recordable_state(worktree: Path) -> dict | None:
             state_path=str(run_state_path(worktree)), error=error,
         )
     return state
+
+
+def _review_record_state(worktree: Path) -> dict | None:
+    """The run state carrying the review record, or None when unreadable.
+
+    Issue #1626: a missing file means no record exists and a corrupt one is
+    already a delivery failure on the resume readers, so neither may fail
+    the record's own lifecycle (the safe direction is always "no record":
+    the next tick runs a full review).
+    """
+    try:
+        return read_run_state(worktree)
+    except ValueError:
+        return None
+
+
+def record_reviewed(worktree: Path, head: str,
+                    issue_body_sha256: str) -> None:
+    """Record the reviewed head a deferred merge may resume against.
+
+    Issue #1626: written ONCE per clean verdict, before the merge gate.
+    A later tick with a green CI, the same PR head and the same rendered
+    Issue body merges without another review session. A missing run state
+    (a recreated worktree) records nothing, and the next tick reviews.
+    """
+    state = _review_record_state(worktree)
+    if state is None:
+        return
+    state["reviewed_head"] = head
+    state["reviewed_issue_body_sha256"] = issue_body_sha256
+    _write_run_state_file(worktree, state)
+
+
+def clear_reviewed(worktree: Path) -> None:
+    """Delete the review record from the run state.
+
+    Issue #1626: called before every review session and on every
+    review_and_merge_if_clean exit except a DeliveryDeferred, so a stale
+    pass (or one a session wrote) can never authorize a later merge.
+    """
+    state = _review_record_state(worktree)
+    if state is None:
+        return
+    if ("reviewed_head" not in state
+            and "reviewed_issue_body_sha256" not in state):
+        return
+    state.pop("reviewed_head", None)
+    state.pop("reviewed_issue_body_sha256", None)
+    _write_run_state_file(worktree, state)
+
+
+def update_reviewed_head(worktree: Path, head: str) -> None:
+    """Point an EXISTING review record at the merge gate's absorbed head.
+
+    Issue #1626: the gate's own conflict-free base absorb pushes a new head.
+    Only a record that already exists (a reviewed pass, not the
+    ai-awaiting-merge path) is updated; with no record this is a no-op.
+    """
+    state = _review_record_state(worktree)
+    if state is None:
+        return
+    if not _has_reviewed(state):
+        return
+    state["reviewed_head"] = head
+    _write_run_state_file(worktree, state)
+
+
+def read_reviewed(worktree: Path) -> tuple[str, str] | None:
+    """The recorded reviewed head and rendered-Issue-body hash, or None.
+
+    Issue #1626: both fields must be present and non-empty; a partial or
+    corrupt record authorizes nothing and the next tick reviews.
+    """
+    state = _review_record_state(worktree)
+    if state is None or not _has_reviewed(state):
+        return None
+    return state["reviewed_head"], state["reviewed_issue_body_sha256"]
+
+
+def _has_reviewed(state: dict) -> bool:
+    head = state.get("reviewed_head")
+    body_sha = state.get("reviewed_issue_body_sha256")
+    return (isinstance(head, str) and bool(head)
+            and isinstance(body_sha, str) and bool(body_sha))
+
 
 def read_run_state(worktree: Path) -> dict | None:
     """Read the run state file; None when absent, fail fast when corrupt.

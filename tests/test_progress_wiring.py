@@ -1534,6 +1534,10 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
             # fixture is about progress traffic, the counts' real-git
             # evidence lives in test_review_merge.
             return "1"
+        if (command[0] == "gh" and command[1] == "pr"
+                and command[2] == "view"):
+            # Issue #1626: the absorb arm reads the PR mergeability.
+            return json.dumps({"mergeable": "MERGEABLE"})
         if command[0] == "git" and command[1] == "merge-base" \
                 and command[2] == "--is-ancestor":
             # The absorb-contract arm (Issue #877) probes the base
@@ -1570,7 +1574,11 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
         "base_ref": "main", "base_oid": "b1",
         "head_ref": "h", "head_oid": "h1",
     })
-    monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: verdict)
+    monkeypatch.setattr(
+        pi_session, "run_review",
+        lambda *a, **k: pi_session.ReviewSessionResult(
+            output=verdict, issue_body_sha256="0" * 64),
+    )
     # CI-as-gate is exercised in test_review_merge; keep this fixture focused
     # on ProgressPublisher's bypass behavior. Issue #788: the gate's CI read
     # is one-shot inside merge_gate itself, so no separate stub is needed.

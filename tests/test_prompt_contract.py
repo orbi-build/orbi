@@ -431,6 +431,43 @@ def test_prompt_review_md_keeps_the_absorb_contract():
     )
 
 
+# --- Issue #1626: absorb only a CONFLICTING PR; never poll CI after push -------
+
+# A deferred merge must not cost a second review session (Issue #1626): a head
+# that is only behind is absorbed by the Runner's merge gate, so the session
+# absorbs in-session only for a CONFLICTING PR and stops polling checks after
+# it pushes — the Runner reads CI itself before it merges.
+MERGE_DEFERRAL_PROMPT_ITEMS = (
+    ("deferral-absorb-conflicting",
+     "absorb `origin/{{base_branch}}` in-session only when github reports "
+     "the pr"),
+    ("deferral-absorb-mergeable-read",
+     "gh pr view {{pr_number}} --json mergeable"),
+    ("deferral-behind-gate",
+     "a head that is merely behind is absorbed by the runner's merge gate"),
+    ("deferral-no-poll", "poll or wait for the new head's checks"),
+    ("deferral-runner-reads-checks",
+     "the runner reads those checks itself before it merges"),
+)
+
+
+def test_prompt_review_md_absorbs_only_a_conflicting_pr_and_stops_polling():
+    missing = _missing(_text(PROMPT_REVIEW), MERGE_DEFERRAL_PROMPT_ITEMS)
+    assert not missing, (
+        f"prompt_review.md is missing the merge-deferral contract "
+        f"(Issue #1626): {missing}"
+    )
+
+
+def test_prompt_review_md_absorb_contract_is_conflicting_only():
+    """Issue #1626: the machine-checked absorb contract is scoped to a round
+    that starts CONFLICTING — a behind-only round is not armed."""
+    text = _text(PROMPT_REVIEW)
+    assert "a round that starts with the pr `conflicting` must end" in text
+    assert ("a round that starts behind `origin/{{base_branch}}` or facing "
+            "a merge conflict") not in text
+
+
 # --- AGENTS.md (TDD section) ---------------------------------------------------
 
 AGENTS_TDD_ITEMS = (
