@@ -195,7 +195,10 @@ else:
 FAKE_PI_OPS = r"""#!/usr/bin/env python3
 import os, re, subprocess, sys
 args = sys.argv[1:]
-prompt = args[args.index("--system-prompt") + 1]
+prompt_arg = args[args.index("--system-prompt") + 1]
+# Issue #1634: --system-prompt carries a FILE path; Pi reads the
+prompt = (open(prompt_arg, encoding="utf-8").read()
+          if os.path.exists(prompt_arg) else prompt_arg)
 run_id = re.search(r"Run id: `([0-9a-f]{8})`", prompt).group(1)
 cwd = os.getcwd()
 os.makedirs(os.path.join(cwd, ".pi-session"), exist_ok=True)
@@ -237,7 +240,10 @@ sys.stdout.write(
 FAKE_PI_OPS_COMMIT = r"""#!/usr/bin/env python3
 import os, re, subprocess, sys
 args = sys.argv[1:]
-prompt = args[args.index("--system-prompt") + 1]
+prompt_arg = args[args.index("--system-prompt") + 1]
+# Issue #1634: --system-prompt carries a FILE path; Pi reads the
+prompt = (open(prompt_arg, encoding="utf-8").read()
+          if os.path.exists(prompt_arg) else prompt_arg)
 run_id = re.search(r"Run id: `([0-9a-f]{8})`", prompt).group(1)
 cwd = os.getcwd()
 os.makedirs(os.path.join(cwd, ".pi-session"), exist_ok=True)

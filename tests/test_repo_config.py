@@ -25,6 +25,7 @@ import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 from seam import resume_deps, seam
 from orbi.delivery_scene import RunContext
+from conftest import rendered_prompt
 
 
 def _b64(text: str) -> str:
@@ -1064,7 +1065,7 @@ def test_run_pi_injects_repo_context_files(monkeypatch, tmp_path):
         ),
         config,
     ) == "done"
-    system_prompt = calls[0][calls[0].index("--system-prompt") + 1]
+    system_prompt = rendered_prompt(calls[0])
     assert str(tmp_path / "AGENTS.md") in system_prompt
 
 

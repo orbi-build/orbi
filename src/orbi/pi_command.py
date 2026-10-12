@@ -9,12 +9,16 @@ implementer and review commands from a single call to
 redacted `log_command` together, so the journal can no longer misreport
 what was launched.
 
-The module is pure — no I/O, no subprocess, no import of `orbi.runner` —
-so it needs no fake or patch to test. `RunnerConfig` is imported under
-`TYPE_CHECKING` only, the same annotation-only rule `orbi.pi_process`
-follows. `ROLE_IMPLEMENT` lives in `orbi.pi_process` and is imported
-here; this leaf module only moves down the constants `runner` still
-consumes.
+Its one I/O is the system prompt file (Issue #1634): the rendered
+prompt is written into the session dir and only its PATH travels as
+argv, because Linux caps a single argv string at 131072 bytes
+(MAX_ARG_STRLEN) and the review prompt of a long-lived Issue reaches
+~148.7 KB. There is no subprocess and no import of `orbi.runner`,
+so the module still needs no fake or patch to test. `RunnerConfig` is
+imported under `TYPE_CHECKING` only, the same annotation-only rule
+`orbi.pi_process` follows. `ROLE_IMPLEMENT` lives in `orbi.pi_process`
+and is imported here; this leaf module only moves down the constants
+`runner` still consumes.
 """
 from __future__ import annotations
 
@@ -135,7 +139,10 @@ def build_pi_command(
     tool boundary, the optional skill/context-file boundaries, the
     isolated extension flags, the role's `--skill` entries, the
     provider/model flags, then
-    `--print --session-dir <dir> --system-prompt <prompt> <context>`.
+    `--print --session-dir <dir> --system-prompt <prompt-file> <context>`
+    — the prompt is written to `<session_dir>/system-prompt.md` (UTF-8,
+    the dir created when absent) and the flag carries that PATH, never
+    the text (Issue #1634).
     `tools=True` leaves Pi's default tool set, `tools=False` adds
     `--no-tools`, and `tools="<a,b,c>"` adds `--tools <a,b,c>` — the
     read-only allowlist of one role (Issue #1576, `orbi suggest`).
@@ -174,10 +181,27 @@ def build_pi_command(
         *(["--no-skills"] if no_skills else []),
         *(["--no-context-files"] if no_context_files else []),
     ]
+    # Issue #1634: NEVER pass the rendered prompt as an argv string.
+    # Linux limits ONE argv string to 131072 bytes (MAX_ARG_STRLEN): the
+    # review prompt of a long-lived Issue (template + Issue body + the
+    # ISSUE_COMMENTS block) reaches ~148.7 KB and the launch failed with
+    # "OSError: [Errno 7] Argument list too long: 'pi'" before Pi
+    # started — every retry rebuilt the same argv and the run was
+    # classified as a dead loop. Pi reads a path given to
+    # --system-prompt itself (resolvePromptInput returns
+    # readFileSync(input) when existsSync(input)), so the prompt is
+    # written into the session dir FIRST and only the path travels. The
+    # file must exist before this function returns: Pi's fallback uses
+    # the string itself when the path does not exist. ".pi-session/" is
+    # in RUNNER_RUNTIME_EXCLUDES, so the file never reaches a commit.
+    session_path = Path(session_dir)
+    session_path.mkdir(parents=True, exist_ok=True)
+    prompt_file = session_path / "system-prompt.md"
+    prompt_file.write_text(system_prompt, encoding="utf-8")
     command = [
         "pi", *boundary_args, *extension_args, *skill_args, *model_args,
         "--print", "--session-dir", str(session_dir),
-        "--system-prompt", system_prompt, context,
+        "--system-prompt", str(prompt_file), context,
     ]
     log_command = [
         "pi", *extension_args, *model_args,

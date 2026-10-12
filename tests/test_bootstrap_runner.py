@@ -37,6 +37,7 @@ import orbi.journal as journal
 from seam import resume_deps, seam
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
+from conftest import rendered_prompt
 
 # Hosted-macOS boundaries; the Ubuntu CI keeps every scene here
 # authoritative. The idle-recovery scenes discover hung tools via
@@ -4285,7 +4286,7 @@ def test_run_pi_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
     config = config_domain.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1")
     pi_session.run_pi(issue, RunContext(run_id=config.run_id, issue=issue["number"], branch="orbi/owner-repo-issue-4", worktree=tmp_path, source_repo="owner/repo"), config)
     command = calls[0]
-    assert command[command.index("--system-prompt") + 1] == "SYSTEM " + str(
+    assert rendered_prompt(command) == "SYSTEM " + str(
         tmp_path / "checkout" / ".orbi" / "base-sync.lock",
     )
 
@@ -4367,7 +4368,7 @@ def test_run_review_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
     pi_session.run_review(RunContext(run_id=config_domain.RunnerConfig(prompt_review=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=()).run_id, issue=4, branch="branch", worktree=tmp_path, source_repo="owner/repo"), {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
          "head_oid": "h1", "head_ref": "h"}, config_domain.RunnerConfig(prompt_review=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=()), 1)
     command = calls[0]
-    assert command[command.index("--system-prompt") + 1] == "REVIEW " + str(
+    assert rendered_prompt(command) == "REVIEW " + str(
         tmp_path / "checkout" / ".orbi" / "base-sync.lock",
     )
 
@@ -4489,7 +4490,7 @@ def test_run_pi_injects_trusted_issue_comments_into_the_prompt(
     assert pi_session.run_pi(issue, RunContext(run_id=config.run_id, issue=issue["number"], branch="orbi/owner-repo-issue-4", worktree=tmp_path, source_repo="owner/repo"), config) == "done"
     assert fetches == [(4, "owner/repo")]
     command = calls[0]
-    system_prompt = command[command.index("--system-prompt") + 1]
+    system_prompt = rendered_prompt(command)
     assert (
         "(1 older trusted comment omitted; showing the 2 most recent)"
         in system_prompt
@@ -4528,7 +4529,7 @@ def test_run_pi_skips_the_comment_fetch_without_the_placeholder(
     pi_session.run_pi({"number": 5, "title": "t", "body": "b"}, RunContext(run_id=config.run_id, issue={"number": 5, "title": "t", "body": "b"}["number"], branch="orbi/owner-repo-issue-5", worktree=tmp_path, source_repo="owner/repo"), config)
     assert fetches == []
     command = calls[0]
-    assert command[command.index("--system-prompt") + 1] == "SYSTEM b"
+    assert rendered_prompt(command) == "SYSTEM b"
 
 
 def test_run_review_refreshes_issue_body_each_round(monkeypatch, tmp_path):
@@ -4543,10 +4544,14 @@ def test_run_review_refreshes_issue_body_each_round(monkeypatch, tmp_path):
         lambda number, fields, *, repo: issue_reads.append((number, fields, repo))
         or {"body": next(bodies)},
     )
-    calls = []
+    prompts = []
     monkeypatch.setitem(
         pi_session.__dict__, "stream_pi",
-        lambda command, **kwargs: calls.append(command) or "ok",
+        # The prompt is read through the FILE the argv names (Issue
+        # #1634) at call time: each round overwrites the same prompt
+        # file in the shared session dir, so the read has to happen
+        # while the round is running.
+        lambda command, **kwargs: prompts.append(rendered_prompt(command)) or "ok",
     )
     config = config_domain.RunnerConfig(
         prompt_review=prompt_path, repo_dir=tmp_path / "checkout",
@@ -4560,7 +4565,6 @@ def test_run_review_refreshes_issue_body_each_round(monkeypatch, tmp_path):
     pi_session.run_review(ctx, pr, config, 1)
     pi_session.run_review(ctx, pr, config, 2)
     assert issue_reads == [(4, "body", "owner/repo"), (4, "body", "owner/repo")]
-    prompts = [call[call.index("--system-prompt") + 1] for call in calls]
     assert prompts == [
         "BODY=old criterion",
         "BODY=new criterion {{BASE_SYNC_LOCK}}",
@@ -4638,7 +4642,7 @@ def test_run_review_combines_current_pr_feedback_with_issue_comments(
         (9, "owner/repo", "inline"),
     ]
     command = calls[0]
-    system_prompt = command[command.index("--system-prompt") + 1]
+    system_prompt = rendered_prompt(command)
     assert (
         "1 older trusted comment omitted; showing the 2 most recent"
         in system_prompt
@@ -4680,7 +4684,7 @@ def test_run_review_pr_feedback_failure_logs_and_keeps_issue_comments(
             {"number": 9, "url": "https://x/pull/9", "base_oid": "b1",
              "head_oid": "h1", "head_ref": "h"}, config, 1,
         )
-    system_prompt = calls[0][calls[0].index("--system-prompt") + 1]
+    system_prompt = rendered_prompt(calls[0])
     assert "issue decision" in system_prompt
     assert "pr_review_feedback_read_failed repo=owner/repo pr=9" in caplog.text
 
@@ -4705,7 +4709,7 @@ def test_run_review_skips_the_comment_fetch_without_the_placeholder(
          "head_oid": "h1", "head_ref": "h"}, config_domain.RunnerConfig(prompt_review=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=()), 1)
     assert fetches == []
     command = calls[0]
-    assert command[command.index("--system-prompt") + 1] == "REVIEW " + str(
+    assert rendered_prompt(command) == "REVIEW " + str(
         tmp_path / "checkout" / ".orbi" / "base-sync.lock",
     )
 
@@ -4725,13 +4729,14 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
     assert pi_session.run_pi(issue, RunContext(run_id=config.run_id, issue=issue["number"], branch="orbi/owner-repo-issue-4", worktree=tmp_path, source_repo="owner/repo"), config) == "done"
     command, kwargs = calls[0]
     assert command[:5] == ["pi", "--no-extensions", "--skill", "skill.md", "--print"]
-    assert "owner/repo" in command[8]
-    assert " 4 " in command[8]
-    assert "Fix title" in command[8]
-    assert "Fix body" in command[8]
-    assert "context.md" in command[8]
-    assert "skill.md" in command[8]
-    assert command[8].endswith(
+    system_prompt = rendered_prompt(command)
+    assert "owner/repo" in system_prompt
+    assert " 4 " in system_prompt
+    assert "Fix title" in system_prompt
+    assert "Fix body" in system_prompt
+    assert "context.md" in system_prompt
+    assert "skill.md" in system_prompt
+    assert system_prompt.endswith(
         "main abc123def456 run1 "
         + str(tmp_path / "checkout" / ".orbi" / "base-sync.lock"),
     )
@@ -4764,8 +4769,9 @@ def test_run_pi_redacts_prompt_and_issue_from_command_log(monkeypatch, tmp_path)
     monkeypatch.setattr(pi_session, "stream_pi", lambda command, **kwargs: calls.append((command, kwargs)) or "done")
     pi_session.run_pi({"number": 5, "title": "secret", "body": "token"}, RunContext(run_id=config_domain.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1").run_id, issue={"number": 5, "title": "secret", "body": "token"}["number"], branch="orbi/owner-repo-issue-5", worktree=tmp_path, source_repo="owner/repo"), config_domain.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1"))
     command, kwargs = calls[0]
-    assert "PRIVATE SYSTEM" in command[6]
-    assert "token" in command[6]
+    system_prompt = rendered_prompt(command)
+    assert "PRIVATE SYSTEM" in system_prompt
+    assert "token" in system_prompt
     assert kwargs["log_command"] == [
         "pi", "--no-extensions", "--print", "--session-dir",
         str(tmp_path / ".pi-session"),
@@ -17188,7 +17194,10 @@ def test_run_ticket_agent_uses_a_temporary_session_without_git(monkeypatch, tmp_
     calls = []
     monkeypatch.setattr(
         pi_session, "stream_pi",
-        lambda command, **kwargs: calls.append((command, kwargs)) or "copy",
+        # The prompt FILE lives in the session's TemporaryDirectory
+        # (Issue #1634), so it is read while the session is running.
+        lambda command, **kwargs: calls.append(
+            (command, kwargs, rendered_prompt(command))) or "copy",
     )
     result = pi_session.run_ticket_agent(
         {"number": 99, "title": "Launch thread", "body": "Write copy"},
@@ -17196,12 +17205,12 @@ def test_run_ticket_agent_uses_a_temporary_session_without_git(monkeypatch, tmp_
         "o/r",
     )
     assert result == "copy"
-    command, kwargs = calls[0]
+    command, kwargs, prompt = calls[0]
     assert command[0] == "pi"
     # `pi --no-tools` is the enforcement boundary: a prompt instruction
     # alone cannot ensure the Agent never invokes git/gh or writes files.
     assert "--no-tools" in command
-    assert "git/gh tools" in command[command.index("--system-prompt") + 1]
+    assert "git/gh tools" in prompt
     assert kwargs["cwd"] != tmp_path
     assert kwargs["cwd"].name.startswith("orbi-ticket-")
     assert kwargs["ctx"].branch == "-"

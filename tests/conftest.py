@@ -19,6 +19,21 @@ import orbi.runner as runner
 from seam import seam
 
 
+def rendered_prompt(command: list[str]) -> str:
+    """The system prompt Pi loads from one built argv (Issue #1634).
+
+    `build_pi_command` hands Pi a PATH — the rendered prompt is written
+    to `<session_dir>/system-prompt.md` because Linux caps one argv
+    string at 131072 bytes — and Pi's own `resolvePromptInput` reads the
+    file when the flag value is an existing path, falling back to the
+    string itself when it is not. This helper mirrors that contract for
+    the tests that inspect the prompt CONTENT.
+    """
+    value = command[command.index("--system-prompt") + 1]
+    path = Path(value)
+    return path.read_text(encoding="utf-8") if path.is_file() else value
+
+
 def git(repo: Path, *args: str) -> str:
     """The one fail-fast git scaffold for the smoke/e2e suites (Issue
     #908): a non-zero exit is an AssertionError carrying the rc, stdout
