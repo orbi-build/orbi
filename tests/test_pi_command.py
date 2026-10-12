@@ -8,6 +8,7 @@ neither the system prompt nor the context string may reach a log command.
 The module is pure, so every case constructs a real `RunnerConfig` and
 calls it — no fake, no monkeypatch.
 """
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,12 @@ from orbi.pi_process import ROLE_IMPLEMENT
 SESSION_DIR = Path("/tmp/session/.pi-session")
 SYSTEM_PROMPT = "SYSTEM SECRET"
 CONTEXT = "CONTEXT SECRET"
+
+
+def _prompt_path(session_dir: Path = SESSION_DIR) -> str:
+    """The `--system-prompt` value of one built argv (Issue #1634): a
+    PATH to the prompt file inside the session dir, never the text."""
+    return str(Path(session_dir) / "system-prompt.md")
 
 
 def _configured() -> config_domain.RunnerConfig:
@@ -70,7 +77,7 @@ def test_ticket_command_and_log_with_everything_configured():
         "--provider", "openai", "--model", "gpt-5.6-sol",
         "--thinking", "medium",
         "--print", "--session-dir", str(SESSION_DIR),
-        "--system-prompt", SYSTEM_PROMPT, CONTEXT,
+        "--system-prompt", _prompt_path(), CONTEXT,
     ]
     assert log_command == [
         "pi", *EXTENSION_ARGS,
@@ -94,7 +101,7 @@ def test_implement_command_and_log_with_everything_configured():
         "--provider", "openai", "--model", "gpt-5.6-sol",
         "--thinking", "medium",
         "--print", "--session-dir", str(SESSION_DIR),
-        "--system-prompt", SYSTEM_PROMPT, CONTEXT,
+        "--system-prompt", _prompt_path(), CONTEXT,
     ]
     assert log_command == [
         "pi", *EXTENSION_ARGS,
@@ -117,7 +124,7 @@ def test_review_command_and_log_with_everything_configured():
         "pi", *EXTENSION_ARGS, *REVIEW_SKILL_ARGS,
         "--provider", "strong", "--model", "careful", "--thinking", "high",
         "--print", "--session-dir", str(SESSION_DIR),
-        "--system-prompt", SYSTEM_PROMPT, CONTEXT,
+        "--system-prompt", _prompt_path(), CONTEXT,
     ]
     assert log_command == [
         "pi", *EXTENSION_ARGS,
@@ -152,7 +159,7 @@ def test_unconfigured_command_and_log(
         *(["--no-tools"] if expect_no_tools else []),
         *(["--no-extensions"] if extensions else []),
         "--print", "--session-dir", str(SESSION_DIR),
-        "--system-prompt", SYSTEM_PROMPT, CONTEXT,
+        "--system-prompt", _prompt_path(), CONTEXT,
     ]
     assert log_command == [
         "pi",
@@ -231,7 +238,7 @@ SUGGEST_COMMAND_ARGS = [
     "--provider", "openai", "--model", "gpt-5.6-sol",
     "--thinking", "medium",
     "--print", "--session-dir", str(SESSION_DIR),
-    "--system-prompt", SYSTEM_PROMPT, CONTEXT,
+    "--system-prompt", _prompt_path(), CONTEXT,
 ]
 
 
@@ -270,7 +277,7 @@ UNDERSTANDING_COMMAND_ARGS = [
     "--provider", "openai", "--model", "gpt-5.6-sol",
     "--thinking", "medium",
     "--print", "--session-dir", str(SESSION_DIR),
-    "--system-prompt", SYSTEM_PROMPT, CONTEXT,
+    "--system-prompt", _prompt_path(), CONTEXT,
 ]
 
 
@@ -311,3 +318,46 @@ def test_extension_flags_are_omitted_when_extensions_is_false():
     assert "--no-extensions" not in command
     assert "--extension" not in command
     assert "--no-extensions" not in log_command
+
+
+# ---------------------------------------------------------------------------
+# Issue #1634: the rendered prompt reaches Pi as a FILE, never as argv
+# ---------------------------------------------------------------------------
+
+# Linux's MAX_ARG_STRLEN: one argv element of this size raises
+# `OSError: [Errno 7] Argument list too long` before Pi even starts.
+MAX_ARG_STRLEN = 131072
+OVERSIZED_PROMPT = "S" * 200_000
+
+
+def _oversized_command(session_dir: Path) -> list[str]:
+    command, _log_command = pi_command.build_pi_command(
+        _unconfigured(), ROLE_IMPLEMENT,
+        pi_command.IMPLEMENT_EXCLUDED_SKILLS, session_dir,
+        OVERSIZED_PROMPT, CONTEXT,
+        context_placeholder="<issue-context-redacted>",
+        tools=True, extensions=False,
+    )
+    return command
+
+
+def test_oversized_prompt_is_a_file_inside_the_session_dir(tmp_path):
+    """Acceptance 1 (Issue #1634): a 200,000-byte prompt keeps every
+    argv element under the kernel's per-string limit, `--system-prompt`
+    carries a path inside `session_dir`, and that file's content is the
+    prompt exactly."""
+    session_dir = tmp_path / ".pi-session"
+    command = _oversized_command(session_dir)
+    assert max(len(item.encode("utf-8")) for item in command) < MAX_ARG_STRLEN
+    prompt_path = Path(command[command.index("--system-prompt") + 1])
+    assert prompt_path.parent == session_dir
+    assert prompt_path.read_text(encoding="utf-8") == OVERSIZED_PROMPT
+
+
+def test_oversized_prompt_argv_really_starts_a_process(tmp_path):
+    """Acceptance 2 (Issue #1634): the returned argv really execs — with
+    the executable swapped for `true` the 200,000-byte prompt is no
+    longer an argv string, so no OSError is raised."""
+    command = _oversized_command(tmp_path / ".pi-session")
+    subprocess.run(["true", *command[1:]], check=True, timeout=30)
+

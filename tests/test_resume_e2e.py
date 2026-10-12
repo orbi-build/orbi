@@ -53,7 +53,10 @@ PR_URL = "https://github.com/owner/repo/pull/45"
 FAKE_PI = """#!/usr/bin/env python3
 import os, re, subprocess, sys
 args = sys.argv[1:]
-prompt = args[args.index("--system-prompt") + 1]
+prompt_arg = args[args.index("--system-prompt") + 1]
+# Issue #1634: --system-prompt carries a FILE path; Pi reads the
+prompt = (open(prompt_arg, encoding="utf-8").read()
+          if os.path.exists(prompt_arg) else prompt_arg)
 cwd = os.getcwd()
 os.makedirs(os.path.join(cwd, ".pi-session"), exist_ok=True)
 match = re.search(r"Run id: `([0-9a-f]{8})`", prompt)

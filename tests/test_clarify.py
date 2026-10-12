@@ -59,7 +59,10 @@ args = sys.argv[1:]
 if "--no-tools" in args:
     sys.stdout.write('{"missing": []}')
     sys.exit(0)
-prompt = args[args.index("--system-prompt") + 1]
+prompt_arg = args[args.index("--system-prompt") + 1]
+# Issue #1634: --system-prompt carries a FILE path; Pi reads the
+prompt = (open(prompt_arg, encoding="utf-8").read()
+          if os.path.exists(prompt_arg) else prompt_arg)
 run_id = re.search(r"Run id: `([0-9a-f]{8})`", prompt).group(1)
 cwd = os.getcwd()
 os.makedirs(os.path.join(cwd, ".pi-session"), exist_ok=True)
@@ -96,7 +99,10 @@ args = sys.argv[1:]
 if "--no-tools" in args:
     sys.stderr.write("model unreachable")
     sys.exit(1)
-prompt = args[args.index("--system-prompt") + 1]
+prompt_arg = args[args.index("--system-prompt") + 1]
+# Issue #1634: --system-prompt carries a FILE path; Pi reads the
+prompt = (open(prompt_arg, encoding="utf-8").read()
+          if os.path.exists(prompt_arg) else prompt_arg)
 run_id = re.search(r"Run id: `([0-9a-f]{8})`", prompt).group(1)
 cwd = os.getcwd()
 os.makedirs(os.path.join(cwd, ".pi-session"), exist_ok=True)

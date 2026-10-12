@@ -329,7 +329,10 @@ if gate:
     while not os.path.exists(gate):
         time.sleep(0.05)
 time.sleep(1.0)
-system_prompt = sys.argv[sys.argv.index("--system-prompt") + 1]
+prompt_arg = sys.argv[sys.argv.index("--system-prompt") + 1]
+# Issue #1634: --system-prompt carries a FILE path; Pi reads the file.
+system_prompt = (open(prompt_arg, encoding="utf-8").read()
+                 if os.path.exists(prompt_arg) else prompt_arg)
 if "INDEPENDENT REVIEW" in system_prompt:
     run_id = system_prompt.split("run_id=")[1].split()[0]
     # Issue #591: the verdict names the head it covers (the Runner

@@ -32,6 +32,7 @@ from tests.test_git_merge_smoke import git
 from seam import seam
 import orbi.journal as journal
 from orbi.delivery_scene import RunContext
+from conftest import rendered_prompt
 
 
 @pytest.fixture(autouse=True)
@@ -755,7 +756,7 @@ def test_run_review_launches_independent_readonly_pi_session(monkeypatch, tmp_pa
     session_dir = command[command.index("--session-dir") + 1]
     assert session_dir == str(tmp_path / ".pi-session")
     # Reviewer system prompt carries the frozen PR number and base/head SHA.
-    system_prompt = command[command.index("--system-prompt") + 1]
+    system_prompt = rendered_prompt(command)
     assert " 4 " in system_prompt
     assert "b1" in system_prompt
     assert "h1" in system_prompt
@@ -770,6 +771,59 @@ def test_run_review_launches_independent_readonly_pi_session(monkeypatch, tmp_pa
     assert kwargs["log_command"][-2:] == [
         "<redacted>", "<review-context-redacted>",
     ]
+
+
+def test_run_review_hands_an_oversized_prompt_to_pi_as_a_file(
+    monkeypatch, tmp_path,
+):
+    """Issue #1634: a long-lived Issue's rendered review prompt (template
+    + Issue body + the {{ISSUE_COMMENTS}} block) passes Linux's
+    MAX_ARG_STRLEN, and the spawn then fails with
+    `OSError: [Errno 7] Argument list too long` before Pi starts. The
+    argv the Pi subprocess receives must carry a path, never the text."""
+    prompt_path = tmp_path / "prompt_review.md"
+    prompt_path.write_text(
+        "REVIEW {{ISSUE_BODY}} {{ISSUE_COMMENTS}}", encoding="utf-8",
+    )
+    oversized_comment = "C" * 140_000
+    monkeypatch.setitem(
+        pi_session.__dict__, "issue_view",
+        lambda number, fields, *, repo: {"body": "Issue body"},
+    )
+    monkeypatch.setattr(seam, "issue_comments", lambda number, *, repo: [
+        {"author": {"login": "orbi-build[bot]"},
+         "authorAssociation": "OWNER",
+         "createdAt": "2026-10-12T12:31:13Z", "body": oversized_comment},
+    ])
+    monkeypatch.setattr(seam, "pr_comments", lambda number, *, repo: [])
+    monkeypatch.setattr(seam, "pr_reviews", lambda number, *, repo: [])
+    monkeypatch.setattr(seam, "pr_review_comments", lambda number, *, repo: [])
+    calls = []
+    monkeypatch.setitem(
+        pi_session.__dict__, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "ok",
+    )
+    config = config_domain.RunnerConfig(
+        prompt_review=prompt_path, repo_dir=tmp_path / "checkout",
+        source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4",
+        skills=(),
+    )
+    ctx = RunContext(run_id=config.run_id, issue=4, branch="branch",
+                     worktree=tmp_path, source_repo="owner/repo")
+    pr = {"number": 9, "url": "https://x/pull/9", "base_oid": "b1",
+          "head_oid": "h1", "head_ref": "h"}
+    pi_session.run_review(ctx, pr, config, 1)
+    command = calls[0]
+    # No argv element reaches the kernel's per-string limit (on the
+    # unfixed argv this assertion IS the red failure: the 140 KB comment
+    # sits in the --system-prompt element).
+    assert max(len(item.encode("utf-8")) for item in command) < 131072
+    # The scene is real: the rendered prompt is over the argv limit, so
+    # this test cannot pass on a trivially small prompt.
+    prompt_file = Path(command[command.index("--system-prompt") + 1])
+    rendered = prompt_file.read_text(encoding="utf-8")
+    assert len(rendered.encode("utf-8")) >= 131072
+    assert oversized_comment in rendered
 
 
 # ---------------------------------------------------------------------------
