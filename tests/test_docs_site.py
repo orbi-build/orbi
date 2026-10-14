@@ -346,6 +346,61 @@ def test_non_release_docs_have_question_metadata_and_answer_opening():
         )
 
 
+# Issue #1639: the docs home page is the search entry point for "how do I
+# self-host Orbi" and "how does a GitHub Issue become a release". The
+# frontmatter description keeps the question shape (Issue #1028) inside the
+# search-result budget, and the first body paragraph answers that question:
+# the installation/quickstart guides, an `ai-ready` Issue delivered through
+# tests, independent PR review and merge, then a tagged release published by a
+# release task — never a release per ordinary Issue.
+HOMEPAGE_DESCRIPTION_LIMIT = 155
+
+# (page, installation link, quickstart link, release-task wording)
+HOMEPAGE_ANSWERS = (
+    ("index.mdx", "/installation", "/quickstart", "release task"),
+    ("zh/index.mdx", "/zh/installation", "/zh/quickstart", "发版任务"),
+)
+
+
+def test_docs_homepage_description_and_answer_cover_self_host_and_release():
+    """The docs home description and its answering paragraph must send a
+    reader to the install guides and keep the two distinct outcomes: an
+    `ai-ready` Issue delivered through tests, independent review and merge,
+    and a tagged release published by a release task."""
+    for page, install_link, quickstart_link, release_task in HOMEPAGE_ANSWERS:
+        path = DOCS_DIR / page
+        frontmatter, body = page_frontmatter(path)
+        description = frontmatter["description"].strip().strip('"')
+        assert description, f"{path} needs a non-empty description"
+        assert len(description) <= HOMEPAGE_DESCRIPTION_LIMIT, (
+            f"{path} description is {len(description)} characters (limit "
+            f"{HOMEPAGE_DESCRIPTION_LIMIT}): {description!r}"
+        )
+        assert description.endswith("?"), (
+            f"{path} description must stay question-shaped: {description!r}"
+        )
+
+        opening = next((line.strip() for line in body if line.strip()), "")
+        for link in (install_link, quickstart_link):
+            assert f"]({link})" in opening, (
+                f"{path} answer must link the guide {link}: {opening!r}"
+            )
+            target = (DOCS_DIR / link.lstrip("/")).with_suffix(".mdx")
+            assert target.is_file(), (
+                f"{path} links {link}, which is not a committed docs page "
+                f"({target})"
+            )
+        assert "ai-ready" in opening, (
+            f"{path} answer must keep the `ai-ready` delivery: {opening!r}"
+        )
+        assert release_task in opening, (
+            f"{path} answer must name the release task: {opening!r}"
+        )
+        assert not re.search(
+            r"(each|every)\s+Issue[^.]*releas", opening, re.IGNORECASE
+        ), f"{path} must not promise a release per ordinary Issue: {opening!r}"
+
+
 def load_docs_config() -> dict:
     assert DOCS_CONFIG.is_file(), f"missing Mintlify config: {DOCS_CONFIG}"
     config = json.loads(DOCS_CONFIG.read_text(encoding="utf-8"))

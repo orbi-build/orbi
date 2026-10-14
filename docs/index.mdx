@@ -1,9 +1,9 @@
 ---
 title: "Orbi docs: self-hosted AI coding agent"
-description: "What is Orbi and what does it deliver from a GitHub Issue?"
+description: "How do I install self-hosted Orbi and deliver GitHub Issues through testing, independent PR review, merge, and release?"
 ---
 
-Orbi turns a GitHub Issue into a tested, independently reviewed, and merged pull request.
+Use the [installation](/installation) and [quickstart](/quickstart) guides to self-host Orbi, deliver `ai-ready` GitHub Issues through tests, independent PR review and merge, then publish a tagged release with a release task.
 
 Orbi is a local AI development worker. You put work into GitHub Issues; it automatically claims an `ai-ready` Issue, develops it in an isolated worktree, runs the real test suite, opens a PR, then completes an independent review (with in-session fixes) and merges a clean PR — with the whole delivery recorded in GitHub Issues, comments and the PR itself. The reviewing session can run on a **different model** than the implementing session ([learn how](/workflow#reviewing-with-a-different-model)). This MVP keeps state only in GitHub rather than a database or queue, runs one Issue per tick rather than a daemon, and does not discover repositories or push to protected branches itself. See [/security](/security) for the full boundary list.
 
