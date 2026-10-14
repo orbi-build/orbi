@@ -423,8 +423,9 @@ run marker 旁携带恰好一个隐藏的带版本 block：
 `fix_ticket` 修复失败并重跑该 Issue；`decide` 需要人工决策；
 `check_credentials` 检查并修复凭据后重试；`wait_quota` 等配额窗口重置后
 重试。人类可读的标题、`**Reason:**` 与 `**Action:**` 行与 block 并列；
-milestone 的可见摘要就是同一条有长度上限、不含本机路径的理由——完整的
-命令 stderr 绝不会被截成第一个词。
+milestone 的可见摘要就是同一条有长度上限、不含本机路径的读者说明——理由，
+或在失败带有明确修复路径时使用 Action（Actions workflow 权限拒绝，Issue
+#1651）——完整的命令 stderr 绝不会被截成第一个词。
 
 ## PR body 契约：`Fixes #N`
 

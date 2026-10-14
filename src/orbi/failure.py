@@ -220,6 +220,28 @@ _CREDENTIAL_MISSING_RE = re.compile(
     + r"|credential",
     re.IGNORECASE,
 )
+# The explicit GitHub rejection when a push creates or updates an
+# Actions workflow without the App's `workflows` permission (Issue
+# #1651). GitHub names the workflow path and the missing permission in
+# ONE sentence, so the pattern requires the whole refusal: a generic
+# 403, a non-fast-forward rejection or the bare word `workflow` never
+# matches.
+_WORKFLOW_PERMISSION_RE = re.compile(
+    r"refusing to allow (?:a|the) GitHub App to "
+    r"(?:create or update|update) workflow "
+    r"[`'\"]?[^`'\"\s]+[`'\"]? without "
+    r"[`'\"]?workflows[`'\"]? permission",
+    re.IGNORECASE,
+)
+
+# The reader-facing cause and repair path for that refusal (Issue
+# #1651). One canonical explanation feeds the detailed comment, the
+# terminal progress scene and the short milestone; only the last
+# sentence differs by whether a delivery PR already exists.
+_WORKFLOW_PERMISSION_CAUSE = (
+    "GitHub rejected the push because the current GitHub App credential "
+    "cannot modify Actions workflows"
+)
 _TESTS_FAILED_RE = re.compile(
     r"\btests? failed\b|\d+ failed", re.IGNORECASE,
 )
@@ -266,6 +288,11 @@ def classify(detail: str, *, outcome: str = "blocked",
         reason_code = "review_budget_exhausted"
     elif human_decision:
         reason_code = "human_decision_required"
+    elif _WORKFLOW_PERMISSION_RE.search(detail):
+        # The explicit App/workflows refusal is an authorization the AI
+        # cannot grant: the existing `credential_missing` /
+        # `check_credentials` category, a repair required before retry.
+        reason_code = "credential_missing"
     elif _CREDENTIAL_MISSING_RE.search(detail):
         reason_code = "credential_missing"
     elif _TESTS_FAILED_RE.search(detail):
@@ -285,6 +312,69 @@ def classify(detail: str, *, outcome: str = "blocked",
         retry_safe=retry_safe,
         outcome=outcome,
     )
+
+
+def workflow_permission_refused(detail: str) -> bool:
+    """True only for the explicit GitHub App Actions-workflow refusal.
+
+    The reporter uses this to give that one authorization rejection its
+    own terminal cause and repair path (Issue #1651); every other push
+    failure keeps its existing classification.
+    """
+    return (
+        isinstance(detail, str)
+        and _WORKFLOW_PERMISSION_RE.search(detail) is not None
+    )
+
+
+def workflow_permission_cause() -> str:
+    """The one-sentence cause of an Actions-workflow permission refusal."""
+    return f"{_WORKFLOW_PERMISSION_CAUSE}."
+
+
+def workflow_permission_action(pr_url: str | None = None) -> str:
+    """The concrete human repair path for the workflow refusal.
+
+    The no-PR wording restarts the Issue (`ai-ready`); the existing-PR
+    wording continues the SAME PR (`ai-fix-needed`). Both first remove
+    the terminal `ai-blocked` label and name the App operator only when
+    the reader cannot approve the permission update. The refusal is an
+    external authorization, so no wording promises an automatic restart
+    and none asks the reader to share a token or reinstall the App.
+    """
+    first = (
+        f"{_WORKFLOW_PERMISSION_CAUSE}. Check the App's installation "
+        "settings for a permission update that includes Workflows "
+        "read/write."
+    )
+    if pr_url:
+        return (
+            f"{first} After resolving the permission, remove `ai-blocked` "
+            f"and add `ai-fix-needed` to continue PR {pr_url}. If no update "
+            "is available or the same error persists, contact the App "
+            "operator."
+        )
+    return (
+        f"{first} After resolving the permission, remove `ai-blocked` and "
+        "ensure `ai-ready` is present to run this Issue again. If no "
+        "update is available or the same error persists, contact the App "
+        "operator. No PR has been created."
+    )
+
+
+def terminal_action(record: Failure) -> str:
+    """The reader action for the implement-phase terminal handler.
+
+    An unrecognized failure says the cause could not be determined
+    instead of implying the Issue text is the problem (Issue #1651);
+    every recognized terminal failure keeps the existing generic action.
+    """
+    if record.reason_code == "unclassified":
+        return (
+            "The cause could not be determined from the failure evidence; "
+            "review it and re-run this Issue once the cause is fixed."
+        )
+    return "Fix the failure described below and re-run this Issue."
 
 
 # --------------------------------------------------------------------------
@@ -311,6 +401,21 @@ def _redact_local_paths(value: str) -> str:
     return _LOCAL_PATH_RE.sub("local runner path", value)
 
 
+def _workflow_permission_line(text: str) -> str | None:
+    """The GitHub Actions-workflow refusal line inside bounded stderr.
+
+    The decisive line sits immediately BEFORE Git's generic
+    `error: failed to push some refs`, so the last-line rule would drop
+    it (Issue #1651). Only the explicit App/workflows refusal sentence
+    matches; a non-fast-forward rejection or a bare `workflow` mention
+    does not.
+    """
+    for line in text.splitlines():
+        if _WORKFLOW_PERMISSION_RE.search(line):
+            return line.strip()
+    return None
+
+
 def _failure_summary(reason: str) -> str:
     """Turn a runner exception description into a short reader summary."""
     stderr_match = re.search(r"\s+stderr=(.*)$", reason,
@@ -334,9 +439,14 @@ def _failure_summary(reason: str) -> str:
         summary = "the delivery command failed"
     if stderr:
         # Setup tools often write informational lines before the provider's
-        # concrete error. The final non-empty line is the actionable result.
+        # concrete error. The final non-empty line is the actionable result
+        # — EXCEPT the Actions-workflow refusal, which GitHub prints one
+        # line above Git's generic `failed to push some refs` and which
+        # the classifier recognizes (Issue #1651).
+        refusal_line = _workflow_permission_line(stderr)
         stderr_summary = _redact_local_paths(
-            stderr.rstrip().rsplit("\n", 1)[-1].strip()
+            refusal_line if refusal_line
+            else stderr.rstrip().rsplit("\n", 1)[-1].strip()
         )
         if stderr_summary and stderr_summary not in summary:
             summary = f"{summary}: {stderr_summary}"

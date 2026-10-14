@@ -250,6 +250,24 @@ def github_transient_error() -> subprocess.CalledProcessError:
     )
 
 
+# The captured two-line rejection of Issue #1651: the decisive App/
+# workflows refusal sits immediately ABOVE Git's generic final line.
+WORKFLOW_REFUSAL_STDERR = (
+    " ! [remote rejected] HEAD -> orbi/example-repo-issue-4 "
+    "(refusing to allow a GitHub App to create or update workflow "
+    "`.github/workflows/ci.yml` without `workflows` permission)\n"
+    "error: failed to push some refs to "
+    "'https://github.com/example/repo.git'"
+)
+
+
+def workflow_refusal_error() -> subprocess.CalledProcessError:
+    return subprocess.CalledProcessError(
+        1, ["git", "push", "origin", "HEAD:orbi/example-repo-issue-4"],
+        stderr=WORKFLOW_REFUSAL_STDERR,
+    )
+
+
 CLASSIFY_CASES = (
     (
         "github_transient",
@@ -342,6 +360,96 @@ def test_classify_failure_maps_generic_unrecoverable_to_human_decision():
     )
     assert record.reason_code == "human_decision_required"
     assert record.action_code == "decide"
+
+
+def test_classify_maps_the_actions_workflow_refusal_to_credential_missing():
+    """Issue #1651: the explicit GitHub App/workflows refusal reuses the
+    existing `credential_missing` / `check_credentials` category (a
+    repair is required before retry)."""
+    record = failure.classify(runner._failure_detail(workflow_refusal_error()))
+    assert record.reason_code == "credential_missing"
+    assert record.action_code == "check_credentials"
+    assert record.retry_safe is False
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        # A non-fast-forward rejection is a plain push conflict.
+        " ! [rejected] HEAD -> b (non-fast-forward)\n"
+        "error: failed to push some refs to 'https://github.com/e/r.git'",
+        # A generic 403 without the App/workflows refusal sentence.
+        "remote: HTTP 403",
+        "fatal: unable to access 'https://github.com/e/r.git/': "
+        "The requested URL returned error: 403",
+        # The bare word `workflow` (or a workflow path) is not the refusal.
+        "error: failed to push some refs (workflow)",
+        "diff --git a/.github/workflows/ci.yml",
+        # A transient network failure.
+        "fatal: unable to access 'https://github.com/e/r.git/': "
+        "Could not resolve host: github.com",
+        # An unrecognized error.
+        "totally unexpected",
+    ],
+)
+def test_workflow_permission_refusal_needs_the_full_sentence(detail):
+    assert failure.workflow_permission_refused(detail) is False
+    assert failure.classify(detail).reason_code != "credential_missing"
+
+
+def test_failure_summary_keeps_the_workflow_refusal_above_gits_final_line():
+    """Issue #1651: the decisive refusal line must not be replaced by Git's
+    generic `error: failed to push some refs` final line."""
+    summary = failure._failure_summary(
+        runner._failure_detail(workflow_refusal_error())
+    )
+    assert "refusing to allow a GitHub App" in summary
+    assert "without `workflows` permission" in summary
+    assert "failed to push some refs" not in summary
+
+
+def test_workflow_permission_action_without_a_pr_names_the_ai_ready_repair():
+    action = failure.workflow_permission_action(None)
+    assert "cannot modify Actions workflows" in action
+    assert "Workflows read/write" in action
+    assert "remove `ai-blocked`" in action
+    assert "`ai-ready`" in action
+    assert "contact the App operator" in action
+    assert "No PR has been created." in action
+    # No PR: the reader restarts the Issue, not a delivery PR, and no
+    # automatic restart is promised.
+    assert "ai-fix-needed" not in action
+    assert "automatically" not in action
+
+
+def test_workflow_permission_action_with_a_pr_continues_the_same_pr():
+    url = "https://github.com/orbi-build/orbi/pull/9"
+    action = failure.workflow_permission_action(url)
+    assert "cannot modify Actions workflows" in action
+    assert "remove `ai-blocked`" in action
+    assert "`ai-fix-needed`" in action
+    assert url in action
+    assert "`ai-ready`" not in action
+    assert "No PR has been created." not in action
+    # The fix never asks the reader to reinstall the App or share a token.
+    assert "reinstall" not in action
+    assert "token" not in action
+
+
+def test_terminal_action_unknown_failure_names_the_undetermined_cause():
+    action = failure.terminal_action(failure.classify("totally unexpected"))
+    assert "could not be determined" in action
+    assert "re-run this Issue" in action
+    # The unknown-error explanation never blames the Issue text.
+    assert "Issue text" not in action
+    assert "reword" not in action
+
+
+def test_terminal_action_recognized_failure_keeps_the_generic_action():
+    action = failure.terminal_action(
+        failure.classify("http 500 internal server error")
+    )
+    assert action == "Fix the failure described below and re-run this Issue."
 
 
 def test_classify_failure_reads_a_provider_quota_marker():
@@ -679,6 +787,187 @@ def test_report_delivery_failure_fix_needed_milestone_is_machine_readable(
     )
     assert "- stderr: 3" not in milestone
     assert "3 failed" in milestone
+
+
+# --------------------------------------------------------------------------
+# The Actions-workflow refusal (Issue #1651): all three surfaces agree
+# --------------------------------------------------------------------------
+
+class _RecordingPublisher:
+    """Records the milestone and the terminal progress body in memory."""
+
+    def __init__(self) -> None:
+        self.milestones: list[str] = []
+        self.milestone_blocks: list[str | None] = []
+        self.finish_bodies: list[str] = []
+        self.comment_id = 1
+
+    def milestone(self, body: str, *, block: str | None = None,
+                  **kwargs) -> None:
+        self.milestones.append(body)
+        self.milestone_blocks.append(block)
+
+    def finish(self, body: str) -> None:
+        self.finish_bodies.append(body)
+
+
+def test_report_delivery_failure_workflow_refusal_no_pr_surfaces(monkeypatch):
+    """Acceptance #1651: the detailed comment, terminal progress scene and
+    short milestone each expose the cause and the no-PR repair path; the
+    original refusal stays in collapsed diagnostics; the block identifies a
+    rejected credential."""
+    posted = _capture_comment(monkeypatch)
+    publisher = _RecordingPublisher()
+    outcome = failure_report.report_delivery_failure(
+        workflow_refusal_error(),
+        issue={"number": 1651, "title": "t", "labels": []},
+        source_repo="orbi-build/orbi", run_id="c517c8c7", pr_url=None,
+        worktree=None, branch="b", role=runner.ROLE_IMPLEMENT,
+        action="Fix the failure described below and re-run this Issue.",
+        reason=(
+            "The delivery stopped before it could be completed: "
+            f"{runner._failure_detail(workflow_refusal_error())}"
+        ),
+        diagnosis=runner._failure_detail(workflow_refusal_error()),
+        classify=False, evidence=False, publisher=publisher, finish=True,
+    )
+    assert outcome == "blocked"
+    record = failure.Failure(
+        reason_code="credential_missing", action_code="check_credentials",
+        retry_safe=False, outcome="blocked",
+    )
+    body = posted[0]
+    assert failure.parse(body) == record
+    assert "**Action:** GitHub rejected the push" in body
+    assert "cannot modify Actions workflows" in body
+    assert "Workflows read/write" in body
+    assert "remove `ai-blocked`" in body
+    assert "`ai-ready`" in body
+    assert "No PR has been created." in body
+    # The refusal is not the visible prose but survives in the collapsed
+    # diagnostics, and Git's generic final line did not replace it.
+    assert "refusing to allow a GitHub App" in body
+    assert body.index("refusing to allow a GitHub App") > body.index("<details>")
+    assert body.count("<details>") == 1
+    assert len(publisher.milestones) == 1
+    milestone = publisher.milestones[0]
+    assert "cannot modify Actions workflows" in milestone
+    assert "`ai-ready`" in milestone
+    assert failure.parse(publisher.milestone_blocks[0]) == record
+    assert len(publisher.finish_bodies) == 1
+    finish_body = publisher.finish_bodies[0]
+    assert "What you need to do: GitHub rejected the push" in finish_body
+    assert "cannot modify Actions workflows" in finish_body
+    assert "`ai-ready`" in finish_body
+
+
+def test_report_delivery_failure_workflow_refusal_with_pr_keeps_the_pr(
+    monkeypatch,
+):
+    """Acceptance #1651: an existing delivery PR is preserved and the repair
+    path removes `ai-blocked` then uses `ai-fix-needed` on the SAME PR."""
+    posted = _capture_comment(monkeypatch)
+    url = "https://github.com/orbi-build/orbi/pull/9"
+    outcome = failure_report.report_delivery_failure(
+        workflow_refusal_error(),
+        issue={"number": 1651, "title": "t", "labels": []},
+        source_repo="orbi-build/orbi", run_id=None, pr_url=url,
+        worktree=None, branch="b", role=runner.ROLE_REVIEW,
+        reason=(
+            f"the independent review of PR {url} failed: "
+            f"{runner._failure_detail(workflow_refusal_error())}"
+        ),
+        diagnosis=runner._failure_detail(workflow_refusal_error()),
+        evidence=False,
+    )
+    assert outcome == "blocked"
+    body = posted[0]
+    assert failure.parse(body) == failure.Failure(
+        reason_code="credential_missing", action_code="check_credentials",
+        retry_safe=False, outcome="blocked",
+    )
+    assert url in body
+    assert "remove `ai-blocked`" in body
+    assert "`ai-fix-needed`" in body
+    assert "`ai-ready`" not in body
+    assert "No PR has been created." not in body
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        " ! [rejected] HEAD -> b (non-fast-forward)\n"
+        "error: failed to push some refs to 'https://github.com/e/r.git'",
+        "remote: HTTP 403",
+        "fatal: unable to access 'https://github.com/e/r.git/': "
+        "The requested URL returned error: 403",
+        "fatal: unable to access 'https://github.com/e/r.git/': "
+        "Could not resolve host: github.com",
+        "totally unexpected",
+    ],
+)
+def test_report_delivery_failure_other_push_errors_keep_generic_action(
+    monkeypatch, stderr,
+):
+    """Acceptance #1651: a non-fast-forward rejection, an unrelated 403, a
+    transient network failure and an unrecognized error never receive the
+    workflow-permission instructions."""
+    posted = _capture_comment(monkeypatch)
+    error = subprocess.CalledProcessError(
+        1, ["git", "push", "origin", "HEAD:b"], stderr=stderr,
+    )
+    outcome = failure_report.report_delivery_failure(
+        error,
+        issue={"number": 1651, "title": "t", "labels": []},
+        source_repo="orbi-build/orbi", run_id=None, pr_url=None,
+        worktree=None, branch="b", role=runner.ROLE_IMPLEMENT,
+        action="Fix the failure described below and re-run this Issue.",
+        reason=(
+            "The delivery stopped before it could be completed: "
+            f"{runner._failure_detail(error)}"
+        ),
+        diagnosis=runner._failure_detail(error),
+        classify=False, evidence=False,
+    )
+    assert outcome == "blocked"
+    body = posted[0]
+    assert "**Action:** Fix the failure described below and re-run this " \
+        "Issue." in body
+    assert "cannot modify Actions workflows" not in body
+    assert "Workflows read/write" not in body
+    assert "ai-fix-needed" not in body
+
+
+def test_report_delivery_failure_unknown_error_does_not_blame_the_issue(
+    monkeypatch,
+):
+    """Acceptance #1651: the unrecognized-error explanation says the cause
+    could not be determined and never asserts the Issue text is wrong."""
+    posted = _capture_comment(monkeypatch)
+    error = subprocess.CalledProcessError(
+        1, ["git", "push", "origin", "HEAD:b"], stderr="totally unexpected",
+    )
+    record = failure.classify(runner._failure_detail(error))
+    outcome = failure_report.report_delivery_failure(
+        error,
+        issue={"number": 1651, "title": "t", "labels": []},
+        source_repo="orbi-build/orbi", run_id=None, pr_url=None,
+        worktree=None, branch="b", role=runner.ROLE_IMPLEMENT,
+        action=failure.terminal_action(record),
+        reason=(
+            "The delivery stopped before it could be completed: "
+            f"{runner._failure_detail(error)}"
+        ),
+        diagnosis=runner._failure_detail(error),
+        classify=False, evidence=False,
+    )
+    assert outcome == "blocked"
+    body = posted[0]
+    assert failure.parse(body).reason_code == "unclassified"
+    assert "could not be determined" in body
+    assert "the Issue text" not in body
+    assert "reword" not in body
+    assert "Workflows read/write" not in body
 
 
 # --------------------------------------------------------------------------
