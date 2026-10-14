@@ -817,6 +817,12 @@ def test_report_delivery_failure_workflow_refusal_no_pr_surfaces(monkeypatch):
     original refusal stays in collapsed diagnostics; the block identifies a
     rejected credential."""
     posted = _capture_comment(monkeypatch)
+    # The finish scene counts the Issue review rounds, so the GitHub
+    # read boundary is replaced here: an unstubbed read calls the REAL
+    # gh issue view inside the publish bypass — a live network call and
+    # an authenticated-gh dependency CI does not have, which left the
+    # terminal finish body unpublished there (the red CI scene).
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     publisher = _RecordingPublisher()
     outcome = failure_report.report_delivery_failure(
         workflow_refusal_error(),

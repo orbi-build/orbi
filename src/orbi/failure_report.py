@@ -653,7 +653,7 @@ def report_delivery_failure(
     terminal blocked state is Issue-only), then publish the milestone
     and the terminal progress scene as a pure bypass. The carried
     failure is named `action`, `reason`, and `diagnosis`; the milestone
-    uses the reason so its mobile notification remains useful. Returns
+    uses the reason, or the action for its own #1651 repair path. Returns
     the outcome, `"blocked"` or `"fix needed"`.
 
     `classify=False` forces the terminal branch (the implement-phase
