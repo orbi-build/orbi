@@ -3137,20 +3137,20 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             # The shared terminal reporter: every failure
             # reaching this handler is terminal by design (the
             # recoverable Pi failures have their own handler above), so
-            # it never classifies — `ai-blocked` with the plain
+            # it never classifies the OUTCOME — `ai-blocked` with the plain
             # `Orbi failed` template. The current delivery-state label
             # is derived from the `pr_opened` flag (the only label
             # present at this point): `ai-pr-opened` when the PR
             # transition landed, otherwise `ai-in-progress` (the claim
             # label) — docs/workflow.mdx label lifecycle:
-            # `ai-pr-opened` is removed on terminal failure.
+            # `ai-pr-opened` is removed on terminal failure. The terminal
+            # action is honest about what is known (Issue #1651).
+            terminal_record = _classify_failure(exc, outcome="blocked")
             failure_report.report_delivery_failure(
                 exc, issue=issue, source_repo=source_repo,
                 run_id=run_id, pr_url=None,
                 worktree=worktree, branch=branch, role=ROLE_IMPLEMENT,
-                action=(
-                    "Fix the failure described below and re-run this Issue."
-                ),
+                action=failure_report.terminal_action(terminal_record),
                 reason=(
                     "The delivery stopped before it could be completed: "
                     f"{_failure_detail(exc)}"

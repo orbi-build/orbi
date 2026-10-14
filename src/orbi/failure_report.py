@@ -30,7 +30,7 @@ from orbi.delivery_labels import (
 )
 from orbi.failure import (
     _failure_comment_body, _failure_detail, _failure_summary,
-    _redact_local_paths,
+    _redact_local_paths, terminal_action,
 )
 from orbi.github import (
     _comment_is_trusted, _pr_number, apply_label_patch, comment_issue,
@@ -653,7 +653,7 @@ def report_delivery_failure(
     terminal blocked state is Issue-only), then publish the milestone
     and the terminal progress scene as a pure bypass. The carried
     failure is named `action`, `reason`, and `diagnosis`; the milestone
-    uses the reason so its mobile notification remains useful. Returns
+    uses the reason, or the action for its own #1651 repair path. Returns
     the outcome, `"blocked"` or `"fix needed"`.
 
     `classify=False` forces the terminal branch (the implement-phase
@@ -705,6 +705,19 @@ def report_delivery_failure(
     if diagnosis is None:
         diagnosis = cause or _failure_detail(exc)
     blocked = not classify or is_unrecoverable_failure(exc)
+    # The GitHub App Actions-workflow refusal is an authorization only a
+    # human can grant: it is terminal (`ai-blocked`) whichever path
+    # caught it, and its reader-facing cause and repair differ from the
+    # generic credential wording. One canonical explanation below feeds
+    # the detailed comment, the terminal progress scene and the short
+    # milestone so the three surfaces cannot disagree (Issue #1651).
+    workflow_refusal = failure.workflow_permission_refused(
+        _failure_detail(exc),
+    )
+    if workflow_refusal:
+        blocked = True
+        action = failure.workflow_permission_action(pr_url)
+        reason = failure.workflow_permission_cause()
     # The #825 dead-loop guard, recoverable failures only (blocked is
     # already terminal; `classify=False` is the implement handler's
     # terminal template): the same (run_id, failure fingerprint)
@@ -786,6 +799,14 @@ def report_delivery_failure(
         else issue_labels(number, source_repo)
     )
     evidence_detail = _failure_evidence(worktree, exc) if evidence else ""
+    # The milestone is a short mobile notification: for the workflow
+    # refusal it must carry the same cause AND repair path as the
+    # detailed comment, so it shows the reader-facing action instead of
+    # the bare cause. Computed here, after the #825 guard may have
+    # extended `reason`.
+    milestone_summary = (
+        action if workflow_refusal and action else _failure_summary(reason)
+    )
     if blocked:
         apply_label_patch(
             number, repo=source_repo, event=EVENT_BLOCKED,
@@ -926,7 +947,7 @@ def report_delivery_failure(
         )
         if outcome == "blocked":
             publish(action=lambda: target.milestone(
-                f"blocked: {_failure_summary(reason)}",
+                f"blocked: {milestone_summary}",
                 block=failure.render(failure_record),
             ))
             if classify:
@@ -945,7 +966,7 @@ def report_delivery_failure(
             finish_outcome = "blocked"
         else:
             publish(action=lambda: target.milestone(
-                f"fix needed: {_failure_summary(reason)}",
+                f"fix needed: {milestone_summary}",
                 block=failure.render(failure_record),
             ))
             finish_failure = reason

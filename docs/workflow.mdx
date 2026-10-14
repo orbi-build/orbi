@@ -519,8 +519,10 @@ nothing to fix; `fix_ticket` fixes the failure and re-runs the Issue;
 the credential, then retries; `wait_quota` retries after the quota window
 resets. The readable headline, `**Reason:**` and `**Action:**` lines stay
 beside the block for a human reader, and the milestone's visible summary
-is the same bounded, host-path free reason — a full command stderr is
-never cut to its first word.
+is the same bounded, host-path free reader explanation — the reason, or
+the reader-facing action when the failure carries a specific repair path
+(the Actions-workflow permission refusal, Issue #1651) — a full command
+stderr is never cut to its first word.
 
 ## PR body contract: `Fixes #N`
 
