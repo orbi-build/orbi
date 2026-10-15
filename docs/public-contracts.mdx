@@ -1,0 +1,146 @@
+---
+title: "Public contracts: interfaces, status, and progress formats"
+description: "What can a consumer depend on, and how do the status and progress documents report scope, ownership and safety?"
+---
+
+Everything a consumer — a person, a script, or a hosted product — may depend on is listed on this page; anything not listed here is private implementation and may change without notice.
+
+The [Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md) holds the architectural invariants. This page holds the interface specifications: the public inventory and the exact formats of the status observation and the progress summary. It is the single public inventory entry point.
+
+## The contract principle
+
+- A consumer may rely only on an interface that is officially documented here. Private implementation is not a contract.
+- Changing a documented contract requires a documentation update and a release note entry in the same PR; a silent change is a defect even when all tests pass.
+- The inventory is interface specification, not architectural invariant. Adding, editing or removing a row is ordinary interface evolution: it updates this page and the release notes, and it is not a constitutional amendment.
+- A change that alters an architectural invariant still follows Article 7 of the Constitution, exactly as any other article does.
+
+## The public interface inventory
+
+| Surface | Definition |
+|---|---|
+| CLI | `orbi` (one Runner tick), `orbi add`, `orbi suggest`, `orbi status`, `orbi session`, `orbi install-units`, `orbi sync-engine-source`, `orbi doctor`, `orbi check`, `orbi setup`, `orbi milestone` (`milestone set <title>`) |
+| Config | `orbi.toml` fields documented in [Getting started](/getting-started); `.orbi/env` loaded as systemd `EnvironmentFile`; the `pi_providers` JSON file |
+| Deployment | `systemd/orbi@.service` and `systemd/orbi@.timer` templates; `.orbi/` as the run-artifact and lock directory |
+| Label state machine | `labels.toml` (names, colors, descriptions) and `src/orbi/delivery_labels.py` (transitions) |
+| Journal | Every line of a run starts with `[run_id]`; event names and `key=value` fields listed in [Operations](/operations) |
+| Session files | `<worktree>/.pi-session/*.jsonl` |
+| Naming | Branch `orbi/<owner>-<repo>-issue-<N>`; worktree `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>` |
+| GitHub markers | `<!-- orbi:run=<run_id> -->` in every run-scoped comment and PR body; `Fixes #<N>` in the PR body |
+| Run scene | the hidden versioned block `<!-- orbi:scene:v1 {json} -->` in the trusted `Orbi opened PR` comment, rendered and parsed by `src/orbi/scene.py`; the only machine-readable recovery record of a delivery (the human-readable text beside it is display only) |
+| Requirements skill | the directory `integrations/claude-plugin/skills/write-ai-ready-issue/` — `SKILL.md` (how an agent turns a one-line idea into a deliverable Issue) and `fidelity-pass.md` (the independent check that the draft asks for exactly what the person asked) |
+| Suggestions | the document `orbi suggest --json` prints — `{"repo", "base_sha", "session_dir", "suggestions": [{"kind": "existing" or "new", "issue": the Issue number for existing and null for new, "title", "why", "body": the Issue body for new and null for existing}]}`, at most three entries, ordered by priority; `session_dir` is `<deploy_home>/.orbi/suggest/<run_id>/.pi-session/`, holding the run's Pi session JSONL in the same format as delivery session files, and the run directory `<deploy_home>/.orbi/suggest/<run_id>/` is kept after the command exits, on success and on failure — and the skill directory `integrations/claude-plugin/skills/suggest-ai-ready-issues/` that produces it |
+
+Anything not in this table is internal and may change without notice.
+
+## Status observation contract
+
+This section specifies the observation behavior of `orbi status` and `orbi status --follow`. It replaces mtime guessing with attributed, complete records.
+
+### Scope and selection
+
+A status run prints a snapshot of every configured source repository. `--follow` changes how long it observes, not the scope. `--repo OWNER/REPO` selects one configured repository and `--issue N` selects an Issue in it. Issue-only selection is valid when exactly one source repository is configured; with several configured repositories it requires `--repo`. Invalid selectors are rejected before any read happens. The view keeps capacity, slots, queue and recent results, and shows every concurrent active delivery when several run at once.
+
+### Attribution and membership
+
+The observation key is the configured repository plus the Issue number. A repository is never reverse-mapped from a global slug, and the Issue number is matched exactly: Issue 42 must not match Issue 420.
+
+Candidate worktrees are enumerated only when the directory name matches that repository's existing full naming convention, `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>`. The worktree name attributes the run; a complete JSONL session record attributes the session; a complete event timestamp attributes the activity time. Directory or file mtime, filename order and a random run id prove nothing about current execution.
+
+Example: for the configured repository `acme/shop`, Issue 42 matches the prefix `.worktrees/orbi-acme-shop-issue-42-`; the legal eight-hex suffix of `.worktrees/orbi-acme-shop-issue-42-86b57234` gives run `86b57234`. A complete JSONL header `{"type":"session","id":"sess-1","timestamp":"2026-10-15T06:20:00Z"}` gives session `sess-1`; the activity time comes from the corresponding complete activity record.
+
+Activity-row membership comes from the last complete successful GitHub scope read, under the existing Orbi state rules. Local worktrees only attach observations to those Issues: file discovery cannot add an old Issue back to the active set, and before the first successful scope read no activity members are guessed. When an Issue leaves that set, it is read directly and its confirmed exit result is shown through the next successful GitHub refresh; its activity row is then removed. If delivery A completes while delivery B continues, A's retained directory cannot make A active again. Explicit `--issue` follow retains that Issue until Ctrl-C and may show attributed, timed historical observations without claiming that execution is ongoing.
+
+A snapshot reads the last complete attributed observation from each candidate session. Follow keeps per-file offsets in process memory, reuses the complete JSONL parsing, and discovers new worktrees and sessions in the same scope. Incomplete or unattributable records mean "no readable activity", never "idle". If several retained records cannot prove which run is alive, the attributed observations and times are shown with explicit uncertainty; one is never silently chosen. No raw messages are displayed.
+
+Labels, PR and check results, and confirmed completion remain authoritative. A Runner stage may be shown only when a matching existing journal record explicitly associates the same run and the same Issue; otherwise the stage is unknown (null). Stages are never inferred from tool names, and the last line of one instance log file is never assumed to be globally newest. The writer takes its stage from its already bound Runner context.
+
+### Read cycles
+
+Local discovery and incremental reads run on a 0.5-second cycle, with the design target of showing a complete local event in about one second under healthy local conditions. The initial scan establishes the latest observation; later cycles read only new complete records. This is record-level observation, not token streaming and not an end-to-end guarantee.
+
+GitHub state has a separate cycle: it starts immediately and waits 15 seconds after each completed read. Single-Issue scope reads that Issue; repository and all-repository scope paginate open Issues completely through the existing read command and page parser, then apply the existing Orbi state semantics — there is no arbitrary 1/50/200 total limit. A new GitHub task is discovered on this cycle, not necessarily within 0.5 seconds. A previously active task that disappears from the set receives a direct state read before its confirmed result, manual wait or removal is shown. Issue follow keeps its Issue until Ctrl-C.
+
+GitHub reads never block local event presentation: one bounded background read inside the foreground command is enough. State-read cycles never overlap. The last successful view is preserved; after the existing bounded read retries fail, the affected repository and Issue are named and the command exits nonzero. Ctrl-C ends cleanly without an orphan read task. There is no daemon, no persistent cursor or history, and no refresh setting.
+
+The Linux and macOS journal entry points and JSONL sources are the existing ones (`systemd_deploy.py:328-349`, `launchd_deploy.py:80-86,253-274`, `scheduler.py:175-185`, `pi_activity.py:58-90,284-325`, `pi_process.py:1103-1124,1245-1285` at the reviewed baseline). macOS logs have no global ordering guarantee.
+
+### Path policy
+
+A read or edit activity target must normalize to a repository-relative path inside the worktree. An absolute, escaping or unattributable target becomes null. The `RUNNER_RUNTIME_EXCLUDES` paths from `pi_session.py` are excluded — `.orbi/`, `.worktrees/`, `.pi-session/`, `.pi/`, and the root `plan.md`, `test.log` and `verify.md` — together with `.git` metadata and the credential and provider files already identified by existing configuration when they are inside the worktree. Those existing resolved paths are used directly; there is no extra setting and no heuristic filename dictionary. Prose and the hidden block share this check. It publishes paths inside the known boundary; it does not publish file contents and does not promise to detect arbitrary secrets in unknown files.
+
+## Progress summary contract
+
+### The progress block
+
+Each run keeps its one existing progress comment. Its formal start is the existing run marker followed immediately by the `orbi:progress:v1` block, including at finish:
+
+```html
+<!-- orbi:run=86b57234 -->
+<!-- orbi:progress:v1 {"step":"review","reported_at":"2026-10-15T06:20:20Z","activity":{"at":"2026-10-15T06:20:18Z","kind":"read","target":"src/login.ts"}} -->
+```
+
+The version belongs only to the marker. The payload requires `step`, `reported_at` and `activity`.
+
+- `step` is a documented stage or null. Only Runner-confirmed actions set `starting`, `implement`, `review`, `checks`, `merge` and `release`; review includes the reviewer's fixes. An unmapped task type uses null.
+- `reported_at` is the report generation time as a UTC ISO-8601 string and cannot be null. A heartbeat may advance `reported_at` without advancing `activity.at`.
+- `activity` is null when no known activity kind can be published.
+
+### Activity shape
+
+When `activity` is not null, all three keys `at`, `kind` and `target` are required and are never omitted: `at` is the activity's UTC timestamp or null when unknown, `kind` is one of `read`, `edit`, `command` or `analysis`, and `target` is a safe repository-relative path or null.
+
+```json
+{"at":"2026-10-15T06:20:18Z","kind":"read","target":"src/login.ts"}
+```
+
+```json
+{"at":"2026-10-15T06:20:18Z","kind":"command","target":null}
+```
+
+```json
+{"at":"2026-10-15T06:20:18Z","kind":"read","target":null}
+```
+
+`command` and `analysis` keep their kind and activity time with `target: null`; they never expose arguments or text. An unsafe `read` or `edit` target also becomes null while the known kind and time are kept. No known activity is `"activity": null`, never an empty object.
+
+### Report selection
+
+From the complete pagination, first identify the most recently updated formal run record under the existing trusted-publisher and run-scoped comment rules. That candidate does not need a progress block; a quoted or fenced marker is not a formal record. Then select the most recently updated progress comment belonging to that same run and classify its summary as `missing`, `unsupported`, `invalid` or `available`. A started or milestone record does not discard a progress comment already present for the same run.
+
+If that run has no progress comment or no readable summary, another run's summary is not used as its current report. Older content may appear only as explicitly labelled history with its own run and times. The selection chooses the most recently reported run attribution, not the latest start and not a live process. Terminal and manual GitHub facts retain precedence.
+
+### Content and safety rules
+
+One safe value is generated from the structured events, and both the prose and the block are rendered from it. A read or edit target is validated as a repository-relative path; absolute or outside paths, credential locations and internal runtime directories are rejected. Serialization is escaped so a path cannot terminate the HTML comment. A previously assembled command string is never re-sanitized. Prompts, analysis text, source, outputs and secrets are never published in either representation, including at finish; recovery and failure records keep their own existing contract.
+
+### Reader and publication boundary
+
+Readers validate the trusted publisher under the existing author rules, the exact unquoted formal prefix, a supported version and complete pagination. Candidate and run selection, including records with no block, follows Report selection above. PR, check and terminal facts are not duplicated into the payload. There is no current-run pointer, no new run ordering, no second comment stream and no recovery store. Publication remains best effort: its failure cannot relabel, block, skip or fail delivery, review or merge. This is a display contract, not task state.
+
+## Worked examples
+
+### Concurrent Issues
+
+Two configured deliveries run at once. Each Issue shows its own attributed observations, because the observation key includes the repository and the Issue number; the local cycle keeps every concurrent active delivery instead of one current run.
+
+### Retained session
+
+Delivery A finished and its Issue left the last successful GitHub scope read, but its worktree and JSONL are still on disk. A is removed from the activity rows: the retained session is history, not current execution. If A's actual GitHub state changes again and a new scope read includes it, it can appear again.
+
+### New run without a summary
+
+A fresh run record exists — a run marker with no progress block. Its summary is classified `missing`: the run is shown with its own fields, and no other run's summary is used as its report.
+
+### Unsupported or corrupt report
+
+The progress block carries an unknown version or malformed JSON. The summary is classified `unsupported` or `invalid`; the rest of the view is still shown, and the command does not crash.
+
+### Terminal or manual state wins
+
+The Issue is closed or merged, or it is waiting on a confirmed manual action. That GitHub fact is displayed over the local observation, and the local records are never used to claim the delivery is still running.
+
+## What this page does not promise
+
+- Not a second state store: GitHub Issues and labels remain the only state.
+- Not an end-to-end latency guarantee: record-level observation is not token streaming.
+- Not a secret scanner: the path policy filters the known boundary, not arbitrary files.

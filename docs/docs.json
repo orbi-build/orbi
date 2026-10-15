@@ -67,6 +67,7 @@
             "group": "Reference",
             "icon": "book",
             "pages": [
+              "public-contracts",
               "docker",
               "optional-kv-cache",
               "licenses/sustainable-use-license",
@@ -253,6 +254,7 @@
             "group": "参考",
             "icon": "book",
             "pages": [
+              "zh/public-contracts",
               "zh/docker",
               "zh/optional-kv-cache",
               {

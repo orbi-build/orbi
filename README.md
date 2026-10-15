@@ -87,6 +87,7 @@ GitHub Issue (ai-ready)
 | One-time setup (labels, units, transport migration) | [One-time setup](docs/setup.mdx) |
 | Workflow (state chain, labels, P0, Epic, Release) | [Workflow](docs/workflow.mdx) |
 | Operations (timer, journal, unit drift, recovery) | [Operations](docs/operations.mdx) |
+| Public contracts (interface inventory, status and progress formats) | [Public contracts](docs/public-contracts.mdx) |
 | Testing, coverage gates, and remote CI | [Testing](docs/testing.mdx) |
 | Contributing (Issue granularity, KISS/LEAN, PR flow) | [Contributing](docs/contributing.mdx) |
 | Chinese documentation | [docs/zh/](docs/zh/) |

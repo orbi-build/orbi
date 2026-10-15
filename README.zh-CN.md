@@ -106,6 +106,7 @@ GitHub Issue（ai-ready）
 | 一次性 setup（labels、units、transport 迁移） | [One-time setup](docs/zh/setup.mdx) |
 | 工作流（状态链、labels、P0、Epic、Release） | [Workflow](docs/zh/workflow.mdx) |
 | 运维（timer、journal、unit drift、恢复） | [Operations](docs/zh/operations.mdx) |
+| 公开契约（接口清单、状态与进度格式） | [Public contracts](docs/zh/public-contracts.mdx) |
 | 测试与覆盖率门禁、远程 CI | [Testing](docs/zh/testing.mdx) |
 | 贡献（Issue 粒度、KISS/LEAN、PR 流程） | [Contributing](docs/zh/contributing.mdx) |
 | 中文文档 | [docs/zh/](docs/zh/) |
