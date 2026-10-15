@@ -61,13 +61,12 @@ from orbi.runner import (
     validate_config,
     validate_execution_source_repos,
 )
-from orbi import pilot_setup
+from orbi import pilot_setup, status_observe
 from orbi.pilot_slots import HELD_PID_UNKNOWN, slot_occupancy
 from orbi.source_pool import (
     installed_unit_configs as _installed_unit_configs,
     source_pool_lines,
 )
-from orbi.pi_activity import activity_snapshot
 from orbi.session_command import (
     find_session_file,
     follow_session_file,
@@ -195,43 +194,6 @@ def recent_result(repo: str) -> dict | None:
 
 def format_issue(issue: dict) -> str:
     return f"#{issue['number']} {issue['title']} {issue['url']}"
-
-
-def latest_task_worktree(repo_dir: Path, source_repo: str,
-                         number: int) -> Path | None:
-    """Return the newest task worktree for an Issue, or None."""
-    slug = source_repo.replace("/", "-")
-    pattern = f".worktrees/orbi-{slug}-issue-{number}-*"
-    candidates = [
-        path for path in repo_dir.glob(pattern) if path.is_dir()
-    ]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda path: path.stat().st_mtime)
-
-
-def live_activity_lines(repo_dir: Path, source_repo: str,
-                        issue: dict) -> list[str]:
-    """Return the live Pi activity lines for an in-progress Issue."""
-    worktree = latest_task_worktree(repo_dir, source_repo, int(issue["number"]))
-    if worktree is None:
-        return ["    live: no task worktree found"]
-    snapshot = activity_snapshot(worktree / ".pi-session")
-    if snapshot is None:
-        return [
-            "    live: no pi session yet",
-            f"    worktree: {worktree}",
-        ]
-    return [
-        (
-            f"    live: phase={snapshot['phase']} "
-            f"last_activity={snapshot['last_activity'] or '-'} "
-            f"action={snapshot['action'] or '-'} "
-            f"result={snapshot['result'] or '-'}"
-        ),
-        f"    session: {snapshot['session_file']}",
-        f"    worktree: {worktree}",
-    ]
 
 
 def slot_lines(state_dir: Path, capacity: int) -> list[str]:
@@ -510,27 +472,54 @@ def doctor_report(config: config_domain.RunnerConfig, installed_dir: Path | None
     return "\n".join(lines)
 
 
-def status_report(config: config_domain.RunnerConfig) -> str:
+def status_report(config: config_domain.RunnerConfig,
+                  scope: status_observe.StatusScope,
+                  observer: status_observe.StatusObserver) -> str:
+    """Render one scoped status view from the observer's complete reads.
+
+    Capacity/slots, the frozen base and the queue/result summary are
+    kept; the active-delivery section enumerates every concurrent
+    delivery in scope with its attributed local observations. An
+    explicit --issue scope shows that Issue's confirmed GitHub state and
+    its retained, timed observations instead. Every GitHub-backed value
+    comes from the observer's last complete GitHub cycle, so a local
+    render reads no GitHub state.
+    """
     lines = [
         f"capacity: {config.max_concurrency}",
         *slot_lines(config.slot_dir, config.max_concurrency),
     ]
-    for repo in config.source_repos:
+    for repo in scope.repos:
         lines.append(f"source: {repo}")
-        base_sha = freeze_base(config.repo_dir, config.base_branch)
+        base_sha = observer.base.get(repo) or "-"
         lines.append(f"  base: {config.base_branch} {base_sha}")
-        current = current_issue(repo)
-        lines.append(f"  current: {format_issue(current) if current else '-'}")
-        if current is not None:
-            lines.extend(
-                live_activity_lines(config.repo_dir, repo, current),
-            )
-        for name, lookup in (
-            ("ready", ready_issue),
-            ("result", recent_result),
-        ):
-            issue = lookup(repo)
-            lines.append(f"  {name}: {format_issue(issue) if issue else '-'}")
+        if scope.issue is not None:
+            delivery = observer.confirmed.get(repo)
+            if delivery is not None:
+                lines.append(
+                    f"  issue: {status_observe.format_delivery(delivery)}"
+                )
+            lines.extend(status_observe.observation_lines(
+                observer.observations(repo, {scope.issue}).get(scope.issue, []),
+            ))
+        else:
+            deliveries = observer.deliveries.get(repo, [])
+            if not deliveries:
+                lines.append("  active: -")
+            for delivery in deliveries:
+                lines.append(
+                    f"  active: {status_observe.format_delivery(delivery)}"
+                )
+                lines.extend(status_observe.observation_lines(
+                    observer.observations(repo, {delivery.number}).get(
+                        delivery.number, [],
+                    ),
+                ))
+        ready = observer.ready.get(repo)
+        result = observer.result.get(repo)
+        lines.append(f"  ready: {format_issue(ready) if ready else '-'}")
+        lines.append(f"  result: {format_issue(result) if result else '-'}")
+    lines.extend(observer.ended)
     return "\n".join(lines)
 
 
@@ -604,9 +593,24 @@ def main(argv: list[str] | None = None) -> int:
         help="write the suggestions and the repository summary in this "
              "language (default: the repository's own language)",
     )
-    subparsers.add_parser(
+    status_parser = subparsers.add_parser(
         "status", parents=[common],
-        help="show current Issue (with live Pi activity), ready queue and recent result",
+        help="show every active delivery with attributed local activity, "
+             "ready queue and recent result per source repo",
+    )
+    status_parser.add_argument(
+        "--repo", default=None,
+        help="observe exactly this configured source repository",
+    )
+    status_parser.add_argument(
+        "--issue", type=int, default=None,
+        help="observe exactly this Issue (requires --repo when several "
+             "repositories are configured)",
+    )
+    status_parser.add_argument(
+        "--follow", action="store_true",
+        help="keep observing: local events every 0.5s, GitHub state every "
+             "15s, until Ctrl-C",
     )
     session_parser = subparsers.add_parser(
         "session", parents=[common],
@@ -779,7 +783,11 @@ def main(argv: list[str] | None = None) -> int:
         # Every command path (doctor included) enforces the
         # same single-source-repo contract as runner.main, so a config
         # the Runner will reject is reported instead of all-green.
-        validate_execution_source_repos(config.source_repos)
+        # status is the read-only observer: it must cover every
+        # configured repository, so it does not enforce the execution
+        # fan-out contract (Issue #1656).
+        if args.command != "status":
+            validate_execution_source_repos(config.source_repos)
     except (ValueError, pilot_setup.SetupError) as exc:
         if args.command == "setup":
             print(f"setup_failed reason={exc}", file=sys.stderr)
@@ -927,7 +935,48 @@ def main(argv: list[str] | None = None) -> int:
             "ORBI_ACTIVE_MILESTONE --jq .value)"
         )
     else:
-        print(status_report(config))
+        # status is the only remaining subcommand.
+        try:
+            scope = status_observe.parse_scope(
+                config.source_repos, args.repo, args.issue,
+            )
+        except status_observe.StatusSelectorError as exc:
+            print(f"status_failed reason={exc}", file=sys.stderr)
+            return 1
+        observer = status_observe.StatusObserver(
+            config, scope,
+            read_ready=ready_issue, read_result=recent_result,
+            read_base=freeze_base,
+        )
+
+        def render() -> str:
+            return status_report(config, scope, observer)
+
+        def fail(exc: BaseException, last_view: str | None = None) -> None:
+            print(
+                f"status_failed scope={status_observe.scope_label(scope)} "
+                f"reason={exc}",
+                file=sys.stderr,
+            )
+            if last_view:
+                print(last_view)
+
+        # One failure line for the whole observation: the first read, a
+        # render and the follow loop all end the same way with the scope
+        # named and the last complete view kept. Ctrl-C ends cleanly
+        # wherever it lands — the first read and a render are synchronous
+        # too, so the handler covers them and not only the follow loop.
+        try:
+            observer.refresh()
+            if not args.follow:
+                print(render())
+                return 0
+            return status_observe.follow(observer, render, on_error=fail)
+        except KeyboardInterrupt:
+            return 0
+        except status_observe.READ_ERRORS as exc:
+            fail(exc)
+            return 1
     return 0
 
 
