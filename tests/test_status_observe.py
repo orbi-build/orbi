@@ -628,6 +628,57 @@ def test_render_re_reads_no_github_state(tmp_path):
     assert reads == []
 
 
+def test_render_keeps_each_issue_and_run_attributed(tmp_path):
+    """Acceptance: an Issue that rotated implementation -> review run
+    keeps its own attributed runs/sessions while another Issue produces
+    newer files; neither picks up the other's activity."""
+    def write_jsonl(tree_name, session_id, at, target):
+        session = tmp_path / ".worktrees" / tree_name / ".pi-session"
+        session.mkdir(parents=True)
+        (session / "s.jsonl").write_text(
+            json.dumps({
+                "type": "session", "id": session_id,
+                "timestamp": "2026-10-15T06:00:00Z",
+            }) + "\n"
+            + json.dumps({
+                "type": "message", "timestamp": at,
+                "message": {"role": "assistant", "content": [
+                    {"type": "toolCall", "name": "read_file",
+                     "arguments": {"path": target}},
+                ]},
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+    write_jsonl(
+        "orbi-acme-shop-issue-3-aaaaaaaa", "sess-old",
+        "2026-10-15T06:10:00Z", "src/old.ts",
+    )
+    write_jsonl(
+        "orbi-acme-shop-issue-3-bbbbbbbb", "sess-new",
+        "2026-10-15T06:20:00Z", "src/login.ts",
+    )
+    write_jsonl(
+        "orbi-acme-shop-issue-5-cccccccc", "sess-5",
+        "2026-10-15T06:30:00Z", "src/other.ts",
+    )
+    config = _config(tmp_path)
+    scope = observe.parse_scope(config.source_repos)
+    observer = observe.StatusObserver(
+        config, scope, read_issues=lambda repo: [_issue(3), _issue(5)],
+        read_base=lambda repo_dir, branch: "abc123",
+        read_ready=lambda repo: None, read_result=lambda repo: None,
+    )
+    observer.refresh()
+    blocks = cli.status_report(config, scope, observer).split("  active: #")
+    assert len(blocks) == 3
+    assert "run=aaaaaaaa session=sess-old" in blocks[1]
+    assert "run=bbbbbbbb session=sess-new" in blocks[1]
+    assert "run=cccccccc session=sess-5" in blocks[2]
+    assert "run=aaaaaaaa" not in blocks[2]
+    assert "run=bbbbbbbb" not in blocks[2]
+
+
 def test_observer_covers_two_repositories_and_discovers_new_tasks(tmp_path):
     config = _config(tmp_path, repos=("acme/shop", "acme/blog"))
     scope = observe.parse_scope(config.source_repos)
