@@ -45,11 +45,8 @@ from orbi.delivery_labels import (
     PR_OPENED_LABEL,
 )
 from orbi.github import issue_view, parse_paginated_issue_array, run_gh_read_command
-from orbi.pi_activity import (
-    RUNNER_RUNTIME_EXCLUDES,
-    activity_kind_for,
-    read_new_events,
-)
+from orbi.pi_activity import activity_kind_for, read_new_events
+from orbi.progress_summary import safe_target as shared_safe_target
 
 # The two read cycles of the contract (seconds).
 LOCAL_CYCLE_SECONDS = 0.5
@@ -266,50 +263,27 @@ def session_files(worktree: Path) -> list[Path]:
     )
 
 
-def _runtime_excluded(relative: str) -> bool:
-    """True for a Runner-owned runtime path of the shared exclude policy.
-
-    The list itself is the single definition in `pi_activity`
-    (`RUNNER_RUNTIME_EXCLUDES`, the boundary `pi_session` pins and the
-    progress writer reads), never a second copy.
-    """
-    for pattern in RUNNER_RUNTIME_EXCLUDES:
-        name = pattern.rstrip("/")
-        if relative == name or relative.startswith(name + "/"):
-            return True
-    return False
-
-
 def safe_target(worktree: Path, raw: object, *,
                 exclude_paths: frozenset[str] = frozenset()) -> str | None:
     """Return a repository-relative safe activity target, or null.
 
-    The shared path policy: a target inside the worktree is published as
-    its repository-relative form (an absolute one included), while an
-    escaping, outside, .git, internal runtime (the shared
-    RUNNER_RUNTIME_EXCLUDES) and configured credential/provider target
-    becomes null; the known activity kind and time are kept by the
-    caller.
+    The shared path policy, not a second copy of it: the containment
+    rule, the internal `RUNNER_RUNTIME_EXCLUDES` paths, `.git`
+    metadata, the `<`/`>` and control characters and the length cap
+    all come from `progress_summary.safe_target`, the single
+    implementation the published activity uses. This function keeps the
+    stricter rule that `.git` metadata nested in a subdirectory is
+    null as well, and adds the configured credential/provider file; the
+    known activity kind and time are kept by the caller.
     """
-    if not isinstance(raw, str):
+    if isinstance(raw, str):
+        raw = raw.strip()
+    target = shared_safe_target(worktree, raw)
+    if target is None or ".git" in Path(target).parts:
         return None
-    candidate = raw.strip()
-    if not candidate:
+    if os.path.abspath(os.path.join(str(worktree), target)) in exclude_paths:
         return None
-    if os.path.isabs(candidate):
-        candidate = os.path.relpath(
-            os.path.abspath(candidate), os.path.abspath(str(worktree)),
-        )
-    normalized = os.path.normpath(candidate)
-    if normalized in (".", "..") or normalized.startswith("../"):
-        return None
-    if ".git" in Path(normalized).parts:
-        return None
-    if _runtime_excluded(normalized):
-        return None
-    if os.path.abspath(os.path.join(str(worktree), normalized)) in exclude_paths:
-        return None
-    return Path(normalized).as_posix()
+    return target
 
 
 def _item_activity(item: dict) -> tuple[str, str | None] | None:

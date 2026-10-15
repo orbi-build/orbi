@@ -952,20 +952,7 @@ def main(argv: list[str] | None = None) -> int:
         def render() -> str:
             return status_report(config, scope, observer)
 
-        try:
-            observer.refresh()
-            if not args.follow:
-                print(render())
-                return 0
-        except status_observe.READ_ERRORS as exc:
-            print(
-                f"status_failed scope={status_observe.scope_label(scope)} "
-                f"reason={exc}",
-                file=sys.stderr,
-            )
-            return 1
-
-        def on_error(exc: BaseException, last_view: str | None) -> None:
+        def fail(exc: BaseException, last_view: str | None = None) -> None:
             print(
                 f"status_failed scope={status_observe.scope_label(scope)} "
                 f"reason={exc}",
@@ -974,10 +961,22 @@ def main(argv: list[str] | None = None) -> int:
             if last_view:
                 print(last_view)
 
+        # One failure line for the whole observation: the first read, a
+        # render and the follow loop all end the same way with the scope
+        # named and the last complete view kept. Ctrl-C ends cleanly
+        # wherever it lands — the first read and a render are synchronous
+        # too, so the handler covers them and not only the follow loop.
         try:
-            return status_observe.follow(observer, render, on_error=on_error)
+            observer.refresh()
+            if not args.follow:
+                print(render())
+                return 0
+            return status_observe.follow(observer, render, on_error=fail)
         except KeyboardInterrupt:
             return 0
+        except status_observe.READ_ERRORS as exc:
+            fail(exc)
+            return 1
     return 0
 
 

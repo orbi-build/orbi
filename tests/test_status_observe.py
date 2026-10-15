@@ -739,14 +739,17 @@ class _ScriptedObserver:
     clock (its own behavior is covered below).
     """
 
-    def __init__(self, read):
+    def __init__(self, read, due=True):
         self._read = read
+        self._due = due
         self._error = None
+        self.reads = 0
 
     def due(self, timestamp=None):
-        return True
+        return self._due
 
     def start_read(self):
+        self.reads += 1
         self._error = None
         try:
             self._read()
@@ -766,6 +769,19 @@ def test_follow_renders_bounded_cycles(capsys):
     )
     assert rc == 0
     assert capsys.readouterr().out.count("view") == 3
+
+
+def test_follow_keeps_rendering_without_a_due_github_read(capsys):
+    """A cycle that is not due starts no read: the local cycle keeps
+    rendering the last complete reads."""
+    observer = _ScriptedObserver(lambda: None, due=False)
+    rc = observe.follow(
+        observer, lambda: "view", sleep=lambda seconds: None,
+        now=lambda: 0.0, max_cycles=2,
+    )
+    assert rc == 0
+    assert observer.reads == 0
+    assert capsys.readouterr().out.count("view") == 2
 
 
 def test_follow_fails_fast_and_preserves_the_last_view(capsys):
@@ -844,6 +860,14 @@ def _wait_until(predicate, timeout=5.0):
             return
         time.sleep(0.001)
     raise AssertionError("background read did not finish")
+
+
+def test_wait_until_guard_fails_fast_on_a_stuck_predicate():
+    """The wait helper is bounded by construction (Issue #95): a
+    predicate that never becomes true fails the test instead of
+    hanging."""
+    with pytest.raises(AssertionError, match="background read did not finish"):
+        _wait_until(lambda: False, timeout=0.01)
 
 
 def test_background_read_does_not_block_the_rendered_view(tmp_path):

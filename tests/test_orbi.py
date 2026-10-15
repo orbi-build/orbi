@@ -562,6 +562,29 @@ def test_main_status_follow_ends_cleanly_on_ctrl_c(
     ]) == 0
 
 
+def test_main_status_ends_cleanly_on_ctrl_c_during_the_first_read(
+    tmp_path, monkeypatch, capsys,
+):
+    """Ctrl-C during the synchronous first read ends observation cleanly
+    too — no traceback, no failure line, exit 0."""
+    config = tmp_path / "orbi.toml"
+    config.write_text("source_repos = [\"acme/shop\"]\n", encoding="utf-8")
+    _write_prompts(tmp_path)
+
+    class _InterruptedObserver(_NoopObserver):
+        def refresh(self):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        observe, "StatusObserver",
+        lambda config, scope, **kwargs: _InterruptedObserver(),
+    )
+    assert orbi.main(["status", "--config", str(config)]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
 def test_main_doctor_fails_fast_on_multiple_source_repos(tmp_path, caplog):
     """Issue #697: the CLI command paths enforce the Runner's
     single-source-repo contract, so `orbi doctor` reports a config the
