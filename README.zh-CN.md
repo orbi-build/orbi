@@ -2,7 +2,7 @@
 
 # Orbi
 
-**给 GitHub Issue 打个标签，拿回一个审过、已合并的 PR，外加一次发版。**
+**给 GitHub Issue 打个标签，拿回一个审过、已合并的 PR。什么时候发版，由你决定。**
 
 [试用 Orbi Cloud：前 3 次成功合并的交付免费](https://orbi.build/zh/?ref=gh-readme) · 不用自己的服务器，不用绑定信用卡
 
@@ -10,7 +10,7 @@
 
 **看一条真实链路：** [Issue #1367](https://github.com/orbi-build/orbi/issues/1367) → [PR #1370](https://github.com/orbi-build/orbi/pull/1370) → [Release v0.5.47](https://github.com/orbi-build/orbi/releases/tag/v0.5.47)
 
-Orbi 是一个开源的自主编程 agent：给 GitHub Issue 打上 `ai-ready`，它在独立的 worktree 里写代码、开 PR，由独立的评审会话对照 Issue 验收项审查，只合并审过的那个 head，最后打 tag 发版。GitHub Issue 是唯一状态存储——没有数据库、队列或 daemon。
+Orbi 是一个开源的**软件暗工厂（software dark factory）**：面向 GitHub 的软件自动交付系统。你在 Issue 里定义目标和验收标准，打上 `ai-ready`；Orbi 在独立 worktree 中实现、运行测试、开 PR，完成独立审查、修复和合并。你发起发版任务后，Orbi 执行发版门禁、打 tag 并发布 release notes。GitHub Issue 是唯一状态存储——没有数据库、队列或 daemon。
 
 **公开账本：** [已合并 PR](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [已关闭 Issue](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged release](https://github.com/orbi-build/orbi/releases) — 仓库就是记录。
 
@@ -55,7 +55,7 @@ orbi doctor --config orbi.toml  # 6. 验证部署健康
 
 ## 35 秒看完一条链路
 
-就是上面那条链路，从线上 GitHub 页面录制——包含审查否决第一次提交的那一轮：
+下面是另一条真实交付，从线上 GitHub 页面录制，包含首轮审查未通过后的修复：
 
 <video src="https://github.com/user-attachments/assets/1f0d3a62-5fc9-44ae-bf68-b312a6a55f85" controls muted></video>
 

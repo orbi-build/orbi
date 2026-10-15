@@ -2,7 +2,7 @@ English | [简体中文](README.zh-CN.md)
 
 # Orbi
 
-**Label a GitHub Issue. Get back a reviewed, merged PR — and a release.**
+**Label a GitHub Issue. Get back a reviewed, merged PR. Release when you decide.**
 
 [Try Orbi Cloud — 3 merged deliveries free](https://orbi.build/?ref=gh-readme) · no server, no credit card required
 
@@ -10,7 +10,7 @@ English | [简体中文](README.zh-CN.md)
 
 **See one real loop:** [Issue #1367](https://github.com/orbi-build/orbi/issues/1367) → [PR #1370](https://github.com/orbi-build/orbi/pull/1370) → [Release v0.5.47](https://github.com/orbi-build/orbi/releases/tag/v0.5.47)
 
-Orbi is an open-source autonomous coding agent: label a GitHub Issue `ai-ready`, and it writes the code in an isolated worktree, opens a PR, has an independent review session check it against the Issue's acceptance criteria, merges only the reviewed head, and cuts a tagged release. GitHub Issues are the only state store—no database, queue, or daemon.
+Orbi is an open-source **software dark factory**: a software delivery system for GitHub. You define the goal and acceptance criteria in an Issue and label it `ai-ready`; Orbi implements it in an isolated worktree, runs tests, opens a PR, and takes it through independent review, fixes, and merge. When you request a release, Orbi runs the release gates and publishes the tag and release notes. GitHub Issues are the only state store—no database, queue, or daemon.
 
 **Ledger:** [merged PRs](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [closed Issues](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged releases](https://github.com/orbi-build/orbi/releases) — the repository is the record.
 
@@ -44,7 +44,7 @@ orbi doctor --config orbi.toml  # 6. verify deployment health
 
 ## The loop, in 35 seconds
 
-That same loop, recorded from the live GitHub pages — including the review that rejected the first attempt:
+Another real delivery, recorded from the live GitHub pages — including the review that rejected the first attempt:
 
 <video src="https://github.com/user-attachments/assets/1f0d3a62-5fc9-44ae-bf68-b312a6a55f85" controls muted></video>
 
