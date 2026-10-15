@@ -11798,7 +11798,11 @@ def test_stream_pi_live_progress_patches_github_before_child_exits(
         for body in patches
     )
     assert any("- phase: bash" in body for body in patches)
-    assert any("- last action: bash pytest tests/" in body for body in patches)
+    # Issue #1657: the live body carries the versioned summary block and
+    # the safe activity; the raw bash command reaches neither.
+    assert all(body.count("<!-- orbi:progress:v1 ") == 1 for body in patches)
+    assert any("- activity: command" in body for body in patches)
+    assert not any("pytest tests/" in body for body in patches)
 
 
 def test_stream_pi_progress_callback_error_never_interrupts_run(
@@ -11847,7 +11851,9 @@ def test_live_progress_throttle_patches_on_change_and_cadence():
     throttle(first)
     assert len(calls) == 1
     # A visible change: passed immediately.
-    changed = dict(first, phase="test", action="bash pytest tests/")
+    changed = dict(
+        first, phase="test", action="bash pytest tests/", kind="command",
+    )
     throttle(changed)
     assert len(calls) == 2
     # Unchanged again within the cadence: suppressed...
@@ -11857,9 +11863,13 @@ def test_live_progress_throttle_patches_on_change_and_cadence():
     throttle._last_patch -= progress.PI_HEARTBEAT_SECONDS + 1
     throttle(changed)
     assert len(calls) == 3
-    # The rendered body carries the live state.
+    # The rendered body carries the live state (Issue #1657: the readable
+    # activity and the block share the safe value; the raw command never
+    # reaches either).
     assert "- phase: test" in calls[-1]
-    assert "- last action: bash pytest tests/" in calls[-1]
+    assert "- activity: command" in calls[-1]
+    assert "pytest tests/" not in calls[-1]
+    assert calls[-1].count("<!-- orbi:progress:v1 ") == 1
 
 
 def test_live_progress_throttle_patches_on_recovery_change():

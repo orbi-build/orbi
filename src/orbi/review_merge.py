@@ -101,6 +101,7 @@ from orbi.progress import (
     _progress_state,
     _safe_publish,
     run_marker,
+    step_publisher,
 )
 # Machine-readable verdict line the reviewer session must end with, and the
 # bounded size of the review/fix loop (see review-fix-loop skill: max 5 rounds).
@@ -1167,16 +1168,16 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         run_id=config.run_id, issue=number, branch=branch,
         worktree=worktree, source_repo=source_repo,
     )
-    # Ensure is a bypass — a 404 here must not stop the
+    # The step's own updates (this ensure, the merge gate's `checks`
+    # stage, the findings/merged finishes) render through one call shape
+    # (Issue #1657). Publishing is a bypass — a 404 here must not stop the
     # review (the delivery is already open and awaiting review; the
     # journal is the record, the progress comment is observability).
-    publish(
-        action=lambda: publisher.ensure(_progress_body(_progress_state(
-            ctx, title=title, role=ROLE_REVIEW, started=started,
-            pr_url=pr["url"], review_round=round, priority=priority,
-            checks=checks,
-        ))),
+    round_update = step_publisher(
+        publisher, ctx, role=ROLE_REVIEW, title=title,
+        started=started, priority=priority, checks=checks,
     )
+    publish(action=lambda: round_update(pr["url"], round))
     if merge_only or merge_only_from_record:
         verdict = {
             "verdict": "pass", "head": pr["head_oid"],
@@ -1262,20 +1263,14 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
                 f"{verdict['majors']} major(s) for PR #{pr['number']}"
             ),
         )
-        publish(
-            action=lambda: publisher.finish(_progress_body(
-                _progress_state(
-                    ctx, title=title, role=ROLE_REVIEW, started=started,
-                    pr_url=pr["url"], review_round=round,
-                    priority=priority, checks=checks,
-                ), outcome=(
-                    "**Orbi review findings**\n\n"
-                    f"round {round}: {verdict['blockers']} blocker(s), "
-                    f"{verdict['majors']} major(s); the next review "
-                    "session retries the same PR automatically"
-                ),
-            )),
-        )
+        publish(action=lambda: round_update(
+            pr["url"], round, outcome=(
+                "**Orbi review findings**\n\n"
+                f"round {round}: {verdict['blockers']} blocker(s), "
+                f"{verdict['majors']} major(s); the next review "
+                "session retries the same PR automatically"
+            ),
+        ))
         apply_label_patch(
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
             current_labels=issue_labels(number, source_repo),
@@ -1488,6 +1483,13 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         run_state.record_reviewed(
             worktree, refrozen["head_oid"], reviewed_body_sha256,
         )
+    # The Runner has entered the merge gate's CI-check action on the
+    # reviewed head: the one live comment reports that stage before the
+    # gate waits for CI and merges (Issue #1657). Best effort like every
+    # progress update - a publication failure cannot affect the merge.
+    publish(action=lambda: round_update(
+        pr["url"], round, step="checks",
+    ))
     try:
         merged = merge_gate(
             worktree,
@@ -1577,20 +1579,15 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             f"commits={pr_commits})"
         ),
     )
-    publish(
-        action=lambda: publisher.finish(_progress_body(
-            _progress_state(
-                ctx, title=title, role=ROLE_REVIEW, started=started,
-                pr_url=merged["url"], review_round=round,
-                priority=priority, review=review_summary, checks=checks,
-            ), outcome=(
-                "**Orbi delivered**\n\n"
-                f"PR {merged['url']} merged "
-                f"(merge_commit={confirmed['merge_commit']} "
-                f"review_rounds={round})"
-            ),
-        )),
-    )
+    publish(action=lambda: round_update(
+        merged["url"], round, step="merge", review=review_summary,
+        outcome=(
+            "**Orbi delivered**\n\n"
+            f"PR {merged['url']} merged "
+            f"(merge_commit={confirmed['merge_commit']} "
+            f"review_rounds={round})"
+        ),
+    ))
     # The GitHub merge already landed. Record ai-merged before touching
     # the local systemd checkout: a checkout that cannot fast-forward is
     # runner ops, not a failed delivery (must not become ai-blocked).

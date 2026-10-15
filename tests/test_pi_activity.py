@@ -1085,3 +1085,108 @@ def test_parse_scene_round_trips_run_scene():
     assert fields["session_file"] == "/w/.pi-session/sess-1.jsonl"
     assert fields["action"] == "bash pytest tests/"
     assert fields["result"] == "ok"
+
+
+# --- activity kind/target: the publication whitelist (Issue #1657) ---
+
+
+def test_activity_kind_whitelist_maps_tools_to_the_documented_kinds():
+    """Only the whitelisted tool names produce an activity kind; a
+    read/edit names its target, a command does not."""
+    assert pi_activity.activity_kind_for(
+        "read", {"path": "/w/src/login.ts", "offset": 3},
+    ) == ("read", "/w/src/login.ts")
+    assert pi_activity.activity_kind_for(
+        "edit", {"path": "/w/src/login.ts"},
+    ) == ("edit", "/w/src/login.ts")
+    assert pi_activity.activity_kind_for(
+        "write", {"path": "/w/docs/x.mdx"},
+    ) == ("edit", "/w/docs/x.mdx")
+    assert pi_activity.activity_kind_for(
+        "bash", {"command": "pytest -q"},
+    ) == ("command", None)
+    # The reviewed deployment runs the sandbox code-execution tool
+    # (.orbi/pi-agent/settings.json); its arguments are never carried.
+    assert pi_activity.activity_kind_for(
+        "codemode", {"code": "return 1"},
+    ) == ("command", None)
+
+
+def test_activity_kind_is_none_for_an_unknown_tool():
+    """The whitelist is closed: an unmapped tool publishes no activity
+    kind at all, never a guessed one and never its arguments."""
+    assert pi_activity.activity_kind_for(
+        "mystery_tool", {"path": "/w/secret"},
+    ) == (None, None)
+
+
+def test_activity_kind_keeps_the_kind_without_a_usable_path_argument():
+    assert pi_activity.activity_kind_for("read", {"offset": 3}) == (
+        "read", None,
+    )
+    assert pi_activity.activity_kind_for("edit", {"path": ""}) == (
+        "edit", None,
+    )
+
+
+def test_watcher_state_carries_activity_kind_and_target(tmp_path):
+    session = tmp_path / "s.jsonl"
+    write_records(session, [
+        SESSION_RECORD,
+        {
+            "type": "message", "id": "a1",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "toolCall", "id": "t1", "name": "read",
+                     "arguments": {"path": "/w/src/login.ts"}},
+                ],
+            },
+        },
+        TOOL_RESULT,
+    ])
+    watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
+    state = watcher.poll()
+    assert state["kind"] == "read"
+    assert state["target"] == "/w/src/login.ts"
+    assert state["last_activity"] == "2026-01-01T00:00:03Z"
+
+
+def test_watcher_state_analysis_kind_for_assistant_text(tmp_path):
+    session = tmp_path / "s.jsonl"
+    write_records(session, [SESSION_RECORD, ASSISTANT_TEXT])
+    watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
+    state = watcher.poll()
+    assert state["kind"] == "analysis"
+    assert state["target"] is None
+
+
+def test_watcher_state_has_no_kind_for_an_unknown_tool(tmp_path):
+    session = tmp_path / "s.jsonl"
+    write_records(session, [
+        SESSION_RECORD,
+        {
+            "type": "message", "id": "a9",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "toolCall", "id": "t9", "name": "mystery_tool",
+                     "arguments": {"path": "/w/secret"}},
+                ],
+            },
+        },
+    ])
+    watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
+    state = watcher.poll()
+    assert state["kind"] is None
+    assert state["target"] is None
+
+
+def test_watcher_state_has_no_kind_before_any_activity(tmp_path):
+    watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
+    state = watcher.poll()
+    assert state["kind"] is None
+    assert state["target"] is None
+

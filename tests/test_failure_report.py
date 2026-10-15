@@ -23,6 +23,7 @@ import subprocess
 from pathlib import Path
 
 from orbi import failure_report, progress, runner
+from tests.fakes.progress import freeze_report_time
 
 from seam import seam
 
@@ -318,11 +319,15 @@ provider failed
 </details>
 
 <!-- orbi:run=abcdef12 -->
+<!-- orbi:progress:v1 {"step":"review","reported_at":"2026-10-15T06:20:20Z","activity":{"at":"2026-09-28T10:00:00Z","kind":"command","target":null}} -->
 
 **Orbi progress**
 
 - role: review
+- step: review
+- reported at: 2026-10-15T06:20:20Z
 - last activity: 2026-09-28T10:00:00Z
+- activity: command
 - tests: -
 - PR: https://github.com/orbi-build/orbi/pull/7
 
@@ -333,7 +338,6 @@ provider failed
 - priority: normal
 - phase: bash
 - elapsed: 0s
-- last action: bash
 - branch: orbi/orbi-build-orbi-issue-42
 - session: -
 
@@ -478,6 +482,9 @@ def _report(monkeypatch, tmp_path: Path, *, session: bool,
     # The seam fans the read out to every module that binds it, so the
     # golden bodies stay deterministic without pinning one home.
     monkeypatch.setattr(seam, "runner_fingerprint", lambda: "deadbeef")
+    # The versioned progress block carries the report generation time
+    # (Issue #1657): the golden bodies pin it through the clock.
+    freeze_report_time(monkeypatch)
     kwargs = dict(
         issue=dict(ISSUE), source_repo=SOURCE_REPO, run_id=RUN_ID,
         pr_url=PR_URL, worktree=_worktree(tmp_path, session=session),
