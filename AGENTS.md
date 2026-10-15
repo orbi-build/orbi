@@ -9,7 +9,7 @@ mechanism (timer instances, unit drift, transport check, journal fields,
 label lifecycle, claim scans) lives in the docs site (`docs/`,
 <https://docs.orbi.build>) and is linked at the end of the owning section
 for when you need the full picture.
-Architectural invariants and the public surface live in [CONSTITUTION.md](CONSTITUTION.md); when this file and the constitution disagree, the constitution wins.
+Architectural invariants live in [CONSTITUTION.md](CONSTITUTION.md) and the public interface contracts in [docs/public-contracts.mdx](docs/public-contracts.mdx); when this file and the constitution disagree, the constitution wins.
 
 **Documentation is not the source of truth — and neither is the code.** This file,
 `docs/`, the README and every comment describe what the code is meant to do; the

@@ -27,7 +27,8 @@ as a side effect of another change.
    number of systemd timer instances sharing flock slots, nothing more.
 4. Orbi does not know who consumes it. There is no hosted-service protocol,
    no upstream reporting channel and no consumer-specific code path. A hosted
-   product integrates through the public surface in Article 2 only.
+   product integrates through the officially documented public contracts
+   (Article 2) only.
 5. Fail fast. A command error logs the command, exit code, stdout and stderr,
    then raises. There is no fallback path, no silent skip, no retry that hides
    a failure. The Issue ends in `ai-blocked` for a human.
@@ -36,26 +37,20 @@ as a side effect of another change.
 
 ## Article 2 — The public surface
 
-The following are contracts. Consumers (humans, scripts, hosted products) may
-depend on them. Changing any of them requires a release note entry and a docs
-update in the same PR; a silent change is a defect even when all tests pass.
-
-| Surface | Definition |
-|---|---|
-| CLI | `orbi` (one Runner tick), `orbi add`, `orbi suggest`, `orbi status`, `orbi session`, `orbi install-units`, `orbi sync-engine-source`, `orbi doctor`, `orbi check`, `orbi setup`, `orbi milestone` (`milestone set <title>`) |
-| Config | `orbi.toml` fields documented in `docs/getting-started.mdx`; `.orbi/env` loaded as systemd `EnvironmentFile`; the `pi_providers` JSON file |
-| Deployment | `systemd/orbi@.service` and `systemd/orbi@.timer` templates; `.orbi/` as the run-artifact and lock directory |
-| Label state machine | `labels.toml` (names, colors, descriptions) and `src/orbi/delivery_labels.py` (transitions) |
-| Journal | Every line of a run starts with `[run_id]`; event names and `key=value` fields listed in `docs/operations.mdx` |
-| Session files | `<worktree>/.pi-session/*.jsonl` |
-| Naming | Branch `orbi/<owner>-<repo>-issue-<N>`; worktree `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>` |
-| GitHub markers | `<!-- orbi:run=<run_id> -->` in every run-scoped comment and PR body; `Fixes #<N>` in the PR body |
-| Run scene | the hidden versioned block `<!-- orbi:scene:v1 {json} -->` in the trusted `Orbi opened PR` comment, rendered and parsed by `src/orbi/scene.py`; the only machine-readable recovery record of a delivery (the human-readable text beside it is display only) |
-| Requirements skill | the directory `integrations/claude-plugin/skills/write-ai-ready-issue/` — `SKILL.md` (how an agent turns a one-line idea into a deliverable Issue) and `fidelity-pass.md` (the independent check that the draft asks for exactly what the person asked) |
-| Suggestions | the document `orbi suggest --json` prints — `{"repo", "base_sha", "session_dir", "suggestions": [{"kind": "existing" or "new", "issue": the Issue number for `existing` and null for `new`, "title", "why", "body": the Issue body for `new` and null for `existing`}]}`, at most three entries, ordered by priority; `session_dir` is `<deploy_home>/.orbi/suggest/<run_id>/.pi-session/`, holding the run's Pi session JSONL in the same format as delivery session files, and the run directory `<deploy_home>/.orbi/suggest/<run_id>/` is kept after the command exits, on success and on failure — and the skill directory `integrations/claude-plugin/skills/suggest-ai-ready-issues/` that produces it |
-
-Anything not in this table is internal and may change without notice.
-Adding a row is an amendment.
+1. A consumer (a human, a script, a hosted product) may rely only on an
+   interface that is officially documented as a public contract. The
+   authoritative inventory of those interfaces and their formats is
+   [docs/public-contracts.mdx](docs/public-contracts.mdx). Anything not
+   listed there is private implementation and may change without notice.
+2. Changing a documented contract requires a documentation update and a
+   release note entry in the same PR; a silent change is a defect even
+   when all tests pass.
+3. The inventory is interface specification, not architectural invariant.
+   Adding, editing or removing an inventory row is ordinary interface
+   evolution: it updates `docs/public-contracts.mdx` and the release
+   notes, and is not an amendment to this file. A change that alters one
+   of this Constitution's invariants still follows Article 7's amendment
+   procedure, exactly as any other article does.
 
 ## Article 3 — Module structure
 

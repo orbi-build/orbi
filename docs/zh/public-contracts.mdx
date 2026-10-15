@@ -1,0 +1,146 @@
+---
+title: "公开契约：接口、状态与进度格式"
+description: "使用者可以依赖什么，status 与进度文档又如何报告范围、归属与安全性?"
+---
+
+使用者——人、脚本或托管产品——可以依赖的一切都列在本页；未列出的都属于私有实现，可能随时变化。
+
+[Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md) 承载架构不变量，本页承载接口规范：公开接口清单，以及状态观察与进度摘要的精确格式。本页是唯一的公开接口清单入口。
+
+## 契约原则
+
+- 使用者只能依赖在本页正式记录的接口。私有实现不是契约。
+- 变更已记录的契约，必须在同一个 PR 里更新文档并写 release note；即使所有测试通过，静默变更也是缺陷。
+- 接口清单是接口规范，不是架构不变量。新增、修改或删除一行属于正常的接口演进：更新本页与 release notes 即可，不是宪法修正。
+- 改变架构不变量的改动，仍然像其他任何条款一样，走 Constitution 第 7 条的修正流程。
+
+## 公开接口清单
+
+| 接口 | 定义 |
+|---|---|
+| CLI | `orbi`（一次 Runner tick）、`orbi add`、`orbi suggest`、`orbi status`、`orbi session`、`orbi install-units`、`orbi sync-engine-source`、`orbi doctor`、`orbi check`、`orbi setup`、`orbi milestone`（`milestone set <title>`） |
+| 配置 | [Getting started](/zh/getting-started) 中记录的 `orbi.toml` 字段；作为 systemd `EnvironmentFile` 加载的 `.orbi/env`；`pi_providers` JSON 文件 |
+| 部署 | `systemd/orbi@.service` 与 `systemd/orbi@.timer` 模板；作为 run 产物与锁目录的 `.orbi/` |
+| Label 状态机 | `labels.toml`（名称、颜色、描述）与 `src/orbi/delivery_labels.py`（状态迁移） |
+| Journal | run 的每一行都以 `[run_id]` 开头；事件名与 `key=value` 字段见 [Operations](/zh/operations) |
+| Session 文件 | `<worktree>/.pi-session/*.jsonl` |
+| 命名 | 分支 `orbi/<owner>-<repo>-issue-<N>`；worktree `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>` |
+| GitHub 标记 | 每个 run 范围内的评论与 PR body 使用 `<!-- orbi:run=<run_id> -->`；PR body 使用 `Fixes #<N>` |
+| Run 现场 | 可信的 `Orbi opened PR` 评论中的隐藏版本化块 `<!-- orbi:scene:v1 {json} -->`，由 `src/orbi/scene.py` 渲染与解析；交付唯一的机器可读恢复记录（旁边的可读文字仅供展示） |
+| 需求 skill | 目录 `integrations/claude-plugin/skills/write-ai-ready-issue/`——`SKILL.md`（agent 如何把一句话想法变成可交付 Issue）与 `fidelity-pass.md`（独立检查草稿是否恰好问了提问者想问的） |
+| Suggestions | `orbi suggest --json` 打印的文档——`{"repo", "base_sha", "session_dir", "suggestions": [{"kind": "existing" 或 "new", "issue": existing 为 Issue 号、new 为 null, "title", "why", "body": new 为 Issue body、existing 为 null}]}`，最多三条、按优先级排序；`session_dir` 是 `<deploy_home>/.orbi/suggest/<run_id>/.pi-session/`，存放与交付 session 文件同格式的 Pi session JSONL，命令退出后运行目录 `<deploy_home>/.orbi/suggest/<run_id>/` 在成功与失败时都保留——以及产出它的 skill 目录 `integrations/claude-plugin/skills/suggest-ai-ready-issues/` |
+
+表中没有的一切都属于内部实现，可能随时变化。
+
+## 状态观察契约
+
+本节规定 `orbi status` 与 `orbi status --follow` 的观察行为。它用有归属的完整记录取代 mtime 猜测。
+
+### 范围与选择
+
+status 运行默认打印每个已配置 source repository 的快照。`--follow` 改变观察时长，不改变范围。`--repo OWNER/REPO` 选择一个已配置仓库，`--issue N` 选择其中的一个 Issue。只配置一个 source repository 时允许只选 Issue；配置多个时必须配合 `--repo`。非法选择器在任何读取之前就被拒绝。视图保留容量、slots、队列与最近结果，并在多个交付并发运行时显示每一个活跃交付。
+
+### 归属与成员
+
+观察键是已配置仓库加 Issue 号。仓库绝不从全局 slug 反推，Issue 号精确匹配：Issue 42 不能匹配 Issue 420。
+
+只有在目录名匹配该仓库既有的完整命名约定 `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>` 时，该 worktree 才是候选。worktree 名归属 run；完整 JSONL session 记录归属 session；完整事件时间戳归属活动时间。目录或文件 mtime、文件名顺序、随机 run id 都不能证明当前正在执行。
+
+示例：已配置仓库 `acme/shop`、Issue 42 匹配前缀 `.worktrees/orbi-acme-shop-issue-42-`；`.worktrees/orbi-acme-shop-issue-42-86b57234` 的合法八位十六进制后缀给出 run `86b57234`。完整 JSONL 头部 `{"type":"session","id":"sess-1","timestamp":"2026-10-15T06:20:00Z"}` 给出 session `sess-1`；活动时间来自对应的完整 activity 记录。
+
+活动行的成员来自最近一次完整成功的 GitHub 范围读取，并沿用既有 Orbi 状态语义。本地 worktree 只把这些 Issue 的观察挂上去：文件发现不能把旧 Issue 加回活跃集合，且首次成功范围读取之前不猜测任何活动成员。某个 Issue 离开该集合时，会直接读取它，并在下一次成功的 GitHub 刷新之前展示其确认的退出结果；随后移除它的活动行。如果交付 A 完成而交付 B 继续，A 保留的目录不能让 A 重新变为活跃。显式的 `--issue` follow 会保留该 Issue 直到 Ctrl-C，可以展示有归属、带时间的历史观察，但不声称执行仍在进行。
+
+快照读取每个候选 session 最近一次完整且有归属的观察。follow 在进程内存里保留每文件偏移，复用完整的 JSONL 解析，并在同一范围内发现新的 worktree 与 session。不完整或无法归属的记录意味着“没有可读活动”，绝不是“空闲”。如果多个保留记录无法证明哪个 run 还活着，就展示带归属的观察与时间并明确标注不确定性；绝不静默选一个。不展示任何原始消息。
+
+Label、PR 与 check 结果、以及确认的完成状态始终是权威。只有当匹配的既有 journal 记录明确关联同一个 run 与同一个 Issue 时，才展示 Runner 阶段；否则阶段未知（null）。绝不从工具名推断阶段，也绝不假定某个实例日志文件的最后一行是全局最新。写入方从自己已绑定的 Runner 上下文取得阶段。
+
+### 读取周期
+
+本地发现与增量读取以 0.5 秒为周期，设计目标是在健康本地条件下约一秒内展示一个完整本地事件。初始扫描建立最新观察；后续周期只读新的完整记录。这是记录级观察，不是 token 流，也不是端到端保证。
+
+GitHub 状态有独立周期：启动时立即读取，每次完整读取后等待 15 秒。单 Issue 范围只读该 Issue；仓库与全仓库范围通过既有读取命令与分页解析器完整分页 open Issues，然后套用既有 Orbi 状态语义——没有任意的 1/50/200 总数上限。新的 GitHub 任务在这个周期上发现，不一定在 0.5 秒内出现。先前活跃的任务从集合中消失时，会先对它做一次直接状态读取，再展示确认结果、手动等待或移除。Issue follow 保留其 Issue 直到 Ctrl-C。
+
+GitHub 读取绝不阻塞本地事件展示：前台命令内一次有界后台读取即可。状态读取周期绝不重叠。保留最近一次成功的视图；既有有界读取重试都失败后，点名受影响的仓库与 Issue 并以非零码退出。Ctrl-C 干净结束，不留下孤儿读取任务。没有 daemon、没有持久游标或历史、也没有刷新设置。
+
+Linux 与 macOS 的 journal 入口与 JSONL 来源就是既有那些（评审基线：`systemd_deploy.py:328-349`、`launchd_deploy.py:80-86,253-274`、`scheduler.py:175-185`、`pi_activity.py:58-90,284-325`、`pi_process.py:1103-1124,1245-1285`）。macOS 日志没有全局顺序保证。
+
+### 路径策略
+
+read 或 edit 的活动目标必须规范化为 worktree 内、相对于仓库的路径。绝对、越界或无法归属的目标变为 null。排除 `pi_session.py` 的 `RUNNER_RUNTIME_EXCLUDES` 路径——`.orbi/`、`.worktrees/`、`.pi-session/`、`.pi/`，以及根目录的 `plan.md`、`test.log`、`verify.md`——以及 `.git` 元数据和既有配置已识别、位于 worktree 内的凭据与 provider 文件。直接使用这些既有解析路径；没有额外设置，也没有启发式文件名字典。正文与隐藏块共用这项检查。它发布已知边界内的路径；不发布文件内容，也不承诺检测未知文件里的任意机密。
+
+## 进度摘要契约
+
+### 进度块
+
+每个 run 保留它唯一既有的 progress comment。它的正式起始是既有 run 标记紧跟 `orbi:progress:v1` 块，结束时也一样：
+
+```html
+<!-- orbi:run=86b57234 -->
+<!-- orbi:progress:v1 {"step":"review","reported_at":"2026-10-15T06:20:20Z","activity":{"at":"2026-10-15T06:20:18Z","kind":"read","target":"src/login.ts"}} -->
+```
+
+版本只属于标记。payload 要求 `step`、`reported_at` 与 `activity`。
+
+- `step` 是已记录的阶段或 null。只有 Runner 确认的动作才设置 `starting`、`implement`、`review`、`checks`、`merge` 与 `release`；review 包含评审者的修复。未映射的任务类型用 null。
+- `reported_at` 是报告生成时间，UTC ISO-8601 字符串，不能为 null。heartbeat 可以推进 `reported_at` 而不推进 `activity.at`。
+- 没有任何已知活动类型可发布时，`activity` 为 null。
+
+### activity 形状
+
+`activity` 不为 null 时，`at`、`kind`、`target` 三个键都必需、绝不省略：`at` 是活动的 UTC 时间戳或未知时的 null，`kind` 是 `read`、`edit`、`command`、`analysis` 之一，`target` 是安全的仓库相对路径或 null。
+
+```json
+{"at":"2026-10-15T06:20:18Z","kind":"read","target":"src/login.ts"}
+```
+
+```json
+{"at":"2026-10-15T06:20:18Z","kind":"command","target":null}
+```
+
+```json
+{"at":"2026-10-15T06:20:18Z","kind":"read","target":null}
+```
+
+`command` 与 `analysis` 保留 kind 与活动时间，`target: null`；它们绝不暴露参数或文本。不安全的 `read` 或 `edit` 目标也变为 null，同时保留已知的 kind 与时间。没有已知活动是 `"activity": null`，绝不是空对象。
+
+### 报告选择
+
+从完整分页里，先按既有可信发布者与 run 范围评论规则，找出最近更新的正式 run 记录。该候选不需要 progress block；被引用或围栏包裹的标记不是正式记录。然后选出属于同一个 run 的、最近更新的 progress comment，并把它归为 `missing`、`unsupported`、`invalid` 或 `available`。started 或 milestone 记录不会丢弃同一 run 已经存在的 progress comment。
+
+如果该 run 没有 progress comment 或没有可读摘要，就不用另一个 run 的摘要当作它的当前报告。较旧内容只能作为明确标注的历史出现，并带有自己的 run 与时间。选择的是最近报告的 run 归属，不是最近一次 start，也不是活着的进程。终态与手动 GitHub 事实保持优先。
+
+### 内容与安全规则
+
+从结构化事件生成一个安全值，正文与块都由它渲染。read 或 edit 目标校验为仓库相对路径；绝对或越界路径、凭据位置、内部运行时目录都被拒绝。序列化会被转义，路径无法终止 HTML 注释。已拼装好的命令字符串绝不二次清洗。prompt、分析文本、源码、输出与机密在两种表示里都绝不发布，结束时也一样；恢复与失败记录保留它们自己既有的契约。
+
+### 读者与发布边界
+
+读者按既有作者规则校验可信发布者，校验精确的无引号正式前缀、受支持的版本与完整分页。候选与 run 的选择（包括没有块的记录）遵循上文“报告选择”。PR、check 与终态事实不重复写进 payload。没有当前 run 指针、没有新的 run 排序、没有第二条评论流、没有恢复存储。发布始终是尽力而为：它失败不会改 label、不会阻塞、不会跳过、也不会让交付、评审或合并失败。这是展示契约，不是任务状态。
+
+## 工作示例
+
+### 并发 Issue
+
+两个已配置交付同时运行。每个 Issue 都显示自己的归属观察，因为观察键包含仓库与 Issue 号；本地周期保留每个并发活跃交付，而不是一个当前 run。
+
+### 保留的 session
+
+交付 A 已完成，它的 Issue 离开最近一次成功 GitHub 范围读取，但 worktree 与 JSONL 仍在磁盘上。A 会从活动行移除：保留的 session 是历史，不是当前执行。如果 A 的实际 GitHub 状态再次变化、新的范围读取又包含它，它可以再次出现。
+
+### 尚无摘要的新 run
+
+存在新的 run 记录——有 run 标记、没有 progress block。它的摘要归为 `missing`：展示该 run 自己的字段，不用另一个 run 的摘要当作它的报告。
+
+### 不支持的或损坏的报告
+
+progress block 带未知版本或畸形 JSON。摘要归为 `unsupported` 或 `invalid`；视图其余部分照常展示，命令不崩溃。
+
+### 终态或手动状态优先
+
+Issue 已关闭或已合并，或正在等待已确认的手动动作。该 GitHub 事实优先于本地观察展示，本地记录绝不用于声称交付仍在运行。
+
+## 本页不承诺什么
+
+- 不是第二个状态存储：GitHub Issue 与 label 仍是唯一状态。
+- 不是端到端时延保证：记录级观察不是 token 流。
+- 不是机密扫描器：路径策略过滤已知边界，而不是任意文件。
