@@ -8,6 +8,8 @@ cycles, bounded termination and the failure path.
 """
 import json
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -266,6 +268,14 @@ def test_safe_target_rejects_absolute_and_escaping_paths(tmp_path):
     assert observe.safe_target(tmp_path, "a/../../b") is None
 
 
+def test_safe_target_publishes_an_absolute_in_worktree_path(tmp_path):
+    """The shared path policy: an absolute target inside the worktree is
+    published as its repository-relative form, never as an absolute one."""
+    assert observe.safe_target(
+        tmp_path, str(tmp_path / "src" / "login.ts"),
+    ) == "src/login.ts"
+
+
 def test_safe_target_rejects_non_string_and_empty(tmp_path):
     assert observe.safe_target(tmp_path, None) is None
     assert observe.safe_target(tmp_path, "  ") is None
@@ -295,7 +305,7 @@ def test_local_observer_excludes_the_configured_provider_file(tmp_path):
         json.dumps({
             "type": "message", "timestamp": "2026-10-15T06:20:18Z",
             "message": {"role": "assistant", "content": [
-                {"type": "toolCall", "name": "read_file",
+                {"type": "toolCall", "name": "read",
                  "arguments": {"path": "provider.json"}},
             ]},
         }) + "\n",
@@ -322,7 +332,7 @@ def test_safe_target_rejects_a_configured_excluded_path(tmp_path):
 
 def test_activity_of_classifies_read_with_target():
     record = _assistant([
-        {"type": "toolCall", "name": "read_file",
+        {"type": "toolCall", "name": "read",
          "arguments": {"path": "src/a.ts"}},
     ])
     assert observe.activity_of(record) == ("read", "src/a.ts")
@@ -338,14 +348,14 @@ def test_activity_of_classifies_edit_with_file_path():
 
 def test_activity_of_classifies_read_without_an_argument():
     record = _assistant([
-        {"type": "toolCall", "name": "read_file", "arguments": "x"},
+        {"type": "toolCall", "name": "read", "arguments": "x"},
     ])
     assert observe.activity_of(record) == ("read", None)
 
 
 def test_activity_of_read_tool_without_a_path_key():
     record = _assistant([
-        {"type": "toolCall", "name": "read_file", "arguments": {"other": 1}},
+        {"type": "toolCall", "name": "read", "arguments": {"other": 1}},
     ])
     assert observe.activity_of(record) == ("read", None)
 
@@ -357,9 +367,28 @@ def test_activity_of_classifies_command_without_target():
     assert observe.activity_of(record) == ("command", None)
 
 
-def test_activity_of_classifies_unknown_tool_as_analysis():
+def test_activity_of_skips_a_tool_outside_the_whitelist():
+    """A tool the progress whitelist does not carry publishes no
+    activity, exactly as the published activity does."""
     record = _assistant([{"type": "toolCall", "name": "webfetch"}])
-    assert observe.activity_of(record) == ("analysis", None)
+    assert observe.activity_of(record) is None
+
+
+def test_activity_of_takes_the_newest_content_item():
+    """The real Pi assistant message carries thinking before its tool
+    call, and the progress writer folds the newest item: the local
+    observation reports the same kind and target for that record."""
+    record = _assistant([
+        {"type": "thinking", "thinking": "..."},
+        {"type": "toolCall", "name": "codemode", "arguments": {"code": "x"}},
+    ])
+    assert observe.activity_of(record) == ("command", None)
+    read_after_text = _assistant([
+        {"type": "text", "text": "..."},
+        {"type": "toolCall", "name": "edit",
+         "arguments": {"file_path": "src/a.ts"}},
+    ])
+    assert observe.activity_of(read_after_text) == ("edit", "src/a.ts")
 
 
 def test_activity_of_classifies_text_as_analysis():
@@ -406,7 +435,7 @@ def test_local_observer_attributes_session_and_activity(tmp_path):
         + json.dumps({
             "type": "message", "timestamp": "2026-10-15T06:20:18Z",
             "message": {"role": "assistant", "content": [
-                {"type": "toolCall", "name": "read_file",
+                {"type": "toolCall", "name": "read",
                  "arguments": {"path": "src/login.ts"}},
             ]},
         }) + "\n",
@@ -453,7 +482,7 @@ def test_local_observer_ignores_incomplete_records(tmp_path):
         + json.dumps({
             "type": "message", "timestamp": 123,
             "message": {"role": "assistant", "content": [
-                {"type": "toolCall", "name": "read_file",
+                {"type": "toolCall", "name": "read",
                  "arguments": {"path": "src/a.ts"}},
             ]},
         }) + "\n",
@@ -643,7 +672,7 @@ def test_render_keeps_each_issue_and_run_attributed(tmp_path):
             + json.dumps({
                 "type": "message", "timestamp": at,
                 "message": {"role": "assistant", "content": [
-                    {"type": "toolCall", "name": "read_file",
+                    {"type": "toolCall", "name": "read",
                      "arguments": {"path": target}},
                 ]},
             }) + "\n",
@@ -701,86 +730,89 @@ def test_scope_label_names_repository_and_issue():
     assert observe.scope_label(scoped) == "acme/shop#5"
 
 
-def test_follow_renders_bounded_cycles(tmp_path, capsys):
-    config = _config(tmp_path)
-    scope = observe.parse_scope(config.source_repos)
-    observer = observe.StatusObserver(
-        config, scope, read_issues=lambda repo: [], now=lambda: 0.0,
-    )
+class _ScriptedObserver:
+    """A deterministic observer stand-in for the follow loop.
+
+    The loop's cycle, termination and failure contract is the subject
+    here, so its read is the fake's own synchronous step: the real
+    observer's background thread never interleaves with the controlled
+    clock (its own behavior is covered below).
+    """
+
+    def __init__(self, read):
+        self._read = read
+        self._error = None
+
+    def due(self, timestamp=None):
+        return True
+
+    def start_read(self):
+        self._error = None
+        try:
+            self._read()
+        except observe.READ_ERRORS as exc:
+            self._error = exc
+        return True
+
+    def read_error(self):
+        error, self._error = self._error, None
+        return error
+
+
+def test_follow_renders_bounded_cycles(capsys):
     rc = observe.follow(
-        observer, lambda: "view",
+        _ScriptedObserver(lambda: None), lambda: "view",
         sleep=lambda seconds: None, now=lambda: 0.0, max_cycles=3,
     )
     assert rc == 0
     assert capsys.readouterr().out.count("view") == 3
 
 
-def test_follow_fails_fast_and_preserves_the_last_view(tmp_path, capsys):
-    config = _config(tmp_path)
-    scope = observe.parse_scope(config.source_repos)
+def test_follow_fails_fast_and_preserves_the_last_view(capsys):
     calls = {"count": 0}
-    clock = {"now": 0.0}
 
-    def read_issues(repo):
+    def read():
         calls["count"] += 1
         if calls["count"] > 1:
             raise subprocess.CalledProcessError(1, ["gh"], stderr="boom")
-        return []
-
-    def sleep(seconds):
-        clock["now"] += 15.0
 
     errors = []
-    observer = observe.StatusObserver(
-        config, scope, read_issues=read_issues, now=lambda: 0.0,
-    )
     rc = observe.follow(
-        observer, lambda: "view", sleep=sleep, now=lambda: clock["now"],
-        max_cycles=5,
+        _ScriptedObserver(read), lambda: "view",
+        sleep=lambda seconds: None, now=lambda: 0.0, max_cycles=5,
         on_error=lambda exc, last: errors.append((str(exc), last)),
     )
     assert rc == 1
     assert errors == [
         ("Command '['gh']' returned non-zero exit status 1.", "view"),
     ]
+    assert capsys.readouterr().out.count("view") == 2
 
 
-def test_follow_without_a_handler_still_fails_fast(tmp_path):
-    config = _config(tmp_path)
-    scope = observe.parse_scope(config.source_repos)
-
-    def read_issues(repo):
+def test_follow_without_a_handler_still_fails_fast():
+    def read():
         raise subprocess.CalledProcessError(1, ["gh"], stderr="boom")
 
-    observer = observe.StatusObserver(config, scope, read_issues=read_issues)
     assert observe.follow(
-        observer, lambda: "view", sleep=lambda seconds: None, max_cycles=None,
+        _ScriptedObserver(read), lambda: "view",
+        sleep=lambda seconds: None, max_cycles=None,
     ) == 1
 
 
-def test_follow_fails_fast_on_a_hung_gh_read(tmp_path):
+def test_follow_fails_fast_on_a_hung_gh_read():
     """A hung gh (TimeoutExpired) is the same read failure class as a
     non-zero exit: no traceback, non-zero return."""
-    config = _config(tmp_path)
-    scope = observe.parse_scope(config.source_repos)
-
-    def read_issues(repo):
+    def read():
         raise subprocess.TimeoutExpired(["gh"], 30)
 
-    observer = observe.StatusObserver(config, scope, read_issues=read_issues)
     assert observe.follow(
-        observer, lambda: "view", sleep=lambda seconds: None, max_cycles=None,
+        _ScriptedObserver(read), lambda: "view",
+        sleep=lambda seconds: None, max_cycles=None,
     ) == 1
 
 
-def test_follow_preserves_the_last_view_when_the_render_fails(tmp_path):
-    """A failure in the rendered view (the ready/result/base reads ran on
-    the cycle that succeeded earlier) keeps the last successful view."""
-    config = _config(tmp_path)
-    scope = observe.parse_scope(config.source_repos)
-    observer = observe.StatusObserver(
-        config, scope, read_issues=lambda repo: [], now=lambda: 0.0,
-    )
+def test_follow_preserves_the_last_view_when_the_render_fails():
+    """A failure in the rendered view keeps the last successful view."""
     views = iter(["view-1", "view-2"])
 
     def render():
@@ -791,11 +823,85 @@ def test_follow_preserves_the_last_view_when_the_render_fails(tmp_path):
 
     errors = []
     rc = observe.follow(
-        observer, render, sleep=lambda seconds: None, now=lambda: 0.0,
-        max_cycles=8,
+        _ScriptedObserver(lambda: None), render, sleep=lambda seconds: None,
+        now=lambda: 0.0, max_cycles=8,
         on_error=lambda exc, last: errors.append((str(exc), last)),
     )
     assert rc == 1
     assert errors == [
         ("Command '['gh']' returned non-zero exit status 1.", "view-2"),
     ]
+
+
+# --- the background GitHub cycle -------------------------------------------
+
+
+def _wait_until(predicate, timeout=5.0):
+    """Wait for the background read, with a bounded termination guard."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.001)
+    raise AssertionError("background read did not finish")
+
+
+def test_background_read_does_not_block_the_rendered_view(tmp_path):
+    """A due GitHub read runs in the background: the cycle keeps
+    rendering the last complete reads, and two read cycles never
+    overlap."""
+    gate = threading.Event()
+
+    def read_issues(repo):
+        gate.wait(5)
+        return [_issue(1)]
+
+    config = _config(tmp_path)
+    scope = observe.parse_scope(config.source_repos)
+    observer = observe.StatusObserver(config, scope, read_issues=read_issues)
+    assert observer.start_read() is True
+    assert observer.reading() is True
+    # The render sees the last complete reads, not a blocked read.
+    assert observer.deliveries == {}
+    assert observer.start_read() is False
+    gate.set()
+    _wait_until(lambda: not observer.reading())
+    assert [
+        delivery.number for delivery in observer.deliveries["acme/shop"]
+    ] == [1]
+    assert observer.read_error() is None
+
+
+def test_background_read_failure_surfaces_once_and_keeps_the_cycle(tmp_path):
+    def read_issues(repo):
+        raise subprocess.CalledProcessError(1, ["gh"], stderr="boom")
+
+    config = _config(tmp_path)
+    scope = observe.parse_scope(config.source_repos)
+    observer = observe.StatusObserver(config, scope, read_issues=read_issues)
+    observer.start_read()
+    _wait_until(lambda: not observer.reading())
+    assert isinstance(observer.read_error(), subprocess.CalledProcessError)
+    assert observer.read_error() is None
+    # A failed cycle schedules no next one: only the foreground decides.
+    assert observer.due() is True
+
+
+def test_github_cycle_restarts_when_the_read_completed(tmp_path):
+    """Completion-based timing: the next cycle is due 15 seconds after
+    the read finished, never 15 seconds after it started."""
+    clock = {"now": 100.0}
+
+    def read_issues(repo):
+        clock["now"] += 5.0
+        return []
+
+    config = _config(tmp_path)
+    scope = observe.parse_scope(config.source_repos)
+    observer = observe.StatusObserver(
+        config, scope, read_issues=read_issues, now=lambda: clock["now"],
+    )
+    observer.refresh()
+    assert clock["now"] == 105.0
+    assert observer.due(115.0) is False
+    assert observer.due(120.0) is True

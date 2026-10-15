@@ -17,10 +17,12 @@ docs/public-contracts.mdx:
   worktrees only attach observations to those Issues. A task that
   disappears from the set is read directly and shown with its
   confirmed state.
-- Local discovery runs on a 0.5-second cycle, and every
-  GitHub-backed read (active set, ready queue, recent results, frozen
-  base) on the 15-second GitHub cycle; a read failure preserves the
-  last view, names the scope and exits non-zero.
+- Local discovery runs on a 0.5-second cycle and renders
+  immediately; every GitHub-backed read (active set, ready queue,
+  recent results, frozen base) runs on the 15-second GitHub cycle —
+  one bounded background read that never blocks the local
+  presentation and never overlaps itself. A read failure preserves
+  the last view, names the scope and exits non-zero.
 
 No database, queue or daemon: GitHub Issues/labels stay the only state
 store, the JSONL files are read in place and nothing is persisted.
@@ -30,6 +32,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -42,7 +45,11 @@ from orbi.delivery_labels import (
     PR_OPENED_LABEL,
 )
 from orbi.github import issue_view, parse_paginated_issue_array, run_gh_read_command
-from orbi.pi_activity import read_new_events
+from orbi.pi_activity import (
+    RUNNER_RUNTIME_EXCLUDES,
+    activity_kind_for,
+    read_new_events,
+)
 
 # The two read cycles of the contract (seconds).
 LOCAL_CYCLE_SECONDS = 0.5
@@ -59,23 +66,13 @@ ACTIVE_DELIVERY_LABELS = (
 # The run id carried by a task worktree name is the legal eight-hex id.
 RUN_ID_PATTERN = re.compile(r"^[0-9a-f]{8}$")
 
-# Activity kinds, as the progress contract publishes them.
+# The activity kinds, as the progress contract publishes them. The
+# tool -> kind mapping is NOT repeated here: the progress whitelist
+# (`pi_activity.ACTIVITY_KIND_BY_TOOL`, read through `activity_kind_for`)
+# stays the single source for every reader of the same JSONL records.
 KIND_READ = "read"
 KIND_EDIT = "edit"
-KIND_COMMAND = "command"
 KIND_ANALYSIS = "analysis"
-
-_READ_TOOLS = frozenset({"read", "read_file", "readfile"})
-_EDIT_TOOLS = frozenset({
-    "edit", "write", "write_file", "writefile", "patch", "apply_patch",
-    "multiedit", "str_replace", "create_file",
-})
-_COMMAND_TOOLS = frozenset({"bash", "shell", "run_command", "run_terminal_cmd"})
-
-# The RUNNER_RUNTIME_EXCLUDES boundary plus .git metadata: an activity
-# target that normalizes into one of these is published as null.
-_RUNTIME_EXCLUDES = (".orbi", ".worktrees", ".pi-session", ".pi")
-_RUNTIME_FILES = ("plan.md", "test.log", "verify.md")
 
 # The read failures that end observation with the scope named: a
 # bounded gh read retry already ran inside the reader, and the same
@@ -269,59 +266,81 @@ def session_files(worktree: Path) -> list[Path]:
     )
 
 
+def _runtime_excluded(relative: str) -> bool:
+    """True for a Runner-owned runtime path of the shared exclude policy.
+
+    The list itself is the single definition in `pi_activity`
+    (`RUNNER_RUNTIME_EXCLUDES`, the boundary `pi_session` pins and the
+    progress writer reads), never a second copy.
+    """
+    for pattern in RUNNER_RUNTIME_EXCLUDES:
+        name = pattern.rstrip("/")
+        if relative == name or relative.startswith(name + "/"):
+            return True
+    return False
+
+
 def safe_target(worktree: Path, raw: object, *,
                 exclude_paths: frozenset[str] = frozenset()) -> str | None:
     """Return a repository-relative safe activity target, or null.
 
-    Absolute, escaping, .git, internal runtime (.orbi/, .worktrees/,
-    .pi-session/, .pi/ and the root plan/test/verify files) and
-    configured credential/provider paths become null; the known
-    activity kind and time are kept by the caller.
+    The shared path policy: a target inside the worktree is published as
+    its repository-relative form (an absolute one included), while an
+    escaping, outside, .git, internal runtime (the shared
+    RUNNER_RUNTIME_EXCLUDES) and configured credential/provider target
+    becomes null; the known activity kind and time are kept by the
+    caller.
     """
     if not isinstance(raw, str):
         return None
     candidate = raw.strip()
-    if not candidate or candidate.startswith("/"):
+    if not candidate:
         return None
+    if os.path.isabs(candidate):
+        candidate = os.path.relpath(
+            os.path.abspath(candidate), os.path.abspath(str(worktree)),
+        )
     normalized = os.path.normpath(candidate)
     if normalized in (".", "..") or normalized.startswith("../"):
         return None
-    parts = Path(normalized).parts
-    if parts[0] in _RUNTIME_EXCLUDES or ".git" in parts:
+    if ".git" in Path(normalized).parts:
         return None
-    if normalized in _RUNTIME_FILES:
+    if _runtime_excluded(normalized):
         return None
     if os.path.abspath(os.path.join(str(worktree), normalized)) in exclude_paths:
         return None
     return Path(normalized).as_posix()
 
 
-def _tool_activity(item: dict) -> tuple[str, str | None]:
-    """Classify one assistant tool call and extract its raw target."""
-    name = item.get("name")
-    lowered = name.lower() if isinstance(name, str) else ""
-    if lowered in _READ_TOOLS:
-        kind = KIND_READ
-    elif lowered in _EDIT_TOOLS:
-        kind = KIND_EDIT
-    elif lowered in _COMMAND_TOOLS:
-        kind = KIND_COMMAND
-    else:
-        kind = KIND_ANALYSIS
-    target = None
-    if kind in (KIND_READ, KIND_EDIT):
+def _item_activity(item: dict) -> tuple[str, str | None] | None:
+    """Classify one assistant content item, or None when it carries none.
+
+    A tool call goes through the progress contract's own whitelist and
+    read/edit path keys (`pi_activity.activity_kind_for`): a tool
+    outside it publishes no activity at all. Text and thinking publish
+    `analysis`, exactly as the published activity does.
+    """
+    item_type = item.get("type")
+    if item_type == "toolCall":
+        name = item.get("name")
         arguments = item.get("arguments")
-        if isinstance(arguments, dict):
-            for key in ("path", "file_path"):
-                value = arguments.get(key)
-                if isinstance(value, str) and value:
-                    target = value
-                    break
-    return kind, target
+        return activity_kind_for(
+            name if isinstance(name, str) else "",
+            arguments if isinstance(arguments, dict) else {},
+        )
+    if item_type in ("text", "thinking"):
+        return (KIND_ANALYSIS, None)
+    return None
 
 
 def activity_of(record: dict) -> tuple[str, str | None] | None:
-    """Return (kind, raw target) for a complete activity record, or None."""
+    """Return (kind, raw target) for a complete activity record, or None.
+
+    The newest recognized content item decides, exactly as the progress
+    writer folds the same record, so the local observation and the
+    published activity carry the same kind and target for one event. An
+    unknown tool call carries no activity and is skipped.
+    """
     if record.get("type") != "message":
         return None
     message = record.get("message")
@@ -330,15 +349,14 @@ def activity_of(record: dict) -> tuple[str, str | None] | None:
     content = message.get("content")
     if not isinstance(content, list):
         return None
+    activity = None
     for item in content:
         if not isinstance(item, dict):
             continue
-        item_type = item.get("type")
-        if item_type == "toolCall":
-            return _tool_activity(item)
-        if item_type in ("text", "thinking"):
-            return (KIND_ANALYSIS, None)
-    return None
+        classified = _item_activity(item)
+        if classified is not None and classified[0] is not None:
+            activity = classified
+    return activity
 
 
 @dataclass(frozen=True)
@@ -514,20 +532,23 @@ class StatusObserver:
             repo: set() for repo in scope.repos
         }
         self._next_github = 0.0
+        self._read_thread: threading.Thread | None = None
+        self._read_error: BaseException | None = None
 
     def due(self, timestamp: float | None = None) -> bool:
         """True when the next GitHub read cycle is due."""
         current = self._now() if timestamp is None else timestamp
         return current >= self._next_github
 
-    def refresh(self, timestamp: float | None = None) -> None:
+    def refresh(self) -> None:
         """Run one complete GitHub read cycle for the whole scope.
 
         The active set, the ready queue, the recent results and the
         frozen base all belong to this cycle: the 0.5-second local cycle
-        renders the last complete reads and never re-reads GitHub.
+        renders the last complete reads and never re-reads GitHub. The
+        15-second cycle restarts when this read COMPLETED, so a slow read
+        never shortens the interval to the next one.
         """
-        current = self._now() if timestamp is None else timestamp
         ended = []
         for repo in self.scope.repos:
             if self._read_base is not None:
@@ -554,7 +575,39 @@ class StatusObserver:
             self._previous[repo] = numbers
             self.deliveries[repo] = active
         self.ended = ended
-        self._next_github = current + GITHUB_CYCLE_SECONDS
+        self._next_github = self._now() + GITHUB_CYCLE_SECONDS
+
+    def reading(self) -> bool:
+        """True while a background GitHub read cycle is in flight."""
+        thread = self._read_thread
+        return thread is not None and thread.is_alive()
+
+    def start_read(self) -> bool:
+        """Start one bounded background GitHub read; no-op while one runs.
+
+        GitHub state never blocks the local presentation: the caller
+        keeps rendering the last complete reads on the 0.5-second cycle
+        while this thread refreshes them, and state-read cycles never
+        overlap — a due cycle is skipped while the previous one runs.
+        """
+        if self.reading():
+            return False
+        self._read_error = None
+        self._read_thread = threading.Thread(target=self._run_read, daemon=True)
+        self._read_thread.start()
+        return True
+
+    def _run_read(self) -> None:
+        """Run one read cycle, keeping its failure for the foreground."""
+        try:
+            self.refresh()
+        except READ_ERRORS as exc:
+            self._read_error = exc
+
+    def read_error(self) -> BaseException | None:
+        """The finished background read's failure, consumed once."""
+        error, self._read_error = self._read_error, None
+        return error
 
     def _read_confirmed(self, repo: str, number: int) -> Delivery:
         return confirmed_delivery(repo, number, read_issue=self._read_issue)
@@ -580,27 +633,33 @@ def follow(observer: StatusObserver, render: Callable[[], str], *,
     """Follow the scope until Ctrl-C or max_cycles.
 
     Every cycle renders the current view from the last complete reads
-    (the local 0.5-second cycle); the GitHub read runs only when its
-    15-second cycle is due. A read failure — the GitHub cycle or the
-    rendered view — calls on_error with the last successful view and
-    returns non-zero without scheduling another cycle.
+    (the local 0.5-second cycle); a due GitHub read runs as one bounded
+    background read, so GitHub never blocks the local presentation and
+    two state-read cycles never overlap. A read failure — the background
+    GitHub cycle or the rendered view — calls on_error with the last
+    successful view and returns non-zero without scheduling another
+    cycle.
     """
     last_view = None
     cycles = 0
     while max_cycles is None or cycles < max_cycles:
         cycles += 1
-        timestamp = now()
-        try:
-            if observer.due(timestamp):
-                observer.refresh(timestamp)
-            last_view = render()
-        except READ_ERRORS as exc:
-            # A partial read failure ends observation: the last
-            # successful view is preserved, the scope is named by the
-            # handler and no next cycle is scheduled.
+        error = observer.read_error()
+        if error is None:
+            if observer.due(now()):
+                observer.start_read()
+            try:
+                last_view = render()
+            except READ_ERRORS as exc:
+                # A partial read failure ends observation: the last
+                # successful view is preserved, the scope is named by
+                # the handler and no next cycle is scheduled.
+                error = exc
+            else:
+                print(last_view)
+        if error is not None:
             if on_error is not None:
-                on_error(exc, last_view)
+                on_error(error, last_view)
             return 1
-        print(last_view)
         sleep(LOCAL_CYCLE_SECONDS)
     return 0

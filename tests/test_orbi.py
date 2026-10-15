@@ -285,9 +285,20 @@ class _NoopObserver:
     confirmed: dict = {}
     deliveries: dict = {}
     ended: list = []
+    error: BaseException | None = None
 
     def refresh(self) -> None:
         pass
+
+    def due(self, timestamp=None) -> bool:
+        return True
+
+    def start_read(self) -> bool:
+        return True
+
+    def read_error(self):
+        error, self.error = self.error, None
+        return error
 
 
 def test_status_report_lists_sources_active_ready_and_result(monkeypatch):
@@ -404,19 +415,18 @@ def test_main_status_prints_report(monkeypatch, tmp_path, capsys):
 
 
 class _FlakyObserver(_NoopObserver):
-    """Refresh succeeds `fail_after` times, then fails: the error path."""
+    """The read succeeds `fail_after` times, then fails: the error path."""
 
     def __init__(self, fail_after=2):
         self.calls = 0
         self.fail_after = fail_after
+        self.error = None
 
-    def due(self, timestamp=None):
-        return True
-
-    def refresh(self, timestamp=None):
+    def start_read(self):
         self.calls += 1
         if self.calls > self.fail_after:
-            raise subprocess.CalledProcessError(1, ["gh"], stderr="boom")
+            self.error = subprocess.CalledProcessError(1, ["gh"], stderr="boom")
+        return True
 
 
 def test_main_status_rejects_issue_only_selection_with_two_repositories(
@@ -505,19 +515,22 @@ def test_main_status_follow_reports_a_read_failure(
     assert "view" in captured.out
 
 
-def test_main_status_follow_reports_a_read_failure_without_a_view(
+def test_main_status_follow_reports_a_first_cycle_failure_without_a_view(
     tmp_path, monkeypatch, capsys,
 ):
+    """A failure before any complete view was rendered prints no view."""
     config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"acme/shop\"]\n", encoding="utf-8")
     _write_prompts(tmp_path)
     monkeypatch.setattr(
         observe, "StatusObserver",
-        lambda config, scope, **kwargs: _FlakyObserver(fail_after=1),
+        lambda config, scope, **kwargs: _NoopObserver(),
     )
-    monkeypatch.setattr(
-        orbi, "status_report", lambda config, scope, observer: "view",
-    )
+
+    def failing_report(config, scope, observer):
+        raise subprocess.CalledProcessError(1, ["gh"], stderr="boom")
+
+    monkeypatch.setattr(orbi, "status_report", failing_report)
     assert orbi.main([
         "status", "--follow", "--config", str(config),
     ]) == 1
@@ -1316,7 +1329,7 @@ def test_status_report_shows_active_observation_for_an_issue(
             "type": "message", "id": "a1",
             "timestamp": "2026-08-25T02:00:05Z",
             "message": {"role": "assistant", "content": [
-                {"type": "toolCall", "id": "t1", "name": "read_file",
+                {"type": "toolCall", "id": "t1", "name": "read",
                  "arguments": {"path": "src/login.ts"}}]},
         }) + "\n")
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
