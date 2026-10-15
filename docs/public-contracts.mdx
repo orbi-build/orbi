@@ -66,7 +66,7 @@ The Linux and macOS journal entry points and JSONL sources are the existing ones
 
 ### Path policy
 
-A read or edit activity target must normalize to a repository-relative path inside the worktree. An absolute, escaping or unattributable target becomes null. The `RUNNER_RUNTIME_EXCLUDES` paths from `pi_session.py` are excluded — `.orbi/`, `.worktrees/`, `.pi-session/`, `.pi/`, and the root `plan.md`, `test.log` and `verify.md` — together with `.git` metadata and the credential and provider files already identified by existing configuration when they are inside the worktree. Those existing resolved paths are used directly; there is no extra setting and no heuristic filename dictionary. Prose and the hidden block share this check. It publishes paths inside the known boundary; it does not publish file contents and does not promise to detect arbitrary secrets in unknown files.
+A read or edit activity target must normalize to a repository-relative path inside the worktree: an absolute path inside the worktree is published as that relative path, so nothing absolute ever reaches either representation, while an escaping, outside or unattributable target becomes null. The `RUNNER_RUNTIME_EXCLUDES` paths (defined once in `pi_activity.py`, imported by `pi_session.py` for the worktree exclude pinning and the dirty-worktree gate) are excluded — `.orbi/`, `.worktrees/`, `.pi-session/`, `.pi/`, and the root `plan.md`, `test.log` and `verify.md` — together with `.git` metadata. A target carrying an HTML comment character (`<` or `>`) becomes null as well: the hidden block escapes those characters as it serializes, the readable prose publishes the same value verbatim, and a value that could open or terminate a comment is dropped in both representations before either is rendered. The credential and provider files the existing configuration resolves (`<deploy_home>/.orbi/env` and the host-only `pi_providers` file) are outside the task worktree, so that same containment rule rejects them; there is no extra setting and no heuristic filename dictionary. Prose and the hidden block share this check. It publishes paths inside the known boundary; it does not publish file contents and does not promise to detect arbitrary secrets in unknown files.
 
 ## Progress summary contract
 
@@ -111,11 +111,39 @@ If that run has no progress comment or no readable summary, another run's summar
 
 ### Content and safety rules
 
-One safe value is generated from the structured events, and both the prose and the block are rendered from it. A read or edit target is validated as a repository-relative path; absolute or outside paths, credential locations and internal runtime directories are rejected. Serialization is escaped so a path cannot terminate the HTML comment. A previously assembled command string is never re-sanitized. Prompts, analysis text, source, outputs and secrets are never published in either representation, including at finish; recovery and failure records keep their own existing contract.
+One safe value is generated from the structured events, and both the prose and the block are rendered from it. A read or edit target is validated as a repository-relative path; absolute or outside paths, credential locations, internal runtime directories and HTML comment characters are rejected, so no target can terminate the hidden block or forge a comment in the readable prose. Serialization is escaped as well, so the block cannot be terminated even by a value that carries the characters. A previously assembled command string is never re-sanitized. Prompts, analysis text, source, outputs and secrets are never published in either representation, including at finish; recovery and failure records keep their own existing contract.
 
 ### Reader and publication boundary
 
 Readers validate the trusted publisher under the existing author rules, the exact unquoted formal prefix, a supported version and complete pagination. Candidate and run selection, including records with no block, follows Report selection above. PR, check and terminal facts are not duplicated into the payload. There is no current-run pointer, no new run ordering, no second comment stream and no recovery store. Publication remains best effort: its failure cannot relabel, block, skip or fail delivery, review or merge. This is a display contract, not task state.
+
+### Protocol examples
+
+These comment bodies are the protocol fixtures a reader integrates against: run attribution and the timestamps come from the records themselves, and the writer never publishes the forged or corrupt forms. A consumer proves its own selection and view against them; this page documents the shapes only.
+
+```html
+<!-- trusted author, formal prefix, summary available: run marker followed by the versioned block -->
+<!-- orbi:run=86b57234 -->
+<!-- orbi:progress:v1 {"step":"review","reported_at":"2026-10-15T06:20:20Z","activity":{"at":"2026-10-15T06:20:18Z","kind":"read","target":"src/login.ts"}} -->
+
+<!-- forged: the marker quoted inside prose or a fence is NOT a formal record -->
+> <!-- orbi:run=86b57234 -->
+
+<!-- a newer run without details: marker only, classification missing -->
+<!-- orbi:run=5c1d0a77 -->
+
+<!-- unknown version: unsupported; the rest of the view still renders -->
+<!-- orbi:progress:v9 {"step":"review"} -->
+
+<!-- corrupt payload: invalid; the rest of the view still renders -->
+<!-- orbi:progress:v1 {"step": -->
+
+<!-- late old-run update: still attributed to run 86b57234 and its own times -->
+<!-- orbi:run=86b57234 -->
+<!-- orbi:progress:v1 {"step":"merge","reported_at":"2026-10-15T07:44:00Z","activity":null} -->
+```
+
+A terminal or manual GitHub fact — the Issue closed or merged, or a confirmed manual wait — wins over any published or local summary, and a quoted, fenced or unknown-version marker is never selected as the current run of the report.
 
 ## Worked examples
 

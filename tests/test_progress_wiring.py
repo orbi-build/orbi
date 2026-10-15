@@ -9,6 +9,7 @@ summary or the blocked scene — in the same comment.
 from orbi import config as config_domain
 import ast
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -2463,3 +2464,49 @@ def test_process_ticket_only_publishes_the_bound_context(monkeypatch):
         assert kwargs["source_repo"] == "o/r"
         assert kwargs["role"] == runner.ROLE_TICKET
         assert callable(kwargs["action"])
+
+
+def _progress_block_payloads(calls):
+    """The parsed progress-block payloads of the comment PATCHes."""
+    payloads = []
+    for command in calls:
+        if command[:2] != ["gh", "api"] or "--method" not in command:
+            continue
+        if "PATCH" not in command:
+            continue
+        body = command[command.index("--field") + 1][len("body="):]
+        match = re.search(r"<!-- orbi:progress:v1 (\{.*?\}) -->", body)
+        assert match is not None, body
+        payloads.append(json.loads(match.group(1)))
+    return payloads
+
+
+def test_review_round_reports_checks_then_merge_in_the_same_comment(
+    monkeypatch, tmp_path,
+):
+    """Issue #1657: the Runner's own actions set `checks` (the merge
+    gate's CI-check action on the reviewed head) and `merge` (the
+    merged finish) in the one existing progress comment, and the
+    block agrees with the readable step line."""
+    pass_verdict = "REVIEW_VERDICT " + json.dumps({
+        "verdict": "pass", "head": "h1", "blockers": 0, "majors": 0,
+        "minors": 0, "findings": [],
+    })
+    merged, edits, calls, posted = _run_review_and_merge(
+        monkeypatch, tmp_path, verdict=pass_verdict,
+    )
+    assert merged is True
+    payloads = _progress_block_payloads(calls)
+    assert [payload["step"] for payload in payloads][-2:] == [
+        "checks", "merge",
+    ], payloads
+    assert all(payload["reported_at"] for payload in payloads)
+    checks_body = [
+        command[command.index("--field") + 1][len("body="):]
+        for command in calls
+        if command[0] == "gh" and command[1] == "api" and "PATCH" in command
+        and command[2].startswith("repos/xqliu/orbi/issues/comments/")
+    ][-2]
+    assert "- step: checks" in checks_body
+
+

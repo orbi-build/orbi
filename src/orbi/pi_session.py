@@ -36,7 +36,10 @@ from orbi.github import (
 )
 from orbi.gitops import base_sync_lock_path
 from orbi.journal import LOGGER, event, issue_context, run_command
-from orbi.pi_activity import activity_snapshot
+from orbi.pi_activity import (
+    RUNNER_RUNTIME_EXCLUDES,
+    activity_snapshot,
+)
 from orbi.pi_command import (
     IMPLEMENT_EXCLUDED_SKILLS,
     REVIEW_EXCLUDED_SKILLS,
@@ -76,15 +79,10 @@ from orbi.repo_config import validate_context_file
 # still fails the gate; coverage command artifacts are NOT in this set —
 # the contract commands write them into the excluded `.orbi/` run dir and
 # the tracked `.gitignore` stays as the fallback layer.
-RUNNER_RUNTIME_EXCLUDES = (
-    ".orbi/",
-    ".worktrees/",
-    ".pi-session/",
-    ".pi/",
-    "plan.md",
-    "test.log",
-    "verify.md",
-)
+# The list itself is defined once in orbi.pi_activity — the leaf the
+# published-activity path policy (Issue #1657) also imports — and
+# imported here for the worktree exclude pinning and the dirty-worktree
+# gate, so all three exclude exactly the same paths.
 
 
 def runner_runtime_exclude_path(worktree: Path) -> Path:

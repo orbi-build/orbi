@@ -35,6 +35,36 @@ from orbi.journal import quote_value, redact_secrets
 
 MAX_SUMMARY_LENGTH = 200
 
+# Runner-owned runtime paths inside a task worktree: created by the parent
+# Runner and the Pi session machinery, never by the agent's delivery. The
+# single definition: orbi.pi_session imports it for the worktree exclude
+# pinning and the dirty-worktree gate, and the progress writer imports it
+# for the published-activity path policy, so all three exclude exactly the
+# same paths.
+RUNNER_RUNTIME_EXCLUDES = (
+    ".orbi/",
+    ".worktrees/",
+    ".pi-session/",
+    ".pi/",
+    "plan.md",
+    "test.log",
+    "verify.md",
+)
+
+# The publication whitelist: a tool name maps to one documented activity
+# kind (read/edit/command/analysis). A name the whitelist does not carry
+# publishes NO activity at all — never a guessed kind and never the
+# arguments. "codemode" is the sandbox's code-execution tool of the
+# reviewed deployment (observed in the session JSONL); its code argument
+# is never carried.
+ACTIVITY_KIND_BY_TOOL = {
+    "read": "read",
+    "edit": "edit",
+    "write": "edit",
+    "bash": "command",
+    "codemode": "command",
+}
+
 # Ordered: the first matching rule wins for a bash command.
 PHASE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bgh\s+pr\b"), "pr"),
@@ -122,6 +152,28 @@ def tool_args_summary(name: str, arguments: dict) -> str:
     return ""
 
 
+def activity_kind_for(
+    name: str, arguments: dict,
+) -> tuple[str | None, str | None]:
+    """The (kind, raw target) a tool call publishes; (None, None) unknown.
+
+    The whitelist decides the kind; only read/edit carry a target, and
+    only from their path argument. The raw target is the model's own
+    value here — the publication boundary (repository-relative,
+    inside-worktree, not a runtime path) is applied by the progress
+    writer, which owns the documented summary contract.
+    """
+    kind = ACTIVITY_KIND_BY_TOOL.get(name)
+    if kind is None:
+        return None, None
+    if kind in ("read", "edit"):
+        for key in ("path", "file_path"):
+            value = arguments.get(key)
+            if isinstance(value, str) and value:
+                return kind, value
+    return kind, None
+
+
 def phase_for(name: str, arguments: dict) -> str:
     """Map a tool call to a human-readable work phase."""
     if name == "bash":
@@ -160,6 +212,11 @@ class SessionWatcher:
         self.last_activity: str | None = None
         self.action: str | None = None
         self.result: str | None = None
+        # The newest known activity's kind and raw target (the
+        # publication whitelist above); None when no whitelisted tool
+        # produced one, so the progress writer publishes no activity.
+        self.activity_kind: str | None = None
+        self.activity_target: str | None = None
         # The newest assistant `errorMessage` (a provider failure such as
         # a quota stop) — read at the Pi exit to tell a quota stop from a
         # crash (Issue #1374).
@@ -219,6 +276,8 @@ class SessionWatcher:
         self.last_activity = None
         self.action = None
         self.result = None
+        self.activity_kind = None
+        self.activity_target = None
         self.error_message = None
         self.last_role = None
         self.events = 0
@@ -263,6 +322,8 @@ class SessionWatcher:
             "last_activity": self.last_activity,
             "action": self.action,
             "result": self.result,
+            "kind": self.activity_kind,
+            "target": self.activity_target,
             "error_message": self.error_message,
             # True only while the newest session event is a tool result:
             # the model is expected to reply next, so a long silence is a
@@ -344,13 +405,19 @@ class SessionWatcher:
                 self.action = sanitize(
                     f"{name} {tool_args_summary(name, arguments)}",
                 ).strip()
+                (
+                    self.activity_kind,
+                    self.activity_target,
+                ) = activity_kind_for(name, arguments)
                 # The previous tool's result no longer describes this call.
                 self.result = None
             elif kind == "text":
                 self.action = "assistant text"
+                self.activity_kind, self.activity_target = "analysis", None
                 self.result = None
             elif kind == "thinking":
                 self.action = "thinking"
+                self.activity_kind, self.activity_target = "analysis", None
                 self.result = None
 
     def _apply_tool_result(self, message: dict) -> None:
