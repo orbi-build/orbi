@@ -814,10 +814,20 @@ orbi add "task title" --repo OWNER/BACKLOG-REPO --config orbi.toml
 orbi suggest --config orbi.toml
 orbi suggest --repo OWNER/REPO --json --config orbi.toml
 
-# Read-only queue view: current (ai-in-progress) task with live Pi
-# activity, the next ready Issue, and the most recent result per source
-# repo (ai-pr-opened / ai-fix-needed / ai-merged / ai-blocked)
+# Read-only scoped observation: every active delivery (ai-in-progress /
+# ai-pr-opened / ai-fix-needed / ai-awaiting-merge) in every configured
+# source repo with its attributed local run/session/activity, the next
+# ready Issue and the most recent result per repo
+# (ai-pr-opened / ai-fix-needed / ai-merged / ai-blocked)
 orbi status --config orbi.toml
+
+# Narrow the observation: --repo selects one configured repository and
+# --issue one Issue (with several repositories --issue requires --repo);
+# an invalid selector fails before any read. --follow observes
+# continuously (local events every 0.5s, GitHub state every 15s) until
+# Ctrl-C; a read failure names the scope and exits non-zero
+orbi status --repo OWNER/REPO --config orbi.toml
+orbi status --repo OWNER/REPO --issue 42 --follow --config orbi.toml
 
 # Read-only deployment/health report: repo commit, deployment-home
 # cleanliness (deploy_home: clean / DRIFT), unit drift, CLI
