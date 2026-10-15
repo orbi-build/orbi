@@ -38,6 +38,13 @@ from orbi.journal import (
 )
 from orbi.checks import test_status
 from orbi.pi_activity import activity_snapshot
+from orbi.progress_summary import (
+    STEP_BY_ROLE,
+    activity_text,
+    progress_block,
+    progress_summary,
+    safe_activity,
+)
 
 # One marker per run: hidden in the rendered comment, exact for lookup.
 # The run-id pattern and its validator live in `orbi.journal` (the run
@@ -403,18 +410,30 @@ def format_elapsed(seconds: float) -> str:
 
 
 def progress_body(state: dict) -> str:
-    """Render the live progress comment body (marker first, then fields)."""
+    """Render the live progress comment body.
+
+    The body starts with the run marker followed immediately by the
+    versioned summary block; the visible fields and the block render the
+    SAME safe summary value, so the readable status and the machine
+    summary always agree (Issue #1657).
+    """
     def value(key: str) -> str:
         item = state.get(key)
         return str(item) if item not in (None, "") else "-"
 
+    summary = progress_summary(state)
+    activity = summary["activity"]
     lines = [
         run_marker(state["run_id"]),
+        progress_block(summary),
         "",
         PROGRESS_HEADER,
         "",
         f"- role: {value('role')}",
-        f"- last activity: {value('last_activity')}",
+        f"- step: {summary['step'] or '-'}",
+        f"- reported at: {summary['reported_at']}",
+        f"- last activity: {(activity or {}).get('at') or '-'}",
+        f"- activity: {activity_text(activity)}",
         f"- tests: {value('tests')}",
         f"- PR: {value('pr')}",
     ]
@@ -433,7 +452,6 @@ def progress_body(state: dict) -> str:
         f"- priority: {value('priority')}",
         f"- phase: {value('phase')}",
         f"- elapsed: {value('elapsed')}",
-        f"- last action: {value('last_action')}",
         f"- branch: {value('branch')}",
         f"- session: {value('session')}",
     ]
@@ -664,6 +682,7 @@ def _run_info_fields(run_info: str) -> dict[str, str]:
 def _progress_state(ctx: RunContext, *, title: str, role: str,
                     started: float, pr_url: str | None,
                     review_round: int, priority: str,
+                    step: str | None = None,
                     checks: list | None = None,
                     activity: dict | None = None,
                     review: str = "pending") -> dict:
@@ -684,7 +703,12 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
     session runs (fresh and already read); without it the newest session
     file is full-scanned. Activity snapshotting is best-effort
     observability: a read failure is logged and reported as "no session
-    yet", it never blocks the task.
+    yet", it never blocks the task. The snapshot is reduced to the one
+    safe activity value (`safe_activity`) here, where the worktree is
+    known: the prose and the versioned block render that value.
+    `step` is the explicit stage of a Runner action that entered it
+    (`checks` / `merge`); without it the bound `role` maps through
+    `STEP_BY_ROLE`.
     """
     if activity is None:
         try:
@@ -701,7 +725,8 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
         "phase": (activity or {}).get("phase") or "starting",
         "elapsed": format_elapsed(time.monotonic() - started),
         "last_activity": (activity or {}).get("last_activity"),
-        "last_action": (activity or {}).get("action"),
+        "step": step if step is not None else STEP_BY_ROLE.get(role),
+        "activity": safe_activity(ctx.worktree, activity),
         "tests": test_status(checks),
         "review_round": review_round,
         "review": review,
@@ -832,6 +857,30 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
 # Pi session runs, so a mobile user sees live progress without any
 # command. The journal cadence is the poll interval above.
 PI_HEARTBEAT_SECONDS = 30.0
+
+
+def step_publisher(publisher: ProgressPublisher, ctx: RunContext, *,
+                   role: str, title: str, started: float, priority: str,
+                   checks: list | None = None) -> Callable[..., None]:
+    """Return one delivery step's progress-update callable (Issue #1657).
+
+    A delivery step publishes several updates of the same shape (the
+    review step's round ensure, the merge gate's `checks` stage and its
+    findings/merged finishes). Binding the step's invariant values once
+    keeps the call sites minimal, and every body is rendered here, where
+    the documented summary is owned. `finish` is the existing
+    locate-or-create publication, so a round whose ensure did not track
+    the comment yet still updates the run's one progress comment.
+    """
+    def publish_step(pr_url: str | None, review_round: int, *,
+                     step: str | None = None, review: str = "pending",
+                     outcome: str | None = None) -> None:
+        publisher.finish(_progress_body(_progress_state(
+            ctx, title=title, role=role, step=step, started=started,
+            pr_url=pr_url, review_round=review_round, priority=priority,
+            checks=checks, review=review,
+        ), outcome=outcome))
+    return publish_step
 
 def _live_progress(ctx: RunContext, publisher: ProgressPublisher, *,
                    title: str, role: str, started: float,

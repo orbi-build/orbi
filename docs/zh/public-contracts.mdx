@@ -66,7 +66,7 @@ Linux 与 macOS 的 journal 入口与 JSONL 来源就是既有那些（评审基
 
 ### 路径策略
 
-read 或 edit 的活动目标必须规范化为 worktree 内、相对于仓库的路径。绝对、越界或无法归属的目标变为 null。排除 `pi_session.py` 的 `RUNNER_RUNTIME_EXCLUDES` 路径——`.orbi/`、`.worktrees/`、`.pi-session/`、`.pi/`，以及根目录的 `plan.md`、`test.log`、`verify.md`——以及 `.git` 元数据和既有配置已识别、位于 worktree 内的凭据与 provider 文件。直接使用这些既有解析路径；没有额外设置，也没有启发式文件名字典。正文与隐藏块共用这项检查。它发布已知边界内的路径；不发布文件内容，也不承诺检测未知文件里的任意机密。
+read 或 edit 的活动目标必须规范化为 worktree 内、相对于仓库的路径：worktree 内的绝对路径会以对应的相对路径发布，因此任何绝对路径都不会出现在任何一种表示中；越界、位于外部或无法归属的目标变为 null。排除 `RUNNER_RUNTIME_EXCLUDES` 路径（单一定义在 `pi_activity.py`，由 `pi_session.py` 为 worktree exclude 固定与 dirty-worktree 门禁导入）——`.orbi/`、`.worktrees/`、`.pi-session/`、`.pi/`，以及根目录的 `plan.md`、`test.log`、`verify.md`——以及 `.git` 元数据。带有 HTML 注释字符（`<` 或 `>`）的目标同样变为 null：隐藏块在序列化时转义这些字符，而正文逐字发布同一个值，因此可能开启或提前终止注释的值会在渲染之前就从两种表示中被丢弃。既有配置解析出的凭据与 provider 文件（`<deploy_home>/.orbi/env` 与 host-only 的 `pi_providers` 文件）位于任务 worktree 之外，因此同一条包含规则就会拒绝它们；没有额外设置，也没有启发式文件名字典。正文与隐藏块共用这项检查。它发布已知边界内的路径；不发布文件内容，也不承诺检测未知文件里的任意机密。
 
 ## 进度摘要契约
 
@@ -111,11 +111,39 @@ read 或 edit 的活动目标必须规范化为 worktree 内、相对于仓库�
 
 ### 内容与安全规则
 
-从结构化事件生成一个安全值，正文与块都由它渲染。read 或 edit 目标校验为仓库相对路径；绝对或越界路径、凭据位置、内部运行时目录都被拒绝。序列化会被转义，路径无法终止 HTML 注释。已拼装好的命令字符串绝不二次清洗。prompt、分析文本、源码、输出与机密在两种表示里都绝不发布，结束时也一样；恢复与失败记录保留它们自己既有的契约。
+从结构化事件生成一个安全值，正文与块都由它渲染。read 或 edit 目标校验为仓库相对路径；绝对或越界路径、凭据位置、内部运行时目录与 HTML 注释字符都被拒绝，因此没有任何目标能终止隐藏块或在可读正文里伪造注释。序列化同样会被转义，即使某个值带着这些字符，块也不会被提前终止。已拼装好的命令字符串绝不二次清洗。prompt、分析文本、源码、输出与机密在两种表示里都绝不发布，结束时也一样；恢复与失败记录保留它们自己既有的契约。
 
 ### 读者与发布边界
 
 读者按既有作者规则校验可信发布者，校验精确的无引号正式前缀、受支持的版本与完整分页。候选与 run 的选择（包括没有块的记录）遵循上文“报告选择”。PR、check 与终态事实不重复写进 payload。没有当前 run 指针、没有新的 run 排序、没有第二条评论流、没有恢复存储。发布始终是尽力而为：它失败不会改 label、不会阻塞、不会跳过、也不会让交付、评审或合并失败。这是展示契约，不是任务状态。
+
+### 协议示例
+
+下面这些评论正文是供读者集成使用的协议 fixture：run 归属与时间戳都来自记录本身，写入方绝不发布伪造或损坏的形态。消费者用它们验证自己的选择与展示逻辑；本页只记录这些形态。
+
+```html
+<!-- trusted author, formal prefix, summary available: run marker followed by the versioned block -->
+<!-- orbi:run=86b57234 -->
+<!-- orbi:progress:v1 {"step":"review","reported_at":"2026-10-15T06:20:20Z","activity":{"at":"2026-10-15T06:20:18Z","kind":"read","target":"src/login.ts"}} -->
+
+<!-- forged: the marker quoted inside prose or a fence is NOT a formal record -->
+> <!-- orbi:run=86b57234 -->
+
+<!-- a newer run without details: marker only, classification missing -->
+<!-- orbi:run=5c1d0a77 -->
+
+<!-- unknown version: unsupported; the rest of the view still renders -->
+<!-- orbi:progress:v9 {"step":"review"} -->
+
+<!-- corrupt payload: invalid; the rest of the view still renders -->
+<!-- orbi:progress:v1 {"step": -->
+
+<!-- late old-run update: still attributed to run 86b57234 and its own times -->
+<!-- orbi:run=86b57234 -->
+<!-- orbi:progress:v1 {"step":"merge","reported_at":"2026-10-15T07:44:00Z","activity":null} -->
+```
+
+终态或手动状态这类 GitHub 事实——Issue 已关闭或已合并，或处于已确认的手动等待——优先于任何已发布或本地的摘要；被引用、被围栏包裹或版本未知的 marker 永远不会被选作报告当前的 run。
 
 ## 工作示例
 

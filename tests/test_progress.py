@@ -6,12 +6,16 @@ finds the same comment and keeps PATCHing it — no database. Milestones are
 short standalone comments so GitHub Mobile pushes a notification.
 """
 import json
+import re
 import subprocess
+from pathlib import Path
 
 import pytest
 
-from orbi import progress, run_state, scene
+from orbi import progress, progress_summary, run_state, scene
 from orbi.delivery_scene import RunContext
+
+from tests.fakes.progress import freeze_report_time
 
 
 def test_quote_value_quotes_only_values_with_spaces():
@@ -354,6 +358,8 @@ def test_progress_body_fails_fast_without_issue_title():
 
 
 def test_progress_body_starts_with_hidden_run_marker():
+    """Issue #1657: the run marker is followed immediately by the
+    versioned summary block; the readable fields render the same value."""
     body = progress.progress_body({
         "run_id": "abc12345",
         "issue": 18,
@@ -362,7 +368,8 @@ def test_progress_body_starts_with_hidden_run_marker():
         "phase": "test",
         "elapsed": "3m 12s",
         "last_activity": "2026-08-25T02:30:00Z",
-        "last_action": "bash pytest tests/",
+        "activity": {"at": "2026-08-25T02:30:00Z", "kind": "command",
+                     "target": None},
         "tests": "156 passed",
         "review_round": 0,
         "branch": "orbi/xqliu-orbi-issue-18",
@@ -371,13 +378,19 @@ def test_progress_body_starts_with_hidden_run_marker():
     })
     lines = body.splitlines()
     assert lines[0] == "<!-- orbi:run=abc12345 -->"
+    assert lines[1].startswith("<!-- orbi:progress:v1 {")
+    assert lines[1].endswith(" -->")
     assert "**Orbi progress**" in body
     assert "- issue: #18 Publish progress" in body
     assert "- role: implement" in body
     assert "- phase: test" in body
     assert "- elapsed: 3m 12s" in body
+    assert "- step: implement" in body
+    assert "- reported at: " in body
     assert "- last activity: 2026-08-25T02:30:00Z" in body
-    assert "- last action: bash pytest tests/" in body
+    assert "- activity: command" in body
+    # The raw command never reaches either representation.
+    assert "bash pytest tests/" not in body
     assert "- tests: 156 passed" in body
     assert "- review/fix round: 0" not in body
     assert "- review:" not in body
@@ -403,7 +416,8 @@ def test_progress_body_marks_missing_values_as_dash():
         "session": None,
     })
     assert "- last activity: -" in body
-    assert "- last action: -" in body
+    assert "- step: implement" in body
+    assert "- activity: -" in body
     assert "- tests: -" in body
     assert "- session: -" in body
 
@@ -469,7 +483,9 @@ def test_progress_body_assigns_status_fields_to_visible_or_folded_sections():
         "issue_title": "Progress comment fold",
         "role": "implement", "priority": "normal", "phase": "test",
         "elapsed": "3m", "last_activity": "now",
-        "last_action": "pytest", "tests": "10 passed",
+        "activity": {"at": "2026-10-15T06:20:18Z", "kind": "read",
+                     "target": "src/login.ts"},
+        "tests": "10 passed",
         "review_round": 3, "review": "pending", "pr": "-",
         "branch": "orbi/task", "session": "sess-1", "recovery": "term",
     })
@@ -490,11 +506,11 @@ def test_progress_body_assigns_status_fields_to_visible_or_folded_sections():
     visible = field_names(body[:open_at])
     folded = field_names(body[open_at:close_at])
     assert visible == {
-        "role", "last activity", "tests", "PR", "recovery",
-        "review/fix round",
+        "role", "step", "reported at", "last activity", "activity",
+        "tests", "PR", "recovery", "review/fix round",
     }
     assert folded == {
-        "issue", "run_id", "priority", "phase", "elapsed", "last action",
+        "issue", "run_id", "priority", "phase", "elapsed",
         "branch", "session",
     }
 
@@ -1309,3 +1325,416 @@ def test_failure_repeat_count_and_bump_round_trip():
             body, "ffffffffffffffff")
     with pytest.raises(ValueError, match="must be a string"):
         progress.bump_failure_repeat(None, "01e1f4a35a2fe1e5")
+
+
+# --- Issue #1657: the versioned progress summary (prose + block) ---
+
+
+def _summary_state(**overrides):
+    """A complete state dict as `_progress_state` produces it."""
+    state = {
+        "run_id": "abc12345",
+        "issue": 1657,
+        "issue_title": "Publish a safe versioned delivery summary",
+        "role": "implement",
+        "priority": "normal",
+        "phase": "read",
+        "elapsed": "1m 0s",
+        "tests": None,
+        "review_round": 0,
+        "branch": "orbi/orbi-build-orbi-issue-1657",
+        "pr": None,
+        "session": "sess-1",
+        "step": "implement",
+        "activity": None,
+    }
+    state.update(overrides)
+    return state
+
+
+def _block_payload(body):
+    """The parsed payload of the body's one progress block."""
+    match = re.search(
+        r"<!-- orbi:progress:v1 (\{.*?\}) -->", body,
+    )
+    assert match is not None, body
+    return json.loads(match.group(1))
+
+
+def test_progress_body_starts_with_the_run_marker_and_the_block(monkeypatch):
+    freeze_report_time(monkeypatch)
+    body = progress.progress_body(_summary_state(
+        activity={"at": "2026-10-15T06:20:18Z", "kind": "read",
+                  "target": "src/login.ts"},
+    ))
+    lines = body.splitlines()
+    assert lines[0] == "<!-- orbi:run=abc12345 -->"
+    assert lines[1] == (
+        '<!-- orbi:progress:v1 {"step":"implement",'
+        '"reported_at":"2026-10-15T06:20:20Z","activity":{'
+        '"at":"2026-10-15T06:20:18Z","kind":"read",'
+        '"target":"src/login.ts"}} -->'
+    )
+    assert body.count("<!-- orbi:progress:v1 ") == 1
+
+def test_progress_prose_and_block_render_the_same_activity(monkeypatch):
+    freeze_report_time(monkeypatch)
+    body = progress.progress_body(_summary_state(
+        role="review", step="merge",
+        activity={"at": "2026-10-15T06:20:18Z", "kind": "edit",
+                  "target": "src/orbi/progress.py"},
+    ))
+    assert "- role: review" in body
+    assert "- step: merge" in body
+    assert "- reported at: 2026-10-15T06:20:20Z" in body
+    assert "- last activity: 2026-10-15T06:20:18Z" in body
+    assert "- activity: edit src/orbi/progress.py" in body
+    assert _block_payload(body) == {
+        "step": "merge",
+        "reported_at": "2026-10-15T06:20:20Z",
+        "activity": {"at": "2026-10-15T06:20:18Z", "kind": "edit",
+                     "target": "src/orbi/progress.py"},
+    }
+
+
+def test_progress_body_makes_a_missing_activity_clear(monkeypatch):
+    freeze_report_time(monkeypatch)
+    body = progress.progress_body(_summary_state(activity=None))
+    assert "- last activity: -" in body
+    assert "- activity: -" in body
+    assert _block_payload(body)["activity"] is None
+    assert "command" not in body
+
+
+def test_heartbeat_advances_the_report_time_not_the_activity_time(monkeypatch):
+    activity = {"at": "2026-10-15T06:20:18Z", "kind": "read",
+                "target": "src/login.ts"}
+    freeze_report_time(monkeypatch)
+    first = progress.progress_body(_summary_state(activity=activity))
+    freeze_report_time(monkeypatch, "2026-10-15T06:21:10Z")
+    second = progress.progress_body(_summary_state(activity=activity))
+    assert _block_payload(first)["reported_at"] == "2026-10-15T06:20:20Z"
+    assert _block_payload(second)["reported_at"] == "2026-10-15T06:21:10Z"
+    assert _block_payload(first)["activity"] == _block_payload(second)["activity"]
+    assert "- last activity: 2026-10-15T06:20:18Z" in second
+
+
+def test_progress_step_comes_from_the_bound_runner_action():
+    assert progress_summary.step_for(_summary_state(role="implement", step=None)) == "implement"
+    assert progress_summary.step_for(_summary_state(role="review", step=None)) == "review"
+    assert progress_summary.step_for(_summary_state(role="release", step=None)) == "release"
+    # A content/ops/ticket-only task has no stage of its own.
+    assert progress_summary.step_for(_summary_state(role="ticket", step=None)) is None
+    # The Runner entered the merge gate's checks action, then merged.
+    assert progress_summary.step_for(_summary_state(role="review", step="checks")) == "checks"
+    assert progress_summary.step_for(_summary_state(role="review", step="merge")) == "merge"
+
+
+def test_progress_step_rejects_an_undocumented_stage():
+    assert progress_summary.step_for(_summary_state(step="deploy")) is None
+
+
+def test_step_by_role_keys_are_the_runner_role_constants():
+    """Drift guard: the map keys are the roles the Runner binds."""
+    from orbi import pi_command, pi_process, release
+    assert set(progress_summary.STEP_BY_ROLE) == {
+        pi_process.ROLE_IMPLEMENT,
+        pi_command.ROLE_REVIEW,
+        release.ROLE_RELEASE,
+    }
+    assert pi_command.ROLE_TICKET not in progress_summary.STEP_BY_ROLE
+
+
+def test_progress_steps_are_the_documented_vocabulary():
+    assert set(progress_summary.PROGRESS_STEPS) == {
+        "starting", "implement", "review", "checks", "merge", "release",
+    }
+
+
+def test_progress_block_escapes_a_value_that_cannot_terminate_the_comment(tmp_path):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    hostile = worktree / "src" / "a--b.py"
+    activity = {"kind": "read", "target": str(hostile),
+                "last_activity": "2026-10-15T06:20:18Z"}
+    value = progress_summary.safe_activity(worktree, activity)
+    assert value["target"] == "src/a--b.py"
+    block = progress_summary.progress_block({
+        "step": "implement", "reported_at": "2026-10-15T06:20:20Z",
+        "activity": value,
+    })
+    assert block.startswith("<!-- orbi:progress:v1 {")
+    assert block.endswith(" -->")
+    assert block.count("<!--") == 1
+    assert block.count("-->") == 1
+    payload = json.loads(block[len("<!-- orbi:progress:v1 "):-4])
+    assert payload["activity"] == value
+
+
+def test_progress_block_escapes_an_html_terminator_in_a_value():
+    """The hidden block's own guarantee: were a value ever to carry the
+    characters, the serialized block still cannot be terminated early."""
+    block = progress_summary.progress_block({
+        "step": "implement", "reported_at": "2026-10-15T06:20:20Z",
+        "activity": {"at": "2026-10-15T06:20:18Z", "kind": "read",
+                     "target": "src/x-->y.py"},
+    })
+    assert block.count("-->") == 1
+    assert "\\u003e" in block
+    payload = json.loads(block[len("<!-- orbi:progress:v1 "):-4])
+    assert payload["activity"]["target"] == "src/x-->y.py"
+
+
+@pytest.mark.parametrize(
+    "raw", ["src/x-->y.py", "src/x<!--y.py", "src/a<b.py"],
+)
+def test_an_html_comment_character_is_null_in_both_representations(
+    tmp_path, raw,
+):
+    """Issue #1657: the prose publishes the same value verbatim where the
+    block escapes it, so a target carrying an HTML comment character
+    never reaches EITHER representation; the known kind and time stay."""
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    value = progress_summary.safe_activity(worktree, {
+        "kind": "edit", "target": str(worktree / raw),
+        "last_activity": "2026-10-15T06:20:18Z",
+    })
+    assert value == {
+        "at": "2026-10-15T06:20:18Z", "kind": "edit", "target": None,
+    }
+
+
+def test_a_hostile_target_forges_no_block_in_the_rendered_body(
+    monkeypatch, tmp_path,
+):
+    """The readable body of the trusted writer carries exactly one run
+    marker, one progress block and one runner marker — never a second,
+    forged block or a swallowed comment (Issue #1657)."""
+    freeze_report_time(monkeypatch)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    forged = (
+        'src/a<!-- orbi:progress:v1 {"step":"merge",'
+        '"reported_at":"2099-01-01T00:00:00Z"} -->.py'
+    )
+    body = progress.progress_body(_summary_state(
+        activity=progress_summary.safe_activity(worktree, {
+            "kind": "read", "target": str(worktree / forged),
+            "last_activity": "2026-10-15T06:20:18Z",
+        }),
+    ))
+    assert body.count("<!--") == 3  # run marker, block, runner marker
+    assert body.count("-->") == 3
+    assert "2099-01-01" not in body
+    assert "- activity: read\n" in body
+    assert _block_payload(body)["activity"]["target"] is None
+
+
+def test_safe_activity_publishes_only_the_documented_kinds(tmp_path):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    assert progress_summary.safe_activity(worktree, None) is None
+    assert progress_summary.safe_activity(worktree, {}) is None
+    assert progress_summary.safe_activity(worktree, {"kind": "deploy"}) is None
+    assert progress_summary.safe_activity(
+        worktree, {"kind": "command", "target": "/etc/passwd",
+                  "last_activity": "2026-10-15T06:20:18Z"},
+    ) == {
+        "at": "2026-10-15T06:20:18Z",
+        "kind": "command",
+        "target": None,
+    }
+    assert progress_summary.safe_activity(
+        worktree, {"kind": "analysis", "target": "/w/src/login.ts",
+                  "last_activity": "not a timestamp"},
+    ) == {"at": None, "kind": "analysis", "target": None}
+    # A missing or non-string activity time is unknown, never invented.
+    assert progress_summary.safe_activity(
+        worktree, {"kind": "read", "target": "src/login.ts"},
+    ) == {"at": None, "kind": "read", "target": "src/login.ts"}
+    assert progress_summary.safe_activity(
+        worktree, {"kind": "read", "target": "src/login.ts",
+                  "last_activity": 7},
+    ) == {"at": None, "kind": "read", "target": "src/login.ts"}
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("src/login.ts", "src/login.ts"),
+        ("./src/login.ts", "src/login.ts"),
+    ],
+)
+def test_safe_target_accepts_an_inside_worktree_path(tmp_path, raw, expected):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    assert progress_summary.safe_target(worktree, raw) == expected
+    assert progress_summary.safe_target(
+        worktree, str(worktree / raw),
+    ) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "/etc/passwd",
+        "../../etc/passwd",
+        "src/../../outside.py",
+        "",
+        None,
+        7,
+        "src/a\nb.py",
+        "deep/" * 120 + "file.py",
+    ],
+)
+def test_safe_target_rejects_outside_and_unattributable_targets(tmp_path, raw):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    assert progress_summary.safe_target(worktree, raw) is None
+    outside = tmp_path / "outside" / "providers.json"
+    assert progress_summary.safe_target(worktree, str(outside)) is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        ".git/config",
+        ".orbi/plan.md",
+        ".orbi/env",
+        ".worktrees/other/src/x.py",
+        ".pi-session/s.jsonl",
+        ".pi/x",
+        "plan.md",
+        "test.log",
+        "verify.md",
+    ],
+)
+def test_safe_target_rejects_runtime_and_credential_paths(tmp_path, raw):
+    """The shared runtime-path list, .git metadata and the
+    worktree-local deploy env file are never published (Issue #1657)."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    assert progress_summary.safe_target(worktree, raw) is None
+
+
+def test_safe_target_keeps_a_nested_file_with_a_runtime_name(tmp_path):
+    # Only the ROOT plan/test/verify artifacts are Runner-owned.
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    assert progress_summary.safe_target(worktree, "docs/plan.md") == "docs/plan.md"
+
+
+def test_progress_publication_patches_one_comment_with_the_block(monkeypatch):
+    freeze_report_time(monkeypatch)
+    publisher, comments, posts, patches = make_stateful_publisher()
+    body = progress.progress_body(_summary_state(
+        activity={"at": "2026-10-15T06:20:18Z", "kind": "read",
+                  "target": "src/login.ts"},
+    ))
+    publisher.ensure(body)
+    publisher.patch(body)
+    assert len(posts) == 1
+    assert len(patches) == 1
+    assert len(comments) == 1
+    assert comments[0]["body"].count("<!-- orbi:progress:v1 ") == 1
+    assert _block_payload(comments[0]["body"])["step"] == "implement"
+    assert progress.find_progress_comment(comments, "abc12345") is not None
+
+
+def test_progress_publication_failure_stays_a_pure_bypass(monkeypatch, tmp_path):
+    """A forced publication failure changes no delivery state: no
+    exception, no relabel, no skipped step (Issue #79/#1657)."""
+    calls = []
+    def boom(*args, **kwargs):
+        calls.append(args)
+        raise RuntimeError("gh api 404")
+    publisher = progress.ProgressPublisher(
+        18, "xqliu/orbi", "abc12345", run_command=boom,
+    )
+    progress._safe_publish(
+        run_id="abc12345", issue=18, source_repo="xqliu/orbi",
+        role="implement",
+        action=lambda: publisher.ensure(progress.progress_body(
+            _summary_state(),
+        )),
+    )
+    assert calls
+    assert publisher.comment_id is None
+
+
+def test_documented_progress_fixture_matches_the_writer_output():
+    """The public contract's example block is the writer's output shape."""
+    text = (
+        Path(__file__).resolve().parent.parent
+        / "docs" / "public-contracts.mdx"
+    ).read_text(encoding="utf-8")
+    match = re.search(r"<!-- orbi:progress:v1 (\{.*?\}) -->", text)
+    assert match is not None, "the docs page lost the progress example"
+    payload = json.loads(match.group(1))
+    assert set(payload) == {"step", "reported_at", "activity"}
+    assert set(payload["activity"]) == {"at", "kind", "target"}
+    assert payload["step"] in progress_summary.PROGRESS_STEPS
+    assert progress_summary.serialize_summary(payload) == match.group(1)
+    assert progress_summary.progress_block(payload) == match.group(0)
+
+
+def test_progress_state_projects_the_watcher_activity_safely(tmp_path):
+    """The raw session state is reduced to the one safe value where
+    the worktree is known: kind/target/at, the path policy applied."""
+    worktree = tmp_path / "worktree"
+    (worktree / "src").mkdir(parents=True)
+    ctx = RunContext(
+        run_id="a1b2c3d4", issue=4, branch="b",
+        worktree=worktree, source_repo="owner/repo",
+    )
+    state = progress._progress_state(
+        ctx, title="t", role="review", started=0.0, pr_url=None,
+        review_round=0, priority="normal",
+        activity={
+            "kind": "edit",
+            "target": str(worktree / "src" / "login.ts"),
+            "last_activity": "2026-10-15T06:20:18.761Z",
+            "action": "edit /w/src/login.ts",
+        },
+    )
+    assert state["activity"] == {
+        "at": "2026-10-15T06:20:18Z",
+        "kind": "edit",
+        "target": "src/login.ts",
+    }
+    assert state["step"] == "review"
+    # An unsafe target keeps the known kind and time, target null.
+    unsafe = progress._progress_state(
+        ctx, title="t", role="implement", started=0.0, pr_url=None,
+        review_round=0, priority="normal",
+        activity={
+            "kind": "read",
+            "target": "/etc/passwd",
+            "last_activity": "2026-10-15T06:20:18Z",
+        },
+    )
+    assert unsafe["activity"] == {
+        "at": "2026-10-15T06:20:18Z", "kind": "read", "target": None,
+    }
+    # An unknown tool publishes no activity at all.
+    unknown = progress._progress_state(
+        ctx, title="t", role="implement", started=0.0, pr_url=None,
+        review_round=0, priority="normal",
+        activity={"kind": None, "target": "/w/secret"},
+    )
+    assert unknown["activity"] is None
+
+
+def test_progress_state_takes_the_explicit_runner_step(tmp_path):
+    ctx = RunContext(
+        run_id="a1b2c3d4", issue=4, branch="b",
+        worktree=tmp_path, source_repo="owner/repo",
+    )
+    state = progress._progress_state(
+        ctx, title="t", role="review", step="merge", started=0.0,
+        pr_url=None, review_round=0, priority="normal", activity={},
+    )
+    assert state["step"] == "merge"
+
+
