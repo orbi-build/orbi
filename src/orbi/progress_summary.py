@@ -110,8 +110,11 @@ def safe_target(worktree: Path, raw: object) -> str | None:
     worktree. An absolute path inside the worktree is published as its
     repository-relative form — nothing absolute is ever published; an
     escaping, outside, unattributable (or non-string) target, `.git`
-    metadata and a Runner-owned runtime path all become None. Prose and
-    the hidden block share this check.
+    metadata, a Runner-owned runtime path and a target carrying an HTML
+    comment character all become None. Prose and the hidden block share
+    this check: the block escapes those characters while it serializes,
+    the readable prose publishes the same value verbatim, so the value
+    itself must be safe for BOTH representations.
     """
     if not isinstance(raw, str) or not raw:
         return None
@@ -125,7 +128,12 @@ def safe_target(worktree: Path, raw: object) -> str | None:
     text = relative.as_posix()
     if not text or text == "." or len(text) > _MAX_TARGET_LENGTH:
         return None
-    if any(character in text for character in "\r\n\x00"):
+    # The block escapes `<`/`>` in its serialization; the readable prose
+    # publishes the value verbatim, where `<!--` would swallow the rest of
+    # the comment and `-->` would terminate it early. A target carrying
+    # either character is therefore dropped in both representations. The
+    # control characters go for the same reason (one value, one line).
+    if any(character in text for character in "\r\n\x00<>"):
         return None
     if _is_runtime_relative_path(text):
         return None

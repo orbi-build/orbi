@@ -1471,26 +1471,64 @@ def test_progress_block_escapes_a_value_that_cannot_terminate_the_comment(tmp_pa
     assert payload["activity"] == value
 
 
-def test_progress_block_escapes_an_html_terminator_in_a_path(tmp_path):
-    worktree = tmp_path / "worktree"
-    worktree.mkdir()
-    activity = {
-        "kind": "edit",
-        "target": str(worktree / "src" / "x-->y.py"),
-        "last_activity": "2026-10-15T06:20:18Z",
-    }
-    value = progress_summary.safe_activity(worktree, activity)
-    assert value["target"].endswith("x-->y.py")
+def test_progress_block_escapes_an_html_terminator_in_a_value():
+    """The hidden block's own guarantee: were a value ever to carry the
+    characters, the serialized block still cannot be terminated early."""
     block = progress_summary.progress_block({
         "step": "implement", "reported_at": "2026-10-15T06:20:20Z",
-        "activity": value,
+        "activity": {"at": "2026-10-15T06:20:18Z", "kind": "read",
+                     "target": "src/x-->y.py"},
     })
-    # The path cannot terminate the comment: only the block's own end
-    # carries the terminator, and the payload decodes back exactly.
     assert block.count("-->") == 1
-    payload = json.loads(block[len("<!-- orbi:progress:v1 "):-4])
-    assert payload["activity"]["target"] == value["target"]
     assert "\\u003e" in block
+    payload = json.loads(block[len("<!-- orbi:progress:v1 "):-4])
+    assert payload["activity"]["target"] == "src/x-->y.py"
+
+
+@pytest.mark.parametrize(
+    "raw", ["src/x-->y.py", "src/x<!--y.py", "src/a<b.py"],
+)
+def test_an_html_comment_character_is_null_in_both_representations(
+    tmp_path, raw,
+):
+    """Issue #1657: the prose publishes the same value verbatim where the
+    block escapes it, so a target carrying an HTML comment character
+    never reaches EITHER representation; the known kind and time stay."""
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    value = progress_summary.safe_activity(worktree, {
+        "kind": "edit", "target": str(worktree / raw),
+        "last_activity": "2026-10-15T06:20:18Z",
+    })
+    assert value == {
+        "at": "2026-10-15T06:20:18Z", "kind": "edit", "target": None,
+    }
+
+
+def test_a_hostile_target_forges_no_block_in_the_rendered_body(
+    monkeypatch, tmp_path,
+):
+    """The readable body of the trusted writer carries exactly one run
+    marker, one progress block and one runner marker — never a second,
+    forged block or a swallowed comment (Issue #1657)."""
+    freeze_report_time(monkeypatch)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    forged = (
+        'src/a<!-- orbi:progress:v1 {"step":"merge",'
+        '"reported_at":"2099-01-01T00:00:00Z"} -->.py'
+    )
+    body = progress.progress_body(_summary_state(
+        activity=progress_summary.safe_activity(worktree, {
+            "kind": "read", "target": str(worktree / forged),
+            "last_activity": "2026-10-15T06:20:18Z",
+        }),
+    ))
+    assert body.count("<!--") == 3  # run marker, block, runner marker
+    assert body.count("-->") == 3
+    assert "2099-01-01" not in body
+    assert "- activity: read\n" in body
+    assert _block_payload(body)["activity"]["target"] is None
 
 
 def test_safe_activity_publishes_only_the_documented_kinds(tmp_path):
