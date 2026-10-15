@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 import orbi.status_observe as observe
+from orbi import cli
 from orbi.config import RunnerConfig
 
 
@@ -27,10 +28,11 @@ def _issue(number, *, title="task", url="u", state="open",
     return issue
 
 
-def _config(tmp_path, repos=("acme/shop",)):
+def _config(tmp_path, repos=("acme/shop",), pi_providers=None):
     return RunnerConfig(
         source_repos=tuple(repos), repo_dir=tmp_path, base_branch="main",
         max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots",
+        pi_providers=pi_providers,
     )
 
 
@@ -279,6 +281,33 @@ def test_safe_target_rejects_runtime_and_git_paths(tmp_path):
     assert observe.safe_target(tmp_path, "verify.md") is None
     assert observe.safe_target(tmp_path, ".git/config") is None
     assert observe.safe_target(tmp_path, "src/.git/x") is None
+
+
+def test_local_observer_excludes_the_configured_provider_file(tmp_path):
+    """The credential/provider file the existing configuration already
+    resolved is null even when it sits inside the worktree."""
+    tree = _worktree(tmp_path, "orbi-acme-shop-issue-1-aaaaaaaa")
+    provider = tree / "provider.json"
+    provider.write_text("{}", encoding="utf-8")
+    session = tree / ".pi-session"
+    session.mkdir()
+    (session / "s.jsonl").write_text(
+        json.dumps({
+            "type": "message", "timestamp": "2026-10-15T06:20:18Z",
+            "message": {"role": "assistant", "content": [
+                {"type": "toolCall", "name": "read_file",
+                 "arguments": {"path": "provider.json"}},
+            ]},
+        }) + "\n",
+        encoding="utf-8",
+    )
+    config = _config(tmp_path, pi_providers=provider)
+    observer = observe.StatusObserver(
+        config, observe.parse_scope(config.source_repos),
+    )
+    entry = observer.observations("acme/shop", {1})[1][0]
+    assert entry.kind == "read"
+    assert entry.target is None
 
 
 def test_safe_target_rejects_a_configured_excluded_path(tmp_path):
@@ -556,6 +585,49 @@ def test_observer_reports_an_ended_delivery_with_its_confirmed_state(tmp_path):
     ]
 
 
+def test_observer_reads_base_queue_and_result_on_the_github_cycle(tmp_path):
+    """The base, the ready queue and the recent result are GitHub-backed
+    view data of the same cycle as the active set (Issue #1656)."""
+    config = _config(tmp_path)
+    scope = observe.parse_scope(config.source_repos)
+    calls = []
+    observer = observe.StatusObserver(
+        config, scope, read_issues=lambda repo: [],
+        read_base=lambda repo_dir, branch: calls.append(
+            ("base", repo_dir, branch),
+        ) or "abc123",
+        read_ready=lambda repo: calls.append(("ready", repo)) or {"n": 11},
+        read_result=lambda repo: calls.append(("result", repo)) or None,
+    )
+    observer.refresh()
+    assert calls == [
+        ("base", tmp_path, "main"), ("ready", "acme/shop"),
+        ("result", "acme/shop"),
+    ]
+    assert observer.base["acme/shop"] == "abc123"
+    assert observer.ready["acme/shop"] == {"n": 11}
+    assert observer.result["acme/shop"] is None
+
+
+def test_render_re_reads_no_github_state(tmp_path):
+    """A local render (the 0.5-second cycle) re-reads no GitHub state:
+    the queue/result/base come from the last complete cycle."""
+    config = _config(tmp_path)
+    scope = observe.parse_scope(config.source_repos)
+    reads = []
+    observer = observe.StatusObserver(
+        config, scope, read_issues=lambda repo: [],
+        read_base=lambda repo_dir, branch: reads.append("base") or "abc123",
+        read_ready=lambda repo: reads.append("ready") or None,
+        read_result=lambda repo: reads.append("result") or None,
+    )
+    observer.refresh()
+    reads.clear()
+    report = cli.status_report(config, scope, observer)
+    assert "  base: main abc123" in report
+    assert reads == []
+
+
 def test_observer_covers_two_repositories_and_discovers_new_tasks(tmp_path):
     config = _config(tmp_path, repos=("acme/shop", "acme/blog"))
     scope = observe.parse_scope(config.source_repos)
@@ -633,3 +705,46 @@ def test_follow_without_a_handler_still_fails_fast(tmp_path):
     assert observe.follow(
         observer, lambda: "view", sleep=lambda seconds: None, max_cycles=None,
     ) == 1
+
+
+def test_follow_fails_fast_on_a_hung_gh_read(tmp_path):
+    """A hung gh (TimeoutExpired) is the same read failure class as a
+    non-zero exit: no traceback, non-zero return."""
+    config = _config(tmp_path)
+    scope = observe.parse_scope(config.source_repos)
+
+    def read_issues(repo):
+        raise subprocess.TimeoutExpired(["gh"], 30)
+
+    observer = observe.StatusObserver(config, scope, read_issues=read_issues)
+    assert observe.follow(
+        observer, lambda: "view", sleep=lambda seconds: None, max_cycles=None,
+    ) == 1
+
+
+def test_follow_preserves_the_last_view_when_the_render_fails(tmp_path):
+    """A failure in the rendered view (the ready/result/base reads ran on
+    the cycle that succeeded earlier) keeps the last successful view."""
+    config = _config(tmp_path)
+    scope = observe.parse_scope(config.source_repos)
+    observer = observe.StatusObserver(
+        config, scope, read_issues=lambda repo: [], now=lambda: 0.0,
+    )
+    views = iter(["view-1", "view-2"])
+
+    def render():
+        value = next(views, None)
+        if value is None:
+            raise subprocess.CalledProcessError(1, ["gh"], stderr="boom")
+        return value
+
+    errors = []
+    rc = observe.follow(
+        observer, render, sleep=lambda seconds: None, now=lambda: 0.0,
+        max_cycles=8,
+        on_error=lambda exc, last: errors.append((str(exc), last)),
+    )
+    assert rc == 1
+    assert errors == [
+        ("Command '['gh']' returned non-zero exit status 1.", "view-2"),
+    ]

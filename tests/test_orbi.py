@@ -263,10 +263,17 @@ def _raw_delivery_issue(number, *, title="task", url="u", state="open",
 
 
 def _status_observer(config, raw_by_repo):
-    """Build a refreshed observer over synthetic Issue objects."""
+    """Build a refreshed observer over synthetic Issue objects.
+
+    The queue/result/base lookups are the CLI's own (already
+    monkeypatched here), exactly as `main` wires them, so the
+    observer's GitHub cycle is the only place that reads them.
+    """
     scope = observe.parse_scope(config.source_repos)
     observer = observe.StatusObserver(
         config, scope, read_issues=lambda repo: raw_by_repo.get(repo, []),
+        read_ready=orbi.ready_issue, read_result=orbi.recent_result,
+        read_base=orbi.freeze_base,
     )
     observer.refresh()
     return scope, observer
@@ -384,7 +391,7 @@ def test_main_status_prints_report(monkeypatch, tmp_path, capsys):
     _write_prompts(tmp_path)
     monkeypatch.setattr(
         observe, "StatusObserver",
-        lambda config, scope: _NoopObserver(),
+        lambda config, scope, **kwargs: _NoopObserver(),
     )
     monkeypatch.setattr(
         orbi, "status_report",
@@ -447,12 +454,34 @@ def test_main_status_reports_a_read_failure(tmp_path, monkeypatch, capsys):
             raise subprocess.CalledProcessError(1, ["gh"], stderr="boom")
 
     monkeypatch.setattr(
-        observe, "StatusObserver", lambda config, scope: _FailingObserver(),
+        observe, "StatusObserver",
+        lambda config, scope, **kwargs: _FailingObserver(),
     )
     assert orbi.main(["status", "--config", str(config)]) == 1
     err = capsys.readouterr().err
     assert "status_failed scope=acme/shop" in err
     assert "non-zero exit status 1" in err
+
+
+def test_main_status_reports_a_render_read_failure(
+    tmp_path, monkeypatch, capsys,
+):
+    """A read that fails while rendering the view (the queue/result/base
+    reads) uses the same scoped failure contract."""
+    config = tmp_path / "orbi.toml"
+    config.write_text("source_repos = [\"acme/shop\"]\n", encoding="utf-8")
+    _write_prompts(tmp_path)
+    monkeypatch.setattr(
+        observe, "StatusObserver",
+        lambda config, scope, **kwargs: _NoopObserver(),
+    )
+
+    def failing_report(config, scope, observer):
+        raise subprocess.CalledProcessError(1, ["gh"], stderr="boom")
+
+    monkeypatch.setattr(orbi, "status_report", failing_report)
+    assert orbi.main(["status", "--config", str(config)]) == 1
+    assert "status_failed scope=acme/shop" in capsys.readouterr().err
 
 
 def test_main_status_follow_reports_a_read_failure(
@@ -462,7 +491,8 @@ def test_main_status_follow_reports_a_read_failure(
     config.write_text("source_repos = [\"acme/shop\"]\n", encoding="utf-8")
     _write_prompts(tmp_path)
     monkeypatch.setattr(
-        observe, "StatusObserver", lambda config, scope: _FlakyObserver(),
+        observe, "StatusObserver",
+        lambda config, scope, **kwargs: _FlakyObserver(),
     )
     monkeypatch.setattr(
         orbi, "status_report", lambda config, scope, observer: "view",
@@ -483,7 +513,7 @@ def test_main_status_follow_reports_a_read_failure_without_a_view(
     _write_prompts(tmp_path)
     monkeypatch.setattr(
         observe, "StatusObserver",
-        lambda config, scope: _FlakyObserver(fail_after=1),
+        lambda config, scope, **kwargs: _FlakyObserver(fail_after=1),
     )
     monkeypatch.setattr(
         orbi, "status_report", lambda config, scope, observer: "view",
@@ -503,7 +533,8 @@ def test_main_status_follow_ends_cleanly_on_ctrl_c(
     config.write_text("source_repos = [\"acme/shop\"]\n", encoding="utf-8")
     _write_prompts(tmp_path)
     monkeypatch.setattr(
-        observe, "StatusObserver", lambda config, scope: _NoopObserver(),
+        observe, "StatusObserver",
+        lambda config, scope, **kwargs: _NoopObserver(),
     )
     monkeypatch.setattr(
         orbi, "status_report", lambda config, scope, observer: "view",
@@ -1181,7 +1212,7 @@ def test_status_resolves_the_single_existing_installed_unit_config(
     monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
     monkeypatch.setattr(
         observe, "StatusObserver",
-        lambda config, scope: _NoopObserver(),
+        lambda config, scope, **kwargs: _NoopObserver(),
     )
     monkeypatch.setattr(
         orbi, "status_report", lambda config, scope, observer: "ok",

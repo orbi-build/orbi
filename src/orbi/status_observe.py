@@ -17,9 +17,10 @@ docs/public-contracts.mdx:
   worktrees only attach observations to those Issues. A task that
   disappears from the set is read directly and shown with its
   confirmed state.
-- Local discovery runs on a 0.5-second cycle, the GitHub read on a
-  15-second cycle; a read failure preserves the last view, names the
-  scope and exits non-zero.
+- Local discovery runs on a 0.5-second cycle, and every
+  GitHub-backed read (active set, ready queue, recent results, frozen
+  base) on the 15-second GitHub cycle; a read failure preserves the
+  last view, names the scope and exits non-zero.
 
 No database, queue or daemon: GitHub Issues/labels stay the only state
 store, the JSONL files are read in place and nothing is persisted.
@@ -77,8 +78,11 @@ _RUNTIME_EXCLUDES = (".orbi", ".worktrees", ".pi-session", ".pi")
 _RUNTIME_FILES = ("plan.md", "test.log", "verify.md")
 
 # The read failures that end observation with the scope named: a
-# bounded gh read retry already ran inside the reader.
-READ_ERRORS = (subprocess.CalledProcessError, ValueError)
+# bounded gh read retry already ran inside the reader, and the same
+# family the other gh-reading CLI commands collapse (a hung gh raises
+# TimeoutExpired, a missing gh raises OSError, a malformed payload
+# raises ValueError).
+READ_ERRORS = (subprocess.SubprocessError, OSError, ValueError)
 
 
 class StatusSelectorError(ValueError):
@@ -478,16 +482,33 @@ class StatusObserver:
     def __init__(self, config, scope: StatusScope, *,
                  read_issues: Callable[[str], list] = open_issues_complete,
                  read_issue: Callable[..., dict] = issue_view,
+                 read_ready: Callable[[str], dict | None] | None = None,
+                 read_result: Callable[[str], dict | None] | None = None,
+                 read_base: Callable[[Path, str], str] | None = None,
                  exclude_paths: Iterable[str] = (),
                  now: Callable[[], float] = time.monotonic) -> None:
         self.config = config
         self.scope = scope
         self._read_issues = read_issues
         self._read_issue = read_issue
+        self._read_ready = read_ready
+        self._read_result = read_result
+        self._read_base = read_base
         self._now = now
-        self.local = LocalObserver(config.repo_dir, exclude_paths=exclude_paths)
+        # The credential/provider file the existing configuration
+        # already resolved is excluded from activity targets like the
+        # runtime paths (docs/public-contracts.mdx, path policy).
+        excluded = tuple(exclude_paths)
+        if config.pi_providers is not None:
+            excluded += (str(config.pi_providers),)
+        self.local = LocalObserver(config.repo_dir, exclude_paths=excluded)
         self.deliveries: dict[str, list[Delivery]] = {}
         self.confirmed: dict[str, Delivery] = {}
+        # The GitHub-backed queue, result and frozen base of each
+        # repository, read on the GitHub cycle (never by a local render).
+        self.base: dict[str, str] = {}
+        self.ready: dict[str, dict | None] = {}
+        self.result: dict[str, dict | None] = {}
         self.ended: list[str] = []
         self._previous: dict[str, set[int]] = {
             repo: set() for repo in scope.repos
@@ -500,10 +521,23 @@ class StatusObserver:
         return current >= self._next_github
 
     def refresh(self, timestamp: float | None = None) -> None:
-        """Run one complete GitHub read cycle for the whole scope."""
+        """Run one complete GitHub read cycle for the whole scope.
+
+        The active set, the ready queue, the recent results and the
+        frozen base all belong to this cycle: the 0.5-second local cycle
+        renders the last complete reads and never re-reads GitHub.
+        """
         current = self._now() if timestamp is None else timestamp
         ended = []
         for repo in self.scope.repos:
+            if self._read_base is not None:
+                self.base[repo] = self._read_base(
+                    self.config.repo_dir, self.config.base_branch,
+                )
+            if self._read_ready is not None:
+                self.ready[repo] = self._read_ready(repo)
+            if self._read_result is not None:
+                self.result[repo] = self._read_result(repo)
             if self.scope.issue is not None:
                 self.confirmed[repo] = self._read_confirmed(
                     repo, self.scope.issue,
@@ -545,24 +579,28 @@ def follow(observer: StatusObserver, render: Callable[[], str], *,
            ) -> int:
     """Follow the scope until Ctrl-C or max_cycles.
 
-    Every cycle renders the current view from the last complete reads;
-    the GitHub read runs only when its 15-second cycle is due. A read
-    failure calls on_error with the last successful view and returns
-    non-zero without scheduling another cycle.
+    Every cycle renders the current view from the last complete reads
+    (the local 0.5-second cycle); the GitHub read runs only when its
+    15-second cycle is due. A read failure — the GitHub cycle or the
+    rendered view — calls on_error with the last successful view and
+    returns non-zero without scheduling another cycle.
     """
     last_view = None
     cycles = 0
     while max_cycles is None or cycles < max_cycles:
         cycles += 1
         timestamp = now()
-        if observer.due(timestamp):
-            try:
+        try:
+            if observer.due(timestamp):
                 observer.refresh(timestamp)
-            except READ_ERRORS as exc:
-                if on_error is not None:
-                    on_error(exc, last_view)
-                return 1
-        last_view = render()
+            last_view = render()
+        except READ_ERRORS as exc:
+            # A partial read failure ends observation: the last
+            # successful view is preserved, the scope is named by the
+            # handler and no next cycle is scheduled.
+            if on_error is not None:
+                on_error(exc, last_view)
+            return 1
         print(last_view)
         sleep(LOCAL_CYCLE_SECONDS)
     return 0

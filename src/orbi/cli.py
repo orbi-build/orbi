@@ -481,7 +481,9 @@ def status_report(config: config_domain.RunnerConfig,
     kept; the active-delivery section enumerates every concurrent
     delivery in scope with its attributed local observations. An
     explicit --issue scope shows that Issue's confirmed GitHub state and
-    its retained, timed observations instead.
+    its retained, timed observations instead. Every GitHub-backed value
+    comes from the observer's last complete GitHub cycle, so a local
+    render reads no GitHub state.
     """
     lines = [
         f"capacity: {config.max_concurrency}",
@@ -489,7 +491,7 @@ def status_report(config: config_domain.RunnerConfig,
     ]
     for repo in scope.repos:
         lines.append(f"source: {repo}")
-        base_sha = freeze_base(config.repo_dir, config.base_branch)
+        base_sha = observer.base.get(repo) or "-"
         lines.append(f"  base: {config.base_branch} {base_sha}")
         if scope.issue is not None:
             delivery = observer.confirmed.get(repo)
@@ -513,8 +515,8 @@ def status_report(config: config_domain.RunnerConfig,
                         delivery.number, [],
                     ),
                 ))
-        ready = ready_issue(repo)
-        result = recent_result(repo)
+        ready = observer.ready.get(repo)
+        result = observer.result.get(repo)
         lines.append(f"  ready: {format_issue(ready) if ready else '-'}")
         lines.append(f"  result: {format_issue(result) if result else '-'}")
     lines.extend(observer.ended)
@@ -941,13 +943,20 @@ def main(argv: list[str] | None = None) -> int:
         except status_observe.StatusSelectorError as exc:
             print(f"status_failed reason={exc}", file=sys.stderr)
             return 1
-        observer = status_observe.StatusObserver(config, scope)
+        observer = status_observe.StatusObserver(
+            config, scope,
+            read_ready=ready_issue, read_result=recent_result,
+            read_base=freeze_base,
+        )
 
         def render() -> str:
             return status_report(config, scope, observer)
 
         try:
             observer.refresh()
+            if not args.follow:
+                print(render())
+                return 0
         except status_observe.READ_ERRORS as exc:
             print(
                 f"status_failed scope={status_observe.scope_label(scope)} "
@@ -955,9 +964,6 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
-        if not args.follow:
-            print(render())
-            return 0
 
         def on_error(exc: BaseException, last_view: str | None) -> None:
             print(
