@@ -673,6 +673,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `suggest_created` | `orbi suggest` 创建或标记了一个 Issue |
 | `suggest_failed` | `orbi suggest` 运行失败（结果无效或 `gh` 调用失败） |
 | `suggest_understanding_failed` | `orbi suggest` 的并行理解会话失败或超时（旁路：不写 `understanding.md`） |
+| `suggest_followup_dropped` | `orbi suggest` 追问其余建议的 follow-up 失败或没有可用结果（旁路：保留 `suggestions.partial.json` 中的第一条建议） |
 
 idle 告警和模型请求挂死 kill 是日志/健康阈值——它们不是每 5 分钟
 调度，也不是业务任务 timeout。
@@ -696,7 +697,9 @@ checkout 导入，即使交付 checkout 是外部仓库 X。checkout 根目录**
 orbi add "task title" --body "task body" --config orbi.toml
 orbi add "task title" --repo OWNER/BACKLOG-REPO --config orbi.toml
 
-# 读取仓库并最多提出三个待交付 Issue：交互流程对每个建议问一次，
+# 读取仓库并最多提出三个待交付 Issue：第一条有效建议先写入
+# <deploy_home>/.orbi/suggest/<run_id>/suggestions.partial.json，同一
+# session 再用 --continue 追问最多两条；交互流程对每个建议问一次，
 # 把你确认的创建或打标签；--json 把 Suggestions 文档（repo、base_sha、
 # session_dir、suggestions）打印到 stdout 且不写任何东西
 orbi suggest --config orbi.toml
@@ -927,7 +930,9 @@ release notes 中声明，以便下游自动化有计划地迁移：
   `sync-engine-source` 子命令，包括 `--config` 和 `ORBI_CONFIG` 环境变量。
 - **Suggestions：**`orbi suggest --json` 打印的文档（`repo`、`base_sha`、
   `session_dir` 与最多三条建议）、保留的运行目录
-  `<deploy_home>/.orbi/suggest/<run_id>/`，以及产出它的 skill
+  `<deploy_home>/.orbi/suggest/<run_id>/`（其中
+  `suggestions.partial.json` 在追问仍在进行时先原子写入第一条已校验
+  建议，Issue #1671），以及产出它的 skill
   `integrations/claude-plugin/skills/suggest-ai-ready-issues/`（Issue
   #1576）；`orbi setup` 的提议只在终端上运行，否则只打印一行提示。
 - **配置：**[配置参考](/zh/configuration)中的每个 key 都是公开表面，

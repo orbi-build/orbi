@@ -132,6 +132,7 @@ def build_pi_command(
     no_context_files: bool = False,
     skills: list[str | Path] | None = None,
     no_extensions: bool = False,
+    continue_session: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Return one Pi session's `(command, log_command)` argv pair.
 
@@ -154,6 +155,10 @@ def build_pi_command(
     auto-discovery denied and NONE of the configured `--extension`
     entries (the understanding session of `orbi suggest`); it is
     ignored when `extensions=True`.
+    `continue_session` (Issue #1671) adds Pi's `--continue` so the call
+    resumes the newest session in the SAME `--session-dir` — the
+    follow-up question of `orbi suggest` continues its first session
+    instead of starting one that re-reads the repository.
 
     `log_command` is derived here from the SAME extension flags, model
     flags and session dir as `command`, so the two cannot drift. The
@@ -198,14 +203,15 @@ def build_pi_command(
     session_path.mkdir(parents=True, exist_ok=True)
     prompt_file = session_path / "system-prompt.md"
     prompt_file.write_text(system_prompt, encoding="utf-8")
+    continue_args = ["--continue"] if continue_session else []
     command = [
         "pi", *boundary_args, *extension_args, *skill_args, *model_args,
-        "--print", "--session-dir", str(session_dir),
+        "--print", *continue_args, "--session-dir", str(session_dir),
         "--system-prompt", str(prompt_file), context,
     ]
     log_command = [
         "pi", *extension_args, *model_args,
-        "--print", "--session-dir", str(session_dir),
+        "--print", *continue_args, "--session-dir", str(session_dir),
         "--system-prompt", "<redacted>", context_placeholder,
     ]
     return command, log_command

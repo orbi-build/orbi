@@ -300,6 +300,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "suggest_created": "orbi suggest filed or labeled an Issue",
     "suggest_failed": "an orbi suggest run failed (invalid result or failed gh call)",
     "suggest_understanding_failed": "the parallel understanding session of orbi suggest failed or timed out (bypass: no understanding.md)",
+    "suggest_followup_dropped": "the follow-up of orbi suggest's first suggestion failed or returned nothing usable (bypass: the first suggestion is kept)",
     # Dead-loop guard (Issue #825).
     "failure_comment_deduplicated": "an identical failure repeat bumped the existing comment's counter; no second comment",
     "failure_comment_update_failed": "the existing failure comment could not be resolved or updated; the tick continues",

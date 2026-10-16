@@ -305,6 +305,31 @@ def test_understanding_command_denies_extensions_without_loading_any():
     ]
 
 
+def test_continue_session_appends_continue_before_the_session_dir():
+    """Issue #1671: the follow-up of the `orbi suggest` session resumes
+    the newest session in the SAME `--session-dir` with `--continue`."""
+    command, log_command = pi_command.build_pi_command(
+        _unconfigured(), pi_command.ROLE_SUGGEST,
+        pi_command.IMPLEMENT_EXCLUDED_SKILLS, SESSION_DIR,
+        SYSTEM_PROMPT, CONTEXT,
+        context_placeholder="<suggest-followup-redacted>",
+        tools="read,grep,find,ls", extensions=False,
+        no_skills=True, no_context_files=True, skills=[],
+        continue_session=True,
+    )
+    assert command == [
+        "pi", "--tools", "read,grep,find,ls", "--no-skills",
+        "--no-context-files",
+        "--print", "--continue", "--session-dir", str(SESSION_DIR),
+        "--system-prompt", _prompt_path(), CONTEXT,
+    ]
+    assert log_command == [
+        "pi",
+        "--print", "--continue", "--session-dir", str(SESSION_DIR),
+        "--system-prompt", "<redacted>", "<suggest-followup-redacted>",
+    ]
+
+
 def test_extension_flags_are_omitted_when_extensions_is_false():
     """`extensions=False` without `no_extensions` keeps the pre-#1600
     behavior: no extension flag at all."""
