@@ -586,25 +586,7 @@ def main(argv: list[str] | None = None) -> int:
         "--repo", default=None,
         help="source repo (default: first configured source)",
     )
-    suggest_parser = subparsers.add_parser(
-        "suggest", parents=[common],
-        help="read the repository and propose up to three Issues to "
-             "deliver (interactive; --json prints the Suggestions "
-             "document)",
-    )
-    suggest_parser.add_argument(
-        "--repo", default=None,
-        help="source repo (default: first configured source)",
-    )
-    suggest_parser.add_argument(
-        "--json", action="store_true",
-        help="print the Suggestions document to stdout and write nothing",
-    )
-    suggest_parser.add_argument(
-        "--locale", choices=["zh", "en"], default=None,
-        help="write the suggestions and the repository summary in this "
-             "language (default: the repository's own language)",
-    )
+    suggest.register_cli(subparsers, common)
     status_parser = subparsers.add_parser(
         "status", parents=[common],
         help="show every active delivery with attributed local activity, "
@@ -850,7 +832,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         return suggest.run_suggest(
             config, repo, json_output=args.json, locale=args.locale,
-            dispatch_issue=dispatch_issue,
+            count=args.count, dispatch_issue=dispatch_issue,
         )
     elif args.command == "session":
         path = find_session_file(config.repo_dir)

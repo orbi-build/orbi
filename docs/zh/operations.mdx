@@ -697,11 +697,13 @@ checkout 导入，即使交付 checkout 是外部仓库 X。checkout 根目录**
 orbi add "task title" --body "task body" --config orbi.toml
 orbi add "task title" --repo OWNER/BACKLOG-REPO --config orbi.toml
 
-# 读取仓库并最多提出三个待交付 Issue：交互流程对每个建议问一次，
-# 把你确认的创建或打标签；--json 把 Suggestions 文档（repo、base_sha、
-# session_dir、suggestions）打印到 stdout 且不写任何东西
+# 读取仓库并最多提出三个待交付 Issue：--count N（1-3，默认 3）要求
+# session 最多给出 N 条；交互流程对每个建议问一次，把你确认的创建或打标签；
+# --json 把 Suggestions 文档（repo、base_sha、session_dir、suggestions）
+# 打印到 stdout 且不写任何东西
 orbi suggest --config orbi.toml
 orbi suggest --repo OWNER/REPO --json --config orbi.toml
+orbi suggest --repo OWNER/REPO --json --count 1 --config orbi.toml
 
 # 只读作用域观察：每个已配置 source repo 的所有活跃交付
 # （ai-in-progress / ai-pr-opened / ai-fix-needed / ai-awaiting-merge），
