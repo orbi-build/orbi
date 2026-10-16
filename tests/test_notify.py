@@ -16,12 +16,22 @@ comment or a delivery's exit.
 """
 from __future__ import annotations
 
+import json
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-from orbi import clarify, config as config_domain, github, journal, notify
+from orbi import (
+    clarify,
+    config as config_domain,
+    github,
+    journal,
+    notify,
+    runner_health,
+)
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL,
     BLOCKED_LABEL,
@@ -61,6 +71,8 @@ class HostLanguageConfig:
 
     telegram_chat_id: str | None = CHAT_ID
     message_language: str = "en"
+    repo_dir: Path = Path(".")
+    source_repos: tuple[str, ...] = ()
 
 
 def bind(monkeypatch, *, config=None, token=TOKEN) -> None:
@@ -639,3 +651,284 @@ def test_redaction_hides_the_telegram_token():
     assert TOKEN not in redacted
     assert "bot<redacted>" in redacted
     assert TOKEN not in journal.redact_secrets(f"token={TOKEN}")
+
+
+# --- merged-PR announcements (Issue #1674) ---------------------------------
+
+
+def merged_config(tmp_path, *, chat_id=CHAT_ID, source_repo="owner/repo"):
+    """A config the merged-PR scan reads: one repo, a tmp watermark dir."""
+    return config_domain.RunnerConfig(
+        telegram_chat_id=chat_id,
+        repo_dir=tmp_path,
+        source_repos=(source_repo,),
+    )
+
+
+def orbi_pr(number, title, *, merged_at="2026-10-16T19:00:00Z",
+            head="orbi/owner-repo-issue-7", repo="owner/repo"):
+    """One merged-PR node as the GraphQL read returns it."""
+    return {
+        "number": number,
+        "title": title,
+        "url": f"https://github.com/{repo}/pull/{number}",
+        "headRefName": head,
+        "mergedAt": merged_at,
+    }
+
+
+def merged_text(number=7, title="Fix the thing", *,
+                repo="owner/repo", language="en"):
+    """The fixed code-merged message for one PR."""
+    headline = (
+        "Orbi · 代码已合并：" if language == "zh" else "Orbi · Code merged: "
+    )
+    return (
+        f"{headline}{repo}#{number} {title}\n"
+        f"https://github.com/{repo}/pull/{number}"
+    )
+
+
+class FakeMergedRead:
+    """A stubbed gh read returning the scripted merged-PR nodes."""
+
+    def __init__(self, prs=()):
+        self.prs = list(prs)
+        self.calls = []
+        self.failure = None
+
+    def __call__(self, command, **kwargs):
+        self.calls.append(list(command))
+        if self.failure is not None:
+            raise self.failure
+        return json.dumps({
+            "data": {"repository": {"pullRequests": {"nodes": self.prs}}},
+        })
+
+
+def test_a_newly_merged_orbi_pr_is_announced_exactly_once(
+    monkeypatch, tmp_path,
+):
+    """Acceptance 1: an orbi/ PR merged after the watermark sends ONE
+    message naming the title and link; the next tick sends nothing."""
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    fake = FakeMergedRead()
+    monkeypatch.setattr(seam, "run_command", fake)
+    config = merged_config(tmp_path)
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        notify.tick_start(config)
+        assert endpoint.requests == []
+        fake.prs = [orbi_pr(7, "Fix the thing")]
+        notify.tick_start(config)
+        assert endpoint.texts() == [merged_text(7, "Fix the thing")]
+        notify.tick_start(config)
+        assert len(endpoint.texts()) == 1
+
+
+def test_a_non_orbi_pr_is_not_announced(monkeypatch, tmp_path):
+    """Acceptance 2: a merged PR whose head branch is not orbi/ is not
+    one of Orbi's deliveries."""
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    fake = FakeMergedRead([orbi_pr(1, "Old")])
+    monkeypatch.setattr(seam, "run_command", fake)
+    config = merged_config(tmp_path)
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        notify.tick_start(config)
+        fake.prs = [orbi_pr(
+            2, "Another delivery", head="feature/other",
+            merged_at="2026-10-16T20:00:00Z",
+        )]
+        notify.tick_start(config)
+        assert endpoint.requests == []
+
+
+def test_first_enable_skips_a_merge_that_happened_before(monkeypatch, tmp_path):
+    """Acceptance 3: turning notifications on sends nothing for PRs merged
+    earlier; a PR merged afterwards is announced once."""
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    old = orbi_pr(1, "Already merged", merged_at="2026-01-01T00:00:00Z")
+    fresh = orbi_pr(2, "Merged after", merged_at="2026-02-01T00:00:00Z")
+    fake = FakeMergedRead([old])
+    monkeypatch.setattr(seam, "run_command", fake)
+    config = merged_config(tmp_path)
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        notify.tick_start(config)
+        assert endpoint.requests == []
+        fake.prs = [fresh, old]
+        notify.tick_start(config)
+        assert endpoint.texts() == [merged_text(2, "Merged after")]
+
+
+def test_off_deletes_the_watermark_and_reenabling_does_not_replay(
+    monkeypatch, tmp_path,
+):
+    """Acceptance 4: notifications off sends nothing and drops the
+    watermark; turning them back on does not replay what merged between."""
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    fake = FakeMergedRead([orbi_pr(1, "Old", merged_at="2026-01-01T00:00:00Z")])
+    monkeypatch.setattr(seam, "run_command", fake)
+    path = tmp_path / ".orbi" / "notify-merged-since"
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        notify.tick_start(merged_config(tmp_path))
+        assert path.exists()
+        fake.calls.clear()
+        monkeypatch.delenv(notify.TOKEN_ENV, raising=False)
+        notify.tick_start(merged_config(tmp_path, chat_id=None))
+        assert not path.exists()
+        assert fake.calls == []
+        monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+        fake.prs = [orbi_pr(
+            2, "Merged while off", merged_at="2026-03-01T00:00:00Z",
+        )]
+        notify.tick_start(merged_config(tmp_path))
+        assert endpoint.requests == []
+
+
+def test_a_missing_token_drops_the_watermark_and_a_later_fix_does_not_replay(
+    monkeypatch, tmp_path,
+):
+    """Acceptance 4: when notifications stay on but the token is missing,
+    the watermark is dropped too, so restoring the token does not replay
+    the gap."""
+    fake = FakeMergedRead([orbi_pr(1, "Old", merged_at="2026-01-01T00:00:00Z")])
+    monkeypatch.setattr(seam, "run_command", fake)
+    path = tmp_path / ".orbi" / "notify-merged-since"
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+        notify.tick_start(merged_config(tmp_path))
+        assert path.exists()
+        monkeypatch.delenv(notify.TOKEN_ENV, raising=False)
+        fake.calls.clear()
+        notify.tick_start(merged_config(tmp_path))
+        assert not path.exists()
+        assert fake.calls == []
+        monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+        fake.prs = [orbi_pr(
+            2, "Merged during the gap", merged_at="2026-04-01T00:00:00Z",
+        )]
+        notify.tick_start(merged_config(tmp_path))
+        assert endpoint.requests == []
+
+
+def test_a_read_failure_is_logged_and_retried_next_tick(
+    monkeypatch, tmp_path, caplog,
+):
+    """Acceptance 5: a failed read sends nothing, leaves the watermark
+    unchanged and records one notify_failed; the next tick announces."""
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    fake = FakeMergedRead()
+    monkeypatch.setattr(seam, "run_command", fake)
+    config = merged_config(tmp_path)
+    path = tmp_path / ".orbi" / "notify-merged-since"
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        notify.tick_start(config)
+        before = path.read_text(encoding="utf-8")
+        fake.failure = RuntimeError("gh exploded")
+        caplog.set_level("INFO")
+        notify.tick_start(config)
+        assert endpoint.requests == []
+        assert path.read_text(encoding="utf-8") == before
+        assert "notify_failed reason=merged_check_failed" in caplog.text
+        fake.failure = None
+        fake.prs = [orbi_pr(7, "Fix the thing")]
+        notify.tick_start(config)
+        assert endpoint.texts() == [merged_text(7, "Fix the thing")]
+
+
+@pytest.mark.parametrize("garbage", [
+    "not json",                  # unparseable
+    "[]", '{"a": 1}',            # parseable, wrong JSON type
+    '"0"', '"zzz"',              # parseable string, not a mergedAt
+])
+def test_a_garbage_watermark_starts_fresh_and_is_rewritten(
+    monkeypatch, tmp_path, garbage,
+):
+    """Acceptance 6: a watermark file with garbage replays nothing and is
+    rewritten from this tick's read.
+
+    The parseable-but-not-a-timestamp strings are the trap: compared as
+    plain strings, a LOW one ("0") matches every real mergedAt and
+    replays the backlog, a HIGH one ("zzz") matches none and silences
+    the scan forever."""
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    fake = FakeMergedRead([orbi_pr(1, "Already merged")])
+    monkeypatch.setattr(seam, "run_command", fake)
+    config = merged_config(tmp_path)
+    path = tmp_path / ".orbi" / "notify-merged-since"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(garbage, encoding="utf-8")
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        notify.tick_start(config)
+        assert endpoint.requests == []
+    assert json.loads(path.read_text(encoding="utf-8")) == (
+        "2026-10-16T19:00:00Z"
+    )
+
+
+def test_two_overlapping_ticks_send_only_one(monkeypatch, tmp_path):
+    """Acceptance 7: two ticks racing the same merge send exactly one."""
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    fake = FakeMergedRead()
+    monkeypatch.setattr(seam, "run_command", fake)
+    config = merged_config(tmp_path)
+    with TelegramEndpoint(delay=0.3) as endpoint:
+        endpoint.point(monkeypatch)
+        notify.tick_start(config)  # establish the watermark
+        fake.prs = [orbi_pr(7, "Fix the thing")]
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(notify.tick_start, config) for _ in range(2)
+            ]
+            for future in futures:
+                future.result(timeout=30)
+    assert endpoint.texts() == [merged_text(7, "Fix the thing")]
+
+
+def test_a_busy_watermark_lock_skips_the_tick(monkeypatch, tmp_path):
+    """The lock is the cross-tick guard: a held lock skips this tick
+    instead of waiting or double-sending."""
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    fake = FakeMergedRead([orbi_pr(7, "Fix the thing")])
+    monkeypatch.setattr(seam, "run_command", fake)
+    config = merged_config(tmp_path)
+    path = tmp_path / ".orbi" / "notify-merged-since"
+    # Make the bounded non-blocking wait expire at once (Issue #95 guard):
+    # the lock stays held for the whole test, so no 5 s real wait.
+    monkeypatch.setitem(runner_health.__dict__, "HEALTH_LOCK_TIMEOUT_S", -1.0)
+    holder = runner_health._acquire_health_lock(path, blocking=True)
+    try:
+        with TelegramEndpoint() as endpoint:
+            endpoint.point(monkeypatch)
+            notify.tick_start(config)
+            assert endpoint.requests == []
+            assert fake.calls == []
+    finally:
+        os.close(holder)
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_merged_message_uses_the_host_language(monkeypatch, tmp_path, language):
+    """The message follows the host message_language (#1660)."""
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    fake = FakeMergedRead()
+    monkeypatch.setattr(seam, "run_command", fake)
+    config = HostLanguageConfig(
+        message_language=language,
+        repo_dir=tmp_path,
+        source_repos=("owner/repo",),
+    )
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        notify.tick_start(config)
+        fake.prs = [orbi_pr(7, "Fix the thing")]
+        notify.tick_start(config)
+        assert endpoint.texts() == [
+            merged_text(7, "Fix the thing", language=language)
+        ]

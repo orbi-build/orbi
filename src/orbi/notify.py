@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -80,6 +81,25 @@ TEST_ZH = (
     "这条消息确认您的接收配置可用，之后的通知会是这个样子。"
 )
 
+# The fixed code-merged texts (Issue #1674): the same `Orbi · ` prefix
+# and the `owner/repo#N <title>` line, followed by the PR link.
+_MERGED_HEADLINE_EN = "Orbi · Code merged: "
+_MERGED_HEADLINE_ZH = "Orbi · 代码已合并："
+
+# The one watermark the merged-PR check keeps (one source repo, Issue
+# #1674): the last handled GitHub `mergedAt`, stored beside the
+# runner-health state and written with the runner-health atomic write.
+WATERMARK_FILENAME = "notify-merged-since"
+WATERMARK_EPOCH = "1970-01-01T00:00:00Z"
+ORBI_HEAD_PREFIX = "orbi/"
+# The shape of a stored watermark: what this module writes is a GitHub
+# `mergedAt` (ISO-8601 UTC, prefix-matched so a fractional second or an
+# explicit offset still counts). Any other value is unreadable state and
+# starts fresh, exactly like an unparseable file: compared as plain
+# strings, a garbage value that sorts below real timestamps (say "0")
+# would replay the backlog, and one that sorts above them (say "zzz")
+# would silence the scan forever.
+WATERMARK_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 # One tick's bound configuration and token, set by `tick_start` so the
 # label call sites pass no argument of their own. Tests reset them for
 # every test (the autouse fixture in tests/conftest.py).
@@ -89,19 +109,29 @@ _last_failure: str | None = None
 
 
 def tick_start(config: RunnerConfig) -> None:
-    """Bind one tick's config and bot token; report a half-configuration.
+    """Bind one tick's config and bot token; run the merged-PR check.
 
     Never raises (pure bypass). `telegram_chat_id` unset/empty = the
     notifier is off: nothing is reported and nothing is sent. A chat id
     with no token writes ONE `notify_failed reason=not_configured` line per
     tick naming the variable (never a value) and sends nothing.
+
+    When notifications are off or half-configured the merged-PR
+    watermark is deleted: fixing a broken setup later must not replay
+    what merged meanwhile. When they are on and configured,
+    `_announce_merged_prs` (Issue #1674) sends one message per
+    `orbi/*` PR merged after the last handled `mergedAt`.
     """
     global _config, _token
     try:
         _config = config
         _token = os.environ.get(TOKEN_ENV)
-        if _chat_id() and not _token:
-            _fail("not_configured", missing=TOKEN_ENV)
+        if not _enabled():
+            if _chat_id() and not _token:
+                _fail("not_configured", missing=TOKEN_ENV)
+            _clear_watermark()
+            return
+        _announce_merged_prs()
     except Exception:
         return
 
@@ -318,3 +348,111 @@ def _issue_line(repo: str, number: int, title: str | None) -> str:
 def _test_message() -> str:
     """The fixed test-notification text in the configured language."""
     return TEST_ZH if _language() == "zh" else TEST_EN
+
+
+def _announce_merged_prs() -> None:
+    """Send one message per newly merged `orbi/*` PR (Issue #1674).
+
+    The watermark read-modify-write is serialized with the runner-health
+    leaf lock (non-blocking: a busy lock skips this tick rather than
+    waiting) and the watermark is written BEFORE the messages, so two
+    overlapping ticks can never announce the same merge twice. A read
+    failure records one `notify_failed reason=merged_check_failed` and
+    leaves the watermark unchanged. Never raises (pure bypass).
+    """
+    source_repo = _source_repo()
+    if not source_repo:
+        return
+    path = _watermark_path()
+    from orbi import branch_reclaim, runner_health
+    lock_fd = runner_health._acquire_health_lock(path, blocking=False)
+    if lock_fd is None:
+        return
+    try:
+        since = _read_watermark(path)
+        try:
+            merged = branch_reclaim.read_merged_pull_requests(source_repo)
+        except Exception:
+            _fail("merged_check_failed")
+            return
+        newest = max((_merged_at(pr) for pr in merged), default="")
+        if not since:
+            # First enable, a re-enable, or an unreadable watermark: the
+            # backlog is not replayed, the newest merge becomes the mark.
+            _write_watermark(path, newest or WATERMARK_EPOCH)
+            return
+        fresh = sorted(
+            (
+                pr for pr in merged
+                if _is_orbi_pr(pr) and _merged_at(pr) > since
+            ),
+            key=_merged_at,
+        )
+        if not fresh:
+            return
+        _write_watermark(path, newest)
+        for pr in fresh:
+            send(_merged_message(source_repo, pr))
+    finally:
+        os.close(lock_fd)
+
+
+def _source_repo() -> str:
+    """The one configured source repository ("" when unset)."""
+    repos = getattr(_config, "source_repos", ()) or ()
+    return repos[0] if repos else ""
+
+
+def _watermark_path() -> Path:
+    """The merged-PR watermark, beside the runner-health state."""
+    return Path(_config.repo_dir) / ".orbi" / WATERMARK_FILENAME
+
+
+def _read_watermark(path: Path) -> str:
+    """The stored `mergedAt`; "" for a missing or unreadable watermark.
+
+    The same "unreadable state starts fresh" rule as runner health: a
+    corrupt watermark replays nothing and is rewritten on the next scan.
+    Unreadable covers the parseable cases too — a wrong JSON type or a
+    string that is not a `mergedAt` (`WATERMARK_RE`) — because a value
+    the code cannot interpret must never be compared against real
+    timestamps.
+    """
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(value, str) or not WATERMARK_RE.match(value):
+        return ""
+    return value
+
+
+def _write_watermark(path: Path, value: str) -> None:
+    """Atomically store the last handled `mergedAt` (runner-health write)."""
+    from orbi import runner_health
+    runner_health.save_health_state(path, value)
+
+
+def _clear_watermark() -> None:
+    """Delete the watermark (notifications off or half-configured)."""
+    _watermark_path().unlink(missing_ok=True)
+
+
+def _is_orbi_pr(pr: dict) -> bool:
+    """True for a PR whose head branch Orbi itself created."""
+    head = pr.get("headRefName")
+    return isinstance(head, str) and head.startswith(ORBI_HEAD_PREFIX)
+
+
+def _merged_at(pr: dict) -> str:
+    """The PR's GitHub `mergedAt`, or "" when it is absent/malformed."""
+    value = pr.get("mergedAt")
+    return value if isinstance(value, str) else ""
+
+
+def _merged_message(repo: str, pr: dict) -> str:
+    """The fixed "code merged" text for one merged PR."""
+    headline = (
+        _MERGED_HEADLINE_ZH if _language() == "zh" else _MERGED_HEADLINE_EN
+    )
+    return f"{headline}{repo}#{pr['number']} {pr['title']}\n{pr['url']}"
