@@ -575,6 +575,7 @@ registry — in both directions (a name only in code or only in docs fails
 | `pi_429_attempts_clear_failed` | clearing the 429 attempt counter failed |
 | `provider_quota` | Pi exited on a provider usage-limit stop (the journal errorMessage) |
 | `progress_publish_failed` | the progress comment could not be published (pure bypass) |
+| `notify_failed` | a Telegram notification could not be sent (pure bypass) `reason=token_invalid\|rate_limited\|platform_error\|rejected\|timeout\|network_error\|not_configured` |
 | `progress_comment_failed` | a post-delivery notification comment could not be published (pure bypass) |
 | `progress_finish_missing_next_step` | a terminal progress scene had no next step |
 | `config_invalid` | the runner config failed validation (no start) |
@@ -1082,9 +1083,9 @@ summary. Changes to any of them must be called out in the release notes so
 downstream automation can migrate deliberately:
 
 - **CLI:** the bare `orbi` tick and the `add`, `suggest`, `status`, `doctor`,
-  `setup`, `install-units`, `session`, `milestone set`, `check`, and
-  `sync-engine-source` subcommands, including `--config` and the `ORBI_CONFIG`
-  environment variable.
+  `setup`, `install-units`, `session`, `milestone set`, `notify test`,
+  `check`, and `sync-engine-source` subcommands, including `--config` and
+  the `ORBI_CONFIG` environment variable.
 - **Suggestions:** the document `orbi suggest --json` prints (`repo`,
   `base_sha`, `session_dir` and up to three suggestions), the kept run
   directory `<deploy_home>/.orbi/suggest/<run_id>/` and the skill

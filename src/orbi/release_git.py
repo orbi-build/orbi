@@ -7,8 +7,13 @@ instances preparing the same version race on that push, so
 `push_prepared_release_version` makes the loser idempotent (Issue #1289)
 instead of failing the release ticket on work already landed.
 
+It also owns the GitHub Release reads/writes the release state machine
+uses (`release_view`, `release_edit_notes`, `release_create`, moved here
+from `orbi.github` under the Article 3.5 module cap, Issue #1673).
+
 The seams are `orbi.journal.run_command` /
-`orbi.journal.run_git_network_command` and the base-sync-locked base fetch
+`orbi.journal.run_git_network_command`, the read-only retry of
+`orbi.github.run_gh_read_command` and the base-sync-locked base fetch
 of `orbi.gitops`.
 """
 from __future__ import annotations
@@ -23,6 +28,7 @@ from pathlib import Path
 
 from orbi.git_identity import BOT_GIT_IDENTITY
 from orbi.gitops import fetch_base_ref
+from orbi.github import run_gh_read_command
 from orbi.journal import run_command, run_git_network_command
 
 # Identity used for every local Git object written by the release state
@@ -319,3 +325,29 @@ def prepare_release_version(worktree: Path, tag: str,
     return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
 
 
+def release_view(repo: str, tag: str, fields: str) -> dict:
+    """Read one GitHub Release's JSON fields by tag."""
+    data = json.loads(run_gh_read_command([
+        "gh", "release", "view", tag, "--repo", repo,
+        "--json", fields,
+    ]))
+    if not isinstance(data, dict):
+        raise ValueError("release view must be a JSON object")
+    return data
+
+
+def release_edit_notes(repo: str, tag: str, *, notes: str) -> None:
+    """Replace one GitHub Release's notes."""
+    run_command([
+        "gh", "release", "edit", tag, "--repo", repo,
+        "--notes", notes,
+    ])
+
+
+def release_create(repo: str, *, tag: str, version: str,
+                   notes: str) -> None:
+    """Publish one GitHub Release from an existing tag."""
+    run_command([
+        "gh", "release", "create", tag, "--repo", repo,
+        "--verify-tag", "--title", version, "--notes", notes,
+    ])

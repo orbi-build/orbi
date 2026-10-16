@@ -1254,15 +1254,15 @@ def _stream_pi_once(
     last_visible = (initial["phase"], initial["action"], initial["result"])
     # `pi_env` carries the per-run Pi agent dir
     # (`PI_CODING_AGENT_DIR`, verified against real Pi 0.84.3) so the
-    # configured provider file is visible to Pi. Absent -> the process
-    # inherits the Runner's environment unchanged (pre-#157 shape).
+    # configured provider file is visible to Pi. Absent -> the child gets
+    # the Runner's environment minus the notification token.
     process = subprocess.Popen(
         command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         # Pi's print mode reads piped stdin until it closes and prepends
         # it to the prompt (Issue #1562): the child must get /dev/null,
         # never the Runner's possibly-open stdin pipe.
         stdin=subprocess.DEVNULL,
-        env=None if pi_env is None else {**os.environ, **pi_env},
+        env={k: v for k, v in {**os.environ, **(pi_env or {})}.items() if k != "ORBI_TELEGRAM_BOT_TOKEN"},
     )
     # Track the live Pi child for the stop handler: a
     # SIGTERM during this window must shut the child down, never

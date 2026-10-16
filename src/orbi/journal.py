@@ -69,6 +69,9 @@ _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(AIza)[A-Za-z0-9_-]{35}"), r"\1<redacted>"),
     (re.compile(r"\b(github_pat_)[A-Za-z0-9_]{16,}"), r"\1<redacted>"),
     (re.compile(r"\b(xox[abprs]-)[A-Za-z0-9-]{16,}"), r"\1<redacted>"),
+    # Telegram bot tokens (Issue #1673): `<8-10 digits>:<35 url-safe
+    # chars>`, standalone or after the `bot` prefix of the API URL.
+    (re.compile(r"\b(bot)?(\d{8,10}:[A-Za-z0-9_-]{35})"), r"\1<redacted>"),
     (re.compile(r"\b(AKIA)[A-Z0-9]{16}"), r"\1<redacted>"),
     # Preserve the optional auth scheme while replacing the header value.
     (re.compile(r"(?i)(Authorization:\s*)(Bearer\s+)?\S+"),
@@ -240,6 +243,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "pi_429_attempts_clear_failed": "clearing the 429 attempt counter failed",
     "provider_quota": "Pi exited on a provider usage-limit stop (the journal errorMessage)",
     # Bypass publishing.
+    "notify_failed": "a Telegram notification could not be sent (pure bypass)",
     "progress_publish_failed": "the progress comment could not be published (pure bypass)",
     "progress_comment_failed": "a post-delivery notification comment could not be published (pure bypass)",
     "progress_finish_missing_next_step": "a terminal progress scene had no next step",

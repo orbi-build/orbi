@@ -86,3 +86,21 @@ See the [`delivery_steered`, `steering_limit_reached`, `steering_poll_failed`, a
 | Key | Type | Default | Allowed values | Meaning |
 |---|---|---|---|---|
 | `health_alert_repo` | string or null | unset | any non-empty `owner/repo` string | Repository receiving Runner crash-loop and stale-pickup health Issues; unset derives it from the deploy-home origin. |
+
+## Notifications
+
+Orbi can reach the person who owns the queue outside GitHub: when it NEWLY adds `ai-blocked`, `ai-needs-detail` or `ai-awaiting-merge` to a task, it sends ONE Telegram message (private chat or group) naming the state, `owner/repo#N <title>` and the Issue link. A label a person adds by hand is their own action and sends nothing. Sending is a pure bypass — a failure is recorded as the `notify_failed` journal line ([Operations](/operations)) and never fails a delivery or changes a label.
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `telegram_chat_id` | string or null | unset | any non-empty string | Telegram chat that receives the "needs you" messages: a private chat (`/start` sent to the bot) or a group the bot may post in (keep the leading `-`). Notifications are ON when it is set; remove it to turn them off. A present-but-empty value fails the config load fast |
+
+The bot token is NOT a config key: it lives only in `<deploy_home>/.orbi/env` as `ORBI_TELEGRAM_BOT_TOKEN=...` and never reaches the journal (the value is redacted) or a Pi session. There is no separate notification language: the fixed messages follow the host-level `message_language` (Issue #1660, default `en`), never a repository's `.github/orbi.toml` override — the message goes to a person, not into the repository.
+
+```toml
+telegram_chat_id = "-1001234567890"
+```
+
+Setup: create a bot with BotFather, add `ORBI_TELEGRAM_BOT_TOKEN=...` to `<deploy_home>/.orbi/env`, send `/start` to the bot (private) or add the bot to the group and post a message there, open `https://api.telegram.org/bot<token>/getUpdates` and copy `message.chat.id` (group ids start with `-`), set `telegram_chat_id`, then run `orbi notify test`. A chat id without a token is reported every tick (`notify_failed reason=not_configured`), by `orbi doctor` and by `orbi notify test` — but never blocks a delivery, because `.orbi/env` and `orbi.toml` are separate files that can lag each other.
+
+Each tick reads this config when it starts, so a change applies from the next tick that starts; a delivery already running keeps the settings it started with. Tickets waiting in other ways — the human-review gate's `ai-human-review`, a milestone confirmation ticket — do not carry one of the three labels and send nothing.

@@ -93,6 +93,28 @@ def test_runner_config_keys_are_documented_and_shipped():
     assert shipped == runner_keys
 
 
+def test_notifications_default_to_off(tmp_path):
+    """Issue #1673: an absent `telegram_chat_id` means notifications off."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n',
+        encoding="utf-8",
+    )
+    assert config_domain.load_config(config_path).telegram_chat_id is None
+
+
+@pytest.mark.parametrize("value", ["123", '""', "true", "[]"])
+def test_load_config_rejects_an_invalid_telegram_chat_id(tmp_path, value):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n'
+        f"telegram_chat_id = {value}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="telegram_chat_id"):
+        config_domain.load_config(config_path)
+
+
 def test_example_config_passes_execution_source_repos_validation():
     """Issue #697: the committed example must be a config the Runner
     accepts — exactly one source repository until multi-repo workspaces
