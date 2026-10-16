@@ -383,6 +383,14 @@ MESSAGES: dict[str, tuple[str, str]] = {
     # The run's started-Pi / opened-PR headlines (the run scenes).
     "delivery.started_headline": ("Orbi started Pi:", "Orbi 已启动 Pi："),
     "delivery.opened_pr_headline": ("Orbi opened PR:", "Orbi 已开启 PR："),
+    "delivery.merged_headline": ("Orbi merged PR: {pr_url}", "Orbi 已合并 PR：{pr_url}"),
+    "delivery.review_row": ("- review: {review}", "- 评审：{review}"),
+    "delivery.review_rounds": (" ({rounds} review rounds)", "（{rounds} 个评审轮次）"),
+    "delivery.merged_into": ("- merged into: {base_branch}", "- 合并目标：{base_branch}"),
+    "review.summary_human_action": ("maintainer-actionable merge retry", "需要维护者处理的合并重试"),
+    "review.summary_pass_recorded": ("pass recorded on {head}; merged after CI", "在 {head} 上记录通过；CI 之后合并"),
+    "review.summary_pass_clean": ("pass, no findings", "通过，没有发现"),
+    "review.summary_pass_fixed": ("pass, {findings} findings fixed in-session", "通过，会话内修复了 {findings} 项发现"),
 
     # Delivery failures (blocked / fix needed).
     "failure.headline_fix_needed": (

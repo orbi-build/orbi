@@ -128,7 +128,9 @@ class RecoverableMergeGateError(RuntimeError):
 def merged_pr_comment_body(run_id: str, pr_url: str, merge_commit: str,
                            review_rounds: int, external_commits: object,
                            commits: object, base_branch: str,
-                           review: str) -> str:
+                           review: str,
+                           language_code: str = language.DEFAULT_LANGUAGE,
+                           ) -> str:
     """Render the final delivery record.
 
     The record carries the canonical ``<!-- orbi:comment=merged -->``
@@ -144,16 +146,26 @@ def merged_pr_comment_body(run_id: str, pr_url: str, merge_commit: str,
     `external_commits`, `run_id` and `pr_url`: the PR URL is a
     machine fact, never extracted from the translated heading.
     """
-    visible_review = f"- review: {review}"
+    visible_review = language.text(
+        language_code, "delivery.review_row", review=review,
+    )
     if int(review_rounds) > 1:
-        visible_review += f" ({review_rounds} review rounds)"
+        visible_review += language.text(
+            language_code, "delivery.review_rounds",
+            rounds=review_rounds,
+        )
+    details_summary = language.text(language_code, "progress.run_details")
     return (
         f"{run_marker(run_id)}\n"
         f"{comment_kind_marker(COMMENT_KIND_MERGED)}\n"
-        f"Orbi merged PR: {pr_url}\n"
+        + language.text(
+            language_code, "delivery.merged_headline", pr_url=pr_url,
+        ) + "\n"
         f"{visible_review}\n"
-        f"- merged into: {base_branch}\n\n"
-        "<details><summary>Run details</summary>\n\n"
+        + language.text(
+            language_code, "delivery.merged_into", base_branch=base_branch,
+        ) + "\n\n"
+        f"<details><summary>{details_summary}</summary>\n\n"
         f"- merge_commit={merge_commit}\n"
         f"- review_rounds={review_rounds}\n"
         f"- commits={commits}\n"
@@ -1132,8 +1144,12 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             "findings": [], "blockers": 0, "majors": 0,
         }
         review_summary = (
-            "maintainer-actionable merge retry" if merge_only
-            else f"pass recorded on {pr['head_oid']}; merged after CI"
+            language.text(
+                language.of(config), "review.summary_human_action",
+            ) if merge_only else language.text(
+                language.of(config), "review.summary_pass_recorded",
+                head=pr["head_oid"],
+            )
         )
         reviewed_body_sha256 = None
     else:
@@ -1156,9 +1172,12 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         verdict = parse_review_verdict(output)
         fixed_findings = len(verdict["findings"])
         review_summary = (
-            "pass, no findings"
+            language.text(language.of(config), "review.summary_pass_clean")
             if fixed_findings == 0
-            else f"pass, {fixed_findings} findings fixed in-session"
+            else language.text(
+                language.of(config), "review.summary_pass_fixed",
+                findings=fixed_findings,
+            )
         )
         event(
             "review", pr=pr["number"], round=round,
@@ -1563,6 +1582,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         body=merged_pr_comment_body(
             config.run_id, merged["url"], confirmed["merge_commit"], round,
             external_commits, pr_commits, base_branch, review_summary,
+            language_code=language.of(config),
         ),
     )
     try:

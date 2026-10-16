@@ -176,6 +176,14 @@ def test_the_packaged_example_documents_the_commented_default():
 
 # ------------------------------------------------------- bound comment text
 
+def test_an_explicit_language_wins_over_the_run_context(tmp_path):
+    body = delivery_comment.started_pi_comment_body(
+        _ctx(tmp_path, "en"), "run_id=abcdef12 priority=p0",
+        language_code="zh",
+    )
+    assert "Orbi 已启动 Pi：" in body
+
+
 def test_started_scene_follows_the_run_context(tmp_path):
     zh = delivery_comment.started_pi_comment_body(
         _ctx(tmp_path, "zh"), "run_id=abcdef12 priority=p0",
@@ -355,6 +363,33 @@ def test_human_review_checklist_follows_the_language():
     assert "no human intervention needed" in en
 
 
+def test_merged_receipt_keeps_its_kind_and_fixed_rows_in_chinese():
+    from orbi import review_merge
+
+    zh = review_merge.merged_pr_comment_body(
+        "abcdef12", "https://github.com/owner/repo/pull/9", "c1", 2, 1, 3,
+        "main", "pass, no findings", language_code="zh",
+    )
+    assert "Orbi 已合并 PR：https://github.com/owner/repo/pull/9" in zh
+    assert comment_kind.comment_kind(zh) == comment_kind.COMMENT_KIND_MERGED
+    # The fixed machine rows survive translation (Issue #1659 contract).
+    for row in ("merge_commit=c1", "review_rounds=2", "commits=3",
+                "external_commits=1", "run_id=abcdef12",
+                "pr_url=https://github.com/owner/repo/pull/9"):
+        assert row in zh
+    assert "- 评审：pass, no findings（2 个评审轮次）" in zh
+
+
+def test_single_round_receipt_has_no_round_suffix():
+    from orbi import review_merge
+
+    one = review_merge.merged_pr_comment_body(
+        "abcdef12", "https://x/pull/9", "c1", 1, 0, 1, "main",
+        "pass, no findings", language_code="zh",
+    )
+    assert "评审轮次" not in one
+
+
 def test_release_comments_follow_the_language():
     from orbi.failure_report import PreExistingCIFailure
 
@@ -374,7 +409,7 @@ def test_release_comments_follow_the_language():
     assert failure_body.startswith("<!-- orbi:run=abcdef12 -->")
 
 
-def test_milestone_plan_ready_follows_the_publisher_language():
+def test_milestone_plan_ready_follows_the_publisher_language(tmp_path):
     published = []
 
     class Publisher:
@@ -385,9 +420,17 @@ def test_milestone_plan_ready_follows_the_publisher_language():
 
     from orbi import milestone as milestone_module
 
-    worktree = Path("/tmp/does-not-exist")
-    milestone_module._publish_plan_milestone(Publisher(), worktree)
-    assert published == []  # no plan artifact -> nothing published
+    (tmp_path / ".orbi").mkdir()
+    (tmp_path / ".orbi" / "plan.md").write_text("plan", encoding="utf-8")
+    milestone_module._publish_plan_milestone(Publisher(), tmp_path)
+    assert published == ["计划已就绪"]
+
+    class EnglishPublisher(Publisher):
+        language_code = "en"
+
+    published.clear()
+    milestone_module._publish_plan_milestone(EnglishPublisher(), tmp_path)
+    assert published == ["plan ready"]
 
 
 # ------------------------------------------------------ the session boundary
