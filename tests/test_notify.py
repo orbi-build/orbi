@@ -505,6 +505,41 @@ def test_tick_start_binds_the_token_for_the_label_hook(monkeypatch):
         assert len(endpoint.texts()) == 1
 
 
+def test_the_tick_binds_the_notifier_at_preflight(monkeypatch, tmp_path):
+    """The real tick wires the notifier: runner.main -> _preflight.
+
+    Without notify.tick_start(config) in the tick's preflight the label
+    hook never sees a chat id, so no message is ever sent: the user
+    outcome ("Orbi blocks Issue N: the endpoint gets one message")
+    depends on this one call site.
+    """
+    from orbi import claim, runner
+
+    (tmp_path / "prompts").mkdir()
+    for name in ("prompt.md", "prompt_review.md"):
+        (tmp_path / "prompts" / name).write_text("prompt", encoding="utf-8")
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["o/r"]\n'
+        f'telegram_chat_id = "{CHAT_ID}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    monkeypatch.setitem(
+        claim.__dict__, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency,
+               active_milestone=None, **_kw: None,
+    )
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]")
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        assert runner.main(["--config", str(config_path)]) == 0
+        # Bound by the tick's own preflight, never by this test: the
+        # label hook sends with no argument of its own.
+        notify.label_added("o/r", 7, BLOCKED_LABEL, "t")
+        assert endpoint.texts() == [blocked_text("t", repo="o/r", number=7)]
+
+
 # --- doctor and "orbi notify test" -----------------------------------------
 
 
