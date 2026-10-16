@@ -136,6 +136,11 @@ class RunnerConfig:
     max_concurrency: int = 1
     allow_stale_runner: bool = False
     human_review_gate: bool = False
+    # Telegram notifications (Issue #1673): ON when `telegram_chat_id` is
+    # set. `ORBI_TELEGRAM_BOT_TOKEN` lives in `<deploy_home>/.orbi/env`,
+    # never here; `notify_language` picks the message language.
+    telegram_chat_id: str | None = None
+    notify_language: str = "en"
     attribution_footer: bool = True
     attribution_link: str = "https://github.com/orbi-build/orbi"
     slot_dir: Path | None = None
@@ -254,6 +259,18 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     human_review_gate = data.get("human_review_gate", False)
     if not isinstance(human_review_gate, bool):
         raise ValueError("human_review_gate must be a boolean")
+    # Notifications (Issue #1673): ON when `telegram_chat_id` is a
+    # non-empty string; absent = off. A present-but-invalid value is a
+    # misconfiguration and fails the load fast (Article 4.5); the bot
+    # token itself is a separate, optional bypass and never fails a start.
+    telegram_chat_id = data.get("telegram_chat_id")
+    if telegram_chat_id is not None and (
+        not isinstance(telegram_chat_id, str) or not telegram_chat_id
+    ):
+        raise ValueError("telegram_chat_id must be a non-empty string")
+    notify_language = data.get("notify_language", "en")
+    if notify_language not in ("zh", "en"):
+        raise ValueError("notify_language must be 'zh' or 'en'")
     attribution_footer = data.get("attribution_footer", True)
     if not isinstance(attribution_footer, bool):
         raise ValueError("attribution_footer must be a boolean")
@@ -458,6 +475,8 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         max_concurrency=max_concurrency,
         allow_stale_runner=allow_stale_runner,
         human_review_gate=human_review_gate,
+        telegram_chat_id=telegram_chat_id,
+        notify_language=notify_language,
         attribution_footer=attribution_footer,
         attribution_link=attribution_link,
         slot_dir=slot_dir_for(repo_dir),

@@ -24,6 +24,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote
 
+from orbi import notify
 from orbi.delivery_labels import (
     IN_PROGRESS_LABEL,
     P0_LABEL,
@@ -499,34 +500,6 @@ def commit_check_runs(repo: str, commit: str) -> list:
     return checks
 
 
-def release_view(repo: str, tag: str, fields: str) -> dict:
-    """Read one GitHub Release's JSON fields by tag."""
-    data = json.loads(run_gh_read_command([
-        "gh", "release", "view", tag, "--repo", repo,
-        "--json", fields,
-    ]))
-    if not isinstance(data, dict):
-        raise ValueError("release view must be a JSON object")
-    return data
-
-
-def release_edit_notes(repo: str, tag: str, *, notes: str) -> None:
-    """Replace one GitHub Release's notes."""
-    run_command([
-        "gh", "release", "edit", tag, "--repo", repo,
-        "--notes", notes,
-    ])
-
-
-def release_create(repo: str, *, tag: str, version: str,
-                   notes: str) -> None:
-    """Publish one GitHub Release from an existing tag."""
-    run_command([
-        "gh", "release", "create", tag, "--repo", repo,
-        "--verify-tag", "--title", version, "--notes", notes,
-    ])
-
-
 def issue_priority(issue: dict) -> str:
     """Return the pickup priority of one issue.
 
@@ -715,7 +688,9 @@ def apply_label_patch(number: int, *, repo: str, event: str,
     patch. The patch is applied through `edit_issue`: one call for the
     add plus the first remove, then one call per extra remove (the exact
     same `edit_issue` kwargs the pre-#175 code emitted). A no-op patch
-    (nothing to add or remove) applies nothing.
+    (nothing to add or remove) applies nothing. A NEWLY added attention
+    label then notifies the person through `notify` (Issue #1673),
+    after the last write.
     """
     to_add, to_remove = label_patch(event, current_labels)
     if not to_add and not to_remove:
@@ -729,6 +704,29 @@ def apply_label_patch(number: int, *, repo: str, event: str,
     edit_issue(number, **kwargs)
     for label in to_remove[1:]:
         edit_issue(number, repo=repo, remove=label)
+    # Notify only a NEWLY added attention label, and only when
+    # notifications are on (no extra gh call when they are off).
+    if (
+        to_add
+        and to_add[0] in notify.ATTENTION_LABELS
+        and to_add[0] not in set(current_labels)
+        and notify.enabled()
+    ):
+        notify.label_added(
+            repo, number, to_add[0], _issue_title(number, repo=repo),
+        )
+
+
+def _issue_title(number: int, *, repo: str) -> str | None:
+    """Read one Issue title for a notification; None when unreadable.
+
+    Never fails the delivery: notifications are a pure bypass (Issue
+    #1673).
+    """
+    try:
+        return issue_view(number, "title", repo=repo, timeout=30).get("title")
+    except Exception:
+        return None
 
 
 def comment_issue(number: int, *, repo: str, body: str) -> None:

@@ -1,0 +1,578 @@
+"""Telegram "needs you" notifications (Issue #1673).
+
+The user outcome: a person who hands Issues to Orbi receives ONE Telegram
+message when Orbi NEWLY puts a task into a state that waits for them
+(ai-blocked, ai-needs-detail, ai-awaiting-merge), naming the state,
+owner/repo#N <title> and the Issue link. "orbi notify test" checks the
+setup. A label a person adds by hand sends nothing.
+
+Evidence is the WIRE: every test points the adapter at a REAL local
+http.server (tests/fakes/telegram.py) and asserts the requests it
+received — the same urllib transport the person's bot endpoint sees.
+Unit tests alone would not prove the real user path.
+
+Notifications are a pure bypass: no failure here changes a label, a
+comment or a delivery's exit.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from orbi import clarify, config as config_domain, github, journal, notify
+from orbi.delivery_labels import (
+    AWAITING_MERGE_LABEL,
+    BLOCKED_LABEL,
+    EVENT_AWAITING_MERGE,
+    EVENT_BLOCKED,
+    EVENT_CLAIM,
+    NEEDS_DETAIL_LABEL,
+)
+from seam import seam
+
+from tests.fakes.telegram import (
+    TelegramEndpoint,
+    bind_notify,
+    point_at,
+    raise_timeout_url_error,
+)
+
+# A token-shaped value (9 digits + 35 url-safe chars). It is NOT a real
+# bot token: the tests always point the adapter at 127.0.0.1.
+TOKEN = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawQ"
+CHAT_ID = "-1001234567890"
+RUN_ID = "a1b2c3d4"
+
+
+def config_for(*, chat_id: str | None = CHAT_ID,
+               language: str = "en") -> config_domain.RunnerConfig:
+    return config_domain.RunnerConfig(
+        telegram_chat_id=chat_id, notify_language=language,
+    )
+
+
+def bind(monkeypatch, *, config=None, token=TOKEN) -> None:
+    """Bind one tick's config and token, like notify.tick_start."""
+    bind_notify(
+        monkeypatch, config if config is not None else config_for(), token,
+    )
+
+
+def blocked_text(title: str = "Fix the thing", *, language: str = "en",
+                 repo: str = "o/r", number: int = 7) -> str:
+    if language == "zh":
+        return (
+            "Orbi · 需要您处理：Orbi 卡住了，需要您处理\n"
+            f"{repo}#{number} {title}\n"
+            f"https://github.com/{repo}/issues/{number}"
+        )
+    return (
+        "Orbi · Needs your attention: Orbi is stuck and needs you\n"
+        f"{repo}#{number} {title}\n"
+        f"https://github.com/{repo}/issues/{number}"
+    )
+
+
+# --- adapter wire contract -------------------------------------------------
+
+
+def test_send_posts_the_documented_request_and_reports_success(monkeypatch):
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        assert notify.send("hello") is True
+        assert endpoint.requests[0]["path"] == f"/bot{TOKEN}/sendMessage"
+        assert endpoint.requests[0]["content_type"] == "application/json"
+        assert endpoint.messages() == [{"chat_id": CHAT_ID, "text": "hello"}]
+
+
+@pytest.mark.parametrize("status,body,reason", [
+    (401, b'{"ok": false, "description": "Unauthorized"}', "token_invalid"),
+    (429, b'{"ok": false, "description": "Too Many Requests"}', "rate_limited"),
+    (500, b'{"ok": false, "description": "Server Error"}', "platform_error"),
+    (503, b'{"ok": false, "description": "Unavailable"}', "platform_error"),
+    (400, b'{"ok": false, "description": "Bad Request"}', "rejected"),
+    (403, b'{"ok": false, "description": "Forbidden"}', "rejected"),
+    (200, b'{"ok": false, "error_code": 400}', "rejected"),
+    (200, b"not json at all", "rejected"),
+])
+def test_send_classifies_each_status_from_the_body(
+    monkeypatch, caplog, status, body, reason,
+):
+    with TelegramEndpoint(status=status, body=body) as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        caplog.set_level("INFO")
+        assert notify.send("hello") is False
+        assert endpoint.requests  # the request really reached the endpoint
+        assert f"notify_failed reason={reason}" in caplog.text
+        assert TOKEN not in caplog.text
+
+
+def test_send_reports_timeout_when_the_endpoint_does_not_answer_in_time(
+    monkeypatch, caplog,
+):
+    with TelegramEndpoint(delay=0.5) as endpoint:
+        endpoint.point(monkeypatch, timeout=0.15)
+        bind(monkeypatch)
+        caplog.set_level("INFO")
+        assert notify.send("hello") is False
+        assert "notify_failed reason=timeout" in caplog.text
+
+
+def test_send_reports_network_error_when_the_endpoint_is_unreachable(
+    monkeypatch, caplog,
+):
+    point_at(monkeypatch, "http://127.0.0.1:1", timeout=1.0)
+    bind(monkeypatch)
+    caplog.set_level("INFO")
+    assert notify.send("hello") is False
+    assert "notify_failed reason=network_error" in caplog.text
+
+
+def test_send_classifies_a_wrapped_timeout_as_a_timeout(
+    monkeypatch, caplog,
+):
+    """urllib reports a do_open timeout as URLError(reason=TimeoutError)."""
+    bind(monkeypatch)
+    raise_timeout_url_error(monkeypatch)
+    caplog.set_level("INFO")
+    assert notify.send("hello") is False
+    assert "notify_failed reason=timeout" in caplog.text
+
+
+class BoomConfig:
+    """A config whose chat-id read raises: the bypass swallows it."""
+
+    @property
+    def telegram_chat_id(self):
+        raise RuntimeError("broken config")
+
+    deploy_home = Path("/deploy")
+
+
+class BoomText:
+    """A value whose string rendering raises while a message is built."""
+
+    def __str__(self):
+        raise RuntimeError("broken value")
+
+
+def test_public_functions_swallow_a_broken_config(monkeypatch, capsys):
+    bind(monkeypatch)
+    notify.tick_start(BoomConfig())
+    assert notify.enabled() is False
+    assert notify.doctor_lines(BoomConfig()) == []
+    assert notify.test_command(BoomConfig()) == 1
+    assert "notify_failed reason=network_error" in capsys.readouterr().out
+
+
+def test_label_added_swallows_a_message_build_failure(monkeypatch):
+    bind(monkeypatch)
+    notify.label_added(BoomText(), 7, BLOCKED_LABEL, "t")
+
+
+def test_send_is_not_configured_reports_the_missing_setting(
+    monkeypatch, caplog,
+):
+    bind(monkeypatch, config=config_for(chat_id=None), token=None)
+    caplog.set_level("INFO")
+    assert notify.send("hello") is False
+    assert "notify_failed reason=not_configured" in caplog.text
+    assert "telegram_chat_id" in caplog.text
+
+
+# --- fixed message text ----------------------------------------------------
+
+
+@pytest.mark.parametrize("label,status_en,status_zh", [
+    (BLOCKED_LABEL, "Orbi is stuck and needs you", "Orbi 卡住了，需要您处理"),
+    (NEEDS_DETAIL_LABEL, "Orbi needs more detail", "需要您补充信息"),
+    (AWAITING_MERGE_LABEL, "Waiting for you to approve the merge",
+     "等您批准合并"),
+])
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_needs_you_message_is_the_fixed_text(
+    monkeypatch, label, status_en, status_zh, language,
+):
+    expected = (
+        f"Orbi · 需要您处理：{status_zh}\n"
+        "o/r#7 Fix the thing\n"
+        "https://github.com/o/r/issues/7"
+        if language == "zh" else
+        f"Orbi · Needs your attention: {status_en}\n"
+        "o/r#7 Fix the thing\n"
+        "https://github.com/o/r/issues/7"
+    )
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch, config=config_for(language=language))
+        notify.label_added("o/r", 7, label, "Fix the thing")
+        assert endpoint.texts() == [expected]
+
+
+def test_label_added_is_silent_for_a_non_attention_label(monkeypatch):
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        notify.label_added("o/r", 7, "ai-in-progress", "t")
+        assert endpoint.requests == []
+
+
+def test_label_added_is_silent_when_notifications_are_off(monkeypatch):
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch, config=config_for(chat_id=None), token=None)
+        notify.label_added("o/r", 7, BLOCKED_LABEL, "t")
+        assert endpoint.requests == []
+
+
+# --- github.apply_label_patch hook -----------------------------------------
+
+
+def test_apply_label_patch_sends_once_for_a_new_attention_label(monkeypatch):
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+        monkeypatch.setattr(
+            seam, "issue_view", lambda *a, **k: {"title": "Fix the thing"},
+        )
+        github.apply_label_patch(
+            7, repo="o/r", event=EVENT_BLOCKED,
+            current_labels={"ai-ready"},
+        )
+        assert endpoint.texts() == [blocked_text()]
+        # Applying the same patch while ai-blocked is already present is
+        # silent: label_patch still returns the add label.
+        github.apply_label_patch(
+            7, repo="o/r", event=EVENT_BLOCKED,
+            current_labels={"ai-blocked"},
+        )
+        assert endpoint.texts() == [blocked_text()]
+
+
+def test_apply_label_patch_notifies_awaiting_merge(monkeypatch):
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+        monkeypatch.setattr(
+            seam, "issue_view", lambda *a, **k: {"title": "Ready to merge"},
+        )
+        github.apply_label_patch(
+            7, repo="o/r", event=EVENT_AWAITING_MERGE,
+            current_labels={"ai-ready", "ai-pr-opened"},
+        )
+        assert endpoint.texts() == [
+            "Orbi · Needs your attention: "
+            "Waiting for you to approve the merge\n"
+            "o/r#7 Ready to merge\n"
+            "https://github.com/o/r/issues/7"
+        ]
+
+
+def test_apply_label_patch_does_not_notify_a_non_attention_add(monkeypatch):
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+        reads = []
+        monkeypatch.setattr(
+            seam, "issue_view",
+            lambda *a, **k: reads.append(a) or {"title": "t"},
+        )
+        github.apply_label_patch(
+            7, repo="o/r", event=EVENT_CLAIM, current_labels=(),
+        )
+        assert endpoint.requests == []
+        assert reads == []
+
+
+def test_apply_label_patch_sends_nothing_when_the_label_write_fails(
+    monkeypatch,
+):
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("gh write failed")
+
+        monkeypatch.setattr(seam, "edit_issue", boom)
+        with pytest.raises(RuntimeError, match="gh write failed"):
+            github.apply_label_patch(
+                7, repo="o/r", event=EVENT_BLOCKED,
+                current_labels={"ai-ready"},
+            )
+        assert endpoint.requests == []
+
+
+def test_apply_label_patch_sends_without_a_title_when_the_read_fails(
+    monkeypatch,
+):
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("gh issue view failed")
+
+        monkeypatch.setattr(seam, "issue_view", boom)
+        github.apply_label_patch(
+            7, repo="o/r", event=EVENT_BLOCKED,
+            current_labels={"ai-ready"},
+        )
+        assert endpoint.texts() == [
+            "Orbi · Needs your attention: Orbi is stuck and needs you\n"
+            "o/r#7\n"
+            "https://github.com/o/r/issues/7"
+        ]
+
+
+def test_apply_label_patch_makes_no_github_read_when_notifications_are_off(
+    monkeypatch,
+):
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch, config=config_for(chat_id=None), token=None)
+        monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+        reads = []
+        monkeypatch.setattr(
+            seam, "issue_view",
+            lambda *a, **k: reads.append(a) or {"title": "t"},
+        )
+        github.apply_label_patch(
+            7, repo="o/r", event=EVENT_BLOCKED,
+            current_labels={"ai-ready"},
+        )
+        assert reads == []
+        assert endpoint.requests == []
+
+
+# --- clarify.enforce hook --------------------------------------------------
+
+
+def _thin_verdict() -> clarify.ClarifyVerdict:
+    return clarify.ClarifyVerdict(
+        passed=False, missing=("observable_result",),
+    )
+
+
+def _record_writes(monkeypatch):
+    comments: list = []
+    edits: list = []
+    monkeypatch.setattr(
+        seam, "comment_issue",
+        lambda number, *, repo, body: comments.append((number, repo, body)),
+    )
+    monkeypatch.setattr(
+        seam, "edit_issue",
+        lambda number, *, repo, add=None, remove=None: edits.append(
+            (number, repo, add, remove)),
+    )
+    return comments, edits
+
+
+def test_clarify_stop_sends_one_needs_detail_message(monkeypatch):
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        monkeypatch.setattr(
+            seam, "judge_issue_body", lambda *a, **k: _thin_verdict(),
+        )
+        comments, edits = _record_writes(monkeypatch)
+        assert clarify.enforce(
+            {"number": 7, "title": "Thin ticket"}, config_for(),
+            "o/r", RUN_ID,
+        ) is False
+        assert len(comments) == 1 and len(edits) == 1
+        assert endpoint.texts() == [
+            "Orbi · Needs your attention: Orbi needs more detail\n"
+            "o/r#7 Thin ticket\n"
+            "https://github.com/o/r/issues/7"
+        ]
+
+
+def test_clarify_stop_still_stops_when_the_endpoint_is_down(
+    monkeypatch, caplog,
+):
+    point_at(monkeypatch, "http://127.0.0.1:1", timeout=1.0)
+    bind(monkeypatch)
+    monkeypatch.setattr(
+        seam, "judge_issue_body", lambda *a, **k: _thin_verdict(),
+    )
+    comments, edits = _record_writes(monkeypatch)
+    caplog.set_level("INFO")
+    assert clarify.enforce(
+        {"number": 7, "title": "Thin ticket"}, config_for(),
+        "o/r", RUN_ID,
+    ) is False
+    assert len(comments) == 1 and len(edits) == 1
+    assert "notify_failed reason=network_error" in caplog.text
+
+
+def test_clarify_stop_sends_nothing_when_the_write_fails(monkeypatch):
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        monkeypatch.setattr(
+            seam, "judge_issue_body", lambda *a, **k: _thin_verdict(),
+        )
+        _record_writes(monkeypatch)
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("gh write failed")
+
+        monkeypatch.setattr(seam, "edit_issue", boom)
+        assert clarify.enforce(
+            {"number": 7, "title": "Thin ticket"}, config_for(),
+            "o/r", RUN_ID,
+        ) is True
+        assert endpoint.requests == []
+
+
+# --- tick_start / half-configuration ---------------------------------------
+
+
+def test_tick_start_reports_a_missing_token_and_sends_nothing(
+    monkeypatch, caplog,
+):
+    monkeypatch.delenv(notify.TOKEN_ENV, raising=False)
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        caplog.set_level("INFO")
+        notify.tick_start(config_for())
+        assert "notify_failed reason=not_configured" in caplog.text
+        assert notify.TOKEN_ENV in caplog.text
+        assert endpoint.requests == []
+
+
+def test_tick_start_reports_an_empty_token(monkeypatch, caplog):
+    monkeypatch.setenv(notify.TOKEN_ENV, "")
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        caplog.set_level("INFO")
+        notify.tick_start(config_for())
+        assert "notify_failed reason=not_configured" in caplog.text
+        assert endpoint.requests == []
+
+
+def test_tick_start_without_a_chat_id_is_silent(monkeypatch, caplog):
+    monkeypatch.delenv(notify.TOKEN_ENV, raising=False)
+    caplog.set_level("INFO")
+    notify.tick_start(config_for(chat_id=None))
+    assert "notify_failed" not in caplog.text
+
+
+def test_tick_start_binds_the_token_for_the_label_hook(monkeypatch):
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        notify.tick_start(config_for())
+        assert notify.enabled() is True
+        notify.label_added("o/r", 7, BLOCKED_LABEL, "t")
+        assert len(endpoint.texts()) == 1
+
+
+# --- doctor and "orbi notify test" -----------------------------------------
+
+
+def test_doctor_lines_name_the_missing_variable_and_env_file(monkeypatch):
+    monkeypatch.delenv(notify.TOKEN_ENV, raising=False)
+    config = config_domain.RunnerConfig(
+        telegram_chat_id=CHAT_ID, deploy_home=Path("/deploy"),
+    )
+    lines = notify.doctor_lines(config)
+    assert len(lines) == 1
+    assert notify.TOKEN_ENV in lines[0]
+    assert "is not set" in lines[0]
+    assert "/deploy/.orbi/env" in lines[0]
+    assert TOKEN not in lines[0]
+
+
+def test_doctor_lines_are_empty_when_configured_or_off(monkeypatch):
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    assert notify.doctor_lines(config_for()) == []
+    monkeypatch.delenv(notify.TOKEN_ENV, raising=False)
+    assert notify.doctor_lines(config_for(chat_id=None)) == []
+
+
+def test_notify_test_command_prints_ok_and_exits_zero(monkeypatch, capsys):
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        assert notify.test_command(config_for()) == 0
+        assert capsys.readouterr().out.strip() == "ok"
+        assert endpoint.texts() == [
+            "Orbi test notification\n"
+            "Your notification target works. Future alerts look like this."
+        ]
+
+
+def test_notify_test_command_prints_the_bad_token_reason(
+    monkeypatch, capsys,
+):
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    with TelegramEndpoint(
+        status=401, body=b'{"ok": false, "description": "Unauthorized"}',
+    ) as endpoint:
+        endpoint.point(monkeypatch)
+        assert notify.test_command(config_for()) == 1
+        assert capsys.readouterr().out.strip() == (
+            "notify_failed reason=token_invalid"
+        )
+
+
+def test_notify_test_command_without_a_chat_id_names_it(
+    monkeypatch, capsys,
+):
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        assert notify.test_command(config_for(chat_id=None)) == 1
+        out = capsys.readouterr().out
+        assert "telegram_chat_id" in out
+        assert endpoint.requests == []
+
+
+def test_orbi_notify_test_runs_through_the_cli(
+    monkeypatch, tmp_path, capsys,
+):
+    """The real user entry point: `orbi notify test` sends and prints ok."""
+    from orbi import cli
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "prompt.md").write_text("p", encoding="utf-8")
+    (tmp_path / "prompts" / "prompt_review.md").write_text(
+        "r", encoding="utf-8")
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["o/r"]\n'
+        f'repo_dir = "{repo}"\n'
+        f'telegram_chat_id = "{CHAT_ID}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        assert cli.main(
+            ["notify", "test", "--config", str(config_path)],
+        ) == 0
+        assert capsys.readouterr().out.strip() == "ok"
+        assert len(endpoint.texts()) == 1
+
+
+# --- redaction -------------------------------------------------------------
+
+
+def test_redaction_hides_the_telegram_token():
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    redacted = journal.redact_secrets(url)
+    assert TOKEN not in redacted
+    assert "bot<redacted>" in redacted
+    assert TOKEN not in journal.redact_secrets(f"token={TOKEN}")

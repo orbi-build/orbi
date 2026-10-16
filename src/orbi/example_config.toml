@@ -236,6 +236,16 @@ max_concurrency = 1
 # outcome is stopped with ONE comment and the ai-needs-detail label.
 # Default: false (off). Every error path fails open.
 # clarify_thin_tickets = false
+# Telegram notifications (Issue #1673): when Orbi NEWLY adds
+# ai-blocked, ai-needs-detail or ai-awaiting-merge to a task, it sends
+# ONE Telegram message naming the state, the Issue and its link.
+# Notifications are ON when telegram_chat_id is set; remove it to turn
+# them off. The bot token is NOT a key: it lives in
+# <deploy_home>/.orbi/env as ORBI_TELEGRAM_BOT_TOKEN.
+# notify_language is "zh" or "en" (default en). Check the setup with
+# `orbi notify test`.
+# telegram_chat_id = "-1001234567890"
+# notify_language = "en"
 # Optional Pi skills. Paths may be absolute, use ~, or be relative to this file.
 skills = []
 

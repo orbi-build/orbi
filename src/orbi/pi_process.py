@@ -1262,7 +1262,7 @@ def _stream_pi_once(
         # it to the prompt (Issue #1562): the child must get /dev/null,
         # never the Runner's possibly-open stdin pipe.
         stdin=subprocess.DEVNULL,
-        env=None if pi_env is None else {**os.environ, **pi_env},
+        env={k: v for k, v in {**os.environ, **(pi_env or {})}.items() if k != "ORBI_TELEGRAM_BOT_TOKEN"},
     )
     # Track the live Pi child for the stop handler: a
     # SIGTERM during this window must shut the child down, never

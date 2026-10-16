@@ -61,9 +61,6 @@ from orbi.github import (
     milestone_issues,
     milestone_open_issues,
     pr_view,
-    release_create,
-    release_edit_notes,
-    release_view,
 )
 from orbi.gitops import (
     _is_ancestor,
@@ -79,6 +76,9 @@ from orbi.release_git import (
     RELEASE_VERSION_TAG_RE,
     ReleaseVersionAlreadyLanded,
     prepare_release_version,
+    release_create,
+    release_edit_notes,
+    release_view,
     run_git_write,
 )
 from orbi.release_notes import (

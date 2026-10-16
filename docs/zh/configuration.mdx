@@ -86,3 +86,23 @@ Steering 让 Runner 轮询 Issue 中的受信任修正，并带着修正重启�
 | Key | Type | Default | Allowed values | Meaning |
 |---|---|---|---|---|
 | `health_alert_repo` | 字符串或空 | 未设置 | 任意非空 `owner/repo` | 接收 Runner crash-loop/stale-pickup 健康 Issue；未设置时从 deploy-home origin 推导。 |
+
+## 通知
+
+Orbi 可以把等待人的任务在 GitHub 之外告知队列负责人：当它新加上 `ai-blocked`、`ai-needs-detail` 或 `ai-awaiting-merge` 时，向 Telegram（私聊或群）发送一条消息，写明状态、`owner/repo#N <title>` 和 Issue 链接。人手加的标签是他自己的动作，不会发送。发送是纯旁路——失败只记 `notify_failed` journal 行（见 [Operations](/zh/operations)），绝不使交付失败或改动标签。
+
+| Key | Type | Default | Allowed values | Meaning |
+|---|---|---|---|---|
+| `telegram_chat_id` | 字符串或空 | 未设置 | 任意非空字符串 | 接收“需要您处理”消息的 Telegram chat：私聊（已向 bot 发送 `/start`）或 bot 可发言的群（保留开头的 `-`）。设置即开启通知；删除即关闭。值为空会令配置加载立即失败 |
+| `notify_language` | 字符串 | `en` | `zh \| en` | 固定消息的语言；其他值令配置加载立即失败 |
+
+bot token 不是配置键：它只存在于 `<deploy_home>/.orbi/env` 的 `ORBI_TELEGRAM_BOT_TOKEN=...`，且不会进入 journal（值会被脱敏）或 Pi session。
+
+```toml
+telegram_chat_id = "-1001234567890"
+notify_language = "zh"
+```
+
+配置步骤：用 BotFather 创建 bot，把 `ORBI_TELEGRAM_BOT_TOKEN=...` 写入 `<deploy_home>/.orbi/env`，向 bot 发送 `/start`（私聊）或把 bot 拉进群并发一条消息，打开 `https://api.telegram.org/bot<token>/getUpdates` 复制 `message.chat.id`（群 id 以 `-` 开头），设置 `telegram_chat_id`，然后运行 `orbi notify test`。只有 chat id 没有 token 时，每个 tick 都会报告（`notify_failed reason=not_configured`），`orbi doctor` 和 `orbi notify test` 也会报告——但绝不阻塞交付，因为 `.orbi/env` 与 `orbi.toml` 是可能互相滞后的两个文件。
+
+每个 tick 在启动时读取本配置，因此改动从下一个启动的 tick 起生效；已在运行的交付沿用启动时的设置。其他方式等待的票——人工验收门禁的 `ai-human-review`、里程碑确认票——不带这三个标签，不会发送。

@@ -15822,6 +15822,32 @@ def test_stream_pi_without_pi_env_keeps_inherited_env(tmp_path, monkeypatch):
     assert result == "inherited"
 
 
+def test_stream_pi_strips_the_telegram_token_from_the_child_env(
+    tmp_path, monkeypatch,
+):
+    """Issue #1673: the bot token stays in the Runner, never in Pi.
+
+    Notifications are a bypass the child never needs, so the token is
+    removed from the child environment while everything else stays
+    inherited (the pre-#157 shape)."""
+    monkeypatch.setenv("ORBI_TELEGRAM_BOT_TOKEN", "123456789:" + "A" * 35)
+    monkeypatch.setenv("ORBI_TEST_ENV_MARKER", "inherited")
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir()
+    script = (
+        "import os, sys\n"
+        "sys.stdout.write(os.environ.get('ORBI_TEST_ENV_MARKER', '') + '|' "
+        "+ os.environ.get('ORBI_TELEGRAM_BOT_TOKEN', 'ABSENT'))\n"
+    )
+    result = pi_session.stream_pi(
+        [sys.executable, "-c", script],
+        ctx=RunContext(run_id="deadbeef", issue=24, branch="b",
+                       worktree=tmp_path, source_repo="xqliu/orbi"),
+        watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path,
+    )
+    assert result == "inherited|ABSENT"
+
+
 def test_run_pi_materializes_provider_dir_and_env(monkeypatch, tmp_path):
     """The implementer session gets the materialized dir via env."""
     (tmp_path / "prompt.md").write_text("SYSTEM", encoding="utf-8")

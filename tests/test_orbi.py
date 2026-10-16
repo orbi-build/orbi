@@ -1992,6 +1992,21 @@ def test_main_setup_failure_prints_the_reason_and_returns_nonzero(
     assert "insufficient permission" in err
 
 
+def test_doctor_report_reports_the_notify_finding(tmp_path, monkeypatch):
+    """Issue #1673: a chat id without a token is a doctor finding that
+    names the variable and the env file, never the (absent) value."""
+    config, installed = _deploy_world(tmp_path, drift=False)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    monkeypatch.delenv("ORBI_TELEGRAM_BOT_TOKEN", raising=False)
+    config = dataclasses.replace(config, telegram_chat_id="-1001234567890")
+    report = orbi.doctor_report(config, installed)
+    assert any(
+        line.startswith("notify:") and "ORBI_TELEGRAM_BOT_TOKEN" in line
+        for line in report.splitlines()
+    )
+
+
 def test_doctor_report_reports_provider_key_finding(tmp_path, monkeypatch):
     config, installed = _deploy_world(tmp_path, drift=False)
     _fake_doctor_commands(monkeypatch)
