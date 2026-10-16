@@ -7,47 +7,43 @@ completes, plus the machine-parsable block a future migration tool reads
 when a column-2 item becomes machine-verifiable (the artifact shape
 stays, the items migrate).
 
-The split between the columns is DATA-DRIVEN per delivery — derived
-from the delivered diff paths and the run's test evidence — never a
+The split between the columns is DATA-DRIVEN per delivery -- derived
+from the delivered diff paths and the run's test evidence -- never a
 hardcoded "human-only items" list: an item leaves column 2 when a
 machine-verification dimension covers it, and an empty column 2 is the
 product's target state ("no human intervention needed", no label
 required). Every function here is pure: a deterministic function of the
 delivery's evidence.
 
+Issue #1660: the checklist is Orbi's own comment and follows the run's
+bound message language -- both columns and the wording around them; the
+machine block keeps its schema and only its item TEXT follows the
+language.
+
 Wording discipline (orbi-website#128): the checklist never claims a
-guarantee of correctness or direction — column 1 is evidence of what
+guarantee of correctness or direction -- column 1 is evidence of what
 the run verified, column 2 is the minimal set a person still confirms.
 """
 import json
 
+from orbi import language
 from orbi.delivery_labels import HUMAN_REVIEW_LABEL
 
-# The machine-parsable block marker (an HTML comment — GitHub renders
+# The machine-parsable block marker (an HTML comment -- GitHub renders
 # nothing of it; a migration tool greps it). Schema 1: one JSON object
 # with the run id and both columns verbatim.
 CHECKLIST_MARKER = "orbi:human-review"
 _CHECKLIST_SCHEMA = 1
 
-# Column-2 items (the machine-unverifiable
-# minimum). Each fires on a data condition of the delivered diff, not
-# on a repo-agnostic "humans must check this" template.
-_INTENT_ITEM = (
-    "业务意图判断：自动化测试只能证明实现与测试一致，不能证明测试与意图一致"
-    "——本次改动是否符合原始预期，需要人确认"
-)
-_UI_ITEM = (
-    "UI 视觉与文案：测试断言不到渲染效果与措辞，需要人在真实界面确认"
-)
-_DEPLOY_ITEM = (
-    "外部环境验证：部署 / CI / 监控类改动要在真实环境验证，本机测试覆盖不到"
-)
-_EVIDENCE_ITEM = (
-    "测试证据缺失：没有可读的测试结果记录，本次交付的自动化验证程度未知"
-)
-_DIFF_ITEM = (
-    "改动文件清单不可读：无法确定本次交付实际改了什么，验证范围未知"
-)
+# Column-2 items (the machine-unverifiable minimum). Each fires on a
+# data condition of the delivered diff, not on a repo-agnostic "humans
+# must check this" template. The catalog keys point at the sentence in
+# the run's message language.
+_INTENT_ITEM = "human_review.item_intent"
+_UI_ITEM = "human_review.item_ui"
+_DEPLOY_ITEM = "human_review.item_deploy"
+_EVIDENCE_ITEM = "human_review.item_evidence"
+_DIFF_ITEM = "human_review.item_diff"
 
 _UI_SUFFIXES = (
     ".html", ".htm", ".css", ".scss", ".less",
@@ -114,7 +110,8 @@ def _is_deploy_path(path: str) -> bool:
 
 
 def build_checklist(*, test_status: str | None,
-                    changed_files: list[str] | None) -> dict:
+                    changed_files: list[str] | None,
+                    language_code: str = language.DEFAULT_LANGUAGE) -> dict:
     """Split the delivery's evidence into the two checklist columns.
 
     `test_status` is the PR head's CI check status (Issue #1613:
@@ -122,7 +119,7 @@ def build_checklist(*, test_status: str | None,
     the paths the delivered commits changed against the frozen base
     (None when the diff cannot be read). Column 1 is what the run
     actually verified; column 2 lists the dimensions the machine
-    evidence cannot close — empty only when the delivery really carries
+    evidence cannot close -- empty only when the delivery really carries
     none (the target state).
 
     Only a passing CI result is evidence: with no PR, no checks, pending
@@ -132,71 +129,76 @@ def build_checklist(*, test_status: str | None,
     column1: list[str] = []
     column2: list[str] = []
     if test_status == "passed":
-        column1.append(f"测试结果：PR CI {test_status}")
-        # No declared test command — the suite is the
+        column1.append(language.text(
+            language_code, "human_review.item_test_result",
+            status=test_status,
+        ))
+        # No declared test command -- the suite is the
         # repository's own test suite (the agent infers the method).
-        column1.append(
-            f"覆盖层：仓库测试套件 —— 自动化断言覆盖到代码与接口层；"
-            f"改动共 {len(changed_files or [])} 个文件"
-        )
+        column1.append(language.text(
+            language_code, "human_review.item_coverage",
+            count=len(changed_files or []),
+        ))
     else:
-        column2.append(_EVIDENCE_ITEM)
+        column2.append(language.text(language_code, _EVIDENCE_ITEM))
     if changed_files is None:
-        column2.append(_DIFF_ITEM)
+        column2.append(language.text(language_code, _DIFF_ITEM))
     changed = changed_files or []
     if any(not _is_test_path(path) and not _is_docs_path(path)
            for path in changed):
-        column2.append(_INTENT_ITEM)
+        column2.append(language.text(language_code, _INTENT_ITEM))
     if any(_is_ui_path(path) for path in changed):
-        column2.append(_UI_ITEM)
+        column2.append(language.text(language_code, _UI_ITEM))
     if any(_is_deploy_path(path) for path in changed):
-        column2.append(_DEPLOY_ITEM)
+        column2.append(language.text(language_code, _DEPLOY_ITEM))
     return {"column1": column1, "column2": column2}
 
 
 def render_checklist_comment(*, run_id: str, pr_url: str,
-                             checklist: dict) -> str:
+                             checklist: dict,
+                             language_code: str = language.DEFAULT_LANGUAGE,
+                             ) -> str:
     """Render the Issue comment: run marker, both columns, machine block.
 
     Hard constraints: no line may start with
     `Orbi review round ` (`review_rounds_so_far` counts it and the
     checklist would burn the bounded review budget); an empty column 2
-    says 无需人工介入 explicitly and does not require the label; the
-    wording never claims a guarantee of direction.
+    says so explicitly and does not require the label; the wording never
+    claims a guarantee of direction.
     """
+    def message(key: str, **fields: object) -> str:
+        return language.text(language_code, key, **fields)
+
     column1 = checklist["column1"]
     column2 = checklist["column2"]
     # The review instruction names the repository's own test
-    # suite — no declared test command exists to quote.
+    # suite -- no declared test command exists to quote.
     lines = [
         f"<!-- orbi:run={run_id} -->",
-        "**Orbi human review checklist**",
+        message("human_review.title"),
         "",
-        "复核方式：阅读 PR 的完整 diff（"
-        f"{pr_url}），在本地跑仓库测试（`仓库测试套件`），再确认下面两栏。",
+        message("human_review.method", pr_url=pr_url),
         "",
-        "栏一 · AI 已验证（证据，不是待办）：",
+        message("human_review.column1"),
     ]
     if column1:
         lines.extend(f"- {item}" for item in column1)
     else:
-        lines.append("- （无可读的自动化验证证据）")
+        lines.append(f"- {message('human_review.column1_empty')}")
     lines.append("")
     if column2:
-        lines.append("栏二 · 需要人确认（机器验不了的最小集合）：")
+        lines.append(message("human_review.column2"))
         lines.extend(f"- {item}" for item in column2)
         lines.append("")
-        lines.append(
-            f"确认无误后给本 Issue 打 `{HUMAN_REVIEW_LABEL}` 标签，"
-            "Orbi 会在下一个 tick 继续评审与合并；在此之前交付在此等待"
-            f"（run_id={run_id}）。"
-        )
+        lines.append(message(
+            "human_review.confirm", label=HUMAN_REVIEW_LABEL,
+            run_id=run_id,
+        ))
     else:
-        lines.append(
-            "栏二 · 需要人确认：**无需人工介入** —— 本次交付没有识别出"
-            f"机器验不了的条目，不要求 `{HUMAN_REVIEW_LABEL}` 标签"
-            f"（run_id={run_id}）。"
-        )
+        lines.append(message(
+            "human_review.column2_empty", label=HUMAN_REVIEW_LABEL,
+            run_id=run_id,
+        ))
     lines += [
         "",
         f"<!-- {CHECKLIST_MARKER}",

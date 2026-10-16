@@ -2087,8 +2087,13 @@ def test_run_setup_routes_home_files_to_deploy_home(tmp_path, monkeypatch):
 
 
 def test_ensure_config_creates_example_without_overwriting(tmp_path):
+    """An adjacent example that CHOOSES its message language wins
+    (Issue #1660): the created config preserves the explicit value."""
     example = tmp_path / ".orbi.example.toml"
-    example.write_text('source_repos = ["OWNER/REPO"]\n', encoding="utf-8")
+    example.write_text(
+        'source_repos = ["OWNER/REPO"]\nmessage_language = "en"\n',
+        encoding="utf-8",
+    )
     config = tmp_path / "orbi.toml"
 
     assert pilot_setup.ensure_config(config) == config
@@ -2097,11 +2102,39 @@ def test_ensure_config_creates_example_without_overwriting(tmp_path):
     config.write_text('source_repos = ["existing/repo"]\n', encoding="utf-8")
     assert pilot_setup.ensure_config(config) == config
     assert "existing/repo" in config.read_text(encoding="utf-8")
+    # An EXISTING file is never touched, not even to add the new key.
+    assert "message_language" not in config.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("locale,expected", [
+    ({"LC_ALL": "zh_CN.UTF-8"}, "zh"),
+    ({"LC_MESSAGES": "zh"}, "zh"),
+    ({"LANG": "zh_TW"}, "zh"),
+    ({"LANG": "en_US.UTF-8"}, "en"),
+    ({"LANG": "C"}, "en"),
+    ({}, "en"),
+])
+def test_ensure_config_seeds_the_new_configs_language_from_the_locale(
+    tmp_path, monkeypatch, locale, expected,
+):
+    """AC2 (Issue #1660): a NEW config under a Chinese/English/C/no
+    locale carries the intended initial value; the commented packaged
+    default documents it without deciding it."""
+    for name in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in locale.items():
+        monkeypatch.setenv(name, value)
+    config = tmp_path / "orbi.toml"
+    assert pilot_setup.ensure_config(config) == config
+    body = config.read_text(encoding="utf-8")
+    assert f'message_language = "{expected}"' in body
+    assert "# message_language" not in body
 
 
 def test_ensure_config_falls_back_to_the_shipped_example(tmp_path):
     """Issue #163: a PyPI install has no checkout-adjacent example —
-    the example SHIPPED IN THE PACKAGE is used, byte for byte."""
+    the example SHIPPED IN THE PACKAGE is used (Issue #1660: with its
+    documented, commented default activated only by the locale)."""
     import importlib.resources
 
     config = tmp_path / "orbi.toml"
@@ -2111,7 +2144,11 @@ def test_ensure_config_falls_back_to_the_shipped_example(tmp_path):
         .joinpath("example_config.toml")
         .read_bytes()
     )
-    assert config.read_bytes() == packaged
+    assert b'# message_language = "en"' in packaged
+    assert config.read_bytes() != packaged
+    assert config.read_bytes() == packaged.replace(
+        b'# message_language = "en"', b'message_language = "en"', 1,
+    )
 
 
 def test_ensure_config_fails_when_no_example_is_available(tmp_path, monkeypatch):

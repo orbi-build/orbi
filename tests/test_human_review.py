@@ -44,10 +44,10 @@ def test_build_checklists_column1_carries_the_ci_result_and_layer():
     assert any("PR CI passed" in item for item in checklist["column1"])
     # Issue #805: no declared test command — the suite wording is the
     # repository's own test suite.
-    assert any("仓库测试套件" in item for item in checklist["column1"])
+    assert any("repository's own test suite" in item for item in checklist["column1"])
     # The business-intent item fires: a non-test source file changed.
     assert len(checklist["column2"]) == 1
-    assert "业务意图" in checklist["column2"][0]
+    assert "Intent judgment" in checklist["column2"][0]
 
 
 def test_build_checklists_column2_adds_ui_and_deploy_dimensions():
@@ -60,9 +60,9 @@ def test_build_checklists_column2_adds_ui_and_deploy_dimensions():
         ],
     )
     joined = "\n".join(checklist["column2"])
-    assert "业务意图" in joined
+    assert "Intent judgment" in joined
     assert "UI" in joined
-    assert "外部环境" in joined
+    assert "External-environment verification" in joined
 
 
 def test_build_checklists_docs_changes_do_not_trigger_the_intent_item():
@@ -95,7 +95,7 @@ def test_build_checklists_missing_check_status_lands_in_column2():
             test_status=test_status,
             changed_files=["tests/test_new.py"],
         )
-        assert any("测试证据" in item for item in checklist["column2"])
+        assert any("Missing test evidence" in item for item in checklist["column2"])
 
 
 def test_build_checklists_unreadable_diff_lands_in_column2():
@@ -103,7 +103,7 @@ def test_build_checklists_unreadable_diff_lands_in_column2():
         test_status="passed",
         changed_files=None,
     )
-    assert any("改动文件" in item for item in checklist["column2"])
+    assert any("Unreadable changed-file" in item for item in checklist["column2"])
 
 
 def test_build_checklists_degenerate_paths_never_crash_the_classifier():
@@ -114,9 +114,9 @@ def test_build_checklists_degenerate_paths_never_crash_the_classifier():
         test_status="passed",
         changed_files=["", "//"],
     )
-    assert any("业务意图" in item for item in checklist["column2"])
+    assert any("Intent judgment" in item for item in checklist["column2"])
     assert not any("UI" in item for item in checklist["column2"])
-    assert not any("外部环境" in item for item in checklist["column2"])
+    assert not any("External-environment verification" in item for item in checklist["column2"])
 
 
 # ------------------------------------------------------- pure: rendering
@@ -125,7 +125,7 @@ def _render(**overrides):
     kwargs = dict(
         run_id=RUN_ID,
         pr_url=PR_URL,
-        checklist={"column1": ["测试结果：10 passed"], "column2": ["业务意图"]},
+        checklist={"column1": ["测试结果：10 passed"], "column2": ["Intent judgment"]},
     )
     kwargs.update(overrides)
     return human_review.render_checklist_comment(**kwargs)
@@ -141,7 +141,7 @@ def test_rendered_checklist_carries_the_run_marker_and_machine_block():
     assert data["schema"] == 1
     assert data["run_id"] == RUN_ID
     assert data["column1"] == ["测试结果：10 passed"]
-    assert data["column2"] == ["业务意图"]
+    assert data["column2"] == ["Intent judgment"]
 
 
 def test_rendered_checklist_never_counts_as_a_review_round():
@@ -159,19 +159,19 @@ def test_rendered_checklist_never_counts_as_a_review_round():
 
 def test_rendered_checklist_names_both_columns_and_the_pr():
     body = _render()
-    assert "栏一" in body and "栏二" in body
+    assert "Column 1" in body and "Column 2" in body
     assert PR_URL in body
     # Issue #805: no declared test command — the review instruction
     # names the repository's own test suite.
-    assert "仓库测试套件" in body
+    assert "repository's own test suite" in body
     # Copy discipline (website#128): the checklist never claims a
     # guarantee of correctness/direction.
-    assert "保证" not in body
+    assert "guarantee" not in body.lower()
 
 
 def test_rendered_checklist_empty_column2_says_no_human_intervention():
     body = _render(checklist={"column1": ["x"], "column2": []})
-    assert "无需人工介入" in body
+    assert "no human intervention needed" in body
     assert "ai-human-review" in body
 
 
@@ -409,4 +409,4 @@ def test_delivered_changed_files_failure_is_missing_evidence(
     checklist = human_review.build_checklist(
         test_status="passed", changed_files=None,
     )
-    assert any("改动文件" in item for item in checklist["column2"])
+    assert any("Unreadable changed-file" in item for item in checklist["column2"])

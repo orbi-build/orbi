@@ -35,7 +35,7 @@ import tomllib
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Callable, cast
 
-from orbi import __version__
+from orbi import __version__, language
 from orbi.delivery_labels import LIFECYCLE_STATES, READY_LABEL
 from orbi.journal import event, run_command
 
@@ -71,6 +71,10 @@ POLICY_KEYS = (
     "steering_max_rounds",
     "release_confirmation",
     "clarify_thin_tickets",
+    # Issue #1660: the repository's explicit message language. It follows
+    # the delivery to the repository's default branch, so it is delivery
+    # policy (not host-only) -- and its absence inherits the host value.
+    language.MESSAGE_LANGUAGE_KEY,
 )
 
 # `test_command` left the whitelist — the merge gate reads
@@ -153,6 +157,7 @@ class RepoPolicy:
     steering_max_rounds: int | None = None
     release_confirmation: bool | None = None
     clarify_thin_tickets: bool | None = None
+    message_language: str | None = None
     sha: str | None = None
     ignored_keys: tuple[str, ...] = ()
 
@@ -229,6 +234,9 @@ def parse_repo_config(text: str, *, source: str = REPO_CONFIG_PATH) -> RepoPolic
         clarify_thin_tickets=cast(
             "bool | None", values.get("clarify_thin_tickets")
         ),
+        message_language=cast(
+            "str | None", values.get(language.MESSAGE_LANGUAGE_KEY)
+        ),
         ignored_keys=ignored,
     )
 
@@ -266,6 +274,14 @@ def _validate_value(key: str, value: object, *, source: str) -> object:
                 f"{source}: clarify_thin_tickets must be a boolean"
             )
         return value
+    if key == language.MESSAGE_LANGUAGE_KEY:
+        # A bad repository value blocks the claim like every other invalid
+        # policy value (the claim's fail-fast precondition path), while the
+        # message keeps the host wording: file, key, value, allowed values.
+        try:
+            return language.normalize_language(value, source=source)
+        except language.LanguageError as exc:
+            raise RepoConfigError(str(exc)) from exc
     if key == "steering_poll_seconds":
         if (
             isinstance(value, bool)
@@ -384,6 +400,14 @@ def resolve_policy(config: RunnerConfig, policy: RepoPolicy) -> RunnerConfig:
             policy.clarify_thin_tickets
             if policy.clarify_thin_tickets is not None
             else config.clarify_thin_tickets
+        ),
+        # Issue #1660: the repository's explicit language wins per key; an
+        # absent repository key inherits the host value (never a copy of
+        # the default).
+        message_language=(
+            policy.message_language
+            if policy.message_language is not None
+            else config.message_language
         ),
     )
 

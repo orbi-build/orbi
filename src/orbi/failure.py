@@ -23,6 +23,8 @@ import dataclasses
 import json
 import re
 
+from orbi import language
+
 SCHEMA_VERSION = 1
 
 # The single hidden block: a versioned marker framing a JSON payload
@@ -238,10 +240,7 @@ _WORKFLOW_PERMISSION_RE = re.compile(
 # #1651). One canonical explanation feeds the detailed comment, the
 # terminal progress scene and the short milestone; only the last
 # sentence differs by whether a delivery PR already exists.
-_WORKFLOW_PERMISSION_CAUSE = (
-    "GitHub rejected the push because the current GitHub App credential "
-    "cannot modify Actions workflows"
-)
+_WORKFLOW_PERMISSION_CAUSE_KEY = "failure.workflow_cause"
 _TESTS_FAILED_RE = re.compile(
     r"\btests? failed\b|\d+ failed", re.IGNORECASE,
 )
@@ -327,12 +326,17 @@ def workflow_permission_refused(detail: str) -> bool:
     )
 
 
-def workflow_permission_cause() -> str:
+def workflow_permission_cause(
+    language_code: str = language.DEFAULT_LANGUAGE,
+) -> str:
     """The one-sentence cause of an Actions-workflow permission refusal."""
-    return f"{_WORKFLOW_PERMISSION_CAUSE}."
+    return language.text(language_code, _WORKFLOW_PERMISSION_CAUSE_KEY)
 
 
-def workflow_permission_action(pr_url: str | None = None) -> str:
+def workflow_permission_action(
+    pr_url: str | None = None, *,
+    language_code: str = language.DEFAULT_LANGUAGE,
+) -> str:
     """The concrete human repair path for the workflow refusal.
 
     The no-PR wording restarts the Issue (`ai-ready`); the existing-PR
@@ -342,27 +346,19 @@ def workflow_permission_action(pr_url: str | None = None) -> str:
     external authorization, so no wording promises an automatic restart
     and none asks the reader to share a token or reinstall the App.
     """
-    first = (
-        f"{_WORKFLOW_PERMISSION_CAUSE}. Check the App's installation "
-        "settings for a permission update that includes Workflows "
-        "read/write."
-    )
+    cause = workflow_permission_cause(language_code)
     if pr_url:
-        return (
-            f"{first} After resolving the permission, remove `ai-blocked` "
-            f"and add `ai-fix-needed` to continue PR {pr_url}. If no update "
-            "is available or the same error persists, contact the App "
-            "operator."
+        return language.text(
+            language_code, "failure.workflow_action_pr",
+            cause=cause, pr_url=pr_url,
         )
-    return (
-        f"{first} After resolving the permission, remove `ai-blocked` and "
-        "ensure `ai-ready` is present to run this Issue again. If no "
-        "update is available or the same error persists, contact the App "
-        "operator. No PR has been created."
+    return language.text(
+        language_code, "failure.workflow_action_no_pr", cause=cause,
     )
 
 
-def terminal_action(record: Failure) -> str:
+def terminal_action(record: Failure,
+                    language_code: str = language.DEFAULT_LANGUAGE) -> str:
     """The reader action for the implement-phase terminal handler.
 
     An unrecognized failure says the cause could not be determined
@@ -370,11 +366,8 @@ def terminal_action(record: Failure) -> str:
     every recognized terminal failure keeps the existing generic action.
     """
     if record.reason_code == "unclassified":
-        return (
-            "The cause could not be determined from the failure evidence; "
-            "review it and re-run this Issue once the cause is fixed."
-        )
-    return "Fix the failure described below and re-run this Issue."
+        return language.text(language_code, "failure.terminal_unclassified")
+    return language.text(language_code, "failure.terminal_generic")
 
 
 # --------------------------------------------------------------------------
@@ -416,8 +409,10 @@ def _workflow_permission_line(text: str) -> str | None:
     return None
 
 
-def _failure_summary(reason: str) -> str:
+def _failure_summary(reason: str,
+                     language_code: str = language.DEFAULT_LANGUAGE) -> str:
     """Turn a runner exception description into a short reader summary."""
+    command_failed = language.text(language_code, "failure.command_failed")
     stderr_match = re.search(r"\s+stderr=(.*)$", reason,
                              flags=re.IGNORECASE | re.DOTALL)
     stderr = stderr_match.group(1).strip() if stderr_match else ""
@@ -428,15 +423,15 @@ def _failure_summary(reason: str) -> str:
     # bracket: an argv value may itself contain ``]``.
     summary = re.sub(
         r"Command\s+.+?\s+returned non-zero exit status\s+\d+",
-        "the delivery command failed", summary,
+        command_failed, summary,
         flags=re.IGNORECASE | re.DOTALL,
     )
     summary = re.sub(r"CalledProcessError\([^)]*\)",
-                     "the delivery command failed", summary)
+                     command_failed, summary)
     summary = _redact_local_paths(summary)
     summary = re.sub(r"\s+", " ", summary).strip(" .;:")
     if not summary:
-        summary = "the delivery command failed"
+        summary = command_failed
     if stderr:
         # Setup tools often write informational lines before the provider's
         # concrete error. The final non-empty line is the actionable result
@@ -456,7 +451,9 @@ def _failure_summary(reason: str) -> str:
 def _failure_comment_body(*, outcome: str, action: str, reason: str,
                          diagnosis: str, scene: str, evidence: str,
                          pr_url: str | None, issue: str, run_id: str,
-                         failure_record: Failure | None = None) -> str:
+                         failure_record: Failure | None = None,
+                         language_code: str = language.DEFAULT_LANGUAGE,
+                         ) -> str:
     """Build the reader-facing hierarchy shared by classified failures.
 
     The hidden `orbi:failure:v1` block is the first line so every
@@ -472,40 +469,63 @@ def _failure_comment_body(*, outcome: str, action: str, reason: str,
             retry_safe=False,
             outcome="fix_needed" if retrying else "blocked",
         )
-    headline = (
-        "Orbi: fix needed — the engine will retry"
-        if retrying else "Orbi: blocked — waiting on a human decision"
+    def message(key: str, **fields: object) -> str:
+        return language.text(language_code, key, **fields)
+
+    headline = message(
+        "failure.headline_fix_needed" if retrying
+        else "failure.headline_blocked",
     )
     parts = [render(failure_record), headline]
     if pr_url:
-        parts.append(f"PR: [{pr_url}]({pr_url})")
-    parts.append(f"Issue: `{issue}` · run_id={run_id}")
+        parts.append(message("failure.pr_line", pr_url=pr_url))
+    parts.append(message("failure.issue_line", issue=issue, run_id=run_id))
     if action:
-        parts.append(f"**Action:** {_redact_local_paths(action)}")
-    parts.append(f"**Reason:** {_failure_summary(reason)}")
-    disposition = "Orbi needs a fix" if retrying else "Orbi failed"
-    branch_match = re.search(r"- branch: `([^`]+)`", scene)
-    session_match = re.search(r"- session: `([^`]+)`", scene)
+        parts.append(
+            f"{message('failure.action_label')} {_redact_local_paths(action)}"
+        )
+    parts.append(
+        f"{message('failure.reason_label')} "
+        f"{_failure_summary(reason, language_code)}"
+    )
+    disposition = message(
+        "failure.disposition_needs_fix" if retrying
+        else "failure.disposition_failed",
+    )
+    # The scene's human field labels follow the same language; the
+    # correlation row reads the two values through the SAME labels, so the
+    # machine lookup shape survives translation.
+    branch_match = re.search(
+        rf"- {re.escape(message('failure.scene.branch'))}: `([^`]+)`",
+        scene,
+    )
+    session_match = re.search(
+        rf"- {re.escape(message('failure.scene.session'))}: `([^`]+)`",
+        scene,
+    )
     correlation = (
         f"run={run_id} branch={branch_match.group(1) if branch_match else '-'} "
         f"session={session_match.group(1) if session_match else '-'}"
     )
     details = [
-        "<details><summary>Diagnosis</summary>",
-        f"- disposition: `{disposition}: see the reason above`",
+        f"<details><summary>{message('failure.diagnosis_summary')}</summary>",
+        message("failure.disposition_row", disposition=disposition),
         scene,
         # Stable correlation keys retain the old journal lookup shape while
         # local path fields above remain reader-safe labels.
-        f"- correlation: `{correlation}`",
+        message("failure.correlation_row", correlation=correlation),
     ]
     if diagnosis:
-        reason_summary = _failure_summary(reason)
-        diagnosis_summary = _failure_summary(diagnosis)
+        reason_summary = _failure_summary(reason, language_code)
+        diagnosis_summary = _failure_summary(diagnosis, language_code)
         if diagnosis_summary == reason_summary or diagnosis_summary in reason_summary:
-            label = "Orbi needs a fix" if retrying else "Orbi failed"
-            details.append(f"- failure detail: `{label}: see the reason above`")
+            details.append(message(
+                "failure.detail_row_same", disposition=disposition,
+            ))
         else:
-            details.append(f"- failure detail: `{diagnosis_summary}`")
+            details.append(message(
+                "failure.detail_row", detail=diagnosis_summary,
+            ))
     if evidence:
         details.append(evidence.lstrip())
     details.append("</details>")

@@ -287,8 +287,8 @@ def test_enforce_removes_the_repositorys_dispatch_label(monkeypatch, caplog):
     assert len(comments) == 1
     body = comments[0][2]
     assert body.startswith(f"<!-- orbi:run={RUN_ID} -->")
-    assert clarify.MISSING["observable_result"] in body
-    assert clarify.MISSING["single_outcome"] in body
+    assert clarify.missing_text("observable_result") in body
+    assert clarify.missing_text("single_outcome") in body
     assert "`ai-queue`" in body
     assert "`ai-ready`" not in body
     assert f"run_id={RUN_ID}" in body
@@ -376,7 +376,7 @@ def test_thin_ticket_stops_before_any_worktree_or_session(
     assert f"<!-- orbi:run={RUN_ID} -->" in body
     assert f"run_id={RUN_ID}" in body
     for piece in missing:
-        assert clarify.MISSING[piece] in body
+        assert clarify.missing_text(piece) in body
     assert delivery_labels.NEEDS_DETAIL_LABEL in body
     # The labels are swapped: ai-ready off, ai-needs-detail on.
     assert labels[ISSUE_NUMBER] == [delivery_labels.NEEDS_DETAIL_LABEL]

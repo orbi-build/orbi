@@ -42,7 +42,12 @@ from orbi.progress import (
     progress_body,
     run_marker,
 )
+from orbi import language
 from orbi.cli_source import refresh_cli_install
+from orbi.release_comments import (
+    release_failure_comment_body,
+    release_success_comment_body,
+)
 from orbi.github import (
     _comment_is_trusted,
     _verify_epic_complete,
@@ -1125,61 +1130,6 @@ def close_release_milestone(repo: str, version: str, *, run_id: str | None = Non
     )
 
 
-def release_success_comment_body(run_id: str, run_info: str,
-                                 release_url: str, tag: str,
-                                 release_commit: str,
-                                 scope_evidence: list[str],
-                                 gate_evidence: list[str],
-                                 test_evidence: str,
-                                 milestone_evidence: str) -> str:
-    """The terminal success comment: the full verification evidence.
-
-     The comment is the auditable record of the release:
-    run marker, release URL, version/tag/release commit, the
-    per-item scope evidence, the gate evidence, the test evidence and
-    the Milestone evidence (the Milestone whose title is the released
-    version is closed on the success path).
-    """
-    info = _run_info_fields(run_info)
-    return "\n".join([
-        field_block(run_id, f"Orbi released: {release_url}", {
-            **info, "tag": tag, "release_commit": release_commit,
-        }),
-        "",
-        "## Scope (verified item by item)",
-        "",
-        *(f"- {item}" for item in scope_evidence),
-        "",
-        "## Pre-release gates",
-        "",
-        *(f"- {item}" for item in gate_evidence),
-        "",
-        "## Tests",
-        "",
-        f"- {test_evidence}",
-        "",
-        "## Milestone",
-        "",
-        f"- {milestone_evidence}",
-        "",
-        f"run_id={run_id}",
-    ])
-
-
-def release_failure_comment_body(run_id: str, run_info: str,
-                                 error: BaseException) -> str:
-    """The terminal failure comment: the blocked scene.
-
-    A release failure is terminal (`ai-blocked` ALONE, no automatic
-    retry): the comment carries the run marker, the same
-    machine-readable `orbi:failure:v1` block the delivery path emits
-    (`failure.classify`, Issue #1323), and the concrete reason.
-    """
-    detail = failure._failure_detail(error)
-    body = field_block(run_id, "Orbi release failed (ai-blocked)",
-                       {**_run_info_fields(run_info), "failure": detail})
-    return body.replace("\n", f"\n{failure.render(failure.classify(detail))}\n", 1)
-
 
 def process_release(issue: dict, config: RunnerConfig,
                    source_repo: str) -> str:
@@ -1255,6 +1205,7 @@ def process_release(issue: dict, config: RunnerConfig,
     run_info = f"run_id={run_id} priority={priority}"
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
+        language_code=language.of(config),
     )
     branch = task_branch(source_repo, number, run_id)
     worktree = worktree_path(
@@ -1267,7 +1218,7 @@ def process_release(issue: dict, config: RunnerConfig,
 
     ctx = RunContext(
         run_id=run_id, issue=number, branch=branch, worktree=worktree,
-        source_repo=source_repo,
+        source_repo=source_repo, language=language.of(config),
     )
 
     def progress() -> dict:
@@ -1321,7 +1272,8 @@ def process_release(issue: dict, config: RunnerConfig,
         )
         publish(
             action=lambda: publisher.milestone(
-                f"**Orbi release started**: {run_info}",
+                language.text(language.of(config), "release.started",
+                    run_info=run_info),
             ),
         )
         release_commit = freeze_base(config.repo_dir, base_branch)
@@ -1352,7 +1304,9 @@ def process_release(issue: dict, config: RunnerConfig,
             if not _comment_is_trusted(comment):
                 continue
             body = comment.get("body", "")
-            if "Orbi release waiting for deliveries" not in body:
+            # Language-independent anchor (Issue #1660): the persisted
+            # timer field, never the translated prose.
+            if "wait_started: " not in body:
                 continue
             match = re.search(r"wait_started: ([0-9]+(?:\.[0-9]+)?)", body)
             if match:
@@ -1390,8 +1344,10 @@ def process_release(issue: dict, config: RunnerConfig,
         )
         publish(
             action=lambda: publisher.milestone(
-                f"**Orbi release gates passed**: "
-                f"{'; '.join(gate_evidence)}",
+                language.text(
+                    language.of(config), "release.gates_passed",
+                    evidence="; ".join(gate_evidence),
+                ),
             ),
         )
         if declaration.get("scope_from_milestone") is not None:
@@ -1429,8 +1385,10 @@ def process_release(issue: dict, config: RunnerConfig,
             ]
         publish(
             action=lambda: publisher.milestone(
-                f"**Orbi release scope verified**: "
-                f"{'; '.join(scope_evidence)}",
+                language.text(
+                    language.of(config), "release.scope_verified",
+                    evidence="; ".join(scope_evidence),
+                ),
             ),
         )
         worktree = create_release_worktree(
@@ -1494,7 +1452,10 @@ def process_release(issue: dict, config: RunnerConfig,
         )
         publish(
             action=lambda: publisher.milestone(
-                f"**Orbi release tests passed**: {test_evidence}",
+                language.text(
+                    language.of(config), "release.tests_passed",
+                    evidence=test_evidence,
+                ),
             ),
         )
         tag = declaration["version"]
@@ -1559,7 +1520,10 @@ def process_release(issue: dict, config: RunnerConfig,
         )
         publish(
             action=lambda: publisher.milestone(
-                f"**Orbi released**: {release_url}",
+                language.text(
+                    language.of(config), "release.released",
+                    release_url=release_url,
+                ),
             ),
         )
         try:
@@ -1608,6 +1572,7 @@ def process_release(issue: dict, config: RunnerConfig,
                     run_id, run_info, release_url, tag, release_commit,
                     scope_evidence, gate_evidence, test_evidence,
                     milestone_evidence,
+                    language_code=language.of(config),
                 ),
             )
         except Exception:
@@ -1646,12 +1611,11 @@ def process_release(issue: dict, config: RunnerConfig,
             number, repo=source_repo,
             body=(
                 run_marker(run_id) + "\n"
-                "Orbi release yielded: a concurrent release instance "
-                "already pushed the same version commit\n"
-                f"tag: {landed.tag}\n"
-                f"base_branch: {landed.base_branch}\n"
-                f"remote_commit: {landed.remote_commit}\n"
-                f"run_id={run_id}"
+                + language.text(
+                    language.of(config), "release.yielded",
+                    tag=landed.tag, base_branch=landed.base_branch,
+                    remote_commit=landed.remote_commit, run_id=run_id,
+                )
             ),
         )
         publish(
@@ -1670,7 +1634,10 @@ def process_release(issue: dict, config: RunnerConfig,
             number, repo=source_repo,
             body=(
                 run_marker(run_id) + "\n"
-                "Orbi release waiting for deliveries\n"
+                + language.text(
+                    language.of(config), "release.waiting",
+                    detail=detail,
+                ) + "\n"
                 f"open_deliveries: {detail}\n"
                 f"waited: {int(waiting.waited)}s / "
                 f"{int(waiting.limit)}s\n"
@@ -1694,7 +1661,10 @@ def process_release(issue: dict, config: RunnerConfig,
         )
         comment_issue(
             number, repo=source_repo,
-            body=release_failure_comment_body(run_id, run_info, exc),
+            body=release_failure_comment_body(
+                run_id, run_info, exc,
+                language_code=language.of(config),
+            ),
         )
         publish(
             action=lambda: publisher.finish(progress_body(progress())),

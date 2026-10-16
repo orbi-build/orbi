@@ -1265,6 +1265,44 @@ def test_merge_gate_skips_merge_when_issue_is_blocked(monkeypatch, tmp_path):
     assert "h1" in body
 
 
+def test_merge_gate_issue_blocked_skip_comment_follows_the_language(
+        monkeypatch, tmp_path,
+):
+    """Issue #1660: the merge-skip notice is a Runner-owned merge handoff,
+    so its prose follows the bound message language; the run marker, the
+    `ai-blocked` label and the reviewed head stay verbatim."""
+    calls = []
+    comments = []
+    monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: [
+        "ai-ready", "ai-pr-opened", "ai-blocked",
+    ])
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda *a, **k: comments.append(k))
+    monkeypatch.setattr(seam, "edit_issue",
+                        lambda *a, **k: calls.append(("edit", k)))
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return _merge_gate_fake()(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    with pytest.raises(review_merge.MergeBlockedByIssueLabel, match="ai-blocked"):
+        review_merge.merge_gate(
+            tmp_path,
+            {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
+             "head_ref": "h", "head_oid": "h1"},
+            "main", repo_dir=tmp_path, source_repo="owner/repo",
+            issue_number=4, run_id="a1b2c3d4", language_code="zh",
+        )
+    assert [c for c in calls if isinstance(c, tuple)] == []
+    assert len(comments) == 1
+    body = comments[0]["body"]
+    assert "Orbi 跳过 PR #4 的合并" in body
+    assert "ai-blocked" in body
+    assert "h1" in body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in body
+
+
 def test_merge_gate_issue_blocked_comment_failure_is_bypass(
         monkeypatch, tmp_path):
     """Issue #1504/#79: the skip comment is a bypass — a publishing
@@ -1682,7 +1720,7 @@ def test_awaiting_merge_retry_posts_again_when_the_head_changes(
     assert _drive_merge_handoff(monkeypatch, tmp_path, state, head="h1") is False
     assert _drive_merge_handoff(monkeypatch, tmp_path, state, head="h2") is False
     assert len(state["comments_posted"]) == 2
-    assert "head `h2`" in state["comments_posted"][1]
+    assert "- head: `h2`" in state["comments_posted"][1]
 
 
 def test_awaiting_merge_retry_posts_again_when_the_blocker_changes(
@@ -2621,7 +2659,7 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("comment", k.get("body"))),
     )
-    make_fake_gh(monkeypatch)
+    _gh_calls, posted = make_fake_gh(monkeypatch)
     merged = review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4, title="Review task",
@@ -2649,6 +2687,27 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     # failure must not rewrite a landed merge as ai-blocked.
     assert calls.index(("edit", {"repo": "owner/repo", "add": "ai-merged",
                                  "remove": "ai-pr-opened"})) < calls.index("sync")
+    # Issue #1660: the review/merge phase PATCHes the run's LIVE progress
+    # comment, so the round's context and publisher carry the bound
+    # message language: a zh-bound delivery renders the header and the
+    # field labels in Chinese, while the hidden block that identifies the
+    # comment stays verbatim.
+    posted.clear()
+    zh_config = config_domain.RunnerConfig(
+        repo_dir=tmp_path, deploy_home=tmp_path, base_branch="main",
+        base_sha="b1", run_id="a1b2c3d4", message_language="zh",
+    )
+    assert review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", zh_config, "owner/repo", 4,
+        title="Review task", priority="normal", scene=_scene(),
+    ) is True
+    zh_progress = [body for body in posted if "orbi:progress:v1" in body]
+    assert zh_progress, "the round published its live progress comment"
+    for body in zh_progress:
+        assert "**Orbi 进度**" in body
+        assert "- 角色: review" in body
+        assert "**Orbi progress**" not in body
+        assert body.startswith("<!-- orbi:run=a1b2c3d4 -->")
 
 
 def test_review_and_merge_skips_checkout_sync_for_a_locked_engine_source(

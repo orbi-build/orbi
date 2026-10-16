@@ -66,7 +66,7 @@ from orbi.delivery_labels import (
     READY_LABEL,
 )
 from orbi import git_transport
-from orbi import scheduler
+from orbi import language, scheduler
 from orbi.progress import quote_value
 from orbi.journal import event
 
@@ -269,7 +269,7 @@ def ensure_config(path: Path) -> Path:
 
     The ADJACENT `.orbi.example.toml` wins (a deployment home may keep
     its own example); without one the example shipped in the package is
-    used.
+    used (a NEW config seeds `message_language` from the locale, #1660).
     Both unavailable is a broken install: fail fast, no partial config.
     """
     path = Path(path)
@@ -287,7 +287,7 @@ def ensure_config(path: Path) -> Path:
                 f"{example} and the packaged example failed: {exc}"
             ) from exc
     try:
-        path.write_bytes(payload)
+        path.write_bytes(language.seed_config(payload))
     except OSError as exc:
         raise SetupError(f"config creation failed for {path}: {exc}") from exc
     return path

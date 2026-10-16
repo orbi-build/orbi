@@ -249,6 +249,13 @@ The repository ships a committed example; the real config is local state
 (gitignored).
 
 `orbi setup` creates `orbi.toml` from the shipped example when it is absent.
+A config created this way carries `message_language` seeded from your
+locale (`LC_ALL`, `LC_MESSAGES`, `LANG`, in that order: a `zh`-territory
+tag such as `zh_CN.UTF-8` maps to `zh`, anything else — including an absent
+variable — to `en`), unless an adjacent `.orbi.example.toml` sets it
+explicitly: an uncommented value there wins and is preserved. An existing
+`orbi.toml` is never rewritten, not even to add the key, so its deliveries
+keep the documented default (`en`) until you set it.
 
 Configuration is kept in `orbi.toml` (relative paths resolve from the
 config file directory). `ORBI_CONFIG` selects another file, and `orbi check`

@@ -945,7 +945,9 @@ def test_e2e_human_review_gate_posts_the_checklist_once_and_holds(
     assert len(checklists) == 1
     # The fake delivery changes impl.py (non-test source): the intent
     # item fires, and the checklist carries the run correlation.
-    assert "业务意图" in checklists[0]
+    # The checklist follows the run's message language (Issue #1660);
+    # this run binds the default (`en`).
+    assert "Intent judgment" in checklists[0]
     assert f"run_id={run_id}" in checklists[0]
 
     # The delivery wait holds at the gate: one label read, the waiting
