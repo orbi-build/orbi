@@ -599,6 +599,12 @@ def main(argv: list[str] | None = None) -> int:
         help="print the Suggestions document to stdout and write nothing",
     )
     suggest_parser.add_argument(
+        "--count", type=int, default=suggest.SUGGESTIONS_MAX,
+        choices=range(1, suggest.SUGGESTIONS_MAX + 1),
+        help="ask the session for at most this many suggestions "
+             "(1-3; default 3)",
+    )
+    suggest_parser.add_argument(
         "--locale", choices=["zh", "en"], default=None,
         help="write the suggestions and the repository summary in this "
              "language (default: the repository's own language)",
@@ -846,7 +852,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         return suggest.run_suggest(
             config, repo, json_output=args.json, locale=args.locale,
-            dispatch_issue=dispatch_issue,
+            count=args.count, dispatch_issue=dispatch_issue,
         )
     elif args.command == "session":
         path = find_session_file(config.repo_dir)
