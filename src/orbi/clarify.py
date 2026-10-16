@@ -242,7 +242,7 @@ def enforce(issue: dict, config: RunnerConfig, source_repo: str,
             issue["number"], repo=source_repo,
             body=render_comment(
                 issue, verdict, run_id, ready_label=ready_label,
-                language_code=config.message_language,
+                language_code=language.of(config),
             ),
         )
         edit_issue(

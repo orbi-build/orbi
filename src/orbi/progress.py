@@ -763,8 +763,7 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
                     step: str | None = None,
                     checks: list | None = None,
                     activity: dict | None = None,
-                    review: str = "pending",
-                    language_code: str = language.DEFAULT_LANGUAGE) -> dict:
+                    review: str = "pending") -> dict:
     """Collect the current run state for the GitHub progress comment.
 
     `title` is the issue's GitHub title: the progress
@@ -799,7 +798,9 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
         "run_id": ctx.run_id,
         "issue": ctx.issue,
         "issue_title": title,
-        "language": language_code,
+        # The run's bound message language (Issue #1660): the ONE place
+        # the progress body reads it from (`RunContext.language`).
+        "language": getattr(ctx, "language", language.DEFAULT_LANGUAGE),
         "role": role,
         "priority": priority,
         "phase": (activity or {}).get("phase") or "starting",
@@ -882,10 +883,10 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
         RunContext(
             run_id=run_id, issue=number, branch=branch or "-",
             worktree=worktree or Path("-"), source_repo=source_repo,
+            language=language_code,
         ),
         title=title, role=role, started=time.monotonic(), pr_url=pr_url,
         review_round=review_round, priority=priority,
-        language_code=language_code,
     ), outcome=_finish_outcome_body(
         outcome=outcome, detail=detail, next_step=next_step, pr_url=pr_url,
         number=number, source_repo=source_repo, action=action,
@@ -899,10 +900,6 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
 # command. The journal cadence is the poll interval above.
 PI_HEARTBEAT_SECONDS = 30.0
 
-
-def _publisher_language(publisher: object) -> str:
-    """The publisher's bound language; a test fake without one is `en`."""
-    return getattr(publisher, "language_code", language.DEFAULT_LANGUAGE)
 
 
 def step_publisher(publisher: ProgressPublisher, ctx: RunContext, *,
@@ -925,7 +922,7 @@ def step_publisher(publisher: ProgressPublisher, ctx: RunContext, *,
             ctx, title=title, role=role, step=step, started=started,
             pr_url=pr_url, review_round=review_round, priority=priority,
             checks=checks, review=review,
-            language_code=_publisher_language(publisher),
+
         ), outcome=outcome))
     return publish_step
 
@@ -952,7 +949,6 @@ def _live_progress(ctx: RunContext, publisher: ProgressPublisher, *,
         ctx, title=title, role=role, started=started,
         pr_url=pr_url, review_round=review_round, priority=priority,
         checks=checks, activity=activity,
-        language_code=_publisher_language(publisher),
     )
     publisher.patch(_progress_body(state))
 

@@ -520,7 +520,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
     # instruction is appended AFTER the template is rendered, so a custom
     # prompt template receives exactly the same effective instruction.
     system_prompt = language.with_model_instruction(
-        render_prompt(template, prompt_values), config.message_language,
+        render_prompt(template, prompt_values), language.of(config),
     )
     context = (
         f"Issue #{issue['number']}: {issue['title']}\n\n"
@@ -800,7 +800,7 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
     # the same bound language, appended after the rendered template.
     system_prompt = language.with_model_instruction(
         render_prompt(review_template, review_values),
-        config.message_language,
+        language.of(config),
     )
     context = (
         f"Independently review PR #{pr['number']} ({pr['url']}) of "

@@ -1682,7 +1682,7 @@ def test_awaiting_merge_retry_posts_again_when_the_head_changes(
     assert _drive_merge_handoff(monkeypatch, tmp_path, state, head="h1") is False
     assert _drive_merge_handoff(monkeypatch, tmp_path, state, head="h2") is False
     assert len(state["comments_posted"]) == 2
-    assert "head `h2`" in state["comments_posted"][1]
+    assert "- head: `h2`" in state["comments_posted"][1]
 
 
 def test_awaiting_merge_retry_posts_again_when_the_blocker_changes(

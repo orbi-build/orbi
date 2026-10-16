@@ -76,6 +76,18 @@ def normalize_language(value: object, *, source: str) -> str:
     )
 
 
+def of(config: object) -> str:
+    """The effective language bound to one config object.
+
+    The single reading point for a runner config: the host validation
+    already guarantees a supported value, and a hand-built (test) config
+    that never bound the field keeps the pre-#1660 default instead of
+    raising.
+    """
+    value = getattr(config, MESSAGE_LANGUAGE_KEY, DEFAULT_LANGUAGE)
+    return value if value in LANGUAGES else DEFAULT_LANGUAGE
+
+
 def language_from_locale(environ: Mapping[str, str] | None = None) -> str:
     """The initial language for a NEW host config, from the user's locale.
 
@@ -138,6 +150,86 @@ def seed_config(payload: bytes,
 # markers, machine fields, JSON keys, enums, paths, commands, URLs, error
 # codes, labels and raw logs are never catalog entries.
 MESSAGES: dict[str, tuple[str, str]] = {
+    # The human review checklist (the ai-human-review gate).
+    "human_review.title": ("**Orbi human review checklist**", "**Orbi 人工复核清单**"),
+    "human_review.method": (
+        "How to review: read the PR's full diff ({pr_url}), run the repository's own test suite locally, then confirm the two columns below.",
+        "复核方式：阅读 PR 的完整 diff（{pr_url}），在本地跑仓库测试，再确认下面两栏。",
+    ),
+    "human_review.column1": (
+        "Column 1 · what the AI verified (evidence, not a to-do):",
+        "栏一 · AI 已验证（证据，不是待办）：",
+    ),
+    "human_review.column1_empty": ("(no readable automated-verification evidence)", "（无可读的自动化验证证据）"),
+    "human_review.column2": (
+        "Column 2 · what a person still confirms (the minimal machine-unverifiable set):",
+        "栏二 · 需要人确认（机器验不了的最小集合）：",
+    ),
+    "human_review.confirm": (
+        "Once it looks right, add the `{label}` label to this Issue and Orbi resumes the review and merge on the next tick; until then the delivery waits here (run_id={run_id}).",
+        "确认无误后给本 Issue 打 `{label}` 标签，Orbi 会在下一个 tick 继续评审与合并；在此之前交付在此等待（run_id={run_id}）。",
+    ),
+    "human_review.column2_empty": (
+        "Column 2 · what a person still confirms: **no human intervention needed** — this delivery carries no item the machine cannot verify, so the `{label}` label is not required (run_id={run_id}).",
+        "栏二 · 需要人确认：**无需人工介入** —— 本次交付没有识别出机器验不了的条目，不要求 `{label}` 标签（run_id={run_id}）。",
+    ),
+    "human_review.item_test_result": ("Test result: PR CI {status}", "测试结果：PR CI {status}"),
+    "human_review.item_coverage": (
+        "Coverage layer: the repository's own test suite — automated assertions cover the code and interface layers; {count} files changed",
+        "覆盖层：仓库测试套件 —— 自动化断言覆盖到代码与接口层；改动共 {count} 个文件",
+    ),
+    "human_review.item_intent": (
+        "Intent judgment: automated tests can only show that the implementation matches the tests, never that the tests match the intent — whether this change matches the original expectation needs a person",
+        "业务意图判断：自动化测试只能证明实现与测试一致，不能证明测试与意图一致——本次改动是否符合原始预期，需要人确认",
+    ),
+    "human_review.item_ui": ("UI look and wording: tests cannot assert rendered output or phrasing; a person confirms them in the real interface", "UI 视觉与文案：测试断言不到渲染效果与措辞，需要人在真实界面确认"),
+    "human_review.item_deploy": ("External-environment verification: deployment / CI / monitoring changes must be verified in the real environment, which local tests cannot cover", "外部环境验证：部署 / CI / 监控类改动要在真实环境验证，本机测试覆盖不到"),
+    "human_review.item_evidence": ("Missing test evidence: no readable test result was recorded, so the automated verification level of this delivery is unknown", "测试证据缺失：没有可读的测试结果记录，本次交付的自动化验证程度未知"),
+    "human_review.item_diff": ("Unreadable changed-file list: what this delivery actually changed cannot be determined, so the verification scope is unknown", "改动文件清单不可读：无法确定本次交付实际改了什么，验证范围未知"),
+    # The merge handoff (a ready PR blocked by repository policy).
+    "handoff.headline": (
+        "Orbi: PR #{pr_number} is delivered and waiting for a maintainer "
+        "action.",
+        "Orbi：PR #{pr_number} 已交付，等待维护者处理。",
+    ),
+    "handoff.policy_heading": (
+        "blocked by this repository policy:",
+        "以下仓库策略阻塞了合并：",
+    ),
+    "handoff.next_step": (
+        "After the named policy action, Orbi will resume and merge the PR.",
+        "完成上述策略要求的操作后，Orbi 会继续并合并该 PR。",
+    ),
+
+    # Review rounds and findings.
+    "review.round_heading": (
+        "Orbi review round {round} for PR #{pr_number}: "
+        "{blockers} blocker(s), {majors} major(s).",
+        "Orbi 评审第 {round} 轮，PR #{pr_number}："
+        "{blockers} 个 blocker、{majors} 个 major。",
+    ),
+    "review.findings_heading": ("### Findings", "### 评审发现"),
+    "review.findings_milestone": ("review findings: round {round}, {blockers} blocker(s), {majors} major(s) for PR #{pr_number}", "评审发现：第 {round} 轮，PR #{pr_number} 有 {blockers} 个 blocker、{majors} 个 major"),
+    "review.findings_outcome": ("**Orbi review findings**\n\nround {round}: {blockers} blocker(s), {majors} major(s); the next review session retries the same PR automatically", "**Orbi 评审发现**\n\n第 {round} 轮：{blockers} 个 blocker、{majors} 个 major；下一个评审 session 会自动重试同一个 PR"),
+    "review.delivered_outcome": ("**Orbi delivered**\n\nPR {pr_url} merged (merge_commit={merge_commit} review_rounds={round})", "**Orbi 已交付**\n\nPR {pr_url} 已合并（merge_commit={merge_commit} review_rounds={round}）"),
+    "review.base_advance_heading": ("Orbi base advance retry {round} for PR #{pr_number}:", "Orbi base 同步重试第 {round} 次，PR #{pr_number}："),
+    "review.gate_ci_blocked": ("CI merge gate blocked: {message} (run_id={run_id})", "CI 合并门禁被阻塞：{message}（run_id={run_id}）"),
+    "review.gate_blocked": ("Merge gate blocked: {message} (run_id={run_id})", "合并门禁被阻塞：{message}（run_id={run_id}）"),
+    "review.gate_next_step": ("The next review session merges the latest origin/{base_branch} into the branch in-session, resolves conflicts, and reruns the full test suite", "下一个评审 session 会在会话内把最新的 origin/{base_branch} 合并进分支、解决冲突，并重跑完整测试套件"),
+    "review.gate_exhausted": ("base-advance retry budget exhausted; a human must resolve the hot base before this PR can continue.", "base 同步重试预算已用尽；必须由人工处理这个频繁变动的 base，该 PR 才能继续。"),
+    "review.absorb_violation": (" Absorb contract violated (machine-checked): the round started with the head already behind origin/{base_branch} and ended with verdict=pass while the head still does not contain origin/{base_branch} — the session neither merged the base in-session nor reported the abandoned absorb as findings; the next review session must merge origin/{base_branch} into the branch or emit findings stating the attempted-and-abandoned absorb with the concrete reason, never an unrelated push", " 违反 absorb 约定（机器校验）：本轮开始时 head 已落后于 origin/{base_branch}，结束时 verdict=pass 但 head 仍不包含 origin/{base_branch} —— session 既没有在会话内合并 base，也没有把放弃的 absorb 作为 findings 上报；下一个评审 session 必须把 origin/{base_branch} 合并进分支，或给出声明“尝试并放弃 absorb”及具体原因的 findings，绝不能改成无关的推送"),
+    "review.external_pr_round": ("Orbi external PR review round {round} for PR #{pr_number}: verdict={verdict}, blockers={blockers}, majors={majors}, minors={minors}; CI={state} ({checks}).", "Orbi 外部 PR 评审第 {round} 轮，PR #{pr_number}：verdict={verdict}, blockers={blockers}, majors={majors}, minors={minors}；CI={state}（{checks}）。"),
+    "review.review_report_open": ("<details>\n<summary>Review report</summary>\n\n", "<details>\n<summary>评审报告</summary>\n\n"),
+    "review.external_conclusion": ("The engine does not merge external PRs and does not set a Milestone: a maintainer decides whether to accept this contribution and which version it ships in. The Issue waits at ai-blocked until then (run_id={run_id})", "引擎不会合并外部 PR，也不会设置 Milestone：是否接受这份贡献、以及它随哪个版本发布，由维护者决定。在此之前该 Issue 保持 ai-blocked 等待（run_id={run_id}）"),
+    "review.same_findings": (
+        "Findings are the same as round {round}.",
+        "发现与第 {round} 轮相同。",
+    ),
+    "review.finding_level": ("Level:", "级别："),
+    "review.finding_location": ("Location:", "位置："),
+    "review.finding_note": ("Note:", "说明："),
+    "review.finding_fix": ("Fix:", "修复："),
+
     # The live progress comment and the terminal outcome.
     "progress.header": ("**Orbi progress**", "**Orbi 进度**"),
     "progress.run_details": ("Run details", "运行详情"),
@@ -222,6 +314,71 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "{detail}\n\n"
         "</details>",
     ),
+    # Release-task status comments.
+    "release.started": ("**Orbi release started**: {run_info}", "**Orbi release 已开始**：{run_info}"),
+    "release.gates_passed": ("**Orbi release gates passed**: {evidence}", "**Orbi release 门禁已通过**：{evidence}"),
+    "release.scope_verified": ("**Orbi release scope verified**: {evidence}", "**Orbi release 发布范围已验证**：{evidence}"),
+    "release.tests_passed": ("**Orbi release tests passed**: {evidence}", "**Orbi release 测试已通过**：{evidence}"),
+    "release.released": ("**Orbi released**: {release_url}", "**Orbi 已发布**：{release_url}"),
+    "release.released_headline": ("Orbi released: {release_url}", "Orbi 已发布：{release_url}"),
+    "release.failed_headline": ("Orbi release failed (ai-blocked)", "Orbi release 失败（ai-blocked）"),
+    "release.section_scope": ("## Scope (verified item by item)", "## 发布范围（逐项验证）"),
+    "release.section_gates": ("## Pre-release gates", "## 发布前门禁"),
+    "release.section_tests": ("## Tests", "## 测试"),
+    "release.section_milestone": ("## Milestone", "## Milestone"),
+    "release.yielded": ("Orbi release yielded: a concurrent release instance already pushed the same version commit\ntag: {tag}\nbase_branch: {base_branch}\nremote_commit: {remote_commit}\nrun_id={run_id}", "Orbi release 已让出：另一个并发 release 实例已经推送了同一个版本提交\ntag: {tag}\nbase_branch: {base_branch}\nremote_commit: {remote_commit}\nrun_id={run_id}"),
+    "release.waiting": ("Orbi release waiting for deliveries", "Orbi release 正在等待其他交付完成"),
+
+    # Runner-owned scene/status comments outside the progress comment.
+    "runner.ticket_only_delivered": (
+        "Orbi ticket-only delivery (run_id={run_id}):",
+        "Orbi 仅工单交付（run_id={run_id}）：",
+    ),
+    "runner.ticket_only_milestone": (
+        "ticket-only delivered: {run_info}",
+        "仅工单交付完成：{run_info}",
+    ),
+    "runner.ticket_only_outcome": (
+        "**Orbi ticket-only delivered**",
+        "**Orbi 仅工单交付完成**",
+    ),
+    "runner.ticket_only_failed": (
+        "Orbi ticket-only failed: {detail} ({run_info})\n"
+        "run_id={run_id}\n"
+        "No Git branch, commit, or PR was created.",
+        "Orbi 仅工单交付失败：{detail}（{run_info}）\n"
+        "run_id={run_id}\n"
+        "没有创建 Git 分支、提交或 PR。",
+    ),
+    "runner.ticket_only_blocked_milestone": (
+        "ticket-only blocked: {detail} ({run_info})",
+        "仅工单交付已阻塞：{detail}（{run_info}）",
+    ),
+    "runner.ops_milestone": (
+        "ops delivered: {run_info}", "ops 交付完成：{run_info}",
+    ),
+    "runner.ops_outcome": (
+        "**Orbi ops delivered**", "**Orbi ops 交付完成**",
+    ),
+    "runner.delivery_stopped_reason": (
+        "The delivery stopped before it could be completed: {detail}",
+        "交付在完成之前停止了：{detail}",
+    ),
+    "runner.pr_closed_milestone": ("blocked: PR {pr_url} was closed without a merge; the delivery is terminally failed", "已阻塞：PR {pr_url} 未合并就被关闭；本次交付最终失败"),
+    "runner.pr_closed_reason": ("PR {pr_url} was closed without a merge; the delivery is terminally failed", "PR {pr_url} 未合并就被关闭；本次交付最终失败"),
+    "runner.pr_closed_next_step": ("investigate why the PR was closed and re-open the delivery or start a fresh run on the Issue", "请查明该 PR 被关闭的原因，然后重新开启交付或在 Issue 上开始一次新的运行"),
+    "runner.issue_closed": (
+        "Orbi delivery stopped: the Issue was closed while the delivery "
+        "was in flight; the completed work stays on branch \u0060{branch}\u0060 "
+        "and no PR was opened.\nrun_id={run_id}",
+        "Orbi 交付已停止：交付进行中该 Issue 被关闭；已完成的工作保留在分支 "
+        "\u0060{branch}\u0060 上，没有创建 PR。\nrun_id={run_id}",
+    ),
+
+    # The run's started-Pi / opened-PR headlines (the run scenes).
+    "delivery.started_headline": ("Orbi started Pi:", "Orbi 已启动 Pi："),
+    "delivery.opened_pr_headline": ("Orbi opened PR:", "Orbi 已开启 PR："),
+
     # Delivery failures (blocked / fix needed).
     "failure.headline_fix_needed": (
         "Orbi: fix needed — the engine will retry",
