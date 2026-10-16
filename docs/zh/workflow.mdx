@@ -372,6 +372,10 @@ attempt 的每一步复用同一个值；同一 Issue 的 retry 生成新的。�
 - 该 attempt 的每条 journal 行（前缀 `[e07383c2]`）；
 - Issue/PR 评论：可见字段 `run_id=e07383c2` + 隐藏机器可读 marker
   `<!-- orbi:run=e07383c2 -->`；
+- 评论类型：隐藏的 `<!-- orbi:comment=started -->`、`<!-- orbi:comment=failure -->`、
+  `<!-- orbi:comment=review-round -->` 与 `<!-- orbi:comment=merged -->` 标记独立于可见（可被翻译）的标题，
+  识别 started、完整 failure、已完成 review-round 与 merged 评论；类型、其前缀
+  规则与合并回执的固定行定义见 [Public contracts](/zh/public-contracts)；
 - 里程碑与场景评论还携带隐藏的 runner marker `<!-- runner=1a2b3c4d -->`：
   写出评论的部署指纹——执行 checkout 的 HEAD；非 editable 安装为包版本；
   探测失败为 `unknown`（live progress 评论与 PR 评论不带它）；
@@ -395,8 +399,8 @@ gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 ## 失败记录：`orbi:failure:v1`
 
 引擎通过失败通道上报的每一次失败都是机器可读的：详细的
-`Orbi: blocked` / `Orbi: fix needed` 评论与其旁的短 milestone 都在
-run marker 旁携带恰好一个隐藏的带版本 block：
+`Orbi: blocked` / `Orbi: fix needed` 评论（类型 `<!-- orbi:comment=failure -->`，定义见 [Public contracts](/zh/public-contracts)）
+与其旁的短 milestone 都在 run marker 旁携带恰好一个隐藏的带版本 block：
 
 ```html
 <!-- orbi:failure:v1 {"schema":1,"outcome":"blocked","reason_code":"github_transient","action_code":"requeue","retry_safe":true} -->

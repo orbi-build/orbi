@@ -25,7 +25,7 @@ import orbi.review_merge as review_merge
 import orbi.run_state as run_state
 import orbi.gitops as gitops
 import orbi.pi_session as pi_session
-from orbi import progress
+from orbi import progress, scene
 from tests.fakes.gitops import remote_head_answer
 from tests.test_progress_wiring import make_fake_gh
 from tests.test_git_merge_smoke import git
@@ -55,7 +55,10 @@ def test_review_round_comment_body_renders_findings_and_shortens_sha():
           "note": "same failure", "fix": f"absorb {full_sha}"}],
         "<!-- orbi:scene:v1 {} -->",
     )
-    assert body.splitlines()[1].startswith("Orbi review round ")
+    # The canonical kind marker sits right after the run marker; the
+    # readable review-round line follows it (Issue #1659).
+    assert body.splitlines()[1] == "<!-- orbi:comment=review-round -->"
+    assert body.splitlines()[2].startswith("Orbi review round ")
     assert "### Findings" in body
     assert "**Level:** Major" in body
     assert full_sha not in body
@@ -63,15 +66,24 @@ def test_review_round_comment_body_renders_findings_and_shortens_sha():
     assert "json.dumps" not in body
 
 
+def _round_scene_block(round_no, pr_number=477, run_id="abc12345"):
+    """A valid review-round scene block for the canonical identity."""
+    return scene.render(scene.Scene(
+        run_id=run_id, base_branch="main", base_sha="abc123",
+        pr_url=f"https://github.com/owner/repo/pull/{pr_number}",
+        review_round=round_no,
+    ))
+
+
 def test_review_round_comment_body_marks_identical_previous_findings():
     marker = "<!-- orbi:run=abc12345 -->"
     finding = {"level": "Major", "location": "comments",
                "note": "repeat", "fix": "repair"}
     first = review_merge.review_round_comment_body(
-        marker, 1, 477, 0, 1, [finding], "scene",
+        marker, 1, 477, 0, 1, [finding], _round_scene_block(1),
     )
     second = review_merge.review_round_comment_body(
-        marker, 2, 477, 0, 1, [finding], "scene",
+        marker, 2, 477, 0, 1, [finding], _round_scene_block(2),
         previous_comments=[{"authorAssociation": "MEMBER", "body": first}],
     )
     assert "Findings are the same as round 1." in second
@@ -80,6 +92,17 @@ def test_review_round_comment_body_marks_identical_previous_findings():
         [{**trusted, "body": first}, {**trusted, "body": second}],
         pr_number=477,
     ) == 2
+    # A REVIEW FAILURE that reuses the previous scene is not a round
+    # record, even though it carries a scene and the review-round prose.
+    gate_failure = review_merge.review_round_comment_body(
+        marker, 2, 477, 0, 0, [], _round_scene_block(1),
+        heading="Orbi base advance retry 2 for PR #477:",
+        kind="failure",
+    )
+    assert gate_failure.splitlines()[1] == "<!-- orbi:comment=failure -->"
+    assert failure_report.review_rounds_so_far(
+        [{**trusted, "body": gate_failure}], pr_number=477,
+    ) == 0
 
 
 def test_review_round_comment_body_ignores_untrusted_or_nonmatching_comments():
@@ -109,10 +132,10 @@ def test_review_round_comment_body_separates_gate_messages():
 def test_review_round_comment_body_golden_bytes_issue_and_pr():
     """The round comment's bytes are frozen (Issue #1263 acceptance).
 
-    The extraction must not change one byte: the exact same body is
-    posted to the Issue and to the PR, and the round counter and the
-    resumable scene are read back from it. The golden strings below are
-    the pre-extraction output of the real renderer.
+    The exact same body is posted to the Issue and to the PR, and the
+    canonical kind, the round counter and the resumable scene are read
+    back from it. Issue #1659 inserted the kind line right after the run
+    marker; everything else is unchanged.
     """
     marker = "<!-- orbi:run=abc12345 -->"
     scene_block = "<!-- orbi:scene:v1 fixed -->"
@@ -123,6 +146,7 @@ def test_review_round_comment_body_golden_bytes_issue_and_pr():
         messages=["merge gate blocked: behind"],
     ) == (
         "<!-- orbi:run=abc12345 -->\n"
+        "<!-- orbi:comment=review-round -->\n"
         "Orbi review round 2 for PR #477: 1 blocker(s), 1 major(s).\n"
         "\n"
         "merge gate blocked: behind\n"
@@ -135,12 +159,16 @@ def test_review_round_comment_body_golden_bytes_issue_and_pr():
         "  **Fix:** absorb origin/main\n"
         "<!-- orbi:scene:v1 fixed -->"
     )
+    # A gate failure that reuses the previous scene is kinded `failure`,
+    # not `review-round` (Issue #1659).
     assert review_merge.review_round_comment_body(
         marker, 3, 477, 0, 0, [], scene_block,
         messages=["merge gate blocked: behind"],
         heading="Orbi base advance retry 3 for PR #477:",
+        kind="failure",
     ) == (
         "<!-- orbi:run=abc12345 -->\n"
+        "<!-- orbi:comment=failure -->\n"
         "Orbi base advance retry 3 for PR #477:\n"
         "\n"
         "merge gate blocked: behind\n"

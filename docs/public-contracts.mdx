@@ -26,6 +26,7 @@ The [Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md)
 | Session files | `<worktree>/.pi-session/*.jsonl` |
 | Naming | Branch `orbi/<owner>-<repo>-issue-<N>`; worktree `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>` |
 | GitHub markers | `<!-- orbi:run=<run_id> -->` in every run-scoped comment and PR body; `Fixes #<N>` in the PR body |
+| Comment kinds | the hidden `<!-- orbi:comment=started -->`, `<!-- orbi:comment=failure -->`, `<!-- orbi:comment=review-round -->` and `<!-- orbi:comment=merged -->` markers on the line after the run marker identify the started, complete failure, completed review-round and merged comments; see [Comment kinds and machine metadata](#comment-kinds-and-machine-metadata) |
 | Run scene | the hidden versioned block `<!-- orbi:scene:v1 {json} -->` in the trusted `Orbi opened PR` comment, rendered and parsed by `src/orbi/scene.py`; the only machine-readable recovery record of a delivery (the human-readable text beside it is display only) |
 | Requirements skill | the directory `integrations/claude-plugin/skills/write-ai-ready-issue/` — `SKILL.md` (how an agent turns a one-line idea into a deliverable Issue) and `fidelity-pass.md` (the independent check that the draft asks for exactly what the person asked) |
 | Suggestions | the document `orbi suggest --json` prints — `{"repo", "base_sha", "session_dir", "suggestions": [{"kind": "existing" or "new", "issue": the Issue number for existing and null for new, "title", "why", "body": the Issue body for new and null for existing}]}`, at most three entries, ordered by priority; `session_dir` is `<deploy_home>/.orbi/suggest/<run_id>/.pi-session/`, holding the run's Pi session JSONL in the same format as delivery session files, and the run directory `<deploy_home>/.orbi/suggest/<run_id>/` is kept after the command exits, on success and on failure — and the skill directory `integrations/claude-plugin/skills/suggest-ai-ready-issues/` that produces it |
@@ -144,6 +145,63 @@ These comment bodies are the protocol fixtures a reader integrates against: run 
 ```
 
 A terminal or manual GitHub fact — the Issue closed or merged, or a confirmed manual wait — wins over any published or local summary, and a quoted, fenced or unknown-version marker is never selected as the current run of the report.
+
+## Comment kinds and machine metadata
+
+Every run-scoped comment starts with the hidden run marker
+`<!-- orbi:run=<run_id> -->`. The marker carries the run identity; it
+does not authenticate an author, so a consumer keeps its own trusted-author
+rules. Four kinds are official, written on the line right after the run
+marker:
+
+```html
+<!-- orbi:run=86b57234 -->
+<!-- orbi:comment=review-round -->
+```
+
+- `started`: the `Orbi started Pi:` comment.
+- `failure`: the COMPLETE diagnostic/action failure comment (the
+  `orbi:failure:v1` record with its reader-facing Action and Reason). It is
+  not the live progress echo and not a short milestone notification.
+- `review-round`: a COMPLETED review report; its `orbi:scene:v1` block
+  supplies the round counter and the PR URL.
+- `merged`: the merge receipt.
+
+Official metadata occupies the contiguous prefix that begins with the run
+marker. On the four kinded comments the kind follows the run marker; progress
+comments keep their existing run-marker-then-progress-block prefix and carry
+no kind; the existing scene and failure blocks follow as applicable. A
+marker-shaped string quoted in the human body, a raw log or a code fence is
+not official metadata: a comment is identified by this prefix and never by
+its translated heading, and an unsupported or malformed kind is not
+reinterpreted through the prose next to it. A present but invalid structured
+block is never silently replaced by the prose beside it. Progress comments
+written before the progress block existed, and historical English comments
+without a kind marker, keep the existing English-heading fallback.
+
+Only a `review-round` comment with a valid scene is a new round record; a
+review failure that reuses the previous scene is a `failure` and consumes
+no round. A comment kind adds no task state and no recovery record: GitHub
+Issues and labels remain the only state store.
+
+### The merged receipt
+
+The merged receipt is one comment whose unique details element carries the
+complete fixed machine rows `merge_commit`, `review_rounds`, `commits`,
+`external_commits`, `run_id` and `pr_url`, each exactly once. `pr_url`
+is the unambiguous PR URL, so no consumer extracts a PR from the summary
+label, which is display text and may be translated. Missing, duplicate or
+conflicting rows or blocks are rejected, rows quoted elsewhere do not
+identify a receipt, and the URL must belong to the expected repository.
+
+### Failure diagnostics
+
+The complete failure comment and its short notifications are the existing
+public surface: the hidden `<!-- orbi:failure:v1 {json} -->` block (its
+version, enum and meaning unchanged), the
+`<!-- orbi:fail=<fingerprint>[:count] -->` dedup marker, and the
+reader-facing **Action**, **Reason** and `Diagnosis` details. The failure
+record's definition is in [Workflow](/workflow).
 
 ## Worked examples
 

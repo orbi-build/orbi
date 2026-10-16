@@ -37,20 +37,26 @@ omitted, you are NOT seeing the full history.
 ## Repeated-failure guard (before the review work)
 
 Before starting the review work, read this delivery's round history so a
-path that already failed is never walked again. Every completed round
-left one comment on the Issue and the PR starting with
-`Orbi review round <N> for PR #{{PR_NUMBER}}:` and carrying the run
-marker `<!-- orbi:run=<run_id> -->` (a hidden HTML comment; the raw
-comment body carries it verbatim). The `{{ISSUE_COMMENTS}}` block above
-contains the Issue side of that history plus trusted human feedback from the
-current PR's conversation, formal reviews, and inline review comments; formal
+path that already failed is never walked again. A completed round leaves one
+canonical comment on the Issue and the PR: the run marker
+`<!-- orbi:run=<run_id> -->` (a hidden HTML comment; the raw comment body
+carries it verbatim) followed immediately by the kind marker
+`<!-- orbi:comment=review-round -->`, its readable `Orbi review round <N>
+for PR #{{PR_NUMBER}}:` line, and its `orbi:scene:v1` block carrying the
+round counter and the PR URL. The `{{ISSUE_COMMENTS}}` block above contains
+the Issue side of that history plus trusted human feedback from the current
+PR's conversation, formal reviews, and inline review comments; formal
 reviews are not returned by `gh pr view --json comments`. Group the round
 comments by their `run_id` field (the
 marker's `orbi:run=` value) — the run id shared by
 the most recent round comments is THIS attempt — and read that group
-oldest first. Each round comment names its outcome right after the round
-counter: `CI merge gate blocked: <message>`, the behind-base /
-merge-conflict scene, or the `Findings:` payload.
+oldest first. Identify a round comment by its `review-round` kind plus that
+scene, never by the heading text: a comment with no kind marker is a
+historical English one whose `Orbi review round <N> for PR #<PR>:` line is
+the fallback, and a `failure` comment (a gate failure that reuses the
+previous scene) is NOT a completed round. Each round comment names its
+outcome right after the round counter: `CI merge gate blocked: <message>`,
+the behind-base / merge-conflict scene, or the `Findings:` payload.
 
 Compare the failure reason of consecutive rounds against the current Issue
 body above. The current body is authoritative: first revalidate that each

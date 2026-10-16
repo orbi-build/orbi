@@ -60,14 +60,16 @@ MOVED = (
     "_BLOCKED_PRECONDITION_PHRASE",
     "_SGR_RE",
     "comment_pr",
-    "review_rounds_so_far",
 )
-# `comment_pr` and `review_rounds_so_far` moved here instead of `github.py`:
-# the frozen size ratchet (github.py at 1146 lines against its 1162 ceiling)
-# forbids the +58 lines, and the Issue names this module as the fallback.
-# The names below are the only moved ones the runner still uses directly, so
-# it imports them back by name; everything else it reaches as
-# `failure_report.<name>` and the moved list above must not be re-exported.
+# `comment_pr` moved here instead of `github.py`: the frozen size ratchet
+# (github.py at 1146 lines against its 1162 ceiling) forbids the +58 lines,
+# and the Issue names this module as the fallback. Issue #1659 moved the
+# review-round accounting into the `orbi.review_rounds` sibling (it grew
+# past the 1,000-line cap here); this module imports and re-exports
+# `review_rounds_so_far` for its existing callers. The names below are the
+# only moved ones the runner still uses directly, so it imports them back by
+# name; everything else it reaches as `failure_report.<name>` and the moved
+# list above must not be re-exported.
 RUNNER_IMPORTS = (
     "_classify_failure",
     "GateCIFailure",
@@ -88,6 +90,7 @@ GOLDEN = {
     "classify": {
         "outcome": """blocked""",
         "issue_comment": """<!-- orbi:run=abcdef12 -->
+<!-- orbi:comment=failure -->
 <!-- orbi:failure:v1 {"schema":1,"outcome":"blocked","reason_code":"unclassified","action_code":"fix_ticket","retry_safe":false} -->
 
 Orbi: blocked — waiting on a human decision
@@ -125,6 +128,7 @@ Issue: `orbi-build/orbi#42` · run_id=abcdef12
     "evidence": {
         "outcome": """fix needed""",
         "issue_comment": """<!-- orbi:run=abcdef12 -->
+<!-- orbi:comment=failure -->
 <!-- orbi:fail=f4037a77e6e12cdc -->
 <!-- orbi:failure:v1 {"schema":1,"outcome":"fix_needed","reason_code":"unclassified","action_code":"fix_ticket","retry_safe":false} -->
 
@@ -182,6 +186,7 @@ collecting ...
 ```
 </details>""",
         "pr_comment": """<!-- orbi:run=abcdef12 -->
+<!-- orbi:comment=failure -->
 <!-- orbi:fail=f4037a77e6e12cdc -->
 <!-- orbi:failure:v1 {"schema":1,"outcome":"fix_needed","reason_code":"unclassified","action_code":"fix_ticket","retry_safe":false} -->
 
@@ -244,6 +249,7 @@ collecting ...
     "finish": {
         "outcome": """fix needed""",
         "issue_comment": """<!-- orbi:run=abcdef12 -->
+<!-- orbi:comment=failure -->
 <!-- orbi:fail=f4037a77e6e12cdc -->
 <!-- orbi:failure:v1 {"schema":1,"outcome":"fix_needed","reason_code":"unclassified","action_code":"fix_ticket","retry_safe":false} -->
 
@@ -276,6 +282,7 @@ Issue: `orbi-build/orbi#42` · run_id=abcdef12
 - failure detail: `provider failed`
 </details>""",
         "pr_comment": """<!-- orbi:run=abcdef12 -->
+<!-- orbi:comment=failure -->
 <!-- orbi:fail=f4037a77e6e12cdc -->
 <!-- orbi:failure:v1 {"schema":1,"outcome":"fix_needed","reason_code":"unclassified","action_code":"fix_ticket","retry_safe":false} -->
 
@@ -536,6 +543,23 @@ def test_evidence_mode_body_is_byte_identical_to_the_pre_extraction_render(
         "test_log_tail:",
     ):
         assert segment in posted[0]
+
+
+def test_full_failure_is_kinded_but_the_short_milestone_is_not(
+        monkeypatch, tmp_path):
+    """Issue #1659: the complete failure diagnostic carries the `failure`
+    kind; the short milestone echo beside it must not claim it."""
+    publisher = FakePublisher()
+    outcome, posted, _ = _report(
+        monkeypatch, tmp_path, session=True, publisher=publisher,
+        classify=True, evidence=False, finish=False,
+    )
+    assert outcome == "fix needed"
+    assert posted[0].splitlines()[1] == "<!-- orbi:comment=failure -->"
+    assert all(
+        "<!-- orbi:comment=" not in milestone
+        for milestone in publisher.milestones
+    )
 
 
 def test_finish_mode_body_is_byte_identical_to_the_pre_extraction_render(

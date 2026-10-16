@@ -461,6 +461,12 @@ same Issue generates a new one. The same id appears in:
 - every journal line of the attempt (prefix `[e07383c2]`);
 - the Issue/PR comments: visible field `run_id=e07383c2` plus the hidden
   machine-readable marker `<!-- orbi:run=e07383c2 -->`;
+- the comment kinds: the hidden `<!-- orbi:comment=started -->`,
+  `<!-- orbi:comment=failure -->`, `<!-- orbi:comment=review-round -->`
+  and `<!-- orbi:comment=merged -->` markers identify the started, complete
+  failure, completed review-round and merged comments independently of
+  their visible (translatable) headings; the kinds, their prefix rule and
+  the merged receipt's fixed rows are defined in [Public contracts](/public-contracts);
 - milestone and scene comments also carry the hidden runner marker
   `<!-- runner=1a2b3c4d -->`: a fingerprint of the deployment that wrote
   them — the executing checkout's HEAD, the package version for a
@@ -487,8 +493,9 @@ gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 
 Every failure the engine reports through its failure path is
 machine-readable: both the detailed `Orbi: blocked` / `Orbi: fix needed`
-comment and the short milestone posted beside it carry exactly one hidden
-versioned block next to the run marker:
+comment (kind `<!-- orbi:comment=failure -->`, defined in
+[Public contracts](/public-contracts)) and the short milestone posted beside
+it carry exactly one hidden versioned block next to the run marker:
 
 ```html
 <!-- orbi:failure:v1 {"schema":1,"outcome":"blocked","reason_code":"github_transient","action_code":"requeue","retry_safe":true} -->

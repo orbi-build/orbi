@@ -115,7 +115,14 @@ def test_old_and_wrapped_comments_preserve_every_reader_contract(kind):
 
     rendered_status = progress.format_status_comment(rendered).splitlines()
     legacy_status = progress.format_status_comment(legacy).splitlines()
-    assert rendered_status[:2] == legacy_status[:2]
+    assert rendered_status[0] == legacy_status[0]
+    if kind == "merged PR":
+        # The canonical kind line sits between the run marker and the
+        # headline (Issue #1659); the rest of the prefix is unchanged.
+        assert rendered_status[1] == "<!-- orbi:comment=merged -->"
+        assert rendered_status[2] == legacy_status[1]
+    else:
+        assert rendered_status[:2] == legacy_status[:2]
 
     cloud_patterns = (
         r"Orbi merged PR:\s+https://[^\s/]+/[^\s/]+/[^\s/]+/pull/(\d+)",
@@ -131,6 +138,7 @@ def test_posted_merged_comment_is_the_exact_final_shape():
     posted = _posted_merged()
     expected = (
         f"{progress.run_marker(RUN_ID)}\n"
+        "<!-- orbi:comment=merged -->\n"
         f"Orbi merged PR: {PR_URL}\n"
         "- review: pass, no findings\n"
         "- merged into: main\n\n"
@@ -139,20 +147,22 @@ def test_posted_merged_comment_is_the_exact_final_shape():
         "- review_rounds=1\n"
         "- commits=1\n"
         "- external_commits=0\n"
-        f"- run_id={RUN_ID}\n\n"
+        f"- run_id={RUN_ID}\n"
+        f"- pr_url={PR_URL}\n\n"
         "</details>\n\n"
     )
     assert re.fullmatch(re.escape(expected) + r"<!-- runner=[^>]+ -->", posted)
 
     visible, _, _ = posted.partition("<details>")
     for token in ("merge_commit", "review_rounds", "external_commits",
-                  "commits", "run_id", "detail:"):
+                  "commits", "run_id", "pr_url", "detail:"):
         assert token not in visible
     assert "- review: pass, no findings" in visible
     assert "- merged into: main" in visible
 
     for row in ("- merge_commit=", "- review_rounds=", "- commits=",
-                "- external_commits=", f"- run_id={RUN_ID}"):
+                "- external_commits=", f"- run_id={RUN_ID}",
+                f"- pr_url={PR_URL}"):
         assert len(re.findall(rf"(?m)^{re.escape(row)}", posted)) == 1
     assert posted.count("<details><summary>Run details</summary>") == 1
 
