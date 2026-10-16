@@ -586,31 +586,7 @@ def main(argv: list[str] | None = None) -> int:
         "--repo", default=None,
         help="source repo (default: first configured source)",
     )
-    suggest_parser = subparsers.add_parser(
-        "suggest", parents=[common],
-        help="read the repository and propose up to three Issues to "
-             "deliver (interactive; --json prints the Suggestions "
-             "document)",
-    )
-    suggest_parser.add_argument(
-        "--repo", default=None,
-        help="source repo (default: first configured source)",
-    )
-    suggest_parser.add_argument(
-        "--json", action="store_true",
-        help="print the Suggestions document to stdout and write nothing",
-    )
-    suggest_parser.add_argument(
-        "--count", type=int, default=suggest.SUGGESTIONS_MAX,
-        choices=range(1, suggest.SUGGESTIONS_MAX + 1),
-        help="ask the session for at most this many suggestions "
-             "(1-3; default 3)",
-    )
-    suggest_parser.add_argument(
-        "--locale", choices=["zh", "en"], default=None,
-        help="write the suggestions and the repository summary in this "
-             "language (default: the repository's own language)",
-    )
+    suggest.register_cli(subparsers, common)
     status_parser = subparsers.add_parser(
         "status", parents=[common],
         help="show every active delivery with attributed local activity, "

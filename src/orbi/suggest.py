@@ -28,6 +28,7 @@ line. This module never imports `cli` — the CLI passes
 """
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import re
@@ -138,6 +139,41 @@ class SuggestError(RuntimeError):
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+
+def register_cli(subparsers, common) -> None:
+    """Register `orbi suggest` and its flags (Issue #1671).
+
+    The parser lives here so `cli.py` adds it in one line, the way
+    `notify.register_cli` does — `cli.py` is the size ratchet's
+    largest baselined module, so the flag definitions belong to the
+    module that owns the command.
+    """
+    parser = subparsers.add_parser(
+        "suggest", parents=[common],
+        help="read the repository and propose up to three Issues to "
+             "deliver (interactive; --json prints the Suggestions "
+             "document)",
+    )
+    parser.add_argument(
+        "--repo", default=None,
+        help="source repo (default: first configured source)",
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="print the Suggestions document to stdout and write nothing",
+    )
+    parser.add_argument(
+        "--count", type=int, default=SUGGESTIONS_MAX,
+        choices=range(1, SUGGESTIONS_MAX + 1),
+        help="ask the session for at most this many suggestions "
+             "(1-3; default 3)",
+    )
+    parser.add_argument(
+        "--locale", choices=["zh", "en"], default=None,
+        help="write the suggestions and the repository summary in this "
+             "language (default: the repository's own language)",
+    )
 
 
 def _is_tty(stream) -> bool:
