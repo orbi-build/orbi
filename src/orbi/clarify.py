@@ -33,6 +33,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from orbi import notify
 from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
 from orbi.github import comment_issue, edit_issue
 from orbi.journal import event
@@ -253,6 +254,14 @@ def enforce(issue: dict, config: RunnerConfig, source_repo: str,
             issue=issue["number"], reason=type(exc).__name__,
         )
         return True
+    # Tell the person outside GitHub (Issue #1673): OUTSIDE the try (a
+    # notify problem must never turn the failed-write branch into "deliver
+    # anyway") and every stop sends — the old `ai-needs-detail` can still
+    # be on a ticket someone just re-readied.
+    notify.label_added(
+        source_repo, issue["number"], NEEDS_DETAIL_LABEL,
+        issue.get("title"),
+    )
     event(
         "clarify_needs_detail", issue=issue["number"],
         missing=",".join(verdict.missing),
