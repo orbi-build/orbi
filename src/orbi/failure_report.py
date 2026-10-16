@@ -26,7 +26,7 @@ import os
 import re
 from pathlib import Path
 
-from orbi import failure, runner_health, scene
+from orbi import failure, language, runner_health, scene
 from orbi.comment_kind import (
     COMMENT_KIND_FAILURE,
     comment_kind_marker,
@@ -269,39 +269,51 @@ def _session_summary(session_file: Path,
 
 
 def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
-                   branch: str, worktree: str, pr_url: str | None = None) -> str:
-    """Render run facts as wrapping Markdown, never as a host-path dump."""
-    fields = [
-        ("run", run_id), ("issue", issue), ("role", role),
-        ("branch", branch),
-        ("worktree", "local runner worktree"),
-        ("session", snapshot.get("session_id") or "-"),
-        ("session log", "local session log"),
-        ("phase", snapshot.get("phase") or "-"),
-        ("last activity", snapshot.get("last_activity") or "-"),
-        ("action", snapshot.get("action") or "-"),
-        ("result", snapshot.get("result") or "-"),
-    ]
-    if snapshot.get("session_file"):
-        fields[6] = ("session log", "local session log")
-    else:
-        fields[6] = ("session log", "<unavailable>")
+                   branch: str, worktree: str, pr_url: str | None = None,
+                   language_code: str = language.DEFAULT_LANGUAGE) -> str:
+    """Render run facts as wrapping Markdown, never as a host-path dump.
+
+    The field labels are human prose and follow the run's message
+    language; `failure._failure_comment_body` reads the correlation row
+    through the SAME labels, so the stable journal lookup shape survives
+    a translation.
+    """
+    def message(key: str, **fields: object) -> str:
+        return language.text(language_code, key, **fields)
+
+    def field(name: str, value: object) -> str:
+        label = message(f"failure.scene.{name}")
+        return f"- {label}: `{_redact_local_paths(str(value))}`"
+
+    session_log = (
+        message("failure.scene.local_session_log")
+        if snapshot.get("session_file")
+        else message("failure.scene.unavailable")
+    )
     rendered_fields = [
-        f"- {key}: `{_redact_local_paths(str(value))}`"
-        for key, value in fields
+        field("run", run_id), field("issue", issue), field("role", role),
+        field("branch", branch),
+        field("worktree", message("failure.scene.local_worktree")),
+        field("session", snapshot.get("session_id") or "-"),
+        field("session_log", session_log),
+        field("phase", snapshot.get("phase") or "-"),
+        field("last_activity", snapshot.get("last_activity") or "-"),
+        field("action", snapshot.get("action") or "-"),
+        field("result", snapshot.get("result") or "-"),
     ]
     if pr_url:
         rendered_fields.insert(1, f"- PR: [{pr_url}]({pr_url})")
     rendered = "\n".join(rendered_fields)
     return rendered + (
-        "\n- legacy correlation: "
+        f"\n- {message('failure.scene.legacy_correlation')}: "
         f"`run={run_id} branch={branch} session="
         f"{snapshot.get('session_id') or '-'} phase={snapshot.get('phase') or '-'} "
         f"last_activity={snapshot.get('last_activity') or '-'}`"
     )
 
 
-def _failure_evidence(worktree: Path | None, exc: BaseException) -> str:
+def _failure_evidence(worktree: Path | None, exc: BaseException, *,
+                      language_code: str = language.DEFAULT_LANGUAGE) -> str:
     """Render the bounded evidence that survives terminal worktree cleanup.
 
     Pi subprocess streams come from ``CalledProcessError``. The session and
@@ -324,20 +336,22 @@ def _failure_evidence(worktree: Path | None, exc: BaseException) -> str:
     session = (
         _session_summary(session_file) if session_file else "<unavailable>"
     )
-    session_label = "local session log" if session_file else "<unavailable>"
+    session_label = (
+        language.text(language_code, "failure.scene.local_session_log")
+        if session_file else "<unavailable>"
+    )
     test_log = "<unavailable>"
     if worktree is not None:
         test_path = worktree / ".orbi" / "test.log"
         if test_path.is_file():
             test_log = _tail_text(test_path)
     return (
-        "\n\nFailure evidence (captured before cleanup):\n"
+        f"\n\n{language.text(language_code, 'failure.evidence.heading')}\n"
         f"exit_code={return_code if return_code is not None else '<unknown>'}\n"
         f"\nstderr_tail:\n{_fenced(_redact_local_paths(stderr))}\n"
         f"\nstdout_tail:\n{_fenced(_redact_local_paths(stdout))}\n"
-        "\nsession_last_events "
-        f"(last {SESSION_SUMMARY_LIMIT} records; full log: "
-        f"{session_label}):\n{_fenced(_redact_local_paths(session))}\n"
+        f"\n{language.text(language_code, 'failure.evidence.session_last_events', limit=SESSION_SUMMARY_LIMIT, label=session_label)}\n"
+        f"{_fenced(_redact_local_paths(session))}\n"
         f"\ntest_log_tail:\n{_fenced(_redact_local_paths(test_log))}"
     )
 
@@ -372,11 +386,7 @@ def _snapshot_or_placeholder(session_dir: Path, *, number: int) -> dict:
 # The fixed phrases of the two failure templates: the
 # classified blocked branch names WHY automatic recovery is impossible,
 # the recoverable branch names the automatic next step.
-_BLOCKED_PRECONDITION_PHRASE = (
-    "; this is an external precondition the AI cannot safely judge or "
-    "fix, so it cannot be recovered automatically (the Issue stays "
-    "ai-blocked until a human decides)"
-)
+_BLOCKED_PRECONDITION_PHRASE_KEY = "failure.blocked_precondition"
 
 
 # The whole failure-comment body is capped well below the
@@ -450,7 +460,8 @@ def _failure_streak(comments: list, run_id: str,
 
 
 def block_scene_failure(issue: dict, error: ValueError, repo: str,
-                        comments: list[dict]) -> None:
+                        comments: list[dict], *,
+                        language_code: str = language.DEFAULT_LANGUAGE) -> None:
     """Mark an opened-PR Issue `ai-blocked` when its scene is malformed.
 
     The blocked transition is scoped to this one Issue: the
@@ -485,13 +496,8 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
                 (f"{marker}\n"
                  f"{comment_kind_marker(COMMENT_KIND_FAILURE)}\n")
                 if marker else ""
-            ) + (
-                f"Orbi failed: {error}; this is an external "
-                "precondition the AI cannot safely judge or fix, so "
-                "it cannot be recovered automatically (the Issue "
-                "stays ai-blocked until a human decides) — restore "
-                "the trusted 'Orbi opened PR' scene comment or "
-                "relabel the Issue ai-fix-needed to resume this same PR"
+            ) + language.text(
+                language_code, "failure.scene_blocked", error=error,
             ),
         )
     except Exception:
@@ -500,7 +506,9 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
 
 def block_repo_config_failure(number: int, source_repo: str,
                               error: ValueError, run_id: str,
-                              current_labels=()) -> None:
+                              current_labels=(),
+                              language_code: str = language.DEFAULT_LANGUAGE,
+                              ) -> None:
     """Mark an Issue `ai-blocked` when its repo config is invalid (#527).
 
     The strict repository schema is a fail-fast precondition: a file that
@@ -521,12 +529,9 @@ def block_repo_config_failure(number: int, source_repo: str,
             body=(
                 f"{run_marker(run_id)}\n"
                 f"{comment_kind_marker(COMMENT_KIND_FAILURE)}\n"
-                f"Orbi failed: repository config is invalid: {error}; "
-                "this is a fail-fast repository precondition the AI does "
-                "not fix "
-                "itself — correct the file on the default branch "
-                "(remove the host-only key or fix the value) and "
-                "relabel the Issue ai-ready for a new run"
+                + language.text(
+                    language_code, "failure.repo_config_blocked", error=error,
+                )
             ),
         )
     except Exception:
@@ -577,7 +582,9 @@ def _raise_if_preexisting_ci_failure(
 
 
 def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
-                           error: Exception) -> None:
+                           error: Exception,
+                           language_code: str = language.DEFAULT_LANGUAGE,
+                           ) -> None:
     """Report a failed resume decision through the terminal path.
 
     The worktree of this issue exists but its run state cannot be
@@ -596,8 +603,10 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
         body=(
             f"{run_marker(run_id)}\n"
             f"{comment_kind_marker(COMMENT_KIND_FAILURE)}\n"
-            f"Orbi failed: cannot continue the interrupted run: "
-            f"{_failure_detail(error)} (run_id={run_id})"
+            + language.text(
+                language_code, "failure.resume_blocked",
+                detail=_failure_detail(error), run_id=run_id,
+            )
         ),
     )
 
@@ -612,6 +621,7 @@ def report_delivery_failure(
     blocked_suffix: str = "", review_round: int | None = None,
     review_scene_block: str | None = None,
     finish: bool = True, publisher: ProgressPublisher | None = None,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> str:
     """Report one delivery failure through the classified-failure flow.
 
@@ -688,8 +698,10 @@ def report_delivery_failure(
     )
     if workflow_refusal:
         blocked = True
-        action = failure.workflow_permission_action(pr_url)
-        reason = failure.workflow_permission_cause()
+        action = failure.workflow_permission_action(
+            pr_url, language_code=language_code,
+        )
+        reason = failure.workflow_permission_cause(language_code)
     # The #825 dead-loop guard, recoverable failures only (blocked is
     # already terminal; `classify=False` is the implement handler's
     # terminal template): the same (run_id, failure fingerprint)
@@ -764,20 +776,25 @@ def report_delivery_failure(
             snapshot, run_id=run_id or "-",
             issue=issue_context(source_repo, number), role=role,
             branch=branch or "-", worktree=str(worktree), pr_url=pr_url,
+            language_code=language_code,
         )
 
     labels = (
         current_labels if current_labels is not None
         else issue_labels(number, source_repo)
     )
-    evidence_detail = _failure_evidence(worktree, exc) if evidence else ""
+    evidence_detail = (
+        _failure_evidence(worktree, exc, language_code=language_code)
+        if evidence else ""
+    )
     # The milestone is a short mobile notification: for the workflow
     # refusal it must carry the same cause AND repair path as the
     # detailed comment, so it shows the reader-facing action instead of
     # the bare cause. Computed here, after the #825 guard may have
     # extended `reason`.
     milestone_summary = (
-        action if workflow_refusal and action else _failure_summary(reason)
+        action if workflow_refusal and action
+        else _failure_summary(reason, language_code)
     )
     if blocked:
         apply_label_patch(
@@ -790,11 +807,12 @@ def report_delivery_failure(
             diagnosis=diagnosis, scene=scene, evidence=evidence_detail,
             pr_url=pr_url, issue=issue_context(source_repo, number),
             run_id=run_id or "-", failure_record=failure_record,
+            language_code=language_code,
         )
         if classify:
             body = body.replace(
                 "</details>",
-                f"\n{_BLOCKED_PRECONDITION_PHRASE.lstrip('; ')}\n</details>",
+                f"\n{language.text(language_code, _BLOCKED_PRECONDITION_PHRASE_KEY)}\n</details>",
                 1,
             )
         if blocked_suffix:
@@ -816,6 +834,7 @@ def report_delivery_failure(
             diagnosis=diagnosis, scene=scene, evidence=evidence_detail,
             pr_url=pr_url, issue=issue_context(source_repo, number),
             run_id=run_id or "-", failure_record=failure_record,
+            language_code=language_code,
         )
         outcome = "fix needed"
     if len(body) > FAILURE_COMMENT_MAX_CHARS:
@@ -825,9 +844,15 @@ def report_delivery_failure(
         session_file = _latest_session_file(worktree)
         body = (
             body[:FAILURE_COMMENT_MAX_CHARS]
-            + f"\n\n_[comment truncated at {FAILURE_COMMENT_MAX_CHARS} "
-            f"chars; full session log: "
-            f"{'local session log' if session_file else '<unavailable>'}]_"
+            + language.text(
+                language_code, "failure.comment_truncated",
+                chars=FAILURE_COMMENT_MAX_CHARS,
+                log=(
+                    language.text(
+                        language_code, "failure.scene.local_session_log")
+                    if session_file else "<unavailable>"
+                ),
+            )
         )
     if run_id:
         # The hidden fingerprint marker rides under the run marker on
@@ -919,6 +944,7 @@ def report_delivery_failure(
             publisher if publisher is not None
             else ProgressPublisher(
                 number, source_repo, run_id, run_command=run_command,
+                language_code=language_code,
             )
         )
         publish = functools.partial(
@@ -927,32 +953,30 @@ def report_delivery_failure(
         )
         if outcome == "blocked":
             publish(action=lambda: target.milestone(
-                f"blocked: {milestone_summary}",
-                block=failure.render(failure_record),
-            ))
-            if classify:
-                finish_failure = reason
-                next_step = (
-                    "fix the precondition above (see the reason) and "
-                    "relabel the Issue ai-fix-needed to resume this "
-                    "same PR"
-                )
-            else:
-                finish_failure = reason
-                next_step = (
-                    "fix the failure above and re-run this Issue (a "
-                    "new run id is created automatically)"
-                )
-            finish_outcome = "blocked"
-        else:
-            publish(action=lambda: target.milestone(
-                f"fix needed: {milestone_summary}",
+                language.text(
+                    language_code, "failure.milestone_blocked",
+                    summary=milestone_summary,
+                ),
                 block=failure.render(failure_record),
             ))
             finish_failure = reason
-            next_step = (
-                "the next tick resumes the same run, branch, worktree "
-                "and PR automatically (the Issue stays ai-fix-needed)"
+            next_step = language.text(
+                language_code,
+                "failure.next_step_blocked_classified" if classify
+                else "failure.next_step_blocked_terminal",
+            )
+            finish_outcome = "blocked"
+        else:
+            publish(action=lambda: target.milestone(
+                language.text(
+                    language_code, "failure.milestone_fix_needed",
+                    summary=milestone_summary,
+                ),
+                block=failure.render(failure_record),
+            ))
+            finish_failure = reason
+            next_step = language.text(
+                language_code, "failure.next_step_fix_needed",
             )
             finish_outcome = "fix needed"
         if finish:
@@ -969,5 +993,6 @@ def report_delivery_failure(
                 next_step=next_step, outcome=finish_outcome,
                 source_repo=source_repo, action=action,
                 reason=reason, diagnosis=diagnosis,
+                language_code=language_code,
             )))
     return outcome

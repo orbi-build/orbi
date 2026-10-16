@@ -204,6 +204,10 @@ class RunContext:
     worktree: Path
     source_repo: str
     pr: str | None = None
+    # The run's bound message language (Issue #1660): `zh` or `en`, bound
+    # from the effective config (host + repository policy) before the
+    # first comment is written. Runtime state only -- never persisted.
+    language: str = "en"
 
 
 @dataclasses.dataclass(frozen=True)

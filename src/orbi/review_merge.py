@@ -71,6 +71,7 @@ from orbi.github import (
     pr_view,
     run_gh_read_command,
 )
+from orbi import language
 from orbi.gitops import (
     _is_ancestor,
     acquire_base_sync_lock,
@@ -127,7 +128,9 @@ class RecoverableMergeGateError(RuntimeError):
 def merged_pr_comment_body(run_id: str, pr_url: str, merge_commit: str,
                            review_rounds: int, external_commits: object,
                            commits: object, base_branch: str,
-                           review: str) -> str:
+                           review: str,
+                           language_code: str = language.DEFAULT_LANGUAGE,
+                           ) -> str:
     """Render the final delivery record.
 
     The record carries the canonical ``<!-- orbi:comment=merged -->``
@@ -143,16 +146,26 @@ def merged_pr_comment_body(run_id: str, pr_url: str, merge_commit: str,
     `external_commits`, `run_id` and `pr_url`: the PR URL is a
     machine fact, never extracted from the translated heading.
     """
-    visible_review = f"- review: {review}"
+    visible_review = language.text(
+        language_code, "delivery.review_row", review=review,
+    )
     if int(review_rounds) > 1:
-        visible_review += f" ({review_rounds} review rounds)"
+        visible_review += language.text(
+            language_code, "delivery.review_rounds",
+            rounds=review_rounds,
+        )
+    details_summary = language.text(language_code, "progress.run_details")
     return (
         f"{run_marker(run_id)}\n"
         f"{comment_kind_marker(COMMENT_KIND_MERGED)}\n"
-        f"Orbi merged PR: {pr_url}\n"
+        + language.text(
+            language_code, "delivery.merged_headline", pr_url=pr_url,
+        ) + "\n"
         f"{visible_review}\n"
-        f"- merged into: {base_branch}\n\n"
-        "<details><summary>Run details</summary>\n\n"
+        + language.text(
+            language_code, "delivery.merged_into", base_branch=base_branch,
+        ) + "\n\n"
+        f"<details><summary>{details_summary}</summary>\n\n"
         f"- merge_commit={merge_commit}\n"
         f"- review_rounds={review_rounds}\n"
         f"- commits={commits}\n"
@@ -429,7 +442,8 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
                *, repo_dir: Path,
                source_repo: str | None = None,
                issue_number: int | None = None,
-               run_id: str | None = None) -> dict:
+               run_id: str | None = None,
+               language_code: str = language.DEFAULT_LANGUAGE) -> dict:
     """Merge the reviewed PR only if the gate still holds against latest base.
 
     Re-fetch the latest remote base, require the PR head to contain it, the PR
@@ -616,14 +630,10 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             try:
                 comment_issue(
                     issue_number, repo=merge_repo,
-                    body=(
-                        f"{marker}\n"
-                        f"Orbi merge skipped for PR #{pr['number']}: the "
-                        f"source Issue is labelled `{BLOCKED_LABEL}`, so the "
-                        f"reviewed head {pr['head_oid']} was not merged "
-                        f"(run_id={run_id}).\n\n"
-                        "The PR is left open and the labels are unchanged; a "
-                        "human decides the next step."
+                    body=f"{marker}\n" + language.text(
+                        language_code, "review.merge_skipped_blocked",
+                        pr_number=pr["number"], label=BLOCKED_LABEL,
+                        head=pr["head_oid"], run_id=run_id,
                     ),
                 )
             except Exception:
@@ -1105,15 +1115,21 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         log_recovery_ci_status(pr, source_repo)
     publisher = ProgressPublisher(
         number, source_repo, config.run_id, run_command=run_command,
+        language_code=language.of(config),
     )
     publish = functools.partial(
         _safe_publish, run_id=config.run_id, issue=number,
         source_repo=source_repo, role=ROLE_REVIEW,
     )
     started = time.monotonic()
+    # The whole review/merge phase PATCHes the run's live progress
+    # comment, so the round's context and publisher carry the bound
+    # message language too (#1660): the header and field labels follow
+    # it exactly like the implementation phase's.
     ctx = RunContext(
         run_id=config.run_id, issue=number, branch=branch,
         worktree=worktree, source_repo=source_repo,
+        language=language.of(config),
     )
     # The step's own updates (this ensure, the merge gate's `checks`
     # stage, the findings/merged finishes) render through one call shape
@@ -1131,8 +1147,12 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             "findings": [], "blockers": 0, "majors": 0,
         }
         review_summary = (
-            "maintainer-actionable merge retry" if merge_only
-            else f"pass recorded on {pr['head_oid']}; merged after CI"
+            language.text(
+                language.of(config), "review.summary_human_action",
+            ) if merge_only else language.text(
+                language.of(config), "review.summary_pass_recorded",
+                head=pr["head_oid"],
+            )
         )
         reviewed_body_sha256 = None
     else:
@@ -1155,9 +1175,12 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         verdict = parse_review_verdict(output)
         fixed_findings = len(verdict["findings"])
         review_summary = (
-            "pass, no findings"
+            language.text(language.of(config), "review.summary_pass_clean")
             if fixed_findings == 0
-            else f"pass, {fixed_findings} findings fixed in-session"
+            else language.text(
+                language.of(config), "review.summary_pass_fixed",
+                findings=fixed_findings,
+            )
         )
         event(
             "review", pr=pr["number"], round=round,
@@ -1197,6 +1220,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
                 verdict_head_unknown_round=0,
             ),
             previous_comments=previous_comments,
+            language_code=language.of(config),
         )
         comment_issue(number, repo=source_repo, body=body)
         failure_report.comment_pr(pr["number"], repo=source_repo, body=body)
@@ -1205,17 +1229,18 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         # review session retries the same PR either way).
         publish(
             action=lambda: publisher.milestone(
-                f"review findings: round {round}, "
-                f"{verdict['blockers']} blocker(s), "
-                f"{verdict['majors']} major(s) for PR #{pr['number']}"
+                language.text(
+                    language.of(config), "review.findings_milestone",
+                    round=round, blockers=verdict["blockers"],
+                    majors=verdict["majors"], pr_number=pr["number"],
+                )
             ),
         )
         publish(action=lambda: round_update(
-            pr["url"], round, outcome=(
-                "**Orbi review findings**\n\n"
-                f"round {round}: {verdict['blockers']} blocker(s), "
-                f"{verdict['majors']} major(s); the next review "
-                "session retries the same PR automatically"
+            pr["url"], round, outcome=language.text(
+                language.of(config), "review.findings_outcome",
+                round=round, blockers=verdict["blockers"],
+                majors=verdict["majors"],
             ),
         ))
         apply_label_patch(
@@ -1313,19 +1338,20 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         # maintainer's.
         state, rollup = pr_delivery_rollup(pr["url"], source_repo)
         checks = ", ".join(_check_summaries(rollup)) or "none"
+        bound = language.of(config)
         body = (
             f"{marker}\n"
-            f"Orbi external PR review round {round} for "
-            f"PR #{pr['number']}: verdict={verdict['verdict']}, "
-            f"blockers={verdict['blockers']}, majors={verdict['majors']}, "
-            f"minors={verdict['minors']}; CI={state} ({checks}).\n\n"
-            "<details>\n<summary>Review report</summary>\n\n"
-            "````\n" + output.rstrip("\n") + "\n````\n\n</details>\n\n"
-            "The engine does not merge external PRs and does not set a "
-            "Milestone: a maintainer decides whether to accept this "
-            "contribution and which version it ships in. The Issue "
-            "waits at ai-blocked until then "
-            f"(run_id={config.run_id})"
+            + language.text(
+                bound, "review.external_pr_round", round=round,
+                pr_number=pr["number"], verdict=verdict["verdict"],
+                blockers=verdict["blockers"], majors=verdict["majors"],
+                minors=verdict["minors"], state=state, checks=checks,
+            ) + "\n\n"
+            + language.text(bound, "review.review_report_open")
+            + "````\n" + output.rstrip("\n") + "\n````\n\n</details>\n\n"
+            + language.text(
+                bound, "review.external_conclusion", run_id=config.run_id,
+            )
         )
         comment_issue(number, repo=source_repo, body=body)
         apply_label_patch(
@@ -1347,15 +1373,10 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         violation = ""
         if absorb_abandoned:
             violation = (
-                " Absorb contract violated (machine-checked): the round "
-                f"started with the head already behind origin/{base_branch} "
-                "and ended with verdict=pass while the head still does not "
-                f"contain origin/{base_branch} — the session neither merged "
-                "the base in-session nor reported the abandoned absorb as "
-                "findings; the next review session must merge "
-                f"origin/{base_branch} into the branch or emit findings "
-                "stating the attempted-and-abandoned absorb with the "
-                "concrete reason, never an unrelated push"
+                language.text(
+                    language.of(config), "review.absorb_violation",
+                    base_branch=base_branch,
+                )
             )
         next_base_advance_round = base_advance_rounds + (0 if ci_failure else 1)
         base_advance_exhausted = (
@@ -1363,20 +1384,27 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         )
         if ci_failure:
             gate_messages = [
-                f"CI merge gate blocked: {message} (run_id={config.run_id})",
-                f"The next review session merges the latest origin/{base_branch} "
-                "into the branch in-session, resolves conflicts, and reruns "
-                "the full test suite",
+                language.text(
+                    language.of(config), "review.gate_ci_blocked",
+                    message=message, run_id=config.run_id,
+                ),
+                language.text(
+                    language.of(config), "review.gate_next_step",
+                    base_branch=base_branch,
+                ),
             ]
         else:
             gate_messages = [
-                f"Merge gate blocked: {message} (run_id={config.run_id})",
-                ("base-advance retry budget exhausted; a human must resolve "
-                 "the hot base before this PR can continue."
-                 if base_advance_exhausted else
-                 f"The next review session merges the latest origin/{base_branch} "
-                 "into the branch in-session, resolves conflicts, and reruns "
-                 "the full test suite"),
+                language.text(
+                    language.of(config), "review.gate_blocked",
+                    message=message, run_id=config.run_id,
+                ),
+                (language.text(
+                    language.of(config), "review.gate_exhausted",
+                ) if base_advance_exhausted else language.text(
+                    language.of(config), "review.gate_next_step",
+                    base_branch=base_branch,
+                )),
             ]
         if violation:
             gate_messages.append(violation.strip())
@@ -1394,14 +1422,16 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
                 verdict_head_unknown_round=0,
             ),
             messages=gate_messages,
-            heading=(None if ci_failure else
-                     f"Orbi base advance retry {next_base_advance_round} for "
-                     f"PR #{pr['number']}:"),
+            heading=(None if ci_failure else language.text(
+                language.of(config), "review.base_advance_heading",
+                round=next_base_advance_round, pr_number=pr["number"],
+            )),
             # A base-advance retry reuses the SAME round scene: it is a
             # review failure, not a completed round, so it must not
             # consume a round record (Issue #1659).
             kind=(COMMENT_KIND_REVIEW_ROUND if ci_failure
                   else COMMENT_KIND_FAILURE),
+            language_code=language.of(config),
         )
         # CI evidence is best-effort observability.  A GitHub comment
         # outage must not prevent the required ai-fix-needed transition.
@@ -1448,12 +1478,14 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             {**refrozen, "_source_repo": source_repo},
             base_branch, repo_dir=config.repo_dir,
             issue_number=number, run_id=config.run_id,
+            language_code=language.of(config),
         )
     except MergeHandoffRequired as exc:
         # A known policy blocker is a successful, resumable handoff.
         return handle_merge_handoff(
             number=number, repo=source_repo, pr_number=refrozen["number"],
             head=refrozen["head_oid"], preflight=exc.preflight, marker=marker,
+            language_code=language.of(config),
         )
     except DeliveryDeferred as exc:
         # A pending check or an UNKNOWN mergeability on the
@@ -1533,11 +1565,10 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
     )
     publish(action=lambda: round_update(
         merged["url"], round, step="merge", review=review_summary,
-        outcome=(
-            "**Orbi delivered**\n\n"
-            f"PR {merged['url']} merged "
-            f"(merge_commit={confirmed['merge_commit']} "
-            f"review_rounds={round})"
+        outcome=language.text(
+            language.of(config), "review.delivered_outcome",
+            pr_url=merged["url"],
+            merge_commit=confirmed["merge_commit"], round=round,
         ),
     ))
     # The GitHub merge already landed. Record ai-merged before touching
@@ -1555,6 +1586,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         body=merged_pr_comment_body(
             config.run_id, merged["url"], confirmed["merge_commit"], round,
             external_commits, pr_commits, base_branch, review_summary,
+            language_code=language.of(config),
         ),
     )
     try:
@@ -1643,9 +1675,11 @@ def human_review_checklist(
     return human_review.render_checklist_comment(
         run_id=run_id,
         pr_url=pr_url,
+        language_code=language.of(config),
         checklist=human_review.build_checklist(
             test_status=test_status,
             changed_files=delivered_changed_files(worktree, base),
+            language_code=language.of(config),
         ),
     )
 
@@ -1664,6 +1698,7 @@ def _human_review_column2(
     return human_review.build_checklist(
         test_status=test_status,
         changed_files=delivered_changed_files(worktree, base),
+        language_code=language.of(config),
     )["column2"]
 
 
@@ -1705,9 +1740,9 @@ def _run_review_round(
             number, repo=source_repo, event=EVENT_BLOCKED,
             current_labels=labels,
         )
-        body = (
-            f"Orbi failed: PR {pr_url} is open but the delivery labels "
-            f"could not be repaired ({reason}); the Issue is ai-blocked"
+        body = language.text(
+            language.of(config), "review.label_repair_failed",
+            pr_url=pr_url, reason=reason,
         )
         if marker:
             body = f"{marker}\n{body}"

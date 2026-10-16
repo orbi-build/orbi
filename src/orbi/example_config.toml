@@ -92,6 +92,16 @@ engine_source_track = "release"
 # delivery passes without the label. Default: false (the pipeline runs
 # with humans out of the loop, exactly as before).
 # human_review_gate = false
+# Message language of Orbi's own comments (Issue #1660): "zh"
+# (Simplified Chinese) or "en" (English). It applies to the Issue/PR
+# comments the Runner writes -- progress, clarification, review
+# findings/fix instructions, merge handoff, failures and release
+# status. A repository may override it for its own deliveries with the
+# same key in .github/orbi.toml on the default branch (explicit
+# repository value > this host value > "en"); source files, project
+# documentation, Issue text and PR titles/bodies keep their own rules.
+# Any other value fails the config load fast. Default: "en".
+# message_language = "en"
 # Add a one-line backlink to Orbi on generated PRs and Releases.
 # Default: true; set false to omit the attribution footer.
 # attribution_footer = true

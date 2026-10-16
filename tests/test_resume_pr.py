@@ -64,6 +64,17 @@ def test_missing_pr_scene_recovery_republishes_from_run_state(monkeypatch):
     assert found["run_id"] == FAKE_RUN_ID
     assert found["pr_url"] == FAKE_PR_URL
     assert posted and "Orbi opened PR:" in posted[0]
+    # Issue #1660: the re-posted scene is a Runner-owned opened-PR
+    # comment, so its headline follows the bound message language; the
+    # machine scene block the resume parses stays language-independent.
+    posted.clear()
+    found = runner._recover_missing_pr_scene(
+        issue, "owner/repo", Path("/tmp/repo"), language_code="zh",
+    )
+    assert found is not None and found["pr_url"] == FAKE_PR_URL
+    assert posted and "Orbi 已开启 PR：" in posted[0]
+    parsed = scene_mod.parse(posted[0])
+    assert parsed is not None and parsed.pr_url == FAKE_PR_URL
 
 
 def test_missing_pr_scene_retry_stays_recoverable_on_write_failure(monkeypatch):

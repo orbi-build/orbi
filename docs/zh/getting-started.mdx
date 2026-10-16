@@ -211,7 +211,12 @@ checkout 根目录**没有** `orbi.py`（与 package 同名的 flat 文件
 
 仓库带一份提交的 example；真实配置是本地状态（gitignored）。
 
-`orbi setup` 会在配置缺失时从仓库提供的 example 创建 `orbi.toml`。
+`orbi setup` 会在配置缺失时从仓库提供的 example 创建 `orbi.toml`。这样创建的配置会按你的 locale 写入
+`message_language`（依次读取 `LC_ALL`、`LC_MESSAGES`、`LANG`：`zh_CN.UTF-8`
+这类 zh 区域标签映射为 `zh`，其他值——包括变量缺失——映射为 `en`），
+除非相邻的 `.orbi.example.toml` 已显式设置：那里未注释的值优先并被保留。
+已存在的 `orbi.toml` 永不改写（连补上这个键也不会），因此它的交付沿用
+文档默认值（`en`），直到你自行设置。
 
 配置保存在 `orbi.toml`（相对路径相对配置文件目录解析）。`ORBI_CONFIG`
 可选择其他文件，`orbi check` 会校验它。完整参考见[配置参考](/zh/configuration)。

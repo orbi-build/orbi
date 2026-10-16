@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from orbi import language
 from orbi.delivery_labels import READY_LABEL, RELEASE_LABEL
 from orbi.gitops import acquire_base_sync_lock
 from orbi.github import (
@@ -846,4 +847,7 @@ def _publish_plan_milestone(publisher: ProgressPublisher, worktree: Path) -> Non
     """Post the `plan ready` milestone once the worktree has the plan
     artifact."""
     if (worktree / ".orbi" / "plan.md").is_file():
-        publisher.milestone("plan ready")
+        publisher.milestone(language.text(
+            getattr(publisher, "language_code", language.DEFAULT_LANGUAGE),
+            "milestone.plan_ready",
+        ))

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 
-from orbi import scene
+from orbi import language, scene
 from orbi.comment_kind import (
     COMMENT_KIND_REVIEW_ROUND,
     comment_kind,
@@ -40,15 +40,26 @@ def _shorten_review_shas(text: str) -> str:
     )
 
 
-def _review_findings_markdown(findings: list[dict]) -> str:
-    """Render the human part of a review verdict, never as JSON."""
+def _review_findings_markdown(findings: list[dict],
+                              language_code: str = language.DEFAULT_LANGUAGE,
+                              ) -> str:
+    """Render the human part of a review verdict, never as JSON.
+
+    Only the four human labels follow the message language (Issue
+    #1660); the model-written values stay verbatim.
+    """
+    labels = {
+        name: language.text(language_code, f"review.finding_{name}")
+        for name in ("level", "location", "note", "fix")
+    }
     items = []
     for finding in findings:
         items.append(
-            "- **Level:** " + str(finding.get("level", "")) + "\n"
-            "  **Location:** " + str(finding.get("location", "")) + "\n"
-            "  **Note:** " + str(finding.get("note", "")) + "\n"
-            "  **Fix:** " + str(finding.get("fix", ""))
+            f"- **{labels['level']}** " + str(finding.get("level", ""))
+            + f"\n  **{labels['location']}** "
+            + str(finding.get("location", ""))
+            + f"\n  **{labels['note']}** " + str(finding.get("note", ""))
+            + f"\n  **{labels['fix']}** " + str(finding.get("fix", ""))
         )
     return "\n".join(items)
 
@@ -107,6 +118,7 @@ def review_round_comment_body(
     messages: list[str] | None = None,
     heading: str | None = None,
     kind: str = COMMENT_KIND_REVIEW_ROUND,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> str:
     """Build a readable, resumable review-round comment.
 
@@ -117,7 +129,7 @@ def review_round_comment_body(
     protocol. The readable review-round line stays for humans and for
     the historical English fallback.
     """
-    rendered = _review_findings_markdown(findings)
+    rendered = _review_findings_markdown(findings, language_code)
     same_as = None
     if rendered and previous_comments:
         for comment in previous_comments:
@@ -130,9 +142,9 @@ def review_round_comment_body(
     lines = [
         f"{marker}",
         comment_kind_marker(kind),
-        heading or (
-            f"Orbi review round {round} for PR #{pr_number}: "
-            f"{blockers} blocker(s), {majors} major(s)."
+        heading or language.text(
+            language_code, "review.round_heading", round=round,
+            pr_number=pr_number, blockers=blockers, majors=majors,
         ),
     ]
     if messages:
@@ -140,9 +152,14 @@ def review_round_comment_body(
             _shorten_review_shas(message) for message in messages
         )])
     if rendered:
-        lines.extend(["", "### Findings", ""])
+        findings_heading = language.text(
+            language_code, "review.findings_heading",
+        )
+        lines.extend(["", findings_heading, ""])
         if same_as is not None:
-            lines.append(f"Findings are the same as round {same_as}.")
+            lines.append(language.text(
+                language_code, "review.same_findings", round=same_as,
+            ))
             lines.append("")
         lines.append(_shorten_review_shas(rendered))
     return "\n".join(lines) + "\n" + scene_block

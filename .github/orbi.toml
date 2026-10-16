@@ -18,3 +18,8 @@ active_milestone = "v0.7.1"
 # result, an acceptance condition and a single outcome, and stops a thin
 # ticket before any worktree, branch or Pi session exists.
 clarify_thin_tickets = true
+# The message language of this repository's public ledger (orbi-build/orbi
+# runs in English): explicit here so the ledger stays English even on a
+# host whose instance language is Chinese (orbi-build/orbi#1660). Removing
+# this line restores inheritance from the host config.
+message_language = "en"

@@ -4,12 +4,19 @@
 successful, resumable handoff. `handle_merge_handoff` performs that
 handoff idempotently: the same waiting state (PR head + blocker text) is
 announced once, and every later retry only journals (Issue #1422).
+
+The announced state is identified LANGUAGE-INDEPENDENTLY (Issue #1660):
+the head is a `- head: `<oid>`` field and the blocker sits in one fenced
+block, so a handoff rendered in another language is still recognized on
+the next tick. A comment written before that change (the English
+"is delivered and waiting for a maintainer action" phrase) stays
+readable, so mixed old-English/new-Chinese history keeps working.
 """
 from __future__ import annotations
 
 import re
 
-from orbi import github, journal
+from orbi import github, journal, language
 from orbi.delivery_labels import AWAITING_MERGE_LABEL, EVENT_AWAITING_MERGE
 
 
@@ -41,14 +48,22 @@ def is_maintainer_actionable(stderr: str, preflight: list[str]) -> bool:
 
 # The handoff comment identifies the exact waiting state it announced.
 # ``ai-awaiting-merge`` is rescanned every tick by design, so the same
-# policy blocker reaches the merge gate again and again; this phrase plus
-# the head OID and the blocker text decide whether the wait is a new state
-# or the same one already posted (Issue #1422).
+# policy blocker reaches the merge gate again and again; the head OID and
+# the blocker text decide whether the wait is a new state or the same one
+# already posted (Issue #1422).
 AWAITING_MERGE_HANDOFF_PHRASE = (
     "is delivered and waiting for a maintainer action"
 )
-_AWAITING_MERGE_HEAD_RE = re.compile(r"at head `([^`]+)` is blocked")
-_AWAITING_MERGE_BLOCKER_RE = re.compile(
+_HANDOFF_HEAD_RE = re.compile(
+    "^[-*] head: `([^`]+)`$", re.MULTILINE,
+)
+_HANDOFF_BLOCKER_RE = re.compile(
+    "````\n(.*?)\n````", re.DOTALL,
+)
+# The pre-#1660 grammar, kept so a historical handoff comment still
+# anchors the wait (mixed history).
+_LEGACY_HEAD_RE = re.compile(r"at head `([^`]+)` is blocked")
+_LEGACY_BLOCKER_RE = re.compile(
     r"blocked by this repository policy:\n````\n(.*?)\n````",
     re.DOTALL,
 )
@@ -56,17 +71,25 @@ _AWAITING_MERGE_BLOCKER_RE = re.compile(
 
 def handoff_body(
     marker: str, *, pr_number: int, head: str, preflight: list[str],
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> str:
-    """Render the one maintainer-action comment for a waiting PR."""
+    """Render the one maintainer-action comment for a waiting PR.
+
+    The `- head:` field and the fenced policy list are the comment's
+    language-independent identity (Issue #1660); the prose around them
+    follows the run's message language.
+    """
     failed_lines = "\n".join(preflight)
+    fence = "````"
     return (
         f"{marker}\n"
-        f"Orbi: PR #{pr_number} is delivered and waiting for "
-        "a maintainer action.\n\n"
-        f"PR #{pr_number} at head `{head}` is blocked "
-        "by this repository policy:\n````\n"
-        f"{failed_lines}\n````\n\n"
-        "After the named policy action, Orbi will resume and merge the PR."
+        + language.text(
+            language_code, "handoff.headline", pr_number=pr_number,
+        )
+        + f"\n- pr: #{pr_number}\n- head: `{head}`\n"
+        + language.text(language_code, "handoff.policy_heading") + "\n"
+        + f"{fence}\n{failed_lines}\n{fence}\n\n"
+        + language.text(language_code, "handoff.next_step")
     )
 
 
@@ -75,9 +98,8 @@ def awaiting_merge_handoff_announced(
 ) -> bool:
     """True when the latest Orbi handoff comment announced this wait.
 
-    The most recent trusted comment carrying
-    `AWAITING_MERGE_HANDOFF_PHRASE` is the state anchor. The wait is
-    already announced when that comment names the same ``head`` OID and
+    The most recent trusted handoff comment is the state anchor. The wait
+    is already announced when that comment names the same ``head`` OID and
     the same blocker text (``preflight`` joined by newlines). A malformed
     handoff, no comment at all, or a mismatching head/blocker all read as
     "not announced" so the caller posts the new state once.
@@ -87,12 +109,18 @@ def awaiting_merge_handoff_announced(
         if not github._comment_is_trusted(comment):
             continue
         body = comment.get("body")
-        if not isinstance(body, str) \
-                or AWAITING_MERGE_HANDOFF_PHRASE not in body:
+        if not isinstance(body, str):
             continue
-        head_match = _AWAITING_MERGE_HEAD_RE.search(body)
-        blocker_match = _AWAITING_MERGE_BLOCKER_RE.search(body)
-        if head_match is None or blocker_match is None:
+        # The current grammar first, then the pre-#1660 one; a comment
+        # matching neither is not a handoff (progress, milestone, ...).
+        head_match = _HANDOFF_HEAD_RE.search(body)
+        blocker_match = _HANDOFF_BLOCKER_RE.search(body)
+        if head_match is None:
+            head_match = _LEGACY_HEAD_RE.search(body)
+            blocker_match = _LEGACY_BLOCKER_RE.search(body)
+        if head_match is None:
+            continue
+        if blocker_match is None:
             return False
         return (
             head_match.group(1) == head
@@ -104,6 +132,7 @@ def awaiting_merge_handoff_announced(
 def handle_merge_handoff(
     *, number: int, repo: str, pr_number: int, head: str,
     preflight: list[str], marker: str,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> bool:
     """Announce one maintainer-action handoff, idempotently.
 
@@ -137,6 +166,7 @@ def handle_merge_handoff(
         number, repo=repo,
         body=handoff_body(
             marker, pr_number=pr_number, head=head, preflight=preflight,
+            language_code=language_code,
         ),
     )
     journal.event(

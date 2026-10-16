@@ -53,6 +53,7 @@ from typing import NamedTuple
 # is fixed at the root. `refresh_cli_install` lives in `orbi.cli_source`; `runner` imports it like any caller and the
 # preflight stubs keep patching the module global below.
 from orbi import engine_source
+from orbi import language
 from orbi import milestone as milestone_bookkeeping
 from orbi import claim, clarify, notify
 from orbi import config as config_domain
@@ -118,10 +119,8 @@ from orbi.repo_config import (
     resolve_policy,
 )
 from orbi.progress import (
-    COMMENT_KIND_STARTED,
     LiveProgressThrottle,
     ProgressPublisher,
-    STARTED_HEADER,
     _progress_body,
     _progress_state,
     _run_info_fields,
@@ -133,6 +132,10 @@ from orbi.progress import (
     recoverable_scene_body,
     run_marker,
     validate_run_id,
+)
+from orbi.delivery_comment import (
+    opened_pr_comment_body,
+    started_pi_comment_body,
 )
 from orbi import runner_health
 from orbi.scheduler import (
@@ -644,75 +647,9 @@ def external_takeover_pr(repo_dir: Path, body: str | None,
     return pr
 
 
-def started_pi_comment_body(ctx: RunContext, run_info: str,
-                            extra_fields: dict | None = None) -> str:
-    """The start comment doubles as the recoverable run scene.
-
-    `extra_fields` carries the repo-config audit fields;
-    their values may contain spaces, so they are rendered by the field
-    block and never spliced into the space-separated `run_info`.
-    """
-    fields = _run_info_fields(run_info)
-    fields["branch"] = str(ctx.branch)
-    fields["worktree"] = str(ctx.worktree)
-    if extra_fields:
-        fields.update(extra_fields)
-    info = _run_info_fields(run_info)
-    headline = f"{STARTED_HEADER} " + " ".join(
-        f"{key}={info[key]}" for key in ("run_id", "priority")
-        if key in info
-    )
-    return field_block(
-        ctx.run_id, headline, fields,
-        detail_keys={"base_sha", "repo_config", "branch", "worktree", "session"},
-        kind=COMMENT_KIND_STARTED,
-    )
-
-
-def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
-                           external: bool = False) -> str:
-    """The PR-opened comment records the recoverable run scene.
-
-    It is the single source the next tick parses to resume this run on
-    the same branch, worktree and PR. The runner is the only
-    writer of this comment, so the scene carries only what the runner
-    cannot derive itself: run_id, base and PR URL. Branch and worktree
-    are derived from the configured repo_dir, source_repo, Issue number
-    and run_id — a comment must never be able to name a local path. An
-    external takeover marks the scene `external`: the PR is
-    the contributor's own (no run marker, no `Fixes` keyword in its
-    body), and the delivery branch is the PR's head branch — derived
-    from the takeover worktree, never from the comment.
-
-    The machine-readable record is the single hidden `orbi:scene:v1`
-    block rendered from the `Scene`; the field lines below
-    the headline stay for humans only.
-    """
-    fields = _run_info_fields(run_info)
-    if external:
-        fields["external"] = "true"
-    headline = "Orbi opened PR: " + pr_url
-    scene_record = scene.Scene(
-        run_id=validate_run_id(run_id),
-        base_branch=fields["base_branch"],
-        base_sha=fields["base_sha"],
-        pr_url=pr_url,
-        external="true" if external else "",
-    )
-    body = field_block(
-        run_id, headline, fields,
-        detail_keys={"base_sha", "repo_config", "branch", "worktree", "session"},
-    )
-    lines = body.splitlines()
-    lines.insert(1, scene.render(scene_record))
-    return "\n".join(lines)
-
-
-
-
-
-
-def _route_external_pr_ticket(issue: dict, repo: str) -> bool:
+def _route_external_pr_ticket(issue: dict, repo: str, *,
+                              language_code: str = language.DEFAULT_LANGUAGE,
+                              ) -> bool:
     """Route a marker-bearing opened-PR ticket through external
     integration instead of `ai-blocked`. Returns True when handled.
 
@@ -771,12 +708,10 @@ def _route_external_pr_ticket(issue: dict, repo: str) -> bool:
             number, repo=repo,
             body=(
                 f"<!-- orbi:external-pr:{pr_number} -->\n"
-                f"Orbi: the `ai-pr-opened` state of this triage Issue "
-                f"comes from external contribution PR #{pr_number} "
-                "(state: "
-                f"{state}), not from a runner scene; routing it through "
-                "the external takeover review on the next claim instead "
-                "of blocking it."
+                + language.text(
+                    language_code, "runner.external_pr_routed",
+                    pr_number=pr_number, state=state,
+                )
             ),
         )
         event(
@@ -788,9 +723,15 @@ def _route_external_pr_ticket(issue: dict, repo: str) -> bool:
 
 
 def _recover_missing_pr_scene(
-    issue: dict, repo: str, repo_dir: Path,
+    issue: dict, repo: str, repo_dir: Path, *,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> dict | None:
-    """Retry a lost opened-PR scene from the durable local run state."""
+    """Retry a lost opened-PR scene from the durable local run state.
+
+    The re-posted scene comment is a runner-owned opened-PR comment, so
+    its headline follows the bound message language (#1660); the machine
+    scene block the resume parses is language-independent.
+    """
     number = int(issue["number"])
     try:
         resume = worktree_resume_scene(repo_dir, repo, number)
@@ -812,6 +753,7 @@ def _recover_missing_pr_scene(
         body = opened_pr_comment_body(
             run_id, f"base_branch={base_branch} base_sha={base_sha} "
             f"run_id={run_id} priority=normal", url,
+            language_code=language_code,
         )
         comment_issue(number, repo=repo, body=body)
         found = run_state.parse_pr_comment(body)
@@ -1145,7 +1087,10 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
     set_run_id(run_id)
     priority = issue_priority(issue)
     run_info = f"run_id={run_id} priority={priority} task_type=ticket-only"
-    publisher = ProgressPublisher(number, source_repo, run_id, run_command=run_command)
+    publisher = ProgressPublisher(
+        number, source_repo, run_id, run_command=run_command,
+        language_code=language.of(config),
+    )
     publish = functools.partial(
         _safe_publish, run_id=run_id, issue=number,
         source_repo=source_repo, role=ROLE_TICKET,
@@ -1159,7 +1104,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
     )
     ticket_ctx = RunContext(
         run_id=run_id, issue=number, branch="-", worktree=Path("-"),
-        source_repo=source_repo,
+        source_repo=source_repo, language=language.of(config),
     )
     set_active_run(ticket_ctx, title)
     try:
@@ -1182,8 +1127,11 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
         comment_issue(
             number, repo=source_repo,
             body=(f"{run_marker(run_id)}\n"
-                  f"Orbi ticket-only delivery (run_id={run_id}):\n\n"
-                  f"{output}"),
+                  + language.text(
+                      language.of(config),
+                      "runner.ticket_only_delivered",
+                      run_id=run_id,
+                  ) + f"\n\n{output}"),
         )
         close_issue(int(number), repo=source_repo)
         # The ticket-only delivery never enters the PR/review states: it
@@ -1191,13 +1139,18 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
         # the Issue is closed, not merged).
         edit_issue(number, repo=source_repo, remove=IN_PROGRESS_LABEL)
         publish(
-            action=lambda: publisher.milestone(f"ticket-only delivered: {run_info}"),
+            action=lambda: publisher.milestone(language.text(
+                language.of(config), "runner.ticket_only_milestone",
+                run_info=run_info,
+            )),
         )
         publish(
             action=lambda: publisher.finish(_progress_body(_progress_state(
                 ticket_ctx, title=title, role=ROLE_TICKET, started=started,
                 pr_url=None, review_round=0, priority=priority,
-            ), outcome="**Orbi ticket-only delivered**")),
+            ), outcome=language.text(
+                language.of(config), "runner.ticket_only_outcome",
+            ))),
         )
         event(
             "run_end", run=run_id, issue=issue_context(source_repo, number),
@@ -1216,14 +1169,18 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
             comment_issue(
                 number, repo=source_repo,
                 body=(f"{run_marker(run_id)}\n"
-                      f"Orbi ticket-only failed: {detail} ({run_info})\n"
-                      f"run_id={run_id}\n"
-                      "No Git branch, commit, or PR was created."),
+                      + language.text(
+                          language.of(config),
+                          "runner.ticket_only_failed",
+                          detail=detail, run_info=run_info, run_id=run_id,
+                      )),
             )
             publish(
-                action=lambda: publisher.milestone(
-                    f"ticket-only blocked: {sanitize(detail)} ({run_info})"
-                ),
+                action=lambda: publisher.milestone(language.text(
+                    language.of(config),
+                    "runner.ticket_only_blocked_milestone",
+                    detail=sanitize(detail), run_info=run_info,
+                )),
             )
         except Exception:
             LOGGER.exception("issue=%s ticket-only failure reporting failed", number)
@@ -1719,13 +1676,11 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     if state == "CLOSED":
         comment_issue(
             issue, repo=source_repo,
-            body=(
-                f"{run_marker(run_id)}\n"
-                f"Orbi delivery stopped: the Issue was closed while the "
-                f"delivery was in flight; the completed work stays on "
-                f"branch `{branch}` and no PR was opened.\n"
-                f"run_id={run_id}"
-            ),
+            body=(f"{run_marker(run_id)}\n"
+                  + language.text(
+                      ctx.language, "runner.issue_closed",
+                      branch=branch, run_id=run_id,
+                  )),
         )
         event(
             "delivery_issue_closed", branch=branch, issue=issue,
@@ -1886,6 +1841,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
             RunContext(
                 run_id=run_id, issue=number, branch=branch,
                 worktree=worktree, source_repo=source_repo,
+                language=language.of(config),
             ),
             config.base_branch, repo_dir=config.repo_dir,
             pr_repo=source_repo,
@@ -1968,6 +1924,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 exc, issue=issue, source_repo=source_repo,
                 run_id=current_run_id(), pr_url=scene["pr_url"],
                 worktree=worktree, branch=branch, role=ROLE_REVIEW,
+                language_code=language.of(config),
                 action=(
                     (
                         f"Update PR {scene['pr_url']} to include `Fixes #{number}` "
@@ -2631,6 +2588,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             failure_report._report_resume_failure(
                 number=number, source_repo=source_repo, run_id=run_id,
                 error=facts.resume_error,
+                language_code=language.of(config),
             )
             raise facts.resume_error
         if facts.resume_scene is not None:
@@ -2722,11 +2680,12 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         worktree=existing_worktree or worktree_path(
             config.repo_dir, source_repo, number, run_id,
         ),
-        source_repo=source_repo,
+        source_repo=source_repo, language=language.of(config),
     )
     set_active_run(ctx, title)
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
+        language_code=language.of(config),
     )
     publish = functools.partial(
         _safe_publish, run_id=run_id, issue=number,
@@ -2857,9 +2816,10 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                     number, repo=source_repo, remove=IN_PROGRESS_LABEL,
                 )
                 publish(
-                    action=lambda: publisher.milestone(
-                        f"ops delivered: {run_info}",
-                    ),
+                    action=lambda: publisher.milestone(language.text(
+                        language.of(config),
+                        "runner.ops_milestone", run_info=run_info,
+                    )),
                 )
                 publish(
                     action=lambda: publisher.finish(_progress_body(
@@ -2868,7 +2828,10 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                             started=started, pr_url=None, review_round=0,
                             priority=priority,
                         ),
-                        outcome="**Orbi ops delivered**",
+                        outcome=language.text(
+                            language.of(config),
+                            "runner.ops_outcome",
+                        ),
                     )),
                 )
                 event(
@@ -2966,6 +2929,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 number, repo=source_repo,
                 body=opened_pr_comment_body(
                     run_id, run_info, pr_url, external=external_takeover,
+                    language_code=language.of(config),
                 ),
             )
         except Exception as exc:
@@ -3049,9 +3013,11 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         # recoverable. Keep the claim, worktree and run-state file so the
         # next in-flight scan resumes this same run.
         recoverable_name = (
-            "model_wait recovered"
+            language.text(
+                language.of(config), "progress.recoverable_model_wait")
             if isinstance(exc, ModelWaitDeadError)
-            else "Pi failure recovered"
+            else language.text(
+                language.of(config), "progress.recoverable_pi_failure")
         )
         # The hung-model-request recovery is a CLASSIFIED,
         # AI-recoverable failure — NOT the terminal `ai-blocked`. The
@@ -3072,6 +3038,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         body = recoverable_scene_body(
             run_id=run_id, recoverable_name=recoverable_name, record=record,
             detail=detail, run_info=run_info,
+            language_code=language.of(config),
         )
         # The recovery comment is the delivery record, but the resume
         # does not parse it (the run state file, the worktree and the
@@ -3150,10 +3117,13 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 exc, issue=issue, source_repo=source_repo,
                 run_id=run_id, pr_url=None,
                 worktree=worktree, branch=branch, role=ROLE_IMPLEMENT,
-                action=failure_report.terminal_action(terminal_record),
-                reason=(
-                    "The delivery stopped before it could be completed: "
-                    f"{_failure_detail(exc)}"
+                language_code=language.of(config),
+                action=failure_report.terminal_action(
+                    terminal_record, language.of(config),
+                ),
+                reason=language.text(
+                    language.of(config), "runner.delivery_stopped_reason",
+                    detail=_failure_detail(exc),
                 ),
                 diagnosis=(
                     f"{_failure_detail(exc)}\n"
@@ -3264,6 +3234,7 @@ def _finish_progress(
     detail: str, next_step: str, title: str, outcome: str,
     role: str = ROLE_REVIEW, review_round: int = 0,
     priority: str = "normal",
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> None:
     """Finish the tracked progress comment with the terminal scene.
 
@@ -3291,12 +3262,14 @@ def _finish_progress(
         return
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
+        language_code=language_code,
     )
     publisher.ensure(progress._finish_progress_body(
         number=number, title=title, run_id=run_id, role=role,
         branch=branch, worktree=worktree, pr_url=pr_url,
         review_round=review_round, priority=priority, detail=detail,
         next_step=next_step, outcome=outcome, source_repo=source_repo,
+        language_code=language_code,
     ))
 
 
@@ -3475,9 +3448,8 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
             number, repo=source_repo, event=EVENT_BLOCKED,
             current_labels=labels,
         )
-        body = (
-            f"Orbi failed: PR {pr_url} was closed without "
-            "a merge; the delivery is terminally failed"
+        body = language.text(
+            language.of(config), "runner.pr_closed_comment", pr_url=pr_url,
         )
         if marker:
             body = f"{marker}\n{body}"
@@ -3491,9 +3463,12 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
                 action=lambda: ProgressPublisher(
                     number, source_repo, run_id,
                     run_command=run_command,
+                    language_code=language.of(config),
                 ).milestone(
-                    f"blocked: PR {pr_url} was closed without a "
-                    "merge; the delivery is terminally failed"
+                    language.text(
+                        language.of(config),
+                        "runner.pr_closed_milestone", pr_url=pr_url,
+                    )
                 ),
             )
             # The blocked scene carries the actual role and the
@@ -3513,15 +3488,19 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
                 action=lambda: _finish_progress(
                     number, run_id, source_repo, None, None,
                     pr_url,
-                    f"PR {pr_url} was closed without a merge; the "
-                    "delivery is terminally failed",
-                    "investigate why the PR was closed and re-open "
-                    "the delivery or start a fresh run on the "
-                    "Issue",
+                    language.text(
+                        language.of(config),
+                        "runner.pr_closed_reason", pr_url=pr_url,
+                    ),
+                    language.text(
+                        language.of(config),
+                        "runner.pr_closed_next_step",
+                    ),
                     title=title,
                     outcome="blocked",
                     role=ROLE_REVIEW, review_round=blocked_round,
                     priority=priority,
+                    language_code=language.of(config),
                 ),
             )
         return
@@ -3809,9 +3788,9 @@ def main(argv: list[str] | None = None) -> int:
                 config=config,
                 hooks=claim.ResumeHooks(
                     resume_scene=run_state.resume_scene,
-                    route_external_pr_ticket=_route_external_pr_ticket,
-                    block_scene_failure=failure_report.block_scene_failure,
-                    recover_missing_pr_scene=_recover_missing_pr_scene,
+                    route_external_pr_ticket=lambda issue, repo: _route_external_pr_ticket(issue, repo, language_code=language.of(config)),
+                    block_scene_failure=lambda issue, err, repo, comments: failure_report.block_scene_failure(issue, err, repo, comments, language_code=language.of(config)),
+                    recover_missing_pr_scene=lambda issue, repo, repo_dir: _recover_missing_pr_scene(issue, repo, repo_dir, language_code=language.of(config)),
                     has_recoverable_pr_scene=_has_recoverable_pr_scene,
                     comment_pr=failure_report.comment_pr,
                 ),
@@ -3948,6 +3927,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             failure_report.block_repo_config_failure(
                 int(issue["number"]), source_repo, exc, run_id,
+                language_code=language.of(config),
                 current_labels={
                     label.get("name") for label in issue.get("labels", [])
                     if isinstance(label, dict)
@@ -3988,6 +3968,7 @@ def main(argv: list[str] | None = None) -> int:
                     int(issue["number"]), scene["run_id"],
                 ),
                 source_repo=source_repo,
+                language=language.of(config),
             ), issue["title"])
             # Verify the open PR BEFORE any git/Pi mutation
             # (head repo, base, run marker, exact URL of the recovered
