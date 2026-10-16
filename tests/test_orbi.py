@@ -2775,3 +2775,37 @@ def test_doctor_report_reports_configured_model_provider(tmp_path, monkeypatch):
     )
     report = orbi.doctor_report(config, installed)
     assert "model_provider: ok provider=openai model=gpt key=OPENAI_API_KEY=set" in report
+
+
+# --- Issue #1669: orbi status and a maintainer-blocked delivery -----------
+
+
+def _stub_status_github(monkeypatch, issue):
+    """Route the real observer active-set read to one synthetic Issue."""
+    monkeypatch.setattr(
+        observe, "run_gh_read_command",
+        lambda command, **kwargs: json.dumps([[issue]]),
+    )
+    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
+    monkeypatch.setattr(
+        orbi, "freeze_base", lambda repo_dir, base_branch: "abc123",
+    )
+
+
+def test_main_status_excludes_a_maintainer_blocked_delivery(
+    monkeypatch, tmp_path, capsys,
+):
+    """Acceptance #1669: a maintainer's ai-blocked manual wait wins over
+    the ai-pr-opened label the merge gate left in place, so orbi status
+    shows no active delivery for that repository."""
+    config = tmp_path / "orbi.toml"
+    config.write_text('source_repos = ["acme/shop"]', encoding="utf-8")
+    _write_prompts(tmp_path)
+    _stub_status_github(monkeypatch, _raw_delivery_issue(
+        42, title="Fix login", labels=("ai-blocked", "ai-pr-opened"),
+    ))
+    assert orbi.main(["status", "--config", str(config)]) == 0
+    out = capsys.readouterr().out
+    assert "  active: -" in out
+    assert "#42" not in out

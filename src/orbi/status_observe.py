@@ -40,6 +40,7 @@ from pathlib import Path
 
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL,
+    BLOCKED_LABEL,
     FIX_NEEDED_LABEL,
     IN_PROGRESS_LABEL,
     PR_OPENED_LABEL,
@@ -171,7 +172,17 @@ def delivery_from_issue(repo: str, issue: object) -> Delivery:
 
 
 def is_active(delivery: Delivery) -> bool:
-    """True while the Issue carries one of the active delivery states."""
+    """True while the Issue carries one of the active delivery states.
+
+    A confirmed manual wait wins over local observations (Issue #1669):
+    when a maintainer adds `ai-blocked` mid-delivery, the merge gate
+    leaves the delivery label in place but the Issue is not running, so
+    it must not be listed as active. This mirrors the engine's own
+    decision order (`delivery_scene.classify` checks BLOCKED before every
+    opened-PR state) instead of inventing a second rule.
+    """
+    if BLOCKED_LABEL in delivery.labels:
+        return False
     return any(label in ACTIVE_DELIVERY_LABELS for label in delivery.labels)
 
 
