@@ -929,3 +929,92 @@ def test_github_cycle_restarts_when_the_read_completed(tmp_path):
     assert clock["now"] == 105.0
     assert observer.due(115.0) is False
     assert observer.due(120.0) is True
+
+
+# --- Issue #1669: a maintainer's confirmed manual wait wins ---------------
+
+
+def test_is_active_is_false_for_a_maintainer_blocked_delivery():
+    """A confirmed manual wait wins over the delivery label (Issue #1669):
+    the merge gate leaves ai-pr-opened in place while ai-blocked stops the
+    delivery, exactly as delivery_scene.classify orders BLOCKED before
+    every opened-PR state."""
+    assert observe.is_active(
+        observe.delivery_from_issue(
+            "acme/shop", _issue(42, labels=("ai-blocked", "ai-pr-opened")),
+        ),
+    ) is False
+
+
+def test_read_active_deliveries_excludes_a_maintainer_blocked_delivery():
+    raw = [
+        _issue(1),
+        _issue(42, labels=("ai-blocked", "ai-pr-opened")),
+    ]
+    deliveries = observe.read_active_deliveries(
+        "acme/shop", read_issues=lambda repo: raw,
+    )
+    assert [delivery.number for delivery in deliveries] == [1]
+
+
+def test_render_excludes_a_maintainer_blocked_delivery_from_active(tmp_path):
+    """Acceptance #1669: orbi status shows 'active: -' for a repository
+    whose only labelled delivery is a maintainer-blocked Issue."""
+    config = _config(tmp_path)
+    scope = observe.parse_scope(config.source_repos)
+    observer = observe.StatusObserver(
+        config, scope,
+        read_issues=lambda repo: [
+            _issue(42, title="Fix login",
+                   labels=("ai-blocked", "ai-pr-opened")),
+        ],
+    )
+    observer.refresh()
+    report = cli.status_report(config, scope, observer)
+    assert "  active: -" in report
+    assert "#42" not in report
+
+
+def test_render_issue_scope_shows_a_blocked_delivery_with_its_observations(
+    tmp_path,
+):
+    """Acceptance #1669: orbi status --issue 42 keeps the confirmed labels
+    and the retained, timed observations of a blocked delivery."""
+    session = (
+        tmp_path / ".worktrees" / "orbi-acme-shop-issue-42-86b57234"
+        / ".pi-session"
+    )
+    session.mkdir(parents=True)
+    (session / "s.jsonl").write_text(
+        json.dumps({
+            "type": "session", "id": "sess-42",
+            "timestamp": "2026-10-15T06:00:00Z",
+        }) + "\n"
+        + json.dumps({
+            "type": "message", "timestamp": "2026-10-15T06:20:00Z",
+            "message": {"role": "assistant", "content": [
+                {"type": "toolCall", "name": "read",
+                 "arguments": {"path": "src/login.ts"}},
+            ]},
+        }) + "\n",
+        encoding="utf-8",
+    )
+    config = _config(tmp_path)
+    scope = observe.parse_scope(config.source_repos, issue=42)
+    observer = observe.StatusObserver(
+        config, scope,
+        read_issue=lambda number, fields, *, repo: _issue(
+            number, title="Fix login", url="u42",
+            labels=("ai-blocked", "ai-pr-opened"),
+        ),
+    )
+    observer.refresh()
+    report = cli.status_report(config, scope, observer)
+    assert (
+        "  issue: #42 Fix login u42 state=open "
+        "labels=ai-blocked,ai-pr-opened"
+    ) in report
+    assert (
+        "run=86b57234 session=sess-42 at=2026-10-15T06:20:00Z "
+        "kind=read target=src/login.ts"
+    ) in report
