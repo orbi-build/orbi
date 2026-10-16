@@ -1377,6 +1377,92 @@ def test_progress_body_starts_with_the_run_marker_and_the_block(monkeypatch):
     )
     assert body.count("<!-- orbi:progress:v1 ") == 1
 
+# --- Issue #1667: a finish keeps the formal prefix in front of the outcome ---
+
+
+class _FinishRecorder:
+    """Capture the one body `finish` publishes."""
+
+    def __init__(self) -> None:
+        self.bodies: list[str] = []
+
+    def finish(self, body: str) -> None:
+        self.bodies.append(body)
+
+
+def _step_publisher(tmp_path, recorder):
+    ctx = RunContext(
+        run_id="86b57234", issue=1667, branch="orbi/orbi-1667",
+        worktree=tmp_path, source_repo="owner/repo",
+    )
+    return progress.step_publisher(
+        recorder, ctx, role="review", title="Ship it",
+        started=0.0, priority="normal",
+    )
+
+
+def test_merged_finish_keeps_the_formal_prefix_above_the_outcome(
+        monkeypatch, tmp_path):
+    """Acceptance: the first two lines are the run marker and the
+    `"step":"merge"` block; `**Orbi delivered**` appears below them."""
+    freeze_report_time(monkeypatch)
+    recorder = _FinishRecorder()
+    publish_step = _step_publisher(tmp_path, recorder)
+    publish_step(
+        "https://github.com/owner/repo/pull/1", 1, step="merge",
+        outcome="**Orbi delivered**\n\nPR merged (merge_commit=m1)",
+    )
+    body = recorder.bodies[-1]
+    lines = body.splitlines()
+    assert lines[0] == "<!-- orbi:run=86b57234 -->"
+    assert lines[1].startswith('<!-- orbi:progress:v1 {"step":"merge"')
+    assert body.index("**Orbi delivered**") > body.index(
+        "<!-- orbi:progress:v1",
+    )
+    assert "PR merged (merge_commit=m1)" in body
+
+
+def test_blocked_finish_keeps_the_formal_prefix_above_the_explanation(
+        monkeypatch, tmp_path):
+    """Acceptance: a blocked finish starts with the run marker and the v1
+    block; the blocked explanation follows them."""
+    freeze_report_time(monkeypatch)
+    body = progress._finish_progress_body(
+        number=1667, title="Blocked task", run_id="86b57234",
+        role="review", branch="orbi/orbi-1667", worktree=tmp_path,
+        pr_url=None, review_round=0, priority="normal", detail="boom",
+        next_step="", outcome="blocked", source_repo="owner/repo",
+    )
+    lines = body.splitlines()
+    assert lines[0] == "<!-- orbi:run=86b57234 -->"
+    assert lines[1].startswith("<!-- orbi:progress:v1 ")
+    assert body.index("**Orbi blocked") > body.index(
+        "<!-- orbi:progress:v1",
+    )
+
+
+def test_review_findings_finish_keeps_the_formal_prefix(
+        monkeypatch, tmp_path):
+    """Acceptance: a review-findings finish starts with the run marker and
+    a v1 block carrying `"step":"review"`."""
+    freeze_report_time(monkeypatch)
+    recorder = _FinishRecorder()
+    publish_step = _step_publisher(tmp_path, recorder)
+    publish_step(
+        "https://github.com/owner/repo/pull/1", 1,
+        outcome=(
+            "**Orbi review findings**\n\nround 1: 1 blocker(s); "
+            "the next review session retries the same PR automatically"
+        ),
+    )
+    body = recorder.bodies[-1]
+    lines = body.splitlines()
+    assert lines[0] == "<!-- orbi:run=86b57234 -->"
+    assert lines[1].startswith('<!-- orbi:progress:v1 {"step":"review"')
+    assert body.index("**Orbi review findings**") > body.index(
+        "<!-- orbi:progress:v1",
+    )
+
 def test_progress_prose_and_block_render_the_same_activity(monkeypatch):
     freeze_report_time(monkeypatch)
     body = progress.progress_body(_summary_state(
