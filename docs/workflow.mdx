@@ -256,6 +256,7 @@ Orbi merged PR: <url>
 - commits=M
 - external_commits=K
 - run_id=…
+- pr_url=<url>
 
 </details>
 ```
@@ -263,9 +264,13 @@ Orbi merged PR: <url>
 The `Run details` rows keep the `key=value` form (equals sign, not
 colon) because they are machine-read anchors: the orbi-cloud
 `mergeCommentFields` reader and the repository's comment-reader
-contracts match `external_commits=K`, `review_rounds=N` and `run_id=…`
-exactly. The `Orbi: merged` milestone line carries the same facts in the
-same `key=value` form.
+contracts match `external_commits=K`, `review_rounds=N`, `run_id=…` and
+`pr_url=<url>` exactly. `pr_url` is the unambiguous PR URL, so a consumer
+never has to read the translatable `Orbi merged PR:` heading; the receipt
+carries the hidden `<!-- orbi:comment=merged -->` kind right after the run
+marker, and both rules are defined in
+[Public contracts](/public-contracts). The `Orbi: merged` milestone line
+carries the same facts in the same `key=value` form.
 
 - `commits` — all commits of the PR branch relative to the base at
   merge time (the denominator of the ratio).

@@ -216,15 +216,19 @@ Orbi merged PR: <url>
 - commits=M
 - external_commits=K
 - run_id=…
+- pr_url=<url>
 
 </details>
 ```
 
 `Run details` 行保持 `key=value` 形式（等号，不是冒号），因为它们是
 机器读的锚点：orbi-cloud 的 `mergeCommentFields` 读取器与本仓库的
-comment-reader 契约精确匹配 `external_commits=K`、`review_rounds=N`
-与 `run_id=…`。`Orbi: merged` milestone 行以同样的 `key=value` 形式
-带上这些事实。
+comment-reader 契约精确匹配 `external_commits=K`、`review_rounds=N`、
+`run_id=…` 与 `pr_url=<url>`。`pr_url` 是明确的 PR URL，消费者无需读取
+可被翻译的 `Orbi merged PR:` 标题；该回执在 run marker 之后紧接隐藏的
+`<!-- orbi:comment=merged -->` 类型，两条规则都定义在
+[Public contracts](/zh/public-contracts)。`Orbi: merged` milestone 行以
+同样的 `key=value` 形式带上这些事实。
 
 - `commits` —— 合并时 PR 分支相对 base 的全部 commit 数（比例的分母）。
 - `external_commits` —— 不在引擎自己推送历史里的 commit 数（开 PR 时的
