@@ -184,7 +184,9 @@ def test_failure_detail_without_stderr_uses_message():
     assert runner._failure_detail(RuntimeError("plain")) == "plain"
 
 
-def test_progress_body_outcome_header_prepends_outcome():
+def test_progress_body_outcome_renders_below_the_formal_prefix():
+    """Issue #1667: the run marker and the v1 block stay first; the
+    terminal outcome renders below them, never in front."""
     state = {
         "run_id": "a1b2c3d4", "issue": 18,
         "issue_title": "Publish progress", "role": "implement",
@@ -193,7 +195,10 @@ def test_progress_body_outcome_header_prepends_outcome():
         "branch": "b", "pr": None, "session": None,
     }
     body = runner._progress_body(state, outcome="**done**")
-    assert body.startswith("**done**\n\n")
+    lines = body.splitlines()
+    assert lines[0] == "<!-- orbi:run=a1b2c3d4 -->"
+    assert lines[1].startswith("<!-- orbi:progress:v1 ")
+    assert body.index("**done**") > body.index("<!-- orbi:progress:v1")
     assert runner._progress_body(state) == progress.progress_body(state)
 
 

@@ -741,11 +741,19 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
 
 
 def _progress_body(state: dict, *, outcome: str | None = None) -> str:
-    """Render the progress body, optionally with a final outcome header."""
+    """Render the progress body, optionally with a terminal outcome.
+
+    The documented formal prefix is the run marker immediately followed
+    by the versioned block, including at finish
+    (`docs/public-contracts.mdx`); the outcome therefore renders below
+    that prefix, never in front of it, so a reader that selects the
+    record by the prefix still sees the run's last report.
+    """
     body = progress_body(state)
     if outcome is None:
         return body
-    return f"{outcome}\n\n{body}"
+    prefix, _, rest = body.partition("\n\n")
+    return f"{prefix}\n\n{outcome}\n\n{rest}"
 
 
 def _safe_publish(*, run_id: str, issue: int, source_repo: str,
