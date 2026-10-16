@@ -1,4 +1,12 @@
 from orbi import config as config_domain
+from orbi import language
+
+# The session-boundary message-language instruction every implementer/
+# review prompt carries (Issue #1660). Prompt-content assertions compare
+# the rendered template PLUS this instruction, so a custom template
+# cannot silently lose it.
+LANGUAGE_SUFFIX = language.model_instruction("en")
+
 import ast
 import dataclasses
 import fcntl
@@ -4286,8 +4294,9 @@ def test_run_pi_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
     config = config_domain.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1")
     pi_session.run_pi(issue, RunContext(run_id=config.run_id, issue=issue["number"], branch="orbi/owner-repo-issue-4", worktree=tmp_path, source_repo="owner/repo"), config)
     command = calls[0]
-    assert rendered_prompt(command) == "SYSTEM " + str(
-        tmp_path / "checkout" / ".orbi" / "base-sync.lock",
+    assert rendered_prompt(command) == (
+        "SYSTEM " + str(tmp_path / "checkout" / ".orbi" / "base-sync.lock")
+        + LANGUAGE_SUFFIX
     )
 
 
@@ -4368,8 +4377,9 @@ def test_run_review_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
     pi_session.run_review(RunContext(run_id=config_domain.RunnerConfig(prompt_review=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=()).run_id, issue=4, branch="branch", worktree=tmp_path, source_repo="owner/repo"), {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
          "head_oid": "h1", "head_ref": "h"}, config_domain.RunnerConfig(prompt_review=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=()), 1)
     command = calls[0]
-    assert rendered_prompt(command) == "REVIEW " + str(
-        tmp_path / "checkout" / ".orbi" / "base-sync.lock",
+    assert rendered_prompt(command) == (
+        "REVIEW " + str(tmp_path / "checkout" / ".orbi" / "base-sync.lock")
+        + LANGUAGE_SUFFIX
     )
 
 
@@ -4529,7 +4539,7 @@ def test_run_pi_skips_the_comment_fetch_without_the_placeholder(
     pi_session.run_pi({"number": 5, "title": "t", "body": "b"}, RunContext(run_id=config.run_id, issue={"number": 5, "title": "t", "body": "b"}["number"], branch="orbi/owner-repo-issue-5", worktree=tmp_path, source_repo="owner/repo"), config)
     assert fetches == []
     command = calls[0]
-    assert rendered_prompt(command) == "SYSTEM b"
+    assert rendered_prompt(command) == "SYSTEM b" + LANGUAGE_SUFFIX
 
 
 def test_run_review_refreshes_issue_body_each_round(monkeypatch, tmp_path):
@@ -4566,8 +4576,8 @@ def test_run_review_refreshes_issue_body_each_round(monkeypatch, tmp_path):
     pi_session.run_review(ctx, pr, config, 2)
     assert issue_reads == [(4, "body", "owner/repo"), (4, "body", "owner/repo")]
     assert prompts == [
-        "BODY=old criterion",
-        "BODY=new criterion {{BASE_SYNC_LOCK}}",
+        "BODY=old criterion" + LANGUAGE_SUFFIX,
+        "BODY=new criterion {{BASE_SYNC_LOCK}}" + LANGUAGE_SUFFIX,
     ]
     assert "old criterion" not in prompts[1]
 
@@ -4709,8 +4719,9 @@ def test_run_review_skips_the_comment_fetch_without_the_placeholder(
          "head_oid": "h1", "head_ref": "h"}, config_domain.RunnerConfig(prompt_review=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=()), 1)
     assert fetches == []
     command = calls[0]
-    assert rendered_prompt(command) == "REVIEW " + str(
-        tmp_path / "checkout" / ".orbi" / "base-sync.lock",
+    assert rendered_prompt(command) == (
+        "REVIEW " + str(tmp_path / "checkout" / ".orbi" / "base-sync.lock")
+        + LANGUAGE_SUFFIX
     )
 
 
@@ -4736,10 +4747,11 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
     assert "Fix body" in system_prompt
     assert "context.md" in system_prompt
     assert "skill.md" in system_prompt
-    assert system_prompt.endswith(
+    assert system_prompt.endswith(LANGUAGE_SUFFIX)
+    assert (
         "main abc123def456 run1 "
-        + str(tmp_path / "checkout" / ".orbi" / "base-sync.lock"),
-    )
+        + str(tmp_path / "checkout" / ".orbi" / "base-sync.lock")
+    ) in system_prompt
     assert command[9] == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
     assert kwargs["cwd"] == tmp_path
     assert kwargs["timeout"] is None

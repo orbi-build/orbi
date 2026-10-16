@@ -36,6 +36,7 @@ from orbi.journal import (
     redact_secrets,
     validate_run_id,
 )
+from orbi import language
 from orbi.checks import test_status
 from orbi.pi_activity import activity_snapshot
 from orbi.comment_kind import (
@@ -64,12 +65,34 @@ _RUNNER_MARKER_PATTERN = re.compile(r"<!-- runner=[^>]+ -->")
 # (`docs/public-contracts.mdx`). A comment written before the block
 # existed keeps the English-heading fallback.
 PROGRESS_PREFIX = f"<!-- {PROGRESS_BLOCK_VERSION} "
-# Standalone milestone comments share this prefix so they are recognizable.
+# Standalone milestone comments share this prefix so they are recognizable
+# (English, the historical form). The writer renders the prefix in the
+# run's message language (Issue #1660).
 MILESTONE_PREFIX = "Orbi:"
 # The live progress comment carries this header; together with the run
 # marker it identifies the run's progress comment among the run's other
 # marker-carrying comments (started Pi / opened PR scenes, milestones).
 PROGRESS_HEADER = "**Orbi progress**"
+# The progress comment's field labels (Issue #1660): the machine fields
+# (`run_id=`, the hidden block) stay verbatim; these human labels
+# follow the run's message language.
+PROGRESS_FIELD_KEYS = {
+    "role": "progress.field.role",
+    "step": "progress.field.step",
+    "reported_at": "progress.field.reported_at",
+    "last_activity": "progress.field.last_activity",
+    "activity": "progress.field.activity",
+    "tests": "progress.field.tests",
+    "pr": "progress.field.pr",
+    "recovery": "progress.field.recovery",
+    "review_round": "progress.field.review_round",
+    "issue": "progress.field.issue",
+    "priority": "progress.field.priority",
+    "phase": "progress.field.phase",
+    "elapsed": "progress.field.elapsed",
+    "branch": "progress.field.branch",
+    "session": "progress.field.session",
+}
 # The started scene carries this headline; together with the run marker
 # it identifies the run's single `Orbi started Pi:` comment, so a resume
 # PATCHes it in place instead of appending a near-identical duplicate
@@ -150,7 +173,8 @@ def _fenced(content: str, *, cap: int = 4000) -> str:
 
 def field_block(run_id: str, headline: str, fields: dict[str, object], *,
                 detail_keys: set[str] | None = None,
-                kind: str | None = None) -> str:
+                kind: str | None = None,
+                language_code: str = language.DEFAULT_LANGUAGE) -> str:
     """Render a marker-first status comment with optional collapsed details.
 
     `kind` prepends the canonical kind marker right after the run marker
@@ -171,8 +195,9 @@ def field_block(run_id: str, headline: str, fields: dict[str, object], *,
         (details if key in detail_keys or is_long else visible).append(line)
     lines.extend(visible)
     if details:
-        lines.extend(["", "<details><summary>Run details</summary>", "", *details,
-                      "", "</details>"])
+        summary = language.text(language_code, "progress.run_details")
+        lines.extend(["", f"<details><summary>{summary}</summary>", "",
+                      *details, "", "</details>"])
     return _with_runner_marker("\n".join(lines))
 
 
@@ -325,6 +350,7 @@ def bump_recovered_repeat(body: str, reason_code: str, previous: int) -> str:
 def recoverable_scene_body(
     *, run_id: str, recoverable_name: str, record: Failure,
     detail: str, run_info: str,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> str:
     """Render the classified recoverable-failure comment (Issue #1465).
 
@@ -339,19 +365,17 @@ def recoverable_scene_body(
     `failure_scene` folds the same `(run_id, reason_code)` into one
     comment and gives a different cause its own.
     """
-    return (
-        f"{run_marker(run_id)}\n"
-        f"{recovered_marker(record.reason_code)}\n"
-        f"Orbi {recoverable_name}: {record.reason_code}; retrying on the "
-        "next tick\n\n"
-        "The Issue stays ai-in-progress and the next tick resumes the "
-        f"same run ({run_info}).\n\n"
-        "<details><summary>Diagnosis</summary>\n\n"
-        f"- reason_code: {record.reason_code}\n"
-        f"- action: {record.action_code}\n"
-        f"- retry_safe: {str(record.retry_safe).lower()}\n\n"
-        f"{_fenced(_redact_local_paths(detail))}\n\n"
-        "</details>"
+    return language.text(
+        language_code, "progress.recoverable_scene",
+        run_marker=run_marker(run_id),
+        recovered_marker=recovered_marker(record.reason_code),
+        recoverable_name=recoverable_name,
+        reason_code=record.reason_code,
+        run_info=run_info,
+        action_code=record.action_code,
+        retry_safe=str(record.retry_safe).lower(),
+        detail=_fenced(_redact_local_paths(detail)),
+        diagnosis=language.text(language_code, "failure.diagnosis_summary"),
     )
 
 
@@ -458,9 +482,17 @@ def progress_body(state: dict) -> str:
     SAME safe summary value, so the readable status and the machine
     summary always agree (Issue #1657).
     """
+    language_code = state.get("language", language.DEFAULT_LANGUAGE)
+
+    def label(key: str) -> str:
+        return language.text(language_code, PROGRESS_FIELD_KEYS[key])
+
     def value(key: str) -> str:
         item = state.get(key)
         return str(item) if item not in (None, "") else "-"
+
+    def row(key: str, rendered: object) -> str:
+        return f"- {label(key)}: {rendered}"
 
     summary = progress_summary(state)
     activity = summary["activity"]
@@ -468,36 +500,37 @@ def progress_body(state: dict) -> str:
         run_marker(state["run_id"]),
         progress_block(summary),
         "",
-        PROGRESS_HEADER,
+        language.text(language_code, "progress.header"),
         "",
-        f"- role: {value('role')}",
-        f"- step: {summary['step'] or '-'}",
-        f"- reported at: {summary['reported_at']}",
-        f"- last activity: {(activity or {}).get('at') or '-'}",
-        f"- activity: {activity_text(activity)}",
-        f"- tests: {value('tests')}",
-        f"- PR: {value('pr')}",
+        row("role", value("role")),
+        row("step", summary["step"] or "-"),
+        row("reported_at", summary["reported_at"]),
+        row("last_activity", (activity or {}).get("at") or "-"),
+        row("activity", activity_text(activity)),
+        row("tests", value("tests")),
+        row("pr", value("pr")),
     ]
     # Exceptional state belongs with the at-a-glance status. A normal
     # first or second review round carries no useful signal on its own.
     if state.get("recovery"):
-        lines.append(f"- recovery: {state['recovery']}")
+        lines.append(row("recovery", state["recovery"]))
     if state.get("review_round", 0) >= 3:
-        lines.append(f"- review/fix round: {value('review_round')}")
+        lines.append(row("review_round", value("review_round")))
 
     # Identifiers and routine bookkeeping remain available on demand.
     # Both hidden protocol markers stay outside this fold.
     details = [
-        f"- issue: {issue_field(state['issue'], state['issue_title'])}",
+        row("issue", issue_field(state["issue"], state["issue_title"])),
         f"- run_id={state['run_id']}",
-        f"- priority: {value('priority')}",
-        f"- phase: {value('phase')}",
-        f"- elapsed: {value('elapsed')}",
-        f"- branch: {value('branch')}",
-        f"- session: {value('session')}",
+        row("priority", value("priority")),
+        row("phase", value("phase")),
+        row("elapsed", value("elapsed")),
+        row("branch", value("branch")),
+        row("session", value("session")),
     ]
-    lines.extend(["", "<details><summary>Run details</summary>", "", *details,
-                  "", "</details>"])
+    summary_label = language.text(language_code, "progress.run_details")
+    lines.extend(["", f"<details><summary>{summary_label}</summary>", "",
+                  *details, "", "</details>"])
     # The progress comment (and the blocked / fix-needed
     # scene it becomes) carries the runner fingerprint like every other
     # Orbi comment.
@@ -522,10 +555,12 @@ class ProgressPublisher:
     """
 
     def __init__(self, issue: int, repo: str, run_id: str,
-                 run_command: Callable[..., str]) -> None:
+                 run_command: Callable[..., str],
+                 language_code: str = language.DEFAULT_LANGUAGE) -> None:
         self.issue = issue
         self.repo = repo
         self.run_id = run_id
+        self.language_code = language_code
         self._run_command = run_command
         self.comment_id: int | None = None
 
@@ -643,9 +678,11 @@ class ProgressPublisher:
             if prose or len({key for key, _ in pairs}) != len(pairs):
                 fields["result"] = prose if headline == "merged" else detail
         fields["run_id"] = self.run_id
+        prefix = language.text(self.language_code, "progress.milestone")
         body = field_block(
-            self.run_id, f"{MILESTONE_PREFIX} {headline}", fields,
+            self.run_id, f"{prefix} {headline}", fields,
             detail_keys={"merge_commit"} if headline == "merged" else set(),
+            language_code=self.language_code,
         )
         if block:
             marker, _, rest = body.partition("\n")
@@ -726,7 +763,8 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
                     step: str | None = None,
                     checks: list | None = None,
                     activity: dict | None = None,
-                    review: str = "pending") -> dict:
+                    review: str = "pending",
+                    language_code: str = language.DEFAULT_LANGUAGE) -> dict:
     """Collect the current run state for the GitHub progress comment.
 
     `title` is the issue's GitHub title: the progress
@@ -761,6 +799,7 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
         "run_id": ctx.run_id,
         "issue": ctx.issue,
         "issue_title": title,
+        "language": language_code,
         "role": role,
         "priority": priority,
         "phase": (activity or {}).get("phase") or "starting",
@@ -819,64 +858,13 @@ def _safe_publish(*, run_id: str, issue: int, source_repo: str,
         )
 
 
-def _finish_outcome_body(*, outcome: str, detail: str,
-                         next_step: str, pr_url: str | None,
-                         number: int, source_repo: str,
-                         action: str | None = None,
-                         reason: str | None = None,
-                         diagnosis: str | None = None) -> str:
-    """Render a terminal outcome with action, reason, and diagnosis."""
-    if not next_step:
-        event(
-            "progress_finish_missing_next_step", level=logging.WARNING,
-            call_point="_finish_progress_body", issue=number,
-            repo=source_repo, outcome=outcome,
-        )
-    legacy_action = action is None
-    blocked = outcome == "blocked"
-    disposition = (
-        "waiting on a human decision" if blocked
-        else "the engine will retry"
-    )
-    if reason is None:
-        reason = (
-            "Orbi could not complete the delivery because a required "
-            "operation failed." if blocked else
-            "Orbi found a problem that must be fixed before it can continue."
-        )
-    if diagnosis is None:
-        diagnosis = detail
-    paragraphs = [f"**Orbi {outcome} — {disposition}**"]
-    if legacy_action:
-        user_action = next_step if blocked and next_step else "Nothing"
-        paragraphs.append(f"What you need to do: {user_action}")
-    elif action:
-        paragraphs.append(f"What you need to do: {action}")
-    if reason:
-        paragraphs.append(f"What happened: {reason}")
-    else:
-        paragraphs.append("What happened: No reason was provided.")
-    if legacy_action:
-        if blocked and pr_url:
-            engine_action = (
-                "Orbi will wait for the required action; the open PR is "
-                f"{pr_url}."
-            )
-        elif blocked:
-            engine_action = "Orbi will wait for a human to resolve this Issue."
-        else:
-            engine_action = (
-                next_step or "Orbi will wait for a human to resolve this Issue."
-            )
-        paragraphs.append(f"What Orbi will do next: {engine_action}")
-    elif not action and next_step:
-        paragraphs.append(f"What Orbi will do next: {next_step}")
-    paragraphs.append(
-        "<details><summary>Raw error</summary>\n"
-        f"{diagnosis}\n"
-        "</details>"
-    )
-    return "\n\n".join(paragraphs)
+# The terminal outcome PROSE (headline, action, cause, raw error) lives
+# in the leaf module `progress_outcome`; the state/body rendering stays
+# here. The name stays bound in this module so every existing caller and
+# test keeps `progress._finish_outcome_body` (Issue #1660).
+from orbi import progress_outcome  # noqa: E402
+
+_finish_outcome_body = progress_outcome.finish_outcome_body
 
 
 def _finish_progress_body(*, number: int, title: str, run_id: str,
@@ -886,7 +874,9 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
                           next_step: str, outcome: str,
                           source_repo: str, action: str | None = None,
                           reason: str | None = None,
-                          diagnosis: str | None = None) -> str:
+                          diagnosis: str | None = None,
+                          language_code: str = language.DEFAULT_LANGUAGE,
+                          ) -> str:
     """Render the terminal progress scene shared by every finish path."""
     return _progress_body(_progress_state(
         RunContext(
@@ -895,17 +885,24 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
         ),
         title=title, role=role, started=time.monotonic(), pr_url=pr_url,
         review_round=review_round, priority=priority,
+        language_code=language_code,
     ), outcome=_finish_outcome_body(
         outcome=outcome, detail=detail, next_step=next_step, pr_url=pr_url,
         number=number, source_repo=source_repo, action=action,
-        reason=reason, diagnosis=diagnosis,
+        reason=reason, diagnosis=diagnosis, language_code=language_code,
     ))
+
 
 # Automatic observability: the GitHub progress comment is
 # PATCHed on every activity change and at most every 30 seconds while a
 # Pi session runs, so a mobile user sees live progress without any
 # command. The journal cadence is the poll interval above.
 PI_HEARTBEAT_SECONDS = 30.0
+
+
+def _publisher_language(publisher: object) -> str:
+    """The publisher's bound language; a test fake without one is `en`."""
+    return getattr(publisher, "language_code", language.DEFAULT_LANGUAGE)
 
 
 def step_publisher(publisher: ProgressPublisher, ctx: RunContext, *,
@@ -928,6 +925,7 @@ def step_publisher(publisher: ProgressPublisher, ctx: RunContext, *,
             ctx, title=title, role=role, step=step, started=started,
             pr_url=pr_url, review_round=review_round, priority=priority,
             checks=checks, review=review,
+            language_code=_publisher_language(publisher),
         ), outcome=outcome))
     return publish_step
 
@@ -954,6 +952,7 @@ def _live_progress(ctx: RunContext, publisher: ProgressPublisher, *,
         ctx, title=title, role=role, started=started,
         pr_url=pr_url, review_round=review_round, priority=priority,
         checks=checks, activity=activity,
+        language_code=_publisher_language(publisher),
     )
     publisher.patch(_progress_body(state))
 

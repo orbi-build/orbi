@@ -57,7 +57,9 @@ MOVED = (
     "FAILURE_COMMENT_MAX_CHARS",
     "FAILURE_STREAK_LIMIT",
     "SESSION_SUMMARY_LIMIT",
-    "_BLOCKED_PRECONDITION_PHRASE",
+    # Issue #1660 turned the fixed phrase into a catalog key (still
+    # owned by this module) so the sentence follows the message language.
+    "_BLOCKED_PRECONDITION_PHRASE_KEY",
     "_SGR_RE",
     "comment_pr",
 )

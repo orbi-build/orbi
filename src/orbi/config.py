@@ -12,7 +12,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from orbi import engine_source
+from orbi import engine_source, language
 from orbi.pi_process import PI_MODEL_WAIT_DEAD_SECONDS, PI_MODEL_WAIT_PROBE_SECONDS
 from orbi.pilot_slots import slot_dir_for
 from orbi.release import RELEASE_CI_WAIT_SECONDS, RELEASE_DELIVERIES_WAIT_SECONDS
@@ -141,6 +141,11 @@ class RunnerConfig:
     # never here; the message language is the host-level
     # `message_language` (#1660), read by `notify` when it is present.
     telegram_chat_id: str | None = None
+    # The message language of Orbi's own comments (Issue #1660), validated
+    # to `zh`/`en` by `load_config`. `resolve_policy` replaces it with the
+    # repository's explicit `.github/orbi.toml` value when the file
+    # declares one; absent everywhere -> "en".
+    message_language: str = language.DEFAULT_LANGUAGE
     attribution_footer: bool = True
     attribution_link: str = "https://github.com/orbi-build/orbi"
     slot_dir: Path | None = None
@@ -268,6 +273,14 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         not isinstance(telegram_chat_id, str) or not telegram_chat_id
     ):
         raise ValueError("telegram_chat_id must be a non-empty string")
+    # The message language of Orbi's comments (Issue #1660). Host-only
+    # validation: an unsupported value fails the load fast naming the file,
+    # the key, the value and the allowed values; the repository's explicit
+    # override is validated by the repository policy reader.
+    message_language = language.normalize_language(
+        data.get(language.MESSAGE_LANGUAGE_KEY, language.DEFAULT_LANGUAGE),
+        source=str(path.resolve()),
+    )
     attribution_footer = data.get("attribution_footer", True)
     if not isinstance(attribution_footer, bool):
         raise ValueError("attribution_footer must be a boolean")
@@ -473,6 +486,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         allow_stale_runner=allow_stale_runner,
         human_review_gate=human_review_gate,
         telegram_chat_id=telegram_chat_id,
+        message_language=message_language,
         attribution_footer=attribution_footer,
         attribution_link=attribution_link,
         slot_dir=slot_dir_for(repo_dir),

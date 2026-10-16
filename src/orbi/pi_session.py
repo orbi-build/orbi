@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orbi import config as config_domain
+from orbi import language
 from orbi.delivery_scene import RunContext
 from orbi.github import (
     _comment_is_trusted,
@@ -514,7 +515,13 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
             issue_comments(int(issue["number"]), repo=source_repo),
             config.issue_comments_limit,
         )
-    system_prompt = render_prompt(template, prompt_values)
+    # The comment-facing natural-language fields this session produces
+    # follow the run's bound message language (Issue #1660). The
+    # instruction is appended AFTER the template is rendered, so a custom
+    # prompt template receives exactly the same effective instruction.
+    system_prompt = language.with_model_instruction(
+        render_prompt(template, prompt_values), config.message_language,
+    )
     context = (
         f"Issue #{issue['number']}: {issue['title']}\n\n"
         f"Issue body:\n{issue.get('body', '')}\n\n"
@@ -788,7 +795,13 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
     # Substitute the body last so placeholder-shaped text in the body remains
     # verbatim instead of being recursively interpreted as a prompt variable.
     review_values["ISSUE_BODY"] = issue_body
-    system_prompt = render_prompt(review_template, review_values)
+    # The review session is a session boundary too (Issue #1660): its
+    # comment-facing natural-language fields (summary, note, fix) follow
+    # the same bound language, appended after the rendered template.
+    system_prompt = language.with_model_instruction(
+        render_prompt(review_template, review_values),
+        config.message_language,
+    )
     context = (
         f"Independently review PR #{pr['number']} ({pr['url']}) of "
         f"{source_repo} against base {config.base_branch}@{pr['base_oid']} "

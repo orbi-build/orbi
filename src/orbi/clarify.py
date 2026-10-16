@@ -33,7 +33,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from orbi import notify
+from orbi import language, notify
 from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
 from orbi.github import comment_issue, edit_issue
 from orbi.journal import event
@@ -44,23 +44,22 @@ if TYPE_CHECKING:
     from orbi.config import RunnerConfig
 
 
-# The three semantic checks, in the identifier -> human-terms shape the
-# comment renders: the model answers with the identifiers, the person
-# reads the sentence.
+# The three semantic check identifiers the model answers with, mapped to
+# the catalog key of the human sentence the comment renders. The JSON
+# protocol is unchanged (#1660): the identifiers stay machine values, and
+# only the RENDERER turns each one into a sentence in the run's message
+# language (English and Chinese both live in the shared catalog).
 MISSING: dict[str, str] = {
-    "observable_result": (
-        "No observable result: the ticket never says what a user sees or "
-        "does differently once the change ships."
-    ),
-    "acceptance_condition": (
-        "No acceptance condition: there is no concrete way to tell a "
-        "finished delivery from an unfinished one."
-    ),
-    "single_outcome": (
-        "More than one outcome: the ticket asks for several unrelated "
-        "things instead of one fix or one change."
-    ),
+    "observable_result": "clarify.missing.observable_result",
+    "acceptance_condition": "clarify.missing.acceptance_condition",
+    "single_outcome": "clarify.missing.single_outcome",
 }
+
+
+def missing_text(item: str, language_code: str = language.DEFAULT_LANGUAGE,
+                 ) -> str:
+    """The human sentence for one failed check, in one language."""
+    return language.text(language_code, MISSING[item])
 
 CLARIFY_SYSTEM_PROMPT = (
     "You are Orbi's ticket gate. Before an unattended delivery starts, "
@@ -154,7 +153,8 @@ def parse_verdict(output: str) -> ClarifyVerdict | None:
 
 
 def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
-                   ready_label: str = READY_LABEL) -> str:
+                   ready_label: str = READY_LABEL,
+                   language_code: str = language.DEFAULT_LANGUAGE) -> str:
     """Render the ONE comment that names the missing pieces.
 
     The first line mentions the Issue author (`@<login>`, #1336) so the
@@ -165,27 +165,27 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
     scan really reads, never a hardcoded default a custom-label
     repository does not use.
     """
-    pieces = "\n".join(f"- {MISSING[item]}" for item in verdict.missing)
+    def message(key: str, **fields: object) -> str:
+        return language.text(language_code, key, **fields)
+
+    pieces = "\n".join(
+        f"- {missing_text(item, language_code)}" for item in verdict.missing
+    )
     mention = _author_mention(issue)
     prefix = f"{mention}\n" if mention else ""
     return (
         f"{prefix}"
         f"{run_marker(run_id)}\n"
-        "**Orbi: this ticket is not ready to deliver.**\n\n"
-        "The pre-flight check says the Issue does not state pieces a "
-        "delivery needs:\n\n"
+        f"{message('clarify.heading')}\n\n"
+        f"{message('clarify.intro')}\n\n"
         f"{pieces}\n\n"
-        "Edit the Issue body into this shape, then add the "
-        f"`{ready_label}` label again:\n\n"
+        f"{message('clarify.repair', ready_label=ready_label)}\n\n"
         "```\n"
-        "Outcome: what a user does, and what they should see differently.\n"
-        "Acceptance: how a finished delivery is told apart from an "
-        "unfinished one.\n"
+        f"{message('clarify.repair_outcome')}\n"
+        f"{message('clarify.repair_acceptance')}\n"
         "```\n\n"
-        "Orbi re-checks the ticket when it claims it and starts the "
-        "delivery once the pieces are there. Until then the ticket "
-        f"carries `{NEEDS_DETAIL_LABEL}` and waits for you.\n\n"
-        f"run_id={run_id}\n"
+        f"{message('clarify.followup', needs_detail_label=NEEDS_DETAIL_LABEL)}"
+        f"\n\nrun_id={run_id}\n"
     )
 
 
@@ -242,6 +242,7 @@ def enforce(issue: dict, config: RunnerConfig, source_repo: str,
             issue["number"], repo=source_repo,
             body=render_comment(
                 issue, verdict, run_id, ready_label=ready_label,
+                language_code=config.message_language,
             ),
         )
         edit_issue(

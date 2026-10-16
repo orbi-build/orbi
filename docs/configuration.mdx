@@ -93,6 +93,7 @@ Orbi can reach the person who owns the queue outside GitHub: when it NEWLY adds 
 
 | Key | Type | Default | Allowed values | Meaning |
 |---|---|---|---|---|
+| `message_language` | string | `en` | `en` \| `zh` | Language of Orbi's own comments (progress, clarification, review findings, merge handoff, failures, release status). A repository may override it per key in `.github/orbi.toml`: explicit repository value > this host value > `en`; an unsupported value fails the config load fast naming the file, key, value and allowed values. It never changes source files, project documentation, Issue text or PR titles/bodies |
 | `telegram_chat_id` | string or null | unset | any non-empty string | Telegram chat that receives the "needs you" messages: a private chat (`/start` sent to the bot) or a group the bot may post in (keep the leading `-`). Notifications are ON when it is set; remove it to turn them off. A present-but-empty value fails the config load fast |
 
 The bot token is NOT a config key: it lives only in `<deploy_home>/.orbi/env` as `ORBI_TELEGRAM_BOT_TOKEN=...` and never reaches the journal (the value is redacted) or a Pi session. There is no separate notification language: the fixed messages follow the host-level `message_language` (Issue #1660, default `en`), never a repository's `.github/orbi.toml` override — the message goes to a person, not into the repository.
