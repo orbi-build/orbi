@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -91,6 +92,14 @@ _MERGED_HEADLINE_ZH = "Orbi · 代码已合并："
 WATERMARK_FILENAME = "notify-merged-since"
 WATERMARK_EPOCH = "1970-01-01T00:00:00Z"
 ORBI_HEAD_PREFIX = "orbi/"
+# The shape of a stored watermark: what this module writes is a GitHub
+# `mergedAt` (ISO-8601 UTC, prefix-matched so a fractional second or an
+# explicit offset still counts). Any other value is unreadable state and
+# starts fresh, exactly like an unparseable file: compared as plain
+# strings, a garbage value that sorts below real timestamps (say "0")
+# would replay the backlog, and one that sorts above them (say "zzz")
+# would silence the scan forever.
+WATERMARK_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 # One tick's bound configuration and token, set by `tick_start` so the
 # label call sites pass no argument of their own. Tests reset them for
 # every test (the autouse fixture in tests/conftest.py).
@@ -404,12 +413,18 @@ def _read_watermark(path: Path) -> str:
 
     The same "unreadable state starts fresh" rule as runner health: a
     corrupt watermark replays nothing and is rewritten on the next scan.
+    Unreadable covers the parseable cases too — a wrong JSON type or a
+    string that is not a `mergedAt` (`WATERMARK_RE`) — because a value
+    the code cannot interpret must never be compared against real
+    timestamps.
     """
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ""
-    return value if isinstance(value, str) else ""
+    if not isinstance(value, str) or not WATERMARK_RE.match(value):
+        return ""
+    return value
 
 
 def _write_watermark(path: Path, value: str) -> None:

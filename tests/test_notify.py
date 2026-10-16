@@ -841,12 +841,21 @@ def test_a_read_failure_is_logged_and_retried_next_tick(
         assert endpoint.texts() == [merged_text(7, "Fix the thing")]
 
 
-@pytest.mark.parametrize("garbage", ["not json", "[]", '{"a": 1}'])
+@pytest.mark.parametrize("garbage", [
+    "not json",                  # unparseable
+    "[]", '{"a": 1}',            # parseable, wrong JSON type
+    '"0"', '"zzz"',              # parseable string, not a mergedAt
+])
 def test_a_garbage_watermark_starts_fresh_and_is_rewritten(
     monkeypatch, tmp_path, garbage,
 ):
     """Acceptance 6: a watermark file with garbage replays nothing and is
-    rewritten from this tick's read."""
+    rewritten from this tick's read.
+
+    The parseable-but-not-a-timestamp strings are the trap: compared as
+    plain strings, a LOW one ("0") matches every real mergedAt and
+    replays the backlog, a HIGH one ("zzz") matches none and silences
+    the scan forever."""
     monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
     fake = FakeMergedRead([orbi_pr(1, "Already merged")])
     monkeypatch.setattr(seam, "run_command", fake)
