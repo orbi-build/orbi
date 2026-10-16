@@ -118,6 +118,7 @@ from orbi.repo_config import (
     resolve_policy,
 )
 from orbi.progress import (
+    COMMENT_KIND_STARTED,
     LiveProgressThrottle,
     ProgressPublisher,
     STARTED_HEADER,
@@ -664,6 +665,7 @@ def started_pi_comment_body(ctx: RunContext, run_info: str,
     return field_block(
         ctx.run_id, headline, fields,
         detail_keys={"base_sha", "repo_config", "branch", "worktree", "session"},
+        kind=COMMENT_KIND_STARTED,
     )
 
 
@@ -704,8 +706,6 @@ def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
     lines = body.splitlines()
     lines.insert(1, scene.render(scene_record))
     return "\n".join(lines)
-
-
 
 
 

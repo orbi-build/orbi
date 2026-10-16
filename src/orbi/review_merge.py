@@ -61,8 +61,6 @@ from orbi.failure_report import (
 from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
     _check_summaries,
-    _comment_is_trusted,
-    _pr_number,
     apply_label_patch,
     comment_issue,
     commit_check_runs,
@@ -94,6 +92,12 @@ from orbi.merge_handoff import (
     is_maintainer_actionable,
 )
 from orbi.pi_command import ROLE_REVIEW
+from orbi.comment_kind import (
+    COMMENT_KIND_FAILURE,
+    COMMENT_KIND_MERGED,
+    COMMENT_KIND_REVIEW_ROUND,
+    comment_kind_marker,
+)
 from orbi.progress import (
     LiveProgressThrottle,
     ProgressPublisher,
@@ -103,6 +107,7 @@ from orbi.progress import (
     run_marker,
     step_publisher,
 )
+from orbi.review_rounds import review_round_comment_body
 # Machine-readable verdict line the reviewer session must end with, and the
 # bounded size of the review/fix loop (see review-fix-loop skill: max 5 rounds).
 VERDICT_MARKER = "REVIEW_VERDICT"
@@ -125,18 +130,25 @@ def merged_pr_comment_body(run_id: str, pr_url: str, merge_commit: str,
                            review: str) -> str:
     """Render the final delivery record.
 
-    The visible part carries only what the user acts on: the PR
-    headline, the review result and the target branch. Every other field
-    lives once, in `key=value` form, inside the single `Run details`
-    fold — those rows are machine-read anchors (orbi-cloud
+    The record carries the canonical ``<!-- orbi:comment=merged -->``
+    kind right after the run marker (Issue #1659), so a consumer
+    identifies it without parsing the translatable `Orbi merged PR:`
+    headline. The visible part carries only what the user acts on: the
+    PR headline, the review result and the target branch. Every other
+    field lives once, in `key=value` form, inside the single `Run
+    details` fold — those rows are machine-read anchors (orbi-cloud
     `mergeCommentFields`, the reader contracts), so they keep the `=`
     form while the visible review/merged-into rows use the human `:`.
+    The fixed rows are `merge_commit`, `review_rounds`, `commits`,
+    `external_commits`, `run_id` and `pr_url`: the PR URL is a
+    machine fact, never extracted from the translated heading.
     """
     visible_review = f"- review: {review}"
     if int(review_rounds) > 1:
         visible_review += f" ({review_rounds} review rounds)"
     return (
         f"{run_marker(run_id)}\n"
+        f"{comment_kind_marker(COMMENT_KIND_MERGED)}\n"
         f"Orbi merged PR: {pr_url}\n"
         f"{visible_review}\n"
         f"- merged into: {base_branch}\n\n"
@@ -145,7 +157,8 @@ def merged_pr_comment_body(run_id: str, pr_url: str, merge_commit: str,
         f"- review_rounds={review_rounds}\n"
         f"- commits={commits}\n"
         f"- external_commits={external_commits}\n"
-        f"- run_id={run_id}\n\n"
+        f"- run_id={run_id}\n"
+        f"- pr_url={pr_url}\n\n"
         "</details>"
     )
 
@@ -900,72 +913,6 @@ def _round_scene_block(resumed: dict, pr_url: str, round: int,
     ))
 
 
-def _shorten_review_shas(text: str) -> str:
-    """Keep full object IDs in the scene, but readable IDs in prose."""
-    return re.sub(
-        r"(?<![0-9a-f])([0-9a-f]{40})(?![0-9a-f])",
-        lambda match: match.group(1)[:10], text, flags=re.IGNORECASE,
-    )
-
-
-def _review_findings_markdown(findings: list[dict]) -> str:
-    """Render the human part of a review verdict, never as JSON."""
-    items = []
-    for finding in findings:
-        items.append(
-            "- **Level:** " + str(finding.get("level", "")) + "\n"
-            "  **Location:** " + str(finding.get("location", "")) + "\n"
-            "  **Note:** " + str(finding.get("note", "")) + "\n"
-            "  **Fix:** " + str(finding.get("fix", ""))
-        )
-    return "\n".join(items)
-
-
-def review_round_comment_body(
-    marker: str, round: int, pr_number: int, blockers: int, majors: int,
-    findings: list[dict], scene_block: str, *,
-    previous_comments: list[dict] | None = None,
-    messages: list[str] | None = None,
-    heading: str | None = None,
-) -> str:
-    """Build a readable, resumable review-round comment.
-
-    The first human line is deliberately stable: ``review_rounds_so_far``
-    counts it. ``scene_block`` is appended untouched because it is the
-    machine-readable recovery protocol.
-    """
-    rendered = _review_findings_markdown(findings)
-    same_as = None
-    if rendered and previous_comments:
-        previous_prefix = f"Orbi review round {round - 1} for PR #{pr_number}:"
-        for comment in previous_comments:
-            if not _comment_is_trusted(comment):
-                continue
-            body = comment.get("body", "")
-            if (marker in body and previous_prefix in body
-                    and rendered in body):
-                same_as = round - 1
-                break
-    lines = [
-        f"{marker}",
-        heading or (
-            f"Orbi review round {round} for PR #{pr_number}: "
-            f"{blockers} blocker(s), {majors} major(s)."
-        ),
-    ]
-    if messages:
-        lines.extend(["", "\n\n".join(
-            _shorten_review_shas(message) for message in messages
-        )])
-    if rendered:
-        lines.extend(["", "### Findings", ""])
-        if same_as is not None:
-            lines.append(f"Findings are the same as round {same_as}.")
-            lines.append("")
-        lines.append(_shorten_review_shas(rendered))
-    return "\n".join(lines) + "\n" + scene_block
-
-
 def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                               config: config_domain.RunnerConfig, source_repo: str,
                               number: int, title: str, priority: str,
@@ -1450,6 +1397,11 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             heading=(None if ci_failure else
                      f"Orbi base advance retry {next_base_advance_round} for "
                      f"PR #{pr['number']}:"),
+            # A base-advance retry reuses the SAME round scene: it is a
+            # review failure, not a completed round, so it must not
+            # consume a round record (Issue #1659).
+            kind=(COMMENT_KIND_REVIEW_ROUND if ci_failure
+                  else COMMENT_KIND_FAILURE),
         )
         # CI evidence is best-effort observability.  A GitHub comment
         # outage must not prevent the required ai-fix-needed transition.

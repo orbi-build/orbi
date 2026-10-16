@@ -11,9 +11,11 @@ milestone and the terminal progress scene as a pure bypass.
 A verbatim extraction out of `orbi.runner` (Issue #1260, Constitution
 Article 3.2: an extraction never changes behaviour), so it imports
 nothing from `orbi.runner` back (Article 3.3) and the runner reaches it
-as `failure_report.<name>`. `comment_pr` and `review_rounds_so_far` moved
-here too: the frozen `orbi.github` size ceiling (github.py at 1146 lines
-against 1162) forbids the +58 lines the preferred home would need.
+as `failure_report.<name>`. `comment_pr` moved here too: the frozen
+`orbi.github` size ceiling (github.py at 1146 lines against 1162)
+forbids the +58 lines the preferred home would need. The review-round
+accounting (`review_rounds_so_far`) lives in the `review_rounds` sibling,
+which this module imports and re-exports for its existing callers.
 """
 from __future__ import annotations
 
@@ -25,6 +27,10 @@ import re
 from pathlib import Path
 
 from orbi import failure, runner_health, scene
+from orbi.comment_kind import (
+    COMMENT_KIND_FAILURE,
+    comment_kind_marker,
+)
 from orbi.delivery_labels import (
     EVENT_BLOCKED, EVENT_FIX_NEEDED, FIX_NEEDED_LABEL, IN_PROGRESS_LABEL,
 )
@@ -46,6 +52,7 @@ from orbi.progress import (
     _finish_progress_body, _safe_publish, bump_failure_repeat, failure_marker,
     failure_repeat_count, format_status_comment, run_marker,
 )
+from orbi.review_rounds import review_rounds_so_far
 
 
 class UnrecoverableDeliveryError(RuntimeError):
@@ -154,45 +161,6 @@ def comment_pr(number: int, *, repo: str, body: str) -> None:
             for comment in pr_comments(number, repo=repo)
         ),
     )
-
-
-def review_rounds_so_far(
-    comments: list[dict], *, after: str | None = None,
-    run_id: str | None = None, pr_number: int | None = None,
-) -> int:
-    """Count trusted review rounds for the selected delivery identity.
-
-    With ``run_id`` supplied, only comments carrying that attempt's stable
-    marker count. This is essential when an Issue is picked up again after a
-    closed PR: historical rounds remain visible evidence, but cannot consume
-    the new PR's budget. ``after`` retains the existing human-recovery
-    boundary for resumes of the same PR. Calls without an identity filter
-    remain available for legacy evidence rendering.
-    """
-    rounds = 0
-    marker = run_marker(run_id) if run_id is not None else None
-    for comment in comments:
-        if not _comment_is_trusted(comment):
-            continue
-        if after is not None and comment.get("createdAt", "") <= after:
-            continue
-        body = comment.get("body")
-        if not isinstance(body, str):
-            continue
-        if marker is not None and marker not in body:
-            continue
-        if pr_number is None:
-            matches = any(line.startswith("Orbi review round ")
-                          for line in body.splitlines())
-        else:
-            matches = any(
-                line.startswith(f"Orbi review round ") and
-                f" for PR #{pr_number}:" in line
-                for line in body.splitlines()
-            )
-        if matches:
-            rounds += 1
-    return rounds
 
 
 _SGR_RE = re.compile(r"(?:\x1b\[[0-9;]*m|\^\[\[[0-9;]*m)")
@@ -514,7 +482,9 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
         comment_issue(
             number, repo=repo,
             body=(
-                f"{marker}\n" if marker else ""
+                (f"{marker}\n"
+                 f"{comment_kind_marker(COMMENT_KIND_FAILURE)}\n")
+                if marker else ""
             ) + (
                 f"Orbi failed: {error}; this is an external "
                 "precondition the AI cannot safely judge or fix, so "
@@ -550,6 +520,7 @@ def block_repo_config_failure(number: int, source_repo: str,
             number, repo=source_repo,
             body=(
                 f"{run_marker(run_id)}\n"
+                f"{comment_kind_marker(COMMENT_KIND_FAILURE)}\n"
                 f"Orbi failed: repository config is invalid: {error}; "
                 "this is a fail-fast repository precondition the AI does "
                 "not fix "
@@ -624,6 +595,7 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
         number, repo=source_repo,
         body=(
             f"{run_marker(run_id)}\n"
+            f"{comment_kind_marker(COMMENT_KIND_FAILURE)}\n"
             f"Orbi failed: cannot continue the interrupted run: "
             f"{_failure_detail(error)} (run_id={run_id})"
         ),
@@ -865,7 +837,15 @@ def report_delivery_failure(
         fail_marker_line = "" if blocked else (
             f"{failure_marker(fingerprint)}\n"
         )
-        body = f"{run_marker(run_id)}\n{fail_marker_line}{body}"
+        # A complete diagnostic/action comment: the canonical failure
+        # kind follows the run marker so a reader never has to parse the
+        # translatable headline (Issue #1659). The short milestone and
+        # the live progress echo do NOT carry it.
+        body = (
+            f"{run_marker(run_id)}\n"
+            f"{comment_kind_marker(COMMENT_KIND_FAILURE)}\n"
+            f"{fail_marker_line}{body}"
+        )
     post_new_comment = True
     if run_id and reported_failure is not None and not blocked:
         # The #825 dedup: `gh issue view --json comments` returns a GraphQL

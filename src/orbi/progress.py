@@ -38,7 +38,13 @@ from orbi.journal import (
 )
 from orbi.checks import test_status
 from orbi.pi_activity import activity_snapshot
+from orbi.comment_kind import (
+    COMMENT_KIND_STARTED,
+    comment_kind,
+    comment_kind_marker,
+)
 from orbi.progress_summary import (
+    PROGRESS_BLOCK_VERSION,
     STEP_BY_ROLE,
     activity_text,
     progress_block,
@@ -53,6 +59,11 @@ RUN_MARKER_PATTERN = re.compile(r"<!-- orbi:run=([0-9a-f]{8}) -->")
 RUN_MARKER_TEMPLATE = "<!-- orbi:run={run_id} -->"
 RUNNER_MARKER_TEMPLATE = "<!-- runner={fingerprint} -->"
 _RUNNER_MARKER_PATTERN = re.compile(r"<!-- runner=[^>]+ -->")
+# The progress comment's documented formal prefix: the run marker on the
+# first line followed immediately by the versioned summary block
+# (`docs/public-contracts.mdx`). A comment written before the block
+# existed keeps the English-heading fallback.
+PROGRESS_PREFIX = f"<!-- {PROGRESS_BLOCK_VERSION} "
 # Standalone milestone comments share this prefix so they are recognizable.
 MILESTONE_PREFIX = "Orbi:"
 # The live progress comment carries this header; together with the run
@@ -102,6 +113,11 @@ def runner_fingerprint() -> str:
         return "unknown"
 
 
+def _has_progress_prefix(body: str, marker: str) -> bool:
+    """True when the body's formal prefix is the run marker plus block."""
+    return body.startswith(f"{marker}\n{PROGRESS_PREFIX}")
+
+
 def _with_runner_marker(body: str) -> str:
     """Append the runner identity as a hidden, machine-readable marker."""
     body = _RUNNER_MARKER_PATTERN.sub("", body).rstrip()
@@ -133,10 +149,18 @@ def _fenced(content: str, *, cap: int = 4000) -> str:
 
 
 def field_block(run_id: str, headline: str, fields: dict[str, object], *,
-                detail_keys: set[str] | None = None) -> str:
-    """Render a marker-first status comment with optional collapsed details."""
+                detail_keys: set[str] | None = None,
+                kind: str | None = None) -> str:
+    """Render a marker-first status comment with optional collapsed details.
+
+    `kind` prepends the canonical kind marker right after the run marker
+    (Issue #1659); None keeps the historical kindless shape.
+    """
     detail_keys = detail_keys or set()
-    lines = [run_marker(run_id), headline]
+    lines = [run_marker(run_id)]
+    if kind is not None:
+        lines.append(comment_kind_marker(kind))
+    lines.append(headline)
     visible = []
     details = []
     for key, value in fields.items():
@@ -338,16 +362,24 @@ def find_progress_comment(
 
     A run's marker alone is not enough: the run's other comments
     (started Pi / opened PR scene comments, milestones) carry the same
-    marker. The progress comment is the one that also carries the
-    progress header.
+    marker. The canonical progress comment is the one whose formal
+    prefix is the run marker immediately followed by the
+    `orbi:progress:v1` block (`docs/public-contracts.mdx`); a comment
+    written before the block existed falls back to the English progress
+    heading. Only a trusted-shaped prefix qualifies, so a marker quoted
+    lower in a comment body is never selected.
     """
     marker = run_marker(run_id)
+    fallback = None
     for comment in comments:
         body = comment.get("body")
-        if (isinstance(body, str) and marker in body
-                and PROGRESS_HEADER in body):
+        if not (isinstance(body, str) and body.startswith(marker)):
+            continue
+        if _has_progress_prefix(body, marker):
             return comment
-    return None
+        if fallback is None and PROGRESS_HEADER in body:
+            fallback = comment
+    return fallback
 
 
 def find_started_comment(
@@ -355,19 +387,28 @@ def find_started_comment(
 ) -> dict | None:
     """Return this run's started scene comment, or None.
 
-    The run marker alone is not enough: the run's other comments
-    (progress, opened PR scene, milestones) carry it too. The started
-    comment is the one that also carries the `Orbi started Pi:`
-    headline. A missing comment (deleted by a human) returns None so the
+    The started comment carries the canonical ``<!-- orbi:comment=started
+    -->`` kind right after the run marker; a translated heading can no
+    longer hide it. A historical comment without a kind marker keeps the
+    English `Orbi started Pi:` fallback. A comment that carries a kind
+    marker is identified by that kind alone, never by the prose next to
+    it. A missing comment (deleted by a human) returns None so the
     caller recreates it once (Issue #1369).
     """
     marker = run_marker(run_id)
+    fallback = None
     for comment in comments:
         body = comment.get("body")
-        if (isinstance(body, str) and marker in body
-                and STARTED_HEADER in body):
+        if not (isinstance(body, str) and body.startswith(marker)):
+            continue
+        kind = comment_kind(body)
+        if kind == COMMENT_KIND_STARTED:
             return comment
-    return None
+        if kind is not None:
+            continue
+        if fallback is None and STARTED_HEADER in body:
+            fallback = comment
+    return fallback
 
 
 def issue_field(issue: int, title: str) -> str:
