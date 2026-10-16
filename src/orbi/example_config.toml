@@ -241,11 +241,10 @@ max_concurrency = 1
 # ONE Telegram message naming the state, the Issue and its link.
 # Notifications are ON when telegram_chat_id is set; remove it to turn
 # them off. The bot token is NOT a key: it lives in
-# <deploy_home>/.orbi/env as ORBI_TELEGRAM_BOT_TOKEN.
-# notify_language is "zh" or "en" (default en). Check the setup with
-# `orbi notify test`.
+# <deploy_home>/.orbi/env as ORBI_TELEGRAM_BOT_TOKEN. The message
+# language is the host-level message_language key (Issue #1660). Check
+# the setup with `orbi notify test`.
 # telegram_chat_id = "-1001234567890"
-# notify_language = "en"
 # Optional Pi skills. Paths may be absolute, use ~, or be relative to this file.
 skills = []
 

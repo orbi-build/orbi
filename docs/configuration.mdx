@@ -94,13 +94,11 @@ Orbi can reach the person who owns the queue outside GitHub: when it NEWLY adds 
 | Key | Type | Default | Allowed values | Meaning |
 |---|---|---|---|---|
 | `telegram_chat_id` | string or null | unset | any non-empty string | Telegram chat that receives the "needs you" messages: a private chat (`/start` sent to the bot) or a group the bot may post in (keep the leading `-`). Notifications are ON when it is set; remove it to turn them off. A present-but-empty value fails the config load fast |
-| `notify_language` | string | `en` | `zh \| en` | Language of the fixed messages. Anything else fails the config load fast |
 
-The bot token is NOT a config key: it lives only in `<deploy_home>/.orbi/env` as `ORBI_TELEGRAM_BOT_TOKEN=...` and never reaches the journal (the value is redacted) or a Pi session.
+The bot token is NOT a config key: it lives only in `<deploy_home>/.orbi/env` as `ORBI_TELEGRAM_BOT_TOKEN=...` and never reaches the journal (the value is redacted) or a Pi session. There is no separate notification language: the fixed messages follow the host-level `message_language` (Issue #1660, default `en`), never a repository's `.github/orbi.toml` override — the message goes to a person, not into the repository.
 
 ```toml
 telegram_chat_id = "-1001234567890"
-notify_language = "zh"
 ```
 
 Setup: create a bot with BotFather, add `ORBI_TELEGRAM_BOT_TOKEN=...` to `<deploy_home>/.orbi/env`, send `/start` to the bot (private) or add the bot to the group and post a message there, open `https://api.telegram.org/bot<token>/getUpdates` and copy `message.chat.id` (group ids start with `-`), set `telegram_chat_id`, then run `orbi notify test`. A chat id without a token is reported every tick (`notify_failed reason=not_configured`), by `orbi doctor` and by `orbi notify test` — but never blocks a delivery, because `.orbi/env` and `orbi.toml` are separate files that can lag each other.

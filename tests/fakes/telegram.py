@@ -81,10 +81,7 @@ class TelegramEndpoint:
             def do_POST(self) -> None:
                 length = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(length)
-                try:
-                    payload = json.loads(raw)
-                except ValueError:
-                    payload = None
+                payload = json.loads(raw)
                 endpoint.requests.append({
                     "path": self.path,
                     "content_type": self.headers.get("Content-Type"),

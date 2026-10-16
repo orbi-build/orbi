@@ -16,6 +16,7 @@ comment or a delivery's exit.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -45,11 +46,21 @@ CHAT_ID = "-1001234567890"
 RUN_ID = "a1b2c3d4"
 
 
-def config_for(*, chat_id: str | None = CHAT_ID,
-               language: str = "en") -> config_domain.RunnerConfig:
-    return config_domain.RunnerConfig(
-        telegram_chat_id=chat_id, notify_language=language,
-    )
+def config_for(*, chat_id: str | None = CHAT_ID) -> config_domain.RunnerConfig:
+    return config_domain.RunnerConfig(telegram_chat_id=chat_id)
+
+
+@dataclass
+class HostLanguageConfig:
+    """The host config `message_language` shape #1660 adds to RunnerConfig.
+
+    `RunnerConfig` does not carry the field yet (Issue #1660 owns it), so
+    the adapter reads it defensively with `getattr`; this stand-in lets
+    the tests pin both languages before that field lands.
+    """
+
+    telegram_chat_id: str | None = CHAT_ID
+    message_language: str = "en"
 
 
 def bind(monkeypatch, *, config=None, token=TOKEN) -> None:
@@ -59,14 +70,8 @@ def bind(monkeypatch, *, config=None, token=TOKEN) -> None:
     )
 
 
-def blocked_text(title: str = "Fix the thing", *, language: str = "en",
+def blocked_text(title: str = "Fix the thing", *,
                  repo: str = "o/r", number: int = 7) -> str:
-    if language == "zh":
-        return (
-            "Orbi · 需要您处理：Orbi 卡住了，需要您处理\n"
-            f"{repo}#{number} {title}\n"
-            f"https://github.com/{repo}/issues/{number}"
-        )
     return (
         "Orbi · Needs your attention: Orbi is stuck and needs you\n"
         f"{repo}#{number} {title}\n"
@@ -207,9 +212,32 @@ def test_needs_you_message_is_the_fixed_text(
     )
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
-        bind(monkeypatch, config=config_for(language=language))
+        bind(monkeypatch, config=HostLanguageConfig(
+            message_language=language,
+        ))
         notify.label_added("o/r", 7, label, "Fix the thing")
         assert endpoint.texts() == [expected]
+
+
+def test_message_language_defaults_to_english_without_the_key(monkeypatch):
+    """A host config without #1660's key sends the English text."""
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch, config=config_for())
+        notify.label_added("o/r", 7, BLOCKED_LABEL, "Fix the thing")
+        assert endpoint.texts() == [blocked_text()]
+
+
+def test_notify_test_uses_the_host_message_language(monkeypatch, capsys):
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        assert notify.test_command(HostLanguageConfig(message_language="zh")) == 0
+        assert capsys.readouterr().out.strip() == "ok"
+        assert endpoint.texts() == [
+            "Orbi 测试通知\n"
+            "这条消息确认您的接收配置可用，之后的通知会是这个样子。"
+        ]
 
 
 def test_label_added_is_silent_for_a_non_attention_label(monkeypatch):

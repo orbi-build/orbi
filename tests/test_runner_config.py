@@ -93,38 +93,14 @@ def test_runner_config_keys_are_documented_and_shipped():
     assert shipped == runner_keys
 
 
-def test_notifications_default_to_off_and_english(tmp_path):
-    """Issue #1673: absent keys mean off, and the default language is en."""
+def test_notifications_default_to_off(tmp_path):
+    """Issue #1673: an absent `telegram_chat_id` means notifications off."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n',
         encoding="utf-8",
     )
-    config = config_domain.load_config(config_path)
-    assert config.telegram_chat_id is None
-    assert config.notify_language == "en"
-
-
-@pytest.mark.parametrize("value", ['"zh"', '"en"'])
-def test_load_config_accepts_both_notify_languages(tmp_path, value):
-    config_path = tmp_path / "orbi.toml"
-    config_path.write_text(
-        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n'
-        f"notify_language = {value}\n",
-        encoding="utf-8",
-    )
-    assert config_domain.load_config(config_path).notify_language == value[1:-1]
-
-
-def test_load_config_rejects_an_invalid_notify_language(tmp_path):
-    config_path = tmp_path / "orbi.toml"
-    config_path.write_text(
-        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n'
-        'notify_language = "fr"\n',
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="notify_language"):
-        config_domain.load_config(config_path)
+    assert config_domain.load_config(config_path).telegram_chat_id is None
 
 
 @pytest.mark.parametrize("value", ["123", '""', "true", "[]"])

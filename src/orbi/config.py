@@ -138,9 +138,9 @@ class RunnerConfig:
     human_review_gate: bool = False
     # Telegram notifications (Issue #1673): ON when `telegram_chat_id` is
     # set. `ORBI_TELEGRAM_BOT_TOKEN` lives in `<deploy_home>/.orbi/env`,
-    # never here; `notify_language` picks the message language.
+    # never here; the message language is the host-level
+    # `message_language` (#1660), read by `notify` when it is present.
     telegram_chat_id: str | None = None
-    notify_language: str = "en"
     attribution_footer: bool = True
     attribution_link: str = "https://github.com/orbi-build/orbi"
     slot_dir: Path | None = None
@@ -268,9 +268,6 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         not isinstance(telegram_chat_id, str) or not telegram_chat_id
     ):
         raise ValueError("telegram_chat_id must be a non-empty string")
-    notify_language = data.get("notify_language", "en")
-    if notify_language not in ("zh", "en"):
-        raise ValueError("notify_language must be 'zh' or 'en'")
     attribution_footer = data.get("attribution_footer", True)
     if not isinstance(attribution_footer, bool):
         raise ValueError("attribution_footer must be a boolean")
@@ -476,7 +473,6 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         allow_stale_runner=allow_stale_runner,
         human_review_gate=human_review_gate,
         telegram_chat_id=telegram_chat_id,
-        notify_language=notify_language,
         attribution_footer=attribution_footer,
         attribution_link=attribution_link,
         slot_dir=slot_dir_for(repo_dir),

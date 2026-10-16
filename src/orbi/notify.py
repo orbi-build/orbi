@@ -13,12 +13,15 @@ progress comment: every public function catches everything internally and
 never raises, never fails a delivery, never changes a label and never
 blocks a tick. A failure writes one `notify_failed` journal line.
 
-Configuration: `telegram_chat_id` (set = notifications on) and
-`notify_language` are top-level `orbi.toml` keys; the bot token is NOT a
-key — it lives in `<deploy_home>/.orbi/env` as
-`ORBI_TELEGRAM_BOT_TOKEN` (Article 6.1). A chat id without a token is
-reported (`notify_failed reason=not_configured`) but never fails a start:
-`.orbi/env` and `orbi.toml` are separate files that can lag each other.
+Configuration: `telegram_chat_id` is the one `orbi.toml` key (set =
+notifications on). The message language is the host-level
+`message_language` (#1660), read when the loaded host config carries it
+and `en` otherwise — never a repository override: the message goes to a
+person, not into the repository. The bot token is NOT a key — it lives in
+`<deploy_home>/.orbi/env` as `ORBI_TELEGRAM_BOT_TOKEN` (Article 6.1). A
+chat id without a token is reported (`notify_failed reason=not_configured`)
+but never fails a start: `.orbi/env` and `orbi.toml` are separate files
+that can lag each other.
 
 `github.py` imports this module, so the top-level imports stay at the
 leaves (`journal`, `delivery_labels`); `RunnerConfig` is annotation-only.
@@ -268,8 +271,13 @@ def _chat_id() -> str:
 
 
 def _language() -> str:
-    """The configured message language; only `zh`/`en` exist."""
-    value = getattr(_config, "notify_language", "en") if _config else "en"
+    """The host message language (#1660); only `zh`/`en` exist.
+
+    `tick_start` binds the HOST config, never a repository-derived one,
+    so this reads the instance setting (default `en`) and stays correct
+    when #1660 adds the field to `RunnerConfig`.
+    """
+    value = getattr(_config, "message_language", "en") if _config else "en"
     return "zh" if value == "zh" else "en"
 
 

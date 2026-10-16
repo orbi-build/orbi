@@ -19,7 +19,7 @@ The [Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md)
 | Surface | Definition |
 |---|---|
 | CLI | `orbi` (one Runner tick), `orbi add`, `orbi suggest`, `orbi status`, `orbi session`, `orbi install-units`, `orbi sync-engine-source`, `orbi doctor`, `orbi check`, `orbi setup`, `orbi milestone` (`milestone set <title>`), `orbi notify` (`notify test`) |
-| Config | `orbi.toml` fields documented in [Getting started](/getting-started) — including the Telegram notification keys `telegram_chat_id` and `notify_language`; `.orbi/env` loaded as systemd `EnvironmentFile` (it carries `ORBI_TELEGRAM_BOT_TOKEN`); the `pi_providers` JSON file |
+| Config | `orbi.toml` fields documented in [Getting started](/getting-started) — including the Telegram notification key `telegram_chat_id`; `.orbi/env` loaded as systemd `EnvironmentFile` (it carries `ORBI_TELEGRAM_BOT_TOKEN`); the `pi_providers` JSON file |
 | Deployment | `systemd/orbi@.service` and `systemd/orbi@.timer` templates; `.orbi/` as the run-artifact and lock directory |
 | Label state machine | `labels.toml` (names, colors, descriptions) and `src/orbi/delivery_labels.py` (transitions) |
 | Journal | Every line of a run starts with `[run_id]`; event names and `key=value` fields listed in [Operations](/operations) |
