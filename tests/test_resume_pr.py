@@ -344,6 +344,7 @@ def test_started_pi_comment_uses_multiline_field_block():
     )
     assert body == (
         f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
+        "<!-- orbi:comment=started -->\n"
         f"Orbi started Pi: run_id={FAKE_RUN_ID} priority=normal\n"
         "- base_branch: main\n"
         f"- run_id={FAKE_RUN_ID}\n"

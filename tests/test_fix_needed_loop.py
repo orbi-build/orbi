@@ -1454,7 +1454,8 @@ def test_report_failure_comment_carries_the_fingerprint_marker(
     fp = runner_health.failure_fingerprint(exc)
     assert captured["comments"], "the first failure is reported"
     assert captured["comments"][0].startswith(
-        f"{MARKER}\n<!-- orbi:fail={fp} -->\n"
+        f"{MARKER}\n<!-- orbi:comment=failure -->\n"
+        f"<!-- orbi:fail={fp} -->\n"
     )
     # Recoverable: the PR thread carries the same failure once.
     assert len(captured["pr_comments"]) == 1

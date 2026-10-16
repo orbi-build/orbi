@@ -26,6 +26,7 @@ description: "使用者可以依赖什么，status 与进度文档又如何报�
 | Session 文件 | `<worktree>/.pi-session/*.jsonl` |
 | 命名 | 分支 `orbi/<owner>-<repo>-issue-<N>`；worktree `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>` |
 | GitHub 标记 | 每个 run 范围内的评论与 PR body 使用 `<!-- orbi:run=<run_id> -->`；PR body 使用 `Fixes #<N>` |
+| 评论类型 | run marker 之后一行上的隐藏 `<!-- orbi:comment=started -->`、`<!-- orbi:comment=failure -->`、`<!-- orbi:comment=review-round -->` 与 `<!-- orbi:comment=merged -->` 标记识别 started、完整 failure、已完成 review-round 与 merged 评论；见[评论类型与机器元数据](#评论类型与机器元数据) |
 | Run 现场 | 可信的 `Orbi opened PR` 评论中的隐藏版本化块 `<!-- orbi:scene:v1 {json} -->`，由 `src/orbi/scene.py` 渲染与解析；交付唯一的机器可读恢复记录（旁边的可读文字仅供展示） |
 | 需求 skill | 目录 `integrations/claude-plugin/skills/write-ai-ready-issue/`——`SKILL.md`（agent 如何把一句话想法变成可交付 Issue）与 `fidelity-pass.md`（独立检查草稿是否恰好问了提问者想问的） |
 | Suggestions | `orbi suggest --json` 打印的文档——`{"repo", "base_sha", "session_dir", "suggestions": [{"kind": "existing" 或 "new", "issue": existing 为 Issue 号、new 为 null, "title", "why", "body": new 为 Issue body、existing 为 null}]}`，最多三条、按优先级排序；`session_dir` 是 `<deploy_home>/.orbi/suggest/<run_id>/.pi-session/`，存放与交付 session 文件同格式的 Pi session JSONL，命令退出后运行目录 `<deploy_home>/.orbi/suggest/<run_id>/` 在成功与失败时都保留——以及产出它的 skill 目录 `integrations/claude-plugin/skills/suggest-ai-ready-issues/` |
@@ -144,6 +145,54 @@ read 或 edit 的活动目标必须规范化为 worktree 内、相对于仓库�
 ```
 
 终态或手动状态这类 GitHub 事实——Issue 已关闭或已合并，或处于已确认的手动等待——优先于任何已发布或本地的摘要；被引用、被围栏包裹或版本未知的 marker 永远不会被选作报告当前的 run。
+
+## 评论类型与机器元数据
+
+每个 run 范围内的评论都以隐藏的 run marker
+`<!-- orbi:run=<run_id> -->` 开头。marker 携带 run 身份，但不认证作者，
+因此消费者仍使用自己的可信作者规则。四种类型是官方元数据，写在 run
+marker 之后的下一行：
+
+```html
+<!-- orbi:run=86b57234 -->
+<!-- orbi:comment=review-round -->
+```
+
+- `started`：`Orbi started Pi:` 评论。
+- `failure`：完整的诊断/行动失败评论（`orbi:failure:v1` 记录及其面向
+  读者的 Action 与 Reason）。它既不是实时进度回显，也不是简短的 milestone
+  通知。
+- `review-round`：已完成的评审报告；其 `orbi:scene:v1` 块提供轮次计数与
+  PR URL。
+- `merged`：合并回执。
+
+官方元数据占据以 run marker 开头的连续前缀。四条带类型的评论中，类型紧跟
+run marker；进度评论保持原有的 run marker 后接进度块的前缀，不带类型；已有的
+scene 与 failure 块按适用情况随后出现。引用在正文、原始日志或代码围栏中的
+marker 形状文本不是官方元数据：评论由该前缀识别，永不依据被翻译的标题，
+且不受支持或格式错误的类型不会被其旁边的文字重新解释。存在但无效的结构化
+块不会被其旁边的文字静默替代。在进度块之前写入的进度评论，以及没有类型标记
+的历史英文评论，保留既有的英文标题回退。
+
+只有带有效 scene 的 `review-round` 评论才是新的轮次记录；复用上一 scene 的
+评审失败是 `failure`，不消耗轮次。评论类型不增加任何任务状态或恢复记录：
+GitHub Issue 与标签仍是唯一状态存储。
+
+### 合并回执
+
+合并回执是一条评论，其唯一的 details 元素携带完整的固定机器行
+`merge_commit`、`review_rounds`、`commits`、`external_commits`、
+`run_id` 与 `pr_url`，每行恰好出现一次。`pr_url` 是明确的 PR URL，因此
+消费者不从摘要标签中提取 PR——摘要标签是展示文本，可以被翻译。缺失、重复或
+冲突的行或块会被拒绝，别处引用的行不构成回执，且 URL 必须属于预期仓库。
+
+### 失败诊断
+
+完整失败评论及其简短通知是既有的公开接口：隐藏的
+`<!-- orbi:failure:v1 {json} -->` 块（版本、枚举与含义不变）、
+`<!-- orbi:fail=<fingerprint>[:count] -->` 去重标记，以及面向读者的
+**Action**、**Reason** 与 `Diagnosis` 详情。失败记录的定义见
+[Workflow](/zh/workflow)。
 
 ## 工作示例
 
