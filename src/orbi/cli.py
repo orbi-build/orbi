@@ -156,11 +156,12 @@ def dispatch_issue(repo: str, title: str, body: str, *,
 
 
 def list_labeled_issues(repo: str, label: str, state: str = "open",
-                        search: str | None = None) -> list[dict]:
+                        search: str | None = None, *,
+                        timeout: int | None = None) -> list[dict]:
     """Return the newest Issues matching a label search (gh lists newest first)."""
     return list_issues(
         repo, state=state, search=search or f"label:{label}",
-        json_fields="number,title,url,state", limit=1,
+        json_fields="number,title,url,state", limit=1, timeout=timeout,
     )
 
 
@@ -170,8 +171,14 @@ def current_issue(repo: str) -> dict | None:
 
 
 def ready_issue(repo: str) -> dict | None:
+    """The ready queue, read under the status cycle's bound.
+
+    The status view owns this read, so a stalled `gh issue list` fails
+    the observation within the bound instead of hanging it (Issue #1668).
+    """
     issues = list_labeled_issues(
         repo, READY_LABEL, search=f"label:{READY_LABEL} -label:{IN_PROGRESS_LABEL}",
+        timeout=status_observe.STATUS_READ_TIMEOUT_SECONDS,
     )
     return issues[0] if issues else None
 
@@ -186,7 +193,10 @@ def recent_result(repo: str) -> dict | None:
     """
     newest = None
     for label in RESULT_LABELS:
-        for issue in list_labeled_issues(repo, label, state="all"):
+        for issue in list_labeled_issues(
+            repo, label, state="all",
+            timeout=status_observe.STATUS_READ_TIMEOUT_SECONDS,
+        ):
             if newest is None or int(issue["number"]) > int(newest["number"]):
                 newest = issue
     return newest
