@@ -478,6 +478,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `pi_429_attempts_clear_failed` | 清除 429 重试计数失败 |
 | `provider_quota` | Pi 因 provider 用量上限停止而退出（journal errorMessage） |
 | `progress_publish_failed` | 进度评论发布失败（纯旁路） |
+| `notify_failed` | Telegram 通知发送失败（纯旁路）`reason=token_invalid\|rate_limited\|platform_error\|rejected\|timeout\|network_error\|not_configured` |
 | `progress_comment_failed` | 交付后通知评论发布失败（纯旁路） |
 | `progress_finish_missing_next_step` | 终态进度场景缺少下一步 |
 | `config_invalid` | runner 配置校验失败（不启动） |
@@ -923,8 +924,9 @@ Issue #856：active Milestone 已无 open Issue，却没人开它的 release 票
 release notes 中声明，以便下游自动化有计划地迁移：
 
 - **CLI：**裸 `orbi` tick，以及 `add`、`suggest`、`status`、`doctor`、
-  `setup`、`install-units`、`session`、`milestone set`、`check`、
-  `sync-engine-source` 子命令，包括 `--config` 和 `ORBI_CONFIG` 环境变量。
+  `setup`、`install-units`、`session`、`milestone set`、`notify test`、
+  `check`、`sync-engine-source` 子命令，包括 `--config` 和 `ORBI_CONFIG`
+  环境变量。
 - **Suggestions：**`orbi suggest --json` 打印的文档（`repo`、`base_sha`、
   `session_dir` 与最多三条建议）、保留的运行目录
   `<deploy_home>/.orbi/suggest/<run_id>/`，以及产出它的 skill

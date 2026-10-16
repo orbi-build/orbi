@@ -3,7 +3,9 @@
 One test per GitHub read/write contract: the fakes sit at the single
 `run_command` seam (injected `command_runner` or a patched module seam) and
 assert the real `gh` command line — the argv IS the contract (Article 5.2).
-No test patches `runner` internals.
+No test patches `runner` internals. The GitHub Release read/writes moved
+to `orbi.release_git` (Issue #1673, Article 3.5) and their command-line
+contracts are asserted here against that module.
 """
 import json
 import logging
@@ -11,7 +13,7 @@ import subprocess
 
 import pytest
 
-from orbi import github
+from orbi import github, release_git
 from seam import seam
 
 from tests.fakes.github import FakeGh
@@ -262,20 +264,20 @@ def test_release_view_create_and_edit_notes(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda c, **k: (
         captured.append(c), '{"tagName": "v1", "url": "u", "body": "b"}')[1])
 
-    release = github.release_view("o/r", "v1", fields="tagName,url,body")
+    release = release_git.release_view("o/r", "v1", fields="tagName,url,body")
     assert release["url"] == "u"
     assert captured[-1] == [
         "gh", "release", "view", "v1", "--repo", "o/r",
         "--json", "tagName,url,body",
     ]
 
-    github.release_edit_notes("o/r", "v1", notes="notes text")
+    release_git.release_edit_notes("o/r", "v1", notes="notes text")
     assert captured[-1] == [
         "gh", "release", "edit", "v1", "--repo", "o/r",
         "--notes", "notes text",
     ]
 
-    github.release_create("o/r", tag="v1", version="v1", notes="notes text")
+    release_git.release_create("o/r", tag="v1", version="v1", notes="notes text")
     assert captured[-1] == [
         "gh", "release", "create", "v1", "--repo", "o/r",
         "--verify-tag", "--title", "v1", "--notes", "notes text",
@@ -888,9 +890,9 @@ def test_issue_view_without_repo_runs_in_the_checkout_context(monkeypatch):
 
 
 def test_release_view_validates_the_response_shape(monkeypatch):
-    monkeypatch.setattr(github, "run_command", lambda c, **k: "[]")
+    monkeypatch.setattr(seam, "run_command", lambda c, **k: "[]")
     with pytest.raises(ValueError, match="release view must be a JSON object"):
-        github.release_view("o/r", "v1", fields="tagName,url")
+        release_git.release_view("o/r", "v1", fields="tagName,url")
 
 
 def test_authenticated_github_login_fails_fast_when_auth_status_fails(monkeypatch):

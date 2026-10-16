@@ -36,6 +36,7 @@ from orbi import (
     config as config_domain,
     engine_source,
     git_transport,
+    notify,
     runner,
     scheduler,
     suggest,
@@ -419,6 +420,7 @@ def doctor_report(config: config_domain.RunnerConfig, installed_dir: Path | None
             f"{finding['provider']} key={finding['variable']} "
             f"{finding['state']} (file: {finding['path']})"
         )
+    lines.extend(notify.doctor_lines(config))
     provider = pilot_setup.model_provider_status(config)
     if provider["state"] == "ok":
         lines.append(
@@ -705,6 +707,7 @@ def main(argv: list[str] | None = None) -> int:
         "title",
         help="the exact Milestone title, e.g. v0.6.0 (must be unique)",
     )
+    notify.register_cli(subparsers, common)
     args = parser.parse_args(argv)
     configure_logging()
 
@@ -783,10 +786,11 @@ def main(argv: list[str] | None = None) -> int:
             # enforces the key), so they load the config with the
             # doctor's lenient provider flags.
             check_provider_api_keys=args.command not in (
-                "doctor", "sync-engine-source", "milestone",
+                "doctor", "sync-engine-source", "milestone", "notify",
             ),
             allow_missing_pi_providers=args.command in (
                 "setup", "doctor", "sync-engine-source", "milestone",
+                "notify",
             ),
         )
         validate_config(config)
@@ -900,6 +904,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     elif args.command == "doctor":
         print(doctor_report(config, args.installed_dir))
+    elif args.command == "notify":
+        return notify.test_command(config)
     elif args.command == "setup":
         try:
             result = pilot_setup.run_setup(

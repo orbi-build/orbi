@@ -54,7 +54,7 @@ from typing import NamedTuple
 # preflight stubs keep patching the module global below.
 from orbi import engine_source
 from orbi import milestone as milestone_bookkeeping
-from orbi import claim, clarify
+from orbi import claim, clarify, notify
 from orbi import config as config_domain
 from orbi.branch_reclaim import delete_merged_delivery_branch, reclaim_merged_delivery_branches
 from orbi.engine_source import EngineSourceError
@@ -3650,13 +3650,13 @@ def _preflight(config: config_domain.RunnerConfig) -> None:
         LOGGER.exception("worktree_reclaim_failed")
     # Remote delivery-branch reclamation: a merged PR's `orbi/*` branch
     # is unreachable evidence and otherwise stays on the remote forever.
-    # Bounded, idempotent and never fatal: a read failure deletes
-    # nothing and a single delete failure is a warning, never a failed
-    # start.
+    # Bounded, idempotent, never fatal: one delete failure is a warning.
     try:
         reclaim_merged_delivery_branches(config)
     except Exception:
         LOGGER.exception("branch_reclaim_failed")
+    # Notify bypass (Issue #1673): bind this tick's config and token once.
+    notify.tick_start(config)
     # Git transport preflight: BEFORE any slot or
     # claim the deployment checkout's git transport must be the
     # CONFIGURED one (orbi.toml `git_transport`, default "ssh") and
