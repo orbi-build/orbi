@@ -808,12 +808,14 @@ development/compatibility path.
 orbi add "task title" --body "task body" --config orbi.toml
 orbi add "task title" --repo OWNER/BACKLOG-REPO --config orbi.toml
 
-# Read the repository and propose up to three Issues to deliver: the
-# interactive flow asks once per suggestion and files/labels the ones
-# you confirm; --json prints the Suggestions document (repo, base_sha,
-# session_dir, suggestions) to stdout and writes nothing
+# Read the repository and propose up to three Issues to deliver: --count N
+# (1-3, default 3) asks the session for at most N; the interactive flow
+# asks once per suggestion and files/labels the ones you confirm; --json
+# prints the Suggestions document (repo, base_sha, session_dir,
+# suggestions) to stdout and writes nothing
 orbi suggest --config orbi.toml
 orbi suggest --repo OWNER/REPO --json --config orbi.toml
+orbi suggest --repo OWNER/REPO --json --count 1 --config orbi.toml
 
 # Read-only scoped observation: every active delivery (ai-in-progress /
 # ai-pr-opened / ai-fix-needed / ai-awaiting-merge) in every configured

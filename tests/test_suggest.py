@@ -1234,3 +1234,144 @@ def test_suggest_without_locale_sends_no_language_sentence(
     for prompt in (stub.command[-1], stub.understanding_call[0][-1]):
         assert "Write all of your output in" not in prompt
 
+
+# --- --count (Issue #1671) ---------------------------------------------------
+#
+# `orbi suggest --count N` (N 1..3, default 3) asks the session for at most
+# N suggestions and keeps the first N of what validates. The default is
+# three, so the default prompt and document are what they were before the
+# flag existed; the kept `suggestions.json` holds only the kept batch, so a
+# later run's `already_suggested` carries exactly what the earlier run
+# showed.
+
+
+def test_suggest_count_one_keeps_only_the_first_suggestion(
+    tmp_path, monkeypatch, capsys,
+):
+    """Acceptance: `--count 1` with a three-suggestion answer prints
+    exactly the first one, and the kept batch holds only it."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    stub = PiStub(_answer_json(EXISTING, NEW_TWO, NEW_THREE))
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--count", "1",
+        "--config", str(world.config_path),
+    ]) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert document["suggestions"] == [{
+        "kind": "existing", "issue": 5, "title": "Fix the existing thing",
+        "why": "src/orbi/claim.py does X", "body": None,
+    }]
+    assert json.loads(
+        (Path(stub.kwargs["cwd"]) / "suggestions.json").read_text(
+            encoding="utf-8",
+        ),
+    ) == [
+        {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
+    ]
+
+
+def test_suggest_count_two_asks_the_prompt_for_at_most_two(
+    tmp_path, monkeypatch, capsys,
+):
+    """Acceptance: the prompt sent for `--count 2` asks for at most 2, and
+    the answer keeps the first two."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    stub = PiStub(_answer_json(EXISTING, NEW_TWO, NEW_THREE))
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--count", "2",
+        "--config", str(world.config_path),
+    ]) == 0
+    prompt = stub.command[-1]
+    assert "At most two entries" in prompt
+    assert "At most three entries" not in prompt
+    document = json.loads(capsys.readouterr().out)
+    assert [item["title"] for item in document["suggestions"]] == [
+        "Fix the existing thing", "Second thing",
+    ]
+
+
+def test_suggest_default_count_keeps_today_behaviour(
+    tmp_path, monkeypatch, capsys,
+):
+    """Acceptance: no `--count` behaves exactly as today — the default
+    prompt asks for three and three suggestions print."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    stub = PiStub(_answer_json(EXISTING, NEW_TWO, NEW_THREE))
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 0
+    assert "At most three entries" in stub.command[-1]
+    document = json.loads(capsys.readouterr().out)
+    assert [item["title"] for item in document["suggestions"]] == [
+        "Fix the existing thing", "Second thing", "Third thing",
+    ]
+
+
+def test_prompt_spells_the_count_as_a_word_and_pluralizes_it():
+    """The count reaches the prompt; the default (3) wording is the one the
+    frozen `PROMPT_WITHOUT_LOCALE` contract pins."""
+    def prompt(count):
+        return suggest._prompt(
+            LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO, count=count,
+        )
+
+    assert "At most one entry," in prompt(1)
+    assert "At most two entries," in prompt(2)
+    assert "At most three entries," in prompt(3)
+
+
+@pytest.mark.parametrize("value", ["0", "4", "abc"])
+def test_suggest_count_out_of_range_is_an_argument_error(
+    tmp_path, monkeypatch, capsys, value,
+):
+    """Acceptance: `--count 0` / `--count 4` (and a non-integer) exit 2
+    (argparse); no Pi session starts and no run directory is created."""
+    world = _world(tmp_path, monkeypatch)
+    stub = PiStub(_answer_json(EXISTING))
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main([
+            "suggest", "--json", "--count", value,
+            "--config", str(world.config_path),
+        ])
+    assert excinfo.value.code == 2
+    assert "error:" in capsys.readouterr().err
+    assert stub.calls == []
+    assert _run_dirs(world) == []
+
+
+def test_count_one_then_count_two_hands_the_first_batch(
+    tmp_path, monkeypatch, capsys,
+):
+    """Acceptance (user journey): `--count 1` then `--count 2`; the second
+    run's context carries the first run's suggestion in
+    `already_suggested`."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    first = PiStub(_answer_json(EXISTING, NEW_TWO, NEW_THREE))
+    monkeypatch.setattr(seam, "stream_pi", first)
+    assert cli.main([
+        "suggest", "--json", "--count", "1",
+        "--config", str(world.config_path),
+    ]) == 0
+    first_run = Path(first.kwargs["cwd"])
+    # Recency is the directory mtime: pin the first run into the past.
+    os.utime(first_run, (1_000, 1_000))
+
+    second = PiStub(_answer_json(NEW_TWO, NEW_THREE))
+    monkeypatch.setattr(seam, "stream_pi", second)
+    assert cli.main([
+        "suggest", "--json", "--count", "2",
+        "--config", str(world.config_path),
+    ]) == 0
+    assert _run_context(second)["already_suggested"] == [
+        {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
+    ]
+    capsys.readouterr()
+
