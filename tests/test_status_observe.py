@@ -7,6 +7,7 @@ attribution, active-set membership, confirmed removal, the two read
 cycles, bounded termination and the failure path.
 """
 import json
+import os
 import subprocess
 import threading
 import time
@@ -17,6 +18,7 @@ import pytest
 import orbi.status_observe as observe
 from orbi import cli
 from orbi.config import RunnerConfig
+from seam import seam
 
 
 def _issue(number, *, title="task", url="u", state="open",
@@ -186,7 +188,7 @@ def test_read_active_deliveries_sorts_by_number():
 def test_confirmed_delivery_reads_one_issue():
     calls = []
 
-    def read_issue(number, fields, *, repo):
+    def read_issue(number, fields, *, repo, timeout=None):
         calls.append((number, fields, repo))
         return _issue(number, state="closed", labels=("ai-merged",))
 
@@ -582,7 +584,7 @@ def test_observer_refresh_reads_confirmed_state_for_an_issue_scope(tmp_path):
     scope = observe.parse_scope(config.source_repos, issue=7)
     observer = observe.StatusObserver(
         config, scope,
-        read_issue=lambda number, fields, *, repo: _issue(
+        read_issue=lambda number, fields, *, repo, timeout=None: _issue(
             number, state="closed", labels=("ai-merged",),
         ),
     )
@@ -597,7 +599,7 @@ def test_observer_reports_an_ended_delivery_with_its_confirmed_state(tmp_path):
     state = {"raw": [_issue(1), _issue(2)]}
     reads = []
 
-    def read_issue(number, fields, *, repo):
+    def read_issue(number, fields, *, repo, timeout=None):
         reads.append(number)
         return _issue(number, state="closed", labels=("ai-merged",))
 
@@ -929,3 +931,153 @@ def test_github_cycle_restarts_when_the_read_completed(tmp_path):
     assert clock["now"] == 105.0
     assert observer.due(115.0) is False
     assert observer.due(120.0) is True
+
+
+# --- the bounded GitHub reads of one status cycle (Issue #1668) ------------
+
+
+def test_status_read_bound_is_the_existing_thirty_seconds():
+    """The one bound every GitHub-backed status read carries."""
+    assert observe.STATUS_READ_TIMEOUT_SECONDS == 30
+
+
+def test_open_issues_complete_reads_under_the_status_bound(monkeypatch):
+    calls = []
+
+    def fake_run(command, timeout=None):
+        calls.append(timeout)
+        return "[]"
+
+    monkeypatch.setattr(observe, "run_gh_read_command", fake_run)
+    assert observe.open_issues_complete("acme/shop") == []
+    assert calls == [observe.STATUS_READ_TIMEOUT_SECONDS]
+
+
+def test_confirmed_delivery_reads_the_issue_under_the_status_bound():
+    calls = []
+
+    def read_issue(number, fields, *, repo, timeout=None):
+        calls.append(timeout)
+        return _issue(number)
+
+    observe.confirmed_delivery("acme/shop", 7, read_issue=read_issue)
+    assert calls == [observe.STATUS_READ_TIMEOUT_SECONDS]
+
+
+def test_ready_issue_and_recent_result_read_under_the_status_bound(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs.get("timeout")))
+        return "[]"
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    assert cli.ready_issue("acme/shop") is None
+    assert cli.recent_result("acme/shop") is None
+    assert {timeout for _, timeout in calls} == {
+        observe.STATUS_READ_TIMEOUT_SECONDS,
+    }
+
+
+def _stalling_gh(tmp_path, *, stall_subcommand):
+    """A `gh` on PATH that never answers one Issue subcommand."""
+    bin_dir = tmp_path / "gh-bin"
+    bin_dir.mkdir()
+    script = bin_dir / "gh"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'if [ "$1" = "issue" ] && [ "$2" = "{stall_subcommand}" ]; then\n'
+        "  exec sleep 5\n"
+        "fi\n"
+        'echo "[]"\n',
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return bin_dir
+
+
+def _git(*args):
+    subprocess.run(
+        ["git", "-c", "user.email=orbi@example.com", "-c", "user.name=orbi",
+         *args],
+        check=True, capture_output=True, text=True,
+    )
+
+
+def _local_checkout(tmp_path):
+    """A checkout whose `origin` is a local bare repository: the base read
+    (`git fetch origin <branch>`) runs for real and offline."""
+    remote = tmp_path / "remote.git"
+    checkout = tmp_path / "checkout"
+    _git("init", "--bare", "-b", "main", str(remote))
+    _git("init", "-b", "main", str(checkout))
+    (checkout / "README.md").write_text("base", encoding="utf-8")
+    _git("-C", str(checkout), "add", ".")
+    _git("-C", str(checkout), "commit", "-m", "base")
+    _git("-C", str(checkout), "remote", "add", "origin", str(remote))
+    _git("-C", str(checkout), "push", "origin", "main")
+    return checkout
+
+
+def _run_status(monkeypatch, tmp_path, argv, *, stall_subcommand):
+    """Run the real `orbi status` entry with a stalling `gh` on PATH.
+
+    Only the bound is shrunk: the command, the config load and scope
+    selection, the observer cycle, the gh subprocess, the local git
+    checkout and the failure line are the real user path.
+    """
+    monkeypatch.setattr(observe, "STATUS_READ_TIMEOUT_SECONDS", 1)
+    bin_dir = _stalling_gh(tmp_path, stall_subcommand=stall_subcommand)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    checkout = _local_checkout(tmp_path)
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    for name in ("prompt.md", "prompt_review.md"):
+        (prompts / name).write_text("prompt", encoding="utf-8")
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["acme/shop"]\n'
+        f'repo_dir = "{checkout}"\n',
+        encoding="utf-8",
+    )
+    return cli.main([
+        "status", "--config", str(config), *argv,
+    ])
+
+
+def test_status_issue_scope_bounds_a_hung_issue_view(monkeypatch, tmp_path,
+                                                     capsys):
+    """Acceptance: `orbi status --repo acme/shop --issue 42` with a
+    `gh issue view` that never answers exits 1 within the bound, with
+    the scope named."""
+    rc = _run_status(
+        monkeypatch, tmp_path, ["--repo", "acme/shop", "--issue", "42"],
+        stall_subcommand="view",
+    )
+    assert rc == 1
+    failure = [
+        line for line in capsys.readouterr().err.splitlines()
+        if line.startswith("status_failed")
+    ]
+    assert len(failure) == 1
+    assert failure[0].startswith("status_failed scope=acme/shop#42 reason=")
+    assert "timed out after 1 seconds" in failure[0]
+
+
+def test_status_repo_scope_bounds_a_hung_ready_list(monkeypatch, tmp_path,
+                                                    capsys):
+    """Acceptance: repository scope with a ready-queue `gh issue list`
+    that never answers exits 1 within the bound, with the scope named."""
+    rc = _run_status(
+        monkeypatch, tmp_path, ["--repo", "acme/shop"],
+        stall_subcommand="list",
+    )
+    assert rc == 1
+    failure = [
+        line for line in capsys.readouterr().err.splitlines()
+        if line.startswith("status_failed")
+    ]
+    assert len(failure) == 1
+    assert failure[0].startswith("status_failed scope=acme/shop reason=")
+    assert "timed out after 1 seconds" in failure[0]
+

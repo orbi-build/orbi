@@ -144,7 +144,7 @@ def test_ready_issue_returns_first_ready_issue(monkeypatch):
     issue = {"number": 11, "title": "task", "url": "u"}
     calls = []
 
-    def fake_list(repo, label, state="open", search=None):
+    def fake_list(repo, label, state="open", search=None, timeout=None):
         calls.append((label, search))
         return [issue] if label == "ai-ready" else []
 
@@ -157,7 +157,7 @@ def test_ready_issue_excludes_in_progress_issues(monkeypatch):
     ready = {"number": 12, "title": "next", "url": "u12"}
     calls = []
 
-    def fake_list(repo, label, state="open", search=None):
+    def fake_list(repo, label, state="open", search=None, timeout=None):
         calls.append(search)
         return [ready] if search == "label:ai-ready -label:ai-in-progress" else []
 
@@ -176,7 +176,7 @@ def test_recent_result_returns_newest_pr_opened_or_blocked_issue(monkeypatch):
     blocked = {"number": 5, "title": "stuck", "url": "u5", "state": "OPEN"}
     calls = []
 
-    def fake_list(repo, label, state="open"):
+    def fake_list(repo, label, state="open", timeout=None):
         calls.append((label, state))
         if label == "ai-pr-opened":
             return [pr_opened]
@@ -199,7 +199,7 @@ def test_recent_result_includes_fix_needed_issue(monkeypatch):
     fix_needed = {"number": 7, "title": "fixing", "url": "u7", "state": "OPEN"}
     blocked = {"number": 5, "title": "stuck", "url": "u5", "state": "OPEN"}
 
-    def fake_list(repo, label, state="open"):
+    def fake_list(repo, label, state="open", timeout=None):
         if label == "ai-fix-needed":
             return [fix_needed]
         if label == "ai-blocked":
@@ -217,7 +217,7 @@ def test_recent_result_includes_merged_issue(monkeypatch):
     merged = {"number": 8, "title": "shipped", "url": "u8", "state": "CLOSED"}
     blocked = {"number": 5, "title": "stuck", "url": "u5", "state": "OPEN"}
 
-    def fake_list(repo, label, state="open"):
+    def fake_list(repo, label, state="open", timeout=None):
         if label == "ai-merged":
             return [merged]
         if label == "ai-blocked":
@@ -232,7 +232,7 @@ def test_recent_result_prefers_pr_opened_when_newer(monkeypatch):
     pr_opened = {"number": 9, "title": "done", "url": "u9", "state": "OPEN"}
     blocked = {"number": 5, "title": "stuck", "url": "u5", "state": "OPEN"}
 
-    def fake_list(repo, label, state="open"):
+    def fake_list(repo, label, state="open", timeout=None):
         if label == "ai-pr-opened":
             return [pr_opened]
         if label in ("ai-fix-needed", "ai-merged"):
@@ -1400,7 +1400,7 @@ def test_status_report_issue_scope_shows_confirmed_state(
     scope = observe.parse_scope(config.source_repos, issue=7)
     observer = observe.StatusObserver(
         config, scope,
-        read_issue=lambda number, fields, *, repo: _raw_delivery_issue(
+        read_issue=lambda number, fields, *, repo, timeout=None: _raw_delivery_issue(
             number, title="done", url="u7", state="closed",
             labels=("ai-merged",),
         ),

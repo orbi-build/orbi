@@ -52,6 +52,13 @@ from orbi.progress_summary import safe_target as shared_safe_target
 LOCAL_CYCLE_SECONDS = 0.5
 GITHUB_CYCLE_SECONDS = 15.0
 
+# The bound every GitHub-backed read of one status cycle carries
+# (seconds): a stalled gh must end the observation with the scope
+# named and a non-zero exit, never make `orbi status` hang. It is the
+# bound the open-Issue listing already applied, now shared by the
+# single-Issue, ready-queue and recent-result reads (Issue #1668).
+STATUS_READ_TIMEOUT_SECONDS = 30
+
 # The Issue fields a delivery state needs (both gh JSON shapes).
 ISSUE_FIELDS = "number,title,state,labels,url"
 
@@ -174,7 +181,7 @@ def open_issues_complete(repo: str) -> list[dict]:
         "gh", "api",
         f"repos/{repo}/issues?state=open&per_page=100",
         "--paginate", "--slurp",
-    ], timeout=30)
+    ], timeout=STATUS_READ_TIMEOUT_SECONDS)
     return parse_paginated_issue_array(raw)
 
 
@@ -202,9 +209,17 @@ def read_active_deliveries(
 
 def confirmed_delivery(repo: str, number: int, *,
                        read_issue: Callable[..., dict] = issue_view) -> Delivery:
-    """Read one Issue directly and return its confirmed state."""
+    """Read one Issue directly and return its confirmed state.
+
+    The read is bounded like every GitHub read of the status cycle, so
+    a stalled `gh issue view` fails the observation instead of hanging
+    it (Issue #1668).
+    """
     return delivery_from_issue(
-        repo, read_issue(number, ISSUE_FIELDS, repo=repo),
+        repo, read_issue(
+            number, ISSUE_FIELDS, repo=repo,
+            timeout=STATUS_READ_TIMEOUT_SECONDS,
+        ),
     )
 
 
