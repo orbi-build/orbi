@@ -275,7 +275,13 @@ def _validate_value(key: str, value: object, *, source: str) -> object:
             )
         return value
     if key == language.MESSAGE_LANGUAGE_KEY:
-        return language.normalize_language(value, source=source)
+        # A bad repository value blocks the claim like every other invalid
+        # policy value (the claim's fail-fast precondition path), while the
+        # message keeps the host wording: file, key, value, allowed values.
+        try:
+            return language.normalize_language(value, source=source)
+        except language.LanguageError as exc:
+            raise RepoConfigError(str(exc)) from exc
     if key == "steering_poll_seconds":
         if (
             isinstance(value, bool)

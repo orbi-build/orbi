@@ -494,6 +494,43 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 ```
 
+## Comment language
+
+Orbi's own comments are written in the instance's **message language**:
+`message_language` accepts only `en` (default) or `zh` (Simplified
+Chinese). Precedence is per key, through the normal configuration
+binding: an explicit `message_language` in the repository's
+`.github/orbi.toml` on the default branch wins, otherwise the host
+`orbi.toml`, otherwise `en`. A repository key that is absent inherits —
+nothing is copied from the host, and deleting the repository key restores
+inheritance. A value that is not `en`/`zh` fails the configuration load
+fast, naming the file, the key, the value and the allowed values.
+
+The setting covers the Runner-owned Issue/PR conversation: start and live
+progress, phase and milestone notifications, thin-ticket clarification,
+the opened-PR scene, review findings and fix instructions, the human
+review/merge handoff, recoverable and terminal failures, delivery
+completion and release-task status comments. Translated are the human
+labels and prose; project/Issue text, paths, commands, URLs, error codes,
+raw logs, JSON keys, verdict/severity/action enums, labels, fingerprints
+and machine fields stay verbatim. Source files, project documentation,
+Issue titles/bodies, PR titles/bodies and release notes keep their own
+existing language rules — the setting never overrides them (this
+repository declares `en`, so its public ledger stays English on any host).
+
+Comment identity stays language-independent: the readers match the hidden
+run/kind/scene markers, the progress block prefix and the persisted
+machine fields, never a translatable heading, so a restart, a resume, an
+in-place PATCH, failure folding or the review-round budget behave the same
+in either language, and mixed history (older English comments beside new
+Chinese ones) stays usable.
+
+When a model session runs, the same effective instruction is appended at
+the session boundary (implement/continued, review and ops sessions), so a
+custom prompt template receives it too: the natural-language fields that
+become comments (questions, summary, notes, fix explanations) follow the
+message language, while code, commands, machine keys and enums do not.
+
 ## Failure record: `orbi:failure:v1`
 
 Every failure the engine reports through its failure path is

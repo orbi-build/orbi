@@ -38,6 +38,7 @@ from orbi.github import (
 from orbi.gitops import task_branch
 from orbi.journal import LOGGER, current_run_id, event, new_run_id, set_run_id
 from orbi.pilot_slots import slot_held_deliveries, slot_occupancy
+from orbi import language
 from orbi.progress import run_marker
 from orbi.release import release_target_milestone
 from orbi.repo_config import RepoConfigError, RepoPolicy, load_repo_policy
@@ -637,6 +638,7 @@ def pick_next_issue(
 def pick_resumable_delivery(
     repo: str, slot_dir: Path, max_concurrency: int,
     repo_dir: Path | None = None, *, hooks: ResumeHooks,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> tuple[dict, dict] | None:
     """Return the newest FREE opened-PR delivery and its resume scene.
 
@@ -795,15 +797,9 @@ def pick_resumable_delivery(
                     )
                     comment_issue(
                         number, repo=repo,
-                        body=(f"{marker}\n" if marker else "") + (
-                            f"Orbi failed: {exc}; no trusted 'Orbi opened PR' "
-                            "scene comment exists on this Issue, so the "
-                            "opened-PR delivery cannot be resumed — this is an "
-                            "external precondition the AI cannot safely judge "
-                            "or fix, so it cannot be recovered automatically "
-                            "(the Issue stays ai-blocked until a human "
-                            "decides) — restore the trusted 'Orbi opened PR' "
-                            "scene comment or relabel the Issue ai-fix-needed"
+                        body=(f"{marker}\n" if marker else "")
+                        + language.text(
+                            language_code, "claim.scene_missing", error=exc,
                         ),
                     )
                 except Exception:
@@ -915,7 +911,7 @@ def pick_next_delivery(
         else:
             selected = pick_resumable_delivery(
                 repo, slot_dir, max_concurrency, config.repo_dir,
-                hooks=hooks,
+                hooks=hooks, language_code=language.of(config),
             )
         if selected is not None:
             issue, scene = selected

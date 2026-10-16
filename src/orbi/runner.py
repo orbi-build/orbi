@@ -647,7 +647,9 @@ def external_takeover_pr(repo_dir: Path, body: str | None,
     return pr
 
 
-def _route_external_pr_ticket(issue: dict, repo: str) -> bool:
+def _route_external_pr_ticket(issue: dict, repo: str, *,
+                              language_code: str = language.DEFAULT_LANGUAGE,
+                              ) -> bool:
     """Route a marker-bearing opened-PR ticket through external
     integration instead of `ai-blocked`. Returns True when handled.
 
@@ -706,12 +708,10 @@ def _route_external_pr_ticket(issue: dict, repo: str) -> bool:
             number, repo=repo,
             body=(
                 f"<!-- orbi:external-pr:{pr_number} -->\n"
-                f"Orbi: the `ai-pr-opened` state of this triage Issue "
-                f"comes from external contribution PR #{pr_number} "
-                "(state: "
-                f"{state}), not from a runner scene; routing it through "
-                "the external takeover review on the next claim instead "
-                "of blocking it."
+                + language.text(
+                    language_code, "runner.external_pr_routed",
+                    pr_number=pr_number, state=state,
+                )
             ),
         )
         event(
@@ -3006,9 +3006,11 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         # recoverable. Keep the claim, worktree and run-state file so the
         # next in-flight scan resumes this same run.
         recoverable_name = (
-            "model_wait recovered"
+            language.text(
+                language.of(config), "progress.recoverable_model_wait")
             if isinstance(exc, ModelWaitDeadError)
-            else "Pi failure recovered"
+            else language.text(
+                language.of(config), "progress.recoverable_pi_failure")
         )
         # The hung-model-request recovery is a CLASSIFIED,
         # AI-recoverable failure — NOT the terminal `ai-blocked`. The
@@ -3029,6 +3031,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         body = recoverable_scene_body(
             run_id=run_id, recoverable_name=recoverable_name, record=record,
             detail=detail, run_info=run_info,
+            language_code=language.of(config),
         )
         # The recovery comment is the delivery record, but the resume
         # does not parse it (the run state file, the worktree and the
@@ -3779,8 +3782,8 @@ def main(argv: list[str] | None = None) -> int:
                 config=config,
                 hooks=claim.ResumeHooks(
                     resume_scene=run_state.resume_scene,
-                    route_external_pr_ticket=_route_external_pr_ticket,
-                    block_scene_failure=failure_report.block_scene_failure,
+                    route_external_pr_ticket=lambda issue, repo: _route_external_pr_ticket(issue, repo, language_code=language.of(config)),
+                    block_scene_failure=lambda issue, err, repo, comments: failure_report.block_scene_failure(issue, err, repo, comments, language_code=language.of(config)),
                     recover_missing_pr_scene=_recover_missing_pr_scene,
                     has_recoverable_pr_scene=_has_recoverable_pr_scene,
                     comment_pr=failure_report.comment_pr,

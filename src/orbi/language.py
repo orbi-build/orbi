@@ -292,6 +292,10 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "<details><summary>Raw error</summary>\n{diagnosis}\n</details>",
         "<details><summary>原始错误</summary>\n{diagnosis}\n</details>",
     ),
+    "claim.scene_missing": ("Orbi failed: {error}; no trusted 'Orbi opened PR' scene comment exists on this Issue, so the opened-PR delivery cannot be resumed — this is an external precondition the AI cannot safely judge or fix, so it cannot be recovered automatically (the Issue stays ai-blocked until a human decides) — restore the trusted 'Orbi opened PR' scene comment or relabel the Issue ai-fix-needed", "Orbi 失败：{error}；这个 Issue 上没有可信的 'Orbi opened PR' 场景评论，因此无法继续已开启 PR 的交付——这是 AI 无法安全判断或修复的外部前提条件，不能自动恢复（Issue 会保持 ai-blocked，直到人工决定）——请恢复可信的 'Orbi opened PR' 场景评论，或把 Issue 重新标记为 ai-fix-needed"),
+    "progress.recoverable_model_wait": ("model_wait recovered", "model_wait 已恢复"),
+    "progress.recoverable_pi_failure": ("Pi failure recovered", "Pi 失败已恢复"),
+    "milestone.plan_ready": ("plan ready", "计划已就绪"),
     "progress.recoverable_scene": (
         "{run_marker}\n{recovered_marker}\n"
         "Orbi {recoverable_name}: {reason_code}; retrying on the next "
@@ -330,6 +334,7 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "release.waiting": ("Orbi release waiting for deliveries", "Orbi release 正在等待其他交付完成"),
 
     # Runner-owned scene/status comments outside the progress comment.
+    "runner.external_pr_routed": ("Orbi: the `ai-pr-opened` state of this triage Issue comes from external contribution PR #{pr_number} (state: {state}), not from a runner scene; routing it through the external takeover review on the next claim instead of blocking it.", "Orbi：这个 triage Issue 的 `ai-pr-opened` 状态来自外部贡献 PR #{pr_number}（state: {state}），而不是 runner 场景；下次认领时会走外部接管评审，而不是把它阻塞掉。"),
     "runner.ticket_only_delivered": (
         "Orbi ticket-only delivery (run_id={run_id}):",
         "Orbi 仅工单交付（run_id={run_id}）：",

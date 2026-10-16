@@ -400,6 +400,34 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 ```
 
+## 评论语言
+
+Orbi 自己的评论使用实例的**消息语言**：`message_language` 只接受 `en`
+（默认）或 `zh`（简体中文）。取值按 key 逐项决定，走正常的配置绑定：
+默认分支上 `.github/orbi.toml` 里显式的 `message_language` 优先，其次
+主机 `orbi.toml`，最后 `en`。仓库未声明的 key 继承主机值——不会拷贝默认
+值，删除仓库里的 key 即恢复继承。取值不是 `en`/`zh` 时配置加载立即失败，
+并报出文件、键、取值和允许值。
+
+该设置覆盖 Runner 自己写的 Issue/PR 对话：开始与实时进度、阶段与里程碑
+通知、薄 ticket 澄清、opened-PR 现场、评审发现与修复指令、人工评审/合并
+交接、可恢复失败与终态失败、交付完成以及 release task 状态评论。被翻译的
+是人类标签与叙述性文字；项目/Issue 原文、路径、命令、URL、错误码、原始
+日志、JSON 键、verdict/severity/action 等枚举、标签、指纹和机器字段保持
+原样。源码、项目文档、Issue 标题/正文、PR 标题/正文与 release notes 仍
+按各自既有规则——该设置不会覆盖它们（本仓库声明 `en`，因此在任何主机上
+其公开账本都保持英文）。
+
+评论身份与语言无关：读取方匹配隐藏的 run/kind/scene marker、progress 块
+前缀与持久化机器字段，绝不依赖可被翻译的标题，因此重启、resume、原地
+PATCH、失败折叠与评审轮次预算在两种语言下行为一致，新旧混排的历史
+（旧英文评论与新中文评论并存）依然可用。
+
+模型 session 运行时，同一条有效指令会追加在 session 边界（implement/续跑、
+review 与 ops session），因此自定义 prompt 模板同样会收到：会变成评论的
+自然语言字段（提问、总结、说明、修复解释）遵循消息语言，而代码、命令、
+机器键与枚举不翻译。
+
 ## 失败记录：`orbi:failure:v1`
 
 引擎通过失败通道上报的每一次失败都是机器可读的：详细的
