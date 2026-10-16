@@ -944,6 +944,7 @@ def report_delivery_failure(
             publisher if publisher is not None
             else ProgressPublisher(
                 number, source_repo, run_id, run_command=run_command,
+                language_code=language_code,
             )
         )
         publish = functools.partial(

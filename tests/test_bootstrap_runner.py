@@ -14410,6 +14410,46 @@ def test_delivery_step_keeps_holding_when_no_delivery_label(
     assert "delivery_label_inconsistent" in caplog.text
 
 
+def test_delivery_step_label_repair_failure_comment_follows_the_language(
+        monkeypatch, caplog,
+):
+    """Issue #1660: the terminal "labels could not be repaired" comment is
+    a Runner-owned failure comment, so its prose follows the bound
+    language while the label, the PR URL and the machine fields stay
+    verbatim."""
+    def fake_run(command, **kwargs):
+        # Dispatch on the joined argv: the same fake answers both reads
+        # and the writes, so no command-shape assertion is added.
+        shape = " ".join(str(part) for part in command)
+        if shape.startswith("gh pr view "):
+            return json.dumps({"state": "OPEN", "statusCheckRollup": []})
+        if shape.startswith("gh issue view "):
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(runner.time, "sleep", lambda s: None)
+    comments: list = []
+    monkeypatch.setattr(seam, "comment_issue",
+        lambda *args, **kwargs: comments.append(kwargs),
+    )
+    caplog.set_level("INFO")
+    runner.delivery_step(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        config_domain.RunnerConfig(
+            repo_dir=Path("/r"), base_branch="main",
+            message_language="zh",
+        ),
+        "owner/repo",
+    )
+    assert "delivery_label_inconsistent" in caplog.text
+    assert len(comments) == 1
+    body = comments[0]["body"]
+    assert "Orbi 失败：PR" in body
+    assert "ai-blocked" in body
+    assert PR_URL in body
+
+
 def test_delivery_step_logs_awaiting_without_bound_run_id(monkeypatch, caplog):
     """When no run id is bound the wait still works: the failure comment
     simply carries no marker."""
@@ -20739,6 +20779,61 @@ def test_process_release_started_milestone_carries_base_branch(monkeypatch):
         "**Orbi release started**: base_branch=main "
         "run_id=a1b2c3d4 priority=normal"
     ]
+
+
+def test_process_release_status_comments_follow_the_message_language(
+        monkeypatch,
+):
+    """Issue #1660: EVERY Runner-owned release status comment follows the
+    bound message language — the started/gates/scope/tests/released
+    milestones and the success record alike — while the machine facts
+    (run marker, run_id, tag rows) stay verbatim."""
+    state = make_release_process_env(monkeypatch)
+
+    def run_publish_actions(**kwargs):
+        # The real `_safe_publish` runs the action (bypass); run it here
+        # so the milestone lambdas really render their text.
+        kwargs["action"]()
+
+    monkeypatch.setattr(seam, "_safe_publish", run_publish_actions)
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    url = release.process_release(
+        issue,
+        config_domain.RunnerConfig(
+            repo_dir=Path("/r"), base_branch="main",
+            message_language="zh",
+        ),
+        "o/r",
+    )
+    assert url == "https://github.com/o/r/releases/tag/v0.3.0"
+    milestones = [
+        call.args[0]
+        for call in state["publisher"].milestone.call_args_list
+    ]
+    for rendered in (
+        "**Orbi release 已开始**", "**Orbi release 门禁已通过**",
+        "**Orbi release 发布范围已验证**", "**Orbi release 测试已通过**",
+        "**Orbi 已发布**",
+    ):
+        assert any(rendered in text for text in milestones), rendered
+    # No release milestone leaks the English wording.
+    assert not any(
+        "Orbi release scope verified" in text
+        or "Orbi release tests passed" in text
+        or "**Orbi released**" in text
+        for text in milestones
+    )
+    # The success record is Chinese too; its machine rows stay verbatim.
+    (comment_number, comment_kwargs), = state["comments"]
+    assert comment_number == 99
+    body = comment_kwargs["body"]
+    assert "Orbi 已发布：" in body
+    assert "## 发布范围（逐项验证）" in body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in body
+    assert "run_id=a1b2c3d4" in body
+    assert "https://github.com/o/r/releases/tag/v0.3.0" in body
 
 
 def test_process_release_failure_comment_carries_base_branch(monkeypatch):

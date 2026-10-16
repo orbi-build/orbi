@@ -723,9 +723,15 @@ def _route_external_pr_ticket(issue: dict, repo: str, *,
 
 
 def _recover_missing_pr_scene(
-    issue: dict, repo: str, repo_dir: Path,
+    issue: dict, repo: str, repo_dir: Path, *,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> dict | None:
-    """Retry a lost opened-PR scene from the durable local run state."""
+    """Retry a lost opened-PR scene from the durable local run state.
+
+    The re-posted scene comment is a runner-owned opened-PR comment, so
+    its headline follows the bound message language (#1660); the machine
+    scene block the resume parses is language-independent.
+    """
     number = int(issue["number"])
     try:
         resume = worktree_resume_scene(repo_dir, repo, number)
@@ -747,6 +753,7 @@ def _recover_missing_pr_scene(
         body = opened_pr_comment_body(
             run_id, f"base_branch={base_branch} base_sha={base_sha} "
             f"run_id={run_id} priority=normal", url,
+            language_code=language_code,
         )
         comment_issue(number, repo=repo, body=body)
         found = run_state.parse_pr_comment(body)
@@ -3441,9 +3448,8 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
             number, repo=source_repo, event=EVENT_BLOCKED,
             current_labels=labels,
         )
-        body = (
-            f"Orbi failed: PR {pr_url} was closed without "
-            "a merge; the delivery is terminally failed"
+        body = language.text(
+            language.of(config), "runner.pr_closed_comment", pr_url=pr_url,
         )
         if marker:
             body = f"{marker}\n{body}"
@@ -3784,7 +3790,7 @@ def main(argv: list[str] | None = None) -> int:
                     resume_scene=run_state.resume_scene,
                     route_external_pr_ticket=lambda issue, repo: _route_external_pr_ticket(issue, repo, language_code=language.of(config)),
                     block_scene_failure=lambda issue, err, repo, comments: failure_report.block_scene_failure(issue, err, repo, comments, language_code=language.of(config)),
-                    recover_missing_pr_scene=_recover_missing_pr_scene,
+                    recover_missing_pr_scene=lambda issue, repo, repo_dir: _recover_missing_pr_scene(issue, repo, repo_dir, language_code=language.of(config)),
                     has_recoverable_pr_scene=_has_recoverable_pr_scene,
                     comment_pr=failure_report.comment_pr,
                 ),

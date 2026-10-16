@@ -1385,8 +1385,10 @@ def process_release(issue: dict, config: RunnerConfig,
             ]
         publish(
             action=lambda: publisher.milestone(
-                f"**Orbi release scope verified**: "
-                f"{'; '.join(scope_evidence)}",
+                language.text(
+                    language.of(config), "release.scope_verified",
+                    evidence="; ".join(scope_evidence),
+                ),
             ),
         )
         worktree = create_release_worktree(
@@ -1450,7 +1452,10 @@ def process_release(issue: dict, config: RunnerConfig,
         )
         publish(
             action=lambda: publisher.milestone(
-                f"**Orbi release tests passed**: {test_evidence}",
+                language.text(
+                    language.of(config), "release.tests_passed",
+                    evidence=test_evidence,
+                ),
             ),
         )
         tag = declaration["version"]
@@ -1515,7 +1520,10 @@ def process_release(issue: dict, config: RunnerConfig,
         )
         publish(
             action=lambda: publisher.milestone(
-                f"**Orbi released**: {release_url}",
+                language.text(
+                    language.of(config), "release.released",
+                    release_url=release_url,
+                ),
             ),
         )
         try:

@@ -442,7 +442,8 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
                *, repo_dir: Path,
                source_repo: str | None = None,
                issue_number: int | None = None,
-               run_id: str | None = None) -> dict:
+               run_id: str | None = None,
+               language_code: str = language.DEFAULT_LANGUAGE) -> dict:
     """Merge the reviewed PR only if the gate still holds against latest base.
 
     Re-fetch the latest remote base, require the PR head to contain it, the PR
@@ -629,14 +630,10 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             try:
                 comment_issue(
                     issue_number, repo=merge_repo,
-                    body=(
-                        f"{marker}\n"
-                        f"Orbi merge skipped for PR #{pr['number']}: the "
-                        f"source Issue is labelled `{BLOCKED_LABEL}`, so the "
-                        f"reviewed head {pr['head_oid']} was not merged "
-                        f"(run_id={run_id}).\n\n"
-                        "The PR is left open and the labels are unchanged; a "
-                        "human decides the next step."
+                    body=f"{marker}\n" + language.text(
+                        language_code, "review.merge_skipped_blocked",
+                        pr_number=pr["number"], label=BLOCKED_LABEL,
+                        head=pr["head_oid"], run_id=run_id,
                     ),
                 )
             except Exception:
@@ -1118,15 +1115,21 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         log_recovery_ci_status(pr, source_repo)
     publisher = ProgressPublisher(
         number, source_repo, config.run_id, run_command=run_command,
+        language_code=language.of(config),
     )
     publish = functools.partial(
         _safe_publish, run_id=config.run_id, issue=number,
         source_repo=source_repo, role=ROLE_REVIEW,
     )
     started = time.monotonic()
+    # The whole review/merge phase PATCHes the run's live progress
+    # comment, so the round's context and publisher carry the bound
+    # message language too (#1660): the header and field labels follow
+    # it exactly like the implementation phase's.
     ctx = RunContext(
         run_id=config.run_id, issue=number, branch=branch,
         worktree=worktree, source_repo=source_repo,
+        language=language.of(config),
     )
     # The step's own updates (this ensure, the merge gate's `checks`
     # stage, the findings/merged finishes) render through one call shape
@@ -1475,6 +1478,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             {**refrozen, "_source_repo": source_repo},
             base_branch, repo_dir=config.repo_dir,
             issue_number=number, run_id=config.run_id,
+            language_code=language.of(config),
         )
     except MergeHandoffRequired as exc:
         # A known policy blocker is a successful, resumable handoff.
@@ -1736,9 +1740,9 @@ def _run_review_round(
             number, repo=source_repo, event=EVENT_BLOCKED,
             current_labels=labels,
         )
-        body = (
-            f"Orbi failed: PR {pr_url} is open but the delivery labels "
-            f"could not be repaired ({reason}); the Issue is ai-blocked"
+        body = language.text(
+            language.of(config), "review.label_repair_failed",
+            pr_url=pr_url, reason=reason,
         )
         if marker:
             body = f"{marker}\n{body}"

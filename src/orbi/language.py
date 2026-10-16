@@ -217,6 +217,8 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "review.gate_blocked": ("Merge gate blocked: {message} (run_id={run_id})", "合并门禁被阻塞：{message}（run_id={run_id}）"),
     "review.gate_next_step": ("The next review session merges the latest origin/{base_branch} into the branch in-session, resolves conflicts, and reruns the full test suite", "下一个评审 session 会在会话内把最新的 origin/{base_branch} 合并进分支、解决冲突，并重跑完整测试套件"),
     "review.gate_exhausted": ("base-advance retry budget exhausted; a human must resolve the hot base before this PR can continue.", "base 同步重试预算已用尽；必须由人工处理这个频繁变动的 base，该 PR 才能继续。"),
+    "review.merge_skipped_blocked": ("Orbi merge skipped for PR #{pr_number}: the source Issue is labelled `{label}`, so the reviewed head {head} was not merged (run_id={run_id}).\n\nThe PR is left open and the labels are unchanged; a human decides the next step.", "Orbi 跳过 PR #{pr_number} 的合并：源 Issue 带有 `{label}` 标签，因此已评审的 head {head} 未被合并（run_id={run_id}）。\n\n该 PR 保持打开、标签不变；下一步由人决定。"),
+    "review.label_repair_failed": ("Orbi failed: PR {pr_url} is open but the delivery labels could not be repaired ({reason}); the Issue is ai-blocked", "Orbi 失败：PR {pr_url} 已打开，但交付标签无法修复（{reason}）；该 Issue 已标记为 ai-blocked"),
     "review.absorb_violation": (" Absorb contract violated (machine-checked): the round started with the head already behind origin/{base_branch} and ended with verdict=pass while the head still does not contain origin/{base_branch} — the session neither merged the base in-session nor reported the abandoned absorb as findings; the next review session must merge origin/{base_branch} into the branch or emit findings stating the attempted-and-abandoned absorb with the concrete reason, never an unrelated push", " 违反 absorb 约定（机器校验）：本轮开始时 head 已落后于 origin/{base_branch}，结束时 verdict=pass 但 head 仍不包含 origin/{base_branch} —— session 既没有在会话内合并 base，也没有把放弃的 absorb 作为 findings 上报；下一个评审 session 必须把 origin/{base_branch} 合并进分支，或给出声明“尝试并放弃 absorb”及具体原因的 findings，绝不能改成无关的推送"),
     "review.external_pr_round": ("Orbi external PR review round {round} for PR #{pr_number}: verdict={verdict}, blockers={blockers}, majors={majors}, minors={minors}; CI={state} ({checks}).", "Orbi 外部 PR 评审第 {round} 轮，PR #{pr_number}：verdict={verdict}, blockers={blockers}, majors={majors}, minors={minors}；CI={state}（{checks}）。"),
     "review.review_report_open": ("<details>\n<summary>Review report</summary>\n\n", "<details>\n<summary>评审报告</summary>\n\n"),
@@ -370,6 +372,9 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "交付在完成之前停止了：{detail}",
     ),
     "runner.pr_closed_milestone": ("blocked: PR {pr_url} was closed without a merge; the delivery is terminally failed", "已阻塞：PR {pr_url} 未合并就被关闭；本次交付最终失败"),
+    # The standalone terminal failure comment of a closed PR (the
+    # milestone above and the progress scene carry the same fact).
+    "runner.pr_closed_comment": ("Orbi failed: PR {pr_url} was closed without a merge; the delivery is terminally failed", "Orbi 失败：PR {pr_url} 未合并就被关闭；本次交付最终失败"),
     "runner.pr_closed_reason": ("PR {pr_url} was closed without a merge; the delivery is terminally failed", "PR {pr_url} 未合并就被关闭；本次交付最终失败"),
     "runner.pr_closed_next_step": ("investigate why the PR was closed and re-open the delivery or start a fresh run on the Issue", "请查明该 PR 被关闭的原因，然后重新开启交付或在 Issue 上开始一次新的运行"),
     "runner.issue_closed": (
