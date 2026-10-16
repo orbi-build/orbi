@@ -308,7 +308,10 @@ Issue: `orbi-build/orbi#42` · run_id=abcdef12
 - failure detail: `provider failed`
 </details>""",
         "milestones": ["""fix needed: delivery failed"""],
-        "finish": """**Orbi fix needed — the engine will retry**
+        "finish": """<!-- orbi:run=abcdef12 -->
+<!-- orbi:progress:v1 {"step":"review","reported_at":"2026-10-15T06:20:20Z","activity":{"at":"2026-09-28T10:00:00Z","kind":"command","target":null}} -->
+
+**Orbi fix needed — the engine will retry**
 
 What you need to do: Repair provider access.
 
@@ -317,9 +320,6 @@ What happened: delivery failed
 <details><summary>Raw error</summary>
 provider failed
 </details>
-
-<!-- orbi:run=abcdef12 -->
-<!-- orbi:progress:v1 {"step":"review","reported_at":"2026-10-15T06:20:20Z","activity":{"at":"2026-09-28T10:00:00Z","kind":"command","target":null}} -->
 
 **Orbi progress**
 
