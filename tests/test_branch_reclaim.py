@@ -273,3 +273,56 @@ def test_tick_start_call_is_a_bypass(monkeypatch, tmp_path, caplog):
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
         assert runner.main(["--config", str(config)]) == 0
     assert "branch_reclaim_failed" in caplog.text
+
+
+# --- merged-PR read for the notification scan (Issue #1674) ----------------
+
+def test_read_merged_pull_requests_parses_the_graphql_nodes(monkeypatch):
+    """The read is the repository connection (not the search API),
+    newest-updated first at GitHub's page maximum; a malformed node is
+    skipped, never guessed into a merge."""
+    node = {
+        "number": 7,
+        "title": "Fix the thing",
+        "url": "https://github.com/owner/repo/pull/7",
+        "headRefName": "orbi/owner-repo-issue-7",
+        "mergedAt": "2026-10-16T19:00:00Z",
+    }
+    payload = {
+        "data": {"repository": {"pullRequests": {"nodes": [node, "bad"]}}},
+    }
+    captured = {}
+
+    def fake(command, **kwargs):
+        captured["command"] = list(command)
+        return json.dumps(payload)
+
+    monkeypatch.setattr(seam, "run_command", fake)
+    assert branch_reclaim.read_merged_pull_requests("owner/repo") == [node]
+    assert _starts_with(captured["command"], ["gh", "api", "graphql"])
+    query = captured["command"][captured["command"].index("-f") + 1]
+    assert "states: MERGED" in query
+    assert "first: 100" in query
+    assert "UPDATED_AT" in query
+    assert "direction: DESC" in query
+
+
+def test_read_merged_pull_requests_rejects_a_malformed_payload(monkeypatch):
+    """Unreadable output is a read failure, never an empty success the
+    scan would silently treat as "no merges"."""
+    monkeypatch.setattr(
+        seam, "run_command", lambda command, **kwargs: "not json",
+    )
+    with pytest.raises(ValueError):
+        branch_reclaim.read_merged_pull_requests("owner/repo")
+
+
+def test_read_merged_pull_requests_rejects_non_list_nodes(monkeypatch):
+    """A shaped-but-wrong payload (nodes is not a list) fails fast."""
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: json.dumps(
+            {"data": {"repository": {"pullRequests": {"nodes": {}}}}}),
+    )
+    with pytest.raises(ValueError, match="malformed"):
+        branch_reclaim.read_merged_pull_requests("owner/repo")

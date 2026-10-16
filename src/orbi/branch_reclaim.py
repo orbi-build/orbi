@@ -20,16 +20,38 @@ import logging
 import re
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-from orbi import config as config_domain
 from orbi.journal import GIT_NETWORK_TIMEOUT_SECONDS, event, run_command
+
+if TYPE_CHECKING:
+    # Annotation-only: `config` reaches `notify` through `release` and
+    # `github`, so a runtime import here would close a cycle once `notify`
+    # imports this module (the `read_merged_pull_requests` scan, #1674).
+    from orbi import config as config_domain
 
 # Remote delivery-branch reclamation: the tick-start pass deletes at most
 # this many merged-PR `orbi/*` branches per tick, so a large backlog (255
 # branches on 2026-09-28) drains over ticks and one tick never spends
 # unbounded time on `gh api` deletes. The same bound as the worktree pass.
 BRANCH_RECLAIM_MAX_PER_TICK = 25
+
+# The one merged-PR read the notification scan uses (Issue #1674). The
+# repository connection, not the search API: a just-merged PR is visible
+# at once, while the search index can lag and a lagged PR older than the
+# watermark would then be skipped forever. A merge updates the PR, so
+# recent merges come first; 100 is GitHub's page maximum.
+MERGED_PULL_REQUESTS_QUERY = """query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(
+      states: MERGED, first: 100,
+      orderBy: {field: UPDATED_AT, direction: DESC}
+    ) {
+      nodes { number title url headRefName mergedAt }
+    }
+  }
+}"""
 
 
 def delete_remote_branch(source_repo: str, branch: str) -> None:
@@ -124,6 +146,31 @@ def _merged_pr_heads(prs: list[dict]) -> dict[str, set[str]]:
         if isinstance(head, str) and isinstance(oid, str):
             heads.setdefault(head, set()).add(oid)
     return heads
+
+
+def read_merged_pull_requests(source_repo: str) -> list[dict]:
+    """Read the most recently updated MERGED PRs (one GraphQL page).
+
+    The read the notification scan uses (Issue #1674). A malformed
+    payload (a failed read, an unexpected shape) raises so the caller
+    records one ``notify_failed reason=merged_check_failed`` and leaves
+    its watermark unchanged; a malformed node is skipped, never guessed
+    into a merge.
+    """
+    owner, _, name = source_repo.partition("/")
+    raw = run_command(
+        [
+            "gh", "api", "graphql",
+            "-f", f"query={MERGED_PULL_REQUESTS_QUERY}",
+            "-f", f"owner={owner}", "-f", f"name={name}",
+        ],
+        timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+        log_command=["gh", "api", "graphql", "merged_pull_requests"],
+    )
+    nodes = json.loads(raw)["data"]["repository"]["pullRequests"]["nodes"]
+    if not isinstance(nodes, list):
+        raise ValueError("malformed merged-pull-request read")
+    return [node for node in nodes if isinstance(node, dict)]
 
 
 def reclaim_merged_delivery_branches(config: config_domain.RunnerConfig) -> None:
