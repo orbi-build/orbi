@@ -17,6 +17,7 @@ journal. These tests pin the active detection contract:
   run breaking the streak) never produce a finding.
 """
 from orbi import config as config_domain
+import base64
 import fcntl
 import json
 import os
@@ -50,6 +51,33 @@ def _use_real_health_check(monkeypatch):
     monkeypatch.setattr(
         runner_health, "run_health_check", _REAL_RUN_HEALTH_CHECK,
     )
+
+
+@pytest.fixture(autouse=True)
+def _repository_policy_read(monkeypatch):
+    """Default: the repository policy read answers "no such file".
+
+    The repeated-failure comment resolves its language through
+    `repo_config.merged_repo_language` (Issue #1703), which reads
+    `.github/orbi.toml` through the shared seam -- not through the fake
+    handed to `run_health_check`. The default is the contents API's
+    no-such-file answer, so every other health test stays on the host
+    language and off the network; a test seeds a file with
+    `seed_repository_policy`."""
+    fake = FakeRunCommand({"/contents/": json.dumps({})})
+    monkeypatch.setattr(seam, "run_command", fake)
+    return fake
+
+
+def seed_repository_policy(fake, text: str) -> None:
+    """Seed one repository `.github/orbi.toml` through the shared seam.
+
+    The same global channel `tests/test_bootstrap_runner.py` uses for
+    claim-time comments: the contents API's file object, base64-encoded."""
+    fake.routes["/contents/"] = json.dumps({
+        "sha": "a" * 40,
+        "content": base64.b64encode(text.encode("utf-8")).decode("ascii"),
+    })
 
 
 class FakeRunCommand:
@@ -652,6 +680,70 @@ def test_repeated_failure_comment_follows_the_host_language(
     assert expected in body
     assert unexpected not in body
     assert "<!-- orbi:run=00000003 -->" in body
+
+
+def test_repeated_failure_comment_follows_the_repository_language(
+    _repository_policy_read, tmp_path,
+):
+    """Issue #1703 acceptance 1: the health-check comment uses the
+    repository's merged message language, like every other comment since
+    #1687 -- a zh host whose repository sets `message_language = "en"`
+    posts an English escalation."""
+    write_state(tmp_path, {
+        "runs": [
+            run_entry(REPO, 41, "00000001", "fp1"),
+            run_entry(REPO, 41, "00000002", "fp1"),
+            run_entry(REPO, 41, "00000003", "fp1"),
+        ],
+        "last_pickup_ts": time.time(), "alerted": [],
+    })
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": "",
+        "journalctl --user -u orbi@2.service": "",
+    })
+    seed_repository_policy(_repository_policy_read, 'message_language = "en"\n')
+    assert runner_health.run_health_check(
+        make_config(tmp_path, message_language="zh"), run_command=fake,
+    ) == [f"repeated_failure:{REPO}#41"]
+    comment = fake.commands("gh issue comment")[0]
+    body = comment[comment.index("--body") + 1]
+    assert "Orbi health check:" in body
+    assert "Orbi 健康巡检" not in body
+    assert "<!-- orbi:run=00000003 -->" in body
+    # The language came from the repository config read of the comment's
+    # repo -- the one global channel, no second language source.
+    assert _repository_policy_read.commands("/contents/") == [
+        ["gh", "api", f"repos/{REPO}/contents/.github/orbi.toml"],
+    ]
+
+
+def test_repeated_failure_comment_keeps_the_host_language_without_override(
+    _repository_policy_read, tmp_path,
+):
+    """Issue #1703 acceptance 2: a repository file that does not set
+    `message_language` keeps the host language -- the merge is per key,
+    exactly like the claim-time comments."""
+    write_state(tmp_path, {
+        "runs": [
+            run_entry(REPO, 41, "00000001", "fp1"),
+            run_entry(REPO, 41, "00000002", "fp1"),
+            run_entry(REPO, 41, "00000003", "fp1"),
+        ],
+        "last_pickup_ts": time.time(), "alerted": [],
+    })
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": "",
+        "journalctl --user -u orbi@2.service": "",
+    })
+
+    seed_repository_policy(_repository_policy_read, 'base_branch = "main"\n')
+    assert runner_health.run_health_check(
+        make_config(tmp_path, message_language="zh"), run_command=fake,
+    ) == [f"repeated_failure:{REPO}#41"]
+    comment = fake.commands("gh issue comment")[0]
+    body = comment[comment.index("--body") + 1]
+    assert "Orbi 健康巡检：" in body
+    assert "Orbi health check:" not in body
 
 
 def test_record_run_attempt_clears_alerted_keys_on_a_streak_break(tmp_path):
