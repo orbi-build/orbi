@@ -137,6 +137,40 @@ def test_send_classifies_each_status_from_the_body(
         assert TOKEN not in caplog.text
 
 
+@pytest.mark.parametrize("body,detail", [
+    (b'{"ok": false, "description": "Bad Request: chat not found"}',
+     'detail="Bad Request: chat not found"'),
+    (b'{"ok": false, "description": "Forbidden: bot is not a member"}',
+     'detail="Forbidden: bot is not a member"'),
+    (b'{"ok": false, "error_code": 400}', None),
+    (b"not json at all", None),
+    (b"[]", None),
+    (b'{"ok": false, "description": 17}', None),
+])
+def test_send_records_telegrams_description_as_detail(
+    monkeypatch, caplog, body, detail,
+):
+    """Telegram's own sentence joins the failure line (Issue #1686).
+
+    The local endpoint answers exactly like the real API: a rejected
+    request carries a human-readable `description`. It is recorded as
+    `detail=` so the common setup mistakes (wrong chat id, `/start` not
+    sent, the bot not in the group) are readable without a log hunt. A
+    body without a string description keeps the pre-#1686 line.
+    """
+    with TelegramEndpoint(status=400, body=body) as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        caplog.set_level("INFO")
+        assert notify.send("hello") is False
+        assert "notify_failed reason=rejected" in caplog.text
+        if detail is None:
+            assert "detail=" not in caplog.text
+        else:
+            assert detail in caplog.text
+        assert TOKEN not in caplog.text
+
+
 def test_send_reports_timeout_when_the_endpoint_does_not_answer_in_time(
     monkeypatch, caplog,
 ):
@@ -191,7 +225,9 @@ def test_public_functions_swallow_a_broken_config(monkeypatch, capsys):
     notify.tick_start(BoomConfig())
     assert notify.doctor_lines(BoomConfig()) == []
     assert notify.test_command(BoomConfig()) == 1
-    assert "notify_failed reason=network_error" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "notify_failed reason=network_error" in out
+    assert out.rstrip().endswith(HELP_EN)
 
 
 def test_label_added_swallows_a_message_build_failure(monkeypatch):
@@ -695,8 +731,36 @@ def test_notify_test_command_prints_the_bad_token_reason(
         endpoint.point(monkeypatch)
         assert notify.test_command(config_for()) == 1
         assert capsys.readouterr().out.strip() == (
-            "notify_failed reason=token_invalid"
+            "notify_failed reason=token_invalid detail=Unauthorized\n"
+            f"{HELP_EN}"
         )
+
+
+def test_notify_test_shows_the_rejected_reason_and_the_help_line_in_zh(
+    monkeypatch, capsys, caplog,
+):
+    """Acceptance #1686: a wrong chat id is readable, not just `rejected`.
+
+    The local endpoint answers the real API's 400 body, so this is the
+    user's own path: `orbi notify test` prints the classified reason,
+    Telegram's sentence and the community help line in the host
+    `message_language`, and the journal line carries the same detail.
+    """
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    body = b'{"ok": false, "description": "Bad Request: chat not found"}'
+    with TelegramEndpoint(status=400, body=body) as endpoint:
+        endpoint.point(monkeypatch)
+        caplog.set_level("INFO")
+        assert notify.test_command(config_domain.RunnerConfig(
+            telegram_chat_id=CHAT_ID, message_language="zh",
+        )) == 1
+        out = capsys.readouterr().out
+        assert "notify_failed reason=rejected" in out
+        assert "Bad Request: chat not found" in out
+        assert out.rstrip().endswith(HELP_ZH)
+        assert 'detail="Bad Request: chat not found"' in caplog.text
+        assert TOKEN not in caplog.text
+        assert len(endpoint.texts()) == 1
 
 
 def test_notify_test_command_without_a_chat_id_names_it(
@@ -708,6 +772,7 @@ def test_notify_test_command_without_a_chat_id_names_it(
         assert notify.test_command(config_for(chat_id=None)) == 1
         out = capsys.readouterr().out
         assert "telegram_chat_id" in out
+        assert out.rstrip().endswith(HELP_EN)
         assert endpoint.requests == []
 
 
@@ -738,6 +803,47 @@ def test_orbi_notify_test_runs_through_the_cli(
         ) == 0
         assert capsys.readouterr().out.strip() == "ok"
         assert len(endpoint.texts()) == 1
+
+
+def test_orbi_notify_test_cli_shows_telegrams_reason_and_the_help_line(
+    monkeypatch, tmp_path, capsys,
+):
+    """The real CLI path with a wrong chat id (Issue #1686).
+
+    Same entry point a person runs by hand: the host config asks for
+    Chinese, the endpoint rejects the chat, and the printed report names
+    the reason, Telegram's sentence and the community help line.
+    """
+    from orbi import cli
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "prompt.md").write_text("p", encoding="utf-8")
+    (tmp_path / "prompts" / "prompt_review.md").write_text(
+        "r", encoding="utf-8")
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["o/r"]\n'
+        f'repo_dir = "{repo}"\n'
+        'telegram_chat_id = "-42"\n'
+        'message_language = "zh"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    body = b'{"ok": false, "description": "Bad Request: chat not found"}'
+    with TelegramEndpoint(status=400, body=body) as endpoint:
+        endpoint.point(monkeypatch)
+        assert cli.main(
+            ["notify", "test", "--config", str(config_path)],
+        ) == 1
+        out = capsys.readouterr().out
+        assert "reason=rejected" in out
+        assert "Bad Request: chat not found" in out
+        assert out.rstrip().endswith(HELP_ZH)
+        assert endpoint.messages() == [
+            {"chat_id": "-42", "text": notify.TEST_ZH},
+        ]
 
 
 # --- redaction -------------------------------------------------------------
