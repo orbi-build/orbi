@@ -1662,15 +1662,12 @@ def _delivery_checklist(
 ) -> dict:
     """Build the human acceptance checklist ONCE from delivery evidence.
 
-    Evidence is read from the delivery worktree (the committed diff
-    against the frozen base) plus the caller's PR head's CI check status
-    (Issue #1613: local logs are no longer parsed) — no session, no
-    GitHub read or write here. The PR-open render and the gate's wait
-    decision both read this one build, so column 2 is decided once.
-    `base_sha` is always present on the same run that posts the
-    checklist; a resumed re-derivation falls back to the configured base
-    branch. Missing evidence lands IN column 2 (the gate holds), so only
-    real evidence can pass it.
+    Evidence is the delivery worktree's committed diff against the frozen
+    base plus the caller's PR head CI status (Issue #1613). The PR-open
+    render and the gate's wait decision read this one build, so column 2
+    is decided once; `base_sha` is present on the run that posts it, and a
+    resumed re-derivation falls back to the configured base branch.
+    Missing evidence lands IN column 2 (the gate holds).
     """
     base = config.base_sha or config.base_branch
     return human_review.build_checklist(
@@ -1684,22 +1681,19 @@ def human_review_checklist(
     worktree: Path, config: config_domain.RunnerConfig, *, run_id: str, pr_url: str,
     test_status: str | None,
 ) -> tuple[str, bool]:
-    """Build the human acceptance checklist comment for one delivery.
+    """Render the checklist comment and whether a person must confirm.
 
-    Returns the rendered body and `needs_person` (column 2 is non-empty,
-    so a person must confirm something). The caller sends the
-    "waiting for your review" notification from this decision, next to
-    the checklist it posts — once per delivery, when the PR opens.
+    `needs_person` is "column 2 is non-empty" (the gate's own decision);
+    the caller sends its "waiting for your review" message next to the
+    checklist it posts — once per delivery, when the PR opens.
     """
     checklist = _delivery_checklist(
         worktree, config, test_status=test_status,
     )
     return (
         human_review.render_checklist_comment(
-            run_id=run_id,
-            pr_url=pr_url,
-            language_code=language.of(config),
-            checklist=checklist,
+            run_id=run_id, pr_url=pr_url,
+            language_code=language.of(config), checklist=checklist,
         ),
         bool(checklist["column2"]),
     )
