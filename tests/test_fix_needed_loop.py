@@ -1415,13 +1415,13 @@ def make_report_fake(monkeypatch, *, history=None, labels=("ai-fix-needed",),
     return captured
 
 
-def _report(exc, monkeypatch_unused=None, **kwargs):
+def _report(exc, monkeypatch_unused=None, *, language_code="en", **kwargs):
     """One classified recoverable report of the resume-verify failure."""
     failure_report.report_delivery_failure(
         exc, issue={"number": 39, "title": "task", "body": ""},
         source_repo="owner/repo", run_id=RUN_ID, pr_url=PR_URL,
         worktree=Path("/nonexistent"), branch=BRANCH,
-        role=runner.ROLE_REVIEW, language_code="en",
+        role=runner.ROLE_REVIEW, language_code=language_code,
         cause=f"the resume verification of PR {PR_URL} failed: {exc}",
         **kwargs,
     )
@@ -1546,6 +1546,25 @@ def test_report_failure_third_identical_failure_blocks_the_dead_loop(
     # Terminal: Issue only — the PR thread gets no comment.
     assert captured["pr_comments"] == []
     assert "failure_streak_escalated" in caplog.text
+
+
+def test_report_failure_streak_escalation_follows_the_language(
+        monkeypatch, tmp_path):
+    """Issue #1702: the consecutive-failure escalation appended to the
+    reason follows the bound message language; the count, run id and
+    fingerprint stay raw."""
+    exc = _failure_exc()
+    fp = runner_health.failure_fingerprint(exc)
+    captured = make_report_fake(
+        monkeypatch, history=_failure_history(2, fp),
+    )
+    _report(exc, language_code="zh")
+    body = captured["comments"][0]
+    assert "；同一个失败现已连续发生 3 次" in body
+    assert f"run_id={RUN_ID}" in body
+    assert f"（run_id={RUN_ID}，指纹 {fp}）" in body
+    assert "死循环" in body
+    assert "consecutive times" not in body
 
 
 def test_report_failure_scene_block_breaks_the_streak(
