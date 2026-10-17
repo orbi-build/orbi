@@ -529,4 +529,9 @@ def _failure_comment_body(*, outcome: str, action: str, reason: str,
     if evidence:
         details.append(evidence.lstrip())
     details.append("</details>")
-    return "\n\n".join(parts + ["\n".join(details)])
+    body = "\n\n".join(parts + ["\n".join(details)])
+    if retrying:
+        return body
+    # The blocked diagnostic is a problem a person must resolve, so its
+    # last paragraph is the community help line (Issue #1684).
+    return f"{body}\n\n{message('help.community')}"

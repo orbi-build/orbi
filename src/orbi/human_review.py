@@ -164,7 +164,8 @@ def render_checklist_comment(*, run_id: str, pr_url: str,
     `Orbi review round ` (`review_rounds_so_far` counts it and the
     checklist would burn the bounded review budget); an empty column 2
     says so explicitly and does not require the label; the wording never
-    claims a guarantee of direction.
+    claims a guarantee of direction. A non-empty column 2 (a person
+    must confirm) ends with the community help line (Issue #1684).
     """
     def message(key: str, **fields: object) -> str:
         return language.text(language_code, key, **fields)
@@ -214,4 +215,9 @@ def render_checklist_comment(*, run_id: str, pr_url: str,
         ),
         "-->",
     ]
+    if column2:
+        # A person must confirm: this problem message ends with the
+        # community help line (Issue #1684). An empty column 2 needs no
+        # human, so it stays exactly as before.
+        lines += ["", message("help.community")]
     return "\n".join(lines)

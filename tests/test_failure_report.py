@@ -122,7 +122,9 @@ Issue: `orbi-build/orbi#42` · run_id=abcdef12
 - legacy correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=- phase=starting last_activity=-`
 - correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=-`
 - failure detail: `provider failed`
-</details>""",
+</details>
+
+Need help? Join the Orbi community: https://t.me/+kJRTTpFGBRU0M2Y9""",
         "pr_comment": None,
         "milestones": ["""blocked: delivery failed"""],
         "finish": None,

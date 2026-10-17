@@ -8107,7 +8107,12 @@ def test_no_run_id_failure_still_preserves_action_and_evidence(
     assert "**Action:** Repair provider access." in posted[0]
     assert "stderr_tail:" in posted[0]
     assert "provider failed" in posted[0]
-    assert posted[0].endswith("</details>")
+    # Issue #1684: the blocked diagnostic ends with the community help
+    # line, after the closed evidence block.
+    assert posted[0].endswith(
+        "Need help? Join the Orbi community: "
+        "https://t.me/+kJRTTpFGBRU0M2Y9"
+    )
 
 
 def test_failure_evidence_handles_binary_streams_and_unavailable_files(tmp_path):
@@ -8313,7 +8318,12 @@ def test_report_delivery_failure_caps_comment_and_names_session_log(
     assert "**Reason:** " + "x" * 500 in body
     assert len(body) < failure_report.FAILURE_COMMENT_MAX_CHARS
     assert "full log: local session log" in body
-    assert body.endswith("</details>")
+    # Issue #1684: the blocked diagnostic ends with the community help
+    # line; the body stays under the cap, so it is not truncated away.
+    assert body.endswith(
+        "Need help? Join the Orbi community: "
+        "https://t.me/+kJRTTpFGBRU0M2Y9"
+    )
 
 
 def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_path):
