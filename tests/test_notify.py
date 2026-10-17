@@ -921,6 +921,31 @@ def test_a_read_failure_is_logged_and_retried_next_tick(
         assert endpoint.texts() == [merged_text(7, "Fix the thing")]
 
 
+def test_a_check_that_cannot_run_is_logged_and_the_tick_completes(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #1696: when the merged-PR check cannot run at all -- here
+    `<repo_dir>/.orbi` is not writable, so the watermark lock cannot be
+    opened -- the tick still completes (pure bypass) and the journal says
+    `notify_failed reason=merged_check_failed` instead of the check
+    silently never running."""
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    fake = FakeMergedRead([orbi_pr(7, "Fix the thing")])
+    monkeypatch.setattr(seam, "run_command", fake)
+    run_dir = tmp_path / ".orbi"
+    run_dir.mkdir()
+    run_dir.chmod(0o500)
+    try:
+        caplog.set_level("INFO")
+        notify.tick_start(merged_config(tmp_path))
+    finally:
+        run_dir.chmod(0o700)
+    assert fake.calls == []
+    assert caplog.text.count(
+        "notify_failed reason=merged_check_failed",
+    ) == 1
+
+
 @pytest.mark.parametrize("garbage", [
     "not json",                  # unparseable
     "[]", '{"a": 1}',            # parseable, wrong JSON type
