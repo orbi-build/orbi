@@ -8,7 +8,8 @@ runs the real public entry points, and asserts the public surface
 (labels, comments, returns). The observable behavior mirrors real
 GitHub: label edits are idempotent, comments append in order, issue
 state is OPEN/CLOSED, ``gh issue list`` returns the requested fields
-newest-first, ``blockedBy`` carries ``{"nodes": [...], "totalCount":
+newest-created first (``sort:created-asc`` reverses that, Issue #1734),
+``blockedBy`` carries ``{"nodes": [...], "totalCount":
 N}`` with explicit OPEN/CLOSED node states, and the authenticated
 identity comes from ``gh auth status``.
 
@@ -276,31 +277,38 @@ class FakeGh:
         search = (flags.get("--search") or [None])[0]
         fields = flags["--json"][0].split(",")
         limit = int((flags.get("--limit") or ["30"])[0])
-        include, exclude, milestone_title = self._parse_search(search)
+        include, exclude, milestone_title, oldest_first = (
+            self._parse_search(search)
+        )
         matches = [
             issue for issue in self.issues.values()
             if self._matches(issue, state, label, include, exclude,
                              milestone_title)
         ]
-        matches.sort(key=lambda issue: -issue["_created"])
+        matches.sort(key=lambda issue: issue["_created"],
+                     reverse=not oldest_first)
         return json.dumps([
             self._issue_fields(issue, fields) for issue in matches[:limit]
         ])
 
     def _parse_search(self, search: str | None):
-        """Split a search string into label groups plus the Milestone title.
+        """Split a search string into label groups, Milestone title, order.
 
         One `label:` qualifier may carry a comma-separated OR group
         (`label:a,b` — GitHub's documented OR within one qualifier, the
-        same contract `orbi.claim` relies on); groups AND together. An
-        unrecognized qualifier fails fast: a scan the fake cannot
-        interpret must never silently match nothing.
+        same contract `orbi.claim` relies on); groups AND together. The
+        order follows GitHub: results are newest-created first unless the
+        documented `sort:created-asc` qualifier asks for the oldest first
+        (Issue #1734's review scan). An unrecognized qualifier fails fast:
+        a scan the fake cannot interpret must never silently match
+        nothing.
         """
         include: list[list[str]] = []
         exclude: list[str] = []
         milestone_title: str | None = None
+        oldest_first = False
         if not search:
-            return include, exclude, milestone_title
+            return include, exclude, milestone_title, oldest_first
         for qualifier, token in _SEARCH_TOKEN_RE.findall(search):
             if qualifier:
                 if milestone_title is not None:
@@ -312,11 +320,13 @@ class FakeGh:
                 exclude.append(token[len("-label:"):])
             elif token.startswith("label:"):
                 include.append(token[len("label:"):].split(","))
+            elif token == "sort:created-asc":
+                oldest_first = True
             else:
                 self._fail(
                     1, f"fake-gh: unsupported search qualifier: {search!r}"
                 )
-        return include, exclude, milestone_title
+        return include, exclude, milestone_title, oldest_first
 
     def _matches(self, issue: dict, state: str, label: str | None,
                  include: list[list[str]], exclude: list[str],

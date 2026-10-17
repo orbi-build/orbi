@@ -114,6 +114,9 @@ from orbi.review_rounds import review_round_comment_body
 VERDICT_MARKER = "REVIEW_VERDICT"
 MAX_REVIEW_ROUNDS = 5
 MAX_BASE_ADVANCE_ROUNDS = 5
+# GitHub computes mergeability asynchronously; a CI-concluded UNKNOWN read is
+# re-read after these bounded delays (≈15 s of slot time, Issue #1736).
+MERGEABLE_UNKNOWN_RETRY_DELAYS = (2.0, 4.0, 8.0)
 
 
 class RecoverableMergeGateError(RuntimeError):
@@ -458,10 +461,12 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
     `DeliveryDeferred` (Issue #1626: never merge a head this tick
     pushed; its CI has not registered yet and this does not start another
     review round). Every state is read once
-    per gate pass: a pending check or an UNKNOWN mergeability is not a failure
-    but an intermediate state — the gate raises `DeliveryDeferred`, the caller
-    returns, and the next tick re-reads. A failed check or a not-mergeable PR
-    prevents the merge. Then merge with `--match-head-commit` so only that
+    per gate pass: a pending check is not a failure but an intermediate
+    state — the gate raises `DeliveryDeferred` and the next tick re-reads.
+    A CI-concluded UNKNOWN mergeability is re-read in-tick with
+    `MERGEABLE_UNKNOWN_RETRY_DELAYS` (Issue #1736) and defers only when
+    every read stays UNKNOWN. A failed check or a not-mergeable PR prevents
+    the merge. Then merge with `--match-head-commit` so only that
     exact head can land, using the merge method the repository's own GitHub
     settings allow (Issue #1480: `gh api repos/<repo>` — merge commit, else
     squash, else rebase, else `--merge` with a `merge_method_unknown`
@@ -477,6 +482,16 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
                     "state,mergeable,headRefOid,statusCheckRollup",
                     cwd=worktree)
     mergeable = state.get("mergeable")
+    # Issue #1736: in-tick re-read; always the WHOLE state, no mixed facts.
+    for delay in MERGEABLE_UNKNOWN_RETRY_DELAYS:
+        rollup = _classify_rollup(state.get("statusCheckRollup") or [])
+        if mergeable != "UNKNOWN" or any(rollup):
+            break
+        time.sleep(delay)
+        state = pr_view(pr["number"],
+                        "state,mergeable,headRefOid,statusCheckRollup",
+                        cwd=worktree)
+        mergeable = state.get("mergeable")
     if mergeable != "MERGEABLE" and mergeable != "UNKNOWN":
         # Keep the existing mergeability policy and message. The assessment
         # below still classifies the reviewed-head/base combination, while
