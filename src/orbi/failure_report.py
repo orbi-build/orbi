@@ -600,8 +600,8 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
     verified: continuing on a guessed identity risks a
     silent fresh redo on top of unknown work, and a fresh run would
     lose the existing work. The Issue goes `ai-blocked` ALONE (the
-    claim label removed) with the exact reason in the failure comment
-    — a human decides (restore or remove the worktree, then re-label).
+    claim label removed) with the exact reason, then the community
+    help line — a human decides (restore or remove the worktree, relabel).
     """
     apply_label_patch(
         number, repo=source_repo, event=EVENT_BLOCKED,
@@ -616,7 +616,7 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
                 language_code, "failure.resume_blocked",
                 detail=_redact_local_paths(_failure_detail(error)),
                 run_id=run_id,
-            )
+            ) + f"\n\n{language.text(language_code, 'help.community')}"
         ),
     )
 
