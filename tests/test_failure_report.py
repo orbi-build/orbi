@@ -22,7 +22,9 @@ import logging
 import subprocess
 from pathlib import Path
 
-from orbi import failure_report, progress, runner
+import pytest
+
+from orbi import failure_report, language, progress, runner
 from tests.fakes.progress import freeze_report_time
 
 from seam import seam
@@ -622,22 +624,53 @@ def test_evidence_redacts_local_paths(monkeypatch, tmp_path):
 # branches the moved code brings along. A new file counts EVERY line as a
 # changed line for tools/diff_coverage_gate.py (Issue #234, tier 2), so the
 # new module has to be 100% covered and these three tests keep it there.
-def test_oversized_body_is_truncated_and_names_the_session_log(
-        monkeypatch, tmp_path):
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_oversized_blocked_body_ends_with_the_help_line_after_the_diagnosis(
+        monkeypatch, tmp_path, language_code):
+    """Issue #1695: the cut closes the open Diagnosis block, then the
+    truncation note and the community help line follow it — never inside
+    the collapsed block that the cut left open."""
     publisher = FakePublisher()
     outcome, posted, _ = _report(
         monkeypatch, tmp_path, session=True, publisher=publisher,
         classify=False, evidence=False, finish=False,
-        blocked_suffix="x" * 25000,
+        blocked_suffix="x" * 25000, language_code=language_code,
     )
+    note = language.text(
+        language_code, "failure.comment_truncated",
+        chars=failure_report.FAILURE_COMMENT_MAX_CHARS,
+        log=language.text(
+            language_code, "failure.scene.local_session_log"),
+    )
+    help_line = language.text(language_code, "help.community")
     assert outcome == "blocked"
-    # The cap bounds the body; the run marker rides on top of it.
-    assert len(posted[0]) < failure_report.FAILURE_COMMENT_MAX_CHARS + 200
+    # The diagnosis is cut at the same cap as before; the closer, the note
+    # and the help line are added after the cut (no length promise covers
+    # them — the run markers are prepended after the cap too).
+    assert len(posted[0]) < failure_report.FAILURE_COMMENT_MAX_CHARS + 500
     assert "x" * 25000 not in posted[0]
+    assert "\n</details>" in posted[0]
+    assert posted[0].rindex("</details>") < posted[0].index(help_line)
+    assert posted[0].endswith(f"{note}\n\n{help_line}")
+
+
+def test_oversized_fix_needed_body_keeps_the_plain_cut_without_the_help_line(
+        monkeypatch, tmp_path):
+    """Acceptance 2: the recoverable comment is cut exactly as before and
+    never gains the help line (only a blocked stop asks a person)."""
+    publisher = FakePublisher()
+    outcome, posted, _ = _report(
+        monkeypatch, tmp_path, session=True, publisher=publisher,
+        classify=True, evidence=False, finish=False,
+        review_scene_block="z" * 25000,
+    )
+    assert outcome == "fix needed"
+    assert "z" * 25000 not in posted[0]
     assert (
         f"[comment truncated at {failure_report.FAILURE_COMMENT_MAX_CHARS} "
         "chars; full session log: local session log]" in posted[0]
     )
+    assert language.text("en", "help.community") not in posted[0]
 
 
 def test_block_scene_failure_never_raises_a_reporting_failure(
