@@ -838,21 +838,18 @@ def report_delivery_failure(
         )
         outcome = "fix needed"
     if len(body) > FAILURE_COMMENT_MAX_CHARS:
-        # The comment body is capped; the cut preserves the
-        # cause-first head and names the full session log for the part
-        # that was dropped.
-        session_file = _latest_session_file(worktree)
-        body = (
-            body[:FAILURE_COMMENT_MAX_CHARS]
-            + language.text(
-                language_code, "failure.comment_truncated",
-                chars=FAILURE_COMMENT_MAX_CHARS,
-                log=(
-                    language.text(
-                        language_code, "failure.scene.local_session_log")
-                    if session_file else "<unavailable>"
-                ),
-            )
+        # The cap keeps the cause-first head, and `failure.cap_comment`
+        # closes the cut Diagnosis block before the note and the help
+        # line, so a blocked stop still shows how to get help (Issue
+        # #1695); the full session log names what was dropped.
+        body = failure.cap_comment(
+            body, limit=FAILURE_COMMENT_MAX_CHARS,
+            log=(
+                language.text(
+                    language_code, "failure.scene.local_session_log")
+                if _latest_session_file(worktree) else "<unavailable>"
+            ),
+            language_code=language_code,
         )
     if run_id:
         # The hidden fingerprint marker rides under the run marker on
