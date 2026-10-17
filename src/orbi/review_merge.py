@@ -1657,48 +1657,52 @@ def delivered_changed_files(worktree: Path, base: str) -> list[str] | None:
     return [line.strip() for line in raw.splitlines() if line.strip()]
 
 
-def human_review_checklist(
-    worktree: Path, config: config_domain.RunnerConfig, *, run_id: str, pr_url: str,
-    test_status: str | None,
-) -> str:
-    """Build the human acceptance checklist comment for one delivery.
+def _delivery_checklist(
+    worktree: Path, config: config_domain.RunnerConfig, *, test_status: str | None,
+) -> dict:
+    """Build the human acceptance checklist ONCE from delivery evidence.
 
     Evidence is read from the delivery worktree (the committed diff
-    against the frozen base) plus the PR head's CI check status read by
-    the caller (Issue #1613: local logs are no longer parsed) — no
-    session, no extra GitHub read here. `base_sha` is always present on
-    the same run that posts the checklist; a resumed re-derivation falls
-    back to the configured base branch.
-    """
-    base = config.base_sha or config.base_branch
-    return human_review.render_checklist_comment(
-        run_id=run_id,
-        pr_url=pr_url,
-        language_code=language.of(config),
-        checklist=human_review.build_checklist(
-            test_status=test_status,
-            changed_files=delivered_changed_files(worktree, base),
-            language_code=language.of(config),
-        ),
-    )
-
-
-def _human_review_column2(
-    worktree: Path, config: config_domain.RunnerConfig, *, test_status: str | None,
-) -> list[str]:
-    """Recompute the checklist's column 2 from delivery evidence.
-
-    The review-round gate's per-tick cost: local file reads plus the
-    caller's CI check status — no session, no GitHub write here. Missing
-    evidence lands IN column 2 (the gate holds), so only real evidence
-    can pass it.
+    against the frozen base) plus the caller's PR head's CI check status
+    (Issue #1613: local logs are no longer parsed) — no session, no
+    GitHub read or write here. The PR-open render and the gate's wait
+    decision both read this one build, so column 2 is decided once.
+    `base_sha` is always present on the same run that posts the
+    checklist; a resumed re-derivation falls back to the configured base
+    branch. Missing evidence lands IN column 2 (the gate holds), so only
+    real evidence can pass it.
     """
     base = config.base_sha or config.base_branch
     return human_review.build_checklist(
         test_status=test_status,
         changed_files=delivered_changed_files(worktree, base),
         language_code=language.of(config),
-    )["column2"]
+    )
+
+
+def human_review_checklist(
+    worktree: Path, config: config_domain.RunnerConfig, *, run_id: str, pr_url: str,
+    test_status: str | None,
+) -> tuple[str, bool]:
+    """Build the human acceptance checklist comment for one delivery.
+
+    Returns the rendered body and `needs_person` (column 2 is non-empty,
+    so a person must confirm something). The caller sends the
+    "waiting for your review" notification from this decision, next to
+    the checklist it posts — once per delivery, when the PR opens.
+    """
+    checklist = _delivery_checklist(
+        worktree, config, test_status=test_status,
+    )
+    return (
+        human_review.render_checklist_comment(
+            run_id=run_id,
+            pr_url=pr_url,
+            language_code=language.of(config),
+            checklist=checklist,
+        ),
+        bool(checklist["column2"]),
+    )
 
 
 def _run_review_round(
@@ -1791,9 +1795,9 @@ def _run_review_round(
         gate_worktree = worktree_path(
             config.repo_dir, source_repo, number, run_id,
         )
-        if gate_worktree.is_dir() and _human_review_column2(
+        if gate_worktree.is_dir() and _delivery_checklist(
             gate_worktree, config, test_status=test_status(checks),
-        ):
+        )["column2"]:
             if READY_LABEL not in labels:
                 apply_label_patch(
                     number, repo=source_repo,

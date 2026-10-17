@@ -117,6 +117,32 @@ for command in (
     subprocess.run(command, cwd=cwd, check=True, capture_output=True)
 """
 
+FAKE_PI_DOCS = """#!/usr/bin/env python3
+import os, re, subprocess, sys
+args = sys.argv[1:]
+prompt_arg = args[args.index("--system-prompt") + 1]
+prompt = (open(prompt_arg, encoding="utf-8").read()
+          if os.path.exists(prompt_arg) else prompt_arg)
+cwd = os.getcwd()
+os.makedirs(os.path.join(cwd, ".pi-session"), exist_ok=True)
+run_id = re.search(r"Run id: `([0-9a-f]{8})`", prompt).group(1)
+os.makedirs(os.path.join(cwd, ".orbi"), exist_ok=True)
+with open(os.path.join(cwd, ".orbi", "plan.md"), "w",
+          encoding="utf-8") as handle:
+    handle.write(f"<!-- orbi:run={run_id} -->\\n# Plan\\n\\nrun_id={run_id}\\n")
+# A documentation-only delivery: the checklist's column 2 stays empty
+# when CI passed, so the gate asks no person to step in (Issue #1691).
+os.makedirs(os.path.join(cwd, "docs"), exist_ok=True)
+with open(os.path.join(cwd, "docs", "notes.md"), "w",
+          encoding="utf-8") as handle:
+    handle.write("# Notes\\n")
+for command in (
+    ["git", "add", "."],
+    ["git", "commit", "-m", f"delivery for run {run_id}"],
+):
+    subprocess.run(command, cwd=cwd, check=True, capture_output=True)
+"""
+
 FAKE_PI_REVIEW_FAILING = """#!/usr/bin/env python3
 import os, sys
 os.makedirs(os.path.join(os.getcwd(), ".pi-session"), exist_ok=True)
@@ -168,7 +194,8 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     edits: list[list[str]] | None = None,
                     served_comments: list[dict] | None = None,
                     pr: dict | None = None,
-                    labels: list[str] | None = None) -> None:
+                    labels: list[str] | None = None,
+                    rollup: list | None = None) -> None:
     """Answer the runner's ``gh`` calls; capture comments and label edits.
 
     ``gh pr list`` answers with the local HEAD as ``headRefOid`` and a PR
@@ -182,7 +209,10 @@ def install_fake_gh(monkeypatch, comments: list[str],
     production shape (a top-level object with a ``.comments`` array;
     every comment carries the owner association of the runner's own
     account), which is how the resume scene is recovered after a
-    restart. Pass ``served_comments`` to serve a fixed comment history
+    ``gh pr view --json state,statusCheckRollup`` read answers with
+    ``rollup`` as the PR head's checks (Issue #1691: an empty checklist
+    column 2 needs a passing CI result) and with no rollup otherwise.
+    Pass ``served_comments`` to serve a fixed comment history
     (e.g. public comments) instead of the captured one.
     """
     comment_ids: list[int] = []
@@ -290,6 +320,12 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     comments.append(command[-1])
                     return ""
                 if command[2] == "view":
+                    if rollup is not None and "statusCheckRollup" in \
+                            command[-1]:
+                        return json.dumps({
+                            "state": pr["state"],
+                            "statusCheckRollup": rollup,
+                        })
                     cwd = kwargs.get("cwd")
                     if cwd is None:
                         # `pr_state` only needs the state (no git).
@@ -977,16 +1013,25 @@ def test_e2e_human_review_gate_posts_the_checklist_once_and_holds(
     assert "human_review_waiting" in caplog.text
 
 
+@pytest.mark.parametrize("seed", [
+    # The normal delivery reaches the gate with ai-ready still on it (a
+    # claim never removes it, EVENT_PR_OPENED only removes ai-in-progress).
+    ["ai-ready", "ai-pr-opened"],
+    # An ai-blocked recovery path: the gate's label patch fires again.
+    ["ai-pr-opened"],
+])
 def test_e2e_human_review_wait_sends_one_needs_you_message(
-    clone, tmp_path, monkeypatch,
+    clone, tmp_path, monkeypatch, seed,
 ):
-    """Issue #1684: the first tick the gate holds a delivery sends ONE
-    Telegram "waiting for your review" message (status, Issue line, link,
-    help line); the next tick sends nothing. The wire is the local
-    recording endpoint from #1673."""
+    """Issue #1691: with the gate on and a non-empty column 2, the PR-open
+    tick sends ONE "waiting for your review" message (status, Issue line,
+    link, help line) next to the checklist; two more gate ticks add
+    nothing. The label patch is not the trigger, so the message arrives
+    whatever labels the delivery carries. The wire is the local recording
+    endpoint from #1673."""
     comments: list[str] = []
     edits: list[list[str]] = []
-    labels = ["ai-pr-opened"]
+    labels = list(seed)
     pr = {"state": "OPEN", "merged": False}
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
     install_fake_gh(monkeypatch, comments, edits, pr=pr, labels=labels)
@@ -1002,8 +1047,7 @@ def test_e2e_human_review_wait_sends_one_needs_you_message(
         )
         result = runner.process_issue(issue(), config, REPO)
         assert result.url == PR_URL
-        # The review tick holds at the gate and sends the wait message.
-        runner.delivery_step(result.url, issue(), config, REPO)
+        # The checklist block sends the wait message when the PR opens.
         assert endpoint.texts() == [
             "Orbi · Needs your attention: Waiting for your review\n"
             f"{REPO}#{ISSUE_NUMBER} Continue fixing the same PR\n"
@@ -1011,10 +1055,49 @@ def test_e2e_human_review_wait_sends_one_needs_you_message(
             "Need help? Join the Orbi community: "
             "https://t.me/+kJRTTpFGBRU0M2Y9"
         ]
-        assert set(labels) == {"ai-pr-opened", "ai-ready"}
-        # The next tick sees ai-ready and skips the patch: nothing more.
-        runner.delivery_step(result.url, issue(), config, REPO)
+        # Two gate ticks hold the delivery; no message is sent again.
+        for _ in range(2):
+            runner.delivery_step(result.url, issue(), config, REPO)
+            assert set(labels) == {"ai-pr-opened", "ai-ready"}
+            assert pr["merged"] is False
         assert len(endpoint.texts()) == 1
+
+
+def test_e2e_human_review_column2_empty_posts_the_checklist_and_no_message(
+    clone, tmp_path, monkeypatch,
+):
+    """Issue #1691 acceptance 2: with the gate on, a passing CI rollup and
+    a docs-only delivery, column 2 is empty — nobody has to confirm
+    anything, so the checklist is posted and NO message is sent."""
+    comments: list[str] = []
+    pr = {"state": "OPEN", "merged": False}
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI_DOCS)
+    install_fake_gh(
+        monkeypatch, comments, pr=pr,
+        labels=["ai-ready", "ai-pr-opened"],
+        rollup=[{"name": "tests", "status": "COMPLETED",
+                 "conclusion": "SUCCESS"}],
+    )
+    config = dataclasses.replace(
+        config_for(clone, tmp_path), human_review_gate=True,
+    )
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind_notify(
+            monkeypatch,
+            dataclasses.replace(config, telegram_chat_id="-1001234567890"),
+            "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawQ",
+        )
+        result = runner.process_issue(issue(), config, REPO)
+        assert endpoint.texts() == []
+    assert result.url == PR_URL
+    checklists = [
+        body for body in comments
+        if human_review.CHECKLIST_MARKER in body
+    ]
+    assert len(checklists) == 1
+    # The empty column 2 is the target state: no human intervention needed.
+    assert "no human intervention needed" in checklists[0]
 
 
 def test_e2e_human_review_checklist_failure_is_a_bypass(

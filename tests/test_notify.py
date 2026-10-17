@@ -189,7 +189,6 @@ class BoomText:
 def test_public_functions_swallow_a_broken_config(monkeypatch, capsys):
     bind(monkeypatch)
     notify.tick_start(BoomConfig())
-    assert notify.enabled() is False
     assert notify.doctor_lines(BoomConfig()) == []
     assert notify.test_command(BoomConfig()) == 1
     assert "notify_failed reason=network_error" in capsys.readouterr().out
@@ -341,54 +340,74 @@ def test_apply_label_patch_notifies_awaiting_merge(monkeypatch):
         ]
 
 
-def test_apply_label_patch_notifies_human_review_waiting_once(monkeypatch):
-    """Issue #1684: the human-review hold sends ONE message with the wait
-    status and the help line; the next tick (ai-ready already present)
-    sends nothing."""
+def test_the_gate_label_patch_never_notifies(monkeypatch):
+    """Issue #1691: the gate's label patch stays (it avoids re-writing
+    labels every tick) but sends nothing. The message belongs to the
+    checklist block, which runs once per delivery — a normal delivery
+    already carries ai-ready, so a trigger here fires almost never."""
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch)
         monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+        reads = []
         monkeypatch.setattr(
-            seam, "issue_view", lambda *a, **k: {"title": "Review me"},
+            seam, "issue_view",
+            lambda *a, **k: reads.append(a) or {"title": "Review me"},
         )
         github.apply_label_patch(
             7, repo="o/r", event=EVENT_HUMAN_REVIEW_WAITING,
             current_labels={"ai-pr-opened"},
         )
+        github.apply_label_patch(
+            7, repo="o/r", event=EVENT_HUMAN_REVIEW_WAITING,
+            current_labels={"ai-pr-opened", "ai-ready"},
+        )
+        assert endpoint.texts() == []
+        # No message means no title read: the patch is pure label work.
+        assert reads == []
+
+
+def test_human_review_waiting_sends_the_wait_message(monkeypatch):
+    """Issue #1691: one message with the wait status, the Issue line, the
+    link and the help line (the person must step in)."""
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        notify.human_review_waiting("o/r", 7, "Review me")
         assert endpoint.texts() == [
             "Orbi · Needs your attention: Waiting for your review\n"
             "o/r#7 Review me\n"
             "https://github.com/o/r/issues/7\n"
             f"{HELP_EN}"
         ]
-        # The first wait already added ai-ready; the next tick sees it and
-        # the caller skips the patch, so nothing is sent again.
-        github.apply_label_patch(
-            7, repo="o/r", event=EVENT_HUMAN_REVIEW_WAITING,
-            current_labels={"ai-pr-opened", "ai-ready"},
-        )
-        assert len(endpoint.texts()) == 1
 
 
 def test_human_review_waiting_message_follows_the_language(monkeypatch):
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch, config=HostLanguageConfig(message_language="zh"))
-        monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
-        monkeypatch.setattr(
-            seam, "issue_view", lambda *a, **k: {"title": "复核我"},
-        )
-        github.apply_label_patch(
-            7, repo="o/r", event=EVENT_HUMAN_REVIEW_WAITING,
-            current_labels={"ai-pr-opened"},
-        )
+        notify.human_review_waiting("o/r", 7, "复核我")
         assert endpoint.texts() == [
             "Orbi · 需要您处理：等您人工验收\n"
             "o/r#7 复核我\n"
             "https://github.com/o/r/issues/7\n"
             f"{HELP_ZH}"
         ]
+
+
+def test_human_review_waiting_is_silent_when_notifications_are_off(
+    monkeypatch,
+):
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch, config=config_for(chat_id=None))
+        notify.human_review_waiting("o/r", 7, "Review me")
+        assert endpoint.requests == []
+
+
+def test_human_review_waiting_swallows_a_message_build_failure(monkeypatch):
+    bind(monkeypatch)
+    notify.human_review_waiting(BoomText(), 7, "t")
 
 
 def test_apply_label_patch_does_not_notify_a_non_attention_add(monkeypatch):
@@ -592,7 +611,6 @@ def test_tick_start_binds_the_token_for_the_label_hook(monkeypatch):
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         notify.tick_start(config_for())
-        assert notify.enabled() is True
         notify.label_added("o/r", 7, BLOCKED_LABEL, "t")
         assert len(endpoint.texts()) == 1
 
