@@ -12,6 +12,7 @@ which fixes findings in the same session. Failures mark the Issue
 from orbi import config as config_domain
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -1078,14 +1079,17 @@ def test_pick_resumable_delivery_ignores_holds_of_other_repos(
     assert scene["run_id"] == FAKE_RUN_ID
 
 
+@pytest.mark.parametrize("language_code", ["en", "zh"])
 def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
-    monkeypatch, caplog, tmp_path,
+    monkeypatch, caplog, tmp_path, language_code,
 ):
     """An `ai-fix-needed` Issue whose comment history carries no trusted
     opened-PR comment at all cannot be resumed: it is blocked through
     the DISTINCT missing-scene branch (Issue #786 — never
     `block_scene_failure`, which only fires on a corrupted scene) and
-    the scan returns None so the tick continues (Issue #672)."""
+    the scan returns None so the tick continues (Issue #672). The blocked
+    comment gets the community help line from the ONE blocked exit
+    (Issue #1730), in the run's language, exactly once."""
     edits: list[list[str]] = []
     comments: list[str] = []
     monkeypatch.setattr(seam, "run_command",
@@ -1099,14 +1103,19 @@ def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
     caplog.set_level("ERROR")
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(), language_code="en",
+        hooks=resume_deps(), language_code=language_code,
     ) is None
     assert edits == [[
         "gh", "issue", "edit", "9", "--repo", "owner/repo",
         "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
     ]]
-    assert "Orbi failed:" in comments[0]
-    assert "no trusted 'Orbi opened PR'" in comments[0]
+    assert "'Orbi opened PR'" in comments[0]
+    # The comment layer appends its hidden runner marker last; the visible
+    # body ends with the language's one community help line (Issue #1730).
+    help_line = language.text(language_code, "help.community")
+    visible = re.sub(r"\n\n<!-- runner=[^>]+ -->$", "", comments[0])
+    assert visible.endswith(f"\n\n{help_line}")
+    assert visible.count(help_line) == 1
     assert "issue=9 resume scene is missing" in caplog.text
 
 

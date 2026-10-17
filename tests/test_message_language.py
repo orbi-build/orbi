@@ -323,14 +323,17 @@ def test_problem_comments_end_with_the_community_help_line():
     assert zh == (
         "需要帮助？加入 Orbi 用户群：https://t.me/+kJRTTpFGBRU0M2Y9"
     )
-    # The blocked failure diagnostic ends with it; fix-needed retries and
-    # does not.
+    # The blocked failure diagnostic no longer ends with it here: the ONE
+    # blocked exit appends it to every blocked comment (Issue #1730), so the
+    # renderer and that exit can never both add it (the exit's own test
+    # asserts the posted body). Fix-needed retries never get it.
     blocked = failure._failure_comment_body(
         outcome="blocked", action="a", reason="boom", diagnosis="",
         scene="- run: `x`", evidence="", pr_url=None,
         issue="owner/repo#7", run_id="abcdef12", language_code="en",
     )
-    assert blocked.endswith(en)
+    assert not blocked.endswith(en)
+    assert blocked.endswith("</details>")
     fix_needed = failure._failure_comment_body(
         outcome="fix needed", action="a", reason="boom", diagnosis="",
         scene="- run: `x`", evidence="", pr_url=None,

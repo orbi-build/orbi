@@ -42,6 +42,7 @@ from tests.fakes.gitops import remote_head_answer
 from tests.test_progress_wiring import make_fake_gh
 import orbi.journal as journal
 from seam import resume_deps, seam
+from orbi.delivery_labels import EVENT_BLOCKED
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
 from conftest import rendered_prompt
@@ -14308,10 +14309,14 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
         "remove": "ai-fix-needed",
     }
     assert len(edits) == 1
-    # ... with a failure comment carrying the run marker and run_id.
+    # ... with a failure comment carrying the run marker and run_id and,
+    # from the ONE blocked exit, the community help line last (Issue #1730).
     body = comments[0][1]["body"]
     assert "Orbi failed:" in body
     assert f"<!-- orbi:run=a1b2c3d4 -->" in body
+    help_line = language.text("en", "help.community")
+    assert body.endswith(f"\n\n{help_line}")
+    assert body.count(help_line) == 1
     assert f"pr={PR_URL}" in caplog.text
     assert "delivery_closed_unmerged" in caplog.text
     # The terminal failure also posts the blocked milestone (Issue #18)
@@ -14347,6 +14352,41 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
     # completed review rounds (review round 2, PR #42).
     assert "- role: review" in blocked
     assert "- review/fix round: 2" not in blocked
+
+
+def test_delivery_step_pr_closed_comment_follows_the_language(monkeypatch):
+    """Issue #1730: the PR-closed blocked comment ends with the community
+    help line in the run's bound language — the zh scene goes through the
+    same blocked exit as the en one."""
+    def fake_run(command, **kwargs):
+        # Only the two reads this scene makes; a third command fails fast
+        # with a KeyError instead of being answered by a catch-all arm.
+        answers = {
+            ("gh", "pr", "view"): {"state": "CLOSED"},
+            ("gh", "issue", "view"): {"labels": [{"name": "ai-fix-needed"}]},
+        }
+        return json.dumps(answers[tuple(command[:3])])
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "_CURRENT_RUN_ID", None)
+    comments: list = []
+    monkeypatch.setattr(seam, "comment_issue",
+        lambda number, **kwargs: comments.append(kwargs))
+    monkeypatch.setattr(seam, "apply_label_patch",
+        lambda number, **kwargs: None)
+    monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
+    runner.delivery_step(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        config_domain.RunnerConfig(message_language="zh"),
+        "owner/repo",
+    )
+    body = comments[0]["body"]
+    help_line = language.text("zh", "help.community")
+    assert body.endswith(f"\n\n{help_line}")
+    assert body.count(help_line) == 1
+    assert language.text(
+        "zh", "runner.pr_closed_comment", pr_url=PR_URL,
+    ) in body
 
 
 def test_delivery_step_review_failure_without_bound_run_id(
@@ -14458,13 +14498,19 @@ def test_delivery_step_blocks_when_in_progress_label_repair_fails(
         if kwargs["event"] == runner.EVENT_PR_OPENED:
             raise RuntimeError("label API unavailable")
     monkeypatch.setattr(seam, "apply_label_patch", fake_patch)
-    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
+    comments: list = []
+    monkeypatch.setattr(seam, "comment_issue",
+        lambda *args, **kwargs: comments.append(kwargs))
     runner.delivery_step(
         PR_URL, {"number": 39, "title": "task", "body": ""},
         config_domain.RunnerConfig(), "owner/repo",
     )
-    assert patches[-1]["event"] == runner.EVENT_BLOCKED
+    assert patches[-1]["event"] == EVENT_BLOCKED
     assert "delivery_label_repair_failed" in caplog.text
+    # The blocked comment ends with the community help line (Issue #1730).
+    help_line = language.text("en", "help.community")
+    assert comments[0]["body"].endswith(f"\n\n{help_line}")
+    assert comments[0]["body"].count(help_line) == 1
 
 
 def test_delivery_step_keeps_holding_when_no_delivery_label(
@@ -14541,6 +14587,10 @@ def test_delivery_step_label_repair_failure_comment_follows_the_language(
     assert "Orbi 失败：PR" in body
     assert "ai-blocked" in body
     assert PR_URL in body
+    # The blocked comment ends with the language's help line (#1730).
+    help_line = language.text("zh", "help.community")
+    assert body.endswith(f"\n\n{help_line}")
+    assert body.count(help_line) == 1
 
 
 def test_delivery_step_logs_awaiting_without_bound_run_id(monkeypatch, caplog):
@@ -17222,7 +17272,11 @@ def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
     assert edits[-1][1]["add"] == "ai-blocked"
 
 
-def test_process_ticket_only_failure_marks_blocked_without_git_delivery(monkeypatch):
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_process_ticket_only_failure_marks_blocked_without_git_delivery(
+        monkeypatch, language_code):
+    """A failed ticket-only run blocks with the community help line from the
+    ONE blocked exit, in the run's bound language (Issue #1730)."""
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
              "labels": [{"name": "ai-content-only"}]}
     edits = []
@@ -17238,11 +17292,24 @@ def test_process_ticket_only_failure_marks_blocked_without_git_delivery(monkeypa
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
     monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
     with pytest.raises(RuntimeError, match="Pi failed"):
-        runner.process_ticket_only(issue, config_domain.RunnerConfig(repo_dir=Path("/repo")), "o/r")
+        runner.process_ticket_only(
+            issue, config_domain.RunnerConfig(
+                repo_dir=Path("/repo"), message_language=language_code,
+            ), "o/r",
+        )
     assert edits[-1] == (99, {"repo": "o/r", "add": "ai-blocked",
                               "remove": "ai-in-progress"})
-    assert "No Git branch, commit, or PR was created." in comments[-1][1]["body"]
-    assert "run_id=a1b2c3d4" in comments[-1][1]["body"]
+    body = comments[-1][1]["body"]
+    assert language.text(
+        language_code, "runner.ticket_only_failed",
+        detail="Pi failed",
+        run_info="run_id=a1b2c3d4 priority=normal task_type=ticket-only",
+        run_id="a1b2c3d4",
+    ) in body
+    assert "run_id=a1b2c3d4" in body
+    help_line = language.text(language_code, "help.community")
+    assert body.endswith(f"\n\n{help_line}")
+    assert body.count(help_line) == 1
 
 
 def test_process_ticket_only_keeps_original_error_when_failure_reporting_fails(monkeypatch):

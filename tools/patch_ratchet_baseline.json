@@ -1,6 +1,7 @@
 {
   "command_shape_asserts": 480,
   "monkeypatch_setattr_modules": {
+    "blocked_comment": 0,
     "branch_reclaim": 0,
     "checks": 0,
     "claim": 94,
@@ -14,7 +15,7 @@
     "delivery_scene": 0,
     "engine_source": 0,
     "failure": 0,
-    "failure_report": 67,
+    "failure_report": 60,
     "git_identity": 0,
     "git_transport": 0,
     "github": 20,

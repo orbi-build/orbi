@@ -24,10 +24,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orbi import failure
+from orbi.blocked_comment import post_blocked_comment
 from orbi.delivery_scene import RunContext
 from orbi.delivery_labels import (
     EPIC_LABEL,
-    EVENT_BLOCKED,
     EVENT_CLAIM,
     EVENT_MERGED,
     EVENT_RELEASE_WAITING,
@@ -1655,16 +1655,14 @@ def process_release(issue: dict, config: RunnerConfig,
         return ""
     except Exception as exc:
         LOGGER.exception("issue=%s release_failed", number)
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_BLOCKED,
-            current_labels={IN_PROGRESS_LABEL},
-        )
-        comment_issue(
+        post_blocked_comment(
             number, repo=source_repo,
             body=release_failure_comment_body(
                 run_id, run_info, exc,
                 language_code=language.of(config),
             ),
+            current_labels={IN_PROGRESS_LABEL},
+            language_code=language.of(config),
         )
         publish(
             action=lambda: publisher.finish(progress_body(progress())),

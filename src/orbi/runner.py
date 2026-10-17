@@ -57,6 +57,7 @@ from orbi import language
 from orbi import milestone as milestone_bookkeeping
 from orbi import claim, clarify, notify
 from orbi import config as config_domain
+from orbi.blocked_comment import post_blocked_comment
 from orbi.branch_reclaim import delete_merged_delivery_branch, reclaim_merged_delivery_branches
 from orbi.engine_source import EngineSourceError
 from orbi.git_identity import set_bot_git_identity
@@ -86,7 +87,6 @@ from orbi.delivery_labels import (
     PR_OPENED_LABEL,
     READY_LABEL,
     RELEASE_LABEL,
-    EVENT_BLOCKED,
     EVENT_CLAIM,
     EVENT_FIX_NEEDED,
     EVENT_HUMAN_REVIEW_WAITING,
@@ -1164,11 +1164,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
         LOGGER.exception("issue=%s ticket-only failed", number)
         detail = _failure_detail(exc)
         try:
-            apply_label_patch(
-                number, repo=source_repo, event=EVENT_BLOCKED,
-                current_labels={IN_PROGRESS_LABEL},
-            )
-            comment_issue(
+            post_blocked_comment(
                 number, repo=source_repo,
                 body=(f"{run_marker(run_id)}\n"
                       + language.text(
@@ -1176,6 +1172,8 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
                           "runner.ticket_only_failed",
                           detail=detail, run_info=run_info, run_id=run_id,
                       )),
+                current_labels={IN_PROGRESS_LABEL},
+                language_code=language.of(config),
             )
             publish(
                 action=lambda: publisher.milestone(language.text(
@@ -3458,16 +3456,15 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
         )
         # The blocked patch leaves the terminal state `ai-blocked`
         # alone.
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_BLOCKED,
-            current_labels=labels,
-        )
         body = language.text(
             language.of(config), "runner.pr_closed_comment", pr_url=pr_url,
         )
         if marker:
             body = f"{marker}\n{body}"
-        comment_issue(number, repo=source_repo, body=body)
+        post_blocked_comment(
+            number, repo=source_repo, body=body,
+            current_labels=labels, language_code=language.of(config),
+        )
         if run_id:
             # The blocked-scene progress publishing is
             # bypass — a 404 here must not escape the step (the
