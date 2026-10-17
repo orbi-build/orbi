@@ -345,6 +345,123 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "{detail}\n\n"
         "</details>",
     ),
+    # Milestone confirmation tickets, stale-notice receipts and the
+    # /command receipts (Issue #1704). Machine fields -- the
+    # \u0060orbi-milestone-advance\u0060 fingerprint, command names, labels,
+    # version strings, receipt markers and the raw failure reason -- are
+    # never catalog entries.
+    "milestone.confirm_release_heading": (
+        "## Milestone complete, awaiting manual release confirmation",
+        "## Milestone 已完成，等待人工确认发布",
+    ),
+    "milestone.confirm_release_closed": (
+        "All Issues in the current milestone \u0060{old}\u0060 are closed, but no "
+        "release ticket has been created yet.",
+        "当前 milestone \u0060{old}\u0060 的所有 Issue 都已关闭，但还没有创建 "
+        "release ticket。",
+    ),
+    "milestone.confirm_release_manual": (
+        "This Issue does not create the release ticket automatically; it "
+        "is opened only after you confirm.",
+        "这个 Issue 不会自动创建 release ticket；只有在您确认之后才会创建。",
+    ),
+    "milestone.confirm_release_command": (
+        "Comment \u0060/milestone {old}\u0060 on this Issue to create the release "
+        "ticket (rendered from \u0060.github/release-ticket-template.md\u0060 and "
+        "carrying the \u0060{release_label}\u0060 label; each of the three steps "
+        "is idempotent).",
+        "在本 Issue 上评论 \u0060/milestone {old}\u0060 来创建 release ticket（由 "
+        "\u0060.github/release-ticket-template.md\u0060 渲染，并带有 "
+        "\u0060{release_label}\u0060 标签；三个步骤都是幂等的）。",
+    ),
+    "milestone.confirm_write_permission": (
+        "The commenter needs write permission on the repository.",
+        "评论者需要拥有本仓库的写权限。",
+    ),
+    "milestone.confirm_advance_heading": (
+        "## Milestone auto-advance awaiting manual confirmation",
+        "## Milestone 自动推进等待人工确认",
+    ),
+    "milestone.confirm_advance_intro": (
+        "The current milestone \u0060{old}\u0060 is complete; waiting for "
+        "confirmation to advance to one of the candidate versions:",
+        "当前 milestone \u0060{old}\u0060 已完成；等待确认推进到以下候选版本之一：",
+    ),
+    "milestone.confirm_candidate": (
+        "- \u0060{title}\u0060: {open_issues} open issues",
+        "- \u0060{title}\u0060：{open_issues} 个未关闭 Issue",
+    ),
+    "milestone.confirm_advance_command": (
+        "Comment \u0060/milestone <version>\u0060 on this Issue (exact match "
+        "against a candidate title):",
+        "在本 Issue 上评论 \u0060/milestone <version>\u0060（需与某个候选标题完全一致）：",
+    ),
+    "milestone.confirm_advance_steps": (
+        "the command creates the milestone, opens a release ticket "
+        "from \u0060.github/release-ticket-template.md\u0060, and lands "
+        "\u0060active_milestone\u0060; each of the three steps is idempotent.",
+        "该命令会创建 Milestone、从 \u0060.github/release-ticket-template.md\u0060 "
+        "打开 release ticket，并写入 \u0060active_milestone\u0060；三个步骤都是幂等的。",
+    ),
+    "milestone.confirm_advance_permission": (
+        "The commenter needs write permission on the repository. "
+        "You can also restore auto-advance and close this Issue.",
+        "评论者需要拥有本仓库的写权限。您也可以恢复自动推进并关闭这个 Issue。",
+    ),
+    "milestone.stale_active_milestone": (
+        "Settled: the configured active_milestone is \u0060{active}\u0060.",
+        "已收敛：当前配置 active_milestone = \u0060{active}\u0060。",
+    ),
+    "milestone.stale_release_exists": (
+        "Settled: the release ticket for Milestone \u0060{active}\u0060 already "
+        "exists, so the release confirmation is no longer needed.",
+        "已收敛：Milestone \u0060{active}\u0060 的 release ticket 已存在，"
+        "不再等待发布确认。",
+    ),
+    "milestone.stale_release_wait_over": (
+        "Settled: Milestone \u0060{active}\u0060 is no longer waiting for "
+        "release confirmation.",
+        "已收敛：Milestone \u0060{active}\u0060 不再等待发布确认。",
+    ),
+    "command.argument_label.argument": ("argument", "参数"),
+    "command.argument_label.version": ("version", "版本"),
+    "command.not_applied": (
+        "**\u0060/{name}\u0060 command not applied**",
+        "**\u0060/{name}\u0060 命令未执行**",
+    ),
+    "command.failed": (
+        "**\u0060/{name} {argument}\u0060 command failed**",
+        "**\u0060/{name} {argument}\u0060 命令执行失败**",
+    ),
+    "command.reason": ("- reason: {reason}", "- 原因：{reason}"),
+    "command.command_line": (
+        "- command line: \u0060/{name}\u0060", "- 命令行：\u0060/{name}\u0060",
+    ),
+    "command.argument": (
+        "- {label}: \u0060{argument}\u0060", "- {label}：\u0060{argument}\u0060",
+    ),
+    "command.failed_step": (
+        "- failed step: \u0060{step}\u0060", "- 失败步骤：\u0060{step}\u0060",
+    ),
+    "command.comment": ("- command comment: {ref}", "- 命令评论：{ref}"),
+    "command.reason_no_permission": (
+        "the command author has no {permission} permission on this "
+        "repository (authorAssociation={association!r})",
+        "命令作者在本仓库没有 {permission} 权限"
+        "（authorAssociation={association!r}）",
+    ),
+    "command.reason_malformed": (
+        "the command line is malformed: write exactly one "
+        "{label} on its own line, \u0060{usage}\u0060",
+        "命令行格式不正确：请单独一行只写一个{label}，例如 \u0060{usage}\u0060",
+    ),
+    "command.reason_not_candidate": (
+        "\u0060{version}\u0060 is not an open milestone above the current "
+        "one; candidates: {candidates}",
+        "\u0060{version}\u0060 不是当前版本之上的开放 Milestone；"
+        "候选版本：{candidates}",
+    ),
+
     # The Epic reconciliation audit comment (Issue #1705): the sentence a
     # provably complete Epic receives before it is closed. The child
     # fragments ("PR #N merged", "Issue #N closed") are shared evidence and

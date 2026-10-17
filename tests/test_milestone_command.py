@@ -1618,6 +1618,7 @@ def test_release_notice_is_closed_once_its_milestone_closes(
     milestone.advance_active_milestone_on_idle(
         "owner/repo", "v0.5.40", config, release_confirmation=True,
         parse_version_title=runner._parse_version_title,
+        language_code="zh",
     )
     assert [notice["number"] for notice in fake.notices] == [500]
     # The reply opened the ticket and the release published -> M closed
@@ -1627,6 +1628,7 @@ def test_release_notice_is_closed_once_its_milestone_closes(
     assert milestone.advance_active_milestone_on_idle(
         "owner/repo", "v0.5.40", config, release_confirmation=True,
         parse_version_title=runner._parse_version_title,
+        language_code="zh",
     ) == (milestone.MILESTONE_CLOSED_UNSCOPED, None)
     assert fake.notices == []
     assert len(fake.comments) == 1
@@ -1681,6 +1683,7 @@ def test_release_notice_close_receipt_never_claims_a_missing_ticket(
     milestone.advance_active_milestone_on_idle(
         "owner/repo", "v0.5.40", config, release_confirmation=True,
         parse_version_title=runner._parse_version_title,
+        language_code="zh",
     )
     assert [notice["number"] for notice in fake.notices] == [500]
     # A new ticket lands in the Milestone: no release ticket exists.
@@ -1688,6 +1691,7 @@ def test_release_notice_close_receipt_never_claims_a_missing_ticket(
     milestone.advance_active_milestone_on_idle(
         "owner/repo", "v0.5.40", config, release_confirmation=True,
         parse_version_title=runner._parse_version_title,
+        language_code="zh",
     )
     assert fake.release_issues == []
     assert fake.notices == []
@@ -1901,3 +1905,202 @@ def test_repo_policy_auto_next_milestone_false_stops_the_idle_advance(
     # The confirmation Issue is the decision channel.
     assert len(fake.notices) == 1
     assert "orbi-milestone-advance" in fake.notices[0]["body"]
+
+
+# --- message language (Issue #1704) --------------------------------------
+
+
+def _confirmation_body(
+    monkeypatch, tmp_path, milestones, *, language_code: str,
+    release_confirmation: bool = False, active: str = "v0.5.40",
+) -> str:
+    """Drive the idle confirmation path and return the created ticket body."""
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        f'active_milestone = "{active}"\n', encoding="utf-8",
+    )
+    fake = FakeMilestoneGh(current=active)
+    fake.milestones = [dict(milestone) for milestone in milestones]
+    monkeypatch.setattr(seam, "run_command", fake.run)
+    monkeypatch.setattr(seam, "run_gh_read_command", fake.run)
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
+    milestone.advance_active_milestone_on_idle(
+        "owner/repo", active, config,
+        auto_next_milestone=False,
+        release_confirmation=release_confirmation,
+        parse_version_title=runner._parse_version_title,
+        language_code=language_code,
+    )
+    return fake.notices[0]["body"]
+
+
+def test_advance_confirmation_body_follows_the_message_language(
+    monkeypatch, tmp_path,
+):
+    milestones = [
+        {"title": "v0.5.40", "state": "closed"},
+        {"title": "v0.5.41", "state": "open", "open_issues": 2},
+    ]
+    zh = _confirmation_body(
+        monkeypatch, tmp_path, milestones, language_code="zh",
+    )
+    assert "## Milestone 自动推进等待人工确认" in zh
+    assert "等待确认推进到以下候选版本之一" in zh
+    # The machine fingerprint the close sweep searches for is unchanged.
+    assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.41" in zh
+    assert "awaiting manual confirmation" not in zh
+    en = _confirmation_body(
+        monkeypatch, tmp_path, milestones, language_code="en",
+    )
+    assert "## Milestone auto-advance awaiting manual confirmation" in en
+    assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.41" in en
+    assert "- `v0.5.41`: 2 open issues" in en
+
+
+def test_release_confirmation_body_follows_the_message_language(
+    monkeypatch, tmp_path,
+):
+    milestones = [{"title": "v0.5.40", "state": "open", "open_issues": 0}]
+    zh = _confirmation_body(
+        monkeypatch, tmp_path, milestones, language_code="zh",
+        release_confirmation=True,
+    )
+    assert "## Milestone 已完成，等待人工确认发布" in zh
+    assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.40" in zh
+    assert "awaiting manual release confirmation" not in zh
+    en = _confirmation_body(
+        monkeypatch, tmp_path, milestones, language_code="en",
+        release_confirmation=True,
+    )
+    assert "## Milestone complete, awaiting manual release confirmation" in en
+    assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.40" in en
+
+
+def test_stale_notice_close_receipt_follows_the_message_language():
+    stale = "orbi-milestone-advance old=v0.5.39 candidates=v0.5.41"
+    release = "orbi-milestone-advance old=v0.5.40 candidates=v0.5.40"
+    assert milestone._stale_notice_comment(
+        stale, "v0.5.40", keep_release_notice=True, language_code="en",
+    ) == "Settled: the configured active_milestone is `v0.5.40`."
+    assert milestone._stale_notice_comment(
+        stale, "v0.5.40", keep_release_notice=True, language_code="zh",
+    ) == "已收敛：当前配置 active_milestone = `v0.5.40`。"
+    assert milestone._stale_notice_comment(
+        release, "v0.5.40", keep_release_notice=False,
+        release_ticket_exists=True, language_code="en",
+    ).startswith("Settled: the release ticket")
+    assert milestone._stale_notice_comment(
+        release, "v0.5.40", keep_release_notice=False,
+        release_ticket_exists=False, language_code="en",
+    ).startswith("Settled: Milestone")
+    assert milestone._stale_notice_comment(
+        release, "v0.5.40", keep_release_notice=False,
+        release_ticket_exists=True, language_code="zh",
+    ).startswith("已收敛：")
+
+
+def _receipt_context(**overrides):
+    context = {
+        "candidate_titles": ["v0.5.41"],
+        "config_path": Path("/nope"),
+        "policy": None,
+        "policy_path": ".github/orbi.toml",
+        "base_branch": "main",
+        "dispatch_label": READY_LABEL,
+        "version_file": None,
+    }
+    context.update(overrides)
+    return context
+
+
+def test_command_receipts_follow_the_message_language(monkeypatch):
+    comments = [
+        _comment("/milestone v0.5.41", login="outsider",
+                 association="NONE", cid=11),
+        _comment("/milestone v0.5.41 extra", cid=12),
+        _comment("/milestone v9.9.9", cid=13),
+    ]
+    posts = []
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
+    monkeypatch.setattr(
+        seam, "run_command", lambda command, **kwargs: posts.append(command) or "",
+    )
+    monkeypatch.setattr(
+        seam, "apply_milestone_command",
+        lambda *args, **kwargs: pytest.fail("nothing to apply"),
+    )
+    ticket_command.process_commands(
+        "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND],
+        language_code="zh", **_receipt_context(),
+    )
+    assert len(posts) == 3
+    permission, malformed, candidate = (
+        _receipt_body(posts, index) for index in range(3)
+    )
+    assert "**`/milestone` 命令未执行**" in permission
+    assert "- 原因：" in permission
+    assert "没有 write 权限" in permission
+    assert "authorAssociation='NONE'" in permission
+    assert "命令行格式不正确" in malformed
+    assert "版本" in malformed
+    assert "`/milestone <version>`" in malformed
+    assert "不是当前版本之上的开放 Milestone" in candidate
+    assert "候选版本：v0.5.41" in candidate
+    assert "- 版本：`v9.9.9`" in candidate
+    # The hidden idempotency marker never changes with the language.
+    assert "<!-- orbi-milestone-command-rejected comment=13 -->" in candidate
+    # A second sweep over the same comments posts no second receipt.
+    comments.extend(
+        {"id": 90 + index, "body": post[post.index("--body") + 1]}
+        for index, post in enumerate(posts)
+    )
+    ticket_command.process_commands(
+        "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND],
+        language_code="zh", **_receipt_context(),
+    )
+    assert len(posts) == 3
+
+
+def test_a_failed_command_receipt_follows_the_message_language(monkeypatch):
+    comments = [_comment("/milestone v0.5.41", cid=21)]
+    posts = []
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
+    monkeypatch.setattr(
+        seam, "run_command", lambda command, **kwargs: posts.append(command) or "",
+    )
+    monkeypatch.setattr(
+        seam, "apply_milestone_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ticket_command.TicketCommandError("release ticket", "template missing")
+        ),
+    )
+    ticket_command.process_commands(
+        "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND],
+        language_code="zh", **_receipt_context(),
+    )
+    body = _receipt_body(posts)
+    assert "**`/milestone v0.5.41` 命令执行失败**" in body
+    # The failure reason stays the raw exception text (#1687).
+    assert "- 原因：template missing" in body
+    assert "- 失败步骤：`release ticket`" in body
+    assert (
+        "<!-- orbi-milestone-command-failed step=release ticket comment=21 -->"
+        in body
+    )
+
+
+def test_command_receipts_stay_english_by_default(monkeypatch):
+    comments = [_comment("/milestone v9.9.9", cid=13)]
+    posts = []
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
+    monkeypatch.setattr(
+        seam, "run_command", lambda command, **kwargs: posts.append(command) or "",
+    )
+    ticket_command.process_commands(
+        "owner/repo", 436, commands=[milestone_command.MILESTONE_COMMAND],
+        **_receipt_context(),
+    )
+    body = _receipt_body(posts)
+    assert "**`/milestone` command not applied**" in body
+    assert "- reason: " in body
+    assert "- version: `v9.9.9`" in body

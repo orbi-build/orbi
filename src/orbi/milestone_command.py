@@ -30,6 +30,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from orbi import config as config_domain
+from orbi import language
 from orbi.delivery_labels import RELEASE_LABEL
 from orbi.github import list_issues, list_milestones, run_gh_read_command
 from orbi.journal import run_command
@@ -500,13 +501,15 @@ def apply_milestone_command(
 
 
 def _milestone_validate(
-    version: str, *, candidate_titles: list[str], **_context: object,
+    version: str, *, candidate_titles: list[str],
+    language_code: str = language.DEFAULT_LANGUAGE, **_context: object,
 ) -> str | None:
     """The command's own business rule: the title must be a candidate."""
     if version not in set(candidate_titles):
-        return (
-            f"`{version}` is not an open milestone above the current one; "
-            f"candidates: {', '.join(candidate_titles) or '(none)'}"
+        return language.text(
+            language_code, "command.reason_not_candidate",
+            version=version,
+            candidates=", ".join(candidate_titles) or "(none)",
         )
     return None
 
@@ -538,7 +541,7 @@ MILESTONE_COMMAND = CommandSpec(
     apply=_milestone_apply,
     usage="/milestone <version>",
     description="advance the active Milestone from a confirmation Issue",
-    argument_label="version",
+    argument_label="command.argument_label.version",
 )
 
 register_command(MILESTONE_COMMAND)

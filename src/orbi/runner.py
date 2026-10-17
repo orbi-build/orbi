@@ -3868,7 +3868,7 @@ def main(argv: list[str] | None = None) -> int:
                                 ),
                                 base_branch=fused_idle.base_branch,
                                 dispatch_label=dispatch_label,
-                                version_file=config.version_file,
+                                version_file=config.version_file, language_code=language.of(fused_idle),
                             )
                         )
                     except Exception:
