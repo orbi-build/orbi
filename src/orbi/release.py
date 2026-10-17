@@ -1218,14 +1218,14 @@ def process_release(issue: dict, config: RunnerConfig,
 
     ctx = RunContext(
         run_id=run_id, issue=number, branch=branch, worktree=worktree,
-        source_repo=source_repo, language=language.of(config),
+        source_repo=source_repo,
     )
 
     def progress() -> dict:
         return _progress_state(
             ctx, title=title, role=ROLE_RELEASE, started=started,
             pr_url=None, review_round=0, priority=priority,
-            activity={},
+            activity={}, language_code=publisher.language_code,
         )
 
     def on_delivery_wait(detail: str) -> None:

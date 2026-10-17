@@ -71,7 +71,7 @@ _LEGACY_BLOCKER_RE = re.compile(
 
 def handoff_body(
     marker: str, *, pr_number: int, head: str, preflight: list[str],
-    language_code: str = language.DEFAULT_LANGUAGE,
+    language_code: str,
 ) -> str:
     """Render the one maintainer-action comment for a waiting PR.
 
@@ -132,7 +132,7 @@ def awaiting_merge_handoff_announced(
 def handle_merge_handoff(
     *, number: int, repo: str, pr_number: int, head: str,
     preflight: list[str], marker: str,
-    language_code: str = language.DEFAULT_LANGUAGE,
+    language_code: str,
 ) -> bool:
     """Announce one maintainer-action handoff, idempotently.
 

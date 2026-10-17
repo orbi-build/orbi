@@ -2106,6 +2106,33 @@ def test_ensure_config_creates_example_without_overwriting(tmp_path):
     assert "message_language" not in config.read_text(encoding="utf-8")
 
 
+def test_ensure_config_seeds_a_top_level_key_before_a_trailing_table(
+    tmp_path, monkeypatch,
+):
+    """Issue #1687 acceptance 4: the real setup entry point seeds a
+    top-level `message_language` even when the adjacent example has no
+    such line and ends with a `[[repositories]]` table — the key used to
+    land INSIDE that table and be ignored, so the created config silently
+    fell back to `en`."""
+    example = tmp_path / ".orbi.example.toml"
+    example.write_text(
+        'source_repos = ["OWNER/REPO"]\n'
+        '\n[[repositories]]\nname = "repo"\ngithub = "OWNER/REPO"\n',
+        encoding="utf-8",
+    )
+    for name in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LANG", "zh_CN.UTF-8")
+    config = tmp_path / "orbi.toml"
+    assert pilot_setup.ensure_config(config) == config
+    parsed = tomllib.loads(config.read_text(encoding="utf-8"))
+    assert parsed["message_language"] == "zh"
+    assert parsed["repositories"] == [
+        {"name": "repo", "github": "OWNER/REPO"},
+    ]
+    assert parsed["source_repos"] == ["OWNER/REPO"]
+
+
 @pytest.mark.parametrize("locale,expected", [
     ({"LC_ALL": "zh_CN.UTF-8"}, "zh"),
     ({"LC_MESSAGES": "zh"}, "zh"),

@@ -486,7 +486,7 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
     #      ORIGINAL worktree (Issue #82: no cold-start fixer).
     resumed, scene = claim.pick_resumable_delivery(
         REPO, tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     )
     assert scene is not None
     # The scene carries only what the runner cannot derive itself;
@@ -795,7 +795,7 @@ def test_e2e_public_comment_scene_is_never_resumed(
     # returns None so the tick continues.
     assert claim.pick_resumable_delivery(
         REPO, tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
     # The blocked transition happened (add ai-blocked, remove
     # ai-fix-needed) and the failure comment names the reason...

@@ -87,8 +87,9 @@ ORBI_REPO = "orbi-build/orbi"
 
 
 def make_config(tmp_path: Path, *, health_alert_repo=None,
-                unit_name: str | None = None) -> dict:
-    return config_domain.RunnerConfig(repo_dir=tmp_path, source_repos=(REPO,), deploy_home=tmp_path, health_alert_repo=health_alert_repo, unit_name=unit_name, max_concurrency=2)
+                unit_name: str | None = None,
+                message_language: str = "en") -> dict:
+    return config_domain.RunnerConfig(repo_dir=tmp_path, source_repos=(REPO,), deploy_home=tmp_path, health_alert_repo=health_alert_repo, unit_name=unit_name, max_concurrency=2, message_language=message_language)
 
 
 def origin_route(url: str = f"git@github.com:{ORBI_REPO}.git") -> dict:
@@ -619,6 +620,38 @@ def test_repeated_failure_alerts_once_with_the_latest_run_marker(tmp_path):
     )
     assert alerts == []
     assert len(fake.commands("gh issue comment")) == 1
+
+
+@pytest.mark.parametrize("message_language,expected,unexpected", [
+    ("zh", "Orbi 健康巡检：", "Orbi health check:"),
+    ("en", "Orbi health check:", "Orbi 健康巡检"),
+])
+def test_repeated_failure_comment_follows_the_host_language(
+    tmp_path, message_language, expected, unexpected,
+):
+    """Issue #1687 item 3: the repeated-failure escalation comment used to
+    be an English-only literal; it follows the configured language now."""
+    write_state(tmp_path, {
+        "runs": [
+            run_entry(REPO, 41, "00000001", "fp1"),
+            run_entry(REPO, 41, "00000002", "fp1"),
+            run_entry(REPO, 41, "00000003", "fp1"),
+        ],
+        "last_pickup_ts": time.time(), "alerted": [],
+    })
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": "",
+        "journalctl --user -u orbi@2.service": "",
+    })
+    assert runner_health.run_health_check(
+        make_config(tmp_path, message_language=message_language),
+        run_command=fake,
+    ) == [f"repeated_failure:{REPO}#41"]
+    comment = fake.commands("gh issue comment")[0]
+    body = comment[comment.index("--body") + 1]
+    assert expected in body
+    assert unexpected not in body
+    assert "<!-- orbi:run=00000003 -->" in body
 
 
 def test_record_run_attempt_clears_alerted_keys_on_a_streak_break(tmp_path):

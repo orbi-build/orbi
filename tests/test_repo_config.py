@@ -804,7 +804,7 @@ def test_started_pi_comment_body_renders_repo_config_fields():
         extra_fields={
             "repo_config_changed": "old..new",
             "repo_config_diff": "base_branch=main->beta",
-        },
+        }, language_code="en",
     )
     assert "- repo_config: " + "a" * 40 in body
     assert "- repo_config_changed: old..new" in body
@@ -825,9 +825,9 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(seam, "has_in_progress_label", lambda number, repo: False,
     )
-    monkeypatch.setattr(seam, "open_pr_for_branch", lambda *a: None)
-    monkeypatch.setattr(runner, "external_takeover_pr", lambda *a: None)
-    monkeypatch.setattr(seam, "stable_branch_exists", lambda *a: False)
+    monkeypatch.setattr(seam, "open_pr_for_branch", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "external_takeover_pr", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "stable_branch_exists", lambda *a, **k: False)
     monkeypatch.setattr(seam, "freeze_base",
         lambda repo_dir, base_branch: seen.setdefault("base", base_branch) or "sha",
     )
@@ -835,7 +835,7 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
     )
     monkeypatch.setattr(run_state, "write_run_state", lambda *a, **k: None)
     monkeypatch.setattr(pi_session, "resume_context", lambda worktree: None)
-    monkeypatch.setattr(pi_session, "apply_runner_runtime_excludes", lambda *a: None)
+    monkeypatch.setattr(pi_session, "apply_runner_runtime_excludes", lambda *a, **k: None)
     monkeypatch.setattr(
         pi_session, "run_pi",
         lambda issue, ctx, config, **kwargs: "done",
@@ -866,7 +866,7 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
     monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: kwargs["action"](),
     )
     monkeypatch.setattr(runner, "runner_health", type("H", (), {
-        "record_pickup": staticmethod(lambda *a: None),
+        "record_pickup": staticmethod(lambda *a, **k: None),
         "record_run_attempt": staticmethod(lambda *a, **k: None),
         "health_state_path": staticmethod(lambda *a: Path("/tmp/x")),
         "failure_fingerprint": staticmethod(lambda *a: ""),
@@ -1032,7 +1032,7 @@ def test_block_repo_config_failure_is_best_effort(monkeypatch, caplog):
 
     monkeypatch.setattr(seam, "apply_label_patch", broken)
     failure_report.block_repo_config_failure(
-        1, "owner/repo", ValueError("bad"), "a1b2c3d4",
+        1, "owner/repo", ValueError("bad"), "a1b2c3d4", language_code="en",
     )
     assert "repo_config_failure_report_failed" in caplog.text
 
@@ -1081,9 +1081,9 @@ def test_process_issue_accepts_a_pre_resolved_record(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(seam, "has_in_progress_label", lambda number, repo: False,
     )
-    monkeypatch.setattr(seam, "open_pr_for_branch", lambda *a: None)
-    monkeypatch.setattr(runner, "external_takeover_pr", lambda *a: None)
-    monkeypatch.setattr(seam, "stable_branch_exists", lambda *a: False)
+    monkeypatch.setattr(seam, "open_pr_for_branch", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "external_takeover_pr", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "stable_branch_exists", lambda *a, **k: False)
     seen = {}
     monkeypatch.setattr(seam, "freeze_base",
         lambda repo_dir, base_branch: seen.setdefault("base", base_branch),
@@ -1097,7 +1097,7 @@ def test_process_issue_accepts_a_pre_resolved_record(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
     monkeypatch.setattr(runner, "runner_health", type("H", (), {
-        "record_pickup": staticmethod(lambda *a: None),
+        "record_pickup": staticmethod(lambda *a, **k: None),
         "record_run_attempt": staticmethod(lambda *a, **k: None),
         "health_state_path": staticmethod(lambda *a: Path("/tmp/x")),
         "failure_fingerprint": staticmethod(lambda *a: ""),
@@ -1224,6 +1224,27 @@ def test_resolve_policy_context_files_are_additive():
     )
     assert effective.context_files == (Path("/host.md"),)
     assert effective.repo_context_files == ("AGENTS.md",)
+
+
+def test_merged_repo_language_reads_the_merged_file(monkeypatch):
+    """Issue #1687: the claim-time language is the repository's merged
+    value -- an explicit repository key wins over the host, an absent file
+    keeps the host value, and a malformed file is fail-open (the claim
+    itself then blocks the Issue with the readable reason)."""
+    def answering(payload: str):
+        monkeypatch.setattr(seam, "run_command", _record(payload))
+
+    config = config_domain.RunnerConfig(message_language="zh")
+    answering('message_language = "en"\n')
+    assert repo_config.merged_repo_language(config, "o/r") == "en"
+    answering('base_branch = "beta"\n')
+    assert repo_config.merged_repo_language(config, "o/r") == "zh"
+    answering('base_branch = 5\n')  # malformed: fail open to the host
+    assert repo_config.merged_repo_language(config, "o/r") == "zh"
+    monkeypatch.setattr(seam, "run_command",
+        lambda command, **kwargs: json.dumps({}),  # no such file
+    )
+    assert repo_config.merged_repo_language(config, "o/r") == "zh"
 
 
 def test_policy_diff_compares_policy_fields_and_skips_the_sha():

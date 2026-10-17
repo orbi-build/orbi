@@ -605,6 +605,24 @@ def validate_context_file(worktree, relative: str, *,
     return path
 
 
+def merged_repo_language(config: RunnerConfig, source_repo: str) -> str:
+    """The effective message language of one source repo (Issue #1687).
+
+    The repository's `.github/orbi.toml` wins per key; an absent file
+    falls back to the host value. Claim-time comments are written before
+    `runner.main` merges the policy, so they resolve it here with the
+    same fail-open read the claim scans use (a malformed file falls back
+    to the host language -- the claim itself then blocks the Issue).
+    """
+    try:
+        policy = load_repo_policy(config, source_repo)
+    except RepoConfigError:
+        policy = None
+    if policy is None:
+        return config.message_language
+    return resolve_policy(config, policy).message_language
+
+
 def repository_config_path(config: RunnerConfig, source_repo: str) -> str:
     """The repository config path of one source repo.
 

@@ -101,7 +101,7 @@ def test_deliver_pr_retries_transient_pr_create(monkeypatch, tmp_path):
 
     assert runner.deliver_pr(
         _ctx(tmp_path), "main", "9" * 40, issue_title="t",
-        repo_dir=tmp_path,
+        repo_dir=tmp_path, language_code="en",
     ) == FAKE_PR_URL
     assert len(create_attempts) == 2
 
@@ -120,7 +120,7 @@ def test_deliver_pr_lost_pr_create_response_does_not_duplicate(
 
     assert runner.deliver_pr(
         _ctx(tmp_path), "main", "9" * 40, issue_title="t",
-        repo_dir=tmp_path,
+        repo_dir=tmp_path, language_code="en",
     ) == FAKE_PR_URL
     assert len(create_attempts) == 1
 
@@ -148,7 +148,7 @@ def test_deliver_pr_pr_create_non_transient_fails_without_retry(
     with pytest.raises(subprocess.CalledProcessError) as failure:
         runner.deliver_pr(
             _ctx(tmp_path), "main", "9" * 40, issue_title="t",
-            repo_dir=tmp_path,
+            repo_dir=tmp_path, language_code="en",
         )
     assert failure.value.stderr == "HTTP 422: Validation Failed"
     assert len([

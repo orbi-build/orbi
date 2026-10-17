@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orbi.delivery_labels import READY_LABEL
+from orbi import language
 from orbi import scheduler
 from orbi.journal import RunIdFilter, event
 from orbi.progress import format_status_comment, run_marker
@@ -572,7 +573,7 @@ def create_health_issue(
     return None
 
 
-def repeat_failure_comment(finding: dict) -> str:
+def repeat_failure_comment(finding: dict, *, language_code: str) -> str:
     """Build the Issue comment for one repeated-failure finding.
 
     Carries the latest failing run's marker (`<!-- orbi:run=<run_id> -->`
@@ -581,14 +582,10 @@ def repeat_failure_comment(finding: dict) -> str:
     run_id = finding["run_ids"][0]
     return "\n".join([
         run_marker(run_id),
-        (
-            f"Orbi health check: issue #{finding['issue']} failed "
-            f"{finding['count']} consecutive runs with the same failure "
-            f"fingerprint `{finding['fingerprint']}` (run_id={run_id})."
-        ),
-        (
-            "This looks like a repeating dead end, not normal review/fix "
-            "rounds — escalating for attention."
+        language.text(
+            language_code, "health.repeat_failure",
+            issue=finding['issue'], count=finding['count'],
+            fingerprint=finding['fingerprint'], run_id=run_id,
         ),
         "",
         f"run_id={run_id}",
@@ -697,7 +694,9 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
                     "gh", "issue", "comment", str(finding["issue"]),
                     "--repo", finding["repo"],
                     "--body", format_status_comment(
-                        repeat_failure_comment(finding),
+                        repeat_failure_comment(
+                            finding, language_code=language.of(config),
+                        ),
                     ),
                 ],
                 timeout=GH_TIMEOUT_SECONDS,

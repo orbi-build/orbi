@@ -20,7 +20,7 @@ def finish_outcome_body(*, outcome: str, detail: str,
                         action: str | None = None,
                         reason: str | None = None,
                         diagnosis: str | None = None,
-                        language_code: str = language.DEFAULT_LANGUAGE,
+                        language_code: str,
                         ) -> str:
     """Render a terminal outcome with action, reason, and diagnosis."""
     def message(key: str, **fields: object) -> str:

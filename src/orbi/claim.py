@@ -41,7 +41,9 @@ from orbi.pilot_slots import slot_held_deliveries, slot_occupancy
 from orbi import language
 from orbi.progress import run_marker
 from orbi.release import release_target_milestone
-from orbi.repo_config import RepoConfigError, RepoPolicy, load_repo_policy
+from orbi.repo_config import (
+    RepoConfigError, RepoPolicy, load_repo_policy, merged_repo_language,
+)
 
 
 class ResumeHooks(NamedTuple):
@@ -49,11 +51,14 @@ class ResumeHooks(NamedTuple):
 
     The physical scene handling of `pick_resumable_delivery` plus the PR
     comment writer `reconcile_orphan_prs` reports its orphan through.
+    Every hook that writes a comment takes the claim's already-resolved
+    per-repository `language_code` (Issue #1687): the claim knows the
+    merged repository config before the first comment is written.
     """
     resume_scene: Callable[[list[dict]], dict]
-    route_external_pr_ticket: Callable[[dict, str], bool]
-    block_scene_failure: Callable[[dict, ValueError, str, list[dict]], None]
-    recover_missing_pr_scene: Callable[[dict, str, Path], dict | None]
+    route_external_pr_ticket: Callable[..., bool]
+    block_scene_failure: Callable[..., None]
+    recover_missing_pr_scene: Callable[..., dict | None]
     has_recoverable_pr_scene: Callable[[dict, str, Path], bool]
     comment_pr: Callable[..., None]
 
@@ -243,7 +248,7 @@ def orphan_pr_branch_issue(head_ref: object) -> int | None:
 
 
 def reconcile_orphan_prs(
-    repo: str, run_id: str, *, hooks: ResumeHooks,
+    repo: str, run_id: str, *, hooks: ResumeHooks, language_code: str,
 ) -> list[str]:
     """Report open delivery PRs whose source Issue is closed.
 
@@ -287,11 +292,10 @@ def reconcile_orphan_prs(
             pr_number, repo=repo,
             body=(
                 f"{ORPHAN_PR_MARK}\n{run_marker(run_id)}\n"
-                f"Orbi orphan PR: the source Issue #{issue_number} is "
-                f"closed while this PR is still open, so it will never "
-                f"be merged automatically. Human decision: merge this "
-                f"PR to keep the work, or close it.\n"
-                f"run_id={run_id}"
+                + language.text(
+                    language_code, "claim.orphan_pr",
+                    issue_number=issue_number, run_id=run_id,
+                )
             ),
         )
         event(
@@ -638,7 +642,7 @@ def pick_next_issue(
 def pick_resumable_delivery(
     repo: str, slot_dir: Path, max_concurrency: int,
     repo_dir: Path | None = None, *, hooks: ResumeHooks,
-    language_code: str = language.DEFAULT_LANGUAGE,
+    language_code: str,
 ) -> tuple[dict, dict] | None:
     """Return the newest FREE opened-PR delivery and its resume scene.
 
@@ -734,15 +738,15 @@ def pick_resumable_delivery(
             # probe the #726 external route first; otherwise this is the
             # ONLY trigger of `block_scene_failure` — a present-but-broken
             # scene is a writer bug or tampering and needs a human.
-            if hooks.route_external_pr_ticket(issue, repo):
+            if hooks.route_external_pr_ticket(issue, repo, language_code=language_code):
                 continue
-            hooks.block_scene_failure(issue, exc, repo, comments)
+            hooks.block_scene_failure(issue, exc, repo, comments, language_code=language_code)
             continue
         except scene.SceneMissingError as exc:
             # No trusted comment carries a scene at all — a distinct branch
             # from corruption. The original #726 incident was
             # exactly this shape, so the external route is probed first.
-            if hooks.route_external_pr_ticket(issue, repo):
+            if hooks.route_external_pr_ticket(issue, repo, language_code=language_code):
                 continue
             # Issue #1216: `awaiting_merge` can deliberately remove the
             # queue label before the delivery returns to `ai-fix-needed`.
@@ -774,7 +778,7 @@ def pick_resumable_delivery(
             # scene comment write. Retry it from the durable local run
             # state; keep ai-pr-opened for another tick if the retry fails.
             recovered = (
-                hooks.recover_missing_pr_scene(issue, repo, repo_dir)
+                hooks.recover_missing_pr_scene(issue, repo, repo_dir, language_code=language_code)
                 if repo_dir is not None else None
             )
             if recovered is not None:
@@ -900,19 +904,18 @@ def pick_next_delivery(
         # Orphan-PR reconciliation follows the same bypass
         # pattern: a broken GitHub query must never prevent the ordinary
         # delivery scans.
+        repo_language = (language.DEFAULT_LANGUAGE if config is None
+                         else merged_repo_language(config, repo))
         try:
-            reconcile_orphan_prs(repo, tick_run_id, hooks=hooks)
+            reconcile_orphan_prs(repo, tick_run_id, hooks=hooks,
+                                 language_code=repo_language)
         except Exception:
             LOGGER.exception("orphan_pr_reconcile_failed repo=%s", repo)
-        if config is None:
-            selected = pick_resumable_delivery(
-                repo, slot_dir, max_concurrency, hooks=hooks,
-            )
-        else:
-            selected = pick_resumable_delivery(
-                repo, slot_dir, max_concurrency, config.repo_dir,
-                hooks=hooks, language_code=language.of(config),
-            )
+        selected = pick_resumable_delivery(
+            repo, slot_dir, max_concurrency,
+            repo_dir=config.repo_dir if config is not None else None,
+            hooks=hooks, language_code=repo_language,
+        )
         if selected is not None:
             issue, scene = selected
             return repo, issue, scene
