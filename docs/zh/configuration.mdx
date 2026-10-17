@@ -89,7 +89,7 @@ Steering 让 Runner 轮询 Issue 中的受信任修正，并带着修正重启�
 
 ## 通知
 
-Orbi 可以把等待人的任务在 GitHub 之外告知队列负责人：当它新加上 `ai-blocked`、`ai-needs-detail` 或 `ai-awaiting-merge` 时，向 Telegram（私聊或群）发送一条消息，写明状态、`owner/repo#N <title>` 和 Issue 链接。人工验收门禁（`human_review_gate`）也会在交付第一次开始等待人时（重新加上 `ai-ready`）发送一条消息——`等您人工验收`；之后的 tick 看到 `ai-ready` 已存在，不再发送。人手加的标签是他自己的动作，不会发送。发送是纯旁路——失败只记 `notify_failed` journal 行（见 [Operations](/zh/operations)），绝不使交付失败或改动标签。
+Orbi 可以把等待人的任务在 GitHub 之外告知队列负责人：当它新加上 `ai-blocked`、`ai-needs-detail` 或 `ai-awaiting-merge` 时，向 Telegram（私聊或群）发送一条消息，写明状态、`owner/repo#N <title>` 和 Issue 链接。人工验收门禁（`human_review_gate`）也会发送一条消息——`等您人工验收`——每次交付仅一次：PR 打开、且清单要求人确认（栏二非空）时，与那份清单一起发送。栏二为空的交付不需要人介入，不发送；之后的 tick 也不会重复发送。人手加的标签是他自己的动作，不会发送。发送是纯旁路——失败只记 `notify_failed` journal 行（见 [Operations](/zh/operations)），绝不使交付失败或改动标签。
 
 需要人处理的问题消息——`ai-blocked`、`ai-needs-detail` 以及人工验收等待——结尾都带社区求助行 `需要帮助？加入 Orbi 用户群：https://t.me/+kJRTTpFGBRU0M2Y9`；普通交接（`ai-awaiting-merge`、合并通知、`orbi notify test`）不带。Orbi 的 GitHub 评论遵循同一规则：澄清评论、栏二非空的人工复核清单、以及 blocked 失败诊断，结尾都带这一行——绝不出现在没有要求人介入的评论里。
 
