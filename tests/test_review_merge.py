@@ -1072,9 +1072,10 @@ def test_preexisting_ci_check_skips_base_lookup_without_base(monkeypatch):
 
 
 def test_merge_gate_reads_the_state_once(monkeypatch, tmp_path):
-    """Issue #788: the gate reads the PR state ONCE — pending checks
-    defer (DeliveryDeferred) instead of polling, and no merge command
-    runs against an unconcluded head."""
+    """Issue #788: a pending rollup is never re-read (Issue #1736 only
+    re-reads a CI-concluded UNKNOWN mergeability), so the gate defers
+    (DeliveryDeferred) instead of polling and no merge command runs
+    against an unconcluded head."""
     views = []
 
     def fake_run(command, **kwargs):
@@ -1515,18 +1516,127 @@ def test_merge_gate_defers_when_ci_pending(monkeypatch, tmp_path, caplog):
     assert "merge_gate_ci_pending" in caplog.text
 
 
-def test_merge_gate_defers_when_mergeable_unknown(monkeypatch, tmp_path, caplog):
-    """Issue #788: a still-UNKNOWN mergeability (GitHub recomputes it
-    asynchronously) defers the merge to the next tick — no poll, no
-    failure, one journal line."""
-    monkeypatch.setattr(seam, "run_command", _merge_gate_fake(pr_state="UNKNOWN"))
+_GREEN_CHECK = {"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}
+
+
+def _pr_state(mergeable, *, head="h1", rollup=None):
+    return {"state": "OPEN", "mergeable": mergeable, "headRefOid": head,
+            "statusCheckRollup": ([_GREEN_CHECK] if rollup is None
+                                  else rollup)}
+
+
+def _mergeable_sequence(states, views):
+    """Per-read PR states, recording every state read the gate performs."""
+    pending = iter(states)
+
+    def fake_run(command, **kwargs):
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
+            views.append(command)
+            return json.dumps(next(pending))
+        return ""
+    return fake_run
+
+
+def test_merge_gate_rereads_a_transient_unknown_mergeability(
+        monkeypatch, tmp_path):
+    """Issue #1736: GitHub computes mergeability asynchronously. A first
+    read that is UNKNOWN on a CI-concluded head is re-read seconds later
+    in the SAME gate pass, and a MERGEABLE answer merges in that call
+    instead of costing a whole timer interval."""
+    views = []
+    monkeypatch.setattr(seam, "run_command", _mergeable_sequence(
+        [_pr_state("UNKNOWN"), _pr_state("MERGEABLE")], views,
+    ))
+    sleeps = []
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    result = review_merge.merge_gate(
+        tmp_path, {"number": 4, "url": "u", "base_ref": "main",
+                   "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
+        "main", repo_dir=tmp_path, language_code="en",
+    )
+    assert result["merged"] is True
+    assert len(views) == 2
+    assert sleeps == [review_merge.MERGEABLE_UNKNOWN_RETRY_DELAYS[0]]
+
+
+def test_merge_gate_reread_uses_the_whole_last_state_for_a_stale_head(
+        monkeypatch, tmp_path, caplog):
+    """Issue #1736: the retried read replaces the WHOLE state, so an
+    UNKNOWN -> MERGEABLE head behind the base still absorbs the base and
+    defers with `base_absorbed_deferred` — never a merge on the older
+    read's facts."""
+    monkeypatch.setattr(seam, "fetch_base_ref", lambda *a, **k: None)
+    # The fake's `git merge-base --is-ancestor` answers "behind", so the
+    # REAL `assess_base_freshness` classifies the reread head as absorbable
+    # (the patch ratchet, Issue #789: no run_state patch needed).
+    monkeypatch.setattr(
+        seam, "run_command",
+        _absorb_merge_command_fake([
+            _absorb_pr_state("h1", mergeable="UNKNOWN"),
+            _absorb_pr_state("h1"),
+            _absorb_pr_state("h2"),
+        ]),
+    )
+    sleeps = []
+    monkeypatch.setattr("time.sleep", sleeps.append)
     with caplog.at_level("INFO"), pytest.raises(review_merge.DeliveryDeferred):
+        review_merge.merge_gate(
+            tmp_path, {"number": 4, "head_oid": "h1", "head_ref": "h",
+                       "base_oid": "b1"},
+            "main", repo_dir=tmp_path, language_code="en",
+        )
+    assert "base_absorbed_deferred" in caplog.text
+    assert len(sleeps) == 1
+
+
+def test_merge_gate_defers_when_mergeable_unknown(monkeypatch, tmp_path, caplog):
+    """Issue #788/#1736: when every bounded re-read still says UNKNOWN
+    (GitHub recomputes it asynchronously), the merge defers to the next
+    tick with the existing event — no poll, no failure, one journal line."""
+    views = []
+    monkeypatch.setattr(seam, "run_command", _mergeable_sequence(
+        [_pr_state("UNKNOWN") for _ in range(
+            1 + len(review_merge.MERGEABLE_UNKNOWN_RETRY_DELAYS))], views,
+    ))
+    sleeps = []
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    with caplog.at_level("INFO"), pytest.raises(
+        review_merge.DeliveryDeferred, match="mergeable state is UNKNOWN",
+    ):
         review_merge.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path, language_code="en",
         )
+    assert len(views) == 1 + len(review_merge.MERGEABLE_UNKNOWN_RETRY_DELAYS)
+    assert sleeps == list(review_merge.MERGEABLE_UNKNOWN_RETRY_DELAYS)
     assert "merge_gate_mergeable_unknown" in caplog.text
+
+
+def test_merge_gate_does_not_reread_while_ci_is_pending(
+        monkeypatch, tmp_path, caplog):
+    """Issue #1736: the re-read covers only a CI-concluded PR. A pending
+    rollup still defers with `merge_gate_ci_pending` after ONE read —
+    the #788 waiting primitive is unchanged for real waits."""
+    views = []
+    monkeypatch.setattr(seam, "run_command", _mergeable_sequence(
+        [_pr_state("UNKNOWN", rollup=[{
+            "name": "tests", "status": "IN_PROGRESS", "conclusion": None,
+        }])], views,
+    ))
+    sleeps = []
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    with caplog.at_level("INFO"), pytest.raises(
+        review_merge.DeliveryDeferred, match="CI is still running",
+    ):
+        review_merge.merge_gate(
+            tmp_path, {"number": 4, "url": "u", "base_ref": "main",
+                       "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
+            "main", repo_dir=tmp_path, language_code="en",
+        )
+    assert len(views) == 1
+    assert sleeps == []
+    assert "merge_gate_ci_pending" in caplog.text
 
 
 def test_merge_gate_rejects_non_mergeable_pr(monkeypatch, tmp_path):
