@@ -31,12 +31,12 @@ from pathlib import Path
 
 from orbi import config as config_domain
 from orbi import failure_report, github, gitops, human_review, pi_session, run_state, scene
+from orbi.blocked_comment import post_blocked_comment
 from orbi.branch_reclaim import delete_merged_delivery_branch
 from orbi.checks import _classify_rollup, _render_check, test_status
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL,
     BLOCKED_LABEL,
-    EVENT_BLOCKED,
     EVENT_FIX_NEEDED,
     EVENT_HUMAN_REVIEW_WAITING,
     EVENT_MERGED,
@@ -1353,10 +1353,10 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
                 bound, "review.external_conclusion", run_id=config.run_id,
             )
         )
-        comment_issue(number, repo=source_repo, body=body)
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_BLOCKED,
+        post_blocked_comment(
+            number, repo=source_repo, body=body,
             current_labels=issue_labels(number, source_repo),
+            language_code=bound,
         )
         event(
             "external_takeover_triage", pr=pr["number"], round=round,
@@ -1734,17 +1734,16 @@ def _run_review_round(
             "delivery_label_inconsistent", level=logging.ERROR,
             issue=number, pr=pr_url, reason=reason,
         )
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_BLOCKED,
-            current_labels=labels,
-        )
         body = language.text(
             language.of(config), "review.label_repair_failed",
             pr_url=pr_url, reason=reason,
         )
         if marker:
             body = f"{marker}\n{body}"
-        comment_issue(number, repo=source_repo, body=body)
+        post_blocked_comment(
+            number, repo=source_repo, body=body,
+            current_labels=labels, language_code=language.of(config),
+        )
 
     labels = issue_labels(number, source_repo)
     if IN_PROGRESS_LABEL in labels:

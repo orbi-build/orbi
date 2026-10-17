@@ -18,10 +18,11 @@ from typing import NamedTuple
 
 from orbi import milestone as milestone_bookkeeping
 from orbi import scene
+from orbi.blocked_comment import post_blocked_comment
 from orbi.checks import _classify_rollup, _render_check
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
-    AWAITING_MERGE_LABEL, BLOCKED_LABEL, EPIC_LABEL, EVENT_BLOCKED,
+    AWAITING_MERGE_LABEL, BLOCKED_LABEL, EPIC_LABEL,
     FIX_NEEDED_LABEL, IN_PROGRESS_LABEL, MERGED_LABEL, P0_LABEL,
     PR_OPENED_LABEL, READY_LABEL, RELEASE_LABEL,
 )
@@ -29,7 +30,7 @@ from orbi.delivery_scene import (
     EXTERNAL_PR_MARKER, DeliveryScene, _issue_label_set, body_markers, classify,
 )
 from orbi.github import (
-    _verify_epic_complete, apply_label_patch, close_issue,
+    _verify_epic_complete, close_issue,
     comment_issue, issue_comments, issue_priority, issue_view,
     latest_run_marker, list_issues, milestone_open_issue_count,
     open_blocker_numbers, open_pr_for_branch, pr_comments,
@@ -795,16 +796,14 @@ def pick_resumable_delivery(
                 LOGGER.error("issue=%s resume scene is missing: %s", number, exc)
                 marker = latest_run_marker(comments)
                 try:
-                    apply_label_patch(
-                        number, repo=repo, event=EVENT_BLOCKED,
-                        current_labels={FIX_NEEDED_LABEL},
-                    )
-                    comment_issue(
+                    post_blocked_comment(
                         number, repo=repo,
                         body=(f"{marker}\n" if marker else "")
                         + language.text(
                             language_code, "claim.scene_missing", error=exc,
                         ),
+                        current_labels={FIX_NEEDED_LABEL},
+                        language_code=language_code,
                     )
                 except Exception:
                     LOGGER.exception("issue=%s failure reporting failed", number)

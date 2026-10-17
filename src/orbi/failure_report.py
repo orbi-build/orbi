@@ -27,12 +27,13 @@ import re
 from pathlib import Path
 
 from orbi import failure, language, runner_health, scene
+from orbi.blocked_comment import post_blocked_comment
 from orbi.comment_kind import (
     COMMENT_KIND_FAILURE,
     comment_kind_marker,
 )
 from orbi.delivery_labels import (
-    EVENT_BLOCKED, EVENT_FIX_NEEDED, FIX_NEEDED_LABEL, IN_PROGRESS_LABEL,
+    EVENT_FIX_NEEDED, FIX_NEEDED_LABEL, IN_PROGRESS_LABEL,
 )
 from orbi.failure import (
     _failure_comment_body, _failure_detail, _failure_summary,
@@ -488,10 +489,6 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
     )
     marker = latest_run_marker(comments)
     try:
-        apply_label_patch(
-            number, repo=repo, event=EVENT_BLOCKED,
-            current_labels={FIX_NEEDED_LABEL},
-        )
         # A scene that cannot be recovered is an external
         # precondition the AI cannot fix by itself (the runner cannot
         # derive run_id, branch, worktree or PR without the trusted
@@ -499,7 +496,7 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
         # comment states the EXPLICIT reason why automatic recovery is
         # impossible plus the human next step (restore the scene comment,
         # then the ONE shared unblock step of the catalog, Issue #1724).
-        comment_issue(
+        post_blocked_comment(
             number, repo=repo,
             body=(
                 (f"{marker}\n"
@@ -508,6 +505,8 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
             ) + language.text(
                 language_code, "failure.scene_blocked", error=error,
             ),
+            current_labels={FIX_NEEDED_LABEL},
+            language_code=language_code,
         )
     except Exception:
         LOGGER.exception("issue=%s failure reporting failed", number)
@@ -529,11 +528,7 @@ def block_repo_config_failure(number: int, source_repo: str,
     cleanly (`main` releases the slot in its `finally`).
     """
     try:
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_BLOCKED,
-            current_labels=set(current_labels),
-        )
-        comment_issue(
+        post_blocked_comment(
             number, repo=source_repo,
             body=(
                 f"{run_marker(run_id)}\n"
@@ -542,6 +537,8 @@ def block_repo_config_failure(number: int, source_repo: str,
                     language_code, "failure.repo_config_blocked", error=error,
                 )
             ),
+            current_labels=set(current_labels),
+            language_code=language_code,
         )
     except Exception:
         LOGGER.exception("issue=%s repo_config_failure_report_failed", number)
@@ -600,14 +597,10 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
     verified: continuing on a guessed identity risks a
     silent fresh redo on top of unknown work, and a fresh run would
     lose the existing work. The Issue goes `ai-blocked` ALONE (the
-    claim label removed) with the exact reason, then the community
-    help line — a human decides (restore or remove the worktree, relabel).
+    claim label removed) with the exact reason — a human decides (restore
+    or remove the worktree, relabel).
     """
-    apply_label_patch(
-        number, repo=source_repo, event=EVENT_BLOCKED,
-        current_labels={IN_PROGRESS_LABEL},
-    )
-    comment_issue(
+    post_blocked_comment(
         number, repo=source_repo,
         body=(
             f"{run_marker(run_id)}\n"
@@ -616,8 +609,10 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
                 language_code, "failure.resume_blocked",
                 detail=_redact_local_paths(_failure_detail(error)),
                 run_id=run_id,
-            ) + f"\n\n{language.text(language_code, 'help.community')}"
+            )
         ),
+        current_labels={IN_PROGRESS_LABEL},
+        language_code=language_code,
     )
 
 
@@ -804,52 +799,47 @@ def report_delivery_failure(
         action if workflow_refusal and action
         else _failure_summary(reason, language_code)
     )
+    scene = scene_line() or "- run: `-`"
     if blocked:
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_BLOCKED,
-            current_labels=labels,
-        )
-        scene = scene_line() or "- run: `-`"
-        body = _failure_comment_body(
-            outcome="blocked", action=action, reason=reason,
-            diagnosis=diagnosis, scene=scene, evidence=evidence_detail,
-            pr_url=pr_url, issue=issue_context(source_repo, number),
-            run_id=run_id or "-", failure_record=failure_record,
-            language_code=language_code,
-        )
-        if classify:
-            body = body.replace(
-                "</details>",
-                f"\n{language.text(language_code, _BLOCKED_PRECONDITION_PHRASE_KEY)}\n</details>",
-                1,
-            )
-        if blocked_suffix:
-            body = body.replace(
-                "</details>",
-                f"\n{blocked_suffix.lstrip('; ')}\n</details>", 1,
-            )
         outcome = "blocked"
     else:
+        # The recoverable scene is the only one that rewrites labels here:
+        # the blocked exit owns its own patch (Issue #1730).
         apply_label_patch(
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
             current_labels=labels,
         )
-        scene = scene_line() or "- run: `-`"
         if review_scene_block is not None:
             scene += f"\n{_redact_local_paths(review_scene_block)}"
-        body = _failure_comment_body(
-            outcome="fix needed", action=action, reason=reason,
-            diagnosis=diagnosis, scene=scene, evidence=evidence_detail,
-            pr_url=pr_url, issue=issue_context(source_repo, number),
-            run_id=run_id or "-", failure_record=failure_record,
-            language_code=language_code,
-        )
         outcome = "fix needed"
+    body = _failure_comment_body(
+        outcome="blocked" if blocked else "fix needed",
+        action=action, reason=reason, diagnosis=diagnosis, scene=scene,
+        evidence=evidence_detail, pr_url=pr_url,
+        issue=issue_context(source_repo, number), run_id=run_id or "-",
+        failure_record=failure_record, language_code=language_code,
+    )
+    if blocked and classify:
+        body = body.replace(
+            "</details>",
+            f"\n{language.text(language_code, _BLOCKED_PRECONDITION_PHRASE_KEY)}\n</details>",
+            1,
+        )
+    if blocked and blocked_suffix:
+        body = body.replace(
+            "</details>",
+            f"\n{blocked_suffix.lstrip('; ')}\n</details>", 1,
+        )
     # An oversized comment shrinks ONLY its evidence segments, never its
     # structure: a cut lands inside the last fence, so the closer and the
-    # help line render as code in the collapsed block (Issue #1711).
+    # help line render as code in the collapsed block (Issue #1711). The
+    # help line the blocked exit appends is inside that budget too (#1730).
+    help_suffix = (
+        f"\n\n{language.text(language_code, 'help.community')}" if blocked else ""
+    )
     cap = EVIDENCE_SEGMENT_CAP
-    while evidence_detail and cap and len(body) > FAILURE_COMMENT_MAX_CHARS:
+    while (evidence_detail and cap
+           and len(body) + len(help_suffix) > FAILURE_COMMENT_MAX_CHARS):
         cap = max(0, cap - _EVIDENCE_CAP_STEP)
         shrunk = _failure_evidence(
             worktree, exc, language_code=language_code, cap=cap)
@@ -928,9 +918,16 @@ def report_delivery_failure(
                     "failure_comment_deduplicated", issue=number,
                     run_id=run_id, fingerprint=fingerprint,
                 )
-    if post_new_comment:
+    if post_new_comment and blocked:
+        # The blocked exit owns the label patch and the help line (Issue
+        # #1730): the label lands first, the comment second.
+        post_blocked_comment(
+            number, repo=source_repo, body=body,
+            current_labels=labels, language_code=language_code,
+        )
+    elif post_new_comment:
         comment_issue(number, repo=source_repo, body=body)
-        if pr_url and not blocked:
+        if pr_url:
             # The recoverable scene is written to the PR too:
             # the next review session and any human watcher see it where
             # the delivery lives. A blocked Issue is terminal — Issue only.

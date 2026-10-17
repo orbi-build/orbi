@@ -27,6 +27,7 @@ import orbi.release_git as release_git
 import orbi.runner as runner
 from orbi import config as config_domain
 from orbi import failure
+from orbi import language
 from seam import seam
 from tests.fakes.bootstrap_release import (
     _EMPTY_SCOPE_BODY,
@@ -3046,6 +3047,41 @@ def test_process_release_failure_comment_carries_failure_block(monkeypatch):
     assert lines[0] == "<!-- orbi:run=a1b2c3d4 -->"
     assert lines[1] == failure.render(expected)
     assert "Orbi release failed (ai-blocked)" in body
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_process_release_failure_comment_ends_with_the_help_line(
+        monkeypatch, language_code):
+    """Issue #1730: the terminal release-failure comment is a blocked
+    comment, so it goes through the ONE blocked exit: the body keeps its
+    reason, the machine block and the run info, and ends with the
+    community help line in the run's language, exactly once."""
+    state = make_release_process_env(monkeypatch)
+
+    def broken_freeze(repo_dir, base_branch):
+        raise RuntimeError("freeze failed")
+
+    monkeypatch.setattr(seam, "freeze_base", broken_freeze)
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    result = release.process_release(
+        issue, config_domain.RunnerConfig(
+            repo_dir=Path("/r"), base_branch="main",
+            message_language=language_code,
+        ), "o/r",
+    )
+    assert result == ""
+    (comment_number, comment_kwargs), = state["comments"]
+    assert comment_number == 99
+    body = comment_kwargs["body"]
+    help_line = language.text(language_code, "help.community")
+    assert body.endswith(f"\n\n{help_line}")
+    assert body.count(help_line) == 1
+    assert "run_id=a1b2c3d4" in body
+    assert "base_branch: main" in body
+    assert "failure: freeze failed" in body
+    assert body.count("<!-- orbi:failure:v1") == 1
 
 
 def test_process_release_refreshes_deployment_cli_after_version_bump(

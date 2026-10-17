@@ -529,9 +529,7 @@ def _failure_comment_body(*, outcome: str, action: str, reason: str,
     if evidence:
         details.append(evidence.lstrip())
     details.append("</details>")
-    body = "\n\n".join(parts + ["\n".join(details)])
-    if retrying:
-        return body
-    # The blocked diagnostic is a problem a person must resolve, so its
-    # last paragraph is the community help line (Issue #1684).
-    return f"{body}\n\n{message('help.community')}"
+    # The blocked diagnostic's community help line is NOT added here: the
+    # ONE blocked exit appends it to every blocked comment (Issue #1730),
+    # so this renderer and that exit can never both add it.
+    return "\n\n".join(parts + ["\n".join(details)])
