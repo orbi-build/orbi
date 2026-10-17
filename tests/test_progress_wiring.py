@@ -25,7 +25,7 @@ import orbi.milestone as milestone
 import orbi.release as release
 from seam import seam
 import orbi.journal as journal
-from orbi import pi_process, progress
+from orbi import language, pi_process, progress
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
 
@@ -417,7 +417,10 @@ def test_process_issue_finishes_progress_comment_with_delivery_summary(
     last_body = final_patches[-1][
         final_patches[-1].index("--field") + 1
     ][len("body="):]
-    assert "Orbi delivered" in last_body
+    # Issue #1733: the PR is open and waiting for checks and review;
+    # the delivery is not "delivered" (merged) yet.
+    assert "waiting for checks and review" in last_body
+    assert "Orbi delivered" not in last_body
     assert "https://github.com/xqliu/orbi/pull/40" in last_body
     # Issue #1613: no PR/checks at implementation end -> no test status
     # (the progress comment never parses the local test log).
@@ -429,14 +432,106 @@ def test_progress_outcome_line_follows_the_language_on_delivery(
     monkeypatch, tmp_path,
 ):
     """Issue #1702: the implement-phase finish means the PR was opened,
-    so its own outcome line follows the bound message language."""
+    so its own outcome line follows the bound message language
+    (Issue #1733: it says the PR waits for checks and review, not that
+    it was delivered)."""
     calls, _posted = make_fake_gh(monkeypatch)
     patch_process_deps(monkeypatch, tmp_path)
     runner.process_issue(make_issue(), _zh_config(tmp_path), "xqliu/orbi")
     last_body = _last_progress_body(calls)
-    assert "**Orbi 已交付**" in last_body
+    assert "**Orbi 已打开 PR：等待检查与评审**" in last_body
     assert "Orbi delivered" not in last_body
     assert "https://github.com/xqliu/orbi/pull/40" in last_body
+
+
+def _visible_step_row(body: str, language_code: str) -> str:
+    """The readable `step` row of one progress body.
+
+    The label follows the run's message language; the rendered stage is
+    the documented vocabulary value.
+    """
+    label = language.text(language_code, "progress.field.step")
+    rows = [
+        line for line in body.splitlines()
+        if line.startswith(f"- {label}: ")
+    ]
+    assert len(rows) == 1, body
+    return rows[0]
+
+
+def _merge_gate_checks_body(language_code: str) -> str:
+    """The merge gate's `checks` progress body.
+
+    Rendered through the merge gate's own publication helper
+    (`review_merge.round_update` is this `step_publisher` bound to the
+    review role), so the PR-opened report is compared with the real
+    merge-gate rendering, never with a copy of it.
+    """
+    published = []
+    publisher = Mock(language_code=language_code)
+    publisher.finish = published.append
+    publish = progress.step_publisher(
+        publisher,
+        RunContext(
+            run_id="a1b2c3d4", issue=18, branch="b",
+            worktree=Path("-"), source_repo="xqliu/orbi",
+        ),
+        role=runner.ROLE_REVIEW, title="Publish progress", started=0.0,
+        priority="normal",
+    )
+    publish("https://github.com/xqliu/orbi/pull/40", 1, step="checks")
+    assert len(published) == 1
+    return published[0]
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_pr_opened_progress_reports_the_checks_stage(
+    monkeypatch, tmp_path, language_code,
+):
+    """Issue #1733: between the PR opening and the next tick's review
+    session, the run's last report names the state it left behind —
+    `checks`, rendered exactly like the merge gate's `checks` update in
+    the same language — instead of the finished `implement` stage."""
+    calls, _posted = make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path)
+    config = (make_config(tmp_path) if language_code == "en"
+              else _zh_config(tmp_path))
+    runner.process_issue(make_issue(), config, "xqliu/orbi")
+    body = _last_progress_body(calls)
+    match = re.search(r"<!-- orbi:progress:v1 ({.*?}) -->", body)
+    assert match is not None, body
+    payload = json.loads(match.group(1))
+    assert payload["step"] == "checks", payload
+    assert payload["reported_at"], payload
+    assert _visible_step_row(body, language_code) == _visible_step_row(
+        _merge_gate_checks_body(language_code), language_code,
+    ), body
+
+
+@pytest.mark.parametrize(
+    "language_code, expected",
+    [
+        ("en", "waiting for checks and review"),
+        ("zh", "等待检查与评审"),
+    ],
+)
+def test_pr_opened_outcome_says_the_pr_waits_for_checks_and_review(
+    monkeypatch, tmp_path, language_code, expected,
+):
+    """Issue #1733: the PR-opened outcome is the catalogue entry for the
+    bound language and names no wait duration."""
+    calls, _posted = make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path)
+    config = (make_config(tmp_path) if language_code == "en"
+              else _zh_config(tmp_path))
+    runner.process_issue(make_issue(), config, "xqliu/orbi")
+    body = _last_progress_body(calls)
+    assert language.text(
+        language_code, "delivery.outcome_pr_opened",
+    ) in body
+    assert expected in body
+    assert "Orbi delivered" not in body
+    assert "Orbi 已交付" not in body
 
 
 def test_progress_outcome_line_follows_the_language_when_the_issue_closes(
@@ -958,9 +1053,10 @@ def test_process_issue_resumes_existing_progress_comment_after_restart(
         and "PATCH" in command
     ]
     assert patches, "existing progress comment was not updated"
-    # And the final summary still lands in the same comment.
+    # And the final summary still lands in the same comment
+    # (Issue #1733: the PR-opened state, waiting for checks and review).
     last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Orbi delivered" in last_body
+    assert "waiting for checks and review" in last_body
 
 
 def test_process_issue_posts_plan_ready_milestone_when_plan_written(
@@ -1163,7 +1259,7 @@ def test_process_issue_delivered_patch_failure_does_not_fail_delivery(
     last_body = delivered_patches[-1][
         delivered_patches[-1].index("--field") + 1
     ][len("body="):]
-    assert "Orbi delivered" in last_body
+    assert "waiting for checks and review" in last_body
 
 
 def test_process_issue_pr_opened_scene_has_no_duplicate_milestone(
@@ -1198,7 +1294,7 @@ def test_process_issue_pr_opened_scene_has_no_duplicate_milestone(
     last_body = delivered_patches[-1][
         delivered_patches[-1].index("--field") + 1
     ][len("body="):]
-    assert "Orbi delivered" in last_body
+    assert "waiting for checks and review" in last_body
     # ...and the failed milestone was not posted.
     assert not any("Orbi: PR opened" in body for body in posted)
 
