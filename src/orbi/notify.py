@@ -4,8 +4,15 @@ A person who hands Issues to Orbi is otherwise reachable only through
 GitHub. When Orbi NEWLY adds one of the three attention labels —
 `ai-blocked`, `ai-needs-detail`, `ai-awaiting-merge` — this module sends
 ONE Telegram message (private chat or group) naming the state, the Issue
-and its link, in Chinese or English. `orbi notify test` checks the setup
-before a real event; a label a person adds by hand sends nothing.
+and its link, in Chinese or English. It also sends ONE message when
+the human-review gate starts holding a delivery for a person (Issue
+#1684). `orbi notify test` checks the setup before a real event; a
+label a person adds by hand sends nothing.
+
+A message that is a problem the person must resolve (`ai-blocked`,
+`ai-needs-detail`, the human-review wait) ends with the community help
+line from the `orbi.language` catalog; a normal handoff
+(`ai-awaiting-merge`, a merged PR, the test message) does not.
 
 The adapter is Telegram-only and uses the standard library `urllib` (no
 new dependency). Notifications are a PURE BYPASS, exactly like the
@@ -36,10 +43,13 @@ import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from orbi import language
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL,
     BLOCKED_LABEL,
+    EVENT_HUMAN_REVIEW_WAITING,
     NEEDS_DETAIL_LABEL,
+    READY_LABEL,
 )
 from orbi.journal import event
 
@@ -59,6 +69,13 @@ ATTENTION_LABELS = frozenset({
     BLOCKED_LABEL, NEEDS_DETAIL_LABEL, AWAITING_MERGE_LABEL,
 })
 
+# The attention labels whose message is a problem the person must
+# resolve, so it ends with the community help line (Issue #1684).
+# `ai-awaiting-merge` is an ordinary handoff and does not.
+HELP_LABELS = frozenset({BLOCKED_LABEL, NEEDS_DETAIL_LABEL})
+# The one catalog key of that line (`orbi.language`).
+HELP_KEY = "help.community"
+
 # The fixed message texts. The `Orbi · ` prefix is part of the contract.
 _HEADLINE_EN = "Orbi · Needs your attention: "
 _HEADLINE_ZH = "Orbi · 需要您处理："
@@ -72,6 +89,10 @@ _STATUS_ZH = {
     NEEDS_DETAIL_LABEL: "需要您补充信息",
     AWAITING_MERGE_LABEL: "等您批准合并",
 }
+# The human-review wait status (Issue #1684): the gate holds the
+# delivery until a person confirms the acceptance checklist.
+HUMAN_REVIEW_STATUS_EN = "Waiting for your review"
+HUMAN_REVIEW_STATUS_ZH = "等您人工验收"
 TEST_EN = (
     "Orbi test notification\n"
     "Your notification target works. Future alerts look like this."
@@ -216,6 +237,45 @@ def label_added(repo: str, number: int, label: str,
         return
 
 
+def patch_applied(event: str, added_labels, current_labels, *,
+                  repo: str, number: int, read_title) -> None:
+    """Send the ONE notification a just-applied label patch warrants.
+
+    The decision moved out of `github.apply_label_patch` (Issue #1684)
+    so the oversized `github.py` gains no branch:
+
+    - `EVENT_HUMAN_REVIEW_WAITING` (the human acceptance gate starts
+      holding a delivery): ONE "needs you" message with the wait status
+      and the community help line. The caller applies this patch once
+      per wait (`ai-ready` is added only when absent), so a later tick
+      -- where `ai-ready` is already set -- sends nothing.
+    - a NEWLY added attention label (`ai-blocked`, `ai-needs-detail`,
+      `ai-awaiting-merge`): the ordinary "needs you" message; the two
+      problem labels end with the help line.
+
+    `read_title` is a callable, so the Issue title is read AT MOST once
+    and only when a message is actually sent -- never when notifications
+    are off or the patch warrants nothing. This module still never
+    builds a `gh` command. Never raises (pure bypass).
+    """
+    try:
+        if not _enabled():
+            return
+        current = set(current_labels)
+        if event == EVENT_HUMAN_REVIEW_WAITING:
+            if READY_LABEL in current:
+                return
+            send(_human_review_message(repo, number, read_title()))
+            return
+        # The caller only reaches this point with an applied patch, and
+        # every event's patch carries exactly one added label.
+        label = added_labels[0]
+        if label in ATTENTION_LABELS and label not in current:
+            send(_attention_message(label, repo, number, read_title()))
+    except Exception:
+        return
+
+
 def doctor_lines(config: RunnerConfig) -> list[str]:
     """Read-only doctor finding(s) for a half-configured notifier.
 
@@ -329,14 +389,39 @@ def _token_state(token: str | None) -> str:
 def _attention_message(label: str, repo: str, number: int,
                        title: str | None) -> str:
     """The fixed "needs you" text for one attention label."""
-    language = _language()
-    headline = _HEADLINE_ZH if language == "zh" else _HEADLINE_EN
-    status = (_STATUS_ZH if language == "zh" else _STATUS_EN)[label]
-    return (
+    language_code = _language()
+    status = (_STATUS_ZH if language_code == "zh" else _STATUS_EN)[label]
+    return _needs_you_message(
+        status, repo, number, title, help_line=label in HELP_LABELS,
+    )
+
+
+def _human_review_message(repo: str, number: int,
+                          title: str | None) -> str:
+    """The fixed "waiting for your review" text (Issue #1684)."""
+    language_code = _language()
+    status = (
+        HUMAN_REVIEW_STATUS_ZH if language_code == "zh"
+        else HUMAN_REVIEW_STATUS_EN
+    )
+    return _needs_you_message(
+        status, repo, number, title, help_line=True,
+    )
+
+
+def _needs_you_message(status: str, repo: str, number: int,
+                       title: str | None, *, help_line: bool) -> str:
+    """One "needs you" message; a problem message ends with the help line."""
+    language_code = _language()
+    headline = _HEADLINE_ZH if language_code == "zh" else _HEADLINE_EN
+    body = (
         f"{headline}{status}\n"
         f"{_issue_line(repo, number, title)}\n"
         f"https://github.com/{repo}/issues/{number}"
     )
+    if not help_line:
+        return body
+    return f"{body}\n{language.text(language_code, HELP_KEY)}"
 
 
 def _issue_line(repo: str, number: int, title: str | None) -> str:

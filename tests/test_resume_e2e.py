@@ -46,6 +46,8 @@ from orbi import human_review
 from seam import resume_deps, seam
 import orbi.journal as journal
 
+from tests.fakes.telegram import TelegramEndpoint, bind_notify
+
 REPO = "owner/repo"
 ISSUE_NUMBER = 45
 PR_URL = "https://github.com/owner/repo/pull/45"
@@ -217,6 +219,11 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     if command[-1] == "labels":
                         return json.dumps({
                             "labels": [{"name": name} for name in labels],
+                        })
+                    if command[-1] == "title":
+                        # The notification title read (Issue #1684).
+                        return json.dumps({
+                            "title": "Continue fixing the same PR",
                         })
                     if served_comments is not None:
                         return json.dumps({"comments": served_comments})
@@ -968,6 +975,46 @@ def test_e2e_human_review_gate_posts_the_checklist_once_and_holds(
     ]
     assert len(checklists) == 1
     assert "human_review_waiting" in caplog.text
+
+
+def test_e2e_human_review_wait_sends_one_needs_you_message(
+    clone, tmp_path, monkeypatch,
+):
+    """Issue #1684: the first tick the gate holds a delivery sends ONE
+    Telegram "waiting for your review" message (status, Issue line, link,
+    help line); the next tick sends nothing. The wire is the local
+    recording endpoint from #1673."""
+    comments: list[str] = []
+    edits: list[list[str]] = []
+    labels = ["ai-pr-opened"]
+    pr = {"state": "OPEN", "merged": False}
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
+    install_fake_gh(monkeypatch, comments, edits, pr=pr, labels=labels)
+    config = dataclasses.replace(
+        config_for(clone, tmp_path), human_review_gate=True,
+    )
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind_notify(
+            monkeypatch,
+            dataclasses.replace(config, telegram_chat_id="-1001234567890"),
+            "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawQ",
+        )
+        result = runner.process_issue(issue(), config, REPO)
+        assert result.url == PR_URL
+        # The review tick holds at the gate and sends the wait message.
+        runner.delivery_step(result.url, issue(), config, REPO)
+        assert endpoint.texts() == [
+            "Orbi · Needs your attention: Waiting for your review\n"
+            f"{REPO}#{ISSUE_NUMBER} Continue fixing the same PR\n"
+            f"https://github.com/{REPO}/issues/{ISSUE_NUMBER}\n"
+            "Need help? Join the Orbi community: "
+            "https://t.me/+kJRTTpFGBRU0M2Y9"
+        ]
+        assert set(labels) == {"ai-pr-opened", "ai-ready"}
+        # The next tick sees ai-ready and skips the patch: nothing more.
+        runner.delivery_step(result.url, issue(), config, REPO)
+        assert len(endpoint.texts()) == 1
 
 
 def test_e2e_human_review_checklist_failure_is_a_bypass(

@@ -606,6 +606,15 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "things instead of one fix or one change.",
         "包含多个结果：工单要求的是若干互不相关的事情，而不是一个修复或一个改动。",
     ),
+    # The ONE community-help line a "something went wrong, a person must
+    # act" message ends with (Issue #1684). It is a constant, never a
+    # config key, and never a message that does not ask a person to step
+    # in.
+    "help.community": (
+        "Need help? Join the Orbi community: "
+        "https://t.me/+kJRTTpFGBRU0M2Y9",
+        "需要帮助？加入 Orbi 用户群：https://t.me/+kJRTTpFGBRU0M2Y9",
+    ),
 }
 
 

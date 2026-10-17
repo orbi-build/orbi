@@ -163,7 +163,8 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
     before. `ready_label` is the repository's claim label (default
     `ai-ready`, #527): the repair instruction names the label the claim
     scan really reads, never a hardcoded default a custom-label
-    repository does not use.
+    repository does not use. The comment ends with the community help
+    line (Issue #1684): this stop asks the author to step in.
     """
     def message(key: str, **fields: object) -> str:
         return language.text(language_code, key, **fields)
@@ -185,7 +186,8 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
         f"{message('clarify.repair_acceptance')}\n"
         "```\n\n"
         f"{message('clarify.followup', needs_detail_label=NEEDS_DETAIL_LABEL)}"
-        f"\n\nrun_id={run_id}\n"
+        f"\n\nrun_id={run_id}"
+        f"\n\n{message('help.community')}\n"
     )
 
 
