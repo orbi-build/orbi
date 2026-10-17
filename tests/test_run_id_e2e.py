@@ -556,7 +556,8 @@ def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
     assert len(progress_bodies) == 1, (
         f"restart must not create a second progress comment: {comments}"
     )
-    assert "Orbi delivered" in progress_bodies[0]
+    # Issue #1733: the PR is open and waiting for checks and review.
+    assert "waiting for checks and review" in progress_bodies[0]
     assert "<!-- orbi:run=a1b2c3d4 -->" in progress_bodies[0]
     assert "b2c3d4e5" not in progress_bodies[0]
 

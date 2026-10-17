@@ -82,7 +82,7 @@ read 或 edit 的活动目标必须规范化为 worktree 内、相对于仓库�
 
 版本只属于标记。payload 要求 `step`、`reported_at` 与 `activity`。
 
-- `step` 是已记录的阶段或 null。只有 Runner 确认的动作才设置 `starting`、`implement`、`review`、`checks`、`merge` 与 `release`；review 包含评审者的修复。未映射的任务类型用 null。
+- `step` 是已记录的阶段或 null。只有 Runner 确认的动作才设置 `starting`、`implement`、`review`、`checks`、`merge` 与 `release`；review 包含评审者的修复。`checks` 出现在两处：PR 打开之后直到评审 session 开始，以及合并门禁的检查。它不代表评审已通过，也不代表仍有进程在运行。未映射的任务类型用 null。
 - `reported_at` 是报告生成时间，UTC ISO-8601 字符串，不能为 null。heartbeat 可以推进 `reported_at` 而不推进 `activity.at`。
 - 没有任何已知活动类型可发布时，`activity` 为 null。
 

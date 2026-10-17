@@ -2976,11 +2976,15 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                     issue=issue_context(source_repo, number), pr=pr_url,
                     reason=str(exc),
                 )
+        # Issue #1733: the tick ends here with the PR open, so the
+        # last report names the state left behind — the merge gate's
+        # own `checks` stage, published through the same `step=`
+        # path — instead of the finished `implement` action.
         publish(
             action=lambda: publisher.finish(_progress_body(_progress_state(
                 ctx, title=title, role=ROLE_IMPLEMENT, started=started,
                 pr_url=pr_url, review_round=0, priority=priority,
-                language_code=language.of(config),
+                language_code=language.of(config), step="checks",
             ), outcome=language.text(
                 language.of(config), "delivery.outcome_pr_opened"))),
         )
