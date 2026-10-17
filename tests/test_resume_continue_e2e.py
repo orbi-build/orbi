@@ -26,6 +26,7 @@ The acceptance criteria proven here:
   fresh redo.
 """
 from orbi import config as config_domain
+from orbi import language
 import json
 import os
 import re
@@ -488,6 +489,11 @@ def test_e2e_missing_run_state_fails_fast_without_a_fresh_run(
     assert len(failed) == 1
     assert "run state" in failed[0]
     assert "<!-- orbi:run=" in failed[0]
+    # The blocked comment is where a person is told to ask for help
+    # (Issue #1722): the community help line is its last paragraph.
+    assert re.sub(
+        r"\n\n<!-- runner=[^>]+ -->$", "", failed[0],
+    ).split("\n\n")[-1] == language.text("en", "help.community")
     # No fresh run was started: the existing work is untouched.
     assert (worktree / "work.txt").read_text() == "part-1\n"
     assert git(worktree, "status", "--porcelain") != ""
