@@ -600,13 +600,15 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         if limit_reached:
             if (fresh or body_changed) and not steering_limit_notice_logged:
                 steering_limit_notice_logged = True
+                notice = language.text(
+                    language.of(config), "delivery.steering_limit_notice",
+                )
                 try:
                     comment_issue(
                         int(issue["number"]), repo=source_repo,
                         body=(
                             f"<!-- orbi:run={config.run_id} -->\n"
-                            "The steering limit was reached, so this correction "
-                            "was not applied.\n"
+                            f"{notice}\n"
                             f"run_id={config.run_id}"
                         ),
                     )

@@ -88,7 +88,10 @@ def derived_wt(tmp_path, number=18):
     return runner.worktree_path(tmp_path, "xqliu/orbi", number, "a1b2c3d4")
 
 
-def patch_process_deps(monkeypatch, tmp_path, *, run_pi_side_effect=None):
+def patch_process_deps(
+    monkeypatch, tmp_path, *, run_pi_side_effect=None,
+    deliver_pr_result="https://github.com/xqliu/orbi/pull/40",
+):
     monkeypatch.setattr(seam, "edit_issue", Mock())
     monkeypatch.setattr(seam, "freeze_base",
                         lambda repo_dir, base_branch: "abc123def456")
@@ -127,8 +130,7 @@ def patch_process_deps(monkeypatch, tmp_path, *, run_pi_side_effect=None):
     # Issue #186: the fresh-claim closeout is `deliver_pr` (the Runner
     # pushes the task branch and opens the PR); the agent no longer does.
     monkeypatch.setattr(runner, "deliver_pr",
-                        lambda *args, **kwargs:
-                        "https://github.com/xqliu/orbi/pull/40")
+                        lambda *args, **kwargs: deliver_pr_result)
 
 
 # --- helpers ------------------------------------------------------------------
@@ -421,6 +423,55 @@ def test_process_issue_finishes_progress_comment_with_delivery_summary(
     # (the progress comment never parses the local test log).
     assert "- tests: -" in last_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in last_body
+
+
+def test_progress_outcome_line_follows_the_language_on_delivery(
+    monkeypatch, tmp_path,
+):
+    """Issue #1702: the implement-phase finish means the PR was opened,
+    so its own outcome line follows the bound message language."""
+    calls, _posted = make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path)
+    runner.process_issue(make_issue(), _zh_config(tmp_path), "xqliu/orbi")
+    last_body = _last_progress_body(calls)
+    assert "**Orbi 已交付**" in last_body
+    assert "Orbi delivered" not in last_body
+    assert "https://github.com/xqliu/orbi/pull/40" in last_body
+
+
+def test_progress_outcome_line_follows_the_language_when_the_issue_closes(
+    monkeypatch, tmp_path,
+):
+    """Issue #1702: the Issue-closed-during-delivery outcome follows the
+    bound message language."""
+    calls, _posted = make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path, deliver_pr_result=None)
+    result = runner.process_issue(
+        make_issue(), _zh_config(tmp_path), "xqliu/orbi",
+    )
+    assert result == ("issue-closed", None)
+    last_body = _last_progress_body(calls)
+    assert "**Orbi 已停止：Issue 在交付过程中被关闭**" in last_body
+    assert "Issue closed during delivery" not in last_body
+
+
+def test_progress_outcome_line_follows_the_language_on_recoverable_failure(
+    monkeypatch, tmp_path,
+):
+    """Issue #1702: the recoverable-failure outcome line (heading, codes
+    and next step) follows the bound message language."""
+    calls, _posted = make_fake_gh(monkeypatch)
+    patch_process_deps(
+        monkeypatch, tmp_path,
+        run_pi_side_effect=runner.RecoverablePiProcessError(
+            1, ["pi"], stderr="provider unavailable",
+        ),
+    )
+    runner.process_issue(make_issue(), _zh_config(tmp_path), "xqliu/orbi")
+    last_body = _last_progress_body(calls)
+    assert "**Orbi Pi 失败已恢复**" in last_body
+    assert "下一步：无需操作" in last_body
+    assert "next step: nothing" not in last_body
 
 
 def test_process_issue_pi_infrastructure_failure_keeps_run_for_resume(
@@ -1038,6 +1089,22 @@ def _progress_patch_of(command) -> bool:
         and command[2] == "repos/xqliu/orbi/issues/comments/77"
         and "--method" in command
         and "PATCH" in command
+    )
+
+
+def _last_progress_body(calls) -> str:
+    """The final tracked-progress PATCH body of one tick."""
+    patches = [command for command in calls if _progress_patch_of(command)]
+    assert patches, "no PATCH of the tracked progress comment"
+    last = patches[-1]
+    return last[last.index("--field") + 1][len("body="):]
+
+
+def _zh_config(tmp_path):
+    """The wiring config with a Chinese message language (Issue #1702)."""
+    return config_domain.RunnerConfig(
+        repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
+        base_branch="main", message_language="zh",
     )
 
 

@@ -727,11 +727,11 @@ def report_delivery_failure(
             streak = _failure_streak(history, run_id, fingerprint)
             if streak + 1 >= FAILURE_STREAK_LIMIT:
                 blocked = True
-                reason = (
-                    f"{reason}; the same failure has now occurred "
-                    f"{streak + 1} consecutive times for run_id={run_id} "
-                    f"(fingerprint {fingerprint}) with unchanged "
-                    "preconditions — a dead loop, not a transient error"
+                reason += language.text(
+                    language_code,
+                    "delivery.failure_streak_escalation",
+                    count=streak + 1, run_id=run_id,
+                    fingerprint=fingerprint,
                 )
                 event(
                     "failure_streak_escalated", level=logging.ERROR,
