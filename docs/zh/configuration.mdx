@@ -96,9 +96,9 @@ Orbi 可以把等待人的任务在 GitHub 之外告知队列负责人：当它�
 | Key | Type | Default | Allowed values | Meaning |
 |---|---|---|---|---|
 | `message_language` | 字符串 | `en` | `en` \| `zh` | Orbi 自己评论的语言（进度、澄清、评审发现、合并交接、失败、发布状态）。仓库可在 `.github/orbi.toml` 中按同一个键覆盖：仓库显式值 > 此处主机值 > `en`；不支持的值会让配置加载立即失败，并报出文件、键、取值和允许值。它不会改变源码、项目文档、Issue 正文或 PR 标题/正文 |
-| `telegram_chat_id` | 字符串或空 | 未设置 | 任意非空字符串 | 接收“需要您处理”消息的 Telegram chat：私聊（已向 bot 发送 `/start`）或 bot 可发言的群（保留开头的 `-`）。设置即开启通知；删除即关闭。值为空会令配置加载立即失败 |
+| `telegram_chat_id` | 字符串或空 | 未设置 | 任意非空字符串 | 接收“需要您处理”消息和“代码已合并”公告的 Telegram chat：私聊（已向 bot 发送 `/start`）或 bot 可发言的群（保留开头的 `-`）。设置即开启通知；删除即关闭。值为空会令配置加载立即失败 |
 
-bot token 不是配置键：它只存在于 `<deploy_home>/.orbi/env` 的 `ORBI_TELEGRAM_BOT_TOKEN=...`，且不会进入 journal（值会被脱敏）或 Pi session。没有单独的通知语言：固定消息跟随主机级 `message_language`（Issue #1660，默认 `en`），而不用仓库的 `.github/orbi.toml` 覆盖值——消息是发给人的，不是写进仓库的。
+bot token 不是配置键：它只存在于 `<deploy_home>/.orbi/env` 的 `ORBI_TELEGRAM_BOT_TOKEN=...`，在 journal 中会被脱敏，也不会传入 Pi session 的环境变量。这层环境变量过滤就是全部保证：Pi 进程以 Runner 的用户身份运行，因此 session 仍可自行读取 `<deploy_home>/.orbi/env`。没有单独的通知语言：固定消息跟随主机级 `message_language`（Issue #1660，默认 `en`），而不用仓库的 `.github/orbi.toml` 覆盖值——消息是发给人的，不是写进仓库的。
 
 ```toml
 telegram_chat_id = "-1001234567890"
