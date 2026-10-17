@@ -93,6 +93,80 @@ def test_runner_config_keys_are_documented_and_shipped():
     assert shipped == runner_keys
 
 
+# --- Notifications docs contract (Issue #1697) -------------------------
+#
+# The Notifications section of the configuration page is the one place a
+# person setting notifications up reads what the chat id receives and what
+# protects the bot token. The wording must not promise more than the code:
+# `pi_process.stream_pi` strips the token from the CHILD ENVIRONMENT only
+# (`tests/test_bootstrap_runner.py::
+# test_stream_pi_strips_the_telegram_token_from_the_child_env`) while the Pi
+# process runs as the Runner's user, and every "code merged" announcement goes
+# to the same `telegram_chat_id` (`notify._announce_merged_prs` ->
+# `notify.send`, `tests/test_notify.py`). Both pages carry both claims.
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+NOTIFICATION_DOC_PAGES = (
+    REPO_ROOT / "docs" / "configuration.mdx",
+    REPO_ROOT / "docs" / "zh" / "configuration.mdx",
+)
+
+
+def _notification_section(page: Path) -> str:
+    """One configuration page's Notifications section (raw text)."""
+    text = page.read_text(encoding="utf-8")
+    match = re.search(
+        r"^## (?:Notifications|通知)$(.*?)(?=^## |\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match, f"{page}: no Notifications section"
+    return match.group(1)
+
+
+def _norm(text: str) -> str:
+    """Collapse whitespace runs so a wrapped sentence still matches."""
+    return re.sub(r"\s+", " ", text)
+
+
+def _telegram_chat_id_row(section: str) -> str:
+    """The `telegram_chat_id` table row: exactly one Markdown line."""
+    match = re.search(r"^\| `telegram_chat_id` \|.*$", section, re.MULTILINE)
+    assert match, "no telegram_chat_id row"
+    return match.group(0)
+
+
+@pytest.mark.parametrize("page", NOTIFICATION_DOC_PAGES, ids=lambda p: p.parent.name)
+def test_notification_docs_scope_the_token_to_the_pi_session_environment(page):
+    """Issue #1697: the token is kept out of the Pi session's ENVIRONMENT.
+
+    The filter is the child `env=` in `pi_process.stream_pi`; the Pi process
+    runs as the Runner's user and could read `<deploy_home>/.orbi/env` itself,
+    so "never reaches a Pi session" promises more than the code does."""
+    section = _norm(_notification_section(page))
+    if page.parent.name == "zh":
+        assert "不会传入 Pi session 的环境变量" in section, section
+        assert "以 Runner 的用户身份运行" in section, section
+        assert "进入 journal（值会被脱敏）或 Pi session" not in section, section
+    else:
+        assert "not passed in the Pi session's environment" in section, section
+        assert "runs as the Runner's user" in section, section
+        assert "never reaches" not in section, section
+
+
+@pytest.mark.parametrize("page", NOTIFICATION_DOC_PAGES, ids=lambda p: p.parent.name)
+def test_notification_docs_name_both_message_classes_for_the_chat_id(page):
+    """Issue #1697: `telegram_chat_id` receives the "needs you" messages AND
+    the "code merged" announcement (`notify._announce_merged_prs`)."""
+    row = _telegram_chat_id_row(_notification_section(page))
+    if page.parent.name == "zh":
+        assert "需要您处理" in row, row
+        assert "代码已合并" in row, row
+    else:
+        assert '"needs you" messages' in row, row
+        assert '"code merged" announcements' in row, row
+
+
 def test_notifications_default_to_off(tmp_path):
     """Issue #1673: an absent `telegram_chat_id` means notifications off."""
     config_path = tmp_path / "orbi.toml"
