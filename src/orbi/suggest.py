@@ -82,9 +82,11 @@ UNDERSTANDING_DIR = ".understanding"
 # The gh context read is bounded like the ticket pool (up to 200 each).
 CONTEXT_LIMIT = 200
 SUGGESTIONS_MAX = 3
-# `--count N` (Issue #1671) asks the session for at most N and keeps the
-# first N validated entries. N is spelled as a word so the default (3)
-# prompt stays byte-for-byte what it was before the flag existed.
+# `--count N` (Issue #1671) asks the session for at most N, keeps the
+# first N of the answer and validates only those (Issue #1688: an entry
+# the caller asked us to drop must not fail the run). N is spelled as a
+# word so the default (3) prompt stays byte-for-byte what it was before
+# the flag existed.
 COUNT_WORDS = {1: "one", 2: "two", 3: "three"}
 # The Suggestions document keys, in one place.
 SUGGESTION_KEYS = {"kind", "issue", "title", "why", "body"}

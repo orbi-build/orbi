@@ -1238,11 +1238,12 @@ def test_suggest_without_locale_sends_no_language_sentence(
 # --- --count (Issue #1671) ---------------------------------------------------
 #
 # `orbi suggest --count N` (N 1..3, default 3) asks the session for at most
-# N suggestions and keeps the first N of what validates. The default is
-# three, so the default prompt and document are what they were before the
-# flag existed; the kept `suggestions.json` holds only the kept batch, so a
-# later run's `already_suggested` carries exactly what the earlier run
-# showed.
+# N suggestions, keeps the first N of the answer and validates only those
+# (Issue #1688: an entry the caller asked us to drop must not fail the
+# run). The default is three, so the default prompt and document are
+# what they were before the flag existed; the kept `suggestions.json`
+# holds only the kept batch, so a later run's `already_suggested`
+# carries exactly what the earlier run showed.
 
 
 def test_suggest_count_one_keeps_only_the_first_suggestion(
