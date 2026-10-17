@@ -142,6 +142,13 @@ def tick_start(config: RunnerConfig) -> None:
     what merged meanwhile. When they are on and configured,
     `_announce_merged_prs` (Issue #1674) sends one message per
     `orbi/*` PR merged after the last handled `mergedAt`.
+
+    Any exception escaping the check records one
+    `notify_failed reason=merged_check_failed` (Issue #1696): the check
+    could not RUN at all -- for example `<repo_dir>/.orbi` is not
+    writable, so the watermark lock cannot be opened -- and a silent
+    "code merged" message that never arrives would otherwise have no
+    trace. It still never raises.
     """
     global _config, _token
     try:
@@ -154,7 +161,7 @@ def tick_start(config: RunnerConfig) -> None:
             return
         _announce_merged_prs()
     except Exception:
-        return
+        _fail("merged_check_failed")
 
 
 def enabled() -> bool:
