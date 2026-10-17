@@ -535,30 +535,3 @@ def _failure_comment_body(*, outcome: str, action: str, reason: str,
     # The blocked diagnostic is a problem a person must resolve, so its
     # last paragraph is the community help line (Issue #1684).
     return f"{body}\n\n{message('help.community')}"
-
-
-def cap_comment(body: str, *, limit: int, log: str,
-                language_code: str) -> str:
-    """Cut one oversized failure comment without losing its help line.
-
-    A blocked body ends with the community help line (Issue #1684), so a
-    raw `body[:limit]` cut drops the Diagnosis `</details>` closer AND
-    that line: the note then renders collapsed inside the still-open
-    block, and the longest failures are exactly the ones where help
-    matters (Issue #1695). The cut keeps the same head, closes the block
-    it left open, and then appends the truncation note and — for a
-    blocked body only — the help line, in the comment's language. A
-    fix-needed body keeps its plain cut and never gains the help line.
-    """
-    help_line = language.text(language_code, "help.community")
-    tail = f"\n\n{help_line}"
-    blocked = body.endswith(tail)
-    head = (body[:-len(tail)] if blocked else body)[:limit]
-    note = language.text(
-        language_code, "failure.comment_truncated", chars=limit, log=log,
-    )
-    if not blocked:
-        return f"{head}{note}"
-    if head.count("<details>") > head.count("</details>"):
-        head = f"{head}\n</details>"
-    return f"{head}{note}\n\n{help_line}"

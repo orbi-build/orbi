@@ -35,7 +35,6 @@ def started_pi_comment_body(ctx: RunContext, run_info: str,
     """
     fields = _run_info_fields(run_info)
     fields["branch"] = str(ctx.branch)
-    fields["worktree"] = str(ctx.worktree)
     if extra_fields:
         fields.update(extra_fields)
     info = _run_info_fields(run_info)
@@ -47,7 +46,7 @@ def started_pi_comment_body(ctx: RunContext, run_info: str,
     )
     return field_block(
         ctx.run_id, headline, fields,
-        detail_keys={"base_sha", "repo_config", "branch", "worktree", "session"},
+        detail_keys={"base_sha", "repo_config", "branch", "session"},
         kind=COMMENT_KIND_STARTED,
         language_code=language_code,
     )
@@ -89,7 +88,7 @@ def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
     )
     body = field_block(
         run_id, headline, fields,
-        detail_keys={"base_sha", "repo_config", "branch", "worktree", "session"},
+        detail_keys={"base_sha", "repo_config", "branch", "session"},
         language_code=language_code,
     )
     lines = body.splitlines()
