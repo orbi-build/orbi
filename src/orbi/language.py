@@ -642,9 +642,12 @@ MESSAGES: dict[str, tuple[str, str]] = {
     ),
     # The implement-phase finish: the PR was OPENED, not merged, so this
     # is its own key (`review.delivered_outcome` is the merge outcome).
+    # It names the wait that follows (checks and the review session),
+    # never a wait duration: the tick interval is each deployment's own
+    # setting (Issue #1733).
     "delivery.outcome_pr_opened": (
-        "**Orbi delivered**",
-        "**Orbi 已交付**",
+        "**Orbi opened the PR: waiting for checks and review**",
+        "**Orbi 已打开 PR：等待检查与评审**",
     ),
     "delivery.recoverable_outcome": (
         "**Orbi {recoverable_name}**\n\n"

@@ -645,7 +645,7 @@ def pick_resumable_delivery(
     repo_dir: Path | None = None, *, hooks: ResumeHooks,
     language_code: str,
 ) -> tuple[dict, dict] | None:
-    """Return the newest FREE opened-PR delivery and its resume scene.
+    """Return the oldest FREE opened-PR delivery and its resume scene.
 
     All opened-PR states are scanned: `ai-fix-needed`
     (awaiting the next review session after a finding or a base
@@ -692,12 +692,13 @@ def pick_resumable_delivery(
     excluded: `main` took it before the claim scan and holds it for the
     whole delivery.
 
-    The query page is `max_concurrency + 1` candidates. At most
+    The query page is `max_concurrency + 1` candidates, ordered OLDEST
+    Issue first (`sort:created-asc`, Issue #1734). At most
     `max_concurrency` deliveries can be held by live co-runners, so a
     free candidate is inside the page when one exists; one whose OPEN PR
-    still waits for CI (Issue #1473) is skipped too. The scan reviews the
-    newest FREE candidate (held ones are skipped before any candidate
-    read — an in-flight delivery is never touched).
+    still waits for CI (Issue #1473) is skipped too. The scan reviews
+    the oldest FREE candidate (held ones are skipped before any
+    candidate read — an in-flight delivery is never touched).
     """
     held = slot_held_deliveries(slot_dir, max_concurrency)
     # `label:a,b` is GitHub's OR within one label qualifier
@@ -717,7 +718,7 @@ def pick_resumable_delivery(
         search=(
             f"label:{FIX_NEEDED_LABEL},{PR_OPENED_LABEL},"
             f"{AWAITING_MERGE_LABEL} "
-            f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL}"
+            f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL} sort:created-asc"
         ),
         json_fields="number,title,state,url,labels,body",
         limit=max_concurrency + 1,

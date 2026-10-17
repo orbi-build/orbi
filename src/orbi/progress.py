@@ -787,9 +787,9 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
     yet", it never blocks the task. The snapshot is reduced to the one
     safe activity value (`safe_activity`) here, where the worktree is
     known: the prose and the versioned block render that value.
-    `step` is the explicit stage of a Runner action that entered it
-    (`checks` / `merge`); without it the bound `role` maps through
-    `STEP_BY_ROLE`.
+    `step` is the explicit stage of a Runner action that entered it:
+    `checks`/`merge` at the merge gate, `checks` at the PR-opened
+    finish (Issue #1733); otherwise `role` maps through STEP_BY_ROLE.
     """
     if activity is None:
         try:

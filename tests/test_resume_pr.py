@@ -820,7 +820,7 @@ def test_pick_fake_rejects_unexpected_command(monkeypatch):
         fake(["gh", "issue", "create", "--repo", "owner/repo"])
 
 
-def test_pick_resumable_delivery_returns_newest_issue_with_scene(
+def test_pick_resumable_delivery_returns_issue_with_scene(
     monkeypatch, tmp_path,
 ):
     calls = []
@@ -841,7 +841,8 @@ def test_pick_resumable_delivery_returns_newest_issue_with_scene(
     assert issue["number"] == 9
     assert scene["run_id"] == FAKE_RUN_ID
     assert scene["pr_url"] == FAKE_PR_URL
-    # Newest-first list, then the full comment history of that Issue.
+    # Oldest-first list (Issue #1734), then the full comment history of
+    # that Issue.
     # Both opened-PR states are scanned (Issue #70): `label:a,b` is
     # GitHub's OR within one label qualifier. `ai-in-progress` is NOT
     # excluded (Issue #178): a runner killed during review leaves the
@@ -853,8 +854,11 @@ def test_pick_resumable_delivery_returns_newest_issue_with_scene(
     assert calls[0] == [
         "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
         "--search",
+        # Issue #1734: `sort:created-asc` is the documented advanced-search
+        # qualifier that makes GitHub return the OLDEST Issues first, so the
+        # page is the deliveries that have waited longest.
         "label:ai-fix-needed,ai-pr-opened,ai-awaiting-merge "
-        "-label:ai-blocked -label:ai-merged",
+        "-label:ai-blocked -label:ai-merged sort:created-asc",
         # `labels` (Issue #101): a resumed P0 delivery keeps its
         # priority in the progress comment through review/merge.
         # `body` (Issue #787): the scene classification reads the
@@ -899,7 +903,7 @@ def test_pick_resumable_delivery_scans_all_open_pr_states(
         "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
         "--search",
         "label:ai-fix-needed,ai-pr-opened,ai-awaiting-merge "
-        "-label:ai-blocked -label:ai-merged",
+        "-label:ai-blocked -label:ai-merged sort:created-asc",
         # `labels` (Issue #101): a resumed P0 delivery keeps its
         # priority in the progress comment through review/merge.
         # `body` (Issue #787): the scene classification reads the
@@ -1002,9 +1006,10 @@ def test_pick_resumable_delivery_skips_held_and_reviews_next_free(
     monkeypatch, tmp_path,
 ):
     """Issue #809, acceptance 4: the scan skips every HELD candidate and
-    reviews the newest FREE one, so the PR backlog drains even while
-    several deliveries are in flight — the drain rate scales with the
-    concurrency instead of dropping to zero."""
+    reviews the oldest FREE one (Issue #1734 ordered the page oldest
+    first), so the PR backlog drains even while several deliveries are
+    in flight — the drain rate scales with the concurrency instead of
+    dropping to zero."""
     issues = [
         {"number": 9, "title": "held", "state": "OPEN",
          "url": "https://github.com/owner/repo/issues/9",
@@ -1053,6 +1058,93 @@ def test_pick_resumable_delivery_skips_held_and_reviews_next_free(
         fake_run(["gh", "release", "view"])
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "issue", "edit", "9"])
+
+
+def _oldest_first_scan(monkeypatch, *, ci_pending=(), max_concurrency=2):
+    """Stub the candidate query at the gh seam with GitHub's order contract.
+
+    Issue #1734: five reviewable opened-PR deliveries created A..E. The
+    fake honours the REQUESTED order exactly as GitHub does — the
+    documented `sort:created-asc` qualifier yields the oldest Issues
+    first, any other query the default newest-created-first page — and
+    the wrapper records the page the scan asked for (`pages`) plus
+    every candidate whose comments the scan read (`reads`).
+    """
+    created = [2527, 2542, 2543, 2551, 2555]  # A..E, creation order
+    fake = FakeGh("owner/repo")
+    for number in created:
+        fake.add_issue(number, title=f"delivery {number}",
+                       labels=("ai-pr-opened",))
+        fake.comment(
+            number,
+            opened_pr_comment(
+                run_id=f"{number:08x}",
+                pr_url=f"https://github.com/owner/repo/pull/{number}",
+            ),
+            association="OWNER",
+        )
+        pending = number in ci_pending
+        fake.add_pr(
+            number, head=f"orbi/owner-repo-issue-{number}",
+            checks=({"name": "tests", "status": "IN_PROGRESS"},) if pending
+            else ({"name": "tests", "status": "COMPLETED",
+                   "conclusion": "SUCCESS"},),
+        )
+
+    pages: list[list[int]] = []
+    reads: list[int] = []
+
+    def recording(command, **kwargs):
+        answer = fake(command, **kwargs)
+        if command[1:3] == ["issue", "list"]:
+            assert command[command.index("--limit") + 1] == str(
+                max_concurrency + 1
+            ), "the page stays max_concurrency + 1 candidates"
+            pages.append([issue["number"] for issue in json.loads(answer)])
+        elif command[1:3] == ["issue", "view"]:
+            reads.append(int(command[3]))
+        return answer
+
+    monkeypatch.setattr(seam, "run_command", recording)
+    return pages, reads
+
+
+def test_pick_resumable_delivery_takes_the_oldest_candidates_first(
+    monkeypatch, tmp_path,
+):
+    """Issue #1734 acceptance 1: five reviewable candidates created A..E
+    and a page of `max_concurrency + 1` = 3. The scan's page is A, B, C
+    and it reviews A. Before the fix the query used GitHub's default
+    newest-first order, so the page was E, D, C and the earliest PR
+    waited until no newer delivery was in flight."""
+    pages, reads = _oldest_first_scan(monkeypatch)
+    issue, scene = claim.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 2,
+        hooks=resume_deps(), language_code="en",
+    )
+    assert pages == [[2527, 2542, 2543]]
+    assert issue["number"] == 2527
+    assert scene["run_id"] == f"{2527:08x}"
+    # The reviewed candidate is the only one whose comments were read.
+    assert reads == [2527]
+
+
+def test_pick_resumable_delivery_skips_a_ci_pending_oldest_candidate(
+    monkeypatch, tmp_path,
+):
+    """Issue #1734 acceptance 2: A's PR still waits for CI (Issue #1473),
+    so the scan skips it and reviews B. With the oldest-first page a
+    CI-pending candidate holds its place only until its CI concludes —
+    it never pushes the next waiting delivery out of the page."""
+    pages, reads = _oldest_first_scan(monkeypatch, ci_pending={2527})
+    issue, scene = claim.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 2,
+        hooks=resume_deps(), language_code="en",
+    )
+    assert pages == [[2527, 2542, 2543]]
+    assert issue["number"] == 2542
+    assert scene["run_id"] == f"{2542:08x}"
+    assert reads == [2527, 2542]
 
 
 def test_pick_resumable_delivery_ignores_holds_of_other_repos(

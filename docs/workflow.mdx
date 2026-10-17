@@ -192,6 +192,13 @@ Rules of the chain:
   resumable scan skips a CI-pending candidate outright (Issue #1473),
   so a pending PR never costs a whole tick. The
   crash-recovery path IS the path.
+  One bounded exception is GitHub's asynchronously computed mergeability
+  (Issue #1736): when the merge gate's first read says `UNKNOWN` and the
+  head's CI has already concluded, the gate re-reads the whole PR state
+  after 2 s, 4 s and 8 s (`MERGEABLE_UNKNOWN_RETRY_DELAYS`) and continues
+  in that same tick as soon as GitHub answers — at most about 15 s of slot
+  time. A pending or failed rollup is never re-read, and a PR that stays
+  `UNKNOWN` through every re-read still defers as above.
 - Base advances are absorbed by a plain `git merge` of the latest
   `origin/<base>` on the task branch (conflicts resolved manually),
   followed by a full test rerun. No force push, no auto conflict

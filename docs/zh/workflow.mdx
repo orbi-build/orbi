@@ -162,6 +162,11 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
   扫描直接跳过 CI 仍 pending 的候选（Issue #1473），pending 的 PR
   因此不再占掉一整个 tick。崩溃恢复
   路径就是主路径。
+  唯一的有界例外是 GitHub 异步计算的 mergeability（Issue #1736）：merge
+  gate 首次读到 `UNKNOWN` 且该 head 的 CI 已得出结论时，会在 2 s、4 s、
+  8 s 后重读整个 PR 状态（`MERGEABLE_UNKNOWN_RETRY_DELAYS`），GitHub 一
+  给出结果就在同一 tick 继续——最多约 15 s 槽位时间。rollup 仍 pending 或
+  有失败时绝不重读；所有重读仍为 `UNKNOWN` 的 PR 依旧按上面的方式顺延。
 - base 前进由 task branch 上对最新 `origin/<base>` 的普通 `git merge`
   吸收（冲突手工解决），然后重跑完整测试。不 force push、不自动解决
   冲突、不 push 保护分支。

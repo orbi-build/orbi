@@ -82,7 +82,7 @@ Each run keeps its one existing progress comment. Its formal start is the existi
 
 The version belongs only to the marker. The payload requires `step`, `reported_at` and `activity`.
 
-- `step` is a documented stage or null. Only Runner-confirmed actions set `starting`, `implement`, `review`, `checks`, `merge` and `release`; review includes the reviewer's fixes. An unmapped task type uses null.
+- `step` is a documented stage or null. Only Runner-confirmed actions set `starting`, `implement`, `review`, `checks`, `merge` and `release`; review includes the reviewer's fixes. `checks` appears in two places: from the moment the PR opens until the review session starts, and at the merge gate's check. It does not mean the review has passed and does not mean a process is still running. An unmapped task type uses null.
 - `reported_at` is the report generation time as a UTC ISO-8601 string and cannot be null. A heartbeat may advance `reported_at` without advancing `activity.at`.
 - `activity` is null when no known activity kind can be published.
 

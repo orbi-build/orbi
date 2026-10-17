@@ -3731,7 +3731,8 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     ]
     assert patches, "the existing progress comment was not updated"
     last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Orbi delivered" in last_body
+    # Issue #1733: the PR is open and waiting for checks and review.
+    assert "waiting for checks and review" in last_body
     assert "- branch: orbi/xqliu-orbi-backlog-issue-4" in last_body
 
 
@@ -5659,7 +5660,8 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     ]
     assert patches
     last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Orbi delivered" in last_body
+    # Issue #1733: the PR-opened state, waiting for checks and review.
+    assert "waiting for checks and review" in last_body
 
 
 def _gh_api(command, posted):

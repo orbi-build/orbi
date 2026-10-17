@@ -30,9 +30,11 @@ PROGRESS_BLOCK_TEMPLATE = f"<!-- {PROGRESS_BLOCK_VERSION} {{payload}} -->"
 # The documented stage vocabulary (shared with the status observation
 # contract). The writer publishes only what its bound Runner action
 # confirms: STEP_BY_ROLE below, or the explicit stage of a Runner
-# action that entered it (checks / merge). `starting` belongs to the
-# shared vocabulary without a bound role of its own, so no delivery
-# publishes it as its stage.
+# action that entered it — `checks` / `merge` at the merge gate, and
+# `checks` again at the implement finish, which leaves the opened PR
+# waiting for checks and review until the next tick's review session
+# (Issue #1733). `starting` belongs to the shared vocabulary without a
+# bound role of its own, so no delivery publishes it as its stage.
 PROGRESS_STEPS = (
     "starting",
     "implement",
