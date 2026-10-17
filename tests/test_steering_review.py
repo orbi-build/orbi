@@ -58,7 +58,7 @@ def test_run_pi_steering_poll_failure_is_bypassed(monkeypatch, tmp_path):
 
 
 def test_stream_pi_steers_and_restarts(tmp_path):
-    from tests.test_bootstrap_runner import make_fake_pi
+    from tests.fakes.bootstrap_pi import make_fake_pi
     from orbi.pi_process import SteeringRequest
     calls = []
     command = make_fake_pi(tmp_path, session_records=[], stdout="ok", sleep=0.2)
