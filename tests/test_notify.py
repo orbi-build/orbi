@@ -46,8 +46,8 @@ from seam import seam
 from tests.fakes.telegram import (
     TelegramEndpoint,
     bind_notify,
-    point_at,
-    raise_timeout_url_error,
+    closed_origin,
+    unanswered_origin,
 )
 
 # A token-shaped value (9 digits + 35 url-safe chars). It is NOT a real
@@ -77,7 +77,7 @@ class HostLanguageConfig:
 
 
 def bind(monkeypatch, *, config=None, token=TOKEN) -> None:
-    """Bind one tick's config and token, like notify.tick_start."""
+    """Bind one tick's config and token, through notify.tick_start."""
     bind_notify(
         monkeypatch, config if config is not None else config_for(), token,
     )
@@ -185,7 +185,7 @@ def test_send_reports_timeout_when_the_endpoint_does_not_answer_in_time(
 def test_send_reports_network_error_when_the_endpoint_is_unreachable(
     monkeypatch, caplog,
 ):
-    point_at(monkeypatch, "http://127.0.0.1:1", timeout=1.0)
+    closed_origin(monkeypatch, timeout=1.0)
     bind(monkeypatch)
     caplog.set_level("INFO")
     assert notify.send("hello") is False
@@ -195,12 +195,17 @@ def test_send_reports_network_error_when_the_endpoint_is_unreachable(
 def test_send_classifies_a_wrapped_timeout_as_a_timeout(
     monkeypatch, caplog,
 ):
-    """urllib reports a do_open timeout as URLError(reason=TimeoutError)."""
-    bind(monkeypatch)
-    raise_timeout_url_error(monkeypatch)
-    caplog.set_level("INFO")
-    assert notify.send("hello") is False
-    assert "notify_failed reason=timeout" in caplog.text
+    """urllib reports a do_open timeout as URLError(reason=TimeoutError).
+
+    A listener whose accept queue is full makes the TCP connect itself
+    time out — the real shape urllib wraps into that URLError — so the
+    classification is pinned without replacing urllib (Issue #1698).
+    """
+    with unanswered_origin(monkeypatch):
+        bind(monkeypatch)
+        caplog.set_level("INFO")
+        assert notify.send("hello") is False
+        assert "notify_failed reason=timeout" in caplog.text
 
 
 class BoomConfig:
@@ -574,7 +579,7 @@ def test_clarify_stop_sends_one_needs_detail_message(monkeypatch):
 def test_clarify_stop_still_stops_when_the_endpoint_is_down(
     monkeypatch, caplog,
 ):
-    point_at(monkeypatch, "http://127.0.0.1:1", timeout=1.0)
+    closed_origin(monkeypatch, timeout=1.0)
     bind(monkeypatch)
     monkeypatch.setattr(
         seam, "judge_issue_body", lambda *a, **k: _thin_verdict(),
