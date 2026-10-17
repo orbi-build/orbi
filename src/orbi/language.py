@@ -345,6 +345,17 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "{detail}\n\n"
         "</details>",
     ),
+    # The Epic reconciliation audit comment (Issue #1705): the sentence a
+    # provably complete Epic receives before it is closed. The child
+    # fragments ("PR #N merged", "Issue #N closed") are shared evidence and
+    # stay verbatim in both languages; only the sentence around them moves.
+    "epic.reconciliation_version": (" for {version}", "（{version}）"),
+    "epic.reconciliation": (
+        "Epic reconciliation{prefix}: complete; children: {children}; "
+        "no open native blockers/dependencies.",
+        "Epic 对账{prefix}：已完成；子项：{children}；没有未关闭的原生阻塞/依赖。",
+    ),
+
     # Release-task status comments.
     "release.started": ("**Orbi release started**: {run_info}", "**Orbi release 已开始**：{run_info}"),
     "release.gates_passed": ("**Orbi release gates passed**: {evidence}", "**Orbi release 门禁已通过**：{evidence}"),

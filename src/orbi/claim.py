@@ -29,7 +29,7 @@ from orbi.delivery_scene import (
     EXTERNAL_PR_MARKER, DeliveryScene, _issue_label_set, body_markers, classify,
 )
 from orbi.github import (
-    _epic_audit, _verify_epic_complete, apply_label_patch, close_issue,
+    _verify_epic_complete, apply_label_patch, close_issue,
     comment_issue, issue_comments, issue_priority, issue_view,
     latest_run_marker, list_issues, milestone_open_issue_count,
     open_blocker_numbers, open_pr_for_branch, pr_comments,
@@ -40,7 +40,7 @@ from orbi.journal import LOGGER, current_run_id, event, new_run_id, set_run_id
 from orbi.pilot_slots import slot_held_deliveries, slot_occupancy
 from orbi import language
 from orbi.progress import run_marker
-from orbi.release import release_target_milestone
+from orbi.release import _epic_audit, epic_audit_posted, release_target_milestone
 from orbi.repo_config import (
     RepoConfigError, RepoPolicy, load_repo_policy, merged_repo_language,
 )
@@ -200,7 +200,7 @@ def is_release(issue: dict) -> bool:
     return False
 
 
-def reconcile_open_epics(repo: str, run_id: str) -> list[str]:
+def reconcile_open_epics(repo: str, run_id: str, language_code: str) -> list[str]:
     """Sweep open Epics once per tick; ordinary pickup must not depend on it."""
     epics = list_issues(
         repo, state="open", search=f"label:{EPIC_LABEL}",
@@ -216,9 +216,9 @@ def reconcile_open_epics(repo: str, run_id: str) -> list[str]:
             event("epic_kept_open", issue=number, repo=repo, reason=reason)
             evidence.append(f"Epic #{number} kept open: {reason}")
             continue
-        audit = _epic_audit(child_evidence)
+        audit = _epic_audit(child_evidence, None, language_code)
         comments = issue_comments(int(number), repo=repo)
-        if not any(audit in str(comment.get("body", "")) for comment in comments):
+        if not epic_audit_posted(comments, child_evidence):
             comment_issue(int(number), repo=repo,
                          body=f"<!-- orbi:run={run_id} -->\n{audit}\nrun_id={run_id}")
         close_issue(int(number), repo=repo)
@@ -873,10 +873,12 @@ def pick_next_delivery(
         tick_run_id = new_run_id()
         set_run_id(tick_run_id)
     for repo in repos:
+        repo_language = (language.DEFAULT_LANGUAGE if config is None
+                         else merged_repo_language(config, repo))
         # Epic reconciliation is a per-tick bypass: a broken GitHub query or
         # mutation must never prevent the ordinary delivery scans.
         try:
-            reconcile_open_epics(repo, tick_run_id)
+            reconcile_open_epics(repo, tick_run_id, repo_language)
         except Exception:
             LOGGER.exception("epic_reconcile_failed repo=%s", repo)
         # Milestone reconciliation intentionally follows the Epic sweep so a
@@ -904,8 +906,6 @@ def pick_next_delivery(
         # Orphan-PR reconciliation follows the same bypass
         # pattern: a broken GitHub query must never prevent the ordinary
         # delivery scans.
-        repo_language = (language.DEFAULT_LANGUAGE if config is None
-                         else merged_repo_language(config, repo))
         try:
             reconcile_orphan_prs(repo, tick_run_id, hooks=hooks,
                                  language_code=repo_language)

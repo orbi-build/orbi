@@ -45,13 +45,12 @@ from orbi.progress import (
 from orbi import language
 from orbi.cli_source import refresh_cli_install
 from orbi.release_comments import (
-    release_failure_comment_body,
+    _epic_audit, epic_audit_posted, release_failure_comment_body,
     release_success_comment_body,
 )
 from orbi.github import (
     _comment_is_trusted,
     _verify_epic_complete,
-    _epic_audit,
     apply_label_patch,
     close_issue,
     close_milestone,
@@ -1002,7 +1001,8 @@ MILESTONE_OPEN_RETRY_DELAYS = (1.0, 2.0, 4.0)
 
 
 def close_release_milestone(repo: str, version: str, *, run_id: str | None = None,
-                            release_issue: int | None = None) -> str:
+                            release_issue: int | None = None,
+                            language_code: str = language.DEFAULT_LANGUAGE) -> str:
     """Close the Milestone whose title is exactly `version`.
 
     Runs on the release success path (after the tag is pushed, the
@@ -1090,9 +1090,9 @@ def close_release_milestone(repo: str, version: str, *, run_id: str | None = Non
     open_issues = open_leftovers()
     epic_evidence: list[str] = []
     if run_id is not None and open_issues:
-        # Every listed Epic is verified from its children and blockers before
-        # the authoritative exact-Milestone list is checked again.
-        epic_evidence = reconcile_release_epics(repo, int(number), version, run_id)
+        # Verify every listed Epic before the exact-Milestone list is re-read.
+        epic_evidence = reconcile_release_epics(
+            repo, int(number), version, run_id, language_code)
         open_issues = open_leftovers()
     retries = 0
     while open_issues and retries < len(MILESTONE_OPEN_RETRY_DELAYS):
@@ -1551,7 +1551,7 @@ def process_release(issue: dict, config: RunnerConfig,
             )
         try:
             milestone_evidence = close_release_milestone(
-                source_repo, tag, run_id=run_id, release_issue=int(number),
+                source_repo, tag, run_id=run_id, release_issue=int(number), language_code=language.of(config),
             )
         except Exception as exc:
             # The tag and GitHub Release are already published at this point.
@@ -1708,7 +1708,7 @@ def release_target_milestone(
 
 
 def reconcile_release_epics(repo: str, milestone_number: int, version: str,
-                            run_id: str) -> list[str]:
+                            run_id: str, language_code: str) -> list[str]:
     """Close only provably complete open Epics in this exact Milestone."""
     issues = milestone_open_issues(repo, milestone_number)
     evidence: list[str] = []
@@ -1723,9 +1723,9 @@ def reconcile_release_epics(repo: str, milestone_number: int, version: str,
         except (ValueError, json.JSONDecodeError) as exc:
             evidence.append(f"Epic #{number} kept open: {exc}")
             continue
-        audit = _epic_audit(child_evidence, version)
+        audit = _epic_audit(child_evidence, version, language_code)
         comments = issue_comments(int(number), repo=repo)
-        if not any(audit in str(comment.get("body", "")) for comment in comments):
+        if not epic_audit_posted(comments, child_evidence, version):
             comment_issue(int(number), repo=repo,
                          body=f"<!-- orbi:run={run_id} -->\n{audit}\nrun_id={run_id}")
         close_issue(int(number), repo=repo)
