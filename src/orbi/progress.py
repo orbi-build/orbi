@@ -174,7 +174,7 @@ def _fenced(content: str, *, cap: int = 4000) -> str:
 def field_block(run_id: str, headline: str, fields: dict[str, object], *,
                 detail_keys: set[str] | None = None,
                 kind: str | None = None,
-                language_code: str = language.DEFAULT_LANGUAGE) -> str:
+                language_code: str) -> str:
     """Render a marker-first status comment with optional collapsed details.
 
     `kind` prepends the canonical kind marker right after the run marker
@@ -234,7 +234,11 @@ def format_status_comment(body: str) -> str:
         run_id = match.group(1) if match else None
     fields.setdefault("detail", detail)
     if isinstance(run_id, str) and RUN_ID_PATTERN.fullmatch(run_id):
-        rendered = field_block(run_id, detail, fields)
+        # A legacy one-line status comment (pre-#1659) is normalized to
+        # the field-block shape: its prose predates message_language, so
+        # the (English) legacy summary is the honest rendering here.
+        rendered = field_block(run_id, detail, fields,
+                               language_code=language.DEFAULT_LANGUAGE)
         if remainder:
             rendered += "\n" + remainder
         return _with_runner_marker(
@@ -350,7 +354,7 @@ def bump_recovered_repeat(body: str, reason_code: str, previous: int) -> str:
 def recoverable_scene_body(
     *, run_id: str, recoverable_name: str, record: Failure,
     detail: str, run_info: str,
-    language_code: str = language.DEFAULT_LANGUAGE,
+    language_code: str,
 ) -> str:
     """Render the classified recoverable-failure comment (Issue #1465).
 
@@ -482,7 +486,7 @@ def progress_body(state: dict) -> str:
     SAME safe summary value, so the readable status and the machine
     summary always agree (Issue #1657).
     """
-    language_code = state.get("language", language.DEFAULT_LANGUAGE)
+    language_code = state["language"]
 
     def label(key: str) -> str:
         return language.text(language_code, PROGRESS_FIELD_KEYS[key])
@@ -556,7 +560,7 @@ class ProgressPublisher:
 
     def __init__(self, issue: int, repo: str, run_id: str,
                  run_command: Callable[..., str],
-                 language_code: str = language.DEFAULT_LANGUAGE) -> None:
+                 language_code: str) -> None:
         self.issue = issue
         self.repo = repo
         self.run_id = run_id
@@ -759,7 +763,7 @@ def _run_info_fields(run_info: str) -> dict[str, str]:
 
 def _progress_state(ctx: RunContext, *, title: str, role: str,
                     started: float, pr_url: str | None,
-                    review_round: int, priority: str,
+                    review_round: int, priority: str, language_code: str,
                     step: str | None = None,
                     checks: list | None = None,
                     activity: dict | None = None,
@@ -798,9 +802,9 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
         "run_id": ctx.run_id,
         "issue": ctx.issue,
         "issue_title": title,
-        # The run's bound message language (Issue #1660): the ONE place
-        # the progress body reads it from (`RunContext.language`).
-        "language": getattr(ctx, "language", language.DEFAULT_LANGUAGE),
+        # The run's bound message language (Issue #1660), passed in by the
+        # caller from the effective config -- the ONE source.
+        "language": language_code,
         "role": role,
         "priority": priority,
         "phase": (activity or {}).get("phase") or "starting",
@@ -876,17 +880,17 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
                           source_repo: str, action: str | None = None,
                           reason: str | None = None,
                           diagnosis: str | None = None,
-                          language_code: str = language.DEFAULT_LANGUAGE,
+                          language_code: str,
                           ) -> str:
     """Render the terminal progress scene shared by every finish path."""
     return _progress_body(_progress_state(
         RunContext(
             run_id=run_id, issue=number, branch=branch or "-",
             worktree=worktree or Path("-"), source_repo=source_repo,
-            language=language_code,
         ),
         title=title, role=role, started=time.monotonic(), pr_url=pr_url,
         review_round=review_round, priority=priority,
+        language_code=language_code,
     ), outcome=_finish_outcome_body(
         outcome=outcome, detail=detail, next_step=next_step, pr_url=pr_url,
         number=number, source_repo=source_repo, action=action,
@@ -921,7 +925,7 @@ def step_publisher(publisher: ProgressPublisher, ctx: RunContext, *,
         publisher.finish(_progress_body(_progress_state(
             ctx, title=title, role=role, step=step, started=started,
             pr_url=pr_url, review_round=review_round, priority=priority,
-            checks=checks, review=review,
+            checks=checks, review=review, language_code=publisher.language_code,
 
         ), outcome=outcome))
     return publish_step
@@ -948,7 +952,7 @@ def _live_progress(ctx: RunContext, publisher: ProgressPublisher, *,
     state = _progress_state(
         ctx, title=title, role=role, started=started,
         pr_url=pr_url, review_round=review_round, priority=priority,
-        checks=checks, activity=activity,
+        checks=checks, activity=activity, language_code=publisher.language_code,
     )
     publisher.patch(_progress_body(state))
 

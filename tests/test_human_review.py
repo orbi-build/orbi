@@ -39,7 +39,7 @@ def test_build_checklists_column1_carries_the_ci_result_and_layer():
     # verified; column 1 carries it.
     checklist = human_review.build_checklist(
         test_status="passed",
-        changed_files=["src/orbi/runner.py"],
+        changed_files=["src/orbi/runner.py"], language_code="en",
     )
     assert any("PR CI passed" in item for item in checklist["column1"])
     # Issue #805: no declared test command — the suite wording is the
@@ -57,7 +57,7 @@ def test_build_checklists_column2_adds_ui_and_deploy_dimensions():
             "src/orbi/runner.py",
             "templates/index.html",
             ".github/workflows/ci.yml",
-        ],
+        ], language_code="en",
     )
     joined = "\n".join(checklist["column2"])
     assert "Intent judgment" in joined
@@ -71,7 +71,7 @@ def test_build_checklists_docs_changes_do_not_trigger_the_intent_item():
     dimensions are intent, UI, external environment)."""
     checklist = human_review.build_checklist(
         test_status="passed",
-        changed_files=["docs/workflow.mdx", "README.md"],
+        changed_files=["docs/workflow.mdx", "README.md"], language_code="en",
     )
     assert checklist["column2"] == []
 
@@ -81,7 +81,7 @@ def test_build_checklists_tests_only_delivery_has_an_empty_column2():
     the empty column 2 is the target state and must be expressible."""
     checklist = human_review.build_checklist(
         test_status="passed",
-        changed_files=["tests/test_new.py", "tests/conftest.py"],
+        changed_files=["tests/test_new.py", "tests/conftest.py"], language_code="en",
     )
     assert checklist["column1"]
     assert checklist["column2"] == []
@@ -93,7 +93,7 @@ def test_build_checklists_missing_check_status_lands_in_column2():
     for test_status in (None, "-", "pending"):
         checklist = human_review.build_checklist(
             test_status=test_status,
-            changed_files=["tests/test_new.py"],
+            changed_files=["tests/test_new.py"], language_code="en",
         )
         assert any("Missing test evidence" in item for item in checklist["column2"])
 
@@ -101,7 +101,7 @@ def test_build_checklists_missing_check_status_lands_in_column2():
 def test_build_checklists_unreadable_diff_lands_in_column2():
     checklist = human_review.build_checklist(
         test_status="passed",
-        changed_files=None,
+        changed_files=None, language_code="en",
     )
     assert any("Unreadable changed-file" in item for item in checklist["column2"])
 
@@ -112,7 +112,7 @@ def test_build_checklists_degenerate_paths_never_crash_the_classifier():
     fires (garbage in holds the gate, it never passes it)."""
     checklist = human_review.build_checklist(
         test_status="passed",
-        changed_files=["", "//"],
+        changed_files=["", "//"], language_code="en",
     )
     assert any("Intent judgment" in item for item in checklist["column2"])
     assert not any("UI" in item for item in checklist["column2"])
@@ -126,6 +126,7 @@ def _render(**overrides):
         run_id=RUN_ID,
         pr_url=PR_URL,
         checklist={"column1": ["测试结果：10 passed"], "column2": ["Intent judgment"]},
+        language_code="en",
     )
     kwargs.update(overrides)
     return human_review.render_checklist_comment(**kwargs)
@@ -407,6 +408,6 @@ def test_delivered_changed_files_failure_is_missing_evidence(
     assert review_merge.delivered_changed_files(worktree, "main") is None
     # Missing evidence lands in column 2 (the gate holds).
     checklist = human_review.build_checklist(
-        test_status="passed", changed_files=None,
+        test_status="passed", changed_files=None, language_code="en",
     )
     assert any("Unreadable changed-file" in item for item in checklist["column2"])

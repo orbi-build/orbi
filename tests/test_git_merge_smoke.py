@@ -102,7 +102,7 @@ def test_merge_gate_merges_head_containing_latest_base(clone, monkeypatch):
           "head_ref": "orbi/owner-repo-issue-4",
           "head_oid": head_oid}
     commands = install_fake_gh(monkeypatch, clone, make_pr(head_oid))
-    merged = review_merge.merge_gate(clone, pr, "main", repo_dir=clone)
+    merged = review_merge.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
     assert merged["merged"] is True
     # The merge used --match-head-commit with the reviewed head SHA.
     merge_cmd = [c for c in commands if c[:2] == ["gh", "pr"]
@@ -168,7 +168,7 @@ def test_merge_gate_absorbs_clean_behind_base_then_defers(
           "head_ref": "orbi/owner-repo-issue-4", "head_oid": head_oid}
     with caplog.at_level("INFO"):
         with pytest.raises(review_merge.DeliveryDeferred):
-            review_merge.merge_gate(clone, pr, "main", repo_dir=clone)
+            review_merge.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
     # Issue #1626: the gate absorbed the base and pushed the merged head,
     # then deferred instead of reading the new head's CI. No merge command
     # ran in this tick.
@@ -181,7 +181,7 @@ def test_merge_gate_absorbs_clean_behind_base_then_defers(
     # The next gate pass (the branch now contains the base) merges the
     # absorbed head with --match-head-commit.
     merged = review_merge.merge_gate(
-        clone, {**pr, "head_oid": absorbed_head}, "main", repo_dir=clone,
+        clone, {**pr, "head_oid": absorbed_head}, "main", repo_dir=clone, language_code="en",
     )
     assert merged["merged"] is True
     merge_cmd = [c for c in commands if c[:2] == ["gh", "pr"]
@@ -209,7 +209,7 @@ def test_merge_gate_conflicted_absorb_stays_recoverable(clone, monkeypatch):
           "base_oid": git(clone, "rev-parse", "origin/main~1"),
           "head_ref": "orbi/owner-repo-issue-4", "head_oid": head_oid}
     with pytest.raises(review_merge.RecoverableMergeGateError, match="cannot absorb"):
-        review_merge.merge_gate(clone, pr, "main", repo_dir=clone)
+        review_merge.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
     assert git(clone, "status", "--porcelain", "--untracked-files=no") == ""
 
 
@@ -228,7 +228,7 @@ def test_merge_gate_rejects_conflicting_pr_reports_mergeable(
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="mergeable=DIRTY",
     ):
-        review_merge.merge_gate(clone, pr, "main", repo_dir=clone)
+        review_merge.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
     assert "merge_gate_not_mergeable" in caplog.text
 
 
@@ -259,7 +259,7 @@ def test_deployment_checkout_fast_forwards_after_independent_merge(
           "head_ref": "orbi/owner-repo-issue-4",
           "head_oid": head_oid}
     install_fake_gh(monkeypatch, clone, make_pr(head_oid))
-    merged = review_merge.merge_gate(clone, pr, "main", repo_dir=clone)
+    merged = review_merge.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
     assert merged["merged"] is True
     merge_commit = git(clone, "rev-parse", "origin/main")
     # The remote advanced; the deployment checkout has not yet.

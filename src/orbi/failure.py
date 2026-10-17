@@ -327,7 +327,7 @@ def workflow_permission_refused(detail: str) -> bool:
 
 
 def workflow_permission_cause(
-    language_code: str = language.DEFAULT_LANGUAGE,
+    language_code: str,
 ) -> str:
     """The one-sentence cause of an Actions-workflow permission refusal."""
     return language.text(language_code, _WORKFLOW_PERMISSION_CAUSE_KEY)
@@ -335,7 +335,7 @@ def workflow_permission_cause(
 
 def workflow_permission_action(
     pr_url: str | None = None, *,
-    language_code: str = language.DEFAULT_LANGUAGE,
+    language_code: str,
 ) -> str:
     """The concrete human repair path for the workflow refusal.
 
@@ -358,7 +358,7 @@ def workflow_permission_action(
 
 
 def terminal_action(record: Failure,
-                    language_code: str = language.DEFAULT_LANGUAGE) -> str:
+                    language_code: str) -> str:
     """The reader action for the implement-phase terminal handler.
 
     An unrecognized failure says the cause could not be determined
@@ -410,7 +410,7 @@ def _workflow_permission_line(text: str) -> str | None:
 
 
 def _failure_summary(reason: str,
-                     language_code: str = language.DEFAULT_LANGUAGE) -> str:
+                     language_code: str) -> str:
     """Turn a runner exception description into a short reader summary."""
     command_failed = language.text(language_code, "failure.command_failed")
     stderr_match = re.search(r"\s+stderr=(.*)$", reason,
@@ -452,7 +452,7 @@ def _failure_comment_body(*, outcome: str, action: str, reason: str,
                          diagnosis: str, scene: str, evidence: str,
                          pr_url: str | None, issue: str, run_id: str,
                          failure_record: Failure | None = None,
-                         language_code: str = language.DEFAULT_LANGUAGE,
+                         language_code: str,
                          ) -> str:
     """Build the reader-facing hierarchy shared by classified failures.
 

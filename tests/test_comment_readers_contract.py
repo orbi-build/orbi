@@ -29,7 +29,7 @@ def _unwrap_details(body: str) -> str:
 def _milestone() -> str:
     posted = []
     publisher = progress.ProgressPublisher(
-        1153, "owner/repo", RUN_ID, lambda *args, **kwargs: "",
+        1153, "owner/repo", RUN_ID, lambda *args, **kwargs: "", language_code="en",
     )
     publisher._post_comment = lambda body: posted.append(body) or 1
     publisher.milestone(
@@ -46,6 +46,7 @@ def _posted_merged(**overrides) -> str:
         "run_id": RUN_ID, "pr_url": PR_URL, "merge_commit": "deadbeef",
         "review_rounds": 1, "external_commits": 0, "commits": 1,
         "base_branch": "main", "review": "pass, no findings",
+        "language_code": "en",
     }
     kwargs.update(overrides)
     return progress.format_status_comment(merged_pr_comment_body(**kwargs))
@@ -69,7 +70,7 @@ def _comments():
         run_id=RUN_ID, issue=1153, branch="orbi/issue-1153",
         worktree=Path("/tmp/worktree"), source_repo="owner/repo",
     )
-    state = {
+    state = {"language": "en",
         "run_id": RUN_ID, "issue": 1153, "issue_title": "Comment display",
         "role": "review", "priority": "normal", "phase": "done",
         "elapsed": "1s", "last_activity": "-", "last_action": "-",
@@ -81,17 +82,17 @@ def _comments():
         "started": started_pi_comment_body(
             context,
             "base_branch=main base_sha=abc123 repo_config=cfg "
-            "run_id=abc12345 priority=normal session=session-1",
+            "run_id=abc12345 priority=normal session=session-1", language_code="en",
         ),
         "progress": progress.progress_body(state),
         "opened": opened_pr_comment_body(
             RUN_ID, "base_branch=main base_sha=abc123 run_id=abc12345",
-            PR_URL,
+            PR_URL, language_code="en",
         ),
         "merged milestone": _milestone(),
         "merged PR": merged_pr_comment_body(
             RUN_ID, PR_URL, "deadbeef", 1, 0, 1, "main",
-            "pass, no findings",
+            "pass, no findings", language_code="en",
         ),
     }
 

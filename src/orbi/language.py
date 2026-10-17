@@ -80,11 +80,10 @@ def of(config: object) -> str:
     """The effective language bound to one config object.
 
     The single reading point for a runner config: the host validation
-    already guarantees a supported value, and a hand-built (test) config
-    that never bound the field keeps the pre-#1660 default instead of
-    raising.
+    already guarantees a supported value, and every config object
+    carries the field (a hand-built test config binds it explicitly).
     """
-    value = getattr(config, MESSAGE_LANGUAGE_KEY, DEFAULT_LANGUAGE)
+    value = config.message_language  # type: ignore[attr-defined]
     return value if value in LANGUAGES else DEFAULT_LANGUAGE
 
 
@@ -118,6 +117,9 @@ _MESSAGE_LANGUAGE_SET_RE = re.compile(rb"^[ \t]*message_language[ \t]*=",
 _MESSAGE_LANGUAGE_COMMENTED_RE = re.compile(
     rb"^[ \t]*#[ \t]*message_language[ \t]*=[^\n]*", re.MULTILINE,
 )
+# The first top-level table header, [table] or [[repositories]]: a
+# seeded key must land before it, never inside the table (Issue #1687).
+_TABLE_HEADER_RE = re.compile(rb"^[ \t]*\[", re.MULTILINE)
 
 
 def seed_config(payload: bytes,
@@ -128,9 +130,10 @@ def seed_config(payload: bytes,
     example or the packaged one) is an explicit human choice and is
     preserved untouched. Otherwise the created config carries the locale
     language: the commented default line is activated when the example
-    has one, and the line is appended when it does not. Only a config
-    that is being CREATED is rewritten -- an existing orbi.toml,
-    including one missing the key, is never touched.
+    has one, and the line is inserted before the first table header (or
+    appended when the example has no table). Only a config that is being
+    CREATED is rewritten -- an existing orbi.toml, including one missing
+    the key, is never touched.
     """
     if _MESSAGE_LANGUAGE_SET_RE.search(payload):
         return payload
@@ -138,6 +141,12 @@ def seed_config(payload: bytes,
     line = f'{MESSAGE_LANGUAGE_KEY} = "{seeded}"'.encode("utf-8")
     if _MESSAGE_LANGUAGE_COMMENTED_RE.search(payload):
         return _MESSAGE_LANGUAGE_COMMENTED_RE.sub(line, payload, count=1)
+    # No line at all: the key is top-level, so it goes BEFORE the first
+    # table header. Appending it after a trailing [[repositories]] table
+    # would put it inside that table and the key would be ignored.
+    header = _TABLE_HEADER_RE.search(payload)
+    if header is not None:
+        return payload[:header.start()] + line + b"\n" + payload[header.start():]
     separator = b"" if not payload or payload.endswith(b"\n") else b"\n"
     return payload + separator + line + b"\n"
 
@@ -295,6 +304,22 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "<details><summary>原始错误</summary>\n{diagnosis}\n</details>",
     ),
     "claim.scene_missing": ("Orbi failed: {error}; no trusted 'Orbi opened PR' scene comment exists on this Issue, so the opened-PR delivery cannot be resumed — this is an external precondition the AI cannot safely judge or fix, so it cannot be recovered automatically (the Issue stays ai-blocked until a human decides) — restore the trusted 'Orbi opened PR' scene comment or relabel the Issue ai-fix-needed", "Orbi 失败：{error}；这个 Issue 上没有可信的 'Orbi opened PR' 场景评论，因此无法继续已开启 PR 的交付——这是 AI 无法安全判断或修复的外部前提条件，不能自动恢复（Issue 会保持 ai-blocked，直到人工决定）——请恢复可信的 'Orbi opened PR' 场景评论，或把 Issue 重新标记为 ai-fix-needed"),
+    "claim.orphan_pr": (
+        "Orbi orphan PR: the source Issue #{issue_number} is closed while this PR is still open, so it will never be merged automatically. Human decision: merge this PR to keep the work, or close it.\nrun_id={run_id}",
+        "Orbi 孤儿 PR：源 Issue #{issue_number} 已关闭，而该 PR 仍然打开，因此不会自动合并。需要人工决定：合并该 PR 以保留工作，或关闭该 PR。\nrun_id={run_id}",
+    ),
+    "runner.external_pr_closed": (
+        "Orbi: the external PR {pr_url} was closed without a merge; the triage Issue #{number} returns to the ready queue and the next claim delivers the fix internally (run_id={run_id})",
+        "Orbi：外部 PR {pr_url} 未合并就被关闭；triage Issue #{number} 返回到就绪队列，下一次认领会改为内部交付该修复（run_id={run_id}）",
+    ),
+    "runner.external_pr_merged": (
+        "Orbi merged the external PR {pr_url}; closing this triage Issue as delivered by the external contribution (run_id={run_id})",
+        "Orbi 已合并外部 PR {pr_url}；作为外部贡献交付，关闭这个 triage Issue（run_id={run_id}）",
+    ),
+    "health.repeat_failure": (
+        "Orbi health check: issue #{issue} failed {count} consecutive runs with the same failure fingerprint `{fingerprint}` (run_id={run_id}).\nThis looks like a repeating dead end, not normal review/fix rounds — escalating for attention.",
+        "Orbi 健康巡检：Issue #{issue} 连续 {count} 次运行以相同的失败指纹 `{fingerprint}` 失败（run_id={run_id}）。\n这看起来是重复的死胡同，而不是正常的评审/修复轮次——已升级以引起注意。",
+    ),
     "progress.recoverable_model_wait": ("model_wait recovered", "model_wait 已恢复"),
     "progress.recoverable_pi_failure": ("Pi failure recovered", "Pi 失败已恢复"),
     "milestone.plan_ready": ("plan ready", "计划已就绪"),

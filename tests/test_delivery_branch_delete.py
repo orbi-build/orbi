@@ -77,7 +77,7 @@ def test_merge_deletes_the_orbi_head_branch_after_merging(monkeypatch, tmp_path)
     fake, calls = _merge_fake()
     monkeypatch.setattr(seam, "run_command", fake)
     pr = review_merge.merge_gate(
-        tmp_path, _orbi_pr(), "main", repo_dir=tmp_path, source_repo="o/r",
+        tmp_path, _orbi_pr(), "main", repo_dir=tmp_path, source_repo="o/r", language_code="en",
     )
     assert pr["merged"] is True
     assert _delete_calls(calls) == [[
@@ -98,7 +98,7 @@ def test_merge_keeps_a_non_orbi_head_branch(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command", fake)
     pr = review_merge.merge_gate(
         tmp_path, _orbi_pr("feature/external"), "main",
-        repo_dir=tmp_path, source_repo="o/r",
+        repo_dir=tmp_path, source_repo="o/r", language_code="en",
     )
     assert pr["merged"] is True
     assert _delete_calls(calls) == []
@@ -116,7 +116,7 @@ def test_missing_reference_is_treated_as_success(monkeypatch, tmp_path,
     monkeypatch.setattr(seam, "run_command", fake)
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
         pr = review_merge.merge_gate(
-            tmp_path, _orbi_pr(), "main", repo_dir=tmp_path, source_repo="o/r",
+            tmp_path, _orbi_pr(), "main", repo_dir=tmp_path, source_repo="o/r", language_code="en",
         )
     assert pr["merged"] is True
     assert _delete_calls(calls) != []
@@ -134,7 +134,7 @@ def test_other_delete_failure_warns_but_still_merges(monkeypatch, tmp_path,
     monkeypatch.setattr(seam, "run_command", fake)
     with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
         pr = review_merge.merge_gate(
-            tmp_path, _orbi_pr(), "main", repo_dir=tmp_path, source_repo="o/r",
+            tmp_path, _orbi_pr(), "main", repo_dir=tmp_path, source_repo="o/r", language_code="en",
         )
     assert pr["merged"] is True
     assert _delete_calls(calls) != []
@@ -151,7 +151,7 @@ def test_delete_timeout_warns_but_still_merges(monkeypatch, tmp_path, caplog):
     monkeypatch.setattr(seam, "run_command", fake)
     with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
         pr = review_merge.merge_gate(
-            tmp_path, _orbi_pr(), "main", repo_dir=tmp_path, source_repo="o/r",
+            tmp_path, _orbi_pr(), "main", repo_dir=tmp_path, source_repo="o/r", language_code="en",
         )
     assert pr["merged"] is True
     assert _delete_calls(calls) != []

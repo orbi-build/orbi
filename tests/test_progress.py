@@ -139,7 +139,7 @@ def test_runner_fingerprint_returns_unknown_when_detection_fails(
 
 def test_structured_comment_places_runner_marker_at_end(monkeypatch):
     monkeypatch.setattr(progress, "runner_fingerprint", lambda: "8a12fb1c")
-    body = progress.field_block("abc12345", "Orbi: started", {"run_id": "abc12345"})
+    body = progress.field_block("abc12345", "Orbi: started", {"run_id": "abc12345"}, language_code="en")
     assert body.endswith("<!-- runner=8a12fb1c -->")
     assert body.count("runner=") == 1
 
@@ -157,7 +157,7 @@ def test_progress_body_places_runner_marker_at_end(monkeypatch):
     # becomes) is the run's main observability surface, so it carries the
     # runner fingerprint like every other Orbi comment (Issue #526).
     monkeypatch.setattr(progress, "runner_fingerprint", lambda: "8a12fb1c")
-    body = progress.progress_body({
+    body = progress.progress_body({"language": "en",
         "run_id": "abc12345",
         "issue": 18,
         "issue_title": "Publish progress",
@@ -186,14 +186,14 @@ def test_comment_rendering_degrades_to_runner_unknown(monkeypatch):
         raise RuntimeError("git unavailable")
     monkeypatch.setattr(progress.subprocess, "run", _raise)
     for body in (
-        progress.progress_body({
+        progress.progress_body({"language": "en",
             "run_id": "abc12345", "issue": 18,
             "issue_title": "Publish progress", "role": "implement",
             "phase": "test", "elapsed": "1s", "last_activity": None,
             "last_action": None, "tests": None, "review_round": 0,
             "branch": "b", "pr": None, "session": None,
         }),
-        progress.field_block("abc12345", "Orbi: tests passed", {}),
+        progress.field_block("abc12345", "Orbi: tests passed", {}, language_code="en"),
         progress.format_status_comment("Orbi failed: boom"),
     ):
         assert body.endswith("<!-- runner=unknown -->")
@@ -291,7 +291,7 @@ def test_issue_field_fails_fast_on_non_int_issue():
 
 def test_progress_body_issue_line_carries_number_and_title():
     # Issue #100: every progress scene renders `#<number> <title>`.
-    body = progress.progress_body({
+    body = progress.progress_body({"language": "en",
         "run_id": "abc12345",
         "issue": 89,
         "issue_title": "Bug: resume 使用评论里的 PR URL，不再 verify_pr",
@@ -315,7 +315,7 @@ def test_progress_body_issue_line_carries_number_and_title():
 
 
 def test_progress_body_issue_line_is_single_line_for_any_title():
-    state = {
+    state = {"language": "en",
         "run_id": "abc12345",
         "issue": 7,
         "issue_title": "a\n\nb  c",
@@ -339,7 +339,7 @@ def test_progress_body_issue_line_is_single_line_for_any_title():
 def test_progress_body_fails_fast_without_issue_title():
     # A state without the title is a contract violation: fail fast,
     # never render a bare `#<number>` (that would hide the violation).
-    state = {
+    state = {"language": "en",
         "run_id": "abc12345",
         "issue": 18,
         "role": "implement",
@@ -360,7 +360,7 @@ def test_progress_body_fails_fast_without_issue_title():
 def test_progress_body_starts_with_hidden_run_marker():
     """Issue #1657: the run marker is followed immediately by the
     versioned summary block; the readable fields render the same value."""
-    body = progress.progress_body({
+    body = progress.progress_body({"language": "en",
         "run_id": "abc12345",
         "issue": 18,
         "issue_title": "Publish progress",
@@ -400,7 +400,7 @@ def test_progress_body_starts_with_hidden_run_marker():
 
 
 def test_progress_body_marks_missing_values_as_dash():
-    body = progress.progress_body({
+    body = progress.progress_body({"language": "en",
         "run_id": "abc12345",
         "issue": 18,
         "issue_title": "Publish progress",
@@ -423,7 +423,7 @@ def test_progress_body_marks_missing_values_as_dash():
 
 
 def test_progress_body_shows_pr_url_when_present():
-    state = {
+    state = {"language": "en",
         "run_id": "abc12345",
         "issue": 18,
         "issue_title": "Publish progress",
@@ -443,13 +443,13 @@ def test_progress_body_shows_pr_url_when_present():
         "- PR: https://github.com/xqliu/orbi/pull/40" in body
     )
     assert "- review/fix round: 1" not in body
-    body = progress.progress_body({**state, "review_round": 3})
+    body = progress.progress_body({"language": "en",**state, "review_round": 3})
     assert body.index("- review/fix round: 3") < body.index("<details>")
 
 
 def test_progress_body_shows_priority_field():
     """The progress details retain the pickup priority value."""
-    state = {
+    state = {"language": "en",
         "run_id": "abc12345",
         "issue": 7,
         "issue_title": "p0 outage",
@@ -464,10 +464,10 @@ def test_progress_body_shows_priority_field():
         "pr": None,
         "session": None,
     }
-    body = progress.progress_body({**state, "priority": "p0"})
+    body = progress.progress_body({"language": "en",**state, "priority": "p0"})
     # Priority is bookkeeping and is deliberately inside the fold.
     assert body.index("- priority: p0") > body.index("<details>")
-    body = progress.progress_body({**state, "priority": "normal"})
+    body = progress.progress_body({"language": "en",**state, "priority": "normal"})
     assert "- priority: normal" in body
 
 
@@ -478,7 +478,7 @@ def test_progress_body_assigns_status_fields_to_visible_or_folded_sections():
     The marker assertions deliberately check positions relative to the fold,
     not merely that the marker strings occur somewhere in the body.
     """
-    body = progress.progress_body({
+    body = progress.progress_body({"language": "en",
         "run_id": "abc12345", "issue": 1165,
         "issue_title": "Progress comment fold",
         "role": "implement", "priority": "normal", "phase": "test",
@@ -520,7 +520,7 @@ def test_progress_body_shows_recovery_field_only_when_active():
     state (`term` / `kill`) at the end of the body while the runner
     is recovering a stalled session; without it the body is exactly
     the pre-#94 shape (no empty recovery line)."""
-    state = {
+    state = {"language": "en",
         "run_id": "abc12345",
         "issue": 94,
         "issue_title": "Idle recovery",
@@ -537,7 +537,7 @@ def test_progress_body_shows_recovery_field_only_when_active():
     }
     body = progress.progress_body(state)
     assert "- recovery" not in body
-    body = progress.progress_body({**state, "recovery": "term"})
+    body = progress.progress_body({"language": "en",**state, "recovery": "term"})
     lines = body.splitlines()
     details_start = lines.index("<details><summary>Run details</summary>")
     close_index = lines.index("</details>")
@@ -548,7 +548,7 @@ def test_progress_body_shows_recovery_field_only_when_active():
                             if line.startswith(anchor))
         assert not details_start < anchor_index < close_index
     assert lines[-1].startswith("<!-- runner=")
-    body = progress.progress_body({**state, "recovery": "kill"})
+    body = progress.progress_body({"language": "en",**state, "recovery": "kill"})
     assert body.index("- recovery: kill") < body.index("<details>")
 
 
@@ -576,7 +576,7 @@ def make_publisher(run_command=None, comments=None, posted=None,
 
     publisher = progress.ProgressPublisher(
         18, "xqliu/orbi", "abc12345",
-        run_command=fake_run_command,
+        run_command=fake_run_command, language_code="en",
     )
     return publisher, calls
 
@@ -596,7 +596,7 @@ def test_progress_comment_writes_use_body_free_log_commands():
         return ""
 
     publisher = progress.ProgressPublisher(
-        18, "xqliu/orbi", "abc12345", run_command=fake_run_command,
+        18, "xqliu/orbi", "abc12345", run_command=fake_run_command, language_code="en",
     )
     publisher.ensure("body with\nfull markdown")
     publisher.patch("updated body with\nfull markdown")
@@ -718,7 +718,7 @@ def make_stateful_publisher(comments=None):
         return ""
 
     publisher = progress.ProgressPublisher(
-        18, "xqliu/orbi", "abc12345", run_command=fake_run_command,
+        18, "xqliu/orbi", "abc12345", run_command=fake_run_command, language_code="en",
     )
     return publisher, comments, posts, patches
 
@@ -1172,7 +1172,7 @@ def test_progress_state_survives_an_activity_snapshot_failure(monkeypatch, tmp_p
         raise RuntimeError("unreadable session")
 
     monkeypatch.setattr(progress, "activity_snapshot", boom)
-    state = progress._progress_state(RunContext(run_id="a1b2c3d4", issue=4, branch="b", worktree=tmp_path, source_repo="owner/repo"), title="t", role="review", started=0.0, pr_url=None, review_round=0, priority="normal")
+    state = progress._progress_state(RunContext(run_id="a1b2c3d4", issue=4, branch="b", worktree=tmp_path, source_repo="owner/repo"), title="t", role="review", started=0.0, pr_url=None, review_round=0, priority="normal", language_code="en")
     assert state["phase"] == "starting"
     assert state["last_activity"] is None
     assert state["session"] is None
@@ -1188,7 +1188,7 @@ def _progress_state_for(tmp_path, **overrides):
             worktree=tmp_path, source_repo="owner/repo",
         ),
         title="t", role="review", started=0.0, pr_url=None,
-        review_round=0, priority="normal",
+        review_round=0, priority="normal", language_code="en",
     )
     kwargs.update(overrides)
     return progress._progress_state(**kwargs)
@@ -1332,7 +1332,7 @@ def test_failure_repeat_count_and_bump_round_trip():
 
 def _summary_state(**overrides):
     """A complete state dict as `_progress_state` produces it."""
-    state = {
+    state = {"language": "en",
         "run_id": "abc12345",
         "issue": 1657,
         "issue_title": "Publish a safe versioned delivery summary",
@@ -1383,6 +1383,8 @@ def test_progress_body_starts_with_the_run_marker_and_the_block(monkeypatch):
 class _FinishRecorder:
     """Capture the one body `finish` publishes."""
 
+    language_code = "en"
+
     def __init__(self) -> None:
         self.bodies: list[str] = []
 
@@ -1431,7 +1433,7 @@ def test_blocked_finish_keeps_the_formal_prefix_above_the_explanation(
         number=1667, title="Blocked task", run_id="86b57234",
         role="review", branch="orbi/orbi-1667", worktree=tmp_path,
         pr_url=None, review_round=0, priority="normal", detail="boom",
-        next_step="", outcome="blocked", source_repo="owner/repo",
+        next_step="", outcome="blocked", source_repo="owner/repo", language_code="en",
     )
     lines = body.splitlines()
     assert lines[0] == "<!-- orbi:run=86b57234 -->"
@@ -1736,7 +1738,7 @@ def test_progress_publication_failure_stays_a_pure_bypass(monkeypatch, tmp_path)
         calls.append(args)
         raise RuntimeError("gh api 404")
     publisher = progress.ProgressPublisher(
-        18, "xqliu/orbi", "abc12345", run_command=boom,
+        18, "xqliu/orbi", "abc12345", run_command=boom, language_code="en",
     )
     progress._safe_publish(
         run_id="abc12345", issue=18, source_repo="xqliu/orbi",
@@ -1782,7 +1784,7 @@ def test_progress_state_projects_the_watcher_activity_safely(tmp_path):
             "target": str(worktree / "src" / "login.ts"),
             "last_activity": "2026-10-15T06:20:18.761Z",
             "action": "edit /w/src/login.ts",
-        },
+        }, language_code="en",
     )
     assert state["activity"] == {
         "at": "2026-10-15T06:20:18Z",
@@ -1798,7 +1800,7 @@ def test_progress_state_projects_the_watcher_activity_safely(tmp_path):
             "kind": "read",
             "target": "/etc/passwd",
             "last_activity": "2026-10-15T06:20:18Z",
-        },
+        }, language_code="en",
     )
     assert unsafe["activity"] == {
         "at": "2026-10-15T06:20:18Z", "kind": "read", "target": None,
@@ -1807,7 +1809,7 @@ def test_progress_state_projects_the_watcher_activity_safely(tmp_path):
     unknown = progress._progress_state(
         ctx, title="t", role="implement", started=0.0, pr_url=None,
         review_round=0, priority="normal",
-        activity={"kind": None, "target": "/w/secret"},
+        activity={"kind": None, "target": "/w/secret"}, language_code="en",
     )
     assert unknown["activity"] is None
 
@@ -1819,7 +1821,7 @@ def test_progress_state_takes_the_explicit_runner_step(tmp_path):
     )
     state = progress._progress_state(
         ctx, title="t", role="review", step="merge", started=0.0,
-        pr_url=None, review_round=0, priority="normal", activity={},
+        pr_url=None, review_round=0, priority="normal", activity={}, language_code="en",
     )
     assert state["step"] == "merge"
 

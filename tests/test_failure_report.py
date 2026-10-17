@@ -441,6 +441,8 @@ def test_finish_progress_body_moved_to_progress():
 class FakePublisher:
     """Records the milestone and finish publishes without GitHub."""
 
+    language_code = "en"
+
     def __init__(self) -> None:
         self.milestones: list[str] = []
         self.finish_bodies: list[str] = []
@@ -502,6 +504,7 @@ def _report(monkeypatch, tmp_path: Path, *, session: bool,
         branch=BRANCH, role=runner.ROLE_REVIEW,
         action="Repair provider access.", reason="delivery failed",
         diagnosis="provider failed", publisher=publisher,
+        language_code="en",
     )
     kwargs.update(flags)
     outcome = failure_report.report_delivery_failure(_failure(), **kwargs)
@@ -609,7 +612,7 @@ def test_evidence_redacts_local_paths(monkeypatch, tmp_path):
         error, issue=dict(ISSUE), source_repo=SOURCE_REPO, run_id=RUN_ID,
         pr_url=PR_URL, worktree=_worktree(tmp_path, session=True),
         branch=BRANCH, role=runner.ROLE_REVIEW, reason="delivery failed",
-        classify=True, evidence=True, finish=False, publisher=publisher,
+        classify=True, evidence=True, finish=False, publisher=publisher, language_code="en",
     )
     assert "/tmp/delivery" not in posted[0]
     assert "local runner path file: boom" in posted[0]
@@ -645,7 +648,7 @@ def test_block_scene_failure_never_raises_a_reporting_failure(
     monkeypatch.setattr(failure_report, "apply_label_patch", broken)
     with caplog.at_level(logging.ERROR):
         failure_report.block_scene_failure(
-            {"number": 42}, ValueError("bad scene"), "orbi-build/orbi", [],
+            {"number": 42}, ValueError("bad scene"), "orbi-build/orbi", [], language_code="en",
         )
     assert "failure reporting failed" in caplog.text
 
@@ -661,6 +664,6 @@ def test_block_repo_config_failure_never_raises_a_reporting_failure(
     monkeypatch.setattr(failure_report, "comment_issue", broken)
     with caplog.at_level(logging.ERROR):
         failure_report.block_repo_config_failure(
-            42, "orbi-build/orbi", ValueError("bad key"), RUN_ID,
+            42, "orbi-build/orbi", ValueError("bad key"), RUN_ID, language_code="en",
         )
     assert "repo_config_failure_report_failed" in caplog.text

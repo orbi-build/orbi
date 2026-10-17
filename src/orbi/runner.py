@@ -648,7 +648,7 @@ def external_takeover_pr(repo_dir: Path, body: str | None,
 
 
 def _route_external_pr_ticket(issue: dict, repo: str, *,
-                              language_code: str = language.DEFAULT_LANGUAGE,
+                              language_code: str,
                               ) -> bool:
     """Route a marker-bearing opened-PR ticket through external
     integration instead of `ai-blocked`. Returns True when handled.
@@ -692,6 +692,7 @@ def _route_external_pr_ticket(issue: dict, repo: str, *,
         _close_external_triage_issue(
             number, repo, f"https://github.com/{repo}/pull/{pr_number}",
             f"<!-- orbi:external-pr:{pr_number} -->", "external-merge",
+            language_code=language_code,
         )
         event(
             "external_pr_already_merged", issue=number,
@@ -724,7 +725,7 @@ def _route_external_pr_ticket(issue: dict, repo: str, *,
 
 def _recover_missing_pr_scene(
     issue: dict, repo: str, repo_dir: Path, *,
-    language_code: str = language.DEFAULT_LANGUAGE,
+    language_code: str,
 ) -> dict | None:
     """Retry a lost opened-PR scene from the durable local run state.
 
@@ -1104,7 +1105,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
     )
     ticket_ctx = RunContext(
         run_id=run_id, issue=number, branch="-", worktree=Path("-"),
-        source_repo=source_repo, language=language.of(config),
+        source_repo=source_repo,
     )
     set_active_run(ticket_ctx, title)
     try:
@@ -1112,6 +1113,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
             action=lambda: publisher.ensure(_progress_body(_progress_state(
                 ticket_ctx, title=title, role=ROLE_TICKET, started=started,
                 pr_url=None, review_round=0, priority=priority,
+                language_code=language.of(config),
             ))),
         )
         output = pi_session.run_ticket_agent(
@@ -1148,6 +1150,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
             action=lambda: publisher.finish(_progress_body(_progress_state(
                 ticket_ctx, title=title, role=ROLE_TICKET, started=started,
                 pr_url=None, review_round=0, priority=priority,
+                language_code=language.of(config),
             ), outcome=language.text(
                 language.of(config), "runner.ticket_only_outcome",
             ))),
@@ -1540,7 +1543,7 @@ def _agent_delivery_boundary(worktree: Path) -> tuple[str, str]:
 
 
 def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
-               issue_title: str, repo_dir: Path,
+               issue_title: str, repo_dir: Path, language_code: str,
                attribution_footer: bool = True,
                attribution_link: str = "https://github.com/orbi-build/orbi",
                ) -> str | None:
@@ -1678,7 +1681,7 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
             issue, repo=source_repo,
             body=(f"{run_marker(run_id)}\n"
                   + language.text(
-                      ctx.language, "runner.issue_closed",
+                      language_code, "runner.issue_closed",
                       branch=branch, run_id=run_id,
                   )),
         )
@@ -1841,7 +1844,6 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
             RunContext(
                 run_id=run_id, issue=number, branch=branch,
                 worktree=worktree, source_repo=source_repo,
-                language=language.of(config),
             ),
             config.base_branch, repo_dir=config.repo_dir,
             pr_repo=source_repo,
@@ -1887,6 +1889,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 _close_external_triage_issue(
                     number, source_repo, scene["pr_url"],
                     run_marker(run_id), run_id,
+                    language_code=language.of(config),
                 )
                 raise
             if external:
@@ -1897,6 +1900,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 _requeue_closed_external_takeover(
                     number, source_repo, scene["pr_url"],
                     run_marker(run_id), run_id,
+                    language_code=language.of(config),
                 )
                 raise
             if exc.scene_pr_state == "MERGED":
@@ -2680,7 +2684,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         worktree=existing_worktree or worktree_path(
             config.repo_dir, source_repo, number, run_id,
         ),
-        source_repo=source_repo, language=language.of(config),
+        source_repo=source_repo,
     )
     set_active_run(ctx, title)
     publisher = ProgressPublisher(
@@ -2767,6 +2771,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         publish(
             action=lambda: publisher.started(started_pi_comment_body(
                 ctx, run_info, extra_fields=repo_config_fields,
+                language_code=language.of(config),
             )),
         )
         # The whole ProgressPublisher path is a bypass — a
@@ -2777,7 +2782,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 _progress_state(
                     ctx, title=title, role=ROLE_IMPLEMENT,
                     started=started, pr_url=None, review_round=0,
-                    priority=priority,
+                    priority=priority, language_code=language.of(config),
                 ),
             )),
         )
@@ -2826,7 +2831,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                         _progress_state(
                             ctx, title=title, role=ROLE_IMPLEMENT,
                             started=started, pr_url=None, review_round=0,
-                            priority=priority,
+                            priority=priority, language_code=language.of(config),
                         ),
                         outcome=language.text(
                             language.of(config),
@@ -2867,6 +2872,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             takeover_pr["url"] if takeover_pr is not None else deliver_pr(
                 ctx, base_branch, base_sha,
                 issue_title=title, repo_dir=config.repo_dir,
+                language_code=language.of(config),
                 attribution_footer=config.attribution_footer,
                 attribution_link=config.attribution_link,
             )
@@ -2885,10 +2891,9 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             publish(
                 action=lambda: publisher.finish(_progress_body(
                     _progress_state(
-                        issue=number, title=title, run_id=run_id,
-                        role=ROLE_IMPLEMENT, branch=branch,
-                        worktree=worktree, started=started,
-                        pr_url=None, review_round=0, priority=priority,
+                        ctx, title=title, role=ROLE_IMPLEMENT,
+                        started=started, pr_url=None, review_round=0,
+                        priority=priority, language_code=language.of(config),
                     ),
                     outcome="**Orbi stopped: Issue closed during delivery**",
                 )),
@@ -2978,6 +2983,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             action=lambda: publisher.finish(_progress_body(_progress_state(
                 ctx, title=title, role=ROLE_IMPLEMENT, started=started,
                 pr_url=pr_url, review_round=0, priority=priority,
+                language_code=language.of(config),
             ), outcome="**Orbi delivered**")),
         )
         event(
@@ -3060,6 +3066,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             action=lambda: publisher.finish(_progress_body(_progress_state(
                 ctx, title=title, role=ROLE_IMPLEMENT, started=started,
                 pr_url=None, review_round=0, priority=priority,
+                language_code=language.of(config),
             ), outcome=(
                 f"**Orbi {recoverable_name}**\n\n"
                 f"- reason_code: `{record.reason_code}`\n"
@@ -3233,8 +3240,8 @@ def _finish_progress(
     worktree: Path | None, branch: str | None, pr_url: str,
     detail: str, next_step: str, title: str, outcome: str,
     role: str = ROLE_REVIEW, review_round: int = 0,
-    priority: str = "normal",
-    language_code: str = language.DEFAULT_LANGUAGE,
+    priority: str = "normal", *,
+    language_code: str,
 ) -> None:
     """Finish the tracked progress comment with the terminal scene.
 
@@ -3284,6 +3291,7 @@ _FIX_NEEDED_PHRASE = (
 
 def _requeue_closed_external_takeover(
     number: int, source_repo: str, pr_url: str, marker: str, run_id: str,
+    *, language_code: str,
 ) -> None:
     """The #608 放弃/不可修 fallback: the external PR was closed without
     a merge (the contributor withdrew it, or a maintainer rejected it).
@@ -3301,10 +3309,10 @@ def _requeue_closed_external_takeover(
     )
     body = (
         f"{marker}\n"
-        f"Orbi: the external PR {pr_url} was closed without "
-        f"a merge; the triage Issue #{number} returns to the "
-        "ready queue and the next claim delivers the fix "
-        f"internally (run_id={run_id})"
+        + language.text(
+            language_code, "runner.external_pr_closed",
+            pr_url=pr_url, number=number, run_id=run_id,
+        )
     )
     comment_issue(number, repo=source_repo, body=body)
     failure_report.comment_pr(_pr_number(pr_url), repo=source_repo, body=body)
@@ -3312,6 +3320,7 @@ def _requeue_closed_external_takeover(
 
 def _close_external_triage_issue(
     number: int, source_repo: str, pr_url: str, marker: str, run_id: str,
+    *, language_code: str,
 ) -> None:
     """Close the triage Issue of a merged external takeover (#608/#726).
 
@@ -3323,9 +3332,10 @@ def _close_external_triage_issue(
     try:
         body = (
             f"{marker}\n"
-            f"Orbi merged the external PR {pr_url}; closing "
-            "this triage Issue as delivered by the external "
-            f"contribution (run_id={run_id})"
+            + language.text(
+                language_code, "runner.external_pr_merged",
+                pr_url=pr_url, run_id=run_id,
+            )
         )
         comment_issue(number, repo=source_repo, body=body)
         run_command(
@@ -3417,6 +3427,7 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
             # Issue (the PR body has no `Fixes #N` for it).
             _close_external_triage_issue(
                 number, source_repo, pr_url, marker, run_id,
+                language_code=language.of(config),
             )
         return
     if state == "CLOSED":
@@ -3432,6 +3443,7 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
             )
             _requeue_closed_external_takeover(
                 number, source_repo, pr_url, marker, run_id,
+                language_code=language.of(config),
             )
             return
         # The current labels are read ONCE before the transition:
@@ -3788,9 +3800,9 @@ def main(argv: list[str] | None = None) -> int:
                 config=config,
                 hooks=claim.ResumeHooks(
                     resume_scene=run_state.resume_scene,
-                    route_external_pr_ticket=lambda issue, repo: _route_external_pr_ticket(issue, repo, language_code=language.of(config)),
-                    block_scene_failure=lambda issue, err, repo, comments: failure_report.block_scene_failure(issue, err, repo, comments, language_code=language.of(config)),
-                    recover_missing_pr_scene=lambda issue, repo, repo_dir: _recover_missing_pr_scene(issue, repo, repo_dir, language_code=language.of(config)),
+                    route_external_pr_ticket=_route_external_pr_ticket,
+                    block_scene_failure=failure_report.block_scene_failure,
+                    recover_missing_pr_scene=_recover_missing_pr_scene,
                     has_recoverable_pr_scene=_has_recoverable_pr_scene,
                     comment_pr=failure_report.comment_pr,
                 ),
@@ -3968,7 +3980,6 @@ def main(argv: list[str] | None = None) -> int:
                     int(issue["number"]), scene["run_id"],
                 ),
                 source_repo=source_repo,
-                language=language.of(config),
             ), issue["title"])
             # Verify the open PR BEFORE any git/Pi mutation
             # (head repo, base, run marker, exact URL of the recovered

@@ -211,20 +211,20 @@ def test_repeated_findings_identity_uses_kind_and_scene():
     finding = {"level": "Major", "location": "comments",
                "note": "repeat", "fix": "repair"}
     first = review_round_comment_body(
-        MARKER, 1, 42, 0, 1, [finding], _round_scene(1),
+        MARKER, 1, 42, 0, 1, [finding], _round_scene(1), language_code="en",
     )
     second = review_round_comment_body(
         MARKER, 2, 42, 0, 1, [finding], _round_scene(2),
-        previous_comments=[{**TRUSTED, "body": first}],
+        previous_comments=[{**TRUSTED, "body": first}], language_code="en",
     )
     assert "Findings are the same as round 1." in second
     # A gate failure reusing the same findings/scene is not the predecessor.
     gate_failure = review_round_comment_body(
-        MARKER, 1, 42, 0, 1, [finding], _round_scene(1), kind="failure",
+        MARKER, 1, 42, 0, 1, [finding], _round_scene(1), kind="failure", language_code="en",
     )
     third = review_round_comment_body(
         MARKER, 2, 42, 0, 1, [finding], _round_scene(2),
-        previous_comments=[{**TRUSTED, "body": gate_failure}],
+        previous_comments=[{**TRUSTED, "body": gate_failure}], language_code="en",
     )
     assert "Findings are the same" not in third
 
@@ -289,7 +289,7 @@ def test_same_findings_round_reads_the_canonical_identity_and_fallbacks():
 
 def test_merged_receipt_is_kinded_and_exposes_one_pr_url():
     body = merged_pr_comment_body(
-        RUN_ID, PR_URL, "deadbeef", 2, 0, 1, "main", "通过",
+        RUN_ID, PR_URL, "deadbeef", 2, 0, 1, "main", "通过", language_code="en",
     )
     assert body.splitlines()[1] == KIND_MERGED
     assert re.search(r"pull/42", body)

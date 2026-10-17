@@ -53,7 +53,7 @@ def test_review_round_comment_body_renders_findings_and_shortens_sha():
         marker, 2, 477, 0, 1,
         [{"level": "Major", "location": "PR round comments",
           "note": "same failure", "fix": f"absorb {full_sha}"}],
-        "<!-- orbi:scene:v1 {} -->",
+        "<!-- orbi:scene:v1 {} -->", language_code="en",
     )
     # The canonical kind marker sits right after the run marker; the
     # readable review-round line follows it (Issue #1659).
@@ -80,11 +80,11 @@ def test_review_round_comment_body_marks_identical_previous_findings():
     finding = {"level": "Major", "location": "comments",
                "note": "repeat", "fix": "repair"}
     first = review_merge.review_round_comment_body(
-        marker, 1, 477, 0, 1, [finding], _round_scene_block(1),
+        marker, 1, 477, 0, 1, [finding], _round_scene_block(1), language_code="en",
     )
     second = review_merge.review_round_comment_body(
         marker, 2, 477, 0, 1, [finding], _round_scene_block(2),
-        previous_comments=[{"authorAssociation": "MEMBER", "body": first}],
+        previous_comments=[{"authorAssociation": "MEMBER", "body": first}], language_code="en",
     )
     assert "Findings are the same as round 1." in second
     trusted = {"authorAssociation": "MEMBER"}
@@ -97,7 +97,7 @@ def test_review_round_comment_body_marks_identical_previous_findings():
     gate_failure = review_merge.review_round_comment_body(
         marker, 2, 477, 0, 0, [], _round_scene_block(1),
         heading="Orbi base advance retry 2 for PR #477:",
-        kind="failure",
+        kind="failure", language_code="en",
     )
     assert gate_failure.splitlines()[1] == "<!-- orbi:comment=failure -->"
     assert failure_report.review_rounds_so_far(
@@ -114,7 +114,7 @@ def test_review_round_comment_body_ignores_untrusted_or_nonmatching_comments():
         previous_comments=[
             {"authorAssociation": "NONE", "body": "quoted"},
             {"authorAssociation": "MEMBER", "body": "unrelated"},
-        ],
+        ], language_code="en",
     )
     assert "Findings are the same" not in body
 
@@ -123,7 +123,7 @@ def test_review_round_comment_body_separates_gate_messages():
     body = review_merge.review_round_comment_body(
         "<!-- orbi:run=abc12345 -->", 3, 477, 0, 0, [], "scene",
         messages=["merge gate blocked: behind", "reruns the full test suite",
-                  "Absorb contract violated: reason"],
+                  "Absorb contract violated: reason"], language_code="en",
     )
     assert "behind\n\nreruns" in body
     assert "suite\n\nAbsorb" in body
@@ -143,7 +143,7 @@ def test_review_round_comment_body_golden_bytes_issue_and_pr():
                  "note": "base behind", "fix": "absorb origin/main"}]
     assert review_merge.review_round_comment_body(
         marker, 2, 477, 1, 1, findings, scene_block,
-        messages=["merge gate blocked: behind"],
+        messages=["merge gate blocked: behind"], language_code="en",
     ) == (
         "<!-- orbi:run=abc12345 -->\n"
         "<!-- orbi:comment=review-round -->\n"
@@ -165,7 +165,7 @@ def test_review_round_comment_body_golden_bytes_issue_and_pr():
         marker, 3, 477, 0, 0, [], scene_block,
         messages=["merge gate blocked: behind"],
         heading="Orbi base advance retry 3 for PR #477:",
-        kind="failure",
+        kind="failure", language_code="en",
     ) == (
         "<!-- orbi:run=abc12345 -->\n"
         "<!-- orbi:comment=failure -->\n"
@@ -914,7 +914,7 @@ def test_merge_gate_rejects_failed_github_ci(monkeypatch, tmp_path):
         review_merge.merge_gate(tmp_path, {"number": 4, "url": "u",
                                      "base_ref": "main", "base_oid": "b1",
                                      "head_ref": "h", "head_oid": "h1"},
-                          "main", repo_dir=tmp_path, source_repo="owner/repo")
+                          "main", repo_dir=tmp_path, source_repo="owner/repo", language_code="en")
 
 
 def test_merge_gate_rejects_preexisting_failed_ci_as_unrecoverable(
@@ -943,7 +943,7 @@ def test_merge_gate_rejects_preexisting_failed_ci_as_unrecoverable(
         review_merge.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
-            "main", repo_dir=tmp_path, source_repo="owner/repo",
+            "main", repo_dir=tmp_path, source_repo="owner/repo", language_code="en",
         )
 
 
@@ -969,7 +969,7 @@ def test_merge_gate_preexisting_failure_matches_apostrophe_name(
         review_merge.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
-            "main", repo_dir=tmp_path, source_repo="owner/repo",
+            "main", repo_dir=tmp_path, source_repo="owner/repo", language_code="en",
         )
 
 
@@ -983,7 +983,7 @@ def test_merge_gate_rejects_failed_status_context(monkeypatch, tmp_path):
         review_merge.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
-            "main", repo_dir=tmp_path,
+            "main", repo_dir=tmp_path, language_code="en",
         )
 
 
@@ -1042,7 +1042,7 @@ def test_merge_gate_merges_after_green_ci(monkeypatch, tmp_path):
     result = review_merge.merge_gate(tmp_path, {"number": 4, "url": "u",
                                           "base_ref": "main", "base_oid": "b1",
                                           "head_ref": "h", "head_oid": "h1"},
-                               "main", repo_dir=tmp_path)
+                               "main", repo_dir=tmp_path, language_code="en")
     assert result["merged"] is True
 
 
@@ -1094,7 +1094,7 @@ def test_merge_gate_reads_the_state_once(monkeypatch, tmp_path):
         review_merge.merge_gate(tmp_path, {"number": 4, "url": "u",
                                      "base_ref": "main", "base_oid": "b1",
                                      "head_ref": "h", "head_oid": "h1"},
-                          "main", repo_dir=tmp_path)
+                          "main", repo_dir=tmp_path, language_code="en")
     assert len(views) == 1
 
 
@@ -1155,7 +1155,7 @@ def test_merge_gate_absorb_remote_head_mismatch_is_fail_fast(monkeypatch, tmp_pa
     with pytest.raises(RuntimeError, match="does not match absorbed head"):
         review_merge.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
                                      "head_ref": "h", "base_oid": "b1"},
-                          "main", repo_dir=tmp_path)
+                          "main", repo_dir=tmp_path, language_code="en")
 
 
 def test_merge_gate_absorb_detects_head_moved_after_push(monkeypatch, tmp_path):
@@ -1171,7 +1171,7 @@ def test_merge_gate_absorb_detects_head_moved_after_push(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="head moved after base absorb"):
         review_merge.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
                                      "head_ref": "h", "base_oid": "b1"},
-                          "main", repo_dir=tmp_path)
+                          "main", repo_dir=tmp_path, language_code="en")
 
 
 def test_merge_gate_absorb_rejects_newly_dirty_pr(monkeypatch, tmp_path):
@@ -1188,7 +1188,7 @@ def test_merge_gate_absorb_rejects_newly_dirty_pr(monkeypatch, tmp_path):
     with pytest.raises(review_merge.RecoverableMergeGateError, match="not mergeable"):
         review_merge.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
                                      "head_ref": "h", "base_oid": "b1"},
-                          "main", repo_dir=tmp_path)
+                          "main", repo_dir=tmp_path, language_code="en")
 
 
 def test_merge_gate_without_ci_proceeds_to_mergeable_gate(monkeypatch, tmp_path):
@@ -1198,7 +1198,7 @@ def test_merge_gate_without_ci_proceeds_to_mergeable_gate(monkeypatch, tmp_path)
     result = review_merge.merge_gate(tmp_path, {"number": 4, "url": "u",
                                           "base_ref": "main", "base_oid": "b1",
                                           "head_ref": "h", "head_oid": "h1"},
-                               "main", repo_dir=tmp_path)
+                               "main", repo_dir=tmp_path, language_code="en")
     assert result["merged"] is True
 
 
@@ -1213,7 +1213,7 @@ def test_merge_gate_merges_reviewed_head_with_match_head_commit(monkeypatch, tmp
     pr = review_merge.merge_gate(tmp_path, {"number": 4, "url": "u",
                                       "base_ref": "main", "base_oid": "b1",
                                       "head_ref": "h", "head_oid": "h1"},
-                           "main", repo_dir=tmp_path)
+                           "main", repo_dir=tmp_path, language_code="en")
     assert pr["merged"] is True
     # The merge must use --match-head-commit with the reviewed head SHA.
     merge_cmd = [c for c in calls if c[:2] == ["gh", "pr"] and "merge" in c][0]
@@ -1248,7 +1248,7 @@ def test_merge_gate_skips_merge_when_issue_is_blocked(monkeypatch, tmp_path):
             {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
              "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path, source_repo="owner/repo",
-            issue_number=4, run_id="a1b2c3d4",
+            issue_number=4, run_id="a1b2c3d4", language_code="en",
         )
     # The merge command is never invoked...
     assert not [c for c in calls
@@ -1331,7 +1331,7 @@ def test_merge_gate_issue_blocked_comment_failure_is_bypass(
             {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
              "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path, source_repo="owner/repo",
-            issue_number=4, run_id="a1b2c3d4",
+            issue_number=4, run_id="a1b2c3d4", language_code="en",
         )
     assert not [c for c in calls
                 if isinstance(c, list) and c[:2] == ["gh", "pr"]
@@ -1360,7 +1360,7 @@ def test_merge_gate_merges_when_issue_is_not_blocked(monkeypatch, tmp_path):
         {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
          "head_ref": "h", "head_oid": "h1"},
         "main", repo_dir=tmp_path, source_repo="owner/repo",
-        issue_number=4, run_id="a1b2c3d4",
+        issue_number=4, run_id="a1b2c3d4", language_code="en",
     )
     assert pr["merged"] is True
     assert [c for c in calls
@@ -1430,7 +1430,7 @@ def test_merge_gate_requires_the_repo_dir_lock_location(
         review_merge.merge_gate(tmp_path, {"number": 4, "url": "u",
                                      "base_ref": "main", "base_oid": "b1",
                                      "head_ref": "h", "head_oid": "h1"},
-                         "main")
+                         "main", language_code="en")
 
 
 def test_merge_gate_fetches_under_the_base_sync_lock(
@@ -1452,7 +1452,7 @@ def test_merge_gate_fetches_under_the_base_sync_lock(
     review_merge.merge_gate(tmp_path, {"number": 4, "url": "u",
                                  "base_ref": "main", "base_oid": "b1",
                                  "head_ref": "h", "head_oid": "h1"},
-                      "main", repo_dir=tmp_path)
+                      "main", repo_dir=tmp_path, language_code="en")
     assert held == [True]
     _lock_free(tmp_path)
 
@@ -1472,7 +1472,7 @@ def test_merge_gate_reraises_merge_base_errors(monkeypatch, tmp_path):
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
         review_merge.merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1"}, "main",
-            repo_dir=tmp_path,
+            repo_dir=tmp_path, language_code="en",
         )
     assert excinfo.value.returncode == 128
 
@@ -1495,7 +1495,7 @@ def test_merge_gate_behind_conflicted_pr_remains_recoverable(
         review_merge.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
                                      "head_oid": "h1"}, "main",
-                          repo_dir=tmp_path)
+                          repo_dir=tmp_path, language_code="en")
     assert "merge_gate_not_mergeable" in caplog.text
 
 
@@ -1510,7 +1510,7 @@ def test_merge_gate_defers_when_ci_pending(monkeypatch, tmp_path, caplog):
         review_merge.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
-            "main", repo_dir=tmp_path,
+            "main", repo_dir=tmp_path, language_code="en",
         )
     assert "merge_gate_ci_pending" in caplog.text
 
@@ -1524,7 +1524,7 @@ def test_merge_gate_defers_when_mergeable_unknown(monkeypatch, tmp_path, caplog)
         review_merge.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
-            "main", repo_dir=tmp_path,
+            "main", repo_dir=tmp_path, language_code="en",
         )
     assert "merge_gate_mergeable_unknown" in caplog.text
 
@@ -1535,7 +1535,7 @@ def test_merge_gate_rejects_non_mergeable_pr(monkeypatch, tmp_path):
         review_merge.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
                                      "head_oid": "h1"}, "main",
-                          repo_dir=tmp_path)
+                          repo_dir=tmp_path, language_code="en")
 
 
 def test_merge_gate_rejects_head_that_moved_since_review(monkeypatch, tmp_path):
@@ -1545,7 +1545,7 @@ def test_merge_gate_rejects_head_that_moved_since_review(monkeypatch, tmp_path):
         review_merge.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
                                      "head_oid": "h1"}, "main",
-                          repo_dir=tmp_path)
+                          repo_dir=tmp_path, language_code="en")
 
 
 @pytest.mark.parametrize("failed_line", [
@@ -1576,7 +1576,7 @@ def test_merge_gate_hands_off_each_actionable_policy_rejection(
         review_merge.merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1", "head_ref": "h",
                        "base_oid": "b1", "_source_repo": "owner/repo"},
-            "main", repo_dir=tmp_path,
+            "main", repo_dir=tmp_path, language_code="en",
         )
     assert raised.value.preflight == [failed_line]
 
@@ -1603,7 +1603,7 @@ def test_merge_gate_does_not_hand_off_without_failed_preflight(
         review_merge.merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1", "head_ref": "h",
                        "base_oid": "b1", "_source_repo": "owner/repo"},
-            "main", repo_dir=tmp_path,
+            "main", repo_dir=tmp_path, language_code="en",
         )
 
 
@@ -4032,7 +4032,7 @@ def test_merge_gate_absorb_records_the_absorbed_head_and_defers(
         review_merge.merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1",
                        "head_ref": "h", "base_oid": "b1"},
-            "main", repo_dir=tmp_path,
+            "main", repo_dir=tmp_path, language_code="en",
         )
     assert run_state.read_reviewed(tmp_path) == ("h2", _REVIEW_BODY_SHA)
 

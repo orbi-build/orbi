@@ -56,7 +56,7 @@ MISSING: dict[str, str] = {
 }
 
 
-def missing_text(item: str, language_code: str = language.DEFAULT_LANGUAGE,
+def missing_text(item: str, language_code: str,
                  ) -> str:
     """The human sentence for one failed check, in one language."""
     return language.text(language_code, MISSING[item])
@@ -154,7 +154,7 @@ def parse_verdict(output: str) -> ClarifyVerdict | None:
 
 def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
                    ready_label: str = READY_LABEL,
-                   language_code: str = language.DEFAULT_LANGUAGE) -> str:
+                   language_code: str) -> str:
     """Render the ONE comment that names the missing pieces.
 
     The first line mentions the Issue author (`@<login>`, #1336) so the

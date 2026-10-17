@@ -5,7 +5,7 @@ Both comments double as the run's machine-readable anchors: the started
 comment carries the `started` kind marker and the opened-PR comment
 carries the `orbi:scene:v1` block the next tick resumes from. Only their
 HEADLINE is human prose and follows the run's bound message language
-(`RunContext.language`, or an explicit `language_code`); the hidden
+(the explicit `language_code`); the hidden
 markers, the field lines and the scene block stay exactly as they were.
 
 Extracted from `runner.py` unchanged apart from the language, so the
@@ -22,16 +22,9 @@ from orbi.journal import validate_run_id
 from orbi.progress import STARTED_HEADER, _run_info_fields, field_block
 
 
-def _language_of(ctx: RunContext, language_code: str | None) -> str:
-    """The explicit language, else the run context's bound language."""
-    if language_code is not None:
-        return language_code
-    return getattr(ctx, "language", language.DEFAULT_LANGUAGE)
-
-
 def started_pi_comment_body(ctx: RunContext, run_info: str,
                             extra_fields: dict | None = None, *,
-                            language_code: str | None = None) -> str:
+                            language_code: str) -> str:
     """The start comment doubles as the recoverable run scene.
 
     `extra_fields` carries the repo-config audit fields;
@@ -46,9 +39,8 @@ def started_pi_comment_body(ctx: RunContext, run_info: str,
     if extra_fields:
         fields.update(extra_fields)
     info = _run_info_fields(run_info)
-    bound = _language_of(ctx, language_code)
     headline = language.text(
-        bound, "delivery.started_headline",
+        language_code, "delivery.started_headline",
     ) + " " + " ".join(
         f"{key}={info[key]}" for key in ("run_id", "priority")
         if key in info
@@ -57,13 +49,13 @@ def started_pi_comment_body(ctx: RunContext, run_info: str,
         ctx.run_id, headline, fields,
         detail_keys={"base_sha", "repo_config", "branch", "worktree", "session"},
         kind=COMMENT_KIND_STARTED,
-        language_code=bound,
+        language_code=language_code,
     )
 
 
 def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
                            external: bool = False, *,
-                           language_code: str = language.DEFAULT_LANGUAGE,
+                           language_code: str,
                            ) -> str:
     """The PR-opened comment records the recoverable run scene.
 
