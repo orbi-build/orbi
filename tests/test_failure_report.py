@@ -730,12 +730,14 @@ RESUME_WORKTREE = "/home/orbi-acme--app-1a2b3c4d/delivery/app/.worktrees/x"
 
 
 @pytest.mark.parametrize("language_code", ["en", "zh"])
-def test_resume_blocked_comment_redacts_local_paths(
+def test_resume_blocked_comment_is_redacted_and_ends_with_help_line(
         monkeypatch, language_code):
-    """Issue #1721 acceptance 2: the "cannot continue the interrupted run"
-    comment never shows the runner's worktree path, keeps
-    `local runner path` where it was, and still says the run state file
-    is missing."""
+    """Issue #1721 acceptance 2 + Issue #1722: the "cannot continue the
+    interrupted run" comment never shows the runner's worktree path, keeps
+    `local runner path` where it was, still says the run state file is
+    missing, and — because it blocks the Issue for a human — ends with the
+    community help line as its own last paragraph, in the comment's language.
+    Nothing else about the comment moves."""
     gh = FakeGh(SOURCE_REPO)
     gh.add_issue(42, title="Fix the thing", labels=("ai-in-progress",))
     monkeypatch.setattr(seam, "run_command", gh)
@@ -749,13 +751,32 @@ def test_resume_blocked_comment_redacts_local_paths(
     )
     assert len(gh.issues[42]["comments"]) == 1
     body = gh.issues[42]["comments"][0]["body"]
-    assert body.startswith(f"<!-- orbi:run={RUN_ID} -->")
     assert "/home/" not in body
-    assert (
-        "local runner path has no run state file (local runner path)"
-        in body
+    # Acceptance 2: the markers and the sentence are untouched; the only
+    # difference from the #1721 comment is the help paragraph at the end.
+    sentence = language.text(
+        language_code, "failure.resume_blocked",
+        detail="worktree local runner path has no run state file "
+               "(local runner path)",
+        run_id=RUN_ID,
     )
-    assert f"run_id={RUN_ID}" in body
+    help_line = language.text(language_code, "help.community")
+    # The comment layer appends the hidden runner marker; everything before
+    # it is this function's body, asserted byte for byte.
+    assert re.fullmatch(
+        re.escape(
+            f"<!-- orbi:run={RUN_ID} -->\n"
+            f"<!-- orbi:comment=failure -->\n"
+            f"{sentence}\n"
+            f"\n"
+            f"{help_line}"
+        ) + r"\n\n<!-- runner=[^>]+ -->",
+        body,
+    )
+    # Acceptance 1: the help line is the comment's last paragraph, in the
+    # comment's language.
+    commented = re.sub(r"\n\n<!-- runner=[^>]+ -->$", "", body)
+    assert commented.split("\n\n")[-1] == help_line
 
 
 # The failure-comment size limit and the two report-itself-failed guards:
