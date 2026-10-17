@@ -82,9 +82,11 @@ UNDERSTANDING_DIR = ".understanding"
 # The gh context read is bounded like the ticket pool (up to 200 each).
 CONTEXT_LIMIT = 200
 SUGGESTIONS_MAX = 3
-# `--count N` (Issue #1671) asks the session for at most N and keeps the
-# first N validated entries. N is spelled as a word so the default (3)
-# prompt stays byte-for-byte what it was before the flag existed.
+# `--count N` (Issue #1671) asks the session for at most N, keeps the
+# first N of the answer and validates only those (Issue #1688: an entry
+# the caller asked us to drop must not fail the run). N is spelled as a
+# word so the default (3) prompt stays byte-for-byte what it was before
+# the flag existed.
 COUNT_WORDS = {1: "one", 2: "two", 3: "three"}
 # The Suggestions document keys, in one place.
 SUGGESTION_KEYS = {"kind", "issue", "title", "why", "body"}
@@ -570,15 +572,19 @@ def _build_document(config: RunnerConfig, repo: str, run_id: str,
     )
     try:
         entries = _parse_output(output)
-        suggestions = _validate_suggestions(entries, context, dispatch_label)
+        # Keep the first N BEFORE validating (Issue #1688): the answer may
+        # hold up to SUGGESTIONS_MAX entries while the caller asked for
+        # fewer, and an entry the caller asked us to drop must not fail
+        # the run (an invalid extra one would otherwise take the kept
+        # entries down with it).
+        suggestions = _validate_suggestions(
+            entries[:count], context, dispatch_label,
+        )
     except SuggestError as exc:
         raise SuggestError(
             str(exc), command=log_command, returncode=0,
             stdout=output, stderr="",
         ) from exc
-    # Keep the first N of what validated (Issue #1671): the answer may
-    # hold up to SUGGESTIONS_MAX entries, the caller asked for fewer.
-    suggestions = suggestions[:count]
     _write_batch(run_dir, suggestions)
     document = {
         "repo": repo,
