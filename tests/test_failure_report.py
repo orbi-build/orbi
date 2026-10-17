@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from orbi import failure_report, language, progress, runner
+from orbi import failure_report, language, progress, runner, runner_health
 from tests.fakes.progress import freeze_report_time
 
 from seam import seam
@@ -478,6 +478,7 @@ def _failure() -> subprocess.CalledProcessError:
 
 def _report(monkeypatch, tmp_path: Path, *, session: bool,
             publisher: FakePublisher, exc: BaseException | None = None,
+            history: list | None = None,
             **flags):
     """Call the moved reporter with GitHub and the fingerprint stubbed."""
     posted: list[str] = []
@@ -495,6 +496,17 @@ def _report(monkeypatch, tmp_path: Path, *, session: bool,
     )
     monkeypatch.setattr(failure_report, "issue_labels", lambda *a, **k: set())
     monkeypatch.setattr(failure_report, "issue_comments", lambda *a, **k: [])
+    if history is not None:
+        # The repeated-failure guard reads the trusted history; a matching
+        # comment also owns the dedup, so its in-place update is stubbed
+        # too (no GitHub call).
+        monkeypatch.setattr(
+            failure_report, "issue_comments",
+            lambda *a, **k: list(history),
+        )
+        monkeypatch.setattr(
+            failure_report, "update_issue_comment", lambda *a, **k: "",
+        )
     # The seam fans the read out to every module that binds it, so the
     # golden bodies stay deterministic without pinning one home.
     monkeypatch.setattr(seam, "runner_fingerprint", lambda: "deadbeef")
@@ -618,6 +630,55 @@ def test_blocked_classified_next_step_tells_how_to_resume(
     assert add_step in next_step
     assert next_step in finish
     assert "relabel the Issue ai-fix-needed" not in finish
+
+
+@pytest.mark.parametrize(
+    "language_code, remove_step, add_step",
+    [("en", "remove `ai-blocked`", "add `ai-fix-needed`"),
+     ("zh", "移除 `ai-blocked`", "添加 `ai-fix-needed`")],
+)
+def test_blocked_guard_escalation_keeps_the_next_step_line(
+        monkeypatch, tmp_path, language_code, remove_step, add_step):
+    """Issue #1701 acceptance 5 on the shape a blocked REVIEW failure
+    really produces: the review handler carries no action for a failure it
+    cannot repair itself, and the repeated-failure guard escalates the
+    third identical failure to `ai-blocked`. Its final progress comment's
+    next-step line must then carry the resume steps — never the bare
+    engine-wait line, which leaves the human no way back to
+    `ai-fix-needed`."""
+    exc = RuntimeError("review worktree missing")
+    fingerprint = runner_health.failure_fingerprint(exc)
+    history = [
+        {
+            "id": 900 + index,
+            "body": (
+                f"<!-- orbi:run={RUN_ID} -->\n"
+                f"<!-- orbi:fail={fingerprint} -->\n"
+                "Orbi needs a fix: boom"
+            ),
+            "authorAssociation": "OWNER",
+        }
+        for index in range(failure_report.FAILURE_STREAK_LIMIT - 1)
+    ]
+    publisher = FakePublisher()
+    outcome, _, _ = _report(
+        monkeypatch, tmp_path, session=False, publisher=publisher,
+        exc=exc, history=history, action="", classify=True,
+        evidence=False, finish=True, language_code=language_code,
+    )
+    assert outcome == "blocked"
+    finish = publisher.finish_bodies[0]
+    next_step = language.text(
+        language_code, "failure.next_step_blocked_classified",
+    )
+    assert remove_step in next_step
+    assert add_step in next_step
+    assert language.text(
+        language_code, "progress.what_next", action=next_step,
+    ) in finish
+    assert language.text(
+        language_code, "progress.engine_wait_pr", pr_url=PR_URL,
+    ) not in finish
 
 
 def test_evidence_redacts_local_paths(monkeypatch, tmp_path):

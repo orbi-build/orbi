@@ -78,16 +78,18 @@ def finish_outcome_body(*, outcome: str, detail: str,
         paragraphs.append(message(
             "progress.what_next", action=engine_action,
         ))
-    elif blocked:
-        # A carried action never hides what the engine does next: a
-        # blocked delivery still waits for a human (Issue #1701 keeps the
-        # blocked review comment's engine line unchanged).
+    elif blocked and action:
+        # A blocked delivery that already carries its resume action still
+        # says what the engine does next: the engine waits for a human.
         paragraphs.append(message(
             "progress.what_next", action=message(
                 "progress.engine_wait_pr", pr_url=pr_url,
             ) if pr_url else message("progress.engine_wait_human"),
         ))
     elif not action and next_step:
+        # No action carried (a recovered/guarded failure): the shared
+        # next-step line IS the reader's resume step (Issue #1701), so it
+        # must never be replaced by the engine wait line.
         paragraphs.append(message("progress.what_next", action=next_step))
     paragraphs.append(message("progress.raw_error", diagnosis=diagnosis))
     return "\n\n".join(paragraphs)
