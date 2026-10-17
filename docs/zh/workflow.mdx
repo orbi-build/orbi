@@ -411,12 +411,12 @@ Orbi 自己的评论使用实例的**消息语言**：`message_language` 只接�
 
 该设置覆盖 Runner 自己写的 Issue/PR 对话：开始与实时进度、阶段与里程碑
 通知、薄 ticket 澄清、opened-PR 现场、评审发现与修复指令、人工评审/合并
-交接、可恢复失败与终态失败、交付完成以及 release task 状态评论。被翻译的
-是人类标签与叙述性文字；项目/Issue 原文、路径、命令、URL、错误码、原始
-日志、JSON 键、verdict/severity/action 等枚举、标签、指纹和机器字段保持
-原样。源码、项目文档、Issue 标题/正文、PR 标题/正文与 release notes 仍
-按各自既有规则——该设置不会覆盖它们（本仓库声明 `en`，因此在任何主机上
-其公开账本都保持英文）。
+交接、可恢复失败与终态失败、交付完成、release task 状态评论，以及 Orbi
+写在 PR 正文末尾的署名尾注。被翻译的是人类标签与叙述性文字；项目/Issue
+原文、路径、命令、URL、错误码、原始日志、JSON 键、verdict/severity/action
+等枚举、标签、指纹和机器字段保持原样。源码、项目文档、Issue 标题/正文、
+PR 标题与 PR 正文的其他内容、以及 release notes 仍按各自既有规则——该设置
+不会覆盖它们（本仓库声明 `en`，因此在任何主机上其公开账本都保持英文）。
 
 评论身份与语言无关：读取方匹配隐藏的 run/kind/scene marker、progress 块
 前缀与持久化机器字段，绝不依赖可被翻译的标题，因此重启、resume、原地

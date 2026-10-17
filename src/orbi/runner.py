@@ -135,6 +135,7 @@ from orbi.progress import (
 )
 from orbi.delivery_comment import (
     opened_pr_comment_body,
+    pr_attribution_footer,
     started_pi_comment_body,
 )
 from orbi import runner_health
@@ -1699,10 +1700,9 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
             f"{issue_title} (run_id={run_id})\n"
         )
         if attribution_footer:
-            body += (
-                f"\nBuilt by [Orbi]({attribution_link})"
-                f" from Issue #{issue}\n"
-            )
+            body += "\n" + pr_attribution_footer(
+                issue, attribution_link, language_code=language_code,
+            ) + "\n"
         # A transient GitHub hiccup must not throw away a finished
         # delivery: the create goes through the bounded write retry, and
         # a response lost after GitHub actually created the PR is caught

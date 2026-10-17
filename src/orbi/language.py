@@ -37,6 +37,8 @@ import os
 import re
 from typing import Mapping
 
+from orbi.language_terms import DISPLAY_TERMS
+
 LANGUAGE_EN = "en"
 LANGUAGE_ZH = "zh"
 LANGUAGES = (LANGUAGE_EN, LANGUAGE_ZH)
@@ -220,7 +222,7 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "review.findings_heading": ("### Findings", "### 评审发现"),
     "review.findings_milestone": ("review findings: round {round}, {blockers} blocker(s), {majors} major(s) for PR #{pr_number}", "评审发现：第 {round} 轮，PR #{pr_number} 有 {blockers} 个 blocker、{majors} 个 major"),
     "review.findings_outcome": ("**Orbi review findings**\n\nround {round}: {blockers} blocker(s), {majors} major(s); the next review session retries the same PR automatically", "**Orbi 评审发现**\n\n第 {round} 轮：{blockers} 个 blocker、{majors} 个 major；下一个评审 session 会自动重试同一个 PR"),
-    "review.delivered_outcome": ("**Orbi delivered**\n\nPR {pr_url} merged (merge_commit={merge_commit} review_rounds={round})", "**Orbi 已交付**\n\nPR {pr_url} 已合并（merge_commit={merge_commit} review_rounds={round}）"),
+    "review.delivered_outcome": ("**Orbi delivered**\n\nPR {pr_url} merged (merge_commit={merge_commit} review_rounds={round})", "**Orbi 已交付**\n\nPR {pr_url} 已合并（合并提交 {merge_commit}，共 {round} 个评审轮次）"),
     "review.base_advance_heading": ("Orbi base advance retry {round} for PR #{pr_number}:", "Orbi base 同步重试第 {round} 次，PR #{pr_number}："),
     "review.gate_ci_blocked": ("CI merge gate blocked: {message} (run_id={run_id})", "CI 合并门禁被阻塞：{message}（run_id={run_id}）"),
     "review.gate_blocked": ("Merge gate blocked: {message} (run_id={run_id})", "合并门禁被阻塞：{message}（run_id={run_id}）"),
@@ -289,6 +291,7 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "progress.header": ("**Orbi progress**", "**Orbi 进度**"),
     "progress.run_details": ("Run details", "运行详情"),
     "progress.milestone": ("Orbi:", "Orbi："),
+    "progress.milestone_heading": ("{prefix} {headline}", "{prefix}{headline}"),
     "progress.field.role": ("role", "角色"),
     "progress.field.step": ("step", "阶段"),
     "progress.field.reported_at": ("reported at", "报告时间"),
@@ -580,6 +583,10 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "The delivery stopped before it could be completed: {detail}",
         "交付在完成之前停止了：{detail}",
     ),
+    "runner.pr_attribution": (
+        "Built by [Orbi]({link}) from Issue #{issue}",
+        "由 [Orbi]({link}) 构建，基于 Issue #{issue}",
+    ),
     "runner.pr_closed_milestone": ("blocked: PR {pr_url} was closed without a merge; the delivery is terminally failed", "已阻塞：PR {pr_url} 未合并就被关闭；本次交付最终失败"),
     # The standalone terminal failure comment of a closed PR (the
     # milestone above and the progress scene carry the same fact).
@@ -665,7 +672,7 @@ MESSAGES: dict[str, tuple[str, str]] = {
     ),
     "review.summary_human_action": ("maintainer-actionable merge retry", "需要维护者处理的合并重试"),
     "review.summary_pass_recorded": ("pass recorded on {head}; merged after CI", "在 {head} 上记录通过；CI 之后合并"),
-    "review.summary_pass_clean": ("pass, no findings", "通过，没有发现"),
+    "review.summary_pass_clean": ("pass, no findings", "通过，没有发现问题"),
     "review.summary_pass_fixed": ("pass, {findings} findings fixed in-session", "通过，会话内修复了 {findings} 项发现"),
 
     # Delivery failures (blocked / fix needed).
@@ -841,12 +848,12 @@ MESSAGES: dict[str, tuple[str, str]] = {
     ),
     "clarify.repair_outcome": (
         "Outcome: what a user does, and what they should see differently.",
-        "Outcome：用户要做什么，以及应该看到什么变化。",
+        "结果：用户要做什么，以及应该看到什么变化。",
     ),
     "clarify.repair_acceptance": (
         "Acceptance: how a finished delivery is told apart from an "
         "unfinished one.",
-        "Acceptance：如何判断交付已完成、而不是半成品。",
+        "验收：如何判断交付已完成、而不是半成品。",
     ),
     "clarify.followup": (
         "Orbi re-checks the ticket when it claims it and starts the "
@@ -881,6 +888,10 @@ MESSAGES: dict[str, tuple[str, str]] = {
     ),
 }
 
+# The display vocabulary of the run comments lives in its own module to
+# keep this catalog owner under the size cap (Issue #1729).
+MESSAGES.update(DISPLAY_TERMS)
+
 
 UNBLOCK_STEP_FIELD = "unblock_step"
 
@@ -903,6 +914,18 @@ def text(language: str, key: str, **fields: object) -> str:
             language, "blocked.unblock_step",
         )
     return template.format(**fields) if fields else template
+
+
+def term(language: str, key: str, default: str) -> str:
+    """One catalogue term, or `default` when the key has no entry.
+
+    Used for display vocabulary whose raw value must survive when the
+    catalogue does not know it (an external tool name, a future phase):
+    the caller keeps the raw value instead of inventing a translation.
+    """
+    if key not in MESSAGES:
+        return default
+    return text(language, key)
 
 
 # --- the model-session boundary -------------------------------------------

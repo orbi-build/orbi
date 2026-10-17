@@ -2705,7 +2705,7 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     assert zh_progress, "the round published its live progress comment"
     for body in zh_progress:
         assert "**Orbi 进度**" in body
-        assert "- 角色: review" in body
+        assert "- 角色: 评审" in body
         assert "**Orbi progress**" not in body
         assert body.startswith("<!-- orbi:run=a1b2c3d4 -->")
 
