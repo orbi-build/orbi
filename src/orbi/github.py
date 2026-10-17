@@ -648,13 +648,6 @@ def _epic_child_evidence(repo: str, kind: str, number: int) -> str:
     return f"Issue #{number} closed"
 
 
-def _epic_audit(child_evidence: list[str], version: str | None = None) -> str:
-    prefix = f" for {version}" if version else ""
-    return (f"Epic reconciliation{prefix}: complete; "
-            f"children: {', '.join(child_evidence)}; "
-            "no open native blockers/dependencies.")
-
-
 # Comments are trusted through one of two channels — a repo maintainer
 # association, or the currently authenticated runner account itself (the
 # login fallback in `_comment_is_trusted`, which requires the local gh
