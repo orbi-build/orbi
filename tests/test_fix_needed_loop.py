@@ -996,7 +996,7 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
     assert "Orbi failed:" in body
     assert "cannot be recovered automatically" in body
     # The reason names what is missing (the trusted scene) and what a
-    # human must do (restore the scene or relabel).
+    # human must do: restore it, then the one unblock step (Issue #1724).
     assert "Orbi opened PR" in body
     assert "ai-fix-needed" in body
     assert "resume_scene_failed" in caplog.text or \

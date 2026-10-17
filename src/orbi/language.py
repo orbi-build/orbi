@@ -240,11 +240,19 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "review.finding_location": ("Location:", "位置："),
     "review.finding_note": ("Note:", "说明："),
     "review.finding_fix": ("Fix:", "修复："),
+    # The ONE unblock step of a blocked delivery (Issue #1724). The claim
+    # scans skip `ai-blocked`, so it is removed BEFORE `ai-fix-needed` goes
+    # on; relabelling alone hits the same block again. Every message that
+    # tells a person how to resume a PR composes this entry through the
+    # `{unblock_step}` field `text()` fills in, so the step cannot drift
+    # message by message again.
+    "blocked.unblock_step": (
+        "remove `ai-blocked`, then add `ai-fix-needed`",
+        "移除 `ai-blocked`，再添加 `ai-fix-needed`",
+    ),
     # The blocked review-stage failure comment (Issue #1701): WHY it
-    # blocked, then HOW a human resumes it. Removing `ai-blocked` comes
-    # first because the claim scans skip it and the round-budget reset
-    # reads exactly that label event; the generic action is chosen by
-    # exception type, never by exception text.
+    # blocked, then HOW a human resumes it. The generic action is chosen
+    # by exception type, never by exception text.
     "review.blocked_rounds_reason": (
         "the independent review of PR {pr_url} used every one of its "
         "review rounds without producing a mergeable result",
@@ -252,20 +260,18 @@ MESSAGES: dict[str, tuple[str, str]] = {
     ),
     "review.blocked_rounds_action": (
         "Fix what the findings above point at (usually the Issue's "
-        "acceptance criteria), then first remove `ai-blocked` and then add "
-        "`ai-fix-needed`: that gives PR {pr_url} a fresh review-round budget.",
-        "请修复上面评审发现所指出的问题（通常是该 Issue 的验收标准），"
-        "然后先移除 `ai-blocked`，再添加 `ai-fix-needed`：这样 PR {pr_url} "
-        "会重新获得一整轮评审预算。",
+        "acceptance criteria) — {unblock_step}: that gives PR {pr_url} a "
+        "fresh review-round budget.",
+        "请修复上面评审发现所指出的问题（通常是该 Issue 的验收标准）——"
+        "{unblock_step}：这样 PR {pr_url} 会重新获得一整轮评审预算。",
     ),
     "review.blocked_human_reason": (
         "the independent review of PR {pr_url} requires a human decision",
         "PR {pr_url} 的独立评审需要人工决定",
     ),
     "review.blocked_human_action": (
-        "{fix}. Then remove `ai-blocked` and add `ai-fix-needed` to resume "
-        "PR {pr_url}.",
-        "{fix}。然后移除 `ai-blocked` 并添加 `ai-fix-needed`，继续 PR {pr_url}。",
+        "{fix}. To resume PR {pr_url}: {unblock_step}.",
+        "{fix}。要继续 PR {pr_url}：{unblock_step}。",
     ),
     "review.blocked_failed_reason": (
         "the independent review of PR {pr_url} failed: {detail}",
@@ -273,12 +279,10 @@ MESSAGES: dict[str, tuple[str, str]] = {
     ),
     "review.blocked_generic_action": (
         "Fix what the reason names (changing labels alone does not change "
-        "it), then remove `ai-blocked` and add `ai-fix-needed` to resume PR "
-        "{pr_url}. If this PR should not continue, close the PR and this "
-        "Issue.",
-        "请修复原因中指出的问题（只改标签不会改变它），然后移除 `ai-blocked` "
-        "并添加 `ai-fix-needed`，继续 PR {pr_url}。如果这个 PR 不应继续，"
-        "请关闭该 PR 和这个 Issue。",
+        "it). To resume PR {pr_url}: {unblock_step}. If this PR should not "
+        "continue, close the PR and this Issue.",
+        "请修复原因中指出的问题（只改标签不会改变它）。要继续 PR {pr_url}："
+        "{unblock_step}。如果这个 PR 不应继续，请关闭该 PR 和这个 Issue。",
     ),
 
     # The live progress comment and the terminal outcome.
@@ -343,7 +347,19 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "<details><summary>Raw error</summary>\n{diagnosis}\n</details>",
         "<details><summary>原始错误</summary>\n{diagnosis}\n</details>",
     ),
-    "claim.scene_missing": ("Orbi failed: {error}; no trusted 'Orbi opened PR' scene comment exists on this Issue, so the opened-PR delivery cannot be resumed — this is an external precondition the AI cannot safely judge or fix, so it cannot be recovered automatically (the Issue stays ai-blocked until a human decides) — restore the trusted 'Orbi opened PR' scene comment or relabel the Issue ai-fix-needed", "Orbi 失败：{error}；这个 Issue 上没有可信的 'Orbi opened PR' 场景评论，因此无法继续已开启 PR 的交付——这是 AI 无法安全判断或修复的外部前提条件，不能自动恢复（Issue 会保持 ai-blocked，直到人工决定）——请恢复可信的 'Orbi opened PR' 场景评论，或把 Issue 重新标记为 ai-fix-needed"),
+    "claim.scene_missing": (
+        "Orbi failed: {error}; no trusted 'Orbi opened PR' scene comment "
+        "exists on this Issue, so the opened-PR delivery cannot be resumed "
+        "— this is an external precondition the AI cannot safely judge or "
+        "fix, so it cannot be recovered automatically (the Issue stays "
+        "ai-blocked until a human decides) — restore the trusted 'Orbi "
+        "opened PR' scene comment, then {unblock_step}",
+        "Orbi 失败：{error}；这个 Issue 上没有可信的 'Orbi opened PR' "
+        "场景评论，因此无法继续已开启 PR 的交付——这是 AI 无法安全判断"
+        "或修复的外部前提条件，不能自动恢复（Issue 会保持 ai-blocked，"
+        "直到人工决定）——请恢复可信的 'Orbi opened PR' 场景评论，然后"
+        "{unblock_step}",
+    ),
     "claim.orphan_pr": (
         "Orbi orphan PR: the source Issue #{issue_number} is closed while this PR is still open, so it will never be merged automatically. Human decision: merge this PR to keep the work, or close it.\nrun_id={run_id}",
         "Orbi 孤儿 PR：源 Issue #{issue_number} 已关闭，而该 PR 仍然打开，因此不会自动合并。需要人工决定：合并该 PR 以保留工作，或关闭该 PR。\nrun_id={run_id}",
@@ -709,13 +725,12 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "failure.workflow_action_pr": (
         "{cause} Check the App's installation settings for a permission "
         "update that includes Workflows read/write. After resolving the "
-        "permission, remove `ai-blocked` and add `ai-fix-needed` to "
-        "continue PR {pr_url}. If no update is available or the same error "
-        "persists, contact the App operator.",
+        "permission: {unblock_step} to continue PR {pr_url}. If no update "
+        "is available or the same error persists, contact the App "
+        "operator.",
         "{cause}。请检查该 App 安装设置里是否可授予包含 Workflows 读写权限的"
-        "权限更新。权限解决后，移除 `ai-blocked` 并添加 `ai-fix-needed`，"
-        "继续 PR {pr_url}。如果无法更新权限或同样的错误仍然出现，请联系 App "
-        "的运维者。",
+        "权限更新。权限解决后：{unblock_step}，继续 PR {pr_url}。如果无法"
+        "更新权限或同样的错误仍然出现，请联系 App 的运维者。",
     ),
     "failure.workflow_action_no_pr": (
         "{cause} Check the App's installation settings for a permission "
@@ -739,12 +754,12 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "Orbi failed: {error}; this is an external precondition the AI "
         "cannot safely judge or fix, so it cannot be recovered "
         "automatically (the Issue stays ai-blocked until a human decides) "
-        "— restore the trusted 'Orbi opened PR' scene comment or relabel "
-        "the Issue ai-fix-needed to resume this same PR",
+        "— restore the trusted 'Orbi opened PR' scene comment, then "
+        "{unblock_step} to resume this same PR",
         "Orbi 失败：{error}；这是 AI 无法安全判断或修复的外部前提条件，"
         "因此无法自动恢复（Issue 会保持 ai-blocked，直到人工决定）——"
-        "请恢复可信的 'Orbi opened PR' 场景评论，或把 Issue 重新标记为 "
-        "ai-fix-needed 以继续同一个 PR",
+        "请恢复可信的 'Orbi opened PR' 场景评论，然后{unblock_step}，"
+        "以继续同一个 PR",
     ),
     "failure.repo_config_blocked": (
         "Orbi failed: repository config is invalid: {error}; this is a "
@@ -767,10 +782,9 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "fix needed: {summary}", "需要修复：{summary}",
     ),
     "failure.next_step_blocked_classified": (
-        "fix the precondition above (see the reason), then remove "
-        "`ai-blocked` and add `ai-fix-needed` to resume this same PR",
-        "修复上面的前提条件（见原因），然后移除 `ai-blocked` 并添加 "
-        "`ai-fix-needed`，以继续同一个 PR",
+        "fix the precondition above (see the reason): {unblock_step} to "
+        "resume this same PR",
+        "修复上面的前提条件（见原因）：{unblock_step}，以继续同一个 PR",
     ),
     "failure.next_step_blocked_terminal": (
         "fix the failure above and re-run this Issue (a new run id is "
@@ -868,15 +882,26 @@ MESSAGES: dict[str, tuple[str, str]] = {
 }
 
 
+UNBLOCK_STEP_FIELD = "unblock_step"
+
+
 def text(language: str, key: str, **fields: object) -> str:
     """Render one catalog message in one language.
 
     The language is the run's bound value; anything but `zh` renders the
     English entry, so a hand-built (test) config that never bound the
     field keeps the exact pre-#1660 output.
+
+    A template naming `{unblock_step}` receives the ONE shared resume step
+    (Issue #1724): the caller never restates it, so a blocked message
+    cannot carry a copy that drifts out of date.
     """
     english, chinese = MESSAGES[key]
     template = chinese if language == LANGUAGE_ZH else english
+    if UNBLOCK_STEP_FIELD in template:
+        fields[UNBLOCK_STEP_FIELD] = text(
+            language, "blocked.unblock_step",
+        )
     return template.format(**fields) if fields else template
 
 
