@@ -312,8 +312,15 @@ def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
     )
 
 
+# One evidence segment's cap (Issue #1711, `_fenced`'s default) and one
+# fitting step: an oversized comment shrinks these, never its structure.
+EVIDENCE_SEGMENT_CAP = 4000
+_EVIDENCE_CAP_STEP = 500
+
+
 def _failure_evidence(worktree: Path | None, exc: BaseException, *,
-                      language_code: str) -> str:
+                      language_code: str,
+                      cap: int = EVIDENCE_SEGMENT_CAP) -> str:
     """Render the bounded evidence that survives terminal worktree cleanup.
 
     Pi subprocess streams come from ``CalledProcessError``. The session and
@@ -322,6 +329,8 @@ def _failure_evidence(worktree: Path | None, exc: BaseException, *,
     the session tail is a structural summary whose duplicates are removed,
     and the full session log is named for the deep-dive. The
     failure reason itself stays the readable head of the comment.
+
+    `cap` bounds each segment, so every fence closes (Issue #1711).
     """
     stderr = getattr(exc, "stderr", None)
     stdout = getattr(exc, "output", None)
@@ -348,11 +357,11 @@ def _failure_evidence(worktree: Path | None, exc: BaseException, *,
     return (
         f"\n\n{language.text(language_code, 'failure.evidence.heading')}\n"
         f"exit_code={return_code if return_code is not None else '<unknown>'}\n"
-        f"\nstderr_tail:\n{_fenced(_redact_local_paths(stderr))}\n"
-        f"\nstdout_tail:\n{_fenced(_redact_local_paths(stdout))}\n"
+        f"\nstderr_tail:\n{_fenced(_redact_local_paths(stderr), cap=cap)}\n"
+        f"\nstdout_tail:\n{_fenced(_redact_local_paths(stdout), cap=cap)}\n"
         f"\n{language.text(language_code, 'failure.evidence.session_last_events', limit=SESSION_SUMMARY_LIMIT, label=session_label)}\n"
-        f"{_fenced(_redact_local_paths(session))}\n"
-        f"\ntest_log_tail:\n{_fenced(_redact_local_paths(test_log))}"
+        f"{_fenced(_redact_local_paths(session), cap=cap)}\n"
+        f"\ntest_log_tail:\n{_fenced(_redact_local_paths(test_log), cap=cap)}"
     )
 
 
@@ -783,10 +792,8 @@ def report_delivery_failure(
         current_labels if current_labels is not None
         else issue_labels(number, source_repo)
     )
-    evidence_detail = (
-        _failure_evidence(worktree, exc, language_code=language_code)
-        if evidence else ""
-    )
+    evidence_detail = _failure_evidence(
+        worktree, exc, language_code=language_code) if evidence else ""
     # The milestone is a short mobile notification: for the workflow
     # refusal it must carry the same cause AND repair path as the
     # detailed comment, so it shows the reader-facing action instead of
@@ -837,20 +844,16 @@ def report_delivery_failure(
             language_code=language_code,
         )
         outcome = "fix needed"
-    if len(body) > FAILURE_COMMENT_MAX_CHARS:
-        # The cap keeps the cause-first head, and `failure.cap_comment`
-        # closes the cut Diagnosis block before the note and the help
-        # line, so a blocked stop still shows how to get help (Issue
-        # #1695); the full session log names what was dropped.
-        body = failure.cap_comment(
-            body, limit=FAILURE_COMMENT_MAX_CHARS,
-            log=(
-                language.text(
-                    language_code, "failure.scene.local_session_log")
-                if _latest_session_file(worktree) else "<unavailable>"
-            ),
-            language_code=language_code,
-        )
+    # An oversized comment shrinks ONLY its evidence segments, never its
+    # structure: a cut lands inside the last fence, so the closer and the
+    # help line render as code in the collapsed block (Issue #1711).
+    cap = EVIDENCE_SEGMENT_CAP
+    while evidence_detail and cap and len(body) > FAILURE_COMMENT_MAX_CHARS:
+        cap = max(0, cap - _EVIDENCE_CAP_STEP)
+        shrunk = _failure_evidence(
+            worktree, exc, language_code=language_code, cap=cap)
+        body = body.replace(evidence_detail.lstrip(), shrunk.lstrip(), 1)
+        evidence_detail = shrunk
     if run_id:
         # The hidden fingerprint marker rides under the run marker on
         # the recoverable path only: a blocked Issue is terminal, so
