@@ -21892,11 +21892,46 @@ def test_reconcile_release_epics_closes_verified_epic_with_audit(monkeypatch):
         assert "run_id=abc12345" in body
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(seam, "comment_issue", fake_comment)
-    result = release.reconcile_release_epics("o/r", 4, "v0.4.0", "abc12345")
+    result = release.reconcile_release_epics(
+        "o/r", 4, "v0.4.0", "abc12345", "en",
+    )
     assert result == ["Epic #20 closed after verification (Issue #21 closed)"]
     assert ["gh", "issue", "close", "20", "--repo", "o/r"] in commands
     with pytest.raises(AssertionError):
         fake_run(["unexpected"])
+
+
+def test_reconcile_release_epics_posts_the_audit_in_the_bound_language(monkeypatch):
+    commands = []
+    epic = {"number": 20, "labels": [{"name": "ai-epic"}],
+            "body": "## Children\n- #21", "blockedBy": {"nodes": []}}
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if command == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100", "--paginate", "--slurp"]:
+            return json.dumps([[epic]])
+        if "sub_issues" in command[2]:
+            return json.dumps([[{"number": 21, "repository": {"full_name": "o/r"}, "state": "closed"}]])
+        if command == ["gh", "api", "repos/o/r/issues/21"]:
+            return json.dumps({"number": 21, "state": "closed"})
+        if command == ["gh", "issue", "view", "20", "--repo", "o/r", "--json", "comments"]:
+            return json.dumps({"comments": []})
+        if command == ["gh", "issue", "close", "20", "--repo", "o/r"]:
+            return ""
+        raise AssertionError(command)
+
+    bodies = []
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda number, *, repo, body: bodies.append(body))
+    release.reconcile_release_epics("o/r", 4, "v0.4.0", "abc12345", "zh")
+    assert len(bodies) == 1
+    assert "Epic 对账（v0.4.0）" in bodies[0]
+    assert "Issue #21 closed" in bodies[0]
+    assert "run_id=abc12345" in bodies[0]
+    assert ["gh", "issue", "close", "20", "--repo", "o/r"] in commands
+    with pytest.raises(AssertionError):
+        fake_run(["gh", "api", "unexpected"])
 
 
 def test_reconcile_release_epics_keeps_open_child_and_bad_scope_open(monkeypatch):
@@ -21920,7 +21955,9 @@ def test_reconcile_release_epics_keeps_open_child_and_bad_scope_open(monkeypatch
         raise AssertionError(command)
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(seam, "comment_issue", lambda **kwargs: calls.append(["comment"]))
-    result = release.reconcile_release_epics("o/r", 4, "v0.4.0", "abc12345")
+    result = release.reconcile_release_epics(
+        "o/r", 4, "v0.4.0", "abc12345", "en",
+    )
     assert "Epic #20 kept open: child Issue #21 is not closed" in result
     assert "Epic #22 kept open: Epic child scope is missing or empty" in result
     assert not any(command[:3] == ["gh", "issue", "close"] for command in calls if isinstance(command, list))
@@ -21940,15 +21977,65 @@ def test_reconcile_open_epics_closes_and_deduplicates_audit(monkeypatch, caplog)
     comments = []
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
     monkeypatch.setattr(seam, "comment_issue", lambda number, *, repo, body: comments.append({"body": body}))
-    result = claim.reconcile_open_epics("o/r", "abc12345")
+    result = claim.reconcile_open_epics("o/r", "abc12345", "en")
     assert result == ["Epic #20 closed after verification (Issue #21 closed)"]
     assert len(comments) == 1 and "run_id=abc12345" in comments[0]["body"]
     assert ["gh", "issue", "close", "20", "--repo", "o/r"] in commands
     # The same audit is idempotent on the next tick.
     commands.clear()
-    claim.reconcile_open_epics("o/r", "def67890")
+    claim.reconcile_open_epics("o/r", "def67890", "en")
     assert len(comments) == 1
     assert "epic_closed issue=20 repo=o/r" in caplog.text
+
+
+def test_reconcile_open_epics_posts_the_audit_in_the_bound_language(monkeypatch):
+    epic = {"number": 20}
+
+    def fake_run(command, **kwargs):
+        if command[1:3] == ["issue", "list"]:
+            return json.dumps([epic])
+        return ""
+
+    comments = []
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "_verify_epic_complete",
+                        lambda repo, item: ["Issue #21 closed"])
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda number, *, repo, body: comments.append({"body": body}))
+    claim.reconcile_open_epics("o/r", "abc12345", "zh")
+    assert len(comments) == 1
+    assert "Epic 对账：已完成" in comments[0]["body"]
+    assert "Issue #21 closed" in comments[0]["body"]
+    assert "run_id=abc12345" in comments[0]["body"]
+
+
+def test_reconcile_open_epics_keeps_one_audit_across_languages(monkeypatch):
+    """A close that failed after today's English audit landed posts no
+    second comment when the next sweep renders Chinese; two Chinese
+    sweeps after a failed close post one comment in total."""
+    epic = {"number": 20}
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if command[1:3] == ["issue", "list"]:
+            return json.dumps([epic])
+        return ""
+
+    english = ("Epic reconciliation: complete; children: Issue #21 closed; "
+               "no open native blockers/dependencies.")
+    comments = [{"body": f"<!-- orbi:run=old -->\n{english}\nrun_id=old"}]
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "_verify_epic_complete",
+                        lambda repo, item: ["Issue #21 closed"])
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda number, *, repo, body: comments.append({"body": body}))
+    claim.reconcile_open_epics("o/r", "abc12345", "zh")
+    claim.reconcile_open_epics("o/r", "def67890", "zh")
+    assert len(comments) == 1
+    assert ["gh", "issue", "close", "20", "--repo", "o/r"] in commands
 
 
 def test_reconcile_open_epics_keeps_incomplete_without_comment(monkeypatch, caplog):
@@ -21958,7 +22045,7 @@ def test_reconcile_open_epics_keeps_incomplete_without_comment(monkeypatch, capl
     monkeypatch.setattr(seam, "_verify_epic_complete", lambda repo, item: (_ for _ in ()).throw(ValueError("open blockers: #3")))
     comments = []
     monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: comments.append(True))
-    claim.reconcile_open_epics("o/r", "abc12345")
+    claim.reconcile_open_epics("o/r", "abc12345", "en")
     assert not comments
     assert "epic_kept_open issue=20 repo=o/r reason=\"open blockers: #3\"" in caplog.text
 
@@ -22436,18 +22523,30 @@ def test_reconcile_open_epics_failure_is_fail_open(tmp_path, monkeypatch, caplog
     assert "milestone_reconcile_not_found repo=o/r status=404" in caplog.text
 
 
-def test_reconcile_open_epics_runs_on_a_fresh_tick(monkeypatch):
+def test_reconcile_open_epics_runs_on_a_fresh_tick(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(claim, "reconcile_open_epics", lambda repo, run_id: calls.append((repo, run_id)))
+    monkeypatch.setattr(
+        claim, "reconcile_open_epics",
+        lambda repo, run_id, language_code: calls.append(
+            (repo, run_id, language_code)),
+    )
     monkeypatch.setattr(milestone, "reconcile_release_milestones", lambda *args, **kwargs: None)
     monkeypatch.setattr(claim, "reconcile_orphan_prs", lambda *args, **kwargs: None)
     monkeypatch.setattr(claim, "pick_resumable_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(claim, "pick_in_progress_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(claim, "pick_issue", lambda *args, **kwargs: None)
     assert claim.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1, hooks=resume_deps()) is None
-    assert calls == [("o/r", "a1b2c3d4")]
+    assert calls == [("o/r", "a1b2c3d4", "en")]
+    # A repository's zh message language reaches the Epic sweep (Issue #1705).
+    config = config_domain.RunnerConfig(
+        repo_dir=tmp_path, source_repos=("o/r",), message_language="zh",
+    )
+    assert claim.pick_next_delivery(
+        ["o/r"], Path("/tmp/slots"), 1, config=config, hooks=resume_deps(),
+    ) is None
+    assert calls[-1] == ("o/r", "a1b2c3d4", "zh")
 
 
 def test_verify_epic_complete_rejects_malformed_native_blockers(monkeypatch):
@@ -22510,6 +22609,52 @@ def test_close_release_milestone_reconciles_epics_when_summary_lags(monkeypatch)
         fake_run(["unexpected"])
 
 
+def test_close_release_milestone_binds_the_language_to_the_epic_audit(monkeypatch):
+    """Issue #1705: the release success path passes the run's bound
+    language down to the Epic audit comment."""
+    epic = {"number": 20, "labels": [{"name": "ai-epic"}],
+            "body": "## Children\n- #21", "blockedBy": {"nodes": []}}
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([[_milestone(5, "v0.4.0", "open", 1)]])
+        if command == MILESTONE_ISSUES_COMMAND:
+            # The gate reads, the Epic sweep verifies, the gate re-reads
+            # the Milestone after the sweep closed the Epic.
+            return json.dumps([[epic]]) if calls.count(
+                MILESTONE_ISSUES_COMMAND) < 3 else json.dumps([[]])
+        if "sub_issues" in command[2]:
+            return json.dumps([[{"number": 21,
+                                 "repository": {"full_name": "o/r"},
+                                 "state": "closed"}]])
+        if command == ["gh", "api", "repos/o/r/issues/21"]:
+            return json.dumps({"number": 21, "state": "closed"})
+        if command == ["gh", "issue", "view", "20", "--repo", "o/r",
+                       "--json", "comments"]:
+            return json.dumps({"comments": []})
+        if command == ["gh", "issue", "close", "20", "--repo", "o/r"]:
+            return ""
+        if command[-1:] == ["state=closed"]:
+            return ""
+        raise AssertionError(command)
+
+    bodies = []
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda number, *, repo, body: bodies.append(body))
+    result = release.close_release_milestone(
+        "o/r", "v0.4.0", run_id="abc12345", language_code="zh",
+    )
+    assert "Epic #20 closed" in result
+    assert len(bodies) == 1
+    assert "Epic 对账（v0.4.0）" in bodies[0]
+    assert "Issue #21 closed" in bodies[0]
+    with pytest.raises(AssertionError):
+        fake_run(["gh", "api", "unexpected"])
+
+
 def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkeypatch):
     calls = []
     issues = [
@@ -22551,7 +22696,9 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
         raise AssertionError(command)
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: calls.append(["comment"]))
-    result = release.reconcile_release_epics("o/r", 4, "v0.4.0", "abc12345")
+    result = release.reconcile_release_epics(
+        "o/r", 4, "v0.4.0", "abc12345", "zh",
+    )
     assert any("Epic #30 closed after verification" in item for item in result)
     assert any("open blockers: #9" in item for item in result)
     assert ["gh", "issue", "close", "34", "--repo", "o/r"] in calls

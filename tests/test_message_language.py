@@ -478,6 +478,52 @@ def test_release_comments_follow_the_language():
     assert failure_body.startswith("<!-- orbi:run=abcdef12 -->")
 
 
+def test_epic_audit_follows_the_language_with_byte_identical_english():
+    """Issue #1705: the audit sentence is catalog text under `epic.`; the
+    English rendering is byte-identical to the pre-#1705 literal."""
+    evidence = ["PR #9 merged", "Issue #21 closed"]
+    assert release_comments._epic_audit(evidence, None, "en") == (
+        "Epic reconciliation: complete; children: PR #9 merged, "
+        "Issue #21 closed; no open native blockers/dependencies."
+    )
+    assert release_comments._epic_audit(evidence, "v0.4.0", "en") == (
+        "Epic reconciliation for v0.4.0: complete; children: PR #9 merged, "
+        "Issue #21 closed; no open native blockers/dependencies."
+    )
+    versioned_zh = release_comments._epic_audit(evidence, "v0.4.0", "zh")
+    assert "Epic 对账" in versioned_zh
+    assert "v0.4.0" in versioned_zh
+    assert "complete" not in versioned_zh
+    # The child fragments are the same raw evidence in both languages.
+    assert "PR #9 merged, Issue #21 closed" in versioned_zh
+
+
+def test_epic_audit_posted_matches_either_language():
+    """An Epic that already carries today's English audit gets no second
+    comment when the next sweep renders the same sentence in Chinese."""
+    evidence = ["Issue #21 closed"]
+    en = release_comments._epic_audit(evidence, None, "en")
+    zh = release_comments._epic_audit(evidence, None, "zh")
+    assert release_comments.epic_audit_posted(
+        [{"body": "run\n" + en}], evidence,
+    )
+    assert release_comments.epic_audit_posted(
+        [{"body": "run\n" + zh}], evidence,
+    )
+    assert not release_comments.epic_audit_posted([], evidence)
+    assert not release_comments.epic_audit_posted(
+        [{"body": "Epic #20 kept open: open blockers: #3"}], evidence,
+    )
+    # The version is part of the rendered sentence.
+    assert not release_comments.epic_audit_posted(
+        [{"body": en}], evidence, "v0.4.0",
+    )
+    assert release_comments.epic_audit_posted(
+        [{"body": release_comments._epic_audit(evidence, "v0.4.0", "zh")}],
+        evidence, "v0.4.0",
+    )
+
+
 def test_the_run_details_summary_follows_the_language():
     """Issue #1687 item 3: the collapsed "Run details" summary of every
     field block is catalog text; it used to be an English literal, so the

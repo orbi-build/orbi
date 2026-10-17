@@ -207,7 +207,6 @@ from orbi.github import (
     run_gh_write_command,
     _comment_is_trusted,
     _pr_number,
-    _epic_audit,
     _verify_epic_complete,
     apply_label_patch,
     close_issue,
