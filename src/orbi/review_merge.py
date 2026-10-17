@@ -1197,9 +1197,10 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             for finding in verdict["findings"]
             if str(finding.get("fix", "")).strip()
         )
+        # No fix: the handler supplies the catalog action (Issue #1701).
         raise HumanDecisionRequired(
             "review requires human decision: " + decisions,
-            action=actions or "Decide how this PR should proceed.",
+            action=actions,
         )
     if review_has_findings(verdict):
         # The reviewer could not make the PR mergeable in this session
@@ -1950,6 +1951,22 @@ def _run_review_round(
             LOGGER.exception(
                 "issue=%s delivery_review_failed pr=%s", number, pr_url,
             )
+        # The blocked comment says why and how to resume (Issue #1701).
+        language_code = language.of(config)
+        text = functools.partial(language.text, language_code, pr_url=pr_url)
+        action = ""
+        if isinstance(exc, ReviewRoundsExhausted):
+            reason, action = (text("review.blocked_rounds_reason"),
+                              text("review.blocked_rounds_action"))
+        elif isinstance(exc, HumanDecisionRequired):
+            reason = text("review.blocked_human_reason")
+            if exc.action:
+                fix = exc.action.strip().rstrip(".。;")
+                action = text("review.blocked_human_action", fix=fix)
+        else:
+            reason = text("review.blocked_failed_reason", detail=detail)
+        if not action and failure_report.is_unrecoverable_failure(exc):
+            action = text("review.blocked_generic_action")
         # The shared classified reporter: recoverable ->
         # `ai-fix-needed` with the full scene on Issue AND PR,
         # unrecoverable -> `ai-blocked` ALONE. No wrapper: a reporting
@@ -1959,31 +1976,14 @@ def _run_review_round(
             exc, issue=issue, source_repo=source_repo,
             run_id=run_id, pr_url=pr_url,
             worktree=worktree, branch=branch, role=ROLE_REVIEW,
-            language_code=language.of(config),
-            action=(
-                exc.action
-                if isinstance(exc, HumanDecisionRequired)
-                else (
-                    "Review the prior findings and decide whether to continue "
-                    "this PR."
-                    if isinstance(exc, ReviewRoundsExhausted) else ""
-                )
-            ),
-            reason=(
-                f"The independent review of PR {pr_url} requires a human "
-                "decision."
-                if isinstance(exc, HumanDecisionRequired)
-                else f"the independent review of PR {pr_url} failed: {detail}"
-            ),
-            diagnosis=detail,
-            evidence=True,
+            language_code=language_code,
+            action=action,
+            reason=reason,
+            diagnosis=detail, evidence=True,
             review_scene_block=(
-                _round_scene_block(
-                    scene, pr_url, int(scene["review_round"]),
-                )
+                _round_scene_block(scene, pr_url, int(scene["review_round"]))
                 if isinstance(scene, dict)
-                and scene.get("verdict_head_unknown_round", 0)
-                else None
+                and scene.get("verdict_head_unknown_round", 0) else None
             ),
         )
         return None
