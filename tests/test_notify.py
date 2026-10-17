@@ -38,6 +38,7 @@ from orbi.delivery_labels import (
     EVENT_AWAITING_MERGE,
     EVENT_BLOCKED,
     EVENT_CLAIM,
+    EVENT_HUMAN_REVIEW_WAITING,
     NEEDS_DETAIL_LABEL,
 )
 from seam import seam
@@ -82,12 +83,21 @@ def bind(monkeypatch, *, config=None, token=TOKEN) -> None:
     )
 
 
+# The one community-help line a problem message ends with (Issue
+# #1684), from the `orbi.language` catalog.
+HELP_EN = (
+    "Need help? Join the Orbi community: https://t.me/+kJRTTpFGBRU0M2Y9"
+)
+HELP_ZH = "需要帮助？加入 Orbi 用户群：https://t.me/+kJRTTpFGBRU0M2Y9"
+
+
 def blocked_text(title: str = "Fix the thing", *,
                  repo: str = "o/r", number: int = 7) -> str:
     return (
         "Orbi · Needs your attention: Orbi is stuck and needs you\n"
         f"{repo}#{number} {title}\n"
-        f"https://github.com/{repo}/issues/{number}"
+        f"https://github.com/{repo}/issues/{number}\n"
+        f"{HELP_EN}"
     )
 
 
@@ -190,6 +200,16 @@ def test_label_added_swallows_a_message_build_failure(monkeypatch):
     notify.label_added(BoomText(), 7, BLOCKED_LABEL, "t")
 
 
+def test_patch_applied_swallows_a_message_build_failure(monkeypatch):
+    """The moved decision keeps the pure-bypass guard: a broken value
+    while building the message never escapes (Issue #1684)."""
+    bind(monkeypatch)
+    notify.patch_applied(
+        EVENT_BLOCKED, [BLOCKED_LABEL], {"ai-ready"},
+        repo=BoomText(), number=7, read_title=lambda: "t",
+    )
+
+
 def test_send_is_not_configured_reports_the_missing_setting(
     monkeypatch, caplog,
 ):
@@ -203,25 +223,33 @@ def test_send_is_not_configured_reports_the_missing_setting(
 # --- fixed message text ----------------------------------------------------
 
 
-@pytest.mark.parametrize("label,status_en,status_zh", [
-    (BLOCKED_LABEL, "Orbi is stuck and needs you", "Orbi 卡住了，需要您处理"),
-    (NEEDS_DETAIL_LABEL, "Orbi needs more detail", "需要您补充信息"),
+@pytest.mark.parametrize("label,status_en,status_zh,help_line", [
+    (BLOCKED_LABEL, "Orbi is stuck and needs you", "Orbi 卡住了，需要您处理",
+     True),
+    (NEEDS_DETAIL_LABEL, "Orbi needs more detail", "需要您补充信息", True),
     (AWAITING_MERGE_LABEL, "Waiting for you to approve the merge",
-     "等您批准合并"),
+     "等您批准合并", False),
 ])
 @pytest.mark.parametrize("language", ["en", "zh"])
 def test_needs_you_message_is_the_fixed_text(
-    monkeypatch, label, status_en, status_zh, language,
+    monkeypatch, label, status_en, status_zh, help_line, language,
 ):
-    expected = (
-        f"Orbi · 需要您处理：{status_zh}\n"
-        "o/r#7 Fix the thing\n"
-        "https://github.com/o/r/issues/7"
-        if language == "zh" else
-        f"Orbi · Needs your attention: {status_en}\n"
-        "o/r#7 Fix the thing\n"
-        "https://github.com/o/r/issues/7"
-    )
+    if language == "zh":
+        expected = (
+            f"Orbi · 需要您处理：{status_zh}\n"
+            "o/r#7 Fix the thing\n"
+            "https://github.com/o/r/issues/7"
+        )
+        if help_line:
+            expected += f"\n{HELP_ZH}"
+    else:
+        expected = (
+            f"Orbi · Needs your attention: {status_en}\n"
+            "o/r#7 Fix the thing\n"
+            "https://github.com/o/r/issues/7"
+        )
+        if help_line:
+            expected += f"\n{HELP_EN}"
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch, config=HostLanguageConfig(
@@ -313,6 +341,56 @@ def test_apply_label_patch_notifies_awaiting_merge(monkeypatch):
         ]
 
 
+def test_apply_label_patch_notifies_human_review_waiting_once(monkeypatch):
+    """Issue #1684: the human-review hold sends ONE message with the wait
+    status and the help line; the next tick (ai-ready already present)
+    sends nothing."""
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+        monkeypatch.setattr(
+            seam, "issue_view", lambda *a, **k: {"title": "Review me"},
+        )
+        github.apply_label_patch(
+            7, repo="o/r", event=EVENT_HUMAN_REVIEW_WAITING,
+            current_labels={"ai-pr-opened"},
+        )
+        assert endpoint.texts() == [
+            "Orbi · Needs your attention: Waiting for your review\n"
+            "o/r#7 Review me\n"
+            "https://github.com/o/r/issues/7\n"
+            f"{HELP_EN}"
+        ]
+        # The first wait already added ai-ready; the next tick sees it and
+        # the caller skips the patch, so nothing is sent again.
+        github.apply_label_patch(
+            7, repo="o/r", event=EVENT_HUMAN_REVIEW_WAITING,
+            current_labels={"ai-pr-opened", "ai-ready"},
+        )
+        assert len(endpoint.texts()) == 1
+
+
+def test_human_review_waiting_message_follows_the_language(monkeypatch):
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch, config=HostLanguageConfig(message_language="zh"))
+        monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+        monkeypatch.setattr(
+            seam, "issue_view", lambda *a, **k: {"title": "复核我"},
+        )
+        github.apply_label_patch(
+            7, repo="o/r", event=EVENT_HUMAN_REVIEW_WAITING,
+            current_labels={"ai-pr-opened"},
+        )
+        assert endpoint.texts() == [
+            "Orbi · 需要您处理：等您人工验收\n"
+            "o/r#7 复核我\n"
+            "https://github.com/o/r/issues/7\n"
+            f"{HELP_ZH}"
+        ]
+
+
 def test_apply_label_patch_does_not_notify_a_non_attention_add(monkeypatch):
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
@@ -368,7 +446,8 @@ def test_apply_label_patch_sends_without_a_title_when_the_read_fails(
         assert endpoint.texts() == [
             "Orbi · Needs your attention: Orbi is stuck and needs you\n"
             "o/r#7\n"
-            "https://github.com/o/r/issues/7"
+            "https://github.com/o/r/issues/7\n"
+            f"{HELP_EN}"
         ]
 
 
@@ -432,7 +511,8 @@ def test_clarify_stop_sends_one_needs_detail_message(monkeypatch):
         assert endpoint.texts() == [
             "Orbi · Needs your attention: Orbi needs more detail\n"
             "o/r#7 Thin ticket\n"
-            "https://github.com/o/r/issues/7"
+            "https://github.com/o/r/issues/7\n"
+            f"{HELP_EN}"
         ]
 
 

@@ -688,9 +688,9 @@ def apply_label_patch(number: int, *, repo: str, event: str,
     patch. The patch is applied through `edit_issue`: one call for the
     add plus the first remove, then one call per extra remove (the exact
     same `edit_issue` kwargs the pre-#175 code emitted). A no-op patch
-    (nothing to add or remove) applies nothing. A NEWLY added attention
-    label then notifies the person through `notify` (Issue #1673),
-    after the last write.
+    (nothing to add or remove) applies nothing. After the last write,
+    `notify.patch_applied` (Issues #1673/#1684) owns the one
+    notification the patch warrants.
     """
     to_add, to_remove = label_patch(event, current_labels)
     if not to_add and not to_remove:
@@ -704,17 +704,15 @@ def apply_label_patch(number: int, *, repo: str, event: str,
     edit_issue(number, **kwargs)
     for label in to_remove[1:]:
         edit_issue(number, repo=repo, remove=label)
-    # Notify only a NEWLY added attention label, and only when
-    # notifications are on (no extra gh call when they are off).
-    if (
-        to_add
-        and to_add[0] in notify.ATTENTION_LABELS
-        and to_add[0] not in set(current_labels)
-        and notify.enabled()
-    ):
-        notify.label_added(
-            repo, number, to_add[0], _issue_title(number, repo=repo),
-        )
+    # Notifying the person is a pure bypass owned by `notify` (Issue
+    # #1684): it decides from the event, the added labels and the
+    # current labels, and reads the title lazily through the callable --
+    # so a tick with notifications off makes no extra `gh` call.
+    notify.patch_applied(
+        event, to_add, current_labels,
+        repo=repo, number=number,
+        read_title=lambda: _issue_title(number, repo=repo),
+    )
 
 
 def _issue_title(number: int, *, repo: str) -> str | None:

@@ -263,6 +263,54 @@ def test_classified_failure_comment_follows_the_language():
     assert "run=abcdef12 branch=b session=s" in zh
 
 
+def test_problem_comments_end_with_the_community_help_line():
+    """Issue #1684: a "something went wrong, a person must act" message
+    ends with the one community-help line; a non-problem message does
+    not."""
+    en = language.text("en", "help.community")
+    zh = language.text("zh", "help.community")
+    assert en == (
+        "Need help? Join the Orbi community: https://t.me/+kJRTTpFGBRU0M2Y9"
+    )
+    assert zh == (
+        "需要帮助？加入 Orbi 用户群：https://t.me/+kJRTTpFGBRU0M2Y9"
+    )
+    # The blocked failure diagnostic ends with it; fix-needed retries and
+    # does not.
+    blocked = failure._failure_comment_body(
+        outcome="blocked", action="a", reason="boom", diagnosis="",
+        scene="- run: `x`", evidence="", pr_url=None,
+        issue="owner/repo#7", run_id="abcdef12",
+    )
+    assert blocked.endswith(en)
+    fix_needed = failure._failure_comment_body(
+        outcome="fix needed", action="a", reason="boom", diagnosis="",
+        scene="- run: `x`", evidence="", pr_url=None,
+        issue="owner/repo#7", run_id="abcdef12", language_code="zh",
+    )
+    assert not fix_needed.endswith(zh)
+    # The clarification comment ends with it, in its bound language.
+    verdict = clarify.ClarifyVerdict(
+        passed=False, missing=("single_outcome",),
+    )
+    issue = {"number": 7, "title": "t", "author": {"login": "x"}}
+    assert clarify.render_comment(
+        issue, verdict, "abcdef12", language_code="zh",
+    ).rstrip("\n").endswith(zh)
+    # The checklist: a non-empty column 2 ends with it, an empty one is
+    # exactly as before.
+    held = human_review.render_checklist_comment(
+        run_id="abcdef12", pr_url="https://x/pull/1",
+        checklist={"column1": ["x"], "column2": ["Intent judgment"]},
+    )
+    assert held.endswith(en)
+    clear = human_review.render_checklist_comment(
+        run_id="abcdef12", pr_url="https://x/pull/1",
+        checklist={"column1": ["x"], "column2": []},
+    )
+    assert en not in clear
+
+
 def test_workflow_permission_refusal_states_cause_remedy_and_label_in_both():
     for code, fragments in (
         ("en", ["GitHub rejected the push", "ai-fix-needed", "ai-blocked"]),
