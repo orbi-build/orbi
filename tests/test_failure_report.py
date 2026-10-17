@@ -495,18 +495,13 @@ def _report(monkeypatch, tmp_path: Path, *, session: bool,
         lambda number, *, repo, body: pr_comments.append(body),
     )
     monkeypatch.setattr(failure_report, "issue_labels", lambda *a, **k: set())
-    monkeypatch.setattr(failure_report, "issue_comments", lambda *a, **k: [])
-    if history is not None:
-        # The repeated-failure guard reads the trusted history; a matching
-        # comment also owns the dedup, so its in-place update is stubbed
-        # too (no GitHub call).
-        monkeypatch.setattr(
-            failure_report, "issue_comments",
-            lambda *a, **k: list(history),
-        )
-        monkeypatch.setattr(
-            failure_report, "update_issue_comment", lambda *a, **k: "",
-        )
+    # One read serves the dedup, the #825 guard and the round count: the
+    # guard fixture supplies the trusted history, every other test the
+    # empty list (Issue #1701).
+    monkeypatch.setattr(
+        failure_report, "issue_comments",
+        lambda *a, **k: list(history or ()),
+    )
     # The seam fans the read out to every module that binds it, so the
     # golden bodies stay deterministic without pinning one home.
     monkeypatch.setattr(seam, "runner_fingerprint", lambda: "deadbeef")
