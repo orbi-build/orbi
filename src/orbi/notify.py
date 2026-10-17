@@ -207,7 +207,6 @@ def send(text: str) -> bool:
         except TimeoutError:
             return _fail("timeout")
         if 200 <= status < 300 and _ok(body):
-            _last_failure = None
             return True
         detail = _description(body)
         extra = {"detail": detail} if detail else {}

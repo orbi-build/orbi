@@ -1042,7 +1042,11 @@ def test_e2e_human_review_wait_sends_one_needs_you_message(
         endpoint.point(monkeypatch)
         bind_notify(
             monkeypatch,
-            dataclasses.replace(config, telegram_chat_id="-1001234567890"),
+            # The message state only: the merged-PR scan tick_start also
+            # runs is the tick preflight's step, covered by its own tests.
+            dataclasses.replace(
+                config, telegram_chat_id="-1001234567890", source_repos=(),
+            ),
             "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawQ",
         )
         result = runner.process_issue(issue(), config, REPO)
@@ -1085,7 +1089,11 @@ def test_e2e_human_review_column2_empty_posts_the_checklist_and_no_message(
         endpoint.point(monkeypatch)
         bind_notify(
             monkeypatch,
-            dataclasses.replace(config, telegram_chat_id="-1001234567890"),
+            # The message state only: the merged-PR scan tick_start also
+            # runs is the tick preflight's step, covered by its own tests.
+            dataclasses.replace(
+                config, telegram_chat_id="-1001234567890", source_repos=(),
+            ),
             "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawQ",
         )
         result = runner.process_issue(issue(), config, REPO)

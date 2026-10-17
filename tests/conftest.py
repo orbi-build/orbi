@@ -114,17 +114,18 @@ def _default_health_check_preflight(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _reset_notify_binding(monkeypatch):
+def _reset_notify_binding(monkeypatch, tmp_path):
     """Default: unbind Telegram notification state between tests.
 
     `notify.tick_start` binds one tick's config and bot token in module
     globals (Issue #1673), so a test that bound a live configuration
     would otherwise make every later label test read a title or reach an
-    endpoint. The reset lives in the fakes module (excluded from the
-    patch ratchet) and a test-level `monkeypatch` still wins over it."""
+    endpoint. The reset is the adapter's own entry point — a tick with no
+    chat id — so no test writes `notify` internals (Issue #1698); a
+    test-level `monkeypatch` still wins over it."""
     from tests.fakes.telegram import reset_notify_state
 
-    reset_notify_state(monkeypatch)
+    reset_notify_state(monkeypatch, tmp_path)
 
 
 @pytest.fixture
