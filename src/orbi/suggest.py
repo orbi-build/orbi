@@ -17,8 +17,9 @@ timeout is a bypass: it writes nothing, logs one line, and never affects
 the Suggestions document.
 
 The run directory keeps `context.json`, `understanding.md` and, once
-the answer validates, `suggestions.json` — the batch the NEXT run avoids
-repeating (Issue #1586), handed to the session as `already_suggested`.
+the answer validates, `suggestions.json` — the batch a later run avoids
+repeating (Issue #1586), handed to the session as `already_suggested`
+together with the two batches kept before it (Issue #1685).
 
 The same module owns the `orbi setup` offer (Issue #1576): on a fresh
 repository, after setup's result, a TTY operator is asked once whether to
@@ -94,6 +95,10 @@ SUGGESTION_KEYS = {"kind", "issue", "title", "why", "body"}
 # Suggestions document the NEXT run must not propose again.
 SUGGESTIONS_FILE = "suggestions.json"
 BATCH_KEYS = ("kind", "issue", "title")
+# How many of the most recent kept batches `already_suggested` merges
+# (Issue #1685): three runs cover a batch split as `--count 1` +
+# `--count 2` and the `--count 1` run of the next batch after it.
+EARLIER_RUNS = 3
 
 SYSTEM_PROMPT = (
     "You are the orbi suggest session: read-only, no shell. Read the "
@@ -212,13 +217,19 @@ def _run_dir(config: RunnerConfig, run_id: str) -> Path:
 
 
 def _earlier_batch(config: RunnerConfig, run_id: str) -> list[dict] | None:
-    """The most recent earlier run's batch, or None when there is none.
+    """The earlier runs' batches to avoid, or None when there is none.
 
     Every run directory is kept after the command exits, on failure too,
     but only a validated run wrote `suggestions.json` — a failed run is
     therefore skipped. Run ids are random hex, so the directory's own
     mtime (updated when the batch file is created) orders the recency;
     the name only breaks a tie.
+
+    The three most recent runs are merged newest first (Issue #1685): a
+    caller may split one batch across runs (`--count 1`, then
+    `--count 2`), and the newest run alone would then hold only a part
+    of it. Three runs cover both split shapes; the same Issue number
+    (`existing`) or title (`new`) is kept once.
     """
     candidates = [
         path for path in _suggest_root(config).iterdir()
@@ -226,10 +237,27 @@ def _earlier_batch(config: RunnerConfig, run_id: str) -> list[dict] | None:
     ]
     if not candidates:
         return None
-    latest = max(
-        candidates, key=lambda path: (path.stat().st_mtime_ns, path.name),
-    )
-    return json.loads((latest / SUGGESTIONS_FILE).read_text(encoding="utf-8"))
+    recent = sorted(
+        candidates,
+        key=lambda path: (path.stat().st_mtime_ns, path.name),
+        reverse=True,
+    )[:EARLIER_RUNS]
+    merged: list[dict] = []
+    seen: set[tuple[str, object]] = set()
+    for path in recent:
+        batch = json.loads(
+            (path / SUGGESTIONS_FILE).read_text(encoding="utf-8"),
+        )
+        for item in batch:
+            key = (
+                ("existing", item["issue"]) if item["kind"] == "existing"
+                else ("new", item["title"])
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    return merged
 
 
 def _write_batch(run_dir: Path, suggestions: list[dict]) -> None:
