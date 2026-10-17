@@ -713,3 +713,103 @@ def test_failure_folding_ignores_the_rendered_language():
     assert progress_module.bump_failure_repeat(body, "0123456789abcdef").count(
         "0123456789abcdef:2",
     ) == 1
+
+
+# ---------------------------------------------- the one unblock step (#1724)
+#
+# The step a blocked Issue needs to get back into the delivery loop: the
+# claim scans skip `ai-blocked`, so it is removed BEFORE `ai-fix-needed`
+# goes on. It is written ONCE in the catalog and composed by every message
+# that tells a person how to resume -- the two scene messages had drifted
+# (`or relabel`), because each carried its own copy of the step.
+UNBLOCK_STEP = {
+    "en": "remove `ai-blocked`, then add `ai-fix-needed`",
+    "zh": "移除 `ai-blocked`，再添加 `ai-fix-needed`",
+}
+
+RESUME_MESSAGES = (
+    "review.blocked_rounds_action",
+    "review.blocked_human_action",
+    "review.blocked_generic_action",
+    "failure.workflow_action_pr",
+    "failure.next_step_blocked_classified",
+    "failure.scene_blocked",
+    "claim.scene_missing",
+)
+
+PR_URL = "https://github.com/owner/repo/pull/9"
+
+SCENE_RECOVERY = {
+    "en": (
+        "restore the trusted 'Orbi opened PR' scene comment, then "
+        + UNBLOCK_STEP["en"]
+    ),
+    "zh": (
+        "请恢复可信的 'Orbi opened PR' 场景评论，然后" + UNBLOCK_STEP["zh"]
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "index, step", [(0, UNBLOCK_STEP["en"]), (1, UNBLOCK_STEP["zh"])],
+)
+def test_the_unblock_step_is_written_once_in_the_catalog(index, step):
+    """Issue #1724 acceptance 3: one catalog entry owns the resume step;
+    no other message carries its own copy that could drift again."""
+    assert language.MESSAGES["blocked.unblock_step"][index] == step
+    owners = [
+        key for key, pair in language.MESSAGES.items() if step in pair[index]
+    ]
+    assert owners == ["blocked.unblock_step"]
+
+
+@pytest.mark.parametrize("key", RESUME_MESSAGES)
+def test_every_resume_message_composes_the_one_unblock_step(key):
+    """Issue #1724 acceptance 3: the review-stage blocked actions, the
+    workflow-permission action, the classified next step and the two scene
+    messages all compose the shared entry instead of restating it."""
+    for index in (0, 1):
+        assert "{unblock_step}" in language.MESSAGES[key][index]
+    for code, step in UNBLOCK_STEP.items():
+        rendered = language.text(
+            code, key, pr_url=PR_URL, fix="fix", error="boom",
+            cause="cause",
+        )
+        assert rendered.count(step) == 1
+
+
+@pytest.mark.parametrize("code", ["en", "zh"])
+@pytest.mark.parametrize(
+    "key", ["claim.scene_missing", "failure.scene_blocked"],
+)
+def test_scene_missing_messages_give_the_one_working_unblock_path(key, code):
+    """Issue #1724 acceptance 1: both scene messages say to restore the
+    trusted scene comment, THEN remove `ai-blocked`, THEN add
+    `ai-fix-needed` -- the only path that works -- and offer no
+    "or relabel" alternative."""
+    body = language.text(code, key, error="scene comment gone")
+    assert SCENE_RECOVERY[code] in body
+    # The `ai-fix-needed` label appears only inside the shared step: no
+    # alternative relabel branch survives.
+    assert "ai-fix-needed" not in body.replace(UNBLOCK_STEP[code], "")
+    assert " or relabel" not in body
+    assert "或把 Issue 重新标记" not in body
+
+
+# The failed alternative the two scene messages carried: "restore the scene
+# comment OR relabel the Issue". It reached the reader through a message
+# template AND through a reviewer-facing exception detail, so the guard scans
+# the whole engine, not just the catalog.
+RELABEL_ALTERNATIVES = ("or relabel the Issue", "或把 Issue 重新标记")
+
+
+@pytest.mark.parametrize("phrase", RELABEL_ALTERNATIVES)
+def test_no_module_carries_the_relabel_alternative(phrase):
+    """Issue #1724 acceptance 1/3: a blocked comment names ONE working
+    resume path. The failed alternative must not survive as a second copy
+    in a template or in a failure detail a comment publishes."""
+    sources = "".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((REPO_ROOT / "src" / "orbi").glob("*.py"))
+    )
+    assert phrase not in sources

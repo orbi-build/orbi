@@ -493,6 +493,56 @@ def test_pick_resumable_delivery_skips_candidate_relabelled_blocked(
     ) is None
 
 
+def test_the_documented_repair_releases_the_blocked_issue_to_the_same_pr(
+    monkeypatch, tmp_path,
+):
+    """Issue #1724 acceptance 2: the resume path the blocked comment now
+    prints is the one that works. With the trusted scene comment restored
+    the Issue still carries `ai-blocked` -> nothing is claimed (the scans
+    skip it); removing `ai-blocked` and adding `ai-fix-needed` lets the
+    next claim resume the SAME PR from that scene."""
+    monkeypatch.setattr(runner_seam, "slot_occupancy",
+                        lambda *a, **k: [])
+    monkeypatch.setattr(
+        runner_seam, "issue_comments",
+        lambda number, repo: [_trusted_scene_comment()],
+    )
+    monkeypatch.setitem(
+        claim.__dict__, "pr_delivery_rollup",
+        lambda pr_url, repo: ("OPEN", [
+            {"name": "tests", "status": "COMPLETED",
+             "conclusion": "SUCCESS"},
+        ]),
+    )
+    candidate = {
+        "number": 9, "title": "ship", "state": "OPEN",
+        "url": "https://github.com/owner/repo/issues/9",
+        "body": "b",
+    }
+    # The state the two scene messages used to leave a reader in: the
+    # scene restored, but the terminal label still present.
+    _issue_list_fake(monkeypatch, [{
+        **candidate,
+        "labels": [{"name": "ai-blocked"}, {"name": "ai-fix-needed"}],
+    }])
+    assert claim.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(), language_code="en",
+    ) is None
+    # The documented repair: remove `ai-blocked`, then add `ai-fix-needed`.
+    _issue_list_fake(monkeypatch, [{
+        **candidate, "labels": [{"name": "ai-fix-needed"}],
+    }])
+    found = claim.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(), language_code="en",
+    )
+    assert found is not None
+    issue, resumed = found
+    assert issue["number"] == 9
+    assert resumed["pr_url"] == "https://github.com/owner/repo/pull/9"
+
+
 def test_pick_resumable_delivery_resumes_a_scene_candidate(
     monkeypatch, tmp_path,
 ):

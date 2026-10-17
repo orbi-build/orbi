@@ -13618,6 +13618,13 @@ def test_delivery_step_marks_blocked_when_review_fails(
     # (review round 2, PR #42) — not the hardcoded fix/0.
     assert "- role: review" in blocked
     assert "- review/fix round: 2" not in blocked
+    # Issue #1724: a review blocked on the missing trusted scene names
+    # ONE working resume path — restore the scene comment, then the
+    # shared unblock step — never the "or relabel the Issue" alternative
+    # that does not work on its own.
+    assert "must restore the trusted 'Orbi opened PR' scene comment" in body
+    assert "remove `ai-blocked`, then add `ai-fix-needed`" in body
+    assert "or relabel" not in body
 
 
 def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
@@ -14818,7 +14825,7 @@ BLOCKED_REVIEW_TEXT = {
         "rounds_reason": "used every one of its review rounds",
         "human_reason": "requires a human decision",
         "generic_action": "changing labels alone does not change it",
-        "step": "remove `ai-blocked` and add `ai-fix-needed`",
+        "step": "remove `ai-blocked`, then add `ai-fix-needed`",
         "close": "close the PR and this Issue",
         "budget": "budget",
     },
@@ -14829,7 +14836,7 @@ BLOCKED_REVIEW_TEXT = {
         "rounds_reason": "评审轮次",
         "human_reason": "需要人工决定",
         "generic_action": "只改标签不会改变它",
-        "step": "移除 `ai-blocked` 并添加 `ai-fix-needed`",
+        "step": "移除 `ai-blocked`，再添加 `ai-fix-needed`",
         "close": "关闭该 PR 和这个 Issue",
         "budget": "预算",
     },

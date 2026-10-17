@@ -1844,14 +1844,18 @@ def _run_review_round(
             # `block_scene_failure`), so the handler below
             # marks the Issue ai-blocked with the explicit
             # reason.
+            # The reason names the condition and the ONE missing
+            # precondition; the resume step itself lives only in the
+            # catalog (Issue #1724: a second copy here once offered the
+            # reader a non-working alternative).
             raise UnrecoverableDeliveryError(
                 f"the resume scene is unrecoverable "
                 f"({scene_exc}); the runner cannot derive "
                 "run_id, branch, worktree or PR without the "
                 "trusted 'Orbi opened PR' comment, so "
                 "it cannot start a review session; a human "
-                "must restore the scene comment or relabel "
-                "the Issue"
+                "must restore the trusted 'Orbi opened PR' "
+                "scene comment"
             ) from scene_exc
         # The scene freezes the base the PR
         # was opened against. The config may have moved on (or
