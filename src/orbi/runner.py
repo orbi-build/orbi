@@ -1929,22 +1929,19 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 worktree=worktree, branch=branch, role=ROLE_REVIEW,
                 language_code=language.of(config),
                 action=(
-                    (
-                        f"Update PR {scene['pr_url']} to include `Fixes #{number}` "
-                        "so GitHub closes the source Issue when it merges; "
-                        "for staged work, split the remaining phases into "
-                        "child Issues with one PR per Issue."
+                    language.text(
+                        language.of(config),
+                        "delivery.resume_missing_fixes_action",
+                        pr_url=scene["pr_url"], number=number,
                     )
                     if isinstance(exc, MissingFixesError)
-                    else (
-                        "Review the preserved PR and decide how to repair or "
-                        "replace its delivery state."
-                        if isinstance(exc, UnrecoverableDeliveryError) else ""
-                    )
+                    else language.text(language.of(config),
+                                      "delivery.resume_review_pr_action")
+                    if isinstance(exc, UnrecoverableDeliveryError) else ""
                 ),
-                reason=(
-                    f"The resume verification of PR {scene['pr_url']} "
-                    f"failed: {_failure_detail(exc)}"
+                reason=language.text(
+                    language.of(config), "delivery.resume_verify_reason",
+                    pr_url=scene["pr_url"], detail=_failure_detail(exc),
                 ),
                 diagnosis=_failure_detail(exc),
                 # The branch-gone scene destroyed the
@@ -1952,8 +1949,8 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 # preserved-objects note would contradict the reason.
                 blocked_suffix=(
                     "" if isinstance(exc, ResumeBranchGoneError) else
-                    f"; the PR, branch {branch} and worktree {worktree} "
-                    "are preserved"
+                    language.text(language.of(config),
+                                  "delivery.preserved_suffix", branch=branch)
                 ),
             )
             reported = True
@@ -2894,7 +2891,8 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                         started=started, pr_url=None, review_round=0,
                         priority=priority, language_code=language.of(config),
                     ),
-                    outcome="**Orbi stopped: Issue closed during delivery**",
+                    outcome=language.text(
+                        language.of(config), "delivery.outcome_issue_closed"),
                 )),
             )
             event(
@@ -2983,7 +2981,8 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 ctx, title=title, role=ROLE_IMPLEMENT, started=started,
                 pr_url=pr_url, review_round=0, priority=priority,
                 language_code=language.of(config),
-            ), outcome="**Orbi delivered**")),
+            ), outcome=language.text(
+                language.of(config), "delivery.outcome_pr_opened"))),
         )
         event(
             "run_end",
@@ -3067,12 +3066,12 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 pr_url=None, review_round=0, priority=priority,
                 language_code=language.of(config),
             ), outcome=(
-                f"**Orbi {recoverable_name}**\n\n"
-                f"- reason_code: `{record.reason_code}`\n"
-                f"- action: `{record.action_code}`\n"
-                "next step: nothing — the Issue stays ai-in-progress "
-                "and the next tick resumes the same run (same run id, "
-                "branch, worktree)"
+                language.text(
+                    language.of(config), "delivery.recoverable_outcome",
+                    recoverable_name=recoverable_name,
+                    reason_code=record.reason_code,
+                    action_code=record.action_code,
+                )
             ))),
         )
         # The recoverable failure reaches the health history

@@ -219,6 +219,32 @@ def test_run_pi_steering_limit_notifies_once_for_late_comment(monkeypatch, tmp_p
     assert "run_id=run1" in comments[0][2]
 
 
+def test_run_pi_steering_limit_notice_follows_the_language(monkeypatch, tmp_path):
+    """Issue #1702: the steering-limit notice is catalog text rendered
+    with the run's bound message language; the run marker and the
+    visible run_id field stay raw."""
+    future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
+    monkeypatch.setitem(pi_session.__dict__, "issue_view", lambda *a, **k: _snapshot([{
+        "id": "late", "createdAt": future, "authorAssociation": "MEMBER",
+        "author": {"login": "alice"}, "body": "correction",
+    }]))
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
+    comments = []
+    monkeypatch.setitem(pi_session.__dict__, "comment_issue",
+        lambda number, *, repo, body: comments.append((number, repo, body)))
+    captured = {}
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    issue = {"number": 2, "title": "title", "body": "body"}
+    config = _config(tmp_path, steering_max_rounds=0, message_language="zh")
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), config) == "done"
+    assert captured["watch"].steering_check() is None
+    assert len(comments) == 1
+    assert "<!-- orbi:run=run1 -->" in comments[0][2]
+    assert "已达到修正次数上限，因此这条修正未被执行。" in comments[0][2]
+    assert "run_id=run1" in comments[0][2]
+
+
 def test_run_pi_steering_limit_notice_failure_is_bypassed(monkeypatch, tmp_path):
     future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
     monkeypatch.setitem(pi_session.__dict__, "issue_view", lambda *a, **k: _snapshot([{

@@ -545,6 +545,68 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "delivery.review_row": ("- review: {review}", "- 评审：{review}"),
     "delivery.review_rounds": (" ({rounds} review rounds)", "（{rounds} 个评审轮次）"),
     "delivery.merged_into": ("- merged into: {base_branch}", "- 合并目标：{base_branch}"),
+
+    # The delivery sentences moved out of their call sites (Issue #1702):
+    # the resume-verification blocked report, the progress outcome line
+    # and the consecutive-failure escalation. Raw values stay raw --
+    # exception detail, reason/action codes, run ids, PR URLs, branch
+    # names -- and the preserved note names the worktree with the
+    # existing `failure.scene.local_worktree` label, never a local path.
+    "delivery.resume_missing_fixes_action": (
+        "Update PR {pr_url} to include `Fixes #{number}` so GitHub closes "
+        "the source Issue when it merges; for staged work, split the "
+        "remaining phases into child Issues with one PR per Issue.",
+        "请更新 PR {pr_url}，加入 `Fixes #{number}`，让 GitHub 在该 PR 合并时"
+        "自动关闭源 Issue；对于分阶段的工作，请把剩余阶段拆成子 Issue，每个 "
+        "Issue 对应一个 PR。",
+    ),
+    "delivery.resume_review_pr_action": (
+        "Review the preserved PR and decide how to repair or replace its "
+        "delivery state.",
+        "请查看保留下来的 PR，并决定如何修复或替换它的交付状态。",
+    ),
+    "delivery.resume_verify_reason": (
+        "The resume verification of PR {pr_url} failed: {detail}",
+        "PR {pr_url} 的恢复校验失败：{detail}",
+    ),
+    "delivery.preserved_suffix": (
+        "the PR, branch {branch} and local runner worktree are preserved",
+        "PR、分支 {branch} 和本机 Runner 工作树均已保留",
+    ),
+    "delivery.outcome_issue_closed": (
+        "**Orbi stopped: Issue closed during delivery**",
+        "**Orbi 已停止：Issue 在交付过程中被关闭**",
+    ),
+    # The implement-phase finish: the PR was OPENED, not merged, so this
+    # is its own key (`review.delivered_outcome` is the merge outcome).
+    "delivery.outcome_pr_opened": (
+        "**Orbi delivered**",
+        "**Orbi 已交付**",
+    ),
+    "delivery.recoverable_outcome": (
+        "**Orbi {recoverable_name}**\n\n"
+        "- reason_code: `{reason_code}`\n"
+        "- action: `{action_code}`\n"
+        "next step: nothing — the Issue stays ai-in-progress and the next "
+        "tick resumes the same run (same run id, branch, worktree)",
+        "**Orbi {recoverable_name}**\n\n"
+        "- reason_code：`{reason_code}`\n"
+        "- action：`{action_code}`\n"
+        "下一步：无需操作 —— Issue 保持 ai-in-progress，下一个 tick 会继续"
+        "同一个运行（同一个 run id、分支、工作树）",
+    ),
+    "delivery.failure_streak_escalation": (
+        "; the same failure has now occurred {count} consecutive times "
+        "for run_id={run_id} (fingerprint {fingerprint}) with unchanged "
+        "preconditions — a dead loop, not a transient error",
+        "；同一个失败现已连续发生 {count} 次（run_id={run_id}，指纹 "
+        "{fingerprint}），前提条件未变化 —— 这是死循环，不是暂时性错误",
+    ),
+    "delivery.steering_limit_notice": (
+        "The steering limit was reached, so this correction was not "
+        "applied.",
+        "已达到修正次数上限，因此这条修正未被执行。",
+    ),
     "review.summary_human_action": ("maintainer-actionable merge retry", "需要维护者处理的合并重试"),
     "review.summary_pass_recorded": ("pass recorded on {head}; merged after CI", "在 {head} 上记录通过；CI 之后合并"),
     "review.summary_pass_clean": ("pass, no findings", "通过，没有发现"),

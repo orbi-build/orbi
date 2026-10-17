@@ -2074,8 +2074,11 @@ def test_main_ends_cleanly_after_reported_resume_failure(
     )
 
 
-def make_resume_config(tmp_path) -> dict:
-    return config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main")
+def make_resume_config(tmp_path, *, message_language: str = "en") -> dict:
+    return config_domain.RunnerConfig(
+        repo_dir=tmp_path, base_branch="main",
+        message_language=message_language,
+    )
 
 
 def make_resume_scene(pr_url: str = FAKE_PR_URL) -> dict:
@@ -2897,6 +2900,93 @@ def test_verify_resumed_pr_missing_fixes_stays_fix_needed(
     assert "Orbi fix needed" in fix_needed
     assert "What you need to do: Update PR" in fix_needed
     assert "resume_pr_verification_failed" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("message_language", "action", "reason"),
+    [
+        ("en", "Update PR ", "The resume verification of PR "),
+        ("zh", "请更新 PR ", "的恢复校验失败："),
+    ],
+)
+def test_verify_resumed_pr_missing_fixes_comment_follows_the_language(
+    monkeypatch, tmp_path, message_language, action, reason,
+):
+    """Issue #1702: the resume blocked report's action and reason are
+    catalog text rendered with the run's language; the exception detail
+    stays raw. Neither language prints a local path."""
+    captured, _ = make_resume_failure_fake(monkeypatch)
+
+    def fake_verify_pr(*args, **kwargs):
+        raise runner.MissingFixesError("PR body is missing `Fixes #9`")
+
+    monkeypatch.setitem(runner.__dict__, "verify_pr", fake_verify_pr)
+    expected_resume_worktree(tmp_path).mkdir(parents=True)
+    journal.set_run_id(FAKE_RUN_ID)
+    with pytest.raises(runner.ReportedMissingFixesError):
+        runner.verify_resumed_pr(
+            make_resume_scene(pr_url="https://github.com/owner/repo/pull/99"),
+            make_resume_issue(),
+            make_resume_config(tmp_path, message_language=message_language),
+            "owner/repo",
+        )
+    body = captured["comments"][0][1]["body"]
+    assert action in body
+    assert "https://github.com/owner/repo/pull/99" in body
+    assert reason in body
+    assert "PR body is missing `Fixes #9`" in body
+    assert str(tmp_path) not in body
+    assert str(expected_resume_worktree(tmp_path)) not in body
+
+
+@pytest.mark.parametrize(
+    ("message_language", "action", "reason", "note"),
+    [
+        (
+            "en",
+            "Review the preserved PR and decide how to repair or replace "
+            "its delivery state.",
+            "The resume verification of PR ",
+            "the PR, branch orbi/owner-repo-issue-9 and local runner "
+            "worktree are preserved",
+        ),
+        (
+            "zh",
+            "请查看保留下来的 PR，并决定如何修复或替换它的交付状态。",
+            "的恢复校验失败：",
+            "PR、分支 orbi/owner-repo-issue-9 和本机 Runner 工作树均已保留",
+        ),
+    ],
+)
+def test_verify_resumed_pr_blocked_comment_follows_the_language_without_path(
+    monkeypatch, tmp_path, message_language, action, reason, note,
+):
+    """Issue #1702: the blocked resume report's action, reason framework
+    and preserved note follow the language, and the note names the
+    worktree with its catalog label instead of the local path."""
+    captured, _ = make_resume_failure_fake(monkeypatch)
+
+    def fake_verify_pr(*args, **kwargs):
+        raise runner.UnrecoverableDeliveryError("boom")
+
+    monkeypatch.setitem(runner.__dict__, "verify_pr", fake_verify_pr)
+    worktree = expected_resume_worktree(tmp_path)
+    worktree.mkdir(parents=True)
+    journal.set_run_id(FAKE_RUN_ID)
+    with pytest.raises(runner.UnrecoverableDeliveryError):
+        runner.verify_resumed_pr(
+            make_resume_scene(pr_url="https://github.com/owner/repo/pull/99"),
+            make_resume_issue(),
+            make_resume_config(tmp_path, message_language=message_language),
+            "owner/repo",
+        )
+    body = captured["comments"][0][1]["body"]
+    assert action in body
+    assert reason in body
+    assert "boom" in body
+    assert note in body
+    assert str(tmp_path) not in body
+    assert str(worktree) not in body
 
 
 def _closed_scene_gh(monkeypatch):
