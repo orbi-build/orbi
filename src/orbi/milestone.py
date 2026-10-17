@@ -151,6 +151,7 @@ def reconcile_milestone_on_idle(
     base_branch: str = "main",
     dispatch_label: str = READY_LABEL,
     version_file: str | None = None,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> tuple[str, str | None]:
     """One idle-path Milestone bookkeeping entry point (Issue #856).
 
@@ -175,7 +176,7 @@ def reconcile_milestone_on_idle(
         parse_version_title=parse_version_title,
         policy=policy, policy_path=policy_path,
         base_branch=base_branch, dispatch_label=dispatch_label,
-        version_file=version_file,
+        version_file=version_file, language_code=language_code,
     )
 
 
@@ -444,6 +445,7 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
 def _pending_milestone_issue(
     repo: str, old: str, candidates: list[dict], repo_dir: Path,
     *, waiting_state: str = _WAITING_NEXT,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> int | None:
     """Create one idempotent human-confirmation issue for a milestone wait.
 
@@ -462,30 +464,31 @@ def _pending_milestone_issue(
     if waiting_state == _WAITING_RELEASE:
         title = f"Milestone {old} complete, awaiting release confirmation"
         intro = [
-            "## Milestone complete, awaiting manual release confirmation",
+            language.text(language_code, "milestone.confirm_release_heading"),
             "",
             fingerprint,
             "",
-            f"All Issues in the current milestone `{old}` are closed, but no "
-            "release ticket has been created yet.",
-            "This Issue does not create the release ticket automatically; it "
-            "is opened only after you confirm.",
+            language.text(
+                language_code, "milestone.confirm_release_closed", old=old,
+            ),
+            language.text(language_code, "milestone.confirm_release_manual"),
             "",
-            f"Comment `/milestone {old}` on this Issue to create the release "
-            "ticket (rendered from `.github/release-ticket-template.md` and "
-            f"carrying the `{RELEASE_LABEL}` label; each of the three steps "
-            "is idempotent).",
-            "The commenter needs write permission on the repository.",
+            language.text(
+                language_code, "milestone.confirm_release_command",
+                old=old, release_label=RELEASE_LABEL,
+            ),
+            language.text(language_code, "milestone.confirm_write_permission"),
         ]
     else:
         title = f"Milestone {old} complete, awaiting confirmation to advance to {titles[0]}"
         intro = [
-            "## Milestone auto-advance awaiting manual confirmation",
+            language.text(language_code, "milestone.confirm_advance_heading"),
             "",
             fingerprint,
             "",
-            f"The current milestone `{old}` is complete; waiting for "
-            "confirmation to advance to one of the candidate versions:",
+            language.text(
+                language_code, "milestone.confirm_advance_intro", old=old,
+            ),
             "",
         ]
     fd = acquire_base_sync_lock(repo_dir, 300.0)
@@ -499,18 +502,24 @@ def _pending_milestone_issue(
         lines = list(intro)
         if waiting_state != _WAITING_RELEASE:
             lines.extend(
-                f"- `{candidate['title']}`: {candidate.get('open_issues', 0)} open issues"
+                language.text(
+                    language_code, "milestone.confirm_candidate",
+                    title=candidate["title"],
+                    open_issues=candidate.get("open_issues", 0),
+                )
                 for candidate in candidates
             )
             lines.extend([
                 "",
-                "Comment `/milestone <version>` on this Issue (exact match "
-                "against a candidate title):",
-                "the command creates the milestone, opens a release ticket "
-                "from `.github/release-ticket-template.md`, and lands "
-                "`active_milestone`; each of the three steps is idempotent.",
-                "The commenter needs write permission on the repository. "
-                "You can also restore auto-advance and close this Issue.",
+                language.text(
+                    language_code, "milestone.confirm_advance_command",
+                ),
+                language.text(
+                    language_code, "milestone.confirm_advance_steps",
+                ),
+                language.text(
+                    language_code, "milestone.confirm_advance_permission",
+                ),
             ])
         run_command([
             "gh", "issue", "create", "--repo", repo,
@@ -562,6 +571,7 @@ _NOTICE_FINGERPRINT_RE = re.compile(
 def _stale_notice_comment(
     body: object, active_milestone: str, *, keep_release_notice: bool,
     release_ticket_exists: bool = False,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> str | None:
     """The close comment for a decision notice, or ``None`` to keep it.
 
@@ -588,20 +598,27 @@ def _stale_notice_comment(
     old = match.group(1)
     candidates = str(match.group(2)).split(",")
     if old != active_milestone:
-        return f"已收敛：当前配置 active_milestone = `{active_milestone}`。"
+        return language.text(
+            language_code, "milestone.stale_active_milestone",
+            active=active_milestone,
+        )
     if candidates != [old] or keep_release_notice:
         return None
     if release_ticket_exists:
-        return (
-            f"已收敛：Milestone `{active_milestone}` 的 release ticket"
-            " 已存在，不再等待发布确认。"
+        return language.text(
+            language_code, "milestone.stale_release_exists",
+            active=active_milestone,
         )
-    return f"已收敛：Milestone `{active_milestone}` 不再等待发布确认。"
+    return language.text(
+        language_code, "milestone.stale_release_wait_over",
+        active=active_milestone,
+    )
 
 
 def _close_stale_milestone_issues(
     repo: str, active_milestone: str, *, keep_release_notice: bool = True,
     release_ticket_exists: bool = False,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> None:
     """Close decision notices that no longer match the config.
 
@@ -622,6 +639,7 @@ def _close_stale_milestone_issues(
             issue.get("body"), active_milestone,
             keep_release_notice=keep_release_notice,
             release_ticket_exists=release_ticket_exists,
+            language_code=language_code,
         )
         if comment is None:
             continue
@@ -644,6 +662,7 @@ def _milestone_open_issue_count(milestone: dict) -> int:
 def _close_stale_milestone_issues_safely(
     repo: str, active_milestone: str, *, keep_release_notice: bool,
     release_ticket_exists: bool = False,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> None:
     """Close obsolete decision notices as a pure idle-path bypass.
 
@@ -654,6 +673,7 @@ def _close_stale_milestone_issues_safely(
         _close_stale_milestone_issues(
             repo, active_milestone, keep_release_notice=keep_release_notice,
             release_ticket_exists=release_ticket_exists,
+            language_code=language_code,
         )
     except Exception:
         LOGGER.exception(
@@ -667,6 +687,7 @@ def _ensure_pending_milestone_notice(
     config_path: Path, waiting_state: str, candidate_titles: list[str],
     *, policy: RepoPolicy | None, policy_path: str, base_branch: str,
     dispatch_label: str, version_file: str | None,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> None:
     """Open one idempotent decision notice and apply any `/milestone` reply.
 
@@ -678,7 +699,7 @@ def _ensure_pending_milestone_notice(
         issue_number = _pending_milestone_issue(
             repo, old, candidates,
             repo_dir if repo_dir is not None else config_path.parent,
-            waiting_state=waiting_state,
+            waiting_state=waiting_state, language_code=language_code,
         )
     except Exception:
         LOGGER.exception(
@@ -694,6 +715,7 @@ def _ensure_pending_milestone_notice(
             config_path=config_path, policy=policy,
             policy_path=policy_path, base_branch=base_branch,
             dispatch_label=dispatch_label, version_file=version_file,
+            language_code=language_code,
         )
     except Exception:
         LOGGER.exception(
@@ -711,6 +733,7 @@ def advance_active_milestone_on_idle(
     base_branch: str = "main",
     dispatch_label: str = READY_LABEL,
     version_file: str | None = None,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> tuple[str, str | None]:
     """Check and advance a configured milestone after no_ready_issue."""
     milestones = list_milestones(repo, timeout=30)
@@ -754,6 +777,7 @@ def advance_active_milestone_on_idle(
         if waiting == MILESTONE_AWAITING_RELEASE:
             _close_stale_milestone_issues_safely(
                 repo, active_milestone, keep_release_notice=True,
+                language_code=language_code,
             )
             event(
                 "active_milestone_release_pending", level=logging.WARNING,
@@ -765,12 +789,13 @@ def advance_active_milestone_on_idle(
                 repo_dir, config_path, _WAITING_RELEASE, [active_milestone],
                 policy=policy, policy_path=policy_path,
                 base_branch=base_branch, dispatch_label=dispatch_label,
-                version_file=version_file,
+                version_file=version_file, language_code=language_code,
             )
             return state, None
         _close_stale_milestone_issues_safely(
             repo, active_milestone, keep_release_notice=False,
             release_ticket_exists=release_ticket_exists,
+            language_code=language_code,
         )
         return state, None
     # The closed path always sweeps obsolete decision notices: an advance
@@ -783,6 +808,7 @@ def advance_active_milestone_on_idle(
     # Milestone tick would ever close.
     _close_stale_milestone_issues_safely(
         repo, active_milestone, keep_release_notice=False,
+        language_code=language_code,
     )
     current = parse_version_title(active_milestone)
     candidates = []
@@ -826,7 +852,7 @@ def advance_active_milestone_on_idle(
             _WAITING_NEXT, candidate_titles,
             policy=policy, policy_path=policy_path,
             base_branch=base_branch, dispatch_label=dispatch_label,
-            version_file=version_file,
+            version_file=version_file, language_code=language_code,
         )
         return "closed", None
     new_value = candidates[0][1]
