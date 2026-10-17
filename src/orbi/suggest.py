@@ -570,15 +570,19 @@ def _build_document(config: RunnerConfig, repo: str, run_id: str,
     )
     try:
         entries = _parse_output(output)
-        suggestions = _validate_suggestions(entries, context, dispatch_label)
+        # Keep the first N BEFORE validating (Issue #1688): the answer may
+        # hold up to SUGGESTIONS_MAX entries while the caller asked for
+        # fewer, and an entry the caller asked us to drop must not fail
+        # the run (an invalid extra one would otherwise take the kept
+        # entries down with it).
+        suggestions = _validate_suggestions(
+            entries[:count], context, dispatch_label,
+        )
     except SuggestError as exc:
         raise SuggestError(
             str(exc), command=log_command, returncode=0,
             stdout=output, stderr="",
         ) from exc
-    # Keep the first N of what validated (Issue #1671): the answer may
-    # hold up to SUGGESTIONS_MAX entries, the caller asked for fewer.
-    suggestions = suggestions[:count]
     _write_batch(run_dir, suggestions)
     document = {
         "repo": repo,
