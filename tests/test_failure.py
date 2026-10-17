@@ -22,7 +22,7 @@ import pytest
 
 import orbi.failure_report as failure_report
 import orbi.runner as runner
-from orbi import failure, progress
+from orbi import failure, language, progress
 from orbi.pi_process import RateLimitExhaustedError
 from seam import seam
 
@@ -589,6 +589,103 @@ def test_failure_comment_body_defaults_to_unclassified_without_a_record():
     assert parsed.action_code == "fix_ticket"
     assert parsed.retry_safe is False
     assert "**Reason:** boom" in body
+
+
+# --------------------------------------------------------------------------
+# The cap: a cut blocked comment keeps its help line OUTSIDE the diagnosis
+# --------------------------------------------------------------------------
+
+LIMIT = 20000
+
+
+def _oversized_comment_body(*, outcome: str, language_code: str) -> str:
+    """A failure comment whose bounded evidence pushes it past the cap."""
+    return failure._failure_comment_body(
+        outcome=outcome, action="do the thing", reason="boom",
+        diagnosis="boom", scene="- run: `a1b2c3d4`",
+        evidence="\n" + "\n".join(["raw evidence line"] * 4000),
+        pr_url=None, issue="orbi-build/orbi#7", run_id="a1b2c3d4",
+        failure_record=record_for(
+            outcome="fix_needed" if outcome == "fix needed" else "blocked",
+        ),
+        language_code=language_code,
+    )
+
+
+def _truncation_note(language_code: str, *, limit: int = LIMIT) -> str:
+    return language.text(
+        language_code, "failure.comment_truncated",
+        chars=limit,
+        log=language.text(
+            language_code, "failure.scene.local_session_log",
+        ),
+    )
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_capped_blocked_comment_closes_the_diagnosis_before_the_help_line(
+        language_code):
+    """Issue #1695: the cut must not swallow the closing tags, or the help
+    line renders collapsed inside the open Diagnosis block."""
+    body = _oversized_comment_body(
+        outcome="blocked", language_code=language_code,
+    )
+    assert len(body) > LIMIT
+    help_line = language.text(language_code, "help.community")
+    assert body.endswith(f"\n\n{help_line}")
+
+    capped = failure.cap_comment(
+        body, limit=LIMIT,
+        log=language.text(
+            language_code, "failure.scene.local_session_log",
+        ),
+        language_code=language_code,
+    )
+
+    # The diagnosis is cut at the same limit as before (Issue #775).
+    # The open block is closed, then the note and the help line follow it.
+    assert capped.startswith(f"{body[:LIMIT]}\n</details>")
+    assert capped.count("</details>") == body.count("</details>")
+    assert capped.rindex("</details>") < capped.index(help_line)
+    assert capped.endswith(f"{_truncation_note(language_code)}\n\n{help_line}")
+    assert failure.parse(capped) == record_for()
+
+
+def test_capped_fix_needed_comment_keeps_todays_cut_without_a_help_line():
+    """Acceptance 2: a long `ai-fix-needed` comment is cut exactly as
+    before and carries no help line."""
+    body = _oversized_comment_body(
+        outcome="fix needed", language_code="en",
+    )
+    assert len(body) > LIMIT
+
+    capped = failure.cap_comment(
+        body, limit=LIMIT, log="local session log", language_code="en",
+    )
+
+    assert capped == body[:LIMIT] + _truncation_note("en")
+    assert language.text("en", "help.community") not in capped
+
+
+def test_capped_blocked_comment_adds_no_closer_when_the_block_already_closed():
+    """The cut can fall past the `</details>` closer (only the help line
+    pushed the body over): the closer is then not duplicated."""
+    help_line = language.text("en", "help.community")
+    head = f"<details><summary>Diagnosis</summary>{'x' * 50}</details>"
+    body = f"{head}\n\n{help_line}"
+    assert len(body) > 120
+
+    capped = failure.cap_comment(
+        body, limit=120, log=language.text(
+            "en", "failure.scene.local_session_log",
+        ),
+        language_code="en",
+    )
+
+    assert capped == (
+        f"{head}{_truncation_note('en', limit=120)}\n\n{help_line}"
+    )
+    assert capped.count("</details>") == 1
 
 
 # --------------------------------------------------------------------------

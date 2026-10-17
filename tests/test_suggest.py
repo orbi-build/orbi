@@ -468,7 +468,24 @@ BAD_RESULTS = {
     "unknown_kind": json.dumps(
         {"suggestions": [{**NEW_TWO, "kind": "maybe"}]},
     ),
+    # Hand-written, not json.dumps: the model wrote a bare quote inside a
+    # Chinese string value (Issue #1693).
+    "unescaped_quote_inside_a_string": (
+        '{"suggestions": [{"kind": "new", "issue": null, '
+        '"title": "限定范围", "why": "支持"缩小范围"的选项风格", '
+        '"body": "## Request\n范围。"}]}'
+    ),
 }
+
+
+def test_parse_output_still_rejects_an_unescaped_quote_inside_a_string():
+    """Acceptance (Issue #1693): the prompt lowers the chance of the error;
+    the parser keeps rejecting it — no repair pass, no retry."""
+    answer = BAD_RESULTS["unescaped_quote_inside_a_string"]
+    assert '"why": "支持"缩小范围"的选项风格"' in answer
+    with pytest.raises(suggest.SuggestError) as excinfo:
+        suggest._parse_output(answer)
+    assert "result is not valid JSON" in str(excinfo.value)
 
 
 @pytest.mark.parametrize("answer", sorted(BAD_RESULTS.values()))
@@ -1099,10 +1116,15 @@ def test_fake_gh_resolves_and_rejects_a_milestone(tmp_path, monkeypatch):
 # sentence to BOTH prompts. Without the flag the prompts stay
 # byte-for-byte what they were before the flag existed.
 
-LOCALE_SENTENCES = {
-    "zh": "Write all of your output in Simplified Chinese.",
-    "en": "Write all of your output in English.",
-}
+# The en sentence is frozen here: a zh-only prompt change (Issue #1693)
+# must never move it.
+EN_SENTENCE = "Write all of your output in English."
+
+# The zh quoting instruction (Issue #1693): on a real zh run the model
+# quoted a Chinese term with a bare ASCII quote and `json.loads` failed
+# at `_parse_output` with `Expecting ',' delimiter`.
+QUOTE_INSTRUCTION = 'quote words with 「」 and never with a bare "'
+ESCAPED_QUOTE_INSTRUCTION = 'if a literal double quote is needed, write \\"'
 
 # Frozen copy of the prompts before --locale existed: locale=None must
 # reproduce them exactly, so the default path can never drift.
@@ -1151,7 +1173,7 @@ def test_prompts_without_locale_are_byte_for_byte_unchanged():
 @pytest.mark.parametrize("locale", ["zh", "en"])
 def test_prompts_end_with_exactly_one_locale_sentence(locale):
     """Acceptance: zh/en append exactly one language sentence to both."""
-    sentence = LOCALE_SENTENCES[locale]
+    sentence = suggest.LOCALE_SENTENCES[locale]
     prompt = suggest._prompt(
         LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO, locale=locale,
     )
@@ -1165,6 +1187,40 @@ def test_prompts_end_with_exactly_one_locale_sentence(locale):
     # The body is untouched: only the sentence is appended.
     assert prompt.startswith(PROMPT_WITHOUT_LOCALE)
     assert understanding.startswith(UNDERSTANDING_WITHOUT_LOCALE)
+
+
+def test_zh_locale_asks_for_json_safe_quotes():
+    """Acceptance (Issue #1693): the zh sentence asks for 「」 inside JSON
+    string values and for an escaped \" when a literal double quote is
+    needed."""
+    zh = suggest.LOCALE_SENTENCES["zh"]
+    assert zh.startswith("Write all of your output in Simplified Chinese.")
+    assert QUOTE_INSTRUCTION in zh
+    assert ESCAPED_QUOTE_INSTRUCTION in zh
+    for prompt in (
+        suggest._prompt(
+            LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO, locale="zh",
+        ),
+        suggest._understanding_prompt(LOCALE_REPO_DIR, locale="zh"),
+    ):
+        assert QUOTE_INSTRUCTION in prompt
+        assert ESCAPED_QUOTE_INSTRUCTION in prompt
+
+
+def test_en_and_no_locale_never_carry_the_zh_quote_instruction():
+    """Acceptance (Issue #1693): en and no locale are unchanged, so the
+    quoting rule reaches only the caller who asked for Chinese output."""
+    assert suggest.LOCALE_SENTENCES["en"] == EN_SENTENCE
+    for prompt in (
+        suggest._prompt(LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO),
+        suggest._understanding_prompt(LOCALE_REPO_DIR),
+        suggest._prompt(
+            LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO, locale="en",
+        ),
+        suggest._understanding_prompt(LOCALE_REPO_DIR, locale="en"),
+    ):
+        assert QUOTE_INSTRUCTION not in prompt
+        assert "「" not in prompt
 
 
 def test_suggest_locale_rejects_an_unsupported_language(
@@ -1196,8 +1252,10 @@ def test_run_suggest_locale_reaches_both_prompts(
         dispatch_issue=cli.dispatch_issue,
     ) == 0
     capsys.readouterr()
-    assert stub.command[-1].endswith(LOCALE_SENTENCES["zh"])
-    assert stub.understanding_call[0][-1].endswith(LOCALE_SENTENCES["zh"])
+    assert stub.command[-1].endswith(suggest.LOCALE_SENTENCES["zh"])
+    assert stub.understanding_call[0][-1].endswith(
+        suggest.LOCALE_SENTENCES["zh"],
+    )
 
 
 def test_suggest_locale_zh_reaches_both_pi_sessions(
@@ -1214,8 +1272,10 @@ def test_suggest_locale_zh_reaches_both_pi_sessions(
         "--config", str(world.config_path),
     ]) == 0
     capsys.readouterr()
-    assert stub.command[-1].endswith(LOCALE_SENTENCES["zh"])
-    assert stub.understanding_call[0][-1].endswith(LOCALE_SENTENCES["zh"])
+    assert stub.command[-1].endswith(suggest.LOCALE_SENTENCES["zh"])
+    assert stub.understanding_call[0][-1].endswith(
+        suggest.LOCALE_SENTENCES["zh"],
+    )
 
 
 def test_suggest_without_locale_sends_no_language_sentence(

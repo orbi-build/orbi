@@ -117,8 +117,18 @@ _CONFIRM_YES = frozenset({"y", "yes"})
 # caller's page language, never a detection. `--locale` is absent by
 # default, and then both prompts are byte-for-byte what they were
 # before the flag existed.
+#
+# The zh sentence also asks for 「」 inside JSON string values (Issue
+# #1693): Chinese prose quotes a term with a bare ASCII `"`, which
+# breaks the JSON answer at `json.loads` (`Expecting ',' delimiter`).
+# The prompt lowers the chance; `_parse_output` still rejects the bad
+# answer — no repair pass, no retry.
 LOCALE_SENTENCES = {
-    "zh": "Write all of your output in Simplified Chinese.",
+    "zh": (
+        "Write all of your output in Simplified Chinese. Inside JSON "
+        'string values, quote words with 「」 and never with a bare "; '
+        'if a literal double quote is needed, write \\".'
+    ),
     "en": "Write all of your output in English.",
 }
 
