@@ -23,7 +23,8 @@ import orbi.review_merge as review_merge
 import orbi.run_state as run_state
 import orbi.pi_session as pi_session
 import orbi.runner_health as runner_health
-from orbi import progress, scene
+from orbi import language, progress, scene
+from orbi.delivery_labels import EVENT_BLOCKED
 from seam import seam
 import orbi.journal as journal
 
@@ -1269,8 +1270,43 @@ def test_external_takeover_clean_verdict_stops_at_triage(
     # The terminal triage state: ai-blocked ALONE (the opened-PR label
     # is cleared with the same blocked patch as every other terminal
     # path).
-    assert patches[-1]["event"] == runner.EVENT_BLOCKED
+    assert patches[-1]["event"] == EVENT_BLOCKED
     assert "external_takeover_triage" in caplog.text
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_external_takeover_conclusion_ends_with_the_help_line(
+        monkeypatch, tmp_path, language_code):
+    """Issue #1730: the external-PR conclusion blocks the Issue, so it goes
+    through the ONE blocked exit: the conclusion text is unchanged and the
+    posted comment ends with the run language's community help line,
+    exactly once."""
+    comments, patches = _external_review_env(monkeypatch, tmp_path,
+                                             external=True)
+    merged = review_merge.review_and_merge_if_clean(
+        tmp_path, "contributor-patch", "main",
+        config_domain.RunnerConfig(
+            run_id=FAKE_RUN_ID, base_branch="main", repo_dir=tmp_path,
+            message_language=language_code,
+        ),
+        "owner/repo", 39, title="task", priority="normal",
+        scene={
+            "run_id": FAKE_RUN_ID, "base_branch": "main",
+            "base_sha": "abc", "pr_url": PR_URL, "external": "true",
+            "review_round": 0, "scene_at": "2026-01-01T00:00:00Z",
+        },
+    )
+    assert merged is False
+    assert len(comments) == 1
+    body = comments[0]["body"]
+    help_line = language.text(language_code, "help.community")
+    assert body.endswith(f"\n\n{help_line}")
+    assert body.count(help_line) == 1
+    assert language.text(
+        language_code, "review.external_conclusion",
+        run_id=FAKE_RUN_ID,
+    ) in body
+    assert patches[-1]["event"] == EVENT_BLOCKED
 
 
 def test_internal_clean_verdict_still_merges(monkeypatch, tmp_path):

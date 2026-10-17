@@ -497,11 +497,12 @@ def _report(monkeypatch, tmp_path: Path, *, session: bool,
     """
     posted: list[str] = []
     pr_comments: list[str] = []
+    # The blocked path posts through the ONE blocked exit (Issue #1730): the
+    # seam fans the write out to every module that binds it, so the capture
+    # never pins one home.
+    monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
     monkeypatch.setattr(
-        failure_report, "apply_label_patch", lambda *a, **k: None,
-    )
-    monkeypatch.setattr(
-        failure_report, "comment_issue",
+        seam, "comment_issue",
         lambda number, *, repo, body: posted.append(body),
     )
     monkeypatch.setattr(
@@ -693,16 +694,48 @@ def test_blocked_guard_escalation_keeps_the_next_step_line(
     ) not in finish
 
 
+def test_recoverable_failure_without_a_pr_posts_the_issue_comment_only(
+        monkeypatch, tmp_path):
+    """The reporter's PR copy is optional (the blocked terminal state is
+    Issue-only and never reaches it): a recoverable failure reported
+    without a PR still posts the Issue comment — and, being a retrying
+    diagnostic rather than a blocked scene, it carries no community help
+    line (Issue #1730)."""
+    posted: list[str] = []
+    pr_comments: list = []
+    monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
+    monkeypatch.setattr(
+        seam, "comment_issue",
+        lambda number, *, repo, body: posted.append(body),
+    )
+    # The seam fans both names out to every module that binds them.
+    monkeypatch.setattr(
+        seam, "comment_pr", lambda *a, **k: pr_comments.append((a, k)),
+    )
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    publisher = FakePublisher()
+    outcome = failure_report.report_delivery_failure(
+        RuntimeError("provider failed"),
+        issue=dict(ISSUE), source_repo=SOURCE_REPO, run_id=RUN_ID,
+        pr_url=None, worktree=_worktree(tmp_path, session=False),
+        branch=BRANCH, role=runner.ROLE_REVIEW, classify=True,
+        finish=False, publisher=publisher, current_labels=set(),
+        language_code="en",
+    )
+    assert outcome == "fix needed"
+    assert len(posted) == 1
+    assert language.text("en", "help.community") not in posted[0]
+    assert pr_comments == []
+
+
 def test_evidence_redacts_local_paths(monkeypatch, tmp_path):
     """Issue #1233 stays intact after the move: a host path in the Pi
     streams never reaches the comment."""
     publisher = FakePublisher()
     posted: list[str] = []
+    monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
     monkeypatch.setattr(
-        failure_report, "apply_label_patch", lambda *a, **k: None,
-    )
-    monkeypatch.setattr(
-        failure_report, "comment_issue",
+        seam, "comment_issue",
         lambda number, *, repo, body: posted.append(body),
     )
     monkeypatch.setattr(failure_report, "comment_pr", lambda *a, **k: None)
@@ -976,7 +1009,7 @@ def test_block_scene_failure_never_raises_a_reporting_failure(
     def broken(*args, **kwargs):
         raise RuntimeError("github down")
 
-    monkeypatch.setattr(failure_report, "apply_label_patch", broken)
+    monkeypatch.setattr(seam, "apply_label_patch", broken)
     with caplog.at_level(logging.ERROR):
         failure_report.block_scene_failure(
             {"number": 42}, ValueError("bad scene"), "orbi-build/orbi", [], language_code="en",
@@ -989,10 +1022,8 @@ def test_block_repo_config_failure_never_raises_a_reporting_failure(
     def broken(*args, **kwargs):
         raise RuntimeError("github down")
 
-    monkeypatch.setattr(
-        failure_report, "apply_label_patch", lambda *a, **k: None,
-    )
-    monkeypatch.setattr(failure_report, "comment_issue", broken)
+    monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue", broken)
     with caplog.at_level(logging.ERROR):
         failure_report.block_repo_config_failure(
             42, "orbi-build/orbi", ValueError("bad key"), RUN_ID, language_code="en",
