@@ -366,7 +366,6 @@ def test_started_pi_comment_uses_multiline_field_block():
         "\n"
         "- base_sha: abc123def456\n"
         f"- branch: {FAKE_BRANCH}\n"
-        f"- worktree: {FAKE_WORKTREE}\n"
         "\n"
         "</details>\n\n"
         f"<!-- runner={progress.runner_fingerprint()} -->"
