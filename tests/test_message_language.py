@@ -794,3 +794,22 @@ def test_scene_missing_messages_give_the_one_working_unblock_path(key, code):
     assert "ai-fix-needed" not in body.replace(UNBLOCK_STEP[code], "")
     assert " or relabel" not in body
     assert "或把 Issue 重新标记" not in body
+
+
+# The failed alternative the two scene messages carried: "restore the scene
+# comment OR relabel the Issue". It reached the reader through a message
+# template AND through a reviewer-facing exception detail, so the guard scans
+# the whole engine, not just the catalog.
+RELABEL_ALTERNATIVES = ("or relabel the Issue", "或把 Issue 重新标记")
+
+
+@pytest.mark.parametrize("phrase", RELABEL_ALTERNATIVES)
+def test_no_module_carries_the_relabel_alternative(phrase):
+    """Issue #1724 acceptance 1/3: a blocked comment names ONE working
+    resume path. The failed alternative must not survive as a second copy
+    in a template or in a failure detail a comment publishes."""
+    sources = "".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((REPO_ROOT / "src" / "orbi").glob("*.py"))
+    )
+    assert phrase not in sources

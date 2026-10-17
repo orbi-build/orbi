@@ -497,8 +497,8 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
         # derive run_id, branch, worktree or PR without the trusted
         # scene comment, so it cannot start a review session): the
         # comment states the EXPLICIT reason why automatic recovery is
-        # impossible plus the human next step (restore the scene or
-        # relabel).
+        # impossible plus the human next step (restore the scene comment,
+        # then the ONE shared unblock step of the catalog, Issue #1724).
         comment_issue(
             number, repo=repo,
             body=(

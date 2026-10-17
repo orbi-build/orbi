@@ -13618,6 +13618,13 @@ def test_delivery_step_marks_blocked_when_review_fails(
     # (review round 2, PR #42) — not the hardcoded fix/0.
     assert "- role: review" in blocked
     assert "- review/fix round: 2" not in blocked
+    # Issue #1724: a review blocked on the missing trusted scene names
+    # ONE working resume path — restore the scene comment, then the
+    # shared unblock step — never the "or relabel the Issue" alternative
+    # that does not work on its own.
+    assert "must restore the trusted 'Orbi opened PR' scene comment" in body
+    assert "remove `ai-blocked`, then add `ai-fix-needed`" in body
+    assert "or relabel" not in body
 
 
 def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
