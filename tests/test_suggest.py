@@ -1238,11 +1238,12 @@ def test_suggest_without_locale_sends_no_language_sentence(
 # --- --count (Issue #1671) ---------------------------------------------------
 #
 # `orbi suggest --count N` (N 1..3, default 3) asks the session for at most
-# N suggestions and keeps the first N of what validates. The default is
-# three, so the default prompt and document are what they were before the
-# flag existed; the kept `suggestions.json` holds only the kept batch, so a
-# later run's `already_suggested` carries exactly what the earlier run
-# showed.
+# N suggestions, keeps the first N of the answer and validates only those
+# (Issue #1688: an entry the caller asked us to drop must not fail the
+# run). The default is three, so the default prompt and document are
+# what they were before the flag existed; the kept `suggestions.json`
+# holds only the kept batch, so a later run's `already_suggested`
+# carries exactly what the earlier run showed.
 
 
 def test_suggest_count_one_keeps_only_the_first_suggestion(
@@ -1311,6 +1312,78 @@ def test_suggest_default_count_keeps_today_behaviour(
     assert [item["title"] for item in document["suggestions"]] == [
         "Fix the existing thing", "Second thing", "Third thing",
     ]
+
+
+def test_suggest_count_one_keeps_the_first_before_validating(
+    tmp_path, monkeypatch, capsys,
+):
+    """Acceptance (Issue #1688): `--count 1` with three entries where the
+    THIRD names an Issue that already carries an `ai-` label exits 0 and
+    prints exactly the first entry — the dropped entry is never
+    validated."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    world.gh.add_issue(6, title="Already queued", labels=("ai-ready",))
+    stub = PiStub(
+        _answer_json(EXISTING, NEW_TWO, {"kind": "existing", "issue": 6,
+                                         "title": "Queued",
+                                         "why": "already ai-ready",
+                                         "body": None}),
+    )
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--count", "1",
+        "--config", str(world.config_path),
+    ]) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert document["suggestions"] == [EXISTING]
+    assert json.loads(
+        (Path(stub.kwargs["cwd"]) / "suggestions.json").read_text(
+            encoding="utf-8",
+        ),
+    ) == [{"kind": "existing", "issue": 5,
+           "title": "Fix the existing thing"}]
+
+
+def test_suggest_count_one_still_fails_when_the_first_entry_is_invalid(
+    tmp_path, monkeypatch, capsys,
+):
+    """Acceptance (Issue #1688): an invalid entry INSIDE the kept range
+    still fails — `--count 1` with the invalid entry first exits 1."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    world.gh.add_issue(6, title="Already queued", labels=("ai-ready",))
+    stub = PiStub(
+        _answer_json({"kind": "existing", "issue": 6, "title": "Queued",
+                      "why": "already ai-ready", "body": None},
+                     EXISTING),
+    )
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--count", "1",
+        "--config", str(world.config_path),
+    ]) == 1
+    assert "suggest_failed" in capsys.readouterr().err
+
+
+def test_suggest_default_count_still_fails_on_an_invalid_third_entry(
+    tmp_path, monkeypatch, capsys,
+):
+    """Acceptance (Issue #1688): without `--count` the default keeps all
+    three, so an invalid third entry still fails the run."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    world.gh.add_issue(6, title="Already queued", labels=("ai-ready",))
+    stub = PiStub(
+        _answer_json(EXISTING, NEW_TWO,
+                     {"kind": "existing", "issue": 6, "title": "Queued",
+                      "why": "already ai-ready", "body": None}),
+    )
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 1
+    assert "suggest_failed" in capsys.readouterr().err
 
 
 def test_prompt_spells_the_count_as_a_word_and_pluralizes_it():
