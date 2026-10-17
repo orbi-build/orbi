@@ -1923,24 +1923,21 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
             # tick BOUND: without it the comment carries no
             # marker and the progress publishing is skipped, whatever
             # the recovered scene says.
+            lang = language.of(config)
             failure_report.report_delivery_failure(
                 exc, issue=issue, source_repo=source_repo,
                 run_id=current_run_id(), pr_url=scene["pr_url"],
                 worktree=worktree, branch=branch, role=ROLE_REVIEW,
-                language_code=language.of(config),
+                language_code=lang,
                 action=(
-                    language.text(
-                        language.of(config),
-                        "delivery.resume_missing_fixes_action",
-                        pr_url=scene["pr_url"], number=number,
-                    )
+                    language.text(lang, "delivery.resume_missing_fixes_action",
+                                  pr_url=scene["pr_url"], number=number)
                     if isinstance(exc, MissingFixesError)
-                    else language.text(language.of(config),
-                                      "delivery.resume_review_pr_action")
+                    else language.text(lang, "delivery.resume_review_pr_action")
                     if isinstance(exc, UnrecoverableDeliveryError) else ""
                 ),
                 reason=language.text(
-                    language.of(config), "delivery.resume_verify_reason",
+                    lang, "delivery.resume_verify_reason",
                     pr_url=scene["pr_url"], detail=_failure_detail(exc),
                 ),
                 diagnosis=_failure_detail(exc),
@@ -1949,8 +1946,11 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 # preserved-objects note would contradict the reason.
                 blocked_suffix=(
                     "" if isinstance(exc, ResumeBranchGoneError) else
-                    language.text(language.of(config),
-                                  "delivery.preserved_suffix", branch=branch)
+                    language.text(
+                        lang, "delivery.preserved_suffix", branch=branch,
+                        worktree=language.text(
+                            lang, "failure.scene.local_worktree"),
+                    )
                 ),
             )
             reported = True

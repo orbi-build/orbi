@@ -570,8 +570,8 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "PR {pr_url} 的恢复校验失败：{detail}",
     ),
     "delivery.preserved_suffix": (
-        "the PR, branch {branch} and local runner worktree are preserved",
-        "PR、分支 {branch} 和本机 Runner 工作树均已保留",
+        "the PR, branch {branch} and {worktree} are preserved",
+        "PR、分支 {branch} 和{worktree}均已保留",
     ),
     "delivery.outcome_issue_closed": (
         "**Orbi stopped: Issue closed during delivery**",

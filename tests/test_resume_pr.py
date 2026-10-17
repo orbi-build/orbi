@@ -25,6 +25,7 @@ import orbi.review_merge as review_merge
 import orbi.run_state as run_state
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
+from orbi import language
 from orbi import progress
 from orbi import scene as scene_mod
 from tests.test_progress_wiring import make_fake_gh
@@ -2985,6 +2986,11 @@ def test_verify_resumed_pr_blocked_comment_follows_the_language_without_path(
     assert reason in body
     assert "boom" in body
     assert note in body
+    # The note names the worktree through the EXISTING catalog label
+    # (failure.scene.local_worktree), so its wording cannot drift.
+    assert language.text(
+        message_language, "failure.scene.local_worktree",
+    ) in body
     assert str(tmp_path) not in body
     assert str(worktree) not in body
 
