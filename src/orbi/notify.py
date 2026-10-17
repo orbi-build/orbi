@@ -127,6 +127,9 @@ WATERMARK_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 _config: RunnerConfig | None = None
 _token: str | None = None
 _last_failure: str | None = None
+# Telegram's own `description` of the last failure ("" = the body carried
+# none); `orbi notify test` prints it as `detail=` (Issue #1686).
+_last_detail: str | None = None
 
 
 def tick_start(config: RunnerConfig) -> None:
@@ -182,8 +185,10 @@ def send(text: str) -> bool:
 
     True only for HTTP 2xx with the documented `{"ok": true}` body. Every
     other outcome is classified, recorded as one `notify_failed` line and
-    reported as False. The token never leaves this call: nothing logged or
-    returned carries it.
+    reported as False. The body's own `description` joins that line as
+    `detail=` when it has one (Issue #1686): "Bad Request: chat not found"
+    says what "rejected" only classifies. The token never leaves this
+    call: nothing logged or returned carries it.
     """
     try:
         if not _enabled():
@@ -217,13 +222,15 @@ def send(text: str) -> bool:
         if 200 <= status < 300 and _ok(body):
             _last_failure = None
             return True
+        detail = _description(body)
+        extra = {"detail": detail} if detail else {}
         if status == 401:
-            return _fail("token_invalid")
+            return _fail("token_invalid", **extra)
         if status == 429:
-            return _fail("rate_limited")
+            return _fail("rate_limited", **extra)
         if 500 <= status < 600:
-            return _fail("platform_error")
-        return _fail("rejected")
+            return _fail("platform_error", **extra)
+        return _fail("rejected", **extra)
     except Exception:
         return _fail("network_error")
 
@@ -307,27 +314,31 @@ def doctor_lines(config: RunnerConfig) -> list[str]:
 def test_command(config: RunnerConfig) -> int:
     """`orbi notify test`: send one test message and report the outcome.
 
-    Prints `ok` and returns 0 on a confirmed send; prints the structured
-    failure reason and returns non-zero otherwise. Never raises (pure
-    bypass).
+    Prints `ok` and returns 0 on a confirmed send. Otherwise it prints
+    `notify_failed reason=<reason>` with Telegram's own `description` as
+    `detail=` when the error body carried one, followed by the community
+    help line (Issue #1686) -- the setup mistake ("chat not found", the
+    bot blocked, the bot not in the group) is readable and has a place to
+    ask. Never raises (pure bypass).
     """
-    global _config, _token
+    global _config, _token, _last_detail
     try:
         _config = config
         _token = os.environ.get(TOKEN_ENV)
+        _last_detail = None
         if not _enabled():
-            print(
+            print(_problem_output(
                 "notify_failed reason=not_configured "
                 f"missing={_missing_setting()}"
-            )
+            ))
             return 1
         if send(_test_message()):
             print("ok")
             return 0
-        print(f"notify_failed reason={_last_failure}")
+        print(_problem_output(_failure_line()))
         return 1
     except Exception:
-        print("notify_failed reason=network_error")
+        print(_problem_output("notify_failed reason=network_error"))
         return 1
 
 
@@ -346,19 +357,55 @@ def register_cli(subparsers, common) -> None:
 
 def _fail(reason: str, **fields) -> bool:
     """Record one `notify_failed` line and report the failure."""
-    global _last_failure
+    global _last_failure, _last_detail
     _last_failure = reason
+    _last_detail = fields.get("detail")
     event("notify_failed", reason=reason, **fields)
     return False
 
 
-def _ok(body: bytes) -> bool:
-    """True only for the documented `{"ok": true}` success body."""
+def _failure_line() -> str:
+    """The last failure as one line, with `detail=` when it was read."""
+    line = f"notify_failed reason={_last_failure}"
+    return f"{line} detail={_last_detail}" if _last_detail else line
+
+
+def _problem_output(line: str) -> str:
+    """A problem line plus the catalog's community help line.
+
+    The same `help.community` line every problem message ends with, in
+    the host `message_language` (Issue #1686).
+    """
+    return f"{line}\n{language.text(_language(), HELP_KEY)}"
+
+
+def _payload(body: bytes) -> dict | None:
+    """The decoded JSON object of a Telegram response body, or None."""
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
-        return False
-    return isinstance(payload, dict) and payload.get("ok") is True
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _ok(body: bytes) -> bool:
+    """True only for the documented `{"ok": true}` success body."""
+    payload = _payload(body)
+    return payload is not None and payload.get("ok") is True
+
+
+def _description(body: bytes) -> str:
+    """Telegram's own `description` from an error body ("" when absent).
+
+    The readable half of a rejected request ("Bad Request: chat not
+    found", "Forbidden: bot was blocked by the user"); it never carries
+    the bot token, so it is recorded as `detail=` and printed as is
+    (Issue #1686). A body that is not a JSON object, or whose
+    description is not a string, yields "" and the pre-#1686 line.
+    """
+    payload = _payload(body)
+    value = payload.get("description") if payload is not None else None
+    return value if isinstance(value, str) else ""
 
 
 def _chat_id() -> str:
