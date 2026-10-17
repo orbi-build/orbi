@@ -398,8 +398,8 @@ def _snapshot_or_placeholder(session_dir: Path, *, number: int) -> dict:
 _BLOCKED_PRECONDITION_PHRASE_KEY = "failure.blocked_precondition"
 
 
-# The whole failure-comment body is capped well below the
-# GitHub comment limit; the cut is noted with the full session log path.
+# The failure comment's size limit: the body stays under it by shrinking
+# only the evidence segments, never by cutting the comment (Issue #1711).
 FAILURE_COMMENT_MAX_CHARS = 20000
 
 

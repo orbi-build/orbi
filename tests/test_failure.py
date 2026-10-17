@@ -22,7 +22,7 @@ import pytest
 
 import orbi.failure_report as failure_report
 import orbi.runner as runner
-from orbi import failure, language, progress
+from orbi import failure, progress
 from orbi.pi_process import RateLimitExhaustedError
 from seam import seam
 
