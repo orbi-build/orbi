@@ -64,7 +64,9 @@ def _noop_spec():
         apply=_noop_apply,
         usage="/noop <target>",
         description="no-op probe for the shared command layer",
-        argument_label="target",
+        # A message-catalog key: the receipt renders the label in the
+        # ticket's language (Issue #1704).
+        argument_label="command.argument_label.argument",
     )
 
 

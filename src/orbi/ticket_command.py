@@ -35,6 +35,7 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
+from orbi import language
 from orbi.github import TRUSTED_COMMENT_ASSOCIATIONS, issue_comments
 from orbi.journal import event, run_command
 
@@ -92,7 +93,9 @@ class CommandSpec:
     apply: Callable[..., None]
     usage: str
     description: str
-    argument_label: str = "argument"
+    # The argument's human label is a message-catalog key (Issue #1704),
+    # so the receipt renders `version` / `版本` in the ticket's language.
+    argument_label: str = "command.argument_label.argument"
 
 
 class TicketCommandRegistryError(RuntimeError):
@@ -201,17 +204,31 @@ def parse_commands(text: object, spec: CommandSpec) -> list[str | None]:
     return parsed
 
 
-def _permission_reason(comment: dict, spec: CommandSpec) -> str:
-    return (
-        f"the command author has no {spec.permission} permission on this "
-        f"repository (authorAssociation={comment.get('authorAssociation')!r})"
+def _language_code(context: dict[str, object]) -> str:
+    """The message language carried through the dispatcher's `**context`."""
+    value = context.get("language_code")
+    return value if isinstance(value, str) else language.DEFAULT_LANGUAGE
+
+
+def _argument_label(spec: CommandSpec, language_code: str) -> str:
+    """The argument's human label in one language (a catalog entry)."""
+    return language.text(language_code, spec.argument_label)
+
+
+def _permission_reason(
+    comment: dict, spec: CommandSpec, language_code: str,
+) -> str:
+    return language.text(
+        language_code, "command.reason_no_permission",
+        permission=spec.permission,
+        association=comment.get("authorAssociation"),
     )
 
 
-def _malformed_reason(spec: CommandSpec) -> str:
-    return (
-        f"the command line is malformed: write exactly one "
-        f"{spec.argument_label} on its own line, `{spec.usage}`"
+def _malformed_reason(spec: CommandSpec, language_code: str) -> str:
+    return language.text(
+        language_code, "command.reason_malformed",
+        label=_argument_label(spec, language_code), usage=spec.usage,
     )
 
 
@@ -230,6 +247,7 @@ def select_command(
     whose own account is the Runner is evaluated like anyone else
     (Issue #1460).
     """
+    language_code = _language_code(context)
     occurrences: list[tuple[dict, str | None]] = []
     for comment in comments:
         if not isinstance(comment, dict) or is_runner_comment(comment):
@@ -242,12 +260,15 @@ def select_command(
         if comment.get("authorAssociation") not in PERMISSION_LEVELS[spec.permission]:
             target = None
             rejections.append((
-                comment, argument, _permission_reason(comment, spec),
+                comment, argument,
+                _permission_reason(comment, spec, language_code),
             ))
             continue
         if argument is None:
             target = None
-            rejections.append((comment, argument, _malformed_reason(spec)))
+            rejections.append((
+                comment, argument, _malformed_reason(spec, language_code),
+            ))
             continue
         reason = spec.validate(argument, **context)
         if reason is not None:
@@ -284,6 +305,7 @@ def _post_command_receipt(
     repo: str, issue_number: int, existing_comments: list[dict], comment: dict,
     *, spec: CommandSpec, marker: str, summary: str, argument: str | None,
     reason: str, step: str | None = None,
+    language_code: str = language.DEFAULT_LANGUAGE,
 ) -> None:
     """Post one reason comment, at most once per occurrence (idempotent)."""
     hidden = f"<!-- {marker} comment={_command_comment_key(comment)} -->"
@@ -293,14 +315,27 @@ def _post_command_receipt(
         for existing in existing_comments
     ):
         return
-    lines = [summary, "", f"- reason: {reason}"]
+    lines = [
+        summary, "",
+        language.text(language_code, "command.reason", reason=reason),
+    ]
     lines.append(
-        f"- command line: `/{spec.name}`" if argument is None
-        else f"- {spec.argument_label}: `{argument}`"
+        language.text(language_code, "command.command_line", name=spec.name)
+        if argument is None else language.text(
+            language_code, "command.argument",
+            label=_argument_label(spec, language_code), argument=argument,
+        )
     )
     if step is not None:
-        lines.append(f"- failed step: `{step}`")
-    lines.extend([f"- command comment: {_command_comment_ref(comment)}", "", hidden])
+        lines.append(language.text(language_code, "command.failed_step", step=step))
+    lines.extend([
+        language.text(
+            language_code, "command.comment",
+            ref=_command_comment_ref(comment),
+        ),
+        "",
+        hidden,
+    ])
     run_command([
         "gh", "issue", "comment", str(issue_number), "--repo", repo,
         "--body", "\n".join(lines),
@@ -317,6 +352,7 @@ def process_commands(
     same comments, its rejections get one receipt each, and its winning
     occurrence reaches ``apply`` only through here.
     """
+    language_code = _language_code(context)
     comments = issue_comments(issue_number, repo=repo)
     for spec in commands:
         target, rejections = select_command(comments, spec, **context)
@@ -324,8 +360,10 @@ def process_commands(
             _post_command_receipt(
                 repo, issue_number, comments, comment, spec=spec,
                 marker=f"{_command_receipt_marker(spec)}-rejected",
-                summary=f"**`/{spec.name}` command not applied**",
-                argument=argument, reason=reason,
+                summary=language.text(
+                    language_code, "command.not_applied", name=spec.name,
+                ),
+                argument=argument, reason=reason, language_code=language_code,
             )
         if target is None:
             continue
@@ -338,8 +376,12 @@ def process_commands(
                 marker=(
                     f"{_command_receipt_marker(spec)}-failed step={exc.step}"
                 ),
-                summary=f"**`/{spec.name} {argument}` command failed**",
+                summary=language.text(
+                    language_code, "command.failed",
+                    name=spec.name, argument=argument,
+                ),
                 argument=argument, reason=exc.reason, step=exc.step,
+                language_code=language_code,
             )
             event(
                 f"{spec.name}_command_failed", level=logging.ERROR, repo=repo,

@@ -6588,12 +6588,23 @@ def test_advance_active_milestone_closes_old_manual_notification_after_manual_mo
     monkeypatch.setattr(seam, "run_command", fake_run)
     assert _advance_active_milestone_on_idle(
         "owner/repo", "v0.4.0", config, auto_next_milestone=False,
+        language_code="zh",
     ) == ("open", None)
     close = next(command for command in calls if command[:3] == ["gh", "issue", "close"])
     assert close == [
         "gh", "issue", "close", "493", "--repo", "owner/repo",
         "--comment", "已收敛：当前配置 active_milestone = `v0.4.0`。",
     ]
+    # Issue #1704: the same receipt in the repository's English language.
+    calls.clear()
+    assert _advance_active_milestone_on_idle(
+        "owner/repo", "v0.4.0", config, auto_next_milestone=False,
+        language_code="en",
+    ) == ("open", None)
+    close = next(command for command in calls if "--comment" in command)
+    assert close[close.index("--comment") + 1] == (
+        "Settled: the configured active_milestone is `v0.4.0`."
+    )
 
 
 def test_stale_notice_comment_table():
@@ -6608,38 +6619,32 @@ def test_stale_notice_comment_table():
         " 已存在，不再等待发布确认。"
     )
     wait_over = "已收敛：Milestone `v0.4.0` 不再等待发布确认。"
-    assert milestone._stale_notice_comment(
-        release_body, active, keep_release_notice=True,
-    ) is None
-    assert milestone._stale_notice_comment(
-        release_body, active, keep_release_notice=False,
-        release_ticket_exists=True,
+
+    def zh(body, **kwargs):
+        return milestone._stale_notice_comment(
+            body, active, language_code="zh", **kwargs,
+        )
+
+    assert zh(release_body, keep_release_notice=True) is None
+    assert zh(
+        release_body, keep_release_notice=False, release_ticket_exists=True,
     ) == confirmed
     # The wait also ends without a release ticket (the Milestone got new
     # work, was closed, or the opt-in was turned off): the receipt must
     # not claim a ticket that does not exist.
-    assert milestone._stale_notice_comment(
-        release_body, active, keep_release_notice=False,
+    assert zh(release_body, keep_release_notice=False) == wait_over
+    assert zh(
+        release_body, keep_release_notice=False, release_ticket_exists=False,
     ) == wait_over
-    assert milestone._stale_notice_comment(
-        release_body, active, keep_release_notice=False,
-        release_ticket_exists=False,
-    ) == wait_over
-    assert milestone._stale_notice_comment(
-        advance_body, active, keep_release_notice=False,
-    ) is None
-    assert milestone._stale_notice_comment(
-        stale_body, active, keep_release_notice=True,
-    ) == close
+    assert zh(advance_body, keep_release_notice=False) is None
+    assert zh(stale_body, keep_release_notice=True) == close
     # A body without a candidates= group keeps the pre-#856 behaviour: it is
     # closed like any advance notice once its old= no longer matches.
-    assert milestone._stale_notice_comment(
-        "orbi-milestone-advance old=v0.3.0", active, keep_release_notice=True,
+    assert zh(
+        "orbi-milestone-advance old=v0.3.0", keep_release_notice=True,
     ) == close
-    assert milestone._stale_notice_comment(None, active, keep_release_notice=True) is None
-    assert milestone._stale_notice_comment(
-        "no fingerprint here", active, keep_release_notice=True,
-    ) is None
+    assert zh(None, keep_release_notice=True) is None
+    assert zh("no fingerprint here", keep_release_notice=True) is None
 
 
 def test_advance_active_milestone_close_failure_is_bypassed(
@@ -7312,6 +7317,7 @@ def test_main_advances_milestone_only_after_no_ready_issue(
              "base_branch": "main",
              "dispatch_label": runner.READY_LABEL,
              "version_file": None,
+             "language_code": "en",
          }),
     ]
 
@@ -7345,6 +7351,7 @@ def test_main_passes_disabled_auto_next_milestone_to_idle_advance(
         "base_branch": "main",
         "dispatch_label": runner.READY_LABEL,
         "version_file": None,
+        "language_code": "en",
     }
 
 
@@ -24211,3 +24218,35 @@ def test_stream_pi_journals_drain_abandonment_when_grandchild_holds_pipe(
         subprocess.run(["pkill", "-f", "orbi709-holder-two"], check=False)
     assert result == "final answer"
     assert "pi_drain_abandoned" in caplog.text
+
+
+def test_main_idle_passes_the_fused_message_language_to_milestone_bookkeeping(
+    monkeypatch, tmp_path,
+):
+    """Issue #1704: the idle confirmation path renders in the repository's
+    fused message language (the repo policy wins over the host value), the
+    same object that carries the fused base branch."""
+    monkeypatch.setitem(
+        milestone.__dict__, "validate_active_milestone", lambda *args, **k: None,
+    )
+    _write_prompts(tmp_path)
+    fake = FakeGh("owner/repo")
+    fake.add_milestone(1, title="v0.4.0")
+    fake.set_repo_config('message_language = "zh"\n')
+    monkeypatch.setattr(seam, "run_command", fake)
+    monkeypatch.setitem(
+        claim.__dict__, "pick_next_delivery", lambda *args, **kwargs: None,
+    )
+    seen = {}
+    monkeypatch.setitem(
+        milestone.__dict__, "reconcile_milestone_on_idle",
+        lambda *args, **kwargs: seen.update(kwargs) or ("open", None),
+    )
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v0.4.0"\n'
+        'message_language = "en"\n',
+        encoding="utf-8",
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert seen["language_code"] == "zh"
