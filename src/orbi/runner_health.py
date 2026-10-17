@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING
 
 from orbi.delivery_labels import READY_LABEL
 from orbi import language
+from orbi.repo_config import merged_repo_language
 from orbi import scheduler
 from orbi.journal import RunIdFilter, event
 from orbi.progress import format_status_comment, run_marker
@@ -695,7 +696,14 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
                     "--repo", finding["repo"],
                     "--body", format_status_comment(
                         repeat_failure_comment(
-                            finding, language_code=language.of(config),
+                            finding,
+                            # The repository's merged message language
+                            # (Issue #1703): this tick runs before any claim
+                            # merges the policy, so `language.of(config)`
+                            # would silently use the host value.
+                            language_code=merged_repo_language(
+                                config, finding["repo"],
+                            ),
                         ),
                     ),
                 ],
