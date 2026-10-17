@@ -613,24 +613,62 @@ def test_suggest_context_skips_a_newer_run_without_a_batch(
     assert set(context) == {"repo", "issues", "prs", "already_suggested"}
 
 
-def test_suggest_context_takes_the_most_recent_batch(
+def test_suggest_context_orders_the_batches_by_recency_not_by_name(
     tmp_path, monkeypatch,
 ):
-    """Run ids are random hex: the kept batch that decides is the most
-    recent directory, not the one whose name sorts last."""
+    """Run ids are random hex: the merged batches are ordered by the
+    directory's recency (newest first), not by the name."""
     world = _world(tmp_path, monkeypatch)
-    newest = [{"kind": "new", "issue": None, "title": "Most recent"}]
     _seed_run(
         world, "zzzzzzzz",
         [{"kind": "new", "issue": None, "title": "Older"}], mtime=1_000,
     )
-    _seed_run(world, "aaaaaaaa", newest, mtime=2_000)
+    _seed_run(
+        world, "aaaaaaaa",
+        [{"kind": "new", "issue": None, "title": "Most recent"}], mtime=2_000,
+    )
     stub = PiStub(_answer_json(NEW_TWO))
     monkeypatch.setattr(seam, "stream_pi", stub)
     assert cli.main([
         "suggest", "--json", "--config", str(world.config_path),
     ]) == 0
-    assert _run_context(stub)["already_suggested"] == newest
+    assert _run_context(stub)["already_suggested"] == [
+        {"kind": "new", "issue": None, "title": "Most recent"},
+        {"kind": "new", "issue": None, "title": "Older"},
+    ]
+
+
+def test_suggest_context_merges_three_batches_and_drops_duplicates(
+    tmp_path, monkeypatch,
+):
+    """Acceptance (Issue #1685): the three most recent kept batches are
+    merged newest first; a repeated Issue number (`existing`) and a
+    repeated title (`new`) appear once; a fourth, older batch is outside
+    the three-run window."""
+    world = _world(tmp_path, monkeypatch)
+    existing = {"kind": "existing", "issue": 5, "title": "Fix the existing"}
+    _seed_run(world, "00000001", [
+        {"kind": "new", "issue": None, "title": "Too old"},
+    ], mtime=500)
+    _seed_run(world, "00000002", [
+        existing,
+        {"kind": "new", "issue": None, "title": "Shared"},
+    ], mtime=1_000)
+    _seed_run(world, "00000003", [
+        {"kind": "new", "issue": None, "title": "Shared"},
+        {"kind": "new", "issue": None, "title": "Second"},
+    ], mtime=2_000)
+    _seed_run(world, "00000004", [existing], mtime=3_000)
+    stub = PiStub(_answer_json(NEW_TWO))
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 0
+    assert _run_context(stub)["already_suggested"] == [
+        existing,
+        {"kind": "new", "issue": None, "title": "Shared"},
+        {"kind": "new", "issue": None, "title": "Second"},
+    ]
 
 
 def test_two_real_runs_hand_the_first_batch_to_the_second(
@@ -1302,8 +1340,9 @@ def test_suggest_without_locale_sends_no_language_sentence(
 # (Issue #1688: an entry the caller asked us to drop must not fail the
 # run). The default is three, so the default prompt and document are
 # what they were before the flag existed; the kept `suggestions.json`
-# holds only the kept batch, so a later run's `already_suggested`
-# carries exactly what the earlier run showed.
+# holds only the kept batch, and a later run's `already_suggested`
+# carries what the earlier runs showed — the three most recent batches
+# merged (Issue #1685).
 
 
 def test_suggest_count_one_keeps_only_the_first_suggestion(
@@ -1507,4 +1546,95 @@ def test_count_one_then_count_two_hands_the_first_batch(
         {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
     ]
     capsys.readouterr()
+
+
+
+# --- already_suggested covers the whole previous batch (Issue #1685) ---------
+#
+# A caller may split one batch across runs (issue #1671: `--count 1`, then
+# `--count 2`). The most recent run then holds only a part of the batch, so
+# `_earlier_batch` merges the three most recent kept batches, newest first,
+# dropping a repeated Issue number (`existing`) or title (`new`).
+
+
+def _new_suggestion(title: str) -> dict:
+    return {
+        "kind": "new", "issue": None, "title": title,
+        "why": f"{title} matters", "body": f"## Request\n{title}.",
+    }
+
+
+def _kept(title: str) -> dict:
+    return {"kind": "new", "issue": None, "title": title}
+
+
+def _one_run(world, monkeypatch, capsys, args, answer, mtime) -> PiStub:
+    """One real `orbi suggest` run with a canned answer, pinned in time."""
+    stub = PiStub(_answer_json(*answer))
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", *args, "--config", str(world.config_path),
+    ]) == 0
+    # Recency is the directory mtime: pin it so the assertion never
+    # depends on the filesystem's timestamp resolution.
+    os.utime(Path(stub.kwargs["cwd"]), (mtime, mtime))
+    capsys.readouterr()
+    return stub
+
+
+def test_count_one_then_two_then_one_hands_the_whole_split_batch(
+    tmp_path, monkeypatch, capsys,
+):
+    """Acceptance (user journey, Issue #1685): `--count 1`, `--count 2`,
+    then `--count 1` again; the third run's `already_suggested` holds all
+    three suggestions of the split batch the first two runs showed."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    _one_run(
+        world, monkeypatch, capsys, ["--count", "1"],
+        [EXISTING, NEW_TWO, NEW_THREE], 1_000,
+    )
+    _one_run(
+        world, monkeypatch, capsys, ["--count", "2"],
+        [_new_suggestion("Split A"), _new_suggestion("Split B")], 2_000,
+    )
+    third = _one_run(
+        world, monkeypatch, capsys, ["--count", "1"],
+        [_new_suggestion("Next batch")], 3_000,
+    )
+    assert _run_context(third)["already_suggested"] == [
+        _kept("Split A"), _kept("Split B"),
+        {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
+    ]
+
+
+def test_count_two_after_a_split_batch_hands_both_runs_of_the_batch(
+    tmp_path, monkeypatch, capsys,
+):
+    """Acceptance (Issue #1685): after A1 (`--count 1`), A2 (`--count 2`)
+    and B1 (`--count 1`), the `--count 2` run's `already_suggested` holds
+    B1's suggestion and all three of A1 + A2."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    _one_run(
+        world, monkeypatch, capsys, ["--count", "1"],
+        [EXISTING, NEW_TWO, NEW_THREE], 1_000,
+    )
+    _one_run(
+        world, monkeypatch, capsys, ["--count", "2"],
+        [_new_suggestion("A2 one"), _new_suggestion("A2 two")], 2_000,
+    )
+    _one_run(
+        world, monkeypatch, capsys, ["--count", "1"],
+        [_new_suggestion("B1 one")], 3_000,
+    )
+    fourth = _one_run(
+        world, monkeypatch, capsys, ["--count", "2"],
+        [_new_suggestion("B2 one"), _new_suggestion("B2 two")], 4_000,
+    )
+    assert _run_context(fourth)["already_suggested"] == [
+        _kept("B1 one"),
+        _kept("A2 one"), _kept("A2 two"),
+        {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
+    ]
 
