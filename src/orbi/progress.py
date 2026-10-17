@@ -889,12 +889,13 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
             worktree=worktree or Path("-"), source_repo=source_repo,
         ),
         title=title, role=role, started=time.monotonic(), pr_url=pr_url,
-        review_round=review_round, priority=priority,
-        language_code=language_code,
+        review_round=review_round, priority=priority, language_code=language_code,
     ), outcome=_finish_outcome_body(
         outcome=outcome, detail=detail, next_step=next_step, pr_url=pr_url,
         number=number, source_repo=source_repo, action=action,
-        reason=reason, diagnosis=diagnosis, language_code=language_code,
+        reason=reason and _redact_local_paths(reason),
+        diagnosis=diagnosis and _redact_local_paths(diagnosis),
+        language_code=language_code,
     ))
 
 

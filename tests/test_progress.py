@@ -1443,6 +1443,36 @@ def test_blocked_finish_keeps_the_formal_prefix_above_the_explanation(
     )
 
 
+CLOUD_PATH = (
+    "/home/orbi-acme--app-1a2b3c4d/delivery/app/.worktrees/"
+    "orbi-acme-app-issue-7-0a1b2c3d/.pi-session"
+)
+
+
+@pytest.mark.parametrize("outcome", ["blocked", "fix needed"])
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_failed_finish_redacts_local_paths_in_reason_and_diagnosis(
+        monkeypatch, tmp_path, outcome, language_code):
+    """Issue #1721 acceptance 1: the final progress comment of a failed
+    delivery never shows the runner's worktree path in "What happened"
+    (and its zh twin) or the raw error, and keeps the rest of both
+    sentences."""
+    freeze_report_time(monkeypatch)
+    body = progress._finish_progress_body(
+        number=1721, title="Failed task", run_id="86b57234",
+        role="implement", branch="orbi/orbi-1721", worktree=tmp_path,
+        pr_url=None, review_round=0, priority="normal", detail="boom",
+        next_step="", outcome=outcome, source_repo="owner/repo",
+        reason=f"pi session exited 1 ({CLOUD_PATH})",
+        diagnosis=f"FileNotFoundError: {CLOUD_PATH}",
+        language_code=language_code,
+    )
+    assert CLOUD_PATH not in body
+    assert "/home/" not in body
+    assert "pi session exited 1 (local runner path)" in body
+    assert "FileNotFoundError: local runner path" in body
+
+
 def test_review_findings_finish_keeps_the_formal_prefix(
         monkeypatch, tmp_path):
     """Acceptance: a review-findings finish starts with the run marker and

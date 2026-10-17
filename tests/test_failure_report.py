@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from orbi import failure_report, language, progress, runner, runner_health
+from tests.fakes.github import FakeGh
 from tests.fakes.progress import freeze_report_time
 
 from seam import seam
@@ -723,6 +724,38 @@ def test_evidence_redacts_local_paths(monkeypatch, tmp_path):
     )
     assert "/tmp/delivery" not in posted[0]
     assert "local runner path file: boom" in posted[0]
+
+
+RESUME_WORKTREE = "/home/orbi-acme--app-1a2b3c4d/delivery/app/.worktrees/x"
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_resume_blocked_comment_redacts_local_paths(
+        monkeypatch, language_code):
+    """Issue #1721 acceptance 2: the "cannot continue the interrupted run"
+    comment never shows the runner's worktree path, keeps
+    `local runner path` where it was, and still says the run state file
+    is missing."""
+    gh = FakeGh(SOURCE_REPO)
+    gh.add_issue(42, title="Fix the thing", labels=("ai-in-progress",))
+    monkeypatch.setattr(seam, "run_command", gh)
+    error = RuntimeError(
+        f"worktree {RESUME_WORKTREE} has no run state file "
+        f"({RESUME_WORKTREE}/.orbi/run-state.json)",
+    )
+    failure_report._report_resume_failure(
+        number=42, source_repo=SOURCE_REPO, run_id=RUN_ID,
+        error=error, language_code=language_code,
+    )
+    assert len(gh.issues[42]["comments"]) == 1
+    body = gh.issues[42]["comments"][0]["body"]
+    assert body.startswith(f"<!-- orbi:run={RUN_ID} -->")
+    assert "/home/" not in body
+    assert (
+        "local runner path has no run state file (local runner path)"
+        in body
+    )
+    assert f"run_id={RUN_ID}" in body
 
 
 # The failure-comment size limit and the two report-itself-failed guards:
