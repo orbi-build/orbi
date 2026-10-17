@@ -2952,22 +2952,22 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         if config.human_review_gate:
             # The human acceptance checklist — the readable
             # face of the gate — posts ONCE per delivery, at the moment
-            # the delivery completes (the PR opens). Bypass:
-            # a failed checklist never fails the delivery; the gate
-            # itself is the label check in the review rounds, and a
-            # checklist-less delivery still holds there when column 2
-            # is non-empty.
+            # the delivery completes (the PR opens), with its one wait
+            # message when column 2 needs a person. Bypass: a failed
+            # checklist never fails the delivery; the gate itself is the
+            # label check in the review rounds, and a checklist-less
+            # delivery still holds there when column 2 is non-empty.
             try:
-                comment_issue(
-                    number, repo=source_repo,
-                    body=review_merge.human_review_checklist(
-                        worktree, config,
-                        run_id=run_id, pr_url=pr_url,
-                        test_status=test_status(
-                            pr_delivery_rollup(pr_url, source_repo)[1],
-                        ),
+                body, needs_person = review_merge.human_review_checklist(
+                    worktree, config,
+                    run_id=run_id, pr_url=pr_url,
+                    test_status=test_status(
+                        pr_delivery_rollup(pr_url, source_repo)[1],
                     ),
                 )
+                if needs_person:
+                    notify.human_review_waiting(source_repo, number, title)
+                comment_issue(number, repo=source_repo, body=body)
             except Exception as exc:
                 LOGGER.warning(
                     "issue=%s post-PR notification failed pr=%s: %s",

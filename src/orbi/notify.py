@@ -4,10 +4,12 @@ A person who hands Issues to Orbi is otherwise reachable only through
 GitHub. When Orbi NEWLY adds one of the three attention labels —
 `ai-blocked`, `ai-needs-detail`, `ai-awaiting-merge` — this module sends
 ONE Telegram message (private chat or group) naming the state, the Issue
-and its link, in Chinese or English. It also sends ONE message when
-the human-review gate starts holding a delivery for a person (Issue
-#1684). `orbi notify test` checks the setup before a real event; a
-label a person adds by hand sends nothing.
+and its link, in Chinese or English. It also sends ONE "waiting for your
+review" message when the human-review gate's checklist asks a person to
+confirm something, sent where that checklist is built — once per
+delivery (Issue #1691). `orbi notify test` checks the setup before a
+real event; a label a person adds by hand sends nothing, and the gate's
+own label patch sends nothing.
 
 A message that is a problem the person must resolve (`ai-blocked`,
 `ai-needs-detail`, the human-review wait) ends with the community help
@@ -47,9 +49,7 @@ from orbi import language
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL,
     BLOCKED_LABEL,
-    EVENT_HUMAN_REVIEW_WAITING,
     NEEDS_DETAIL_LABEL,
-    READY_LABEL,
 )
 from orbi.journal import event
 
@@ -164,19 +164,6 @@ def tick_start(config: RunnerConfig) -> None:
         _fail("merged_check_failed")
 
 
-def enabled() -> bool:
-    """True when this tick bound both a chat id and a token.
-
-    The hook in `github.apply_label_patch` reads the Issue title ONLY
-    when this is true, so a tick with notifications off makes no extra
-    `gh` call. Never raises (pure bypass).
-    """
-    try:
-        return _enabled()
-    except Exception:
-        return False
-
-
 def send(text: str) -> bool:
     """POST one message to the configured chat; never raises (bypass).
 
@@ -244,21 +231,38 @@ def label_added(repo: str, number: int, label: str,
         return
 
 
+def human_review_waiting(repo: str, number: int,
+                         title: str | None = None) -> None:
+    """Send the ONE "waiting for your review" message of a delivery.
+
+    Sent by the PR-open checklist block when its column 2 asks a person
+    to confirm something (Issue #1691), BEFORE the checklist comment is
+    posted -- a failed comment still leaves the person a message. The
+    block runs once per delivery, so the message is sent once: fix
+    rounds, gate waits and recoveries never repost it. A no-op for a
+    notifier that is off or half-configured (`tick_start` already
+    reported the gap) and for every failure. NEVER raises (pure bypass).
+    """
+    try:
+        if not _enabled():
+            return
+        send(_human_review_message(repo, number, title))
+    except Exception:
+        return
+
+
 def patch_applied(event: str, added_labels, current_labels, *,
                   repo: str, number: int, read_title) -> None:
     """Send the ONE notification a just-applied label patch warrants.
 
-    The decision moved out of `github.apply_label_patch` (Issue #1684)
-    so the oversized `github.py` gains no branch:
-
-    - `EVENT_HUMAN_REVIEW_WAITING` (the human acceptance gate starts
-      holding a delivery): ONE "needs you" message with the wait status
-      and the community help line. The caller applies this patch once
-      per wait (`ai-ready` is added only when absent), so a later tick
-      -- where `ai-ready` is already set -- sends nothing.
-    - a NEWLY added attention label (`ai-blocked`, `ai-needs-detail`,
-      `ai-awaiting-merge`): the ordinary "needs you" message; the two
-      problem labels end with the help line.
+    The decision moved out of `github.apply_label_patch` (Issue #1673)
+    so the oversized `github.py` gains no branch: only a NEWLY added
+    attention label (`ai-blocked`, `ai-needs-detail`,
+    `ai-awaiting-merge`) sends the ordinary "needs you" message; the two
+    problem labels end with the help line. The human-review wait is NOT
+    triggered here (Issue #1691): a normal delivery already carries
+    `ai-ready`, so this patch usually does not even run, and the message
+    belongs to the checklist block that decides it.
 
     `read_title` is a callable, so the Issue title is read AT MOST once
     and only when a message is actually sent -- never when notifications
@@ -269,11 +273,6 @@ def patch_applied(event: str, added_labels, current_labels, *,
         if not _enabled():
             return
         current = set(current_labels)
-        if event == EVENT_HUMAN_REVIEW_WAITING:
-            if READY_LABEL in current:
-                return
-            send(_human_review_message(repo, number, read_title()))
-            return
         # The caller only reaches this point with an applied patch, and
         # every event's patch carries exactly one added label.
         label = added_labels[0]
