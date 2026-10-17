@@ -614,7 +614,8 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
             f"{comment_kind_marker(COMMENT_KIND_FAILURE)}\n"
             + language.text(
                 language_code, "failure.resume_blocked",
-                detail=_failure_detail(error), run_id=run_id,
+                detail=_redact_local_paths(_failure_detail(error)),
+                run_id=run_id,
             )
         ),
     )

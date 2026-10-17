@@ -13985,7 +13985,12 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
     assert patches, "the tracked progress comment was not updated"
     fix_needed = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi fix needed" in fix_needed
-    assert "orbi-owner-repo-issue-39-a1b2c3d4" in fix_needed
+    # Issue #1721: the "What happened" sentence keeps the failure, but the
+    # worktree path on the runner's disk is redacted; the branch (the
+    # public name) still says which worktree is missing.
+    assert "worktree missing: local runner path" in fix_needed
+    assert "orbi-owner-repo-issue-39-a1b2c3d4" not in fix_needed
+    assert "branch: orbi/owner-repo-issue-39" in fix_needed
     assert "What Orbi will do next:" in fix_needed
 
 
