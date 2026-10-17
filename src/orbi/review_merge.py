@@ -129,7 +129,7 @@ def merged_pr_comment_body(run_id: str, pr_url: str, merge_commit: str,
                            review_rounds: int, external_commits: object,
                            commits: object, base_branch: str,
                            review: str,
-                           language_code: str = language.DEFAULT_LANGUAGE,
+                           language_code: str,
                            ) -> str:
     """Render the final delivery record.
 
@@ -443,7 +443,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
                source_repo: str | None = None,
                issue_number: int | None = None,
                run_id: str | None = None,
-               language_code: str = language.DEFAULT_LANGUAGE) -> dict:
+               language_code: str) -> dict:
     """Merge the reviewed PR only if the gate still holds against latest base.
 
     Re-fetch the latest remote base, require the PR head to contain it, the PR
@@ -1123,13 +1123,12 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
     )
     started = time.monotonic()
     # The whole review/merge phase PATCHes the run's live progress
-    # comment, so the round's context and publisher carry the bound
-    # message language too (#1660): the header and field labels follow
-    # it exactly like the implementation phase's.
+    # comment, so the publisher above carries the bound message language
+    # too (#1660/#1687): the header and field labels follow it exactly
+    # like the implementation phase's.
     ctx = RunContext(
         run_id=config.run_id, issue=number, branch=branch,
         worktree=worktree, source_repo=source_repo,
-        language=language.of(config),
     )
     # The step's own updates (this ensure, the merge gate's `checks`
     # stage, the findings/merged finishes) render through one call shape
@@ -1962,6 +1961,7 @@ def _run_review_round(
             exc, issue=issue, source_repo=source_repo,
             run_id=run_id, pr_url=pr_url,
             worktree=worktree, branch=branch, role=ROLE_REVIEW,
+            language_code=language.of(config),
             action=(
                 exc.action
                 if isinstance(exc, HumanDecisionRequired)

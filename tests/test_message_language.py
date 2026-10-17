@@ -34,10 +34,10 @@ def _prompt_of(command: list[str]) -> str:
     return path.read_text(encoding="utf-8") if path.is_file() else value
 
 
-def _ctx(tmp_path: Path, bound: str) -> RunContext:
+def _ctx(tmp_path: Path) -> RunContext:
     return RunContext(
         run_id="abcdef12", issue=7, branch="orbi/owner-repo-issue-7",
-        worktree=tmp_path, source_repo="owner/repo", language=bound,
+        worktree=tmp_path, source_repo="owner/repo",
     )
 
 
@@ -167,6 +167,27 @@ def test_seed_config_appends_the_key_when_the_example_has_none():
     assert language.seed_config(b"", {}) == b'message_language = "en"\n'
 
 
+def test_seed_config_keeps_the_key_top_level_before_a_trailing_table():
+    """Issue #1687 acceptance 4: an example whose last block is a
+    `[[repositories]]` table gets the seeded key at the TOP level. Appending
+    it to the end put the key INSIDE that table, where it is ignored, and
+    the created config silently fell back to `en`."""
+    import tomllib
+
+    payload = (
+        b'source_repos = ["a/b"]\n'
+        b'\n[[repositories]]\nname = "b"\ngithub = "a/b"\n'
+    )
+    seeded = language.seed_config(payload, {"LANG": "zh_CN.UTF-8"})
+    assert seeded.index(b'message_language = "zh"') < seeded.index(
+        b"[[repositories]]",
+    )
+    parsed = tomllib.loads(seeded.decode("utf-8"))
+    assert parsed["message_language"] == "zh"
+    assert parsed["repositories"] == [{"name": "b", "github": "a/b"}]
+    assert parsed["source_repos"] == ["a/b"]
+
+
 def test_the_packaged_example_documents_the_commented_default():
     example = (REPO_ROOT / "src" / "orbi" / "example_config.toml").read_text(
         encoding="utf-8",
@@ -176,17 +197,17 @@ def test_the_packaged_example_documents_the_commented_default():
 
 # ------------------------------------------------------- bound comment text
 
-def test_an_explicit_language_wins_over_the_run_context(tmp_path):
+def test_the_explicit_language_renders(tmp_path):
     body = delivery_comment.started_pi_comment_body(
-        _ctx(tmp_path, "en"), "run_id=abcdef12 priority=p0",
+        _ctx(tmp_path), "run_id=abcdef12 priority=p0",
         language_code="zh",
     )
     assert "Orbi 已启动 Pi：" in body
 
 
-def test_started_scene_follows_the_run_context(tmp_path):
+def test_started_scene_follows_the_bound_language(tmp_path):
     zh = delivery_comment.started_pi_comment_body(
-        _ctx(tmp_path, "zh"), "run_id=abcdef12 priority=p0",
+        _ctx(tmp_path), "run_id=abcdef12 priority=p0", language_code="zh",
     )
     assert "Orbi 已启动 Pi：" in zh
     assert comment_kind.comment_kind(zh) == comment_kind.COMMENT_KIND_STARTED
@@ -194,7 +215,7 @@ def test_started_scene_follows_the_run_context(tmp_path):
         [{"body": zh}], "abcdef12",
     ) is not None
     en = delivery_comment.started_pi_comment_body(
-        _ctx(tmp_path, "en"), "run_id=abcdef12 priority=p0",
+        _ctx(tmp_path), "run_id=abcdef12 priority=p0", language_code="en",
     )
     assert "Orbi started Pi:" in en
 
@@ -280,7 +301,7 @@ def test_problem_comments_end_with_the_community_help_line():
     blocked = failure._failure_comment_body(
         outcome="blocked", action="a", reason="boom", diagnosis="",
         scene="- run: `x`", evidence="", pr_url=None,
-        issue="owner/repo#7", run_id="abcdef12",
+        issue="owner/repo#7", run_id="abcdef12", language_code="en",
     )
     assert blocked.endswith(en)
     fix_needed = failure._failure_comment_body(
@@ -301,12 +322,12 @@ def test_problem_comments_end_with_the_community_help_line():
     # exactly as before.
     held = human_review.render_checklist_comment(
         run_id="abcdef12", pr_url="https://x/pull/1",
-        checklist={"column1": ["x"], "column2": ["Intent judgment"]},
+        checklist={"column1": ["x"], "column2": ["Intent judgment"]}, language_code="en",
     )
     assert held.endswith(en)
     clear = human_review.render_checklist_comment(
         run_id="abcdef12", pr_url="https://x/pull/1",
-        checklist={"column1": ["x"], "column2": []},
+        checklist={"column1": ["x"], "column2": []}, language_code="en",
     )
     assert en not in clear
 
@@ -346,7 +367,7 @@ def test_clarify_comment_renders_the_missing_pieces_in_the_bound_language():
     assert "请按下面的形状补充 Issue 正文" in zh
     assert "缺少可观察结果" in zh
     assert "Acceptance" in zh  # the repair shape stays the documented one
-    en = clarify.render_comment(issue, verdict, "abcdef12")
+    en = clarify.render_comment(issue, verdict, "abcdef12", language_code="en")
     assert "Orbi: this ticket is not ready to deliver." in en
 
 
@@ -406,7 +427,7 @@ def test_human_review_checklist_follows_the_language():
     assert "ai-human-review" in zh
     en = human_review.render_checklist_comment(
         run_id="abcdef12", pr_url="https://x/pull/1",
-        checklist={"column1": ["x"], "column2": []},
+        checklist={"column1": ["x"], "column2": []}, language_code="en",
     )
     assert "no human intervention needed" in en
 
@@ -455,6 +476,24 @@ def test_release_comments_follow_the_language():
     )
     assert "Orbi release 失败（ai-blocked）" in failure_body
     assert failure_body.startswith("<!-- orbi:run=abcdef12 -->")
+
+
+def test_the_run_details_summary_follows_the_language():
+    """Issue #1687 item 3: the collapsed "Run details" summary of every
+    field block is catalog text; it used to be an English literal, so the
+    release comments stayed half-English on a zh host."""
+    fields = {"session": "x" * 300}
+    zh = progress.field_block("abcdef12", "head", fields, language_code="zh")
+    en = progress.field_block("abcdef12", "head", fields, language_code="en")
+    assert "<summary>运行详情</summary>" in zh
+    assert "<summary>Run details</summary>" in en
+    zh_release = release_comments.release_success_comment_body(
+        "abcdef12", "run_id=abcdef12 priority=p0 session=" + "x" * 300,
+        "https://github.com/owner/repo/releases/tag/v1", "v1", "abc",
+        ["scope"], ["gate"], "tests", "milestone", "zh",
+    )
+    assert "<summary>运行详情</summary>" in zh_release
+    assert "Run details" not in zh_release
 
 
 def test_milestone_plan_ready_follows_the_publisher_language(tmp_path):
@@ -551,7 +590,7 @@ def test_the_clarify_ticket_agent_stays_protocol_only(monkeypatch, tmp_path):
 
 
 def pi_session_run_context(tmp_path: Path) -> RunContext:
-    return _ctx(tmp_path, "zh")
+    return _ctx(tmp_path)
 
 
 # -------------------------------------------- language-independent machinery
@@ -576,7 +615,7 @@ def test_mixed_history_stays_readable(tmp_path):
         "<!-- orbi:run=abcdef12 -->\n\nOrbi started Pi: run_id=abcdef12\n"
     )
     zh_started = delivery_comment.started_pi_comment_body(
-        _ctx(tmp_path, "zh"), "run_id=abcdef12 priority=p0",
+        _ctx(tmp_path), "run_id=abcdef12 priority=p0", language_code="zh",
     )
     assert progress.find_started_comment(
         [{"body": old_started}], "abcdef12",

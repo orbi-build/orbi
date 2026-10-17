@@ -18,7 +18,7 @@ def release_success_comment_body(run_id: str, run_info: str,
                                  gate_evidence: list[str],
                                  test_evidence: str,
                                  milestone_evidence: str,
-                                 language_code: str = language.DEFAULT_LANGUAGE,
+                                 language_code: str,
                                  ) -> str:
     """The terminal success comment: the full verification evidence.
 
@@ -35,6 +35,7 @@ def release_success_comment_body(run_id: str, run_info: str,
             language.text(language_code, "release.released_headline",
                           release_url=release_url),
             {**info, "tag": tag, "release_commit": release_commit},
+            language_code=language_code,
         ),
         "",
         language.text(language_code, "release.section_scope"),
@@ -59,7 +60,7 @@ def release_success_comment_body(run_id: str, run_info: str,
 
 def release_failure_comment_body(run_id: str, run_info: str,
                                  error: BaseException,
-                                 language_code: str = language.DEFAULT_LANGUAGE,
+                                 language_code: str,
                                  ) -> str:
     """The terminal failure comment: the blocked scene.
 
@@ -73,6 +74,7 @@ def release_failure_comment_body(run_id: str, run_info: str,
         run_id,
         language.text(language_code, "release.failed_headline"),
         {**_run_info_fields(run_info), "failure": detail},
+        language_code=language_code,
     )
     return body.replace("\n", f"\n{failure.render(failure.classify(detail))}\n", 1)
 

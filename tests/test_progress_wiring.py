@@ -187,7 +187,7 @@ def test_failure_detail_without_stderr_uses_message():
 def test_progress_body_outcome_renders_below_the_formal_prefix():
     """Issue #1667: the run marker and the v1 block stay first; the
     terminal outcome renders below them, never in front."""
-    state = {
+    state = {"language": "en",
         "run_id": "a1b2c3d4", "issue": 18,
         "issue_title": "Publish progress", "role": "implement",
         "phase": "test", "elapsed": "1s", "last_activity": None,
@@ -1785,7 +1785,8 @@ def test_delivery_step_closed_unmerged_posts_blocked_milestone(
     monkeypatch.setattr(seam, "comment_issue", Mock())
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.delivery_step(
-        pr_url, {"number": 39, "title": "t", "body": ""}, {}, "owner/repo",
+        pr_url, {"number": 39, "title": "t", "body": ""},
+        config_domain.RunnerConfig(), "owner/repo",
     )
     posted_bodies = [
         command[command.index("--field") + 1][len("body="):]
@@ -1996,7 +1997,8 @@ def test_delivery_step_closed_unmerged_progress_failure_still_releases(
     # slot is released by the caller.
     runner.delivery_step(
         "https://github.com/owner/repo/pull/46",
-        {"number": 39, "title": "t", "body": ""}, {}, "owner/repo",
+        {"number": 39, "title": "t", "body": ""},
+        config_domain.RunnerConfig(), "owner/repo",
     )
 
     # The `ai-blocked` transition (the blocked patch clears every

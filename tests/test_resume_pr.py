@@ -60,7 +60,7 @@ def test_missing_pr_scene_recovery_republishes_from_run_state(monkeypatch):
     monkeypatch.setattr(
         seam, "comment_issue", lambda number, **kwargs: posted.append(kwargs["body"]),
     )
-    found = runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo"))
+    found = runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo"), language_code="en")
     assert found["run_id"] == FAKE_RUN_ID
     assert found["pr_url"] == FAKE_PR_URL
     assert posted and "Orbi opened PR:" in posted[0]
@@ -91,7 +91,7 @@ def test_missing_pr_scene_retry_stays_recoverable_on_write_failure(monkeypatch):
                         "url": FAKE_PR_URL},
     )
     monkeypatch.setattr(seam, "comment_issue", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("down")))
-    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
+    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo"), language_code="en") is None
     assert runner._has_recoverable_pr_scene(issue, "owner/repo", Path("/tmp/repo"))
 
 
@@ -100,18 +100,18 @@ def test_missing_pr_scene_helper_handles_unavailable_state_pr_and_bad_pr(monkeyp
     worktree = Path("/tmp/delivery")
     monkeypatch.setitem(runner.__dict__, "worktree_resume_scene", lambda *_args: (FAKE_RUN_ID, worktree))
     monkeypatch.setitem(run_state.__dict__, "read_run_state", lambda _path: None)
-    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
+    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo"), language_code="en") is None
     monkeypatch.setitem(run_state.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
     monkeypatch.setattr(seam, "open_pr_for_branch", lambda *_args: None)
-    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
+    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo"), language_code="en") is None
     monkeypatch.setattr(seam, "open_pr_for_branch", lambda *_args: {"url": FAKE_PR_URL})
-    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
+    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo"), language_code="en") is None
 
 
 def test_missing_pr_scene_helper_handles_no_resume_and_unparseable_scene(monkeypatch):
     issue = {"number": 9}
     monkeypatch.setitem(runner.__dict__, "worktree_resume_scene", lambda *_args: None)
-    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
+    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo"), language_code="en") is None
     monkeypatch.setitem(runner.__dict__, "worktree_resume_scene", lambda *_args: (FAKE_RUN_ID, Path("/tmp/delivery")))
     monkeypatch.setitem(run_state.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
     monkeypatch.setattr(seam, "open_pr_for_branch", lambda *_args: {
@@ -119,7 +119,7 @@ def test_missing_pr_scene_helper_handles_no_resume_and_unparseable_scene(monkeyp
     })
     monkeypatch.setattr(seam, "comment_issue", lambda *_args, **_kwargs: None)
     monkeypatch.setitem(run_state.__dict__, "parse_pr_comment", lambda _body: None)
-    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
+    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo"), language_code="en") is None
 
 
 def test_has_recoverable_pr_scene_handles_probe_failure(monkeypatch):
@@ -191,7 +191,7 @@ def test_missing_pr_scene_recovery_clears_scene_timestamp(monkeypatch):
     recovered = {"run_id": FAKE_RUN_ID, "scene_at": "old"}
     monkeypatch.setitem(run_state.__dict__, "parse_pr_comment", lambda _body: recovered)
     assert runner._recover_missing_pr_scene(
-        {"number": 9}, "owner/repo", Path("/tmp/repo"),
+        {"number": 9}, "owner/repo", Path("/tmp/repo"), language_code="en",
     ) == {"run_id": FAKE_RUN_ID, "scene_at": None}
 
 
@@ -201,7 +201,7 @@ def test_pick_missing_pr_scene_recovers_or_defers_or_blocks(monkeypatch, tmp_pat
     monkeypatch.setattr(seam, "slot_held_deliveries", lambda *_args: set())
     monkeypatch.setattr(seam, "list_issues", lambda *args, **kwargs: [issue])
     monkeypatch.setattr(seam, "issue_comments", lambda *args, **kwargs: [])
-    monkeypatch.setitem(runner.__dict__, "_route_external_pr_ticket", lambda *_args: False)
+    monkeypatch.setitem(runner.__dict__, "_route_external_pr_ticket", lambda *_args, **k: False)
     monkeypatch.setattr(seam, "apply_label_patch", lambda *args, **kwargs: None)
     monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None)
     # Issue #1473: the recovered scene carries its PR URL (the real
@@ -218,22 +218,22 @@ def test_pick_missing_pr_scene_recovers_or_defers_or_blocks(monkeypatch, tmp_pat
     )
     monkeypatch.setitem(
         runner.__dict__, "_recover_missing_pr_scene",
-        lambda *args: {"run_id": FAKE_RUN_ID, "pr_url": FAKE_PR_URL},
+        lambda *args, **kwargs: {"run_id": FAKE_RUN_ID, "pr_url": FAKE_PR_URL},
     )
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1, tmp_path,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     )[1]["run_id"] == FAKE_RUN_ID
-    monkeypatch.setitem(runner.__dict__, "_recover_missing_pr_scene", lambda *args: None)
+    monkeypatch.setitem(runner.__dict__, "_recover_missing_pr_scene", lambda *args, **k: None)
     monkeypatch.setitem(runner.__dict__, "_has_recoverable_pr_scene", lambda *args: True)
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1, tmp_path,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
-    monkeypatch.setitem(runner.__dict__, "_has_recoverable_pr_scene", lambda *args: False)
+    monkeypatch.setitem(runner.__dict__, "_has_recoverable_pr_scene", lambda *args, **k: False)
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1, tmp_path,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
 
 
@@ -283,7 +283,7 @@ def scene_for() -> dict:
 def test_parse_pr_comment_returns_scene_for_multiline_opened_pr_comment():
     body = runner.opened_pr_comment_body(
         FAKE_RUN_ID, "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4",
-        FAKE_PR_URL,
+        FAKE_PR_URL, language_code="en",
     )
     scene = run_state.parse_pr_comment(body)
     assert scene == scene_for()
@@ -316,7 +316,7 @@ def test_parse_pr_comment_returns_scene_for_multiline_opened_pr_comment():
 def test_parse_pr_comment_preserves_unknown_head_counter():
     body = runner.opened_pr_comment_body(
         FAKE_RUN_ID, "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4",
-        FAKE_PR_URL,
+        FAKE_PR_URL, language_code="en",
     )
     record = scene_mod.Scene(
         run_id=FAKE_RUN_ID, base_branch="main",
@@ -340,7 +340,7 @@ def test_parse_pr_comment_returns_scene_for_legacy_opened_pr_comment():
 def test_parse_pr_comment_ignores_unrelated_new_format_line():
     body = runner.opened_pr_comment_body(
         FAKE_RUN_ID, "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4",
-        FAKE_PR_URL,
+        FAKE_PR_URL, language_code="en",
     ) + "\nnot a field"
     assert run_state.parse_pr_comment(body) == scene_for()
 
@@ -351,7 +351,7 @@ def test_started_pi_comment_uses_multiline_field_block():
             run_id=FAKE_RUN_ID, issue=18, branch=FAKE_BRANCH,
             worktree=Path(FAKE_WORKTREE), source_repo="owner/repo",
         ),
-        "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4 priority=normal",
+        "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4 priority=normal", language_code="en",
     )
     assert body == (
         f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
@@ -835,7 +835,7 @@ def test_pick_resumable_delivery_returns_newest_issue_with_scene(
     monkeypatch.setattr(seam, "run_command", counting)
     issue, scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 9
     assert scene["run_id"] == FAKE_RUN_ID
@@ -892,7 +892,7 @@ def test_pick_resumable_delivery_scans_all_open_pr_states(
     monkeypatch.setattr(seam, "run_command", counting)
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
     assert calls == [[
         "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
@@ -927,7 +927,7 @@ def test_pick_resumable_delivery_resumes_delivery_that_carries_in_progress_label
     monkeypatch.setattr(seam, "run_command", fake)
     issue, scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 9
     assert scene["run_id"] == FAKE_RUN_ID
@@ -940,7 +940,7 @@ def test_pick_resumable_delivery_returns_none_when_queue_empty(
     monkeypatch.setattr(seam, "run_command", make_pick_fake("[]"))
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
 
 
@@ -965,7 +965,7 @@ def test_pick_resumable_delivery_skips_only_the_held_delivery(
                         lambda slot_dir, capacity: {("owner/repo", 9)})
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
     assert len(gh_calls) == 1, "only the queue query, no candidate reads"
     assert gh_calls[0][:3] == ["gh", "issue", "list"]
@@ -990,7 +990,7 @@ def test_pick_resumable_delivery_reviews_free_pr_while_other_in_flight(
     ))
     issue, scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 9
     assert scene["run_id"] == FAKE_RUN_ID
@@ -1040,7 +1040,7 @@ def test_pick_resumable_delivery_skips_held_and_reviews_next_free(
     monkeypatch.setattr(seam, "run_command", fake_run)
     issue, scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 10
     assert scene["run_id"] == "b2c3d4e5"
@@ -1072,7 +1072,7 @@ def test_pick_resumable_delivery_ignores_holds_of_other_repos(
     ))
     issue, scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 9
     assert scene["run_id"] == FAKE_RUN_ID
@@ -1099,7 +1099,7 @@ def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
     caplog.set_level("ERROR")
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
     assert edits == [[
         "gh", "issue", "edit", "9", "--repo", "owner/repo",
@@ -1132,7 +1132,7 @@ def test_pick_resumable_delivery_blocks_pr_opened_issue_without_scene(
     caplog.set_level("ERROR")
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
     assert edits == [[
         "gh", "issue", "edit", "9", "--repo", "owner/repo",
@@ -1150,7 +1150,7 @@ def test_pick_resumable_delivery_skips_closed_issue(monkeypatch, tmp_path):
     )
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
 
 
@@ -1184,7 +1184,7 @@ def test_pick_resumable_delivery_blocks_issue_when_scene_is_malformed(
     caplog.set_level("ERROR")
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
     # The blocked transition: add ai-blocked, remove ai-fix-needed...
     assert edits == [[
@@ -1253,7 +1253,7 @@ def test_pick_resumable_delivery_routes_corrupted_marker_and_next_candidate(
     monkeypatch.setattr(seam, "run_command", fake_run)
     found = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     )
     assert found is not None
     issue, scene = found
@@ -1284,14 +1284,14 @@ def test_pick_resumable_delivery_resumes_from_the_v1_scene_block(
     body = runner.opened_pr_comment_body(
         FAKE_RUN_ID,
         "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4",
-        FAKE_PR_URL,
+        FAKE_PR_URL, language_code="en",
     )
     monkeypatch.setattr(seam, "run_command", make_pick_fake(
         issue_payload(), gh_comments_payload([body]),
     ))
     issue, scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 9
     # The scan's scene carries the `scene_at` stamp (the fake comment
@@ -1314,7 +1314,7 @@ def test_pick_resumable_delivery_blocks_on_a_corrupted_v1_block(
     blocked = []
     monkeypatch.setattr(
         failure_report, "block_scene_failure",
-        lambda issue, error, repo, comments: blocked.append(
+        lambda issue, error, repo, comments, **kwargs: blocked.append(
             issue["number"],
         ),
     )
@@ -1323,7 +1323,7 @@ def test_pick_resumable_delivery_blocks_on_a_corrupted_v1_block(
     ))
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
     assert blocked == [9]
 
@@ -1352,7 +1352,7 @@ def test_pick_resumable_delivery_blocks_issue_when_no_trusted_scene(
     caplog.set_level("ERROR")
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
     assert edits == [[
         "gh", "issue", "edit", "9", "--repo", "owner/repo",
@@ -1380,7 +1380,7 @@ def test_pick_resumable_delivery_missing_scene_names_the_run_marker(
     ))
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
     assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in comments[0]
     assert "no trusted 'Orbi opened PR'" in comments[0]
@@ -1403,7 +1403,7 @@ def test_pick_resumable_delivery_missing_scene_reporting_failure_is_bypass(
     caplog.set_level("ERROR")
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
     assert "failure reporting failed" in caplog.text
 
@@ -1433,7 +1433,7 @@ def test_pick_resumable_delivery_scene_failure_carries_marker_when_present(
     monkeypatch.setattr(seam, "run_command", counting)
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
     assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in comments[0]
 
@@ -1464,7 +1464,7 @@ def test_pick_resumable_delivery_scene_failure_skips_bodyless_comments(
     monkeypatch.setattr(seam, "run_command", fake)
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
     assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in comments[0]
 
@@ -1491,7 +1491,7 @@ def test_pick_resumable_delivery_scene_failure_logs_reporting_failure(
     with caplog.at_level("ERROR"):
         assert claim.pick_resumable_delivery(
             "owner/repo", tmp_path / "slots", 1,
-            hooks=resume_deps(),
+            hooks=resume_deps(), language_code="en",
         ) is None
     assert "failure reporting failed" in caplog.text
     # The fake's edit/comment branches are reachable without capture
@@ -1690,7 +1690,7 @@ def test_pick_resumable_delivery_skips_ci_pending_candidate(
     caplog.set_level("INFO")
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     ) is None
     assert "delivery_ci_pending" in caplog.text
 
@@ -1730,7 +1730,7 @@ def test_pick_resumable_delivery_skips_pending_and_returns_next_candidate(
     )
     issue, scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 10
     assert scene["run_id"] == "b2c3d4e5"
@@ -1747,7 +1747,7 @@ def test_pick_resumable_delivery_returns_completed_success_candidate(
     monkeypatch.setitem(claim.__dict__, "pr_delivery_rollup", _success_rollup)
     issue, _scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 9
 
@@ -1770,7 +1770,7 @@ def test_pick_resumable_delivery_never_skips_terminal_pr(
     )
     issue, _scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 9
 
@@ -1790,7 +1790,7 @@ def test_pick_resumable_delivery_returns_candidate_when_rollup_read_raises(
     monkeypatch.setitem(claim.__dict__, "pr_delivery_rollup", boom)
     issue, _scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
-        hooks=resume_deps(),
+        hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 9
 
@@ -3629,5 +3629,5 @@ def test_deliver_closeout_continues_on_the_creating_runs_existing_pr(
     ctx = RunContext(run_id=RECLAIM_RUN_ID, issue=9, branch=FAKE_BRANCH,
                      worktree=worktree, source_repo="owner/repo")
     assert runner.deliver_pr(
-        ctx, "main", "c0000", issue_title="t", repo_dir=tmp_path,
+        ctx, "main", "c0000", issue_title="t", repo_dir=tmp_path, language_code="en",
     ) == FAKE_PR_URL

@@ -41,7 +41,7 @@ def _shorten_review_shas(text: str) -> str:
 
 
 def _review_findings_markdown(findings: list[dict],
-                              language_code: str = language.DEFAULT_LANGUAGE,
+                              language_code: str,
                               ) -> str:
     """Render the human part of a review verdict, never as JSON.
 
@@ -118,7 +118,7 @@ def review_round_comment_body(
     messages: list[str] | None = None,
     heading: str | None = None,
     kind: str = COMMENT_KIND_REVIEW_ROUND,
-    language_code: str = language.DEFAULT_LANGUAGE,
+    language_code: str,
 ) -> str:
     """Build a readable, resumable review-round comment.
 

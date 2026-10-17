@@ -270,7 +270,7 @@ def _session_summary(session_file: Path,
 
 def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
                    branch: str, worktree: str, pr_url: str | None = None,
-                   language_code: str = language.DEFAULT_LANGUAGE) -> str:
+                   language_code: str) -> str:
     """Render run facts as wrapping Markdown, never as a host-path dump.
 
     The field labels are human prose and follow the run's message
@@ -313,7 +313,7 @@ def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
 
 
 def _failure_evidence(worktree: Path | None, exc: BaseException, *,
-                      language_code: str = language.DEFAULT_LANGUAGE) -> str:
+                      language_code: str) -> str:
     """Render the bounded evidence that survives terminal worktree cleanup.
 
     Pi subprocess streams come from ``CalledProcessError``. The session and
@@ -461,7 +461,7 @@ def _failure_streak(comments: list, run_id: str,
 
 def block_scene_failure(issue: dict, error: ValueError, repo: str,
                         comments: list[dict], *,
-                        language_code: str = language.DEFAULT_LANGUAGE) -> None:
+                        language_code: str) -> None:
     """Mark an opened-PR Issue `ai-blocked` when its scene is malformed.
 
     The blocked transition is scoped to this one Issue: the
@@ -506,8 +506,8 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
 
 def block_repo_config_failure(number: int, source_repo: str,
                               error: ValueError, run_id: str,
-                              current_labels=(),
-                              language_code: str = language.DEFAULT_LANGUAGE,
+                              current_labels=(), *,
+                              language_code: str,
                               ) -> None:
     """Mark an Issue `ai-blocked` when its repo config is invalid (#527).
 
@@ -583,7 +583,7 @@ def _raise_if_preexisting_ci_failure(
 
 def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
                            error: Exception,
-                           language_code: str = language.DEFAULT_LANGUAGE,
+                           language_code: str,
                            ) -> None:
     """Report a failed resume decision through the terminal path.
 
@@ -621,7 +621,7 @@ def report_delivery_failure(
     blocked_suffix: str = "", review_round: int | None = None,
     review_scene_block: str | None = None,
     finish: bool = True, publisher: ProgressPublisher | None = None,
-    language_code: str = language.DEFAULT_LANGUAGE,
+    language_code: str,
 ) -> str:
     """Report one delivery failure through the classified-failure flow.
 

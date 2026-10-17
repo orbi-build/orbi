@@ -401,7 +401,7 @@ def test_failure_summary_keeps_the_workflow_refusal_above_gits_final_line():
     """Issue #1651: the decisive refusal line must not be replaced by Git's
     generic `error: failed to push some refs` final line."""
     summary = failure._failure_summary(
-        runner._failure_detail(workflow_refusal_error())
+        runner._failure_detail(workflow_refusal_error()), language_code="en"
     )
     assert "refusing to allow a GitHub App" in summary
     assert "without `workflows` permission" in summary
@@ -409,7 +409,7 @@ def test_failure_summary_keeps_the_workflow_refusal_above_gits_final_line():
 
 
 def test_workflow_permission_action_without_a_pr_names_the_ai_ready_repair():
-    action = failure.workflow_permission_action(None)
+    action = failure.workflow_permission_action(None, language_code="en")
     assert "cannot modify Actions workflows" in action
     assert "Workflows read/write" in action
     assert "remove `ai-blocked`" in action
@@ -424,7 +424,7 @@ def test_workflow_permission_action_without_a_pr_names_the_ai_ready_repair():
 
 def test_workflow_permission_action_with_a_pr_continues_the_same_pr():
     url = "https://github.com/orbi-build/orbi/pull/9"
-    action = failure.workflow_permission_action(url)
+    action = failure.workflow_permission_action(url, language_code="en")
     assert "cannot modify Actions workflows" in action
     assert "remove `ai-blocked`" in action
     assert "`ai-fix-needed`" in action
@@ -437,7 +437,7 @@ def test_workflow_permission_action_with_a_pr_continues_the_same_pr():
 
 
 def test_terminal_action_unknown_failure_names_the_undetermined_cause():
-    action = failure.terminal_action(failure.classify("totally unexpected"))
+    action = failure.terminal_action(failure.classify("totally unexpected"), language_code="en")
     assert "could not be determined" in action
     assert "re-run this Issue" in action
     # The unknown-error explanation never blames the Issue text.
@@ -447,7 +447,7 @@ def test_terminal_action_unknown_failure_names_the_undetermined_cause():
 
 def test_terminal_action_recognized_failure_keeps_the_generic_action():
     action = failure.terminal_action(
-        failure.classify("http 500 internal server error")
+        failure.classify("http 500 internal server error"), language_code="en"
     )
     assert action == "Fix the failure described below and re-run this Issue."
 
@@ -520,7 +520,7 @@ def test_failure_comment_body_renders_the_block_before_the_headline():
         outcome="blocked", action="relabel ai-ready", reason="boom",
         diagnosis="boom", scene="- run: `a1b2c3d4`", evidence="",
         pr_url=None, issue="orbi-build/orbi#7", run_id="a1b2c3d4",
-        failure_record=record_for(),
+        failure_record=record_for(), language_code="en",
     )
     assert body.startswith(block_for())
     parsed = failure.parse(body)
@@ -546,7 +546,7 @@ def test_every_reason_code_renders_a_parsable_comment(
         outcome="fix needed" if outcome == "fix_needed" else "blocked",
         action="do the thing", reason="boom", diagnosis="boom",
         scene="- run: `-`", evidence="", pr_url=None,
-        issue="orbi-build/orbi#1322", run_id="-", failure_record=record,
+        issue="orbi-build/orbi#1322", run_id="-", failure_record=record, language_code="en",
     )
     parsed = failure.parse(body)
     assert parsed == failure.Failure(
@@ -568,7 +568,7 @@ def test_failure_comment_body_renders_a_fix_needed_block():
         failure_record=record_for(
             reason_code="tests_failed", action_code="fix_ticket",
             retry_safe=False, outcome="fix_needed",
-        ),
+        ), language_code="en",
     )
     parsed = failure.parse(body)
     assert parsed is not None
@@ -581,7 +581,7 @@ def test_failure_comment_body_defaults_to_unclassified_without_a_record():
     body = failure._failure_comment_body(
         outcome="blocked", action="", reason="boom", diagnosis="boom",
         scene="- run: `-`", evidence="",
-        pr_url=None, issue="orbi-build/orbi#7", run_id="-",
+        pr_url=None, issue="orbi-build/orbi#7", run_id="-", language_code="en",
     )
     parsed = failure.parse(body)
     assert parsed is not None
@@ -614,7 +614,7 @@ def test_report_delivery_failure_classifies_a_transient_github_error(monkeypatch
         worktree=None, branch="b", role=runner.ROLE_IMPLEMENT,
         reason="the delivery command failed: pull request create failed",
         diagnosis="pull request create failed",
-        classify=False, evidence=False,
+        classify=False, evidence=False, language_code="en",
     )
     assert outcome == "blocked"
     parsed = failure.parse(posted[0])
@@ -640,7 +640,7 @@ def test_report_delivery_failure_keeps_full_bounded_stderr(monkeypatch):
         worktree=None, branch="b", role=runner.ROLE_IMPLEMENT,
         reason=f"the delivery command failed: {runner._failure_detail(error)}",
         diagnosis=runner._failure_detail(error),
-        classify=False, evidence=False,
+        classify=False, evidence=False, language_code="en",
     )
     body = posted[0]
     assert stderr in body
@@ -657,7 +657,7 @@ def test_report_delivery_failure_unknown_exception_is_unclassified(monkeypatch):
         action="Fix the failure described below and re-run this Issue.",
         reason="The delivery stopped before it could be completed: totally unexpected",
         diagnosis="totally unexpected",
-        classify=False, evidence=False,
+        classify=False, evidence=False, language_code="en",
     )
     assert outcome == "blocked"
     body = posted[0]
@@ -683,7 +683,7 @@ def test_report_delivery_failure_recoverable_is_fix_needed(monkeypatch):
         pr_url="https://github.com/orbi-build/orbi/pull/9",
         worktree=None, branch="b", role=runner.ROLE_REVIEW,
         reason="the tests failed", diagnosis="3 failed",
-        evidence=False,
+        evidence=False, language_code="en",
     )
     assert outcome == "fix needed"
     parsed = failure.parse(posted[0])
@@ -712,7 +712,7 @@ def _milestone_publisher(run_id="c517c8c7"):
         return json.dumps({"id": 42})
 
     publisher = progress.ProgressPublisher(
-        1322, "orbi-build/orbi", run_id, run_command=fake_run_command,
+        1322, "orbi-build/orbi", run_id, run_command=fake_run_command, language_code="en",
     )
     return publisher, milestones
 
@@ -739,7 +739,7 @@ def test_report_delivery_failure_milestone_is_machine_readable(monkeypatch):
         worktree=None, branch="b", role=runner.ROLE_IMPLEMENT,
         reason=f"The delivery stopped: {runner._failure_detail(error)}",
         diagnosis=runner._failure_detail(error),
-        classify=False, evidence=False, publisher=publisher, finish=False,
+        classify=False, evidence=False, publisher=publisher, finish=False, language_code="en",
     )
     assert len(milestones) == 1
     milestone = milestones[0]
@@ -775,7 +775,7 @@ def test_report_delivery_failure_fix_needed_milestone_is_machine_readable(
             f"{runner._failure_detail(error)}"
         ),
         diagnosis=runner._failure_detail(error),
-        evidence=False, publisher=publisher, finish=False,
+        evidence=False, publisher=publisher, finish=False, language_code="en",
     )
     assert outcome == "fix needed"
     assert len(milestones) == 1
@@ -835,7 +835,7 @@ def test_report_delivery_failure_workflow_refusal_no_pr_surfaces(monkeypatch):
             f"{runner._failure_detail(workflow_refusal_error())}"
         ),
         diagnosis=runner._failure_detail(workflow_refusal_error()),
-        classify=False, evidence=False, publisher=publisher, finish=True,
+        classify=False, evidence=False, publisher=publisher, finish=True, language_code="en",
     )
     assert outcome == "blocked"
     record = failure.Failure(
@@ -884,7 +884,7 @@ def test_report_delivery_failure_workflow_refusal_with_pr_keeps_the_pr(
             f"{runner._failure_detail(workflow_refusal_error())}"
         ),
         diagnosis=runner._failure_detail(workflow_refusal_error()),
-        evidence=False,
+        evidence=False, language_code="en",
     )
     assert outcome == "blocked"
     body = posted[0]
@@ -933,7 +933,7 @@ def test_report_delivery_failure_other_push_errors_keep_generic_action(
             f"{runner._failure_detail(error)}"
         ),
         diagnosis=runner._failure_detail(error),
-        classify=False, evidence=False,
+        classify=False, evidence=False, language_code="en",
     )
     assert outcome == "blocked"
     body = posted[0]
@@ -959,13 +959,13 @@ def test_report_delivery_failure_unknown_error_does_not_blame_the_issue(
         issue={"number": 1651, "title": "t", "labels": []},
         source_repo="orbi-build/orbi", run_id=None, pr_url=None,
         worktree=None, branch="b", role=runner.ROLE_IMPLEMENT,
-        action=failure.terminal_action(record),
+        action=failure.terminal_action(record, language_code="en"),
         reason=(
             "The delivery stopped before it could be completed: "
             f"{runner._failure_detail(error)}"
         ),
         diagnosis=runner._failure_detail(error),
-        classify=False, evidence=False,
+        classify=False, evidence=False, language_code="en",
     )
     assert outcome == "blocked"
     body = posted[0]

@@ -848,6 +848,6 @@ def _publish_plan_milestone(publisher: ProgressPublisher, worktree: Path) -> Non
     artifact."""
     if (worktree / ".orbi" / "plan.md").is_file():
         publisher.milestone(language.text(
-            getattr(publisher, "language_code", language.DEFAULT_LANGUAGE),
+            publisher.language_code,
             "milestone.plan_ready",
         ))

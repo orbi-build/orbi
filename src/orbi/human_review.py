@@ -111,7 +111,7 @@ def _is_deploy_path(path: str) -> bool:
 
 def build_checklist(*, test_status: str | None,
                     changed_files: list[str] | None,
-                    language_code: str = language.DEFAULT_LANGUAGE) -> dict:
+                    language_code: str) -> dict:
     """Split the delivery's evidence into the two checklist columns.
 
     `test_status` is the PR head's CI check status (Issue #1613:
@@ -156,7 +156,7 @@ def build_checklist(*, test_status: str | None,
 
 def render_checklist_comment(*, run_id: str, pr_url: str,
                              checklist: dict,
-                             language_code: str = language.DEFAULT_LANGUAGE,
+                             language_code: str,
                              ) -> str:
     """Render the Issue comment: run marker, both columns, machine block.
 

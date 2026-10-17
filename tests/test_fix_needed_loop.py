@@ -951,7 +951,7 @@ def test_finish_progress_fix_needed_without_run_id_is_noop(monkeypatch):
     assert runner._finish_progress(
         39, None, "owner/repo", None, None, PR_URL, "the failure",
         "the next tick resumes the same run", title="task",
-        outcome="fix needed",
+        outcome="fix needed", language_code="en",
     ) is None
     assert api_calls == []
 
@@ -985,7 +985,7 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
     )
     failure_report.block_scene_failure(
         issue, scene.SceneError("opened PR comment is missing run_id"),
-        "owner/repo", comments,
+        "owner/repo", comments, language_code="en",
     )
     assert edits == [
         ((39,), {"repo": "owner/repo", "add": "ai-blocked",
@@ -1133,7 +1133,7 @@ def test_review_rounds_exhausted_raises_unrecoverable(monkeypatch, tmp_path):
     UnrecoverableDeliveryError (the caller marks the Issue ai-blocked
     with the reason). Issue #788: the budget is the scene's round
     counter — exhausted BEFORE any freeze or review."""
-    monkeypatch.setattr(review_merge, "human_review_recovery_at", lambda *a: None)
+    monkeypatch.setattr(review_merge, "human_review_recovery_at", lambda *a, **k: None)
     from tests.test_resume_pr import FAKE_RUN_ID
 
     freezes = []
@@ -1193,7 +1193,7 @@ def _external_review_env(monkeypatch, tmp_path, *, external: bool):
                         lambda *a, **k: (_ for _ in ()).throw(
                             AssertionError("confirm_merged must not run")))
     monkeypatch.setattr(seam, "human_review_recovery_at",
-                        lambda *a: None)
+                        lambda *a, **k: None)
     monkeypatch.setattr(seam, "pr_delivery_rollup",
                         lambda *a, **k: (
                             "OPEN",
@@ -1421,7 +1421,7 @@ def _report(exc, monkeypatch_unused=None, **kwargs):
         exc, issue={"number": 39, "title": "task", "body": ""},
         source_repo="owner/repo", run_id=RUN_ID, pr_url=PR_URL,
         worktree=Path("/nonexistent"), branch=BRANCH,
-        role=runner.ROLE_REVIEW,
+        role=runner.ROLE_REVIEW, language_code="en",
         cause=f"the resume verification of PR {PR_URL} failed: {exc}",
         **kwargs,
     )
@@ -1630,7 +1630,7 @@ def test_human_decision_failure_is_terminal_with_decision_details(
         source_repo="owner/repo", run_id=RUN_ID, pr_url=PR_URL,
         worktree=Path("/nonexistent"), branch=BRANCH,
         role=runner.ROLE_REVIEW, action=action,
-        reason="The review requires a human decision.", diagnosis=decision,
+        reason="The review requires a human decision.", diagnosis=decision, language_code="en",
     )
     assert outcome == "blocked"
     assert captured["edits"] == [("ai-blocked", "ai-pr-opened")]
@@ -1654,7 +1654,7 @@ def test_report_failure_without_run_id_keeps_the_plain_path(
         source_repo="owner/repo", run_id=None, pr_url=PR_URL,
         worktree=Path("/nonexistent"), branch=BRANCH,
         role=runner.ROLE_REVIEW,
-        cause="the resume verification of PR x failed: boom",
+        cause="the resume verification of PR x failed: boom", language_code="en",
     )
     assert len(captured["comments"]) == 1
     assert "orbi:fail=" not in captured["comments"][0]
