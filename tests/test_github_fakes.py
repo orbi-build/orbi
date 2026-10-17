@@ -10,8 +10,9 @@ check-run reads and writes through ``orbi.github``), and assert the
 public surface: which Issue the scan picks, the labels an edit leaves,
 the comment order, and the returned PR/check data.
 
-The list order mirrors ``gh issue list``: newest first, so tests seed
-issues oldest-first.
+The list order mirrors ``gh issue list``: newest-created first (the
+``sort:created-asc`` qualifier reverses it, as GitHub does), so tests
+seed issues oldest-first.
 """
 import base64
 import json
@@ -483,6 +484,27 @@ def test_fake_fails_fast_on_bad_search_qualifiers(fake_gh):
         ),
         "two milestone qualifiers",
     )
+
+
+def test_fake_list_issues_honours_the_requested_creation_order(fake_gh):
+    """Issue #1734: `gh issue list` returns the newest-created issues first
+    unless the documented `sort:created-asc` advanced-search qualifier asks
+    for the oldest first (`gh issue list --help` ships exactly that
+    qualifier in its own example). The review scan depends on it to keep a
+    page of "the deliveries that have waited longest"."""
+    for number in (11, 12, 13):
+        fake_gh.add_issue(number, labels=(READY_LABEL,))
+    newest_first = github.list_issues(
+        "owner/repo", state="open", search=f"label:{READY_LABEL}",
+        json_fields="number", limit=2,
+    )
+    assert [issue["number"] for issue in newest_first] == [13, 12]
+    oldest_first = github.list_issues(
+        "owner/repo", state="open",
+        search=f"label:{READY_LABEL} sort:created-asc",
+        json_fields="number", limit=2,
+    )
+    assert [issue["number"] for issue in oldest_first] == [11, 12]
 
 
 def test_repo_config_unseeded_is_a_designed_no_op(fake_gh):
