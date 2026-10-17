@@ -1,12 +1,15 @@
-"""The runner-owned run comments: the started-Pi and opened-PR scenes
-(Issue #1660).
+"""The runner-owned run comments and the PR body's footer: the
+started-Pi and opened-PR scenes (Issue #1660) and the attribution footer
+(Issue #1729).
 
 Both comments double as the run's machine-readable anchors: the started
 comment carries the `started` kind marker and the opened-PR comment
-carries the `orbi:scene:v1` block the next tick resumes from. Only their
-HEADLINE is human prose and follows the run's bound message language
-(the explicit `language_code`); the hidden
-markers, the field lines and the scene block stay exactly as they were.
+carries the `orbi:scene:v1` block the next tick resumes from. Their
+human text — the headline, the field labels and the stored display
+values — follows the run's bound message language (the explicit
+`language_code`); the hidden markers, the public machine rows
+(`run_id=`, `repo_config:`) and the scene block stay exactly as they
+were.
 
 Extracted from `runner.py` unchanged apart from the language, so the
 frozen runner module does not grow (Issue #1229) and a caller keeps

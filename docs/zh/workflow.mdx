@@ -227,8 +227,9 @@ comment-reader 契约精确匹配 `external_commits=K`、`review_rounds=N`、
 `run_id=…` 与 `pr_url=<url>`。`pr_url` 是明确的 PR URL，消费者无需读取
 可被翻译的 `Orbi merged PR:` 标题；该回执在 run marker 之后紧接隐藏的
 `<!-- orbi:comment=merged -->` 类型，两条规则都定义在
-[Public contracts](/zh/public-contracts)。`Orbi: merged` milestone 行以
-同样的 `key=value` 形式带上这些事实。
+[Public contracts](/zh/public-contracts)。`Orbi: merged` milestone 行面向
+人读，同样带上这些事实；它的行属于显示文本，标签跟随消息语言——消费者
+不从 milestone 读取事实，机器读取面只有回执的 `Run details` 折叠块。
 
 - `commits` —— 合并时 PR 分支相对 base 的全部 commit 数（比例的分母）。
 - `external_commits` —— 不在引擎自己推送历史里的 commit 数（开 PR 时的

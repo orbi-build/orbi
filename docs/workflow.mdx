@@ -270,7 +270,9 @@ never has to read the translatable `Orbi merged PR:` heading; the receipt
 carries the hidden `<!-- orbi:comment=merged -->` kind right after the run
 marker, and both rules are defined in
 [Public contracts](/public-contracts). The `Orbi: merged` milestone line
-carries the same facts in the same `key=value` form.
+carries the same facts for a human reader, but its rows are display text
+whose labels follow the message language — no consumer reads a fact from
+the milestone; the receipt's `Run details` fold is the machine surface.
 
 - `commits` — all commits of the PR branch relative to the base at
   merge time (the denominator of the ratio).

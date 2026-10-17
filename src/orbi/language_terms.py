@@ -69,14 +69,9 @@ DISPLAY_TERMS: dict[str, tuple[str, str]] = {
     "progress.task_type.ops": ("ops", "运维"),
     "progress.boolean.true": ("true", "是"),
     "progress.boolean.false": ("false", "否"),
-    # The short milestone comments' display headline (the event word).
+    # The merged milestone's display headline. It is the ONLY milestone
+    # whose event word arrives raw: every other milestone text is already
+    # a localized sentence from `language.text`, so an entry for its
+    # English word would never be reached (Issue #1729).
     "progress.milestone_headline.merged": ("merged", "已合并"),
-    "progress.milestone_headline.blocked": ("blocked", "已阻塞"),
-    "progress.milestone_headline.fix needed": ("fix needed", "需要修复"),
-    "progress.milestone_headline.started": ("started", "已开始"),
-    "progress.milestone_headline.tests passed": ("tests passed", "测试通过"),
-    "progress.milestone_headline.plan ready": ("plan ready", "计划已就绪"),
-    "progress.milestone_headline.review findings": (
-        "review findings", "评审发现",
-    ),
 }
