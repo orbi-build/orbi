@@ -14516,7 +14516,7 @@ def test_delivery_step_logs_awaiting_without_bound_run_id(monkeypatch, caplog):
 def _review_round_env(
     monkeypatch, tmp_path, *, scene_base="main", label="ai-pr-opened",
     with_worktree=True, review_result=False, scene_round=0,
-    external="", record=None,
+    external="", record=None, review_raises=None,
 ):
     """Shared fake GitHub/git scene for one direct `_run_review_round`
     call. Returns (edits, comments, reviews, publishes) capture lists;
@@ -14580,10 +14580,15 @@ def _review_round_env(
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     reviews: list = []
+
+    def fake_review(*args, **kwargs):
+        reviews.append((args, kwargs))
+        if review_raises is not None:
+            raise review_raises
+        return review_result
+
     monkeypatch.setattr(
-        review_merge, "review_and_merge_if_clean",
-        lambda *args, **kwargs: reviews.append((args, kwargs))
-        or review_result,
+        review_merge, "review_and_merge_if_clean", fake_review,
     )
     publishes: list = []
     monkeypatch.setattr(seam, "_safe_publish",
@@ -14788,6 +14793,174 @@ def test_run_review_round_failure_comment_follows_the_config_language(
     assert "Orbi：已阻塞 —— 等待人工决定" in body
     assert "**原因：**" in body
     assert "Orbi failed:" not in body
+
+
+# The blocked-review comment body in both languages (Issue #1701): the
+# Action line must say how to resume (remove `ai-blocked` BEFORE adding
+# `ai-fix-needed` — the claim scans skip `ai-blocked` and the budget reset
+# needs it removed first), and the Reason line is one full catalog sentence.
+BLOCKED_REVIEW_TEXT = {
+    "en": {
+        "action": "**Action:**",
+        "reason": "**Reason:**",
+        "rounds_action": "fresh review-round budget",
+        "rounds_reason": "used every one of its review rounds",
+        "human_reason": "requires a human decision",
+        "generic_action": "changing labels alone does not change it",
+        "step": "remove `ai-blocked` and add `ai-fix-needed`",
+        "close": "close the PR and this Issue",
+        "budget": "budget",
+    },
+    "zh": {
+        "action": "**需要您做的操作：**",
+        "reason": "**原因：**",
+        "rounds_action": "评审预算",
+        "rounds_reason": "评审轮次",
+        "human_reason": "需要人工决定",
+        "generic_action": "只改标签不会改变它",
+        "step": "移除 `ai-blocked` 并添加 `ai-fix-needed`",
+        "close": "关闭该 PR 和这个 Issue",
+        "budget": "预算",
+    },
+}
+
+
+def _blocked_line(body: str, label: str) -> str:
+    """The one comment line starting with a rendered field label."""
+    return next(line for line in body.splitlines() if line.startswith(label))
+
+
+def _blocked_review_body(monkeypatch, tmp_path, code, **env):
+    """The Issue comment one blocking review failure posts in that language."""
+    edits, comments, _, _ = _review_round_env(monkeypatch, tmp_path, **env)
+    outcome = review_merge._run_review_round(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        config_domain.RunnerConfig(
+            repo_dir=tmp_path, base_branch="main", message_language=code,
+        ),
+        "owner/repo",
+    )
+    assert outcome is None
+    assert edits[0][1]["add"] == "ai-blocked"
+    return comments[0][1]["body"]
+
+
+@pytest.mark.parametrize("code", ["en", "zh"])
+def test_run_review_round_rounds_exhausted_says_how_to_resume(
+        monkeypatch, tmp_path, code,
+):
+    """Issue #1701 acceptance 1: the exhausted round budget names the PR,
+    says the review used all its rounds without a mergeable result (no raw
+    exception text), and tells the human to remove `ai-blocked` before
+    adding `ai-fix-needed`, which buys a fresh review-round budget."""
+    text = BLOCKED_REVIEW_TEXT[code]
+    body = _blocked_review_body(
+        monkeypatch, tmp_path, code,
+        review_raises=failure_report.ReviewRoundsExhausted("raw budget line"),
+    )
+    action = _blocked_line(body, text["action"])
+    reason = _blocked_line(body, text["reason"])
+    assert action.index("`ai-blocked`") < action.index("`ai-fix-needed`")
+    assert text["rounds_action"] in action
+    assert text["rounds_reason"] in reason
+    assert PR_URL in reason
+    assert "raw budget line" not in reason
+
+
+@pytest.mark.parametrize("code", ["en", "zh"])
+def test_run_review_round_human_decision_keeps_the_reviewer_fix(
+        monkeypatch, tmp_path, code,
+):
+    """Issue #1701 acceptance 2: with a reviewer fix the action is the
+    reviewer's own text plus the resume step and no budget clause — the
+    budget resets only after all rounds are used."""
+    text = BLOCKED_REVIEW_TEXT[code]
+    body = _blocked_review_body(
+        monkeypatch, tmp_path, code,
+        review_raises=failure_report.HumanDecisionRequired(
+            "review requires human decision: note: same failure twice; "
+            "fix: choose the authoritative address source",
+            action="Choose the authoritative address source.",
+        ),
+    )
+    action = _blocked_line(body, text["action"])
+    reason = _blocked_line(body, text["reason"])
+    # The reviewer's own text is kept verbatim; only its trailing
+    # punctuation is dropped so the step sentence does not double it.
+    assert "Choose the authoritative address source" in action
+    assert "source.。" not in action
+    assert text["step"] in action
+    assert text["budget"] not in action
+    assert text["human_reason"] in reason
+    assert PR_URL in reason
+    assert "same failure twice" not in reason
+
+
+@pytest.mark.parametrize("code", ["en", "zh"])
+def test_run_review_round_human_decision_without_fix_uses_generic_action(
+        monkeypatch, tmp_path, code,
+):
+    """Issue #1701 acceptance 2: the reviewer gave no fix — the handler
+    supplies the generic catalog action instead of an English literal."""
+    text = BLOCKED_REVIEW_TEXT[code]
+    body = _blocked_review_body(
+        monkeypatch, tmp_path, code,
+        review_raises=failure_report.HumanDecisionRequired(
+            "review requires human decision: note: decide the base",
+            action="",
+        ),
+    )
+    action = _blocked_line(body, text["action"])
+    assert text["generic_action"] in action
+    assert text["step"] in action
+    assert text["close"] in action
+    assert "Decide how this PR should proceed." not in body
+
+
+@pytest.mark.parametrize("code", ["en", "zh"])
+def test_run_review_round_base_mismatch_gets_the_generic_action(
+        monkeypatch, tmp_path, code,
+):
+    """Issue #1701 acceptance 3: a base mismatch has no case-specific
+    remedy (the base check reads the scene comment, not the PR) — it gets
+    the generic action in the language while the reason still names both
+    base values."""
+    text = BLOCKED_REVIEW_TEXT[code]
+    body = _blocked_review_body(
+        monkeypatch, tmp_path, code, scene_base="develop",
+    )
+    action = _blocked_line(body, text["action"])
+    reason = _blocked_line(body, text["reason"])
+    assert text["generic_action"] in action
+    assert text["close"] in action
+    assert "base_branch=develop" in reason
+    assert "base_branch=main" in reason
+    assert language.text(code, "failure.headline_blocked") in body
+
+
+@pytest.mark.parametrize("code", ["en", "zh"])
+def test_run_review_round_recoverable_failure_keeps_no_action(
+        monkeypatch, tmp_path, code,
+):
+    """Issue #1701 acceptance 4: a recoverable review failure stays
+    ai-fix-needed with an empty action — the next tick resumes it."""
+    text = BLOCKED_REVIEW_TEXT[code]
+    edits, comments, _, _ = _review_round_env(
+        monkeypatch, tmp_path, with_worktree=False,
+    )
+    outcome = review_merge._run_review_round(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        config_domain.RunnerConfig(
+            repo_dir=tmp_path, base_branch="main", message_language=code,
+        ),
+        "owner/repo",
+    )
+    assert outcome is None
+    assert edits[0][1]["add"] == "ai-fix-needed"
+    body = comments[0][1]["body"]
+    assert text["action"] not in body
+    assert text["reason"] in body
+    assert "worktree missing" in body
 
 
 def test_main_releases_slot_after_opening_the_pr(monkeypatch, tmp_path):
