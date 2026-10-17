@@ -1,5 +1,5 @@
 {
-  "command_shape_asserts": 503,
+  "command_shape_asserts": 480,
   "monkeypatch_setattr_modules": {
     "blocked_comment": 0,
     "branch_reclaim": 0,
@@ -39,7 +39,7 @@
     "progress": 12,
     "progress_outcome": 0,
     "progress_summary": 0,
-    "release": 19,
+    "release": 14,
     "release_comments": 0,
     "release_git": 0,
     "release_notes": 0,
