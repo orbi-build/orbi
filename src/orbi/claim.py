@@ -645,7 +645,7 @@ def pick_resumable_delivery(
     repo_dir: Path | None = None, *, hooks: ResumeHooks,
     language_code: str,
 ) -> tuple[dict, dict] | None:
-    """Return the newest FREE opened-PR delivery and its resume scene.
+    """Return the oldest FREE opened-PR delivery and its resume scene.
 
     All opened-PR states are scanned: `ai-fix-needed`
     (awaiting the next review session after a finding or a base

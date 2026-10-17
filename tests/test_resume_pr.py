@@ -1006,9 +1006,10 @@ def test_pick_resumable_delivery_skips_held_and_reviews_next_free(
     monkeypatch, tmp_path,
 ):
     """Issue #809, acceptance 4: the scan skips every HELD candidate and
-    reviews the newest FREE one, so the PR backlog drains even while
-    several deliveries are in flight — the drain rate scales with the
-    concurrency instead of dropping to zero."""
+    reviews the oldest FREE one (Issue #1734 ordered the page oldest
+    first), so the PR backlog drains even while several deliveries are
+    in flight — the drain rate scales with the concurrency instead of
+    dropping to zero."""
     issues = [
         {"number": 9, "title": "held", "state": "OPEN",
          "url": "https://github.com/owner/repo/issues/9",
