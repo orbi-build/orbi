@@ -477,7 +477,8 @@ def _failure() -> subprocess.CalledProcessError:
 
 
 def _report(monkeypatch, tmp_path: Path, *, session: bool,
-            publisher: FakePublisher, **flags):
+            publisher: FakePublisher, exc: BaseException | None = None,
+            **flags):
     """Call the moved reporter with GitHub and the fingerprint stubbed."""
     posted: list[str] = []
     pr_comments: list[str] = []
@@ -509,7 +510,9 @@ def _report(monkeypatch, tmp_path: Path, *, session: bool,
         language_code="en",
     )
     kwargs.update(flags)
-    outcome = failure_report.report_delivery_failure(_failure(), **kwargs)
+    outcome = failure_report.report_delivery_failure(
+        exc if exc is not None else _failure(), **kwargs,
+    )
     return outcome, posted, pr_comments
 
 
@@ -585,6 +588,36 @@ def test_finish_mode_body_is_byte_identical_to_the_pre_extraction_render(
     assert pr_comments == [GOLDEN["finish"]["pr_comment"]]
     assert publisher.milestones == GOLDEN["finish"]["milestones"]
     assert publisher.finish_bodies == [GOLDEN["finish"]["finish"]]
+
+
+@pytest.mark.parametrize(
+    "language_code, remove_step, add_step",
+    [("en", "remove `ai-blocked`", "add `ai-fix-needed`"),
+     ("zh", "移除 `ai-blocked`", "添加 `ai-fix-needed`")],
+)
+def test_blocked_classified_next_step_tells_how_to_resume(
+        monkeypatch, tmp_path, language_code, remove_step, add_step):
+    """Issue #1701 acceptance 5: after a classified blocked outcome the
+    final progress comment's next-step line says how to resume —
+    remove `ai-blocked`, THEN add `ai-fix-needed`; relabelling alone never
+    resumes a blocked Issue (the claim scans skip `ai-blocked`)."""
+    publisher = FakePublisher()
+    outcome, posted, _ = _report(
+        monkeypatch, tmp_path, session=False, publisher=publisher,
+        exc=runner.ReviewRoundsExhausted("review/fix loop exhausted"),
+        action=None, classify=True, evidence=False, finish=True,
+        language_code=language_code,
+    )
+    assert outcome == "blocked"
+    assert "<!-- orbi:failure:v1" in posted[0]
+    finish = publisher.finish_bodies[0]
+    next_step = language.text(
+        language_code, "failure.next_step_blocked_classified",
+    )
+    assert remove_step in next_step
+    assert add_step in next_step
+    assert next_step in finish
+    assert "relabel the Issue ai-fix-needed" not in finish
 
 
 def test_evidence_redacts_local_paths(monkeypatch, tmp_path):

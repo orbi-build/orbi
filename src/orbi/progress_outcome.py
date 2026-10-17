@@ -78,6 +78,15 @@ def finish_outcome_body(*, outcome: str, detail: str,
         paragraphs.append(message(
             "progress.what_next", action=engine_action,
         ))
+    elif blocked:
+        # A carried action never hides what the engine does next: a
+        # blocked delivery still waits for a human (Issue #1701 keeps the
+        # blocked review comment's engine line unchanged).
+        paragraphs.append(message(
+            "progress.what_next", action=message(
+                "progress.engine_wait_pr", pr_url=pr_url,
+            ) if pr_url else message("progress.engine_wait_human"),
+        ))
     elif not action and next_step:
         paragraphs.append(message("progress.what_next", action=next_step))
     paragraphs.append(message("progress.raw_error", diagnosis=diagnosis))

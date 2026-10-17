@@ -240,6 +240,46 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "review.finding_location": ("Location:", "位置："),
     "review.finding_note": ("Note:", "说明："),
     "review.finding_fix": ("Fix:", "修复："),
+    # The blocked review-stage failure comment (Issue #1701): WHY it
+    # blocked, then HOW a human resumes it. Removing `ai-blocked` comes
+    # first because the claim scans skip it and the round-budget reset
+    # reads exactly that label event; the generic action is chosen by
+    # exception type, never by exception text.
+    "review.blocked_rounds_reason": (
+        "the independent review of PR {pr_url} used every one of its "
+        "review rounds without producing a mergeable result",
+        "PR {pr_url} 的独立评审已用完所有评审轮次，仍未得到可合并的结果",
+    ),
+    "review.blocked_rounds_action": (
+        "Fix what the findings above point at (usually the Issue's "
+        "acceptance criteria), then first remove `ai-blocked` and then add "
+        "`ai-fix-needed`: that gives PR {pr_url} a fresh review-round budget.",
+        "请修复上面评审发现所指出的问题（通常是该 Issue 的验收标准），"
+        "然后先移除 `ai-blocked`，再添加 `ai-fix-needed`：这样 PR {pr_url} "
+        "会重新获得一整轮评审预算。",
+    ),
+    "review.blocked_human_reason": (
+        "the independent review of PR {pr_url} requires a human decision",
+        "PR {pr_url} 的独立评审需要人工决定",
+    ),
+    "review.blocked_human_action": (
+        "{fix}. Then remove `ai-blocked` and add `ai-fix-needed` to resume "
+        "PR {pr_url}.",
+        "{fix}。然后移除 `ai-blocked` 并添加 `ai-fix-needed`，继续 PR {pr_url}。",
+    ),
+    "review.blocked_failed_reason": (
+        "the independent review of PR {pr_url} failed: {detail}",
+        "PR {pr_url} 的独立评审失败：{detail}",
+    ),
+    "review.blocked_generic_action": (
+        "Fix what the reason names (changing labels alone does not change "
+        "it), then remove `ai-blocked` and add `ai-fix-needed` to resume PR "
+        "{pr_url}. If this PR should not continue, close the PR and this "
+        "Issue.",
+        "请修复原因中指出的问题（只改标签不会改变它），然后移除 `ai-blocked` "
+        "并添加 `ai-fix-needed`，继续 PR {pr_url}。如果这个 PR 不应继续，"
+        "请关闭该 PR 和这个 Issue。",
+    ),
 
     # The live progress comment and the terminal outcome.
     "progress.header": ("**Orbi progress**", "**Orbi 进度**"),
@@ -670,10 +710,10 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "fix needed: {summary}", "需要修复：{summary}",
     ),
     "failure.next_step_blocked_classified": (
-        "fix the precondition above (see the reason) and relabel the "
-        "Issue ai-fix-needed to resume this same PR",
-        "修复上面的前提条件（见原因），然后把 Issue 重新标记为 "
-        "ai-fix-needed 以继续同一个 PR",
+        "fix the precondition above (see the reason), then remove "
+        "`ai-blocked` and add `ai-fix-needed` to resume this same PR",
+        "修复上面的前提条件（见原因），然后移除 `ai-blocked` 并添加 "
+        "`ai-fix-needed`，以继续同一个 PR",
     ),
     "failure.next_step_blocked_terminal": (
         "fix the failure above and re-run this Issue (a new run id is "
