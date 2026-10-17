@@ -18,7 +18,9 @@ against the post-move call, and the AI/human decision (`blocked` vs
 `fix needed`) with it.
 """
 import ast
+import json
 import logging
+import re
 import subprocess
 from pathlib import Path
 
@@ -456,17 +458,23 @@ class FakePublisher:
         self.finish_bodies.append(body)
 
 
-def _worktree(tmp_path: Path, *, session: bool) -> Path:
-    """A worktree with a test log, and a Pi session log for the evidence."""
+def _worktree(tmp_path: Path, *, session: bool, test_log: str = TEST_LOG,
+              session_content: str = SESSION_RECORD) -> Path:
+    """A worktree with a test log, and a Pi session log for the evidence.
+
+    `test_log` and `session_content` let a test hand the reporter real
+    oversized evidence instead of a shape production never posts
+    (Issue #1711).
+    """
     worktree = tmp_path / "wt"
     worktree.mkdir()
     if session:
         (worktree / ".pi-session").mkdir()
         (worktree / ".pi-session" / "session.jsonl").write_text(
-            SESSION_RECORD + "\n", encoding="utf-8",
+            f"{session_content}\n", encoding="utf-8",
         )
     (worktree / ".orbi").mkdir()
-    (worktree / ".orbi" / "test.log").write_text(TEST_LOG, encoding="utf-8")
+    (worktree / ".orbi" / "test.log").write_text(test_log, encoding="utf-8")
     return worktree
 
 
@@ -479,8 +487,13 @@ def _failure() -> subprocess.CalledProcessError:
 def _report(monkeypatch, tmp_path: Path, *, session: bool,
             publisher: FakePublisher, exc: BaseException | None = None,
             history: list | None = None,
+            test_log: str = TEST_LOG, session_content: str = SESSION_RECORD,
             **flags):
-    """Call the moved reporter with GitHub and the fingerprint stubbed."""
+    """Call the moved reporter with GitHub and the fingerprint stubbed.
+
+    `exc` and the two worktree contents feed the real evidence render;
+    every other flag goes straight to the reporter.
+    """
     posted: list[str] = []
     pr_comments: list[str] = []
     monkeypatch.setattr(
@@ -510,16 +523,19 @@ def _report(monkeypatch, tmp_path: Path, *, session: bool,
     freeze_report_time(monkeypatch)
     kwargs = dict(
         issue=dict(ISSUE), source_repo=SOURCE_REPO, run_id=RUN_ID,
-        pr_url=PR_URL, worktree=_worktree(tmp_path, session=session),
+        pr_url=PR_URL,
+        worktree=_worktree(
+            tmp_path, session=session, test_log=test_log,
+            session_content=session_content,
+        ),
         branch=BRANCH, role=runner.ROLE_REVIEW,
         action="Repair provider access.", reason="delivery failed",
         diagnosis="provider failed", publisher=publisher,
         language_code="en",
     )
     kwargs.update(flags)
-    outcome = failure_report.report_delivery_failure(
-        exc if exc is not None else _failure(), **kwargs,
-    )
+    error = _failure() if exc is None else exc
+    outcome = failure_report.report_delivery_failure(error, **kwargs)
     return outcome, posted, pr_comments
 
 
@@ -709,57 +725,196 @@ def test_evidence_redacts_local_paths(monkeypatch, tmp_path):
     assert "local runner path file: boom" in posted[0]
 
 
-# The failure-comment cap and the two report-itself-failed guards: the
-# branches the moved code brings along. A new file counts EVERY line as a
-# changed line for tools/diff_coverage_gate.py (Issue #234, tier 2), so the
-# new module has to be 100% covered and these three tests keep it there.
+# The failure-comment size limit and the two report-itself-failed guards:
+# the branches the moved code brings along. A new file counts EVERY line as
+# a changed line for tools/diff_coverage_gate.py (Issue #234, tier 2), so the
+# new module has to be 100% covered and these tests keep it there.
+#
+# Issue #1711: an oversized comment shrinks ONLY its four evidence segments
+# (capped at 4000 chars each by default), never the structure around them —
+# a cut lands inside the last fence, so the Diagnosis closer and the help
+# line would render as code in the collapsed block (the #1695 acceptance).
+LONG_TEST_LOG = ("test line " + "y" * 290 + "\n") * 20
+LONG_SESSION = "".join(
+    json.dumps({
+        "type": "message",
+        "timestamp": f"2026-09-28T10:00:{index:02d}Z",
+        "message": {
+            "role": "assistant",
+            "toolName": "bash-" + "x" * 200,
+            "content": [
+                {"type": "text", "text": f"step {index}"},
+                {"type": "toolCall", "name": "bash"},
+            ],
+        },
+    }) + "\n"
+    for index in range(20)
+)
+
+
+def _oversized_evidence_error() -> subprocess.CalledProcessError:
+    """Real Pi streams, both longer than one segment's 4000-char cap."""
+    return subprocess.CalledProcessError(
+        2, ["pi"], output="stdout line\n" * 400, stderr="stderr line\n" * 400,
+    )
+
+
+def _body_before_markers(posted: str) -> str:
+    """The exact body the size check measured, before the prepended markers.
+
+    The reporter puts the run marker, the failure kind marker and — on the
+    recoverable path only — the failure fingerprint marker above the body
+    (Issue #1711: the limit applies before them). A plain split on the
+    first blank line would drop the body's own `orbi:failure:v1` record
+    and so measure a shorter string than the one the limit checked.
+    """
+    lines = posted.splitlines(keepends=True)
+    assert lines[0].startswith("<!-- orbi:run="), lines[0]
+    assert lines[1] == "<!-- orbi:comment=failure -->\n", lines[1]
+    start = 2
+    if lines[start].startswith("<!-- orbi:fail="):
+        start += 1
+    assert lines[start].startswith("<!-- orbi:failure:v1 "), lines[start]
+    return "".join(lines[start:])
+
+
+def _fence_lines(body: str) -> list[int]:
+    """Line indexes of whole code fences (three or more backticks)."""
+    return [
+        index for index, line in enumerate(body.splitlines())
+        if len(line) >= 3 and set(line) == {"`"}
+    ]
+
+
+def _omission_notes(body: str) -> list[str]:
+    return re.findall(r"_\[truncated, \d+ chars omitted\]_", body)
+
+
+def _assert_comment_structure_intact(body: str) -> None:
+    """Acceptance 1/2: closed fences, a closed Diagnosis and no code tail."""
+    fences = _fence_lines(body)
+    assert fences and len(fences) % 2 == 0, "every fence closes"
+    assert body.count("<details>") == body.count("</details>")
+    lines = body.splitlines()
+    assert "</details>" in lines[fences[-1] + 1:], (
+        "the Diagnosis closer after the last fence is not inside it"
+    )
+
+
 @pytest.mark.parametrize("language_code", ["en", "zh"])
-def test_oversized_blocked_body_ends_with_the_help_line_after_the_diagnosis(
+def test_oversized_blocked_comment_shrinks_evidence_and_keeps_structure(
         monkeypatch, tmp_path, language_code):
-    """Issue #1695: the cut closes the open Diagnosis block, then the
-    truncation note and the community help line follow it — never inside
-    the collapsed block that the cut left open."""
+    """Acceptance 1 (Issue #1711): maxed evidence plus a long action passes
+    the limit, so the SEGMENTS shrink — each with its own omission note —
+    and the help line stays last, outside the closed Diagnosis block."""
+    publisher = FakePublisher()
+    outcome, posted, _ = _report(
+        monkeypatch, tmp_path, session=True, publisher=publisher,
+        exc=_oversized_evidence_error(), test_log=LONG_TEST_LOG,
+        session_content=LONG_SESSION, classify=False, evidence=True,
+        finish=False, action="a" * 3000, language_code=language_code,
+    )
+    body = _body_before_markers(posted[0])
+    help_line = language.text(language_code, "help.community")
+    assert outcome == "blocked"
+    assert len(body) <= failure_report.FAILURE_COMMENT_MAX_CHARS
+    _assert_comment_structure_intact(body)
+    assert body.endswith(help_line)
+    # The rest of the comment is untouched: the long action is all there.
+    assert "a" * 3000 in body
+    notes = _omission_notes(body)
+    assert len(notes) == 4
+    # The shrink really ran: the 4800-char stderr segment is docked below
+    # the 4000-char default, so more than its 800 default chars were cut.
+    assert int(re.search(r"\d+", notes[0]).group()) > 800
+
+
+def test_oversized_fix_needed_comment_shrinks_evidence_without_a_help_line(
+        monkeypatch, tmp_path):
+    """Acceptance 2: the recoverable comment follows the same one rule —
+    evidence shrunk, structure intact, and never a community help line."""
+    publisher = FakePublisher()
+    outcome, posted, _ = _report(
+        monkeypatch, tmp_path, session=True, publisher=publisher,
+        exc=_oversized_evidence_error(), test_log=LONG_TEST_LOG,
+        session_content=LONG_SESSION, classify=True, evidence=True,
+        finish=False, action="a" * 3000,
+    )
+    body = _body_before_markers(posted[0])
+    assert outcome == "fix needed"
+    assert len(body) <= failure_report.FAILURE_COMMENT_MAX_CHARS
+    _assert_comment_structure_intact(body)
+    assert language.text("en", "help.community") not in body
+    notes = _omission_notes(body)
+    assert len(notes) == 4
+    assert int(re.search(r"\d+", notes[0]).group()) > 800
+
+
+def test_comment_under_the_limit_is_posted_unchanged(monkeypatch, tmp_path):
+    """Acceptance 3: a body under the limit keeps today's bytes — the full
+    default-cap evidence with no omission note (the goldens above pin the
+    byte-for-byte render of the same under-limit path)."""
+    publisher = FakePublisher()
+    outcome, posted, _ = _report(
+        monkeypatch, tmp_path, session=True, publisher=publisher,
+        classify=False, evidence=True, finish=False,
+    )
+    body = _body_before_markers(posted[0])
+    assert outcome == "blocked"
+    assert len(body) < failure_report.FAILURE_COMMENT_MAX_CHARS
+    assert _failure().stderr.rstrip("\n") in body
+    assert _omission_notes(body) == []
+    assert failure_report._failure_evidence(
+        tmp_path / "wt", _failure(), language_code="en",
+    ).lstrip() in body
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_oversized_comment_without_evidence_is_posted_unchanged(
+        monkeypatch, tmp_path, language_code):
+    """Acceptance 4: only a comment WITH evidence can shrink, so one without
+    it is posted exactly as rendered, however long — a cut there would bring
+    back the unclosed-structure bug (Issue #1711)."""
     publisher = FakePublisher()
     outcome, posted, _ = _report(
         monkeypatch, tmp_path, session=True, publisher=publisher,
         classify=False, evidence=False, finish=False,
         blocked_suffix="x" * 25000, language_code=language_code,
     )
-    note = language.text(
-        language_code, "failure.comment_truncated",
-        chars=failure_report.FAILURE_COMMENT_MAX_CHARS,
-        log=language.text(
-            language_code, "failure.scene.local_session_log"),
-    )
+    body = _body_before_markers(posted[0])
     help_line = language.text(language_code, "help.community")
     assert outcome == "blocked"
-    # The diagnosis is cut at the same cap as before; the closer, the note
-    # and the help line are added after the cut (no length promise covers
-    # them — the run markers are prepended after the cap too).
-    assert len(posted[0]) < failure_report.FAILURE_COMMENT_MAX_CHARS + 500
-    assert "x" * 25000 not in posted[0]
-    assert "\n</details>" in posted[0]
-    assert posted[0].rindex("</details>") < posted[0].index(help_line)
-    assert posted[0].endswith(f"{note}\n\n{help_line}")
+    assert "x" * 25000 in body
+    assert language.text(
+        language_code, "failure.evidence.heading") not in body
+    assert "chars omitted" not in body
+    assert body.endswith(f"</details>\n\n{help_line}")
+    assert body.count("<details>") == body.count("</details>")
 
 
-def test_oversized_fix_needed_body_keeps_the_plain_cut_without_the_help_line(
+def test_oversized_comment_with_text_only_posts_cap_zero_evidence(
         monkeypatch, tmp_path):
-    """Acceptance 2: the recoverable comment is cut exactly as before and
-    never gains the help line (only a blocked stop asks a person)."""
+    """Acceptance 4: when the text outside the evidence alone passes the
+    limit, the evidence is posted at cap 0 — every segment an empty closed
+    fence with its own omission note — and the comment is still never cut."""
     publisher = FakePublisher()
     outcome, posted, _ = _report(
         monkeypatch, tmp_path, session=True, publisher=publisher,
-        classify=True, evidence=False, finish=False,
-        review_scene_block="z" * 25000,
+        exc=_oversized_evidence_error(), test_log=LONG_TEST_LOG,
+        session_content=LONG_SESSION, classify=False, evidence=True,
+        finish=False, action="a" * 25000,
     )
-    assert outcome == "fix needed"
-    assert "z" * 25000 not in posted[0]
-    assert (
-        f"[comment truncated at {failure_report.FAILURE_COMMENT_MAX_CHARS} "
-        "chars; full session log: local session log]" in posted[0]
-    )
-    assert language.text("en", "help.community") not in posted[0]
+    body = _body_before_markers(posted[0])
+    assert outcome == "blocked"
+    assert "a" * 25000 in body
+    assert body.count("```\n\n```") == 4
+    # Cap 0: every segment is dropped whole and noted after its closed fence.
+    notes = _omission_notes(body)
+    assert len(notes) == 4
+    assert int(re.search(r"\d+", notes[0]).group()) == 4800
+    assert int(re.search(r"\d+", notes[1]).group()) == 4800
+    _assert_comment_structure_intact(body)
+    assert body.endswith(language.text("en", "help.community"))
 
 
 def test_block_scene_failure_never_raises_a_reporting_failure(

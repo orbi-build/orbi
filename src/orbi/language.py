@@ -760,11 +760,6 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "(run_id={run_id})",
         "Orbi 失败：无法继续被中断的运行：{detail}（run_id={run_id}）",
     ),
-    "failure.comment_truncated": (
-        "\n\n_[comment truncated at {chars} chars; full session log: "
-        "{log}]_",
-        "\n\n_[评论在 {chars} 字符处被截断；完整会话日志：{log}]_",
-    ),
     "failure.milestone_blocked": (
         "blocked: {summary}", "已阻塞：{summary}",
     ),

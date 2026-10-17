@@ -5584,7 +5584,10 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     assert "- base_sha: abc123def456" in start_body
     assert "run_id=a1b2c3d4" in start_body
     assert "- branch: orbi/xqliu-orbi-backlog-issue-4" in start_body
-    assert "- worktree: " + str(tmp_path / "wt") in start_body
+    # Issue #1715: the public started comment never names the worktree
+    # path on the runner host.
+    assert "- worktree" not in start_body
+    assert str(tmp_path) not in start_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in start_body
     opened_bodies = [
         call[-1] for call in gh_calls

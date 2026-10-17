@@ -220,6 +220,33 @@ def test_started_scene_follows_the_bound_language(tmp_path):
     assert "Orbi started Pi:" in en
 
 
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_the_started_comment_never_names_the_runner_worktree_path(
+    tmp_path, language_code,
+):
+    """Issue #1715: the public started comment shows the branch and the
+    run id and no path on the runner host, in both languages."""
+    probe = tmp_path / "orbi-tenant-probe" / "delivery"
+    body = delivery_comment.started_pi_comment_body(
+        RunContext(
+            run_id="abc12345", issue=1153,
+            branch="orbi/owner-repo-issue-1153",
+            worktree=(probe / ".worktrees"
+                      / "orbi-owner-repo-issue-1153-abc12345"),
+            source_repo="owner/repo",
+        ),
+        "base_branch=main base_sha=abc123 repo_config=cfg "
+        "run_id=abc12345 priority=normal session=session-1",
+        language_code=language_code,
+    )
+    assert str(probe) not in body
+    assert "worktree" not in body
+    assert "run_id=abc12345" in body
+    details = body.split("<details><summary>", 1)[1]
+    assert "- branch: orbi/owner-repo-issue-1153" in details
+    assert "- session: session-1" in details
+
+
 def test_opened_pr_comment_keeps_the_scene_block(tmp_path):
     from orbi import scene
 
