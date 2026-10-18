@@ -178,7 +178,9 @@ Rules of the chain:
   in-flight restart and the ready scan all found nothing. One PR waiting
   for approval therefore never starves the review backlog or the new
   claims. The cost: after the maintainer acts, the merge happens on the
-  first otherwise-idle tick, not on the very next one.
+  first otherwise-idle tick, not on the very next one. The scans cover
+  every repository the runner serves, so while any other repository of
+  the same runner still has work, this merge is pushed back with it.
 - The review/fix loop is bounded (5 rounds). The completed-round count
   lives in the trusted scene (`review_round`, Issue #788): every round
   comment carries the updated scene block, so the next tick reads the
@@ -349,7 +351,8 @@ the waiting PR never takes a tick away from a review, a restart or a new claim.
 After the maintainer changes the policy or supplies the required approval, the
 next otherwise-idle tick resumes and Orbi merges the PR itself — the cost of
 the rule is that this is the first tick with an empty queue, not the very next
-tick. A policy rejection without a known FAILED preflight action, or any other
+tick, and the queue is the runner's whole queue: while another repository served
+by the same runner still has work, the merge waits for it as well. A policy rejection without a known FAILED preflight action, or any other
 merge failure, remains `ai-blocked`.
 
 ## Human acceptance gate (ai-human-review)
