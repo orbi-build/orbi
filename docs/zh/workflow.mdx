@@ -467,7 +467,7 @@ review 与 ops session），因此自定义 prompt 模板同样会收到：会�
 | --- | --- | --- | --- |
 | `github_transient` | 临时的 GitHub API/服务端失败 | `requeue` | true |
 | `provider_quota` | 模型 provider 配额耗尽 | `wait_quota` | true |
-| `tests_failed` | 交付自身的测试失败 | `fix_ticket` | false |
+| `tests_failed` | 旧值，只为兼容 #1759 之前写下的评论而保留；Orbi 已不再产生它（CI 检查失败按 CI 失败处理） | `fix_ticket` | false |
 | `review_budget_exhausted` | 有界 review/fix 预算用尽 | `decide` | false |
 | `human_decision_required` | 只有人能决策的外部前置条件 | `decide` | false |
 | `base_branch_missing` | 配置的 base branch 在仓库中不存在 | `fix_ticket` | false |

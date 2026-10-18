@@ -583,7 +583,7 @@ at all — readers ignore it (`parse` returns `None`).
 | --- | --- | --- | --- |
 | `github_transient` | a transient GitHub API/server failure | `requeue` | true |
 | `provider_quota` | the model provider quota is exhausted | `wait_quota` | true |
-| `tests_failed` | the delivery's own tests failed | `fix_ticket` | false |
+| `tests_failed` | legacy, kept only so comments written before #1759 still parse; Orbi no longer produces it (a red CI check is routed as a CI failure) | `fix_ticket` | false |
 | `review_budget_exhausted` | the bounded review/fix budget is spent | `decide` | false |
 | `human_decision_required` | an external precondition only a human can decide | `decide` | false |
 | `base_branch_missing` | the configured base branch does not exist in the repository | `fix_ticket` | false |
