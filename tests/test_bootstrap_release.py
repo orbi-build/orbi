@@ -50,7 +50,7 @@ from tests.fakes.bootstrap_release import (
     make_scope_gh,
     mock_release_range_gh,
 )
-from tests.test_bootstrap_runner import _git_output, make_local_remote_pair
+from tests.fakes.bootstrap_delivery import _git_output, make_local_remote_pair
 from tests.test_progress_wiring import make_fake_gh
 
 

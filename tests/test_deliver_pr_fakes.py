@@ -18,7 +18,7 @@ import orbi.runner as runner
 from orbi.delivery_scene import RunContext
 from seam import seam
 
-from tests.test_bootstrap_runner import (
+from tests.fakes.bootstrap_delivery import (
     DELIVER_BRANCH,
     FAKE_HEAD_SHA,
     FAKE_PR_URL,
