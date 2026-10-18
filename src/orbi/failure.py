@@ -107,6 +107,18 @@ class ReleaseGateWaitTimeout(RuntimeError):
     """
 
 
+class GitHubPermissionDenied(RuntimeError):
+    """A GitHub 403 with quota left: the credential lacks the permission.
+
+    The release gate receives that status from `gh_response` but reports
+    it with its own reader-facing sentence (the one naming the missing
+    `Checks:read` scope), so the meaning travels on the TYPE: `classify`
+    reads the type, never the sentence — which is why the broad
+    `credential` word could be dropped from the text markers without
+    losing the permission repair (Issue #1760).
+    """
+
+
 def render(record: Failure) -> str:
     """Render the single hidden v1 block for one failure.
 
@@ -349,9 +361,12 @@ def classify(detail: str, *, outcome: str = "blocked",
         reason_code = "credential_missing"
     elif gh_response.transient(error):
         reason_code = "github_transient"
-    elif gh_response.status_of(error) == 403:
+    elif gh_response.status_of(error) == 403 or isinstance(
+            error, GitHubPermissionDenied):
         # A 403 with quota left is a permission failure: the same repair
-        # as a rejected credential.
+        # as a rejected credential. A caller that re-wraps that status in
+        # its own sentence (the release gate's missing Checks:read) keeps
+        # it on the type.
         reason_code = "credential_missing"
     elif _WORKFLOW_PERMISSION_RE.search(detail):
         # The explicit App/workflows refusal is an authorization the AI

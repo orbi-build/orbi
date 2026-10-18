@@ -218,11 +218,14 @@ def run_gh_read_command(
     A rate limit (a 403 with `x-ratelimit-remaining: 0`), a 429 or a
     GitHub-side 5xx used to crash a whole tick that was only reading.
     Only provably read-only commands (`_is_readonly_gh_command`) whose
-    response carries a transient status are retried, so no write path can
-    ever reach the retry loop; every retry logs a structured
-    `gh_read_retry` line, and the last error is re-raised carrying the
-    response status so the failure handling classifies it from the status
-    rather than the text (Issue #1760).
+    response carries a transient status are retried; a `gh` subcommand
+    that prints no status line keeps GitHub's own server sentence
+    (`gh_response.transient_command`), so the retry Issue #738 added
+    survives for every read. No write path can ever reach this retry
+    loop; every retry logs a structured `gh_read_retry` line, and the
+    last error is re-raised carrying the response status so the failure
+    handling classifies it from the status rather than the text
+    (Issue #1760).
     """
     execute = command_runner or run_command
     command = gh_response.include_headers(command)
@@ -246,7 +249,7 @@ def run_gh_read_command(
             failure = gh_response.failed_request(exc)
             retryable = (
                 _is_readonly_gh_command(command)
-                and gh_response.transient(failure)
+                and gh_response.transient_command(failure)
             )
             if attempt >= GH_READ_MAX_ATTEMPTS or not retryable:
                 raise failure
@@ -288,7 +291,7 @@ def run_gh_write_command(
             return gh_response.response_parts(execute(command, **kwargs))[2]
         except subprocess.CalledProcessError as exc:
             failure = gh_response.failed_request(exc)
-            if not gh_response.transient_write(failure):
+            if not gh_response.transient_command(failure):
                 raise failure
             if already_applied is not None:
                 try:

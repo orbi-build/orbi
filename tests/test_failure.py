@@ -1211,6 +1211,24 @@ def test_classify_a_release_gate_wait_timeout_is_a_human_decision():
     )
 
 
+def test_classify_a_wrapped_permission_403_keeps_its_repair():
+    """A 403 with quota left that a caller had to re-word keeps the
+    `check_credentials` repair on its TYPE: the release gate names the
+    missing Checks:read scope in its own sentence, and the removed
+    `credential` word no longer has to carry the meaning (Issue #1760)."""
+    message = (
+        "CI gate could not be evaluated: the credential lacks "
+        "Checks:read permission (GitHub returned HTTP 403 while listing "
+        "check runs)"
+    )
+    assert failure.classify(
+        message, error=failure.GitHubPermissionDenied(message),
+    ) == failure.Failure(
+        reason_code="credential_missing", action_code="check_credentials",
+        retry_safe=False, outcome="blocked",
+    )
+
+
 def test_release_failure_comment_classifies_a_gate_wait_timeout_as_blocked():
     """The release comment's block is the one a status reader parses: a
     gate wait timeout must not claim `github_transient` / `requeue`."""

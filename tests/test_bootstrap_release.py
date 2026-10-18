@@ -1048,7 +1048,12 @@ def test_check_release_gates_reports_missing_checks_permission(monkeypatch):
 
     monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(seam, "run_command", fake_run_command)
-    with pytest.raises(RuntimeError, match=r"lacks Checks:read"):
+    # Its own type (Issue #1760): the status meaning travels on the type,
+    # so the classification still chooses the credential repair now that
+    # the broad "credential" text marker is gone.
+    with pytest.raises(
+        failure.GitHubPermissionDenied, match=r"lacks Checks:read",
+    ):
         release.check_release_gates("o/r", "abc123", 99)
 
 
@@ -3097,6 +3102,32 @@ def test_process_release_reports_a_gate_wait_timeout_as_blocked(
         retry_safe=False, outcome="blocked",
     )
     assert "timed out" in comment_kwargs["body"]
+
+
+def test_process_release_reports_missing_checks_permission_as_a_credential_repair(
+    monkeypatch,
+):
+    """Issue #1760: the release CI gate's 403 names the missing
+    Checks:read scope in its sentence and carries the status meaning on
+    its TYPE, so the machine block still says credential_missing /
+    check_credentials after the broad "credential" text marker was
+    dropped."""
+    state = make_release_process_env(monkeypatch, check_runs_status=403)
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    config = config_domain.RunnerConfig(
+        repo_dir=Path("/r"), base_branch="main",
+    )
+    assert release.process_release(issue, config, "o/r") == ""
+    (comment_number, comment_kwargs), = state["comments"]
+    assert comment_number == 99
+    assert "lacks Checks:read" in comment_kwargs["body"]
+    record = failure.parse(comment_kwargs["body"])
+    assert record == failure.Failure(
+        reason_code="credential_missing", action_code="check_credentials",
+        retry_safe=False, outcome="blocked",
+    )
 
 
 @pytest.mark.parametrize("language_code", ["en", "zh"])

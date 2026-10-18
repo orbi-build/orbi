@@ -14,6 +14,7 @@ from unittest.mock import Mock
 
 import orbi.release as release
 import orbi.runner as runner
+from orbi import gh_response
 from seam import seam
 
 
@@ -380,7 +381,8 @@ def mock_release_range_gh(monkeypatch, by_commit, calls=None):
 def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                              tag_commit=None, release_url="https://github.com/o/r/releases/tag/v0.3.0",
                              in_progress=False, existing_run_id=None,
-                             check_run_pages=None, milestone_items=None,
+                             check_run_pages=None, check_runs_status=None,
+                             milestone_items=None,
                              leftover_labels=None, leftover_milestones=None,
                              release_tree_files=("pyproject.toml", "package.json"),
                              prepare_release_version_error=None,
@@ -392,6 +394,9 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     `check_run_pages` (Issue #268) optionally sequences the check-runs
     endpoint: a list of [(name, status, conclusion)] pages answered in
     order, the last page repeating when exhausted.
+    `check_runs_status` (Issue #1760) makes the check-runs endpoint fail
+    with that HTTP status, the way `gh api --include` reports a refused
+    read (the release gate's missing Checks:read permission).
     `milestone_items` (Issue #253) answers the milestone scope-derivation
     queries: milestone number -> dict with keys `issues_closed` /
     `issues_open` / `pulls_closed` / `pulls_open`.
@@ -505,6 +510,14 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                     kind, item_state, number = match.groups()
                     bucket = milestone_items.get(int(number), {})
                     return json.dumps([bucket.get(f"{kind}_{item_state}", [])])
+            if check_runs_status is not None and \
+                    command[2].endswith("/check-runs"):
+                raise gh_response.GitHubRequestFailed(
+                    1, command, status=check_runs_status,
+                    ratelimit_remaining=4980,
+                    stderr=("gh: Resource not accessible by integration "
+                            f"(HTTP {check_runs_status})"),
+                )
             if check_run_pages:
                 page = check_run_pages.pop(0)
                 if not check_run_pages:

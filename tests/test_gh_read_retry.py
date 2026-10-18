@@ -88,14 +88,45 @@ def test_gh_read_command_does_not_retry_a_rejected_credential(monkeypatch):
     assert caught.value.authentication_required is True
 
 
-def test_gh_read_command_does_not_retry_without_a_response_status(monkeypatch):
-    """A gh subcommand that prints no response headers (`gh issue list`)
-    has no status to decide from, so it is never retried on the wording of
-    its error line."""
+def test_gh_read_command_retries_a_status_less_server_failure(
+    monkeypatch, caplog,
+):
+    """A gh subcommand other than `gh api` prints no status line (`gh
+    issue list`), so GitHub's own server sentence is the only signal
+    there is — the same fallback the write path keeps. Dropping it would
+    turn a GitHub-side 5xx on a plain scan read back into the crashed
+    tick the bounded retry exists to prevent (Issues #738 / #1760)."""
+    calls = []
+    sleeps = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if len(calls) < 3:
+            raise subprocess.CalledProcessError(
+                1, command, stderr="gh: Bad Gateway (HTTP 502)",
+            )
+        return "[]"
+
+    monkeypatch.setattr(runner.time, "sleep", sleeps.append)
+    with caplog.at_level("INFO"):
+        assert runner.run_gh_read_command(
+            ["gh", "issue", "list", "--repo", "o/r",
+             "--json", "number", "--limit", "1"],
+            command_runner=fake_run,
+        ) == "[]"
+
+    assert len(calls) == 3
+    assert sleeps == [1, 2]
+    assert "gh_read_retry" in caplog.text
+
+
+def test_gh_read_command_does_not_retry_a_status_less_four_x(monkeypatch):
+    """A rejected credential prints no server-failure sentence, so a
+    status-less gh subcommand still fails on its first attempt
+    (Issue #1760)."""
     def fake_run(command, **kwargs):
         raise subprocess.CalledProcessError(
-            1, command, stderr="HTTP 502: Bad Gateway "
-                               "(https://api.github.com/graphql)",
+            1, command, stderr="gh: Bad credentials (HTTP 401)",
         )
 
     monkeypatch.setattr(runner.time, "sleep", lambda _: pytest.fail("slept"))

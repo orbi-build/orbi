@@ -165,13 +165,16 @@ def failed_request(
     )
 
 
-def transient_write(failure: GitHubRequestFailed) -> bool:
-    """Whether a failed gh write is worth retrying.
+def transient_command(failure: GitHubRequestFailed) -> bool:
+    """Whether a failed gh command is worth retrying.
 
     The response status decides whenever gh printed one — a permission
-    failure is never retried. A `gh` subcommand that prints no response
-    headers keeps GitHub's own server sentences: there is no status to
-    read, and the caller's idempotency check guards the retry.
+    failure is never retried. A `gh` subcommand other than `gh api`
+    prints no response headers, so it keeps GitHub's own server
+    sentences: there is no status to read, and dropping that signal would
+    turn a GitHub-side 5xx on a plain scan read back into the crashed
+    tick the bounded retry exists to prevent (Issue #738). A retried
+    mutation stays guarded by the caller's `already_applied` check.
     """
     if failure.status is not None or failure.authentication_required:
         return transient(failure)

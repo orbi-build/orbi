@@ -776,7 +776,11 @@ def check_release_gates(repo: str, release_commit: str,
             # Checks:read permission from every other read failure
             # (Issue #1760).
             if gh_response.status_of(error) == 403:
-                raise RuntimeError(
+                # Its own type: the status meaning travels on the type
+                # while the reader-facing sentence names the missing
+                # scope, so classification never reads the words
+                # (Issue #1760).
+                raise failure.GitHubPermissionDenied(
                     "CI gate could not be evaluated: the credential lacks "
                     "Checks:read permission (GitHub returned HTTP 403 while "
                     "listing check runs)"
