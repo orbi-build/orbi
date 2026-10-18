@@ -610,7 +610,7 @@ def test_started_comment_translates_visible_rows_and_keeps_machine_rows(
         "run_id=abcdef12 priority=normal session=session-1",
         language_code="zh",
     )
-    assert "Orbi 已启动 Pi： run_id=abcdef12 priority=普通" in zh
+    assert "Orbi 已启动 Pi： run_id=abcdef12 优先级=普通" in zh
     assert "- 基础分支: main" in zh
     assert "- 优先级: 普通" in zh
     assert "- 基础 SHA: abc1234" in zh
@@ -629,6 +629,69 @@ def test_started_comment_translates_visible_rows_and_keeps_machine_rows(
     assert "- priority: normal" in en
     assert "- repo_config: deadbeef" in en
     assert "- base_sha: abc1234" in en
+
+
+def test_chinese_started_headline_carries_no_english_priority_key(tmp_path):
+    """Issue #1746: the headline's escaping label is the display label too.
+
+    The priority keeps its place in the one-line headline with the same
+    Chinese key as the row below (`优先级`); `run_id=` is a machine row
+    and stays byte-identical. An English repository is unchanged.
+    """
+    zh = delivery_comment.started_pi_comment_body(
+        _ctx(tmp_path), "run_id=abcdef12 priority=p0", language_code="zh",
+    )
+    headline = zh.splitlines()[2]
+    assert "priority=" not in zh
+    assert "run_id=abcdef12" in headline
+    assert "优先级=P0" in headline
+    en = delivery_comment.started_pi_comment_body(
+        _ctx(tmp_path), "run_id=abcdef12 priority=p0", language_code="en",
+    )
+    assert en.splitlines()[2] == "Orbi started Pi: run_id=abcdef12 priority=p0"
+
+
+@pytest.mark.parametrize(
+    ("raw", "rendered"), [("wait", "等待"), ("term", "终止"), ("kill", "强制终止")],
+)
+def test_recovery_value_follows_the_language(raw, rendered):
+    """Issue #1746: a stuck session's recovery row is Chinese too; the
+    stored value never leaks into a Chinese comment, the English row is
+    unchanged."""
+    state = {
+        "run_id": "abcdef12", "issue": 7, "issue_title": "t",
+        "role": "implement", "priority": "normal", "step": "implement",
+        "tests": "passed", "pr": None, "phase": "bash", "elapsed": "12s",
+        "activity": None, "recovery": raw,
+    }
+    zh = progress.progress_body({**state, "language": "zh"})
+    assert f"- 恢复状态: {rendered}" in zh
+    assert raw not in zh
+    en = progress.progress_body({**state, "language": "en"})
+    assert f"- recovery: {raw}" in en
+
+
+def test_the_workflow_docs_name_the_rows_a_chinese_run_shows():
+    """Issue #1746 AC3: the zh page names each repo-config row exactly as
+    a Chinese repository renders it (label from the ONE catalogue), and
+    the en page says a Chinese repository shows translated row names."""
+    from orbi import progress_display
+
+    zh_docs = (REPO_ROOT / "docs" / "zh" / "workflow.mdx").read_text(
+        encoding="utf-8",
+    )
+    for key in ("repo_config_ignored", "repo_config_changed",
+                "repo_config_diff"):
+        assert f"「{progress_display.field_label('zh', key)}」" in zh_docs
+    en_docs = (REPO_ROOT / "docs" / "workflow.mdx").read_text(
+        encoding="utf-8",
+    )
+    assert "message language" in en_docs
+    assert "中文仓库" not in en_docs
+    for key in ("repo_config_ignored", "repo_config_changed",
+                "repo_config_diff"):
+        assert key in en_docs
+    assert "忽略的仓库配置键" in en_docs
 
 
 def test_opened_pr_comment_translates_visible_rows():

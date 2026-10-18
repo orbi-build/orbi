@@ -505,7 +505,8 @@ def progress_body(state: dict) -> str:
     # Exceptional state belongs with the at-a-glance status. A normal
     # first or second review round carries no useful signal on its own.
     if state.get("recovery"):
-        lines.append(row("recovery", state["recovery"]))
+        lines.append(row("recovery", vocabulary(
+            language_code, "recovery", state["recovery"])))
     if state.get("review_round", 0) >= 3:
         lines.append(row("review_round", value("review_round")))
 
