@@ -168,13 +168,16 @@ def make_milestone_gh(monkeypatch, *, milestones=None, items_by_milestone=None):
 
 
 def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
-                 leftover_milestones=None):
+                 leftover_milestones=None, check_runs_failure=None):
     """Answer the gh calls of `check_release_gates`.
 
     `leftover_labels`: label -> [issue numbers] still open with it.
     `check_runs`: list of (name, status, conclusion) for the release
     commit (None -> the call fails, which must propagate). No open-PR
     query is answered: since Issue #608 the gate never makes one.
+    `check_runs_failure`: a `(status, ratelimit_remaining)` pair the
+    check-runs read fails with, carrying the response gh reported — a
+    rate-limited 403 is `(403, 0)` (Issue #1768).
     `leftover_milestones`: issue number -> Milestone title (or None).
     When a leftover scan carries the documented `--milestone <title>`
     flag (Issue #671) only the Issues with that Milestone are answered —
@@ -197,6 +200,13 @@ def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
                 ]
             return json.dumps([{"number": n} for n in numbers])
         if command[:2] == ["gh", "api"]:
+            if check_runs_failure is not None:
+                status, remaining = check_runs_failure
+                raise gh_response.GitHubRequestFailed(
+                    1, command, status=status,
+                    ratelimit_remaining=remaining,
+                    stderr=f"gh: failed with HTTP {status}",
+                )
             if check_runs is None:
                 raise subprocess.CalledProcessError(
                     1, command, stderr="HTTP 500: server error",

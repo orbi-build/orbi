@@ -257,6 +257,11 @@ PROVIDER_AUTH_WORDS = ("unauthorized", "forbidden", "api key")
 # (Issue #1465): its 401 shapes, its rejected-key sentences and
 # `unauthorized`; `forbidden` stays in `PROVIDER_AUTH_WORDS` for
 # `pi_process`'s own startup classifier, which is not this regex.
+# `api key` is the provider's own missing/rejected-key sentence ("No API
+# key found for provider …"), the marker `PROVIDER_AUTH_WORDS` still
+# lists; only `incorrect api key` survived #1762, so the plain sentence
+# regressed to `unclassified` (Issue #1768). An argv word cannot carry
+# it — the space keeps it out of a branch, label or check name.
 _CREDENTIAL_MISSING_RE = re.compile(
     r"bad credentials"
     r"|(?:http|status)\s+401\b"
@@ -265,7 +270,7 @@ _CREDENTIAL_MISSING_RE = re.compile(
     # relabelled as a credential problem (Issue #1465).
     r"|(?:^|[\s\"'(])401:"
     r"|authentication (?:failed|required|fails)"
-    r"|incorrect api key"
+    r"|api key"
     r"|unauthorized",
     re.IGNORECASE,
 )
@@ -289,9 +294,11 @@ _WORKFLOW_PERMISSION_RE = re.compile(
 # sentence differs by whether a delivery PR already exists.
 _WORKFLOW_PERMISSION_CAUSE_KEY = "failure.workflow_cause"
 # The remaining text-only transient markers: network-level failures and
-# GitHub's own server sentences. This set names no timeout — a GitHub
-# request reports its status, and a real transport timeout IS a
-# `subprocess.TimeoutExpired` (Issue #1760).
+# GitHub's own server sentences. This set names no timeout: a timeout is
+# decided by `subprocess.TimeoutExpired` or, for a source that gives no
+# status and no type, by `_TEXT_TIMEOUT_RE` below. A GitHub request that
+# received a response reports its status and never reads that wording; a
+# status-less gh transport failure is the one exception (Issue #1768).
 _GITHUB_TRANSIENT_RE = re.compile(
     r"http 5\d\d|http 429|rate limit|"
     r"something went wrong while executing your query|"
@@ -310,11 +317,23 @@ def _timeout_is_text_only(error: BaseException | None) -> bool:
     """Whether only the failure's text can say it was a timeout.
 
     `subprocess.TimeoutExpired` IS a timeout (decided by type) and a
-    GitHub request reports its status, so neither reads the wording; a
-    non-gh subprocess (Pi, `git fetch`/`git push`) has only its output.
+    GitHub request that received a response reports its status, so
+    neither reads the wording; a non-gh subprocess (Pi, `git
+    fetch`/`git push`) has only its output. gh's own transport can fail
+    before any response exists — a TLS handshake timeout exits 1 with no
+    status and no `TimeoutExpired` (cli/cli#1761) — so a structured gh
+    failure that reports NO status keeps the wording as its only signal
+    (Issue #1768). A response status, when present, still wins.
     """
     command = getattr(error, "cmd", None)
-    return isinstance(command, list) and command[:1] != ["gh"]
+    if not isinstance(command, list):
+        return False
+    if command[:1] != ["gh"]:
+        return True
+    return (
+        isinstance(error, gh_response.GitHubRequestFailed)
+        and error.status is None
+    )
 
 
 # reason_code -> (action_code, retry_safe). `retry_safe` is whether a
