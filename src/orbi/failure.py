@@ -48,7 +48,10 @@ REASON_CODES = frozenset({
     # A transient GitHub API/server failure (5xx, secondary rate limit,
     # `GraphQL: Something went wrong`): the same operation may succeed.
     "github_transient",
-    # The delivery's own tests failed and the code must change.
+    # Legacy only (Issue #1759): nothing in production raises it any
+    # more. The runner runs no tests of its own, and a red CI check is
+    # routed by the `GateCIFailure` type. It stays in the closed set so
+    # an already-written comment still parses; `classify` never produces it.
     "tests_failed",
     # The bounded review/fix budget is spent — a human decision.
     "review_budget_exhausted",
@@ -285,9 +288,6 @@ _WORKFLOW_PERMISSION_RE = re.compile(
 # terminal progress scene and the short milestone; only the last
 # sentence differs by whether a delivery PR already exists.
 _WORKFLOW_PERMISSION_CAUSE_KEY = "failure.workflow_cause"
-_TESTS_FAILED_RE = re.compile(
-    r"\btests? failed\b|\d+ failed", re.IGNORECASE,
-)
 # The remaining text-only transient markers: network-level failures and
 # GitHub's own server sentences. This set names no timeout — a GitHub
 # request reports its status, and a real transport timeout IS a
@@ -412,8 +412,6 @@ def classify(detail: str, *, outcome: str = "blocked",
         reason_code = "credential_missing"
     elif _CREDENTIAL_MISSING_RE.search(detail):
         reason_code = "credential_missing"
-    elif _TESTS_FAILED_RE.search(detail):
-        reason_code = "tests_failed"
     elif _timeout_is_text_only(error) and _TEXT_TIMEOUT_RE.search(detail):
         reason_code = "github_transient"
     elif _GITHUB_TRANSIENT_RE.search(detail):
