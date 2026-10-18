@@ -128,11 +128,20 @@ _CONFIRM_YES = frozenset({"y", "yes"})
 # breaks the JSON answer at `json.loads` (`Expecting ',' delimiter`).
 # The prompt lowers the chance; `_parse_output` still rejects the bad
 # answer — no repair pass, no retry.
+#
+# It also names the fixed Chinese section headings (Issue #1764): the
+# suggest skill's output example shows the English ones, and the model
+# copied them into a Chinese body. Nothing parses the headings by name,
+# so only the zh sentence changes; en and no locale stay as they were.
 LOCALE_SENTENCES = {
     "zh": (
         "Write all of your output in Simplified Chinese. Inside JSON "
         'string values, quote words with 「」 and never with a bare "; '
-        'if a literal double quote is needed, write \\".'
+        'if a literal double quote is needed, write \\". '
+        "Write the Issue body section headings in Simplified Chinese "
+        "too, in this order: 需求 (Request), 用户看到的结果 (User "
+        "outcome), 验收 (Acceptance), 证据 (Evidence), 不做 (Not "
+        "included)."
     ),
     "en": "Write all of your output in English.",
 }

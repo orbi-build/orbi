@@ -1261,6 +1261,60 @@ def test_en_and_no_locale_never_carry_the_zh_quote_instruction():
         assert "「" not in prompt
 
 
+# The fixed Chinese heading set (Issue #1764). The zh sentence names them
+# because the suggest skill's output example shows the English headings
+# (Request / User outcome / Acceptance / Evidence / Not included) and the
+# model copied those into a Chinese body.
+ZH_HEADINGS = ("需求", "用户看到的结果", "验收", "证据", "不做")
+
+
+def test_zh_locale_asks_for_the_chinese_section_headings():
+    """Acceptance (Issue #1764): the zh sentence names the five headings,
+    so a Chinese body does not open with the skill's English ones."""
+    zh = suggest.LOCALE_SENTENCES["zh"]
+    for heading in ZH_HEADINGS:
+        assert heading in zh
+    prompt = suggest._prompt(
+        LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO, locale="zh",
+    )
+    for heading in ZH_HEADINGS:
+        assert heading in prompt
+
+
+def test_en_and_no_locale_never_carry_the_zh_headings():
+    """Acceptance (Issue #1764): English and no locale stay unchanged, so
+    the Chinese headings reach only a caller who asked for Chinese."""
+    assert suggest.LOCALE_SENTENCES["en"] == EN_SENTENCE
+    for prompt in (
+        suggest._prompt(LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO),
+        suggest._understanding_prompt(LOCALE_REPO_DIR),
+        suggest._prompt(
+            LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO, locale="en",
+        ),
+        suggest._understanding_prompt(LOCALE_REPO_DIR, locale="en"),
+    ):
+        for heading in ZH_HEADINGS:
+            assert heading not in prompt
+
+
+def test_suggest_locale_zh_sends_the_headings_to_the_session(
+    tmp_path, monkeypatch, capsys,
+):
+    """The user path: `orbi suggest --locale zh` puts the headings into
+    the prompt the suggestions session actually receives."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    stub = PiStub(_answer_json(EXISTING))
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--locale", "zh",
+        "--config", str(world.config_path),
+    ]) == 0
+    capsys.readouterr()
+    for heading in ZH_HEADINGS:
+        assert heading in stub.command[-1]
+
+
 def test_suggest_locale_rejects_an_unsupported_language(
     tmp_path, monkeypatch, capsys,
 ):
