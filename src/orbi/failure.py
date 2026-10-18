@@ -294,9 +294,11 @@ _WORKFLOW_PERMISSION_RE = re.compile(
 # sentence differs by whether a delivery PR already exists.
 _WORKFLOW_PERMISSION_CAUSE_KEY = "failure.workflow_cause"
 # The remaining text-only transient markers: network-level failures and
-# GitHub's own server sentences. This set names no timeout — a GitHub
-# request reports its status, and a real transport timeout IS a
-# `subprocess.TimeoutExpired` (Issue #1760).
+# GitHub's own server sentences. This set names no timeout: a timeout is
+# decided by `subprocess.TimeoutExpired` or, for a source that gives no
+# status and no type, by `_TEXT_TIMEOUT_RE` below. A GitHub request that
+# received a response reports its status and never reads that wording; a
+# status-less gh transport failure is the one exception (Issue #1768).
 _GITHUB_TRANSIENT_RE = re.compile(
     r"http 5\d\d|http 429|rate limit|"
     r"something went wrong while executing your query|"
