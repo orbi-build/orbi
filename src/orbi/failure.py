@@ -55,6 +55,9 @@ REASON_CODES = frozenset({
     "credential_missing",
     # The model provider quota is exhausted (429/RESOURCE_EXHAUSTED).
     "provider_quota",
+    # The configured base branch does not exist in the repository
+    # (Issue #1749): a repository/config precondition a human repairs.
+    "base_branch_missing",
     # Any other runner exception the classifier does not recognize.
     "unclassified",
 })
@@ -244,6 +247,12 @@ _WORKFLOW_PERMISSION_CAUSE_KEY = "failure.workflow_cause"
 _TESTS_FAILED_RE = re.compile(
     r"\btests? failed\b|\d+ failed", re.IGNORECASE,
 )
+# Git's answer to `git fetch origin <branch>` when the remote has no such
+# branch (Issue #1749): the two wordings real Git emits, and nothing else —
+# a generic fetch failure keeps its existing classification.
+_BASE_BRANCH_MISSING_RE = re.compile(
+    r"could ?n['o]t find remote ref", re.IGNORECASE,
+)
 _GITHUB_TRANSIENT_RE = re.compile(
     r"http 5\d\d|http 429|rate limit|"
     r"something went wrong while executing your query|"
@@ -264,6 +273,7 @@ DISPOSITIONS: dict[str, tuple[str, bool]] = {
     "human_decision_required": ("decide", False),
     "credential_missing": ("check_credentials", False),
     "provider_quota": ("wait_quota", True),
+    "base_branch_missing": ("fix_ticket", False),
     "unclassified": ("fix_ticket", False),
 }
 
@@ -292,6 +302,8 @@ def classify(detail: str, *, outcome: str = "blocked",
         # cannot grant: the existing `credential_missing` /
         # `check_credentials` category, a repair required before retry.
         reason_code = "credential_missing"
+    elif _BASE_BRANCH_MISSING_RE.search(detail):
+        reason_code = "base_branch_missing"
     elif _CREDENTIAL_MISSING_RE.search(detail):
         reason_code = "credential_missing"
     elif _TESTS_FAILED_RE.search(detail):
@@ -362,12 +374,36 @@ def terminal_action(record: Failure,
     """The reader action for the implement-phase terminal handler.
 
     An unrecognized failure says the cause could not be determined
-    instead of implying the Issue text is the problem (Issue #1651);
-    every recognized terminal failure keeps the existing generic action.
+    instead of implying the Issue text is the problem (Issue #1651); a
+    missing base branch names its one repair (Issue #1749); every other
+    recognized terminal failure keeps the existing generic action.
     """
     if record.reason_code == "unclassified":
         return language.text(language_code, "failure.terminal_unclassified")
+    if record.reason_code == "base_branch_missing":
+        return language.text(
+            language_code, "failure.terminal_base_branch_missing",
+        )
     return language.text(language_code, "failure.terminal_generic")
+
+
+def terminal_reason(detail: str, record: Failure, *,
+                    base_branch: str | None, language_code: str) -> str:
+    """The reader-facing reason of the implement-phase terminal handler.
+
+    The missing-base-branch failure names the CONFIGURED branch: Git's own
+    `couldn't find remote ref <value>` line is the evidence, never the
+    setting a human has to repair (Issue #1749). Every other terminal
+    failure keeps the generic stopped-delivery sentence.
+    """
+    if record.reason_code == "base_branch_missing":
+        return language.text(
+            language_code, "failure.base_branch_missing_reason",
+            base_branch=base_branch or "-", detail=detail,
+        )
+    return language.text(
+        language_code, "runner.delivery_stopped_reason", detail=detail,
+    )
 
 
 # --------------------------------------------------------------------------

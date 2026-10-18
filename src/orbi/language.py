@@ -726,6 +726,24 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "Fix the failure described below and re-run this Issue.",
         "请修复下面描述的失败，然后重新运行这个 Issue。",
     ),
+    # Issue #1749: the configured base branch does not exist in the
+    # repository. The reason names the CONFIGURED branch (Git's own line
+    # only carries the value it was asked to fetch) and the action names
+    # the one repair a human decides.
+    "failure.base_branch_missing_reason": (
+        "base branch \u0060{base_branch}\u0060 does not exist in the repository: "
+        "{detail}",
+        "仓库中不存在 base branch \u0060{base_branch}\u0060：{detail}",
+    ),
+    "failure.terminal_base_branch_missing": (
+        "Create the missing base branch in the repository, or correct "
+        "\u0060base_branch\u0060 in the Runner configuration, then remove "
+        "\u0060ai-blocked\u0060 and re-add \u0060ai-ready\u0060 to run this "
+        "Issue again.",
+        "请在仓库中创建缺失的 base branch，或修正 Runner 配置里的 "
+        "\u0060base_branch\u0060，然后移除 \u0060ai-blocked\u0060 并重新添加 "
+        "\u0060ai-ready\u0060 以再次运行这个 Issue。",
+    ),
     "failure.workflow_cause": (
         "GitHub rejected the push because the current GitHub App "
         "credential cannot modify Actions workflows.",

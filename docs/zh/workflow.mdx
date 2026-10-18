@@ -458,6 +458,7 @@ review 与 ops session），因此自定义 prompt 模板同样会收到：会�
 | `tests_failed` | 交付自身的测试失败 | `fix_ticket` | false |
 | `review_budget_exhausted` | 有界 review/fix 预算用尽 | `decide` | false |
 | `human_decision_required` | 只有人能决策的外部前置条件 | `decide` | false |
+| `base_branch_missing` | 配置的 base branch 在仓库中不存在 | `fix_ticket` | false |
 | `credential_missing` | GitHub/provider 凭据缺失或被拒绝 | `check_credentials` | false |
 | `unclassified` | 其它任何 Runner 异常 | `fix_ticket` | false |
 
