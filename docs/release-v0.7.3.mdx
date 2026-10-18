@@ -1,0 +1,53 @@
+---
+title: "v0.7.3 release (latest)"
+description: "Orbi v0.7.3 release notes: Move bootstrap release tests into their own domain suite and 9 more changes."
+---
+
+`v0.7.3` was published 2026-10-18T02:19:45Z as the GitHub Release [v0.7.3](https://github.com/orbi-build/orbi/releases/tag/v0.7.3) (release task: Issue #1728).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.7.3` | annotated tag `24ebd07dcf75e4fe7911796d0c3ba0bf3d2bbaaf` | commit `573b697a3e8489608e0c1c372d9cd6756589164a` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Move bootstrap release tests into their own domain suite ([Issue #1645](https://github.com/orbi-build/orbi/issues/1645); [PR #1731](https://github.com/orbi-build/orbi/pull/1731))
+- Move bootstrap configuration and preflight tests into their own domain suite ([Issue #1647](https://github.com/orbi-build/orbi/issues/1647); [PR #1741](https://github.com/orbi-build/orbi/pull/1741))
+- Move bootstrap delivery and claim tests into their own domain suite ([Issue #1648](https://github.com/orbi-build/orbi/issues/1648); [PR #1742](https://github.com/orbi-build/orbi/pull/1742))
+- Move bootstrap command and GitHub adapter tests into their own domain suite ([Issue #1649](https://github.com/orbi-build/orbi/issues/1649); [PR #1743](https://github.com/orbi-build/orbi/pull/1743))
+
+### Reliability and recovery
+
+- Move bootstrap Pi session and recovery tests into their own domain suite ([Issue #1646](https://github.com/orbi-build/orbi/issues/1646); [PR #1740](https://github.com/orbi-build/orbi/pull/1740))
+- Every blocked comment ends with the community help line, added once at a shared exit ([Issue #1730](https://github.com/orbi-build/orbi/issues/1730); [PR #1732](https://github.com/orbi-build/orbi/pull/1732))
+
+### Observability
+
+- After the PR opens, the progress comment says it is waiting for checks and review ([Issue #1733](https://github.com/orbi-build/orbi/issues/1733); [PR #1735](https://github.com/orbi-build/orbi/pull/1735))
+
+### Bug fixes
+
+- Chinese repositories still see English in Orbi's delivery comments and PR body ([Issue #1729](https://github.com/orbi-build/orbi/issues/1729); [PR #1739](https://github.com/orbi-build/orbi/pull/1739))
+- Review scan takes the oldest open deliveries first, so the earliest PR is not starved by newer ones ([Issue #1734](https://github.com/orbi-build/orbi/issues/1734); [PR #1737](https://github.com/orbi-build/orbi/pull/1737))
+- Merge gate re-reads a briefly UNKNOWN mergeability within the tick instead of deferring a whole tick ([Issue #1736](https://github.com/orbi-build/orbi/issues/1736); [PR #1738](https://github.com/orbi-build/orbi/pull/1738))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
+
+- tag: `v0.7.3`
+- release commit: `573b697a3e8489608e0c1c372d9cd6756589164a`
+- release task: Issue #1728
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 573b697a3e8489608e0c1c372d9cd6756589164a (the #268 CI-wait gate; no local test execution)
+
+
+Released by [Orbi](https://orbi.build/?ref=prfoot-orbi-build)
