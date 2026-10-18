@@ -150,7 +150,8 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
   领取三个扫描本 tick 都无结果时，才用同一条 merge-only 路径重试一次。
   一个等批准的 PR 因此不会再让评审队列和新票领取停摆。代价是：维护者
   动作之后，合并发生在队列首次无事可做的那一 tick，而不是紧接着的下一
-  tick。
+  tick。三个扫描覆盖这个 Runner 管的所有仓库，所以同一个 Runner 管的
+  其他仓库有活时，这次合并会一起往后推。
 - review/fix 循环有界（5 轮）。已完成轮数存在受信任现场里
   （`review_round` 字段，Issue #788）：每条轮次评论携带更新后的现场
   块，下一 tick 从中读出推进后的计数（人工在 block 之后把 Issue 改回
@@ -289,7 +290,8 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 in-flight 和 ready 三个扫描本 tick 都无结果后才会被重试：等待中的 PR 不再
 抢走评审、接续或新领取的 tick。维护者完成策略变更或给出所需批准后，队列
 首次无事可做的 tick 恢复，仍由 Orbi 自己合并 PR——这条规则的代价就是它
-不是紧接着的下一 tick。若 preflight 没有已知的 FAILED 动作，或是其他合并
+不是紧接着的下一 tick；而且看的是这个 Runner 的整条队列，同一个 Runner 管的
+其他仓库有活时，合并也会一起往后推。若 preflight 没有已知的 FAILED 动作，或是其他合并
 失败，仍进入 `ai-blocked`。
 
 ## 人工验收门禁（ai-human-review）
