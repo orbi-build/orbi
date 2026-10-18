@@ -1271,3 +1271,43 @@ def test_release_failure_comment_classifies_a_gate_wait_timeout_as_blocked():
     assert record is not None
     assert record.reason_code == "human_decision_required"
     assert record.action_code == "decide"
+
+
+# --------------------------------------------------------------------------
+# Issue #1768: the three #1762 review regressions keep their classification
+# --------------------------------------------------------------------------
+
+def test_pi_no_api_key_found_is_a_credential_problem():
+    """The provider's own missing-key sentence is `credential_missing`: the
+    marker `PROVIDER_AUTH_WORDS` still lists was dropped from the text
+    classifier by #1762 and comes back here (Issue #1768).
+
+    The marker cannot be forged by a command's argv: it contains a space,
+    so no branch, label or check name can carry it (the #1760 concern)."""
+    result = failure.classify(
+        "Pi session failed: No API key found for provider deepseek")
+    assert result.reason_code == "credential_missing"
+    assert result.action_code == "check_credentials"
+    assert result.retry_safe is False
+
+
+def test_gh_tls_handshake_timeout_is_transient():
+    """gh's own transport can fail before any response exists: a TLS
+    handshake timeout exits 1 with no status and no `TimeoutExpired`
+    (cli/cli#1761), so the wording is the only signal there is
+    (Issue #1768). A response status, when present, still wins."""
+    from orbi import gh_response
+
+    error = gh_response.GitHubRequestFailed(
+        1, ["gh", "api", "repos/o/r/issues"],
+        stderr='Post "https://api.github.com/graphql": net/http: '
+               "TLS handshake timeout",
+        status=None,
+    )
+    result = failure.classify(
+        "gh api repos/o/r/issues failed: net/http: TLS handshake timeout",
+        error=error,
+    )
+    assert result.reason_code == "github_transient"
+    assert result.action_code == "requeue"
+    assert result.retry_safe is True

@@ -717,12 +717,15 @@ def check_release_gates(repo: str, release_commit: str,
 
     A real `gh` failure (auth, rate limit, API error) propagates
     unchanged — a gate that cannot be checked is a failed gate. The one
-    exception is GitHub's HTTP 403 for the check-runs query (read from the
-    response status, never from the output text): it is reported as a
-    missing Checks:read credential permission so the blocked release is
-    actionable. A wait budget that runs out raises
-    `failure.ReleaseGateWaitTimeout`, which the blocked comment reports as
-    a human decision rather than a transient failure (Issue #1760).
+    exception is GitHub's HTTP 403 **with quota left** for the check-runs
+    query (read from the response status, never from the output text): it
+    is reported as a missing Checks:read credential permission so the
+    blocked release is actionable. A rate-limited 403 (no quota left) is
+    a transient GitHub failure and propagates unchanged, so it requeues
+    instead of asking for a credential repair (Issue #1768). A wait budget
+    that runs out raises `failure.ReleaseGateWaitTimeout`, which the
+    blocked comment reports as a human decision rather than a transient
+    failure (Issue #1760).
     """
     evidence: list[str] = []
     open_deliveries: set[int] = set()
@@ -774,8 +777,11 @@ def check_release_gates(repo: str, release_commit: str,
         except subprocess.CalledProcessError as error:
             # The response status — not the output text — tells a missing
             # Checks:read permission from every other read failure
-            # (Issue #1760).
-            if gh_response.status_of(error) == 403:
+            # (Issue #1760). A rate-limited 403 is GitHub's own limit, not
+            # a permission: it propagates unchanged and classifies as the
+            # transient failure that requeues (Issue #1768).
+            if (gh_response.status_of(error) == 403
+                    and not gh_response.transient(error)):
                 # Its own type: the status meaning travels on the type
                 # while the reader-facing sentence names the missing
                 # scope, so classification never reads the words

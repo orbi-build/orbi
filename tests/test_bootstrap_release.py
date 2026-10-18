@@ -1057,6 +1057,22 @@ def test_check_release_gates_reports_missing_checks_permission(monkeypatch):
         release.check_release_gates("o/r", "abc123", 99)
 
 
+def test_rate_limited_check_runs_read_stays_transient(monkeypatch):
+    """A rate-limited 403 on the check-runs read is GitHub's rate limit, not
+    a missing permission: it propagates unwrapped and classifies as a
+    transient failure that requeues (Issue #1768). The status and the
+    `X-Ratelimit-Remaining: 0` header — not the output text — say so."""
+    make_gate_gh(monkeypatch, check_runs_failure=(403, 0))
+    monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
+    with pytest.raises(Exception) as raised:
+        release.check_release_gates("o/r", "abc", 1)
+    assert not isinstance(raised.value, failure.GitHubPermissionDenied)
+    result = failure.classify(str(raised.value), error=raised.value)
+    assert result.reason_code == "github_transient"
+    assert result.action_code == "requeue"
+    assert result.retry_safe is True
+
+
 def test_check_release_gates_reraises_real_gh_failure(monkeypatch):
     make_gate_gh(monkeypatch, check_runs=None)
     with pytest.raises(subprocess.CalledProcessError):
