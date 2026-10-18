@@ -1,5 +1,5 @@
 {
-  "command_shape_asserts": 480,
+  "command_shape_asserts": 479,
   "monkeypatch_setattr_modules": {
     "blocked_comment": 0,
     "branch_reclaim": 0,
