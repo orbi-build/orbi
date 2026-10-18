@@ -56,10 +56,14 @@ def started_pi_comment_body(ctx: RunContext, run_info: str,
         for key in ("run_id", "priority")
         if key in info
     }
+    # The headline's key is the same display label the rows use
+    # (Issue #1746): `run_id` has no catalogue entry and stays the
+    # machine row, `priority` renders `优先级` in a Chinese comment.
     headline = language.text(
         language_code, "delivery.started_headline",
     ) + " " + " ".join(
-        f"{key}={value}" for key, value in rendered_info.items()
+        f"{field_label(language_code, key)}={value}"
+        for key, value in rendered_info.items()
     )
     detail_keys = {"base_sha", "repo_config", "branch", "session"}
     return field_block(
