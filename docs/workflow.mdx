@@ -277,7 +277,9 @@ never has to read the translatable `Orbi merged PR:` heading; the receipt
 carries the hidden `<!-- orbi:comment=merged -->` kind right after the run
 marker, and both rules are defined in
 [Public contracts](/public-contracts). The `Orbi: merged` milestone line
-carries the same facts in the same `key=value` form.
+carries the same facts for a human reader, but its rows are display text
+whose labels follow the message language — no consumer reads a fact from
+the milestone; the receipt's `Run details` fold is the machine surface.
 
 - `commits` — all commits of the PR branch relative to the base at
   merge time (the denominator of the ratio).
@@ -517,13 +519,15 @@ The setting covers the Runner-owned Issue/PR conversation: start and live
 progress, phase and milestone notifications, thin-ticket clarification,
 the opened-PR scene, review findings and fix instructions, the human
 review/merge handoff, recoverable and terminal failures, delivery
-completion and release-task status comments. Translated are the human
-labels and prose; project/Issue text, paths, commands, URLs, error codes,
-raw logs, JSON keys, verdict/severity/action enums, labels, fingerprints
-and machine fields stay verbatim. Source files, project documentation,
-Issue titles/bodies, PR titles/bodies and release notes keep their own
-existing language rules — the setting never overrides them (this
-repository declares `en`, so its public ledger stays English on any host).
+completion and release-task status comments, and the attribution footer
+Orbi writes at the end of a PR body. Translated are the human labels and
+prose; project/Issue text, paths, commands, URLs, error codes, raw logs,
+JSON keys, verdict/severity/action enums, labels, fingerprints and
+machine fields stay verbatim. Source files, project documentation, Issue
+titles/bodies, PR titles and the rest of a PR body, and release notes
+keep their own existing language rules — the setting never overrides
+them (this repository declares `en`, so its public ledger stays English
+on any host).
 
 Comment identity stays language-independent: the readers match the hidden
 run/kind/scene markers, the progress block prefix and the persisted

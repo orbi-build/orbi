@@ -13,6 +13,7 @@ One test file for the whole contract:
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -243,8 +244,10 @@ def test_the_started_comment_never_names_the_runner_worktree_path(
     assert "worktree" not in body
     assert "run_id=abc12345" in body
     details = body.split("<details><summary>", 1)[1]
-    assert "- branch: orbi/owner-repo-issue-1153" in details
-    assert "- session: session-1" in details
+    branch_label = "分支" if language_code == "zh" else "branch"
+    session_label = "会话" if language_code == "zh" else "session"
+    assert f"- {branch_label}: orbi/owner-repo-issue-1153" in details
+    assert f"- {session_label}: session-1" in details
 
 
 def test_opened_pr_comment_keeps_the_scene_block(tmp_path):
@@ -266,7 +269,7 @@ def test_progress_body_labels_and_header_follow_the_language(tmp_path):
              "phase": "starting", "elapsed": "0s"}
     body = progress.progress_body(state)
     assert "**Orbi 进度**" in body
-    assert "- 角色: implement" in body
+    assert "- 角色: 实现" in body
     assert "<details><summary>运行详情</summary>" in body
     assert body.startswith("<!-- orbi:run=abcdef12 -->")
     # The documented formal prefix and the machine block are untouched.
@@ -396,7 +399,7 @@ def test_clarify_comment_renders_the_missing_pieces_in_the_bound_language():
     )
     assert "请按下面的形状补充 Issue 正文" in zh
     assert "缺少可观察结果" in zh
-    assert "Acceptance" in zh  # the repair shape stays the documented one
+    assert "验收：" in zh and "结果：" in zh
     en = clarify.render_comment(issue, verdict, "abcdef12", language_code="en")
     assert "Orbi: this ticket is not ready to deliver." in en
 
@@ -594,6 +597,179 @@ def test_milestone_plan_ready_follows_the_publisher_language(tmp_path):
     published.clear()
     milestone_module._publish_plan_milestone(EnglishPublisher(), tmp_path)
     assert published == ["plan ready"]
+
+
+# ---------------------------------------------- display text (Issue #1729)
+
+def test_started_comment_translates_visible_rows_and_keeps_machine_rows(
+        tmp_path,
+):
+    zh = delivery_comment.started_pi_comment_body(
+        _ctx(tmp_path),
+        "base_branch=main base_sha=abc1234 repo_config=deadbeef "
+        "run_id=abcdef12 priority=normal session=session-1",
+        language_code="zh",
+    )
+    assert "Orbi 已启动 Pi： run_id=abcdef12 priority=普通" in zh
+    assert "- 基础分支: main" in zh
+    assert "- 优先级: 普通" in zh
+    assert "- 基础 SHA: abc1234" in zh
+    assert "- 会话: session-1" in zh
+    # The public machine rows are byte-identical.
+    assert "- run_id=abcdef12" in zh
+    assert "- repo_config: deadbeef" in zh
+    en = delivery_comment.started_pi_comment_body(
+        _ctx(tmp_path),
+        "base_branch=main base_sha=abc1234 repo_config=deadbeef "
+        "run_id=abcdef12 priority=normal session=session-1",
+        language_code="en",
+    )
+    assert "Orbi started Pi: run_id=abcdef12 priority=normal" in en
+    assert "- base_branch: main" in en
+    assert "- priority: normal" in en
+    assert "- repo_config: deadbeef" in en
+    assert "- base_sha: abc1234" in en
+
+
+def test_opened_pr_comment_translates_visible_rows():
+    zh = delivery_comment.opened_pr_comment_body(
+        "abcdef12",
+        "base_branch=main base_sha=abc1234 run_id=abcdef12 priority=p0",
+        "https://github.com/owner/repo/pull/1", language_code="zh",
+    )
+    assert "Orbi 已开启 PR： https://github.com/owner/repo/pull/1" in zh
+    assert "- 基础分支: main" in zh
+    assert "- 优先级: P0" in zh
+    assert "- run_id=abcdef12" in zh
+
+
+def test_merged_milestone_translates_headline_and_field_labels():
+    calls = []
+
+    def run_command(command, **kwargs):
+        calls.append(command)
+        return json.dumps({"id": 42, "body": "x", "url": "u"})
+
+    publisher = progress.ProgressPublisher(
+        7, "owner/repo", "abcdef12", run_command=run_command,
+        language_code="zh",
+    )
+    publisher.milestone(
+        "merged: https://github.com/owner/repo/pull/1 "
+        "merge_commit=m1 review_rounds=1 external_commits=0 commits=1",
+    )
+    body = calls[0][-1]
+    assert "Orbi：已合并" in body
+    assert "- 结果: https://github.com/owner/repo/pull/1" in body
+    assert "- 评审轮次: 1" in body
+    assert "- 外部提交: 0" in body
+    assert "- 提交数: 1" in body
+    assert "- 合并提交: m1" in body
+    assert "- run_id=abcdef12" in body
+
+
+def test_progress_values_follow_the_language():
+    state = {
+        "run_id": "abcdef12", "issue": 7, "issue_title": "t",
+        "language": "zh", "role": "review", "priority": "normal",
+        "step": "merge", "tests": "passed", "pr": None,
+        "phase": "bash", "elapsed": "12s",
+        "activity": {"kind": "analysis", "target": None},
+    }
+    body = progress.progress_body(state)
+    assert "- 角色: 评审" in body
+    assert "- 阶段: 合并" in body
+    assert "- 活动: 分析" in body
+    assert "- 测试: 通过" in body
+    assert "- 优先级: 普通" in body
+    assert "- 阶段状态: 命令行" in body
+    assert "- 状态: pending" not in body
+
+
+def test_failed_tests_keep_the_external_check_names_raw():
+    state = {
+        "run_id": "abcdef12", "issue": 7, "issue_title": "t",
+        "language": "zh", "role": "implement", "priority": "p0",
+        "step": "implement", "tests": "failed: ci / test", "pr": None,
+        "phase": "read", "elapsed": "1s", "activity": None,
+    }
+    body = progress.progress_body(state)
+    assert "- 测试: 失败：ci / test" in body
+
+
+def test_english_milestone_and_started_rows_are_unchanged():
+    calls = []
+
+    def run_command(command, **kwargs):
+        calls.append(command)
+        return json.dumps({"id": 42, "body": "x", "url": "u"})
+
+    publisher = progress.ProgressPublisher(
+        7, "owner/repo", "abcdef12", run_command=run_command,
+        language_code="en",
+    )
+    publisher.milestone(
+        "merged: https://github.com/owner/repo/pull/1 "
+        "merge_commit=m1 review_rounds=1 external_commits=0 commits=1",
+    )
+    body = calls[0][-1]
+    assert "Orbi: merged" in body
+    assert "- result: https://github.com/owner/repo/pull/1" in body
+    assert "- review_rounds: 1" in body
+    assert "- external_commits: 0" in body
+    assert "- commits: 1" in body
+    assert "- merge_commit: m1" in body
+    assert "- run_id=abcdef12" in body
+
+
+def test_zh_contract_rows_are_byte_identical(tmp_path):
+    """Issue #1729 AC4: the machine rows stay exactly as v0.7.2."""
+    started = delivery_comment.started_pi_comment_body(
+        _ctx(tmp_path),
+        "base_branch=main base_sha=abc1234 repo_config=deadbeef "
+        "run_id=abcdef12 priority=normal",
+        language_code="zh",
+    )
+    assert "- repo_config: deadbeef" in started
+    assert "- run_id=abcdef12" in started
+    assert "<!-- orbi:run=abcdef12 -->" in started
+    assert "<!-- orbi:comment=started -->" in started
+    from orbi.failure_report import PreExistingCIFailure
+    from orbi import release_comments
+
+    failed = release_comments.release_failure_comment_body(
+        "abcdef12", "run_id=abcdef12 priority=normal",
+        PreExistingCIFailure("boom"), "zh",
+    )
+    assert "- failure: boom" in failed
+    assert "<!-- orbi:failure:v1 " in failed
+
+
+def test_merged_receipt_reads_naturally_without_findings():
+    from orbi import review_merge
+
+    review = language.text("zh", "review.summary_pass_clean")
+    assert review == "通过，没有发现问题"
+    zh = review_merge.merged_pr_comment_body(
+        "abcdef12", "https://github.com/owner/repo/pull/9", "c1", 2, 1, 3,
+        "main", review, language_code="zh",
+    )
+    assert "- 评审：通过，没有发现问题（2 个评审轮次）" in zh
+
+
+def test_pr_attribution_footer_follows_the_language():
+    link = "https://orbi.build/?ref=prfoot-owner"
+    zh = delivery_comment.pr_attribution_footer(
+        7, link, language_code="zh",
+    )
+    assert zh == language.text(
+        "zh", "runner.pr_attribution", link=link, issue=7,
+    )
+    assert "由 [Orbi]" in zh and "#7" in zh and link in zh
+    en = delivery_comment.pr_attribution_footer(
+        7, link, language_code="en",
+    )
+    assert en == f"Built by [Orbi]({link}) from Issue #7"
 
 
 # ------------------------------------------------------ the session boundary
