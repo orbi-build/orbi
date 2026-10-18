@@ -499,20 +499,24 @@ def test_base_branch_missing_needs_gits_missing_ref_sentence(detail):
 
 
 def test_terminal_reason_names_the_configured_base_branch():
-    """The comment names the CONFIGURED branch: Git's own line only repeats
-    the ref it was asked to fetch (Issue #1749)."""
+    """The comment names the CONFIGURED branch and keeps Git's raw answer
+    out of the explanation (Issue #1749, #1753): the evidence belongs to
+    the run details, the reason to the reader."""
     record = failure.classify("fatal: couldn't find remote ref other")
     assert record.reason_code == "base_branch_missing"
-    for code, language_phrase in (
-        ("en", "does not exist in the repository"),
-        ("zh", "不存在"),
+    for code, expected in (
+        ("en",
+         "This repository has no branch `release/9`, so Orbi doesn't "
+         "know which branch to start from."),
+        ("zh",
+         "这个仓库里没有分支 `release/9`，Orbi 不知道该从哪个分支开始改。"),
     ):
         reason = failure.terminal_reason(
             "fatal: couldn't find remote ref other", record,
             base_branch="release/9", language_code=code,
         )
-        assert "release/9" in reason
-        assert language_phrase in reason
+        assert reason == expected
+        assert "couldn't find remote ref" not in reason
 
 
 def test_terminal_reason_keeps_the_generic_sentence_for_other_failures():

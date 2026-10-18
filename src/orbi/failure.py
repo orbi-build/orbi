@@ -370,19 +370,23 @@ def workflow_permission_action(
 
 
 def terminal_action(record: Failure,
-                    language_code: str) -> str:
+                    language_code: str, *,
+                    base_branch: str | None = None) -> str:
     """The reader action for the implement-phase terminal handler.
 
     An unrecognized failure says the cause could not be determined
     instead of implying the Issue text is the problem (Issue #1651); a
-    missing base branch names its one repair (Issue #1749); every other
-    recognized terminal failure keeps the existing generic action.
+    missing base branch names the branch and both repairs — create it, or
+    pick an existing one where the repository was set up — plus how to
+    restart the Issue (Issue #1749, #1753); every other recognized
+    terminal failure keeps the existing generic action.
     """
     if record.reason_code == "unclassified":
         return language.text(language_code, "failure.terminal_unclassified")
     if record.reason_code == "base_branch_missing":
         return language.text(
             language_code, "failure.terminal_base_branch_missing",
+            base_branch=base_branch or "-",
         )
     return language.text(language_code, "failure.terminal_generic")
 
@@ -391,15 +395,16 @@ def terminal_reason(detail: str, record: Failure, *,
                     base_branch: str | None, language_code: str) -> str:
     """The reader-facing reason of the implement-phase terminal handler.
 
-    The missing-base-branch failure names the CONFIGURED branch: Git's own
-    `couldn't find remote ref <value>` line is the evidence, never the
-    setting a human has to repair (Issue #1749). Every other terminal
-    failure keeps the generic stopped-delivery sentence.
+    The missing-base-branch failure names the CONFIGURED branch and keeps
+    Git's own `couldn't find remote ref <value>` line out of the sentence:
+    that line is the evidence the run details carry, never the setting a
+    human has to repair (Issue #1749, #1753). Every other terminal failure
+    keeps the generic stopped-delivery sentence.
     """
     if record.reason_code == "base_branch_missing":
         return language.text(
             language_code, "failure.base_branch_missing_reason",
-            base_branch=base_branch or "-", detail=detail,
+            base_branch=base_branch or "-",
         )
     return language.text(
         language_code, "runner.delivery_stopped_reason", detail=detail,
@@ -465,8 +470,11 @@ def _failure_summary(reason: str,
     summary = re.sub(r"CalledProcessError\([^)]*\)",
                      command_failed, summary)
     summary = _redact_local_paths(summary)
-    summary = re.sub(r"\s+", " ", summary).strip(" .;:")
-    if not summary:
+    # Trailing dots are kept: a catalog sentence ("... start from.")
+    # reaches the reader as written (Issue #1753), while a trailing
+    # separator from exception text is noise.
+    summary = re.sub(r"\s+", " ", summary).strip(" ;:")
+    if not summary.strip("."):
         summary = command_failed
     if stderr:
         # Setup tools often write informational lines before the provider's
@@ -480,7 +488,9 @@ def _failure_summary(reason: str,
             else stderr.rstrip().rsplit("\n", 1)[-1].strip()
         )
         if stderr_summary and stderr_summary not in summary:
-            summary = f"{summary}: {stderr_summary}"
+            # The sentence separator never doubles the punctuation the
+            # summary already ends with.
+            summary = f"{summary.rstrip(' .;:')}: {stderr_summary}"
     return summary[:500]
 
 

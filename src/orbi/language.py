@@ -726,23 +726,30 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "Fix the failure described below and re-run this Issue.",
         "请修复下面描述的失败，然后重新运行这个 Issue。",
     ),
-    # Issue #1749: the configured base branch does not exist in the
-    # repository. The reason names the CONFIGURED branch (Git's own line
-    # only carries the value it was asked to fetch) and the action names
-    # the one repair a human decides.
+    # Issue #1749, #1753: the configured base branch does not exist in
+    # the repository. The reason names the CONFIGURED branch (Git's own
+    # line only carries the value it was asked to fetch) and says what is
+    # wrong; the action names both repairs — create the branch, or pick an
+    # existing one where this repository was set up (the web connection or
+    # the config file, so a hosted tenant has a place to go too) — and how
+    # to start the Issue over. Git's raw answer stays in the run details.
     "failure.base_branch_missing_reason": (
-        "base branch \u0060{base_branch}\u0060 does not exist in the repository: "
-        "{detail}",
-        "仓库中不存在 base branch \u0060{base_branch}\u0060：{detail}",
+        "This repository has no branch \u0060{base_branch}\u0060, so Orbi "
+        "doesn't know which branch to start from.",
+        "这个仓库里没有分支 \u0060{base_branch}\u0060，Orbi 不知道该从哪个"
+        "分支开始改。",
     ),
     "failure.terminal_base_branch_missing": (
-        "Create the missing base branch in the repository, or correct "
-        "\u0060base_branch\u0060 in the Runner configuration, then remove "
-        "\u0060ai-blocked\u0060 and re-add \u0060ai-ready\u0060 to run this "
-        "Issue again.",
-        "请在仓库中创建缺失的 base branch，或修正 Runner 配置里的 "
-        "\u0060base_branch\u0060，然后移除 \u0060ai-blocked\u0060 并重新添加 "
-        "\u0060ai-ready\u0060 以再次运行这个 Issue。",
+        "Either create \u0060{base_branch}\u0060 in the repository, or switch "
+        "Orbi to a branch that exists, wherever you set up this repository "
+        "(the branch you picked when connecting it on the web, or "
+        "base_branch in your config file). Then remove \u0060ai-blocked\u0060 "
+        "and add \u0060ai-ready\u0060 again, and Orbi will start over.",
+        "两种改法选一种：在仓库里建好分支 \u0060{base_branch}\u0060；或者把 "
+        "Orbi 用的基础分支换成仓库里已有的分支，在你当初设置这个仓库的地方"
+        "改（网页上连接仓库时选的分支，或配置文件里的 base_branch）。改好后"
+        "去掉 \u0060ai-blocked\u0060 标签、重新加上 \u0060ai-ready\u0060，"
+        "Orbi 会重新开始。",
     ),
     "failure.workflow_cause": (
         "GitHub rejected the push because the current GitHub App "
