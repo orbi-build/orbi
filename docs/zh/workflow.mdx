@@ -37,7 +37,7 @@ flowchart LR
   opened -->|独立审查会话（会话内修复）| verdict{"REVIEW_VERDICT"}
   verdict -->|clean verdict + merge 门禁| merged["ai-merged（终态）"]
   verdict -->|clean verdict + 已知仓库策略仍阻塞；需要维护者动作| awaiting["ai-awaiting-merge"]
-  awaiting -->|维护者动作完成，Orbi 恢复并合并指定 head| merged
+  awaiting -->|维护者动作完成后，Orbi 在队列无事可做的那一 tick 合并指定 head| merged
   verdict -->|超轮（人工决策）| blocked["ai-blocked（终态，人工决策）"]
   opened -->|finding / base 冲突 / 可恢复失败（Issue #50）| fixneeded["ai-fix-needed"]
   fixneeded -->|下一 tick：同一 run、branch、worktree、PR 的下一个审查会话| opened
@@ -92,7 +92,8 @@ ai-ready                任务被派发（orbi add，或人工加标签）
                         （Issue #1526；不回溯已合并的 Issue）；
                         PR body 的 Fixes #N 原生关闭 Issue
   -> ai-awaiting-merge  已知策略阻塞：Issue 评论写明维护者要做的一件事；
-                        完成后 Orbi 在后续 tick 恢复并合并 PR
+                        Orbi 只在队列无事可做的 tick 重试合并，
+                        维护者完成后合并指定 head
 ```
 
 已有 run/PR 的失败被分类（Issue #50）：**可恢复失败**（Pi 执行失败、
@@ -144,6 +145,12 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
   领取；`ai-blocked` 从不自动恢复。携带回填的 `ai-in-progress` 标签的
   交付仍会被拾取（Issue #178：review 中被杀的 Runner 会留下该标签——
   正向的 opened-PR 限定已保证 implement 阶段的 Issue 不会匹配该扫描）。
+- `ai-awaiting-merge` 是等维护者的等待态，因此永不与 Runner 能推进的工作
+  抢 tick（Issue #1745）：只有在 opened-PR 评审、in-flight 接续和 ready
+  领取三个扫描本 tick 都无结果时，才用同一条 merge-only 路径重试一次。
+  一个等批准的 PR 因此不会再让评审队列和新票领取停摆。代价是：维护者
+  动作之后，合并发生在队列首次无事可做的那一 tick，而不是紧接着的下一
+  tick。
 - review/fix 循环有界（5 轮）。已完成轮数存在受信任现场里
   （`review_round` 字段，Issue #788）：每条轮次评论携带更新后的现场
   块，下一 tick 从中读出推进后的计数（人工在 block 之后把 Issue 改回
@@ -271,16 +278,19 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 | `ai-pr-opened` | PR 已创建并验收；等待独立审查 |
 | `ai-fix-needed` | PR head 尚不可合并，或已有 run/PR 的可恢复失败（Issue #50）；下一 tick 在同一 run、branch、worktree、PR 上继续 |
 | `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支。合并同时清除 `ai-ready`，因此合并后的 Issue 只剩 `ai-merged`（Issue #1526；不回溯已合并的 Issue） |
-| `ai-awaiting-merge` | 评审和检查已通过，但已知仓库策略仍阻塞合并；评论写明维护者动作，完成后 Orbi 恢复并合并指定 PR head |
+| `ai-awaiting-merge` | 评审和检查已通过，但已知仓库策略仍阻塞合并；评论写明维护者动作。只在队列无事可做的 tick 重试（Issue #1745），随后由 Orbi 合并指定 PR head |
 | `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50）；blocked comment 写明为什么不能自动恢复；人工必须决定下一步 |
 | `ai-human-review` | 人工验收门禁（Issue #763）：人已确认该交付的验收清单。只有人能打或摘——Runner 永不增删 |
 | `ai-needs-detail` | 薄 ticket 闸门（Issue #1088）：ticket 说得太少无法交付，Orbi 在开工前停住。Runner 把 `ai-ready` 换成它，并只发一条列出缺失项的评论；人补齐后重新加 `ai-ready` |
 
 仓库策略可能在 Orbi 的评审和检查都通过后仍阻塞合并。Orbi 交付 PR 后停止
 在 `ai-awaiting-merge`；Issue 评论写出精确 head 和维护者要做的一件事（适用时
-包含设置 URL）。维护者完成策略变更或给出所需批准后，下一 tick 恢复，仍由
-Orbi 自己合并 PR。若 preflight 没有已知的 FAILED 动作，或是其他合并失败，
-仍进入 `ai-blocked`。
+包含设置 URL）。这种交付是等待而不是可推进的工作，所以只有在 opened-PR、
+in-flight 和 ready 三个扫描本 tick 都无结果后才会被重试：等待中的 PR 不再
+抢走评审、接续或新领取的 tick。维护者完成策略变更或给出所需批准后，队列
+首次无事可做的 tick 恢复，仍由 Orbi 自己合并 PR——这条规则的代价就是它
+不是紧接着的下一 tick。若 preflight 没有已知的 FAILED 动作，或是其他合并
+失败，仍进入 `ai-blocked`。
 
 ## 人工验收门禁（ai-human-review）
 

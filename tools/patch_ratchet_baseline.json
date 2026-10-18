@@ -46,6 +46,7 @@
     "release_git": 0,
     "release_notes": 0,
     "repo_config": 0,
+    "resume_scan": 0,
     "review_merge": 98,
     "review_rounds": 0,
     "run_state": 5,

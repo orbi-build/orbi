@@ -6807,6 +6807,9 @@ def test_claim_time_comment_follows_the_repository_language(
         claim.__dict__, "pick_in_progress_issue", lambda *a, **k: None,
     )
     monkeypatch.setitem(claim.__dict__, "pick_issue", lambda *a, **k: None)
+    monkeypatch.setitem(
+        claim.__dict__, "pick_awaiting_merge_delivery", lambda *a, **k: None,
+    )
     monkeypatch.setitem(journal.__dict__, "_CURRENT_RUN_ID", "abc12345")
     config = config_domain.RunnerConfig(
         repo_dir=tmp_path, source_repos=("o/r",), message_language="zh",
@@ -6858,6 +6861,9 @@ def test_reconcile_open_epics_runs_on_a_fresh_tick(monkeypatch, tmp_path):
     monkeypatch.setattr(claim, "pick_resumable_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(claim, "pick_in_progress_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(claim, "pick_issue", lambda *args, **kwargs: None)
+    monkeypatch.setitem(
+        claim.__dict__, "pick_awaiting_merge_delivery", lambda *a, **k: None,
+    )
     assert claim.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1, hooks=resume_deps()) is None
     assert calls == [("o/r", "a1b2c3d4", "en")]
     # A repository's zh message language reaches the Epic sweep (Issue #1705).

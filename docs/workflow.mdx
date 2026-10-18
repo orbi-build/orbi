@@ -37,7 +37,7 @@ flowchart LR
   opened -->|independent review session, fixes in-session| verdict{REVIEW_VERDICT}
   verdict -->|clean verdict + merge gate| merged["ai-merged (terminal)"]
   verdict -->|clean verdict + known repository policy blocker remains; maintainer action required| awaiting["ai-awaiting-merge"]
-  awaiting -->|maintainer action done, Orbi resumes and merges the named head| merged
+  awaiting -->|maintainer action done: Orbi merges the named head on the first tick whose queue is otherwise empty| merged
   verdict -->|rounds exhausted (human decision)| blocked["ai-blocked (terminal, human decides)"]
   opened -->|finding / base conflict / recoverable failure (Issue #50)| fixneeded["ai-fix-needed"]
   fixneeded -->|next tick: next review session on the SAME run, branch, worktree, PR| opened
@@ -102,7 +102,9 @@ ai-ready                a task is dispatched (orbi add, or a human
                         merged Issues are not backfilled); the PR body's
                         Fixes #N closes the Issue natively
   -> ai-awaiting-merge  known policy blocker: the Issue comment names the
-                        one maintainer action; Orbi resumes and merges after it
+                        one maintainer action; Orbi re-checks the merge only
+                        on a tick whose queue is otherwise empty, and merges
+                        the named head after the maintainer acted
 ```
 
 A failure of an existing run/PR is classified (Issue #50): an
@@ -170,6 +172,13 @@ Rules of the chain:
   `ai-in-progress` label is still picked up (Issue #178: a runner killed
   during review leaves it behind — the positive opened-PR qualifier
   already keeps implement-phase Issues out of the scan).
+- `ai-awaiting-merge` waits for a maintainer, so it never competes with
+  the work the runner can move (Issue #1745): it is re-checked — the same
+  merge-only path — only on a tick where the opened-PR review, the
+  in-flight restart and the ready scan all found nothing. One PR waiting
+  for approval therefore never starves the review backlog or the new
+  claims. The cost: after the maintainer acts, the merge happens on the
+  first otherwise-idle tick, not on the very next one.
 - The review/fix loop is bounded (5 rounds). The completed-round count
   lives in the trusted scene (`review_round`, Issue #788): every round
   comment carries the updated scene block, so the next tick reads the
@@ -326,7 +335,7 @@ commits — initialize them per repository (see
 | `ai-pr-opened` | PR created and verified; awaiting the independent review |
 | `ai-fix-needed` | The PR head is not mergeable yet, or an AI-recoverable failure of the run/PR (Issue #50); the next tick resumes the same run, branch, worktree and PR |
 | `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch. The merge also clears `ai-ready`, so a merged Issue is `ai-merged` alone (Issue #1526; existing merged Issues are not backfilled) |
-| `ai-awaiting-merge` | Review and checks passed, but a known repository policy blocker remains; the comment names the maintainer action and Orbi resumes to merge the named PR head |
+| `ai-awaiting-merge` | Review and checks passed, but a known repository policy blocker remains; the comment names the maintainer action. Re-checked only on a tick whose queue is otherwise empty (Issue #1745), then Orbi merges the named PR head |
 | `ai-blocked` | Only an external precondition the AI cannot safely judge or fix (Issue #50); the blocked comment states why automatic recovery is impossible; a human must decide the next step |
 | `ai-human-review` | The human acceptance gate (Issue #763): a person confirmed the delivery's acceptance checklist. Only a human applies or removes it — the Runner never touches it |
 | `ai-needs-detail` | The thin-ticket clarification gate (Issue #1088): the ticket states too little to deliver, so Orbi stopped BEFORE any work. The Runner swaps `ai-ready` for it and posts ONE comment naming the missing pieces; a human adds them and re-adds `ai-ready` |
@@ -334,10 +343,14 @@ commits — initialize them per repository (see
 A repository policy may block the merge even after Orbi's review and checks
 pass. Orbi stops at `ai-awaiting-merge`; the Issue comment names the exact head
 and the one maintainer action (including the settings URL when applicable).
-After the maintainer changes the policy or supplies the required approval, a
-later tick resumes and Orbi merges the PR itself. A policy rejection without a
-known FAILED preflight action, or any other merge failure, remains
-`ai-blocked`.
+Such a delivery is a wait, not work the runner can move, so it is re-checked
+only after the opened-PR, in-flight and ready scans found nothing for the tick:
+the waiting PR never takes a tick away from a review, a restart or a new claim.
+After the maintainer changes the policy or supplies the required approval, the
+next otherwise-idle tick resumes and Orbi merges the PR itself — the cost of
+the rule is that this is the first tick with an empty queue, not the very next
+tick. A policy rejection without a known FAILED preflight action, or any other
+merge failure, remains `ai-blocked`.
 
 ## Human acceptance gate (ai-human-review)
 

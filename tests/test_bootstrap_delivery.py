@@ -1732,6 +1732,9 @@ def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
 def test_pick_next_delivery_returns_none_when_all_scans_empty(
     monkeypatch, tmp_path,
 ):
+    """All four scans empty; the fourth is Issue #1745's deferred
+    `ai-awaiting-merge` re-check (see test_resume_pr for its behavior
+    against the GitHub fake)."""
     monkeypatch.setattr(
         claim, "pick_resumable_delivery",
         lambda repo, slot_dir, max_concurrency, **_kwargs: None,
@@ -1741,6 +1744,10 @@ def test_pick_next_delivery_returns_none_when_all_scans_empty(
         lambda repo, slot_dir, max_concurrency, **_kwargs: None,
     )
     monkeypatch.setattr(claim, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
+    monkeypatch.setitem(
+        claim.__dict__, "pick_awaiting_merge_delivery",
+        lambda repo, slot_dir, max_concurrency, **_kwargs: None,
+    )
     assert claim.pick_next_delivery(
         ["r1"], tmp_path / "slots", 1,
         hooks=resume_deps(),
