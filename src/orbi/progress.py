@@ -44,10 +44,16 @@ from orbi.comment_kind import (
     comment_kind,
     comment_kind_marker,
 )
+from orbi.progress_display import (
+    activity_display,
+    field_label,
+    localized_fields,
+    tests_value,
+    vocabulary,
+)
 from orbi.progress_summary import (
     PROGRESS_BLOCK_VERSION,
     STEP_BY_ROLE,
-    activity_text,
     progress_block,
     progress_summary,
     safe_activity,
@@ -73,26 +79,6 @@ MILESTONE_PREFIX = "Orbi:"
 # marker it identifies the run's progress comment among the run's other
 # marker-carrying comments (started Pi / opened PR scenes, milestones).
 PROGRESS_HEADER = "**Orbi progress**"
-# The progress comment's field labels (Issue #1660): the machine fields
-# (`run_id=`, the hidden block) stay verbatim; these human labels
-# follow the run's message language.
-PROGRESS_FIELD_KEYS = {
-    "role": "progress.field.role",
-    "step": "progress.field.step",
-    "reported_at": "progress.field.reported_at",
-    "last_activity": "progress.field.last_activity",
-    "activity": "progress.field.activity",
-    "tests": "progress.field.tests",
-    "pr": "progress.field.pr",
-    "recovery": "progress.field.recovery",
-    "review_round": "progress.field.review_round",
-    "issue": "progress.field.issue",
-    "priority": "progress.field.priority",
-    "phase": "progress.field.phase",
-    "elapsed": "progress.field.elapsed",
-    "branch": "progress.field.branch",
-    "session": "progress.field.session",
-}
 # The started scene carries this headline; together with the run marker
 # it identifies the run's single `Orbi started Pi:` comment, so a resume
 # PATCHes it in place instead of appending a near-identical duplicate
@@ -489,7 +475,7 @@ def progress_body(state: dict) -> str:
     language_code = state["language"]
 
     def label(key: str) -> str:
-        return language.text(language_code, PROGRESS_FIELD_KEYS[key])
+        return field_label(language_code, key)
 
     def value(key: str) -> str:
         item = state.get(key)
@@ -506,12 +492,14 @@ def progress_body(state: dict) -> str:
         "",
         language.text(language_code, "progress.header"),
         "",
-        row("role", value("role")),
-        row("step", summary["step"] or "-"),
+        row("role", vocabulary(language_code, "role", value("role"))),
+        row("step", vocabulary(
+            language_code, "step", summary["step"] or "-",
+        )),
         row("reported_at", summary["reported_at"]),
         row("last_activity", (activity or {}).get("at") or "-"),
-        row("activity", activity_text(activity)),
-        row("tests", value("tests")),
+        row("activity", activity_display(language_code, activity)),
+        row("tests", tests_value(language_code, value("tests"))),
         row("pr", value("pr")),
     ]
     # Exceptional state belongs with the at-a-glance status. A normal
@@ -526,8 +514,9 @@ def progress_body(state: dict) -> str:
     details = [
         row("issue", issue_field(state["issue"], state["issue_title"])),
         f"- run_id={state['run_id']}",
-        row("priority", value("priority")),
-        row("phase", value("phase")),
+        row("priority", vocabulary(language_code, "priority",
+                                   value("priority"))),
+        row("phase", vocabulary(language_code, "phase", value("phase"))),
         row("elapsed", value("elapsed")),
         row("branch", value("branch")),
         row("session", value("session")),
@@ -683,9 +672,19 @@ class ProgressPublisher:
                 fields["result"] = prose if headline == "merged" else detail
         fields["run_id"] = self.run_id
         prefix = language.text(self.language_code, "progress.milestone")
+        detail_keys = {"merge_commit"} if headline == "merged" else set()
+        headline = language.term(
+            self.language_code,
+            f"progress.milestone_headline.{headline}", headline,
+        )
+        localized = localized_fields(self.language_code, fields)
         body = field_block(
-            self.run_id, f"{prefix} {headline}", fields,
-            detail_keys={"merge_commit"} if headline == "merged" else set(),
+            self.run_id,
+            language.text(self.language_code, "progress.milestone_heading",
+                          prefix=prefix, headline=headline),
+            localized,
+            detail_keys={field_label(self.language_code, key)
+                         for key in detail_keys},
             language_code=self.language_code,
         )
         if block:

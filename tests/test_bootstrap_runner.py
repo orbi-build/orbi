@@ -13055,6 +13055,50 @@ def test_deliver_pr_creates_the_pr_when_absent(
         assert "?ref=" not in body
 
 
+def test_deliver_pr_uses_the_bound_language_for_the_attribution_footer(
+    monkeypatch, tmp_path,
+):
+    """Issue #1729: the PR body's one Orbi-authored prose line follows the
+    run's message language; the marker, `Fixes` and `(run_id=)` do not."""
+    from orbi import language
+
+    calls = []
+    _seed_deliver_run_state(tmp_path)
+    created = []
+    link = "https://orbi.build/?ref=prfoot-owner"
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[0] == "gh" and command[1] == "pr" and command[2] == "list":
+            return json.dumps(created)
+        if command[0] == "gh" and command[1] == "pr" and command[2] == "create":
+            created.append({
+                "url": FAKE_PR_URL,
+                "baseRefName": "main",
+                "headRefName": DELIVER_BRANCH,
+                "headRefOid": FAKE_HEAD_SHA,
+                "body": command[command.index("--body") + 1],
+            })
+            return FAKE_PR_URL
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    assert runner.deliver_pr(
+        RunContext(run_id=FAKE_RUN_ID, issue=4, branch=DELIVER_BRANCH,
+                   worktree=tmp_path, source_repo="o/r"),
+        "main", "9" * 40, issue_title="Closeout title", repo_dir=tmp_path,
+        attribution_link=link, language_code="zh",
+    ) == FAKE_PR_URL
+    body = created[0]["body"]
+    assert language.text(
+        "zh", "runner.pr_attribution", link=link, issue=4,
+    ) in body
+    assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in body
+    assert "Fixes #4" in body
+    assert f"(run_id={FAKE_RUN_ID})" in body
+    assert link in body
+
+
 def test_deliver_pr_fails_fast_when_pr_create_fails(monkeypatch, tmp_path):
     _seed_deliver_run_state(tmp_path)
 

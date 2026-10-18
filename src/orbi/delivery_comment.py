@@ -1,12 +1,15 @@
-"""The runner-owned run comments: the started-Pi and opened-PR scenes
-(Issue #1660).
+"""The runner-owned run comments and the PR body's footer: the
+started-Pi and opened-PR scenes (Issue #1660) and the attribution footer
+(Issue #1729).
 
 Both comments double as the run's machine-readable anchors: the started
 comment carries the `started` kind marker and the opened-PR comment
-carries the `orbi:scene:v1` block the next tick resumes from. Only their
-HEADLINE is human prose and follows the run's bound message language
-(the explicit `language_code`); the hidden
-markers, the field lines and the scene block stay exactly as they were.
+carries the `orbi:scene:v1` block the next tick resumes from. Their
+human text — the headline, the field labels and the stored display
+values — follows the run's bound message language (the explicit
+`language_code`); the hidden markers, the public machine rows
+(`run_id=`, `repo_config:`) and the scene block stay exactly as they
+were.
 
 Extracted from `runner.py` unchanged apart from the language, so the
 frozen runner module does not grow (Issue #1229) and a caller keeps
@@ -19,7 +22,16 @@ from orbi import language, scene
 from orbi.comment_kind import COMMENT_KIND_STARTED
 from orbi.delivery_scene import RunContext
 from orbi.journal import validate_run_id
-from orbi.progress import STARTED_HEADER, _run_info_fields, field_block
+from orbi.progress import (
+    STARTED_HEADER,
+    _run_info_fields,
+    field_block,
+)
+from orbi.progress_display import (
+    field_label,
+    localized_fields,
+    vocabulary,
+)
 
 
 def started_pi_comment_body(ctx: RunContext, run_info: str,
@@ -38,17 +50,35 @@ def started_pi_comment_body(ctx: RunContext, run_info: str,
     if extra_fields:
         fields.update(extra_fields)
     info = _run_info_fields(run_info)
+    rendered_info = {
+        key: (vocabulary(language_code, "priority", info[key])
+              if key == "priority" else info[key])
+        for key in ("run_id", "priority")
+        if key in info
+    }
     headline = language.text(
         language_code, "delivery.started_headline",
     ) + " " + " ".join(
-        f"{key}={info[key]}" for key in ("run_id", "priority")
-        if key in info
+        f"{key}={value}" for key, value in rendered_info.items()
     )
+    detail_keys = {"base_sha", "repo_config", "branch", "session"}
     return field_block(
-        ctx.run_id, headline, fields,
-        detail_keys={"base_sha", "repo_config", "branch", "session"},
+        ctx.run_id, headline, localized_fields(language_code, fields),
+        detail_keys={field_label(language_code, key) for key in detail_keys},
         kind=COMMENT_KIND_STARTED,
         language_code=language_code,
+    )
+
+
+def pr_attribution_footer(issue: int, attribution_link: str, *,
+                          language_code: str) -> str:
+    """The PR body's attribution footer in the bound message language.
+
+    The link URL and `#<issue>` are the machine facts and stay verbatim.
+    """
+    return language.text(
+        language_code, "runner.pr_attribution",
+        link=attribution_link, issue=issue,
     )
 
 
@@ -86,9 +116,10 @@ def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
         pr_url=pr_url,
         external="true" if external else "",
     )
+    detail_keys = {"base_sha", "repo_config", "branch", "session"}
     body = field_block(
-        run_id, headline, fields,
-        detail_keys={"base_sha", "repo_config", "branch", "session"},
+        run_id, headline, localized_fields(language_code, fields),
+        detail_keys={field_label(language_code, key) for key in detail_keys},
         language_code=language_code,
     )
     lines = body.splitlines()
