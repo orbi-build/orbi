@@ -278,15 +278,6 @@ CLASSIFY_CASES = (
         "blocked",
     ),
     (
-        "tests_failed",
-        lambda: subprocess.CalledProcessError(
-            1, ["pytest"], stderr="3 failed, 10 passed in 1.2s",
-        ),
-        "fix_ticket",
-        False,
-        "fix_needed",
-    ),
-    (
         "review_budget_exhausted",
         lambda: runner.ReviewRoundsExhausted("round budget spent"),
         "decide",
@@ -362,6 +353,28 @@ def test_classify_failure_returns_unclassified_for_an_arbitrary_exception():
     assert record.reason_code == "unclassified"
     assert record.action_code == "fix_ticket"
     assert record.retry_safe is False
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        # Issue #1759: the delivery runs no tests of its own, so an "N
+        # failed" count in a message is prose, never a test result. The
+        # classifier must not relabel it as `tests_failed`.
+        "push failed: 2 failed attempts",
+        "2 failed attempts to reach the provider",
+        "test failed on the second call",
+        # Even a pytest-shaped line is not evidence: nothing runs pytest.
+        "3 failed, 10 passed in 1.2s",
+    ],
+)
+def test_a_failure_merely_mentioning_a_failed_count_is_not_tests_failed(detail):
+    record = failure.classify(detail)
+    assert record.reason_code != "tests_failed"
+    assert record == failure.Failure(
+        reason_code="unclassified", action_code="fix_ticket",
+        retry_safe=False, outcome="blocked",
+    )
 
 
 def test_classify_failure_maps_generic_unrecoverable_to_human_decision():
@@ -777,7 +790,9 @@ def test_report_delivery_failure_recoverable_is_fix_needed(monkeypatch):
     assert outcome == "fix needed"
     parsed = failure.parse(posted[0])
     assert parsed is not None
-    assert parsed.reason_code == "tests_failed"
+    # Issue #1759: pytest-shaped text no longer decides the reason; the
+    # outcome still follows the exception type (recoverable -> fix needed).
+    assert parsed.reason_code == "unclassified"
     assert parsed.action_code == "fix_ticket"
     assert parsed.outcome == "fix_needed"
     assert parsed.retry_safe is False
@@ -871,7 +886,7 @@ def test_report_delivery_failure_fix_needed_milestone_is_machine_readable(
     milestone = milestones[0]
     assert "Orbi: fix needed" in milestone
     assert failure.parse(milestone) == failure.Failure(
-        reason_code="tests_failed", action_code="fix_ticket",
+        reason_code="unclassified", action_code="fix_ticket",
         retry_safe=False, outcome="fix_needed",
     )
     assert "- stderr: 3" not in milestone
