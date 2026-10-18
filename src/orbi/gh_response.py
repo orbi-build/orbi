@@ -21,6 +21,10 @@ be 4", which covers the gh subcommands that print no response headers.
 JSON output escapes newlines inside string values, so a line that starts
 with a status line can only be gh's own header block — a body that merely
 QUOTES an HTTP example keeps it inside one JSON string.
+
+An empty body prints no line at all: gh's output is then the status line
+and the headers, and the stripped stdout ends after the last header. That
+block is still complete — the body it carries is the empty string.
 """
 from __future__ import annotations
 
@@ -89,7 +93,15 @@ def include_headers(command: list[str]) -> list[str]:
 
 
 def _header_block_end(lines: list[str], start: int) -> int | None:
-    """Index of the first line after a header block, or None if not one."""
+    """Index of the first line after a header block, or None if not one.
+
+    A block also ends at the end of the output: gh prints no body line at
+    all when the response body is empty (a `--jq` filter that selects
+    nothing, a `204`), and the caller's stripped stdout then ends right
+    after the last header — without the trailing blank line. A status
+    line followed by header lines and nothing else is still gh's header
+    block, never body text (Issue #1760).
+    """
     index = start + 1
     if index >= len(lines) or not (
         _HEADER_LINE_RE.match(lines[index]) or lines[index][:1] in " \t"
@@ -102,7 +114,7 @@ def _header_block_end(lines: list[str], start: int) -> int | None:
         if not (_HEADER_LINE_RE.match(line) or line[:1] in " \t"):
             return None
         index += 1
-    return None
+    return len(lines)
 
 
 def response_parts(output: str | None) -> tuple[int | None, int | None, str]:

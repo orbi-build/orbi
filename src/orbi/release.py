@@ -1171,8 +1171,10 @@ def process_release(issue: dict, config: RunnerConfig,
        The subsequent steps run against that commit.
     5. Test acceptance is the #268 CI-wait gate on the release commit:
        after the version bump the gates re-run against that exact
-       commit, and a red or timed-out CI takes the existing recoverable
-       failure path. No local test execution.
+       commit, and a red or timed-out CI takes the terminal failure
+       path: a spent wait budget is a human decision
+       (`ReleaseGateWaitTimeout`), never a transient requeue
+       (Issue #1760). No local test execution.
     6. Tag: the remote tag must not exist or must point EXACTLY at
        the release commit (a mismatch fails — an existing tag is
        never moved; one exception: a tag pointing at an ancestor of

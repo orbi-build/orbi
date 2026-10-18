@@ -133,18 +133,33 @@ def test_response_parts_without_a_header_block_is_the_body():
 
 
 @pytest.mark.parametrize("output", [
-    # A status-looking line with nothing after it.
+    # A status-looking line with nothing after it: no header line follows,
+    # so it is not gh's response metadata.
     "HTTP/2.0 500 Error",
     # A status-looking line followed by a line that is not a header.
     "HTTP/2.0 403 Forbidden\nnot a header\n\nbody",
     "HTTP/2.0 403 Forbidden\nContent-Type: application/json\nnot a header\n\nbody",
-    # A header block that never reaches its blank line.
-    "HTTP/2.0 500 Error\nContent-Type: application/json",
 ])
 def test_response_parts_needs_a_complete_header_block(output):
     """Only a complete block (status line, header lines, blank line) is
     response metadata; anything else stays part of the body."""
     assert gh_response.response_parts(output) == (None, None, output.strip())
+
+
+def test_response_parts_reads_a_block_whose_body_is_empty():
+    """gh prints no body line for an empty body, and the caller's stripped
+    stdout then ends after the last header — the block is still complete and
+    the body is the empty string, never the header text (Issue #1760)."""
+    # A gh api --jq filter that selects nothing (the release milestone read
+    # of a milestone outside the first page): the real stdout is the status
+    # line and the headers only.
+    stripped = (
+        "HTTP/2.0 200 OK\n"
+        "Content-Type: application/json; charset=utf-8\n"
+        "X-Ratelimit-Remaining: 3796\n"
+        "X-Ratelimit-Used: 1204"
+    )
+    assert gh_response.response_parts(stripped) == (200, 3796, "")
 
 
 def test_failed_request_carries_the_response_status():

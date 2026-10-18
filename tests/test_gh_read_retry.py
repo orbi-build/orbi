@@ -318,6 +318,31 @@ def test_gh_read_command_returns_first_success_without_retry(monkeypatch):
     assert len(calls) == 1
 
 
+def test_gh_read_command_returns_an_empty_body_not_its_headers(monkeypatch):
+    """A read whose response body is empty returns "" — never the status
+    line and headers gh printed for --include (Issue #1760).
+
+    The real scene: the milestone read's jq filter selects nothing, so gh
+    prints the headers only; run_command strips the trailing blank line,
+    and the adapter must still recognize the header block it asked for.
+    """
+    def fake_run(command, **kwargs):
+        # Exactly what run_command returns for an empty body: the status
+        # line and the headers, stripped, without the trailing blank line.
+        return (
+            "HTTP/2.0 200 OK\r\n"
+            "Content-Type: application/json; charset=utf-8\r\n"
+            "X-Ratelimit-Remaining: 3796\r\n"
+            "\r\n"
+        ).strip()
+
+    assert runner.run_gh_read_command(
+        ["gh", "api", "repos/o/r/milestones",
+         "--jq", '.[] | select(.title=="v0.7.5") | .open_issues'],
+        command_runner=fake_run,
+    ) == ""
+
+
 def test_gh_read_command_exhausts_and_reraises_unchanged(monkeypatch):
     calls = []
     monkeypatch.setattr(runner.time, "sleep", lambda _: None)
@@ -488,24 +513,41 @@ def test_is_readonly_gh_command_classifies_subcommands():
 
 def test_list_issues_does_not_retry_a_rejected_credential(monkeypatch):
     """Issue #1760: the tick's `list_issues` read of a rejected credential
-    is a repair, not a retry — it fails on the first attempt carrying the
-    response status the classifier reads."""
+    is a repair, not a retry.
+
+    `list_issues` runs `gh issue list`, which prints no response headers
+    (`gh --include` is a `gh api` flag), so the real failure is exit 1
+    with `HTTP 401: Bad credentials` on stderr — modelled here as gh
+    prints it. The read fails on its first attempt; the classification
+    then reads the remaining text marker, which is all that shape carries.
+    """
+    from orbi import failure
+
     calls = []
     monkeypatch.setattr(runner.time, "sleep", lambda _: pytest.fail("slept"))
 
     def fake_run(command, **kwargs):
         calls.append(list(command))
         raise subprocess.CalledProcessError(
-            1, command, output=failed_response(401),
-            stderr="gh: Bad credentials (HTTP 401)",
+            1, command,
+            stderr="HTTP 401: Bad credentials "
+                   "(https://api.github.com/graphql)",
         )
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    with pytest.raises(github.gh_response.GitHubRequestFailed) as caught:
+    with pytest.raises(subprocess.CalledProcessError) as caught:
         runner.list_issues(
             "orbi-build/orbi-cloud", state="open",
             search="label:ai-fix-needed,ai-pr-opened -label:ai-blocked",
             json_fields="number,title,state,url,labels", limit=1,
         )
     assert len(calls) == 1
-    assert caught.value.status == 401
+    assert gh_response_status(caught.value) is None
+    assert failure.classify(
+        runner._failure_detail(caught.value), error=caught.value,
+    ).reason_code == "credential_missing"
+
+
+def gh_response_status(exc):
+    """The response status the adapter attached, or None."""
+    return getattr(exc, "status", None)
