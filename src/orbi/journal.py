@@ -13,6 +13,7 @@ share one seam and one logger without importing `runner`.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 import time
@@ -486,6 +487,44 @@ def event(kind: str, scene: str | None = None, /, *,
     LOGGER.log(level, " ".join(parts))
 
 
+# Git localises its messages, and so does the C library behind strings like
+# "Connection timed out". Every text check Orbi makes on a Git failure
+# (`GIT_TRANSIENT_ERROR_MARKERS` below, the release push-rejection markers,
+# the git part of `failure._GITHUB_TRANSIENT_RE`) matches the C-locale
+# wording, so without this a Chinese-locale host would silently stop
+# recognising the same errors (Issue #1758). `LANGUAGE` outranks `LC_ALL` in
+# gettext, so it is cleared for the child too. This is the message locale of
+# Git only: Orbi's own comment language still follows `language.py`.
+#
+# Every Git call goes through this seam (`run_git_network_command` included).
+# The one deliberate exception is the best-effort
+# `progress.runner_fingerprint` probe: its output is a commit SHA, which is
+# never translated, and any failure already degrades to `unknown`.
+GIT_MESSAGE_LOCALE = {"LC_ALL": "C", "LANGUAGE": ""}
+
+
+def _is_git_command(command: list[str]) -> bool:
+    """Whether a command runs Git, whatever path form it was given as."""
+    return bool(command) and Path(command[0]).name == "git"
+
+
+def _command_environment(
+    command: list[str], env: dict[str, str] | None,
+) -> dict[str, str] | None:
+    """The environment for one child: only Git gets the C message locale.
+
+    `None` keeps the plain inheritance of the parent environment, so a
+    non-Git child (`gh`, a test command) is untouched. A caller-supplied
+    `env` keeps every key it carries — the release git identity passes a
+    complete `os.environ` copy and only gains the message locale.
+    """
+    if not _is_git_command(command):
+        return env
+    child_env = dict(os.environ if env is None else env)
+    child_env.update(GIT_MESSAGE_LOCALE)
+    return child_env
+
+
 def run_command(command: list[str], *, cwd: Path | None = None,
                 timeout: int | None = None,
                 log_command: list[str] | None = None,
@@ -512,8 +551,9 @@ def run_command(command: list[str], *, cwd: Path | None = None,
             "check": check,
             "timeout": timeout,
         }
-        if env is not None:
-            run_kwargs["env"] = env
+        child_env = _command_environment(command, env)
+        if child_env is not None:
+            run_kwargs["env"] = child_env
         result = subprocess.run(command, **run_kwargs)
     except subprocess.CalledProcessError as exc:
         event(

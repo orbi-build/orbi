@@ -19,6 +19,7 @@ bookkeeping, reconciliation, failure reporting) stay in
 `test_bootstrap_runner.py`.
 """
 import json
+import os
 import subprocess
 from unittest.mock import Mock
 
@@ -37,9 +38,11 @@ def test_run_command_returns_stdout(monkeypatch, tmp_path):
     completed = Mock(stdout=" output \n", stderr="")
     monkeypatch.setattr(runner.subprocess, "run", Mock(return_value=completed))
     assert runner.run_command(["git", "status"], cwd=tmp_path) == "output"
+    # A git child alone carries the C message locale (Issue #1758).
     runner.subprocess.run.assert_called_once_with(
         ["git", "status"], cwd=tmp_path, capture_output=True,
         text=True, check=True, timeout=None,
+        env={**os.environ, "LC_ALL": "C", "LANGUAGE": ""},
     )
 
 

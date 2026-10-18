@@ -8,6 +8,7 @@ they never patch `runner` internals.
 """
 import io
 import logging
+import os
 import subprocess
 import sys
 
@@ -66,6 +67,89 @@ def test_run_command_timeout_is_logged_and_raised(caplog):
                 timeout=1,
             )
     assert "command_timeout" in caplog.text
+
+
+def _capture_spawn(monkeypatch) -> dict:
+    """Capture the keyword arguments the single seam hands to subprocess."""
+    captured: dict = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(journal.subprocess, "run", fake_run)
+    return captured
+
+
+def test_git_command_runs_in_the_c_message_locale_on_a_chinese_host(monkeypatch):
+    """Issue #1758 acceptance 1: a git child always gets `LC_ALL=C`.
+
+    Git (and the C library behind it) translates its messages, while every
+    text check Orbi makes on a git failure matches the C-locale wording, so
+    a Chinese host must not change which errors are recognised.
+    """
+    monkeypatch.setenv("LANG", "zh_CN.UTF-8")
+    monkeypatch.setenv("LC_ALL", "zh_CN.UTF-8")
+    monkeypatch.delenv("LANGUAGE", raising=False)
+    captured = _capture_spawn(monkeypatch)
+
+    journal.run_command(["git", "fetch", "origin", "main"])
+
+    assert captured["env"]["LC_ALL"] == "C"
+    # `LANGUAGE` outranks `LC_ALL` in gettext, so it must be cleared too.
+    assert captured["env"]["LANGUAGE"] == ""
+    # Only the child's message locale changes; the rest of the host env stays.
+    assert captured["env"]["LANG"] == "zh_CN.UTF-8"
+
+
+def test_git_command_locale_is_scoped_to_the_child(monkeypatch):
+    """The parent environment is never mutated by the git message locale."""
+    monkeypatch.setenv("LANG", "zh_CN.UTF-8")
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LANGUAGE", raising=False)
+    _capture_spawn(monkeypatch)
+
+    journal.run_command(["git", "status", "--porcelain"])
+
+    assert "LC_ALL" not in os.environ
+    assert "LANGUAGE" not in os.environ
+
+
+def test_git_command_locale_keeps_the_caller_environment(monkeypatch):
+    """A caller-supplied env (the release git identity) is preserved."""
+    monkeypatch.setenv("LANG", "zh_CN.UTF-8")
+    caller_env = {"GIT_AUTHOR_NAME": "orbi-build[bot]", "PATH": "/usr/bin"}
+    captured = _capture_spawn(monkeypatch)
+
+    journal.run_command(
+        ["git", "commit", "-m", "chore: prepare release v1.2.3"],
+        env=caller_env,
+    )
+
+    assert captured["env"] == {**caller_env, "LC_ALL": "C", "LANGUAGE": ""}
+    assert caller_env == {"GIT_AUTHOR_NAME": "orbi-build[bot]", "PATH": "/usr/bin"}
+
+
+def test_non_git_command_does_not_get_a_locale_environment(monkeypatch):
+    """Issue #1758 acceptance 3: only git subprocesses change locale."""
+    monkeypatch.setenv("LANG", "zh_CN.UTF-8")
+    monkeypatch.setenv("LC_ALL", "zh_CN.UTF-8")
+    captured = _capture_spawn(monkeypatch)
+
+    journal.run_command(["gh", "pr", "list"])
+
+    assert captured.get("env") is None
+
+
+def test_git_detection_accepts_an_absolute_executable_path(monkeypatch):
+    """`/usr/bin/git` is git too; the basename decides, never a prefix match."""
+    monkeypatch.setenv("LANG", "zh_CN.UTF-8")
+    captured = _capture_spawn(monkeypatch)
+
+    journal.run_command(["/usr/bin/git", "rev-parse", "HEAD"])
+
+    assert captured["env"]["LC_ALL"] == "C"
 
 
 def test_run_id_filter_prefixes_journal_lines_only_while_bound(caplog):

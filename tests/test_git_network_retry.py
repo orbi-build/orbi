@@ -1,9 +1,62 @@
+import os
 import subprocess
 
 import pytest
 
 import orbi.runner as runner
 import orbi.journal as journal
+
+
+# Stand-in for git: a C-locale git prints the English network message,
+# a translated one does not, and the fake reproduces exactly that split so
+# the locale plumbing itself is what the test exercises (Issue #1758).
+_FAKE_GIT_SCRIPT = '''#!/usr/bin/env python3
+import os
+import sys
+
+if os.environ.get("LC_ALL") == "C":
+    print("fatal: unable to access 'https://github.com/o/r.git/': "
+          "Connection timed out", file=sys.stderr)
+else:
+    print("fatal: [%s] lianjie chaoshi" % os.environ.get("LC_ALL"),
+          file=sys.stderr)
+sys.exit(128)
+'''
+
+
+def _install_fake_git(tmp_path, monkeypatch) -> None:
+    """Put a fake `git` first on PATH for one test."""
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    script = binary_dir / "git"
+    script.write_text(_FAKE_GIT_SCRIPT)
+    script.chmod(0o755)
+    monkeypatch.setenv(
+        "PATH", f"{binary_dir}{os.pathsep}{os.environ['PATH']}",
+    )
+
+
+def test_chinese_host_retries_a_transient_git_network_failure(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #1758 acceptance 2: the same retry as on an English host.
+
+    The host exports a Chinese locale; only the child's `LC_ALL=C` makes git
+    print the English message Orbi recognises. Without it the fake prints the
+    translated sentence, no marker matches, and the failure falls through as
+    "not retried" — the bug this ticket fixes.
+    """
+    _install_fake_git(tmp_path, monkeypatch)
+    monkeypatch.setenv("LANG", "zh_CN.UTF-8")
+    monkeypatch.setenv("LC_ALL", "zh_CN.UTF-8")
+    with caplog.at_level("WARNING", logger="orbi.bootstrap"):
+        with pytest.raises(subprocess.CalledProcessError) as caught:
+            journal.run_git_network_command(["git", "fetch", "origin", "main"])
+
+    assert caplog.text.count("git_network_retry") == 2
+    assert "attempt=2" in caplog.text and "attempt=3" in caplog.text
+    # The real C-locale stderr stays available to the failure handling.
+    assert "Connection timed out" in caught.value.stderr
 
 
 def test_git_network_command_retries_transient_failure_then_succeeds(
