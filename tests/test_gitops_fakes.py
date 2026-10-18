@@ -13,6 +13,7 @@ import subprocess
 import pytest
 
 import orbi.gitops as gitops
+from orbi import failure
 from seam import seam
 
 from tests.fakes.gitops import FakeGit
@@ -273,9 +274,26 @@ def test_freeze_base_fetches_and_returns_the_remote_sha(fake_git):
 
 
 def test_fetch_base_ref_fails_fast_on_a_missing_remote_branch(fake_git):
-    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+    """Issue #1756: the fetch failure is confirmed by asking the remote
+    (`git ls-remote --heads` answers empty) and raised as the structured
+    failure that already carries the reason and the branch — no consumer
+    re-derives it from Git's (localized) error text."""
+    with pytest.raises(failure.BaseBranchMissingError) as excinfo:
         gitops.fetch_base_ref(fake_git.repo_dir, "no-such-branch")
-    assert "couldn't find remote ref" in excinfo.value.stderr
+    error = excinfo.value
+    assert error.base_branch == "no-such-branch"
+    assert "no-such-branch" in str(error)
+    assert error.failure_record.reason_code == "base_branch_missing"
+    assert error.failure_record.action_code == "fix_ticket"
+    assert error.failure_record.retry_safe is False
+    # Exactly one fetch (missing refs are not transient) and the probe.
+    assert [
+        command for command in fake_git.calls if command[1] == "fetch"
+    ] == [["git", "fetch", "origin", "no-such-branch"]]
+    assert [
+        "git", "ls-remote", "--heads", "origin",
+        "refs/heads/no-such-branch",
+    ] in fake_git.calls
 
 
 def test_is_ancestor_distinguishes_reachable_unrelated_and_unknown(

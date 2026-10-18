@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from orbi import gitops
+from orbi import failure, gitops
 from seam import seam
 
 
@@ -267,6 +267,85 @@ def test_acquire_base_sync_lock_times_out_fail_fast(tmp_path):
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
+
+
+def test_fetch_base_ref_raises_the_remote_decided_missing_branch(
+    monkeypatch, tmp_path,
+):
+    """Issue #1756: a missing base branch is decided by the remote's own
+    answer (`git ls-remote --heads`), never by matching Git's error text
+    — Git localizes that text, so the host locale would decide the reason."""
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if command == ["git", "fetch", "origin", "develop"]:
+            raise subprocess.CalledProcessError(
+                128, command,
+                stderr="致命错误：无法找到远程引用 refs/heads/develop",
+            )
+        return ""  # the branch probe: no such ref
+
+    monkeypatch.setattr(seam, "run_command", run)
+    with pytest.raises(failure.BaseBranchMissingError) as excinfo:
+        gitops.fetch_base_ref(tmp_path, "develop", lock_timeout_seconds=1.0)
+
+    error = excinfo.value
+    assert error.base_branch == "develop"
+    assert error.failure_record == failure.Failure(
+        reason_code="base_branch_missing", action_code="fix_ticket",
+        retry_safe=False,
+    )
+    assert calls == [
+        ["git", "fetch", "origin", "develop"],
+        ["git", "ls-remote", "--heads", "origin", "refs/heads/develop"],
+    ]
+
+
+def test_fetch_base_ref_keeps_the_fetch_error_when_the_remote_lists_the_branch(
+    monkeypatch, tmp_path,
+):
+    """The remote lists the branch, so the fetch failure is something
+    else: the original error (and its existing classification) stands."""
+    fetch_error = subprocess.CalledProcessError(
+        128, ["git", "fetch", "origin", "develop"],
+        stderr="fatal: cannot lock ref 'refs/remotes/origin/develop'",
+    )
+
+    def run(command, **kwargs):
+        if command[1] == "fetch":
+            raise fetch_error
+        return f"{'a' * 40}\trefs/heads/develop\n"
+
+    monkeypatch.setattr(seam, "run_command", run)
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        gitops.fetch_base_ref(tmp_path, "develop", lock_timeout_seconds=1.0)
+    assert excinfo.value is fetch_error
+
+
+def test_fetch_base_ref_keeps_the_fetch_error_when_the_probe_fails(
+    monkeypatch, tmp_path,
+):
+    """No answer from the remote (`ls-remote` itself fails) is never a
+    missing branch: the original error propagates."""
+    fetch_error = subprocess.CalledProcessError(
+        128, ["git", "fetch", "origin", "develop"],
+        stderr="fatal: cannot lock ref 'refs/remotes/origin/develop'",
+    )
+    probe_error = subprocess.CalledProcessError(
+        128, ["git", "ls-remote", "--heads", "origin", "refs/heads/develop"],
+        stderr="fatal: could not read from remote repository",
+    )
+
+    def run(command, **kwargs):
+        if command[1] == "fetch":
+            raise fetch_error
+        raise probe_error
+
+    monkeypatch.setattr(seam, "run_command", run)
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        gitops.fetch_base_ref(tmp_path, "develop", lock_timeout_seconds=1.0)
+    assert excinfo.value is fetch_error
 
 
 def test_fetch_base_ref_runs_the_fetch_in_the_requested_cwd(

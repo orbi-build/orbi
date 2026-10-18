@@ -320,10 +320,9 @@ CLASSIFY_CASES = (
     ),
     (
         "base_branch_missing",
-        lambda: subprocess.CalledProcessError(
-            128, ["git", "fetch", "origin", "release/9"],
-            stderr="fatal: couldn't find remote ref release/9",
-        ),
+        # Issue #1756: the first delivery step decides the reason at the
+        # source and carries it on the exception.
+        lambda: failure.BaseBranchMissingError("release/9"),
         "fix_ticket",
         False,
         "blocked",
@@ -463,22 +462,30 @@ def test_terminal_action_recognized_failure_keeps_the_generic_action():
     assert action == "Fix the failure described below and re-run this Issue."
 
 
-@pytest.mark.parametrize(
-    "wording",
-    [
-        "fatal: couldn't find remote ref release/9",
-        "fatal: could not find remote ref release/9",
-    ],
-)
-def test_classify_maps_git_missing_ref_to_base_branch_missing(wording):
-    """Issue #1749: `git fetch origin <base>` answering that the remote has
-    no such ref is its own failure class — an external precondition a human
-    repairs, never the generic unclassified runner exception."""
-    record = failure.classify(wording)
+def test_classify_uses_the_carried_record_and_applies_the_outcome():
+    """Issue #1756: a failure that decided its reason at the source is
+    used as it is — the classifier never re-reads an error message."""
+    record = runner._classify_failure(
+        failure.BaseBranchMissingError("develop"), outcome="fix_needed",
+    )
     assert record == failure.Failure(
         reason_code="base_branch_missing", action_code="fix_ticket",
-        retry_safe=False, outcome="blocked",
+        retry_safe=False, outcome="fix_needed",
     )
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        # Git localizes its message, so neither wording decides the
+        # reason any more: the remote is asked instead (Issue #1756).
+        "fatal: couldn't find remote ref release/9",
+        "fatal: could not find remote ref release/9",
+        "致命错误：无法找到远程引用 release/9",
+    ],
+)
+def test_gits_missing_ref_text_never_decides_the_reason(detail):
+    assert failure.classify(detail).reason_code != "base_branch_missing"
 
 
 @pytest.mark.parametrize(
@@ -494,21 +501,23 @@ def test_classify_maps_git_missing_ref_to_base_branch_missing(wording):
         "totally unexpected",
     ],
 )
-def test_base_branch_missing_needs_gits_missing_ref_sentence(detail):
+def test_other_failures_are_never_base_branch_missing(detail):
     assert failure.classify(detail).reason_code != "base_branch_missing"
 
 
 def test_terminal_reason_names_the_configured_base_branch():
-    """The comment names the CONFIGURED branch: Git's own line only repeats
-    the ref it was asked to fetch (Issue #1749)."""
-    record = failure.classify("fatal: couldn't find remote ref other")
+    """The comment names the CONFIGURED branch: the remote's answer only
+    says that the branch is absent (Issue #1749), and the record is the
+    structured failure's own (Issue #1756)."""
+    error = failure.BaseBranchMissingError("other")
+    record = runner._classify_failure(error, outcome="blocked")
     assert record.reason_code == "base_branch_missing"
     for code, language_phrase in (
         ("en", "does not exist in the repository"),
         ("zh", "不存在"),
     ):
         reason = failure.terminal_reason(
-            "fatal: couldn't find remote ref other", record,
+            failure._failure_detail(error), record,
             base_branch="release/9", language_code=code,
         )
         assert "release/9" in reason

@@ -135,6 +135,9 @@ def is_unrecoverable_failure(exc: BaseException) -> bool:
 # markers live in `orbi.failure` (Issue #1229 keeps this module small).
 def _classify_failure(exc: BaseException, *, outcome: str) -> failure.Failure:
     """Map one delivery exception to the machine-readable failure record."""
+    carried = getattr(exc, "failure_record", None)
+    if isinstance(carried, failure.Failure):  # decided at the source (#1756)
+        return carried.with_outcome(outcome)
     return failure.classify(
         _failure_detail(exc),
         provider_quota=isinstance(exc, RateLimitExhaustedError),

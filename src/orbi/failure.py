@@ -16,6 +16,8 @@ ignored (`parse` returns `None`) instead of failing the resume path.
 new code is a deliberate contract change here and in `docs/workflow.mdx`
 (EN + ZH); `classify` maps an exception to them and an unknown one to
 `unclassified`, never to a missing block, so the prose cannot drift.
+A failure that knows its reason at the source carries the record itself
+(`BaseBranchMissingError`); the reporter uses it as it is.
 """
 from __future__ import annotations
 
@@ -90,6 +92,15 @@ class Failure:
     retry_safe: bool
     outcome: str = "blocked"
     schema: int = SCHEMA_VERSION
+
+    def with_outcome(self, outcome: str) -> Failure:
+        """The same record for another delivery outcome.
+
+        A failure that decided its reason at the source (Issue #1756)
+        carries the record already; the caller only supplies the
+        outcome, never a re-derivation from the message.
+        """
+        return dataclasses.replace(self, outcome=outcome)
 
 
 class FailureError(ValueError):
@@ -247,12 +258,6 @@ _WORKFLOW_PERMISSION_CAUSE_KEY = "failure.workflow_cause"
 _TESTS_FAILED_RE = re.compile(
     r"\btests? failed\b|\d+ failed", re.IGNORECASE,
 )
-# Git's answer to `git fetch origin <branch>` when the remote has no such
-# branch (Issue #1749): the two wordings real Git emits, and nothing else —
-# a generic fetch failure keeps its existing classification.
-_BASE_BRANCH_MISSING_RE = re.compile(
-    r"could ?n['o]t find remote ref", re.IGNORECASE,
-)
 _GITHUB_TRANSIENT_RE = re.compile(
     r"http 5\d\d|http 429|rate limit|"
     r"something went wrong while executing your query|"
@@ -276,6 +281,34 @@ DISPOSITIONS: dict[str, tuple[str, bool]] = {
     "base_branch_missing": ("fix_ticket", False),
     "unclassified": ("fix_ticket", False),
 }
+
+
+class BaseBranchMissingError(RuntimeError):
+    """The configured base branch does not exist on the remote (Issue #1756).
+
+    Raised by the first delivery step `freeze_base` → `fetch_base_ref`
+    only after the fetch failed AND the remote itself answered
+    `git ls-remote --heads` with nothing: the fact is decided at the
+    source, so no consumer has to read Git's error text — Git localizes
+    it (`LANG` / `LC_MESSAGES`), and a text match would classify the
+    same failure differently on a non-English host.
+
+    `base_branch` is the CONFIGURED branch and `failure_record` is the
+    record the failure report uses as it is; the text classifier never
+    runs for this failure.
+    """
+
+    def __init__(self, base_branch: str):
+        super().__init__(
+            f"base branch {base_branch!r} does not exist on origin",
+        )
+        self.base_branch = base_branch
+        action_code, retry_safe = DISPOSITIONS["base_branch_missing"]
+        self.failure_record = Failure(
+            reason_code="base_branch_missing",
+            action_code=action_code,
+            retry_safe=retry_safe,
+        )
 
 
 def classify(detail: str, *, outcome: str = "blocked",
@@ -302,8 +335,6 @@ def classify(detail: str, *, outcome: str = "blocked",
         # cannot grant: the existing `credential_missing` /
         # `check_credentials` category, a repair required before retry.
         reason_code = "credential_missing"
-    elif _BASE_BRANCH_MISSING_RE.search(detail):
-        reason_code = "base_branch_missing"
     elif _CREDENTIAL_MISSING_RE.search(detail):
         reason_code = "credential_missing"
     elif _TESTS_FAILED_RE.search(detail):
@@ -391,9 +422,9 @@ def terminal_reason(detail: str, record: Failure, *,
                     base_branch: str | None, language_code: str) -> str:
     """The reader-facing reason of the implement-phase terminal handler.
 
-    The missing-base-branch failure names the CONFIGURED branch: Git's own
-    `couldn't find remote ref <value>` line is the evidence, never the
-    setting a human has to repair (Issue #1749). Every other terminal
+    The missing-base-branch failure names the CONFIGURED branch: the
+    remote's own `git ls-remote` answer is the evidence, never the setting
+    a human has to repair (Issues #1749, #1756). Every other terminal
     failure keeps the generic stopped-delivery sentence.
     """
     if record.reason_code == "base_branch_missing":

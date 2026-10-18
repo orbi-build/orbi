@@ -7,8 +7,9 @@ freezes `origin/<base>`, the ancestor checks of the delivery gates, and
 the base-sync lock every fetch that updates the shared remote-tracking
 ref must hold.
 
-The only seam is `orbi.journal.run_command` (Article 3.4); this module
-imports no other `orbi` module besides `journal`.
+The only seam is `orbi.journal.run_command` (Article 3.4); besides
+`journal` this module imports only the pure `failure` leaf, whose
+`BaseBranchMissingError` carries the reason the base fetch decides.
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from orbi.failure import BaseBranchMissingError
 from orbi.journal import (
     GIT_NETWORK_TIMEOUT_SECONDS,
     LOGGER,
@@ -335,6 +337,27 @@ def acquire_base_sync_lock(
             time.sleep(0.1)
 
 
+def _remote_branch_missing(base_branch: str, *, cwd: Path,
+                           command_runner: Callable[..., str]) -> bool:
+    """True only when the remote itself says it has no such branch.
+
+    `git ls-remote --heads` is the remote's answer, independent of any
+    localized error message: exit 0 with empty output means the ref does
+    not exist. Any failure of the probe (network, auth, timeout) is no
+    answer at all and is reported as "not missing", so the original fetch
+    error keeps its existing classification (Issue #1756).
+    """
+    try:
+        raw = command_runner(
+            ["git", "ls-remote", "--heads", "origin",
+             f"refs/heads/{base_branch}"],
+            cwd=cwd, timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+        )
+    except subprocess.SubprocessError:
+        return False
+    return not raw.strip()
+
+
 def fetch_base_ref(repo_dir: Path, base_branch: str,
                    *, cwd: Path | None = None,
                    lock_timeout_seconds: float = 300.0,
@@ -353,17 +376,32 @@ def fetch_base_ref(repo_dir: Path, base_branch: str,
     default). ``command_runner`` overrides the command executor (the
     setup entry injects its own); by default the module's
     ``run_command`` is used. A lock timeout or a fetch error fails
-    fast — no retry, no lock bypass.
+    fast — no retry, no lock bypass. A fetch failure is confirmed
+    against the remote (``git ls-remote --heads``); only an empty
+    answer raises ``BaseBranchMissingError``, which already carries the
+    failure record and the configured branch (Issue #1756).
     """
     if command_runner is None:
         command_runner = run_command
+    fetch_cwd = cwd if cwd is not None else repo_dir
     fd = acquire_base_sync_lock(repo_dir, lock_timeout_seconds)
     try:
-        run_git_network_command(
-            ["git", "fetch", "origin", base_branch],
-            cwd=cwd if cwd is not None else repo_dir,
-            command_runner=command_runner,
-        )
+        try:
+            run_git_network_command(
+                ["git", "fetch", "origin", base_branch],
+                cwd=fetch_cwd,
+                command_runner=command_runner,
+            )
+        except subprocess.CalledProcessError as exc:
+            # The reason is decided HERE, at the source, not later from
+            # the error text: Git localizes this message (`LANG` /
+            # `LC_MESSAGES`), so a text match classifies the same
+            # failure differently on a non-English host (Issue #1756).
+            if _remote_branch_missing(
+                    base_branch, cwd=fetch_cwd,
+                    command_runner=command_runner):
+                raise BaseBranchMissingError(base_branch) from exc
+            raise
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
