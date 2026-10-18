@@ -1095,3 +1095,179 @@ def test_docs_document_the_failure_block_and_the_closed_code_sets():
             assert code in text, f"{relative} missing reason_code {code}"
         for code in failure.ACTION_CODES:
             assert code in text, f"{relative} missing action_code {code}"
+
+
+# --------------------------------------------------------------------------
+# Issue #1760: the GitHub response status decides, not the error text
+# --------------------------------------------------------------------------
+
+def github_failed(status, *, remaining=None, stderr="gh: failed"):
+    """A failed gh request carrying the response status it received."""
+    from orbi import gh_response
+
+    return gh_response.GitHubRequestFailed(
+        1, ["gh", "api", "repos/o/r"], status=status,
+        ratelimit_remaining=remaining, stderr=stderr,
+    )
+
+
+@pytest.mark.parametrize("status, remaining, action_code, retry_safe", [
+    (401, None, "check_credentials", False),
+    (429, 4999, "requeue", True),
+    (502, 4999, "requeue", True),
+    (403, 0, "requeue", True),          # the primary rate limit
+    (403, 4999, "check_credentials", False),   # a permission 403
+])
+def test_classify_reads_the_github_response_status(
+    status, remaining, action_code, retry_safe,
+):
+    """Acceptance #1: 401/429/502/403-with-no-quota/403-with-quota are told
+    apart by the response status alone — the detail text below contains
+    none of the words the old regexes looked for."""
+    record = failure.classify(
+        "Command returned non-zero exit status 1.",
+        error=github_failed(status, remaining=remaining),
+    )
+    assert record.action_code == action_code
+    assert record.retry_safe is retry_safe
+    assert record.reason_code == (
+        "credential_missing" if action_code == "check_credentials"
+        else "github_transient"
+    )
+
+
+def test_classify_status_wins_over_the_error_text():
+    """Acceptance #2: a permission 403 whose text happens to mention a rate
+    limit or a timeout is still a permission failure; a 5xx whose text
+    mentions a credential is still transient."""
+    permission = failure.classify(
+        "API rate limit exceeded; request timed out; bad credentials",
+        error=github_failed(403, remaining=4100),
+    )
+    assert permission.reason_code == "credential_missing"
+    transient = failure.classify(
+        "credential forbidden unauthorized",
+        error=github_failed(503),
+    )
+    assert transient.reason_code == "github_transient"
+
+
+def test_classify_ignores_argv_words_of_a_non_github_failure():
+    """Acceptance #2: the command's argv is part of the exception detail, so
+    a branch named `forbidden` or `credential` must not relabel a Git
+    failure as a credential problem."""
+    exc = subprocess.CalledProcessError(
+        128,
+        ["git", "push", "origin",
+         "orbi/forbidden-credential-repair", "forbidden"],
+        stderr="fatal: the remote end hung up unexpectedly",
+    )
+    record = runner._classify_failure(exc, outcome="blocked")
+    assert record.reason_code != "credential_missing"
+
+
+def test_classify_reads_a_timeout_by_its_type():
+    """Acceptance #4: a subprocess timeout is transient by type, whatever
+    its message says."""
+    timeout = subprocess.TimeoutExpired(
+        ["gh", "api", "repos/o/r"], 30,
+        output="", stderr="no marker in this text",
+    )
+    record = failure.classify("no marker in this text", error=timeout)
+    assert record.reason_code == "github_transient"
+    assert record.action_code == "requeue"
+    assert record.retry_safe is True
+
+
+def test_classify_does_not_read_the_word_timeout_without_a_source():
+    """A detail that merely SAYS "timed out" is not a transport timeout: the
+    type (or the text-only source that produced the detail) decides
+    (Issue #1760)."""
+    record = failure.classify("the release gate note says timed out")
+    assert record.reason_code != "github_transient"
+
+
+def test_classify_keeps_the_text_timeout_of_a_text_only_source():
+    """A Pi session and a Git fetch/push report a timeout in their own
+    words — no status, no timeout type — so their wording is the one
+    signal there is (the same text-only carve-out the provider reasons
+    keep)."""
+    git = subprocess.CalledProcessError(
+        128, ["git", "fetch", "origin", "main"],
+        stderr="fatal: unable to access 'https://github.com/o/r.git/': "
+               "Connection timed out",
+    )
+    assert failure.classify(
+        runner._failure_detail(git), error=git,
+    ).reason_code == "github_transient"
+    pi = subprocess.CalledProcessError(
+        1, ["pi"], stderr="request timed out after 30s",
+    )
+    assert failure.classify(
+        runner._failure_detail(pi), error=pi,
+    ).reason_code == "github_transient"
+
+
+def test_classify_does_not_read_a_github_command_timeout_word():
+    """A GitHub request's timeout never comes from the wording: a gh
+    subcommand whose text says "timed out" is not transient by that word
+    (Issue #1760)."""
+    gh = subprocess.CalledProcessError(
+        1, ["gh", "issue", "list", "--repo", "o/r"],
+        stderr="request timed out",
+    )
+    assert failure.classify(
+        runner._failure_detail(gh), error=gh,
+    ).reason_code != "github_transient"
+
+
+def test_classify_a_release_gate_wait_timeout_is_a_human_decision():
+    """Acceptance #3: the release gate's wait budget running out is a
+    terminal, human-decided stop — never the requeue a transient GitHub
+    failure gets."""
+    record = failure.classify(
+        "release gate: waiting for CI on the release commit abc123 timed "
+        "out after 7s (still pending: check 'tests')",
+        error=failure.ReleaseGateWaitTimeout("wait timeout"),
+    )
+    assert record == failure.Failure(
+        reason_code="human_decision_required", action_code="decide",
+        retry_safe=False, outcome="blocked",
+    )
+
+
+def test_classify_a_wrapped_permission_403_keeps_its_repair():
+    """A 403 with quota left that a caller had to re-word keeps the
+    `check_credentials` repair on its TYPE: the release gate names the
+    missing Checks:read scope in its own sentence, and the removed
+    `credential` word no longer has to carry the meaning (Issue #1760)."""
+    message = (
+        "CI gate could not be evaluated: the credential lacks "
+        "Checks:read permission (GitHub returned HTTP 403 while listing "
+        "check runs)"
+    )
+    assert failure.classify(
+        message, error=failure.GitHubPermissionDenied(message),
+    ) == failure.Failure(
+        reason_code="credential_missing", action_code="check_credentials",
+        retry_safe=False, outcome="blocked",
+    )
+
+
+def test_release_failure_comment_classifies_a_gate_wait_timeout_as_blocked():
+    """The release comment's block is the one a status reader parses: a
+    gate wait timeout must not claim `github_transient` / `requeue`."""
+    from orbi import release_comments
+
+    body = release_comments.release_failure_comment_body(
+        "a1b2c3d4", "- issue: #99", 
+        failure.ReleaseGateWaitTimeout(
+            "release gate: waiting for CI on the release commit abc123 "
+            "timed out after 7s",
+        ),
+        "en",
+    )
+    record = failure.parse(body)
+    assert record is not None
+    assert record.reason_code == "human_decision_required"
+    assert record.action_code == "decide"

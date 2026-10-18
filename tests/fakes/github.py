@@ -34,6 +34,17 @@ _SEARCH_TOKEN_RE = re.compile(r'milestone:"([^"]+)"|(\S+)')
 # The one jq program the adapter runs against the milestones endpoint
 # (`milestone_open_issue_count`): the title-select reading GitHub's own
 # open-Issue counter.
+def _with_response_headers(payload: str, status: int = 200) -> str:
+    """The `gh api --include` shape: status line, headers, blank, body."""
+    return (
+        f"HTTP/2.0 {status} OK\r\n"
+        "Content-Type: application/json; charset=utf-8\r\n"
+        "X-Ratelimit-Remaining: 4999\r\n"
+        "\r\n"
+        f"{payload}"
+    )
+
+
 _MILESTONE_JQ_RE = re.compile(
     r'^\.\[\] \| select\(\.title=="([^"]+)"\) \| \.open_issues$'
 )
@@ -162,6 +173,18 @@ class FakeGh:
 
     def __call__(self, command: list[str], *, cwd=None,
                  timeout=None, **kwargs) -> str:
+        # The adapter appends `--include` to a `gh api` command so it can
+        # read the response status (Issue #1760). gh prints the status line
+        # and the headers in front of the body: the fake answers that same
+        # documented shape, and a `--include` it was not given changes
+        # nothing.
+        include = command[-1:] == ["--include"]
+        if include:
+            command = command[:-1]
+        payload = self._answer(command)
+        return _with_response_headers(payload) if include else payload
+
+    def _answer(self, command: list[str]) -> str:
         # `failure_log_level` and other adapter logging hints are not
         # command semantics — the fake answers argv, log decoration is
         # the caller's business.
