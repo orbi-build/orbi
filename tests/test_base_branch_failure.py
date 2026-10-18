@@ -3,8 +3,8 @@
 Freezing the base branch runs before the claim and before the delivery's
 failure range, so a base branch the remote does not have escaped every
 catch: no label, no comment, no help line, and the next tick claimed the
-same Issue again and failed the same way (`fatal: couldn't find remote ref`
-only in the host journal).
+same Issue again and failed the same way (Git's error only in the host
+journal).
 
 The user journey driven here is the real one — the Runner's delivery
 dispatch `runner.process_issue`, the same entry the tick calls, plus the
@@ -14,8 +14,10 @@ real ready pickup scan (`orbi.claim.pick_issue`) for the next tick:
   CONFIGURED branch, says the repository has no such branch, ends with
   the community help line (en + zh), and leaves the Issue `ai-blocked`
   alone — so the next tick claims nothing;
-* a different error of the same step (a network error after the existing
-  transient retries) reports the same way instead of raising.
+* the reason is decided by the remote's own answer (Issue #1756): the
+  failed fetch is confirmed with `git ls-remote --heads`, so a localized
+  Git message (a zh_CN host) still yields `base_branch_missing`, while a
+  listed branch or a failing probe keeps the existing classification.
 
 The git/gh seam is the fake `run_command` below (never a module-level
 patch), and `freeze_base` itself runs for real: the tests observe the
@@ -93,15 +95,18 @@ def _progress_api(_command: list[str]) -> str:
     return json.dumps({"id": 1, "body": ""})
 
 
-def fake_seam(gh: FakeGh, *, fetch_stderr: str):
+def fake_seam(gh: FakeGh, *, fetch_stderr: str, ls_remote=""):
     """Answer the git/gh argv the claim and the failure report issue.
 
     `git fetch origin <base>` raises the error the real remote would give:
     the base branch the checkout asks for is not there (or the network
-    died). `git ls-remote` answers "no such branch" (the no-op probe).
+    died). `git ls-remote --heads` is the branch probe (Issue #1756):
+    `ls_remote` is the remote's answer — the empty default (no such
+    branch), a listed ref line, or the exception a failed probe raises.
     The external-takeover scan of `pick_issue` has no candidates.
     """
     attempts: list = []
+    probes: list = []
 
     def run(command, **kwargs):
         if command[0] == "git":
@@ -110,6 +115,14 @@ def fake_seam(gh: FakeGh, *, fetch_stderr: str):
                 raise subprocess.CalledProcessError(
                     128, command, stderr=fetch_stderr,
                 )
+            # The configured base branch's probe gets the configured
+            # answer; every other `ls-remote` (the delivery branch the
+            # claim scan asks for) finds nothing, as it must.
+            if command[-1] == f"refs/heads/{MISSING_BRANCH}":
+                probes.append(command)
+                if isinstance(ls_remote, BaseException):
+                    raise ls_remote
+                return ls_remote
             return ""
         if command[0] == "gh" and command[1] == "issue" \
                 and command[2] == "list" and "--search" in command:
@@ -125,18 +138,27 @@ def fake_seam(gh: FakeGh, *, fetch_stderr: str):
         return gh(command)
 
     run.attempts = attempts
+    run.probes = probes
     return run
 
 
 MISSING_REF_STDERR = f"fatal: couldn't find remote ref {MISSING_BRANCH}"
+# The zh_CN host's wording of the same Git failure: no English text the
+# removed regex could have matched (Issue #1756).
+LOCALIZED_MISSING_REF_STDERR = f"致命错误：无法找到远程引用 {MISSING_BRANCH}"
+# The remote's answer when the branch DOES exist (a network failure, not
+# a missing branch).
+LISTED_BRANCH = f"{'a' * 40}\trefs/heads/{MISSING_BRANCH}\n"
 
 
 def world(monkeypatch, tmp_path, *, language_code: str = "en",
-          fetch_stderr: str = MISSING_REF_STDERR,
+          fetch_stderr: str = MISSING_REF_STDERR, ls_remote="",
           base_branch: str = MISSING_BRANCH):
     gh = FakeGh(REPO)
     gh.add_issue(NUMBER, title="Base branch is gone", labels=("ai-ready",))
-    command_runner = fake_seam(gh, fetch_stderr=fetch_stderr)
+    command_runner = fake_seam(
+        gh, fetch_stderr=fetch_stderr, ls_remote=ls_remote,
+    )
     monkeypatch.setattr(seam, "run_command", command_runner)
     monkeypatch.setattr(seam, "new_run_id", lambda: RUN_ID)
     # The transient-retry backoff would make the test wait for the real
@@ -261,17 +283,44 @@ def test_the_blocked_issue_is_not_claimed_on_the_next_tick(
     assert claim.pick_issue(REPO) is None
 
 
-def test_another_failure_of_the_first_step_is_reported_not_raised(
+def test_a_localized_fetch_error_is_still_base_branch_missing(
         monkeypatch, tmp_path):
-    """Acceptance 3: a different error in the same step (a network failure
-    that exhausts the existing transient retries) also produces the failure
-    comment with the help line and a label — never an uncaught exception."""
+    """Acceptance 1: a zh_CN host's Git prints its own wording (the removed
+    regex matched nothing there). The remote's empty answer to the branch
+    probe still produces `reason_code: base_branch_missing`."""
+    gh, config, issue, command_runner = world(
+        monkeypatch, tmp_path, fetch_stderr=LOCALIZED_MISSING_REF_STDERR,
+    )
+
+    result = runner.process_issue(issue, config, REPO)
+
+    assert result == runner.IssueResult("failed", None)
+    body = assert_blocked_exit(gh, "en")
+    record = failure.parse(body)
+    assert record.reason_code == "base_branch_missing"
+    assert record.action_code == "fix_ticket"
+    assert MISSING_BRANCH in body
+    assert language.text(
+        "en", "failure.terminal_base_branch_missing",
+        base_branch=MISSING_BRANCH,
+    ) in body
+    # The remote was asked directly, for the CONFIGURED branch.
+    assert [
+        "git", "ls-remote", "--heads", "origin",
+        f"refs/heads/{MISSING_BRANCH}",
+    ] in command_runner.probes
+
+
+def test_a_network_failure_with_the_branch_still_listed_is_not_missing(
+        monkeypatch, tmp_path):
+    """Acceptance 2: the fetch failed, but the remote still lists the
+    branch — the existing transient classification applies."""
     network = (
         "fatal: unable to access 'https://github.com/owner/repo.git/': "
         "Connection timed out"
     )
     gh, config, issue, command_runner = world(
-        monkeypatch, tmp_path, fetch_stderr=network,
+        monkeypatch, tmp_path, fetch_stderr=network, ls_remote=LISTED_BRANCH,
     )
 
     result = runner.process_issue(issue, config, REPO)
@@ -285,3 +334,34 @@ def test_another_failure_of_the_first_step_is_reported_not_raised(
     assert failure.parse(body).reason_code == "github_transient"
     assert "Connection timed out" in body
     assert MISSING_REF_SUFFIX["en"] not in body
+
+
+def test_a_failing_probe_keeps_the_existing_classification(
+        monkeypatch, tmp_path):
+    """Acceptance 3: `ls-remote` itself fails, so the remote gave no
+    answer — never `base_branch_missing`; the original failure stands."""
+    network = (
+        "fatal: unable to access 'https://github.com/owner/repo.git/': "
+        "Connection timed out"
+    )
+    probe_failure = subprocess.CalledProcessError(
+        128, ["git", "ls-remote", "--heads", "origin", MISSING_BRANCH],
+        stderr=network,
+    )
+    gh, config, issue, command_runner = world(
+        monkeypatch, tmp_path, fetch_stderr=network,
+        ls_remote=probe_failure,
+    )
+
+    result = runner.process_issue(issue, config, REPO)
+
+    assert result == runner.IssueResult("failed", None)
+    body = assert_blocked_exit(gh, "en")
+    record = failure.parse(body)
+    assert record.reason_code == "github_transient"
+    assert record.reason_code != "base_branch_missing"
+    # The probe really ran and really failed.
+    assert [
+        "git", "ls-remote", "--heads", "origin",
+        f"refs/heads/{MISSING_BRANCH}",
+    ] in command_runner.probes
