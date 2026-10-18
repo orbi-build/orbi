@@ -48,6 +48,11 @@ DISPLAY_TERMS: dict[str, tuple[str, str]] = {
     "progress.tests.passed": ("passed", "通过"),
     "progress.tests.pending": ("pending", "等待中"),
     "progress.tests.failed": ("failed: {names}", "失败：{names}"),
+    # The progress comment's recovery row while a session is stuck
+    # (Issue #1746): the stored state stays `wait`/`term`/`kill`.
+    "progress.recovery.wait": ("wait", "等待"),
+    "progress.recovery.term": ("term", "终止"),
+    "progress.recovery.kill": ("kill", "强制终止"),
     "progress.activity.read": ("read", "读取"),
     "progress.activity.edit": ("edit", "编辑"),
     "progress.activity.command": ("command", "命令"),

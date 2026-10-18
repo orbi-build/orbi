@@ -662,7 +662,8 @@ host-only 身份/安全键（见
 在错误里列出违规键，Issue 进入 `ai-blocked`——一个仓库的坏文件绝不
 影响其他池。其余不认识的键则被忽略：journal 记一行
 `repo_config_keys_ignored` 指明该键与引擎版本，run 评论带
-`repo_config_ignored`，claim 用已知键继续（Issue #1329）。该文件由交付
+`repo_config_ignored` 行（中文仓库显示为「忽略的仓库配置键」），
+claim 用已知键继续（Issue #1329）。该文件由交付
 宿主实际运行的引擎版本读取，而它往往比写出该文件的代码更旧，所以新策略
 键必须能被旧引擎安全忽略：它默认保持功能加入前的行为，不认识它的引擎照
 常交付。host-only 集合同样包括宿主调度：`max_concurrency`
@@ -673,10 +674,12 @@ claim 选中的那个 Issue 上；`dispatch_label` 不是 `ai-ready` 的仓库�
 文件本身坏掉时没有 `ai-ready` 候选 Issue 可阻塞，此时 fail-fast 原因
 只在 journal 的 `repo_config_invalid` 行（不改标签、不发评论）。run 评论记录
 `repo_config: <sha>`；与上一 run 的 sha 不同时附 `repo_config_changed`
-标注，且当前一版内容可读时附有效键值 diff `repo_config_diff`，让变更
-始终在 run 上可见。传输原因（限流、网络）导致的读取失败只记一行
-`repo_config_read_failed` 并回退宿主配置——该降级在 run 评论上表现为
-缺少 `repo_config` 字段。
+标注（中文仓库显示为「仓库配置变更」），且当前一版内容可读时附有效键值
+diff `repo_config_diff`（中文仓库显示为「仓库配置差异」），让变更
+始终在 run 上可见：这三行只有行名随消息语言变化，
+`repo_config: <sha>` 与其他机器字段在两种语言下都逐字不变。传输原因
+（限流、网络）导致的读取失败只记一行 `repo_config_read_failed` 并回退
+宿主配置——该降级在 run 评论上表现为缺少 `repo_config` 字段。
 
 ## 等待 Milestone 决策时的唯一回复
 
