@@ -14,6 +14,7 @@ from unittest.mock import Mock
 
 import orbi.release as release
 import orbi.runner as runner
+from orbi import gh_response
 from seam import seam
 
 
@@ -380,7 +381,8 @@ def mock_release_range_gh(monkeypatch, by_commit, calls=None):
 def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                              tag_commit=None, release_url="https://github.com/o/r/releases/tag/v0.3.0",
                              in_progress=False, existing_run_id=None,
-                             check_run_pages=None, milestone_items=None,
+                             check_run_pages=None, check_runs_status=None,
+                             milestone_items=None,
                              leftover_labels=None, leftover_milestones=None,
                              release_tree_files=("pyproject.toml", "package.json"),
                              prepare_release_version_error=None,
@@ -392,6 +394,9 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     `check_run_pages` (Issue #268) optionally sequences the check-runs
     endpoint: a list of [(name, status, conclusion)] pages answered in
     order, the last page repeating when exhausted.
+    `check_runs_status` (Issue #1760) makes the check-runs endpoint fail
+    with that HTTP status, the way `gh api --include` reports a refused
+    read (the release gate's missing Checks:read permission).
     `milestone_items` (Issue #253) answers the milestone scope-derivation
     queries: milestone number -> dict with keys `issues_closed` /
     `issues_open` / `pulls_closed` / `pulls_open`.
@@ -475,7 +480,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                     if leftover_milestones.get(n) == milestone
                 ]
             return json.dumps([{"number": n} for n in numbers])
-        if command == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100",
+        if without_include(command) == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100",
                        "--paginate", "--slurp"]:
             return json.dumps([[
                 {"number": 1, "title": "v0.2.0", "state": "closed",
@@ -487,10 +492,10 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                  "url": "https://api.github.com/repos/o/r/milestones/5",
                  "html_url": "https://github.com/o/r/milestone/5"},
             ]])
-        if command == ["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100",
+        if without_include(command) == ["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100",
                        "--paginate", "--slurp"]:
             return json.dumps([[]])
-        if command == ["gh", "api", "repos/o/r/milestones/5",
+        if without_include(command) == ["gh", "api", "repos/o/r/milestones/5",
                        "--method", "PATCH", "-f", "state=closed"]:
             return json.dumps({"number": 5, "title": "v0.3.0",
                                "state": "closed", "open_issues": 0})
@@ -505,6 +510,14 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                     kind, item_state, number = match.groups()
                     bucket = milestone_items.get(int(number), {})
                     return json.dumps([bucket.get(f"{kind}_{item_state}", [])])
+            if check_runs_status is not None and \
+                    command[2].endswith("/check-runs"):
+                raise gh_response.GitHubRequestFailed(
+                    1, command, status=check_runs_status,
+                    ratelimit_remaining=4980,
+                    stderr=("gh: Resource not accessible by integration "
+                            f"(HTTP {check_runs_status})"),
+                )
             if check_run_pages:
                 page = check_run_pages.pop(0)
                 if not check_run_pages:
@@ -584,15 +597,27 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     return state
 
 
+def without_include(command: list[str]) -> list[str]:
+    """The argv minus the adapter's trailing `--include` (Issue #1760).
+
+    The adapter appends `--include` to a `gh api` command to read the
+    response status; a fake that answers the call does not care about the
+    header request, so it compares the caller's own argv.
+    """
+    return command[:-1] if command[-1:] == ["--include"] else command
+
+
+# The adapter's gh api reads carry `--include` so the response status is
+# readable (Issue #1760); the fake answers the documented header shape.
 MILESTONE_LIST_COMMAND = [
     "gh", "api", "repos/o/r/milestones?state=all&per_page=100",
-    "--paginate", "--slurp",
+    "--paginate", "--slurp", "--include",
 ]
 
 
 MILESTONE_ISSUES_COMMAND = [
     "gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100",
-    "--paginate", "--slurp",
+    "--paginate", "--slurp", "--include",
 ]
 
 

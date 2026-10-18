@@ -24,8 +24,9 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
+import subprocess
 
-from orbi import language
+from orbi import gh_response, language
 
 SCHEMA_VERSION = 1
 
@@ -108,6 +109,28 @@ class Failure:
 
 class FailureError(ValueError):
     """A failure block is present in the body but cannot be parsed."""
+
+
+class ReleaseGateWaitTimeout(RuntimeError):
+    """A release gate spent its bounded wait budget without a decision.
+
+    The release state machine reports this wait as `blocked`: the budget
+    is bounded on purpose, so the next step is a human's, never the
+    automatic requeue a transient GitHub failure gets (Issue #1760). The
+    classification reads THIS type, never the words of the message.
+    """
+
+
+class GitHubPermissionDenied(RuntimeError):
+    """A GitHub 403 with quota left: the credential lacks the permission.
+
+    The release gate receives that status from `gh_response` but reports
+    it with its own reader-facing sentence (the one naming the missing
+    `Checks:read` scope), so the meaning travels on the TYPE: `classify`
+    reads the type, never the sentence — which is why the broad
+    `credential` word could be dropped from the text markers without
+    losing the permission repair (Issue #1760).
+    """
 
 
 def render(record: Failure) -> str:
@@ -220,12 +243,20 @@ _PROVIDER_QUOTA_RE = re.compile(
     r"\b429\b|quota|resource_exhausted|retry in|usage limit has been reached",
     re.IGNORECASE,
 )
-# The word markers of a provider authentication failure. `pi_process`'s
-# early-exit classifier (`_classify_startup_exit`) matches this SAME
-# tuple (plus the 401/403 status codes), so the two classifications
-# cannot drift into two lists (Issue #1465).
+# The word markers `pi_process`'s early-exit classifier
+# (`_classify_startup_exit`) matches, plus the 401/403 status codes: the
+# provider's own words stay the Pi startup classification's (Issue #1465),
+# and `failure` reads them from the one regex below.
 PROVIDER_AUTH_WORDS = ("unauthorized", "forbidden", "api key")
 
+# The text-only credential markers. GitHub failures no longer read this
+# one: they carry the response status (`gh_response`), which is exact,
+# while `forbidden` and `credential` were broad enough to match a branch
+# or check name inside the command's argv (Issue #1760). The remaining
+# markers serve the Pi / model-provider detail, which only gives text
+# (Issue #1465): its 401 shapes, its rejected-key sentences and
+# `unauthorized`; `forbidden` stays in `PROVIDER_AUTH_WORDS` for
+# `pi_process`'s own startup classifier, which is not this regex.
 _CREDENTIAL_MISSING_RE = re.compile(
     r"bad credentials"
     r"|(?:http|status)\s+401\b"
@@ -235,8 +266,7 @@ _CREDENTIAL_MISSING_RE = re.compile(
     r"|(?:^|[\s\"'(])401:"
     r"|authentication (?:failed|required|fails)"
     r"|incorrect api key"
-    r"|" + "|".join(re.escape(word) for word in PROVIDER_AUTH_WORDS)
-    + r"|credential",
+    r"|unauthorized",
     re.IGNORECASE,
 )
 # The explicit GitHub rejection when a push creates or updates an
@@ -258,14 +288,34 @@ _WORKFLOW_PERMISSION_RE = re.compile(
 # terminal progress scene and the short milestone; only the last
 # sentence differs by whether a delivery PR already exists.
 _WORKFLOW_PERMISSION_CAUSE_KEY = "failure.workflow_cause"
+# The remaining text-only transient markers: network-level failures and
+# GitHub's own server sentences. This set names no timeout — a GitHub
+# request reports its status, and a real transport timeout IS a
+# `subprocess.TimeoutExpired` (Issue #1760).
 _GITHUB_TRANSIENT_RE = re.compile(
     r"http 5\d\d|http 429|rate limit|"
     r"something went wrong while executing your query|"
     r"internal server error|connection reset|connection refused|"
-    r"temporary failure in name resolution|network is unreachable|"
-    r"timed out|timeout",
+    r"temporary failure in name resolution|network is unreachable",
     re.IGNORECASE,
 )
+# A non-GitHub subprocess — a Pi session, a Git fetch/push — reports a
+# timeout in its own words and gives neither a status nor a timeout type:
+# there the wording is all that exists (the same text-only carve-out the
+# provider failure reasons keep, Issue #1465/#1760).
+_TEXT_TIMEOUT_RE = re.compile(r"timed out|timeout", re.IGNORECASE)
+
+
+def _timeout_is_text_only(error: BaseException | None) -> bool:
+    """Whether only the failure's text can say it was a timeout.
+
+    `subprocess.TimeoutExpired` IS a timeout (decided by type) and a
+    GitHub request reports its status, so neither reads the wording; a
+    non-gh subprocess (Pi, `git fetch`/`git push`) has only its output.
+    """
+    command = getattr(error, "cmd", None)
+    return isinstance(command, list) and command[:1] != ["gh"]
+
 
 # reason_code -> (action_code, retry_safe). `retry_safe` is whether a
 # plain re-queue can succeed WITHOUT a human repair: a transient GitHub
@@ -318,22 +368,43 @@ class BaseBranchMissingError(RuntimeError):
 def classify(detail: str, *, outcome: str = "blocked",
              provider_quota: bool = False, review_budget: bool = False,
              human_decision: bool = False,
-             unrecoverable: bool = False) -> Failure:
+             unrecoverable: bool = False,
+             error: BaseException | None = None) -> Failure:
     """Map one delivery exception to the machine-readable failure record.
 
     The caller supplies the type-derived flags (the runner owns the
-    exception classes); an explicit type wins over the message markers,
-    and every marker that is not recognized falls through to
-    `unclassified`, so the block is never omitted. The mapping is the
-    single source both the comment block and the reader-facing
-    Action/Reason rendering use.
+    exception classes) and, when it has one, the failing exception itself
+    (`error`). Its TYPE and the HTTP response status it carries decide
+    BEFORE every text marker — a 401, a 429/5xx, a rate-limited 403, a
+    permission 403, a transport timeout and a bounded gate wait are read
+    from the failure itself, never from words that the command's argv
+    could also contain (Issue #1760). Every marker that is not recognized
+    falls through to `unclassified`, so the block is never omitted. The
+    mapping is the single source both the comment block and the
+    reader-facing Action/Reason rendering use.
     """
     if provider_quota:
         reason_code = "provider_quota"
     elif review_budget:
         reason_code = "review_budget_exhausted"
-    elif human_decision:
+    elif human_decision or isinstance(error, ReleaseGateWaitTimeout):
+        # A bounded wait that ran out is a human's decision, never a
+        # transient failure to requeue (Issue #1760).
         reason_code = "human_decision_required"
+    elif isinstance(error, subprocess.TimeoutExpired):
+        # A transport timeout is transient by type, whatever it says.
+        reason_code = "github_transient"
+    elif gh_response.authentication_required(error):
+        reason_code = "credential_missing"
+    elif gh_response.transient(error):
+        reason_code = "github_transient"
+    elif gh_response.status_of(error) == 403 or isinstance(
+            error, GitHubPermissionDenied):
+        # A 403 with quota left is a permission failure: the same repair
+        # as a rejected credential. A caller that re-wraps that status in
+        # its own sentence (the release gate's missing Checks:read) keeps
+        # it on the type.
+        reason_code = "credential_missing"
     elif _WORKFLOW_PERMISSION_RE.search(detail):
         # The explicit App/workflows refusal is an authorization the AI
         # cannot grant: the existing `credential_missing` /
@@ -341,6 +412,8 @@ def classify(detail: str, *, outcome: str = "blocked",
         reason_code = "credential_missing"
     elif _CREDENTIAL_MISSING_RE.search(detail):
         reason_code = "credential_missing"
+    elif _timeout_is_text_only(error) and _TEXT_TIMEOUT_RE.search(detail):
+        reason_code = "github_transient"
     elif _GITHUB_TRANSIENT_RE.search(detail):
         reason_code = "github_transient"
     elif _PROVIDER_QUOTA_RE.search(detail):

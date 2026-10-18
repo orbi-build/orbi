@@ -24,7 +24,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote
 
-from orbi import notify
+from orbi import gh_response, notify
 from orbi.delivery_labels import (
     IN_PROGRESS_LABEL,
     P0_LABEL,
@@ -47,13 +47,6 @@ GH_READ_BACKOFF_SECONDS = 1
 GH_WRITE_MAX_ATTEMPTS = 3
 GH_WRITE_BACKOFF_SECONDS = 1
 GH_WRITE_MAX_SECONDS = 30
-# gh prints its own HTTP failures as `HTTP <code>: <text> (<url>)` — the
-# transient classes are the 401 keyring race, the rate
-# limits (429 / the API's "rate limit" messages) and GitHub-side 5xx.
-GH_TRANSIENT_ERROR_RE = re.compile(
-    r"http 401|http 429|http 5\d\d|bad credentials|rate limit",
-    re.IGNORECASE,
-)
 # The read-only gh subcommand surface (the maintainer comment's
 # enumerated read table). A verb missing from the set simply gets no
 # retry — today's behavior — while a write verb can never classify as
@@ -222,15 +215,20 @@ def run_gh_read_command(
 ) -> str:
     """Run one read-only gh command with bounded transient-failure retries.
 
-    A keyring race (HTTP 401), a rate limit (429) or a
+    A rate limit (a 403 with `x-ratelimit-remaining: 0`), a 429 or a
     GitHub-side 5xx used to crash a whole tick that was only reading.
-    Only provably read-only commands (`_is_readonly_gh_command`) that
-    failed with a transient error are retried, so no write path can ever
-    reach the retry loop; every retry logs a structured `gh_read_retry`
-    line, and the last error is re-raised unchanged so the existing
-    failure handling keeps its stderr.
+    Only provably read-only commands (`_is_readonly_gh_command`) whose
+    response carries a transient status are retried; a `gh` subcommand
+    that prints no status line keeps GitHub's own server sentence
+    (`gh_response.transient_command`), so the retry Issue #738 added
+    survives for every read. No write path can ever reach this retry
+    loop; every retry logs a structured `gh_read_retry` line, and the
+    last error is re-raised carrying the response status so the failure
+    handling classifies it from the status rather than the text
+    (Issue #1760).
     """
     execute = command_runner or run_command
+    command = gh_response.include_headers(command)
     attempt = 0
     while True:
         attempt += 1
@@ -245,15 +243,16 @@ def run_gh_read_command(
                 kwargs["timeout"] = timeout
             if failure_log_level != logging.ERROR:
                 kwargs["failure_log_level"] = failure_log_level
-            return execute(command, **kwargs)
+            return gh_response.response_parts(execute(command, **kwargs))[2]
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or "").strip()
+            failure = gh_response.failed_request(exc)
             retryable = (
                 _is_readonly_gh_command(command)
-                and GH_TRANSIENT_ERROR_RE.search(detail) is not None
+                and gh_response.transient_command(failure)
             )
             if attempt >= GH_READ_MAX_ATTEMPTS or not retryable:
-                raise
+                raise failure
         delay = GH_READ_BACKOFF_SECONDS * (2 ** (attempt - 1))
         event(
             "gh_read_retry", level=logging.WARNING,
@@ -262,15 +261,6 @@ def run_gh_read_command(
             stderr=single_line(detail),
         )
         time.sleep(delay)
-
-
-def _is_transient_gh_write_error(exc: subprocess.CalledProcessError) -> bool:
-    """Recognize GitHub server failures, but never client/permission errors."""
-    detail = " ".join(str(part or "") for part in (exc.stderr, exc.stdout))
-    return re.search(
-        r"http 5\d\d|http 429|rate limit|something went wrong while executing your query|internal server error",
-        detail, re.IGNORECASE,
-    ) is not None
 
 
 def run_gh_write_command(
@@ -284,9 +274,12 @@ def run_gh_write_command(
     GitHub may execute a mutation and lose the response.  ``already_applied``
     is therefore checked before each retry; it lets comment callers use the
     run marker/body as an idempotency key rather than creating duplicates.
-    Permission and validation failures are re-raised immediately.
+    Permission and validation failures are re-raised immediately. The
+    response status decides transience; a `gh` subcommand that prints no
+    response headers keeps GitHub's own server-failure sentences.
     """
     execute = command_runner or run_command
+    command = gh_response.include_headers(command)
     started = time.monotonic()
     for attempt in range(1, GH_WRITE_MAX_ATTEMPTS + 1):
         try:
@@ -295,10 +288,11 @@ def run_gh_write_command(
                 kwargs["cwd"] = cwd
             if timeout is not None:
                 kwargs["timeout"] = timeout
-            return execute(command, **kwargs)
+            return gh_response.response_parts(execute(command, **kwargs))[2]
         except subprocess.CalledProcessError as exc:
-            if not _is_transient_gh_write_error(exc):
-                raise
+            failure = gh_response.failed_request(exc)
+            if not gh_response.transient_command(failure):
+                raise failure
             if already_applied is not None:
                 try:
                     if already_applied():
