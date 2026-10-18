@@ -506,22 +506,27 @@ def test_other_failures_are_never_base_branch_missing(detail):
 
 
 def test_terminal_reason_names_the_configured_base_branch():
-    """The comment names the CONFIGURED branch: the remote's answer only
-    says that the branch is absent (Issue #1749), and the record is the
-    structured failure's own (Issue #1756)."""
+    """The comment names the CONFIGURED branch and keeps Git's raw answer
+    out of the explanation (Issue #1749, #1753): the evidence belongs to
+    the run details, the reason to the reader. The record is the
+    structured failure's own (Issue #1756) — nothing re-reads Git's
+    (localized) error text."""
     error = failure.BaseBranchMissingError("other")
     record = runner._classify_failure(error, outcome="blocked")
     assert record.reason_code == "base_branch_missing"
-    for code, language_phrase in (
-        ("en", "does not exist in the repository"),
-        ("zh", "不存在"),
+    for code, expected in (
+        ("en",
+         "This repository has no branch `release/9`, so Orbi doesn't "
+         "know which branch to start from."),
+        ("zh",
+         "这个仓库里没有分支 `release/9`，Orbi 不知道该从哪个分支开始改。"),
     ):
         reason = failure.terminal_reason(
             failure._failure_detail(error), record,
             base_branch="release/9", language_code=code,
         )
-        assert "release/9" in reason
-        assert language_phrase in reason
+        assert reason == expected
+        assert "couldn't find remote ref" not in reason
 
 
 def test_terminal_reason_keeps_the_generic_sentence_for_other_failures():

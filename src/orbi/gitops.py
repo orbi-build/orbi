@@ -400,7 +400,12 @@ def fetch_base_ref(repo_dir: Path, base_branch: str,
             if _remote_branch_missing(
                     base_branch, cwd=fetch_cwd,
                     command_runner=command_runner):
-                raise BaseBranchMissingError(base_branch) from exc
+                # The failed fetch's own output travels with the failure
+                # as evidence for the run details; it never decides the
+                # reason (Issues #1749, #1753).
+                raise BaseBranchMissingError(
+                    base_branch, stderr=exc.stderr,
+                ) from exc
             raise
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)

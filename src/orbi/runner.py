@@ -3129,6 +3129,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 language_code=language.of(config),
                 action=failure_report.terminal_action(
                     terminal_record, language.of(config),
+                    base_branch=base_branch,
                 ),
                 reason=terminal_reason(
                     _failure_detail(exc), terminal_record,
