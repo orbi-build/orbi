@@ -276,10 +276,18 @@ def test_agents_md_documents_model_wait_dead_kill():
 
 
 def test_workflow_docs_say_orbi_resumes_merge_after_maintainer_action():
-    """The handoff is a resumable wait, never an instruction to merge."""
+    """The handoff is a resumable wait, never an instruction to merge.
+
+    Issue #1745 added the cost of the deferral: the waiting delivery is
+    re-checked only on a tick whose queue is otherwise empty, so after
+    the maintainer acts Orbi merges on that first idle tick, not on the
+    very next one. Both languages must state that.
+    """
     english = docs_page("workflow")
     chinese = docs_page("zh/workflow")
     assert "approves and merges" not in english
     assert "批准并合并" not in chinese
-    assert "Orbi resumes and merges" in english
+    assert "Orbi merges the PR itself" in english
+    assert "otherwise-idle tick" in english
     assert "Orbi 自己合并" in chinese
+    assert "队列首次无事可做" in chinese

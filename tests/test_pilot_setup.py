@@ -268,7 +268,12 @@ def test_awaiting_merge_label_matches_resumable_workflow_direction():
     assert awaiting_merge["description"] == (
         "Reviewed PR delivered; Orbi merges once the maintainer clears the named blocker"
     )
-    assert "comment names the maintainer action and Orbi resumes to merge" in workflow
+    # Issue #1745: the label still promises the merge ("once the maintainer
+    # clears the blocker") and the workflow page says who merges and when —
+    # including the deferral cost, so the two do not drift apart.
+    assert "comment names the maintainer action" in workflow
+    assert "then Orbi merges the named PR head" in workflow
+    assert "tick whose queue is otherwise empty" in workflow
 
 
 def test_load_label_defs_parses_all_platform_labels(tmp_path):
