@@ -1,0 +1,50 @@
+---
+title: "v0.7.6 release (latest)"
+description: "Orbi v0.7.6 release notes: A missing base branch is detected by asking the remote, not by matching Git's error text and 7 more changes."
+---
+
+`v0.7.6` was published 2026-10-18T12:26:11Z as the GitHub Release [v0.7.6](https://github.com/orbi-build/orbi/releases/tag/v0.7.6) (release task: Issue #1754).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.7.6` | annotated tag `e1786df61eb292dbd7249195203ff855998ecac0` | commit `5bc4f0e4a387ccc3bd16bbfd9d1fc47b131f9973` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- A missing base branch is detected by asking the remote, not by matching Git's error text ([Issue #1756](https://github.com/orbi-build/orbi/issues/1756); [PR #1761](https://github.com/orbi-build/orbi/pull/1761))
+- Git errors are recognised the same way in any system language ([Issue #1758](https://github.com/orbi-build/orbi/issues/1758); [PR #1767](https://github.com/orbi-build/orbi/pull/1767))
+- A failure that merely mentions "N failed" is no longer reported as a test failure ([Issue #1759](https://github.com/orbi-build/orbi/issues/1759); [PR #1763](https://github.com/orbi-build/orbi/pull/1763))
+- Failed GitHub requests are classified by HTTP status, not by error text ([Issue #1760](https://github.com/orbi-build/orbi/issues/1760); [PR #1762](https://github.com/orbi-build/orbi/pull/1762))
+- Chinese suggestion bodies use Chinese section headings ([Issue #1764](https://github.com/orbi-build/orbi/issues/1764); [PR #1765](https://github.com/orbi-build/orbi/pull/1765))
+
+### Reliability and recovery
+
+- The missing-base-branch blocked comment says what is wrong, where to fix it and how to restart ([Issue #1753](https://github.com/orbi-build/orbi/issues/1753); [PR #1757](https://github.com/orbi-build/orbi/pull/1757))
+
+### Documentation
+
+- docs: an awaiting-merge PR also waits for the runner's other repositories ([PR #1755](https://github.com/orbi-build/orbi/pull/1755))
+- docs: mark tests_failed as a legacy reason code ([PR #1766](https://github.com/orbi-build/orbi/pull/1766))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
+
+- tag: `v0.7.6`
+- release commit: `5bc4f0e4a387ccc3bd16bbfd9d1fc47b131f9973`
+- release task: Issue #1754
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 5bc4f0e4a387ccc3bd16bbfd9d1fc47b131f9973 (the #268 CI-wait gate; no local test execution)
+
+
+Released by [Orbi](https://orbi.build/?ref=prfoot-orbi-build)
+
+[![Download Orbi](https://a.fsdn.com/con/app/sf-download-button)](https://sourceforge.net/projects/orbi/files/v0.7.6/v0.7.6%20source%20code.zip/download)
