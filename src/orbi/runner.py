@@ -184,7 +184,7 @@ from orbi import run_state
 from orbi import github, gitops, journal, progress, release, scene
 # The failure record lives in its own lean module (Issue #1229); these
 # helpers are re-exported so `runner.<name>` keeps working for callers.
-from orbi.failure import _failure_detail
+from orbi.failure import _failure_detail, terminal_reason
 # The delivery failure report is its own module (Issue #1260): the runner
 # reaches it as `failure_report.<name>` and imports back only the exception
 # types it raises or catches, plus the classifier the delivery flow uses.
@@ -2598,98 +2598,13 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             event(
                 "resuming_run", issue=number, run_id=run_id,
             )
-    base_sha = freeze_base(config.repo_dir, base_branch)
-    branch = task_branch(source_repo, number, run_id)
-    if existing_worktree is not None:
-        # The resumed run keeps its ORIGINAL branch —
-        # after a repo rename the re-derived name would carry the NEW
-        # slug and no longer match the branch the worktree is on (a
-        # second branch would be a second delivery). The worktree's
-        # current branch IS the scene's branch.
-        branch = run_command(
-            ["git", "branch", "--show-current"],
-            cwd=existing_worktree,
-        )
-    elif external_takeover:
-        # The external takeover delivers the contributor's own
-        # branch — the identity the takeover PR is frozen on.
-        branch = takeover_pr["headRefName"]
-    # Pickup priority: derived from the scanned issue's
-    # labels (no extra gh call) and carried on every journal line and
-    # scene comment of the attempt via `run_info`.
-    priority = issue_priority(issue)
-    run_info = (
-        f"base_branch={base_branch} base_sha={base_sha} run_id={run_id} "
-        f"priority={priority}"
-    )
-    if ops:
-        run_info += " task_type=ops"
-    if facts.repo_policy is not None and facts.repo_policy.sha is not None:
-        # The run comment carries the repository config sha
-        # (the file blob at the default branch tip) so a policy change is
-        # always visible on the run.
-        run_info += f" repo_config={facts.repo_policy.sha}"
-    LOGGER.info(
-        "issue=%s %s", number, run_info,
-    )
-    if not in_progress and dispatch_label in claim_labels \
-            and takeover_pr is None:
-        # The pickup scan and the in-progress recheck above
-        # both predate freeze_base (a seconds-long network round trip).
-        # A label — or the stable branch — appearing inside that window
-        # means another instance claimed this Issue while we were
-        # preparing: yield. No label writes, no comments, nothing that
-        # could interrupt the winner's in-flight delivery; the next
-        # tick's scan picks work up again on its own. The
-        # predicate keys on the repository's dispatch label (#527), not
-        # the default constant — a custom-label repository's tickets
-        # never carry `ai-ready`, and the guard must guard them too.
-        if has_in_progress_label(number, source_repo):
-            event("claim_yield", issue=number, reason="in_progress_label")
-            return IssueResult("claim-yielded", None)
-        if not stable_branch_present and stable_branch_exists(
-                config.repo_dir, stable_branch,
-        ):
-            event("claim_yield", issue=number, reason="stable_branch_appeared")
-            return IssueResult("claim-yielded", None)
-        if config.clarify_thin_tickets and not clarify.enforce(
-                issue, config, source_repo, run_id):
-            return IssueResult("needs-detail", None)
-    apply_label_patch(
-        number, repo=source_repo, event=EVENT_CLAIM,
-        current_labels=claim_labels,
-    )
-    # The successful pickup resets the stale-pickup clock in
-    # the health state file (bypass — a state-write failure never fails
-    # the claim).
-    try:
-        runner_health.record_pickup(config.repo_dir)
-    except Exception:
-        LOGGER.exception("issue=%s health_pickup_record_failed", number)
-    # The Issue is in flight from the claim label on: bind the stop
-    # scene so a SIGTERM during this tick logs the active
-    # Issue context, not only systemd's generic "Stopped" line. The
-    # branch and worktree path are the same derived values the
-    # worktree creation below uses (bound before the worktree exists);
-    # the run identity is bound once as a frozen RunContext and
-    # the failure/finish paths unpack it from there.
-    ctx = RunContext(
-        run_id=run_id, issue=number, branch=branch,
-        worktree=existing_worktree or worktree_path(
-            config.repo_dir, source_repo, number, run_id,
-        ),
-        source_repo=source_repo,
-    )
-    set_active_run(ctx, title)
-    publisher = ProgressPublisher(
-        number, source_repo, run_id, run_command=run_command,
-        language_code=language.of(config),
-    )
-    publish = functools.partial(
-        _safe_publish, run_id=run_id, issue=number,
-        source_repo=source_repo, role=ROLE_IMPLEMENT,
-    )
+    # The FIRST step is inside the failure range (Issue #1749): a base
+    # branch the remote lacks used to escape before the claim.
+    base_sha: str | None = None
+    branch: str | None = None
     worktree: Path | None = None
+    publisher: ProgressPublisher | None = None
+    priority = issue_priority(issue)
     started = time.monotonic()
     # The PR label is authoritative once the PR exists. A scene-comment
     # notification is recoverable reporting: if GitHub still rejects it
@@ -2697,6 +2612,93 @@ def _dispatch_implementation(issue: dict, source_repo: str,
     # ai-blocked.
     pr_opened = False
     try:
+        base_sha = freeze_base(config.repo_dir, base_branch)
+        branch = task_branch(source_repo, number, run_id)
+        if existing_worktree is not None:
+            # The resumed run keeps its ORIGINAL branch —
+            # after a repo rename the re-derived name would carry the NEW
+            # slug and no longer match the branch the worktree is on (a
+            # second branch would be a second delivery). The worktree's
+            # current branch IS the scene's branch.
+            branch = run_command(
+                ["git", "branch", "--show-current"],
+                cwd=existing_worktree,
+            )
+        elif external_takeover:
+            # The external takeover delivers the contributor's own
+            # branch — the identity the takeover PR is frozen on.
+            branch = takeover_pr["headRefName"]
+        run_info = (
+            f"base_branch={base_branch} base_sha={base_sha} run_id={run_id} "
+            f"priority={priority}"
+        )
+        if ops:
+            run_info += " task_type=ops"
+        if facts.repo_policy is not None and facts.repo_policy.sha is not None:
+            # The run comment carries the repository config sha
+            # (the file blob at the default branch tip) so a policy change is
+            # always visible on the run.
+            run_info += f" repo_config={facts.repo_policy.sha}"
+        LOGGER.info(
+            "issue=%s %s", number, run_info,
+        )
+        if not in_progress and dispatch_label in claim_labels \
+                and takeover_pr is None:
+            # The pickup scan and the in-progress recheck above
+            # both predate freeze_base (a seconds-long network round trip).
+            # A label — or the stable branch — appearing inside that window
+            # means another instance claimed this Issue while we were
+            # preparing: yield. No label writes, no comments, nothing that
+            # could interrupt the winner's in-flight delivery; the next
+            # tick's scan picks work up again on its own. The
+            # predicate keys on the repository's dispatch label (#527), not
+            # the default constant — a custom-label repository's tickets
+            # never carry `ai-ready`, and the guard must guard them too.
+            if has_in_progress_label(number, source_repo):
+                event("claim_yield", issue=number, reason="in_progress_label")
+                return IssueResult("claim-yielded", None)
+            if not stable_branch_present and stable_branch_exists(
+                    config.repo_dir, stable_branch,
+            ):
+                event("claim_yield", issue=number, reason="stable_branch_appeared")
+                return IssueResult("claim-yielded", None)
+            if config.clarify_thin_tickets and not clarify.enforce(
+                    issue, config, source_repo, run_id):
+                return IssueResult("needs-detail", None)
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_CLAIM,
+            current_labels=claim_labels,
+        )
+        # The successful pickup resets the stale-pickup clock in
+        # the health state file (bypass — a state-write failure never fails
+        # the claim).
+        try:
+            runner_health.record_pickup(config.repo_dir)
+        except Exception:
+            LOGGER.exception("issue=%s health_pickup_record_failed", number)
+        # The Issue is in flight from the claim label on: bind the stop
+        # scene so a SIGTERM during this tick logs the active
+        # Issue context, not only systemd's generic "Stopped" line. The
+        # branch and worktree path are the same derived values the
+        # worktree creation below uses (bound before the worktree exists);
+        # the run identity is bound once as a frozen RunContext and
+        # the failure/finish paths unpack it from there.
+        ctx = RunContext(
+            run_id=run_id, issue=number, branch=branch,
+            worktree=existing_worktree or worktree_path(
+                config.repo_dir, source_repo, number, run_id,
+            ),
+            source_repo=source_repo,
+        )
+        set_active_run(ctx, title)
+        publisher = ProgressPublisher(
+            number, source_repo, run_id, run_command=run_command,
+            language_code=language.of(config),
+        )
+        publish = functools.partial(
+            _safe_publish, run_id=run_id, issue=number,
+            source_repo=source_repo, role=ROLE_IMPLEMENT,
+        )
         worktree = create_worktree(
             config.repo_dir, source_repo, number, run_id, base_sha,
             existing=existing_worktree,
@@ -3128,20 +3130,26 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 action=failure_report.terminal_action(
                     terminal_record, language.of(config),
                 ),
-                reason=language.text(
-                    language.of(config), "runner.delivery_stopped_reason",
-                    detail=_failure_detail(exc),
+                reason=terminal_reason(
+                    _failure_detail(exc), terminal_record,
+                    base_branch=base_branch, language_code=language.of(config),
                 ),
                 diagnosis=(
                     f"{_failure_detail(exc)}\n"
                     f"- base_branch: {base_branch}\n"
-                    f"- base_sha: {base_sha}\n"
+                    f"- base_sha: {base_sha or '-'}\n"
                     f"run_id={run_id}\n"
                     f"- priority: {priority}"
                 ),
                 classify=False, evidence=True,
+                # The blocked patch must clear the queue label, or the
+                # Issue is claimed again every tick (Issue #1749). Before
+                # the claim write landed (the publisher is created right
+                # after it) the scanned labels are the honest source.
                 current_labels=(
-                    {PR_OPENED_LABEL} if pr_opened else {IN_PROGRESS_LABEL}
+                    {PR_OPENED_LABEL} if pr_opened
+                    else {IN_PROGRESS_LABEL} if publisher is not None
+                    else set(claim_labels)
                 ),
                 review_round=0,
                 finish=(

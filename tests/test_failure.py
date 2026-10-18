@@ -66,6 +66,7 @@ def test_reason_and_action_codes_are_closed_sets_with_expected_members():
         "human_decision_required",
         "credential_missing",
         "provider_quota",
+        "base_branch_missing",
         "unclassified",
     }
     assert failure.ACTION_CODES == {
@@ -318,6 +319,16 @@ CLASSIFY_CASES = (
         "blocked",
     ),
     (
+        "base_branch_missing",
+        lambda: subprocess.CalledProcessError(
+            128, ["git", "fetch", "origin", "release/9"],
+            stderr="fatal: couldn't find remote ref release/9",
+        ),
+        "fix_ticket",
+        False,
+        "blocked",
+    ),
+    (
         "unclassified",
         lambda: RuntimeError("something truly unexpected"),
         "fix_ticket",
@@ -450,6 +461,70 @@ def test_terminal_action_recognized_failure_keeps_the_generic_action():
         failure.classify("http 500 internal server error"), language_code="en"
     )
     assert action == "Fix the failure described below and re-run this Issue."
+
+
+@pytest.mark.parametrize(
+    "wording",
+    [
+        "fatal: couldn't find remote ref release/9",
+        "fatal: could not find remote ref release/9",
+    ],
+)
+def test_classify_maps_git_missing_ref_to_base_branch_missing(wording):
+    """Issue #1749: `git fetch origin <base>` answering that the remote has
+    no such ref is its own failure class — an external precondition a human
+    repairs, never the generic unclassified runner exception."""
+    record = failure.classify(wording)
+    assert record == failure.Failure(
+        reason_code="base_branch_missing", action_code="fix_ticket",
+        retry_safe=False, outcome="blocked",
+    )
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        # A network failure of the same fetch keeps its own class.
+        "fatal: unable to access 'https://github.com/e/r.git/': "
+        "Could not resolve host: github.com",
+        "fatal: unable to access 'https://github.com/e/r.git/': "
+        "Connection timed out",
+        # A non-fast-forward push and an unclassified error are unchanged.
+        "! [rejected] HEAD -> b (non-fast-forward)",
+        "totally unexpected",
+    ],
+)
+def test_base_branch_missing_needs_gits_missing_ref_sentence(detail):
+    assert failure.classify(detail).reason_code != "base_branch_missing"
+
+
+def test_terminal_reason_names_the_configured_base_branch():
+    """The comment names the CONFIGURED branch: Git's own line only repeats
+    the ref it was asked to fetch (Issue #1749)."""
+    record = failure.classify("fatal: couldn't find remote ref other")
+    assert record.reason_code == "base_branch_missing"
+    for code, language_phrase in (
+        ("en", "does not exist in the repository"),
+        ("zh", "不存在"),
+    ):
+        reason = failure.terminal_reason(
+            "fatal: couldn't find remote ref other", record,
+            base_branch="release/9", language_code=code,
+        )
+        assert "release/9" in reason
+        assert language_phrase in reason
+
+
+def test_terminal_reason_keeps_the_generic_sentence_for_other_failures():
+    record = failure.classify("http 500 internal server error")
+    reason = failure.terminal_reason(
+        "http 500 internal server error", record,
+        base_branch="main", language_code="en",
+    )
+    assert reason == (
+        "The delivery stopped before it could be completed: "
+        "http 500 internal server error"
+    )
 
 
 def test_classify_failure_reads_a_provider_quota_marker():
