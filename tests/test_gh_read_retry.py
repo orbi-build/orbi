@@ -1,12 +1,13 @@
-"""Issue #738: bounded retries for read-only gh commands.
+"""Issue #738 / #1760: bounded retries for gh commands.
 
-A transient credential/API blip (a keyring race under concurrent orbi
-processes surfaces as ``HTTP 401: Bad credentials``; plus API rate
-limits and GitHub-side 5xx) must not crash a whole tick that was only
-reading. Retry lives in the read-only gh wrapper layer so a write path
-can never reach it, and only gh's own transient error lines are
-retried — a 404 or a parameter error is deterministic and re-raises on
-the first attempt.
+A transient failure (GitHub rate limiting, 429, GitHub-side 5xx) must not
+crash a whole tick that was only reading. Retry lives in the wrapper layer
+so a write path can never reach the read retry loop, and it is decided by
+the HTTP status the response carries (Issue #1760): `gh api --include`
+puts the status line and the `x-ratelimit-remaining` header in the
+error's stdout, so a 404 or a rejected credential is never mistaken for a
+transient failure by a word in the error text. A rejected credential
+(401) is a repair, not a retry.
 """
 
 import subprocess
@@ -17,34 +18,45 @@ import orbi.runner as runner
 import orbi.github as github
 from seam import seam
 
-TRANSIENT_STDERRS = [
-    "HTTP 401: Bad credentials (https://api.github.com/graphql)",
-    "HTTP 429: Too Many Requests (https://api.github.com/graphql)",
-    "API rate limit exceeded for organization 'orbi-build'",
-    "HTTP 502: Bad Gateway (https://api.github.com/graphql)",
-    "HTTP 503: Service Unavailable (https://api.github.com/graphql)",
-    "HTTP 504: Gateway Time-out (https://api.github.com/graphql)",
-]
+
+def failed_response(status, *, remaining=10, body='{"message": "failed"}'):
+    """The stdout of a failed `gh api --include` (gh exits 1)."""
+    return (
+        f"HTTP/2.0 {status} Error\r\n"
+        "Content-Type: application/json; charset=utf-8\r\n"
+        f"X-Ratelimit-Remaining: {remaining}\r\n"
+        "\r\n"
+        f"{body}"
+    )
 
 
-@pytest.mark.parametrize("stderr", TRANSIENT_STDERRS)
-def test_gh_read_command_retries_transient_failures_then_succeeds(
-    monkeypatch, caplog, stderr,
+@pytest.mark.parametrize("status, remaining", [
+    (429, 10),   # too many requests
+    (500, 10),   # GitHub-side 5xx
+    (502, 10),
+    (503, 10),
+    (504, 10),
+    (403, 0),    # the primary rate limit: a 403 with no quota left
+])
+def test_gh_read_command_retries_transient_statuses_then_succeeds(
+    monkeypatch, caplog, status, remaining,
 ):
     calls = []
     sleeps = []
+    output = failed_response(status, remaining=remaining)
 
     def fake_run(command, **kwargs):
         calls.append(command)
         if len(calls) < 3:
-            raise subprocess.CalledProcessError(1, command, stderr=stderr)
+            raise subprocess.CalledProcessError(
+                1, command, output=output, stderr=f"gh: failed (HTTP {status})",
+            )
         return "[]"
 
     monkeypatch.setattr(runner.time, "sleep", sleeps.append)
     with caplog.at_level("INFO"):
         assert runner.run_gh_read_command(
-            ["gh", "issue", "list", "--repo", "o/r",
-             "--json", "number", "--limit", "1"],
+            ["gh", "api", "repos/o/r/issues?state=open"],
             command_runner=fake_run,
         ) == "[]"
 
@@ -52,6 +64,47 @@ def test_gh_read_command_retries_transient_failures_then_succeeds(
     assert sleeps == [1, 2]
     assert "gh_read_retry" in caplog.text
     assert "attempt=2" in caplog.text
+
+
+def test_gh_read_command_does_not_retry_a_rejected_credential(monkeypatch):
+    """A 401 is a credential problem, not a transient blip: retrying it
+    cannot succeed (Issue #1760)."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        raise subprocess.CalledProcessError(
+            1, command, output=failed_response(401),
+            stderr="gh: Bad credentials (HTTP 401)",
+        )
+
+    monkeypatch.setattr(runner.time, "sleep", lambda _: pytest.fail("slept"))
+    with pytest.raises(github.gh_response.GitHubRequestFailed) as caught:
+        runner.run_gh_read_command(
+            ["gh", "api", "repos/o/r"], command_runner=fake_run,
+        )
+    assert len(calls) == 1
+    assert caught.value.status == 401
+    assert caught.value.authentication_required is True
+
+
+def test_gh_read_command_does_not_retry_without_a_response_status(monkeypatch):
+    """A gh subcommand that prints no response headers (`gh issue list`)
+    has no status to decide from, so it is never retried on the wording of
+    its error line."""
+    def fake_run(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, command, stderr="HTTP 502: Bad Gateway "
+                               "(https://api.github.com/graphql)",
+        )
+
+    monkeypatch.setattr(runner.time, "sleep", lambda _: pytest.fail("slept"))
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.run_gh_read_command(
+            ["gh", "issue", "list", "--repo", "o/r",
+             "--json", "number", "--limit", "1"],
+            command_runner=fake_run,
+        )
 
 
 def test_gh_write_command_retries_server_error_then_succeeds(monkeypatch):
@@ -75,6 +128,30 @@ def test_gh_write_command_retries_server_error_then_succeeds(monkeypatch):
     assert sleeps == [1]
 
 
+def test_gh_write_command_reads_the_status_before_the_text(monkeypatch):
+    """A response status decides the retry; the text never overrides it —
+    a permission 403 whose message mentions a rate limit is not retried."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        raise subprocess.CalledProcessError(
+            1, command, output=failed_response(
+                403, body='{"message": "API rate limit exceeded"}',
+            ),
+            stderr="gh: Resource not accessible (HTTP 403)",
+        )
+
+    monkeypatch.setattr(github.time, "sleep", lambda _: pytest.fail("slept"))
+    with pytest.raises(github.gh_response.GitHubRequestFailed):
+        github.run_gh_write_command(
+            ["gh", "api", "repos/o/r/issues/9/comments",
+             "--method", "POST", "-f", "body=x"],
+            command_runner=fake_run,
+        )
+    assert len(calls) == 1
+
+
 def test_gh_write_command_does_not_retry_permission_error(monkeypatch):
     calls = []
 
@@ -90,17 +167,21 @@ def test_gh_write_command_does_not_retry_permission_error(monkeypatch):
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("stderr", [
-    "HTTP 401: Bad credentials",
-    "HTTP 404: Not Found",
-])
-def test_gh_write_command_does_not_retry_four_x(monkeypatch, stderr):
+@pytest.mark.parametrize("status", [401, 404])
+def test_gh_write_command_does_not_retry_four_x(monkeypatch, status):
     def fake_run(command, **kwargs):
-        raise subprocess.CalledProcessError(1, command, stderr=stderr)
+        raise subprocess.CalledProcessError(
+            1, command, output=failed_response(status),
+            stderr=f"gh: failed (HTTP {status})",
+        )
 
     monkeypatch.setattr(github.time, "sleep", lambda _: pytest.fail("slept"))
     with pytest.raises(subprocess.CalledProcessError):
-        github.run_gh_write_command(["gh", "issue", "edit", "9"], command_runner=fake_run)
+        github.run_gh_write_command(
+            ["gh", "api", "repos/o/r/issues/9/comments",
+             "--method", "POST", "-f", "body=x"],
+            command_runner=fake_run,
+        )
 
 
 def test_gh_write_command_handles_zero_attempt_budget(monkeypatch):
@@ -206,28 +287,27 @@ def test_gh_read_command_returns_first_success_without_retry(monkeypatch):
     assert len(calls) == 1
 
 
-def test_gh_read_command_exhausts_and_reraises_stderr_unchanged(monkeypatch):
+def test_gh_read_command_exhausts_and_reraises_unchanged(monkeypatch):
     calls = []
     monkeypatch.setattr(runner.time, "sleep", lambda _: None)
+    output = failed_response(502)
+    stderr = "gh: Bad Gateway (HTTP 502)"
 
     def fake_run(command, **kwargs):
         calls.append(command)
         raise subprocess.CalledProcessError(
-            1, command,
-            stderr="HTTP 502: Bad Gateway (https://api.github.com/graphql)",
+            1, command, output=output, stderr=stderr,
         )
 
     with pytest.raises(subprocess.CalledProcessError) as caught:
         runner.run_gh_read_command(
-            ["gh", "pr", "list", "--repo", "o/r", "--state", "open",
-             "--json", "number", "--limit", "1"],
+            ["gh", "api", "repos/o/r/pulls?state=open"],
             command_runner=fake_run,
         )
 
     assert len(calls) == 3
-    assert caught.value.stderr == (
-        "HTTP 502: Bad Gateway (https://api.github.com/graphql)"
-    )
+    assert caught.value.stderr == stderr
+    assert caught.value.status == 502
 
 
 def test_gh_read_command_does_not_retry_deterministic_failure(monkeypatch):
@@ -236,14 +316,14 @@ def test_gh_read_command_does_not_retry_deterministic_failure(monkeypatch):
     def fake_run(command, **kwargs):
         calls.append(command)
         raise subprocess.CalledProcessError(
-            1, command,
-            stderr="HTTP 404: Not Found (https://api.github.com/repos/o/r)",
+            1, command, output=failed_response(404),
+            stderr="gh: Not Found (HTTP 404)",
         )
 
     monkeypatch.setattr(runner.time, "sleep", lambda _: pytest.fail("slept"))
     with pytest.raises(subprocess.CalledProcessError):
         runner.run_gh_read_command(
-            ["gh", "issue", "view", "9", "--repo", "o/r"],
+            ["gh", "api", "repos/o/r/issues/9"],
             command_runner=fake_run,
         )
     assert len(calls) == 1
@@ -258,8 +338,8 @@ def test_gh_read_command_does_not_retry_write_subcommands(monkeypatch):
     def fake_run(command, **kwargs):
         calls.append(command)
         raise subprocess.CalledProcessError(
-            1, command,
-            stderr="HTTP 502: Bad Gateway (https://api.github.com/graphql)",
+            1, command, output=failed_response(502),
+            stderr="gh: Bad Gateway (HTTP 502)",
         )
 
     monkeypatch.setattr(runner.time, "sleep", lambda _: pytest.fail("slept"))
@@ -280,6 +360,7 @@ def test_gh_read_command_does_not_retry_write_subcommands(monkeypatch):
     assert len(calls) == 10
 
 
+
 def test_gh_read_command_does_not_retry_gh_api_writes(monkeypatch):
     """`gh api` is a read only without a write marker — a non-GET
     --method/-X override, or any `-f`/`-F` parameter, which per gh's
@@ -290,8 +371,8 @@ def test_gh_read_command_does_not_retry_gh_api_writes(monkeypatch):
     def fake_run(command, **kwargs):
         calls.append(command)
         raise subprocess.CalledProcessError(
-            1, command,
-            stderr="HTTP 429: Too Many Requests (https://api.github.com/graphql)",
+            1, command, output=failed_response(429),
+            stderr="gh: Too Many Requests (HTTP 429)",
         )
 
     monkeypatch.setattr(runner.time, "sleep", lambda _: pytest.fail("slept"))
@@ -318,6 +399,9 @@ def test_is_readonly_gh_command_classifies_gh_api_reads():
     assert github._is_readonly_gh_command(
         ["gh", "api", "repos/o/r", "--method=GET", "--jq", ".name"])
     assert github._is_readonly_gh_command(["gh", "api", "-X", "GET", "repos/o/r"])
+    # The adapter's own --include flag never turns a read into a write.
+    assert github._is_readonly_gh_command(
+        ["gh", "api", "repos/o/r", "--include"])
     # A trailing -X with no value is malformed; no method override was
     # parsed, so the command is still classified as a read (gh rejects it).
     assert github._is_readonly_gh_command(["gh", "api", "repos/o/r", "-X"])
@@ -371,26 +455,26 @@ def test_is_readonly_gh_command_classifies_subcommands():
         assert not github._is_readonly_gh_command(command), command
 
 
-def test_list_issues_survives_transient_401_from_keyring_race(monkeypatch):
-    """Issue #738 acceptance: the Issue's exact crash scene — the tick's
-    `list_issues` read — recovers from a first-attempt keyring 401
-    through the runner's own `run_command` seam."""
+def test_list_issues_does_not_retry_a_rejected_credential(monkeypatch):
+    """Issue #1760: the tick's `list_issues` read of a rejected credential
+    is a repair, not a retry — it fails on the first attempt carrying the
+    response status the classifier reads."""
     calls = []
-    monkeypatch.setattr(runner.time, "sleep", lambda _: None)
+    monkeypatch.setattr(runner.time, "sleep", lambda _: pytest.fail("slept"))
 
     def fake_run(command, **kwargs):
         calls.append(list(command))
-        if len(calls) == 1:
-            raise subprocess.CalledProcessError(
-                1, command,
-                stderr="HTTP 401: Bad credentials (https://api.github.com/graphql)",
-            )
-        return "[]"
+        raise subprocess.CalledProcessError(
+            1, command, output=failed_response(401),
+            stderr="gh: Bad credentials (HTTP 401)",
+        )
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.list_issues(
-        "orbi-build/orbi-cloud", state="open",
-        search="label:ai-fix-needed,ai-pr-opened -label:ai-blocked",
-        json_fields="number,title,state,url,labels", limit=1,
-    ) == []
-    assert len(calls) == 2
+    with pytest.raises(github.gh_response.GitHubRequestFailed) as caught:
+        runner.list_issues(
+            "orbi-build/orbi-cloud", state="open",
+            search="label:ai-fix-needed,ai-pr-opened -label:ai-blocked",
+            json_fields="number,title,state,url,labels", limit=1,
+        )
+    assert len(calls) == 1
+    assert caught.value.status == 401

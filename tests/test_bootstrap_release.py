@@ -40,6 +40,7 @@ from tests.fakes.bootstrap_release import (
     _milestone,
     commit_file,
     git_out,
+    without_include,
     make_gate_gh,
     make_milestone_gh,
     make_registration_lag_gh,
@@ -860,7 +861,11 @@ def test_check_release_gates_times_out_when_ci_never_registers(monkeypatch):
         monkeypatch, api_responses=[[], [], [], [], [], []],
     )
     monkeypatch.setattr("time.sleep", lambda seconds: None)
-    with pytest.raises(RuntimeError, match="wait timeout, not a CI failure"):
+    # Its own type (Issue #1760): the blocked report reads the type, never
+    # the message, so a spent wait budget is a human decision.
+    with pytest.raises(
+        failure.ReleaseGateWaitTimeout, match="wait timeout, not a CI failure",
+    ):
         release.check_release_gates(
             "o/r", "abc123", 99,
             repo_has_ci=True, ci_wait_seconds=60,
@@ -911,7 +916,10 @@ def test_check_release_gates_fails_on_leftover_fix_needed(monkeypatch):
 
 def test_check_release_gates_delivery_wait_timeout_is_not_ci_failure(monkeypatch):
     make_gate_gh(monkeypatch, leftover_labels={"ai-in-progress": [7]}, check_runs=[])
-    with pytest.raises(RuntimeError, match="delivery wait timeout, not a CI failure"):
+    with pytest.raises(
+        failure.ReleaseGateWaitTimeout,
+        match="delivery wait timeout, not a CI failure",
+    ):
         release.check_release_gates("o/r", "abc123", 99,
                                    delivery_wait_seconds=5,
                                    delivery_waited_seconds=5)
@@ -1012,7 +1020,7 @@ def test_check_release_gates_ci_wait_times_out(monkeypatch, caplog):
     monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"), pytest.raises(
-        RuntimeError,
+        failure.ReleaseGateWaitTimeout,
         match=r"waiting for CI on the release commit abc123 "
               r"timed out after 7s.*not a CI failure",
     ):
@@ -1024,13 +1032,17 @@ def test_check_release_gates_ci_wait_times_out(monkeypatch, caplog):
 
 
 def test_check_release_gates_reports_missing_checks_permission(monkeypatch):
-    """A hosted App token's Checks permission failure is actionable."""
+    """A hosted App token's Checks permission failure is actionable.
+
+    The 403 is read from the response status gh printed (`--include`),
+    never from the error text (Issue #1760)."""
+    from orbi import gh_response
+
     def fake_run_command(command, **kwargs):
         if command[:2] == ["gh", "api"]:
-            raise subprocess.CalledProcessError(
-                1, command,
-                stderr=("gh: Resource not accessible by integration "
-                        "(HTTP 403)"),
+            raise gh_response.GitHubRequestFailed(
+                1, command, status=403,
+                stderr="gh: Resource not accessible by integration (HTTP 403)",
             )
         return "[]"
 
@@ -3049,6 +3061,44 @@ def test_process_release_failure_comment_carries_failure_block(monkeypatch):
     assert "Orbi release failed (ai-blocked)" in body
 
 
+@pytest.mark.parametrize("budget", ["deliveries", "ci"])
+def test_process_release_reports_a_gate_wait_timeout_as_blocked(
+    monkeypatch, budget,
+):
+    """Issue #1760 acceptance 3: a release gate that runs out of its wait
+    budget is reported `blocked` — a human decides — and never as the
+    `github_transient` / `requeue` a transient GitHub failure gets."""
+    if budget == "deliveries":
+        state = make_release_process_env(
+            monkeypatch, leftover_labels={"ai-in-progress": [7]},
+        )
+        config = config_domain.RunnerConfig(
+            repo_dir=Path("/r"), base_branch="main",
+            release_deliveries_wait_seconds=0.0,
+        )
+    else:
+        state = make_release_process_env(
+            monkeypatch,
+            check_run_pages=[[("tests", "in_progress", None)]],
+        )
+        config = config_domain.RunnerConfig(
+            repo_dir=Path("/r"), base_branch="main",
+            release_ci_wait_seconds=0.0,
+        )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    assert release.process_release(issue, config, "o/r") == ""
+    (comment_number, comment_kwargs), = state["comments"]
+    assert comment_number == 99
+    record = failure.parse(comment_kwargs["body"])
+    assert record == failure.Failure(
+        reason_code="human_decision_required", action_code="decide",
+        retry_safe=False, outcome="blocked",
+    )
+    assert "timed out" in comment_kwargs["body"]
+
+
 @pytest.mark.parametrize("language_code", ["en", "zh"])
 def test_process_release_failure_comment_ends_with_the_help_line(
         monkeypatch, language_code):
@@ -3147,7 +3197,7 @@ def test_process_release_derives_scope_from_milestone(monkeypatch):
     # The scope was derived from the milestone, not hand-listed.
     assert ["gh", "api",
             "repos/o/r/issues?state=closed&milestone=5&per_page=100",
-            "--paginate", "--slurp"] \
+            "--paginate", "--slurp", "--include"] \
         in commands
     # The derived scope went through the existing item-by-item verify.
     (comment_number, comment_kwargs), = state["comments"]
@@ -3493,7 +3543,7 @@ def test_process_release_closes_milestone_despite_stale_release_ticket(monkeypat
     ]
 
     def stale_release_ticket(command, **kwargs):
-        if command == stale_index_command:
+        if without_include(command) == stale_index_command:
             return json.dumps(
                 [[{"number": 99, "title": "Release v0.3.0"}]],
             )
@@ -3710,7 +3760,7 @@ def test_close_release_milestone_closes_an_open_empty_milestone(monkeypatch):
             ]])
         if command == MILESTONE_ISSUES_COMMAND:
             return json.dumps([[]])
-        if command == ["gh", "api", "repos/o/r/milestones/5",
+        if without_include(command) == ["gh", "api", "repos/o/r/milestones/5",
                        "--method", "PATCH", "-f", "state=closed"]:
             return json.dumps(_milestone(5, "v0.3.0", "closed", 0))
         raise AssertionError(f"unexpected command: {command}")
@@ -3827,7 +3877,7 @@ def test_close_release_milestone_retries_the_stale_issue_index_after_close(monke
             # lists the just-closed issue; the re-read catches up.
             stale = json.dumps([[{"number": 748, "title": "Release v0.3.0"}]])
             return stale if calls.count(command) == 1 else json.dumps([[]])
-        if command == ["gh", "api", "repos/o/r/milestones/5",
+        if without_include(command) == ["gh", "api", "repos/o/r/milestones/5",
                        "--method", "PATCH", "-f", "state=closed"]:
             return json.dumps(_milestone(5, "v0.3.0", "closed", 0))
         raise AssertionError(f"unexpected command: {command}")
@@ -3892,7 +3942,7 @@ def test_close_release_milestone_ignores_the_release_ticket_itself(monkeypatch):
             # The release ticket was closed seconds ago; the stale index
             # still lists it — and nothing else.
             return json.dumps([[{"number": 99, "title": "Release v0.3.0"}]])
-        if command == ["gh", "api", "repos/o/r/milestones/5",
+        if without_include(command) == ["gh", "api", "repos/o/r/milestones/5",
                        "--method", "PATCH", "-f", "state=closed"]:
             return json.dumps(_milestone(5, "v0.3.0", "closed", 0))
         raise AssertionError(f"unexpected command: {command}")
@@ -3983,11 +4033,11 @@ def test_reconcile_release_epics_closes_verified_epic_with_audit(monkeypatch):
 
     def fake_run(command, **kwargs):
         commands.append(command)
-        if command == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100", "--paginate", "--slurp"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[epic]])
-        if command == ["gh", "api", "repos/o/r/issues/20/sub_issues?per_page=100", "--paginate", "--slurp"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues/20/sub_issues?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[{"number": 21, "repository": {"full_name": "o/r"}, "state": "closed"}]])
-        if command == ["gh", "api", "repos/o/r/issues/21"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues/21"]:
             return json.dumps({"number": 21, "state": "closed"})
         if command == ["gh", "issue", "view", "20", "--repo", "o/r", "--json", "comments"]:
             return json.dumps({"comments": []})
@@ -4019,11 +4069,11 @@ def test_reconcile_release_epics_posts_the_audit_in_the_bound_language(monkeypat
 
     def fake_run(command, **kwargs):
         commands.append(command)
-        if command == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100", "--paginate", "--slurp"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[epic]])
         if "sub_issues" in command[2]:
             return json.dumps([[{"number": 21, "repository": {"full_name": "o/r"}, "state": "closed"}]])
-        if command == ["gh", "api", "repos/o/r/issues/21"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues/21"]:
             return json.dumps({"number": 21, "state": "closed"})
         if command == ["gh", "issue", "view", "20", "--repo", "o/r", "--json", "comments"]:
             return json.dumps({"comments": []})
@@ -4055,13 +4105,13 @@ def test_reconcile_release_epics_keeps_open_child_and_bad_scope_open(monkeypatch
     ]
     def fake_run(command, **kwargs):
         calls.append(command)
-        if command == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100", "--paginate", "--slurp"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100", "--paginate", "--slurp"]:
             return json.dumps([issues])
-        if command == ["gh", "api", "repos/o/r/issues/20/sub_issues?per_page=100", "--paginate", "--slurp"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues/20/sub_issues?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[{"number": 21, "repository": {"full_name": "o/r"}, "state": "open"}]])
-        if command == ["gh", "api", "repos/o/r/issues/21"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues/21"]:
             return json.dumps({"number": 21, "state": "open"})
-        if command == ["gh", "api", "repos/o/r/issues/22/sub_issues?per_page=100", "--paginate", "--slurp"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues/22/sub_issues?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[]])
         raise AssertionError(command)
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -4135,19 +4185,19 @@ def test_reconcile_release_milestones_closes_only_published_empty_milestones(mon
     def fake_run(command, **kwargs):
         calls.append(command)
         call_kwargs.append(kwargs)
-        if command == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100", "--paginate", "--slurp"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[listed_milestone]])
-        if command == ["gh", "api", "repos/o/r/releases?per_page=100", "--paginate", "--slurp"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/releases?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[{"tag_name": "v0.4.0", "draft": False}]])
-        if command == ["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100", "--paginate", "--slurp"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[]])
-        if command == ["gh", "api", "repos/o/r/milestones/5", "--method", "PATCH", "-f", "state=closed"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/milestones/5", "--method", "PATCH", "-f", "state=closed"]:
             return ""
         raise AssertionError(command)
     monkeypatch.setattr(seam, "run_command", fake_run)
     assert milestone.reconcile_release_milestones("o/r", "abc12345") == ["Milestone #5 (v0.4.0) closed"]
     assert "milestone_closed number=5 repo=o/r" in caplog.text
-    assert calls.index(["gh", "api", "repos/o/r/milestones/5", "--method", "PATCH", "-f", "state=closed"]) > calls.index(["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100", "--paginate", "--slurp"])
+    assert calls.index(["gh", "api", "repos/o/r/milestones/5", "--method", "PATCH", "-f", "state=closed"]) > calls.index(["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100", "--paginate", "--slurp", "--include"])
     assert call_kwargs == [
         {"timeout": 30, "failure_log_level": logging.DEBUG},
         {"timeout": 30, "failure_log_level": logging.DEBUG},
@@ -4162,9 +4212,9 @@ def test_reconcile_release_milestones_keeps_open_without_published_release_or_em
     caplog.set_level("INFO")
     milestones = [_milestone(5, "v0.4.0", "open", 1), _milestone(6, "v0.4.0", "open", 0)]
     def fake_run(command, **kwargs):
-        if command == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100", "--paginate", "--slurp"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100", "--paginate", "--slurp"]:
             return json.dumps([milestones])
-        if command == ["gh", "api", "repos/o/r/releases?per_page=100", "--paginate", "--slurp"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/releases?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[{"tag_name": "v0.4.0", "draft": True}]])
         raise AssertionError(command)
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -4235,7 +4285,7 @@ def test_close_release_milestone_binds_the_language_to_the_epic_audit(monkeypatc
             return json.dumps([[{"number": 21,
                                  "repository": {"full_name": "o/r"},
                                  "state": "closed"}]])
-        if command == ["gh", "api", "repos/o/r/issues/21"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues/21"]:
             return json.dumps({"number": 21, "state": "closed"})
         if command == ["gh", "issue", "view", "20", "--repo", "o/r",
                        "--json", "comments"]:
@@ -4274,12 +4324,12 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
     audit = "<!-- orbi:run=abc12345 -->\nEpic reconciliation for v0.4.0: complete; children: Issue #35 closed; no open native blockers/dependencies."
     def fake_run(command, **kwargs):
         calls.append(command)
-        if command == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100",
+        if without_include(command) == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100",
                        "--paginate", "--slurp"]:
             return json.dumps([issues])
-        if command == ["gh", "api", "repos/o/r/issues/34/sub_issues?per_page=100", "--paginate", "--slurp"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues/34/sub_issues?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[{"number": 35, "repository": {"full_name": "o/r"}, "state": "closed"}]])
-        if command == ["gh", "api", "repos/o/r/issues/35"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues/35"]:
             return json.dumps({"number": 35, "state": "closed"})
         if command == ["gh", "issue", "view", "30", "--repo", "o/r",
                        "--json", "number,body,labels,blockedBy"]:
@@ -4288,9 +4338,9 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
                                "blockedBy": {"nodes": []}})
         if command == ["gh", "issue", "view", "30", "--repo", "o/r", "--json", "comments"]:
             return json.dumps({"comments": []})
-        if command == ["gh", "api", "repos/o/r/issues/30/sub_issues?per_page=100", "--paginate", "--slurp"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues/30/sub_issues?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[{"number": 31, "repository": {"full_name": "o/r"}, "state": "closed"}]])
-        if command == ["gh", "api", "repos/o/r/issues/31"]:
+        if without_include(command) == ["gh", "api", "repos/o/r/issues/31"]:
             return json.dumps({"number": 31, "state": "closed"})
         if command[:4] == ["gh", "issue", "view", "34"]:
             return json.dumps({"comments": [{"body": audit}]})

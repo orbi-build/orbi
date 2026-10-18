@@ -1074,6 +1074,7 @@ def test_milestone_open_issue_count_reads_github_counter(monkeypatch):
     assert commands == [[
         "gh", "api", "repos/xqliu/orbi/milestones",
         "--jq", '.[] | select(.title=="v0.4.2") | .open_issues',
+        "--include",
     ]]
 
 

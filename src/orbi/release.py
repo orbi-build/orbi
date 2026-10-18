@@ -23,7 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from orbi import failure
+from orbi import failure, gh_response
 from orbi.blocked_comment import post_blocked_comment
 from orbi.delivery_scene import RunContext
 from orbi.delivery_labels import (
@@ -717,9 +717,12 @@ def check_release_gates(repo: str, release_commit: str,
 
     A real `gh` failure (auth, rate limit, API error) propagates
     unchanged — a gate that cannot be checked is a failed gate. The one
-    exception is GitHub's HTTP 403 for the check-runs query: it is reported
-    as a missing Checks:read credential permission so the blocked release is
-    actionable.
+    exception is GitHub's HTTP 403 for the check-runs query (read from the
+    response status, never from the output text): it is reported as a
+    missing Checks:read credential permission so the blocked release is
+    actionable. A wait budget that runs out raises
+    `failure.ReleaseGateWaitTimeout`, which the blocked comment reports as
+    a human decision rather than a transient failure (Issue #1760).
     """
     evidence: list[str] = []
     open_deliveries: set[int] = set()
@@ -749,7 +752,10 @@ def check_release_gates(repo: str, release_commit: str,
                 f"{int(delivery_wait_seconds)}s"
             )
         if delivery_waited_seconds >= delivery_wait_seconds:
-            raise RuntimeError(
+            # A spent wait budget is a terminal, human-decided stop — its
+            # own type, so the classification never reads the message and
+            # never calls it a transient GitHub failure (Issue #1760).
+            raise failure.ReleaseGateWaitTimeout(
                 f"release gate: waiting for open deliveries {numbers} "
                 f"timed out after {int(delivery_wait_seconds)}s "
                 "— delivery wait timeout, not a CI failure"
@@ -766,11 +772,10 @@ def check_release_gates(repo: str, release_commit: str,
         try:
             return commit_check_runs(repo, release_commit)
         except subprocess.CalledProcessError as error:
-            output = "\n".join(
-                str(value) for value in (error.stdout, error.stderr)
-                if value
-            )
-            if "403" in output:
+            # The response status — not the output text — tells a missing
+            # Checks:read permission from every other read failure
+            # (Issue #1760).
+            if gh_response.status_of(error) == 403:
                 raise RuntimeError(
                     "CI gate could not be evaluated: the credential lacks "
                     "Checks:read permission (GitHub returned HTTP 403 while "
@@ -810,7 +815,7 @@ def check_release_gates(repo: str, release_commit: str,
                 f"{int(ci_wait_seconds)}s"
             )
         if waited >= ci_wait_seconds:
-            raise RuntimeError(
+            raise failure.ReleaseGateWaitTimeout(
                 f"release gate: waiting for CI on the release commit "
                 f"{release_commit} timed out after "
                 f"{int(ci_wait_seconds)}s (still pending: {detail}) "

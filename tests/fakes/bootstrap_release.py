@@ -475,7 +475,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                     if leftover_milestones.get(n) == milestone
                 ]
             return json.dumps([{"number": n} for n in numbers])
-        if command == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100",
+        if without_include(command) == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100",
                        "--paginate", "--slurp"]:
             return json.dumps([[
                 {"number": 1, "title": "v0.2.0", "state": "closed",
@@ -487,10 +487,10 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                  "url": "https://api.github.com/repos/o/r/milestones/5",
                  "html_url": "https://github.com/o/r/milestone/5"},
             ]])
-        if command == ["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100",
+        if without_include(command) == ["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100",
                        "--paginate", "--slurp"]:
             return json.dumps([[]])
-        if command == ["gh", "api", "repos/o/r/milestones/5",
+        if without_include(command) == ["gh", "api", "repos/o/r/milestones/5",
                        "--method", "PATCH", "-f", "state=closed"]:
             return json.dumps({"number": 5, "title": "v0.3.0",
                                "state": "closed", "open_issues": 0})
@@ -584,15 +584,27 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     return state
 
 
+def without_include(command: list[str]) -> list[str]:
+    """The argv minus the adapter's trailing `--include` (Issue #1760).
+
+    The adapter appends `--include` to a `gh api` command to read the
+    response status; a fake that answers the call does not care about the
+    header request, so it compares the caller's own argv.
+    """
+    return command[:-1] if command[-1:] == ["--include"] else command
+
+
+# The adapter's gh api reads carry `--include` so the response status is
+# readable (Issue #1760); the fake answers the documented header shape.
 MILESTONE_LIST_COMMAND = [
     "gh", "api", "repos/o/r/milestones?state=all&per_page=100",
-    "--paginate", "--slurp",
+    "--paginate", "--slurp", "--include",
 ]
 
 
 MILESTONE_ISSUES_COMMAND = [
     "gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100",
-    "--paginate", "--slurp",
+    "--paginate", "--slurp", "--include",
 ]
 
 

@@ -119,5 +119,9 @@ def release_failure_comment_body(run_id: str, run_info: str,
         {**_run_info_fields(run_info), "failure": detail},
         language_code=language_code,
     )
-    return body.replace("\n", f"\n{failure.render(failure.classify(detail))}\n", 1)
+    return body.replace(
+        "\n",
+        f"\n{failure.render(failure.classify(detail, error=error))}\n",
+        1,
+    )
 

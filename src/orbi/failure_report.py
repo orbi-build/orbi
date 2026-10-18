@@ -141,6 +141,7 @@ def _classify_failure(exc: BaseException, *, outcome: str) -> failure.Failure:
         review_budget=isinstance(exc, ReviewRoundsExhausted),
         human_decision=isinstance(exc, HumanDecisionRequired),
         unrecoverable=isinstance(exc, UnrecoverableDeliveryError),
+        error=exc,
         outcome=outcome,
     )
 

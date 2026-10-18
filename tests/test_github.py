@@ -33,13 +33,20 @@ def test_run_gh_read_command_retries_transient_read_then_succeeds(monkeypatch):
     sleeps = []
     monkeypatch.setattr(github.time, "sleep", sleeps.append)
     attempts = []
+    # The response status decides the retry (Issue #1760); the adapter asks
+    # gh for it with `--include`.
+    rate_limited = (
+        "HTTP/2.0 429 Too Many Requests\r\n"
+        "X-Ratelimit-Remaining: 0\r\n\r\n"
+        '{"message": "Too Many Requests"}'
+    )
 
     def run(command, **kwargs):
         attempts.append(command)
         if len(attempts) < 3:
             raise subprocess.CalledProcessError(
-                1, command,
-                stderr="HTTP 429: Too Many Requests",
+                1, command, output=rate_limited,
+                stderr="gh: Too Many Requests (HTTP 429)",
             )
         return "[]"
 
@@ -114,7 +121,7 @@ def test_milestone_open_issues_keeps_the_runner_sweep_argv(monkeypatch):
     assert github.milestone_open_issues("o/r", 5) == [{"number": 1}]
     assert captured == [[
         "gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100",
-        "--paginate", "--slurp",
+        "--paginate", "--slurp", "--include",
     ]]
 
 
@@ -126,7 +133,7 @@ def test_milestone_issues_keeps_the_release_scope_argv(monkeypatch):
     assert github.milestone_issues("o/r", 5, "closed") == [{"number": 2}]
     assert captured == [[
         "gh", "api", "repos/o/r/issues?state=closed&milestone=5&per_page=100",
-        "--paginate", "--slurp",
+        "--paginate", "--slurp", "--include",
     ]]
 
 
@@ -142,7 +149,7 @@ def test_list_milestones_reads_the_exact_api_page(monkeypatch):
     assert [m["title"] for m in milestones] == ["v0.3.0"]
     assert captured == [[
         "gh", "api", "repos/o/r/milestones?state=all&per_page=100",
-        "--paginate", "--slurp",
+        "--paginate", "--slurp", "--include",
     ]]
 
 
@@ -251,7 +258,7 @@ def test_commit_check_runs_returns_the_array(monkeypatch):
     assert checks == [{"name": "ci"}]
     assert captured == [[
         "gh", "api", "repos/o/r/commits/abc/check-runs",
-        "--jq", ".check_runs",
+        "--jq", ".check_runs", "--include",
     ]]
 
     monkeypatch.setattr(seam, "run_command", lambda c, **k: "{}")
@@ -393,7 +400,8 @@ def test_pr_reviews_and_inline_comments_use_bounded_read_only_api(monkeypatch):
     assert calls == [
         (["gh", "pr", "view", "4", "--repo", "o/r", "--json", "reviews"],
          {"timeout": 30}),
-        (["gh", "api", "repos/o/r/pulls/4/comments", "--paginate", "--slurp"],
+        (["gh", "api", "repos/o/r/pulls/4/comments", "--paginate",
+          "--slurp", "--include"],
          {"timeout": 30}),
     ]
 
@@ -479,8 +487,8 @@ def test_merge_gate_preflight_reports_unreadable_protection(monkeypatch):
     from orbi import github
 
     def fake(command, **kwargs):
-        if (command[-1].endswith("branches/main")
-                and "/rules/" not in command[-1]):
+        if (command[2].endswith("branches/main")
+                and "/rules/" not in command[2]):
             return '{"protected": true}'
         raise subprocess.CalledProcessError(
             1, command, stderr="HTTP 404: Not Found",
@@ -498,10 +506,10 @@ def test_merge_gate_preflight_reports_classic_approval_and_admin(monkeypatch):
     from orbi import github
 
     def fake(command, **kwargs):
-        if (command[-1].endswith("branches/main")
-                and "/rules/" not in command[-1]):
+        if (command[2].endswith("branches/main")
+                and "/rules/" not in command[2]):
             return '{"protected": true}'
-        if "protection" in command[-1]:
+        if "protection" in command[2]:
             return json.dumps({
                 "required_pull_request_reviews": {
                     "required_approving_review_count": 1,
@@ -527,10 +535,10 @@ def test_merge_gate_preflight_reports_ruleset_and_no_writes(monkeypatch):
 
     def fake(command, **kwargs):
         commands.append(command)
-        if (command[-1].endswith("branches/main")
-                and "/rules/" not in command[-1]):
+        if (command[2].endswith("branches/main")
+                and "/rules/" not in command[2]):
             return '{"protected": true}'
-        if "protection" in command[-1]:
+        if "protection" in command[2]:
             raise subprocess.CalledProcessError(
                 1, command, stderr="HTTP 404: Not Found",
             )
@@ -556,8 +564,8 @@ def test_merge_gate_preflight_passes_when_no_protection(monkeypatch):
     from orbi import github
 
     def fake(command, **kwargs):
-        if (command[-1].endswith("branches/main")
-                and "/rules/" not in command[-1]):
+        if (command[2].endswith("branches/main")
+                and "/rules/" not in command[2]):
             return '{"protected": false}'
         return "[]"
 
@@ -572,11 +580,11 @@ def test_merge_gate_preflight_encodes_branch_and_detects_hidden_protection(
     from orbi import github
 
     def fake(command, **kwargs):
-        assert "release/v1" not in command[-1]
-        if (command[-1].endswith("branches/release%2Fv1")
-                and "/rules/" not in command[-1]):
+        assert "release/v1" not in command[2]
+        if (command[2].endswith("branches/release%2Fv1")
+                and "/rules/" not in command[2]):
             return '{"protected": true}'
-        if "protection" in command[-1]:
+        if "protection" in command[2]:
             raise subprocess.CalledProcessError(
                 1, command, stderr="HTTP 404: Not Found",
             )
@@ -609,10 +617,10 @@ def test_merge_gate_preflight_reports_malformed_responses(
     from orbi import github
 
     def fake(command, **kwargs):
-        if (command[-1].endswith("branches/main")
-                and "/rules/" not in command[-1]):
+        if (command[2].endswith("branches/main")
+                and "/rules/" not in command[2]):
             return '{"protected": true}'
-        return rules if "rules/branches/" in command[-1] else classic
+        return rules if "rules/branches/" in command[2] else classic
 
     monkeypatch.setattr(github, "run_command", fake)
     assert expected in github.merge_gate_preflight("acme/project", "main")[0]
@@ -641,14 +649,14 @@ def test_merge_gate_preflight_reports_non_404_read_failures(
     from orbi import github
 
     def fake(command, **kwargs):
-        if (command[-1].endswith("branches/main")
-                and "/rules/" not in command[-1]):
+        if (command[2].endswith("branches/main")
+                and "/rules/" not in command[2]):
             return '{"protected": true}'
-        if failed_path in command[-1]:
+        if failed_path in command[2]:
             raise subprocess.CalledProcessError(
                 1, command, stderr="HTTP 403: Forbidden",
             )
-        return "{}" if "protection" in command[-1] else "[]"
+        return "{}" if "protection" in command[2] else "[]"
 
     monkeypatch.setattr(github, "run_command", fake)
     assert message in github.merge_gate_preflight("acme/project", "main")[0]
@@ -727,8 +735,8 @@ def test_merge_gate_preflight_rules_without_approvals(monkeypatch):
     from orbi import github
 
     def fake(command, **kwargs):
-        if (command[-1].endswith("branches/main")
-                and "/rules/" not in command[-1]):
+        if (command[2].endswith("branches/main")
+                and "/rules/" not in command[2]):
             return '{"protected": false}'
         return json.dumps([{"type": "required_status_checks"}])
 
@@ -742,8 +750,8 @@ def test_merge_gate_preflight_ruleset_without_id_names_settings(monkeypatch):
     from orbi import github
 
     def fake(command, **kwargs):
-        if (command[-1].endswith("branches/main")
-                and "/rules/" not in command[-1]):
+        if (command[2].endswith("branches/main")
+                and "/rules/" not in command[2]):
             return '{"protected": false}'
         return json.dumps([{
             "type": "pull_request",
@@ -978,5 +986,6 @@ def test_update_issue_comment_patches_the_publisher_route(monkeypatch):
             "gh", "api", "repos/owner/repo/issues/comments/4711",
             "--method", "PATCH",
             "--field", f"body={github.format_status_comment('b')}",
+            "--include",
         ],
     ]

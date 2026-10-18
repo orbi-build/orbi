@@ -415,9 +415,9 @@ def test_verify_epic_complete_uses_native_sub_issue_shapes(monkeypatch):
     def pr_run(command, **kwargs):
         if "sub_issues?per_page=100" in command[2]:
             return json.dumps([[pr]])
-        if command[-1] == "repos/o/r/issues/21":
+        if command[2] == "repos/o/r/issues/21":
             return json.dumps({"pull_request": {}, "state": "closed"})
-        if command[-1] == "repos/o/r/pulls/21":
+        if command[2] == "repos/o/r/pulls/21":
             return json.dumps({"merged": False})
         raise AssertionError(command)
     monkeypatch.setattr(seam, "run_command", pr_run)
@@ -449,7 +449,10 @@ def test_epic_child_evidence_validates_issue_and_pr_shapes(monkeypatch):
         "repos/o/r/issues/2": json.dumps({"pull_request": {}, "state": "open"}),
         "repos/o/r/pulls/2": json.dumps({"merged": True}),
     }
-    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: responses[command[-1]])
+    # The endpoint sits at command[2]; the adapter appends --include for the
+    # response status (Issue #1760).
+    monkeypatch.setattr(seam, "run_command",
+                        lambda command, **kwargs: responses[command[2]])
     assert github._epic_child_evidence("o/r", "issue", 1) == "Issue #1 closed"
     assert github._epic_child_evidence("o/r", "pr", 2) == "PR #2 merged"
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]")
@@ -461,6 +464,6 @@ def test_epic_child_evidence_validates_issue_and_pr_shapes(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: json.dumps({"state": "closed"}))
     with pytest.raises(ValueError, match="declared as PR"):
         github._epic_child_evidence("o/r", "pr", 2)
-    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: json.dumps({"pull_request": {}}) if "issues" in command[-1] else json.dumps({"merged": False}))
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: json.dumps({"pull_request": {}}) if "issues" in command[2] else json.dumps({"merged": False}))
     with pytest.raises(ValueError, match="not merged"):
         github._epic_child_evidence("o/r", "pr", 2)
