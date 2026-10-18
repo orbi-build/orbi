@@ -4,7 +4,8 @@ Extracted from `orbi.runner` (Issue #1259, Article 3.2): the five claim scans
 (P0, bug, plain, release fallback, external takeover), the classifiers and
 reconcilers they share, and the resumable-PR / in-flight / fresh-claim
 selection order. The module never imports `orbi.runner` (Article 3.3): the
-delivery-side helpers arrive as `ResumeHooks`.
+delivery-side helpers arrive as `ResumeHooks`. The opened-PR candidate scan
+itself lives in `orbi.resume_scan` (Article 3.5 split, Issue #1229).
 """
 from __future__ import annotations
 
@@ -12,17 +13,13 @@ import json
 import logging
 import os
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
-from typing import NamedTuple
 
 from orbi import milestone as milestone_bookkeeping
-from orbi import scene
-from orbi.blocked_comment import post_blocked_comment
-from orbi.checks import _classify_rollup, _render_check
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
-    AWAITING_MERGE_LABEL, BLOCKED_LABEL, EPIC_LABEL,
+    BLOCKED_LABEL, EPIC_LABEL,
     FIX_NEEDED_LABEL, IN_PROGRESS_LABEL, MERGED_LABEL, P0_LABEL,
     PR_OPENED_LABEL, READY_LABEL, RELEASE_LABEL,
 )
@@ -32,36 +29,21 @@ from orbi.delivery_scene import (
 from orbi.github import (
     _verify_epic_complete, close_issue,
     comment_issue, issue_comments, issue_priority, issue_view,
-    latest_run_marker, list_issues, milestone_open_issue_count,
-    open_blocker_numbers, open_pr_for_branch, pr_comments,
-    pr_delivery_rollup, run_gh_read_command,
+    list_issues, milestone_open_issue_count,
+    open_blocker_numbers, pr_comments,
+    run_gh_read_command,
 )
-from orbi.gitops import task_branch
 from orbi.journal import LOGGER, current_run_id, event, new_run_id, set_run_id
 from orbi.pilot_slots import slot_held_deliveries, slot_occupancy
+from orbi.resume_scan import (
+    ResumeHooks, pick_awaiting_merge_delivery, pick_resumable_delivery,
+)
 from orbi import language
 from orbi.progress import run_marker
 from orbi.release import _epic_audit, epic_audit_posted, release_target_milestone
 from orbi.repo_config import (
     RepoConfigError, RepoPolicy, load_repo_policy, merged_repo_language,
 )
-
-
-class ResumeHooks(NamedTuple):
-    """The delivery-side helpers `runner.main` passes in (Article 3.3).
-
-    The physical scene handling of `pick_resumable_delivery` plus the PR
-    comment writer `reconcile_orphan_prs` reports its orphan through.
-    Every hook that writes a comment takes the claim's already-resolved
-    per-repository `language_code` (Issue #1687): the claim knows the
-    merged repository config before the first comment is written.
-    """
-    resume_scene: Callable[[list[dict]], dict]
-    route_external_pr_ticket: Callable[..., bool]
-    block_scene_failure: Callable[..., None]
-    recover_missing_pr_scene: Callable[..., dict | None]
-    has_recoverable_pr_scene: Callable[[dict, str, Path], bool]
-    comment_pr: Callable[..., None]
 
 
 # Ready scans: P0 urgent Issues are claimed before
@@ -632,214 +614,17 @@ def pick_in_progress_issue(
 def pick_next_issue(
     repos: list[str], active_milestone: str | None = None,
 ) -> tuple[str, dict] | None:
-    """Scan sources in order; return the first ready issue and its source."""
+    """Scan sources in order; return the first ready issue and its source.
+
+    Only the fresh ready scan lives here; the opened-PR resume, the
+    in-flight restart and the deferred `ai-awaiting-merge` re-check are
+    `pick_next_delivery`'s scans (Issue #1745: a delivery waiting for a
+    maintainer never competes with them).
+    """
     for repo in repos:
         issue = pick_issue(repo, active_milestone)
         if issue is not None:
             return repo, issue
-    return None
-
-
-def pick_resumable_delivery(
-    repo: str, slot_dir: Path, max_concurrency: int,
-    repo_dir: Path | None = None, *, hooks: ResumeHooks,
-    language_code: str,
-) -> tuple[dict, dict] | None:
-    """Return the oldest FREE opened-PR delivery and its resume scene.
-
-    All opened-PR states are scanned: `ai-fix-needed`
-    (awaiting the next review session after a finding or a base
-    conflict — the review session fixes findings in the same
-    session), `ai-pr-opened` (awaiting review), and
-    `ai-awaiting-merge` (a known policy blocker whose maintainer action
-    is retried without another review). The `ai-pr-opened`
-    scan exists because the delivery that opened the PR can be gone: the
-    runner can die inside the delivery wait loop, leaving a valid
-    MERGEABLE PR with no owner. Without the scan such a delivery is
-    picked up by no other scan (`pick_issue` excludes `ai-pr-opened`)
-    and is stranded forever. `ai-blocked` Issues are excluded (they need
-    a human decision first), as are merged Issues and closed Issues.
-    `ai-in-progress` is NOT excluded: a runner killed
-    during review leaves the backfilled in-flight label behind on the
-    opened-PR delivery, and the same scan must pick it back up — the
-    positive `label:ai-fix-needed,ai-pr-opened` qualifier already
-    restricts the scan to opened-PR Issues (an implement-phase Issue
-    has `ai-ready`+`ai-in-progress` but neither opened-PR label, so it
-    never matches). A missing scene on `ai-fix-needed` with exactly one
-    open PR on the stable internal branch is a fresh-claim takeover: the PR
-    supplies the continuation anchor and the claim writes a new trusted
-    scene. Other scenes that cannot be recovered are SINGLE-Issue failures:
-    the Issue is marked `ai-blocked` with the concrete reason
-    (`block_scene_failure`) and the scan moves on to the next candidate, so
-    the tick continues with the in-flight and ready scans and exits 0 — one
-    corrupted Issue must never make every tick crash while the whole queue
-    waits.
-
-    Only the deliveries a live co-runner CURRENTLY holds are skipped:
-    every holder names its (repo, issue) in its slot file
-    (`pilot_slots.mark_slot_delivery`), so this scan skips exactly the
-    in-flight deliveries. That is the round-1 protection at
-    the right granularity — a held delivery is never resumed here, so a
-    second review Pi never starts in the same worktree/branch/run and a
-    second `gh pr merge --match-head-commit` never hits the merged PR.
-    The pre-#809 guard abandoned the WHOLE scan whenever any slot in the
-    (often shared, multi-repo) slot dir was held: with any concurrency
-    the review never ran while fresh claims kept opening PRs — the
-    reported starvation (nine MERGEABLE PRs, the oldest 90 minutes,
-    zero review ticks). A free delivery is now resumed even while other
-    deliveries are in flight, and the review backlog drains at the
-    concurrency rate instead of only growing. This runner's own slot is
-    excluded: `main` took it before the claim scan and holds it for the
-    whole delivery.
-
-    The query page is `max_concurrency + 1` candidates, ordered OLDEST
-    Issue first (`sort:created-asc`, Issue #1734). At most
-    `max_concurrency` deliveries can be held by live co-runners, so a
-    free candidate is inside the page when one exists; one whose OPEN PR
-    still waits for CI (Issue #1473) is skipped too. The scan reviews
-    the oldest FREE candidate (held ones are skipped before any
-    candidate read — an in-flight delivery is never touched).
-    """
-    held = slot_held_deliveries(slot_dir, max_concurrency)
-    # `label:a,b` is GitHub's OR within one label qualifier
-    # (verified live: repeating the qualifier matches only the
-    # first label). `ai-in-progress` is intentionally NOT excluded:
-    # a killed review runner leaves the backfilled
-    # in-flight label behind, and the positive qualifier above
-    # already keeps implement-phase Issues out.
-    # `labels`: a resumed P0 delivery keeps its
-    # priority in the progress comment through review/merge.
-    # `body`: the scene classification reads the
-    # delivery markers — without it the #726 external routing of a
-    # marker ticket with no trusted scene comment is unreachable in
-    # production (the probe read a body the query never fetched).
-    issues = list_issues(
-        repo, state="open",
-        search=(
-            f"label:{FIX_NEEDED_LABEL},{PR_OPENED_LABEL},"
-            f"{AWAITING_MERGE_LABEL} "
-            f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL} sort:created-asc"
-        ),
-        json_fields="number,title,state,url,labels,body",
-        limit=max_concurrency + 1,
-    )
-    for issue in issues:
-        if issue.get("state") != "OPEN":
-            # Left the opened-PR state between the query and this read
-            # (a close/merge race): this candidate is gone, not the scan.
-            continue
-        if (repo, int(issue["number"])) in held:
-            # In flight in another live runner: never a
-            # second review Pi for it — and no candidate read either.
-            continue
-        comments = issue_comments(int(issue["number"]), repo=repo)
-        try:
-            found = hooks.resume_scene(comments)
-        except scene.SceneError as exc:
-            # A trusted scene comment exists but is corrupted:
-            # probe the #726 external route first; otherwise this is the
-            # ONLY trigger of `block_scene_failure` — a present-but-broken
-            # scene is a writer bug or tampering and needs a human.
-            if hooks.route_external_pr_ticket(issue, repo, language_code=language_code):
-                continue
-            hooks.block_scene_failure(issue, exc, repo, comments, language_code=language_code)
-            continue
-        except scene.SceneMissingError as exc:
-            # No trusted comment carries a scene at all — a distinct branch
-            # from corruption. The original #726 incident was
-            # exactly this shape, so the external route is probed first.
-            if hooks.route_external_pr_ticket(issue, repo, language_code=language_code):
-                continue
-            # Issue #1216: `awaiting_merge` can deliberately remove the
-            # queue label before the delivery returns to `ai-fix-needed`.
-            # An open PR on the stable internal branch is enough durable
-            # identity to route this through the ordinary fresh-claim
-            # takeover, which writes a new trusted scene before review.
-            # Probe the exact branch (and require the helper's sole-PR
-            # contract); no open PR falls through to the existing missing-
-            # scene failure below.
-            current_labels = _issue_label_set(issue)
-            if (repo_dir is not None
-                    and FIX_NEEDED_LABEL in current_labels
-                    and open_pr_for_branch(
-                        repo_dir,
-                        task_branch(repo, int(issue["number"])),
-                    ) is not None):
-                found_scene = classify(
-                    labels=current_labels, scene=None, pr_state="OPEN",
-                    body_markers=body_markers(issue.get("body")),
-                )
-                if found_scene is DeliveryScene.FRESH_CLAIM:
-                    return issue, None
-                event(
-                    "claim_yield", issue=int(issue["number"]),
-                    reason=f"scene_{found_scene.value}",
-                )
-                continue
-            # A runner may have created the PR and label, then lost the
-            # scene comment write. Retry it from the durable local run
-            # state; keep ai-pr-opened for another tick if the retry fails.
-            recovered = (
-                hooks.recover_missing_pr_scene(issue, repo, repo_dir, language_code=language_code)
-                if repo_dir is not None else None
-            )
-            if recovered is not None:
-                found = recovered
-            elif repo_dir is not None and hooks.has_recoverable_pr_scene(
-                    issue, repo, repo_dir):
-                LOGGER.warning(
-                    "issue=%s resume scene recovery pending: %s",
-                    issue["number"], exc,
-                )
-                continue
-            else:
-                number = int(issue["number"])
-                LOGGER.error("issue=%s resume scene is missing: %s", number, exc)
-                marker = latest_run_marker(comments)
-                try:
-                    post_blocked_comment(
-                        number, repo=repo,
-                        body=(f"{marker}\n" if marker else "")
-                        + language.text(
-                            language_code, "claim.scene_missing", error=exc,
-                        ),
-                        current_labels={FIX_NEEDED_LABEL},
-                        language_code=language_code,
-                    )
-                except Exception:
-                    LOGGER.exception("issue=%s failure reporting failed", number)
-                continue
-        # The scan and the dispatch classify with the same pure
-        # function. This scan owns the resumable route only: a candidate
-        # that classifies elsewhere left the opened-PR state between the
-        # query and this read (a relabel race) — this candidate is skipped
-        # and the scan moves on. A candidate with no readable labels fails
-        # open (the is_epic / is_release convention): the trusted scene is
-        # the authority.
-        current_labels = _issue_label_set(issue)
-        if current_labels:
-            found_scene = classify(
-                labels=current_labels, scene=found, pr_state=None,
-                body_markers=body_markers(issue.get("body")),
-            )
-            if found_scene is not DeliveryScene.RESUME_REVIEW:
-                event(
-                    "claim_yield", issue=int(issue["number"]),
-                    reason=f"scene_{found_scene.value}",
-                )
-                continue
-        # Issue #1473: skip a CI-pending OPEN PR; MERGED/CLOSED and a
-        # failed rollup read still return the candidate.
-        try:
-            pr_state, rollup = pr_delivery_rollup(found["pr_url"], repo)
-        except Exception:
-            return issue, found
-        pending = _classify_rollup(rollup)[0] if pr_state == "OPEN" else []
-        if pending:
-            event("delivery_ci_pending", issue=int(issue["number"]),
-                  pr=found["pr_url"], pending="; ".join(map(_render_check, pending)))
-            continue
-        return issue, found
     return None
 
 
@@ -859,6 +644,15 @@ def pick_next_delivery(
     scan: `process_issue`'s resume block reuses the newest worktree's
     run id, so the same progress comment is kept instead of a second
     run being started on an Issue that is already in flight.
+
+    Issue #1745: an `ai-awaiting-merge` delivery waits for a maintainer,
+    so it is NOT part of the opened-PR scan. It is re-checked
+    (`pick_awaiting_merge_delivery`, the existing merge-only path) only
+    after all three scans above found nothing for this tick. A
+    maintainer-blocked PR therefore no longer starves the review, the
+    restart and the fresh-claim scans; the cost is that after the
+    maintainer acts the merge happens on the first otherwise-idle tick,
+    not on the very next one.
 
     `active_milestone` scopes only the FRESH claim
     (`pick_issue`) — the resumable-PR and in-flight restart scans are
@@ -932,6 +726,22 @@ def pick_next_delivery(
         issue = _pick_issue_with_repo_policy(repo, active_milestone, config, held)
         if issue is not None:
             return repo, issue, None
+    # Issue #1745: a delivery waiting for a maintainer is re-checked LAST —
+    # only on a tick where nothing above could move. Everything it needs
+    # (the merge gate, the de-duplicated #1422 handoff) already exists; it
+    # just never takes the tick away from reviewable, resumable or fresh
+    # work.
+    for repo in repos:
+        repo_language = (language.DEFAULT_LANGUAGE if config is None
+                         else merged_repo_language(config, repo))
+        selected = pick_awaiting_merge_delivery(
+            repo, slot_dir, max_concurrency,
+            repo_dir=config.repo_dir if config is not None else None,
+            hooks=hooks, language_code=repo_language,
+        )
+        if selected is not None:
+            issue, scene = selected
+            return repo, issue, scene
     return None
 
 

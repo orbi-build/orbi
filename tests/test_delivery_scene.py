@@ -507,8 +507,8 @@ def test_the_documented_repair_releases_the_blocked_issue_to_the_same_pr(
         runner_seam, "issue_comments",
         lambda number, repo: [_trusted_scene_comment()],
     )
-    monkeypatch.setitem(
-        claim.__dict__, "pr_delivery_rollup",
+    monkeypatch.setattr(
+        runner_seam, "pr_delivery_rollup",
         lambda pr_url, repo: ("OPEN", [
             {"name": "tests", "status": "COMPLETED",
              "conclusion": "SUCCESS"},
@@ -555,8 +555,8 @@ def test_pick_resumable_delivery_resumes_a_scene_candidate(
     # state + rollup before resuming. The read is answered with a
     # completed/success rollup (never left to raise), so this test
     # exercises the normal branch and not the read-failure fallback.
-    monkeypatch.setitem(
-        claim.__dict__, "pr_delivery_rollup",
+    monkeypatch.setattr(
+        runner_seam, "pr_delivery_rollup",
         lambda pr_url, repo: ("OPEN", [
             {"name": "tests", "status": "COMPLETED",
              "conclusion": "SUCCESS"},

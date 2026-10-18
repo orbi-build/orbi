@@ -28,6 +28,9 @@ import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 from orbi import language
 from orbi import progress
+from orbi.delivery_labels import (
+    AWAITING_MERGE_LABEL, IN_PROGRESS_LABEL, PR_OPENED_LABEL, READY_LABEL,
+)
 from orbi import scene as scene_mod
 from tests.test_progress_wiring import make_fake_gh
 from tests.fakes.github import FakeGh
@@ -211,8 +214,8 @@ def test_pick_missing_pr_scene_recovers_or_defers_or_blocks(monkeypatch, tmp_pat
     # the scan's CI read is answered with a completed/success rollup,
     # so the RESUME_REVIEW route runs its normal branch instead of the
     # read-failure fallback.
-    monkeypatch.setitem(
-        claim.__dict__, "pr_delivery_rollup",
+    monkeypatch.setattr(
+        seam, "pr_delivery_rollup",
         lambda pr_url, repo: ("OPEN", [
             {"name": "tests", "status": "COMPLETED",
              "conclusion": "SUCCESS"},
@@ -843,21 +846,24 @@ def test_pick_resumable_delivery_returns_issue_with_scene(
     assert scene["pr_url"] == FAKE_PR_URL
     # Oldest-first list (Issue #1734), then the full comment history of
     # that Issue.
-    # Both opened-PR states are scanned (Issue #70): `label:a,b` is
-    # GitHub's OR within one label qualifier. `ai-in-progress` is NOT
-    # excluded (Issue #178): a runner killed during review leaves the
-    # backfilled in-flight label behind, and the same scan must pick
-    # the delivery back up — the positive `label:ai-fix-needed,
-    # ai-pr-opened` qualifier already restricts the scan to opened-PR
-    # Issues (an implement-phase Issue has `ai-ready`+`ai-in-progress`
-    # but neither opened-PR label, so it never matches).
+    # Both reviewable opened-PR states are scanned (Issue #70): `label:a,b`
+    # is GitHub's OR within one label qualifier. `ai-awaiting-merge` is NOT
+    # in this query (Issue #1745): that delivery waits for a maintainer and
+    # is re-checked by `pick_awaiting_merge_delivery` only after the whole
+    # tick found nothing else. `ai-in-progress` is NOT excluded (Issue
+    # #178): a runner killed during review leaves the backfilled in-flight
+    # label behind, and the same scan must pick the delivery back up — the
+    # positive `label:ai-fix-needed,ai-pr-opened` qualifier already
+    # restricts the scan to opened-PR Issues (an implement-phase Issue has
+    # `ai-ready`+`ai-in-progress` but neither opened-PR label, so it never
+    # matches).
     assert calls[0] == [
         "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
         "--search",
         # Issue #1734: `sort:created-asc` is the documented advanced-search
         # qualifier that makes GitHub return the OLDEST Issues first, so the
         # page is the deliveries that have waited longest.
-        "label:ai-fix-needed,ai-pr-opened,ai-awaiting-merge "
+        "label:ai-fix-needed,ai-pr-opened "
         "-label:ai-blocked -label:ai-merged sort:created-asc",
         # `labels` (Issue #101): a resumed P0 delivery keeps its
         # priority in the progress comment through review/merge.
@@ -902,7 +908,7 @@ def test_pick_resumable_delivery_scans_all_open_pr_states(
     assert calls == [[
         "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
         "--search",
-        "label:ai-fix-needed,ai-pr-opened,ai-awaiting-merge "
+        "label:ai-fix-needed,ai-pr-opened "
         "-label:ai-blocked -label:ai-merged sort:created-asc",
         # `labels` (Issue #101): a resumed P0 delivery keeps its
         # priority in the progress comment through review/merge.
@@ -1145,6 +1151,170 @@ def test_pick_resumable_delivery_skips_a_ci_pending_oldest_candidate(
     assert issue["number"] == 2542
     assert scene["run_id"] == f"{2542:08x}"
     assert reads == [2527, 2542]
+
+
+# ------------------------- awaiting-merge never steals the tick (Issue #1745)
+
+
+def _tick_queue(monkeypatch):
+    """A FakeGh-backed claim tick: the real scans, the real queries.
+
+    Only the per-tick milestone reconciliation is stubbed: it is a
+    bypass sweep with its own tests and it reads the releases API, which
+    this queue has nothing to say about.
+    """
+    fake = FakeGh("owner/repo")
+    monkeypatch.setattr(seam, "run_command", fake)
+    monkeypatch.setattr(
+        claim.milestone_bookkeeping, "milestone_reconcile_due",
+        lambda *args, **kwargs: False,
+    )
+    return fake
+
+
+def _add_delivery(fake, number, label):
+    """One opened-PR delivery: its label, trusted scene and open PR."""
+    fake.add_issue(number, title=f"delivery {number}", labels=(label,))
+    fake.comment(
+        number,
+        opened_pr_comment(
+            run_id=f"{number:08x}",
+            pr_url=f"https://github.com/owner/repo/pull/{number}",
+        ),
+        association="OWNER",
+    )
+    fake.add_pr(
+        number, head=f"orbi/owner-repo-issue-{number}",
+        checks=({"name": "tests", "status": "COMPLETED",
+                 "conclusion": "SUCCESS"},),
+    )
+
+
+def _tick(monkeypatch, tmp_path, *, max_concurrency=1):
+    return claim.pick_next_delivery(
+        ["owner/repo"], tmp_path / "slots", max_concurrency,
+        hooks=resume_deps(),
+    )
+
+
+def test_tick_reviews_a_pr_before_an_older_awaiting_merge_delivery(
+    monkeypatch, tmp_path,
+):
+    """Issue #1745 acceptance 1: an `ai-awaiting-merge` delivery created
+    first used to win the opened-PR page (oldest first, #1734) on EVERY
+    tick and the newer `ai-pr-opened` delivery was never reviewed. The
+    waiting delivery is no longer in that page, so the tick reviews the
+    PR."""
+    fake = _tick_queue(monkeypatch)
+    _add_delivery(fake, 1, AWAITING_MERGE_LABEL)
+    _add_delivery(fake, 2, PR_OPENED_LABEL)
+    repo, issue, scene = _tick(monkeypatch, tmp_path)
+    assert (repo, issue["number"]) == ("owner/repo", 2)
+    assert scene["run_id"] == f"{2:08x}"
+
+
+def test_tick_claims_a_ready_issue_before_an_awaiting_merge_delivery(
+    monkeypatch, tmp_path,
+):
+    """Issue #1745 acceptance 2: with only one waiting delivery and one
+    `ai-ready` Issue, the tick claims the new work — a PR only a human
+    can unblock never holds the queue."""
+    fake = _tick_queue(monkeypatch)
+    _add_delivery(fake, 1, AWAITING_MERGE_LABEL)
+    fake.add_issue(2, title="new work", labels=(READY_LABEL,))
+    repo, issue, scene = _tick(monkeypatch, tmp_path)
+    assert (repo, issue["number"]) == ("owner/repo", 2)
+    assert scene is None
+
+
+def test_tick_resumes_an_orphaned_in_progress_issue_before_awaiting_merge(
+    monkeypatch, tmp_path,
+):
+    """Issue #1745 acceptance 3: a killed runner left
+    `ai-in-progress` behind. That restart is resumed before the
+    maintainer-blocked delivery is re-checked, so a stuck PR never
+    strands an unfinished run."""
+    fake = _tick_queue(monkeypatch)
+    _add_delivery(fake, 1, AWAITING_MERGE_LABEL)
+    fake.add_issue(
+        2, title="killed run", labels=(READY_LABEL, IN_PROGRESS_LABEL),
+    )
+    repo, issue, scene = _tick(monkeypatch, tmp_path)
+    assert (repo, issue["number"]) == ("owner/repo", 2)
+    assert scene is None
+
+
+def test_tick_reviews_a_pr_though_the_awaiting_merge_page_is_full(
+    monkeypatch, tmp_path,
+):
+    """Issue #1745 acceptance 4: `max_concurrency + 1` awaiting-merge
+    deliveries exist and are all older than one `ai-pr-opened` delivery.
+    With the waiting state still in the query they filled the whole page
+    before the limit was applied (#1734) and the reviewable PR was never
+    seen; the exclusion is part of the query, so the page is the
+    reviewable PR."""
+    fake = _tick_queue(monkeypatch)
+    _add_delivery(fake, 1, AWAITING_MERGE_LABEL)
+    _add_delivery(fake, 2, AWAITING_MERGE_LABEL)
+    _add_delivery(fake, 3, PR_OPENED_LABEL)
+    repo, issue, scene = _tick(monkeypatch, tmp_path)
+    assert (repo, issue["number"]) == ("owner/repo", 3)
+    assert scene["run_id"] == f"{3:08x}"
+
+
+def test_tick_rechecks_a_lone_awaiting_merge_delivery_on_an_idle_tick(
+    monkeypatch, tmp_path,
+):
+    """Issue #1745 acceptance 5 (the deferral is the ONLY change): when
+    the queue holds just the maintainer-blocked delivery, the tick still
+    picks it with its scene, so `delivery_step` runs the same merge-only
+    path as before (the #1422 handoff stays de-duplicated) and the
+    delivery merges by itself once the maintainer acts."""
+    fake = _tick_queue(monkeypatch)
+    _add_delivery(fake, 1, AWAITING_MERGE_LABEL)
+    repo, issue, scene = _tick(monkeypatch, tmp_path)
+    assert (repo, issue["number"]) == ("owner/repo", 1)
+    assert scene["run_id"] == f"{1:08x}"
+    assert scene["pr_url"] == "https://github.com/owner/repo/pull/1"
+
+
+def test_tick_keeps_the_oldest_first_review_order(monkeypatch, tmp_path):
+    """Issue #1745 acceptance 6: removing the waiting state from the page
+    must not disturb #1734's oldest-first order of the candidates that
+    remain — of two reviewable PRs the older Issue is reviewed first."""
+    fake = _tick_queue(monkeypatch)
+    _add_delivery(fake, 2, PR_OPENED_LABEL)
+    _add_delivery(fake, 7, PR_OPENED_LABEL)
+    repo, issue, scene = _tick(monkeypatch, tmp_path)
+    assert (repo, issue["number"]) == ("owner/repo", 2)
+    assert scene["run_id"] == f"{2:08x}"
+
+
+def test_pick_awaiting_merge_delivery_queries_only_the_waiting_state(
+    monkeypatch, tmp_path,
+):
+    """The deferred scan's own page: exactly the `ai-awaiting-merge`
+    state, blocked/merged excluded, oldest Issue first (#1734) and the
+    `max_concurrency + 1` page (#809) it shares with the opened-PR
+    scan."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return "[]"
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    assert claim.pick_awaiting_merge_delivery(
+        "owner/repo", tmp_path / "slots", 2,
+        hooks=resume_deps(), language_code="en",
+    ) is None
+    assert calls == [[
+        "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
+        "--search",
+        "label:ai-awaiting-merge "
+        "-label:ai-blocked -label:ai-merged sort:created-asc",
+        "--json", "number,title,state,url,labels,body", "--limit", "3",
+    ]]
 
 
 def test_pick_resumable_delivery_ignores_holds_of_other_repos(
@@ -1747,6 +1917,9 @@ def test_pick_next_delivery_scans_sources_in_order(monkeypatch, tmp_path):
 def test_pick_next_delivery_returns_none_when_nothing_to_do(
     monkeypatch, tmp_path,
 ):
+    """All FOUR scans empty (Issue #1745 added the last one: the deferred
+    `ai-awaiting-merge` re-check, which runs only after the other three
+    found nothing and here finds nothing either)."""
     monkeypatch.setattr(
         claim, "pick_resumable_delivery",
         lambda repo, slot_dir, max_concurrency, **_kwargs: None,
@@ -1756,6 +1929,7 @@ def test_pick_next_delivery_returns_none_when_nothing_to_do(
         lambda repo, slot_dir, max_concurrency, **_kwargs: None,
     )
     monkeypatch.setattr(claim, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
+    monkeypatch.setattr(seam, "run_command", lambda *args, **kwargs: "[]")
     assert claim.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1,
         hooks=resume_deps(),
@@ -1787,7 +1961,7 @@ def test_pick_resumable_delivery_skips_ci_pending_candidate(
     monkeypatch.setattr(seam, "run_command", make_pick_fake(
         issue_payload(), gh_comments_payload([opened_pr_comment()]),
     ))
-    monkeypatch.setitem(claim.__dict__, "pr_delivery_rollup", _pending_rollup)
+    monkeypatch.setattr(seam, "pr_delivery_rollup", _pending_rollup)
     caplog.set_level("INFO")
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
@@ -1821,8 +1995,8 @@ def test_pick_resumable_delivery_skips_pending_and_returns_next_candidate(
     monkeypatch.setattr(seam, "run_command", make_pick_fake(
         json.dumps(issues), view_for,
     ))
-    monkeypatch.setitem(
-        claim.__dict__, "pr_delivery_rollup",
+    monkeypatch.setattr(
+        seam, "pr_delivery_rollup",
         lambda pr_url, repo: (
             _pending_rollup(pr_url, repo)
             if pr_url.endswith("/pull/9")
@@ -1845,7 +2019,7 @@ def test_pick_resumable_delivery_returns_completed_success_candidate(
     monkeypatch.setattr(seam, "run_command", make_pick_fake(
         issue_payload(), gh_comments_payload([opened_pr_comment()]),
     ))
-    monkeypatch.setitem(claim.__dict__, "pr_delivery_rollup", _success_rollup)
+    monkeypatch.setattr(seam, "pr_delivery_rollup", _success_rollup)
     issue, _scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
         hooks=resume_deps(), language_code="en",
@@ -1863,8 +2037,8 @@ def test_pick_resumable_delivery_never_skips_terminal_pr(
     monkeypatch.setattr(seam, "run_command", make_pick_fake(
         issue_payload(), gh_comments_payload([opened_pr_comment()]),
     ))
-    monkeypatch.setitem(
-        claim.__dict__, "pr_delivery_rollup",
+    monkeypatch.setattr(
+        seam, "pr_delivery_rollup",
         lambda pr_url, repo: (state, [
             {"name": "tests", "status": "IN_PROGRESS", "conclusion": None},
         ]),
@@ -1888,7 +2062,7 @@ def test_pick_resumable_delivery_returns_candidate_when_rollup_read_raises(
     def boom(pr_url, repo):
         raise RuntimeError("gh down")
 
-    monkeypatch.setitem(claim.__dict__, "pr_delivery_rollup", boom)
+    monkeypatch.setattr(seam, "pr_delivery_rollup", boom)
     issue, _scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
         hooks=resume_deps(), language_code="en",
@@ -1907,7 +2081,7 @@ def test_pick_next_delivery_falls_through_when_resumable_ci_pending(
         issue_payload(labels=["ai-pr-opened"]),
         gh_comments_payload([opened_pr_comment()]),
     ))
-    monkeypatch.setitem(claim.__dict__, "pr_delivery_rollup", _pending_rollup)
+    monkeypatch.setattr(seam, "pr_delivery_rollup", _pending_rollup)
     monkeypatch.setitem(claim.__dict__, "reconcile_open_epics", lambda *a, **k: [])
     monkeypatch.setitem(
         claim.milestone_bookkeeping.__dict__, "milestone_reconcile_due",

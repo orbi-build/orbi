@@ -47,10 +47,13 @@ def is_maintainer_actionable(stderr: str, preflight: list[str]) -> bool:
 
 
 # The handoff comment identifies the exact waiting state it announced.
-# ``ai-awaiting-merge`` is rescanned every tick by design, so the same
-# policy blocker reaches the merge gate again and again; the head OID and
-# the blocker text decide whether the wait is a new state or the same one
-# already posted (Issue #1422).
+# ``ai-awaiting-merge`` is re-checked by design — but only on a tick
+# whose queue is otherwise empty (Issue #1745: the deferred scan never
+# takes the tick away from reviewable, resumable or fresh work), so the
+# same policy blocker still reaches the merge gate again and again. The
+# head OID and the blocker text decide whether the wait is a new state or
+# the same one already posted (Issue #1422), so an unchanged blocker
+# posts nothing.
 AWAITING_MERGE_HANDOFF_PHRASE = (
     "is delivered and waiting for a maintainer action"
 )
