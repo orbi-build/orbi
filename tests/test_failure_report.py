@@ -26,7 +26,9 @@ from pathlib import Path
 
 import pytest
 
-from orbi import failure_report, language, progress, runner, runner_health
+from orbi import (
+    failure_report, language, progress, runner, runner_health, scene,
+)
 from tests.fakes.github import FakeGh
 from tests.fakes.progress import freeze_report_time
 
@@ -613,6 +615,68 @@ def test_finish_mode_body_is_byte_identical_to_the_pre_extraction_render(
     assert pr_comments == [GOLDEN["finish"]["pr_comment"]]
     assert publisher.milestones == GOLDEN["finish"]["milestones"]
     assert publisher.finish_bodies == [GOLDEN["finish"]["finish"]]
+
+
+def _pr_comment(pr_number, round_no, *, opened=False, run_id=RUN_ID):
+    """One trusted comment carrying `pr_number`'s scene at `round_no`.
+
+    `opened=True` is the "Orbi opened PR" scene comment; otherwise it is a
+    recorded review round (the heading `review_round_comment_body`
+    writes).
+    """
+    pr_url = f"https://github.com/orbi-build/orbi/pull/{pr_number}"
+    heading = (
+        f"Orbi opened PR: {pr_url}" if opened
+        else f"Orbi review round {round_no} for PR #{pr_number}: findings"
+    )
+    return {
+        "body": (
+            f"<!-- orbi:run={run_id} -->\n{heading}\n"
+            + scene.render(scene.Scene(
+                run_id=run_id, base_branch="main", base_sha="abc123",
+                pr_url=pr_url, review_round=round_no,
+            ))
+        ),
+        "authorAssociation": "OWNER",
+    }
+
+
+def test_finish_scene_reports_the_current_pr_scene_round(
+        monkeypatch, tmp_path):
+    """Issue #1772 acceptance 1: five completed rounds on an EARLIER PR
+    (#100) followed by a new PR (#200) at round 0. The reported round is
+    the new PR's scene round — the value the review loop reads — so the
+    old PR's rounds are never recounted into the report (which showed
+    "review/fix round: 5" before)."""
+    history = [
+        _pr_comment(100, round_no) for round_no in (1, 2, 3, 4, 5)
+    ] + [_pr_comment(200, 0, opened=True)]
+    publisher = FakePublisher()
+    outcome, _, _ = _report(
+        monkeypatch, tmp_path, session=False, publisher=publisher,
+        history=history, classify=True, evidence=False, finish=True,
+    )
+    assert outcome == "fix needed"
+    finish = publisher.finish_bodies[0]
+    assert "- review/fix round: 5" not in finish
+    assert "- review/fix round:" not in finish
+
+
+def test_finish_scene_reports_a_single_prs_scene_round(
+        monkeypatch, tmp_path):
+    """Issue #1772 acceptance 2: a single PR at round 3 reports 3 — the
+    scene's value, exactly as today (the row is rendered from round 3 on;
+    round 2 is pinned in the round-accounting unit tests)."""
+    publisher = FakePublisher()
+    outcome, _, _ = _report(
+        monkeypatch, tmp_path, session=False, publisher=publisher,
+        history=[_pr_comment(42, 0, opened=True),
+                 _pr_comment(42, 1), _pr_comment(42, 2),
+                 _pr_comment(42, 3)],
+        classify=True, evidence=False, finish=True,
+    )
+    assert outcome == "fix needed"
+    assert "- review/fix round: 3" in publisher.finish_bodies[0]
 
 
 @pytest.mark.parametrize(

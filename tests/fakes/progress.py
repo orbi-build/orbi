@@ -17,3 +17,24 @@ def freeze_report_time(
 
     monkeypatch.setattr(progress_summary, "utc_now_iso", lambda: moment)
     return moment
+
+
+def bind_run_id(monkeypatch, run_id: str = "a1b2c3d4") -> str:
+    """Bind the run id the progress run marker carries.
+
+    A delivery step locates the run's tracked progress comment by this
+    marker, so a test asserting on the finish scene binds it first.
+    """
+    from orbi import journal
+
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", run_id)
+    return run_id
+
+
+def patched_comment_bodies(api_calls: list[list[str]]) -> list[str]:
+    """The bodies of the `gh api --method PATCH` calls, in call order."""
+    return [
+        command[command.index("--field") + 1][len("body="):]
+        for command in api_calls
+        if "--method" in command and "PATCH" in command
+    ]

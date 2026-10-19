@@ -25,9 +25,10 @@ import orbi.milestone as milestone
 import orbi.release as release
 from seam import seam
 import orbi.journal as journal
-from orbi import language, pi_process, progress
+from orbi import language, pi_process, progress, scene
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
+from tests.fakes.progress import bind_run_id, patched_comment_bodies
 
 
 def make_fake_gh(monkeypatch, comments=None, in_progress=False):
@@ -2111,6 +2112,128 @@ def _review_round_comments():
             "authorAssociation": "OWNER",
         },
     ]
+
+
+def _old_pr_round_comments(pr_number=100, count=5):
+    """Completed review rounds of an EARLIER PR, shaped like the real
+    round comments (marker + heading + scene)."""
+    return [
+        {
+            "body": (
+                "<!-- orbi:run=oldrun01 -->\n"
+                f"Orbi review round {round_no} for PR #{pr_number}: findings\n"
+                + scene.render(scene.Scene(
+                    run_id="oldrun01", base_branch="main",
+                    base_sha="old-base",
+                    pr_url=(
+                        f"https://github.com/owner/repo/pull/{pr_number}"
+                    ),
+                    review_round=round_no,
+                ))
+            ),
+            "authorAssociation": "OWNER",
+        }
+        for round_no in range(1, count + 1)
+    ]
+
+
+def _opened_pr_scene_comment(pr_number=46, round_no=0):
+    """The current delivery's "Orbi opened PR" scene comment."""
+    return {
+        "body": (
+            "<!-- orbi:run=a1b2c3d4 -->\n"
+            f"Orbi opened PR: https://github.com/owner/repo/pull/{pr_number}\n"
+            + scene.render(scene.Scene(
+                run_id="a1b2c3d4", base_branch="main",
+                base_sha="abc123def456",
+                pr_url=f"https://github.com/owner/repo/pull/{pr_number}",
+                review_round=round_no,
+            ))
+        ),
+        "authorAssociation": "OWNER",
+    }
+
+
+def _round_row_present(body, expected_round):
+    if expected_round is None:
+        return "- review/fix round:" not in body
+    return f"- review/fix round: {expected_round}" in body
+
+
+def _current_round_scene_body(monkeypatch, *, pr_state,
+                              old_pr_rounds, scene_round):
+    """Run one delivery step against that comment history; return the
+    terminal progress scene it writes into the tracked comment."""
+    api_calls, posted = [], []
+    comments = (
+        _old_pr_round_comments(count=old_pr_rounds) if old_pr_rounds else []
+    ) + [_opened_pr_scene_comment(round_no=scene_round)]
+    _wait_delivery_fake_gh(
+        monkeypatch, pr_state=pr_state,
+        labels=[{
+            "name": "ai-pr-opened" if pr_state == "OPEN"
+            else "ai-fix-needed",
+        }],
+        comments=comments,
+        fail_progress=lambda command: False,
+        api_calls=api_calls, posted=posted,
+    )
+    monkeypatch.setattr(seam, "edit_issue", Mock())
+    monkeypatch.setattr(seam, "comment_issue", Mock())
+    bind_run_id(monkeypatch)
+    runner.delivery_step(
+        "https://github.com/owner/repo/pull/46",
+        {"number": 39, "title": "t", "body": ""},
+        # The worktree derived from this repo_dir does not exist, so the
+        # review fails AFTER the trusted scene was recovered.
+        config_domain.RunnerConfig(repo_dir=Path("/srv/repo")), "owner/repo",
+    )
+    bodies = patched_comment_bodies(api_calls)
+    assert bodies, "the tracked progress comment was not updated"
+    return bodies[-1]
+
+
+# Issue #1772: five rounds on an EARLIER PR, then a new PR at round 0; and
+# a single PR whose scene round is 3 (the row is rendered from round 3 on).
+_CURRENT_ROUND_CASES = [
+    (5, 0, None),
+    (0, 3, "3"),
+]
+
+
+@pytest.mark.parametrize(
+    ("old_pr_rounds", "scene_round", "expected_round"), _CURRENT_ROUND_CASES,
+)
+def test_delivery_step_review_failure_reports_the_current_pr_round(
+        monkeypatch, old_pr_rounds, scene_round, expected_round,
+):
+    """Issue #1772 acceptance 1/2 on the review path: the failure report
+    shows the CURRENT PR's scene round — the number the review loop reads
+    — never a recount of an earlier PR's rounds."""
+    scene_body = _current_round_scene_body(
+        monkeypatch, pr_state="OPEN",
+        old_pr_rounds=old_pr_rounds, scene_round=scene_round,
+    )
+    assert "- role: review" in scene_body
+    assert "worktree missing" in scene_body
+    assert _round_row_present(scene_body, expected_round)
+
+
+@pytest.mark.parametrize(
+    ("old_pr_rounds", "scene_round", "expected_round"), _CURRENT_ROUND_CASES,
+)
+def test_delivery_step_pr_closed_reports_the_current_pr_round(
+        monkeypatch, old_pr_rounds, scene_round, expected_round,
+):
+    """Issue #1772 acceptance 1/2 on the closed-PR path: the blocked scene
+    shows the CURRENT PR's scene round, not the earlier PR's rounds."""
+    blocked = _current_round_scene_body(
+        monkeypatch, pr_state="CLOSED",
+        old_pr_rounds=old_pr_rounds, scene_round=scene_round,
+    )
+    assert "closed without a merge" in blocked
+    assert "- role: review" in blocked
+    assert _round_row_present(blocked, expected_round)
 
 
 def _blocked_progress_failures(command) -> bool:
