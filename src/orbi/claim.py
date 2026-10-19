@@ -420,10 +420,29 @@ def _pick_from_scan(
     return None
 
 
+def _scan_read_failed(
+    exc: Exception, repo: str, raise_on_read_failure: bool,
+) -> None:
+    """Journal one failed ready-scan read, then fail open OR re-raise.
+
+    The claim fails open: a broken scan query must never deadlock the
+    queue, so this tick claims nothing and the next one retries. An
+    OBSERVER of the same decision (`orbi status`) must not read a failed
+    read as an empty queue — it asks for the failure instead (#1668).
+    """
+    event(
+        "blocked_by_check_failed", level=logging.ERROR,
+        repo=repo, error=exc,
+    )
+    if raise_on_read_failure:
+        raise
+
+
 def pick_issue(repo: str, active_milestone: str | None = None,
                dispatch_label: str = READY_LABEL,
                held: frozenset = frozenset(),
-               timeout: int | None = None) -> dict | None:
+               timeout: int | None = None,
+               raise_on_read_failure: bool = False) -> dict | None:
     # A merged delivery keeps `ai-ready` + `ai-merged` on the (still
     # open) Issue; `ai-merged` is the success terminal state, so it is
     # excluded from the ready scan like every other delivery state.
@@ -461,6 +480,10 @@ def pick_issue(repo: str, active_milestone: str | None = None,
     # bound); the claim itself reads unbounded. The ready decision is
     # one function for both readers (Issue #1773), so the bound travels
     # with the call instead of a second query being built.
+    # `raise_on_read_failure` says what a failed scan read MEANS to the
+    # caller: the claim fails open (default), the status observation
+    # re-raises so the failure is named instead of reading as an empty
+    # queue (`_scan_read_failed`).
     for search in ready_searches(active_milestone, dispatch_label):
         try:
             issues = list_issues(
@@ -473,10 +496,7 @@ def pick_issue(repo: str, active_milestone: str | None = None,
             # never deadlock the queue. This tick claims nothing from
             # this repo and the next tick retries the query; the error
             # is logged, never raised, and no label is touched.
-            event(
-                "blocked_by_check_failed", level=logging.ERROR,
-                repo=repo, error=exc,
-            )
+            _scan_read_failed(exc, repo, raise_on_read_failure)
             return None
         picked = _pick_from_scan(
             issues, repo, ready_label=dispatch_label, held=held,
@@ -498,10 +518,7 @@ def pick_issue(repo: str, active_milestone: str | None = None,
             limit=200, timeout=timeout,
         )
     except Exception as exc:
-        event(
-            "blocked_by_check_failed", level=logging.ERROR,
-            repo=repo, error=exc,
-        )
+        _scan_read_failed(exc, repo, raise_on_read_failure)
         return None
     picked = _pick_from_scan(
         issues, repo, allow_release=True, held=held,
@@ -527,10 +544,7 @@ def pick_issue(repo: str, active_milestone: str | None = None,
             limit=200, timeout=timeout,
         )
     except Exception as exc:
-        event(
-            "blocked_by_check_failed", level=logging.ERROR,
-            repo=repo, error=exc,
-        )
+        _scan_read_failed(exc, repo, raise_on_read_failure)
         return None
     return _pick_from_scan(
         issues, repo, external_only=True, held=held,
@@ -800,7 +814,7 @@ def _repo_scan_context(
 def pick_ready_issue(
     repo: str, active_milestone: str | None = None,
     config: RunnerConfig | None = None, held: frozenset = frozenset(),
-    *, timeout: int | None = None,
+    *, timeout: int | None = None, raise_on_read_failure: bool = False,
 ) -> dict | None:
     """The Issue the next fresh claim would pick: THE ready decision.
 
@@ -815,15 +829,20 @@ def pick_ready_issue(
     `dispatch_label` and `active_milestone` are resolved from the
     repository policy before the scan (see `_repo_scan_keys`), `held`
     (the deliveries live co-runners work on) is passed through, and
-    `timeout` bounds every scan's read for the caller that needs it
-    (`orbi status`, Issue #1668).
+    `timeout` bounds every scan's read and `raise_on_read_failure`
+    decides what a failed read means to the caller: the claim fails open,
+    while `orbi status` re-raises so a broken read is named as a failure
+    and never rendered as an empty queue (`_scan_read_failed`).
     """
     milestone, dispatch_label = _repo_scan_keys(
         config, repo, active_milestone,
     )
     if dispatch_label == READY_LABEL:
-        return pick_issue(repo, milestone, held=held, timeout=timeout)
+        return pick_issue(
+            repo, milestone, held=held, timeout=timeout,
+            raise_on_read_failure=raise_on_read_failure,
+        )
     return pick_issue(
         repo, milestone, dispatch_label=dispatch_label, held=held,
-        timeout=timeout,
+        timeout=timeout, raise_on_read_failure=raise_on_read_failure,
     )

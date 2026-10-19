@@ -300,13 +300,13 @@ class FakeGh:
         search = (flags.get("--search") or [None])[0]
         fields = flags["--json"][0].split(",")
         limit = int((flags.get("--limit") or ["30"])[0])
-        include, exclude, milestone_title, oldest_first = (
+        include, exclude, body_terms, milestone_title, oldest_first = (
             self._parse_search(search)
         )
         matches = [
             issue for issue in self.issues.values()
             if self._matches(issue, state, label, include, exclude,
-                             milestone_title)
+                             body_terms, milestone_title)
         ]
         matches.sort(key=lambda issue: issue["_created"],
                      reverse=not oldest_first)
@@ -322,16 +322,19 @@ class FakeGh:
         same contract `orbi.claim` relies on); groups AND together. The
         order follows GitHub: results are newest-created first unless the
         documented `sort:created-asc` qualifier asks for the oldest first
-        (Issue #1734's review scan). An unrecognized qualifier fails fast:
-        a scan the fake cannot interpret must never silently match
-        nothing.
+        (Issue #1734's review scan). A quoted phrase is matched against
+        the Issue BODY — the only form Orbi's scans use, the
+        external-takeover prefilter `"orbi:external-pr" in:body`
+        (Issue #842). An unrecognized qualifier fails fast: a scan the
+        fake cannot interpret must never silently match nothing.
         """
         include: list[list[str]] = []
         exclude: list[str] = []
+        body_terms: list[str] = []
         milestone_title: str | None = None
         oldest_first = False
         if not search:
-            return include, exclude, milestone_title, oldest_first
+            return include, exclude, body_terms, milestone_title, oldest_first
         for qualifier, token in _SEARCH_TOKEN_RE.findall(search):
             if qualifier:
                 if milestone_title is not None:
@@ -345,14 +348,21 @@ class FakeGh:
                 include.append(token[len("label:"):].split(","))
             elif token == "sort:created-asc":
                 oldest_first = True
+            elif token == "in:body":
+                # The scope modifier of the quoted phrase above: the fake
+                # matches a quoted phrase against the body only.
+                continue
+            elif token.startswith('"') and token.endswith('"'):
+                body_terms.append(token[1:-1])
             else:
                 self._fail(
                     1, f"fake-gh: unsupported search qualifier: {search!r}"
                 )
-        return include, exclude, milestone_title, oldest_first
+        return include, exclude, body_terms, milestone_title, oldest_first
 
     def _matches(self, issue: dict, state: str, label: str | None,
                  include: list[list[str]], exclude: list[str],
+                 body_terms: list[str],
                  milestone_title: str | None) -> bool:
         # `--state all` lists both states (GitHub has no state filter to
         # apply); "open"/"closed" filter exactly.
@@ -364,6 +374,8 @@ class FakeGh:
             if not set(group) & set(issue["labels"]):
                 return False
         if any(name in issue["labels"] for name in exclude):
+            return False
+        if any(term not in issue["body"] for term in body_terms):
             return False
         if milestone_title is not None:
             milestone = self.milestones.get(issue["milestone"])

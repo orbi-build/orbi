@@ -582,6 +582,23 @@ def test_contents_put_rejects_non_base64_content(fake_gh):
         ))
     assert "base64" in excinfo.value.stderr
 
+def test_issue_list_honours_the_in_body_search_term(fake_gh):
+    """The external-takeover scan's query is a body-text term (Issue
+    #842: `"orbi:external-pr" in:body`); the fake must answer it, so the
+    five claim scans the status view now runs (Issue #1773) are all real
+    reads instead of a fail-open masking an unsupported query."""
+    fake_gh.add_issue(1, body="please review\n<!-- orbi:external-pr:9 -->")
+    fake_gh.add_issue(2, body="no marker here")
+    for number in (1, 2):
+        fake_gh.issues[number]["labels"] = [READY_LABEL]
+    issues = github.list_issues(
+        "owner/repo", state="open",
+        search=f'label:{READY_LABEL} "orbi:external-pr" in:body',
+        json_fields="number", limit=200,
+    )
+    assert [issue["number"] for issue in issues] == [1]
+
+
 # --- `orbi status` reads the claim's ONE ready decision (Issue #1773) ------
 
 

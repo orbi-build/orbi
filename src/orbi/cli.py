@@ -180,11 +180,10 @@ def ready_issue(repo: str,
                 config: config_domain.RunnerConfig) -> dict | None:
     """The Issue the claim would pick, read under the status bound (#1668).
 
-    The ready decision lives on the claim side (Issue #1773), so an Issue
-    already in a delivery state (ai-pr-opened/ai-fix-needed/ai-merged/
-    ai-blocked) is never reported as ready. The claim's pick/skip journal
-    lines stay out of the view: this is an observation, and the view's
-    stderr belongs to its failure line.
+    The ready decision lives on the claim side (Issue #1773): an Issue in
+    a delivery state (ai-pr-opened/ai-fix-needed/ai-merged/ai-blocked) is
+    never ready, and the claim's pick/skip lines stay out of the view; an
+    unreadable scan fails the observation (#1668), not an empty queue.
     """
     journal = journal_domain.LOGGER
     level = journal.level
@@ -193,6 +192,7 @@ def ready_issue(repo: str,
         return claim.pick_ready_issue(
             repo, config.active_milestone, config,
             timeout=status_observe.STATUS_READ_TIMEOUT_SECONDS,
+            raise_on_read_failure=True,
         )
     finally:
         journal.setLevel(level)

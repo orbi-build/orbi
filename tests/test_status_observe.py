@@ -1022,15 +1022,19 @@ def _local_checkout(tmp_path):
     return checkout
 
 
-def _run_status(monkeypatch, tmp_path, argv, *, stall_subcommand):
+def _run_status(monkeypatch, tmp_path, argv, *, stall_subcommand=None,
+                gh_bin=None):
     """Run the real `orbi status` entry with a stalling `gh` on PATH.
 
     Only the bound is shrunk: the command, the config load and scope
     selection, the observer cycle, the gh subprocess, the local git
-    checkout and the failure line are the real user path.
+    checkout and the failure line are the real user path. `gh_bin`
+    replaces the stalling `gh` with another fake binary.
     """
     monkeypatch.setattr(observe, "STATUS_READ_TIMEOUT_SECONDS", 1)
-    bin_dir = _stalling_gh(tmp_path, stall_subcommand=stall_subcommand)
+    bin_dir = gh_bin or _stalling_gh(
+        tmp_path, stall_subcommand=stall_subcommand,
+    )
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
     checkout = _local_checkout(tmp_path)
     prompts = tmp_path / "prompts"
@@ -1083,6 +1087,60 @@ def test_status_repo_scope_bounds_a_hung_ready_list(monkeypatch, tmp_path,
     assert len(failure) == 1
     assert failure[0].startswith("status_failed scope=acme/shop reason=")
     assert "timed out after 1 seconds" in failure[0]
+
+
+def _search_failing_gh(tmp_path):
+    """A `gh` on PATH that fails exactly the ready decision's scans.
+
+    The ready decision's own queries (Issue #1773) are the ones carrying
+    the claim's delivery-state exclusion `-label:ai-in-progress`; every
+    other read (`gh api`, the open-Issue listing, the result scan)
+    answers an empty result, so only the ready read can fail here. The
+    failure is a non-transient 422, so the read retry does not mask it
+    behind backoff sleeps.
+    """
+    bin_dir = tmp_path / "gh-bin"
+    bin_dir.mkdir()
+    script = bin_dir / "gh"
+    script.write_text(
+        "#!/bin/sh\n"
+        'for arg in "$@"; do\n'
+        '  case "$arg" in\n'
+        '    *-label:ai-in-progress*)\n'
+        '      echo "error: HTTP 422: Validation Failed" >&2\n'
+        "      exit 1\n"
+        "      ;;\n"
+        "  esac\n"
+        "done\n"
+        'echo "[]"\n',
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return bin_dir
+
+
+def test_status_repo_scope_names_a_failed_ready_scan(monkeypatch, tmp_path,
+                                                     capsys):
+    """Acceptance #1773 + #1668: the ready decision is the claim's own
+    scan, so a ready-scan read that fails must be NAMED and exit non-zero
+    — it is never rendered as `ready: -`, an empty queue.
+
+    The claim itself keeps failing open (a broken query must not deadlock
+    the queue); only this observation asks for the failure.
+    """
+    rc = _run_status(
+        monkeypatch, tmp_path, ["--repo", "acme/shop"],
+        gh_bin=_search_failing_gh(tmp_path),
+    )
+    captured = capsys.readouterr()
+    assert rc == 1
+    failure = [
+        line for line in captured.err.splitlines()
+        if line.startswith("status_failed")
+    ]
+    assert len(failure) == 1
+    assert failure[0].startswith("status_failed scope=acme/shop reason=")
+    assert "ready:" not in captured.out
 
 
 # --- Issue #1669: a maintainer's confirmed manual wait wins ---------------
