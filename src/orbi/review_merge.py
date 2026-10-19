@@ -1010,14 +1010,11 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
       with the explicit reason.
     """
     marker = run_marker(config.run_id)
-    # The round budget lives in the scene: `review_round`
-    # counts the COMPLETED rounds, each recorded by the round comment
-    # that carried the updated scene block. The count — with a
-    # maintainer's blocked -> ai-fix-needed recovery reset applied —
-    # is ONE decision owned by `review_rounds` (Issue #1779): this
-    # budget, the round in progress and every failure report read the
-    # same value, so a recovered PR never reports the exhausted count
-    # while it is running round 1.
+    # The round budget lives in the scene: `review_round` counts the
+    # COMPLETED rounds recorded by the round comments' scene blocks, with
+    # a maintainer's blocked -> ai-fix-needed recovery reset applied — ONE
+    # decision owned by `review_rounds` (Issue #1779): the budget, the
+    # round in progress and failure reports share it (Issue #1783).
     scene_round = int(scene["review_round"])
     rounds = effective_review_round(scene, number=number, repo=source_repo)
     recovered = rounds != scene_round
@@ -1039,6 +1036,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             "decision, so the AI cannot safely continue this PR"
         )
     round = rounds if merge_only else rounds + 1
+    scene["review_round_running"] = round  # the failure report's source
     external_pr_url = scene["pr_url"] if scene.get("external") else None
     pr = freeze_pr(
         worktree, branch, base_branch,
@@ -1961,6 +1959,7 @@ def _run_review_round(
             action=action,
             reason=reason,
             diagnosis=detail, evidence=True,
+            review_round=(scene or {}).get("review_round_running"),
             review_scene_block=(
                 _round_scene_block(scene, pr_url, int(scene["review_round"]))
                 if isinstance(scene, dict)

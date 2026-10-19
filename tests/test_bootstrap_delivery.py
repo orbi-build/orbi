@@ -4961,6 +4961,126 @@ def test_run_review_round_reports_five_when_no_recovery_happened(
     assert rounds == [5]
 
 
+def _executing_review_round_env(monkeypatch, tmp_path, *, scene_round=2):
+    """Issue #1783: the REAL loop writes round comments through the
+    shared comment store, so a failure report after those writes reads
+    the scene the round just advanced."""
+    from types import SimpleNamespace
+
+    from tests.fakes.progress import capture_finish_rounds
+
+    real_round = review_merge.review_and_merge_if_clean
+    real_publish = progress._safe_publish
+    _review_round_env(monkeypatch, tmp_path, scene_round=scene_round)
+    monkeypatch.setattr(seam, "review_and_merge_if_clean", real_round)
+    monkeypatch.setattr(seam, "_safe_publish", real_publish)
+    worktree = (tmp_path / ".worktrees"
+                / "orbi-owner-repo-issue-39-a1b2c3d4")
+    run_state.write_run_state(RunContext(
+        run_id=FAKE_RUN_ID, issue=39, branch="orbi/owner-repo-issue-39",
+        worktree=worktree, source_repo="owner/repo",
+    ))
+    run_state.record_pushed_head(worktree, "def")
+    store = [{
+        "body": (
+            "<!-- orbi:run=a1b2c3d4 -->\n"
+            "<!-- orbi:scene:v1 " + json.dumps({
+                "base_branch": "main", "base_sha": "abc123def456",
+                "external": "", "pr_url": PR_URL,
+                "review_round": scene_round, "run_id": "a1b2c3d4",
+                "schema": 1,
+            }) + " -->\n"
+            f"Orbi opened PR: {PR_URL} (base_branch=main "
+            "base_sha=abc123def456 run_id=a1b2c3d4)"
+        ),
+        "authorAssociation": "OWNER",
+    }]
+
+    def fake_run(command, **kwargs):
+        if command[-1] == "comments":
+            return json.dumps({"comments": store})
+        if command[-1] == "labels":
+            return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+        if command == ["git", "branch", "--show-current"]:
+            return "orbi/owner-repo-issue-39"
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+
+    def comment_issue(number, *, repo, body):
+        store.append({"body": body, "authorAssociation": "OWNER"})
+
+    monkeypatch.setattr(seam, "comment_issue", comment_issue)
+    pr_posts: list[str] = []
+
+    def comment_pr(number, *, repo, body):
+        pr_posts.append(body)
+        if "<!-- orbi:comment=failure -->" not in body:
+            raise RuntimeError("PR round comment post failed")
+
+    monkeypatch.setattr(seam, "comment_pr", comment_pr)
+    monkeypatch.setattr(seam, "pr_view",
+                        lambda *a, **k: {"mergeable": "MERGEABLE"})
+    frozen = {"number": 46, "url": PR_URL, "base_ref": "main",
+              "base_oid": "abc", "head_ref": "b", "head_oid": "def"}
+    monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: frozen)
+    monkeypatch.setattr(
+        seam, "run_review",
+        lambda *a, **k: SimpleNamespace(
+            output=(
+                'REVIEW_VERDICT {"verdict": "findings", "head": "def", '
+                '"blockers": 0, "majors": 1, "minors": 0, "findings": '
+                '[{"level": "Major", "note": "n", "fix": ""}]}'
+            ),
+            issue_body_sha256=None,
+        ),
+    )
+    return store, pr_posts, capture_finish_rounds(monkeypatch)
+
+
+def test_run_review_round_reports_the_round_it_ran_after_its_comment(
+        monkeypatch, tmp_path,
+):
+    """Issue #1783 acceptance 1: two completed rounds, round 3 writes its
+    Issue round comment and then the PR round comment post fails. The
+    failure scene reports the round that ran (3), never the scene-derived
+    next round (4)."""
+    store, pr_posts, rounds = _executing_review_round_env(
+        monkeypatch, tmp_path, scene_round=2,
+    )
+    assert review_merge._run_review_round(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
+        "owner/repo",
+    ) is None
+    # The loop ran round 3 and its Issue round comment advanced the scene.
+    assert '"review_round": 3' in store[1]["body"]
+    # The failed round post and the failure report's own PR comment.
+    assert len(pr_posts) == 2
+    assert rounds == [3]
+
+
+def test_run_review_round_reports_the_round_it_ran_on_a_freeze_failure(
+        monkeypatch, tmp_path,
+):
+    """Issue #1783 acceptance 2: round 3 fails in freeze_pr before any
+    comment; it still reports round 3."""
+    _store, _pr_posts, rounds = _executing_review_round_env(
+        monkeypatch, tmp_path, scene_round=2,
+    )
+
+    def freeze_fails(*args, **kwargs):
+        raise RuntimeError("freeze failed")
+
+    monkeypatch.setattr(seam, "freeze_pr", freeze_fails)
+    assert review_merge._run_review_round(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
+        "owner/repo",
+    ) is None
+    assert rounds == [3]
+
+
 def test_run_review_round_passes_a_recorded_pass(monkeypatch, tmp_path):
     """Issue #1626: a recorded pass with the same rendered Issue body is
     passed to the round, which merges without a session."""
