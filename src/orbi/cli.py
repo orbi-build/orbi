@@ -32,10 +32,12 @@ from pathlib import Path
 
 from orbi import (
     __version__,
+    claim,
     cli_source,
     config as config_domain,
     engine_source,
     git_transport,
+    journal as journal_domain,
     notify,
     runner,
     scheduler,
@@ -156,12 +158,15 @@ def dispatch_issue(repo: str, title: str, body: str, *,
     return url
 
 
-def list_labeled_issues(repo: str, label: str, state: str = "open",
-                        search: str | None = None, *,
+def list_labeled_issues(repo: str, label: str, state: str = "open", *,
                         timeout: int | None = None) -> list[dict]:
-    """Return the newest Issues matching a label search (gh lists newest first)."""
+    """Return the newest Issue carrying one label (gh lists newest first).
+
+    The label IS the query: the status view never assembles a search of
+    its own. "Which Issue is ready" is the claim's decision (#1773).
+    """
     return list_issues(
-        repo, state=state, search=search or f"label:{label}",
+        repo, state=state, search=f"label:{label}",
         json_fields="number,title,url,state", limit=1, timeout=timeout,
     )
 
@@ -171,17 +176,26 @@ def current_issue(repo: str) -> dict | None:
     return issues[0] if issues else None
 
 
-def ready_issue(repo: str) -> dict | None:
-    """The ready queue, read under the status cycle's bound.
+def ready_issue(repo: str,
+                config: config_domain.RunnerConfig) -> dict | None:
+    """The Issue the claim would pick, read under the status bound (#1668).
 
-    The status view owns this read, so a stalled `gh issue list` fails
-    the observation within the bound instead of hanging it (Issue #1668).
+    The ready decision lives on the claim side (Issue #1773): an Issue in
+    a delivery state (ai-pr-opened/ai-fix-needed/ai-merged/ai-blocked) is
+    never ready, and the claim's pick/skip lines stay out of the view; an
+    unreadable scan fails the observation (#1668), not an empty queue.
     """
-    issues = list_labeled_issues(
-        repo, READY_LABEL, search=f"label:{READY_LABEL} -label:{IN_PROGRESS_LABEL}",
-        timeout=status_observe.STATUS_READ_TIMEOUT_SECONDS,
-    )
-    return issues[0] if issues else None
+    journal = journal_domain.LOGGER
+    level = journal.level
+    journal.setLevel(max(level, logging.WARNING))
+    try:
+        return claim.pick_ready_issue(
+            repo, config.active_milestone, config,
+            timeout=status_observe.STATUS_READ_TIMEOUT_SECONDS,
+            raise_on_read_failure=True,
+        )
+    finally:
+        journal.setLevel(level)
 
 
 def recent_result(repo: str) -> dict | None:
@@ -204,7 +218,9 @@ def recent_result(repo: str) -> dict | None:
 
 
 def format_issue(issue: dict) -> str:
-    return f"#{issue['number']} {issue['title']} {issue['url']}"
+    """Render `#N title url`; a claim-scan record carries no url (#1773)."""
+    url = issue.get("url")
+    return f"#{issue['number']} {issue['title']}" + (f" {url}" if url else "")
 
 
 def slot_lines(state_dir: Path, capacity: int) -> list[str]:
@@ -943,7 +959,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         observer = status_observe.StatusObserver(
             config, scope,
-            read_ready=ready_issue, read_result=recent_result,
+            read_ready=lambda repo: ready_issue(repo, config),
+            read_result=recent_result,
             read_base=freeze_base,
         )
 

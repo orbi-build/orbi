@@ -1,4 +1,5 @@
 from orbi import config as config_domain
+import inspect
 import json
 import logging
 import os
@@ -13,6 +14,7 @@ import dataclasses
 
 import orbi.runner as runner
 import orbi.cli as orbi
+import orbi.claim as claim_domain
 import orbi.status_observe as observe
 from seam import seam
 
@@ -140,35 +142,44 @@ def test_current_issue_returns_none_when_idle(monkeypatch):
     assert orbi.current_issue("xqliu/orbi") is None
 
 
-def test_ready_issue_returns_first_ready_issue(monkeypatch):
-    issue = {"number": 11, "title": "task", "url": "u"}
+def test_ready_issue_runs_the_claim_searches_under_the_status_bound(
+        monkeypatch):
+    """The ready decision has ONE owner (Issue #1773): the CLI issues the
+    claim's own searches — never a query of its own — and keeps the
+    status read bound (Issue #1668)."""
     calls = []
 
-    def fake_list(repo, label, state="open", search=None, timeout=None):
-        calls.append((label, search))
-        return [issue] if label == "ai-ready" else []
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs.get("timeout")))
+        return "[]"
 
-    monkeypatch.setattr(orbi, "list_labeled_issues", fake_list)
-    assert orbi.ready_issue("xqliu/orbi") == issue
-    assert calls == [("ai-ready", "label:ai-ready -label:ai-in-progress")]
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    config = config_domain.RunnerConfig(active_milestone="v1.0")
+    assert orbi.ready_issue("xqliu/orbi", config) is None
+    searches = [
+        command[command.index("--search") + 1]
+        for command, _ in calls
+        if "--search" in command
+    ]
+    assert searches[:3] == list(
+        claim_domain.ready_searches("v1.0"),
+    )
+    assert {timeout for _, timeout in calls} == {
+        observe.STATUS_READ_TIMEOUT_SECONDS,
+    }
 
 
-def test_ready_issue_excludes_in_progress_issues(monkeypatch):
-    ready = {"number": 12, "title": "next", "url": "u12"}
-    calls = []
-
-    def fake_list(repo, label, state="open", search=None, timeout=None):
-        calls.append(search)
-        return [ready] if search == "label:ai-ready -label:ai-in-progress" else []
-
-    monkeypatch.setattr(orbi, "list_labeled_issues", fake_list)
-    assert orbi.ready_issue("xqliu/orbi") == ready
-    assert calls == ["label:ai-ready -label:ai-in-progress"]
+def test_ready_issue_builds_no_search_of_its_own():
+    """Criterion #1773: no second ready query lives in the CLI."""
+    source = inspect.getsource(orbi.ready_issue)
+    assert "label:" not in source
 
 
 def test_ready_issue_returns_none_when_idle(monkeypatch):
-    monkeypatch.setattr(orbi, "list_labeled_issues", lambda *a, **k: [])
-    assert orbi.ready_issue("xqliu/orbi") is None
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]")
+    assert orbi.ready_issue(
+        "xqliu/orbi", config_domain.RunnerConfig(),
+    ) is None
 
 
 def test_recent_result_returns_newest_pr_opened_or_blocked_issue(monkeypatch):
@@ -272,7 +283,8 @@ def _status_observer(config, raw_by_repo):
     scope = observe.parse_scope(config.source_repos)
     observer = observe.StatusObserver(
         config, scope, read_issues=lambda repo: raw_by_repo.get(repo, []),
-        read_ready=orbi.ready_issue, read_result=orbi.recent_result,
+        read_ready=lambda repo: orbi.ready_issue(repo, config),
+        read_result=orbi.recent_result,
         read_base=orbi.freeze_base,
     )
     observer.refresh()
@@ -304,7 +316,7 @@ class _NoopObserver:
 def test_status_report_lists_sources_active_ready_and_result(monkeypatch):
     ready = {"number": 11, "title": "next", "url": "u11"}
     result = {"number": 2, "title": "done", "url": "u2"}
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo: ready)
+    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: ready)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: result)
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="main", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots"))
@@ -325,7 +337,7 @@ def test_status_report_freezes_base_from_configured_repo_dir(monkeypatch):
         orbi, "freeze_base",
         lambda repo_dir, base_branch: calls.append((repo_dir, base_branch)) or "abc123def456",
     )
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="develop", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots"))
     scope, observer = _status_observer(config, {})
@@ -334,7 +346,7 @@ def test_status_report_freezes_base_from_configured_repo_dir(monkeypatch):
 
 
 def test_status_report_marks_empty_lookups(monkeypatch):
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="main", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots"))
@@ -1355,7 +1367,7 @@ def test_status_report_shows_active_observation_for_an_issue(
                 {"type": "toolCall", "id": "t1", "name": "read",
                  "arguments": {"path": "src/login.ts"}}]},
         }) + "\n")
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
@@ -1374,7 +1386,7 @@ def test_status_report_shows_active_observation_for_an_issue(
 def test_status_report_repo_scope_excludes_the_other_repository(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     config = config_domain.RunnerConfig(source_repos=("acme/shop", "acme/blog"), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
@@ -1393,7 +1405,7 @@ def test_status_report_repo_scope_excludes_the_other_repository(
 def test_status_report_issue_scope_shows_confirmed_state(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
@@ -1414,7 +1426,7 @@ def test_status_report_issue_scope_shows_confirmed_state(
 def test_status_report_issue_scope_without_a_confirmed_read(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
@@ -1426,7 +1438,7 @@ def test_status_report_issue_scope_without_a_confirmed_read(
 
 
 def test_status_report_marks_no_active_delivery(monkeypatch, tmp_path):
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
@@ -1444,7 +1456,7 @@ def test_status_report_shows_capacity_and_free_slots(monkeypatch, tmp_path):
         orbi, "freeze_base",
         lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=2, slot_dir=tmp_path / ".orbi" / "slots")
     scope, observer = _status_observer(config, {})
@@ -1466,7 +1478,7 @@ def test_status_report_shows_occupied_slots_with_pids(monkeypatch, tmp_path):
         orbi, "freeze_base",
         lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=2, slot_dir=slot_dir)
     scope, observer = _status_observer(config, {})
@@ -1490,7 +1502,7 @@ def test_status_report_shows_free_slot_when_file_exists_without_lock(
         orbi, "freeze_base",
         lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=slot_dir)
     scope, observer = _status_observer(config, {})
@@ -2801,7 +2813,7 @@ def _stub_status_github(monkeypatch, issue):
         observe, "run_gh_read_command",
         lambda command, **kwargs: json.dumps([[issue]]),
     )
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     monkeypatch.setattr(
         orbi, "freeze_base", lambda repo_dir, base_branch: "abc123",

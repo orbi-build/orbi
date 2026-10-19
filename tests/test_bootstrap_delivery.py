@@ -276,6 +276,48 @@ def test_pick_issue_fails_open_when_blocked_by_query_fails(
     assert "blocked_by_check_failed" in caplog.text
 
 
+def test_pick_issue_reraises_a_failed_scan_for_the_observation(
+    monkeypatch, caplog,
+):
+    """`orbi status` reads this same scan (Issue #1773), and an
+    observation must not turn an unreadable queue into an empty one
+    (Issue #1668): with `raise_on_read_failure` the failed read is
+    named, while the claim keeps failing open above."""
+    error = subprocess.CalledProcessError(
+        1, ["gh"], output="", stderr="error: HTTP 422: Validation Failed",
+    )
+    monkeypatch.setattr(seam, "run_command",
+        lambda command, **kwargs: (_ for _ in ()).throw(error),
+    )
+    with caplog.at_level("INFO"), pytest.raises(subprocess.CalledProcessError):
+        claim.pick_issue("xqliu/orbi", raise_on_read_failure=True)
+    assert "blocked_by_check_failed" in caplog.text
+
+
+def test_pick_ready_issue_reraises_the_release_scan_failure(
+    monkeypatch,
+):
+    """The flag reaches every scan, not only the three ordinary ones: a
+    failed release-fallback read is named too instead of ending the
+    observation as an empty queue."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if any("label:ai-release" in arg for arg in command):
+            raise subprocess.CalledProcessError(
+                1, ["gh"], output="", stderr="error: HTTP 422: Validation",
+            )
+        return json.dumps([])
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    with pytest.raises(subprocess.CalledProcessError):
+        claim.pick_ready_issue("xqliu/orbi", raise_on_read_failure=True)
+    assert any(
+        "label:ai-release" in arg for command in calls for arg in command
+    )
+
+
 def test_validate_active_milestone_none_is_unchanged(monkeypatch):
     monkeypatch.setitem(runner.__dict__, "list_milestones", lambda *args, **kwargs: pytest.fail("no lookup"))
     milestone.validate_active_milestone("owner/repo", None)
