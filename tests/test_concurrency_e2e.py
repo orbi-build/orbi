@@ -120,9 +120,10 @@ def match_issue(labels, search):
 
 if args[:2] == ["issue", "list"]:
     search = args[args.index("--search") + 1]
-    # Issue #809: the resumable scan asks for a page (max_concurrency+1)
-    # so it can skip held deliveries and still reach a free one — the
-    # fake must honor the limit, not answer one issue regardless.
+    # Issue #809/#1792: the resumable scan asks for one full page
+    # (OPENED_PR_SCAN_LIMIT) so it can skip held and CI-pending deliveries
+    # and still reach a free one — the fake must honor the limit, not
+    # answer one issue regardless.
     limit = int(args[args.index("--limit") + 1])
     out = [
         # `--state open` only ever returns open Issues, and the real
