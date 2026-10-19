@@ -576,6 +576,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `review_merge_skipped_issue_blocked` | 因 Issue 处于 ai-blocked，合并门拒绝合并（Issue #1504） |
 | `review_recovery_ci_status` | 观察到用于评审恢复的 CI 状态 |
 | `review_recovery_ci_status_failed` | 评审恢复所需的 CI 状态读取失败 |
+| `review_recovery_read_failed` | 评审恢复重置所需的标签历史读取失败（报告中仍使用场景里的轮次） |
 | `merge_gate_ci_pending` | 合并门发现 CI pending；合并顺延到下一 tick |
 | `merge_gate_mergeable_unknown` | GitHub 可合并状态仍为 UNKNOWN；合并顺延到下一 tick |
 | `merge_gate_behind_base` | 合并门发现 PR 落后于 base |

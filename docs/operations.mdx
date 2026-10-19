@@ -672,6 +672,7 @@ registry — in both directions (a name only in code or only in docs fails
 | `review_merge_skipped_issue_blocked` | the merge gate refused because the Issue is ai-blocked (Issue #1504) |
 | `review_recovery_ci_status` | CI status for review recovery observed |
 | `review_recovery_ci_status_failed` | the CI status read for review recovery failed |
+| `review_recovery_read_failed` | the label-history read for the review recovery reset failed (the reported round keeps the scene's count) |
 | `merge_gate_ci_pending` | the merge gate found pending CI; the merge defers to the next tick |
 | `merge_gate_mergeable_unknown` | GitHub mergeability is still UNKNOWN; the merge defers to the next tick |
 | `merge_gate_behind_base` | the merge gate found the PR behind the base |

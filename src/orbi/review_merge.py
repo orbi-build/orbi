@@ -41,7 +41,6 @@ from orbi.delivery_labels import (
     EVENT_HUMAN_REVIEW_WAITING,
     EVENT_MERGED,
     EVENT_PR_OPENED,
-    FIX_NEEDED_LABEL,
     HUMAN_REVIEW_LABEL,
     IN_PROGRESS_LABEL,
     MERGED_LABEL,
@@ -69,7 +68,6 @@ from orbi.github import (
     issue_priority,
     pr_delivery_rollup,
     pr_view,
-    run_gh_read_command,
 )
 from orbi import language
 from orbi.gitops import (
@@ -108,11 +106,15 @@ from orbi.progress import (
     run_marker,
     step_publisher,
 )
-from orbi.review_rounds import review_round_comment_body
+from orbi.review_rounds import (
+    MAX_REVIEW_ROUNDS,
+    effective_review_round,
+    review_round_comment_body,
+)
 # Machine-readable verdict line the reviewer session must end with, and the
-# bounded size of the review/fix loop (see review-fix-loop skill: max 5 rounds).
+# bounded size of the review/fix loop (review_rounds.MAX_REVIEW_ROUNDS, the
+# same value the reported round caps at — Issue #1779).
 VERDICT_MARKER = "REVIEW_VERDICT"
-MAX_REVIEW_ROUNDS = 5
 MAX_BASE_ADVANCE_ROUNDS = 5
 # GitHub computes mergeability asynchronously; a CI-concluded UNKNOWN read is
 # re-read after these bounded delays (≈15 s of slot time, Issue #1736).
@@ -785,40 +787,6 @@ def merge_commit_metrics(worktree: Path, merge_commit: str,
     return str(commits - engine), str(commits)
 
 
-def human_review_recovery_at(number: int, repo: str) -> str | None:
-    """Return the latest explicit blocked -> fix-needed recovery time.
-
-    Label history is used rather than the current projection: the current
-    ``ai-fix-needed`` label alone cannot distinguish a normal retry from a
-    human decision after terminal blocking.
-    """
-    raw = run_gh_read_command([
-        "gh", "api", f"repos/{repo}/issues/{number}/timeline",
-        "--paginate", "--jq", ".[]",
-    ])
-    events: list[dict] = []
-    decoded = [json.loads(line) for line in raw.splitlines() if line.strip()]
-    if len(decoded) == 1 and isinstance(decoded[0], list):
-        decoded = decoded[0]
-    for event in decoded:
-        if isinstance(event, dict):
-            events.append(event)
-    blocked_removed = False
-    recovery_at = None
-    for event in events:
-        label = event.get("label")
-        label_name = label.get("name") if isinstance(label, dict) else None
-        if event.get("event") == "labeled" and label_name == BLOCKED_LABEL:
-            blocked_removed = False
-        elif event.get("event") == "unlabeled" and label_name == BLOCKED_LABEL:
-            blocked_removed = True
-        elif (blocked_removed and event.get("event") == "labeled"
-              and label_name == FIX_NEEDED_LABEL):
-            recovery_at = event.get("created_at")
-            blocked_removed = False
-    return recovery_at if isinstance(recovery_at, str) else None
-
-
 def log_recovery_ci_status(pr: dict, repo: str) -> None:
     """Record the recovered PR's current check status without check output.
 
@@ -989,10 +957,13 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
     like every other scene; it is required, never fabricated.
 
     `scene` is the delivery's recovered resume scene (run_id, base,
-    PR URL, `review_round`, `scene_at`): the round budget reads the
-    scene's `review_round` field (the scene is the
-    waiting primitive's state anchor), and every round comment carries
-    the updated scene block, so the next resume continues the count.
+    PR URL, `review_round`, `scene_at`): the round budget reads
+    `review_rounds.effective_review_round` of it — the scene's count with
+    a maintainer recovery after the scene reset (Issue #483) — so the
+    budget, the round in progress and every failure report show one
+    number (Issue #1779). The scene is the waiting primitive's state
+    anchor, and every round comment carries the updated scene block, so
+    the next resume continues the count.
 
     The delivery step calls this while the PR is open and the Issue
     awaits review (`ai-pr-opened`) or awaits the next review session
@@ -1041,40 +1012,32 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
     marker = run_marker(config.run_id)
     # The round budget lives in the scene: `review_round`
     # counts the COMPLETED rounds, each recorded by the round comment
-    # that carried the updated scene block.
-    rounds = int(scene["review_round"])
-    base_advance_rounds = int(scene.get("base_advance_round", 0))
-    recovery_at = None
+    # that carried the updated scene block. The count — with a
+    # maintainer's blocked -> ai-fix-needed recovery reset applied —
+    # is ONE decision owned by `review_rounds` (Issue #1779): this
+    # budget, the round in progress and every failure report read the
+    # same value, so a recovered PR never reports the exhausted count
+    # while it is running round 1.
+    scene_round = int(scene["review_round"])
+    rounds = effective_review_round(scene, number=number, repo=source_repo)
+    recovered = rounds != scene_round
+    base_advance_rounds = (
+        0 if recovered else int(scene.get("base_advance_round", 0))
+    )
     if rounds >= MAX_REVIEW_ROUNDS and not merge_only:
-        # A maintainer may repair an external prerequisite and
-        # explicitly move the terminal Issue back to ai-fix-needed. That
-        # transition establishes a new budget for this same PR; old review
-        # comments remain immutable evidence and are not counted again.
-        recovery_at = human_review_recovery_at(number, source_repo)
-        scene_at = scene.get("scene_at")
-        if recovery_at is not None and (
-            not isinstance(scene_at, str) or recovery_at > scene_at
-        ):
-            rounds = 0
-            base_advance_rounds = 0
-            event(
-                "review_budget_recovered", issue=number,
-                recovery_at=recovery_at, rounds=rounds,
-            )
-        if rounds >= MAX_REVIEW_ROUNDS:
-            event(
-                "review_rounds_exhausted", level=logging.ERROR,
-                issue=number, rounds=rounds,
-                terminal="expected_human_decision",
-            )
-            # The loop is bounded by MAX_REVIEW_ROUNDS on purpose
-            # — after 5 rounds without a clean verdict the remaining findings
-            # need a human decision, so the AI cannot safely continue this PR.
-            raise ReviewRoundsExhausted(
-                f"review/fix loop exhausted after {MAX_REVIEW_ROUNDS} rounds "
-                "without a clean verdict; the bounded loop is a human "
-                "decision, so the AI cannot safely continue this PR"
-            )
+        event(
+            "review_rounds_exhausted", level=logging.ERROR,
+            issue=number, rounds=rounds,
+            terminal="expected_human_decision",
+        )
+        # The loop is bounded by MAX_REVIEW_ROUNDS on purpose
+        # — after 5 rounds without a clean verdict the remaining findings
+        # need a human decision, so the AI cannot safely continue this PR.
+        raise ReviewRoundsExhausted(
+            f"review/fix loop exhausted after {MAX_REVIEW_ROUNDS} rounds "
+            "without a clean verdict; the bounded loop is a human "
+            "decision, so the AI cannot safely continue this PR"
+        )
     round = rounds if merge_only else rounds + 1
     external_pr_url = scene["pr_url"] if scene.get("external") else None
     pr = freeze_pr(
@@ -1124,8 +1087,8 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             "pushed_head_recorded", pr=pr["number"],
             head=pr["head_oid"], round=round,
         )
-    if recovery_at is not None:
-        # Only the explicit recovery path reaches this branch. Check the
+    if recovered:
+        # Only the explicit recovery reset reaches this branch. Check the
         # latest PR CI before spending the newly granted review budget.
         log_recovery_ci_status(pr, source_repo)
     publisher = ProgressPublisher(

@@ -20,6 +20,7 @@ import pytest
 import orbi.failure_report as failure_report
 import orbi.runner as runner
 import orbi.review_merge as review_merge
+import orbi.review_rounds as review_rounds
 import orbi.run_state as run_state
 import orbi.pi_session as pi_session
 import orbi.runner_health as runner_health
@@ -1093,14 +1094,14 @@ def test_human_recovery_requires_blocked_removal_then_fix_needed(monkeypatch):
              "created_at": "2026-01-02T01:00:00Z"},
         ]),
     )
-    assert review_merge.human_review_recovery_at(39, "owner/repo") == \
+    assert review_rounds.human_review_recovery_at(39, "owner/repo") == \
         "2026-01-02T01:00:00Z"
 
 
 def test_human_review_recovery_ignores_unrelated_label_history(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda *a, **k: '{"event":"labeled"}\n',
     )
-    assert review_merge.human_review_recovery_at(39, "owner/repo") is None
+    assert review_rounds.human_review_recovery_at(39, "owner/repo") is None
 
 
 def test_human_review_recovery_requires_latest_blocked_removal(monkeypatch):
@@ -1113,13 +1114,13 @@ def test_human_review_recovery_requires_latest_blocked_removal(monkeypatch):
              "created_at": "2026-01-02T01:00:00Z"},
         ]),
     )
-    assert review_merge.human_review_recovery_at(39, "owner/repo") is None
+    assert review_rounds.human_review_recovery_at(39, "owner/repo") is None
 
 
 def test_human_review_recovery_skips_non_object_events(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda *a, **k: "1\n",
     )
-    assert review_merge.human_review_recovery_at(39, "owner/repo") is None
+    assert review_rounds.human_review_recovery_at(39, "owner/repo") is None
 
 
 def test_log_recovery_ci_status_logs_malformed_response_and_continues(
@@ -1152,8 +1153,8 @@ def test_exhausted_review_enters_new_budget_after_human_recovery(
     transition AFTER the recovered scene starts a fresh budget — the
     round runs (the freeze proves it)."""
     from tests.test_resume_pr import FAKE_RUN_ID
-    monkeypatch.setattr(review_merge, "human_review_recovery_at",
-                        lambda *a: "2026-02-01T00:00:00Z")
+    monkeypatch.setattr(seam, "human_review_recovery_at",
+                        lambda *a, **k: "2026-02-01T00:00:00Z")
     frozen = {"number": 46, "url": PR_URL, "base_ref": "main",
               "base_oid": "abc", "head_ref": "b", "head_oid": "def"}
     freezes = []
@@ -1196,7 +1197,8 @@ def test_review_rounds_exhausted_raises_unrecoverable(monkeypatch, tmp_path):
     UnrecoverableDeliveryError (the caller marks the Issue ai-blocked
     with the reason). Issue #788: the budget is the scene's round
     counter — exhausted BEFORE any freeze or review."""
-    monkeypatch.setattr(review_merge, "human_review_recovery_at", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "human_review_recovery_at",
+                        lambda *a, **k: None)
     from tests.test_resume_pr import FAKE_RUN_ID
 
     freezes = []

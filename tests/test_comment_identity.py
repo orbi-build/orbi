@@ -20,6 +20,8 @@ from orbi.review_rounds import (
 )
 from tests.test_progress import make_stateful_publisher
 
+from seam import seam
+
 RUN_ID = "abc12345"
 MARKER = "<!-- orbi:run=abc12345 -->"
 KIND_STARTED = "<!-- orbi:comment=started -->"
@@ -196,33 +198,111 @@ def test_current_review_round_reads_the_current_pr_scene_not_the_history():
     new_pr = {**TRUSTED, "body": _opened_pr_body(200, 0)}
     comments = old_rounds + [new_pr]
     assert review_rounds_so_far(comments) == 5
-    assert current_review_round(comments) == 0
+    assert current_review_round(comments, number=42, repo="owner/repo") == 1
 
 
-def test_current_review_round_is_the_single_prs_scene_round():
-    """Acceptance 2 (Issue #1772): one PR with two completed rounds
-    reports round 2, exactly the number the review loop reads."""
+def test_current_review_round_is_the_round_the_review_is_on():
+    """Acceptance 2 (Issue #1772): one PR with two completed rounds — the
+    review is on round 3, exactly the number the review loop uses and
+    its own round comments carry (Issue #1779 made the report and the
+    review use one number)."""
     comments = [
         {**TRUSTED, "body": _opened_pr_body(42, 0)},
         {**TRUSTED, "body": _round_body(1)},
         {**TRUSTED, "body": _round_body(2)},
     ]
-    assert current_review_round(comments) == 2
+    assert current_review_round(comments, number=42, repo="owner/repo") == 3
 
 
 def test_current_review_round_without_a_readable_scene_is_zero():
     """No trusted scene is no review round: the reporting path reports 0
     instead of failing or guessing."""
-    assert current_review_round([]) == 0
+    assert current_review_round([], number=42, repo="owner/repo") == 0
     # An untrusted public comment can never be the round's source.
     assert current_review_round([
         {"authorAssociation": "NONE", "body": _opened_pr_body(42, 5)},
-    ]) == 0
+    ], number=42, repo="owner/repo") == 0
     # A corrupted trusted scene is still no readable round.
     assert current_review_round([{
         **TRUSTED,
         "body": f"{MARKER}\n<!-- orbi:scene:v1 {{broken -->",
-    }]) == 0
+    }], number=42, repo="owner/repo") == 0
+
+
+def _five_round_history(*, last_created="2026-01-01T00:00:00Z"):
+    """One PR whose trusted history completed all five review rounds.
+
+    The LAST trusted scene-carrying comment is round 5 (created at
+    `last_created`): the resume scene a report and the review loop both
+    read, so the recovery boundary can be placed before or after it.
+    """
+    history = [
+        {**TRUSTED, "body": _opened_pr_body(42, 0),
+         "createdAt": "2025-12-31T00:00:00Z"},
+    ]
+    history += [
+        {**TRUSTED, "body": _round_body(round_no),
+         "createdAt": f"2025-12-31T0{round_no}:00:00Z"}
+        for round_no in (1, 2, 3, 4)
+    ]
+    history.append({
+        **TRUSTED, "body": _round_body(5), "createdAt": last_created,
+    })
+    return history
+
+
+def test_current_review_round_applies_the_human_recovery_reset(monkeypatch):
+    """Issue #1779 acceptance 1: a recovery AFTER the exhausted scene
+    restarts the budget, so the report shows round 1 — the round the
+    review is on — never the exhausted 5."""
+    monkeypatch.setattr(
+        seam, "human_review_recovery_at",
+        lambda *a, **k: "2026-01-02T00:00:00Z",
+    )
+    assert current_review_round(
+        _five_round_history(), number=42, repo="owner/repo",
+    ) == 1
+
+
+def test_current_review_round_keeps_five_without_a_recovery(monkeypatch):
+    """Issue #1779 acceptance 2: no recovery — the budget stays exhausted
+    and the report shows 5, exactly as today."""
+    monkeypatch.setattr(
+        seam, "human_review_recovery_at", lambda *a, **k: None,
+    )
+    assert current_review_round(
+        _five_round_history(), number=42, repo="owner/repo",
+    ) == 5
+
+
+def test_current_review_round_ignores_a_recovery_before_the_scene(
+        monkeypatch,
+):
+    """A recovery BEFORE the scene is already carried by the scene's own
+    count: it never rewinds the rounds completed after it."""
+    monkeypatch.setattr(
+        seam, "human_review_recovery_at",
+        lambda *a, **k: "2025-12-30T00:00:00Z",
+    )
+    assert current_review_round(
+        _five_round_history(), number=42, repo="owner/repo",
+    ) == 5
+
+
+def test_current_review_round_survives_a_failed_recovery_read(
+        monkeypatch, caplog,
+):
+    """A failed recovery read never fails the report: it is reported as
+    `review_recovery_read_failed` and the scene round stands."""
+    def boom(*args, **kwargs):
+        raise RuntimeError("gh timeline read failed")
+
+    monkeypatch.setattr(seam, "human_review_recovery_at", boom)
+    caplog.set_level("WARNING")
+    assert current_review_round(
+        _five_round_history(), number=42, repo="owner/repo",
+    ) == 5
+    assert "review_recovery_read_failed" in caplog.text
 
 
 def test_only_a_completed_review_round_kind_with_a_valid_scene_counts():

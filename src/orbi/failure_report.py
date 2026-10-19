@@ -657,13 +657,13 @@ def report_delivery_failure(
     handler derives the current delivery label locally); None reads
     the labels from GitHub. `blocked_suffix` extends the classified
     blocked body (the resume verification's preserved-PR note).
-    `review_round` pins the terminal scene's round (the implement
-    phase has none); None reads the current PR's scene round (the
-    review loop's own value) in the finish publish; a read failure is
-    bypass, never a second failure. `finish=False` skips the progress scene
-    (the tracked progress comment does not exist and the milestone
-    alone carries the notification). `publisher` is the run's LIVE
-    progress publisher when the caller holds one: its `finish` then
+    `review_round` pins the terminal scene's round (the implement phase has
+    none); None reads the round the current PR's review is on — the review
+    loop's own value, recovery reset included (Issue #1779) — in the finish
+    publish; a read failure is bypass, never a second failure.
+    `finish=False` skips the progress scene (no tracked comment yet: the
+    milestone alone notifies). `publisher` is the run's LIVE progress
+    publisher when the caller holds one: its `finish` then
     PATCHes the tracked comment directly instead of relocating it by
     the run marker. `evidence` appends the bounded
     `_failure_evidence` block after the scene.
@@ -989,7 +989,7 @@ def report_delivery_failure(
                     review_round if review_round is not None
                     else current_review_round(
                         issue_comments(number, repo=source_repo),
-                    )
+                        number=number, repo=source_repo)
                 ),
                 priority=priority, detail=finish_failure,
                 next_step=next_step, outcome=finish_outcome,

@@ -2195,9 +2195,11 @@ def _current_round_scene_body(monkeypatch, *, pr_state,
 
 # Issue #1772: five rounds on an EARLIER PR, then a new PR at round 0; and
 # a single PR whose scene round is 3 (the row is rendered from round 3 on).
+# The reported round is the round the review is ON (Issue #1779): the new
+# PR's is round 1 (no row), the three-round PR's is round 4.
 _CURRENT_ROUND_CASES = [
     (5, 0, None),
-    (0, 3, "3"),
+    (0, 3, "4"),
 ]
 
 
