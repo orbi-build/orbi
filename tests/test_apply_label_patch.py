@@ -22,10 +22,10 @@ def test_apply_label_patch_no_op_patch_applies_nothing(monkeypatch):
     monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: calls.append((args, kwargs)),
     )
-    # `label_patch` never returns an empty patch for a known event, so
-    # the no-op guard is defensive: exercise it by stubbing the patch to
+    # Exercise the no-op guard directly by stubbing the patch to
     # (nothing to add, nothing to remove) — `apply_label_patch` must
-    # apply nothing (no `edit_issue` call).
+    # apply nothing (no `edit_issue` call). The real empty patch is the
+    # terminal fix-needed transition (Issue #1786), covered below.
     monkeypatch.setattr(
         github, "label_patch",
         lambda event, current_labels, ready_label=None: ([], []),
@@ -34,6 +34,24 @@ def test_apply_label_patch_no_op_patch_applies_nothing(monkeypatch):
         7, repo="o/r", event=EVENT_BLOCKED,
         current_labels={"ai-ready", "ai-blocked"},
     )
+    assert calls == []
+
+
+def test_apply_label_patch_fix_needed_on_a_terminal_issue_applies_nothing(
+        monkeypatch,
+):
+    """Issue #1786: the terminal transition is really empty, so applying
+    fix-needed to a merged or blocked Issue writes no label at all — the
+    engine's single transition decides, and the caller applies it."""
+    calls = []
+    monkeypatch.setattr(seam, "edit_issue",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    for current in ({"ai-merged"}, {"ai-blocked", "ai-pr-opened"}):
+        github.apply_label_patch(
+            7, repo="o/r", event=EVENT_FIX_NEEDED,
+            current_labels=current,
+        )
     assert calls == []
 
 

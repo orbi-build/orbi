@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from orbi.delivery_scene import DeliveryScene, classify
+from orbi.delivery_labels import EVENT_FIX_NEEDED, label_patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "tools" / "ci_failure_triage.py"
@@ -859,9 +859,8 @@ def setup_active_pr_failure(
         "number": 494, "state": "open",
         "labels": [{"name": name} for name in active_labels],
     }
-    for name in ("ai-in-progress", "ai-pr-opened"):
-        if name in active_labels:
-            gh.routes[f"{ep_labels(494)}/{name}"] = {}
+    for name in active_labels:
+        gh.routes[f"{ep_labels(494)}/{name}"] = {}
     gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
 
 
@@ -912,51 +911,66 @@ def test_triage_keeps_no_delivery_state_label_set():
 
 @pytest.mark.parametrize("labels", [
     ["ai-pr-opened"],
-    ["ai-fix-needed"],
     ["ai-in-progress"],
+    ["ai-fix-needed"],
     ["ai-ready", "ai-pr-opened"],
+    ["ai-pr-opened", "ai-awaiting-merge"],
+    ["ai-merged"],
     ["ai-blocked", "ai-pr-opened"],
-    ["ai-blocked", "ai-fix-needed"],
 ])
-def test_delivery_scene_is_the_engine_classification(labels):
-    """Issue #1771 acceptance 1: the triage reads the delivery state from
-    delivery_scene.classify for the same labels — no second decision."""
-    assert mod.delivery_scene(labels) is classify(
-        labels=labels, scene=None, pr_state=None, body_markers=frozenset(),
-    )
+def test_fix_needed_label_change_is_the_engine_transition(
+    gh, monkeypatch, tmp_path, labels,
+):
+    """Issue #1786 acceptance 1, end to end through main(): the triage's
+    label change is exactly `label_patch(EVENT_FIX_NEEDED, ...)` for the
+    same labels. The transition is the one decision — the script adds or
+    removes nothing of its own."""
+    setup_active_pr_failure(gh, monkeypatch, tmp_path, labels=labels)
+    mod.main()
+    to_add, to_remove = label_patch(EVENT_FIX_NEEDED, labels)
+    deletes = [
+        call["endpoint"] for call in gh.calls if call["method"] == "DELETE"
+    ]
+    assert deletes == [f"{ep_labels(494)}/{label}" for label in to_remove]
+    added = [
+        label
+        for call in gh.calls_to(ep_labels(494), "POST")
+        for label in call["payload"]["labels"]
+    ]
+    assert added == to_add
+    # The Issue stays the PR's delivery: evidence lands, no duplicate ticket.
+    assert len(gh.calls_to(ep_comment(494), "POST")) == 1
+    assert len(gh.calls_to(ep_comment(541), "POST")) == 1
+    assert gh.calls_to(ep_create(), "POST") == []
 
 
 @pytest.mark.parametrize("labels", [
-    ["ai-pr-opened"],
-    ["ai-fix-needed"],
-    ["ai-in-progress"],
+    ["ai-merged"],
     ["ai-blocked", "ai-pr-opened"],
-    ["ai-blocked", "ai-fix-needed"],
 ])
-def test_label_flip_matches_the_engine_classification(
-    gh, monkeypatch, tmp_path, capsys, labels,
+def test_terminal_delivery_keeps_its_labels(
+    gh, monkeypatch, tmp_path, labels,
 ):
-    """Issue #1771 acceptance 1, end to end through main(): a CI failure
-    flips the delivery to ai-fix-needed exactly when the engine does not
-    classify it BLOCKED. A blocked delivery keeps its state — evidence
-    comments land, no label is written."""
+    """Issue #1786 acceptance 2: a terminal Issue (`ai-merged` or
+    `ai-blocked`) gets no label change from a CI failure. Adding
+    `ai-fix-needed` beside the terminal state would let a later removal
+    resume an automatic fix nobody asked for."""
     setup_active_pr_failure(gh, monkeypatch, tmp_path, labels=labels)
     mod.main()
-    scene = classify(
-        labels=labels, scene=None, pr_state=None, body_markers=frozenset(),
-    )
-    flips = bool(gh.calls_to(ep_labels(494), "POST"))
-    assert flips is (scene is not DeliveryScene.BLOCKED)
+    assert gh.calls_to(ep_labels(494), "POST") == []
+    assert [call for call in gh.calls if call["method"] == "DELETE"] == []
     assert len(gh.calls_to(ep_comment(494), "POST")) == 1
     assert len(gh.calls_to(ep_comment(541), "POST")) == 1
-    if flips:
-        assert gh.calls_to(ep_labels(494), "POST")[0]["payload"] == {
-            "labels": ["ai-fix-needed"]
-        }
-    else:
-        assert gh.calls_to(f"{ep_labels(494)}/ai-pr-opened", "DELETE") == []
-        assert gh.calls_to(f"{ep_labels(494)}/ai-fix-needed", "DELETE") == []
-        assert "blocked_delivery_no_label_flip" in capsys.readouterr().err
+
+
+def test_triage_has_no_lifecycle_set_or_blocked_special_case():
+    """Issue #1786 acceptance 3: the label transition is the one decision,
+    so the script carries neither a lifecycle-set check nor a `BLOCKED`
+    special case of its own."""
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "LIFECYCLE_STATES" not in source
+    assert "blocked_delivery_no_label_flip" not in source
+    assert "DeliveryScene.BLOCKED" not in source
 
 
 def test_blocked_delivery_is_still_the_evidence_source(gh, monkeypatch, tmp_path):
@@ -977,7 +991,7 @@ def test_script_imports_the_engine_without_an_installed_package(tmp_path):
     """Issue #1771 acceptance 3: the workflow runs the script straight from
     the checkout (no install step), so the script puts src/ on the path
     itself. -S drops site-packages — the workflow's fresh-checkout state —
-    and the script must still reach orbi.delivery_scene and then fail fast
+    and the script must still reach orbi.delivery_labels and then fail fast
     on the missing event instead of a ModuleNotFoundError."""
     event = tmp_path / "event.json"
     event.write_text(json.dumps({}), encoding="utf-8")
