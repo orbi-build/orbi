@@ -1275,6 +1275,7 @@ def process_release(issue: dict, config: RunnerConfig,
         # post-gate reassignment further down adds base_sha). The journal
         # refactor deleted the assignment and both comments lost the only
         # field naming the frozen branch.
+        ready_label = config.dispatch_label or READY_LABEL
         run_info = f"base_branch={base_branch} run_id={run_id} priority={priority}"
         event("release_task", run_info, issue=number)
         apply_label_patch(
@@ -1552,7 +1553,8 @@ def process_release(issue: dict, config: RunnerConfig,
             # `ai-ready` that reads as "still queued" (Issue #1526).
             apply_label_patch(
                 number, repo=source_repo, event=EVENT_MERGED,
-                current_labels={READY_LABEL, IN_PROGRESS_LABEL},
+                current_labels={ready_label, IN_PROGRESS_LABEL},
+                ready_label=ready_label,
             )
             close_issue(int(number), repo=source_repo)
         except Exception:
@@ -1622,7 +1624,7 @@ def process_release(issue: dict, config: RunnerConfig,
         )
         apply_label_patch(
             number, repo=source_repo, event=EVENT_RELEASE_WAITING,
-            current_labels={IN_PROGRESS_LABEL},
+            current_labels={IN_PROGRESS_LABEL}, ready_label=ready_label,
         )
         comment_issue(
             number, repo=source_repo,
@@ -1644,7 +1646,7 @@ def process_release(issue: dict, config: RunnerConfig,
         # ticket to the ready queue before releasing the caller's slot.
         apply_label_patch(
             number, repo=source_repo, event=EVENT_RELEASE_WAITING,
-            current_labels={IN_PROGRESS_LABEL},
+            current_labels={IN_PROGRESS_LABEL}, ready_label=ready_label,
         )
         detail = ", ".join(f"#{item}" for item in waiting.issue_numbers)
         comment_issue(
@@ -1679,7 +1681,7 @@ def process_release(issue: dict, config: RunnerConfig,
                 language_code=language.of(config),
             ),
             current_labels={IN_PROGRESS_LABEL},
-            language_code=language.of(config),
+            language_code=language.of(config), ready_label=ready_label,
         )
         publish(
             action=lambda: publisher.finish(progress_body(progress())),

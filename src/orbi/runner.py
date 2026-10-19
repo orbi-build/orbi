@@ -648,7 +648,7 @@ def external_takeover_pr(repo_dir: Path, body: str | None,
 
 
 def _route_external_pr_ticket(issue: dict, repo: str, *,
-                              language_code: str,
+                              language_code: str, ready_label: str = READY_LABEL,
                               ) -> bool:
     """Route a marker-bearing opened-PR ticket through external
     integration instead of `ai-blocked`. Returns True when handled.
@@ -703,7 +703,7 @@ def _route_external_pr_ticket(issue: dict, repo: str, *,
         labels = issue_labels(number, repo=repo)
         apply_label_patch(
             number, repo=repo, event=EVENT_REQUEUE,
-            current_labels=labels,
+            current_labels=labels, ready_label=ready_label,
         )
         comment_issue(
             number, repo=repo,
@@ -1174,8 +1174,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
                           detail=detail, run_info=run_info, run_id=run_id,
                       )),
                 current_labels={IN_PROGRESS_LABEL},
-                language_code=language.of(config),
-            )
+                language_code=language.of(config), ready_label=config.dispatch_label or READY_LABEL)
             publish(
                 action=lambda: publisher.milestone(language.text(
                     language.of(config),
@@ -1897,8 +1896,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 _requeue_closed_external_takeover(
                     number, source_repo, scene["pr_url"],
                     run_marker(run_id), run_id,
-                    language_code=language.of(config),
-                )
+                    language_code=language.of(config), ready_label=config.dispatch_label or READY_LABEL)
                 raise
             if exc.scene_pr_state == "MERGED":
                 # A human merged the delivery PR (or a crash landed
@@ -1927,7 +1925,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 run_id=current_run_id(), pr_url=scene["pr_url"],
                 worktree=worktree, branch=branch, role=ROLE_REVIEW,
                 language_code=lang,
-                action=(
+                ready_label=config.dispatch_label or READY_LABEL, action=(
                     language.text(lang, "delivery.resume_missing_fixes_action",
                                   pr_url=scene["pr_url"], number=number)
                     if isinstance(exc, MissingFixesError)
@@ -2586,8 +2584,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             failure_report._report_resume_failure(
                 number=number, source_repo=source_repo, run_id=run_id,
                 error=facts.resume_error,
-                language_code=language.of(config),
-            )
+                language_code=language.of(config), ready_label=dispatch_label)
             raise facts.resume_error
         if facts.resume_scene is not None:
             run_id = facts.resume_scene[0]
@@ -3127,7 +3124,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 run_id=run_id, pr_url=None,
                 worktree=worktree, branch=branch, role=ROLE_IMPLEMENT,
                 language_code=language.of(config),
-                action=failure_report.terminal_action(
+                ready_label=dispatch_label, action=failure_report.terminal_action(
                     terminal_record, language.of(config),
                     base_branch=base_branch,
                 ),
@@ -3300,7 +3297,7 @@ _FIX_NEEDED_PHRASE = (
 
 def _requeue_closed_external_takeover(
     number: int, source_repo: str, pr_url: str, marker: str, run_id: str,
-    *, language_code: str,
+    *, language_code: str, ready_label: str = READY_LABEL,
 ) -> None:
     """The #608 放弃/不可修 fallback: the external PR was closed without
     a merge (the contributor withdrew it, or a maintainer rejected it).
@@ -3315,6 +3312,7 @@ def _requeue_closed_external_takeover(
     apply_label_patch(
         number, repo=source_repo, event=EVENT_REQUEUE,
         current_labels=issue_labels(number, repo=source_repo),
+        ready_label=ready_label,
     )
     body = (
         f"{marker}\n"
@@ -3453,7 +3451,7 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
             _requeue_closed_external_takeover(
                 number, source_repo, pr_url, marker, run_id,
                 language_code=language.of(config),
-            )
+                ready_label=config.dispatch_label or READY_LABEL)
             return
         # The current labels are read ONCE before the transition:
         # the terminal patch clears every delivery-state label that
@@ -3473,6 +3471,7 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
         post_blocked_comment(
             number, repo=source_repo, body=body,
             current_labels=labels, language_code=language.of(config),
+            ready_label=config.dispatch_label or READY_LABEL,
         )
         if run_id:
             # The blocked-scene progress publishing is
@@ -3948,6 +3947,7 @@ def main(argv: list[str] | None = None) -> int:
             failure_report.block_repo_config_failure(
                 int(issue["number"]), source_repo, exc, run_id,
                 language_code=language.of(config),
+                ready_label=config.dispatch_label or READY_LABEL,
                 current_labels={
                     label.get("name") for label in issue.get("labels", [])
                     if isinstance(label, dict)

@@ -19,7 +19,7 @@ from orbi.blocked_comment import post_blocked_comment
 from orbi.checks import _classify_rollup, _render_check
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL, BLOCKED_LABEL, FIX_NEEDED_LABEL, MERGED_LABEL,
-    PR_OPENED_LABEL,
+    PR_OPENED_LABEL, READY_LABEL,
 )
 from orbi.delivery_scene import (
     DeliveryScene, _issue_label_set, body_markers, classify,
@@ -53,7 +53,7 @@ class ResumeHooks(NamedTuple):
 def pick_resumable_delivery(
     repo: str, slot_dir: Path, max_concurrency: int,
     repo_dir: Path | None = None, *, hooks: ResumeHooks,
-    language_code: str,
+    language_code: str, ready_label: str = READY_LABEL,
 ) -> tuple[dict, dict] | None:
     """Return the oldest FREE reviewable opened-PR delivery and its scene.
 
@@ -96,14 +96,14 @@ def pick_resumable_delivery(
     return _pick_opened_pr_delivery(
         repo, slot_dir, max_concurrency, repo_dir,
         search_labels=(FIX_NEEDED_LABEL, PR_OPENED_LABEL),
-        hooks=hooks, language_code=language_code,
+        hooks=hooks, language_code=language_code, ready_label=ready_label,
     )
 
 
 def pick_awaiting_merge_delivery(
     repo: str, slot_dir: Path, max_concurrency: int,
     repo_dir: Path | None = None, *, hooks: ResumeHooks,
-    language_code: str,
+    language_code: str, ready_label: str = READY_LABEL,
 ) -> tuple[dict, dict] | None:
     """Return the oldest FREE `ai-awaiting-merge` delivery and its scene.
 
@@ -130,7 +130,7 @@ def pick_awaiting_merge_delivery(
     return _pick_opened_pr_delivery(
         repo, slot_dir, max_concurrency, repo_dir,
         search_labels=(AWAITING_MERGE_LABEL,),
-        hooks=hooks, language_code=language_code,
+        hooks=hooks, language_code=language_code, ready_label=ready_label,
     )
 
 
@@ -138,6 +138,7 @@ def _pick_opened_pr_delivery(
     repo: str, slot_dir: Path, max_concurrency: int,
     repo_dir: Path | None, *, search_labels: Sequence[str],
     hooks: ResumeHooks, language_code: str,
+    ready_label: str = READY_LABEL,
 ) -> tuple[dict, dict] | None:
     """Scan ONE opened-PR label set for the oldest FREE resumable delivery.
 
@@ -211,15 +212,21 @@ def _pick_opened_pr_delivery(
             # probe the #726 external route first; otherwise this is the
             # ONLY trigger of `block_scene_failure` — a present-but-broken
             # scene is a writer bug or tampering and needs a human.
-            if hooks.route_external_pr_ticket(issue, repo, language_code=language_code):
+            if hooks.route_external_pr_ticket(
+                    issue, repo, language_code=language_code,
+                    ready_label=ready_label):
                 continue
-            hooks.block_scene_failure(issue, exc, repo, comments, language_code=language_code)
+            hooks.block_scene_failure(
+                issue, exc, repo, comments, language_code=language_code,
+                ready_label=ready_label)
             continue
         except scene.SceneMissingError as exc:
             # No trusted comment carries a scene at all — a distinct branch
             # from corruption. The original #726 incident was
             # exactly this shape, so the external route is probed first.
-            if hooks.route_external_pr_ticket(issue, repo, language_code=language_code):
+            if hooks.route_external_pr_ticket(
+                    issue, repo, language_code=language_code,
+                    ready_label=ready_label):
                 continue
             # Issue #1216: `awaiting_merge` can deliberately remove the
             # queue label before the delivery returns to `ai-fix-needed`.
@@ -275,7 +282,7 @@ def _pick_opened_pr_delivery(
                             language_code, "claim.scene_missing", error=exc,
                         ),
                         current_labels={FIX_NEEDED_LABEL},
-                        language_code=language_code,
+                        language_code=language_code, ready_label=ready_label,
                     )
                 except Exception:
                     LOGGER.exception("issue=%s failure reporting failed", number)

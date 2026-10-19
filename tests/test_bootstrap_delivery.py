@@ -4524,6 +4524,44 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
     assert "- review/fix round: 2" not in blocked
 
 
+def test_delivery_step_blocked_clears_the_repositorys_dispatch_label(
+        monkeypatch,
+):
+    """Issue #1775: a repository whose `dispatch_label` is `ship` claims on
+    `ship`; the blocked terminal must clear that same label, or the
+    blocked Issue still reads as queued on every surface that reads it."""
+    def fake_run(command, **kwargs):
+        answers = {
+            ("gh", "pr", "view"): {"state": "CLOSED"},
+            # The claimed Issue carries the custom queue label plus the
+            # delivery state the PR closed under.
+            ("gh", "issue", "view"): {
+                "labels": [{"name": "ship"}, {"name": "ai-fix-needed"}],
+            },
+        }
+        return json.dumps(answers[tuple(command[:3])])
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
+    edits: list = []
+    monkeypatch.setattr(seam, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
+    runner.delivery_step(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        config_domain.RunnerConfig(dispatch_label="ship"),
+        "owner/repo",
+    )
+    # The blocked transition clears the delivery state AND the queue label
+    # the claim scanned: `ai-blocked` ALONE, no `ship` residue.
+    assert edits == [
+        ((39,), {"repo": "owner/repo", "add": "ai-blocked",
+                 "remove": "ai-fix-needed"}),
+        ((39,), {"repo": "owner/repo", "remove": "ship"}),
+    ]
+
+
 def test_delivery_step_pr_closed_comment_follows_the_language(monkeypatch):
     """Issue #1730: the PR-closed blocked comment ends with the community
     help line in the run's bound language — the zh scene goes through the
@@ -5960,7 +5998,7 @@ def test_pick_resumable_routes_marker_ticket_instead_of_blocking(
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
     patches = []
     monkeypatch.setattr(seam, "apply_label_patch",
-        lambda number, *, repo, event, current_labels:
+        lambda number, *, repo, event, current_labels, ready_label=None:
             patches.append(event),
     )
     comments_posted = []
