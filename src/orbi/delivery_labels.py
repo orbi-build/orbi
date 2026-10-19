@@ -225,13 +225,13 @@ def is_pickup_eligible(current_labels) -> bool:
     `ai-ready` itself is the queue entry, not a delivery state — it is
     excluded from the check. `p0`/`bug` are scheduling metadata, not
     lifecycle states — they never affect eligibility (they only order the
-    pickup).
+    pickup). The "other delivery state" check is `has_delivery_state`'s
+    single decision (Issue #1795), never a second set expression here.
     """
     current = set(current_labels)
     if READY_LABEL not in current:
         return False
-    other_states = LIFECYCLE_STATES - {READY_LABEL}
-    return not (current & other_states)
+    return not has_delivery_state(current)
 
 
 def is_resumable(current_labels) -> bool:
