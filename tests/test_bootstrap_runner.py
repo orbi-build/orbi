@@ -6637,7 +6637,12 @@ def test_reconcile_orphan_prs_reports_an_open_pr_of_a_closed_issue(monkeypatch, 
     closed is reported ONCE on the PR — every delivery-state scan reads
     `state=open` Issues only, so nothing else would ever look at that PR
     again. The merge/close decision stays with the human: the Runner
-    never auto-merges and never auto-closes across a human's close."""
+    never auto-merges and never auto-closes across a human's close.
+
+    Issue #1788 acceptance 2: `orbi/x-y-issue-3` is ANOTHER repository's
+    delivery name, so the sweep never reads Issue #3 for it and never
+    reports it — the fake raises on that read, so the old regex fails here
+    even though this repository's #3 is closed."""
     caplog.set_level("INFO")
     pr_comments: list[dict] = []
     posted = []
@@ -6645,7 +6650,10 @@ def test_reconcile_orphan_prs_reports_an_open_pr_of_a_closed_issue(monkeypatch, 
     def fake_run(command, **kwargs):
         if command == ["gh", "pr", "list", "--repo", "o/r", "--state", "open",
                        "--json", "number,headRefName", "--limit", "200"]:
-            return json.dumps([{"number": 9, "headRefName": "orbi/o-r-issue-4"}])
+            return json.dumps([
+                {"number": 9, "headRefName": "orbi/o-r-issue-4"},
+                {"number": 30, "headRefName": "orbi/x-y-issue-3"},
+            ])
         if command == ["gh", "issue", "view", "4", "--repo", "o/r", "--json", "state"]:
             return json.dumps({"state": "CLOSED"})
         raise AssertionError(command)
@@ -6665,6 +6673,7 @@ def test_reconcile_orphan_prs_reports_an_open_pr_of_a_closed_issue(monkeypatch, 
     assert "<!-- orbi:run=abc12345 -->" in body
     assert "#4" in body
     assert "orphan_pr_reported pr=9 issue=4 repo=o/r" in caplog.text
+    assert "pr=30" not in caplog.text
     # Idempotent: the marker on the PR means the next tick reports nothing.
     pr_comments.append({"body": posted[0][2]})
     assert claim.reconcile_orphan_prs("o/r", "def67890", hooks=resume_deps(), language_code="en") == []
@@ -6704,8 +6713,9 @@ def test_reconcile_orphan_prs_rejects_malformed_pr_list_and_state(monkeypatch):
 
 def test_reconcile_orphan_prs_skips_open_issues_and_non_delivery_branches(monkeypatch):
     """An open source Issue is the normal delivery flow (no report); a
-    head branch outside the stable delivery naming (a human or external
-    PR) is never the Runner's business — no issue state is even read."""
+    head branch outside THIS repository's delivery naming (a human or
+    external PR, another repository's `orbi/x-y-issue-3`) is never the
+    Runner's business — no issue state is even read."""
     read_issues = []
 
     def fake_run(command, **kwargs):
@@ -6715,6 +6725,7 @@ def test_reconcile_orphan_prs_skips_open_issues_and_non_delivery_branches(monkey
                 {"number": 9, "headRefName": "orbi/o-r-issue-4"},
                 {"number": 10, "headRefName": "feature/human-branch"},
                 {"number": 11, "headRefName": None},
+                {"number": 12, "headRefName": "orbi/manual"},
             ])
         if command == ["gh", "issue", "view", "4", "--repo", "o/r", "--json", "state"]:
             read_issues.append(4)
@@ -6727,6 +6738,14 @@ def test_reconcile_orphan_prs_skips_open_issues_and_non_delivery_branches(monkey
     assert read_issues == [4]
     with pytest.raises(AssertionError):
         fake_run(["unexpected"])
+
+
+def test_the_orphan_branch_regex_is_gone():
+    """Issue #1788 acceptance 3: the sweep no longer parses the Issue
+    number with its own pattern — it reads the one delivery naming."""
+    source = Path(claim.__file__).read_text(encoding="utf-8")
+    assert "_ORPHAN_PR_BRANCH_RE" not in source
+    assert "orbi/.+-issue-" not in source
 
 
 def test_reconcile_orphan_prs_failure_is_fail_open(tmp_path, monkeypatch, caplog):

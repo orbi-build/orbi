@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
+from orbi import gitops
 from orbi.journal import GIT_NETWORK_TIMEOUT_SECONDS, event, run_command
 
 if TYPE_CHECKING:
@@ -93,14 +94,16 @@ def delete_merged_delivery_branch(
 ) -> None:
     """Delete a MERGED delivery PR's remote head branch (Issue #1478).
 
-    Called right after `gh pr merge` lands. Only an `orbi/`-prefixed
-    head (a branch Orbi itself created) is deleted; an external takeover
-    PR's head is left to its owner. A 404/422 (the reference is already
-    gone) counts as success. Any other failure emits a warning event and
-    returns — the merge has already landed, so this cleanup never fails
-    the delivery.
+    Called right after `gh pr merge` lands. Only this source repo's own
+    delivery branch (`gitops.is_delivery_branch`, the one ownership
+    check, Issue #1788) is deleted; a head a user named
+    (`orbi/manual`), another repository's delivery name or an external
+    takeover PR's head is left to its owner. A 404/422 (the reference is
+    already gone) counts as success. Any other failure emits a warning
+    event and returns — the merge has already landed, so this cleanup
+    never fails the delivery.
     """
-    if not branch.startswith("orbi/"):
+    if not gitops.is_delivery_branch(source_repo, branch):
         return
     try:
         delete_remote_branch(source_repo, branch)
@@ -174,7 +177,7 @@ def read_merged_pull_requests(source_repo: str) -> list[dict]:
 
 
 def reclaim_merged_delivery_branches(config: config_domain.RunnerConfig) -> None:
-    """Delete remote `orbi/*` branches whose delivery PR has MERGED.
+    """Delete this repo's remote delivery branches whose PR has MERGED.
 
     A merged delivery leaves its `orbi/<slug>-issue-<n>` branch on the
     remote forever; #1478 stops NEW ones, this pass drains the BACKLOG.
@@ -182,7 +185,9 @@ def reclaim_merged_delivery_branches(config: config_domain.RunnerConfig) -> None
     idempotent, bounded (at most `BRANCH_RECLAIM_MAX_PER_TICK` deletes)
     and never fatal.
 
-    Only a branch whose CURRENT remote oid equals the `headRefOid` a
+    Only a branch this source repo OWNS (`gitops.is_delivery_branch`,
+    Issue #1788: `orbi/<owner>-<repo>-issue-<n>`, never an `orbi/`
+    prefix alone) whose CURRENT remote oid equals the `headRefOid` a
     MERGED PR reports is deleted. The delivery branch name is fixed per
     Issue, so a reopened Issue's new attempt pushes to the same name
     while the old merged PR still reports it: without the oid match the
@@ -201,7 +206,7 @@ def reclaim_merged_delivery_branches(config: config_domain.RunnerConfig) -> None
         heads = {
             branch: oid
             for branch, oid in _parse_remote_heads(raw).items()
-            if branch.startswith("orbi/")
+            if gitops.is_delivery_branch(source_repo, branch)
         }
         if not heads:
             return

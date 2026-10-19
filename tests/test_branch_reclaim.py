@@ -16,6 +16,7 @@ deletion helper itself is exercised for real.
 import json
 import logging
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -88,34 +89,46 @@ class FakeRemote:
         raise AssertionError(f"unexpected command: {command}")
 
 
-# --- Acceptance 1: only the merged `orbi/*` branch is deleted ---------------
+# --- Acceptance 1: only THIS repo's merged delivery branch is deleted -------
 
-def test_deletes_only_the_merged_orbi_branch(monkeypatch, caplog):
-    """Remote heads `orbi/a` (PR MERGED), `orbi/b` (OPEN), `orbi/c`
-    (CLOSED-unmerged), `orbi/d` (no PR) and `feature/x` (PR MERGED): only
-    `orbi/a` is deleted. The OPEN, CLOSED and no-PR branches are simply
-    absent from the merged map, and `feature/x` fails the `orbi/` prefix."""
+def test_deletes_only_this_repos_merged_delivery_branch(monkeypatch, caplog):
+    """Issue #1788 acceptance 1: ownership is `gitops.is_delivery_branch`,
+    never an `orbi/` prefix. `orbi/owner-repo-issue-7` (PR MERGED) is
+    deleted; the OPEN, CLOSED-unmerged and no-PR delivery branches are
+    absent from the merged map; a self-hosted user's own merged
+    `orbi/manual`, another repository's `orbi/x-y-issue-3` and `feature/x`
+    are merged yet kept. A malformed merged entry (a deleted fork head) is
+    ignored, never turned into a deletion."""
     remote = FakeRemote(
         heads={
-            "orbi/a": "oid-a",
-            "orbi/b": "oid-b",
-            "orbi/c": "oid-c",
-            "orbi/d": "oid-d",
+            "orbi/owner-repo-issue-7": "oid-7",
+            "orbi/owner-repo-issue-8": "oid-8",
+            "orbi/owner-repo-issue-9": "oid-9",
+            "orbi/owner-repo-issue-10": "oid-10",
+            "orbi/manual": "oid-manual",
+            "orbi/x-y-issue-3": "oid-foreign",
             "feature/x": "oid-x",
         },
         merged_prs=[
-            {"number": 1, "headRefName": "orbi/a", "headRefOid": "oid-a"},
-            {"number": 2, "headRefName": "feature/x", "headRefOid": "oid-x"},
-            # A malformed entry (a deleted fork head) is ignored, never
-            # turned into a deletion.
-            {"number": 3, "headRefName": None, "headRefOid": "oid-n"},
+            {"number": 7, "headRefName": "orbi/owner-repo-issue-7",
+             "headRefOid": "oid-7"},
+            {"number": 20, "headRefName": "orbi/manual",
+             "headRefOid": "oid-manual"},
+            {"number": 21, "headRefName": "orbi/x-y-issue-3",
+             "headRefOid": "oid-foreign"},
+            {"number": 22, "headRefName": "feature/x", "headRefOid": "oid-x"},
+            {"number": 23, "headRefName": None, "headRefOid": "oid-n"},
         ],
     )
     monkeypatch.setattr(seam, "run_command", remote)
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
         branch_reclaim.reclaim_merged_delivery_branches(_config())
-    assert remote.deleted_branches() == ["orbi/a"]
-    assert set(remote.heads) == {"orbi/b", "orbi/c", "orbi/d", "feature/x"}
+    assert remote.deleted_branches() == ["orbi/owner-repo-issue-7"]
+    assert set(remote.heads) == {
+        "orbi/owner-repo-issue-8", "orbi/owner-repo-issue-9",
+        "orbi/owner-repo-issue-10", "orbi/manual", "orbi/x-y-issue-3",
+        "feature/x",
+    }
     reclaimed = [
         record.getMessage() for record in caplog.records
         if "branches_reclaimed" in record.getMessage()
@@ -126,14 +139,17 @@ def test_deletes_only_the_merged_orbi_branch(monkeypatch, caplog):
 # --- Acceptance 2: at most 25 deletions per tick ----------------------------
 
 def test_per_tick_cap_of_25_drains_over_ticks(monkeypatch, caplog):
-    """30 merged `orbi/*` branches → 25 deleted in one tick, the
+    """30 merged delivery branches → 25 deleted in one tick, the
     remaining 5 on the next: a 255-branch backlog drains over ticks and
     one tick never spends unbounded time deleting."""
-    heads = {f"orbi/b{number}": f"oid-{number}" for number in range(30)}
+    heads = {
+        f"orbi/owner-repo-issue-{number}": f"oid-{number}"
+        for number in range(30)
+    }
     merged = [
         {
             "number": number,
-            "headRefName": f"orbi/b{number}",
+            "headRefName": f"orbi/owner-repo-issue-{number}",
             "headRefOid": f"oid-{number}",
         }
         for number in range(30)
@@ -159,19 +175,20 @@ def test_per_tick_cap_of_25_drains_over_ticks(monkeypatch, caplog):
 # --- Acceptance 3: a reopened Issue's new attempt is never deleted ----------
 
 def test_reopened_issue_new_oid_is_not_deleted(monkeypatch):
-    """`orbi/e` is the `headRefName` of a MERGED PR, but its remote oid
-    differs from that PR's `headRefOid` (a reopened Issue's new attempt):
-    the live branch is never deleted."""
+    """`orbi/owner-repo-issue-5` is the `headRefName` of a MERGED PR, but
+    its remote oid differs from that PR's `headRefOid` (a reopened Issue's
+    new attempt): the live branch is never deleted."""
     remote = FakeRemote(
-        heads={"orbi/e": "new-oid"},
+        heads={"orbi/owner-repo-issue-5": "new-oid"},
         merged_prs=[
-            {"number": 5, "headRefName": "orbi/e", "headRefOid": "old-oid"},
+            {"number": 5, "headRefName": "orbi/owner-repo-issue-5",
+             "headRefOid": "old-oid"},
         ],
     )
     monkeypatch.setattr(seam, "run_command", remote)
     branch_reclaim.reclaim_merged_delivery_branches(_config())
     assert remote.deleted_branches() == []
-    assert remote.heads == {"orbi/e": "new-oid"}
+    assert remote.heads == {"orbi/owner-repo-issue-5": "new-oid"}
 
 
 # --- Acceptance 4: one DELETE failure does not stop the others --------------
@@ -180,22 +197,31 @@ def test_single_delete_failure_warns_and_continues(monkeypatch, caplog):
     """One DELETE fails → the others are still deleted and the pass —
     and therefore the tick — does not fail."""
     remote = FakeRemote(
-        heads={"orbi/a": "a", "orbi/b": "b"},
+        heads={
+            "orbi/owner-repo-issue-1": "a",
+            "orbi/owner-repo-issue-2": "b",
+        },
         merged_prs=[
-            {"number": 1, "headRefName": "orbi/a", "headRefOid": "a"},
-            {"number": 2, "headRefName": "orbi/b", "headRefOid": "b"},
+            {"number": 1, "headRefName": "orbi/owner-repo-issue-1",
+             "headRefOid": "a"},
+            {"number": 2, "headRefName": "orbi/owner-repo-issue-2",
+             "headRefOid": "b"},
         ],
     )
-    remote.delete_failures["orbi/a"] = subprocess.CalledProcessError(
-        1, ["gh"], stderr="HTTP 500: server error",
+    remote.delete_failures["orbi/owner-repo-issue-1"] = (
+        subprocess.CalledProcessError(
+            1, ["gh"], stderr="HTTP 500: server error",
+        )
     )
     monkeypatch.setattr(seam, "run_command", remote)
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
         branch_reclaim.reclaim_merged_delivery_branches(_config())
-    assert remote.deleted_branches() == ["orbi/a", "orbi/b"]
-    assert remote.heads == {"orbi/a": "a"}
+    assert remote.deleted_branches() == [
+        "orbi/owner-repo-issue-1", "orbi/owner-repo-issue-2",
+    ]
+    assert remote.heads == {"orbi/owner-repo-issue-1": "a"}
     assert "branch_reclaim_failed" in caplog.text
-    assert "orbi/a" in caplog.text
+    assert "orbi/owner-repo-issue-1" in caplog.text
     reclaimed = [
         record.getMessage() for record in caplog.records
         if "branches_reclaimed" in record.getMessage()
@@ -208,7 +234,7 @@ def test_single_delete_failure_warns_and_continues(monkeypatch, caplog):
 def test_read_failure_deletes_nothing_and_warns(monkeypatch, caplog):
     """A read failure (ls-remote or gh) deletes NOTHING and the tick
     continues (宁可不删，不可误删)."""
-    remote = FakeRemote({"orbi/a": "a"}, [])
+    remote = FakeRemote({"orbi/owner-repo-issue-1": "a"}, [])
     remote.read_failure = RuntimeError("git is down")
     monkeypatch.setattr(seam, "run_command", remote)
     with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
@@ -229,6 +255,15 @@ def test_no_orbi_branches_skips_the_pr_read(monkeypatch):
         for command in remote.calls
     )
     assert remote.deleted_branches() == []
+
+
+def test_the_prefix_only_ownership_filter_is_gone():
+    """Issue #1788 acceptance 3: no hand-rolled `orbi/` prefix filter is
+    left in the module — ownership is the one
+    `gitops.is_delivery_branch` decision."""
+    source = Path(branch_reclaim.__file__).read_text(encoding="utf-8")
+    assert 'startswith("orbi/")' not in source
+    assert "is_delivery_branch(" in source
 
 
 def test_fake_remote_fails_on_an_unexpected_command():

@@ -160,14 +160,17 @@ def test_delete_timeout_warns_but_still_merges(monkeypatch, tmp_path, caplog):
 
 # --- The helper's own contract ---------------------------------------------
 
-def test_delete_helper_skips_an_empty_or_non_orbi_branch(monkeypatch):
+def test_delete_helper_skips_an_empty_or_non_delivery_branch(monkeypatch):
+    """Issue #1788: the merge-time cleanup uses the same ownership check as
+    the reclaim pass, so an `orbi/`-prefixed head a user named (or another
+    repository's delivery name) is never deleted either."""
     calls = []
     monkeypatch.setattr(
         seam, "run_command",
         lambda command, **kwargs: calls.append(list(command)) or "",
     )
-    branch_reclaim.delete_merged_delivery_branch("o/r", 7, "")
-    branch_reclaim.delete_merged_delivery_branch("o/r", 7, "main")
+    for branch in ("", "main", "orbi/manual", "orbi/x-y-issue-3"):
+        branch_reclaim.delete_merged_delivery_branch("o/r", 7, branch)
     assert calls == []
 
 
