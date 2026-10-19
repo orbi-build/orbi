@@ -281,7 +281,10 @@ def _pick_opened_pr_delivery(
                         + language.text(
                             language_code, "claim.scene_missing", error=exc,
                         ),
-                        current_labels={FIX_NEEDED_LABEL},
+                        # The claimed ticket carries the resolved
+                        # queue label, so the blocked terminal clears it
+                        # too (Issue #1775).
+                        current_labels={FIX_NEEDED_LABEL, ready_label},
                         language_code=language_code, ready_label=ready_label,
                     )
                 except Exception:

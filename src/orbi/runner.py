@@ -1164,6 +1164,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
     except Exception as exc:
         LOGGER.exception("issue=%s ticket-only failed", number)
         detail = _failure_detail(exc)
+        ready_label = config.dispatch_label or READY_LABEL
         try:
             post_blocked_comment(
                 number, repo=source_repo,
@@ -1173,8 +1174,8 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
                           "runner.ticket_only_failed",
                           detail=detail, run_info=run_info, run_id=run_id,
                       )),
-                current_labels={IN_PROGRESS_LABEL},
-                language_code=language.of(config), ready_label=config.dispatch_label or READY_LABEL)
+                current_labels={IN_PROGRESS_LABEL, ready_label},
+                language_code=language.of(config), ready_label=ready_label)
             publish(
                 action=lambda: publisher.milestone(language.text(
                     language.of(config),
@@ -1955,7 +1956,6 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
         if reported and isinstance(exc, MissingFixesError):
             raise ReportedMissingFixesError(str(exc)) from exc
         raise
-
 
 
 

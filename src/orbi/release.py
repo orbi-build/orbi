@@ -1680,7 +1680,10 @@ def process_release(issue: dict, config: RunnerConfig,
                 run_id, run_info, exc,
                 language_code=language.of(config),
             ),
-            current_labels={IN_PROGRESS_LABEL},
+            # A failed release is a blocked terminal: the claimed
+            # ticket still carries the resolved queue label, so it is
+            # cleared with the in-flight label (Issue #1775).
+            current_labels={IN_PROGRESS_LABEL, ready_label},
             language_code=language.of(config), ready_label=ready_label,
         )
         publish(

@@ -1210,13 +1210,22 @@ def test_process_issue_fresh_run_has_no_resume_context(
     assert "resume_continue" not in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("dispatch_label", "queue_label"),
+    [(None, "ai-ready"), ("ship", "ship")],
+    ids=["default_queue_label", "custom_dispatch_label"],
+)
 def test_process_issue_fails_fast_when_the_run_state_is_missing(
-    monkeypatch, tmp_path, caplog,
+    monkeypatch, tmp_path, caplog, dispatch_label, queue_label,
 ):
     """Issue #219: the worktree of this issue exists but its run state
     file is gone — the same run cannot be verified. The attempt fails
     fast through the terminal failure path (`ai-blocked` + the reason
-    comment): no fresh run, no silent redo."""
+    comment): no fresh run, no silent redo.
+
+    Issue #1775: the terminal state is `ai-blocked` ALONE — the queue
+    label the claim scanned (the repository's `dispatch_label`, default
+    `ai-ready`) is cleared with it."""
     gh_calls, posted, worktree, comment_bodies = _resume_wiring_setup(
         monkeypatch, tmp_path, in_progress=True,
     )
@@ -1242,15 +1251,22 @@ def test_process_issue_fails_fast_when_the_run_state_is_missing(
     with pytest.raises(RuntimeError, match="run state"):
         runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
-            config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
+            config_domain.RunnerConfig(
+                repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
+                base_branch="main", dispatch_label=dispatch_label,
+            ),
             "xqliu/orbi-backlog",
         )
     # No fresh run was started.
     assert run_pi_calls == []
-    # The terminal state is `ai-blocked` (the claim label removed).
-    assert edits[-1] == ((4,), {
+    # The terminal state is `ai-blocked` ALONE (the claim label removed).
+    assert edits[-2] == ((4,), {
         "repo": "xqliu/orbi-backlog", "add": "ai-blocked",
         "remove": "ai-in-progress",
+    })
+    # The queue label the claim kept is cleared last (Issue #1775).
+    assert edits[-1] == ((4,), {
+        "repo": "xqliu/orbi-backlog", "remove": queue_label,
     })
     # The failure comment carries the reason and the run marker.
     failed = [
@@ -6183,14 +6199,25 @@ def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
     monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
     with pytest.raises(RuntimeError, match="returned no content"):
         runner.process_ticket_only(issue, config_domain.RunnerConfig(repo_dir=Path("/repo")), "o/r")
-    assert edits[-1][1]["add"] == "ai-blocked"
+    assert edits[-2][1]["add"] == "ai-blocked"
+    # ai-blocked ALONE: the queue label is cleared too (Issue #1775).
+    assert edits[-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
 
 
 @pytest.mark.parametrize("language_code", ["en", "zh"])
+@pytest.mark.parametrize(
+    ("dispatch_label", "queue_label"),
+    [(None, "ai-ready"), ("ship", "ship")],
+    ids=["default_queue_label", "custom_dispatch_label"],
+)
 def test_process_ticket_only_failure_marks_blocked_without_git_delivery(
-        monkeypatch, language_code):
+        monkeypatch, language_code, dispatch_label, queue_label):
     """A failed ticket-only run blocks with the community help line from the
-    ONE blocked exit, in the run's bound language (Issue #1730)."""
+    ONE blocked exit, in the run's bound language (Issue #1730).
+
+    Issue #1775: the blocked terminal is `ai-blocked` ALONE — it clears
+    the queue label the claim scanned, the repository's own
+    `dispatch_label` when it declares one."""
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
              "labels": [{"name": "ai-content-only"}]}
     edits = []
@@ -6209,10 +6236,14 @@ def test_process_ticket_only_failure_marks_blocked_without_git_delivery(
         runner.process_ticket_only(
             issue, config_domain.RunnerConfig(
                 repo_dir=Path("/repo"), message_language=language_code,
+                dispatch_label=dispatch_label,
             ), "o/r",
         )
-    assert edits[-1] == (99, {"repo": "o/r", "add": "ai-blocked",
-                              "remove": "ai-in-progress"})
+    assert edits[-2] == (99, {"repo": "o/r", "add": "ai-blocked",
+                               "remove": "ai-in-progress"})
+    # The terminal state is ai-blocked ALONE: the queue label the claim
+    # kept is cleared too (Issue #1775).
+    assert edits[-1] == (99, {"repo": "o/r", "remove": queue_label})
     body = comments[-1][1]["body"]
     assert language.text(
         language_code, "runner.ticket_only_failed",

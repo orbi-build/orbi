@@ -509,7 +509,7 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
             ) + language.text(
                 language_code, "failure.scene_blocked", error=error,
             ),
-            current_labels={FIX_NEEDED_LABEL},
+            current_labels={FIX_NEEDED_LABEL, ready_label},
             language_code=language_code, ready_label=ready_label,
         )
     except Exception:
@@ -615,7 +615,7 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
                 run_id=run_id,
             )
         ),
-        current_labels={IN_PROGRESS_LABEL},
+        current_labels={IN_PROGRESS_LABEL, ready_label},
         language_code=language_code, ready_label=ready_label,
     )
 

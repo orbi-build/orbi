@@ -6285,9 +6285,12 @@ def test_route_external_pr_probe_failure_falls_through_to_block(
         hooks=resume_deps(), language_code="en",
     )
     assert result is None
-    assert edits == [((100,), {"repo": "owner/repo",
-                               "add": "ai-blocked",
-                               "remove": "ai-fix-needed"})]
+    # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
+    assert edits == [
+        ((100,), {"repo": "owner/repo",
+                  "add": "ai-blocked", "remove": "ai-fix-needed"}),
+        ((100,), {"repo": "owner/repo", "remove": "ai-ready"}),
+    ]
     assert "no trusted 'Orbi opened PR'" in posted[0]
 
 
@@ -6321,9 +6324,12 @@ def test_route_external_pr_unknown_state_falls_through_to_block(
         hooks=resume_deps(), language_code="en",
     )
     assert result is None
-    assert edits == [((100,), {"repo": "owner/repo",
-                               "add": "ai-blocked",
-                               "remove": "ai-fix-needed"})]
+    # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
+    assert edits == [
+        ((100,), {"repo": "owner/repo",
+                  "add": "ai-blocked", "remove": "ai-fix-needed"}),
+        ((100,), {"repo": "owner/repo", "remove": "ai-ready"}),
+    ]
     assert "no trusted 'Orbi opened PR'" in posted[0]
 
 
@@ -6356,9 +6362,12 @@ def test_route_external_pr_ignores_tickets_without_marker(
         hooks=resume_deps(), language_code="en",
     )
     assert result is None
-    assert edits == [((41,), {"repo": "owner/repo",
-                              "add": "ai-blocked",
-                              "remove": "ai-fix-needed"})]
+    # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
+    assert edits == [
+        ((41,), {"repo": "owner/repo",
+                 "add": "ai-blocked", "remove": "ai-fix-needed"}),
+        ((41,), {"repo": "owner/repo", "remove": "ai-ready"}),
+    ]
     assert "no trusted 'Orbi opened PR'" in posted[0]
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "view"])
