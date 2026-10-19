@@ -23,9 +23,14 @@ layer, asserting the real GitHub REST contract:
 """
 import importlib.util
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+from orbi.delivery_scene import DeliveryScene, classify
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "tools" / "ci_failure_triage.py"
@@ -857,6 +862,94 @@ def test_active_orbi_pr_routes_evidence_to_source_and_pr(gh, monkeypatch, tmp_pa
     }
 
 
+def test_triage_keeps_no_delivery_state_label_set():
+    """Issue #1771 acceptance 2: the delivery-active decision is the
+    engine's, so the script carries no copy of it."""
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "ACTIVE_DELIVERY_LABELS" not in source
+
+
+@pytest.mark.parametrize("labels", [
+    ["ai-pr-opened"],
+    ["ai-fix-needed"],
+    ["ai-in-progress"],
+    ["ai-ready", "ai-pr-opened"],
+    ["ai-blocked", "ai-pr-opened"],
+    ["ai-blocked", "ai-fix-needed"],
+])
+def test_delivery_scene_is_the_engine_classification(labels):
+    """Issue #1771 acceptance 1: the triage reads the delivery state from
+    delivery_scene.classify for the same labels — no second decision."""
+    assert mod.delivery_scene(labels) is classify(
+        labels=labels, scene=None, pr_state=None, body_markers=frozenset(),
+    )
+
+
+@pytest.mark.parametrize("labels", [
+    ["ai-pr-opened"],
+    ["ai-fix-needed"],
+    ["ai-in-progress"],
+    ["ai-blocked", "ai-pr-opened"],
+    ["ai-blocked", "ai-fix-needed"],
+])
+def test_label_flip_matches_the_engine_classification(
+    gh, monkeypatch, tmp_path, capsys, labels,
+):
+    """Issue #1771 acceptance 1, end to end through main(): a CI failure
+    flips the delivery to ai-fix-needed exactly when the engine does not
+    classify it BLOCKED. A blocked delivery keeps its state — evidence
+    comments land, no label is written."""
+    setup_active_pr_failure(gh, monkeypatch, tmp_path, labels=labels)
+    mod.main()
+    scene = classify(
+        labels=labels, scene=None, pr_state=None, body_markers=frozenset(),
+    )
+    flips = bool(gh.calls_to(ep_labels(494), "POST"))
+    assert flips is (scene is not DeliveryScene.BLOCKED)
+    assert len(gh.calls_to(ep_comment(494), "POST")) == 1
+    assert len(gh.calls_to(ep_comment(541), "POST")) == 1
+    if flips:
+        assert gh.calls_to(ep_labels(494), "POST")[0]["payload"] == {
+            "labels": ["ai-fix-needed"]
+        }
+    else:
+        assert gh.calls_to(f"{ep_labels(494)}/ai-pr-opened", "DELETE") == []
+        assert gh.calls_to(f"{ep_labels(494)}/ai-fix-needed", "DELETE") == []
+        assert "blocked_delivery_no_label_flip" in capsys.readouterr().err
+
+
+def test_blocked_delivery_is_still_the_evidence_source(gh, monkeypatch, tmp_path):
+    """A blocked delivery still owns its PR: the failure evidence is
+    recorded on the Issue and the PR (only the labels stay untouched), so
+    the triage never files a duplicate bug ticket for it."""
+    setup_active_pr_failure(
+        gh, monkeypatch, tmp_path, labels=["ai-blocked", "ai-pr-opened"],
+    )
+    gh.routes[ep_issues_list()] = []
+    mod.main()
+    assert gh.calls_to(ep_create(), "POST") == []
+    assert len(gh.calls_to(ep_comment(494), "POST")) == 1
+    assert len(gh.calls_to(ep_comment(541), "POST")) == 1
+
+
+def test_script_imports_the_engine_without_an_installed_package(tmp_path):
+    """Issue #1771 acceptance 3: the workflow runs the script straight from
+    the checkout (no install step), so the script puts src/ on the path
+    itself. -S drops site-packages — the workflow's fresh-checkout state —
+    and the script must still reach orbi.delivery_scene and then fail fast
+    on the missing event instead of a ModuleNotFoundError."""
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({}), encoding="utf-8")
+    env = {name: value for name, value in os.environ.items() if name != "PYTHONPATH"}
+    env["GITHUB_EVENT_PATH"] = str(event)
+    proc = subprocess.run(
+        [sys.executable, "-S", str(SCRIPT)],
+        capture_output=True, text=True, env=env, cwd=str(REPO_ROOT), timeout=60,
+    )
+    assert proc.returncode == 1, proc.stderr
+    assert "ci_triage error stage=load_event" in proc.stderr, proc.stderr
+
+
 @pytest.mark.parametrize("body, labels, state", [
     ("No closing reference", ["ai-pr-opened"], "open"),
     ("Fixes #494", ["ai-pr-opened"], "closed"),
@@ -894,16 +987,16 @@ def test_closing_reference_accepts_github_keywords_and_same_repo_qualification()
     ) == [494, 495]
 
 
-def test_pr_without_a_text_body_is_not_an_active_source(gh):
+def test_pr_without_a_text_body_is_not_a_delivery_source(gh):
     gh.routes[ep_pr(541)] = []
-    assert mod.active_source_issue("orbi-run", "test-repo", 541) is None
-    assert mod.active_source_issue("orbi-run", "test-repo", None) is None
+    assert mod.source_issue_for_pr("orbi-run", "test-repo", 541) is None
+    assert mod.source_issue_for_pr("orbi-run", "test-repo", None) is None
 
 
-def test_malformed_source_issue_response_is_not_an_active_source(gh):
+def test_malformed_source_issue_response_is_not_a_delivery_source(gh):
     gh.routes[ep_pr(541)] = {"body": "Fixes #494"}
     gh.routes[ep_source(494)] = []
-    assert mod.active_source_issue("orbi-run", "test-repo", 541) is None
+    assert mod.source_issue_for_pr("orbi-run", "test-repo", 541) is None
 
 
 # ---------------------------------------------------------------------------
