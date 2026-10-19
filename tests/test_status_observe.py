@@ -964,7 +964,10 @@ def test_confirmed_delivery_reads_the_issue_under_the_status_bound():
     assert calls == [observe.STATUS_READ_TIMEOUT_SECONDS]
 
 
-def test_ready_issue_and_recent_result_read_under_the_status_bound(monkeypatch):
+def test_ready_issue_and_recent_result_read_under_the_status_bound(
+        monkeypatch, tmp_path):
+    """Every GitHub read of the ready decision — the claim's own scans
+    (Issue #1773) and the result scan — carries the status bound."""
     calls = []
 
     def fake_run(command, **kwargs):
@@ -972,7 +975,7 @@ def test_ready_issue_and_recent_result_read_under_the_status_bound(monkeypatch):
         return "[]"
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert cli.ready_issue("acme/shop") is None
+    assert cli.ready_issue("acme/shop", _config(tmp_path)) is None
     assert cli.recent_result("acme/shop") is None
     assert {timeout for _, timeout in calls} == {
         observe.STATUS_READ_TIMEOUT_SECONDS,

@@ -422,7 +422,8 @@ def _pick_from_scan(
 
 def pick_issue(repo: str, active_milestone: str | None = None,
                dispatch_label: str = READY_LABEL,
-               held: frozenset = frozenset()) -> dict | None:
+               held: frozenset = frozenset(),
+               timeout: int | None = None) -> dict | None:
     # A merged delivery keeps `ai-ready` + `ai-merged` on the (still
     # open) Issue; `ai-merged` is the success terminal state, so it is
     # excluded from the ready scan like every other delivery state.
@@ -456,11 +457,16 @@ def pick_issue(repo: str, active_milestone: str | None = None,
     # code-layer marker guard to the triage tickets an external
     # contribution routes to — an external review is supplementary
     # capacity, never a competitor of this version's deliveries.
+    # `timeout` is the CALLER's read bound (the status view's #1668
+    # bound); the claim itself reads unbounded. The ready decision is
+    # one function for both readers (Issue #1773), so the bound travels
+    # with the call instead of a second query being built.
     for search in ready_searches(active_milestone, dispatch_label):
         try:
             issues = list_issues(
                 repo, state="open", search=search,
                 json_fields="number,title,body,labels,blockedBy,author", limit=200,
+                timeout=timeout,
             )
         except Exception as exc:
             # Fail open: a failed blockedBy query must
@@ -489,7 +495,7 @@ def pick_issue(repo: str, active_milestone: str | None = None,
             repo, state="open",
             search=release_fallback_search(active_milestone, dispatch_label),
             json_fields="number,title,body,labels,blockedBy,milestone",
-            limit=200,
+            limit=200, timeout=timeout,
         )
     except Exception as exc:
         event(
@@ -518,7 +524,7 @@ def pick_issue(repo: str, active_milestone: str | None = None,
             repo, state="open",
             search=external_takeover_search(dispatch_label),
             json_fields="number,title,body,labels,blockedBy",
-            limit=200,
+            limit=200, timeout=timeout,
         )
     except Exception as exc:
         event(
@@ -723,7 +729,7 @@ def pick_next_delivery(
             return repo, issue, None
     for repo in repos:
         held = slot_held_deliveries(slot_dir, max_concurrency)
-        issue = _pick_issue_with_repo_policy(repo, active_milestone, config, held)
+        issue = pick_ready_issue(repo, active_milestone, config, held)
         if issue is not None:
             return repo, issue, None
     # Issue #1745: a delivery waiting for a maintainer is re-checked LAST —
@@ -791,19 +797,33 @@ def _repo_scan_context(
     )
 
 
-def _pick_issue_with_repo_policy(
-    repo: str, active_milestone: str | None, config: RunnerConfig | None,
-    held: frozenset = frozenset(),
+def pick_ready_issue(
+    repo: str, active_milestone: str | None = None,
+    config: RunnerConfig | None = None, held: frozenset = frozenset(),
+    *, timeout: int | None = None,
 ) -> dict | None:
-    """Fresh ready scan with the repo's scan keys.
+    """The Issue the next fresh claim would pick: THE ready decision.
+
+    Every reader of "which Issue is ready" asks THIS function, so the
+    answer cannot drift into a second query (Issue #1773): the claim
+    loop (`pick_next_delivery`) and `orbi status` (`cli.ready_issue`, with
+    its own read bound) both arrive here. It carries the claim's own
+    searches and delivery-state exclusions (see `ready_searches`), the
+    repository policy's scan keys, the Epic/blockedBy/scene guards and
+    the release + external-takeover fallbacks.
 
     `dispatch_label` and `active_milestone` are resolved from the
-    repository policy before the scan (see `_repo_scan_keys`), and
-    `held` (the deliveries live co-runners work on) is passed through.
+    repository policy before the scan (see `_repo_scan_keys`), `held`
+    (the deliveries live co-runners work on) is passed through, and
+    `timeout` bounds every scan's read for the caller that needs it
+    (`orbi status`, Issue #1668).
     """
     milestone, dispatch_label = _repo_scan_keys(
         config, repo, active_milestone,
     )
     if dispatch_label == READY_LABEL:
-        return pick_issue(repo, milestone, held=held)
-    return pick_issue(repo, milestone, dispatch_label=dispatch_label, held=held)
+        return pick_issue(repo, milestone, held=held, timeout=timeout)
+    return pick_issue(
+        repo, milestone, dispatch_label=dispatch_label, held=held,
+        timeout=timeout,
+    )
