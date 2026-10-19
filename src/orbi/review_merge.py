@@ -673,20 +673,32 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             "--match-head-commit", pr["head_oid"], merge_method,
         ], cwd=worktree)
     except subprocess.CalledProcessError as exc:
-        preflight = github.merge_gate_preflight(
-            merge_repo, base_branch,
-        )
-        stderr = str(exc.stderr or "")
-        if is_maintainer_actionable(stderr, preflight):
-            failed_preflight = [
-                line for line in preflight
-                if line.startswith("merge_gate: FAILED")
-            ]
-            raise MergeHandoffRequired(
-                f"PR #{pr['number']} is ready for the named maintainer action",
-                preflight=failed_preflight,
-            ) from None
-        raise
+        # Issue #1798: GitHub can create the merge commit and this call still
+        # fail (`502 Bad Gateway`), leaving the PR OPEN with `mergedAt: null`.
+        # `confirm_merged` decides: landed continues like a success (never a
+        # second merge call), "not landed" keeps today's path.
+        try:
+            confirm_merged(worktree, pr, base_branch, repo_dir=repo_dir)
+            landed = True
+        except RuntimeError:
+            landed = False
+        if not landed:
+            preflight = github.merge_gate_preflight(merge_repo, base_branch)
+            stderr = str(exc.stderr or "")
+            if is_maintainer_actionable(stderr, preflight):
+                failed_preflight = [
+                    line for line in preflight
+                    if line.startswith("merge_gate: FAILED")
+                ]
+                raise MergeHandoffRequired(
+                    f"PR #{pr['number']} is ready for the named maintainer "
+                    "action",
+                    preflight=failed_preflight,
+                ) from None
+            raise
+        event("merge_landed_after_error", level=logging.WARNING,
+              pr=pr["number"], head=pr["head_oid"], method=merge_method,
+              returncode=exc.returncode, stderr=str(exc.stderr or "").strip())
     event("merged", pr=pr["number"], head=pr["head_oid"],
           method=merge_method)
     delete_merged_delivery_branch(merge_repo, pr["number"], pr["head_ref"])
@@ -695,27 +707,37 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
 
 def confirm_merged(worktree: Path, pr: dict, base_branch: str,
                    *, repo_dir: Path) -> dict:
-    """Confirm the PR is MERGED and origin/<base> contains the merge commit.
+    """Confirm the reviewed PR's merge landed on origin/<base>.
 
-    The base fetch updates the shared remote-tracking ref, so it runs
-    under the base-sync lock with the deployment checkout
-    as the lock location.
+    A MERGED PR answers with its merge commit, which must be on the base
+    branch. Issue #1798: the merge can also land while the merge call
+    itself errors, leaving the PR OPEN/CLOSED with `mergedAt: null` — the
+    reviewed head being on origin/<base> after the fresh fetch is that
+    merge. Anything else is a rejection; a failed read propagates.
+
+    The base fetch updates the shared remote-tracking ref, so it runs under
+    the base-sync lock with the deployment checkout as the lock location.
     """
     state = pr_view(pr["number"], "state,mergedAt,mergeCommit", cwd=worktree)
-    if state.get("state") != "MERGED" or not state.get("mergedAt"):
-        event(
-            "confirm_merged_not_merged", level=logging.ERROR,
-            pr=pr["number"], state=state.get("state"),
-        )
-        raise RuntimeError(
-            f"PR #{pr['number']} is not merged (state={state.get('state')})"
-        )
+    merged = state.get("state") == "MERGED" and bool(state.get("mergedAt"))
     merge_commit = (state.get("mergeCommit") or {}).get("oid")
-    if not merge_commit:
+    if merged and not merge_commit:
         raise RuntimeError(
             f"PR #{pr['number']} is merged but has no merge commit oid"
         )
     fetch_base_ref(repo_dir, base_branch, cwd=worktree)
+    if not merged:
+        # Issue #1798: it can have landed while the merge call errored.
+        merge_commit = run_state.landed_merge_commit(
+            pr["head_oid"], f"origin/{base_branch}", cwd=worktree)
+        if merge_commit is None:
+            event("confirm_merged_not_merged", level=logging.ERROR,
+                  pr=pr["number"], state=state.get("state"))
+            raise RuntimeError(f"PR #{pr['number']} is not merged "
+                               f"(state={state.get('state')})")
+        event("confirm_merged_landed_on_base", pr=pr["number"],
+              head=pr["head_oid"], merge_commit=merge_commit)
+        return {"state": "MERGED", "merge_commit": merge_commit}
     if not _is_ancestor(merge_commit, f"origin/{base_branch}", cwd=worktree):
         event(
             "confirm_merged_missing_on_base", level=logging.ERROR,

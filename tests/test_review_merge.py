@@ -1676,6 +1676,13 @@ def test_merge_gate_hands_off_each_actionable_policy_rejection(
             raise subprocess.CalledProcessError(
                 1, command, stderr="the base branch policy prohibits the merge",
             )
+        if command[0] == "git" and command[1] == "merge-base":
+            # The head contains the base, but the base does NOT contain
+            # the reviewed head: this merge did not land (Issue #1798 asks
+            # the ancestry question before treating the error as final).
+            if command[3] == "origin/main":
+                return ""
+            raise subprocess.CalledProcessError(1, command, stderr="no")
         return ""
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner.github, "merge_gate_preflight", lambda *a: [
@@ -1697,15 +1704,25 @@ def test_merge_gate_hands_off_each_actionable_policy_rejection(
 ])
 def test_merge_gate_does_not_hand_off_without_failed_preflight(
         monkeypatch, tmp_path, preflight):
-    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: (
-        (_ for _ in ()).throw(subprocess.CalledProcessError(
-            1, command, stderr="the base branch policy prohibits the merge",
-        )) if command[0] == "gh" and command[1] == "pr" and "merge" in command else (
-            json.dumps({"state": "OPEN", "mergeable": "MERGEABLE",
-                        "headRefOid": "h1", "statusCheckRollup": []})
-            if command[0] == "gh" and command[1] == "pr" and "view" in command else ""
-        )
-    ))
+    def fake_run(command, **kwargs):
+        if command[0] == "gh" and command[1] == "pr" and "merge" in command:
+            raise subprocess.CalledProcessError(
+                1, command, stderr="the base branch policy prohibits the merge",
+            )
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
+            return json.dumps({
+                "state": "OPEN", "mergeable": "MERGEABLE", "headRefOid": "h1",
+                "statusCheckRollup": [],
+            })
+        if command[0] == "git" and command[1] == "merge-base":
+            # The head contains the base, but the base does NOT contain the
+            # reviewed head: the failed merge did not land (Issue #1798).
+            if command[3] == "origin/main":
+                return ""
+            raise subprocess.CalledProcessError(1, command, stderr="no")
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(
         runner.github, "merge_gate_preflight", lambda *a: preflight,
     )
@@ -2009,18 +2026,89 @@ def test_confirm_merged_fetches_under_the_base_sync_lock(
 
 
 def test_confirm_merged_rejects_unmerged_pr(monkeypatch, tmp_path):
-    monkeypatch.setattr(seam, "run_command",
-        lambda command, **kwargs: json.dumps({
-            "number": 4, "url": "u", "state": "OPEN",
-            "mergedAt": None, "mergeCommit": None,
-        }),
-    )
+    """Issue #1798: an unmerged PR whose reviewed head is NOT on
+    origin/<base> is still a failed confirm — the head's ancestry is the
+    fact that decides it, so this fixture answers it (the reviewed head is
+    not reachable from origin/main)."""
+    def fake_run(command, **kwargs):
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
+            return json.dumps({
+                "number": 4, "url": "u", "state": "OPEN",
+                "mergedAt": None, "mergeCommit": None,
+            })
+        if command[0] == "git" and command[1] == "merge-base":
+            raise subprocess.CalledProcessError(1, command, stderr="not ancestor")
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="not merged"):
         review_merge.confirm_merged(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path,
         )
+
+
+def test_confirm_merged_accepts_a_reviewed_head_that_landed_on_base(
+        monkeypatch, tmp_path, caplog):
+    """Issue #1798: GitHub creates the merge commit and the merge call
+    still fails, so the PR reads OPEN with `mergedAt: null` and no merge
+    commit. The reviewed head being reachable from origin/<base> is that
+    landed merge; the commit that landed it is the answer.
+
+    `--topo-order --reverse` lists parents before children on the
+    ancestry path, so the first commit is the one that landed the head —
+    verified against a real repository in test_git_merge_smoke.py."""
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
+            return json.dumps({
+                "number": 4, "url": "u", "state": "OPEN",
+                "mergedAt": None, "mergeCommit": None,
+            })
+        if command[0] == "git" and command[1] == "rev-list":
+            return "m1\nlater\n"
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        result = review_merge.confirm_merged(
+            tmp_path, {"number": 4, "head_oid": "h1"}, "main",
+            repo_dir=tmp_path,
+        )
+    assert result == {"state": "MERGED", "merge_commit": "m1"}
+    rev_list = [c for c in commands if c[1:2] == ["rev-list"]][0]
+    assert rev_list[2:] == [
+        "--ancestry-path", "--topo-order", "--reverse", "h1..origin/main",
+    ]
+    assert "confirm_merged_landed_on_base" in caplog.text
+
+
+def test_confirm_merged_needs_a_landing_commit_for_an_open_pr(
+        monkeypatch, tmp_path, caplog):
+    """Issue #1798: a head that is an ancestor of origin/<base> with no
+    commit between them names no merge commit, so the confirm stays a
+    rejection instead of inventing one."""
+    def fake_run(command, **kwargs):
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
+            return json.dumps({
+                "number": 4, "url": "u", "state": "OPEN",
+                "mergedAt": None, "mergeCommit": None,
+            })
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    with caplog.at_level("ERROR"), pytest.raises(
+        RuntimeError, match="not merged",
+    ):
+        review_merge.confirm_merged(
+            tmp_path, {"number": 4, "head_oid": "h1"}, "main",
+            repo_dir=tmp_path,
+        )
+    assert "confirm_merged_not_merged" in caplog.text
+    assert "confirm_merged_landed_on_base" not in caplog.text
 
 
 def test_confirm_merged_rejects_merge_commit_missing_from_origin_main(

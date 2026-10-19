@@ -364,9 +364,11 @@ JOURNAL_EVENTS: dict[str, str] = {
     "merge_gate_issue_blocked": "the source Issue is ai-blocked; the merge was skipped (Issue #1504)",
     "merge_gate_rulesets_unavailable": "the rulesets API is unavailable on the repository plan (Issue #1361)",
     "merged": "the PR merge landed on the reviewed head",
+    "merge_landed_after_error": "the merge call failed but the reviewed head landed on the base branch (Issue #1798)",
     "merge_method_unknown": "the repository merge settings could not be read; --merge is used",
     "confirm_merged_missing_on_base": "the merged commit is missing from the base branch",
-    "confirm_merged_not_merged": "the PR reports merged but GitHub contradicts the state",
+    "confirm_merged_not_merged": "the PR is not merged and its reviewed head is not on the base branch",
+    "confirm_merged_landed_on_base": "the reviewed head landed on the base branch while the PR still reads unmerged (Issue #1798)",
     # Human review gate.
     "human_review_waiting": "the delivery waits for the human review label",
     "human_review_checklist_failed": "publishing the human review checklist failed (bypass)",

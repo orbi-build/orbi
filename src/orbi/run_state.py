@@ -58,6 +58,25 @@ def assess_base_freshness(worktree: Path, base_branch: str, *,
     return BaseFreshness.ABSORBABLE
 
 
+def landed_merge_commit(head: str, base_ref: str, *,
+                        cwd: Path) -> str | None:
+    """The commit that landed *head* on *base_ref*, or None (Issue #1798).
+
+    GitHub can create the merge commit while the merge call itself fails
+    (`502 Bad Gateway`), so the PR state alone cannot show that merge: the
+    head being reachable from the base branch is it. `--topo-order
+    --reverse` lists parents before children on that ancestry path, so the
+    first commit is the one that landed the head.
+    """
+    if not _is_ancestor(head, base_ref, cwd=cwd):
+        return None
+    commits = run_command([
+        "git", "rev-list", "--ancestry-path", "--topo-order", "--reverse",
+        f"{head}..{base_ref}",
+    ], cwd=cwd).split()
+    return commits[0] if commits else None
+
+
 def delivery_commit_guard(worktree: Path, *, local_head: str,
                           base_sha: str, branch: str) -> None:
     """Fail the delivery when the task branch carries no real change.
