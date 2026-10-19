@@ -28,12 +28,14 @@ gh 2.97):
   not a fix: the comment is appended and the Issue stays open.
 - Anything else (another workflow, another event, a push off `main`, any
   other conclusion) is a logged no-op with exit 0.
-- Delivery state (Issue #1771): the routed pull-request path reads the
-  Issue's delivery state from the engine's single classifier
-  (`orbi.delivery_scene.classify`) — the script keeps no label set of its
-  own. A delivery the engine reports `blocked` keeps its state: the failure
-  evidence is recorded on the Issue and the PR, and no label is written, so
-  removing `ai-blocked` later never resumes an unrequested automatic fix.
+- Delivery state (Issues #1771/#1786): the routed pull-request path
+  applies exactly the engine's label transition
+  (`orbi.delivery_labels.label_patch` with the fix-needed event) — the
+  script keeps no lifecycle label set of its own. The in-flight delivery
+  flips to `ai-fix-needed`; a terminal delivery (`ai-merged` or
+  `ai-blocked`) keeps its labels. The failure evidence is recorded on the
+  Issue and the PR in every case, so removing a terminal label later never
+  resumes an unrequested automatic fix.
 
 Stable failure fingerprints include the workflow name, for example:
 `sha256("CI|<event>|<head_branch>|<job name>")`,
@@ -70,8 +72,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Issue #1771: the delivery state is the engine's single classification
-# (`orbi.delivery_scene.classify`), so the triage imports the package. The
+# Issues #1771/#1786: the delivery label transition is the engine's single
+# decision (`orbi.delivery_labels`), so the triage imports the package. The
 # workflow (`.github/workflows/ci-failure-issue.yml`) runs this file straight
 # from the checkout with no install step; the src layout is put on the path
 # here (the same layout the test suite gets from pytest's `pythonpath`).
@@ -79,13 +81,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from orbi.delivery_labels import (  # noqa: E402 - the src bootstrap above
     EVENT_FIX_NEEDED,
-    LIFECYCLE_STATES,
-    READY_LABEL,
+    has_delivery_state,
     label_patch,
-)
-from orbi.delivery_scene import (  # noqa: E402 - the src bootstrap above
-    DeliveryScene,
-    classify,
 )
 from orbi.gitops import is_delivery_branch  # noqa: E402 - the src bootstrap above
 
@@ -542,36 +539,23 @@ def fetch_issue(owner: str, repo: str, number: int) -> dict | None:
 
 
 def issue_label_names(issue: dict) -> frozenset[str]:
-    """The Issue's label names — the fact `delivery_scene.classify` reads."""
+    """The Issue's label names — the fact the ownership check reads."""
     return frozenset(
         label.get("name") for label in issue.get("labels", [])
         if isinstance(label, dict) and isinstance(label.get("name"), str)
     )
 
 
-def delivery_scene(labels) -> DeliveryScene:
-    """The engine's classification of this Issue's delivery (Issue #1771).
-
-    `delivery_scene.classify` is the single decision: the triage keeps no
-    delivery-state label set of its own. It supplies the only fact it has —
-    the Issue's labels; no trusted scene comment is read and the PR state
-    is not part of the question (only a BLOCKED scene is consumed).
-    """
-    return classify(
-        labels=labels, scene=None, pr_state=None, body_markers=frozenset(),
-    )
-
-
 def source_issue_for_pr(
     owner: str, repo: str, pr_number: int | None,
-) -> tuple[int, int, frozenset[str], DeliveryScene] | None:
-    """The open delivery Issue a PR closes, with the engine's scene.
+) -> tuple[int, int, frozenset[str]] | None:
+    """The open delivery Issue a PR closes, with its labels.
 
-    An open Issue carrying a delivery-state label (`LIFECYCLE_STATES` minus
-    the `ai-ready` queue entry) is the delivery this PR belongs to; an Issue
-    with none is unrelated and the triage files its own ticket. A delivery
-    the engine classifies BLOCKED is still this PR's source — its evidence is
-    recorded — it is only never relabelled.
+    An open Issue carrying a delivery-state label (the engine's
+    `has_delivery_state`) is the delivery this PR belongs to; an Issue with
+    none is unrelated and the triage files its own ticket. A terminal
+    delivery is still this PR's source — its evidence is recorded — it is
+    only never relabelled (Issue #1786).
     """
     if pr_number is None:
         return None
@@ -584,9 +568,9 @@ def source_issue_for_pr(
         if not issue or issue.get("state") != "open":
             continue
         labels = issue_label_names(issue)
-        if not labels & (LIFECYCLE_STATES - {READY_LABEL}):
+        if not has_delivery_state(labels):
             continue
-        return number, pr_number, labels, delivery_scene(labels)
+        return number, pr_number, labels
     return None
 
 
@@ -754,7 +738,7 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
         log(f"ignored reason=no_failed_jobs run_id={run.get('id')}")
         return
     if source is not None:
-        source_number, source_pr, source_labels, source_scene = source
+        source_number, source_pr, source_labels = source
         for item in failed:
             evidence = build_reoccurrence_comment(run, item)
             comment_issue(owner, repo, source_number, evidence)
@@ -773,20 +757,14 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
                 f"pr={source_pr} run_id={run.get('id')}"
             )
             return
-        if source_scene is DeliveryScene.BLOCKED:
-            # Issue #1771: the engine's classification is the one decision.
-            # A blocked delivery is a human's terminal state, so the triage
-            # never adds ai-fix-needed beside it — removing ai-blocked later
-            # must not resume an automatic fix nobody asked for. The failure
-            # evidence above still stands.
-            log(
-                f"blocked_delivery_no_label_flip source_issue={source_number} "
-                f"pr={source_pr} run_id={run.get('id')}"
-            )
-            return
-        # Keep the delivery state canonical: the Runner's lifecycle contract
-        # requires ai-fix-needed to replace an older opened/in-flight state,
-        # not coexist with it. The engine owns that transition.
+        # Issue #1786: the label transition is the one decision. The engine
+        # keeps an in-flight delivery canonical (ai-fix-needed replaces the
+        # older opened/in-flight state) and changes nothing on a terminal
+        # Issue: ai-merged is a finished success and ai-blocked is a human's
+        # decision point, so a late CI run never leaves ai-fix-needed beside
+        # either — removing the terminal label later must not resume an
+        # automatic fix nobody asked for. The failure evidence above still
+        # stands for every case.
         to_add, to_remove = label_patch(EVENT_FIX_NEEDED, source_labels)
         for stale_label in to_remove:
             remove_issue_label(owner, repo, source_number, stale_label)
@@ -794,7 +772,8 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
             add_issue_label(owner, repo, source_number, label)
         log(
             f"routed source_issue={source_number} pr={source_pr} "
-            f"scene={source_scene.value} run_id={run.get('id')}"
+            f"add={','.join(to_add) or '-'} "
+            f"remove={','.join(to_remove) or '-'} run_id={run.get('id')}"
         )
         return
     index = index_open_issues(owner, repo)
