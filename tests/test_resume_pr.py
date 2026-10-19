@@ -870,10 +870,11 @@ def test_pick_resumable_delivery_returns_issue_with_scene(
         # `body` (Issue #787): the scene classification reads the
         # delivery markers, so the #726 external routing of a marker
         # ticket with no trusted scene comment is reachable.
-        # Issue #809: the page is max_concurrency + 1 candidates — at
-        # most max_concurrency deliveries can be held by live co-runners,
-        # so a free candidate is always inside the page when one exists.
-        "--json", "number,title,state,url,labels,body", "--limit", "2",
+        # Issue #1792: one full GitHub result page. The page used to be
+        # `max_concurrency + 1` on the false premise that only held
+        # deliveries are skipped; CI-pending and routed candidates take a
+        # slot too, so a free one behind them was never read.
+        "--json", "number,title,state,url,labels,body", "--limit", "100",
     ]
     assert calls[1] == [
         "gh", "issue", "view", "9", "--repo", "owner/repo",
@@ -915,10 +916,11 @@ def test_pick_resumable_delivery_scans_all_open_pr_states(
         # `body` (Issue #787): the scene classification reads the
         # delivery markers, so the #726 external routing of a marker
         # ticket with no trusted scene comment is reachable.
-        # Issue #809: the page is max_concurrency + 1 candidates — at
-        # most max_concurrency deliveries can be held by live co-runners,
-        # so a free candidate is always inside the page when one exists.
-        "--json", "number,title,state,url,labels,body", "--limit", "2",
+        # Issue #1792: one full GitHub result page. The page used to be
+        # `max_concurrency + 1` on the false premise that only held
+        # deliveries are skipped; CI-pending and routed candidates take a
+        # slot too, so a free one behind them was never read.
+        "--json", "number,title,state,url,labels,body", "--limit", "100",
     ]]
 
 
@@ -1066,7 +1068,8 @@ def test_pick_resumable_delivery_skips_held_and_reviews_next_free(
         fake_run(["gh", "issue", "edit", "9"])
 
 
-def _oldest_first_scan(monkeypatch, *, ci_pending=(), max_concurrency=2):
+def _oldest_first_scan(monkeypatch, *, ci_pending=(),
+                       created=(2527, 2542, 2543, 2551, 2555), held=()):
     """Stub the candidate query at the gh seam with GitHub's order contract.
 
     Issue #1734: five reviewable opened-PR deliveries created A..E. The
@@ -1075,8 +1078,9 @@ def _oldest_first_scan(monkeypatch, *, ci_pending=(), max_concurrency=2):
     first, any other query the default newest-created-first page — and
     the wrapper records the page the scan asked for (`pages`) plus
     every candidate whose comments the scan read (`reads`).
+    `held` names the candidates a live co-runner holds; `created`
+    overrides the candidate list (Issue #1792).
     """
-    created = [2527, 2542, 2543, 2551, 2555]  # A..E, creation order
     fake = FakeGh("owner/repo")
     for number in created:
         fake.add_issue(number, title=f"delivery {number}",
@@ -1103,14 +1107,21 @@ def _oldest_first_scan(monkeypatch, *, ci_pending=(), max_concurrency=2):
     def recording(command, **kwargs):
         answer = fake(command, **kwargs)
         if command[1:3] == ["issue", "list"]:
-            assert command[command.index("--limit") + 1] == str(
-                max_concurrency + 1
-            ), "the page stays max_concurrency + 1 candidates"
+            # Issue #1792: the page is no longer sized from
+            # `max_concurrency` — a full GitHub result page is one
+            # request and carries a free candidate past any number of
+            # skipped ones.
+            assert command[command.index("--limit") + 1] == "100"
             pages.append([issue["number"] for issue in json.loads(answer)])
         elif command[1:3] == ["issue", "view"]:
             reads.append(int(command[3]))
         return answer
 
+    if held:
+        monkeypatch.setattr(seam, "slot_held_deliveries",
+                            lambda slot_dir, capacity: {
+                                ("owner/repo", number) for number in held
+                            })
     monkeypatch.setattr(seam, "run_command", recording)
     return pages, reads
 
@@ -1118,17 +1129,16 @@ def _oldest_first_scan(monkeypatch, *, ci_pending=(), max_concurrency=2):
 def test_pick_resumable_delivery_takes_the_oldest_candidates_first(
     monkeypatch, tmp_path,
 ):
-    """Issue #1734 acceptance 1: five reviewable candidates created A..E
-    and a page of `max_concurrency + 1` = 3. The scan's page is A, B, C
-    and it reviews A. Before the fix the query used GitHub's default
-    newest-first order, so the page was E, D, C and the earliest PR
-    waited until no newer delivery was in flight."""
+    """Issue #1734 acceptance 1: five reviewable candidates created A..E,
+    ordered oldest first. The scan reviews A. Before the fix the query
+    used GitHub's default newest-first order, so the page was E, D, C and
+    the earliest PR waited until no newer delivery was in flight."""
     pages, reads = _oldest_first_scan(monkeypatch)
     issue, scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
         hooks=resume_deps(), language_code="en",
     )
-    assert pages == [[2527, 2542, 2543]]
+    assert pages == [[2527, 2542, 2543, 2551, 2555]]
     assert issue["number"] == 2527
     assert scene["run_id"] == f"{2527:08x}"
     # The reviewed candidate is the only one whose comments were read.
@@ -1147,10 +1157,37 @@ def test_pick_resumable_delivery_skips_a_ci_pending_oldest_candidate(
         "owner/repo", tmp_path / "slots", 2,
         hooks=resume_deps(), language_code="en",
     )
-    assert pages == [[2527, 2542, 2543]]
+    assert pages == [[2527, 2542, 2543, 2551, 2555]]
     assert issue["number"] == 2542
     assert scene["run_id"] == f"{2542:08x}"
     assert reads == [2527, 2542]
+
+
+def test_pick_resumable_delivery_reaches_a_free_candidate_behind_skips(
+    monkeypatch, tmp_path,
+):
+    """Issue #1792 acceptance 1: with `max_concurrency = 2` and candidates
+    #1-#4 oldest first, #1 is held by a live co-runner and #2/#3 wait for
+    CI. The old page (`max_concurrency + 1` = 3) was built on the wrong
+    premise that `held` is the ONLY skip reason, so it read #1-#3, found
+    no free candidate and returned None — #4 waited behind the skips on
+    every tick (live: #2641/PR #2652 in orbi-cloud). The scan must read
+    on until the oldest FREE candidate: #4, in this tick."""
+    candidates = [2600, 2601, 2602, 2603]
+    pages, reads = _oldest_first_scan(
+        monkeypatch, created=candidates, held={2600},
+        ci_pending={2601, 2602},
+    )
+    issue, scene = claim.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 2,
+        hooks=resume_deps(), language_code="en",
+    )
+    assert pages == [candidates]
+    assert issue["number"] == 2603
+    assert scene["run_id"] == f"{2603:08x}"
+    # #1 is held: its comments are never read. #2/#3 are read only to be
+    # skipped (CI pending) — the free #4 is the candidate returned.
+    assert reads == [2601, 2602, 2603]
 
 
 # ------------------------- awaiting-merge never steals the tick (Issue #1745)
@@ -1249,7 +1286,7 @@ def test_tick_reviews_a_pr_though_the_awaiting_merge_page_is_full(
 ):
     """Issue #1745 acceptance 4: `max_concurrency + 1` awaiting-merge
     deliveries exist and are all older than one `ai-pr-opened` delivery.
-    With the waiting state still in the query they filled the whole page
+    With the waiting state still in the query they took every page slot
     before the limit was applied (#1734) and the reviewable PR was never
     seen; the exclusion is part of the query, so the page is the
     reviewable PR."""
@@ -1295,8 +1332,8 @@ def test_pick_awaiting_merge_delivery_queries_only_the_waiting_state(
 ):
     """The deferred scan's own page: exactly the `ai-awaiting-merge`
     state, blocked/merged excluded, oldest Issue first (#1734) and the
-    `max_concurrency + 1` page (#809) it shares with the opened-PR
-    scan."""
+    one full page (`OPENED_PR_SCAN_LIMIT`) it shares with the opened-PR
+    scan (#1792)."""
     calls = []
 
     def fake_run(command, **kwargs):
@@ -1313,7 +1350,7 @@ def test_pick_awaiting_merge_delivery_queries_only_the_waiting_state(
         "--search",
         "label:ai-awaiting-merge "
         "-label:ai-blocked -label:ai-merged sort:created-asc",
-        "--json", "number,title,state,url,labels,body", "--limit", "3",
+        "--json", "number,title,state,url,labels,body", "--limit", "100",
     ]]
 
 

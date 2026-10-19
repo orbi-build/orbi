@@ -33,6 +33,18 @@ from orbi.journal import LOGGER, event
 from orbi.pilot_slots import slot_held_deliveries
 
 
+# Issue #1792: one GitHub result page. The candidate page used to be
+# `max_concurrency + 1`, on the premise that at most `max_concurrency`
+# deliveries can be skipped — true only for `held`. CI-pending candidates
+# (Issue #1473) and candidates routed elsewhere by the scene checks consume
+# page slots too, so a free candidate behind them was never read (live:
+# #2641 in orbi-cloud waited while the three older candidates were
+# skipped). 100 is the search API's maximum page size, so one full page is
+# still one query; the scan reads it oldest first until it finds the
+# oldest FREE candidate or the candidates run out.
+OPENED_PR_SCAN_LIMIT = 100
+
+
 class ResumeHooks(NamedTuple):
     """The delivery-side helpers `runner.main` passes in (Article 3.3).
 
@@ -124,8 +136,9 @@ def pick_awaiting_merge_delivery(
 
     The candidate rules are the shared opened-PR ones (see
     `_pick_opened_pr_delivery`): held deliveries are skipped and the
-    page is `max_concurrency + 1` candidates, oldest Issue first
-    (`sort:created-asc`, Issue #1734).
+    scan reads candidates oldest Issue first (`sort:created-asc`,
+    Issue #1734) until the oldest FREE one is found or the page of
+    `OPENED_PR_SCAN_LIMIT` candidates runs out (Issue #1792).
     """
     return _pick_opened_pr_delivery(
         repo, slot_dir, max_concurrency, repo_dir,
@@ -165,13 +178,19 @@ def _pick_opened_pr_delivery(
     excluded: `main` took it before the claim scan and holds it for the
     whole delivery.
 
-    The query page is `max_concurrency + 1` candidates, ordered OLDEST
-    Issue first (`sort:created-asc`, Issue #1734). At most
-    `max_concurrency` deliveries can be held by live co-runners, so a
-    free candidate is inside the page when one exists; one whose OPEN PR
-    still waits for CI (Issue #1473) is skipped too. The scan reviews
-    the oldest FREE candidate (held ones are skipped before any
-    candidate read — an in-flight delivery is never touched).
+    The query is ONE full GitHub result page
+    (`OPENED_PR_SCAN_LIMIT` = 100, the search API maximum), ordered OLDEST
+    Issue first (`sort:created-asc`, Issue #1734), and the scan reads the
+    candidates in that order until it finds the oldest FREE one or they
+    run out (Issue #1792). The page is deliberately NOT
+    `max_concurrency + 1`: that size followed from "at most
+    `max_concurrency` candidates are held by live co-runners", but being
+    held is not the only skip reason — a candidate whose OPEN PR still
+    waits for CI (Issue #1473) or whose scene routes elsewhere occupies a
+    slot too, and a free candidate behind those was never read (#2641
+    waited while the three older candidates were skipped). Held candidates
+    are still skipped before any candidate read, so an in-flight delivery
+    is never touched.
     """
     held = slot_held_deliveries(slot_dir, max_concurrency)
     # `label:a,b` is GitHub's OR within one label qualifier
@@ -193,7 +212,7 @@ def _pick_opened_pr_delivery(
             f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL} sort:created-asc"
         ),
         json_fields="number,title,state,url,labels,body",
-        limit=max_concurrency + 1,
+        limit=OPENED_PR_SCAN_LIMIT,
     )
     for issue in issues:
         if issue.get("state") != "OPEN":
