@@ -2595,20 +2595,19 @@ def test_verify_resumed_pr_verifies_scene_pr_and_returns_verified_url(
 
 
 def make_resume_failure_fake(monkeypatch, *, progress_comments=None,
-                             labels=None):
+                             labels=None, history=None):
     """Shared `run_command` fake of the resume verification failure
     tests (Issue #89).
 
     Answers exactly the failure-scene reporting: the progress API
     (GET comment list / POST create / PATCH update), the Issue label
     read (the leftover `ai-fix-needed` check), the comment-history
-    read (the completed review rounds — no round comments exist yet)
-    and the PR failure comment (Issue #50: the failure comment is
-    written to the Issue AND the PR). Anything else is rejected.
-    `progress_comments` is the GET payload (an existing tracked
-    progress comment makes the blocked/fix-needed scene PATCH it in
-    place; empty makes it POST a new one) and `labels` the label
-    read. Captures the gh api calls and the label edits / failure
+    read (the completed review rounds — empty unless `history` seeds
+    an Issue history) and the PR failure comment (Issue #50: the failure
+    comment is written to the Issue AND the PR). Anything else is
+    rejected. `progress_comments` is the GET payload (an existing
+    tracked progress comment makes the blocked/fix-needed scene PATCH it
+    in place; empty makes it POST a new one), `labels` the label read. Captures the gh api calls and the label edits / failure
     comments; monkeypatches `edit_issue` / `comment_issue`
     accordingly. Returns `(captured, fake_run)` where `captured` is
     `{"api": [...], "edits": [...], "comments": [...],
@@ -2643,7 +2642,7 @@ def make_resume_failure_fake(monkeypatch, *, progress_comments=None,
                 "labels": [{"name": name} for name in labels],
             })
         if command[-1] == "comments":
-            return json.dumps({"comments": []})
+            return json.dumps({"comments": list(history or ())})
         raise AssertionError(f"unexpected command: {command}")
 
     def fake_edit(*args, **kwargs):
