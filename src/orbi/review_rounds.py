@@ -14,12 +14,21 @@ its prose: a `failure` comment that happens to contain a scene consumes
 no round. `review_round_comment_body` writes the canonical kind, so the
 writer and the readers share one definition.
 
-Imports pull in `github` (`_comment_is_trusted`, `_pr_number`) and
+It also owns the ONE decision of which round a PR is effectively on
+(Issue #1779): the scene's completed count with the human-recovery
+budget reset applied. The review loop's budget and every failure report
+read `effective_review_round` / `current_review_round`, so a recovered
+PR can never report the exhausted count while the review runs round 1.
+
+Imports pull in `github` (`_comment_is_trusted`, `_pr_number`,
+`run_gh_read_command`), `delivery_labels` (the recovery transition) and
 `progress` (`run_marker`); nothing here imports `runner` back
 (Article 3.3). The module is small and pure apart from those helpers.
 """
 from __future__ import annotations
 
+import json
+import logging
 import re
 
 from orbi import language, run_state, scene
@@ -28,8 +37,19 @@ from orbi.comment_kind import (
     comment_kind,
     comment_kind_marker,
 )
-from orbi.github import _comment_is_trusted, _pr_number
+from orbi.delivery_labels import BLOCKED_LABEL, FIX_NEEDED_LABEL
+from orbi.github import (
+    _comment_is_trusted,
+    _pr_number,
+    run_gh_read_command,
+)
+from orbi.journal import event
 from orbi.progress import run_marker
+
+# The bounded review/fix loop (Issue #788): the completed rounds one PR may
+# spend before the remaining findings need a human decision. Living here
+# keeps the budget and the reported round one value (Issue #1779).
+MAX_REVIEW_ROUNDS = 5
 
 
 def _shorten_review_shas(text: str) -> str:
@@ -165,25 +185,116 @@ def review_round_comment_body(
     return "\n".join(lines) + "\n" + scene_block
 
 
-def current_review_round(comments: list[dict]) -> int:
-    """The current PR's review round: the trusted scene's `review_round`.
+def human_review_recovery_at(number: int, repo: str) -> str | None:
+    """Return the latest explicit blocked -> fix-needed recovery time.
 
-    The ONE place a report of the CURRENT round reads its number. The
-    review loop's round budget reads this same field of this same scene
-    (`_review_and_merge_round`), so a failure comment, a
-    resume-verification failure and a closed-PR report show the number
-    the review uses — and an earlier PR's completed rounds can never be
-    recounted into a new PR's report (Issue #1772). The Issue history is
-    never counted here.
+    Label history is used rather than the current projection: the current
+    ``ai-fix-needed`` label alone cannot distinguish a normal retry from a
+    human decision after terminal blocking. It lives here because the
+    recovery is part of the round this module decides (Issue #1779).
+    """
+    raw = run_gh_read_command([
+        "gh", "api", f"repos/{repo}/issues/{number}/timeline",
+        "--paginate", "--jq", ".[]",
+    ])
+    events: list[dict] = []
+    decoded = [json.loads(line) for line in raw.splitlines() if line.strip()]
+    if len(decoded) == 1 and isinstance(decoded[0], list):
+        decoded = decoded[0]
+    for event_entry in decoded:
+        if isinstance(event_entry, dict):
+            events.append(event_entry)
+    blocked_removed = False
+    recovery_at = None
+    for event_entry in events:
+        label = event_entry.get("label")
+        label_name = label.get("name") if isinstance(label, dict) else None
+        if (event_entry.get("event") == "labeled"
+                and label_name == BLOCKED_LABEL):
+            blocked_removed = False
+        elif (event_entry.get("event") == "unlabeled"
+              and label_name == BLOCKED_LABEL):
+            blocked_removed = True
+        elif (blocked_removed and event_entry.get("event") == "labeled"
+              and label_name == FIX_NEEDED_LABEL):
+            recovery_at = event_entry.get("created_at")
+            blocked_removed = False
+    return recovery_at if isinstance(recovery_at, str) else None
+
+
+def _review_recovery_at(number: int, repo: str) -> str | None:
+    """Read the recovery transition, tolerating a failed read.
+
+    The reset only matters once the budget is exhausted, and a report is
+    not a second failure: an unreadable label history logs
+    `review_recovery_read_failed` and keeps the scene's count (Issue
+    #1779).
+    """
+    try:
+        return human_review_recovery_at(number, repo)
+    except Exception as exc:
+        event(
+            "review_recovery_read_failed", level=logging.WARNING,
+            issue=number, error=str(exc),
+        )
+        return None
+
+
+def effective_review_round(resume_scene: dict, *, number: int,
+                           repo: str) -> int:
+    """The completed review rounds this PR effectively has (Issue #1779).
+
+    The ONE place the human-recovery reset is decided: the delivered
+    scene's `review_round`, or 0 when the maintainer's blocked ->
+    fix-needed transition postdates the scene (a fresh budget for the same
+    PR, Issue #483). The review loop's round budget reads this value, and
+    every failure report reads it through `current_review_round`, so a
+    recovery can never be applied on one side only.
+
+    A scene below the bounded budget needs no read: a reset could not
+    change its count.
+    """
+    rounds = int(resume_scene["review_round"])
+    if rounds < MAX_REVIEW_ROUNDS:
+        return rounds
+    recovery_at = _review_recovery_at(number, repo)
+    scene_at = resume_scene.get("scene_at")
+    if recovery_at is None:
+        return rounds
+    if isinstance(scene_at, str) and recovery_at <= scene_at:
+        return rounds
+    event(
+        "review_budget_recovered", issue=number,
+        recovery_at=recovery_at, rounds=0,
+    )
+    return 0
+
+
+def current_review_round(comments: list[dict], *, number: int,
+                         repo: str) -> int:
+    """The round the current PR's review is on (Issue #1779).
+
+    The ONE place a report of the CURRENT round reads its number: the
+    scene's completed count with the human-recovery reset applied, plus
+    the round being reviewed — the same value the review loop's budget
+    and its round comments use, never a recount of the Issue history
+    (Issue #1772) and never a reset only one side applied. The value never
+    exceeds the bounded budget: an exhausted scene reports 5, the last
+    round the loop may run, exactly as before.
 
     No readable scene means no review round yet: 0. Reporting must never
     fail on this read (a corrupted scene is one the review loop refuses
-    to review, not a second failure of the failure report).
+    to review, not a second failure of the failure report), and a failed
+    recovery read never fails it either.
     """
     try:
-        return int(run_state.resume_scene(comments)["review_round"])
+        resume_scene = run_state.resume_scene(comments)
     except (scene.SceneError, scene.SceneMissingError):
         return 0
+    effective = effective_review_round(
+        resume_scene, number=number, repo=repo,
+    )
+    return min(effective + 1, MAX_REVIEW_ROUNDS)
 
 
 def review_rounds_so_far(

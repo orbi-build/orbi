@@ -4227,7 +4227,7 @@ def test_human_recovery_after_the_scene_resets_the_budget(
     # mutable-cell patch serves all three recovery scenes below.
     recovery = {"at": "2026-09-13T01:00:00Z"}
     monkeypatch.setattr(
-        review_merge, "human_review_recovery_at", lambda *a: recovery["at"],
+        seam, "human_review_recovery_at", lambda *a, **k: recovery["at"],
     )
     assert review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),

@@ -3495,12 +3495,12 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
             # PR's review round (review round 2, PR #42): both opened-PR
             # states are review states (the review session fixes findings
             # in the same session), so the role is always `review`, and
-            # the round is the current PR's scene round — the value the
-            # review loop reads, never a recount of an earlier PR's
-            # rounds (Issue #1772; GitHub is the only state store).
+            # the round is the one the review is on — the value the review
+            # loop uses, recovery reset included, never a recount of an
+            # earlier PR's rounds (Issues #1772, #1779; GitHub is the store).
             blocked_round = failure_report.current_review_round(
                 issue_comments(number, repo=source_repo),
-            )
+                number=number, repo=source_repo)
             # The tracked progress comment becomes the blocked scene:
             # the same terminal body the other failure
             # paths write, with the next-step reason.
