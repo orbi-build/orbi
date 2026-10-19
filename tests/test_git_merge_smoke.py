@@ -22,7 +22,9 @@ from pathlib import Path
 import pytest
 
 from conftest import git
-
+from orbi import config as config_domain
+import orbi.gh_response as gh_response
+import orbi.pi_session as pi_session
 import orbi.runner as runner
 import orbi.review_merge as review_merge
 from seam import seam
@@ -411,6 +413,11 @@ def test_merge_gate_accepts_a_landed_head_while_the_pr_reads_open(
     assert len([c for c in calls
                 if c[0] == "gh" and c[1] == "pr" and "merge" in c]) == 1
     merge_commit = git(clone, "rev-parse", "origin/main")
+    # Issue #1802: the gate keeps the confirmation it already made instead
+    # of throwing it away for the round to read a second time.
+    assert merged["confirmation"] == {
+        "state": "MERGED", "merge_commit": merge_commit,
+    }
     # The commit that landed the reviewed head is a real merge commit whose
     # second parent is that head.
     assert git(clone, "rev-parse", f"{merge_commit}^2") == head_oid
@@ -445,3 +452,152 @@ def test_merge_gate_still_fails_when_the_merge_did_not_land(
     # Nothing landed: the base branch is untouched.
     assert git(clone, "rev-parse", "origin/main") == pr["base_oid"]
 
+
+
+# ---------------------------------------------------------------------------
+# Issue #1802: the landed verdict is decided once per merge
+# ---------------------------------------------------------------------------
+
+_LANDING_FIELDS = "state,mergedAt,mergeCommit"
+
+
+def install_round_gh(monkeypatch, clone: Path, head_oid: str, *,
+                     merge_fails: bool, landing_reads: list,
+                     labels: list, comments: list) -> None:
+    """Fake gh plus the Issue side effects for ONE full review round.
+
+    `gh pr merge` performs a real local merge and pushes origin/main, then
+    errors with a 502 when `merge_fails` (the Issue #1798 scene) or returns
+    0. The landing read answers exactly ONCE — OPEN for the failed call (the
+    reviewed head on origin/<base> is the landing proof, Issue #1798),
+    MERGED for the successful one — and every later landing read raises the
+    5xx the Issue #1802 scene reports, so a second landing read fails the
+    round instead of being silently retried.
+    """
+    real_run = runner.run_command
+
+    def fake_run(command, **kwargs):
+        if command[0] != "gh":
+            return real_run(command, **kwargs)
+        if command[1:3] == ["pr", "view"]:
+            fields = command[command.index("--json") + 1]
+            if fields != _LANDING_FIELDS:
+                return make_pr(head_oid)
+            if landing_reads:
+                raise gh_response.GitHubRequestFailed(
+                    1, command, stderr="HTTP 502: Bad Gateway", status=502,
+                )
+            landing_reads.append(fields)
+            if merge_fails:
+                return make_pr(head_oid)
+            return make_pr(
+                head_oid, state="MERGED", merged_at="2026-10-19T13:38:31Z",
+                merge_commit=git(clone, "rev-parse", "origin/main"),
+            )
+        if command[1] == "pr" and "merge" in command:
+            git(clone, "checkout", "main")
+            git(clone, "merge", "--no-ff", command[command.index(
+                "--match-head-commit") + 1])
+            git(clone, "push", "origin", "main")
+            git(clone, "checkout", "-")
+            if merge_fails:
+                raise subprocess.CalledProcessError(
+                    1, command, stderr="HTTP 502: Bad Gateway",
+                )
+            return ""
+        if command[1] == "api":
+            if command[2] == "repos/owner/repo":
+                return json.dumps({"allow_merge_commit": True})
+            if "--method" in command:
+                return json.dumps({"id": 77, "body": "", "url": "https://x"})
+            return "[]"
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "issue_labels",
+                        lambda *a, **k: ["ai-ready", "ai-pr-opened"])
+    monkeypatch.setattr(seam, "edit_issue",
+                        lambda *a, **k: labels.append(k))
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda *a, **k: comments.append(k.get("body", "")))
+    # A 5xx read is retried with backoff before it escapes (gh read retry):
+    # no test may spend real seconds proving the round never reads again.
+    monkeypatch.setattr("time.sleep", lambda *a: None)
+
+
+def run_review_round(monkeypatch, clone: Path, head_oid: str, *,
+                     merge_fails: bool):
+    """One full review round on a real git clone; returns the round result
+    plus every landing read, label patch and Issue comment it made."""
+    landing_reads: list = []
+    labels: list = []
+    comments: list = []
+    install_round_gh(
+        monkeypatch, clone, head_oid, merge_fails=merge_fails,
+        landing_reads=landing_reads, labels=labels, comments=comments,
+    )
+    pr = _delivery_pr(clone, head_oid)
+    monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: dict(pr))
+    monkeypatch.setattr(
+        seam, "run_review",
+        lambda *a, **k: pi_session.ReviewSessionResult(
+            output="REVIEW_VERDICT " + json.dumps({
+                "verdict": "pass", "head": head_oid, "blockers": 0,
+                "majors": 0, "minors": 0, "findings": [],
+            }),
+            issue_body_sha256="0" * 64,
+        ),
+    )
+    config = config_domain.RunnerConfig(
+        repo_dir=clone, deploy_home=clone / "deploy", base_branch="main",
+        base_sha="b1", run_id="a1b2c3d4",
+    )
+    merged = review_merge.review_and_merge_if_clean(
+        clone, "orbi/owner-repo-issue-4", "main", config, "owner/repo", 4,
+        title="Review task", priority="normal",
+        scene={
+            "run_id": "a1b2c3d4", "base_branch": "main", "base_sha": "b1",
+            "pr_url": pr["url"], "external": "", "review_round": 0,
+            "base_advance_round": 0, "scene_at": "2026-10-19T00:00:00Z",
+        },
+    )
+    return merged, landing_reads, labels, comments
+
+
+def test_round_uses_the_gates_landed_verdict_after_a_failed_merge_call(
+        clone, monkeypatch):
+    """Issue #1802 acceptance 1: a 502 from `gh pr merge` whose merge landed
+    ends the round as merged. The landing read happens ONCE — inside the
+    gate — and every later PR read fails 5xx, so a second read would escape
+    the round after the merge (and the branch deletion) already happened."""
+    git(clone, "checkout", "-b", "orbi/owner-repo-issue-4")
+    head_oid = commit_file(clone, "delivery.txt", "delivery")
+
+    merged, landing_reads, labels, comments = run_review_round(
+        monkeypatch, clone, head_oid, merge_fails=True,
+    )
+
+    assert merged is True
+    assert landing_reads == [_LANDING_FIELDS]
+    assert {"repo": "owner/repo", "add": "ai-merged",
+            "remove": "ai-pr-opened"} in labels
+    merge_commit = git(clone, "rev-parse", "origin/main")
+    assert f"merge_commit={merge_commit}" in comments[0]
+
+
+def test_round_reads_the_landing_once_when_the_merge_call_succeeds(
+        clone, monkeypatch):
+    """Issue #1802 acceptance 2: a `gh pr merge` returning 0 keeps its ONE
+    landing read (today's behavior), now the round's only read."""
+    git(clone, "checkout", "-b", "orbi/owner-repo-issue-4")
+    head_oid = commit_file(clone, "delivery.txt", "delivery")
+
+    merged, landing_reads, labels, _comments = run_review_round(
+        monkeypatch, clone, head_oid, merge_fails=False,
+    )
+
+    assert merged is True
+    assert landing_reads == [_LANDING_FIELDS]
+    assert {"repo": "owner/repo", "add": "ai-merged",
+            "remove": "ai-pr-opened"} in labels
