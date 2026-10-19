@@ -23,6 +23,7 @@ comments) stay in `test_bootstrap_runner.py`.
 from orbi import config as config_domain
 from orbi import language
 
+import ast
 import json
 import logging
 import os
@@ -1182,6 +1183,81 @@ def test_release_not_claimed_when_milestone_check_fails(monkeypatch, caplog):
     with caplog.at_level("INFO"):
         assert claim.pick_issue("xqliu/orbi") is None
     assert "release_milestone_check_failed" in caplog.text
+    assert "picked issue=254" not in caplog.text
+
+
+def _raise_on_read_failure_decisions(source: str) -> list[str]:
+    """The enclosing function of every `if raise_on_read_failure` branch."""
+    decisions: list[str] = []
+
+    def visit(node: ast.AST, function: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            name = (
+                child.name
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                else function
+            )
+            if (
+                isinstance(child, ast.If)
+                and isinstance(child.test, ast.Name)
+                and child.test.id == "raise_on_read_failure"
+            ):
+                decisions.append(name)
+            visit(child, name)
+
+    visit(ast.parse(source), "<module>")
+    return decisions
+
+
+def test_raise_on_read_failure_pin_detects_every_decision():
+    """The detector really detects: two decisions in two functions are
+    both named, and a sibling `if` on another flag is ignored."""
+    source = (
+        "def first(raise_on_read_failure):\n"
+        "    if raise_on_read_failure:\n"
+        "        raise\n"
+        "def second(other):\n"
+        "    if other:\n"
+        "        raise\n"
+        "def third(raise_on_read_failure):\n"
+        "    if raise_on_read_failure:\n"
+        "        raise\n"
+    )
+    assert _raise_on_read_failure_decisions(source) == ["first", "third"]
+
+
+def test_raise_on_read_failure_is_decided_in_one_place():
+    """Issue #1794: whether a failed read is raised or skipped is decided
+    in exactly ONE function of `claim.py`. It used to be tested twice —
+    the release-Milestone read of the release gate and the shared
+    scan-read handling — two copies of the same answer, so a future change
+    to one would silently miss the other (#1782 fixed exactly such a miss
+    for the release read). Each failing site still keeps its own journal
+    event, passed to that one decision."""
+    decisions = _raise_on_read_failure_decisions(
+        Path(claim.__file__).read_text(encoding="utf-8")
+    )
+    assert decisions == ["_read_failed"], (
+        "raise_on_read_failure must be tested in exactly one place "
+        f"(the shared read-failure decision, Issue #1794); sites: {decisions}"
+    )
+
+
+def test_release_milestone_read_failure_reaches_the_status_observer(
+    monkeypatch, caplog,
+):
+    """Acceptance #1794: the release-Milestone read goes through the SAME
+    raise-or-skip decision as every other failed read — the claim
+    (default) journals `release_milestone_check_failed` and skips the
+    release, while an OBSERVER (`orbi status`, `raise_on_read_failure=True`)
+    is given the failure instead of an empty queue."""
+    error = subprocess.CalledProcessError(1, ["gh"], output="boom")
+    monkeypatch.setattr(seam, "run_command", _release_scan_fake(error))
+    with caplog.at_level("INFO"):
+        assert claim.pick_issue("xqliu/orbi") is None
+        with pytest.raises(subprocess.CalledProcessError):
+            claim.pick_issue("xqliu/orbi", raise_on_read_failure=True)
+    assert "release_milestone_check_failed issue=254" in caplog.text
     assert "picked issue=254" not in caplog.text
 
 
