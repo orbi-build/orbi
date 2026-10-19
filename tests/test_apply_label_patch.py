@@ -28,7 +28,7 @@ def test_apply_label_patch_no_op_patch_applies_nothing(monkeypatch):
     # apply nothing (no `edit_issue` call).
     monkeypatch.setattr(
         github, "label_patch",
-        lambda event, current_labels: ([], []),
+        lambda event, current_labels, ready_label=None: ([], []),
     )
     github.apply_label_patch(
         7, repo="o/r", event=EVENT_BLOCKED,
@@ -93,7 +93,7 @@ def test_apply_label_patch_remove_only_patch(monkeypatch):
     # `edit_issue` call — no `add` kwarg.
     monkeypatch.setattr(
         github, "label_patch",
-        lambda event, current_labels: ([], ["ai-in-progress"]),
+        lambda event, current_labels, ready_label=None: ([], ["ai-in-progress"]),
     )
     github.apply_label_patch(
         7, repo="o/r", event=EVENT_BLOCKED,
@@ -101,6 +101,25 @@ def test_apply_label_patch_remove_only_patch(monkeypatch):
     )
     assert calls == [
         ((7,), {"repo": "o/r", "remove": "ai-in-progress"}),
+    ]
+
+
+def test_apply_label_patch_threads_the_resolved_queue_label(monkeypatch):
+    """Issue #1775: the resolved repository `dispatch_label` reaches the
+    one label decision, so the blocked terminal clears the label the claim
+    scanned instead of the host default."""
+    calls = []
+    monkeypatch.setattr(seam, "edit_issue",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    github.apply_label_patch(
+        7, repo="o/r", event=EVENT_BLOCKED,
+        current_labels={"ship", "ai-in-progress"}, ready_label="ship",
+    )
+    assert calls == [
+        ((7,), {"repo": "o/r", "add": "ai-blocked",
+                "remove": "ai-in-progress"}),
+        ((7,), {"repo": "o/r", "remove": "ship"}),
     ]
 
 

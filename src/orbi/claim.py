@@ -689,6 +689,7 @@ def pick_next_delivery(
     for repo in repos:
         repo_language = (language.DEFAULT_LANGUAGE if config is None
                          else merged_repo_language(config, repo))
+        _, dispatch_label = _repo_scan_keys(config, repo, active_milestone)
         # Epic reconciliation is a per-tick bypass: a broken GitHub query or
         # mutation must never prevent the ordinary delivery scans.
         try:
@@ -729,6 +730,7 @@ def pick_next_delivery(
             repo, slot_dir, max_concurrency,
             repo_dir=config.repo_dir if config is not None else None,
             hooks=hooks, language_code=repo_language,
+            ready_label=dispatch_label,
         )
         if selected is not None:
             issue, scene = selected
@@ -754,10 +756,12 @@ def pick_next_delivery(
     for repo in repos:
         repo_language = (language.DEFAULT_LANGUAGE if config is None
                          else merged_repo_language(config, repo))
+        _, dispatch_label = _repo_scan_keys(config, repo, active_milestone)
         selected = pick_awaiting_merge_delivery(
             repo, slot_dir, max_concurrency,
             repo_dir=config.repo_dir if config is not None else None,
             hooks=hooks, language_code=repo_language,
+            ready_label=dispatch_label,
         )
         if selected is not None:
             issue, scene = selected

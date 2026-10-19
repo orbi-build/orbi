@@ -129,7 +129,9 @@ def test_resume_blocked_ends_with_the_help_line_exactly_once(
         language_code=language_code,
     )
     body = posted_body(calls)
-    assert calls[0][2]["current_labels"] == {"ai-in-progress"}
+    # The claimed Issue still carries the queue label, so the blocked
+    # terminal clears it with the in-flight label (Issue #1775).
+    assert calls[0][2]["current_labels"] == {"ai-in-progress", "ai-ready"}
     expected = (
         f"{run_marker(RUN_ID)}\n"
         f"{comment_kind_marker(COMMENT_KIND_FAILURE)}\n"

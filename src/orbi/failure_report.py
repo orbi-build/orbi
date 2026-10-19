@@ -33,7 +33,7 @@ from orbi.comment_kind import (
     comment_kind_marker,
 )
 from orbi.delivery_labels import (
-    EVENT_FIX_NEEDED, FIX_NEEDED_LABEL, IN_PROGRESS_LABEL,
+    EVENT_FIX_NEEDED, FIX_NEEDED_LABEL, IN_PROGRESS_LABEL, READY_LABEL,
 )
 from orbi.failure import (
     _failure_comment_body, _failure_detail, _failure_summary,
@@ -475,7 +475,7 @@ def _failure_streak(comments: list, run_id: str,
 
 def block_scene_failure(issue: dict, error: ValueError, repo: str,
                         comments: list[dict], *,
-                        language_code: str) -> None:
+                        language_code: str, ready_label: str = READY_LABEL) -> None:
     """Mark an opened-PR Issue `ai-blocked` when its scene is malformed.
 
     The blocked transition is scoped to this one Issue: the
@@ -509,8 +509,8 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
             ) + language.text(
                 language_code, "failure.scene_blocked", error=error,
             ),
-            current_labels={FIX_NEEDED_LABEL},
-            language_code=language_code,
+            current_labels={FIX_NEEDED_LABEL, ready_label},
+            language_code=language_code, ready_label=ready_label,
         )
     except Exception:
         LOGGER.exception("issue=%s failure reporting failed", number)
@@ -519,7 +519,7 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
 def block_repo_config_failure(number: int, source_repo: str,
                               error: ValueError, run_id: str,
                               current_labels=(), *,
-                              language_code: str,
+                              language_code: str, ready_label: str = READY_LABEL
                               ) -> None:
     """Mark an Issue `ai-blocked` when its repo config is invalid (#527).
 
@@ -542,7 +542,7 @@ def block_repo_config_failure(number: int, source_repo: str,
                 )
             ),
             current_labels=set(current_labels),
-            language_code=language_code,
+            language_code=language_code, ready_label=ready_label,
         )
     except Exception:
         LOGGER.exception("issue=%s repo_config_failure_report_failed", number)
@@ -593,7 +593,7 @@ def _raise_if_preexisting_ci_failure(
 
 def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
                            error: Exception,
-                           language_code: str,
+                           language_code: str, ready_label: str = READY_LABEL
                            ) -> None:
     """Report a failed resume decision through the terminal path.
 
@@ -615,8 +615,8 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
                 run_id=run_id,
             )
         ),
-        current_labels={IN_PROGRESS_LABEL},
-        language_code=language_code,
+        current_labels={IN_PROGRESS_LABEL, ready_label},
+        language_code=language_code, ready_label=ready_label,
     )
 
 
@@ -630,7 +630,7 @@ def report_delivery_failure(
     blocked_suffix: str = "", review_round: int | None = None,
     review_scene_block: str | None = None,
     finish: bool = True, publisher: ProgressPublisher | None = None,
-    language_code: str,
+    language_code: str, ready_label: str = READY_LABEL,
 ) -> str:
     """Report one delivery failure through the classified-failure flow.
 
@@ -928,7 +928,7 @@ def report_delivery_failure(
         post_blocked_comment(
             number, repo=source_repo, body=body,
             current_labels=labels, language_code=language_code,
-        )
+            ready_label=ready_label)
     elif post_new_comment:
         comment_issue(number, repo=source_repo, body=body)
         if pr_url:

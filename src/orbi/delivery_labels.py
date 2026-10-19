@@ -69,11 +69,16 @@ _DELIVERY_STATE_LABELS = (
 )
 
 
-def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
+def label_patch(event: str, current_labels,
+                ready_label: str = READY_LABEL) -> tuple[list[str], list[str]]:
     """Return the (to_add, to_remove) label patch for one event.
 
     A pure function of the event and the current labels: the same
     inputs always produce the same deterministic, idempotent patch.
+    `ready_label` is the repository's RESOLVED queue entry — the same
+    label the claim scanned (`dispatch_label`, default `ai-ready`) —
+    so a custom-label repository's blocked/merged/waiting terminal never
+    keeps a queue-label residue (Issue #1775).
 
     - claim: add `ai-in-progress`, remove a stale `ai-fix-needed` from
       a resumed fix round and a stale `ai-needs-detail` left by the
@@ -85,14 +90,18 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
     - merged: add `ai-merged`, remove the current delivery-state label
       (the one present in `current_labels`): `ai-pr-opened` for the
       normal PR delivery, `ai-in-progress` for the release state
-      machine (which never enters the PR states). `ai-ready` is cleared
-      too: the ready label is the queue entry, not a delivery state, so
-      a merged Issue must not keep showing it (Issue #1526) — the
-      terminal state is `ai-merged` ALONE.
+      machine (which never enters the PR states). The resolved queue
+      label (`ready_label`, default `ai-ready`) is cleared too: it is
+      the queue entry, not a delivery state, so a merged Issue must not
+      keep showing it (Issue #1526) — the terminal state is
+      `ai-merged` ALONE.
     - blocked: add `ai-blocked`, remove every delivery-state label that
-      is present (so the terminal state is `ai-blocked` ALONE).
+      is present AND the resolved queue label (`ready_label`), so the
+      terminal state is `ai-blocked` ALONE — even in a repository
+      whose claim label is a custom `dispatch_label` (Issue #1775).
     - awaiting_merge: add `ai-awaiting-merge`, remove every delivery-state
-      label and `ai-ready` (a maintainer action is required before Orbi retries).
+      label and the resolved queue label (a maintainer action is
+      required before Orbi retries).
 
     An unknown event raises `ValueError` (fail fast — never a guessed
     patch).
@@ -120,7 +129,7 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
         ]
         return ([FIX_NEEDED_LABEL], to_remove)
     if event == EVENT_RELEASE_WAITING:
-        return ([READY_LABEL], [IN_PROGRESS_LABEL])
+        return ([ready_label], [IN_PROGRESS_LABEL])
     if event == EVENT_HUMAN_REVIEW_WAITING:
         # The human acceptance gate holds the delivery — the
         # same clean, recoverable tick as the release waiting: the
@@ -134,7 +143,7 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
         to_remove = (
             [IN_PROGRESS_LABEL] if IN_PROGRESS_LABEL in current else []
         )
-        return ([READY_LABEL], to_remove)
+        return ([ready_label], to_remove)
     if event == EVENT_REQUEUE:
         # The external takeover delivery ended without a merge
         # (the contributor withdrew the PR, or a maintainer closed it) —
@@ -144,7 +153,7 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
         to_remove = [
             label for label in _DELIVERY_STATE_LABELS if label in current
         ]
-        return ([READY_LABEL], to_remove)
+        return ([ready_label], to_remove)
     if event == EVENT_MERGED:
         to_remove = [
             label for label in (*_DELIVERY_STATE_LABELS, AWAITING_MERGE_LABEL)
@@ -155,8 +164,8 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
         # shows `ai-ready` and reads as "still queued" (Issue #1526).
         # The terminal state is `ai-merged` ALONE. Existing merged Issues
         # are not backfilled.
-        if READY_LABEL in current:
-            to_remove.append(READY_LABEL)
+        if ready_label in current:
+            to_remove.append(ready_label)
         return ([MERGED_LABEL], to_remove)
     if event == EVENT_BLOCKED:
         # A handoff writes its terminal label before its required Issue
@@ -174,15 +183,15 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
         # re-claims the already-terminal Issue every tick (the #14
         # ai-in-progress add/remove loop, 2026-09-17). The terminal
         # state is BLOCKED ALONE.
-        if READY_LABEL in current:
-            to_remove.append(READY_LABEL)
+        if ready_label in current:
+            to_remove.append(ready_label)
         return ([BLOCKED_LABEL], to_remove)
     if event == EVENT_AWAITING_MERGE:
         to_remove = [
             label for label in _DELIVERY_STATE_LABELS if label in current
         ]
-        if READY_LABEL in current:
-            to_remove.append(READY_LABEL)
+        if ready_label in current:
+            to_remove.append(ready_label)
         return ([AWAITING_MERGE_LABEL], to_remove)
     raise ValueError(f"unknown delivery event: {event!r}")
 

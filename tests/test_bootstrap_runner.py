@@ -1210,13 +1210,22 @@ def test_process_issue_fresh_run_has_no_resume_context(
     assert "resume_continue" not in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("dispatch_label", "queue_label"),
+    [(None, "ai-ready"), ("ship", "ship")],
+    ids=["default_queue_label", "custom_dispatch_label"],
+)
 def test_process_issue_fails_fast_when_the_run_state_is_missing(
-    monkeypatch, tmp_path, caplog,
+    monkeypatch, tmp_path, caplog, dispatch_label, queue_label,
 ):
     """Issue #219: the worktree of this issue exists but its run state
     file is gone — the same run cannot be verified. The attempt fails
     fast through the terminal failure path (`ai-blocked` + the reason
-    comment): no fresh run, no silent redo."""
+    comment): no fresh run, no silent redo.
+
+    Issue #1775: the terminal state is `ai-blocked` ALONE — the queue
+    label the claim scanned (the repository's `dispatch_label`, default
+    `ai-ready`) is cleared with it."""
     gh_calls, posted, worktree, comment_bodies = _resume_wiring_setup(
         monkeypatch, tmp_path, in_progress=True,
     )
@@ -1242,15 +1251,22 @@ def test_process_issue_fails_fast_when_the_run_state_is_missing(
     with pytest.raises(RuntimeError, match="run state"):
         runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
-            config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
+            config_domain.RunnerConfig(
+                repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
+                base_branch="main", dispatch_label=dispatch_label,
+            ),
             "xqliu/orbi-backlog",
         )
     # No fresh run was started.
     assert run_pi_calls == []
-    # The terminal state is `ai-blocked` (the claim label removed).
-    assert edits[-1] == ((4,), {
+    # The terminal state is `ai-blocked` ALONE (the claim label removed).
+    assert edits[-2] == ((4,), {
         "repo": "xqliu/orbi-backlog", "add": "ai-blocked",
         "remove": "ai-in-progress",
+    })
+    # The queue label the claim kept is cleared last (Issue #1775).
+    assert edits[-1] == ((4,), {
+        "repo": "xqliu/orbi-backlog", "remove": queue_label,
     })
     # The failure comment carries the reason and the run marker.
     failed = [
@@ -1942,8 +1958,11 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     # does NOT re-raise — the service must not crash on it (Issue #239).
     assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
     assert calls[1][2] == {"repo": "xqliu/orbi-backlog", "add": "ai-blocked", "remove": "ai-in-progress"}
-    assert calls[2][0] == "comment"
-    failure_body = calls[2][2]["body"]
+    # The terminal state is ai-blocked ALONE: the queue label the claim
+    # kept is cleared too.
+    assert calls[2][2] == {"repo": "xqliu/orbi-backlog", "remove": "ai-ready"}
+    assert calls[3][0] == "comment"
+    failure_body = calls[3][2]["body"]
     # The failure is also published as the blocked milestone (Issue
     # #18). The worktree was never created, so no progress comment
     # exists to PATCH: the milestone alone carries the notification.
@@ -1958,6 +1977,112 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     assert "- base_sha: abc123def456" in failure_body
     assert "run_id=a1b2c3d4" in failure_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in failure_body
+
+
+def test_process_issue_terminal_failure_clears_the_repositorys_dispatch_label(
+    monkeypatch, tmp_path,
+):
+    """Issue #1775: a repository whose dispatch_label is ship must end a
+    terminal failure ai-blocked ALONE — the blocked transition clears the
+    same queue label the claim scanned, not only the host default."""
+    edits = []
+    monkeypatch.setattr(seam, "edit_issue",
+        lambda *args, **kwargs: edits.append(kwargs),
+    )
+    monkeypatch.setattr(seam, "freeze_base",
+        lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree",
+        Mock(side_effect=RuntimeError("git failed")))
+    monkeypatch.setitem(
+        failure_report.__dict__, "activity_snapshot",
+        lambda session_dir: None,
+    )
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[0] == "gh" and command[1] == "api":
+            return _gh_api(command, posted)
+        if (command[0] == "gh" and command[1] == "issue"
+                and command[2] == "view"):
+            return json.dumps({"labels": [{"name": "ship"}]})
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    result = runner.process_issue(
+        {"number": 8, "title": "Fail", "body": ""},
+        config_domain.RunnerConfig(
+            repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
+            base_branch="main", dispatch_label="ship",
+        ),
+        "xqliu/orbi-backlog",
+    )
+    assert result.kind == "failed"
+    # The claim keeps ship and adds the in-flight label; the terminal
+    # blocked patch clears both and leaves ai-blocked alone.
+    assert edits == [
+        {"repo": "xqliu/orbi-backlog", "add": "ai-in-progress"},
+        {"repo": "xqliu/orbi-backlog", "add": "ai-blocked",
+         "remove": "ai-in-progress"},
+        {"repo": "xqliu/orbi-backlog", "remove": "ship"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("repo_config", "queue_label", "other_label"),
+    [
+        # Issue #1775 acceptance 1: the repository's own queue label.
+        ('dispatch_label = "ship"\n', "ship", "ai-ready"),
+        # Issue #1775 acceptance 2: the default stays exactly as today.
+        ("", "ai-ready", "ship"),
+    ],
+    ids=["custom_dispatch_label", "default_queue_label"],
+)
+def test_claim_then_blocked_ends_ai_blocked_alone(
+    monkeypatch, tmp_path, repo_config, queue_label, other_label,
+):
+    """Issue #1775, end to end on the public surface: the Issue the claim
+    scan selects is the one carrying the repository's RESOLVED queue label
+    (`dispatch_label`, default `ai-ready`), and the blocked terminal clears
+    that SAME label — the Issue ends `ai-blocked` alone, no queue-label
+    residue on any surface that reads it.
+
+    The distractor Issue carries the OTHER label and is NEWER, so a scan
+    that read the wrong label would pick it and a blocked transition that
+    cleared the wrong label would leave the residue behind."""
+    fake = FakeGh("owner/repo")
+    if repo_config:
+        fake.set_repo_config(repo_config)
+    # Oldest first: the queue-label Issue, then the newer distractor.
+    fake.add_issue(8, title="task", body="", labels=(queue_label,))
+    fake.add_issue(9, title="other", body="", labels=(other_label,))
+    fake.add_pr(41, head="orbi/owner-repo-issue-8", state="CLOSED")
+    monkeypatch.setattr(seam, "run_command", fake)
+    runner.set_run_id("a1b2c3d4")
+    config = config_domain.RunnerConfig(
+        repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main",
+    )
+    # The tick's policy resolution, exactly as `main` does it.
+    policy = runner.load_repo_policy(config, "owner/repo")
+    fused = runner.resolve_source_base_branch(config, "owner/repo", policy)
+    assert (fused.dispatch_label or "ai-ready") == queue_label
+
+    # 1. The claim scan looks for the repository's queue label.
+    issue = claim.pick_ready_issue("owner/repo", None, config=fused)
+    assert issue["number"] == 8
+    # 2. The claim transition keeps it: the delivery is in flight.
+    github.apply_label_patch(
+        8, repo="owner/repo", event=runner.EVENT_CLAIM,
+        current_labels=github.issue_labels(8, repo="owner/repo"),
+    )
+    assert fake.issues[8]["labels"] == [queue_label, "ai-in-progress"]
+    # 3. The delivery's PR closed without a merge: the blocked terminal.
+    runner.delivery_step(
+        fake.prs[41]["url"], issue, fused, "owner/repo",
+    )
+    assert fake.issues[8]["labels"] == ["ai-blocked"]
+    # The distractor Issue is untouched.
+    assert fake.issues[9]["labels"] == [other_label]
 
 
 def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
@@ -2019,6 +2144,7 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
         {"repo": "xqliu/orbi", "add": "ai-in-progress"},
         {"repo": "xqliu/orbi", "add": "ai-blocked",
          "remove": "ai-in-progress"},
+        {"repo": "xqliu/orbi", "remove": "ai-ready"},
     ]
     comment_bodies = [
         entry[2]["body"] for entry in calls
@@ -2629,6 +2755,7 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
         {"repo": "xqliu/orbi", "add": "ai-in-progress"},
         {"repo": "xqliu/orbi", "add": "ai-blocked",
          "remove": "ai-in-progress"},
+        {"repo": "xqliu/orbi", "remove": "ai-ready"},
     ]
     comment_bodies = [
         entry[2]["body"] for entry in calls
@@ -2710,6 +2837,7 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
         {"repo": "xqliu/orbi-backlog", "add": "ai-in-progress"},
         {"repo": "xqliu/orbi-backlog", "add": "ai-blocked",
          "remove": "ai-in-progress"},
+        {"repo": "xqliu/orbi-backlog", "remove": "ai-ready"},
     ]
 
 
@@ -6071,14 +6199,25 @@ def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
     monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
     with pytest.raises(RuntimeError, match="returned no content"):
         runner.process_ticket_only(issue, config_domain.RunnerConfig(repo_dir=Path("/repo")), "o/r")
-    assert edits[-1][1]["add"] == "ai-blocked"
+    assert edits[-2][1]["add"] == "ai-blocked"
+    # ai-blocked ALONE: the queue label is cleared too (Issue #1775).
+    assert edits[-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
 
 
 @pytest.mark.parametrize("language_code", ["en", "zh"])
+@pytest.mark.parametrize(
+    ("dispatch_label", "queue_label"),
+    [(None, "ai-ready"), ("ship", "ship")],
+    ids=["default_queue_label", "custom_dispatch_label"],
+)
 def test_process_ticket_only_failure_marks_blocked_without_git_delivery(
-        monkeypatch, language_code):
+        monkeypatch, language_code, dispatch_label, queue_label):
     """A failed ticket-only run blocks with the community help line from the
-    ONE blocked exit, in the run's bound language (Issue #1730)."""
+    ONE blocked exit, in the run's bound language (Issue #1730).
+
+    Issue #1775: the blocked terminal is `ai-blocked` ALONE — it clears
+    the queue label the claim scanned, the repository's own
+    `dispatch_label` when it declares one."""
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
              "labels": [{"name": "ai-content-only"}]}
     edits = []
@@ -6097,10 +6236,14 @@ def test_process_ticket_only_failure_marks_blocked_without_git_delivery(
         runner.process_ticket_only(
             issue, config_domain.RunnerConfig(
                 repo_dir=Path("/repo"), message_language=language_code,
+                dispatch_label=dispatch_label,
             ), "o/r",
         )
-    assert edits[-1] == (99, {"repo": "o/r", "add": "ai-blocked",
-                              "remove": "ai-in-progress"})
+    assert edits[-2] == (99, {"repo": "o/r", "add": "ai-blocked",
+                               "remove": "ai-in-progress"})
+    # The terminal state is ai-blocked ALONE: the queue label the claim
+    # kept is cleared too (Issue #1775).
+    assert edits[-1] == (99, {"repo": "o/r", "remove": queue_label})
     body = comments[-1][1]["body"]
     assert language.text(
         language_code, "runner.ticket_only_failed",

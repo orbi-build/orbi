@@ -1367,10 +1367,15 @@ def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
         "owner/repo", tmp_path / "slots", 1,
         hooks=resume_deps(), language_code=language_code,
     ) is None
-    assert edits == [[
-        "gh", "issue", "edit", "9", "--repo", "owner/repo",
-        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
-    ]]
+    assert edits == [
+        [
+            "gh", "issue", "edit", "9", "--repo", "owner/repo",
+            "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+        ],
+        # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
+        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
+         "--remove-label", "ai-ready"],
+    ]
     assert "'Orbi opened PR'" in comments[0]
     # The comment layer appends its hidden runner marker last; the visible
     # body ends with the language's one community help line (Issue #1730).
@@ -1405,10 +1410,15 @@ def test_pick_resumable_delivery_blocks_pr_opened_issue_without_scene(
         "owner/repo", tmp_path / "slots", 1,
         hooks=resume_deps(), language_code="en",
     ) is None
-    assert edits == [[
-        "gh", "issue", "edit", "9", "--repo", "owner/repo",
-        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
-    ]]
+    assert edits == [
+        [
+            "gh", "issue", "edit", "9", "--repo", "owner/repo",
+            "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+        ],
+        # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
+        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
+         "--remove-label", "ai-ready"],
+    ]
     # The erroneous ai-pr-opened label is NOT auto-cleaned (Issue #672).
     assert "ai-pr-opened" not in edits[0]
     assert "Orbi failed:" in comments[0]
@@ -1458,10 +1468,15 @@ def test_pick_resumable_delivery_blocks_issue_when_scene_is_malformed(
         hooks=resume_deps(), language_code="en",
     ) is None
     # The blocked transition: add ai-blocked, remove ai-fix-needed...
-    assert edits == [[
-        "gh", "issue", "edit", "9", "--repo", "owner/repo",
-        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
-    ]]
+    assert edits == [
+        [
+            "gh", "issue", "edit", "9", "--repo", "owner/repo",
+            "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+        ],
+        # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
+        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
+         "--remove-label", "ai-ready"],
+    ]
     # ...and a failure comment with the concrete reason...
     body = comments[0]
     assert "Orbi failed:" in body
@@ -1625,12 +1640,49 @@ def test_pick_resumable_delivery_blocks_issue_when_no_trusted_scene(
         "owner/repo", tmp_path / "slots", 1,
         hooks=resume_deps(), language_code="en",
     ) is None
-    assert edits == [[
-        "gh", "issue", "edit", "9", "--repo", "owner/repo",
-        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
-    ]]
+    assert edits == [
+        [
+            "gh", "issue", "edit", "9", "--repo", "owner/repo",
+            "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+        ],
+        # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
+        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
+         "--remove-label", "ai-ready"],
+    ]
     assert "Orbi failed:" in comments[0]
     assert "issue=9 resume scene is missing" in caplog.text
+
+
+def test_pick_resumable_delivery_scene_blocked_clears_the_dispatch_label(
+    monkeypatch, caplog, tmp_path,
+):
+    """Issue #1775: the missing-scene blocked terminal runs on a CLAIMED
+    opened-PR Issue, which still carries the resolved queue label. The
+    scan receives the label the claim scanned (`ready_label`), so with
+    `dispatch_label = "ship"` the ticket ends `ai-blocked` ALONE."""
+    edits: list[list[str]] = []
+    comments: list[str] = []
+    monkeypatch.setattr(seam, "run_command",
+        make_pick_fake(
+            issue_payload(),
+            gh_comments_payload(["only a human comment here"]),
+            edits=edits,
+            comments=comments,
+        ),
+    )
+    caplog.set_level("ERROR")
+    assert claim.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(), language_code="en", ready_label="ship",
+    ) is None
+    assert edits == [
+        [
+            "gh", "issue", "edit", "9", "--repo", "owner/repo",
+            "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+        ],
+        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
+         "--remove-label", "ship"],
+    ]
 
 
 def test_pick_resumable_delivery_missing_scene_names_the_run_marker(
@@ -1818,10 +1870,15 @@ def test_pick_next_delivery_continues_after_scene_failure(
     # Issue was scoped to a single-ticket block, not a tick stop.
     assert result == ("owner/repo", ready, None)
     assert calls == [("ready", "owner/repo")]
-    assert edits == [[
-        "gh", "issue", "edit", "9", "--repo", "owner/repo",
-        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
-    ]]
+    assert edits == [
+        [
+            "gh", "issue", "edit", "9", "--repo", "owner/repo",
+            "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+        ],
+        # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
+        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
+         "--remove-label", "ai-ready"],
+    ]
     assert len(comments) == 1
     assert "Orbi failed:" in comments[0]
     # The fake rejects anything but its own traffic (same guard pattern
@@ -2265,10 +2322,15 @@ def test_main_continues_to_ready_delivery_after_scene_failure(
     monkeypatch.setattr(runner, "delivery_step", lambda *a, **k: None)
     assert runner.main(["--config", str(config)]) == 0
     # The corrupted Issue was scoped to a single-ticket block...
-    assert edits == [[
-        "gh", "issue", "edit", "9", "--repo", "owner/repo",
-        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
-    ]]
+    assert edits == [
+        [
+            "gh", "issue", "edit", "9", "--repo", "owner/repo",
+            "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+        ],
+        # ai-blocked ALONE: the queue label the claim kept goes too (#1775).
+        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
+         "--remove-label", "ai-ready"],
+    ]
     assert len(comments) == 1
     assert "Orbi failed:" in comments[0]
     # ...and the same tick delivered the next ready Issue.

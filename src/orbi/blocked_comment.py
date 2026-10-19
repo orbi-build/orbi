@@ -12,12 +12,13 @@ receipt) never goes through this exit and never gets the line.
 from __future__ import annotations
 
 from orbi import language
-from orbi.delivery_labels import EVENT_BLOCKED
+from orbi.delivery_labels import EVENT_BLOCKED, READY_LABEL
 from orbi.github import apply_label_patch, comment_issue
 
 
 def post_blocked_comment(number: int, *, repo: str, body: str,
-                         current_labels, language_code: str) -> None:
+                         current_labels, language_code: str,
+                         ready_label: str = READY_LABEL) -> None:
     """Block `number`: apply the `ai-blocked` label patch, then comment.
 
     The order is part of the contract: the label transition lands first, the
@@ -27,7 +28,7 @@ def post_blocked_comment(number: int, *, repo: str, body: str,
     """
     apply_label_patch(
         number, repo=repo, event=EVENT_BLOCKED,
-        current_labels=current_labels,
+        current_labels=current_labels, ready_label=ready_label,
     )
     comment_issue(
         number, repo=repo,

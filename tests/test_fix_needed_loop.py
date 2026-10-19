@@ -1054,6 +1054,9 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
     assert edits == [
         ((39,), {"repo": "owner/repo", "add": "ai-blocked",
                  "remove": "ai-fix-needed"}),
+        # ai-blocked ALONE: the queue label the claim kept is cleared
+        # too (Issue #1775).
+        ((39,), {"repo": "owner/repo", "remove": "ai-ready"}),
     ]
     assert len(posted) == 1
     body = posted[0]
@@ -1065,6 +1068,31 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
     assert "ai-fix-needed" in body
     assert "resume_scene_failed" in caplog.text or \
         "resume scene is malformed" in caplog.text
+
+
+def test_block_scene_failure_clears_the_repositorys_dispatch_label(
+        monkeypatch,
+):
+    """Issue #1775: the corrupted-scene blocked terminal runs on a CLAIMED
+    opened-PR Issue, which still carries the queue label the claim
+    scanned. With `dispatch_label = "ship"` the ticket ends
+    `ai-blocked` ALONE, not `ai-blocked` + `ship`."""
+    issue = {"number": 39, "title": "task", "body": ""}
+    edits = []
+    monkeypatch.setattr(seam, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
+    monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None)
+    failure_report.block_scene_failure(
+        issue, scene.SceneError("opened PR comment is missing run_id"),
+        "owner/repo", [{"body": "public comment", "authorAssociation": "NONE"}],
+        language_code="en", ready_label="ship",
+    )
+    assert edits == [
+        ((39,), {"repo": "owner/repo", "add": "ai-blocked",
+                 "remove": "ai-fix-needed"}),
+        ((39,), {"repo": "owner/repo", "remove": "ship"}),
+    ]
 
 
 # ------------------------------------------------------------------ review rounds
