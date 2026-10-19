@@ -1265,6 +1265,7 @@ def process_release(issue: dict, config: RunnerConfig,
     release_commit: str | None = None
     declaration: dict | None = None
     open_milestone_evidence: list[str] = []
+    ready_label = config.dispatch_label or READY_LABEL
     try:
         declaration = parse_release_declaration(issue["body"])
         # Fused value: entry fallback + policy override (see
@@ -1275,7 +1276,6 @@ def process_release(issue: dict, config: RunnerConfig,
         # post-gate reassignment further down adds base_sha). The journal
         # refactor deleted the assignment and both comments lost the only
         # field naming the frozen branch.
-        ready_label = config.dispatch_label or READY_LABEL
         run_info = f"base_branch={base_branch} run_id={run_id} priority={priority}"
         event("release_task", run_info, issue=number)
         apply_label_patch(
