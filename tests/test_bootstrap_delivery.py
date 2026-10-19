@@ -4855,6 +4855,112 @@ def test_run_review_round_passes_prior_comments_after_first_round(
     assert reviews[0][1]["previous_comments"]
 
 
+def _recovered_review_round_env(monkeypatch, tmp_path):
+    """Issue #1779: a maintainer recovery AFTER a five-round scene.
+
+    Restores the REAL review loop (the shared env stubs it), freezes the
+    PR at an already-recorded engine push, and returns the env captures
+    plus `rounds`, the `review_round` every finish scene is built with.
+    """
+    from tests.fakes.progress import capture_finish_rounds
+
+    real_round = review_merge.review_and_merge_if_clean
+    real_publish = progress._safe_publish
+    edits, comments, reviews, publishes = _review_round_env(
+        monkeypatch, tmp_path, scene_round=review_merge.MAX_REVIEW_ROUNDS,
+    )
+    monkeypatch.setattr(seam, "review_and_merge_if_clean", real_round)
+
+    def fake_run_review(*args, **kwargs):
+        reviews.append((args, kwargs))
+        raise RuntimeError("review session died")
+
+    monkeypatch.setattr(seam, "run_review", fake_run_review)
+    # The bypass stub hides the built scene; the real one runs it.
+    monkeypatch.setattr(seam, "_safe_publish", real_publish)
+    monkeypatch.setattr(seam, "human_review_recovery_at",
+                        lambda *a, **k: "2026-02-01T00:00:00Z")
+    monkeypatch.setattr(seam, "pr_view",
+                        lambda *a, **k: {"mergeable": "MERGEABLE"})
+    frozen = {"number": 46, "url": PR_URL, "base_ref": "main",
+              "base_oid": "abc", "head_ref": "b", "head_oid": "def"}
+    monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: frozen)
+    worktree = (tmp_path / ".worktrees"
+                / "orbi-owner-repo-issue-39-a1b2c3d4")
+    run_state.write_run_state(RunContext(
+        run_id=FAKE_RUN_ID, issue=39, branch="orbi/owner-repo-issue-39",
+        worktree=worktree, source_repo="owner/repo",
+    ))
+    run_state.record_pushed_head(worktree, "def")
+    return edits, comments, reviews, publishes, capture_finish_rounds(
+        monkeypatch)
+
+
+def test_run_review_round_reports_the_round_the_review_used(
+        monkeypatch, tmp_path,
+):
+    """Issue #1779 acceptance 1: five completed rounds, a recovery after
+    the scene, and a failure before the next round comment. The review
+    runs round 1 and the published failure scene says round 1 — one
+    number, never the exhausted 5."""
+    _edits, _comments, reviews, _publishes, rounds = \
+        _recovered_review_round_env(monkeypatch, tmp_path)
+    assert review_merge._run_review_round(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
+        "owner/repo",
+    ) is None
+    # The round the review loop used ...
+    assert reviews[0][0][3] == 1
+    # ... and the round the failure report published.
+    assert rounds == [1]
+
+
+def test_run_review_round_reports_the_recovered_round_on_a_freeze_failure(
+        monkeypatch, tmp_path,
+):
+    """Issue #1779 acceptance 1 with the freeze itself failing: the round
+    is already decided, so the failure scene reports round 1, not 5."""
+    _edits, _comments, _reviews, _publishes, rounds = \
+        _recovered_review_round_env(monkeypatch, tmp_path)
+
+    def freeze_fails(*args, **kwargs):
+        raise RuntimeError("freeze failed")
+
+    monkeypatch.setattr(seam, "freeze_pr", freeze_fails)
+    assert review_merge._run_review_round(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
+        "owner/repo",
+    ) is None
+    assert rounds == [1]
+
+
+def test_run_review_round_reports_five_when_no_recovery_happened(
+        monkeypatch, tmp_path,
+):
+    """Issue #1779 acceptance 2: five completed rounds and NO recovery —
+    the review never starts and the failure scene still reports 5."""
+    from tests.fakes.progress import capture_finish_rounds
+
+    real_round = review_merge.review_and_merge_if_clean
+    real_publish = progress._safe_publish
+    _review_round_env(
+        monkeypatch, tmp_path, scene_round=review_merge.MAX_REVIEW_ROUNDS,
+    )
+    monkeypatch.setattr(seam, "review_and_merge_if_clean", real_round)
+    monkeypatch.setattr(seam, "_safe_publish", real_publish)
+    monkeypatch.setattr(seam, "human_review_recovery_at",
+                        lambda *a, **k: None)
+    rounds = capture_finish_rounds(monkeypatch)
+    assert review_merge._run_review_round(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
+        "owner/repo",
+    ) is None
+    assert rounds == [5]
+
+
 def test_run_review_round_passes_a_recorded_pass(monkeypatch, tmp_path):
     """Issue #1626: a recorded pass with the same rendered Issue body is
     passed to the round, which merges without a session."""

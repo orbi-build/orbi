@@ -30,6 +30,7 @@ import orbi.release as release
 import orbi.release_git as release_git
 import orbi.release_notes as release_notes
 import orbi.review_merge as review_merge
+import orbi.review_rounds as review_rounds
 import orbi.pi_session as pi_session
 import orbi.run_state as run_state
 import orbi.resume_scan as resume_scan
@@ -38,7 +39,8 @@ import orbi.runner as runner
 _MODULES = (
     journal, github, gitops, milestone, milestone_command, ticket_command,
     progress, cli_source, release, release_git, release_notes, pi_session,
-    runner, review_merge, run_state, claim, resume_scan, repo_config, clarify,
+    runner, review_merge, review_rounds, run_state, claim, resume_scan,
+    repo_config, clarify,
     branch_reclaim, failure_report, suggest, cli, blocked_comment,
 )
 

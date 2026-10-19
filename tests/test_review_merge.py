@@ -4227,7 +4227,7 @@ def test_human_recovery_after_the_scene_resets_the_budget(
     # mutable-cell patch serves all three recovery scenes below.
     recovery = {"at": "2026-09-13T01:00:00Z"}
     monkeypatch.setattr(
-        review_merge, "human_review_recovery_at", lambda *a: recovery["at"],
+        seam, "human_review_recovery_at", lambda *a, **k: recovery["at"],
     )
     assert review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
@@ -4251,6 +4251,27 @@ def test_human_recovery_after_the_scene_resets_the_budget(
         "owner/repo", 4, title="Review task", priority="normal",
         scene=_scene(review_round=review_merge.MAX_REVIEW_ROUNDS, scene_at=None),
     ) is False
+
+
+def test_recovery_read_failure_is_not_a_hidden_exhausted_verdict(
+        budget_review_env, monkeypatch, tmp_path, caplog):
+    """Issue #1779: the recovery read DECIDES the budget, so its failure
+    fails the delivery recoverably instead of being swallowed into the
+    terminal "exhausted" verdict (which only a human could undo)."""
+    def boom(*args, **kwargs):
+        raise RuntimeError("gh: API rate limit exceeded")
+
+    monkeypatch.setattr(seam, "human_review_recovery_at", boom)
+    with caplog.at_level("ERROR"), pytest.raises(
+        RuntimeError, match="API rate limit",
+    ) as raised:
+        review_merge.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4, title="Review task", priority="normal",
+            scene=_scene(review_round=review_merge.MAX_REVIEW_ROUNDS),
+        )
+    assert not isinstance(raised.value, review_merge.ReviewRoundsExhausted)
+    assert "review_rounds_exhausted" not in caplog.text
 
 
 def test_base_advance_budget_exhausts_separately(monkeypatch, tmp_path):

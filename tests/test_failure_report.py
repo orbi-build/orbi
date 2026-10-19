@@ -664,9 +664,10 @@ def test_finish_scene_reports_the_current_pr_scene_round(
 
 def test_finish_scene_reports_a_single_prs_scene_round(
         monkeypatch, tmp_path):
-    """Issue #1772 acceptance 2: a single PR at round 3 reports 3 — the
-    scene's value, exactly as today (the row is rendered from round 3 on;
-    round 2 is pinned in the round-accounting unit tests)."""
+    """Issue #1772 acceptance 2 with Issue #1779's one number: a single PR
+    whose scene completed 3 rounds is reviewing round 4, and the report
+    says 4 — the round the review loop uses (the row renders from round 3
+    on; the helper is pinned in the round-accounting unit tests)."""
     publisher = FakePublisher()
     outcome, _, _ = _report(
         monkeypatch, tmp_path, session=False, publisher=publisher,
@@ -676,7 +677,7 @@ def test_finish_scene_reports_a_single_prs_scene_round(
         classify=True, evidence=False, finish=True,
     )
     assert outcome == "fix needed"
-    assert "- review/fix round: 3" in publisher.finish_bodies[0]
+    assert "- review/fix round: 4" in publisher.finish_bodies[0]
 
 
 @pytest.mark.parametrize(

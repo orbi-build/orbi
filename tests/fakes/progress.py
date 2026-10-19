@@ -31,6 +31,26 @@ def bind_run_id(monkeypatch, run_id: str = "a1b2c3d4") -> str:
     return run_id
 
 
+def capture_finish_rounds(monkeypatch) -> list[int]:
+    """Record the `review_round` every finish scene is published with.
+
+    A round below 3 renders no visible `review/fix round` row, so a test
+    asserting WHICH round a failure report carries reads the value the
+    scene is built from (Issue #1779) instead of the folded body.
+    """
+    from orbi import failure_report
+
+    rounds: list[int] = []
+    real = failure_report._finish_progress_body
+
+    def spy(**kwargs):
+        rounds.append(kwargs["review_round"])
+        return real(**kwargs)
+
+    monkeypatch.setattr(failure_report, "_finish_progress_body", spy)
+    return rounds
+
+
 def patched_comment_bodies(api_calls: list[list[str]]) -> list[str]:
     """The bodies of the `gh api --method PATCH` calls, in call order."""
     return [
