@@ -1774,7 +1774,12 @@ def _run_review_round(
         if gate_worktree.is_dir() and _delivery_checklist(
             gate_worktree, config, test_status=test_status(checks),
         )["column2"]:
-            if READY_LABEL not in labels:
+            # The waiting guard asks for the repository RESOLVED claim
+            # label, never the host default (Issue #1775): in a repository
+            # whose dispatch_label is a custom queue label the ticket
+            # already carries it, so a second tick must not rewrite the
+            # waiting patch.
+            if ready_label not in labels:
                 apply_label_patch(
                     number, repo=source_repo,
                     event=EVENT_HUMAN_REVIEW_WAITING,

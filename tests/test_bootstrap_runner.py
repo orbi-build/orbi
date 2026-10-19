@@ -2012,6 +2012,63 @@ def test_process_issue_terminal_failure_clears_the_repositorys_dispatch_label(
     ]
 
 
+@pytest.mark.parametrize(
+    ("repo_config", "queue_label", "other_label"),
+    [
+        # Issue #1775 acceptance 1: the repository's own queue label.
+        ('dispatch_label = "ship"\n', "ship", "ai-ready"),
+        # Issue #1775 acceptance 2: the default stays exactly as today.
+        ("", "ai-ready", "ship"),
+    ],
+    ids=["custom_dispatch_label", "default_queue_label"],
+)
+def test_claim_then_blocked_ends_ai_blocked_alone(
+    monkeypatch, tmp_path, repo_config, queue_label, other_label,
+):
+    """Issue #1775, end to end on the public surface: the Issue the claim
+    scan selects is the one carrying the repository's RESOLVED queue label
+    (`dispatch_label`, default `ai-ready`), and the blocked terminal clears
+    that SAME label — the Issue ends `ai-blocked` alone, no queue-label
+    residue on any surface that reads it.
+
+    The distractor Issue carries the OTHER label and is NEWER, so a scan
+    that read the wrong label would pick it and a blocked transition that
+    cleared the wrong label would leave the residue behind."""
+    fake = FakeGh("owner/repo")
+    if repo_config:
+        fake.set_repo_config(repo_config)
+    # Oldest first: the queue-label Issue, then the newer distractor.
+    fake.add_issue(8, title="task", body="", labels=(queue_label,))
+    fake.add_issue(9, title="other", body="", labels=(other_label,))
+    fake.add_pr(41, head="orbi/owner-repo-issue-8", state="CLOSED")
+    monkeypatch.setattr(seam, "run_command", fake)
+    runner.set_run_id("a1b2c3d4")
+    config = config_domain.RunnerConfig(
+        repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main",
+    )
+    # The tick's policy resolution, exactly as `main` does it.
+    policy = runner.load_repo_policy(config, "owner/repo")
+    fused = runner.resolve_source_base_branch(config, "owner/repo", policy)
+    assert (fused.dispatch_label or "ai-ready") == queue_label
+
+    # 1. The claim scan looks for the repository's queue label.
+    issue = claim.pick_ready_issue("owner/repo", None, config=fused)
+    assert issue["number"] == 8
+    # 2. The claim transition keeps it: the delivery is in flight.
+    github.apply_label_patch(
+        8, repo="owner/repo", event=runner.EVENT_CLAIM,
+        current_labels=github.issue_labels(8, repo="owner/repo"),
+    )
+    assert fake.issues[8]["labels"] == [queue_label, "ai-in-progress"]
+    # 3. The delivery's PR closed without a merge: the blocked terminal.
+    runner.delivery_step(
+        fake.prs[41]["url"], issue, fused, "owner/repo",
+    )
+    assert fake.issues[8]["labels"] == ["ai-blocked"]
+    # The distractor Issue is untouched.
+    assert fake.issues[9]["labels"] == [other_label]
+
+
 def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     monkeypatch, tmp_path,
 ):

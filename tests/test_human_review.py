@@ -218,8 +218,11 @@ def _scene_comments():
     ]
 
 
-def _gate_config(tmp_path, *, gate=True):
-    return config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main", base_sha=BASE_SHA, human_review_gate=gate)
+def _gate_config(tmp_path, *, gate=True, dispatch_label=None):
+    return config_domain.RunnerConfig(
+        repo_dir=tmp_path, base_branch="main", base_sha=BASE_SHA,
+        human_review_gate=gate, dispatch_label=dispatch_label,
+    )
 
 
 @pytest.fixture()
@@ -311,6 +314,22 @@ def test_gate_on_second_tick_does_not_rewrite_the_waiting_patch(
         lambda *a, **k: ["ai-ready", "ai-pr-opened"],
     )
     outcome = _round(_gate_config(tmp_path))
+    assert outcome is None
+    assert gate_env["calls"]["edit"] == []
+    assert gate_env["reviews"] == []
+
+
+def test_gate_on_second_tick_does_not_rewrite_the_waiting_patch_for_a_custom_queue_label(
+    gate_env, tmp_path, monkeypatch,
+):
+    """Issue #1775: the waiting guard asks for the repository's RESOLVED
+    claim label, not the host default — a repository whose
+    `dispatch_label` is `ship` already carries the label while it waits,
+    so the next tick must not rewrite the waiting patch every time."""
+    monkeypatch.setattr(seam, "issue_labels",
+        lambda *a, **k: ["ship", "ai-pr-opened"],
+    )
+    outcome = _round(_gate_config(tmp_path, dispatch_label="ship"))
     assert outcome is None
     assert gate_env["calls"]["edit"] == []
     assert gate_env["reviews"] == []
