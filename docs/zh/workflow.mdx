@@ -90,7 +90,9 @@ ai-ready                任务被派发（orbi add，或人工加标签）
   -> ai-merged          Orbi 自动合并模式：成功终态；合并同时清除
                         `ai-ready`，合并后的 Issue 只剩 `ai-merged`
                         （Issue #1526；不回溯已合并的 Issue）；
-                        PR body 的 Fixes #N 原生关闭 Issue
+                        PR body 的 Fixes #N 原生关闭 Issue；若合并已落地但
+                        GitHub 从未把 PR 标记为 merged，则由引擎自行关闭
+                        （Issue #1801）
   -> ai-awaiting-merge  已知策略阻塞：Issue 评论写明维护者要做的一件事；
                         Orbi 只在队列无事可做的 tick 重试合并，
                         维护者完成后合并指定 head

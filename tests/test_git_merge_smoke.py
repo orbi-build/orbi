@@ -27,6 +27,7 @@ import orbi.gh_response as gh_response
 import orbi.pi_session as pi_session
 import orbi.runner as runner
 import orbi.review_merge as review_merge
+import orbi.run_state as run_state
 from seam import seam
 
 
@@ -414,9 +415,11 @@ def test_merge_gate_accepts_a_landed_head_while_the_pr_reads_open(
                 if c[0] == "gh" and c[1] == "pr" and "merge" in c]) == 1
     merge_commit = git(clone, "rev-parse", "origin/main")
     # Issue #1802: the gate keeps the confirmation it already made instead
-    # of throwing it away for the round to read a second time.
+    # of throwing it away for the round to read a second time. Issue #1801:
+    # that confirmation carries the state the PR really reads (still OPEN),
+    # which is what tells the merged path to close the Issue itself.
     assert merged["confirmation"] == {
-        "state": "MERGED", "merge_commit": merge_commit,
+        "state": "OPEN", "merge_commit": merge_commit,
     }
     # The commit that landed the reviewed head is a real merge commit whose
     # second parent is that head.
@@ -424,8 +427,38 @@ def test_merge_gate_accepts_a_landed_head_while_the_pr_reads_open(
     with caplog.at_level("INFO"):
         confirmed = review_merge.confirm_merged(clone, merged, "main",
                                                 repo_dir=clone)
-    assert confirmed == {"state": "MERGED", "merge_commit": merge_commit}
+    # Issue #1801: the PR never reads MERGED, so GitHub never closes the
+    # Issue through the closing keyword; the answer says OPEN and the
+    # merged path closes it itself.
+    assert confirmed == {"state": "OPEN", "merge_commit": merge_commit}
     assert "confirm_merged_landed_on_base" in caplog.text
+
+
+def test_a_landed_merge_that_never_reads_merged_closes_the_issue(
+        clone, monkeypatch, caplog):
+    """Issue #1801 acceptance 1, against a real repository: `gh pr merge`
+    fails with a 5xx, the reviewed head landed on `origin/main` and the PR
+    still reads `OPEN`. The merged path's decision (`confirm_merged` did
+    not answer MERGED) runs `gh issue close`, so the Issue ends closed
+    like a normal merge instead of holding its milestone's release."""
+    git(clone, "checkout", "-b", "orbi/owner-repo-issue-4")
+    head_oid = commit_file(clone, "delivery.txt", "delivery")
+    calls = install_failing_merge_gh(monkeypatch, clone, head_oid)
+    merged = review_merge.merge_gate(
+        clone, _delivery_pr(clone, head_oid), "main",
+        repo_dir=clone, language_code="en",
+    )
+    confirmed = review_merge.confirm_merged(clone, merged, "main",
+                                            repo_dir=clone)
+    assert confirmed["state"] != "MERGED"
+    with caplog.at_level("INFO"):
+        run_state.close_issue_after_landed_merge(
+            4, repo="owner/repo", merge_commit=confirmed["merge_commit"],
+        )
+    assert ["gh", "issue", "close", "4",
+            "--repo", "owner/repo"] in calls
+    assert "issue_closed_after_landed_merge" in caplog.text
+    assert f"merge_commit={confirmed['merge_commit']}" in caplog.text
 
 
 def test_merge_gate_still_fails_when_the_merge_did_not_land(

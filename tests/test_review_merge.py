@@ -2078,7 +2078,10 @@ def test_confirm_merged_accepts_a_reviewed_head_that_landed_on_base(
             tmp_path, {"number": 4, "head_oid": "h1"}, "main",
             repo_dir=tmp_path,
         )
-    assert result == {"state": "MERGED", "merge_commit": "m1"}
+    # Issue #1801: the answer carries the state the PR actually read —
+    # OPEN, because GitHub never marked this merge — so nothing but the
+    # engine itself closes the Issue.
+    assert result == {"state": "OPEN", "merge_commit": "m1"}
     rev_list = [c for c in commands if c[1:2] == ["rev-list"]][0]
     assert rev_list[2:] == [
         "--ancestry-path", "--topo-order", "--reverse", "h1..origin/main",
@@ -2906,6 +2909,136 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
         assert "- 角色: 评审" in body
         assert "**Orbi progress**" not in body
         assert body.startswith("<!-- orbi:run=a1b2c3d4 -->")
+
+
+def _merged_round(monkeypatch, tmp_path, *, gate, state="MERGED",
+                  close=None):
+    """Drive one clean round whose merge result is `gate` (Issue #1801).
+
+    Returns the round's answer and ONE ordered list of every write the
+    merged path made — the gh commands, the label edits and the Issue
+    comments — so their order is assertable. Every patch goes through the
+    `seam` fan-out, which adds no per-module patch site (Issue #789).
+    """
+    monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(
+        seam, "run_review",
+        lambda *a, **k: _review_session(_pass_verdict_text()),
+    )
+    monkeypatch.setattr(seam, "merge_gate", gate)
+    monkeypatch.setattr(
+        seam, "confirm_merged",
+        lambda *a, **k: {"state": state, "merge_commit": "m1"},
+    )
+    monkeypatch.setattr(seam, "sync_base_checkout", lambda *a, **k: None)
+    if close is not None:
+        monkeypatch.setattr(seam, "close_issue", close)
+    # The fake gh call list IS the event list: the close command lands in
+    # it, so the label, the record and the close need one shared order.
+    events, _posted = make_fake_gh(monkeypatch)
+    monkeypatch.setattr(
+        seam, "edit_issue", lambda *a, **k: events.append(("edit", k)),
+    )
+    monkeypatch.setattr(
+        seam, "comment_issue",
+        lambda *a, **k: events.append(("comment", k.get("body"))),
+    )
+    merged = review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+        scene=_scene(),
+    )
+    return merged, events
+
+
+def _close_calls(events):
+    return [
+        index for index, call in enumerate(events)
+        if isinstance(call, list)
+        and call[0] == "gh" and call[1] == "issue" and call[2] == "close"
+    ]
+
+
+def test_review_and_merge_closes_the_issue_of_a_landed_unmerged_merge(
+        monkeypatch, tmp_path):
+    """Issue #1801 (orbi-cloud PR #2652): `gh pr merge` fails with a 5xx
+    and the reviewed head still landed on origin/<base>, so the PR reads
+    OPEN with `mergedAt: null` — GitHub never closes the Issue through the
+    PR's closing keyword. The merged path closes it itself, after the
+    `ai-merged` label and the merged record naming the commit that landed.
+    """
+    merged, events = _merged_round(
+        monkeypatch, tmp_path, state="OPEN",
+        gate=lambda *a, **k: {**_pr(), "merged": True},
+    )
+    assert merged is True
+    close_at = _close_calls(events)
+    assert len(close_at) == 1
+    assert events[close_at[0]] == [
+        "gh", "issue", "close", "4", "--repo", "owner/repo",
+    ]
+    # The label and the merged record name the landed commit, and both
+    # land BEFORE the close: the merge is recorded first, its bookkeeping
+    # second.
+    labelled_at = [
+        index for index, call in enumerate(events)
+        if isinstance(call, tuple)
+        and call[0] == "edit" and call[1].get("add") == "ai-merged"
+    ]
+    assert len(labelled_at) == 1
+    commented_at = [
+        index for index, call in enumerate(events)
+        if isinstance(call, tuple) and call[0] == "comment"
+    ]
+    assert len(commented_at) == 1
+    record = events[commented_at[0]][1]
+    assert record.splitlines()[0] == "<!-- orbi:run=a1b2c3d4 -->"
+    assert "merge_commit=m1" in record
+    assert labelled_at[0] < commented_at[0] < close_at[0]
+
+
+def test_review_and_merge_keeps_the_merged_fact_when_the_close_fails(
+        monkeypatch, tmp_path, caplog):
+    """Issue #1801: the close is bookkeeping of an already landed merge —
+    a failing `gh issue close` is journaled and never rewrites the merged
+    fact (the `ai-merged` label, the merged record and the round's merged
+    answer all stay)."""
+    def failing_close(*args, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, ["gh", "issue", "close"], stderr="HTTP 502: Bad Gateway",
+        )
+
+    with caplog.at_level("ERROR"):
+        merged, events = _merged_round(
+            monkeypatch, tmp_path, state="OPEN",
+            gate=lambda *a, **k: {**_pr(), "merged": True},
+            close=failing_close,
+        )
+    assert merged is True
+    assert any(
+        isinstance(call, tuple) and call[0] == "edit"
+        and call[1].get("add") == "ai-merged"
+        for call in events
+    )
+    record = [
+        call[1] for call in events
+        if isinstance(call, tuple) and call[0] == "comment"
+    ][0]
+    assert "merge_commit=m1" in record
+    assert "issue_close_failed" in caplog.text
+
+
+def test_review_and_merge_normal_merge_leaves_the_close_to_github(
+        monkeypatch, tmp_path):
+    """Issue #1801 acceptance 2: a PR GitHub marks MERGED keeps today's
+    path — the `Fixes #N` keyword closes the Issue, so the engine issues
+    no extra close call."""
+    merged, events = _merged_round(
+        monkeypatch, tmp_path,
+        gate=lambda *a, **k: {**_pr(), "merged": True},
+    )
+    assert merged is True
+    assert _close_calls(events) == []
 
 
 def test_review_and_merge_skips_checkout_sync_for_a_locked_engine_source(

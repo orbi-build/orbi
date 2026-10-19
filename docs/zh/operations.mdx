@@ -590,6 +590,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `confirm_merged_missing_on_base` | 合并提交不在 base 分支上 |
 | `confirm_merged_not_merged` | PR 未合并，且被评审的 head 不在 base 分支上 |
 | `confirm_merged_landed_on_base` | PR 仍显示未合并，但被评审的 head 已落在 base 分支上（Issue #1798） |
+| `issue_closed_after_landed_merge` | 合并已落地但 PR 仍显示未合并，引擎自行关闭源 Issue（Issue #1801） |
+| `issue_close_failed` | 合并已落地，关闭源 Issue 失败（bypass；合并已是既成事实） |
 | `human_review_waiting` | 交付等待人工评审标签 |
 | `human_review_checklist_failed` | 人工评审清单发布失败（旁路） |
 | `human_review_diff_read_failed` | 人工评审 diff 读取失败 |

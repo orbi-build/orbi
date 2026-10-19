@@ -1411,7 +1411,8 @@ def test_internal_clean_verdict_still_merges(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "merge_gate",
                         lambda *a, **k: {"url": PR_URL})
     monkeypatch.setattr(seam, "confirm_merged",
-                        lambda *a, **k: {"merge_commit": "m1"})
+                        lambda *a, **k: {"state": "MERGED",
+                                         "merge_commit": "m1"})
     monkeypatch.setattr(seam, "merge_commit_metrics",
                         lambda *a, **k: (0, 1))
     monkeypatch.setattr(seam, "sync_base_checkout", lambda *a, **k: None)
