@@ -667,6 +667,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
                 "not merged"
             )
     merge_method = select_merge_method(merge_repo)
+    confirmation = None
     try:
         run_command([
             "gh", "pr", "merge", str(pr["number"]),
@@ -676,13 +677,14 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         # Issue #1798: GitHub can create the merge commit and this call still
         # fail (`502 Bad Gateway`), leaving the PR OPEN with `mergedAt: null`.
         # `confirm_merged` decides: landed continues like a success (never a
-        # second merge call), "not landed" keeps today's path.
+        # second merge call), "not landed" keeps today's path. Issue #1802:
+        # the decision is made once and returned to the caller.
         try:
-            confirm_merged(worktree, pr, base_branch, repo_dir=repo_dir)
-            landed = True
+            confirmation = confirm_merged(worktree, pr, base_branch,
+                                          repo_dir=repo_dir)
         except RuntimeError:
-            landed = False
-        if not landed:
+            pass
+        if confirmation is None:
             preflight = github.merge_gate_preflight(merge_repo, base_branch)
             stderr = str(exc.stderr or "")
             if is_maintainer_actionable(stderr, preflight):
@@ -702,7 +704,8 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
     event("merged", pr=pr["number"], head=pr["head_oid"],
           method=merge_method)
     delete_merged_delivery_branch(merge_repo, pr["number"], pr["head_ref"])
-    return {**pr, "merged": True, "merge_method": merge_method}
+    return {**pr, "merged": True, "merge_method": merge_method,
+            "confirmation": confirmation}
 
 
 def confirm_merged(worktree: Path, pr: dict, base_branch: str,
@@ -1544,7 +1547,8 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         # behind-base/conflict head propagate untouched and fail fast.
         handle_gate_failure(str(exc), ci_failure=True)
         return False
-    confirmed = confirm_merged(
+    # Issue #1802: use the gate's confirmation; a success reads it here.
+    confirmed = merged.get("confirmation") or confirm_merged(
         worktree, merged, base_branch, repo_dir=config.repo_dir,
     )
     # The merged-as-is fact (Issue #833): every count failure degrades
