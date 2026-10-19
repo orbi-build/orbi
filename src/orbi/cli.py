@@ -184,6 +184,7 @@ def ready_issue(repo: str,
     a delivery state (ai-pr-opened/ai-fix-needed/ai-merged/ai-blocked) is
     never ready, and the claim's pick/skip lines stay out of the view; an
     unreadable scan fails the observation (#1668), not an empty queue.
+    The held set and the Milestone read arrive from the claim (#1782).
     """
     journal = journal_domain.LOGGER
     level = journal.level

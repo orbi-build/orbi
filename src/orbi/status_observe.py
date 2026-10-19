@@ -83,8 +83,11 @@ KIND_ANALYSIS = "analysis"
 # bounded gh read retry already ran inside the reader, and the same
 # family the other gh-reading CLI commands collapse (a hung gh raises
 # TimeoutExpired, a missing gh raises OSError, a malformed payload
-# raises ValueError).
-READ_ERRORS = (subprocess.SubprocessError, OSError, ValueError)
+# raises ValueError). A read that ANSWERED but cannot be evaluated is
+# the adapter's own failed check (a Milestone that cannot be found is a
+# failed read, never a silent 0), which it raises as RuntimeError
+# (Issue #1782).
+READ_ERRORS = (subprocess.SubprocessError, OSError, ValueError, RuntimeError)
 
 
 class StatusSelectorError(ValueError):

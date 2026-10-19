@@ -15,13 +15,17 @@ The list order mirrors ``gh issue list``: newest-created first (the
 seed issues oldest-first.
 """
 import base64
+import fcntl
 import json
 import logging
+import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
 import orbi.github as github
+import orbi.pilot_slots as pilot_slots
 import orbi.repo_config as repo_config
 import orbi.claim as claim
 import orbi.runner as runner
@@ -40,7 +44,7 @@ from orbi.delivery_labels import (
     RELEASE_LABEL,
 )
 from orbi.progress import format_status_comment
-from seam import seam
+from seam import resume_deps, seam
 
 from tests.fakes.github import FakeGh
 
@@ -712,3 +716,184 @@ def test_status_ready_keeps_the_claim_journal_out_of_the_view(
         claim.pick_ready_issue("owner/repo")
     assert "picked issue=2647" in caplog.text
 
+
+# --- status and the claim decide on the SAME inputs (Issue #1782) -----------
+
+
+def _hold_foreign_slot(config: RunnerConfig, repo: str, number: int) -> int:
+    """A live FOREIGN co-runner holds slot 1 for `<repo>#<number>`.
+
+    The second open file description conflicts with this process's own
+    probes even inside one process, and the file records a foreign pid —
+    the same real scene `slot_held_deliveries` reads (the flock is the
+    token, the identity line names the delivery).
+    """
+    path = pilot_slots.slot_path(config.slot_dir, 1)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    os.write(fd, f"{os.getpid() + 1}\n{repo}#{int(number)}\n".encode("ascii"))
+    return fd
+
+
+def test_status_ready_skips_the_delivery_a_live_co_runner_holds(
+        fake_gh, tmp_path):
+    """Acceptance #1782, criterion 1: while a co-runner holds #1 in a
+    slot and has not labelled it `ai-in-progress` yet, `orbi status`
+    names #2 — the Issue the claim picks — instead of the held #1.
+
+    #2 seeds first so `gh` lists #1 (the held one) FIRST: the order that
+    made status name the Issue the claim would skip."""
+    fake_gh.add_issue(2, title="next", labels=(READY_LABEL,))
+    fake_gh.add_issue(
+        1, title="held by a co-runner", labels=(READY_LABEL,),
+    )
+    config = _status_config(tmp_path)
+    holder = _hold_foreign_slot(config, "owner/repo", 1)
+    try:
+        selected = claim.pick_next_delivery(
+            ["owner/repo"], config.slot_dir, config.max_concurrency,
+            config=config, hooks=resume_deps(),
+        )
+        assert selected is not None
+        assert selected[1]["number"] == 2
+        assert _status_ready_line(config) == "  ready: #2 next"
+    finally:
+        os.close(holder)
+
+
+def _status_config_file(tmp_path) -> Path:
+    """A real config file for the CLI path (the same host keys
+    `_status_config` hands the observer in process)."""
+    prompts = tmp_path / "prompts"
+    prompts.mkdir(exist_ok=True)
+    for name in ("prompt.md", "prompt_review.md"):
+        (prompts / name).write_text("prompt", encoding="utf-8")
+    path = tmp_path / "orbi.toml"
+    path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        'base_branch = "main"\n'
+        "max_concurrency = 1\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _status_cli_observer(monkeypatch) -> None:
+    """Wire the REAL observer, injecting only the open-Issue listing.
+
+    `FakeGh` models the claim's reads (`gh issue list`, the Milestones
+    API) but not the status view's REST issue listing, so the
+    active-delivery read is injected exactly as the report helper does;
+    the ready decision under test stays the real
+    `cli.ready_issue` -> `claim.pick_ready_issue` path.
+    """
+    real = observe.StatusObserver
+
+    def factory(config, scope, **kwargs):
+        kwargs.setdefault("read_issues", lambda repo: [])
+        return real(config, scope, **kwargs)
+
+    monkeypatch.setattr(observe, "StatusObserver", factory)
+
+
+def _break_milestone_reads(fake_gh, monkeypatch) -> None:
+    """The Milestones API is down: only the release milestone read fails."""
+    def api_outage(command, **kwargs):
+        if command[1:2] == ["api"] and "milestones" in command[2]:
+            raise subprocess.CalledProcessError(
+                1, command, output="", stderr="gh: API error (fatal)",
+            )
+        return fake_gh(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", api_outage)
+
+
+def _release_only_queue(fake_gh) -> None:
+    fake_gh.add_issue(
+        1, title="release", labels=(READY_LABEL, RELEASE_LABEL), milestone=1,
+    )
+    fake_gh.add_milestone(1, title="v1.0", open_issues=1)
+
+
+def _empty_milestone_reads(fake_gh, monkeypatch) -> None:
+    """The Milestones read answers nothing: the adapter's own failed check
+    (the Milestone is not on the results page — never a silent 0), which
+    is not a non-zero exit but is still an unevaluated read."""
+    def vanished(command, **kwargs):
+        if command[1:2] == ["api"] and "milestones" in command[2]:
+            return ""
+        return fake_gh(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", vanished)
+
+
+def test_status_reports_a_failed_release_milestone_read(
+        fake_gh, tmp_path, monkeypatch, caplog):
+    """Acceptance #1782, criterion 2: with only the release ticket ready,
+    a failed Milestone read is a FAILED READ in the view — never
+    `ready: -` — while the claim still skips the release this tick."""
+    _release_only_queue(fake_gh)
+    _break_milestone_reads(fake_gh, monkeypatch)
+    config = _status_config(tmp_path)
+    with pytest.raises(observe.READ_ERRORS, match="milestones"):
+        _status_ready_line(config)
+    with caplog.at_level(logging.ERROR):
+        assert claim.pick_ready_issue(
+            "owner/repo", config.active_milestone, config,
+        ) is None
+    assert "release_milestone_check_failed issue=1" in caplog.text
+
+
+def test_main_status_reports_a_failed_release_milestone_read(
+        fake_gh, tmp_path, monkeypatch, capsys):
+    """Acceptance #1782, criterion 2 through the user's own command:
+    `orbi status` names the failed read and exits non-zero; it never
+    renders the empty `ready: -` queue the failed read used to become."""
+    _release_only_queue(fake_gh)
+    _break_milestone_reads(fake_gh, monkeypatch)
+    monkeypatch.setattr(
+        seam, "freeze_base", lambda repo_dir, base_branch: "0" * 40,
+    )
+    _status_cli_observer(monkeypatch)
+    config_file = _status_config_file(tmp_path)
+    assert cli.main(["status", "--config", str(config_file)]) == 1
+    captured = capsys.readouterr()
+    assert "status_failed scope=owner/repo" in captured.err
+    assert "milestones" in captured.err
+    assert "ready:" not in captured.out
+
+
+def test_main_status_reports_a_missing_release_milestone_as_a_failed_read(
+        fake_gh, tmp_path, monkeypatch, capsys):
+    """Acceptance #1782, criterion 2: the adapter's own failed check (the
+    Milestone cannot be found — never a silent 0) is a failed read too,
+    not a traceback and not an empty queue."""
+    _release_only_queue(fake_gh)
+    _empty_milestone_reads(fake_gh, monkeypatch)
+    monkeypatch.setattr(
+        seam, "freeze_base", lambda repo_dir, base_branch: "0" * 40,
+    )
+    _status_cli_observer(monkeypatch)
+    config_file = _status_config_file(tmp_path)
+    assert cli.main(["status", "--config", str(config_file)]) == 1
+    captured = capsys.readouterr()
+    assert "status_failed scope=owner/repo" in captured.err
+    assert "not found" in captured.err
+    assert "ready:" not in captured.out
+
+
+def test_status_ready_and_the_claim_agree_without_a_holder(fake_gh, tmp_path):
+    """Acceptance #1782, criterion 3: no live holder and healthy reads —
+    status and the claim pick the same Issue, as before."""
+    fake_gh.add_issue(2, title="next", labels=(READY_LABEL,))
+    fake_gh.add_issue(1, title="first", labels=(READY_LABEL,))
+    config = _status_config(tmp_path)
+    selected = claim.pick_next_delivery(
+        ["owner/repo"], config.slot_dir, config.max_concurrency,
+        config=config, hooks=resume_deps(),
+    )
+    assert selected is not None
+    assert _status_ready_line(config) == (
+        f"  ready: #{selected[1]['number']} {selected[1]['title']}"
+    )
