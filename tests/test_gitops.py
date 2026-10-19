@@ -35,6 +35,31 @@ def test_task_branch_is_the_stable_delivery_identity():
     assert gitops.task_branch("o/r", 4, "a1b2c3d4") == "orbi/o-r-issue-4"
 
 
+def test_delivery_branch_prefix_is_what_task_branch_builds_on():
+    """Issue #1776: the naming and the ownership check are one source."""
+    prefix = gitops.delivery_branch_prefix("orbi-build/orbi")
+    assert prefix == "orbi/orbi-build-orbi-issue-"
+    assert gitops.task_branch("orbi-build/orbi", 12) == prefix + "12"
+
+
+def test_is_delivery_branch_accepts_only_this_repos_stable_naming():
+    """Issue #1776 acceptance 1: an `orbi/` prefix is not ownership — only
+    `orbi/<owner>-<repo>-issue-<n>` for the configured source repo is."""
+    repo = "orbi-build/orbi"
+    assert gitops.is_delivery_branch(repo, gitops.task_branch(repo, 12)) is True
+    for head in (
+        "orbi/manual",
+        "orbi/orbi-build-orbi-issue-",
+        "orbi/orbi-build-orbi-issue-12x",
+        "orbi/other-owner-other-repo-issue-3",
+        "fix/bug",
+        "",
+    ):
+        assert gitops.is_delivery_branch(repo, head) is False, head
+    # The merged-PR read is a GraphQL node: a malformed one has no head.
+    assert gitops.is_delivery_branch(repo, None) is False
+
+
 def test_worktree_path_names_the_run_isolated_worktree(tmp_path):
     path = gitops.worktree_path(tmp_path, "orbi-build/orbi", 785, "a1b2c3d4")
     assert path == (
