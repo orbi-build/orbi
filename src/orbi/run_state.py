@@ -77,6 +77,27 @@ def landed_merge_commit(head: str, base_ref: str, *,
     return commits[0] if commits else None
 
 
+def close_issue_after_landed_merge(number: int, *, repo: str,
+                                   merge_commit: str) -> None:
+    """Close the source Issue of a merge GitHub never marked merged (#1801).
+
+    GitHub closes an Issue through the PR's closing keyword only when the
+    PR ITSELF is merged. A merge that landed while the merge call errored
+    (#1798) leaves the PR `OPEN` with `mergedAt: null`, so nothing closes
+    the Issue and it holds its milestone's release. The merge is already a
+    fact: a failed close is journaled (`issue_close_failed`) and never
+    rewrites it.
+    """
+    try:
+        github.close_issue(number, repo=repo)
+    except Exception:
+        event("issue_close_failed", level=logging.ERROR,
+              issue=number, merge_commit=merge_commit)
+        return
+    event("issue_closed_after_landed_merge", issue=number,
+          merge_commit=merge_commit)
+
+
 def delivery_commit_guard(worktree: Path, *, local_head: str,
                           base_sha: str, branch: str) -> None:
     """Fail the delivery when the task branch carries no real change.

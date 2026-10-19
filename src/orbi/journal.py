@@ -369,6 +369,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "confirm_merged_missing_on_base": "the merged commit is missing from the base branch",
     "confirm_merged_not_merged": "the PR is not merged and its reviewed head is not on the base branch",
     "confirm_merged_landed_on_base": "the reviewed head landed on the base branch while the PR still reads unmerged (Issue #1798)",
+    "issue_closed_after_landed_merge": "the engine closed the source Issue itself because the merge landed while the PR still reads unmerged (Issue #1801)",
+    "issue_close_failed": "closing the source Issue of a landed merge failed (bypass; the merge already landed)",
     # Human review gate.
     "human_review_waiting": "the delivery waits for the human review label",
     "human_review_checklist_failed": "publishing the human review checklist failed (bypass)",

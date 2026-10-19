@@ -25,6 +25,7 @@ from conftest import git
 
 import orbi.runner as runner
 import orbi.review_merge as review_merge
+import orbi.run_state as run_state
 from seam import seam
 
 
@@ -417,8 +418,38 @@ def test_merge_gate_accepts_a_landed_head_while_the_pr_reads_open(
     with caplog.at_level("INFO"):
         confirmed = review_merge.confirm_merged(clone, merged, "main",
                                                 repo_dir=clone)
-    assert confirmed == {"state": "MERGED", "merge_commit": merge_commit}
+    # Issue #1801: the PR never reads MERGED, so GitHub never closes the
+    # Issue through the closing keyword; the answer says OPEN and the
+    # merged path closes it itself.
+    assert confirmed == {"state": "OPEN", "merge_commit": merge_commit}
     assert "confirm_merged_landed_on_base" in caplog.text
+
+
+def test_a_landed_merge_that_never_reads_merged_closes_the_issue(
+        clone, monkeypatch, caplog):
+    """Issue #1801 acceptance 1, against a real repository: `gh pr merge`
+    fails with a 5xx, the reviewed head landed on `origin/main` and the PR
+    still reads `OPEN`. The merged path's decision (`confirm_merged` did
+    not answer MERGED) runs `gh issue close`, so the Issue ends closed
+    like a normal merge instead of holding its milestone's release."""
+    git(clone, "checkout", "-b", "orbi/owner-repo-issue-4")
+    head_oid = commit_file(clone, "delivery.txt", "delivery")
+    calls = install_failing_merge_gh(monkeypatch, clone, head_oid)
+    merged = review_merge.merge_gate(
+        clone, _delivery_pr(clone, head_oid), "main",
+        repo_dir=clone, language_code="en",
+    )
+    confirmed = review_merge.confirm_merged(clone, merged, "main",
+                                            repo_dir=clone)
+    assert confirmed["state"] != "MERGED"
+    with caplog.at_level("INFO"):
+        run_state.close_issue_after_landed_merge(
+            4, repo="owner/repo", merge_commit=confirmed["merge_commit"],
+        )
+    assert ["gh", "issue", "close", "4",
+            "--repo", "owner/repo"] in calls
+    assert "issue_closed_after_landed_merge" in caplog.text
+    assert f"merge_commit={confirmed['merge_commit']}" in caplog.text
 
 
 def test_merge_gate_still_fails_when_the_merge_did_not_land(

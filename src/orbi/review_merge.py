@@ -710,10 +710,12 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str,
     """Confirm the reviewed PR's merge landed on origin/<base>.
 
     A MERGED PR answers with its merge commit, which must be on the base
-    branch. Issue #1798: the merge can also land while the merge call
-    itself errors, leaving the PR OPEN/CLOSED with `mergedAt: null` — the
-    reviewed head being on origin/<base> after the fresh fetch is that
-    merge. Anything else is a rejection; a failed read propagates.
+    branch. Issue #1798: it can also land while the merge call itself
+    errors, leaving the PR OPEN/CLOSED with `mergedAt: null` — the head on
+    origin/<base> is that merge, and the answer then carries the PR's own
+    state, never a claimed `MERGED` (Issue #1801: GitHub closes an Issue
+    only for a merged PR, so the caller closes this one itself). A
+    rejection otherwise; a failed read propagates.
 
     The base fetch updates the shared remote-tracking ref, so it runs under
     the base-sync lock with the deployment checkout as the lock location.
@@ -737,7 +739,7 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str,
                                f"(state={state.get('state')})")
         event("confirm_merged_landed_on_base", pr=pr["number"],
               head=pr["head_oid"], merge_commit=merge_commit)
-        return {"state": "MERGED", "merge_commit": merge_commit}
+        return {"state": state.get("state"), "merge_commit": merge_commit}
     if not _is_ancestor(merge_commit, f"origin/{base_branch}", cwd=worktree):
         event(
             "confirm_merged_missing_on_base", level=logging.ERROR,
@@ -1553,9 +1555,8 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         read_pushed_base(worktree),
         merge_method=merged.get("merge_method", "--merge"),
     )
-    # The merged publishing is bypass — the GitHub merge
-    # already landed; a 404 here must not stop the `ai-merged`
-    # transition and the merged PR scene comment below.
+    # The merged publishing is bypass — the GitHub merge already landed; a
+    # 404 here must not stop `ai-merged` and the merged record below.
     publish(
         action=lambda: publisher.milestone(
             f"merged: {merged['url']} "
@@ -1592,6 +1593,9 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             language_code=language.of(config),
         ),
     )
+    if confirmed["state"] != "MERGED":  # Issue #1801: nothing else closes it
+        run_state.close_issue_after_landed_merge(
+            number, repo=source_repo, merge_commit=confirmed["merge_commit"])
     try:
         # A config built by config_domain.load_config always carries both paths (the
         # deploy home defaults to the repo dir). A split layout does not
