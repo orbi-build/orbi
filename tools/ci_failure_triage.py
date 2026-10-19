@@ -87,6 +87,7 @@ from orbi.delivery_scene import (  # noqa: E402 - the src bootstrap above
     DeliveryScene,
     classify,
 )
+from orbi.gitops import is_delivery_branch  # noqa: E402 - the src bootstrap above
 
 CI_WORKFLOW_NAME = "CI"
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
@@ -340,18 +341,17 @@ def pr_html_url(owner: str, repo: str, number: int) -> str:
 
 
 def is_external_head(owner: str, repo: str, head_branch: str) -> bool:
-    """True when the head branch is not the Runner's stable delivery naming.
+    """True when the head branch is not this repository's delivery branch.
 
-    The Runner's own PRs always carry `orbi/<owner>-<repo>-issue-<n>` (the
-    stable delivery identity); a contributor's freely chosen branch name is
-    an external contribution the delivery loop must review, not redo.
+    The one ownership decision lives beside `gitops.task_branch`
+    (Issue #1776, `orbi.gitops.is_delivery_branch`): the Runner's own PRs
+    always carry `orbi/<owner>-<repo>-issue-<n>`, while a contributor's
+    freely chosen branch name — even one starting with `orbi/` — is an
+    external contribution the delivery loop must review, not redo. This
+    script keeps no pattern of its own, so it can never disagree with the
+    merge notification.
     """
-    if re.fullmatch(
-        rf"orbi/{re.escape(owner)}-{re.escape(repo)}-issue-\d+",
-        head_branch or "",
-    ):
-        return False
-    return True
+    return not is_delivery_branch(f"{owner}/{repo}", head_branch)
 
 
 def target_display(

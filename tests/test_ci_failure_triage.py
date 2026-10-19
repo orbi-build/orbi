@@ -598,6 +598,9 @@ def test_stable_named_head_creates_no_external_marker(
 def test_is_external_head_matches_the_stable_delivery_naming_only():
     assert mod.is_external_head("orbi-run", "test-repo", "fix/bug") is True
     assert mod.is_external_head("orbi-run", "test-repo", "main") is True
+    # Issue #1776: an `orbi/` prefix is NOT ownership — a self-hosted user
+    # may name their own branch `orbi/manual`.
+    assert mod.is_external_head("orbi-run", "test-repo", "orbi/manual") is True
     assert (
         mod.is_external_head(
             "orbi-run", "test-repo", "orbi/orbi-run-test-repo-issue-42",
@@ -605,6 +608,44 @@ def test_is_external_head_matches_the_stable_delivery_naming_only():
         is False
     )
     assert mod.is_external_head("orbi-run", "test-repo", "") is True
+
+
+def test_orbi_prefixed_manual_branch_files_an_external_contribution(
+    gh, monkeypatch, tmp_path, capsys
+):
+    """Issue #1776 acceptance 1: `orbi/manual` is external for the triage,
+    exactly as it is for the merge notification — one decision, no copy."""
+    write_event(
+        monkeypatch, tmp_path,
+        run_event(event="pull_request", head_branch="orbi/manual"),
+    )
+    gh.routes[ep_pulls()] = [{"number": 592, "state": "open", "title": "Fix"}]
+    gh.routes[ep_pr(592)] = {"number": 592, "body": "fix the bug"}
+    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
+    gh.routes[ep_issues_list()] = []
+    mod.main()
+    body = gh.calls_to(ep_create(), "POST")[0]["payload"]["body"]
+    assert "<!-- orbi:external-pr:592 -->" in body
+    assert "external_pr pr=592" in capsys.readouterr().err
+
+
+def test_triage_and_notify_agree_on_which_heads_are_orbi_deliveries():
+    """Issue #1776: the CI-failure triage and the merge notification give
+    the SAME answer — they call the one check beside `gitops.task_branch`."""
+    from orbi import notify
+
+    owner, repo = "orbi-run", "test-repo"
+    cases = {
+        "orbi/orbi-run-test-repo-issue-12": True,
+        "orbi/manual": False,
+        "orbi/other-owner-other-repo-issue-3": False,
+        "fix/bug": False,
+    }
+    for head, is_orbi_delivery in cases.items():
+        assert mod.is_external_head(owner, repo, head) is (not is_orbi_delivery)
+        assert notify._is_orbi_pr(
+            {"headRefName": head}, f"{owner}/{repo}",
+        ) is is_orbi_delivery
 
 
 def test_external_pr_marker_regex_extracts_the_number():

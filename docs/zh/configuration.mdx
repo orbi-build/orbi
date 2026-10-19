@@ -108,4 +108,4 @@ telegram_chat_id = "-1001234567890"
 
 每个 tick 在启动时读取本配置，因此改动从下一个启动的 tick 起生效；已在运行的交付沿用启动时的设置。其他方式等待的票——已经带上人工专属 `ai-human-review` 标签的票、里程碑确认票——不会发送。
 
-合并也会被通知：通知开启时，每个 tick 读取仓库最近更新的已合并 PR，并为自上次检查以来合并的、由 Orbi 开出的 PR（head 以 `orbi/` 开头）各发一条消息——`Orbi · 代码已合并：owner/repo#N <title>` 加 PR 链接，语言跟随主机 `message_language`。开启（或重新开启、或修复缺失 token）后的第一个 tick 不会补发此前已发生的合并：它用当前最新的合并建立水位文件 `<repo_dir>/.orbi/notify-merged-since`，之后才通知新的合并。关闭通知会删除该水位文件，因此之后重新开启不会重放这段空档；读取失败记一条 `notify_failed reason=merged_check_failed` journal 行，下一个 tick 重试。两个限制：两个 tick 之间更新超过 100 个 PR 时，某次合并可能被挤出读取页而不再被通知；单槽 Runner 忙于一次交付时，下一个 tick（以及消息）要等到该交付结束。
+合并也会被通知：通知开启时，每个 tick 读取仓库最近更新的已合并 PR，并为自上次检查以来合并的、由 Orbi 开出的 PR（交付分支 `orbi/<owner>-<repo>-issue-<n>`；仅有 `orbi/` 前缀、例如自建的 `orbi/manual` 不算）各发一条消息——`Orbi · 代码已合并：owner/repo#N <title>` 加 PR 链接，语言跟随主机 `message_language`。开启（或重新开启、或修复缺失 token）后的第一个 tick 不会补发此前已发生的合并：它用当前最新的合并建立水位文件 `<repo_dir>/.orbi/notify-merged-since`，之后才通知新的合并。关闭通知会删除该水位文件，因此之后重新开启不会重放这段空档；读取失败记一条 `notify_failed reason=merged_check_failed` journal 行，下一个 tick 重试。两个限制：两个 tick 之间更新超过 100 个 PR 时，某次合并可能被挤出读取页而不再被通知；单槽 Runner 忙于一次交付时，下一个 tick（以及消息）要等到该交付结束。

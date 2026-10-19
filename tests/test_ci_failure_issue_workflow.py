@@ -126,6 +126,21 @@ def test_single_job_runs_the_triage_script():
     ), f"the job must run the triage script, steps run: {commands!r}"
 
 
+def test_no_step_installs_the_package():
+    """Issue #1776 acceptance 3: the triage imports the engine's one
+    delivery-branch check straight from the checkout's `src` (the script's
+    own sys.path bootstrap), so the job installs nothing."""
+    commands = [
+        str(step.get("run", "")) for step in steps_of(load_workflow())
+        if step.get("run")
+    ]
+    for installer in ("pip install", "pip3 install", "uv pip", "uv tool"):
+        assert not any(installer in command for command in commands), commands
+    assert any(
+        "python3 tools/ci_failure_triage.py" in command for command in commands
+    ), commands
+
+
 def test_token_is_the_workflow_token():
     """The triage step authenticates with the workflow's own token
     (`github.token`) — never a PAT or another secret."""

@@ -953,6 +953,30 @@ def test_a_non_orbi_pr_is_not_announced(monkeypatch, tmp_path):
         assert endpoint.requests == []
 
 
+def test_an_orbi_prefixed_branch_orbi_did_not_create_is_silent(
+    monkeypatch, tmp_path,
+):
+    """Issue #1776 acceptance 2: a self-hosted user may name a branch with
+    an `orbi/` prefix (`orbi/manual`). Only the stable delivery branch
+    `orbi/<owner>-<repo>-issue-<n>` is Orbi's own, so `orbi/manual` merged
+    in the same window stays silent while the real delivery is announced."""
+    monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
+    fake = FakeMergedRead([orbi_pr(1, "Old")])
+    monkeypatch.setattr(seam, "run_command", fake)
+    config = merged_config(tmp_path)
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        notify.tick_start(config)
+        fake.prs = [
+            orbi_pr(2, "Hand-made branch", head="orbi/manual",
+                    merged_at="2026-10-16T20:00:00Z"),
+            orbi_pr(3, "Our delivery", head="orbi/owner-repo-issue-3",
+                    merged_at="2026-10-16T21:00:00Z"),
+        ]
+        notify.tick_start(config)
+        assert endpoint.texts() == [merged_text(3, "Our delivery")]
+
+
 def test_first_enable_skips_a_merge_that_happened_before(monkeypatch, tmp_path):
     """Acceptance 3: turning notifications on sends nothing for PRs merged
     earlier; a PR merged afterwards is announced once."""
