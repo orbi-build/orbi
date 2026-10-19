@@ -1265,6 +1265,7 @@ def process_release(issue: dict, config: RunnerConfig,
     release_commit: str | None = None
     declaration: dict | None = None
     open_milestone_evidence: list[str] = []
+    ready_label = config.dispatch_label or READY_LABEL
     try:
         declaration = parse_release_declaration(issue["body"])
         # Fused value: entry fallback + policy override (see
@@ -1552,7 +1553,8 @@ def process_release(issue: dict, config: RunnerConfig,
             # `ai-ready` that reads as "still queued" (Issue #1526).
             apply_label_patch(
                 number, repo=source_repo, event=EVENT_MERGED,
-                current_labels={READY_LABEL, IN_PROGRESS_LABEL},
+                current_labels={ready_label, IN_PROGRESS_LABEL},
+                ready_label=ready_label,
             )
             close_issue(int(number), repo=source_repo)
         except Exception:
@@ -1622,7 +1624,7 @@ def process_release(issue: dict, config: RunnerConfig,
         )
         apply_label_patch(
             number, repo=source_repo, event=EVENT_RELEASE_WAITING,
-            current_labels={IN_PROGRESS_LABEL},
+            current_labels={IN_PROGRESS_LABEL}, ready_label=ready_label,
         )
         comment_issue(
             number, repo=source_repo,
@@ -1644,7 +1646,7 @@ def process_release(issue: dict, config: RunnerConfig,
         # ticket to the ready queue before releasing the caller's slot.
         apply_label_patch(
             number, repo=source_repo, event=EVENT_RELEASE_WAITING,
-            current_labels={IN_PROGRESS_LABEL},
+            current_labels={IN_PROGRESS_LABEL}, ready_label=ready_label,
         )
         detail = ", ".join(f"#{item}" for item in waiting.issue_numbers)
         comment_issue(
@@ -1678,8 +1680,11 @@ def process_release(issue: dict, config: RunnerConfig,
                 run_id, run_info, exc,
                 language_code=language.of(config),
             ),
-            current_labels={IN_PROGRESS_LABEL},
-            language_code=language.of(config),
+            # A failed release is a blocked terminal: the claimed
+            # ticket still carries the resolved queue label, so it is
+            # cleared with the in-flight label (Issue #1775).
+            current_labels={IN_PROGRESS_LABEL, ready_label},
+            language_code=language.of(config), ready_label=ready_label,
         )
         publish(
             action=lambda: publisher.finish(progress_body(progress())),

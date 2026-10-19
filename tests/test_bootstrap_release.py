@@ -1198,6 +1198,9 @@ def test_process_release_parse_failure_publishes_final_comment(
          "--add-label", "ai-in-progress"],
         ["gh", "issue", "edit", "467", "--repo", "orbi-build/orbi",
          "--add-label", "ai-blocked", "--remove-label", "ai-in-progress"],
+        # ALONE: the queue label the claim kept is cleared too (#1775).
+        ["gh", "issue", "edit", "467", "--repo", "orbi-build/orbi",
+         "--remove-label", "ai-ready"],
     ]
     # The concrete failure scene is on the Issue.
     comments = [c for c in gh_calls if c[:3] == ["gh", "issue", "comment"]]
@@ -2676,7 +2679,8 @@ def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main", release_deliveries_wait_seconds=5), "o/r",
     )
     assert result == ""
-    assert state["edits"][-1][1]["add"] == "ai-blocked"
+    assert state["edits"][-2][1]["add"] == "ai-blocked"
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
 
 
 def test_process_release_uses_declared_package_version_file(monkeypatch):
@@ -2722,8 +2726,11 @@ def test_process_release_blocks_at_claim_when_default_version_file_missing(monke
     assert [c for c, _ in state["commands"]] == [
         ["git", "ls-tree", "--name-only", "abc123"],
     ]
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
+    # The terminal state is ai-blocked ALONE: the queue label the
+    # claim kept is cleared too (Issue #1775).
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     failure = [k["body"] for n, k in state["comments"]
                if n == 99 and "ai-blocked" in k["body"]]
     assert failure and "pyproject.toml" in failure[0]
@@ -2744,8 +2751,11 @@ def test_process_release_blocks_when_declared_version_file_missing(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
+    # The terminal state is ai-blocked ALONE: the queue label the
+    # claim kept is cleared too (Issue #1775).
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     failure = [k["body"] for n, k in state["comments"]
                if n == 99 and "ai-blocked" in k["body"]]
     assert failure and "package.json" in failure[0]
@@ -2809,8 +2819,11 @@ def test_process_release_blocks_when_version_push_rejected(monkeypatch, caplog):
             "o/r",
         )
     assert result == ""
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
+    # The terminal state is ai-blocked ALONE: the queue label the
+    # claim kept is cleared too (Issue #1775).
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     assert "claim_yield" not in caplog.text
 
 
@@ -3403,6 +3416,34 @@ def test_process_release_waits_for_pending_ci_and_succeeds(monkeypatch):
                for body in patched)
 
 
+def test_process_release_failure_clears_the_repositorys_dispatch_label(
+        monkeypatch,
+):
+    """Issue #1775: a failed release is a blocked terminal for a CLAIMED
+    ticket, so it clears the same queue label the claim scanned — in a
+    repository whose dispatch_label is `ship` the release ends
+    `ai-blocked` ALONE, never `ai-blocked` + `ship` (which reads
+    as "still queued" on every surface that reads that label)."""
+    state = make_release_process_env(
+        monkeypatch,
+        check_run_pages=[[("tests", "completed", "failure")]],
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ship"}, {"name": "ai-release"}]}
+    result = release.process_release(
+        issue,
+        config_domain.RunnerConfig(
+            repo_dir=Path("/r"), base_branch="main", dispatch_label="ship",
+        ),
+        "o/r",
+    )
+    assert result == ""
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
+                                       "remove": "ai-in-progress"})
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ship"})
+
+
 def test_process_release_ci_wait_timeout_blocks_with_distinct_reason(
         monkeypatch):
     """Issue #268: a CI wait that exceeds the configured limit blocks
@@ -3422,8 +3463,11 @@ def test_process_release_ci_wait_timeout_blocks_with_distinct_reason(
         "o/r",
     )
     assert result == ""
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
+    # The terminal state is ai-blocked ALONE: the queue label the
+    # claim kept is cleared too (Issue #1775).
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     (comment_number, comment_kwargs), = [
         (n, k) for n, k in state["comments"]
         if "Orbi release failed (ai-blocked)" in k["body"]
@@ -3449,8 +3493,11 @@ def test_process_release_gate_failure_blocks_and_returns_cleanly(monkeypatch):
     )
 
     assert result == ""
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
                                         "remove": "ai-in-progress"})
+    # The terminal state is ai-blocked ALONE: the queue label the
+    # claim kept is cleared too (Issue #1775).
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     assert "CI check 'tests' is completed/failure" in (
         state["comments"][-1][1]["body"]
     )
@@ -3633,8 +3680,11 @@ def test_process_release_publish_failure_blocks_with_the_reason(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
         "o/r",
     ) == ""
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
+    # The terminal state is ai-blocked ALONE: the queue label the
+    # claim kept is cleared too (Issue #1775).
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     assert not any(k.get("add") == "ai-merged" for _, k in state["edits"])
     (comment_number, comment_kwargs), = state["comments"]
     assert comment_number == 99
@@ -3655,8 +3705,11 @@ def test_process_release_tag_push_failure_blocks(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
         "o/r",
     ) == ""
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
+    # The terminal state is ai-blocked ALONE: the queue label the
+    # claim kept is cleared too (Issue #1775).
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     (comment_number, comment_kwargs), = state["comments"]
     assert comment_number == 99
     assert "tag push down" in comment_kwargs["body"]
@@ -3689,8 +3742,11 @@ def test_process_release_fails_on_malformed_declaration(monkeypatch):
     )
     assert result == ""
     # Terminal failure: ai-blocked ALONE, no ai-merged, no close.
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
+    # The terminal state is ai-blocked ALONE: the queue label the
+    # claim kept is cleared too (Issue #1775).
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     assert not any(k.get("add") == "ai-merged" for _, k in state["edits"])
     commands = [c for c, _ in state["commands"]]
     assert not [c for c in commands if c[:3] == ["gh", "issue", "close"]]
@@ -3729,8 +3785,11 @@ def test_process_release_fails_on_tag_mismatch_without_moving_it(monkeypatch):
     commands = [c for c, _ in state["commands"]]
     assert not [c for c in commands if c[:2] == ["git", "tag"]]
     assert not [c for c in commands if c[:2] == ["git", "push"]]
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
+    # The terminal state is ai-blocked ALONE: the queue label the
+    # claim kept is cleared too (Issue #1775).
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     (comment_number, comment_kwargs), = state["comments"]
     assert "other123" in comment_kwargs["body"]
     assert "abc123" in comment_kwargs["body"]
@@ -3790,8 +3849,11 @@ def test_process_release_fails_on_scope_violation(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
+    # The terminal state is ai-blocked ALONE: the queue label the
+    # claim kept is cleared too (Issue #1775).
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
 
 
 def test_close_release_milestone_closes_an_open_empty_milestone(monkeypatch):
@@ -4626,8 +4688,11 @@ def test_process_release_fails_on_scope_item_that_is_neither(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-blocked",
                                         "remove": "ai-in-progress"})
+    # The terminal state is ai-blocked ALONE: the queue label the
+    # claim kept is cleared too (Issue #1775).
+    assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
 
 
 def test_scope_gh_fake_rejects_unexpected_command(monkeypatch):

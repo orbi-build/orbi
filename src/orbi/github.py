@@ -28,6 +28,7 @@ from orbi import gh_response, notify
 from orbi.delivery_labels import (
     IN_PROGRESS_LABEL,
     P0_LABEL,
+    READY_LABEL,
     label_patch,
 )
 from orbi.journal import (LOGGER, MilestoneReconcileError,
@@ -665,21 +666,24 @@ def edit_issue(number: int, *, repo: str, add: str | None = None,
 
 
 def apply_label_patch(number: int, *, repo: str, event: str,
-                      current_labels) -> None:
+                      current_labels,
+                      ready_label: str = READY_LABEL) -> None:
     """Compute the deterministic label patch for `event` and apply it.
 
     `current_labels` is the Issue's current label names (read once by the
     caller). The patch comes from `delivery_labels.label_patch` — the
     single source of truth for the transition rules — so the
     same current labels and event always produce the same idempotent
-    patch. The patch is applied through `edit_issue`: one call for the
-    add plus the first remove, then one call per extra remove (the exact
+    patch. `ready_label` is the repository's resolved claim label (Issue
+    #1775), passed through to that one decision. The patch is applied
+    through `edit_issue`: one call for the add plus the first remove,
+    then one call per extra remove (the exact
     same `edit_issue` kwargs the pre-#175 code emitted). A no-op patch
     (nothing to add or remove) applies nothing. After the last write,
     `notify.patch_applied` (Issue #1673) owns the one notification the
     patch warrants — a newly added attention label, never the wait.
     """
-    to_add, to_remove = label_patch(event, current_labels)
+    to_add, to_remove = label_patch(event, current_labels, ready_label)
     if not to_add and not to_remove:
         return
     first_remove = to_remove[0] if to_remove else None

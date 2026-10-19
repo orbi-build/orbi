@@ -338,7 +338,10 @@ def test_apply_label_patch_applies_the_idempotent_patch(monkeypatch):
     # A no-op patch (no add, no remove) applies nothing. No real event
     # produces one today — the guard is the contract, so the patch
     # computation is stubbed to the empty patch here.
-    monkeypatch.setattr(github, "label_patch", lambda event, labels: ([], []))
+    monkeypatch.setattr(
+        github, "label_patch",
+        lambda event, labels, ready_label=None: ([], []),
+    )
     captured.clear()
     github.apply_label_patch(4, repo="o/r", event="claim", current_labels=set())
     assert captured == []

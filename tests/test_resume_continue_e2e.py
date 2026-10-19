@@ -478,8 +478,9 @@ def test_e2e_missing_run_state_fails_fast_without_a_fresh_run(
         runner.process_issue(
             issue(), config_for(clone, tmp_path, REPO), REPO,
         )
-    # The terminal state is `ai-blocked` (the claim label removed).
-    assert labels[ISSUE_NUMBER] == ["ai-ready", "ai-blocked"]
+    # The terminal state is `ai-blocked` ALONE: the queue label the claim
+    # kept is removed with it (Issue #1775).
+    assert labels[ISSUE_NUMBER] == ["ai-blocked"]
     # The failure comment carries the reason and the run marker.
     failed = [
         body for body in comments
@@ -522,7 +523,7 @@ def test_e2e_corrupt_run_state_fails_fast_without_a_fresh_run(
         runner.process_issue(
             issue(), config_for(clone, tmp_path, REPO), REPO,
         )
-    assert labels[ISSUE_NUMBER] == ["ai-ready", "ai-blocked"]
+    assert labels[ISSUE_NUMBER] == ["ai-blocked"]
     failed = [
         body for body in comments
         if "Orbi failed" in body

@@ -17,7 +17,9 @@ from __future__ import annotations
 import re
 
 from orbi import github, journal, language
-from orbi.delivery_labels import AWAITING_MERGE_LABEL, EVENT_AWAITING_MERGE
+from orbi.delivery_labels import (
+    AWAITING_MERGE_LABEL, EVENT_AWAITING_MERGE, READY_LABEL,
+)
 
 
 class MergeHandoffRequired(RuntimeError):
@@ -135,7 +137,7 @@ def awaiting_merge_handoff_announced(
 def handle_merge_handoff(
     *, number: int, repo: str, pr_number: int, head: str,
     preflight: list[str], marker: str,
-    language_code: str,
+    language_code: str, ready_label: str = READY_LABEL,
 ) -> bool:
     """Announce one maintainer-action handoff, idempotently.
 
@@ -163,7 +165,7 @@ def handle_merge_handoff(
         return False
     github.apply_label_patch(
         number, repo=repo, event=EVENT_AWAITING_MERGE,
-        current_labels=current_labels,
+        current_labels=current_labels, ready_label=ready_label,
     )
     github.comment_issue(
         number, repo=repo,

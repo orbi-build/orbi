@@ -207,6 +207,34 @@ def test_label_patch_blocked_clears_in_progress_when_only_claim_present():
     assert to_remove == ["ai-in-progress", "ai-ready"]
 
 
+def test_label_patch_uses_the_resolved_queue_label():
+    """Issue #1775: the queue entry is the repository's resolved
+    `dispatch_label` (default `ai-ready`), never a second hard-coded
+    constant — every event that adds or clears the queue entry takes the
+    same label the claim scanned for."""
+    # A blocked terminal clears the custom queue label with the delivery
+    # state labels: the Issue ends `ai-blocked` ALONE.
+    assert dl.label_patch(
+        dl.EVENT_BLOCKED, {"ship", "ai-in-progress"}, ready_label="ship",
+    ) == (["ai-blocked"], ["ai-in-progress", "ship"])
+    # The same rule on the other queue-label transitions.
+    assert dl.label_patch(
+        dl.EVENT_MERGED, {"ship", "ai-pr-opened"}, ready_label="ship",
+    ) == (["ai-merged"], ["ai-pr-opened", "ship"])
+    assert dl.label_patch(
+        dl.EVENT_AWAITING_MERGE, {"ship"}, ready_label="ship",
+    ) == (["ai-awaiting-merge"], ["ship"])
+    assert dl.label_patch(
+        dl.EVENT_REQUEUE, {"ai-pr-opened"}, ready_label="ship",
+    ) == (["ship"], ["ai-pr-opened"])
+    assert dl.label_patch(
+        dl.EVENT_RELEASE_WAITING, {"ai-in-progress"}, ready_label="ship",
+    ) == (["ship"], ["ai-in-progress"])
+    assert dl.label_patch(
+        dl.EVENT_HUMAN_REVIEW_WAITING, {"ai-pr-opened"}, ready_label="ship",
+    ) == (["ship"], [])
+
+
 # --- label_patch: idempotency ----------------------------------------
 
 def test_label_patch_is_deterministic_for_repeated_inputs():

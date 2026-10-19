@@ -1010,6 +1010,10 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
       with the explicit reason.
     """
     marker = run_marker(config.run_id)
+    # The queue entry the claim scanned: the repository's resolved
+    # `dispatch_label` (default `ai-ready`), never a second constant
+    # (Issue #1775).
+    ready_label = config.dispatch_label or READY_LABEL
     # The round budget lives in the scene: `review_round` counts the
     # COMPLETED rounds recorded by the round comments' scene blocks, with
     # a maintainer's blocked -> ai-fix-needed recovery reset applied — ONE
@@ -1332,7 +1336,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         post_blocked_comment(
             number, repo=source_repo, body=body,
             current_labels=issue_labels(number, source_repo),
-            language_code=bound,
+            language_code=bound, ready_label=ready_label,
         )
         event(
             "external_takeover_triage", pr=pr["number"], round=round,
@@ -1461,7 +1465,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         return handle_merge_handoff(
             number=number, repo=source_repo, pr_number=refrozen["number"],
             head=refrozen["head_oid"], preflight=exc.preflight, marker=marker,
-            language_code=language.of(config),
+            language_code=language.of(config), ready_label=ready_label,
         )
     except DeliveryDeferred as exc:
         # A pending check or an UNKNOWN mergeability on the
@@ -1556,6 +1560,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
     apply_label_patch(
         number, repo=source_repo, event=EVENT_MERGED,
         current_labels=issue_labels(number, source_repo),
+        ready_label=ready_label,
     )
     comment_issue(
         number, repo=source_repo,
@@ -1704,6 +1709,7 @@ def _run_review_round(
     run_id = current_run_id()
     marker = run_marker(run_id) if run_id else ""
     priority = issue_priority(issue)
+    ready_label = config.dispatch_label or READY_LABEL
 
     def block_label_inconsistency(labels: list[str], reason: str) -> None:
         event(
@@ -1719,6 +1725,7 @@ def _run_review_round(
         post_blocked_comment(
             number, repo=source_repo, body=body,
             current_labels=labels, language_code=language.of(config),
+            ready_label=ready_label,
         )
 
     labels = issue_labels(number, source_repo)
@@ -1768,11 +1775,16 @@ def _run_review_round(
         if gate_worktree.is_dir() and _delivery_checklist(
             gate_worktree, config, test_status=test_status(checks),
         )["column2"]:
-            if READY_LABEL not in labels:
+            # The waiting guard asks for the repository RESOLVED claim
+            # label, never the host default (Issue #1775): in a repository
+            # whose dispatch_label is a custom queue label the ticket
+            # already carries it, so a second tick must not rewrite the
+            # waiting patch.
+            if ready_label not in labels:
                 apply_label_patch(
                     number, repo=source_repo,
                     event=EVENT_HUMAN_REVIEW_WAITING,
-                    current_labels=labels,
+                    current_labels=labels, ready_label=ready_label,
                 )
             event(
                 "human_review_waiting", issue=number, pr=pr_url,
@@ -1955,7 +1967,7 @@ def _run_review_round(
             exc, issue=issue, source_repo=source_repo,
             run_id=run_id, pr_url=pr_url,
             worktree=worktree, branch=branch, role=ROLE_REVIEW,
-            language_code=language_code,
+            language_code=language_code, ready_label=ready_label,
             action=action,
             reason=reason,
             diagnosis=detail, evidence=True,
