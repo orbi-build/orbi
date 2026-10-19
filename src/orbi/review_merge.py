@@ -713,12 +713,10 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str,
     """Confirm the reviewed PR's merge landed on origin/<base>.
 
     A MERGED PR answers with its merge commit, which must be on the base
-    branch. Issue #1798: it can also land while the merge call itself
-    errors, leaving the PR OPEN/CLOSED with `mergedAt: null` — the head on
-    origin/<base> is that merge, and the answer then carries the PR's own
-    state, never a claimed `MERGED` (Issue #1801: GitHub closes an Issue
-    only for a merged PR, so the caller closes this one itself). A
-    rejection otherwise; a failed read propagates.
+    branch. Issue #1798: it can also land while the merge call errors,
+    leaving the PR unmerged with `mergedAt: null` — the head on origin/<base>
+    is that merge, answered with the PR's own state so the caller closes
+    the Issue (Issue #1801). A rejection otherwise; a failed read propagates.
 
     The base fetch updates the shared remote-tracking ref, so it runs under
     the base-sync lock with the deployment checkout as the lock location.
@@ -1578,12 +1576,10 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             merge_commit=confirmed["merge_commit"], round=round,
         ),
     ))
-    # The GitHub merge already landed. Record ai-merged before touching
-    # the local systemd checkout: a checkout that cannot fast-forward is
-    # runner ops, not a failed delivery (must not become ai-blocked).
-    # Read the label projection after the merge: a resumed fix round may
-    # have both `ai-in-progress` and `ai-fix-needed`.
-    # The merged patch clears every delivery-state label actually present.
+    # The GitHub merge already landed. Read the labels after it (a resumed
+    # fix round may carry `ai-in-progress` and `ai-fix-needed`), record
+    # `ai-merged` — clearing every state label present — before touching the
+    # systemd checkout: a checkout that cannot fast-forward is runner ops.
     apply_label_patch(
         number, repo=source_repo, event=EVENT_MERGED,
         current_labels=issue_labels(number, source_repo),

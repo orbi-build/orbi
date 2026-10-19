@@ -90,9 +90,10 @@ def close_issue_after_landed_merge(number: int, *, repo: str,
     """
     try:
         github.close_issue(number, repo=repo)
-    except Exception:
-        event("issue_close_failed", level=logging.ERROR,
-              issue=number, merge_commit=merge_commit)
+    except Exception as exc:
+        event("issue_close_failed", level=logging.ERROR, issue=number,
+              merge_commit=merge_commit,
+              error=str(getattr(exc, "stderr", None) or exc).strip())
         return
     event("issue_closed_after_landed_merge", issue=number,
           merge_commit=merge_commit)

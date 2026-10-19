@@ -415,9 +415,11 @@ def test_merge_gate_accepts_a_landed_head_while_the_pr_reads_open(
                 if c[0] == "gh" and c[1] == "pr" and "merge" in c]) == 1
     merge_commit = git(clone, "rev-parse", "origin/main")
     # Issue #1802: the gate keeps the confirmation it already made instead
-    # of throwing it away for the round to read a second time.
+    # of throwing it away for the round to read a second time. Issue #1801:
+    # that confirmation carries the state the PR really reads (still OPEN),
+    # which is what tells the merged path to close the Issue itself.
     assert merged["confirmation"] == {
-        "state": "MERGED", "merge_commit": merge_commit,
+        "state": "OPEN", "merge_commit": merge_commit,
     }
     # The commit that landed the reviewed head is a real merge commit whose
     # second parent is that head.
