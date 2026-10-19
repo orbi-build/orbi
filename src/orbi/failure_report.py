@@ -14,7 +14,7 @@ nothing from `orbi.runner` back (Article 3.3) and the runner reaches it
 as `failure_report.<name>`. `comment_pr` moved here too: the frozen
 `orbi.github` size ceiling (github.py at 1146 lines against 1162)
 forbids the +58 lines the preferred home would need. The review-round
-accounting (`review_rounds_so_far`) lives in the `review_rounds` sibling,
+accounting (`current_review_round`) lives in the `review_rounds` sibling,
 which this module imports and re-exports for its existing callers.
 """
 from __future__ import annotations
@@ -53,7 +53,7 @@ from orbi.progress import (
     _finish_progress_body, _safe_publish, bump_failure_repeat, failure_marker,
     failure_repeat_count, format_status_comment, run_marker,
 )
-from orbi.review_rounds import review_rounds_so_far
+from orbi.review_rounds import current_review_round, review_rounds_so_far
 
 
 class UnrecoverableDeliveryError(RuntimeError):
@@ -658,9 +658,9 @@ def report_delivery_failure(
     the labels from GitHub. `blocked_suffix` extends the classified
     blocked body (the resume verification's preserved-PR note).
     `review_round` pins the terminal scene's round (the implement
-    phase has none); None computes `review_rounds_so_far` lazily
-    inside the finish publish (a history-read failure there is bypass,
-    never a second failure). `finish=False` skips the progress scene
+    phase has none); None reads the current PR's scene round (the
+    review loop's own value) in the finish publish; a read failure is
+    bypass, never a second failure. `finish=False` skips the progress scene
     (the tracked progress comment does not exist and the milestone
     alone carries the notification). `publisher` is the run's LIVE
     progress publisher when the caller holds one: its `finish` then
@@ -987,7 +987,7 @@ def report_delivery_failure(
                 branch=branch, worktree=worktree, pr_url=pr_url,
                 review_round=(
                     review_round if review_round is not None
-                    else review_rounds_so_far(
+                    else current_review_round(
                         issue_comments(number, repo=source_repo),
                     )
                 ),

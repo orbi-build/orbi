@@ -24,6 +24,7 @@ import orbi.run_state as run_state
 import orbi.pi_session as pi_session
 import orbi.runner_health as runner_health
 from orbi import language, progress, scene
+from tests.fakes.progress import bind_run_id
 from orbi.delivery_labels import EVENT_BLOCKED
 from seam import seam
 import orbi.journal as journal
@@ -940,6 +941,67 @@ def test_verify_resumed_pr_unrecoverable_failure_removes_leftover_fix_needed_lab
         ((9,), {"repo": "owner/repo", "add": "ai-blocked",
                 "remove": "ai-fix-needed"}),
     ]
+
+
+def _pr_scene_comment(pr_number, round_no, *, run_id, opened=False):
+    """One trusted comment carrying `pr_number`'s scene at `round_no`."""
+    pr_url = f"https://github.com/owner/repo/pull/{pr_number}"
+    heading = (
+        f"Orbi opened PR: {pr_url}" if opened
+        else f"Orbi review round {round_no} for PR #{pr_number}: findings"
+    )
+    return {
+        "body": (
+            f"<!-- orbi:run={run_id} -->\n{heading}\n"
+            + scene.render(scene.Scene(
+                run_id=run_id, base_branch="main", base_sha="abc123",
+                pr_url=pr_url, review_round=round_no,
+            ))
+        ),
+        "authorAssociation": "OWNER",
+    }
+
+
+def test_verify_resumed_pr_reports_the_current_pr_round(
+        monkeypatch, tmp_path,
+):
+    """Issue #1772 acceptance 1 on the resume-verification path: five
+    completed rounds on an EARLIER PR (#100) followed by the current PR at
+    round 0 — the reported round is the current PR's scene round (0), not
+    the old PR's five."""
+    from tests.test_resume_pr import (
+        make_resume_config, make_resume_issue, make_resume_scene,
+        make_resume_failure_fake, expected_resume_worktree, FAKE_RUN_ID,
+    )
+
+    history = [
+        _pr_scene_comment(100, round_no, run_id="oldrun01")
+        for round_no in (1, 2, 3, 4, 5)
+    ] + [_pr_scene_comment(46, 0, run_id=FAKE_RUN_ID, opened=True)]
+    captured, _ = make_resume_failure_fake(monkeypatch, history=history)
+
+    def fake_verify_pr(*args, **kwargs):
+        raise RuntimeError("the verified commit was not pushed")
+
+    # The seam fans the runner-owned hook out without a new
+    # runner-internal patch (Issue #789).
+    monkeypatch.setattr(seam, "verify_pr", fake_verify_pr)
+    expected_resume_worktree(tmp_path).mkdir(parents=True)
+    bind_run_id(monkeypatch, FAKE_RUN_ID)
+    with pytest.raises(RuntimeError, match="not pushed"):
+        runner.verify_resumed_pr(
+            make_resume_scene(), make_resume_issue(),
+            make_resume_config(tmp_path), "owner/repo",
+        )
+    posted = [
+        command[command.index("--field") + 1][len("body="):]
+        for command in captured["api"]
+        if "--method" in command and "POST" in command
+    ]
+    assert posted, "no progress scene was published"
+    # The bug reproduced here before: the old PR's five rounds were
+    # recounted into the new PR's scene.
+    assert not any("- review/fix round: 5" in body for body in posted)
 
 
 def test_finish_progress_fix_needed_without_run_id_is_noop(monkeypatch):

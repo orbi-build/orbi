@@ -13,6 +13,7 @@ import pytest
 from orbi import comment_kind, progress, scene
 from orbi.review_merge import merged_pr_comment_body
 from orbi.review_rounds import (
+    current_review_round,
     review_round_comment_body,
     review_rounds_so_far,
     same_findings_round,
@@ -173,6 +174,55 @@ def test_review_rounds_use_the_run_and_pr_identity():
     assert review_rounds_so_far(
         comments, run_id=RUN_ID, pr_number=99,
     ) == 1
+
+
+def _opened_pr_body(pr_number=42, round_no=0):
+    return (
+        f"{MARKER}\n"
+        f"Orbi opened PR: https://github.com/owner/repo/pull/{pr_number}\n"
+        + _round_scene(round_no, pr_number)
+    )
+
+
+def test_current_review_round_reads_the_current_pr_scene_not_the_history():
+    """Issue #1772: five completed rounds on an earlier PR (#100) followed
+    by a new PR (#200) at round 0. The reported round is the NEW PR's
+    scene round — the value the review loop's budget reads — never a
+    recount of the Issue history (which still counts the old records)."""
+    old_rounds = [
+        {**TRUSTED, "body": _round_body(i, pr_number=100)}
+        for i in (1, 2, 3, 4, 5)
+    ]
+    new_pr = {**TRUSTED, "body": _opened_pr_body(200, 0)}
+    comments = old_rounds + [new_pr]
+    assert review_rounds_so_far(comments) == 5
+    assert current_review_round(comments) == 0
+
+
+def test_current_review_round_is_the_single_prs_scene_round():
+    """Acceptance 2 (Issue #1772): one PR with two completed rounds
+    reports round 2, exactly the number the review loop reads."""
+    comments = [
+        {**TRUSTED, "body": _opened_pr_body(42, 0)},
+        {**TRUSTED, "body": _round_body(1)},
+        {**TRUSTED, "body": _round_body(2)},
+    ]
+    assert current_review_round(comments) == 2
+
+
+def test_current_review_round_without_a_readable_scene_is_zero():
+    """No trusted scene is no review round: the reporting path reports 0
+    instead of failing or guessing."""
+    assert current_review_round([]) == 0
+    # An untrusted public comment can never be the round's source.
+    assert current_review_round([
+        {"authorAssociation": "NONE", "body": _opened_pr_body(42, 5)},
+    ]) == 0
+    # A corrupted trusted scene is still no readable round.
+    assert current_review_round([{
+        **TRUSTED,
+        "body": f"{MARKER}\n<!-- orbi:scene:v1 {{broken -->",
+    }]) == 0
 
 
 def test_only_a_completed_review_round_kind_with_a_valid_scene_counts():

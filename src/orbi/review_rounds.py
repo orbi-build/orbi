@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 
-from orbi import language, scene
+from orbi import language, run_state, scene
 from orbi.comment_kind import (
     COMMENT_KIND_REVIEW_ROUND,
     comment_kind,
@@ -165,6 +165,27 @@ def review_round_comment_body(
     return "\n".join(lines) + "\n" + scene_block
 
 
+def current_review_round(comments: list[dict]) -> int:
+    """The current PR's review round: the trusted scene's `review_round`.
+
+    The ONE place a report of the CURRENT round reads its number. The
+    review loop's round budget reads this same field of this same scene
+    (`_review_and_merge_round`), so a failure comment, a
+    resume-verification failure and a closed-PR report show the number
+    the review uses — and an earlier PR's completed rounds can never be
+    recounted into a new PR's report (Issue #1772). The Issue history is
+    never counted here.
+
+    No readable scene means no review round yet: 0. Reporting must never
+    fail on this read (a corrupted scene is one the review loop refuses
+    to review, not a second failure of the failure report).
+    """
+    try:
+        return int(run_state.resume_scene(comments)["review_round"])
+    except (scene.SceneError, scene.SceneMissingError):
+        return 0
+
+
 def review_rounds_so_far(
     comments: list[dict], *, after: str | None = None,
     run_id: str | None = None, pr_number: int | None = None,
@@ -184,6 +205,11 @@ def review_rounds_so_far(
     retains the existing human-recovery boundary for resumes of the
     same PR. Calls without an identity filter remain available for
     legacy evidence rendering.
+
+    This is the round-RECORD accounting (what a comment consumes), not
+    the number a report shows: reporting the CURRENT round reads
+    `current_review_round`, the scene the review loop uses, never this
+    recount (Issue #1772).
     """
     rounds = 0
     marker = run_marker(run_id) if run_id is not None else None
