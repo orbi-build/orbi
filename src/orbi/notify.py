@@ -32,8 +32,9 @@ chat id without a token is reported (`notify_failed reason=not_configured`)
 but never fails a start: `.orbi/env` and `orbi.toml` are separate files
 that can lag each other.
 
-`github.py` imports this module, so the top-level imports stay at the
-leaves (`journal`, `delivery_labels`); `RunnerConfig` is annotation-only.
+`github.py` imports this module, so the top-level imports stay acyclic
+(`journal`, `delivery_labels`, the `gitops` naming leaf); `RunnerConfig`
+is annotation-only.
 """
 from __future__ import annotations
 
@@ -51,6 +52,7 @@ from orbi.delivery_labels import (
     BLOCKED_LABEL,
     NEEDS_DETAIL_LABEL,
 )
+from orbi.gitops import is_delivery_branch
 from orbi.journal import event
 
 if TYPE_CHECKING:
@@ -112,7 +114,6 @@ _MERGED_HEADLINE_ZH = "Orbi · 代码已合并："
 # runner-health state and written with the runner-health atomic write.
 WATERMARK_FILENAME = "notify-merged-since"
 WATERMARK_EPOCH = "1970-01-01T00:00:00Z"
-ORBI_HEAD_PREFIX = "orbi/"
 # The shape of a stored watermark: what this module writes is a GitHub
 # `mergedAt` (ISO-8601 UTC, prefix-matched so a fractional second or an
 # explicit offset still counts). Any other value is unreadable state and
@@ -144,7 +145,8 @@ def tick_start(config: RunnerConfig) -> None:
     watermark is deleted: fixing a broken setup later must not replay
     what merged meanwhile. When they are on and configured,
     `_announce_merged_prs` (Issue #1674) sends one message per
-    `orbi/*` PR merged after the last handled `mergedAt`.
+    Orbi delivery PR (the `gitops.is_delivery_branch` head, Issue #1776)
+    merged after the last handled `mergedAt`.
 
     Any exception escaping the check records one
     `notify_failed reason=merged_check_failed` (Issue #1696): the check
@@ -488,7 +490,7 @@ def _test_message() -> str:
 
 
 def _announce_merged_prs() -> None:
-    """Send one message per newly merged `orbi/*` PR (Issue #1674).
+    """Send one message per newly merged Orbi delivery PR (Issue #1674).
 
     The watermark read-modify-write is serialized with the runner-health
     leaf lock (non-blocking: a busy lock skips this tick rather than
@@ -521,7 +523,8 @@ def _announce_merged_prs() -> None:
         fresh = sorted(
             (
                 pr for pr in merged
-                if _is_orbi_pr(pr) and _merged_at(pr) > since
+                if _is_orbi_pr(pr, source_repo)
+                and _merged_at(pr) > since
             ),
             key=_merged_at,
         )
@@ -575,10 +578,15 @@ def _clear_watermark() -> None:
     _watermark_path().unlink(missing_ok=True)
 
 
-def _is_orbi_pr(pr: dict) -> bool:
-    """True for a PR whose head branch Orbi itself created."""
-    head = pr.get("headRefName")
-    return isinstance(head, str) and head.startswith(ORBI_HEAD_PREFIX)
+def _is_orbi_pr(pr: dict, source_repo: str) -> bool:
+    """True for a PR whose head is `source_repo`'s delivery branch.
+
+    The decision is the engine's one ownership check (Issue #1776,
+    `orbi.gitops.is_delivery_branch`), the same call the CI-failure triage
+    makes: an `orbi/` prefix a self-hosted user chose (`orbi/manual`) is
+    not an Orbi delivery and is never announced.
+    """
+    return is_delivery_branch(source_repo, pr.get("headRefName"))
 
 
 def _merged_at(pr: dict) -> str:

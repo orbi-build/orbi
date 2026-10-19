@@ -28,6 +28,12 @@ gh 2.97):
   not a fix: the comment is appended and the Issue stays open.
 - Anything else (another workflow, another event, a push off `main`, any
   other conclusion) is a logged no-op with exit 0.
+- Delivery state (Issue #1771): the routed pull-request path reads the
+  Issue's delivery state from the engine's single classifier
+  (`orbi.delivery_scene.classify`) — the script keeps no label set of its
+  own. A delivery the engine reports `blocked` keeps its state: the failure
+  evidence is recorded on the Issue and the PR, and no label is written, so
+  removing `ai-blocked` later never resumes an unrequested automatic fix.
 
 Stable failure fingerprints include the workflow name, for example:
 `sha256("CI|<event>|<head_branch>|<job name>")`,
@@ -62,6 +68,26 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+# Issue #1771: the delivery state is the engine's single classification
+# (`orbi.delivery_scene.classify`), so the triage imports the package. The
+# workflow (`.github/workflows/ci-failure-issue.yml`) runs this file straight
+# from the checkout with no install step; the src layout is put on the path
+# here (the same layout the test suite gets from pytest's `pythonpath`).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from orbi.delivery_labels import (  # noqa: E402 - the src bootstrap above
+    EVENT_FIX_NEEDED,
+    LIFECYCLE_STATES,
+    READY_LABEL,
+    label_patch,
+)
+from orbi.delivery_scene import (  # noqa: E402 - the src bootstrap above
+    DeliveryScene,
+    classify,
+)
+from orbi.gitops import is_delivery_branch  # noqa: E402 - the src bootstrap above
 
 CI_WORKFLOW_NAME = "CI"
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
@@ -88,7 +114,6 @@ CLOSING_REFERENCE_RE = re.compile(
     r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+"
     r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(\d+)"
 )
-ACTIVE_DELIVERY_LABELS = {"ai-in-progress", "ai-pr-opened", "ai-fix-needed"}
 # Issue #608: a CI failure on an EXTERNAL contributor PR (head branch not
 # the Runner's stable delivery naming `orbi/<owner>-<repo>-issue-<n>`) is
 # filed with the PR link in the body plus the hidden marker below — the
@@ -316,18 +341,17 @@ def pr_html_url(owner: str, repo: str, number: int) -> str:
 
 
 def is_external_head(owner: str, repo: str, head_branch: str) -> bool:
-    """True when the head branch is not the Runner's stable delivery naming.
+    """True when the head branch is not this repository's delivery branch.
 
-    The Runner's own PRs always carry `orbi/<owner>-<repo>-issue-<n>` (the
-    stable delivery identity); a contributor's freely chosen branch name is
-    an external contribution the delivery loop must review, not redo.
+    The one ownership decision lives beside `gitops.task_branch`
+    (Issue #1776, `orbi.gitops.is_delivery_branch`): the Runner's own PRs
+    always carry `orbi/<owner>-<repo>-issue-<n>`, while a contributor's
+    freely chosen branch name — even one starting with `orbi/` — is an
+    external contribution the delivery loop must review, not redo. This
+    script keeps no pattern of its own, so it can never disagree with the
+    merge notification.
     """
-    if re.fullmatch(
-        rf"orbi/{re.escape(owner)}-{re.escape(repo)}-issue-\d+",
-        head_branch or "",
-    ):
-        return False
-    return True
+    return not is_delivery_branch(f"{owner}/{repo}", head_branch)
 
 
 def target_display(
@@ -517,10 +541,38 @@ def fetch_issue(owner: str, repo: str, number: int) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def active_source_issue(
+def issue_label_names(issue: dict) -> frozenset[str]:
+    """The Issue's label names — the fact `delivery_scene.classify` reads."""
+    return frozenset(
+        label.get("name") for label in issue.get("labels", [])
+        if isinstance(label, dict) and isinstance(label.get("name"), str)
+    )
+
+
+def delivery_scene(labels) -> DeliveryScene:
+    """The engine's classification of this Issue's delivery (Issue #1771).
+
+    `delivery_scene.classify` is the single decision: the triage keeps no
+    delivery-state label set of its own. It supplies the only fact it has —
+    the Issue's labels; no trusted scene comment is read and the PR state
+    is not part of the question (only a BLOCKED scene is consumed).
+    """
+    return classify(
+        labels=labels, scene=None, pr_state=None, body_markers=frozenset(),
+    )
+
+
+def source_issue_for_pr(
     owner: str, repo: str, pr_number: int | None,
-) -> tuple[int, int, set[str]] | None:
-    """Resolve an open Orbi delivery Issue from a PR's closing reference."""
+) -> tuple[int, int, frozenset[str], DeliveryScene] | None:
+    """The open delivery Issue a PR closes, with the engine's scene.
+
+    An open Issue carrying a delivery-state label (`LIFECYCLE_STATES` minus
+    the `ai-ready` queue entry) is the delivery this PR belongs to; an Issue
+    with none is unrelated and the triage files its own ticket. A delivery
+    the engine classifies BLOCKED is still this PR's source — its evidence is
+    recorded — it is only never relabelled.
+    """
     if pr_number is None:
         return None
     pull = fetch_pull_request(owner, repo, pr_number)
@@ -529,12 +581,12 @@ def active_source_issue(
         return None
     for number in closing_issue_numbers(body, owner, repo):
         issue = fetch_issue(owner, repo, number)
-        labels = {
-            label.get("name") for label in issue.get("labels", [])
-            if isinstance(label, dict) and isinstance(label.get("name"), str)
-        } if issue else set()
-        if issue and issue.get("state") == "open" and labels & ACTIVE_DELIVERY_LABELS:
-            return number, pr_number, labels
+        if not issue or issue.get("state") != "open":
+            continue
+        labels = issue_label_names(issue)
+        if not labels & (LIFECYCLE_STATES - {READY_LABEL}):
+            continue
+        return number, pr_number, labels, delivery_scene(labels)
     return None
 
 
@@ -696,13 +748,13 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
                     f"external_pr pr={pr_number} "
                     f"head_branch={run.get('head_branch')!r}"
                 )
-        source = active_source_issue(owner, repo, pr_number)
+        source = source_issue_for_pr(owner, repo, pr_number)
     failed = jobs_with_conclusion(jobs, FAILURE_CONCLUSIONS)
     if not failed:
         log(f"ignored reason=no_failed_jobs run_id={run.get('id')}")
         return
     if source is not None:
-        source_number, source_pr, source_labels = source
+        source_number, source_pr, source_labels, source_scene = source
         for item in failed:
             evidence = build_reoccurrence_comment(run, item)
             comment_issue(owner, repo, source_number, evidence)
@@ -721,16 +773,28 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
                 f"pr={source_pr} run_id={run.get('id')}"
             )
             return
+        if source_scene is DeliveryScene.BLOCKED:
+            # Issue #1771: the engine's classification is the one decision.
+            # A blocked delivery is a human's terminal state, so the triage
+            # never adds ai-fix-needed beside it — removing ai-blocked later
+            # must not resume an automatic fix nobody asked for. The failure
+            # evidence above still stands.
+            log(
+                f"blocked_delivery_no_label_flip source_issue={source_number} "
+                f"pr={source_pr} run_id={run.get('id')}"
+            )
+            return
         # Keep the delivery state canonical: the Runner's lifecycle contract
         # requires ai-fix-needed to replace an older opened/in-flight state,
-        # not coexist with it.
-        for stale_label in ("ai-in-progress", "ai-pr-opened"):
-            if stale_label in source_labels:
-                remove_issue_label(owner, repo, source_number, stale_label)
-        add_issue_label(owner, repo, source_number, "ai-fix-needed")
+        # not coexist with it. The engine owns that transition.
+        to_add, to_remove = label_patch(EVENT_FIX_NEEDED, source_labels)
+        for stale_label in to_remove:
+            remove_issue_label(owner, repo, source_number, stale_label)
+        for label in to_add:
+            add_issue_label(owner, repo, source_number, label)
         log(
             f"routed source_issue={source_number} pr={source_pr} "
-            f"run_id={run.get('id')}"
+            f"scene={source_scene.value} run_id={run.get('id')}"
         )
         return
     index = index_open_issues(owner, repo)
@@ -801,7 +865,7 @@ def recovery_closing_reference(
 ) -> bool:
     """True when the recovery run's head commit resolves to a PR whose body
     references the Issue with a GitHub closing keyword (`Fixes #N`) — the
-    same contract `active_source_issue` applies (Issue #715).
+    same contract `source_issue_for_pr` applies (Issue #715).
 
     `run["head_sha"]` must be a usable string; the caller guards that.
     """

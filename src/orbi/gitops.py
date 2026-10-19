@@ -54,6 +54,17 @@ class BaseSyncLockError(RuntimeError):
         )
 
 
+def delivery_branch_prefix(source_repo: str) -> str:
+    """The prefix every delivery branch of ``source_repo`` carries.
+
+    The one place the delivery naming is spelled (Issue #1776): the branch
+    ``task_branch`` creates and the ownership check that reads a head
+    branch both derive from it, so a self-hosted user's own ``orbi/manual``
+    branch is never mistaken for an Orbi delivery.
+    """
+    return f"orbi/{source_repo.replace('/', '-')}-issue-"
+
+
 def task_branch(source_repo: str, number: int, run_id: str | None = None) -> str:
     """Return the stable remote delivery identity for one Issue.
 
@@ -61,7 +72,23 @@ def task_branch(source_repo: str, number: int, run_id: str | None = None) -> str
     part of the branch identity: retries must converge on one GitHub branch
     and therefore one open PR.
     """
-    return f"orbi/{source_repo.replace('/', '-')}-issue-{number}"
+    return f"{delivery_branch_prefix(source_repo)}{number}"
+
+
+def is_delivery_branch(source_repo: str, head_branch: str) -> bool:
+    """True when ``head_branch`` is ``source_repo``'s delivery branch.
+
+    The single "did Orbi open this PR?" decision (Issue #1776): the
+    CI-failure triage's external-contribution routing and the merged-PR
+    notification both call it, so they can never disagree. Only
+    ``orbi/<owner>-<repo>-issue-<n>` counts — an ``orbi/`` prefix alone
+    (a head a self-hosted user named) or another repository's delivery
+    branch does not.
+    """
+    prefix = delivery_branch_prefix(source_repo)
+    if not isinstance(head_branch, str) or not head_branch.startswith(prefix):
+        return False
+    return head_branch[len(prefix):].isdigit()
 
 
 def worktree_path(repo_dir: Path, source_repo: str, number: int,
