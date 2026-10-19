@@ -25,11 +25,17 @@ import orbi.github as github
 import orbi.repo_config as repo_config
 import orbi.claim as claim
 import orbi.runner as runner
+import orbi.cli as cli
+import orbi.status_observe as observe
+from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
+    BLOCKED_LABEL,
     EPIC_LABEL,
+    FIX_NEEDED_LABEL,
     IN_PROGRESS_LABEL,
     MERGED_LABEL,
     P0_LABEL,
+    PR_OPENED_LABEL,
     READY_LABEL,
     RELEASE_LABEL,
 )
@@ -575,3 +581,134 @@ def test_contents_put_rejects_non_base64_content(fake_gh):
             "message=x", "content=not base64!", "sha=abc",
         ))
     assert "base64" in excinfo.value.stderr
+
+def test_issue_list_honours_the_in_body_search_term(fake_gh):
+    """The external-takeover scan's query is a body-text term (Issue
+    #842: `"orbi:external-pr" in:body`); the fake must answer it, so the
+    five claim scans the status view now runs (Issue #1773) are all real
+    reads instead of a fail-open masking an unsupported query."""
+    fake_gh.add_issue(1, body="please review\n<!-- orbi:external-pr:9 -->")
+    fake_gh.add_issue(2, body="no marker here")
+    for number in (1, 2):
+        fake_gh.issues[number]["labels"] = [READY_LABEL]
+    issues = github.list_issues(
+        "owner/repo", state="open",
+        search=f'label:{READY_LABEL} "orbi:external-pr" in:body',
+        json_fields="number", limit=200,
+    )
+    assert [issue["number"] for issue in issues] == [1]
+
+
+# --- `orbi status` reads the claim's ONE ready decision (Issue #1773) ------
+
+
+def _status_config(tmp_path) -> RunnerConfig:
+    """A hand-built host config for the status render.
+
+    Only the fields the ready read and the slot line touch are set: the
+    rest of the report's GitHub reads are injected by the helper below.
+    """
+    return RunnerConfig(
+        source_repos=("owner/repo",), repo_dir=tmp_path,
+        base_branch="main", max_concurrency=1,
+        slot_dir=tmp_path / ".orbi" / "slots",
+    )
+
+
+def _status_ready_line(config: RunnerConfig) -> str:
+    """Render the real status report over whatever `gh` seam is patched.
+
+    The unrelated GitHub reads (active deliveries, recent result, frozen
+    base) are injected exactly as `main` wires them, while the ready
+    queue goes through the REAL `cli.ready_issue` ->
+    `claim.pick_ready_issue` path with the fake `gh` behind it.
+    """
+    scope = observe.parse_scope(config.source_repos)
+    observer = observe.StatusObserver(
+        config, scope,
+        read_issues=lambda repo: [],
+        read_ready=lambda repo: cli.ready_issue(repo, config),
+        read_result=lambda repo: None,
+        read_base=lambda repo_dir, base_branch: "0" * 40,
+    )
+    observer.refresh()
+    return next(
+        line
+        for line in cli.status_report(config, scope, observer).splitlines()
+        if line.startswith("  ready:")
+    )
+
+
+def test_status_ready_names_the_issue_the_claim_would_pick(fake_gh, tmp_path):
+    """Acceptance #1773: an open Issue carrying `ai-ready` + `ai-pr-opened`
+    (every delivery carries both once it opens its PR) is NOT ready, and
+    the plain `ai-ready` Issue behind it is.
+
+    The delivery Issue is seeded last so `gh` lists it FIRST — the order
+    that made the old hand-built query report it as ready.
+    """
+    fake_gh.add_issue(2647, title="next", labels=(READY_LABEL,))
+    fake_gh.add_issue(
+        2646, title="delivery awaiting review",
+        labels=(READY_LABEL, PR_OPENED_LABEL),
+    )
+    config = _status_config(tmp_path)
+    assert _status_ready_line(config) == "  ready: #2647 next"
+
+
+@pytest.mark.parametrize(
+    "state_label",
+    [PR_OPENED_LABEL, FIX_NEEDED_LABEL, BLOCKED_LABEL, MERGED_LABEL],
+)
+def test_status_ready_never_shows_an_issue_in_a_delivery_state(
+        fake_gh, tmp_path, state_label):
+    """Acceptance #1773: none of the four result states is ready — the
+    claim's exclusions decide, not a second query."""
+    fake_gh.add_issue(2646, title="delivery", labels=(READY_LABEL, state_label))
+    config = _status_config(tmp_path)
+    assert _status_ready_line(config) == "  ready: -"
+    assert claim.pick_ready_issue("owner/repo") is None
+
+
+def test_status_ready_equals_the_claim_pick(fake_gh, tmp_path):
+    """Acceptance #1773, criterion 1: for the same open Issues the status
+    ready Issue IS the one the claim scan picks — one decision, two
+    readers."""
+    fake_gh.add_issue(1, labels=(READY_LABEL,))
+    fake_gh.add_issue(2, labels=(READY_LABEL, P0_LABEL))
+    fake_gh.add_issue(3, labels=(READY_LABEL, "bug"))
+    fake_gh.add_issue(4, labels=(READY_LABEL, PR_OPENED_LABEL))
+    fake_gh.add_issue(5, labels=(READY_LABEL, MERGED_LABEL))
+    config = _status_config(tmp_path)
+    picked = claim.pick_ready_issue(
+        "owner/repo", config.active_milestone, config,
+    )
+    assert picked is not None
+    assert _status_ready_line(config) == (
+        f"  ready: #{picked['number']} {picked['title']}"
+    )
+    assert picked["number"] == 2
+
+
+def test_status_ready_still_shows_a_plain_ready_issue(fake_gh, tmp_path):
+    """Acceptance #1773, criterion 2: a plain `ai-ready` Issue is still
+    reported as ready, exactly as before."""
+    fake_gh.add_issue(9, title="plain ready", labels=(READY_LABEL,))
+    config = _status_config(tmp_path)
+    assert _status_ready_line(config) == "  ready: #9 plain ready"
+
+
+def test_status_ready_keeps_the_claim_journal_out_of_the_view(
+        fake_gh, tmp_path, caplog):
+    """The status read is an OBSERVATION, not a claim: the claim's
+    pick/skip journal lines never reach the view's own output."""
+    fake_gh.add_issue(2646, title="delivery", labels=(READY_LABEL, PR_OPENED_LABEL))
+    fake_gh.add_issue(2647, title="next", labels=(READY_LABEL,))
+    config = _status_config(tmp_path)
+    with caplog.at_level(logging.INFO):
+        assert cli.ready_issue("owner/repo", config)["number"] == 2647
+        assert "picked" not in caplog.text
+        # The claim's own tick still journals its decision.
+        claim.pick_ready_issue("owner/repo")
+    assert "picked issue=2647" in caplog.text
+

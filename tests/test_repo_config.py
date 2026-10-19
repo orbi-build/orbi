@@ -744,7 +744,7 @@ def test_pick_issue_uses_a_custom_dispatch_label(monkeypatch):
     assert "label:ai-ready" not in searched
 
 
-def test_pick_issue_with_repo_policy_uses_repo_scan_keys(monkeypatch):
+def test_pick_ready_issue_uses_repo_scan_keys(monkeypatch):
     commands = []
 
     def fake_run(command, **kwargs):
@@ -758,13 +758,13 @@ def test_pick_issue_with_repo_policy_uses_repo_scan_keys(monkeypatch):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     config = config_domain.RunnerConfig()
-    assert claim._pick_issue_with_repo_policy("owner/repo", "v1.0.0", config) is None
+    assert claim.pick_ready_issue("owner/repo", "v1.0.0", config) is None
     searched = "\n".join(" ".join(command) for command in commands)
     assert "label:repo-ready" in searched
     assert 'milestone:"v9.9.9"' in searched
 
 
-def test_pick_issue_with_repo_policy_ignores_a_malformed_file(monkeypatch):
+def test_pick_ready_issue_ignores_a_malformed_file(monkeypatch):
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return json.dumps({"sha": "x", "content": _b64("nope = 1\n")})
@@ -772,12 +772,12 @@ def test_pick_issue_with_repo_policy_ignores_a_malformed_file(monkeypatch):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     # The scan keeps the host keys and stays alive; process_issue blocks.
-    assert claim._pick_issue_with_repo_policy(
+    assert claim.pick_ready_issue(
         "owner/repo", "v1.0.0", config_domain.RunnerConfig(),
     ) is None
 
 
-def test_pick_issue_with_repo_policy_without_config_uses_host_keys(monkeypatch):
+def test_pick_ready_issue_without_config_uses_host_keys(monkeypatch):
     commands = []
 
     def fake_run(command, **kwargs):
@@ -785,7 +785,7 @@ def test_pick_issue_with_repo_policy_without_config_uses_host_keys(monkeypatch):
         return json.dumps([])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    claim._pick_issue_with_repo_policy("owner/repo", "v1.0.0", None)
+    claim.pick_ready_issue("owner/repo", "v1.0.0", None)
     searched = "\n".join(" ".join(command) for command in commands)
     assert "label:ai-ready" in searched
     assert "gh api" not in searched
