@@ -86,7 +86,12 @@ def label_patch(event: str, current_labels,
       `ai-ready` residue is kept).
     - pr_opened: add `ai-pr-opened`, remove `ai-in-progress`.
     - fix_needed: add `ai-fix-needed`, remove any stale opened-PR or
-      in-flight label.
+      in-flight label. A TERMINAL Issue (`ai-merged` or `ai-blocked`
+      present) changes nothing: the delivery is over or waiting for a
+      human, and a fix-needed label beside it would let a later terminal
+      label removal resume an automatic fix nobody asked for (Issue
+      #1786). The engine never sends this event to a terminal Issue; the
+      CI triage does, from a late run on an already-merged PR.
     - merged: add `ai-merged`, remove the current delivery-state label
       (the one present in `current_labels`): `ai-pr-opened` for the
       normal PR delivery, `ai-in-progress` for the release state
@@ -121,6 +126,8 @@ def label_patch(event: str, current_labels,
     if event == EVENT_PR_OPENED:
         return ([PR_OPENED_LABEL], [IN_PROGRESS_LABEL])
     if event == EVENT_FIX_NEEDED:
+        if MERGED_LABEL in current or BLOCKED_LABEL in current:
+            return ([], [])
         to_remove = [
             label for label in (
                 IN_PROGRESS_LABEL, PR_OPENED_LABEL, AWAITING_MERGE_LABEL,
@@ -194,6 +201,20 @@ def label_patch(event: str, current_labels,
             to_remove.append(ready_label)
         return ([AWAITING_MERGE_LABEL], to_remove)
     raise ValueError(f"unknown delivery event: {event!r}")
+
+
+def has_delivery_state(current_labels,
+                       ready_label: str = READY_LABEL) -> bool:
+    """True when the labels carry a delivery state, not just the queue
+    entry.
+
+    The one answer to "is this Issue a delivery?" — any lifecycle state
+    other than the `ready_label` queue entry counts, terminal states
+    included. The CI triage uses it to own the open Issue a PR's
+    `Fixes #N` names, so the script carries no lifecycle label set of its
+    own (Issue #1786).
+    """
+    return bool(set(current_labels) & (LIFECYCLE_STATES - {ready_label}))
 
 
 def is_pickup_eligible(current_labels) -> bool:

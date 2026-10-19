@@ -12,10 +12,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 from collections.abc import Sequence
 from pathlib import Path
 
+from orbi import gitops
 from orbi import milestone as milestone_bookkeeping
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
@@ -214,20 +214,21 @@ def reconcile_open_epics(repo: str, run_id: str, language_code: str) -> list[str
 # idempotency key (one report per PR, never one per tick).
 ORPHAN_PR_MARK = "<!-- orbi:orphan-pr -->"
 
-_ORPHAN_PR_BRANCH_RE = re.compile(r"orbi/.+-issue-(\d+)\Z")
 
+def orphan_pr_branch_issue(repo: str, head_ref: object) -> int | None:
+    """The source Issue number of THIS repo's delivery branch, or None.
 
-def orphan_pr_branch_issue(head_ref: object) -> int | None:
-    """The source Issue number of a stable delivery branch, or None.
-
-    `task_branch` names every Runner delivery branch
-    `orbi/<source_repo slug>-issue-<N>`; any other head (a human's or an
-    external contributor's branch) is never the Runner's business.
+    The ownership decision is `gitops.is_delivery_branch` and the number
+    comes from the same naming source (`gitops.delivery_branch_prefix`,
+    Issue #1788): only `orbi/<this source repo>-issue-<N>` names an Issue
+    here, so another repository's `orbi/x-y-issue-3` — or a human's own
+    `orbi/manual` — is never the Runner's business.
     """
-    if not isinstance(head_ref, str):
+    if not isinstance(head_ref, str) or not gitops.is_delivery_branch(
+        repo, head_ref,
+    ):
         return None
-    match = _ORPHAN_PR_BRANCH_RE.fullmatch(head_ref)
-    return int(match.group(1)) if match else None
+    return int(head_ref.removeprefix(gitops.delivery_branch_prefix(repo)))
 
 
 def reconcile_orphan_prs(
@@ -256,7 +257,9 @@ def reconcile_orphan_prs(
         if not isinstance(pr, dict):
             continue
         pr_number = pr.get("number")
-        issue_number = orphan_pr_branch_issue(pr.get("headRefName"))
+        issue_number = orphan_pr_branch_issue(
+            repo, pr.get("headRefName"),
+        )
         if not isinstance(pr_number, int) or issue_number is None:
             continue
         details = issue_view(issue_number, "state", repo=repo, timeout=30)

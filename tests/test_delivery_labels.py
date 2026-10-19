@@ -146,6 +146,39 @@ def test_label_patch_fix_needed_clears_stale_in_progress_too():
     assert to_remove == ["ai-in-progress", "ai-pr-opened"]
 
 
+@pytest.mark.parametrize("labels", [
+    {"ai-merged"},
+    {"ai-blocked"},
+    {"ai-blocked", "ai-pr-opened"},
+    {"ai-blocked", "ai-fix-needed"},
+    {"ai-blocked", "ai-awaiting-merge"},
+])
+def test_label_patch_fix_needed_changes_nothing_on_a_terminal_issue(labels):
+    """Issue #1786: a terminal Issue keeps its labels.
+
+    `ai-merged` is a finished success and `ai-blocked` is a human's
+    decision point. Adding `ai-fix-needed` beside either would let a
+    later removal of the terminal label resume an automatic fix nobody
+    asked for (the late CI run on an already-merged PR). The engine never
+    sends this event to a terminal Issue, so only the CI triage's label
+    decision changes.
+    """
+    assert dl.label_patch(dl.EVENT_FIX_NEEDED, labels) == ([], [])
+
+
+def test_has_delivery_state_excludes_the_queue_entry():
+    """The one "is this Issue a delivery?" answer, used by the CI triage's
+    `Fixes #N` ownership lookup: any lifecycle state other than the
+    `ai-ready` queue entry counts, terminal states included."""
+    assert dl.has_delivery_state({"ai-pr-opened"})
+    assert dl.has_delivery_state({"ai-merged"})
+    assert dl.has_delivery_state({"ai-blocked"})
+    assert dl.has_delivery_state({"ai-ready", "ai-in-progress"})
+    assert not dl.has_delivery_state({"ai-ready"})
+    assert not dl.has_delivery_state({"bug", "p0"})
+    assert not dl.has_delivery_state(())
+
+
 def test_label_patch_fix_round_sequence_leaves_only_merged():
     labels = {"ai-ready"}
     add, remove = dl.label_patch(dl.EVENT_CLAIM, labels)
