@@ -1942,8 +1942,11 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     # does NOT re-raise — the service must not crash on it (Issue #239).
     assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
     assert calls[1][2] == {"repo": "xqliu/orbi-backlog", "add": "ai-blocked", "remove": "ai-in-progress"}
-    assert calls[2][0] == "comment"
-    failure_body = calls[2][2]["body"]
+    # The terminal state is ai-blocked ALONE: the queue label the claim
+    # kept is cleared too.
+    assert calls[2][2] == {"repo": "xqliu/orbi-backlog", "remove": "ai-ready"}
+    assert calls[3][0] == "comment"
+    failure_body = calls[3][2]["body"]
     # The failure is also published as the blocked milestone (Issue
     # #18). The worktree was never created, so no progress comment
     # exists to PATCH: the milestone alone carries the notification.
@@ -1958,6 +1961,55 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     assert "- base_sha: abc123def456" in failure_body
     assert "run_id=a1b2c3d4" in failure_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in failure_body
+
+
+def test_process_issue_terminal_failure_clears_the_repositorys_dispatch_label(
+    monkeypatch, tmp_path,
+):
+    """Issue #1775: a repository whose dispatch_label is ship must end a
+    terminal failure ai-blocked ALONE — the blocked transition clears the
+    same queue label the claim scanned, not only the host default."""
+    edits = []
+    monkeypatch.setattr(seam, "edit_issue",
+        lambda *args, **kwargs: edits.append(kwargs),
+    )
+    monkeypatch.setattr(seam, "freeze_base",
+        lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree",
+        Mock(side_effect=RuntimeError("git failed")))
+    monkeypatch.setitem(
+        failure_report.__dict__, "activity_snapshot",
+        lambda session_dir: None,
+    )
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[0] == "gh" and command[1] == "api":
+            return _gh_api(command, posted)
+        if (command[0] == "gh" and command[1] == "issue"
+                and command[2] == "view"):
+            return json.dumps({"labels": [{"name": "ship"}]})
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    result = runner.process_issue(
+        {"number": 8, "title": "Fail", "body": ""},
+        config_domain.RunnerConfig(
+            repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
+            base_branch="main", dispatch_label="ship",
+        ),
+        "xqliu/orbi-backlog",
+    )
+    assert result.kind == "failed"
+    # The claim keeps ship and adds the in-flight label; the terminal
+    # blocked patch clears both and leaves ai-blocked alone.
+    assert edits == [
+        {"repo": "xqliu/orbi-backlog", "add": "ai-in-progress"},
+        {"repo": "xqliu/orbi-backlog", "add": "ai-blocked",
+         "remove": "ai-in-progress"},
+        {"repo": "xqliu/orbi-backlog", "remove": "ship"},
+    ]
 
 
 def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
@@ -2019,6 +2071,7 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
         {"repo": "xqliu/orbi", "add": "ai-in-progress"},
         {"repo": "xqliu/orbi", "add": "ai-blocked",
          "remove": "ai-in-progress"},
+        {"repo": "xqliu/orbi", "remove": "ai-ready"},
     ]
     comment_bodies = [
         entry[2]["body"] for entry in calls
@@ -2629,6 +2682,7 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
         {"repo": "xqliu/orbi", "add": "ai-in-progress"},
         {"repo": "xqliu/orbi", "add": "ai-blocked",
          "remove": "ai-in-progress"},
+        {"repo": "xqliu/orbi", "remove": "ai-ready"},
     ]
     comment_bodies = [
         entry[2]["body"] for entry in calls
@@ -2710,6 +2764,7 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
         {"repo": "xqliu/orbi-backlog", "add": "ai-in-progress"},
         {"repo": "xqliu/orbi-backlog", "add": "ai-blocked",
          "remove": "ai-in-progress"},
+        {"repo": "xqliu/orbi-backlog", "remove": "ai-ready"},
     ]
 
 

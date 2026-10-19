@@ -3145,9 +3145,9 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 # the claim write landed (the publisher is created right
                 # after it) the scanned labels are the honest source.
                 current_labels=(
-                    {PR_OPENED_LABEL} if pr_opened
-                    else {IN_PROGRESS_LABEL} if publisher is not None
-                    else set(claim_labels)
+                    {PR_OPENED_LABEL, dispatch_label} if pr_opened
+                    else {IN_PROGRESS_LABEL, dispatch_label}
+                    if publisher is not None else set(claim_labels)
                 ),
                 review_round=0,
                 finish=(
