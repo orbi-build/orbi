@@ -19,6 +19,9 @@ It also owns the ONE decision of which round a PR is effectively on
 budget reset applied. The review loop's budget and every failure report
 read `effective_review_round` / `current_review_round`, so a recovered
 PR can never report the exhausted count while the review runs round 1.
+Only the report reader tolerates a failed recovery read (Issue #79); the
+budget's read fails fast, so a rate-limited label history is a
+recoverable failure, never a hidden "exhausted" verdict.
 
 Imports pull in `github` (`_comment_is_trusted`, `_pr_number`,
 `run_gh_read_command`), `delivery_labels` (the recovery transition) and
@@ -222,24 +225,6 @@ def human_review_recovery_at(number: int, repo: str) -> str | None:
     return recovery_at if isinstance(recovery_at, str) else None
 
 
-def _review_recovery_at(number: int, repo: str) -> str | None:
-    """Read the recovery transition, tolerating a failed read.
-
-    The reset only matters once the budget is exhausted, and a report is
-    not a second failure: an unreadable label history logs
-    `review_recovery_read_failed` and keeps the scene's count (Issue
-    #1779).
-    """
-    try:
-        return human_review_recovery_at(number, repo)
-    except Exception as exc:
-        event(
-            "review_recovery_read_failed", level=logging.WARNING,
-            issue=number, error=str(exc),
-        )
-        return None
-
-
 def effective_review_round(resume_scene: dict, *, number: int,
                            repo: str) -> int:
     """The completed review rounds this PR effectively has (Issue #1779).
@@ -252,12 +237,17 @@ def effective_review_round(resume_scene: dict, *, number: int,
     recovery can never be applied on one side only.
 
     A scene below the bounded budget needs no read: a reset could not
-    change its count.
+    change its count. Above it the read decides the budget, so its
+    failure propagates and fails the delivery recoverably (Issue #73):
+    treating an unreadable label history as "no recovery" would turn a
+    transient read error into the terminal `ai-blocked` verdict only a
+    human can undo. `current_review_round` — the report reader — is the
+    one place that tolerates the failed read.
     """
     rounds = int(resume_scene["review_round"])
     if rounds < MAX_REVIEW_ROUNDS:
         return rounds
-    recovery_at = _review_recovery_at(number, repo)
+    recovery_at = human_review_recovery_at(number, repo)
     scene_at = resume_scene.get("scene_at")
     if recovery_at is None:
         return rounds
@@ -285,16 +275,24 @@ def current_review_round(comments: list[dict], *, number: int,
     No readable scene means no review round yet: 0. Reporting must never
     fail on this read (a corrupted scene is one the review loop refuses
     to review, not a second failure of the failure report), and a failed
-    recovery read never fails it either.
+    recovery read never fails it either: it is logged
+    (`review_recovery_read_failed`) and the scene's own count stands.
     """
     try:
         resume_scene = run_state.resume_scene(comments)
     except (scene.SceneError, scene.SceneMissingError):
         return 0
-    effective = effective_review_round(
-        resume_scene, number=number, repo=repo,
-    )
-    return min(effective + 1, MAX_REVIEW_ROUNDS)
+    completed = int(resume_scene["review_round"])
+    try:
+        completed = effective_review_round(
+            resume_scene, number=number, repo=repo,
+        )
+    except Exception as exc:  # a report is not a second failure (Issue #79)
+        event(
+            "review_recovery_read_failed", level=logging.WARNING,
+            issue=number, error=str(exc),
+        )
+    return min(completed + 1, MAX_REVIEW_ROUNDS)
 
 
 def review_rounds_so_far(
