@@ -228,9 +228,10 @@ def is_pickup_eligible(current_labels) -> bool:
     pickup). The "other delivery state" check is `has_delivery_state`'s
     single decision (Issue #1795), never a second set expression here.
     """
-    if READY_LABEL not in set(current_labels):
+    current = set(current_labels)
+    if READY_LABEL not in current:
         return False
-    return not has_delivery_state(current_labels)
+    return not has_delivery_state(current)
 
 
 def is_resumable(current_labels) -> bool:
