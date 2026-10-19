@@ -318,6 +318,7 @@ def _pick_from_scan(
     active_milestone: str | None = None,
     ready_label: str = READY_LABEL,
     external_only: bool = False, held: frozenset = frozenset(),
+    raise_on_read_failure: bool = False,
 ) -> dict | None:
     """Return the first claimable Issue of one scan result, else None.
 
@@ -364,6 +365,13 @@ def _pick_from_scan(
     `held` names the deliveries a live co-runner works on: such an Issue
     is skipped (`claim_yield reason=held_by_live_runner`) and never
     claimed twice — the skip is the FIRST guard of this loop.
+
+    `raise_on_read_failure` decides what a failed Milestone read of the
+    release gate MEANS to the caller — the same meaning every other read
+    of the decision carries (`_scan_read_failed`): the claim fails safe
+    and skips the release this tick, an OBSERVER of the decision
+    (`orbi status`) re-raises so the failed read is named instead of
+    rendering as an empty queue (Issue #1782).
     """
     for issue in issues:
         if (repo, int(issue["number"])) in held:
@@ -393,6 +401,8 @@ def _pick_from_scan(
                         "release_milestone_check_failed", level=logging.ERROR,
                         issue=issue.get("number"), repo=repo,
                         milestone=target_milestone, error=exc)
+                    if raise_on_read_failure:
+                        raise
                     return None
                 if open_issues > 1:
                     event("release_milestone_incomplete", issue=issue.get("number"),
@@ -503,6 +513,7 @@ def pick_issue(repo: str, active_milestone: str | None = None,
             return None
         picked = _pick_from_scan(
             issues, repo, ready_label=dispatch_label, held=held,
+            raise_on_read_failure=raise_on_read_failure,
         )
         if picked is not None:
             return picked
@@ -527,6 +538,7 @@ def pick_issue(repo: str, active_milestone: str | None = None,
         issues, repo, allow_release=True, held=held,
         active_milestone=active_milestone,
         ready_label=dispatch_label,
+        raise_on_read_failure=raise_on_read_failure,
     )
     if picked is not None:
         return picked
@@ -552,6 +564,7 @@ def pick_issue(repo: str, active_milestone: str | None = None,
     return _pick_from_scan(
         issues, repo, external_only=True, held=held,
         ready_label=dispatch_label,
+        raise_on_read_failure=raise_on_read_failure,
     )
 
 
@@ -818,9 +831,27 @@ def _repo_scan_context(
     )
 
 
+def _live_held_deliveries(
+    config: RunnerConfig | None,
+) -> frozenset[tuple[str, int]]:
+    """The deliveries live co-runners hold RIGHT NOW, from the host config.
+
+    The claim path reads its slots through `slot_held_deliveries`
+    (`pick_next_delivery`); this is the same read for a reader that has
+    only the configuration — a host without a readable `slot_dir`
+    contributes nothing (fail open: skip only what is provably held).
+    """
+    if config is None or config.slot_dir is None:
+        return frozenset()
+    return frozenset(
+        slot_held_deliveries(config.slot_dir, config.max_concurrency)
+    )
+
+
 def pick_ready_issue(
     repo: str, active_milestone: str | None = None,
-    config: RunnerConfig | None = None, held: frozenset = frozenset(),
+    config: RunnerConfig | None = None,
+    held: frozenset | None = None,
     *, timeout: int | None = None, raise_on_read_failure: bool = False,
 ) -> dict | None:
     """The Issue the next fresh claim would pick: THE ready decision.
@@ -840,7 +871,17 @@ def pick_ready_issue(
     decides what a failed read means to the caller: the claim fails open,
     while `orbi status` re-raises so a broken read is named as a failure
     and never rendered as an empty queue (`_scan_read_failed`).
+
+    An unset `held` reads the SAME live slots the claim reads, from the
+    configuration's own `slot_dir`/`max_concurrency`
+    (`_live_held_deliveries`): the status reader must not name a delivery
+    a live co-runner already holds during the seconds between that
+    runner's slot-identity write and its `ai-in-progress` label (Issue
+    #1782). Both readers decide on the same held set, and no held logic
+    lives in `cli.py`.
     """
+    if held is None:
+        held = _live_held_deliveries(config)
     milestone, dispatch_label = _repo_scan_keys(
         config, repo, active_milestone,
     )
