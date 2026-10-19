@@ -1182,8 +1182,13 @@ The oid match protects a reopened Issue's new attempt: the delivery
 branch name is fixed per Issue, so the new attempt pushes to the same
 name while the old merged PR still reports it. A branch whose only PR
 is OPEN, CLOSED-unmerged or absent is never in the merged map and is
-never touched. Deletions are capped at 25 per tick, so a backlog drains
-over ticks. The pass is a pure bypass: a read failure logs
+never touched. Ownership is the one delivery-branch check
+(`gitops.is_delivery_branch`): a head is only ever deleted when it is
+this source repo's `orbi/<owner>-<repo>-issue-<n>`, so a self-hosted
+user's own merged `orbi/manual` — or another repository's delivery name
+— is never deleted (Issue #1788; the same check guards the orphan-PR
+report's Issue number). Deletions are capped at 25 per tick, so a
+backlog drains over ticks. The pass is a pure bypass: a read failure logs
 `branch_reclaim_failed reason=... (deleting nothing)`, a single delete
 failure logs `branch_reclaim_failed branch=... reason=...` and the pass
 continues, and a successful tick with deletions logs

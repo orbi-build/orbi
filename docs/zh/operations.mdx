@@ -1013,7 +1013,12 @@ worktree 过去只增不减：每次交付都会留下
 重新打开的 Issue 的新尝试：交付分支名按 Issue 固定，因此新尝试会推到
 同名分支，而旧的已合并 PR 仍在报告该名字。只有一个 OPEN、
 CLOSED-unmerged 或根本没有 PR 的分支永远不会进入已合并映射，也就
-永远不会被碰。每次 tick 最多删除 25 个，积压在多个 tick 内消化。整个
+永远不会被碰。归属判定只有一条交付分支检查
+（`gitops.is_delivery_branch`）：只有当远端头是本 source repo 的
+`orbi/<owner>-<repo>-issue-<n>` 时才会被删除，因此自托管用户自己的
+已合并 `orbi/manual`、或其他仓库的交付分支名永远不会被删除
+（Issue #1788；孤儿 PR 上报的 Issue 号也来自同一条检查）。每次 tick
+最多删除 25 个，积压在多个 tick 内消化。整个
 扫描是纯旁路：读取失败记录
 `branch_reclaim_failed reason=... (deleting nothing)`，单个删除失败
 记录 `branch_reclaim_failed branch=... reason=...` 后继续，有删除的
