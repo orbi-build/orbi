@@ -351,10 +351,7 @@ def _pick_from_scan(
     `ai-ready` for the next tick — a recoverable wait, never
     `ai-blocked`. A Milestone query that cannot be evaluated skips the
     release too (`release_milestone_check_failed`): a bad release is
-    irreversible, so the check fails safe and the next tick retries —
-    unless the caller is an OBSERVER of the decision
-    (`raise_on_read_failure`, `orbi status`), which re-raises so the
-    failed read is named instead of reading as an empty queue.
+    irreversible, so the check fails safe and the next tick retries.
 
     The last guard is the delivery-scene classification itself (Issue
     #787): the ready scans claim only the fresh-claim family, decided
