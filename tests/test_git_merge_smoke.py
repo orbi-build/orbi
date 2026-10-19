@@ -505,13 +505,11 @@ def install_round_gh(monkeypatch, clone: Path, head_oid: str, *,
                     1, command, stderr="HTTP 502: Bad Gateway",
                 )
             return ""
-        if command[1] == "api":
-            if command[2] == "repos/owner/repo":
-                return json.dumps({"allow_merge_commit": True})
-            if "--method" in command:
-                return json.dumps({"id": 77, "body": "", "url": "https://x"})
-            return "[]"
-        return ""
+        if command[2] == "repos/owner/repo":
+            return json.dumps({"allow_merge_commit": True})
+        if "--method" in command:
+            return json.dumps({"id": 77, "body": "", "url": "https://x"})
+        return "[]"
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
@@ -584,6 +582,12 @@ def test_round_uses_the_gates_landed_verdict_after_a_failed_merge_call(
             "remove": "ai-pr-opened"} in labels
     merge_commit = git(clone, "rev-parse", "origin/main")
     assert f"merge_commit={merge_commit}" in comments[0]
+    # Every later landing read is the 5xx that used to escape the round
+    # after the merge landed: the round needed no second one.
+    with pytest.raises(gh_response.GitHubRequestFailed):
+        review_merge.confirm_merged(
+            clone, _delivery_pr(clone, head_oid), "main", repo_dir=clone,
+        )
 
 
 def test_round_reads_the_landing_once_when_the_merge_call_succeeds(
