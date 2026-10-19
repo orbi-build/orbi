@@ -307,3 +307,141 @@ def test_sync_base_checkout_fails_fast_on_drifted_checkout(
 
     with pytest.raises(RuntimeError, match="cannot fast-forward"):
         review_merge.sync_base_checkout(checkout, "main")
+
+
+# ---------------------------------------------------------------------------
+# Issue #1798: a merge that landed despite an error from the merge call
+# ---------------------------------------------------------------------------
+
+def install_failing_merge_gh(monkeypatch, clone: Path, head_oid: str, *,
+                             landed: bool = True, pr_after=None) -> list:
+    """Run real git; `gh pr merge` lands a real merge and THEN fails.
+
+    This is the Issue #1798 scene (orbi-build/orbi-cloud PR #2652): GitHub
+    creates the merge commit on the base branch and the merge call itself
+    returns `502 Bad Gateway`. `landed=False` models the same error with
+    nothing on the base branch. `pr_after` answers `gh pr view` once the
+    merge call has failed; before it the reviewed head reads OPEN and
+    mergeable.
+    """
+    real_run = runner.run_command
+    calls: list = []
+    failed = False
+
+    def fake_run(command, **kwargs):
+        nonlocal failed
+        if command[0] == "gh" and command[1:3] == ["pr", "view"]:
+            calls.append(command)
+            if failed and pr_after is not None:
+                return pr_after()
+            return make_pr(head_oid)
+        if command[0] == "gh" and command[1] == "pr" and "merge" in command:
+            calls.append(command)
+            if landed:
+                git(clone, "checkout", "main")
+                git(clone, "merge", "--no-ff", command[command.index(
+                    "--match-head-commit") + 1])
+                git(clone, "push", "origin", "main")
+                git(clone, "checkout", "-")
+            failed = True
+            raise subprocess.CalledProcessError(
+                1, command, stderr="HTTP 502: Bad Gateway",
+            )
+        if command[0] == "gh":
+            calls.append(command)
+            return ""
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    return calls
+
+
+def _delivery_pr(clone: Path, head_oid: str) -> dict:
+    return {"number": 4, "url": "u", "base_ref": "main",
+            "base_oid": git(clone, "rev-parse", "origin/main"),
+            "head_ref": "orbi/owner-repo-issue-4", "head_oid": head_oid}
+
+
+def test_merge_gate_accepts_a_merge_that_landed_despite_a_502(
+        clone, monkeypatch, caplog):
+    """Issue #1798 acceptance 1: `gh pr merge` fails 5xx and the PR then
+    reads MERGED with its merge commit on origin/<base> — the delivery
+    continues like a successful merge instead of a fix-needed round."""
+    git(clone, "checkout", "-b", "orbi/owner-repo-issue-4")
+    head_oid = commit_file(clone, "delivery.txt", "delivery")
+    calls = install_failing_merge_gh(
+        monkeypatch, clone, head_oid,
+        pr_after=lambda: make_pr(
+            head_oid, state="MERGED", merged_at="2026-10-19T13:38:31Z",
+            merge_commit=git(clone, "rev-parse", "origin/main"),
+        ),
+    )
+    with caplog.at_level("WARNING"):
+        merged = review_merge.merge_gate(
+            clone, _delivery_pr(clone, head_oid), "main",
+            repo_dir=clone, language_code="en",
+        )
+    assert merged["merged"] is True
+    assert "merge_landed_after_error" in caplog.text
+    # Still exactly one merge call: the error is confirmed, never retried.
+    assert len([c for c in calls
+                if c[0] == "gh" and c[1] == "pr" and "merge" in c]) == 1
+    merge_commit = git(clone, "rev-parse", "origin/main")
+    confirmed = review_merge.confirm_merged(clone, merged, "main",
+                                            repo_dir=clone)
+    assert confirmed == {"state": "MERGED", "merge_commit": merge_commit}
+
+
+def test_merge_gate_accepts_a_landed_head_while_the_pr_reads_open(
+        clone, monkeypatch, caplog):
+    """Issue #1798 acceptance 2 (PR #2652's shape): GitHub created the merge
+    commit on the base branch and never marked the PR merged, so re-reading
+    the PR state cannot recognise the merge. The reviewed head being
+    reachable from origin/<base> does, and the landed merge commit is the
+    one the delivery records."""
+    git(clone, "checkout", "-b", "orbi/owner-repo-issue-4")
+    head_oid = commit_file(clone, "delivery.txt", "delivery")
+    calls = install_failing_merge_gh(monkeypatch, clone, head_oid)
+    with caplog.at_level("INFO"):
+        merged = review_merge.merge_gate(
+            clone, _delivery_pr(clone, head_oid), "main",
+            repo_dir=clone, language_code="en",
+        )
+    assert merged["merged"] is True
+    assert len([c for c in calls
+                if c[0] == "gh" and c[1] == "pr" and "merge" in c]) == 1
+    merge_commit = git(clone, "rev-parse", "origin/main")
+    # The commit that landed the reviewed head is a real merge commit whose
+    # second parent is that head.
+    assert git(clone, "rev-parse", f"{merge_commit}^2") == head_oid
+    with caplog.at_level("INFO"):
+        confirmed = review_merge.confirm_merged(clone, merged, "main",
+                                                repo_dir=clone)
+    assert confirmed == {"state": "MERGED", "merge_commit": merge_commit}
+    assert "confirm_merged_landed_on_base" in caplog.text
+
+
+def test_merge_gate_still_fails_when_the_merge_did_not_land(
+        clone, monkeypatch):
+    """Issue #1798 acceptance 3: the same 5xx with the reviewed head NOT on
+    origin/<base> keeps today's outcome — the error surfaces."""
+    git(clone, "checkout", "-b", "orbi/owner-repo-issue-4")
+    head_oid = commit_file(clone, "delivery.txt", "delivery")
+    pr = _delivery_pr(clone, head_oid)
+    calls = install_failing_merge_gh(monkeypatch, clone, head_oid,
+                                     landed=False)
+    monkeypatch.setattr(
+        seam, "merge_gate_preflight",
+        lambda *args: ["merge_gate: PASS protection readable"],
+    )
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        review_merge.merge_gate(
+            clone, pr, "main", repo_dir=clone, language_code="en",
+        )
+    assert raised.value.returncode == 1
+    assert "502" in (raised.value.stderr or "")
+    assert len([c for c in calls
+                if c[0] == "gh" and c[1] == "pr" and "merge" in c]) == 1
+    # Nothing landed: the base branch is untouched.
+    assert git(clone, "rev-parse", "origin/main") == pr["base_oid"]
+
