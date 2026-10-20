@@ -1,0 +1,43 @@
+---
+title: "v0.7.11 release (latest)"
+description: "Orbi v0.7.11 release notes: Idle recovery terminates a hung command on hosts whose /proc has no stat file (subset=pid) and 2 more changes."
+---
+
+`v0.7.11` was published 2026-10-20T04:16:01Z as the GitHub Release [v0.7.11](https://github.com/orbi-build/orbi/releases/tag/v0.7.11) (release task: Issue #1807).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.7.11` | annotated tag `7dc3be9e87f636fa9b75bdd41662fc0769c99db1` | commit `8e5bad79907776d08ff935b05fbffe5e50c82d2a` |
+
+## Release notes
+
+## Changelog
+
+### Reliability and recovery
+
+- Idle recovery terminates a hung command on hosts whose /proc has no stat file (subset=pid) ([Issue #1808](https://github.com/orbi-build/orbi/issues/1808); [PR #1811](https://github.com/orbi-build/orbi/pull/1811))
+
+### Documentation
+
+- Redirect retired v0.1.1 docs links to the existing GitHub Release ([Issue #1810](https://github.com/orbi-build/orbi/issues/1810); [PR #1812](https://github.com/orbi-build/orbi/pull/1812))
+
+### Bug fixes
+
+- Maintainers with private org membership are recognised from their repository permission, not the comment's authorAssociation ([Issue #1806](https://github.com/orbi-build/orbi/issues/1806); [PR #1809](https://github.com/orbi-build/orbi/pull/1809))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
+
+- tag: `v0.7.11`
+- release commit: `8e5bad79907776d08ff935b05fbffe5e50c82d2a`
+- release task: Issue #1807
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 8e5bad79907776d08ff935b05fbffe5e50c82d2a (the #268 CI-wait gate; no local test execution)
+
+
+Released by [Orbi](https://orbi.build/?ref=prfoot-orbi-build)
