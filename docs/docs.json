@@ -5,6 +5,16 @@
   "colors": {
     "primary": "#1d76db"
   },
+  "redirects": [
+    {
+      "source": "/release-v0.1.1",
+      "destination": "https://github.com/orbi-build/orbi/releases/tag/v0.1.1"
+    },
+    {
+      "source": "/zh/release-v0.1.1",
+      "destination": "https://github.com/orbi-build/orbi/releases/tag/v0.1.1"
+    }
+  ],
   "navigation": {
     "languages": [
       {
