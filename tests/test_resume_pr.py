@@ -50,12 +50,37 @@ _WRITERS = frozenset({
 })
 
 
+def _gh_status_for_this_suite(command, *args, **kwargs):
+    """Answer the credential read the trust fallback makes, and only that.
+
+    A comment from a non-writer falls through to the own-account trust
+    fallback, which reads the RUNNER's own credential with
+    ``gh auth status``. On a host or CI job with no GitHub login that
+    read fails, and a test of the trust gate would then fail for a reason
+    that is not its subject: pin the account here. Any other command is
+    not this suite's subject — the tests patch the seam they need, and
+    this default makes an unexpected subprocess a loud failure instead of
+    a host-dependent answer. A scenario that exercises the identity
+    resolution itself patches this seam in its own body, which wins.
+    """
+    assert [str(part) for part in command][:3] == ["gh", "auth", "status"], (
+        f"unexpected command in a resume-scene test: {command}"
+    )
+    return (
+        "github.com\n"
+        "  \u2713 Logged in to github.com account orbi-bot (keyring)\n"
+        "  - Active account: true\n"
+        "  - Git operations protocol: https\n"
+    )
+
+
 @pytest.fixture(autouse=True)
 def _repository_permissions(monkeypatch):
     monkeypatch.setattr(
         seam, "repository_permission",
         lambda login, *, repo: "admin" if login in _WRITERS else "none",
     )
+    monkeypatch.setattr(seam, "run_command", _gh_status_for_this_suite)
 
 from orbi.delivery_scene import RunContext
 

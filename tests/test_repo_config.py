@@ -706,20 +706,22 @@ def test_apply_repo_policy_uses_the_entry_base_branch_as_fallback():
 
 def test_previous_repo_config_sha_reads_the_newest_trusted_comment(monkeypatch):
     # Ordered oldest -> newest (reversed by the function): an untrusted
-    # comment, a non-string body, a trusted comment without the field and
-    # finally the trusted match. The match is the newest, so it wins after
-    # the earlier candidates are skipped.
+    # comment, an older trusted match, a non-string body, a trusted comment
+    # without the field and finally the NEWEST trusted match. The newest
+    # wins, so a scan that reads the oldest match first is wrong.
     # Issue #1806: the trust is the author's repository permission, so a
     # comment from a writer is read and one from a non-writer is skipped.
     comments = [
+        {"authorAssociation": "NONE", "author": {"login": "drive-by"},
+         "body": "- repo_config: " + "b" * 40},
         {"authorAssociation": "MEMBER", "author": {"login": "maintainer"},
          "body": "- repo_config: " + "c" * 40},
         {"authorAssociation": "MEMBER", "author": {"login": "maintainer"},
          "body": "no repo config field"},
-        {"authorAssociation": "NONE", "author": {"login": "drive-by"},
-         "body": "- repo_config: " + "b" * 40},
         {"authorAssociation": "MEMBER", "author": {"login": "maintainer"},
          "body": None},
+        {"authorAssociation": "MEMBER", "author": {"login": "maintainer"},
+         "body": "- repo_config: " + "d" * 40},
     ]
     monkeypatch.setattr(seam, "_authenticated_github_login", lambda: "orbi")
     monkeypatch.setattr(
@@ -728,7 +730,7 @@ def test_previous_repo_config_sha_reads_the_newest_trusted_comment(monkeypatch):
     )
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments,
     )
-    assert runner.previous_repo_config_sha(1, "owner/repo") == "c" * 40
+    assert runner.previous_repo_config_sha(1, "owner/repo") == "d" * 40
 
 
 def test_previous_repo_config_sha_is_best_effort(monkeypatch, caplog):

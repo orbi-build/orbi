@@ -71,8 +71,13 @@ REPO = "owner/repo"
 RUNNER_MODULE = "orbi.runner"
 
 # Stateful fake ``gh``: one JSON file (ORBI_FAKE_GH_STATE) holds the Issue
-# labels, the comments (with author association) and the PR state. It
-# answers exactly the commands the runner runs.
+# labels, the comments (with their author) and the PR state. It answers
+# exactly the commands the runner runs. Every comment in this fixture
+# world is written by the runner or by the maintainer, and the
+# repository-permission read (Issue #1806) says so: the trust gate is not
+# what these scenes test, and answering "can write" keeps every comment
+# of the world usable (the untrusted-author scenes live in the unit
+# tests).
 FAKE_GH = """#!/usr/bin/env python3
 import fcntl, json, os, subprocess, sys, tempfile
 from pathlib import Path
@@ -151,6 +156,7 @@ elif args[:2] == ["issue", "edit"]:
 elif args[:2] == ["issue", "comment"]:
     state["comments"].append(
         {"issue": args[2], "body": args[args.index("--body") + 1],
+         "author": {"login": "orbi-build[bot]"},
          "authorAssociation": "OWNER"}
     )
     save()
@@ -175,9 +181,9 @@ elif args[:2] == ["issue", "view"]:
         }))
     else:
         comments = [
-            {"body": c["body"], "authorAssociation": c.get(
-                "authorAssociation", "OWNER"
-            )}
+            {"body": c["body"],
+             "author": c.get("author", {"login": "orbi-build[bot]"}),
+             "authorAssociation": c.get("authorAssociation", "OWNER")}
             for c in state["comments"] if c["issue"] == num
         ]
         print(json.dumps({"comments": comments}))
@@ -264,12 +270,25 @@ elif args[:2] == ["pr", "merge"]:
     state.setdefault("pr_states", {})[branch] = "MERGED"
     state["merged_head"] = head
     save()
+elif args[:2] == ["auth", "status"]:
+    # The runner's own identity (the own-account trust fallback of
+    # Issue #1806 reads it): the App account this fixture world posts as.
+    print("github.com\\n"
+          "  Logged in to github.com account orbi-build[bot] (keyring)\\n"
+          "  - Active account: true\\n"
+          "  - Git operations protocol: https\\n")
 elif args[:1] == ["api"]:
     if "check-runs" in args[1]:
         print(json.dumps([{
             "name": "tests", "status": "completed",
             "conclusion": "success",
         }]))
+    elif args[1].split("/")[3:4] == ["collaborators"]:
+        # repos/<owner>/<repo>/collaborators/<login>/permission — the
+        # repository permission GitHub reports (Issue #1806).
+        login = args[1].split("/")[4]
+        print(json.dumps({"permission": "admin", "role_name": "admin",
+                          "user": {"login": login}}))
     else:
         # The progress publisher (Issue #18) keeps the single per-run
         # comment via gh api: list (GET) and create (POST) on
@@ -285,6 +304,7 @@ elif args[:1] == ["api"]:
                 cid = max([c.get("id", 0) for c in state["comments"]] or [0]) + 1
                 state["comments"].append(
                     {"issue": num, "body": body, "id": cid,
+                     "author": {"login": "orbi-build[bot]"},
                      "authorAssociation": "OWNER"}
                 )
                 save()
@@ -300,6 +320,7 @@ elif args[:1] == ["api"]:
         else:
             print(json.dumps([
                 {"id": c.get("id", i + 1), "body": c["body"],
+                 "author": c.get("author", {"login": "orbi-build[bot]"}),
                  "authorAssociation": c.get("authorAssociation", "OWNER")}
                 for i, c in enumerate(state["comments"])
                 if c["issue"] == num

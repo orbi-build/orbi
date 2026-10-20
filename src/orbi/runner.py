@@ -526,7 +526,7 @@ def previous_repo_config_sha(number: int, source_repo: str) -> str | None:
             issue=number,
         )
         return None
-    for comment in trusted_comments(comments, repo=source_repo):
+    for comment in reversed(trusted_comments(comments, repo=source_repo)):
         body = comment.get("body")
         if not isinstance(body, str):
             continue
