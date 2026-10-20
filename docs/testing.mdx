@@ -118,9 +118,13 @@ inside the suite: the deployment, setup, doctor and health-check
 contracts are pinned to the systemd implementation through the
 `systemd_scheduler` test fixture (the launchd implementation keeps its
 own fakes-based tests), and the real-subprocess idle-recovery scenes
-(`/proc`-based descendant discovery) plus the runner-subprocess e2e
-scenes skip on Darwin with named reasons — the Ubuntu workflow above
-keeps every one of them authoritative. The coverage and
+(`/proc/<pid>/stat` descendant discovery and start ticks — no
+`/proc/stat`, so a `subset=pid` container runs them for real too, Issue
+#1808) plus the runner-subprocess e2e scenes skip on Darwin with named
+reasons — the Ubuntu workflow above keeps every one of them
+authoritative. The one scene that asserts the `upstream_alive` live-socket
+evidence needs `/proc/net/tcp` and skips with its own named reason where
+that file does not exist. The coverage and
 changed-code gates stay authoritative in the Ubuntu workflow above; the
 macOS job still fails on any test, package, or installer compatibility
 failure — nothing is swallowed or converted into a pass.

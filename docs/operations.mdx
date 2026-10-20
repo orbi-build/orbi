@@ -480,10 +480,18 @@ Stable `key=value` lines you will see:
 - `pi_idle_term` / `pi_idle_kill` — the idle-stall recovery (Issue
   #94): while the session stays stalled the Runner SIGTERMs the Pi
   descendants that already existed before the idle window (the hung
-  tools — ppid chain + start time from `/proc/<pid>/stat`, never a
-  name guess; only Pi descendants are ever signaled), then SIGKILLs a
-  target that survived; each line carries run id, pid, cmdline and
-  result (`sent` / `already_dead` / `no_target` / `failed: ...`);
+  tools — ppid chain + start ticks, stat field 22, from
+  `/proc/<pid>/stat`, never a name guess; only Pi descendants are ever
+  signaled), then SIGKILLs a target that survived; each line carries
+  run id, pid, cmdline and result (`sent` / `already_dead` /
+  `no_target` / `failed: ...`). The recovery reads ONLY the
+  per-process directories and compares the kernel's own unit (ticks
+  since boot) as-is: no `/proc/stat` `btime`, no clock conversion, so
+  it also works where `/proc` is mounted with `subset=pid` and no file
+  outside the process directories exists (Issue #1808). The descendants
+  are recorded when the idle window opens: a process spawned after it is
+  never a target, and a pid whose start ticks changed (the kernel reused
+  it) is reported `pid_reused` and never signaled;
 - `pi_retry_429` — one WARNING per provider rate-limit retry (Issue
   #321): Pi exited non-zero and its stderr carries a 429 marker
   (`429` / `quota` / `RESOURCE_EXHAUSTED` / `retry in`) — TRANSIENT

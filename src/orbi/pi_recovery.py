@@ -10,13 +10,21 @@ gives it the /proc-based primitives to recover instead of only warning:
 
 - `descendant_pids` — the live process tree of the Pi process, built
   from the ppid chain in `/proc/<pid>/stat` (never a name guess);
-- `find_idle_descendants` — the descendants that already existed before
-  the idle window started (start time from stat field 22 converted with
-  the boot time and CLK_TCK) and are still running: those are the hung
+- `snapshot_descendants` — the descendants that already exist when the
+  idle window opens, recorded as pid -> start ticks (stat field 22): a
+  process spawned after the window is a new tool call, never a target;
+- `find_idle_descendants` — the recorded descendants that are still the
+  SAME process (same start ticks, not a zombie): those are the hung
   tools, and ONLY they may be signaled;
 - `signal_pid` / `pid_alive` — SIGTERM first (the scene is preserved and
   the tool gets a non-zero exit, so the failure signal reaches the
   model), SIGKILL only for a target that survived.
+
+Everything here reads ONLY the per-process directories. The start time is
+the kernel's own unit (stat field 22, ticks since boot) compared as-is —
+no `/proc/stat` (`btime`), no clock conversion — so the recovery works on
+a `/proc` mounted with `subset=pid`, where no file outside the process
+directories exists (Issue #1808).
 
 This module never spawns anything and owns no background thread: it is
 called from the existing `stream_pi` poll loop.
@@ -100,12 +108,15 @@ def process_state(pid: int) -> str | None:
     return fields[0]
 
 
-def process_start_epoch(pid: int, *, btime: float, hz: float) -> float | None:
-    """The process start time in epoch seconds.
+def process_start_ticks(pid: int) -> int | None:
+    """The process start time in the kernel's own unit: stat field 22,
+    clock ticks since boot.
 
-    stat field 22 is the start time in clock ticks since boot; the boot
-    time comes from `/proc/stat` (`btime`) and the tick rate from
-    `sysconf(_SC_CLK_TCK)`. None when the process is gone or the line is
+    The value is compared AS-IS (start ticks are unique per pid
+    lifetime), so the recovery never needs the boot time or a clock
+    conversion: a `/proc` mounted with `subset=pid` carries no
+    `/proc/stat`, and reading it would make every start time unknown
+    (Issue #1808). None when the process is gone or the line is
     malformed.
     """
     raw = _read_stat(pid)
@@ -115,38 +126,9 @@ def process_start_epoch(pid: int, *, btime: float, hz: float) -> float | None:
     if fields is None or len(fields) < 20:
         return None
     try:
-        starttime = int(fields[19])
+        return int(fields[19])
     except ValueError:
         return None
-    return btime + starttime / hz
-
-
-def process_start_monotonic(pid: int, *, hz: float) -> float | None:
-    """The process start offset in the boot-time clock domain.
-
-    stat field 22 (starttime, ticks since boot) converted with `hz`.
-    Callers comparing this value must use CLOCK_BOOTTIME too, because
-    CLOCK_MONOTONIC stops during suspend.
-    """
-    raw = _read_stat(pid)
-    if raw is None:
-        return None
-    fields = _stat_fields(raw)
-    if fields is None or len(fields) < 20:
-        return None
-    try:
-        starttime = int(fields[19])
-    except ValueError:
-        return None
-    return starttime / hz
-
-
-def boot_time() -> float:
-    """The system boot time in epoch seconds (`/proc/stat` `btime`)."""
-    for line in (PROC / "stat").read_text().splitlines():
-        if line.startswith("btime "):
-            return float(line.split()[1])
-    raise RuntimeError("/proc/stat has no btime line")
 
 
 def clk_tck() -> float:
@@ -343,47 +325,52 @@ def descendant_pids(root_pid: int) -> list[int]:
     return sorted(found)
 
 
-def find_idle_descendants(root_pid: int, idle_start_epoch: float,
-                          *, btime: float | None = None,
-                          hz: float | None = None) -> list[dict]:
-    """The descendants of `root_pid` that are still running AND started
-    no later than `idle_start_epoch` — the hung tools of the stalled
-    scene.
+def snapshot_descendants(root_pid: int) -> dict[int, int]:
+    """The live descendants of `root_pid` right now -> start ticks.
 
-    Each result is `{"pid": int, "cmdline": str, "start_epoch": float}`.
-    The start time rides along as the process identity: the signal path
-    re-checks it before delivering, so a pid reused inside the
-    discovery-to-signal gap is never signaled. A process spawned
-    after the idle window began (a new tool call) is never a target, and
-    a process that is not a descendant (checked by the ppid chain) is
-    never a target. `btime`/`hz` default to the real clock constants.
+    Called when the idle window opens: a descendant that already exists
+    at that moment is a recovery candidate, and the recorded start ticks
+    are its identity. A process spawned later (a new tool call) is never
+    recorded, so it can never be a target.
+
+    No /proc (macOS) yields an empty snapshot — the caller must keep its
+    poll loop alive, never see an exception from the recovery probe
+    itself.
     """
-    if btime is None:
-        try:
-            btime = boot_time()
-        except OSError:
-            # No /proc (macOS): no determinable idle descendants — the
-            # caller must keep its poll loop alive, never see a
-            # FileNotFoundError from the recovery probe itself.
-            return []
-    if hz is None:
-        hz = clk_tck()
-    targets: list[dict] = []
+    snapshot: dict[int, int] = {}
     for pid in descendant_pids(root_pid):
+        ticks = process_start_ticks(pid)
+        if ticks is not None:
+            snapshot[pid] = ticks
+    return snapshot
+
+
+def find_idle_descendants(recorded: dict[int, int]) -> list[dict]:
+    """The recorded descendants that are still the SAME process — the
+    hung tools of the stalled scene.
+
+    `recorded` is the window-open snapshot (pid -> start ticks). A
+    target is a recorded pid that is still alive with the SAME start
+    ticks: a pid the kernel reused in the meantime carries different
+    ticks and belongs to an innocent process, and a pid whose directory
+    is gone has exited. Each result is
+    `{"pid": int, "cmdline": str, "start_ticks": int}`; the ticks ride
+    along as the identity the signal path re-checks before delivering.
+    """
+    targets: list[dict] = []
+    for pid, ticks in recorded.items():
         # A zombie (state Z) is already dead — the parent just has not
         # reaped it yet: signaling it is meaningless and its empty
         # cmdline would fall back to the comm name, a lie.
         if process_state(pid) == "Z":
             continue
-        start = process_start_epoch(pid, btime=btime, hz=hz)
-        if start is None:
+        if process_start_ticks(pid) != ticks:
             continue
-        if start <= idle_start_epoch:
-            targets.append({
-                "pid": pid,
-                "cmdline": cmdline_of(pid),
-                "start_epoch": start,
-            })
+        targets.append({
+            "pid": pid,
+            "cmdline": cmdline_of(pid),
+            "start_ticks": ticks,
+        })
     return targets
 
 
@@ -450,11 +437,11 @@ def slots_idle(url: str, timeout: float = SLOTS_PROBE_TIMEOUT) -> bool | None:
     return True
 
 
-def signal_pid(pid: int, sig: int, *, expected_start_epoch: float | None = None,
-               btime: float | None = None, hz: float | None = None) -> str:
+def signal_pid(pid: int, sig: int, *,
+               expected_start_ticks: int | None = None) -> str:
     """Send `sig` to `pid`; return the outcome for the journal.
 
-    With `expected_start_epoch` (the target's start time from
+    With `expected_start_ticks` (the target's start ticks from
     `find_idle_descendants`) the identity is re-checked on the stat
     line right before the delivery: the discovery-to-signal gap can
     span a full idle window, and a pid the kernel reused in the gap
@@ -462,21 +449,17 @@ def signal_pid(pid: int, sig: int, *, expected_start_epoch: float | None = None,
     (TOCTOU).
 
     `sent` (delivered), `already_dead` (ESRCH: it exited between the
-    discovery and the signal — or the start-time recheck finds the
-    stat line gone), `pid_reused` (the recheck finds a different start
-    time on the pid: not the discovered process, nothing signaled) or
+    discovery and the signal — or the start-tick recheck finds the
+    stat line gone), `pid_reused` (the recheck finds different start
+    ticks on the pid: not the discovered process, nothing signaled) or
     `failed: <error>` (any other OS error — logged, never raised: the
     recovery must not take the delivery down).
     """
-    if expected_start_epoch is not None:
-        current = process_start_epoch(
-            pid,
-            btime=boot_time() if btime is None else btime,
-            hz=clk_tck() if hz is None else hz,
-        )
+    if expected_start_ticks is not None:
+        current = process_start_ticks(pid)
         if current is None:
             return "already_dead"
-        if current != expected_start_epoch:
+        if current != expected_start_ticks:
             return "pid_reused"
     try:
         os.kill(pid, sig)
