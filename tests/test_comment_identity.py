@@ -25,10 +25,15 @@ from seam import seam
 @pytest.fixture(autouse=True)
 def _repository_permissions(monkeypatch):
     """Issue #1806: the trusted comments here are written by a repository
-    maintainer, so the permission read answers `admin`; the runner's own
-    account is pinned to a bot no comment names."""
+    maintainer, so the permission read answers `admin`; a non-writer
+    names an outsider, and the runner's own account is pinned to a bot no
+    comment names."""
     monkeypatch.setattr(
-        seam, "repository_permission", lambda login, *, repo: "admin",
+        seam, "repository_permission",
+        lambda login, *, repo: (
+            "none" if login in {"drive-by", "stranger", "outsider"}
+            else "admin"
+        ),
     )
     monkeypatch.setattr(
         seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
@@ -389,6 +394,12 @@ def test_same_findings_round_reads_the_canonical_identity_and_fallbacks():
     assert same_findings_round(
         {**TRUSTED, "body": legacy}, marker=MARKER, **base, repo="owner/repo",
     ) is True
+    # A body that matches but whose author cannot write is not the
+    # predecessor (Issue #1806: identity alone never trusts a comment).
+    assert same_findings_round(
+        {"author": {"login": "drive-by"}, "body": legacy},
+        marker=MARKER, **base, repo="owner/repo",
+    ) is False
     assert same_findings_round(
         {**TRUSTED, "body": legacy.replace("round 1", "round 2")},
         marker=MARKER, **base, repo="owner/repo",
