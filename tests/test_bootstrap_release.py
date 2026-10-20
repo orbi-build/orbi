@@ -2666,15 +2666,19 @@ def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
                     "Orbi release waiting for deliveries\n"
                     "wait_started: 95",
         },
-        {"authorAssociation": "MEMBER", "author": maintainer,
-         "body": "unrelated maintainer note"},
         {
+            # The anchor without a readable number: the regex finds no
+            # timer, so the scan keeps going.
             "authorAssociation": "MEMBER", "author": maintainer,
-            "body": "Orbi release waiting for deliveries\nno timestamp",
+            "body": "Orbi release waiting for deliveries\nwait_started: soon",
         },
         {"authorAssociation": "NONE", "author": {"login": "drive-by"},
          "body": "wait_started: 0"},
         "not a comment",
+        # A trusted comment without the persisted field is skipped, and
+        # the scan keeps going (it never breaks the wait derivation).
+        {"authorAssociation": "MEMBER", "author": maintainer,
+         "body": "unrelated maintainer note"},
     ])
     monkeypatch.setattr(runner.time, "time", lambda: 100)
     issue = {"number": 99, "title": "Release v0.3.0",

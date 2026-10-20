@@ -716,13 +716,26 @@ def test_resume_scene_ignores_a_comment_without_a_readable_author():
         run_state.resume_scene(comments, repo="owner/repo")
 
 
-@pytest.mark.parametrize("association", [
-    "OWNER", "MAINTAINER", "MEMBER", "COLLABORATOR",
+@pytest.mark.parametrize("permission,trusted", [
+    ("admin", True), ("write", True), ("read", False), ("none", False),
 ])
-def test_resume_scene_accepts_every_trusted_association(association):
-    comments = [comment(opened_pr_comment(), association=association)]
-    scene = run_state.resume_scene(comments, repo="owner/repo")
-    assert scene["run_id"] == FAKE_RUN_ID
+def test_resume_scene_trusts_exactly_the_write_permissions(
+    monkeypatch, permission, trusted,
+):
+    """Issue #1806: the repository permission decides — `admin`/`write`
+    pass, `read`/`none` do not — and the comment's association is never
+    part of the decision."""
+    monkeypatch.setattr(
+        seam, "repository_permission", lambda login, *, repo: permission,
+    )
+    comments = [comment(opened_pr_comment(), association="MEMBER")]
+    if not trusted:
+        with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
+            run_state.resume_scene(comments, repo="owner/repo")
+        return
+    assert run_state.resume_scene(
+        comments, repo="owner/repo",
+    )["run_id"] == FAKE_RUN_ID
 
 
 def test_resume_scene_skips_non_dict_trusted_comment():
@@ -838,14 +851,6 @@ def make_pick_fake(list_payload: str, view_payload=None,
                      "conclusion": "SUCCESS"},
                 ],
             })
-        if command[1:3] == ["auth", "status"]:
-            # The runner's own account (Issue #1806's second trust
-            # channel); it matches no comment author in these scenarios.
-            return (
-                "github.com\n"
-                "  ✓ Logged in to github.com account orbi-bot (keyring)\n"
-                "  - Active account: true\n"
-            )
         raise AssertionError(f"unexpected command: {command}")
 
     return fake_run
