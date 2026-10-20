@@ -196,6 +196,52 @@ LOCK_FETCH_ITEMS = (
 )
 
 
+# --- Issue #1813: the agent never edits the PR body ---------------------------
+
+# orbi-cloud#2729 / run a60b123f: the acceptance list asked for `git grep`
+# before/after results "in the PR", so the delivery agent rewrote the whole
+# Runner-written PR body to include them. The rewrites dropped
+# `<!-- orbi:run=a60b123f -->`; every later resume failed in the runner's
+# `pr_run_marker_missing` check and the ticket went `ai-blocked` until a human
+# restored the marker by hand. The cause is removed in the prompt: the PR body
+# is the Runner's, and PR-bound evidence is a PR comment.
+PR_BODY_ITEMS = (
+    # The rule forbids editing the body outright.
+    ("pr-body-no-edit", "never edit the pr body"),
+    # Why: the Runner writes it once, with the run marker and `Fixes #N`.
+    ("pr-body-runner-written", "the runner writes it once"),
+    ("pr-body-marker", "carries the run marker"),
+    # What to do instead: a PR comment, carrying the marker and run_id=.
+    ("pr-body-post-comment", "post anything meant for the pr"),
+    ("pr-body-evidence", "evidence, before/after output, lists"),
+    ("pr-body-as-comment", "as a pr comment"),
+    ("pr-body-comment-marker",
+     "carries the run marker and the visible `run_id="),
+)
+
+
+def test_prompt_md_forbids_editing_the_pr_body():
+    """Issue #1813: render the real implementer prompt (the template the
+    Runner hands to Pi) with a real run id and Issue number, and assert the
+    no-PR-body-edit rule is present — and that its rendered form names the
+    concrete marker and `run_id=` field every other comment carries."""
+    from orbi import pi_session
+
+    rendered = pi_session.render_prompt(
+        PROMPT.read_text(encoding="utf-8"),
+        {"RUN_ID": "a60b123f", "ISSUE_NUMBER": "2729"},
+    )
+    text = " ".join(rendered.lower().split())
+    missing = _missing(text, PR_BODY_ITEMS)
+    assert not missing, (
+        f"prompt.md does not forbid editing the PR body (Issue #1813): "
+        f"{missing}"
+    )
+    # The rendered sentence names the real marker and the visible run_id.
+    assert "<!-- orbi:run=a60b123f -->" in text
+    assert "run_id=a60b123f" in text
+
+
 def test_prompt_md_does_not_make_the_agent_run_the_git_github_lifecycle():
     """Issue #186: the deterministic Git/GitHub lifecycle (base fetch and
     absorb, push, PR creation) belongs to the Runner, not the agent. The

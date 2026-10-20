@@ -31,6 +31,12 @@ another id (no `trace_id`, no new UUID) for this run.
 - The PR the Runner opens for this run must contain the stable
   machine-readable marker `<!-- orbi:run={{RUN_ID}} -->` in its
   body; the runner rejects a delivery whose PR body is missing it.
+- Never edit the PR body: the Runner writes it once and it carries the
+  run marker and `Fixes #{{ISSUE_NUMBER}}`. Post anything meant for the
+  PR (evidence, before/after output, lists) as a PR comment that carries
+  the run marker and the visible `run_id={{RUN_ID}}` field, like every
+  other comment — a body rewrite drops the marker and dead-loops the
+  resume into `ai-blocked` (Issue #1813).
 - Every Issue or PR comment you post (progress, review, fix, final) must
   contain the same marker and the visible field `run_id={{RUN_ID}}`.
 - Keep all run artifacts (plan, test, verify, review report) inside the
