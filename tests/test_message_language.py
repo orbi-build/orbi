@@ -28,6 +28,21 @@ from orbi.repo_config import RepoConfigError, parse_repo_config, resolve_policy
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+@pytest.fixture(autouse=True)
+def _repository_permissions(monkeypatch):
+    """Issue #1806: the commented identities here are the runner's own
+    bot account, which stays trusted by the credential fallback; the
+    permission read is answered too so no test reaches real GitHub."""
+    from seam import seam
+
+    monkeypatch.setattr(
+        seam, "repository_permission", lambda login, *, repo: "admin",
+    )
+    monkeypatch.setattr(
+        seam, "_authenticated_github_login", lambda: "orbi-build[bot]",
+    )
+
+
 def _prompt_of(command: list[str]) -> str:
     """The rendered system prompt the argv names (Issue #1634)."""
     value = command[command.index("--system-prompt") + 1]
@@ -412,7 +427,7 @@ def test_review_round_comment_keeps_its_kind_and_scene_in_chinese():
             run_id="abcdef12", base_branch="main", base_sha="abc",
             pr_url="https://github.com/owner/repo/pull/9", review_round=2,
         )),
-        language_code="zh",
+        language_code="zh", repo="owner/repo",
     )
     assert "Orbi 评审第 2 轮" in body
     assert "**级别：** Blocker" in body
@@ -420,7 +435,7 @@ def test_review_round_comment_keeps_its_kind_and_scene_in_chinese():
     assert review_rounds.review_rounds_so_far(
         [{"body": body, "authorAssociation": "MEMBER",
           "author": {"login": "orbi-build[bot]"}}],
-        run_id="abcdef12", pr_number=9,
+        run_id="abcdef12", pr_number=9, repo="owner/repo",
     ) == 1
 
 
@@ -432,7 +447,8 @@ def test_merge_handoff_is_idempotent_across_languages():
     comments = [{"body": zh, "authorAssociation": "MEMBER",
                  "author": {"login": "orbi-build[bot]"}}]
     assert merge_handoff.awaiting_merge_handoff_announced(
-        comments, head="h1", preflight=["merge_gate: FAILED policy"],
+        comments, repo="owner/repo", head="h1",
+        preflight=["merge_gate: FAILED policy"],
     )
     legacy = (
         "Orbi: PR #9 is delivered and waiting for a maintainer action.\n\n"
@@ -442,7 +458,8 @@ def test_merge_handoff_is_idempotent_across_languages():
     assert merge_handoff.awaiting_merge_handoff_announced(
         [{"body": legacy, "authorAssociation": "MEMBER",
           "author": {"login": "orbi-build[bot]"}}],
-        head="h1", preflight=["merge_gate: FAILED policy"],
+        repo="owner/repo", head="h1",
+        preflight=["merge_gate: FAILED policy"],
     )
 
 

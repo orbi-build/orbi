@@ -25,6 +25,7 @@ from unittest.mock import Mock
 
 import pytest
 
+import orbi.comment_trust as comment_trust
 import orbi.github as github
 import orbi.journal as journal
 import orbi.runner as runner
@@ -317,18 +318,18 @@ def test_issue_labels_returns_names_and_fails_fast(monkeypatch):
 
 
 def test_trusted_issue_comments_block_filters_untrusted_and_keeps_order(
-    monkeypatch,
+    monkeypatch, permissions,
 ):
-    """Issue #745: only trusted authors (the #45 authorAssociation set
-    or the runner's own App) enter the task context — a public repo
-    lets anyone comment, and an unfiltered injection would be a prompt
-    injection surface. The timeline order is preserved (oldest first)."""
-    # A NONE-association comment carrying a login reaches the
-    # authenticated-login fallback; pin it so the test never depends on
-    # the host's real gh login state (CI runs unauthenticated).
-    monkeypatch.setattr(
-        seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
-    )
+    """Issue #745: only trusted authors enter the task context — a public
+    repo lets anyone comment, and an unfiltered injection would be a
+    prompt injection surface. Since Issue #1806 the trust is the author's
+    repository write permission (or the runner's own App). The timeline
+    order is preserved (oldest first)."""
+    # A comment whose author is not this runner reaches the permission
+    # read; the fixture answers it (and pins the host's real gh login
+    # state, which CI does not have).
+    permissions["alice"] = "admin"
+    permissions["carol"] = "write"
     comments = [
         {"author": {"login": "alice"}, "authorAssociation": "OWNER",
          "createdAt": "2026-09-12T01:00:00Z", "body": "first decision"},
@@ -337,11 +338,13 @@ def test_trusted_issue_comments_block_filters_untrusted_and_keeps_order(
         {"author": {"login": "carol"}, "authorAssociation": "MEMBER",
          "createdAt": "2026-09-12T03:00:00Z", "body": "second decision"},
     ]
-    block = github.trusted_issue_comments_block(comments, limit=20)
+    block = comment_trust.trusted_issue_comments_block(
+        comments, limit=20, repo="owner/repo",
+    )
     assert "public drive-by" not in block
     assert "mallory" not in block
-    first = block.index("- alice (OWNER) at 2026-09-12T01:00:00Z:")
-    second = block.index("- carol (MEMBER) at 2026-09-12T03:00:00Z:")
+    first = block.index("- alice at 2026-09-12T01:00:00Z:")
+    second = block.index("- carol at 2026-09-12T03:00:00Z:")
     assert block.index("first decision") < second < block.index(
         "second decision",
     )
@@ -349,11 +352,14 @@ def test_trusted_issue_comments_block_filters_untrusted_and_keeps_order(
     assert "omitted" not in block
 
 
-def test_trusted_issue_comments_block_truncates_to_the_newest_with_a_visible_note():
+def test_trusted_issue_comments_block_truncates_to_the_newest_with_a_visible_note(
+    permissions,
+):
     """Issue #745: over the limit the OLDEST trusted comments are
     dropped (the newest carry the latest decision) and the omission is
     stated in the block — the agent must know it did not see the full
     history, never a silent truncation."""
+    permissions.update({"alice": "admin", "bob": "admin", "carol": "admin"})
     comments = [
         {"author": {"login": "alice"}, "authorAssociation": "OWNER",
          "createdAt": "2026-09-12T01:00:00Z", "body": "oldest decision"},
@@ -362,7 +368,9 @@ def test_trusted_issue_comments_block_truncates_to_the_newest_with_a_visible_not
         {"author": {"login": "carol"}, "authorAssociation": "MEMBER",
          "createdAt": "2026-09-12T03:00:00Z", "body": "newest decision"},
     ]
-    block = github.trusted_issue_comments_block(comments, limit=2)
+    block = comment_trust.trusted_issue_comments_block(
+        comments, limit=2, repo="owner/repo",
+    )
     assert block.startswith(
         "(1 older trusted comment omitted; showing the 2 most recent)",
     )
@@ -372,20 +380,19 @@ def test_trusted_issue_comments_block_truncates_to_the_newest_with_a_visible_not
 
 
 def test_trusted_issue_comments_block_states_when_nothing_is_trusted(
-    monkeypatch,
+    monkeypatch, permissions,
 ):
     """Issue #745: zero trusted comments produce an explicit marker, not
     an empty string — the agent can tell an empty timeline apart from a
     missing section."""
-    monkeypatch.setattr(
-        seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
-    )
-    block = github.trusted_issue_comments_block([
+    block = comment_trust.trusted_issue_comments_block([
         {"author": {"login": "mallory"}, "authorAssociation": "NONE",
          "createdAt": "2026-09-12T02:00:00Z", "body": "public drive-by"},
-    ], limit=20)
+    ], limit=20, repo="owner/repo")
     assert block == "(no trusted comments)"
-    block = github.trusted_issue_comments_block([], limit=20)
+    block = comment_trust.trusted_issue_comments_block(
+        [], limit=20, repo="owner/repo",
+    )
     assert block == "(no trusted comments)"
 
 

@@ -563,6 +563,20 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(seam, "set_run_id",
                         lambda rid: state["run_ids"].append(rid))
+    # Issue #1806: the persisted-wait comment is trusted from its
+    # author's repository permission; the read is answered here so the
+    # release path never asks GitHub.
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: (
+            "none" if login in {"drive-by", "stranger"} else "admin"
+        ),
+    )
+    # The runner's own account is the second trust channel; pin it so a
+    # non-writer's comment never reaches the host's real `gh auth status`.
+    monkeypatch.setattr(
+        seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+    )
     monkeypatch.setattr(seam, "has_in_progress_label",
                         lambda n, r: in_progress)
     monkeypatch.setattr(seam, "latest_run_id",

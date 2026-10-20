@@ -39,6 +39,26 @@ REAL_TEMPLATE = (ROOT / ".github" / "release-ticket-template.md").read_text(
 )
 
 
+@pytest.fixture(autouse=True)
+def _repository_permissions(monkeypatch):
+    """Issue #1806: the in-ticket command decision reads the author's
+    REPOSITORY PERMISSION, so these tests state who can write.
+
+    `alice` (the default author of these tickets' comments) and the
+    self-hosted runner login can write; `outsider` cannot. A test that
+    needs another answer patches the read itself (a later
+    `monkeypatch` wins).
+    """
+    grants = {"alice": "admin", "orbi-build": "admin", "orbi-build[bot]": "write"}
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: grants.get(login, "none"),
+    )
+    monkeypatch.setattr(
+        seam, "_authenticated_github_login", lambda: "orbi-other-bot[bot]",
+    )
+
+
 def _comment(body, *, login="alice", association="MEMBER", cid=1, url=None):
     comment = {
         "id": cid,
@@ -118,7 +138,7 @@ def test_a_malformed_command_line_is_reported_not_ignored():
 def test_select_rejects_a_malformed_command_with_a_readable_reason():
     comments = [_comment("/milestone")]
     target, rejections = ticket_command.select_command(
-        comments, milestone_command.MILESTONE_COMMAND,
+        comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
         candidate_titles=["v0.5.41"],
     )
     assert target is None
@@ -142,7 +162,7 @@ def test_select_requires_write_permission_and_reports_the_reason():
         "/milestone v0.5.41", login="outsider", association="NONE",
     )]
     target, rejections = ticket_command.select_command(
-        comments, milestone_command.MILESTONE_COMMAND,
+        comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
         candidate_titles=["v0.5.41"],
     )
     assert target is None
@@ -154,7 +174,7 @@ def test_select_requires_write_permission_and_reports_the_reason():
 def test_select_rejects_a_version_outside_the_candidate_set():
     comments = [_comment("/milestone v9.9.9")]
     target, rejections = ticket_command.select_command(
-        comments, milestone_command.MILESTONE_COMMAND,
+        comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
         candidate_titles=["v0.5.41", "v0.6.0"],
     )
     assert target is None
@@ -165,7 +185,7 @@ def test_select_rejects_a_version_outside_the_candidate_set():
 def test_select_reports_an_empty_candidate_set_readably():
     _target, rejections = ticket_command.select_command(
         [_comment("/milestone v0.5.41")], milestone_command.MILESTONE_COMMAND,
-        candidate_titles=[],
+        repo="owner/repo", candidate_titles=[],
     )
     assert "(none)" in rejections[0][2]
 
@@ -179,7 +199,7 @@ def test_select_skips_a_runner_marker_comment_silently():
         login="orbi-build[bot]", association="NONE",
     )]
     target, rejections = ticket_command.select_command(
-        comments, milestone_command.MILESTONE_COMMAND,
+        comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
         candidate_titles=["v0.5.41"],
     )
     assert target is None
@@ -194,7 +214,7 @@ def test_select_applies_a_command_from_the_runners_own_login():
         "/milestone v0.5.41", login="orbi-build", association="MEMBER",
     )]
     target, rejections = ticket_command.select_command(
-        comments, milestone_command.MILESTONE_COMMAND,
+        comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
         candidate_titles=["v0.5.41"],
     )
     assert rejections == []
@@ -209,7 +229,7 @@ def test_select_ignores_a_runner_comment_quoting_the_command():
         login="orbi-build", association="MEMBER",
     )]
     target, rejections = ticket_command.select_command(
-        comments, milestone_command.MILESTONE_COMMAND,
+        comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
         candidate_titles=["v0.5.41"],
     )
     assert target is None
@@ -219,7 +239,7 @@ def test_select_ignores_a_runner_comment_quoting_the_command():
 def test_select_accepts_a_trusted_author():
     comments = [_comment("/milestone v0.5.41")]
     target, rejections = ticket_command.select_command(
-        comments, milestone_command.MILESTONE_COMMAND,
+        comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
         candidate_titles=["v0.5.41"],
     )
     assert rejections == []
@@ -233,7 +253,7 @@ def test_select_lets_the_last_command_win():
         _comment("/milestone v0.6.0", cid=2),
     ]
     target, rejections = ticket_command.select_command(
-        comments, milestone_command.MILESTONE_COMMAND,
+        comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
         candidate_titles=["v0.5.41", "v0.6.0"],
     )
     assert rejections == []
@@ -247,7 +267,7 @@ def test_select_lets_a_later_bad_command_shadow_an_earlier_good_one():
         _comment("/milestone v9.9.9", cid=2),
     ]
     target, rejections = ticket_command.select_command(
-        comments, milestone_command.MILESTONE_COMMAND,
+        comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
         candidate_titles=["v0.5.41"],
     )
     assert target is None
@@ -257,7 +277,7 @@ def test_select_lets_a_later_bad_command_shadow_an_earlier_good_one():
 def test_select_ignores_non_comment_entries():
     target, rejections = ticket_command.select_command(
         ["not-a-dict", None], milestone_command.MILESTONE_COMMAND,
-        candidate_titles=["v0.5.41"],
+        repo="owner/repo", candidate_titles=["v0.5.41"],
     )
     assert target is None and rejections == []
 
@@ -2040,7 +2060,9 @@ def test_command_receipts_follow_the_message_language(monkeypatch):
     assert "**`/milestone` 命令未执行**" in permission
     assert "- 原因：" in permission
     assert "没有 write 权限" in permission
-    assert "authorAssociation='NONE'" in permission
+    # The receipt names the repository permission it read, never the
+    # comment's authorAssociation (Issue #1806).
+    assert "仓库权限='none'" in permission
     assert "命令行格式不正确" in malformed
     assert "版本" in malformed
     assert "`/milestone <version>`" in malformed

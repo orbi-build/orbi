@@ -52,9 +52,9 @@ ai-ready                a task is dispatched (orbi add, or a human
                         from the frozen origin/<base> SHA, Pi session starts
                         (the prompt carries the Issue body plus the
                         trusted-comment timeline {{ISSUE_COMMENTS}},
-                        Issue #745: OWNER/MAINTAINER/MEMBER/COLLABORATOR
-                        comments only, capped by issue_comments_limit with
-                        a visible omission note)
+                        Issue #745/#1806: only comments whose author can
+                        write to the repository, capped by
+                        issue_comments_limit with a visible omission note)
   -> ai-pr-opened       the PR passes verification (base freshness, run
                         marker, Fixes #N); the tick then ENDS and
                         releases the slot (Issue #788) — the delivery
@@ -139,10 +139,14 @@ is reached, further corrections do not restart that delivery and the journal
 records `steering_limit_reached`. Let the current delivery finish, then put the
 revised scope in a follow-up delivery.
 
-Only comments from trusted repository roles—OWNER, MAINTAINER, MEMBER, or
-COLLABORATOR—can steer a run. A comment from a public commenter is ignored by
-design, because allowing arbitrary commenters to steer a delivery would expose
-a prompt-injection path. The initial trusted comment timeline is capped at
+Only comments whose author can write to the repository can steer a run:
+GitHub's reported permission for that login (`collaborators/{login}/permission`
+answering `admin` or `write`), never the comment's `authorAssociation` —
+that field depends on what the reading token can see, so a maintainer whose
+organization membership is private reads as `CONTRIBUTOR`, and `MEMBER` or
+`COLLABORATOR` does not imply write access. A comment from a public commenter
+is ignored by design, because allowing arbitrary commenters to steer a delivery
+would expose a prompt-injection path. The initial trusted comment timeline is capped at
 `issue_comments_limit` (200 by default): older comments are dropped and the
 injected context states how many were omitted.
 

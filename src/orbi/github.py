@@ -34,11 +34,7 @@ from orbi.delivery_labels import (
 from orbi.journal import (LOGGER, MilestoneReconcileError,
                           classify_milestone_error, event, run_command, single_line)
 from orbi.merge_gate import classify_protection
-from orbi.progress import (
-    RUN_MARKER_PATTERN,
-    format_status_comment,
-    run_marker,
-)
+from orbi.progress import format_status_comment
 
 GH_READ_MAX_ATTEMPTS = 3
 GH_READ_BACKOFF_SECONDS = 1
@@ -643,16 +639,39 @@ def _epic_child_evidence(repo: str, kind: str, number: int) -> str:
     return f"Issue #{number} closed"
 
 
-# Comments are trusted through one of two channels — a repo maintainer
-# association, or the currently authenticated runner account itself (the
-# login fallback in `_comment_is_trusted`, which requires the local gh
-# credentials' identity, so a public commenter cannot satisfy it): a
-# public comment (authorAssociation=NONE) that is not from the runner's
-# own account must never steer the runner into an arbitrary local
-# worktree, branch or PR.
-TRUSTED_COMMENT_ASSOCIATIONS = frozenset({
-    "OWNER", "MAINTAINER", "MEMBER", "COLLABORATOR",
-})
+# The repository permissions that mean "this author can write here"
+# (Issue #1806). GitHub reports the effective permission of the user on
+# the endpoint — `maintain` arrives as `write` and `triage` as `read`
+# (https://docs.github.com/en/rest/collaborators/collaborators#get-repository-permissions-for-a-user)
+# — so these two values are the whole write set.
+WRITE_PERMISSIONS = frozenset({"admin", "write"})
+
+
+def repository_permission(login: str, *, repo: str) -> str:
+    """The permission GitHub reports for `login` on `repo` (Issue #1806).
+
+    One read of the documented `collaborators/{login}/permission`
+    endpoint, which reports the user's repository permission whatever the
+    visibility of their organization membership — the field the comment's
+    `authorAssociation` cannot answer. A 404 (the login is not visible to
+    this token) means no access; any other failed read is a GitHub read
+    failure and propagates.
+    """
+    try:
+        raw = run_gh_read_command([
+            "gh", "api", f"repos/{repo}/collaborators/{login}/permission",
+        ], timeout=30)
+    except subprocess.CalledProcessError as exc:
+        if gh_response.status_of(exc) == 404:
+            return "none"
+        raise
+    data = json.loads(raw)
+    permission = data.get("permission") if isinstance(data, dict) else None
+    if not isinstance(permission, str):
+        raise ValueError(
+            f"repository permission read for {login} on {repo} is malformed"
+        )
+    return permission
 
 
 def edit_issue(number: int, *, repo: str, add: str | None = None,
@@ -782,9 +801,10 @@ def issue_comments(number: int, *, repo: str) -> list[dict]:
     """Return the Issue's comment history (oldest first) from GitHub.
 
     ``gh issue view --json comments`` returns a top-level object with a
-    ``comments`` array; each comment carries the author and the
-    ``authorAssociation`` of the viewer, which is how the runner tells
-    its own trusted comments apart from public ones.
+    ``comments`` array; each comment carries its author, which is what
+    the trust decision reads (`orbi.comment_trust`, Issue #1806). The
+    ``authorAssociation`` field rides along: it is the viewer's view of
+    the author's membership and decides nothing.
     """
     raw = run_gh_read_command([
         "gh", "issue", "view", str(number), "--repo", repo,
@@ -869,51 +889,6 @@ def normalize_pr_feedback(items: list[dict]) -> list[dict]:
     ]
 
 
-def trusted_issue_comments_block(comments: list[dict], limit: int) -> str:
-    """Render the {{ISSUE_COMMENTS}} prompt block.
-
-    Only trusted authors enter the task context — the same
-    `authorAssociation` trust set as the recovery-scene parser (Issue
-    #45; a public repo lets anyone comment, and an unfiltered injection
-    would be a prompt-injection surface). The input order is preserved
-    (oldest first, the natural timeline read). Over `limit` the OLDEST
-    trusted comments are dropped — the newest carry the latest decision
-    — and the omission is stated inside the block: the agent must know
-    it did not see the full history, never a silent truncation. Zero
-    trusted comments produce an explicit marker, not an empty string.
-    """
-    trusted = [
-        comment for comment in comments if _comment_is_trusted(comment)
-    ]
-    kept = trusted[-limit:]
-    omitted = len(trusted) - len(kept)
-    if not kept:
-        return "(no trusted comments)"
-    lines = []
-    if omitted:
-        noun = "comment" if omitted == 1 else "comments"
-        lines.append(
-            f"({omitted} older trusted {noun} omitted; showing the "
-            f"{len(kept)} most recent)"
-        )
-    for comment in kept:
-        author = comment.get("author")
-        login = author.get("login") if isinstance(author, dict) else None
-        state = comment.get("state")
-        anchor = ""
-        if "path" in comment:
-            line = comment.get("line") or comment.get("original_line") or "-"
-            anchor = f" at {comment.get('path') or '-'}:{line}"
-        state_text = f" [{state}]" if state else ""
-        lines.append(
-            f"- {login or 'unknown'} "
-            f"({comment.get('authorAssociation') or '-'})"
-            f"{anchor}{state_text} at {comment.get('createdAt') or '-'}:\n\n"
-            f"{str(comment.get('body') or '').rstrip()}"
-        )
-    return "\n\n".join(lines)
-
-
 def _authenticated_github_login() -> str:
     """Return the login represented by the active ``gh`` credential.
 
@@ -976,66 +951,6 @@ def _strip_bot_suffix(login: str) -> str:
     return login[:-5] if login.endswith("[bot]") else login
 
 
-def _comment_is_trusted(comment: object) -> bool:
-    """True when the comment is from a maintainer or this runner's App bot."""
-    if not isinstance(comment, dict):
-        return False
-    if comment.get("authorAssociation") in TRUSTED_COMMENT_ASSOCIATIONS:
-        return True
-    author = comment.get("author")
-    login = author.get("login") if isinstance(author, dict) else None
-    if not isinstance(login, str):
-        return False
-    # A copied run marker is not sufficient: the author must be the account
-    # represented by the currently authenticated installation token. The
-    # optional `[bot]` suffix is normalized on both sides because GraphQL
-    # drops it and REST keeps it.
-    return _strip_bot_suffix(login) == _strip_bot_suffix(
-        _authenticated_github_login()
-    )
-
-
-def latest_run_marker(comments: list[dict]) -> str:
-    """The latest trusted comment's rendered run marker, or "".
-
-    Recovery reports name the run they failed for when any trusted
-    comment of the Issue still carries the marker; an empty string when
-    none does. A pure scan over the already-fetched comment list.
-    """
-    for comment in reversed(comments):
-        if not _comment_is_trusted(comment):
-            continue
-        body = comment.get("body")
-        if not isinstance(body, str):
-            continue
-        match = RUN_MARKER_PATTERN.search(body)
-        if match:
-            return run_marker(match.group(1))
-    return ""
-
-
-def line_run_markers(comments: list[dict]) -> frozenset[str]:
-    """Every rendered run marker in the Issue's trusted comments.
-
-    Issue #825: a delivery line may resume under a NEW run id, so the
-    line's identity is the SET of run ids its trusted comments carry —
-    the creating run's marker stays accepted after the rebind. The same
-    trust filter as the resume scene (`_comment_is_trusted`): a copied
-    marker in a public comment widens nothing. A pure scan over the
-    already-fetched comment list.
-    """
-    markers: set[str] = set()
-    for comment in comments:
-        if not _comment_is_trusted(comment):
-            continue
-        body = comment.get("body")
-        if not isinstance(body, str):
-            continue
-        markers.update(
-            run_marker(match.group(1))
-            for match in RUN_MARKER_PATTERN.finditer(body)
-        )
-    return frozenset(markers)
 _FOREIGN_PRS_JOURNALED: set[tuple[str, str]] = set()
 def filter_same_repository_prs(prs: list, branch: str) -> list:
     foreign = [p for p in prs if isinstance(p, dict) and p.get("isCrossRepository") is True]

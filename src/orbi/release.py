@@ -48,8 +48,8 @@ from orbi.release_comments import (
     _epic_audit, epic_audit_posted, release_failure_comment_body,
     release_success_comment_body,
 )
+from orbi.comment_trust import trusted_comments
 from orbi.github import (
-    _comment_is_trusted,
     _verify_epic_complete,
     apply_label_patch,
     close_issue,
@@ -1313,14 +1313,14 @@ def process_release(issue: dict, config: RunnerConfig,
         wait_started: float | None = None
         # Waiting is persisted in the auditable Issue comment, so a later
         # tick can enforce one bounded waiting window without local state.
-        for comment in issue_comments(number, repo=source_repo):
+        for comment in trusted_comments(
+                issue_comments(number, repo=source_repo), repo=source_repo,
+        ):
             # Only the runner's trusted, structured waiting comments may
             # carry the persisted timer.  A public comment must not be able
             # to inject an old timestamp and turn a recoverable wait into an
             # immediate terminal block (the same trust boundary as resume
             # scenes).
-            if not _comment_is_trusted(comment):
-                continue
             body = comment.get("body", "")
             # Language-independent anchor (Issue #1660): the persisted
             # timer field, never the translated prose.

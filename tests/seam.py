@@ -14,6 +14,7 @@ import orbi.blocked_comment as blocked_comment
 import orbi.cli as cli
 import orbi.cli_source as cli_source
 import orbi.branch_reclaim as branch_reclaim
+import orbi.comment_trust as comment_trust
 import orbi.suggest as suggest
 import orbi.clarify as clarify
 import orbi.claim as claim
@@ -40,7 +41,7 @@ _MODULES = (
     journal, github, gitops, milestone, milestone_command, ticket_command,
     progress, cli_source, release, release_git, release_notes, pi_session,
     runner, review_merge, review_rounds, run_state, claim, resume_scan,
-    repo_config, clarify,
+    repo_config, clarify, comment_trust,
     branch_reclaim, failure_report, suggest, cli, blocked_comment,
 )
 

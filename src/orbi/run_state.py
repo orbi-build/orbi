@@ -19,9 +19,9 @@ from pathlib import Path
 
 from orbi import github, scene
 from orbi.delivery_scene import RunContext
+from orbi.comment_trust import trusted_comments
 from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
-    _comment_is_trusted,
     _pr_number,
     pr_view,
     run_gh_read_command,
@@ -181,13 +181,14 @@ def parse_pr_comment(body: str) -> dict | None:
     }
 
 
-def resume_scene(comments: list[dict]) -> dict:
+def resume_scene(comments: list[dict], *, repo: str) -> dict:
     """Return the scene of the latest trusted opened-PR comment of one Issue.
 
     Only trusted comments are considered: a comment is trusted when its
-    author has maintainer association (OWNER, MAINTAINER, MEMBER or
-    COLLABORATOR) or is the account the `gh` credentials resolve to
-    (`_comment_is_trusted`, github.py). A public comment can never
+    author can WRITE to `repo` (the repository permission GitHub reports)
+    or is the account the `gh` credentials resolve to
+    (`_comment_is_trusted`, comment_trust.py) — never the comment's
+    `authorAssociation` (Issue #1806). A public comment can never
     become the recovery scene. The two
     failure shapes stay distinct for the caller:
     `scene.SceneError` when a trusted scene comment is corrupted,
@@ -196,13 +197,12 @@ def resume_scene(comments: list[dict]) -> dict:
     (the comment's `createdAt`): the #483 human-recovery budget reset
     compares it against the recovery transition time.
     """
-    for comment in reversed(comments):
-        if not _comment_is_trusted(comment):
-            continue
+    for comment in reversed(trusted_comments(comments, repo=repo)):
         found = parse_pr_comment(comment.get("body"))
-        if found is not None:
-            found["scene_at"] = comment.get("createdAt")
-            return found
+        if found is None:
+            continue
+        found["scene_at"] = comment.get("createdAt")
+        return found
     raise scene.SceneMissingError(
         "no 'Orbi opened PR' comment from a trusted author; the "
         "Issue cannot be resumed"

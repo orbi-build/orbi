@@ -34,6 +34,26 @@ BASE_SHA = "abc123def456"
 
 # ------------------------------------------------------- pure: classification
 
+
+@pytest.fixture(autouse=True)
+def _repository_permissions(monkeypatch):
+    """Issue #1806: the trusted comments in these scenarios are written
+    by a repository maintainer (`maintainer`); a non-writer names an
+    outsider. The read is answered here so each inline `gh` fake keeps
+    modelling only the command it exists for.
+    """
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: (
+            "none" if login in {"drive-by", "stranger", "outsider"}
+            else "admin"
+        ),
+    )
+    monkeypatch.setattr(
+        seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+    )
+
+
 def test_build_checklists_column1_carries_the_ci_result_and_layer():
     # Issue #1613: only a passing PR CI result is evidence the run
     # verified; column 1 carries it.
@@ -151,8 +171,9 @@ def test_rendered_checklist_never_counts_as_a_review_round():
     a checklist would burn the bounded review budget."""
     body = _render()
     assert failure_report.review_rounds_so_far([
-        {"body": body, "authorAssociation": "OWNER"},
-    ]) == 0
+        {"body": body, "authorAssociation": "OWNER",
+         "author": {"login": "maintainer"}},
+    ], repo="owner/repo") == 0
     assert not any(
         line.startswith("Orbi review round ") for line in body.splitlines()
     )
@@ -214,6 +235,7 @@ def _scene_comments():
                 f"base_sha={BASE_SHA} run_id={RUN_ID})"
             ),
             "authorAssociation": "OWNER",
+            "author": {"login": "maintainer"},
         },
     ]
 
@@ -411,7 +433,9 @@ def test_gate_hold_does_not_consume_the_review_round_budget(gate_env,
     review finds is the budget the delivery had before the wait."""
     _round(_gate_config(tmp_path))
     comments = _scene_comments()
-    assert failure_report.review_rounds_so_far(comments, run_id=RUN_ID) == 0
+    assert failure_report.review_rounds_so_far(
+        comments, run_id=RUN_ID, repo="owner/repo",
+    ) == 0
 
 
 def test_delivered_changed_files_failure_is_missing_evidence(

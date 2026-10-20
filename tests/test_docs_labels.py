@@ -121,17 +121,21 @@ def test_setup_documents_label_initialization():
 def test_security_documents_recovery_scene_contract():
     """Issue #49/#241: the recovery scene contract is documented in
     docs/security.mdx (EN + ZH): the resume scene is only read from
-    comments posted by a trusted maintainer (OWNER/MAINTAINER/MEMBER/
-    COLLABORATOR), and branch/worktree paths are derived from the
-    configured repo, Issue number and run id — a public comment can
+    comments posted by an author who can write to the repository —
+    GitHub's reported permission, never the comment's authorAssociation
+    (Issue #1806) — and branch/worktree paths are derived from the
+    configured repo, Issue number and run id, so a public comment can
     never steer the Runner into an arbitrary local path. The scene
     comment prefix itself is the code contract (bootstrap_runner).
     """
     for slug in ("security", "zh/security"):
         text = docs_page(slug)
         assert "trusted" in text, f"docs/{slug} must name the trusted-maintainer rule"
-        assert "OWNER" in text and "COLLABORATOR" in text, (
-            f"docs/{slug} must list the trusted author associations"
+        assert "collaborators/{login}/permission" in text, (
+            f"docs/{slug} must name the repository permission read"
+        )
+        assert "authorAssociation" in text, (
+            f"docs/{slug} must say the association decides nothing"
         )
         assert "derived" in text or "推导" in text, (
             f"docs/{slug} must say branch/worktree are derived"

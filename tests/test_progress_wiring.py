@@ -31,6 +31,24 @@ from orbi.pi_process import PiWatchOptions
 from tests.fakes.progress import bind_run_id, patched_comment_bodies
 
 
+@pytest.fixture(autouse=True)
+def _repository_permissions(monkeypatch):
+    """Issue #1806: the trusted comments in these scenarios are written
+    by a repository maintainer (`maintainer`); a non-writer names an
+    outsider. The read is answered here so each inline `gh` fake keeps
+    modelling only the command it exists for."""
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: (
+            "none" if login in {"drive-by", "stranger", "outsider"}
+            else "admin"
+        ),
+    )
+    monkeypatch.setattr(
+        seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+    )
+
+
 def make_fake_gh(monkeypatch, comments=None, in_progress=False):
     """Answer every gh call; return (calls, posted_bodies).
 
@@ -2103,6 +2121,7 @@ def _review_round_comments():
                 "Orbi review round 1 for PR #46: clean"
             ),
             "authorAssociation": "OWNER",
+            "author": {"login": "maintainer"},
         },
         {
             "body": (
@@ -2110,6 +2129,7 @@ def _review_round_comments():
                 "Orbi review round 2 for PR #46: findings"
             ),
             "authorAssociation": "OWNER",
+            "author": {"login": "maintainer"},
         },
     ]
 
@@ -2151,6 +2171,7 @@ def _opened_pr_scene_comment(pr_number=46, round_no=0):
             ))
         ),
         "authorAssociation": "OWNER",
+        "author": {"login": "maintainer"},
     }
 
 

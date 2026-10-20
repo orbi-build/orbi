@@ -149,3 +149,26 @@ def systemd_scheduler(monkeypatch):
     monkeypatch.setattr(
         scheduler, "detect", lambda system=None: real_detect("Linux"),
     )
+
+
+@pytest.fixture
+def permissions(monkeypatch):
+    """Author login -> repository permission for the trust gates.
+
+    Issue #1806: a comment is trusted — and an in-ticket command accepted
+    — from the repository permission GitHub reports for its author, so a
+    test that needs a maintainer grants one here. An ungranted login reads
+    as `"none"` (GitHub's answer for a user with no access), so nothing
+    is trusted by accident. The authenticated identity is pinned to a bot
+    nobody's comment names, so the own-account fallback of
+    `_comment_is_trusted` stays out of these tests (a test that exercises
+    it patches the login itself, which wins over this default).
+    """
+    grants: dict[str, str] = {}
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: grants.get(login, "none"),
+    )
+    monkeypatch.setattr(seam, "_authenticated_github_login",
+                        lambda: "orbi-bot[bot]")
+    return grants

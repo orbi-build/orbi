@@ -39,10 +39,14 @@ the delivery contract, local-only secrets, and no remote state store.
   keep the protected branch restricted to the account that runs the
   Runner (or to no one — the Runner's token performs the merge).
 - Delivery state is derived, never trusted from public text: the resume
-  scene is only read from comments posted by a trusted maintainer
-  (OWNER/MAINTAINER/MEMBER/COLLABORATOR), and branch/worktree paths are
-  derived from the configured repo, Issue number and run id — a public
-  comment can never steer the Runner into an arbitrary local path. The
+  scene is only read from comments posted by an author who can WRITE to
+  the repository — GitHub's reported permission for that login
+  (`collaborators/{login}/permission`: `admin` or `write`), not the
+  comment's `authorAssociation`, which reads `CONTRIBUTOR` for a
+  maintainer whose organization membership is private — and
+  branch/worktree paths are derived from the configured repo, Issue
+  number and run id — a public comment can never steer the Runner into an
+  arbitrary local path. The
   machine-readable record is the hidden versioned `orbi:scene:v1` block
   rendered and parsed by `src/orbi/scene.py`; the readable text beside
   it is display only.

@@ -9,6 +9,7 @@
     "cli": 4,
     "cli_source": 7,
     "comment_kind": 0,
+    "comment_trust": 0,
     "config": 0,
     "delivery_comment": 0,
     "delivery_labels": 6,
