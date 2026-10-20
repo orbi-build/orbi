@@ -716,11 +716,16 @@ def test_resume_scene_ignores_a_comment_without_a_readable_author():
         run_state.resume_scene(comments, repo="owner/repo")
 
 
-@pytest.mark.parametrize("permission,trusted", [
-    ("admin", True), ("write", True), ("read", False), ("none", False),
+@pytest.mark.parametrize("permission,trusted,association", [
+    ("admin", True, "MEMBER"),
+    # Without the field at all: GitHub may omit it, and it decides
+    # nothing either way (Issue #1806).
+    ("write", True, None),
+    ("read", False, "MEMBER"),
+    ("none", False, "MEMBER"),
 ])
 def test_resume_scene_trusts_exactly_the_write_permissions(
-    monkeypatch, permission, trusted,
+    monkeypatch, permission, trusted, association,
 ):
     """Issue #1806: the repository permission decides — `admin`/`write`
     pass, `read`/`none` do not — and the comment's association is never
@@ -728,7 +733,7 @@ def test_resume_scene_trusts_exactly_the_write_permissions(
     monkeypatch.setattr(
         seam, "repository_permission", lambda login, *, repo: permission,
     )
-    comments = [comment(opened_pr_comment(), association="MEMBER")]
+    comments = [comment(opened_pr_comment(), association=association)]
     if not trusted:
         with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
             run_state.resume_scene(comments, repo="owner/repo")
