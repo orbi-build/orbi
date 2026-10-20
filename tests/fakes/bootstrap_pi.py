@@ -423,11 +423,12 @@ def make_timeout_tool_pi_controlled(tmp_path, *, tool_seconds: float,
 def make_idle_recovery_tracker(monkeypatch, *, window=0.3, targets=None,
                                pending=None, alive=True):
     """A `IdleRecoveryTracker` wired to fake /proc primitives (Issue
-    #287): `find_idle_descendants` returns `targets`, the pending-
-    timeout computation returns `pending` (a list of
+    #287): `snapshot_descendants` records an empty snapshot (the
+    window opens) and `find_idle_descendants` returns `targets`, the
+    pending-timeout computation returns `pending` (a list of
     `(target, deadline)`), signals are recorded instead of delivered,
     and the monotonic clock is a mutable dict the test advances."""
-    targets = [{"pid": 4242, "cmdline": "sleep 300", "start_epoch": 1.0}] \
+    targets = [{"pid": 4242, "cmdline": "sleep 300", "start_ticks": 1}] \
         if targets is None else targets
     pending = [] if pending is None else pending
     state = {
@@ -436,8 +437,13 @@ def make_idle_recovery_tracker(monkeypatch, *, window=0.3, targets=None,
         "pending_calls": 0,
     }
     monkeypatch.setattr(
+        pi_process, "snapshot_descendants",
+        lambda pid: {target["pid"]: target["start_ticks"]
+                     for target in targets},
+    )
+    monkeypatch.setattr(
         pi_process, "find_idle_descendants",
-        lambda pid, epoch: targets,
+        lambda recorded: targets,
     )
     monkeypatch.setattr(
         pi_process, "_pending_timeout_targets",
@@ -447,7 +453,7 @@ def make_idle_recovery_tracker(monkeypatch, *, window=0.3, targets=None,
     )
     monkeypatch.setattr(
         pi_process, "signal_pid",
-        lambda pid, sig, *, expected_start_epoch=None, btime=None, hz=None:
+        lambda pid, sig, *, expected_start_ticks=None:
         state["signals"].append((pid, sig)) or "sent",
     )
     monkeypatch.setattr(pi_process, "pid_alive", lambda pid: alive)

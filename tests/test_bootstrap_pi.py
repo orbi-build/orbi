@@ -45,20 +45,31 @@ from tests.fakes.bootstrap_pi import (
 )
 
 # Hosted-macOS boundaries; the Ubuntu CI keeps every scene here
-# authoritative. The idle-recovery scenes discover hung tools via
-# /proc (Linux-only by pi_recovery's contract) and time their start
-# from /proc/stat btime.
-_proc_based_recovery = (
-    sys.platform != "darwin" and Path("/proc/stat").exists()
-)
+# authoritative. The idle-recovery scenes discover hung tools through
+# /proc/<pid>/stat (Linux-only by pi_recovery's contract) and need
+# nothing outside the per-process directories — a container whose /proc
+# is mounted `subset=pid` (no /proc/stat) runs them for real too
+# (Issue #1808).
+_proc_based_recovery = sys.platform != "darwin" and Path("/proc").is_dir()
 _stream_pi_linux_only = pytest.mark.skipif(
     not _proc_based_recovery,
     reason=(
-        "pi_recovery idle-descendant discovery reads /proc (Linux) and "
-        "times each descendant from /proc/stat btime; on macOS or a "
-        "container whose /proc is mounted `subset=pid` (no /proc/stat) "
-        "the recovery loop honestly finds no target, so these "
-        "real-subprocess recovery scenes stay Linux-authoritative"
+        "pi_recovery discovers idle descendants through /proc/<pid>/stat; "
+        "hosted macOS has no /proc at all, so these real-subprocess "
+        "recovery scenes stay Linux-authoritative"
+    ),
+)
+# The upstream_alive connection evidence reads /proc/net/tcp, a file
+# outside the per-process directories: hosted macOS and a /proc mounted
+# `subset=pid` do not expose it (the probe is a bypass, never a veto, so
+# it honestly reports false there). The scene asserting the live-socket
+# evidence needs the socket tables.
+_upstream_evidence = sys.platform != "darwin" and Path("/proc/net/tcp").is_file()
+_stream_pi_upstream_only = pytest.mark.skipif(
+    not _upstream_evidence,
+    reason=(
+        "the upstream_alive evidence reads /proc/net/tcp, which hosted "
+        "macOS and a /proc mounted `subset=pid` do not expose"
     ),
 )
 
@@ -1664,6 +1675,7 @@ def test_stream_pi_no_upstream_kill_before_model_wait(tmp_path, caplog):
 
 
 @_stream_pi_linux_only
+@_stream_pi_upstream_only
 def test_stream_pi_hung_model_request_killed_despite_live_upstream(
     tmp_path, caplog,
 ):
@@ -2178,22 +2190,18 @@ def test_stream_pi_wait_state_cleared_when_waited_tool_exits(
     assert "reason=idle_recovery_stale_" in failures[0]
 
 
-def test_pending_timeout_targets_unit(tmp_path, monkeypatch):
+def test_pending_timeout_targets_unit(monkeypatch):
     """Issue #169: the clock-consistent pending computation — a target
-    whose start time is unreadable (it exited between the discovery and
-    the check) is skipped, a target without a clear timeout is not
-    pending, a target inside its deadline is pending with the remaining
-    time, and a target whose deadline already passed is not pending."""
+    without a clear timeout is not pending, a target inside its deadline
+    is pending with the remaining time, and a target whose deadline
+    already passed is not pending. The age comes from the target's
+    recorded start ticks (stat field 22, Issue #1808): no /proc read and
+    no other clock than CLOCK_BOOTTIME."""
+    hz = pi_process.clk_tck()
     now_mono = time.monotonic()
+    ago = (now_mono - 1.0) * hz  # started 1 s ago: inside a timeout 5
+    old = (now_mono - 9.0) * hz  # started 9 s ago: past a timeout 5
 
-    def fake_start(pid, *, hz):
-        if pid == 1:
-            return None  # gone between discovery and the check
-        if pid == 2:
-            return now_mono - 1.0  # started 1 s ago, timeout 5 s
-        return now_mono - 9.0  # started 9 s ago, timeout 5 s (passed)
-
-    monkeypatch.setattr(pi_process, "process_start_monotonic", fake_start)
     monkeypatch.setattr(pi_process, "process_ppid", lambda pid: None)
     boot_clock = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)
     monkeypatch.setattr(
@@ -2203,10 +2211,9 @@ def test_pending_timeout_targets_unit(tmp_path, monkeypatch):
         ),
     )
     targets = [
-        {"pid": 1, "cmdline": "timeout 5 pytest"},
-        {"pid": 2, "cmdline": "timeout 5 pytest"},
-        {"pid": 3, "cmdline": "timeout 5 pytest"},
-        {"pid": 4, "cmdline": "pytest"},  # no clear timeout
+        {"pid": 2, "cmdline": "timeout 5 pytest", "start_ticks": ago},
+        {"pid": 3, "cmdline": "timeout 5 pytest", "start_ticks": old},
+        {"pid": 4, "cmdline": "pytest", "start_ticks": ago},
     ]
     pending = pi_process._pending_timeout_targets(targets)
     assert [target["pid"] for target, _ in pending] == [2]
@@ -2220,13 +2227,9 @@ def test_pending_timeout_targets_unit(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pi_process, "process_ppid", lambda pid: 10 if pid == 11 else None,
     )
-    monkeypatch.setattr(
-        pi_process, "process_start_monotonic",
-        lambda pid, *, hz: now_mono - 1.0,
-    )
     pending = pi_process._pending_timeout_targets([
-        {"pid": 10, "cmdline": "timeout 5 sleep 300"},
-        {"pid": 11, "cmdline": "sleep 300"},
+        {"pid": 10, "cmdline": "timeout 5 sleep 300", "start_ticks": ago},
+        {"pid": 11, "cmdline": "sleep 300", "start_ticks": ago},
     ])
     assert [target["pid"] for target, _ in pending] == [10]
 
@@ -2253,22 +2256,22 @@ def test_idle_recovery_tracker_escalation_pacing(monkeypatch, caplog):
     with caplog.at_level("WARNING"):
         assert tracker.state is None
         assert tracker.exhausted is False
-        tracker.open_window()
+        tracker.open_window(7)
         # Window 1: the first observation — the grace window, no signal
         # (Issue #181: one "alive" observation is not evidence).
-        tracker.escalate(7)
+        tracker.escalate()
         assert tracker.state == "wait"
         assert state["signals"] == []
         # Same window (silence still below the window length): the
         # target is inside its grace cycle — still nothing signaled.
         state["mono"] += 0.1
-        tracker.escalate(7)
+        tracker.escalate()
         assert tracker.state == "wait"
         assert state["signals"] == []
         # Window 2: the evidence flips (still alive one full window) —
         # the TERM.
         state["mono"] += 0.25
-        tracker.escalate(7)
+        tracker.escalate()
         assert tracker.state == "term"
         assert state["signals"] == [(4242, signal.SIGTERM)]
         # Window 3: the KILL; exhaustion remains false until the
@@ -2276,13 +2279,13 @@ def test_idle_recovery_tracker_escalation_pacing(monkeypatch, caplog):
         # window: an exact `+0.3` floors back into window 1 after the
         # floating-point subtraction in `escalate`.
         state["mono"] += 0.31
-        tracker.escalate(7)
+        tracker.escalate()
         assert tracker.state == "kill"
         assert state["signals"][-1] == (4242, signal.SIGKILL)
         assert tracker.exhausted is False
         for _ in range(pi_process.PI_IDLE_RECOVERY_CYCLES - 3):
             state["mono"] += 0.31
-            tracker.escalate(7)
+            tracker.escalate()
         assert tracker.exhausted is True
     # The journal lines carry the run correlation fields.
     term = [line for line in caplog.text.splitlines()
@@ -2304,13 +2307,13 @@ def test_idle_recovery_tracker_kill_step_skipped_same_window(monkeypatch):
     polls."""
     state = make_idle_recovery_tracker(monkeypatch, targets=[])
     tracker = state["tracker"]
-    tracker.open_window()
-    tracker.escalate(7)  # window 1: no_target, step -> 1
+    tracker.open_window(7)
+    tracker.escalate()  # window 1: no_target, step -> 1
     assert tracker.state is None
-    tracker.escalate(7)  # still window 1: the KILL step must not run
+    tracker.escalate()  # still window 1: the KILL step must not run
     assert tracker.state is None
     state["mono"] += 0.31  # a hair past one window (see the pacing test)
-    tracker.escalate(7)  # window 2: the (empty) KILL step
+    tracker.escalate()  # window 2: the (empty) KILL step
     assert tracker.state == "kill"
 
 
@@ -2324,17 +2327,17 @@ def test_idle_recovery_tracker_kill_reports_already_dead(
     tracker = state["tracker"]
     monkeypatch.setattr(pi_process, "pid_alive", lambda pid: False)
     with caplog.at_level("WARNING"):
-        tracker.open_window()
-        tracker.escalate(7)  # window 1: the grace observation
+        tracker.open_window(7)
+        tracker.escalate()  # window 1: the grace observation
         state["mono"] += 0.35
-        tracker.escalate(7)  # window 2: the flip TERM
+        tracker.escalate()  # window 2: the flip TERM
         state["mono"] += 0.3
-        tracker.escalate(7)  # window 3: the KILL step
+        tracker.escalate()  # window 3: the KILL step
         assert tracker.state == "kill"
         assert tracker.exhausted is False
         for _ in range(pi_process.PI_IDLE_RECOVERY_CYCLES - 3):
             state["mono"] += 0.31
-            tracker.escalate(7)
+            tracker.escalate()
         assert tracker.exhausted is True
     assert state["signals"] == [(4242, signal.SIGTERM)]
     kill = [line for line in caplog.text.splitlines()
@@ -2350,13 +2353,13 @@ def test_idle_recovery_tracker_reset_clears_state(monkeypatch):
     escalation at the grace window, not at the session kill."""
     state = make_idle_recovery_tracker(monkeypatch)
     tracker = state["tracker"]
-    tracker.open_window()
+    tracker.open_window(7)
     state["mono"] += 0.9  # straight to cycle 3
-    tracker.escalate(7)
+    tracker.escalate()
     assert tracker.exhausted is False
     for _ in range(pi_process.PI_IDLE_RECOVERY_CYCLES - 3):
         state["mono"] += 0.31
-        tracker.escalate(7)
+        tracker.escalate()
     assert tracker.exhausted is True
     tracker.reset()
     assert tracker.state is None
@@ -2364,8 +2367,8 @@ def test_idle_recovery_tracker_reset_clears_state(monkeypatch):
     state["signals"].clear()
     # A fresh window escalates from the grace window again (no signal
     # — the old escalation left no residue).
-    tracker.open_window()
-    tracker.escalate(7)
+    tracker.open_window(7)
+    tracker.escalate()
     assert tracker.state == "wait"
     assert state["signals"] == []
     assert tracker.exhausted is False
@@ -2381,28 +2384,28 @@ def test_idle_recovery_tracker_wait_decision_logged_once_then_flip(
     second wait line); one full window later the flip delivers the
     TERM."""
     target = {"pid": 7, "cmdline": "timeout 5 sleep 300",
-              "start_epoch": 1.0}
+              "start_ticks": 1}
     pending = [(target, 9999999999.0)]  # inside the deadline
     state = make_idle_recovery_tracker(
         monkeypatch, targets=[target], pending=pending,
     )
     tracker = state["tracker"]
     with caplog.at_level("WARNING"):
-        tracker.open_window()
+        tracker.open_window(7)
         # Window 1: inside the deadline — the wait decision, once.
-        tracker.escalate(7)
+        tracker.escalate()
         assert tracker.state == "wait"
         assert state["signals"] == []
         # Same window, deadline now passed: the grace window — the
         # target is recorded, nothing is signaled, no second wait line.
         pending.clear()
         state["mono"] += 0.1
-        tracker.escalate(7)
+        tracker.escalate()
         assert tracker.state == "wait"
         assert state["signals"] == []
         # One full window later, still alive: the evidence flips, TERM.
         state["mono"] += 0.25
-        tracker.escalate(7)
+        tracker.escalate()
         assert tracker.state == "term"
         assert state["signals"] == [(7, signal.SIGTERM)]
     waits = [line for line in caplog.text.splitlines()
@@ -2420,16 +2423,16 @@ def test_idle_recovery_tracker_wait_holds_exhaustion(monkeypatch):
     `PI_IDLE_RECOVERY_CYCLES` windows) must survive every one of them."""
     target = {"pid": 9,
               "cmdline": "timeout 1200 go test -c ./pkg/cli/server/",
-              "start_epoch": 1.0}
+              "start_ticks": 1}
     pending = [(target, 9999999999.0)]  # inside the deadline
     state = make_idle_recovery_tracker(
         monkeypatch, targets=[target], pending=pending,
     )
     tracker = state["tracker"]
-    tracker.open_window()
+    tracker.open_window(7)
     for _ in range(2 * pi_process.PI_IDLE_RECOVERY_CYCLES):
         state["mono"] += 0.31  # a hair past one window (see the pacing test)
-        tracker.escalate(7)
+        tracker.escalate()
         assert tracker.state == "wait"
         assert state["signals"] == []
         assert tracker.exhausted is False
@@ -2443,17 +2446,17 @@ def test_idle_recovery_tracker_wait_releases_to_escalation(monkeypatch):
     held past the wrapper deadline + two windows)."""
     target = {"pid": 9,
               "cmdline": "timeout 1200 go test -c ./pkg/cli/server/",
-              "start_epoch": 1.0}
+              "start_ticks": 1}
     pending = [(target, 9999999999.0)]  # inside the deadline
     state = make_idle_recovery_tracker(
         monkeypatch, targets=[target], pending=pending,
     )
     tracker = state["tracker"]
-    tracker.open_window()
+    tracker.open_window(7)
     # Three full windows inside the deadline: wait, no signal, no kill.
     for _ in range(3):
         state["mono"] += 0.31
-        tracker.escalate(7)
+        tracker.escalate()
         assert tracker.state == "wait"
         assert state["signals"] == []
         assert tracker.exhausted is False
@@ -2461,25 +2464,25 @@ def test_idle_recovery_tracker_wait_releases_to_escalation(monkeypatch):
     # (recorded, nothing signaled, still no exhaustion).
     pending.clear()
     state["mono"] += 0.31
-    tracker.escalate(7)
+    tracker.escalate()
     assert tracker.state == "wait"
     assert state["signals"] == []
     assert tracker.exhausted is False
     # One full window later: the evidence flips — the TERM.
     state["mono"] += 0.31
-    tracker.escalate(7)
+    tracker.escalate()
     assert tracker.state == "term"
     assert state["signals"] == [(9, signal.SIGTERM)]
     # The next window: the KILL, and the same exhausted decision — the
     # loop kills the Pi session.
     state["mono"] += 0.31
-    tracker.escalate(7)
+    tracker.escalate()
     assert tracker.state == "kill"
     assert state["signals"][-1] == (9, signal.SIGKILL)
     assert tracker.exhausted is False
     for _ in range(pi_process.PI_IDLE_RECOVERY_CYCLES - 3):
         state["mono"] += 0.31
-        tracker.escalate(7)
+        tracker.escalate()
     assert tracker.exhausted is True
 
 
@@ -2491,18 +2494,18 @@ def test_idle_recovery_tracker_wait_capped(monkeypatch):
     concurrency slot for a day."""
     target = {"pid": 11,
               "cmdline": "timeout 86400 sleep 300",
-              "start_epoch": 1.0}
+              "start_ticks": 1}
     pending = [(target, 9999999999.0)]  # the declared deadline: far out
     state = make_idle_recovery_tracker(
         monkeypatch, targets=[target], pending=pending,
     )
     monkeypatch.setattr(pi_process, "PI_IDLE_WAIT_MAX_SECONDS", 0.9)
     tracker = state["tracker"]
-    tracker.open_window()
+    tracker.open_window(7)
     # Inside the cap: the wait holds — no signal, no exhaustion.
     for _ in range(3):
         state["mono"] += 0.31
-        tracker.escalate(7)
+        tracker.escalate()
         assert tracker.state == "wait"
         assert state["signals"] == []
         assert tracker.exhausted is False
@@ -2510,26 +2513,26 @@ def test_idle_recovery_tracker_wait_capped(monkeypatch):
     # the grace window records the still-alive target (nothing
     # signaled, still no exhaustion).
     state["mono"] += 0.31
-    tracker.escalate(7)
+    tracker.escalate()
     assert tracker.state == "wait"
     assert state["signals"] == []
     assert tracker.exhausted is False
     # One full window later: the TERM — the wrapper failed to end the
     # command inside the capped deadline.
     state["mono"] += 0.31
-    tracker.escalate(7)
+    tracker.escalate()
     assert tracker.state == "term"
     assert state["signals"] == [(11, signal.SIGTERM)]
     # The next window: the KILL and the exhaustion flip — the slot is
     # released.
     state["mono"] += 0.31
-    tracker.escalate(7)
+    tracker.escalate()
     assert tracker.state == "kill"
     assert state["signals"][-1] == (11, signal.SIGKILL)
     assert tracker.exhausted is False
     for _ in range(pi_process.PI_IDLE_RECOVERY_CYCLES - 6):
         state["mono"] += 0.31
-        tracker.escalate(7)
+        tracker.escalate()
     assert tracker.exhausted is True
 
 
@@ -2541,19 +2544,19 @@ def test_idle_recovery_tracker_no_target_clears_state(monkeypatch, caplog):
     state = make_idle_recovery_tracker(monkeypatch, targets=[])
     tracker = state["tracker"]
     with caplog.at_level("WARNING"):
-        tracker.open_window()
-        tracker.escalate(7)
+        tracker.open_window(7)
+        tracker.escalate()
         assert tracker.state is None
         assert state["signals"] == []
         state["mono"] += 0.31  # a hair past one window
-        tracker.escalate(7)
+        tracker.escalate()
         assert tracker.state == "kill"
         state["mono"] += 0.31
-        tracker.escalate(7)
+        tracker.escalate()
         assert tracker.exhausted is False
         for _ in range(pi_process.PI_IDLE_RECOVERY_CYCLES - 2):
             state["mono"] += 0.31
-            tracker.escalate(7)
+            tracker.escalate()
         assert tracker.exhausted is True
     terms = [line for line in caplog.text.splitlines()
              if " pi_idle_term " in line]

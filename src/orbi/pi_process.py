@@ -44,9 +44,9 @@ from orbi.pi_recovery import (
     find_idle_descendants,
     pid_alive,
     process_ppid,
-    process_start_monotonic,
     signal_pid,
     slots_idle,
+    snapshot_descendants,
     timeout_duration,
     upstream_alive,
 )
@@ -633,13 +633,12 @@ def _pending_timeout_targets(targets: list[dict]) -> list[tuple[dict, float]]:
     `timeout <seconds>` wrapper and whose deadline is still in the
     future is a legitimately running tool — the runner waits for the
     deadline instead of signaling it. The age is measured CLOCK
-    CONSISTENTLY: the process's boot-time start offset
-    (stat field 22) against CLOCK_BOOTTIME, never the
-    realtime-flavoured `process_start_epoch` — a realtime step after
-    boot (NTP) must not make a tool look older than it is. A
-    descendant without a clear timeout, whose start time is unreadable,
-    or whose deadline already passed is not pending: the existing
-    escalation applies to it.
+    CONSISTENTLY: the target's recorded start ticks (stat field 22,
+    converted with CLK_TCK) against CLOCK_BOOTTIME, never a realtime
+    clock — a realtime step after boot (NTP) must not make a tool look
+    older than it is. A descendant without a clear timeout or whose
+    deadline already passed is not pending: the existing escalation
+    applies to it.
     """
     if not targets:
         return []
@@ -648,7 +647,7 @@ def _pending_timeout_targets(targets: list[dict]) -> list[tuple[dict, float]]:
     now_mono = time.clock_gettime(boot_clock)
     now = time.time()
     starts = {
-        target["pid"]: process_start_monotonic(target["pid"], hz=hz)
+        target["pid"]: target["start_ticks"] / hz
         for target in targets
     }
     durations = {
@@ -661,7 +660,7 @@ def _pending_timeout_targets(targets: list[dict]) -> list[tuple[dict, float]]:
     wrapper_deadlines = {
         pid: (start, durations[pid])
         for pid, start in starts.items()
-        if start is not None and durations[pid] is not None
+        if durations[pid] is not None
     }
     pending: list[tuple[dict, float]] = []
     for target in targets:
@@ -677,8 +676,6 @@ def _pending_timeout_targets(targets: list[dict]) -> list[tuple[dict, float]]:
             # the non-empty wrapper result also protects the child from
             # escalation while its wrapper is inside the deadline.
             continue
-        if start_mono is None:
-            continue
         remaining = duration - (now_mono - start_mono)
         if remaining > 0:
             pending.append((target, now + remaining))
@@ -688,14 +685,15 @@ def _pending_timeout_targets(targets: list[dict]) -> list[tuple[dict, float]]:
 class IdleRecoveryTracker:
     """The idle-stall escalation strategy: the mutable pieces of
     escalation state — once inline in the stream loop — live here
-    (`_window_epoch` / `_window_monotonic` / `_state` / `_targets` /
+    (`_recorded` / `_window_monotonic` / `_state` / `_targets` /
     `_step` / `_deadline_passed` / `_wait_logged` / `_exhausted`), so
     the escalation is one replaceable strategy the loop
     drives with `reset` (the stall ended), `open_window` (the #18 idle
-    warning opened the window) and one `escalate` call per idle poll,
-    then reads `state` (the progress-comment value) and `exhausted`
-    (the loop must kill the Pi session now). The rest of the loop's
-    state machines are untouched.
+    warning opened the window: the descendants living at that moment are
+    recorded with their start ticks) and one `escalate` call per idle
+    poll, then reads `state` (the progress-comment value) and
+    `exhausted` (the loop must kill the Pi session now). The rest of the
+    loop's state machines are untouched.
 
     Escalation, one step per idle window of NEW silence since the
     window opened (never in absolute stale seconds — a session that is
@@ -713,9 +711,10 @@ class IdleRecoveryTracker:
                 through the normal `ai-blocked` path (the slot is
                 never held forever).
 
-    Only pi descendants (ppid chain) that started no later than the
-    window are ever signaled — never other system processes, never a
-    process spawned after the window began. The evidence exceptions
+    Only pi descendants (ppid chain) recorded when the window opened are
+    ever signaled — never other system processes, never a process spawned
+    after the window began, never a pid the kernel reused (the recorded
+    start ticks are the identity). The evidence exceptions
     (Issues #105/#169/#181) are part of the strategy: a pre-idle
     descendant inside a coreutils `timeout` deadline is a legitimately
     running tool — the escalation waits (`pi_idle_wait` logged once
@@ -741,11 +740,11 @@ class IdleRecoveryTracker:
         self._reset()
 
     def _reset(self) -> None:
-        # The epoch moment the idle window opened: only descendants
-        # that started no later than it are targets — a process
-        # spawned after the window began is a new tool call, never a
-        # target.
-        self._window_epoch: float | None = None
+        # The descendants that existed when the idle window opened,
+        # recorded as pid -> start ticks: only they are targets — a
+        # process spawned after the window began is a new tool call,
+        # never a target, and the ticks are the identity.
+        self._recorded: dict[int, int] = {}
         # The monotonic moment the window opened: escalation is
         # measured in idle windows of NEW silence since it (see the
         # class docstring).
@@ -784,9 +783,10 @@ class IdleRecoveryTracker:
         stall starts a fresh window."""
         self._reset()
 
-    def open_window(self) -> None:
-        """The idle window starts now (the #18 warning poll)."""
-        self._window_epoch = time.time()
+    def open_window(self, pid: int) -> None:
+        """The idle window starts now (the #18 warning poll): `pid` is
+        the Pi process whose living descendants are recorded."""
+        self._recorded = snapshot_descendants(pid)
         self._window_monotonic = time.monotonic()
 
     @property
@@ -803,10 +803,10 @@ class IdleRecoveryTracker:
         forever)."""
         return self._exhausted
 
-    def escalate(self, pid: int) -> None:
+    def escalate(self) -> None:
         """Advance the escalation by one poll (the loop calls this only
-        on an idle poll with the window open; `pid` is the Pi
-        process)."""
+        on an idle poll with the window open; the targets are the
+        descendants recorded by `open_window`)."""
         silence = time.monotonic() - self._window_monotonic
         cycle = int(silence // self._window_seconds) + 1
         # The exhaustion decision at the end of this method must not run
@@ -825,7 +825,7 @@ class IdleRecoveryTracker:
         # windows.
         waiting = self._state == "wait"
         if self._step == 0:
-            targets = find_idle_descendants(pid, self._window_epoch)
+            targets = find_idle_descendants(self._recorded)
             # Evidence-based wait: a
             # pre-idle descendant that runs a coreutils
             # `timeout <seconds> ...` wrapper INSIDE its deadline is a
@@ -913,7 +913,7 @@ class IdleRecoveryTracker:
                     for target in flipped:
                         result = signal_pid(
                             target["pid"], signal.SIGTERM,
-                            expected_start_epoch=target["start_epoch"],
+                            expected_start_ticks=target["start_ticks"],
                         )
                         event(
                             "pi_idle_term", level=logging.WARNING,
@@ -973,7 +973,7 @@ class IdleRecoveryTracker:
                     continue
                 result = signal_pid(
                     target["pid"], signal.SIGKILL,
-                    expected_start_epoch=target["start_epoch"],
+                    expected_start_ticks=target["start_ticks"],
                 )
                 event(
                     "pi_idle_kill", level=logging.WARNING,
@@ -1469,10 +1469,10 @@ def _stream_pi_once(
                     stale_seconds=format_duration(activity["stale_seconds"]),
                 )
                 idle_warned = True
-                # The idle window starts now: only
-                # descendants that already existed before this moment
-                # are recovery targets.
-                idle_recovery.open_window()
+                # The idle window starts now: the descendants that
+                # already exist are recorded as the only recovery
+                # targets.
+                idle_recovery.open_window(process.pid)
             # Idle-stall recovery (strategy in
             # `IdleRecoveryTracker`): a stalled session (no
             # model/session activity for idle windows, and the model is
@@ -1493,7 +1493,7 @@ def _stream_pi_once(
                 and not activity["model_wait"]
                 and activity["stale_seconds"] >= idle_warn_seconds
             ):
-                idle_recovery.escalate(process.pid)
+                idle_recovery.escalate()
                 if idle_recovery.exhausted:
                     process.kill()
                     idle_recovery_failed = True

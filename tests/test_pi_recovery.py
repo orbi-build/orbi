@@ -1,32 +1,40 @@
 """Unit tests for the idle-stall recovery helpers (Issue #94).
 
-The helpers read the REAL `/proc` in production (ppid chain from
-`/proc/<pid>/stat` + process start time — never a name guess). The unit
-tests build a fake procfs in `tmp_path` and point `pi_recovery.PROC` at
-it, so no real process is ever signaled here.
+The helpers read the REAL `/proc` in production (ppid chain and start
+ticks from `/proc/<pid>/stat` — never a name guess, and never a file
+outside the per-process directories, Issue #1808). The unit tests build a
+fake procfs in `tmp_path` and point `pi_recovery.PROC` at it, so no real
+process is ever signaled here; the fake holds only PID DIRECTORIES, the
+shape a `subset=pid` mount has.
 """
 import os
 import signal
+import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
 from orbi import pi_recovery
 
 
-# Fake clock constants: btime=1_000_000 s, CLK_TCK=100 -> one tick = 0.01 s.
-FAKE_BTIME = 1_000_000.0
+# The fake procfs carries no clock constants: the kernel's own unit (start
+# ticks, stat field 22) is compared as-is (Issue #1808). CLK_TCK only
+# converts ticks into seconds for a coreutils `timeout` deadline.
 FAKE_HZ = 100.0
 
 
-def make_procfs(tmp_path, processes, btime=FAKE_BTIME):
+def make_procfs(tmp_path, processes):
     """Build a fake procfs: `processes` is a list of
     `(pid, comm, ppid, starttime_ticks, cmdline_bytes_or_None, state)`
-    (the state char is optional, default `S`)."""
+    (the state char is optional, default `S`).
+
+    Only per-process directories are created — no `/proc/stat`, no
+    `/proc/net`: the `subset=pid` shape of the host that exposed the
+    Issue #1808 defect."""
     proc = tmp_path / "proc"
     proc.mkdir()
-    (proc / "stat").write_text(f"btime {int(btime)}\n", encoding="utf-8")
     for item in processes:
         pid, comm, ppid, starttime, cmdline = item[:5]
         state = item[5] if len(item) > 5 else "S"
@@ -42,10 +50,6 @@ def make_procfs(tmp_path, processes, btime=FAKE_BTIME):
         if cmdline is not None:
             (entry / "cmdline").write_bytes(cmdline)
     return proc
-
-
-def start_epoch(starttime_ticks):
-    return FAKE_BTIME + starttime_ticks / FAKE_HZ
 
 
 # --- /proc parsing -----------------------------------------------------------
@@ -83,60 +87,35 @@ def test_process_ppid_returns_none_for_non_numeric_ppid(tmp_path,
     assert pi_recovery.process_ppid(6) is None
 
 
-def test_process_start_epoch_converts_ticks_to_epoch(tmp_path, monkeypatch):
+def test_process_start_ticks_reads_field_22_as_the_kernel_unit(
+    tmp_path, monkeypatch,
+):
+    # Issue #1808: stat field 22 (starttime) is the kernel's own unit —
+    # clock ticks since boot — and is returned AS-IS. No /proc/stat
+    # (btime) is read, so the value is comparable on a `subset=pid`
+    # mount, and no clock conversion can drift between two reads.
     proc = make_procfs(tmp_path, [(42, "bash", 7, 1234, b"bash")])
     monkeypatch.setattr(pi_recovery, "PROC", proc)
-    assert pi_recovery.process_start_epoch(
-        42, btime=FAKE_BTIME, hz=FAKE_HZ,
-    ) == start_epoch(1234)
+    assert pi_recovery.process_start_ticks(42) == 1234
 
 
-def test_process_start_epoch_returns_none_for_gone_process(tmp_path,
-                                                           monkeypatch):
-    proc = make_procfs(tmp_path, [])
-    monkeypatch.setattr(pi_recovery, "PROC", proc)
-    assert pi_recovery.process_start_epoch(
-        99, btime=FAKE_BTIME, hz=FAKE_HZ,
-    ) is None
-
-
-def test_process_start_epoch_returns_none_for_short_stat(tmp_path,
-                                                         monkeypatch):
+def test_process_start_ticks_none_for_gone_or_malformed_stat(
+    tmp_path, monkeypatch,
+):
+    # A gone process (no directory), a short stat line and a
+    # non-numeric starttime all yield None, never a crash and never a
+    # fabricated identity.
     proc = make_procfs(tmp_path, [])
     (proc / "7").mkdir()
     (proc / "7" / "stat").write_text("7 (short) S 1", encoding="utf-8")
-    monkeypatch.setattr(pi_recovery, "PROC", proc)
-    assert pi_recovery.process_start_epoch(
-        7, btime=FAKE_BTIME, hz=FAKE_HZ,
-    ) is None
-
-
-def test_process_start_epoch_returns_none_for_bad_starttime(tmp_path,
-                                                            monkeypatch):
-    proc = make_procfs(tmp_path, [])
     (proc / "8").mkdir()
     (proc / "8" / "stat").write_text(
         "8 (bad) S 1 " + " ".join(["0"] * 17) + " x", encoding="utf-8",
     )
     monkeypatch.setattr(pi_recovery, "PROC", proc)
-    assert pi_recovery.process_start_epoch(
-        8, btime=FAKE_BTIME, hz=FAKE_HZ,
-    ) is None
-
-
-def test_boot_time_reads_btime_from_proc_stat(tmp_path, monkeypatch):
-    proc = make_procfs(tmp_path, [], btime=1234567)
-    monkeypatch.setattr(pi_recovery, "PROC", proc)
-    assert pi_recovery.boot_time() == 1234567.0
-
-
-def test_boot_time_fails_fast_without_btime(tmp_path, monkeypatch):
-    proc = tmp_path / "proc"
-    proc.mkdir()
-    (proc / "stat").write_text("intr 1\n", encoding="utf-8")
-    monkeypatch.setattr(pi_recovery, "PROC", proc)
-    with pytest.raises(RuntimeError, match="btime"):
-        pi_recovery.boot_time()
+    assert pi_recovery.process_start_ticks(99) is None
+    assert pi_recovery.process_start_ticks(7) is None
+    assert pi_recovery.process_start_ticks(8) is None
 
 
 def test_cmdline_of_joins_null_separated_arguments(tmp_path, monkeypatch):
@@ -279,30 +258,112 @@ def test_descendant_pids_survives_ppid_cycle(tmp_path, monkeypatch):
     assert pi_recovery.descendant_pids(300) == []
 
 
-# --- idle target selection ---------------------------------------------------
+# --- idle target selection (the kernel's own unit, Issue #1808) -------------
+# The snapshot is taken when the idle window opens: only a descendant that
+# already existed then is a recovery candidate, and the start ticks recorded
+# there ARE its identity — a pid the kernel reused carries other ticks.
 
 
-def test_find_idle_descendants_selects_pre_idle_start_descendants_only(
+def test_snapshot_descendants_records_descendants_with_their_start_ticks(
     tmp_path, monkeypatch,
 ):
-    # 200 started long before the idle window (the hung tool), 300
-    # started AFTER it (a newer tool call): only 200 is a target.
     proc = make_procfs(tmp_path, [
         (100, "pi", 1, 10, b"pi"),
         (200, "bash", 100, 100, b"/bin/bash\x00-c\x00pytest"),
-        (300, "pytest", 200, 5000, b"pytest"),
+        (300, "pytest", 200, 200, b"pytest"),
+        (400, "unrelated", 1, 40, b"unrelated"),
     ])
     monkeypatch.setattr(pi_recovery, "PROC", proc)
-    idle_start = start_epoch(1000)  # between the two starts
-    targets = pi_recovery.find_idle_descendants(
-        100, idle_start, btime=FAKE_BTIME, hz=FAKE_HZ,
+    assert pi_recovery.snapshot_descendants(100) == {200: 100, 300: 200}
+
+
+def test_snapshot_descendants_skips_a_descendant_that_left_the_proc(
+    tmp_path, monkeypatch,
+):
+    # A descendant whose stat vanishes between the tree walk and the
+    # start-tick read (it exited in the gap) is skipped, never a crash;
+    # the rest of the snapshot is still recorded.
+    proc = make_procfs(tmp_path, [
+        (100, "pi", 1, 10, b"pi"),
+        (200, "bash", 100, 100, b"bash"),
+        (300, "pytest", 100, 200, b"pytest"),
+    ])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    real_read = pi_recovery._read_stat
+
+    def flaky_read(pid):
+        raw = real_read(pid)
+        if pid == 300 and raw is not None:
+            # First read (the tree walk) sees the process; the second
+            # read (the start ticks) finds it gone.
+            (proc / "300" / "stat").unlink()
+        return raw
+
+    monkeypatch.setattr(pi_recovery, "_read_stat", flaky_read)
+    assert pi_recovery.snapshot_descendants(100) == {200: 100}
+
+
+def test_snapshot_descendants_empty_when_proc_absent(tmp_path, monkeypatch):
+    # Issue #870: on macOS there is no /proc at all — "no determinable
+    # descendants" is an empty snapshot, never an exception from the
+    # recovery probe itself.
+    monkeypatch.setattr(pi_recovery, "PROC", tmp_path / "no-such-proc")
+    assert pi_recovery.snapshot_descendants(100) == {}
+
+
+def test_find_idle_descendants_returns_only_recorded_live_processes(
+    tmp_path, monkeypatch,
+):
+    # 200 existed when the idle window opened (recorded), 300 was
+    # spawned afterwards: the SNAPSHOT decides, so only 200 is a target
+    # — the hung tool — even though both are descendants right now.
+    proc = make_procfs(tmp_path, [
+        (100, "pi", 1, 10, b"pi"),
+        (200, "bash", 100, 100, b"/bin/bash\x00-c\x00pytest"),
+    ])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    recorded = pi_recovery.snapshot_descendants(100)
+    (proc / "300").mkdir()
+    (proc / "300" / "stat").write_text(
+        "300 (pytest) S 100 " + " ".join(["0"] * 18) + " 5000",
+        encoding="utf-8",
     )
-    assert targets == [
+    assert pi_recovery.find_idle_descendants(recorded) == [
         {
             "pid": 200, "cmdline": "/bin/bash -c pytest",
-            "start_epoch": start_epoch(100),
+            "start_ticks": 100,
         },
     ]
+
+
+def test_find_idle_descendants_skips_gone_and_reused_pids(
+    tmp_path, monkeypatch,
+):
+    # A recorded pid that exited is gone (no stat); a recorded pid whose
+    # ticks CHANGED belongs to an innocent process the kernel gave the
+    # same pid — neither is a target. The same ticks are still the
+    # discovered process.
+    proc = make_procfs(tmp_path, [(4242, "innocent", 1, 900, b"other")])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.find_idle_descendants({999: 100, 4242: 100}) == []
+    targets = pi_recovery.find_idle_descendants({4242: 900})
+    assert [(t["pid"], t["start_ticks"]) for t in targets] == [(4242, 900)]
+
+
+def test_find_idle_descendants_skips_zombies(tmp_path, monkeypatch):
+    # Issue #169: a descendant that already exited but was not reaped
+    # yet (state Z, the parent is busy) is DEAD — signaling it is
+    # meaningless and its empty cmdline would fall back to the comm
+    # name (a lie like `timeout` for an exited `timeout 0.6 sleep 300`).
+    # Only running states are targets.
+    proc = make_procfs(tmp_path, [
+        (200, "timeout", 100, 100, b"timeout\x000.6\x00sleep\x00300",
+         "Z"),
+        (300, "sleep", 100, 200, b"sleep\x00300"),
+    ])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    targets = pi_recovery.find_idle_descendants({200: 100, 300: 200})
+    assert [t["pid"] for t in targets] == [300]
 
 
 def test_signal_pid_rechecks_identity_and_refuses_a_reused_pid(
@@ -310,10 +371,9 @@ def test_signal_pid_rechecks_identity_and_refuses_a_reused_pid(
 ):
     # The discovery-to-signal gap can span a full idle window: a target
     # that exits in the gap and whose pid the kernel hands to an
-    # innocent process must NEVER be signaled. The start time (stat
-    # field 22) is the identity: a different start on the same pid is a
-    # reused pid (`pid_reused`, nothing signaled); the same start is
-    # the discovered process (`sent`).
+    # innocent process must NEVER be signaled. The start ticks (stat
+    # field 22) are the identity: different ticks on the same pid are a
+    # reused pid (`pid_reused`, nothing signaled).
     proc = make_procfs(tmp_path, [(42, "innocent", 1, 200, b"other")])
     monkeypatch.setattr(pi_recovery, "PROC", proc)
 
@@ -322,9 +382,7 @@ def test_signal_pid_rechecks_identity_and_refuses_a_reused_pid(
 
     monkeypatch.setattr(pi_recovery.os, "kill", refuse)
     assert pi_recovery.signal_pid(
-        42, signal.SIGTERM,
-        expected_start_epoch=start_epoch(100), btime=FAKE_BTIME,
-        hz=FAKE_HZ,
+        42, signal.SIGTERM, expected_start_ticks=100,
     ) == "pid_reused"
 
 
@@ -337,9 +395,7 @@ def test_signal_pid_identity_recheck_confirms_the_discovered_process(
     # is faked (pid 42 is not a real process to signal).
     monkeypatch.setattr(pi_recovery.os, "kill", lambda pid, sig: None)
     assert pi_recovery.signal_pid(
-        42, signal.SIGTERM,
-        expected_start_epoch=start_epoch(100), btime=FAKE_BTIME,
-        hz=FAKE_HZ,
+        42, signal.SIGTERM, expected_start_ticks=100,
     ) == "sent"
 
 
@@ -356,9 +412,7 @@ def test_signal_pid_identity_recheck_reports_a_gone_process(
 
     monkeypatch.setattr(pi_recovery.os, "kill", refuse)
     assert pi_recovery.signal_pid(
-        42, signal.SIGTERM,
-        expected_start_epoch=start_epoch(100), btime=FAKE_BTIME,
-        hz=FAKE_HZ,
+        42, signal.SIGTERM, expected_start_ticks=100,
     ) == "already_dead"
 
 
@@ -368,120 +422,111 @@ def test_signal_pid_without_expected_start_keeps_the_legacy_behavior():
     assert pi_recovery.signal_pid(os.getpid(), 0) == "sent"
 
 
-def test_find_idle_descendants_includes_process_started_at_idle_start(
-    tmp_path, monkeypatch,
-):
-    # A process that started exactly at the idle start belongs to the
-    # stalled scene (boundary is inclusive).
-    proc = make_procfs(tmp_path, [
-        (100, "pi", 1, 10, b"pi"),
-        (200, "bash", 100, 1000, b"bash"),
-    ])
-    monkeypatch.setattr(pi_recovery, "PROC", proc)
-    targets = pi_recovery.find_idle_descendants(
-        100, start_epoch(1000), btime=FAKE_BTIME, hz=FAKE_HZ,
+# --- a real /proc shaped like a `subset=pid` mount --------------------------
+# Issue #1808 acceptance on the real entry point: the host that exposed the
+# defect mounts /proc with `subset=pid` — only per-process directories and
+# NO `stat`/`net` file outside them. The fake below is built exactly that way
+# (every pid a symlink to the real entry), the children are REAL processes,
+# and the TERM is a REAL signal.
+
+_proc_only = pytest.mark.skipif(
+    not Path("/proc").is_dir(), reason="requires a real Linux /proc",
+)
+
+
+def _subset_pid_proc(root: Path) -> Path:
+    """A /proc as a `subset=pid` mount presents it: per-process
+    directories only, each a symlink to the real `/proc/<pid>`."""
+    fake = root / "proc"
+    fake.mkdir()
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            (fake / entry.name).symlink_to(entry)
+    assert not (fake / "stat").exists()
+    return fake
+
+
+def _sleep_child() -> subprocess.Popen:
+    return subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
     )
-    assert [t["pid"] for t in targets] == [200]
 
 
-def test_find_idle_descendants_skips_targets_that_died_before_read(
+@_proc_only
+def test_subset_pid_proc_targets_and_terms_a_hung_descendant(
     tmp_path, monkeypatch,
 ):
-    # The descendant exists in the tree walk but its stat is unreadable
-    # (it exited between the walk and the start-time read): skipped.
-    proc = make_procfs(tmp_path, [
-        (100, "pi", 1, 10, b"pi"),
-        (200, "bash", 100, 100, b"bash"),
-    ])
-    (proc / "200" / "stat").unlink()
-    monkeypatch.setattr(pi_recovery, "PROC", proc)
-    assert pi_recovery.find_idle_descendants(
-        100, start_epoch(1000), btime=FAKE_BTIME, hz=FAKE_HZ,
-    ) == []
+    """Issue #1808 acceptance 1: with a /proc that has only pid
+    directories (no `stat` file), a descendant that existed when the
+    idle window opened is returned as a target and receives the TERM —
+    the same result the real /proc gives."""
+    child = _sleep_child()
+    try:
+        fake = _subset_pid_proc(tmp_path)
+        for proc in (Path("/proc"), fake):
+            monkeypatch.setattr(pi_recovery, "PROC", proc)
+            recorded = pi_recovery.snapshot_descendants(os.getpid())
+            assert child.pid in recorded, (proc, recorded)
+            targets = pi_recovery.find_idle_descendants(recorded)
+            assert (child.pid, recorded[child.pid]) in [
+                (target["pid"], target["start_ticks"])
+                for target in targets
+            ]
+        # The TERM sent through the subset=pid shape is the real signal:
+        # the hung child dies with it (and nothing else is touched).
+        assert pi_recovery.signal_pid(
+            child.pid, signal.SIGTERM,
+            expected_start_ticks=recorded[child.pid],
+        ) == "sent"
+        assert child.wait(timeout=10) == -signal.SIGTERM
+    finally:
+        # Safe on an already-exited child (Popen reaps before signaling),
+        # so a failed assertion above never leaves a sleeping process.
+        child.kill()
+        child.wait()
 
 
-def test_find_idle_descendants_skips_unreadable_start_time(
+@_proc_only
+def test_subset_pid_proc_never_targets_a_later_descendant_or_a_reused_pid(
     tmp_path, monkeypatch,
 ):
-    # A descendant whose stat vanishes between the tree walk and the
-    # start-time read (it exited in the gap) is skipped, never a
-    # crash; the remaining targets are still reported.
-    proc = make_procfs(tmp_path, [
-        (100, "pi", 1, 10, b"pi"),
-        (200, "bash", 100, 100, b"bash"),
-        (300, "pytest", 100, 200, b"pytest"),
-    ])
-    monkeypatch.setattr(pi_recovery, "PROC", proc)
-    real_read = pi_recovery._read_stat
-
-    def flaky_read(pid):
-        raw = real_read(pid)
-        if pid == 300 and raw is not None:
-            # First read (the tree walk) sees the process; the second
-            # read (the start time) finds it gone.
-            (proc / "300" / "stat").unlink()
-        return raw
-
-    monkeypatch.setattr(pi_recovery, "_read_stat", flaky_read)
-    targets = pi_recovery.find_idle_descendants(
-        100, start_epoch(1000), btime=FAKE_BTIME, hz=FAKE_HZ,
-    )
-    assert [t["pid"] for t in targets] == [200]
-
-
-def test_find_idle_descendants_skips_zombies(tmp_path, monkeypatch):
-    # Issue #169: a descendant that already exited but was not reaped
-    # yet (state Z, the parent is busy) is DEAD — signaling it is
-    # meaningless and its empty cmdline would fall back to the comm
-    # name (a lie like `timeout` for an exited `timeout 0.6 sleep 300`).
-    # Only running states are targets.
-    proc = make_procfs(tmp_path, [
-        (100, "pi", 1, 10, b"pi"),
-        (200, "timeout", 100, 100, b"timeout\x000.6\x00sleep\x00300",
-         "Z"),
-        (300, "sleep", 100, 200, b"sleep\x00300"),
-    ])
-    monkeypatch.setattr(pi_recovery, "PROC", proc)
-    targets = pi_recovery.find_idle_descendants(
-        100, start_epoch(1000), btime=FAKE_BTIME, hz=FAKE_HZ,
-    )
-    assert [t["pid"] for t in targets] == [300]
-
-
-def test_find_idle_descendants_uses_real_clock_when_not_given(
-    tmp_path, monkeypatch,
-):
-    # Without explicit btime/hz the real boot time and CLK_TCK are used:
-    # a process that started just now is NOT pre-idle-start for an
-    # idle start in the past.
-    proc = make_procfs(tmp_path, [
-        (100, "pi", 1, 10, b"pi"),
-        (200, "bash", 100, 100, b"bash"),
-    ])
-    monkeypatch.setattr(pi_recovery, "PROC", proc)
-    real_btime = pi_recovery.boot_time()
-    real_hz = pi_recovery.clk_tck()
-    # starttime=100 ticks after the real boot: a very old process.
-    targets = pi_recovery.find_idle_descendants(
-        100, real_btime + 10_000,
-    )
-    assert [t["pid"] for t in targets] == [200]
-    # Sanity: the real clock constants are sane (guards the test itself).
-    assert real_btime > 0 and real_hz > 0
-
-
-def test_find_idle_descendants_returns_empty_when_proc_absent(
-    tmp_path, monkeypatch,
-):
-    # Issue #870: on macOS there is no /proc at all — the default
-    # boot_time() read raises FileNotFoundError BEFORE the guarded
-    # descendant_pids() runs, killing the poll loop instead of
-    # recovering. No /proc means "no determinable idle descendants":
-    # an empty list, never an exception.
-    monkeypatch.setattr(pi_recovery, "PROC", tmp_path / "no-such-proc")
-    assert pi_recovery.find_idle_descendants(
-        100, start_epoch(1000),
-    ) == []
+    """Issue #1808 acceptance 2, on both /proc shapes: a descendant
+    spawned after the idle window opened is never a target, and a pid
+    whose start ticks changed is never signaled (`pid_reused`)."""
+    first = _sleep_child()
+    try:
+        fake = _subset_pid_proc(tmp_path)
+        for proc in (Path("/proc"), fake):
+            monkeypatch.setattr(pi_recovery, "PROC", proc)
+            recorded = pi_recovery.snapshot_descendants(os.getpid())
+            assert first.pid in recorded, (proc, recorded)
+        # A descendant spawned after the window opened shows up in both
+        # proc shapes, but not in the recording: never a target.
+        second = _sleep_child()
+        try:
+            (fake / str(second.pid)).symlink_to(
+                Path("/proc") / str(second.pid),
+            )
+            for proc in (Path("/proc"), fake):
+                monkeypatch.setattr(pi_recovery, "PROC", proc)
+                pids = [
+                    target["pid"]
+                    for target in pi_recovery.find_idle_descendants(recorded)
+                ]
+                assert first.pid in pids, (proc, pids)
+                assert second.pid not in pids, (proc, pids)
+        finally:
+            second.kill()
+            second.wait()
+        # The recorded ticks no longer match: a reused pid — no signal.
+        assert pi_recovery.signal_pid(
+            first.pid, signal.SIGTERM,
+            expected_start_ticks=recorded[first.pid] + 1,
+        ) == "pid_reused"
+        assert first.poll() is None
+    finally:
+        first.kill()
+        first.wait()
 
 
 # --- signaling ---------------------------------------------------------------
@@ -580,46 +625,6 @@ def test_process_state_none_for_paren_terminated_stat(
     (proc / "5" / "stat").write_text("5 (bash)", encoding="utf-8")
     monkeypatch.setattr(pi_recovery, "PROC", proc)
     assert pi_recovery.process_state(5) is None
-
-
-def test_process_start_monotonic_reads_field_22(tmp_path, monkeypatch):
-    # stat field 22 (starttime) in ticks since boot, converted with the
-    # given hz: 100 ticks at hz=100 -> 1.0 s since boot. The value stays
-    # in the boot-time clock domain (Issue #169), rather than being
-    # converted through a second clock whose suspend offset can change.
-    proc = make_procfs(tmp_path, [(42, "bash", 7, 100, b"bash")])
-    monkeypatch.setattr(pi_recovery, "PROC", proc)
-    assert pi_recovery.process_start_monotonic(42, hz=FAKE_HZ) == 1.0
-
-
-def test_process_start_monotonic_none_for_gone_process(tmp_path, monkeypatch):
-    proc = make_procfs(tmp_path, [])
-    monkeypatch.setattr(pi_recovery, "PROC", proc)
-    assert pi_recovery.process_start_monotonic(99, hz=FAKE_HZ) is None
-
-
-def test_process_start_monotonic_none_for_malformed_stat(
-    tmp_path, monkeypatch,
-):
-    proc = make_procfs(tmp_path, [])
-    (proc / "5").mkdir()
-    (proc / "5" / "stat").write_text("garbage without parens",
-                                     encoding="utf-8")
-    monkeypatch.setattr(pi_recovery, "PROC", proc)
-    assert pi_recovery.process_start_monotonic(5, hz=FAKE_HZ) is None
-
-
-def test_process_start_monotonic_none_for_non_numeric_starttime(
-    tmp_path, monkeypatch,
-):
-    proc = make_procfs(tmp_path, [])
-    (proc / "6").mkdir()
-    # 17 zero fields after ppid, then a non-numeric starttime at index 19.
-    (proc / "6" / "stat").write_text(
-        "6 (bad) S 1 " + " ".join(["0"] * 17 + ["x"]), encoding="utf-8",
-    )
-    monkeypatch.setattr(pi_recovery, "PROC", proc)
-    assert pi_recovery.process_start_monotonic(6, hz=FAKE_HZ) is None
 
 
 def test_timeout_duration_plain_seconds(tmp_path):

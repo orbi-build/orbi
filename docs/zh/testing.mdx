@@ -98,9 +98,12 @@ perl `alarm` 提供一行 `timeout` 垫片，让每条命令保持文档规定�
 替代真实 Mac 硬件上的真实 macOS launchd smoke。同样的诚实也适用于套件
 内部：部署、setup、doctor 与健康检查契约通过 `systemd_scheduler` 测试
 fixture 钉在 systemd 实现上（launchd 实现保有自己基于 fakes 的测试），
-基于 `/proc` 的真实子进程 idle-recovery 场景与 runner 子进程 e2e 场景
-在 Darwin 上以明确理由跳过——上方的 Ubuntu workflow 仍是它们唯一的
-权威。覆盖率与变更代码门禁仍
+基于 `/proc/<pid>/stat`（后代发现与启动 tick，不读 `/proc/stat`，
+因此 `subset=pid` 容器里同样真跑，Issue #1808）的真实子进程
+idle-recovery 场景与 runner 子进程 e2e 场景在 Darwin 上以明确理由跳过
+——上方的 Ubuntu workflow 仍是它们唯一的权威。唯一断言
+`upstream_alive` 活连接证据的场景需要 `/proc/net/tcp`，在该文件不存在
+处以自己的明确理由跳过。覆盖率与变更代码门禁仍
 以上面的 Ubuntu workflow 为准；macOS job 对任何测试、打包或安装器兼容
 性失败仍然变红——没有任何失败被吞掉或洗成通过。
 
