@@ -557,7 +557,10 @@ def test_retired_v011_release_links_redirect_to_the_github_release():
             f"{source} must keep Mintlify's permanent (308) default, "
             f"got permanent={rule.get('permanent')!r}"
         )
-        path = (DOCS_DIR / source.lstrip("/")).with_suffix(".mdx")
+        # A literal suffix append, never Path.with_suffix: the source carries
+        # a version dot ("release-v0.1.1"), which with_suffix would rewrite to
+        # release-v0.1.mdx and make this absence check pass vacuously.
+        path = DOCS_DIR / f"{source.lstrip('/')}.mdx"
         assert not path.is_file(), (
             f"{path} must not come back (Issue #910 moved the record to the "
             "GitHub Release)"
