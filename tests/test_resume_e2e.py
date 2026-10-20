@@ -207,8 +207,9 @@ def install_fake_gh(monkeypatch, comments: list[str],
     throwaway clone when the base advanced in the meantime). ``gh issue
     view --json comments`` returns the captured comment history in the
     production shape (a top-level object with a ``.comments`` array;
-    every comment carries the owner association of the runner's own
-    account), which is how the resume scene is recovered after a
+    every comment names the maintainer's author identity, which the trust
+    decision reads — Issue #1806 — and the permission endpoint answers,
+    which is how the resume scene is recovered after a
     ``gh pr view --json state,statusCheckRollup`` read answers with
     ``rollup`` as the PR head's checks (Issue #1691: an empty checklist
     column 2 needs a passing CI result) and with no rollup otherwise.
@@ -260,7 +261,12 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     return json.dumps({
                         "comments": [
                             {"id": comment_id, "body": body,
-                             "authorAssociation": "OWNER"}
+                             "authorAssociation": "OWNER",
+                             # Issue #1806: the trust decision reads the
+                             # author's repository permission, so the
+                             # runner's own comments name a writer (the
+                             # endpoint below answers).
+                             "author": {"login": "maintainer"}}
                             for comment_id, body in zip(
                                 comment_ids, comments,
                             )
@@ -282,6 +288,17 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     return "[]"
                 return ""
             if command[1] == "api":
+                if "/collaborators/" in command[2]:
+                    # Issue #1806: the author's repository permission.
+                    login = command[2].rsplit("/", 2)[-2]
+                    permission = (
+                        "none" if login in {"drive-by", "stranger"}
+                        else "admin"
+                    )
+                    return json.dumps({
+                        "permission": permission,
+                        "role_name": permission,
+                    })
                 if "check-runs" in command[2]:
                     return json.dumps([{
                         "name": "tests", "status": "completed",
@@ -402,6 +419,13 @@ def install_fake_gh(monkeypatch, comments: list[str],
             raise AssertionError(f"unexpected gh command: {command}")
         return real_run(command, **kwargs)
 
+    # Issue #1806 keeps the runner's own account as the second trust
+    # channel; the fallback resolves it through `gh auth status`, which
+    # this fake does not model, so the identity is pinned to the runner
+    # bot it posts as.
+    monkeypatch.setattr(
+        seam, "_authenticated_github_login", lambda: "orbi-bot",
+    )
     monkeypatch.setattr(seam, "run_command", fake_run)
 
 
@@ -680,6 +704,16 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
                 command, cwd=kwargs.get("cwd"), capture_output=True,
                 text=True, check=True,
             ).stdout.strip()
+        if (command[0] == "gh" and command[1] == "api"
+                and "/collaborators/" in command[2]):
+            # Issue #1806: the author's repository permission.
+            login = command[2].rsplit("/", 2)[-2]
+            permission = (
+                "none" if login in {"drive-by", "stranger"} else "admin"
+            )
+            return json.dumps({
+                "permission": permission, "role_name": permission,
+            })
         if command[:1] == ["gh"] and command[1] == "issue":
             if command[2] == "list":
                 search = " ".join(command)
@@ -695,7 +729,10 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
                 return json.dumps({
                     "comments": [
                         {"id": i + 1, "body": body,
-                         "authorAssociation": "OWNER"}
+                         "authorAssociation": "OWNER",
+                         # Issue #1806: the trust decision reads the
+                         # author's repository permission.
+                         "author": {"login": "maintainer"}}
                         for i, body in enumerate(comments)
                     ],
                 })
@@ -822,6 +859,7 @@ def test_e2e_public_comment_scene_is_never_resumed(
                 "a1b2c3d4 worktree=/tmp/attacker-controlled-worktree)"
             ),
             "authorAssociation": "NONE",
+            "author": {"login": "drive-by"},
         }],
     )
 

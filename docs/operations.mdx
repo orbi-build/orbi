@@ -994,10 +994,15 @@ access or the CLI.
 - Only a title from the Issue's candidate list is accepted, and the
   literal in the comment is the only version used — the command never
   infers the next version.
-- The comment author needs write permission on the repository
-  (OWNER/MEMBER/MAINTAINER/COLLABORATOR); a comment from anyone else, a title outside
-  the candidates, and a malformed line all leave one readable reason
-  comment on the Issue. The runner's own comments never trigger it.
+- The comment author needs write permission on the repository —
+  GitHub's reported permission for that login
+  (`GET /repos/{owner}/{repo}/collaborators/{login}/permission`:
+  `admin` or `write`; a 404 means no access), never the comment's
+  `authorAssociation`, which depends on what the reading token can see
+  and reads `CONTRIBUTOR` for a maintainer whose organization membership
+  is private. A comment from anyone else, a title outside the candidates,
+  and a malformed line all leave one readable reason comment on the
+  Issue. The runner's own comments never trigger it.
 - The three steps are idempotent: create the Milestone (open) when it is
   missing, open its release ticket from
   `.github/release-ticket-template.md` when the Milestone has none (the

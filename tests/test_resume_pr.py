@@ -21,6 +21,7 @@ import pytest
 import orbi.gitops as gitops
 import orbi.claim as claim
 import orbi.failure_report as failure_report
+import orbi.comment_trust as comment_trust
 import orbi.runner as runner
 import orbi.review_merge as review_merge
 import orbi.run_state as run_state
@@ -38,6 +39,24 @@ from tests.fakes.gitops import FakeGit
 from seam import resume_deps, seam
 import orbi.journal as journal
 import orbi.github as github
+
+
+# Issue #1806: a comment is trusted (and a scene usable) when its author
+# can WRITE to the repository, so these scenarios name their maintainers
+# and everyone else reads as no access. The permission read is faked at
+# the seam, so the fixtures speak in logins rather than GitHub state.
+_WRITERS = frozenset({
+    "maintainer", "xqliu", "orbi-dev-test", "orbi-build", "reviewer",
+})
+
+
+@pytest.fixture(autouse=True)
+def _repository_permissions(monkeypatch):
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: "admin" if login in _WRITERS else "none",
+    )
+
 from orbi.delivery_scene import RunContext
 
 
@@ -435,10 +454,18 @@ def test_parse_pr_comment_fails_fast_on_empty_field_value():
         run_state.parse_pr_comment(body)
 
 
-def comment(body: str, association: str | None = "OWNER") -> dict:
-    if association is None:
-        return {"body": body}
-    return {"body": body, "authorAssociation": association}
+def comment(body: str, association: str | None = "OWNER",
+            author: str = "maintainer") -> dict:
+    """One comment as the readers see it.
+
+    The author login is what the trust decision reads (Issue #1806); the
+    association rides along because it is what GitHub returns, never
+    because it decides anything.
+    """
+    entry = {"body": body, "author": {"login": author}}
+    if association is not None:
+        entry["authorAssociation"] = association
+    return entry
 
 
 def test_resume_scene_returns_latest_trusted_opened_pr_scene():
@@ -447,7 +474,7 @@ def test_resume_scene_returns_latest_trusted_opened_pr_scene():
         comment("unrelated human comment"),
         comment(opened_pr_comment(base_sha="newsha123456")),
     ]
-    scene = run_state.resume_scene(comments)
+    scene = run_state.resume_scene(comments, repo="owner/repo")
     assert scene["base_sha"] == "newsha123456"
     assert scene["run_id"] == FAKE_RUN_ID
 
@@ -455,7 +482,7 @@ def test_resume_scene_returns_latest_trusted_opened_pr_scene():
 def test_resume_scene_fails_fast_when_no_opened_pr_comment_exists():
     comments = [comment("no PR here")]
     with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
-        run_state.resume_scene(comments)
+        run_state.resume_scene(comments, repo="owner/repo")
 
 
 def test_resume_scene_skips_non_dict_comments():
@@ -464,7 +491,7 @@ def test_resume_scene_skips_non_dict_comments():
         comment(opened_pr_comment()),
         "not a dict",
     ]
-    scene = run_state.resume_scene(comments)
+    scene = run_state.resume_scene(comments, repo="owner/repo")
     assert scene["run_id"] == FAKE_RUN_ID
 
 
@@ -569,7 +596,7 @@ def test_resume_scene_accepts_the_authenticated_runner_app_bot(monkeypatch):
         )
 
     monkeypatch.setattr(seam, "run_command", gh_status)
-    scene = run_state.resume_scene(comments)
+    scene = run_state.resume_scene(comments, repo="owner/repo")
     assert scene["run_id"] == FAKE_RUN_ID
 
 
@@ -584,7 +611,7 @@ def test_resume_scene_rejects_another_app_bot_even_with_the_marker(monkeypatch):
         lambda: "orbi-dev-test[bot]",
     )
     with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
-        run_state.resume_scene(comments)
+        run_state.resume_scene(comments, repo="owner/repo")
 
 
 # Issue #655: `gh issue view --json comments` (GraphQL) returns
@@ -616,7 +643,7 @@ def test_comment_is_trusted_normalizes_optional_bot_suffix(
         "authorAssociation": "NONE",
         "author": {"login": login},
     }
-    assert runner._comment_is_trusted(comment) is expected
+    assert comment_trust._comment_is_trusted(comment, repo="owner/repo") is expected
 
 
 def test_resume_scene_accepts_graphql_shaped_runner_app_bot(monkeypatch):
@@ -630,7 +657,7 @@ def test_resume_scene_accepts_graphql_shaped_runner_app_bot(monkeypatch):
         seam, "_authenticated_github_login",
         lambda: "orbi-dev-test[bot]",
     )
-    scene = run_state.resume_scene(comments)
+    scene = run_state.resume_scene(comments, repo="owner/repo")
     assert scene["run_id"] == FAKE_RUN_ID
 
 
@@ -652,40 +679,41 @@ def test_comment_is_trusted_rejects_missing_or_non_string_login(
         "authorAssociation": "NONE",
         "author": author,
     }
-    assert runner._comment_is_trusted(comment) is False
+    assert comment_trust._comment_is_trusted(comment, repo="owner/repo") is False
 
 
 # ------------------------------------------------- trusted comments (F1)
 
 
-def test_resume_scene_ignores_public_comment_with_scene():
-    """A public comment (authorAssociation=NONE) must never steer the
-    runner into an arbitrary local worktree/branch/PR, even when it is
-    the only and newest scene comment."""
+def test_resume_scene_ignores_a_non_writer_comment_with_a_scene():
+    """A comment whose author cannot write to the repository must never
+    steer the runner into an arbitrary local worktree/branch/PR, even
+    when it is the only and newest scene comment (Issue #1806)."""
     comments = [
-        comment(opened_pr_comment(), association="NONE"),
+        comment(opened_pr_comment(), author="drive-by"),
     ]
     with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
-        run_state.resume_scene(comments)
+        run_state.resume_scene(comments, repo="owner/repo")
 
 
-def test_resume_scene_ignores_public_comment_even_when_newest():
-    """The latest comment is public; the older trusted comment wins."""
+def test_resume_scene_ignores_a_non_writer_comment_even_when_newest():
+    """The latest comment's author cannot write; the older one wins."""
     comments = [
         comment(opened_pr_comment(base_sha="trusted123456")),
         comment(opened_pr_comment(base_sha="attacker12345"),
-                association="NONE"),
+                author="drive-by"),
     ]
-    scene = run_state.resume_scene(comments)
+    scene = run_state.resume_scene(comments, repo="owner/repo")
     assert scene["base_sha"] == "trusted123456"
 
 
-def test_resume_scene_ignores_comment_without_association():
-    # A missing association is never trusted: only a positive trusted
-    # value (OWNER/MAINTAINER/MEMBER/COLLABORATOR) passes.
-    comments = [comment(opened_pr_comment(), association=None)]
+def test_resume_scene_ignores_a_comment_without_a_readable_author():
+    # No author login means no identity to check (Issue #1806), so the
+    # comment is never trusted, whatever association it carries.
+    comments = [{"body": opened_pr_comment(),
+                 "authorAssociation": "OWNER"}]
     with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
-        run_state.resume_scene(comments)
+        run_state.resume_scene(comments, repo="owner/repo")
 
 
 @pytest.mark.parametrize("association", [
@@ -693,14 +721,14 @@ def test_resume_scene_ignores_comment_without_association():
 ])
 def test_resume_scene_accepts_every_trusted_association(association):
     comments = [comment(opened_pr_comment(), association=association)]
-    scene = run_state.resume_scene(comments)
+    scene = run_state.resume_scene(comments, repo="owner/repo")
     assert scene["run_id"] == FAKE_RUN_ID
 
 
 def test_resume_scene_skips_non_dict_trusted_comment():
     # A non-dict entry cannot carry an association, so it is skipped.
     comments = ["not a dict", comment(opened_pr_comment())]
-    scene = run_state.resume_scene(comments)
+    scene = run_state.resume_scene(comments, repo="owner/repo")
     assert scene["run_id"] == FAKE_RUN_ID
 
 
@@ -746,13 +774,16 @@ def test_parse_pr_comment_ignores_field_part_without_key():
 
 
 def gh_comments_payload(comments: list[str],
-                        association: str = "OWNER") -> str:
+                        association: str = "OWNER",
+                        author: str = "maintainer") -> str:
     # The production shape of `gh issue view --json comments`: a
-    # top-level object with a `.comments` array; each comment carries
-    # the author association of the viewer.
+    # top-level object with a `.comments` array. The author login is what
+    # the trust decision reads (Issue #1806); the association rides along
+    # because GitHub returns it.
     return json.dumps({
         "comments": [
-            {"body": body, "authorAssociation": association}
+            {"body": body, "authorAssociation": association,
+             "author": {"login": author}}
             for body in comments
         ],
     })
@@ -807,6 +838,14 @@ def make_pick_fake(list_payload: str, view_payload=None,
                      "conclusion": "SUCCESS"},
                 ],
             })
+        if command[1:3] == ["auth", "status"]:
+            # The runner's own account (Issue #1806's second trust
+            # channel); it matches no comment author in these scenarios.
+            return (
+                "github.com\n"
+                "  ✓ Logged in to github.com account orbi-bot (keyring)\n"
+                "  - Active account: true\n"
+            )
         raise AssertionError(f"unexpected command: {command}")
 
     return fake_run
@@ -1815,9 +1854,12 @@ def test_pick_resumable_delivery_scene_failure_skips_bodyless_comments(
                     "(base_branch=main base_sha=abc123def456)"
                 ),
                 "authorAssociation": "OWNER",
+                "author": {"login": "maintainer"},
             },
-            {"authorAssociation": "OWNER"},
-            {"body": None, "authorAssociation": "OWNER"},
+            {"authorAssociation": "OWNER",
+             "author": {"login": "maintainer"}},
+            {"body": None, "authorAssociation": "OWNER",
+             "author": {"login": "maintainer"}},
         ]}),
         comments=comments,
     )

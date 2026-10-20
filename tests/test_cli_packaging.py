@@ -55,6 +55,9 @@ RUNTIME_MODULES = (
     "progress",
     # Issue #152: the CLI source consistency check (doctor/setup).
     "cli_source",
+    # Issue #1806: which comments count, decided from the author's
+    # repository permission.
+    "comment_trust",
 )
 
 # The docs pages that document user-facing commands (EN + ZH parity).

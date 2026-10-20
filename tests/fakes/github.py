@@ -34,10 +34,11 @@ _SEARCH_TOKEN_RE = re.compile(r'milestone:"([^"]+)"|(\S+)')
 # The one jq program the adapter runs against the milestones endpoint
 # (`milestone_open_issue_count`): the title-select reading GitHub's own
 # open-Issue counter.
-def _with_response_headers(payload: str, status: int = 200) -> str:
+def _with_response_headers(payload: str, status: int = 200,
+                           reason: str = "OK") -> str:
     """The `gh api --include` shape: status line, headers, blank, body."""
     return (
-        f"HTTP/2.0 {status} OK\r\n"
+        f"HTTP/2.0 {status} {reason}\r\n"
         "Content-Type: application/json; charset=utf-8\r\n"
         "X-Ratelimit-Remaining: 4999\r\n"
         "\r\n"
@@ -70,6 +71,11 @@ class FakeGh:
         self.repo_config: str | None = None
         self.branches: dict[str, dict] = {}
         self.rulesets_failure: str | None = None
+        # The repository permission GitHub reports per user
+        # (`collaborators/{login}/permission`, Issue #1806) and the one
+        # login whose read fails server-side.
+        self.collaborators: dict[str, str] = {}
+        self.permission_failure: str | None = None
         self._clock = 0
 
     # --- state arrangement (what a test does instead of patching) -------
@@ -161,6 +167,18 @@ class FakeGh:
         the permission 403 of a token without administration
         permission."""
         self.rulesets_failure = mode
+
+    def add_collaborator(self, login: str, permission: str = "admin") -> None:
+        """Seed one user's repository permission ("admin"/"write"/...).
+
+        An unseeded login is GitHub's 404 for a user this token cannot
+        see: the fake never invents access it was not given.
+        """
+        self.collaborators[login] = permission
+
+    def set_permission_failure(self, login: str) -> None:
+        """Make that user's permission read fail server-side (a 5xx)."""
+        self.permission_failure = login
 
     def set_repo_config(self, text: str) -> None:
         """Seed the repository's default `.github/orbi.toml` — the
@@ -503,6 +521,29 @@ class FakeGh:
         path = args[0]
         flags = self._flags(args[1:])
         match = re.fullmatch(
+            r"repos/([^/]+/[^/]+)/collaborators/([^/]+)/permission", path,
+        )
+        if match:
+            # The repository permission of one user (Issue #1806): the
+            # documented effective permission, and GitHub's 404 for a user
+            # this token cannot see.
+            self._repo_or_fail(match.group(1))
+            self._known_flags(flags, (), ["gh", "api", path])
+            login = match.group(2)
+            if self.permission_failure == login:
+                self._fail(
+                    1, "gh: Server Error (HTTP 500)", status=500,
+                    reason="Internal Server Error",
+                )
+            permission = self.collaborators.get(login)
+            if permission is None:
+                self._fail(
+                    1, f"gh: {login} is not a user (HTTP 404)", status=404,
+                    reason="Not Found",
+                )
+            return json.dumps({"permission": permission,
+                               "role_name": permission})
+        match = re.fullmatch(
             r"repos/([^/]+/[^/]+)/milestones\?"
             r"state=all&per_page=100",
             path,
@@ -667,9 +708,19 @@ class FakeGh:
         minutes, seconds = divmod(self._next_clock(), 60)
         return f"2026-09-13T00:{minutes:02d}:{seconds:02d}Z"
 
-    def _fail(self, code: int, stderr: str):
+    def _fail(self, code: int, stderr: str, *,
+              status: int | None = None, reason: str = "Error"):
+        """Raise a failed call; `status` also emits the response headers.
+
+        A failed `gh api --include` prints the status line and headers
+        in front of the (empty) body, which is how the adapter classifies
+        the failure (Issue #1760).
+        """
         raise subprocess.CalledProcessError(
-            code, ["gh"], output="", stderr=stderr
+            code, ["gh"],
+            output=(_with_response_headers("", status, reason)
+                    if status is not None else ""),
+            stderr=stderr,
         )
 
     def _unsupported(self, command: list[str]):

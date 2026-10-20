@@ -39,10 +39,11 @@ from orbi.failure import (
     _failure_comment_body, _failure_detail, _failure_summary,
     _redact_local_paths, terminal_action,
 )
+from orbi.comment_trust import latest_run_marker, trusted_comments
 from orbi.github import (
-    _comment_is_trusted, _pr_number, apply_label_patch, comment_issue,
+    _pr_number, apply_label_patch, comment_issue,
     commit_check_runs, issue_comments, issue_labels, issue_priority,
-    latest_run_marker, list_issues, pr_comments, run_gh_write_command,
+    list_issues, pr_comments, run_gh_write_command,
     update_issue_comment,
 )
 from orbi.journal import LOGGER, event, issue_context, run_command
@@ -430,13 +431,11 @@ def _is_line_failure_comment(body: str, run_id: str,
 
 
 def _reported_failure_comment(comments: list, run_id: str,
-                              fingerprint: str) -> dict | None:
+                              fingerprint: str, *, repo: str) -> dict | None:
     """The trusted comment already reporting this exact
     (run_id, fingerprint) failure, or None — the #825 dedup key. A pure
     scan over the already-fetched comment list."""
-    for comment in comments:
-        if not _comment_is_trusted(comment):
-            continue
+    for comment in trusted_comments(comments, repo=repo):
         body = comment.get("body")
         if isinstance(body, str) and _is_line_failure_comment(
                 body, run_id, fingerprint):
@@ -445,7 +444,7 @@ def _reported_failure_comment(comments: list, run_id: str,
 
 
 def _failure_streak(comments: list, run_id: str,
-                    fingerprint: str) -> int:
+                    fingerprint: str, *, repo: str) -> int:
     """The number of CONSECUTIVE identical failures at the tail of the
     trusted comment history (Issue #825). A pure scan over the
     already-fetched comment list.
@@ -458,9 +457,7 @@ def _failure_streak(comments: list, run_id: str,
     changed. Publisher milestones and human chatter in between are
     skipped: they change no premise."""
     streak = 0
-    for comment in reversed(comments):
-        if not _comment_is_trusted(comment):
-            continue
+    for comment in reversed(trusted_comments(comments, repo=repo)):
         body = comment.get("body")
         if not isinstance(body, str):
             continue
@@ -491,7 +488,7 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
     LOGGER.error(
         "issue=%s resume scene is malformed: %s", number, error,
     )
-    marker = latest_run_marker(comments)
+    marker = latest_run_marker(comments, repo=repo)
     try:
         # A scene that cannot be recovered is an external
         # precondition the AI cannot fix by itself (the runner cannot
@@ -731,9 +728,11 @@ def report_delivery_failure(
             )
         else:
             reported_failure = _reported_failure_comment(
-                history, run_id, fingerprint,
+                history, run_id, fingerprint, repo=source_repo,
             )
-            streak = _failure_streak(history, run_id, fingerprint)
+            streak = _failure_streak(
+                history, run_id, fingerprint, repo=source_repo,
+            )
             if streak + 1 >= FAILURE_STREAK_LIMIT:
                 blocked = True
                 reason += language.text(

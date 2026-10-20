@@ -35,9 +35,12 @@ Orbi 在你的机器上运行一个带 GitHub token 的自主 coding agent。
   权限限定在运行 Runner 的账号（或谁都不给——由 Runner 的 token 执行
   merge）。
 - 交付状态是推导出来的，从不信任公开文本：恢复现场只从 trusted
-  maintainer（OWNER/MAINTAINER/MEMBER/COLLABORATOR）发布的评论读取；
-  branch/worktree 路径由配置的 repo、Issue 编号和 run id 推导——公开
-  评论永远无法把 Runner 指向任意本地路径。机器可读的记录是隐藏的
+  maintainer（对该仓有 write 权限的作者）发布的评论读取——以 GitHub
+  报告的权限为准（`collaborators/{login}/permission`：`admin` 或
+  `write`），与评论的 `authorAssociation` 无关（组织成员身份私密时
+  维护者也会读成 `CONTRIBUTOR`）；branch/worktree 路径由配置的 repo、
+  Issue 编号和 run id 推导——公开评论永远无法把 Runner 指向任意本地路径。
+  机器可读的记录是隐藏的
   `orbi:scene:v1` 带版本块（由 `src/orbi/scene.py` 渲染和解析），
   旁边的可读文本仅供人看。
 

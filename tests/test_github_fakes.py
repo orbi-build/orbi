@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+import orbi.comment_trust as comment_trust
 import orbi.github as github
 import orbi.pilot_slots as pilot_slots
 import orbi.repo_config as repo_config
@@ -268,13 +269,18 @@ def test_comments_append_in_order_and_read_back_oldest_first(fake_gh):
 
 
 def test_trusted_block_keeps_maintainer_and_bot_comments(fake_gh):
+    """Issue #1806: the block's trust comes from the author's repository
+    permission (read through the fake's permission endpoint), plus the
+    runner's own account."""
     fake_gh.add_issue(5)
+    fake_gh.add_collaborator("xqliu", "admin")
     fake_gh.comment(5, "drive-by noise", login="stranger",
                     association="NONE")
     fake_gh.comment(5, "the decision", login="xqliu", association="MEMBER")
     github.comment_issue(5, repo="owner/repo", body="runner note")
-    block = github.trusted_issue_comments_block(
+    block = comment_trust.trusted_issue_comments_block(
         github.issue_comments(5, repo="owner/repo"), limit=20,
+        repo="owner/repo",
     )
     assert "xqliu" in block and "the decision" in block
     # The runner's own comment is trusted by its authenticated login
@@ -285,12 +291,14 @@ def test_trusted_block_keeps_maintainer_and_bot_comments(fake_gh):
 
 def test_trusted_block_drops_the_oldest_over_the_limit(fake_gh):
     fake_gh.add_issue(5)
+    fake_gh.add_collaborator("xqliu", "admin")
     fake_gh.comment(5, "old decision", login="xqliu",
                     association="MEMBER")
     fake_gh.comment(5, "new decision", login="xqliu",
                     association="MEMBER")
-    block = github.trusted_issue_comments_block(
+    block = comment_trust.trusted_issue_comments_block(
         github.issue_comments(5, repo="owner/repo"), limit=1,
+        repo="owner/repo",
     )
     assert "new decision" in block
     assert "old decision" not in block

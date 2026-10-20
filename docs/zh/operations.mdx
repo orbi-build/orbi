@@ -855,9 +855,12 @@ orbi milestone set v0.5.7 --config orbi.toml
   触发。
 - 只接受该 Issue 候选列表里的标题，且版本号一律取自评论字面量——命令
   从不推断下一个版本。
-- 评论者需对该仓有 write 权限（OWNER/MEMBER/MAINTAINER/COLLABORATOR）；其他人、
-  候选外的标题、格式错误的命令行，都会在 Issue 上留下一条可读原因；
-  Runner 自己的评论永不触发。
+- 评论者需对该仓有 write 权限——以 GitHub 报告的权限为准
+  （`GET /repos/{owner}/{repo}/collaborators/{login}/permission`：
+  `admin` 或 `write`；404 视为无权限），与评论的 `authorAssociation`
+  无关：该字段取决于读取 token 能看到什么，组织成员身份私密时维护者也会
+  读成 `CONTRIBUTOR`。其他人、候选外的标题、格式错误的命令行，都会在
+  Issue 上留下一条可读原因；Runner 自己的评论永不触发。
 - 三步各自幂等：创建缺失的 Milestone（open）；该 Milestone 下没有
   release 票时按 `.github/release-ticket-template.md` 开一张
   （`version_file` 取 `version_file` 配置项，否则按仓内文件探测；两者都

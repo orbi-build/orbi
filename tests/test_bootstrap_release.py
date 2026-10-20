@@ -2650,25 +2650,30 @@ def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
     state = make_release_process_env(
         monkeypatch, leftover_labels={"ai-in-progress": [7]},
     )
+    # Issue #1806: the persisted timer is read from a comment whose
+    # author can WRITE to the repository, never from a non-writer's copy.
+    maintainer = {"login": "maintainer"}
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [
         {
-            "authorAssociation": "MEMBER",
+            "authorAssociation": "MEMBER", "author": maintainer,
             "body": "<!-- orbi:run=aaaaaaaa -->\n"
                     "Orbi release waiting for deliveries\n"
                     "wait_started: 90",
         },
         {
-            "authorAssociation": "MEMBER",
+            "authorAssociation": "MEMBER", "author": maintainer,
             "body": "<!-- orbi:run=bbbbbbbb -->\n"
                     "Orbi release waiting for deliveries\n"
                     "wait_started: 95",
         },
-        {"authorAssociation": "MEMBER", "body": "unrelated maintainer note"},
+        {"authorAssociation": "MEMBER", "author": maintainer,
+         "body": "unrelated maintainer note"},
         {
-            "authorAssociation": "MEMBER",
+            "authorAssociation": "MEMBER", "author": maintainer,
             "body": "Orbi release waiting for deliveries\nno timestamp",
         },
-        {"authorAssociation": "NONE", "body": "wait_started: 0"},
+        {"authorAssociation": "NONE", "author": {"login": "drive-by"},
+         "body": "wait_started: 0"},
         "not a comment",
     ])
     monkeypatch.setattr(runner.time, "time", lambda: 100)

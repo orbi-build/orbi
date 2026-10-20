@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 
-from orbi import github, journal, language
+from orbi import comment_trust, github, journal, language
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL, EVENT_AWAITING_MERGE, READY_LABEL,
 )
@@ -99,7 +99,7 @@ def handoff_body(
 
 
 def awaiting_merge_handoff_announced(
-    comments: list[dict], *, head: str, preflight: list[str],
+    comments: list[dict], *, repo: str, head: str, preflight: list[str],
 ) -> bool:
     """True when the latest Orbi handoff comment announced this wait.
 
@@ -110,9 +110,8 @@ def awaiting_merge_handoff_announced(
     "not announced" so the caller posts the new state once.
     """
     blocker = "\n".join(preflight)
-    for comment in reversed(comments):
-        if not github._comment_is_trusted(comment):
-            continue
+    for comment in reversed(comment_trust.trusted_comments(
+            comments, repo=repo)):
         body = comment.get("body")
         if not isinstance(body, str):
             continue
@@ -155,7 +154,7 @@ def handle_merge_handoff(
         AWAITING_MERGE_LABEL in current_labels
         and awaiting_merge_handoff_announced(
             github.issue_comments(number, repo=repo),
-            head=head, preflight=preflight,
+            repo=repo, head=head, preflight=preflight,
         )
     ):
         journal.event(

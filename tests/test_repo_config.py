@@ -709,13 +709,23 @@ def test_previous_repo_config_sha_reads_the_newest_trusted_comment(monkeypatch):
     # comment, a non-string body, a trusted comment without the field and
     # finally the trusted match. The match is the newest, so it wins after
     # the earlier candidates are skipped.
+    # Issue #1806: the trust is the author's repository permission, so a
+    # comment from a writer is read and one from a non-writer is skipped.
     comments = [
-        {"authorAssociation": "MEMBER", "body": "- repo_config: " + "c" * 40},
-        {"authorAssociation": "MEMBER", "body": "no repo config field"},
-        {"authorAssociation": "NONE", "body": "- repo_config: " + "b" * 40},
-        {"authorAssociation": "MEMBER", "body": None},
+        {"authorAssociation": "MEMBER", "author": {"login": "maintainer"},
+         "body": "- repo_config: " + "c" * 40},
+        {"authorAssociation": "MEMBER", "author": {"login": "maintainer"},
+         "body": "no repo config field"},
+        {"authorAssociation": "NONE", "author": {"login": "drive-by"},
+         "body": "- repo_config: " + "b" * 40},
+        {"authorAssociation": "MEMBER", "author": {"login": "maintainer"},
+         "body": None},
     ]
     monkeypatch.setattr(seam, "_authenticated_github_login", lambda: "orbi")
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: "none" if login == "drive-by" else "admin",
+    )
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments,
     )
     assert runner.previous_repo_config_sha(1, "owner/repo") == "c" * 40

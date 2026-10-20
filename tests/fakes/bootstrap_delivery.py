@@ -274,6 +274,10 @@ def _review_round_env(
                     "base_sha=abc123def456 run_id=a1b2c3d4)"
                 ),
                 "authorAssociation": "OWNER",
+                # Issue #1806: trust is the author's repository
+                # permission, so the scene names a writer and the
+                # permission endpoint answers below.
+                "author": {"login": "maintainer"},
             }]})
         if command[-1] == "labels":
             return json.dumps({"labels": [{"name": label}]})

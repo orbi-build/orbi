@@ -28,6 +28,26 @@ from tests.seam import seam
 ROOT = Path(__file__).resolve().parent.parent
 
 
+@pytest.fixture(autouse=True)
+def _repository_permissions(monkeypatch):
+    """Issue #1806: this layer's trusted actors are repository writers.
+
+    One place for the whole module: the authors these tests write as can
+    write to the repository, everyone else (`outsider`) cannot — the
+    permission gate never drowns the behavior under test. A test that
+    needs another answer patches the read itself (a later
+    `monkeypatch` wins).
+    """
+    grants = {"alice": "admin", "bob": "write", "orbi-build": "admin"}
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: grants.get(login, "none"),
+    )
+    monkeypatch.setattr(
+        seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+    )
+
+
 def _comment(body, *, login="alice", association="MEMBER", cid=1, url=None):
     comment = {
         "id": cid,
@@ -155,17 +175,22 @@ def test_selection_enforces_the_declared_permission():
         "/noop alpha", login="outsider", association="NONE",
     )]
     target, rejections = ticket_command.select_command(
-        comments, _noop_spec(), allowed_targets=["alpha"],
+        comments, _noop_spec(), repo="owner/repo", allowed_targets=["alpha"],
     )
     assert target is None
     assert len(rejections) == 1
     assert "no write permission" in rejections[0][2]
+    # The receipt names the repository permission it read, never the
+    # comment's authorAssociation (Issue #1806).
+    assert "repository permission='none'" in rejections[0][2]
+    assert "authorAssociation" not in rejections[0][2]
     assert rejections[0][1] == "alpha"
 
 
 def test_selection_reports_the_commands_own_validation_reason():
     target, rejections = ticket_command.select_command(
-        [_comment("/noop beta")], _noop_spec(), allowed_targets=["alpha"],
+        [_comment("/noop beta")], _noop_spec(), repo="owner/repo",
+        allowed_targets=["alpha"],
     )
     assert target is None
     assert "not an allowed target" in rejections[0][2]
@@ -182,7 +207,8 @@ def test_selection_skips_comments_carrying_the_runner_marker():
         _comment("/noop beta", cid=3),
     ]
     target, rejections = ticket_command.select_command(
-        comments, _noop_spec(), allowed_targets=["alpha", "beta"],
+        comments, _noop_spec(), repo="owner/repo",
+        allowed_targets=["alpha", "beta"],
     )
     assert rejections == []
     assert target is not None and target[1] == "beta"
@@ -191,13 +217,16 @@ def test_selection_skips_comments_carrying_the_runner_marker():
 
 def test_selection_ignores_unreadable_comments_and_unreadable_authors():
     target, rejections = ticket_command.select_command(
-        ["not-a-dict", None, {"body": "/noop alpha", "authorAssociation": "MEMBER"},
-         _comment("thanks")],
-        _noop_spec(), allowed_targets=["alpha"],
+        ["not-a-dict", None, {"body": "/noop alpha"},
+         _comment("/noop beta"), _comment("thanks")],
+        _noop_spec(), repo="owner/repo", allowed_targets=["alpha", "beta"],
     )
-    assert target is not None
-    assert target[1] == "alpha"
-    assert rejections == []
+    # An entry that is not a comment is ignored; a comment whose author
+    # cannot be read has no permission to check, so its command is
+    # rejected with a receipt instead of being applied.
+    assert target is not None and target[1] == "beta"
+    assert len(rejections) == 1
+    assert "no write permission" in rejections[0][2]
 
 
 # --- identity helpers -----------------------------------------------------

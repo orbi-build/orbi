@@ -52,6 +52,25 @@ TRUSTED_SCENE_RECORD = Scene(
     pr_url="https://github.com/o/r/pull/9",
 )
 
+@pytest.fixture(autouse=True)
+def _repository_permissions(monkeypatch):
+    """Issue #1806: the trusted comments in these scenarios are written
+    by a repository maintainer (`maintainer`); a non-writer names an
+    outsider. The read is answered here so each inline `gh` fake keeps
+    modelling only the command it exists for.
+    """
+    monkeypatch.setattr(
+        runner_seam, "repository_permission",
+        lambda login, *, repo: (
+            "none" if login in {"drive-by", "stranger", "outsider"}
+            else "admin"
+        ),
+    )
+    monkeypatch.setattr(
+        runner_seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+    )
+
+
 
 @pytest.mark.parametrize(
     (
@@ -185,6 +204,8 @@ TRUSTED_SCENE_RECORD = Scene(
         ("my-queue", None, None, frozenset(), DeliveryScene.NOT_CLAIMABLE),
     ],
 )
+
+
 def test_classify_decision_table(labels, scene, pr_state, markers, expected):
     assert classify(
         labels, scene, pr_state,
@@ -403,7 +424,6 @@ def test_classify_human_review_hold():
     ) is DeliveryScene.RESUME_REVIEW
 
 
-
 def test_body_markers():
     """The marker vocabulary is the triage workflow's hidden external-PR
     marker (Issue #608); a missing or non-string body carries none."""
@@ -466,7 +486,8 @@ def _trusted_scene_comment() -> dict:
         run_id="a1b2c3d4", base_branch="main", base_sha="abc123def456",
         pr_url="https://github.com/owner/repo/pull/9",
     ))
-    return {"body": body, "authorAssociation": "OWNER"}
+    return {"body": body, "authorAssociation": "OWNER",
+            "author": {"login": "maintainer"}}
 
 
 def test_pick_resumable_delivery_skips_candidate_relabelled_blocked(

@@ -24,8 +24,11 @@ from pathlib import Path
 from orbi import config as config_domain
 from orbi import language
 from orbi.delivery_scene import RunContext
-from orbi.github import (
+from orbi.comment_trust import (
     _comment_is_trusted,
+    trusted_issue_comments_block,
+)
+from orbi.github import (
     comment_issue,
     issue_comments,
     issue_view,
@@ -33,7 +36,6 @@ from orbi.github import (
     pr_comments,
     pr_review_comments,
     pr_reviews,
-    trusted_issue_comments_block,
 )
 from orbi.gitops import base_sync_lock_path
 from orbi.journal import LOGGER, event, issue_context, run_command
@@ -513,7 +515,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
     if "{{ISSUE_COMMENTS}}" in template:
         prompt_values["ISSUE_COMMENTS"] = trusted_issue_comments_block(
             issue_comments(int(issue["number"]), repo=source_repo),
-            config.issue_comments_limit,
+            config.issue_comments_limit, repo=source_repo,
         )
     # The comment-facing natural-language fields this session produces
     # follow the run's bound message language (Issue #1660). The
@@ -593,7 +595,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
             steering_seen.add(identifier)
             if str(comment.get("createdAt") or "") < started_at:
                 continue
-            if _comment_is_trusted(comment):
+            if _comment_is_trusted(comment, repo=source_repo):
                 item = dict(comment)
                 item["issue"] = issue["number"]
                 fresh.append(item)
@@ -792,7 +794,7 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
                 source_repo, pr["number"],
             )
         review_values["ISSUE_COMMENTS"] = trusted_issue_comments_block(
-            comments, config.issue_comments_limit,
+            comments, config.issue_comments_limit, repo=source_repo,
         )
     # Substitute the body last so placeholder-shaped text in the body remains
     # verbatim instead of being recursively interpreted as a prompt variable.
