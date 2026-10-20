@@ -22,13 +22,31 @@ from tests.test_progress import make_stateful_publisher
 
 from seam import seam
 
+@pytest.fixture(autouse=True)
+def _repository_permissions(monkeypatch):
+    """Issue #1806: the trusted comments here are written by a repository
+    maintainer, so the permission read answers `admin`; a non-writer
+    names an outsider, and the runner's own account is pinned to a bot no
+    comment names."""
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: (
+            "none" if login in {"drive-by", "stranger", "outsider"}
+            else "admin"
+        ),
+    )
+    monkeypatch.setattr(
+        seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+    )
+
+
 RUN_ID = "abc12345"
 MARKER = "<!-- orbi:run=abc12345 -->"
 KIND_STARTED = "<!-- orbi:comment=started -->"
 KIND_FAILURE = "<!-- orbi:comment=failure -->"
 KIND_ROUND = "<!-- orbi:comment=review-round -->"
 KIND_MERGED = "<!-- orbi:comment=merged -->"
-TRUSTED = {"authorAssociation": "MEMBER"}
+TRUSTED = {"author": {"login": "maintainer"}}
 PR_URL = "https://github.com/owner/repo/pull/42"
 
 
@@ -171,10 +189,10 @@ def test_review_rounds_use_the_run_and_pr_identity():
     current = {**TRUSTED, "body": _round_body(1)}
     comments = [old_attempt, other_pr, current]
     assert review_rounds_so_far(
-        comments, run_id=RUN_ID, pr_number=42,
+        comments, run_id=RUN_ID, pr_number=42, repo="owner/repo",
     ) == 1
     assert review_rounds_so_far(
-        comments, run_id=RUN_ID, pr_number=99,
+        comments, run_id=RUN_ID, pr_number=99, repo="owner/repo",
     ) == 1
 
 
@@ -197,7 +215,7 @@ def test_current_review_round_reads_the_current_pr_scene_not_the_history():
     ]
     new_pr = {**TRUSTED, "body": _opened_pr_body(200, 0)}
     comments = old_rounds + [new_pr]
-    assert review_rounds_so_far(comments) == 5
+    assert review_rounds_so_far(comments, repo="owner/repo",) == 5
     assert current_review_round(comments, number=42, repo="owner/repo") == 1
 
 
@@ -326,7 +344,7 @@ def test_only_a_completed_review_round_kind_with_a_valid_scene_counts():
         # A historical English comment with no kind still counts.
         {**TRUSTED, "body": f"{MARKER}\nOrbi review round 7 for PR #42: legacy"},
     ]
-    assert review_rounds_so_far(comments, run_id=RUN_ID, pr_number=42) == 3
+    assert review_rounds_so_far(comments, run_id=RUN_ID, pr_number=42, repo="owner/repo",) == 3
 
 
 def test_untrusted_history_cannot_change_the_review_budget():
@@ -334,27 +352,27 @@ def test_untrusted_history_cannot_change_the_review_budget():
         {"authorAssociation": "NONE", "body": _round_body(i)}
         for i in (1, 2, 3)
     ]
-    assert review_rounds_so_far(comments, run_id=RUN_ID, pr_number=42) == 0
+    assert review_rounds_so_far(comments, run_id=RUN_ID, pr_number=42, repo="owner/repo",) == 0
 
 
 def test_repeated_findings_identity_uses_kind_and_scene():
     finding = {"level": "Major", "location": "comments",
                "note": "repeat", "fix": "repair"}
     first = review_round_comment_body(
-        MARKER, 1, 42, 0, 1, [finding], _round_scene(1), language_code="en",
+        MARKER, 1, 42, 0, 1, [finding], _round_scene(1), language_code="en", repo="owner/repo",
     )
     second = review_round_comment_body(
         MARKER, 2, 42, 0, 1, [finding], _round_scene(2),
-        previous_comments=[{**TRUSTED, "body": first}], language_code="en",
+        previous_comments=[{**TRUSTED, "body": first}], language_code="en", repo="owner/repo",
     )
     assert "Findings are the same as round 1." in second
     # A gate failure reusing the same findings/scene is not the predecessor.
     gate_failure = review_round_comment_body(
-        MARKER, 1, 42, 0, 1, [finding], _round_scene(1), kind="failure", language_code="en",
+        MARKER, 1, 42, 0, 1, [finding], _round_scene(1), kind="failure", language_code="en", repo="owner/repo",
     )
     third = review_round_comment_body(
         MARKER, 2, 42, 0, 1, [finding], _round_scene(2),
-        previous_comments=[{**TRUSTED, "body": gate_failure}], language_code="en",
+        previous_comments=[{**TRUSTED, "body": gate_failure}], language_code="en", repo="owner/repo",
     )
     assert "Findings are the same" not in third
 
@@ -365,44 +383,50 @@ def test_same_findings_round_reads_the_canonical_identity_and_fallbacks():
     base = {"pr_number": 42, "previous_round": 1, "rendered": rendered}
     # A non-string body is never a match.
     assert same_findings_round(
-        {**TRUSTED, "body": None}, marker=MARKER, **base,
+        {**TRUSTED, "body": None}, marker=MARKER, **base, repo="owner/repo",
     ) is False
     # The identical findings must appear in the predecessor.
     assert same_findings_round(
         {**TRUSTED, "body": f"{MARKER}\nOrbi review round 1 for PR #42:\nother"},
-        marker=MARKER, **base,
+        marker=MARKER, **base, repo="owner/repo",
     ) is False
     # A historical English comment with no kind keeps the fallback.
     assert same_findings_round(
-        {**TRUSTED, "body": legacy}, marker=MARKER, **base,
+        {**TRUSTED, "body": legacy}, marker=MARKER, **base, repo="owner/repo",
     ) is True
+    # A body that matches but whose author cannot write is not the
+    # predecessor (Issue #1806: identity alone never trusts a comment).
+    assert same_findings_round(
+        {"author": {"login": "drive-by"}, "body": legacy},
+        marker=MARKER, **base, repo="owner/repo",
+    ) is False
     assert same_findings_round(
         {**TRUSTED, "body": legacy.replace("round 1", "round 2")},
-        marker=MARKER, **base,
+        marker=MARKER, **base, repo="owner/repo",
     ) is False
     # An empty marker (no run id) still reads the fallback.
     assert same_findings_round(
-        {**TRUSTED, "body": legacy}, marker="", **base,
+        {**TRUSTED, "body": legacy}, marker="", **base, repo="owner/repo",
     ) is True
     # A different run marker never matches.
     assert same_findings_round(
-        {**TRUSTED, "body": legacy}, marker="<!-- orbi:run=deadbeef -->", **base,
+        {**TRUSTED, "body": legacy}, marker="<!-- orbi:run=deadbeef -->", **base, repo="owner/repo",
     ) is False
     # A canonical kind whose scene is malformed does not match.
     malformed = (
         f"{MARKER}\n{KIND_ROUND}\nOrbi review round 1 for PR #42:\n"
         f"{rendered}\n<!-- orbi:scene:v1 {{broken -->"
     )
-    assert same_findings_round({**TRUSTED, "body": malformed}, marker=MARKER, **base) is False
+    assert same_findings_round({**TRUSTED, "body": malformed}, marker=MARKER, **base, repo="owner/repo",) is False
     # A canonical kind with no scene does not match.
     no_scene = f"{MARKER}\n{KIND_ROUND}\nOrbi review round 1 for PR #42:\n{rendered}"
-    assert same_findings_round({**TRUSTED, "body": no_scene}, marker=MARKER, **base) is False
+    assert same_findings_round({**TRUSTED, "body": no_scene}, marker=MARKER, **base, repo="owner/repo",) is False
     # A canonical scene for another round does not match.
     other_round = no_scene + "\n" + _round_scene(2)
-    assert same_findings_round({**TRUSTED, "body": other_round}, marker=MARKER, **base) is False
+    assert same_findings_round({**TRUSTED, "body": other_round}, marker=MARKER, **base, repo="owner/repo",) is False
     # A canonical scene for another PR does not match.
     other_pr = no_scene + "\n" + _round_scene(1, pr_number=99)
-    assert same_findings_round({**TRUSTED, "body": other_pr}, marker=MARKER, **base) is False
+    assert same_findings_round({**TRUSTED, "body": other_pr}, marker=MARKER, **base, repo="owner/repo",) is False
     # An unparseable PR URL in the scene does not match.
     bad_pr = scene.render(scene.Scene(
         run_id=RUN_ID, base_branch="main", base_sha="abc",
@@ -410,7 +434,7 @@ def test_same_findings_round_reads_the_canonical_identity_and_fallbacks():
         review_round=1,
     ))
     assert same_findings_round(
-        {**TRUSTED, "body": no_scene + "\n" + bad_pr}, marker=MARKER, **base,
+        {**TRUSTED, "body": no_scene + "\n" + bad_pr}, marker=MARKER, **base, repo="owner/repo",
     ) is False
 
 

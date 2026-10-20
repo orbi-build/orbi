@@ -23,10 +23,11 @@ Only the report reader tolerates a failed recovery read (Issue #79); the
 budget's read fails fast, so a rate-limited label history is a
 recoverable failure, never a hidden "exhausted" verdict.
 
-Imports pull in `github` (`_comment_is_trusted`, `_pr_number`,
-`run_gh_read_command`), `delivery_labels` (the recovery transition) and
-`progress` (`run_marker`); nothing here imports `runner` back
-(Article 3.3). The module is small and pure apart from those helpers.
+Imports pull in `comment_trust` (which comments count), `github`
+(`_pr_number`, `run_gh_read_command`), `delivery_labels` (the recovery
+transition) and `progress` (`run_marker`); nothing here imports
+`runner` back (Article 3.3). The module is small and pure apart from
+those helpers.
 """
 from __future__ import annotations
 
@@ -41,8 +42,8 @@ from orbi.comment_kind import (
     comment_kind_marker,
 )
 from orbi.delivery_labels import BLOCKED_LABEL, FIX_NEEDED_LABEL
+from orbi.comment_trust import _comment_is_trusted, trusted_comments
 from orbi.github import (
-    _comment_is_trusted,
     _pr_number,
     run_gh_read_command,
 )
@@ -96,8 +97,8 @@ def _scene_matches_pr(parsed: scene.Scene, pr_number: int) -> bool:
 
 
 def same_findings_round(
-    comment: dict, *, marker: str, pr_number: int, previous_round: int,
-    rendered: str,
+    comment: dict, *, repo: str, marker: str, pr_number: int,
+    previous_round: int, rendered: str,
 ) -> bool:
     """True when one trusted comment is this round's identical predecessor.
 
@@ -108,14 +109,14 @@ def same_findings_round(
     never falls back to its prose. A present-but-invalid scene does not
     match.
     """
-    if not _comment_is_trusted(comment):
-        return False
     body = comment.get("body")
     if not isinstance(body, str):
         return False
     if marker and not body.startswith(marker):
         return False
     if rendered not in body:
+        return False
+    if not _comment_is_trusted(comment, repo=repo):
         return False
     kind = comment_kind(body)
     if kind is None:
@@ -136,7 +137,7 @@ def same_findings_round(
 
 def review_round_comment_body(
     marker: str, round: int, pr_number: int, blockers: int, majors: int,
-    findings: list[dict], scene_block: str, *,
+    findings: list[dict], scene_block: str, *, repo: str,
     previous_comments: list[dict] | None = None,
     messages: list[str] | None = None,
     heading: str | None = None,
@@ -157,7 +158,7 @@ def review_round_comment_body(
     if rendered and previous_comments:
         for comment in previous_comments:
             if same_findings_round(
-                comment, marker=marker, pr_number=pr_number,
+                comment, repo=repo, marker=marker, pr_number=pr_number,
                 previous_round=round - 1, rendered=rendered,
             ):
                 same_as = round - 1
@@ -279,7 +280,7 @@ def current_review_round(comments: list[dict], *, number: int,
     (`review_recovery_read_failed`) and the scene's own count stands.
     """
     try:
-        resume_scene = run_state.resume_scene(comments)
+        resume_scene = run_state.resume_scene(comments, repo=repo)
     except (scene.SceneError, scene.SceneMissingError):
         return 0
     completed = int(resume_scene["review_round"])
@@ -296,7 +297,7 @@ def current_review_round(comments: list[dict], *, number: int,
 
 
 def review_rounds_so_far(
-    comments: list[dict], *, after: str | None = None,
+    comments: list[dict], *, repo: str, after: str | None = None,
     run_id: str | None = None, pr_number: int | None = None,
 ) -> int:
     """Count trusted review rounds for the selected delivery identity.
@@ -322,9 +323,7 @@ def review_rounds_so_far(
     """
     rounds = 0
     marker = run_marker(run_id) if run_id is not None else None
-    for comment in comments:
-        if not _comment_is_trusted(comment):
-            continue
+    for comment in trusted_comments(comments, repo=repo):
         if after is not None and comment.get("createdAt", "") <= after:
             continue
         body = comment.get("body")

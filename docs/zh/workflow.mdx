@@ -50,9 +50,9 @@ ai-ready                任务被派发（orbi add，或人工加标签）
   -> ai-in-progress     Runner 领取：加标签，从冻结的 origin/<base> SHA
                         创建 worktree，启动 Pi session（prompt 携带
                         Issue body 加受信任评论时间线 {{ISSUE_COMMENTS}}，
-                        Issue #745：只收 OWNER/MAINTAINER/MEMBER/
-                        COLLABORATOR 评论，按 issue_comments_limit 截断
-                        并显式标明省略条数）
+                        Issue #745/#1806：只收对该仓有 write 权限的作者
+                        的评论，按 issue_comments_limit 截断并显式标明
+                        省略条数）
   -> ai-pr-opened       PR 验收通过（base 新鲜度、run marker、Fixes #N）；
                         该 tick 随即结束并释放槽位（Issue #788）——
                         交付等待它的评审 tick
@@ -120,9 +120,12 @@ ai-ready                任务被派发（orbi add，或人工加标签）
 不会再重启这次交付，journal 会记录 `steering_limit_reached`。让当前交付完成，
 再把修订后的范围放入后续交付。
 
-只有受信任的仓库角色——OWNER、MAINTAINER、MEMBER 或 COLLABORATOR——的
-评论可以 steering。公开评论者的评论会按设计被忽略，因为允许任意评论者
-控制交付会暴露 prompt injection 入口。初始受信任评论时间线受
+只有对该仓有 write 权限的作者评论可以 steering——以 GitHub 报告的权限
+为准（`collaborators/{login}/permission` 返回 `admin` 或 `write`），与
+评论的 `authorAssociation` 无关：该字段取决于读取 token 能看到什么，
+组织成员身份私密时维护者会被读成 `CONTRIBUTOR`，而 `MEMBER`、
+`COLLABORATOR` 也不等于 write 权限。公开评论者的评论会按设计被忽略，
+因为允许任意评论者控制交付会暴露 prompt injection 入口。初始受信任评论时间线受
 `issue_comments_limit` 限制（默认 200 条）：更早的评论会被丢弃，注入的上下文
 会明确说明省略了多少条。
 

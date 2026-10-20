@@ -24,9 +24,9 @@ from orbi.delivery_labels import (
 from orbi.delivery_scene import (
     DeliveryScene, _issue_label_set, body_markers, classify,
 )
+from orbi.comment_trust import latest_run_marker
 from orbi.github import (
-    issue_comments, latest_run_marker, list_issues, open_pr_for_branch,
-    pr_delivery_rollup,
+    issue_comments, list_issues, open_pr_for_branch, pr_delivery_rollup,
 )
 from orbi.gitops import task_branch
 from orbi.journal import LOGGER, event
@@ -54,7 +54,7 @@ class ResumeHooks(NamedTuple):
     per-repository `language_code` (Issue #1687): the claim knows the
     merged repository config before the first comment is written.
     """
-    resume_scene: Callable[[list[dict]], dict]
+    resume_scene: Callable[..., dict]
     route_external_pr_ticket: Callable[..., bool]
     block_scene_failure: Callable[..., None]
     recover_missing_pr_scene: Callable[..., dict | None]
@@ -225,7 +225,7 @@ def _pick_opened_pr_delivery(
             continue
         comments = issue_comments(int(issue["number"]), repo=repo)
         try:
-            found = hooks.resume_scene(comments)
+            found = hooks.resume_scene(comments, repo=repo)
         except scene.SceneError as exc:
             # A trusted scene comment exists but is corrupted:
             # probe the #726 external route first; otherwise this is the
@@ -292,7 +292,7 @@ def _pick_opened_pr_delivery(
             else:
                 number = int(issue["number"])
                 LOGGER.error("issue=%s resume scene is missing: %s", number, exc)
-                marker = latest_run_marker(comments)
+                marker = latest_run_marker(comments, repo=repo)
                 try:
                     post_blocked_comment(
                         number, repo=repo,

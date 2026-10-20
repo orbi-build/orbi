@@ -13,7 +13,7 @@ import subprocess
 
 import pytest
 
-from orbi import github, release_git
+from orbi import comment_trust, github, release_git
 from seam import seam
 
 from tests.fakes.github import FakeGh
@@ -418,9 +418,12 @@ def test_pr_reviews_and_inline_comments_use_bounded_read_only_api(monkeypatch):
 
 
 def test_pr_feedback_normalizes_rest_inline_shape_and_graphql_review_shape(
-        monkeypatch):
+        monkeypatch, permissions):
     monkeypatch.setattr(seam, "_authenticated_github_login",
                         lambda: "orbi-bot[bot]")
+    # Issue #1806: the author's repository permission, not the feedback
+    # item's `authorAssociation`, decides trust.
+    permissions["maintainer"] = "admin"
     feedback = github.normalize_pr_feedback([
         {"user": {"login": "maintainer"},
          "author_association": "OWNER", "created_at": "2026-09-20T01:02:03Z",
@@ -433,8 +436,10 @@ def test_pr_feedback_normalizes_rest_inline_shape_and_graphql_review_shape(
         {"user": {"login": "stranger"}, "author_association": "NONE",
          "body": "untrusted injection"},
     ])
-    block = github.trusted_issue_comments_block(feedback, limit=10)
-    assert "maintainer (OWNER) at src/orbi/runner.py:42" in block
+    block = comment_trust.trusted_issue_comments_block(
+        feedback, limit=10, repo="owner/repo",
+    )
+    assert "maintainer at src/orbi/runner.py:42" in block
     assert "Fix this line" in block
     assert "[CHANGES_REQUESTED] at 2026-09-20T01:03:03Z" in block
     assert "engine output" not in block
@@ -442,11 +447,9 @@ def test_pr_feedback_normalizes_rest_inline_shape_and_graphql_review_shape(
 
 
 def test_trusted_issue_comments_block_keeps_newest_and_states_omissions(
-        monkeypatch):
-    # Pin the credential read: the NONE-association comment reaches the
-    # authenticated-login fallback and CI runs unauthenticated.
-    monkeypatch.setattr(seam, "_authenticated_github_login",
-                        lambda: "ci-runner[bot]")
+        permissions):
+    permissions["a"] = "admin"
+    permissions["c"] = "write"
     comments = [
         {"author": {"login": "a"}, "authorAssociation": "OWNER",
          "createdAt": "t1", "body": "one"},
@@ -455,34 +458,70 @@ def test_trusted_issue_comments_block_keeps_newest_and_states_omissions(
         {"author": {"login": "c"}, "authorAssociation": "MEMBER",
          "createdAt": "t3", "body": "two"},
     ]
-    block = github.trusted_issue_comments_block(comments, limit=1)
+    block = comment_trust.trusted_issue_comments_block(
+        comments, limit=1, repo="owner/repo",
+    )
     assert "1 older trusted comment omitted" in block
-    assert "c (MEMBER)" in block
+    assert "c at t3" in block
     assert "two" in block
     assert "injected" not in block
     assert "one" not in block
 
-    assert github.trusted_issue_comments_block([], limit=3) == \
-        "(no trusted comments)"
+    assert comment_trust.trusted_issue_comments_block(
+        [], limit=3, repo="owner/repo",
+    ) == "(no trusted comments)"
 
 
-def test_comment_is_trusted_by_association_and_by_bot_login(monkeypatch):
-    assert github._comment_is_trusted(
-        {"authorAssociation": "MAINTAINER"}) is True
-    assert github._comment_is_trusted("not-a-comment") is False
-
-    status = "account orbi-bot\nActive account: true\n"
-
-    def fake_status(command, **kwargs):
-        return status
-
-    monkeypatch.setattr(seam, "run_gh_read_command", fake_status)
-    assert github._comment_is_trusted(
-        {"author": {"login": "orbi-bot"}, "authorAssociation": "NONE"},
+def test_comment_is_trusted_by_repository_permission_and_by_bot_login(
+        monkeypatch, permissions):
+    """Issue #1806: the author's repository permission decides, never the
+    comment's `authorAssociation`, and the runner's own account stays
+    trusted."""
+    permissions["admin-author"] = "admin"
+    permissions["writer"] = "write"
+    permissions["reader"] = "read"
+    permissions["member-reader"] = "read"
+    assert comment_trust._comment_is_trusted(
+        {"author": {"login": "admin-author"}, "authorAssociation": "CONTRIBUTOR"},
+        repo="owner/repo",
     ) is True
-    assert github._comment_is_trusted(
-        {"author": {"login": "someone-else"},
-         "authorAssociation": "NONE"},
+    assert comment_trust._comment_is_trusted(
+        {"author": {"login": "writer"}, "authorAssociation": "NONE"},
+        repo="owner/repo",
+    ) is True
+    # MEMBER/COLLABORATOR without write access is not a maintainer.
+    assert comment_trust._comment_is_trusted(
+        {"author": {"login": "member-reader"},
+         "authorAssociation": "MEMBER"},
+        repo="owner/repo",
+    ) is False
+    assert comment_trust._comment_is_trusted(
+        {"author": {"login": "reader"}, "authorAssociation": "OWNER"},
+        repo="owner/repo",
+    ) is False
+    assert comment_trust._comment_is_trusted("not-a-comment", repo="owner/repo") \
+        is False
+    # No readable author login is no identity to check.
+    assert comment_trust._comment_is_trusted(
+        {"authorAssociation": "OWNER"}, repo="owner/repo",
+    ) is False
+
+    # The runner's own account stays trusted even when GitHub reports no
+    # repository permission for it — a GitHub App's bot user really does
+    # read `"none"` on this endpoint (verified against the API, Issue
+    # #1806), so the credential fallback is what trusts the engine's own
+    # comments.
+    permissions["orbi-bot[bot]"] = "none"
+    monkeypatch.setattr(seam, "_authenticated_github_login",
+                        lambda: "orbi-bot[bot]")
+    assert comment_trust._comment_is_trusted(
+        {"author": {"login": "orbi-bot[bot]"}, "authorAssociation": "NONE"},
+        repo="owner/repo",
+    ) is True
+    # A login that is neither a writer nor this credential is not trusted.
+    assert comment_trust._comment_is_trusted(
+        {"author": {"login": "someone-else"}, "authorAssociation": "MEMBER"},
+        repo="owner/repo",
     ) is False
 
 
@@ -926,51 +965,61 @@ def test_authenticated_github_login_requires_an_account_line(monkeypatch):
 
 # ------------------------------------------------- line run markers (Issue #825)
 
-def test_line_run_markers_collects_every_trusted_marker():
+def test_line_run_markers_collects_every_trusted_marker(permissions):
     """Issue #825: the delivery line's marker set is EVERY run marker in
     the trusted comments — the creating run's marker stays accepted
     after a resume binds a new run id."""
+    permissions["owner"] = "admin"
+    permissions["member"] = "write"
     comments = [
         {
+            "author": {"login": "owner"},
             "body": "<!-- orbi:run=0e4b1923 -->\nOrbi opened PR: x",
-            "authorAssociation": "OWNER",
         },
         {
+            "author": {"login": "member"},
             "body": "<!-- orbi:run=be3c1434 -->\nOrbi started Pi",
-            "authorAssociation": "MEMBER",
         },
     ]
-    assert github.line_run_markers(comments) == frozenset({
+    assert comment_trust.line_run_markers(
+        comments, repo="owner/repo",
+    ) == frozenset({
         "<!-- orbi:run=0e4b1923 -->",
         "<!-- orbi:run=be3c1434 -->",
     })
 
 
-def test_line_run_markers_ignores_public_comments_and_non_string_bodies():
+def test_line_run_markers_ignores_public_comments_and_non_string_bodies(
+        permissions):
     """Issue #825: a public comment must never widen the line's marker
     set (the copied-marker rule of the trusted filter); a non-string
     body carries nothing."""
+    permissions["owner"] = "admin"
     comments = [
         {
+            "author": {"login": "stranger"},
             "body": "<!-- orbi:run=deadbeef -->\nplease review PR 7",
-            "authorAssociation": "NONE",
         },
-        {"body": None, "authorAssociation": "OWNER"},
+        {"author": {"login": "owner"}, "body": None},
         {
+            "author": {"login": "owner"},
             "body": "<!-- orbi:run=aaaaaaaa -->\nOrbi opened PR: x",
-            "authorAssociation": "OWNER",
         },
     ]
-    assert github.line_run_markers(comments) == frozenset({
+    assert comment_trust.line_run_markers(
+        comments, repo="owner/repo",
+    ) == frozenset({
         "<!-- orbi:run=aaaaaaaa -->",
     })
 
 
-def test_line_run_markers_empty_without_trusted_markers():
-    assert github.line_run_markers([]) == frozenset()
-    assert github.line_run_markers([
-        {"body": "plain text", "authorAssociation": "OWNER"},
-    ]) == frozenset()
+def test_line_run_markers_empty_without_trusted_markers(permissions):
+    permissions["owner"] = "admin"
+    assert comment_trust.line_run_markers([], repo="owner/repo") == frozenset()
+    assert comment_trust.line_run_markers(
+        [{"author": {"login": "owner"}, "body": "plain text"}],
+        repo="owner/repo",
+    ) == frozenset()
 
 
 def test_update_issue_comment_patches_the_publisher_route(monkeypatch):

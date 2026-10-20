@@ -202,11 +202,11 @@ from orbi.merge_handoff import (
     is_maintainer_actionable,
 )
 from orbi.cli_source import CliInstallError, refresh_cli_install
+from orbi.comment_trust import line_run_markers, trusted_comments
 from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
     run_gh_read_command,
     run_gh_write_command,
-    _comment_is_trusted,
     _pr_number,
     _verify_epic_complete,
     apply_label_patch,
@@ -222,7 +222,6 @@ from orbi.github import (
     issue_labels,
     issue_priority,
     issue_view,
-    line_run_markers,
     list_issues,
     list_milestones,
     milestone_issues,
@@ -527,9 +526,7 @@ def previous_repo_config_sha(number: int, source_repo: str) -> str | None:
             issue=number,
         )
         return None
-    for comment in reversed(comments):
-        if not _comment_is_trusted(comment):
-            continue
+    for comment in reversed(trusted_comments(comments, repo=source_repo)):
         body = comment.get("body")
         if not isinstance(body, str):
             continue
@@ -1444,7 +1441,9 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
         # checks above still pin the PR.
         line_repo = pr_repo or ctx.source_repo
         line_markers = (
-            line_run_markers(issue_comments(issue, repo=line_repo))
+            line_run_markers(
+                issue_comments(issue, repo=line_repo), repo=line_repo,
+            )
             if isinstance(body, str) and line_repo else frozenset()
         )
         if not isinstance(body, str) or not any(

@@ -36,7 +36,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from orbi import language
-from orbi.github import TRUSTED_COMMENT_ASSOCIATIONS, issue_comments
+from orbi.github import WRITE_PERMISSIONS, issue_comments, repository_permission
 from orbi.journal import event, run_command
 
 
@@ -67,11 +67,13 @@ def is_runner_comment(comment: object) -> bool:
     return isinstance(body, str) and RUNNER_COMMENT_MARKER in body
 
 
-# The permission levels a CommandSpec may declare, level -> the comment
-# author associations the dispatcher accepts. Declarative: the handler
-# never checks a caller itself, so the help text and the gate cannot drift.
+# The permission levels a CommandSpec may declare, level -> the repository
+# permissions the dispatcher accepts (Issue #1806: the permission GitHub
+# reports for the author, never the comment's `authorAssociation`).
+# Declarative: the handler never checks a caller itself, so the help text
+# and the gate cannot drift.
 PERMISSION_LEVELS: dict[str, frozenset[str]] = {
-    "write": TRUSTED_COMMENT_ASSOCIATIONS,
+    "write": WRITE_PERMISSIONS,
 }
 
 
@@ -215,13 +217,30 @@ def _argument_label(spec: CommandSpec, language_code: str) -> str:
     return language.text(language_code, spec.argument_label)
 
 
+def _author_permission(
+    comment: dict, *, repo: str, cache: dict[str, str],
+) -> str:
+    """The repository permission of the comment's author (Issue #1806).
+
+    The one GitHub read `select_command` makes: ``cache`` keeps it to one
+    read per author for the whole ticket. An unreadable author has no
+    permission ("none"), while a failed read is a GitHub read failure and
+    propagates — never a "no permission" receipt.
+    """
+    login = comment_author_login(comment)
+    if login is None:
+        return "none"
+    if login not in cache:
+        cache[login] = repository_permission(login, repo=repo)
+    return cache[login]
+
+
 def _permission_reason(
-    comment: dict, spec: CommandSpec, language_code: str,
+    permission: str, spec: CommandSpec, language_code: str,
 ) -> str:
     return language.text(
         language_code, "command.reason_no_permission",
-        permission=spec.permission,
-        association=comment.get("authorAssociation"),
+        permission=spec.permission, observed=permission,
     )
 
 
@@ -233,19 +252,21 @@ def _malformed_reason(spec: CommandSpec, language_code: str) -> str:
 
 
 def select_command(
-    comments: list[dict], spec: CommandSpec, **context: object,
+    comments: list[dict], spec: CommandSpec, *, repo: str, **context: object,
 ) -> tuple[tuple[dict, str] | None, list[tuple[dict, str | None, str]]]:
     """Resolve the ticket's occurrences of ``spec`` to one executable command.
 
-    Returns `(target, rejections)`. `target` is the LAST occurrence when it
-    is authorized, well-formed and accepted by the command's ``validate``
-    callback — the last word wins, so an operator can correct a typo by
-    commenting again. Every rejected occurrence is returned with a readable
-    reason so the caller can leave one receipt each. A comment carrying a
-    hidden ``<!-- orbi`` Runner marker is skipped silently: the bot must
-    never trigger itself off its own output, and a self-hosted maintainer
-    whose own account is the Runner is evaluated like anyone else
-    (Issue #1460).
+    Returns `(target, rejections)`. `target` is the LAST occurrence when
+    it is authorized — its author's REPOSITORY PERMISSION allows the
+    command's level (Issue #1806; the comment's ``authorAssociation`` is
+    never read) — well-formed and accepted by the command's ``validate``
+    callback: the last word wins, so an operator can correct a typo by
+    commenting again. Every rejected occurrence is returned with a
+    readable reason so the caller can leave one receipt each. A comment
+    carrying a hidden ``<!-- orbi`` Runner marker is skipped silently:
+    the bot must never trigger itself off its own output, and a
+    self-hosted maintainer whose own account is the Runner is evaluated
+    like anyone else (Issue #1460).
     """
     language_code = _language_code(context)
     occurrences: list[tuple[dict, str | None]] = []
@@ -256,12 +277,14 @@ def select_command(
             occurrences.append((comment, argument))
     rejections: list[tuple[dict, str | None, str]] = []
     target: tuple[dict, str] | None = None
+    permissions: dict[str, str] = {}
     for comment, argument in occurrences:
-        if comment.get("authorAssociation") not in PERMISSION_LEVELS[spec.permission]:
+        permission = _author_permission(comment, repo=repo, cache=permissions)
+        if permission not in PERMISSION_LEVELS[spec.permission]:
             target = None
             rejections.append((
                 comment, argument,
-                _permission_reason(comment, spec, language_code),
+                _permission_reason(permission, spec, language_code),
             ))
             continue
         if argument is None:
@@ -355,7 +378,9 @@ def process_commands(
     language_code = _language_code(context)
     comments = issue_comments(issue_number, repo=repo)
     for spec in commands:
-        target, rejections = select_command(comments, spec, **context)
+        target, rejections = select_command(
+            comments, spec, repo=repo, **context,
+        )
         for comment, argument, reason in rejections:
             _post_command_receipt(
                 repo, issue_number, comments, comment, spec=spec,

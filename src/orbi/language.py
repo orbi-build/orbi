@@ -505,9 +505,9 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "command.comment": ("- command comment: {ref}", "- 命令评论：{ref}"),
     "command.reason_no_permission": (
         "the command author has no {permission} permission on this "
-        "repository (authorAssociation={association!r})",
+        "repository (repository permission={observed!r})",
         "命令作者在本仓库没有 {permission} 权限"
-        "（authorAssociation={association!r}）",
+        "（仓库权限={observed!r}）",
     ),
     "command.reason_malformed": (
         "the command line is malformed: write exactly one "

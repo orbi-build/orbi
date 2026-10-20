@@ -49,6 +49,30 @@ from seam import resume_deps, seam
 from orbi.delivery_labels import EVENT_BLOCKED
 from orbi.delivery_scene import RunContext
 
+@pytest.fixture(autouse=True)
+def _repository_permissions(monkeypatch):
+    """Issue #1806: the scene comments in these scenarios are written by
+    repository maintainers.
+
+    The permission read is the one GitHub read behind a trusted comment;
+    it is answered here so the inline `gh` fakes of each scenario keep
+    modelling only the command they exist for. A scenario that needs an
+    outsider's comment patches the read itself (a later `monkeypatch`
+    wins).
+    """
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: (
+            "none" if login in {"drive-by", "stranger"} else "admin"
+        ),
+    )
+    # The runner's own account is the bot these fakes authenticate as, so
+    # no scenario reaches the host's real `gh auth status`.
+    monkeypatch.setattr(
+        seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+    )
+
+
 from tests.fakes.bootstrap_delivery import (
     BLOCKED_REVIEW_TEXT,
     DELIVER_BRANCH,
@@ -3619,6 +3643,7 @@ def test_delivery_step_runs_one_review_per_tick(
                             "base_sha=abc123def456 run_id=a1b2c3d4)"
                         ),
                         "authorAssociation": "OWNER",
+                        "author": {"login": "maintainer"},
                     },
                 ]})
             calls["labels"] += 1
@@ -3730,6 +3755,7 @@ def test_delivery_step_auto_merges_on_clean_review(
                             "base_sha=abc123def456 run_id=a1b2c3d4)"
                         ),
                         "authorAssociation": "OWNER",
+                        "author": {"login": "maintainer"},
                     },
                 ]})
             return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
@@ -3786,6 +3812,7 @@ def test_delivery_step_passes_p0_priority_to_the_review(
                             "base_sha=abc123def456 run_id=a1b2c3d4)"
                         ),
                         "authorAssociation": "OWNER",
+                        "author": {"login": "maintainer"},
                     },
                 ]})
             return json.dumps({"labels": [
@@ -3872,13 +3899,15 @@ def test_delivery_step_marks_blocked_when_review_fails(
             # still count for the blocked scene's round field (review
             # round 2, PR #42).
             return json.dumps({"comments": [
-                {"body": "public comment", "authorAssociation": "NONE"},
+                {"body": "public comment", "authorAssociation": "NONE",
+                 "author": {"login": "drive-by"}},
                 {
                     "body": (
                         "<!-- orbi:run=a1b2c3d4 -->\n"
                         "Orbi review round 1 for PR #46: clean"
                     ),
                     "authorAssociation": "OWNER",
+                    "author": {"login": "maintainer"},
                 },
                 {
                     "body": (
@@ -3886,6 +3915,7 @@ def test_delivery_step_marks_blocked_when_review_fails(
                         "Orbi review round 2 for PR #46: findings"
                     ),
                     "authorAssociation": "OWNER",
+                    "author": {"login": "maintainer"},
                 },
             ]})
         return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
@@ -3992,7 +4022,8 @@ def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
             # No trusted `Orbi opened PR:` comment: the scene
             # cannot be recovered, so the review fails fast.
             return json.dumps({"comments": [
-                {"body": "public comment", "authorAssociation": "NONE"},
+                {"body": "public comment", "authorAssociation": "NONE",
+                 "author": {"login": "drive-by"}},
             ]})
         # The delivery is in the `ai-fix-needed` state (awaiting the
         # next review session).
@@ -4101,6 +4132,7 @@ def test_delivery_step_blocks_when_scene_base_differs_from_config(
                         "base_sha=abc123def456 run_id=a1b2c3d4)"
                     ),
                     "authorAssociation": "OWNER",
+                    "author": {"login": "maintainer"},
                 },
             ]})
         return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
@@ -4228,6 +4260,7 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
                         "base_sha=abc123def456 run_id=a1b2c3d4)"
                     ),
                     "authorAssociation": "OWNER",
+                    "author": {"login": "maintainer"},
                 },
             ]})
         if command[-1] == "labels":
@@ -4379,6 +4412,7 @@ def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
                         "base_sha=abc123def456 run_id=a1b2c3d4)"
                     ),
                     "authorAssociation": "OWNER",
+                    "author": {"login": "maintainer"},
                 },
             ]})
         # The delivery is in the `ai-fix-needed` state (awaiting the
@@ -4444,6 +4478,7 @@ def test_delivery_step_runs_review_when_fix_needed(
                         "base_sha=abc123def456 run_id=a1b2c3d4)"
                     ),
                     "authorAssociation": "OWNER",
+                    "author": {"login": "maintainer"},
                 },
             ]})
         if command == ["git", "branch", "--show-current"]:
@@ -4511,6 +4546,7 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
                         "Orbi review round 1 for PR #46: clean"
                     ),
                     "authorAssociation": "OWNER",
+                    "author": {"login": "maintainer"},
                 },
                 {
                     "body": (
@@ -4518,6 +4554,7 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
                         "Orbi review round 2 for PR #46: findings"
                     ),
                     "authorAssociation": "OWNER",
+                    "author": {"login": "maintainer"},
                 },
             ]})
         api_calls.append(command)
@@ -4745,6 +4782,7 @@ def test_delivery_step_repairs_in_progress_label_and_logs_ci(
                         "base_sha=abc123def456 run_id=a1b2c3d4)"
                     ),
                     "authorAssociation": "OWNER",
+                    "author": {"login": "maintainer"},
                 }]})
             return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         return ""
@@ -5108,6 +5146,7 @@ def _executing_review_round_env(monkeypatch, tmp_path, *, scene_round=2):
             "base_sha=abc123def456 run_id=a1b2c3d4)"
         ),
         "authorAssociation": "OWNER",
+        "author": {"login": "maintainer"},
     }]
 
     def fake_run(command, **kwargs):
@@ -5122,7 +5161,8 @@ def _executing_review_round_env(monkeypatch, tmp_path, *, scene_round=2):
     monkeypatch.setattr(seam, "run_command", fake_run)
 
     def comment_issue(number, *, repo, body):
-        store.append({"body": body, "authorAssociation": "OWNER"})
+        store.append({"body": body, "authorAssociation": "OWNER",
+                              "author": {"login": "maintainer"}})
 
     monkeypatch.setattr(seam, "comment_issue", comment_issue)
     pr_posts: list[str] = []
@@ -6284,6 +6324,7 @@ def test_delivery_step_never_closes_triage_issue_after_review(
                             "base_sha=abc123def456 run_id=a1b2c3d4)"
                         ),
                         "authorAssociation": "OWNER",
+                        "author": {"login": "maintainer"},
                     },
                 ]})
             return json.dumps({"labels": [{"name": "ai-pr-opened"}]})

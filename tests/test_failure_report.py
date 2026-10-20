@@ -36,6 +36,25 @@ from seam import seam
 
 PACKAGE_DIR = Path(__file__).resolve().parent.parent / "src" / "orbi"
 
+
+@pytest.fixture(autouse=True)
+def _repository_permissions(monkeypatch):
+    """Issue #1806: the history these reports read is written by
+    repository maintainers (`maintainer`); a non-writer names an
+    outsider, and the runner's own account is a pinned bot.
+    """
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: (
+            "none" if login in {"drive-by", "stranger", "outsider"}
+            else "admin"
+        ),
+    )
+    monkeypatch.setattr(
+        seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+    )
+
+
 # The failure-reporting definitions moved out of `runner.py` (Issue #1260).
 MOVED = (
     "report_delivery_failure",
@@ -638,6 +657,7 @@ def _pr_comment(pr_number, round_no, *, opened=False, run_id=RUN_ID):
             ))
         ),
         "authorAssociation": "OWNER",
+        "author": {"login": "maintainer"},
     }
 
 
@@ -735,6 +755,7 @@ def test_blocked_guard_escalation_keeps_the_next_step_line(
                 "Orbi needs a fix: boom"
             ),
             "authorAssociation": "OWNER",
+            "author": {"login": "maintainer"},
         }
         for index in range(failure_report.FAILURE_STREAK_LIMIT - 1)
     ]

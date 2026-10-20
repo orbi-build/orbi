@@ -42,6 +42,26 @@ def _reset_run_id(monkeypatch):
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
 
 
+@pytest.fixture(autouse=True)
+def _repository_permissions(monkeypatch):
+    """Issue #1806: the scene comments in these scenarios are written by
+    repository maintainers (`maintainer`); `drive-by` cannot write.
+
+    The permission read is answered here so each scenario's inline `gh`
+    fake keeps modelling only the command it exists for, and the runner's
+    own account is pinned so no test reaches the host's real `gh`.
+    """
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: (
+            "none" if login in {"drive-by", "stranger"} else "admin"
+        ),
+    )
+    monkeypatch.setattr(
+        seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+    )
+
+
 def _scene_comments():
     """The trusted opened-PR scene comment (the recovery source)."""
     return [
@@ -52,6 +72,7 @@ def _scene_comments():
                 f"base_sha=abc123def456 run_id={RUN_ID})"
             ),
             "authorAssociation": "OWNER",
+            "author": {"login": "maintainer"},
         },
     ]
 
@@ -606,6 +627,7 @@ def test_delivery_step_base_branch_mismatch_marks_blocked_with_reason(
                     f"base_sha=abc123def456 run_id={RUN_ID})"
                 ),
                 "authorAssociation": "OWNER",
+                "author": {"login": "maintainer"},
             },
         ],
     )
@@ -960,6 +982,7 @@ def _pr_scene_comment(pr_number, round_no, *, run_id, opened=False):
             ))
         ),
         "authorAssociation": "OWNER",
+        "author": {"login": "maintainer"},
     }
 
 
@@ -1102,12 +1125,14 @@ def test_review_rounds_after_human_recovery_ignores_old_run():
     """Issue #483: a human recovery starts a new review budget."""
     comments = [
         {"body": "Orbi review round 1 for PR #46: findings",
-         "authorAssociation": "OWNER", "createdAt": "2026-01-01T00:00:00Z"},
+         "authorAssociation": "OWNER", "author": {"login": "maintainer"},
+         "createdAt": "2026-01-01T00:00:00Z"},
         {"body": "Orbi review round 5 for PR #46: findings",
-         "authorAssociation": "OWNER", "createdAt": "2026-01-02T00:00:00Z"},
+         "authorAssociation": "OWNER", "author": {"login": "maintainer"},
+         "createdAt": "2026-01-02T00:00:00Z"},
     ]
     assert failure_report.review_rounds_so_far(
-        comments, after="2026-01-01T12:00:00Z",
+        comments, repo="owner/repo", after="2026-01-01T12:00:00Z",
     ) == 1
 
 
@@ -1467,6 +1492,7 @@ def _failure_history(count, fp, *, run_id=RUN_ID, marker=None):
                 "Orbi needs a fix: the resume verification failed: boom"
             ),
             "authorAssociation": "OWNER",
+            "author": {"login": "maintainer"},
         }
         for i in range(count)
     ]
@@ -1512,7 +1538,8 @@ def make_report_fake(monkeypatch, *, history=None, labels=("ai-fix-needed",),
     def post_issue_comment(number, *, repo, body):
         captured["comments"].append(body)
         store.append({"id": next_id[0], "body": body,
-                      "authorAssociation": "OWNER"})
+                      "authorAssociation": "OWNER",
+                      "author": {"login": "maintainer"}})
         next_id[0] += 1
 
     def update_stored_comment(comment_id, *, repo, body):
@@ -1715,6 +1742,7 @@ def test_report_failure_scene_block_breaks_the_streak(
                 '"run_id": "%s", "review_round": 1} -->' % RUN_ID
             ),
             "authorAssociation": "OWNER",
+            "author": {"login": "maintainer"},
         },
         *_failure_history(1, fp),
     ]
@@ -1742,6 +1770,7 @@ def test_report_failure_different_fingerprint_breaks_the_streak(
             "Orbi needs a fix: something else"
         ),
         "authorAssociation": "OWNER",
+        "author": {"login": "maintainer"},
     }
     captured = make_report_fake(monkeypatch, history=[other])
     _report(exc)
@@ -1822,26 +1851,34 @@ def test_streak_and_dedup_scans_skip_non_failure_noise(
         "Orbi needs a fix: the resume verification failed: boom"
     )
     history = [
-        {"body": failure_body, "authorAssociation": "OWNER"},
-        # A public comment with a copied marker: skipped, not a break.
-        {"body": failure_body, "authorAssociation": "NONE"},
+        {"body": failure_body, "authorAssociation": "OWNER",
+         "author": {"login": "maintainer"}},
+        # A non-writer's comment with a copied marker: skipped, not a break.
+        {"body": failure_body, "authorAssociation": "NONE",
+         "author": {"login": "drive-by"}},
         # A non-string body: skipped alike.
-        {"body": None, "authorAssociation": "OWNER"},
+        {"body": None, "authorAssociation": "OWNER",
+         "author": {"login": "maintainer"}},
         # A publisher milestone: no premise change, the streak survives.
         {"body": f"{MARKER}\n**Orbi progress**\n\nfix needed",
-         "authorAssociation": "OWNER"},
+         "authorAssociation": "OWNER", "author": {"login": "maintainer"}},
     ]
-    assert failure_report._failure_streak(history, RUN_ID, fp) == 1
+    assert failure_report._failure_streak(
+        history, RUN_ID, fp, repo="owner/repo",
+    ) == 1
     assert failure_report._reported_failure_comment(
-        history, RUN_ID, fp) is history[0]
-    # The public copy alone never satisfies the dedup.
+        history, RUN_ID, fp, repo="owner/repo") is history[0]
+    # The non-writer copy alone never satisfies the dedup.
     public_only = [
-        {"body": failure_body, "authorAssociation": "NONE"},
+        {"body": failure_body, "authorAssociation": "NONE",
+         "author": {"login": "drive-by"}},
     ]
     assert failure_report._reported_failure_comment(
-        public_only, RUN_ID, fp,
+        public_only, RUN_ID, fp, repo="owner/repo",
     ) is None
-    assert failure_report._failure_streak(public_only, RUN_ID, fp) == 0
+    assert failure_report._failure_streak(
+        public_only, RUN_ID, fp, repo="owner/repo",
+    ) == 0
     # The hidden `:count` suffix IS the occurrence count: one comment
     # stamped `:2` (two deduped failures) counts 2, and the bump
     # helper raises it in place.
@@ -1851,13 +1888,18 @@ def test_streak_and_dedup_scans_skip_non_failure_noise(
             "Orbi needs a fix: the resume verification failed: boom"
         ),
         "authorAssociation": "OWNER",
+        "author": {"login": "maintainer"},
     }
-    assert failure_report._failure_streak([counted], RUN_ID, fp) == 2
+    assert failure_report._failure_streak(
+        [counted], RUN_ID, fp, repo="owner/repo",
+    ) == 2
     bumped = progress.bump_failure_repeat(counted["body"], fp)
     assert f"<!-- orbi:fail={fp}:3 -->" in bumped
-    assert failure_report._failure_streak([{"body": bumped,
-                                    "authorAssociation": "OWNER"}],
-                                 RUN_ID, fp) == 3
+    assert failure_report._failure_streak(
+        [{"body": bumped, "authorAssociation": "OWNER",
+          "author": {"login": "maintainer"}}],
+        RUN_ID, fp, repo="owner/repo",
+    ) == 3
 
 
 def test_report_failure_repeat_resolves_graphql_comment_id(
@@ -1871,6 +1913,7 @@ def test_report_failure_repeat_resolves_graphql_comment_id(
         "url": "https://github.com/owner/repo/issues/39#issuecomment-900",
         "body": _failure_history(1, fp)[0]["body"],
         "authorAssociation": "OWNER",
+        "author": {"login": "maintainer"},
     }]
     captured = make_report_fake(monkeypatch, history=history)
     caplog.set_level("INFO")
@@ -1891,6 +1934,7 @@ def test_report_failure_repeat_without_comment_url_posts_new_comment(
         "id": "IC_kwDOUC1jsc8AAAABVrm_6w",
         "body": _failure_history(1, fp)[0]["body"],
         "authorAssociation": "OWNER",
+        "author": {"login": "maintainer"},
     }])
     caplog.set_level("INFO")
     _report(exc)
@@ -1909,6 +1953,7 @@ def test_report_failure_repeat_with_malformed_comment_url_posts_new_comment(
         "url": "https://github.com/owner/repo/issues/39#comment-900",
         "body": _failure_history(1, fp)[0]["body"],
         "authorAssociation": "OWNER",
+        "author": {"login": "maintainer"},
     }])
     caplog.set_level("INFO")
     _report(exc)
@@ -1942,6 +1987,7 @@ def test_report_failure_unsupported_comment_id_does_not_escape(
         "id": None,
         "body": _failure_history(1, fp)[0]["body"],
         "authorAssociation": "OWNER",
+        "author": {"login": "maintainer"},
     }])
     caplog.set_level("INFO")
     _report(exc)

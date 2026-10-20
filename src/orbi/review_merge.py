@@ -1224,7 +1224,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
                 scene, pr["url"], round,
                 verdict_head_unknown_round=0,
             ),
-            previous_comments=previous_comments,
+            repo=source_repo, previous_comments=previous_comments,
             language_code=language.of(config),
         )
         comment_issue(number, repo=source_repo, body=body)
@@ -1426,7 +1426,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
                 ),
                 verdict_head_unknown_round=0,
             ),
-            messages=gate_messages,
+            messages=gate_messages, repo=source_repo,
             heading=(None if ci_failure else language.text(
                 language.of(config), "review.base_advance_heading",
                 round=next_base_advance_round, pr_number=pr["number"],
@@ -1847,7 +1847,7 @@ def _run_review_round(
     try:
         try:
             comments = issue_comments(number, repo=source_repo)
-            scene = run_state.resume_scene(comments)
+            scene = run_state.resume_scene(comments, repo=source_repo)
         except ValueError as scene_exc:
             # Without the trusted scene the runner
             # cannot derive run_id, branch, worktree or PR and

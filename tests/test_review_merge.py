@@ -40,6 +40,20 @@ def _current_delivery_labels(monkeypatch):
     """Provide the live label read used by review transitions."""
     monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: ["ai-pr-opened"],
     )
+    # Issue #1806: these scenarios' trusted comments are written by a
+    # repository maintainer (`maintainer`); a non-writer names an
+    # outsider. The read is answered here so each inline `gh` fake keeps
+    # modelling only the command it exists for.
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: (
+            "none" if login in {"drive-by", "stranger", "outsider", "reader"}
+            else "admin"
+        ),
+    )
+    monkeypatch.setattr(
+        seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +67,7 @@ def test_review_round_comment_body_renders_findings_and_shortens_sha():
         marker, 2, 477, 0, 1,
         [{"level": "Major", "location": "PR round comments",
           "note": "same failure", "fix": f"absorb {full_sha}"}],
-        "<!-- orbi:scene:v1 {} -->", language_code="en",
+        "<!-- orbi:scene:v1 {} -->", language_code="en", repo="owner/repo",
     )
     # The canonical kind marker sits right after the run marker; the
     # readable review-round line follows it (Issue #1659).
@@ -80,28 +94,30 @@ def test_review_round_comment_body_marks_identical_previous_findings():
     finding = {"level": "Major", "location": "comments",
                "note": "repeat", "fix": "repair"}
     first = review_merge.review_round_comment_body(
-        marker, 1, 477, 0, 1, [finding], _round_scene_block(1), language_code="en",
+        marker, 1, 477, 0, 1, [finding], _round_scene_block(1), language_code="en", repo="owner/repo",
     )
     second = review_merge.review_round_comment_body(
         marker, 2, 477, 0, 1, [finding], _round_scene_block(2),
-        previous_comments=[{"authorAssociation": "MEMBER", "body": first}], language_code="en",
+        previous_comments=[{"author": {"login": "maintainer"},
+                            "body": first}],
+        language_code="en", repo="owner/repo",
     )
     assert "Findings are the same as round 1." in second
-    trusted = {"authorAssociation": "MEMBER"}
+    trusted = {"author": {"login": "maintainer"}}
     assert failure_report.review_rounds_so_far(
         [{**trusted, "body": first}, {**trusted, "body": second}],
-        pr_number=477,
+        pr_number=477, repo="owner/repo",
     ) == 2
     # A REVIEW FAILURE that reuses the previous scene is not a round
     # record, even though it carries a scene and the review-round prose.
     gate_failure = review_merge.review_round_comment_body(
         marker, 2, 477, 0, 0, [], _round_scene_block(1),
         heading="Orbi base advance retry 2 for PR #477:",
-        kind="failure", language_code="en",
+        kind="failure", language_code="en", repo="owner/repo",
     )
     assert gate_failure.splitlines()[1] == "<!-- orbi:comment=failure -->"
     assert failure_report.review_rounds_so_far(
-        [{**trusted, "body": gate_failure}], pr_number=477,
+        [{**trusted, "body": gate_failure}], pr_number=477, repo="owner/repo",
     ) == 0
 
 
@@ -114,7 +130,7 @@ def test_review_round_comment_body_ignores_untrusted_or_nonmatching_comments():
         previous_comments=[
             {"authorAssociation": "NONE", "body": "quoted"},
             {"authorAssociation": "MEMBER", "body": "unrelated"},
-        ], language_code="en",
+        ], language_code="en", repo="owner/repo",
     )
     assert "Findings are the same" not in body
 
@@ -123,7 +139,7 @@ def test_review_round_comment_body_separates_gate_messages():
     body = review_merge.review_round_comment_body(
         "<!-- orbi:run=abc12345 -->", 3, 477, 0, 0, [], "scene",
         messages=["merge gate blocked: behind", "reruns the full test suite",
-                  "Absorb contract violated: reason"], language_code="en",
+                  "Absorb contract violated: reason"], language_code="en", repo="owner/repo",
     )
     assert "behind\n\nreruns" in body
     assert "suite\n\nAbsorb" in body
@@ -143,7 +159,7 @@ def test_review_round_comment_body_golden_bytes_issue_and_pr():
                  "note": "base behind", "fix": "absorb origin/main"}]
     assert review_merge.review_round_comment_body(
         marker, 2, 477, 1, 1, findings, scene_block,
-        messages=["merge gate blocked: behind"], language_code="en",
+        messages=["merge gate blocked: behind"], language_code="en", repo="owner/repo",
     ) == (
         "<!-- orbi:run=abc12345 -->\n"
         "<!-- orbi:comment=review-round -->\n"
@@ -165,7 +181,7 @@ def test_review_round_comment_body_golden_bytes_issue_and_pr():
         marker, 3, 477, 0, 0, [], scene_block,
         messages=["merge gate blocked: behind"],
         heading="Orbi base advance retry 3 for PR #477:",
-        kind="failure", language_code="en",
+        kind="failure", language_code="en", repo="owner/repo",
     ) == (
         "<!-- orbi:run=abc12345 -->\n"
         "<!-- orbi:comment=failure -->\n"
@@ -1786,7 +1802,8 @@ def _drive_merge_handoff(monkeypatch, tmp_path, state, *, preflight=None,
     def fake_comment_issue(number, *, repo, body):
         state["comments_posted"].append(body)
         state["comments"].append(
-            {"body": body, "authorAssociation": "MEMBER"},
+            {"body": body, "authorAssociation": "MEMBER",
+             "author": {"login": "maintainer"}},
         )
 
     monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: state["labels"])
@@ -2188,7 +2205,10 @@ def test_comment_pr_runs_gh_pr_comment_from_unrelated_cwd(
 # review_rounds_so_far
 # ---------------------------------------------------------------------------
 
-def _round_comment(round_no, pr_number=4, association="OWNER"):
+def _round_comment(round_no, pr_number=4, association="OWNER",
+                  author="maintainer"):
+    """One review-round comment; `author` is the trust identity the
+    reader checks (Issue #1806), the association is what GitHub returns."""
     return {
         "body": (
             "<!-- orbi:run=run1 -->\n"
@@ -2196,38 +2216,46 @@ def _round_comment(round_no, pr_number=4, association="OWNER"):
             "1 blocker(s), 0 major(s). Findings: []"
         ),
         "authorAssociation": association,
+        "author": {"login": author},
     }
 
 
 def test_review_rounds_so_far_counts_recorded_rounds():
     comments = [
         {"body": "Orbi opened PR: https://x",
-         "authorAssociation": "OWNER"},
+         "authorAssociation": "OWNER", "author": {"login": "maintainer"}},
         _round_comment(1),
         {"body": "Orbi fixed PR: https://x",
-         "authorAssociation": "OWNER"},
+         "authorAssociation": "OWNER", "author": {"login": "maintainer"}},
         _round_comment(2),
-        {"body": None, "authorAssociation": "OWNER"},
+        {"body": None, "authorAssociation": "OWNER",
+         "author": {"login": "maintainer"}},
     ]
-    assert failure_report.review_rounds_so_far(comments) == 2
+    assert failure_report.review_rounds_so_far(comments, repo="owner/repo",) == 2
 
 
 def test_review_rounds_so_far_ignores_comments_without_round_line():
     assert failure_report.review_rounds_so_far([
-        {"body": "Orbi started Pi: ...", "authorAssociation": "OWNER"},
-        {"body": "some public comment", "authorAssociation": "OWNER"},
-    ]) == 0
+        {"body": "Orbi started Pi: ...", "authorAssociation": "OWNER",
+         "author": {"login": "maintainer"}},
+        {"body": "some public comment", "authorAssociation": "OWNER",
+         "author": {"login": "maintainer"}},
+    ], repo="owner/repo",) == 0
 
 
 def test_review_rounds_so_far_ignores_untrusted_comments():
-    # Public comments must not exhaust the 5-round budget (same trust
-    # filter as resume_scene). Five NONE round comments still count as 0.
-    untrusted = [_round_comment(i, association="NONE") for i in range(1, 6)]
-    assert failure_report.review_rounds_so_far(untrusted) == 0
+    # Non-writer comments must not exhaust the 5-round budget (same trust
+    # rule as resume_scene, Issue #1806). Five of them still count as 0,
+    # and neither MEMBER nor COLLABORATOR makes a round count.
+    untrusted = [_round_comment(i, association="NONE", author="drive-by")
+                 for i in range(1, 6)]
+    assert failure_report.review_rounds_so_far(untrusted, repo="owner/repo",) == 0
     trusted = [_round_comment(i, association="OWNER") for i in range(1, 6)]
-    assert failure_report.review_rounds_so_far(trusted) == 5
+    assert failure_report.review_rounds_so_far(trusted, repo="owner/repo",) == 5
     mixed = untrusted + [_round_comment(1, association="MEMBER")]
-    assert failure_report.review_rounds_so_far(mixed) == 1
+    assert failure_report.review_rounds_so_far(mixed, repo="owner/repo",) == 1
+    read_only = [_round_comment(1, association="MEMBER", author="reader")]
+    assert failure_report.review_rounds_so_far(read_only, repo="owner/repo",) == 0
 
 
 def test_review_rounds_so_far_scopes_new_attempt_away_from_closed_pr_history():
@@ -2237,7 +2265,7 @@ def test_review_rounds_so_far_scopes_new_attempt_away_from_closed_pr_history():
         "run=run1", "run=deadbeef",
     )
     assert failure_report.review_rounds_so_far(
-        [old, current], run_id="deadbeef", pr_number=49,
+        [old, current], run_id="deadbeef", pr_number=49, repo="owner/repo",
     ) == 1
 
 
@@ -2248,7 +2276,7 @@ def test_review_rounds_so_far_keeps_budget_for_same_attempt_and_pr():
             "run=run1", "run=a1b2c3d4",
         )
     assert failure_report.review_rounds_so_far(
-        comments, run_id="a1b2c3d4", pr_number=4,
+        comments, run_id="a1b2c3d4", pr_number=4, repo="owner/repo",
     ) == 2
 
 
@@ -3798,8 +3826,8 @@ def test_review_and_merge_midround_base_advance_is_not_a_violation(
     assert '"review_round": 0' in calls[0][1]
     assert '"base_advance_round": 1' in calls[0][1]
     assert failure_report.review_rounds_so_far(
-        [{"body": calls[0][1], "authorAssociation": "OWNER"}],
-        run_id="a1b2c3d4",
+        [{"body": calls[0][1], "authorAssociation": "OWNER", "author": {"login": "maintainer"}}],
+        run_id="a1b2c3d4", repo="owner/repo",
     ) == 0
     assert "Absorb contract violated" not in calls[0][1]
 
@@ -3928,8 +3956,8 @@ def test_review_and_merge_ci_failure_comment_counts_toward_round_budget(
     # The emitted comment is exactly the counting carrier: a trusted
     # comment with this run's marker is counted as one round.
     assert failure_report.review_rounds_so_far(
-        [{"body": calls[0][1], "authorAssociation": "OWNER"}],
-        run_id="a1b2c3d4",
+        [{"body": calls[0][1], "authorAssociation": "OWNER", "author": {"login": "maintainer"}}],
+        run_id="a1b2c3d4", repo="owner/repo",
     ) == 1
     # ...and the comment carries the updated scene: the next resume
     # reads review_round=1 from it (the budget's new carrier, #788).

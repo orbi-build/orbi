@@ -6,6 +6,24 @@ import orbi.runner as runner
 import orbi.pi_session as pi_session
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
+from seam import seam
+
+
+@pytest.fixture(autouse=True)
+def _repository_permissions(monkeypatch):
+    """Issue #1806: the steering authors here can write to the
+    repository (`alice`/`bob`); `bad` cannot. The read is answered
+    here so the steering scan never reaches real GitHub."""
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: (
+            "none" if login == "bad" else "admin"
+        ),
+    )
+    monkeypatch.setattr(
+        seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+    )
+
 
 
 def _config(tmp_path: Path, **kwargs):
@@ -35,7 +53,7 @@ def test_run_pi_steering_callback_filters_and_deduplicates(monkeypatch, tmp_path
     ]
     monkeypatch.setitem(pi_session.__dict__, "issue_view",
         lambda *a, **k: _snapshot(comments))
-    monkeypatch.setitem(pi_session.__dict__, "_comment_is_trusted", lambda c: c["id"] == "new")
+    monkeypatch.setitem(pi_session.__dict__, "_comment_is_trusted", lambda c, *, repo: c["id"] == "new")
     monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
     monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     captured = {}
@@ -138,7 +156,7 @@ def test_run_pi_steering_body_edit_and_comment_is_one_request(monkeypatch, tmp_p
     ]
     monkeypatch.setitem(pi_session.__dict__, "issue_view",
         lambda *a, **k: _snapshot(comments, body="edited body"))
-    monkeypatch.setitem(pi_session.__dict__, "_comment_is_trusted", lambda c: c["id"] == "new")
+    monkeypatch.setitem(pi_session.__dict__, "_comment_is_trusted", lambda c, *, repo: c["id"] == "new")
     monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
     monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     captured = {}

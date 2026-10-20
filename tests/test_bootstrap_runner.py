@@ -1419,9 +1419,14 @@ def test_run_pi_injects_trusted_issue_comments_into_the_prompt(
         return comments
 
     monkeypatch.setattr(seam, "issue_comments", fake_issue_comments)
-    # mallory's NONE-association comment reaches the authenticated-login
-    # fallback; pin it so the test never depends on the host's real gh
-    # login state (CI runs unauthenticated).
+    # Issue #1806: the writers are the repository's maintainers (alice,
+    # carol, dave), mallory is not — the comment's association decides
+    # nothing. The read is answered here so the test never depends on the
+    # host's real gh login state (CI runs unauthenticated).
+    monkeypatch.setattr(
+        seam, "repository_permission",
+        lambda login, *, repo: "none" if login == "mallory" else "admin",
+    )
     monkeypatch.setattr(
         seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
     )
@@ -1565,6 +1570,11 @@ def test_run_review_combines_current_pr_feedback_with_issue_comments(
     monkeypatch.setattr(
         seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
     )
+    # Issue #1806: the human comments of these timelines are writers;
+    # the permission read is answered here so no test reaches GitHub.
+    monkeypatch.setattr(
+        seam, "repository_permission", lambda login, *, repo: "admin",
+    )
     calls = []
     monkeypatch.setattr(
         pi_session, "stream_pi",
@@ -1609,6 +1619,14 @@ def test_run_review_pr_feedback_failure_logs_and_keeps_issue_comments(
          "createdAt": "2026-09-12T01:00:00Z", "body": "issue decision"},
     ])
     monkeypatch.setattr(seam, "pr_comments", lambda *args, **kwargs: [])
+    # Issue #1806: the trust read is answered here so the timeline never
+    # asks GitHub (and never needs the host's identity).
+    monkeypatch.setattr(
+        seam, "repository_permission", lambda login, *, repo: "admin",
+    )
+    monkeypatch.setattr(
+        seam, "_authenticated_github_login", lambda: "ci-runner[bot]",
+    )
 
     def fail_reviews(*args, **kwargs):
         raise RuntimeError("reviews unavailable")
