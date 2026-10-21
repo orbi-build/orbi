@@ -25,6 +25,13 @@ route before writing).
   of that same behaviour (what the person sees when it fails). Everything
   else — hardening, adjacent cleanup, "while we are here" — goes under
   `Not included (suggestions)`, one line each.
+- A repository observation is evidence, never a requirement. How many lines
+  the file has today, or which line the new one would become, is at most a
+  line under `Current state`. For a preserve-and-append request (append one
+  line, keep the existing content, change no other file), express the
+  relative change — the sentence appended and the existing content untouched —
+  not a total line count the person never named. A quantity the person stated
+  ("exactly 17 lines") is their requirement and stays.
 - A request with two readings does not become the bigger reading. Take the
   smallest reading and ask one question (see *Draft first*).
 - Behaviour that already exists is reported as existing under `Current state`.
