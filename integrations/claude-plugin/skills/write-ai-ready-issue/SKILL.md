@@ -113,8 +113,14 @@ it down under `Assumptions` instead.
 Sections, in this order:
 
 - `Request` — the person's words, quoted verbatim.
-- `Current state` — what is true today, with file and line references and the
-  evidence already gathered (commands, output, error messages).
+- `Current state` — what is true today, with file references and the
+  evidence already gathered (commands, output, error messages). Add an exact
+  line position only when visible repository evidence establishes it: a
+  numbered result that identifies the line, or a read-only lookup you ran to
+  establish it. An unnumbered read establishes no position — cite the path
+  instead. A line that only exists after the requested change is not a
+  current-state position. An evidenced citation stays, and so does a quantity
+  the person stated.
 - `User outcome` — the request in observable terms.
 - `Preconditions` — what must hold before the change applies.
 - `Acceptance` — WHEN/THEN items: the requested behaviour plus one failure
