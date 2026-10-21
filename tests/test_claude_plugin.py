@@ -7,7 +7,7 @@ directory reads at its default path, ``.claude-plugin/icon.svg`` (Issue
 on the user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
 directory, the Agent Plugins 1.0 root manifest (Issue #1404), the Cursor
 marketplace manifest (Issue #1437) and the repository's contract require,
-and they carry fifteen counter-proofs (six for the claude.com and Agent
+and they carry seventeen counter-proofs (six for the claude.com and Agent
 Plugins manifests: a fixture copy with ``hooks/``, one without
 ``homepage``, one missing the ``author.url`` ref, one with
 ``skills/x/logo.svg``, one with a ``logo`` key in the root manifest, and
@@ -18,8 +18,10 @@ one without the ``cursor-marketplace`` ref, one without the top-level
 one without the top-level
 ``homepage``, one without the top-level ``author.url``, one without the
 top-level ``description``, and one with mismatched top-level
-``keywords``) so a future change cannot silently turn the assertions into
-no-ops.
+``keywords``; two for the fidelity pass of the write-ai-ready-issue skill
+(Issue #1816): one whose added-constraint rule is deleted and one whose
+``SKILL.md`` loses the relative-change rule) so a future change cannot
+silently turn the assertions into no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
 """
@@ -928,6 +930,177 @@ def test_skill_drafts_the_nearest_version_the_code_can_deliver():
         "the nearest-deliverable-version sentence must come before "
         f"{DRAFT_FIRST_PARAGRAPH!r}"
     )
+
+
+# --- No invented constraints from repository observations (Issue #1816) -------
+
+# A preserve-and-append request stays relative: the sentence appended and the
+# existing content untouched. How many lines the file has today is a
+# repository observation, not a requirement, and a total the person never
+# named must not survive the fidelity pass in any section (Issue #1816).
+FIDELITY_PASS_REL = SKILL_REL.parent / "fidelity-pass.md"
+FIDELITY_RULE_RE = re.compile(
+    r"^(\d+)\. \*\*(.+?)\*\*(.*?)(?=^\d+\. \*\*|\Z)", re.MULTILINE | re.DOTALL
+)
+# Sections in which a draft can restate an invented constraint.
+CONSTRAINT_SECTIONS = (
+    "User outcome",
+    "Preconditions",
+    "Acceptance",
+    "Evidence",
+    "Assumptions",
+    "Decisions",
+)
+
+
+def fidelity_rules(plugin_dir: Path = PLUGIN_DIR) -> dict[str, str]:
+    """The numbered fidelity-pass rules, keyed by their bold lead phrase and
+    flattened to single spaces."""
+    text = read_plugin_file(plugin_dir, FIDELITY_PASS_REL)
+    rules = FIDELITY_RULE_RE.findall(text)
+    assert rules, f"{FIDELITY_PASS_REL}: no numbered rules found"
+    return {title.strip(): " ".join(body.split()) for _, title, body in rules}
+
+
+def rule_matching(rules: dict[str, str], needle: str) -> str:
+    matches = [body for title, body in rules.items() if needle in title.lower()]
+    assert matches, f"{FIDELITY_PASS_REL}: no rule whose lead says {needle!r}"
+    return matches[0]
+
+
+def check_fidelity_removes_an_added_constraint(plugin_dir: Path = PLUGIN_DIR) -> None:
+    """Issue #1816: a constraint the person never made is removed from every
+    section that carries it, with the references that depend on it, while the
+    Request and unrelated grounded content stay."""
+    body = rule_matching(fidelity_rules(plugin_dir), "added constraint")
+    for section in CONSTRAINT_SECTIONS:
+        assert f"`{section}`" in body, (
+            f"{FIDELITY_PASS_REL}: the rule that removes an added constraint "
+            f"must name {section!r}: {body}"
+        )
+    assert "`Request`" in body, (
+        f"{FIDELITY_PASS_REL}: the removal must keep the person's Request"
+    )
+    assert "unrelated" in body, (
+        f"{FIDELITY_PASS_REL}: the removal must keep unrelated grounded content"
+    )
+    # The invention is nobody's suggestion: it is deleted, not parked in
+    # `Not included (suggestions)`.
+    assert "Not included" in body, (
+        f"{FIDELITY_PASS_REL}: the removal rule must say an invented "
+        "constraint is not moved to `Not included (suggestions)`"
+    )
+
+
+def check_fidelity_keeps_a_requested_quantity(plugin_dir: Path = PLUGIN_DIR) -> None:
+    """Issue #1816 control case: a total the person stated stays, so the pass
+    never reads as "delete every number"."""
+    body = rule_matching(fidelity_rules(plugin_dir), "quantity the person")
+    assert "exactly 17 lines" in body, (
+        f"{FIDELITY_PASS_REL}: the requested-quantity rule must carry the "
+        f"control case the person stated: {body}"
+    )
+
+
+def check_fidelity_keep_rule_is_scoped_to_the_removals(
+    plugin_dir: Path = PLUGIN_DIR,
+) -> None:
+    """Issue #1816: the keep-as-is rule must not re-protect `Evidence`,
+    `Assumptions` and `Decisions` against the removals."""
+    body = rule_matching(fidelity_rules(plugin_dir), "kept as is")
+    assert "except" in body, (
+        f"{FIDELITY_PASS_REL}: the keep-as-is rule must be scoped to the "
+        f"removals, otherwise it protects the invented constraint: {body}"
+    )
+
+
+def check_skill_writes_preserve_and_append_as_a_relative_change(
+    plugin_dir: Path = PLUGIN_DIR,
+) -> None:
+    """Issue #1816: the draft keeps a repository observation out of the
+    required outcome, expresses a preserve-and-append request as the relative
+    change, and keeps a quantity the person stated."""
+    flat = " ".join(read_plugin_file(plugin_dir, SKILL_REL).split())
+    for phrase in (
+        "repository observation",
+        "preserve-and-append",
+        "relative change",
+        "quantity the person",
+    ):
+        assert phrase in flat, (
+            f"{SKILL_REL}: missing {phrase!r}, so a repository observation "
+            "can become a required outcome again (Issue #1816)"
+        )
+
+
+def test_fidelity_pass_removes_an_added_constraint_everywhere():
+    check_fidelity_removes_an_added_constraint()
+
+
+def test_fidelity_pass_keeps_a_quantity_the_person_requested():
+    check_fidelity_keeps_a_requested_quantity()
+
+
+def test_fidelity_pass_keep_rule_is_scoped_to_the_removals():
+    check_fidelity_keep_rule_is_scoped_to_the_removals()
+
+
+def test_skill_writes_preserve_and_append_as_a_relative_change():
+    check_skill_writes_preserve_and_append_as_a_relative_change()
+
+
+def write_skill_fixture(
+    tmp_path: Path,
+    skill_text: str | None = None,
+    pass_text: str | None = None,
+) -> Path:
+    """A fixture plugin folder holding the two skill files, so a counter-proof
+    can break exactly one rule."""
+    plugin_dir = tmp_path / "plugin"
+    skill_dir = plugin_dir / "skills" / "write-ai-ready-issue"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        read_plugin_file(PLUGIN_DIR, SKILL_REL)
+        if skill_text is None
+        else skill_text,
+        encoding="utf-8",
+    )
+    (skill_dir / "fidelity-pass.md").write_text(
+        read_plugin_file(PLUGIN_DIR, FIDELITY_PASS_REL)
+        if pass_text is None
+        else pass_text,
+        encoding="utf-8",
+    )
+    return plugin_dir
+
+
+def test_fixture_fidelity_pass_without_the_removal_rule_fails(tmp_path):
+    """Counter-proof: delete the added-constraint rule and the check fails, so
+    the assertions cannot become no-ops."""
+    pass_text = read_plugin_file(PLUGIN_DIR, FIDELITY_PASS_REL)
+    pass_text = FIDELITY_RULE_RE.sub(
+        lambda match: ""
+        if "added constraint" in match.group(2).lower()
+        else match.group(0),
+        pass_text,
+    )
+    plugin_dir = write_skill_fixture(tmp_path, pass_text=pass_text)
+    titles = [title.lower() for title in fidelity_rules(plugin_dir)]
+    assert not any("added constraint" in title for title in titles), (
+        "the counter-proof did not remove the added-constraint rule"
+    )
+    with pytest.raises(AssertionError):
+        check_fidelity_removes_an_added_constraint(plugin_dir)
+
+
+def test_fixture_skill_without_the_relative_change_rule_fails(tmp_path):
+    """Counter-proof: drop the relative-change rule and the check fails."""
+    skill_text = read_plugin_file(PLUGIN_DIR, SKILL_REL).replace(
+        "preserve-and-append", "append"
+    )
+    plugin_dir = write_skill_fixture(tmp_path, skill_text=skill_text)
+    with pytest.raises(AssertionError):
+        check_skill_writes_preserve_and_append_as_a_relative_change(plugin_dir)
 
 
 # --- Counter-proof ------------------------------------------------------------
