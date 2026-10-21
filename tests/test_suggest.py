@@ -1151,8 +1151,15 @@ def test_fake_gh_resolves_and_rejects_a_milestone(tmp_path, monkeypatch):
 #
 # The caller (Orbi Cloud) shows both the suggestions and the repository
 # summary on a page written in one language, so one flag appends one
-# sentence to BOTH prompts. Without the flag the prompts stay
+# language sentence to BOTH prompts. Without the flag the prompts stay
 # byte-for-byte what they were before the flag existed.
+#
+# The zh JSON-quoting and Issue-heading rules belong to the suggestions
+# session's answer only (Issue #1822): the summary session writes plain
+# sentences, so appending them there made two real zh summary sessions
+# answer with an Issue-shaped description (Request / User outcome /
+# Acceptance / Evidence / Not included) instead of describing the
+# repository.
 
 # The en sentence is frozen here: a zh-only prompt change (Issue #1693)
 # must never move it.
@@ -1215,7 +1222,7 @@ def test_prompts_end_with_exactly_one_locale_sentence(locale):
     prompt = suggest._prompt(
         LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO, locale=locale,
     )
-    assert prompt.endswith(sentence)
+    assert sentence in prompt
     assert prompt.count(sentence) == 1
     understanding = suggest._understanding_prompt(
         LOCALE_REPO_DIR, locale=locale,
@@ -1228,21 +1235,24 @@ def test_prompts_end_with_exactly_one_locale_sentence(locale):
 
 
 def test_zh_locale_asks_for_json_safe_quotes():
-    """Acceptance (Issue #1693): the zh sentence asks for 「」 inside JSON
-    string values and for an escaped \" when a literal double quote is
-    needed."""
-    zh = suggest.LOCALE_SENTENCES["zh"]
-    assert zh.startswith("Write all of your output in Simplified Chinese.")
+    """Acceptance (Issue #1693): the zh suggestions prompt asks for 「」
+    inside JSON string values and for an escaped \" when a literal double
+    quote is needed — and only that prompt (Issue #1822)."""
+    zh = suggest.SUGGESTION_LOCALE_RULES["zh"]
+    assert suggest.LOCALE_SENTENCES["zh"].startswith(
+        "Write all of your output in Simplified Chinese.",
+    )
     assert QUOTE_INSTRUCTION in zh
     assert ESCAPED_QUOTE_INSTRUCTION in zh
-    for prompt in (
-        suggest._prompt(
-            LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO, locale="zh",
-        ),
-        suggest._understanding_prompt(LOCALE_REPO_DIR, locale="zh"),
-    ):
-        assert QUOTE_INSTRUCTION in prompt
-        assert ESCAPED_QUOTE_INSTRUCTION in prompt
+    prompt = suggest._prompt(
+        LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO, locale="zh",
+    )
+    assert QUOTE_INSTRUCTION in prompt
+    assert ESCAPED_QUOTE_INSTRUCTION in prompt
+    understanding = suggest._understanding_prompt(LOCALE_REPO_DIR, locale="zh")
+    assert QUOTE_INSTRUCTION not in understanding
+    assert ESCAPED_QUOTE_INSTRUCTION not in understanding
+    assert "「" not in understanding
 
 
 def test_en_and_no_locale_never_carry_the_zh_quote_instruction():
@@ -1271,7 +1281,7 @@ ZH_HEADINGS = ("需求", "用户看到的结果", "验收", "证据", "不做")
 def test_zh_locale_asks_for_the_chinese_section_headings():
     """Acceptance (Issue #1764): the zh sentence names the five headings,
     so a Chinese body does not open with the skill's English ones."""
-    zh = suggest.LOCALE_SENTENCES["zh"]
+    zh = suggest.SUGGESTION_LOCALE_RULES["zh"]
     for heading in ZH_HEADINGS:
         assert heading in zh
     prompt = suggest._prompt(
@@ -1279,6 +1289,12 @@ def test_zh_locale_asks_for_the_chinese_section_headings():
     )
     for heading in ZH_HEADINGS:
         assert heading in prompt
+    # Issue #1822: the summary describes the repository, so it never gets
+    # the Issue-body headings.
+    understanding = suggest._understanding_prompt(LOCALE_REPO_DIR, locale="zh")
+    for heading in ZH_HEADINGS:
+        assert heading not in understanding
+    assert "Issue body" not in understanding
 
 
 def test_en_and_no_locale_never_carry_the_zh_headings():
@@ -1344,7 +1360,8 @@ def test_run_suggest_locale_reaches_both_prompts(
         dispatch_issue=cli.dispatch_issue,
     ) == 0
     capsys.readouterr()
-    assert stub.command[-1].endswith(suggest.LOCALE_SENTENCES["zh"])
+    assert stub.command[-1].endswith(suggest.SUGGESTION_LOCALE_RULES["zh"])
+    assert suggest.LOCALE_SENTENCES["zh"] in stub.command[-1]
     assert stub.understanding_call[0][-1].endswith(
         suggest.LOCALE_SENTENCES["zh"],
     )
@@ -1364,10 +1381,52 @@ def test_suggest_locale_zh_reaches_both_pi_sessions(
         "--config", str(world.config_path),
     ]) == 0
     capsys.readouterr()
-    assert stub.command[-1].endswith(suggest.LOCALE_SENTENCES["zh"])
+    assert stub.command[-1].endswith(suggest.SUGGESTION_LOCALE_RULES["zh"])
+    assert suggest.LOCALE_SENTENCES["zh"] in stub.command[-1]
     assert stub.understanding_call[0][-1].endswith(
         suggest.LOCALE_SENTENCES["zh"],
     )
+
+
+def test_zh_summary_prompt_is_the_plain_description_plus_the_language_sentence():
+    """Acceptance (Issue #1822): byte for byte, the zh summary prompt is
+    the pre-locale plain-sentence prompt followed by the language
+    sentence — no JSON quoting rule, no Issue-body headings."""
+    assert suggest._understanding_prompt(LOCALE_REPO_DIR, locale="zh") == (
+        UNDERSTANDING_WITHOUT_LOCALE + "\n\n" + suggest.LOCALE_SENTENCES["zh"]
+    )
+
+
+def test_suggest_locale_zh_summary_prompt_has_no_issue_format_instructions(
+    tmp_path, monkeypatch, capsys,
+):
+    """The user path (Issue #1822): a real `orbi suggest --locale zh` with
+    the existing stub captures both session commands. Both ask for Chinese
+    output; the suggestions prompt keeps its JSON quoting and five Issue
+    headings; the summary prompt keeps the plain description without
+    those output-format instructions."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    stub = PiStub(_answer_json(EXISTING))
+    monkeypatch.setattr(seam, "stream_pi", stub)
+    assert cli.main([
+        "suggest", "--json", "--locale", "zh",
+        "--config", str(world.config_path),
+    ]) == 0
+    capsys.readouterr()
+    suggestions = stub.command[-1]
+    summary = stub.understanding_call[0][-1]
+    sentence = suggest.LOCALE_SENTENCES["zh"]
+    for command in (suggestions, summary):
+        assert sentence in command
+    assert suggestions.endswith(suggest.SUGGESTION_LOCALE_RULES["zh"])
+    for marker in (QUOTE_INSTRUCTION, ESCAPED_QUOTE_INSTRUCTION, *ZH_HEADINGS):
+        assert marker in suggestions
+        assert marker not in summary
+    assert summary.startswith("Read the repository at ")
+    assert summary.count(sentence) == 1
+    assert summary.endswith(sentence)
+    assert "three plain sentences" in summary
 
 
 def test_suggest_without_locale_sends_no_language_sentence(
