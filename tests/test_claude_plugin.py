@@ -7,7 +7,7 @@ directory reads at its default path, ``.claude-plugin/icon.svg`` (Issue
 on the user's own ``gh`` CLI. These tests pin the shape the claude.com plugin
 directory, the Agent Plugins 1.0 root manifest (Issue #1404), the Cursor
 marketplace manifest (Issue #1437) and the repository's contract require,
-and they carry seventeen counter-proofs (six for the claude.com and Agent
+and they carry eighteen counter-proofs (six for the claude.com and Agent
 Plugins manifests: a fixture copy with ``hooks/``, one without
 ``homepage``, one missing the ``author.url`` ref, one with
 ``skills/x/logo.svg``, one with a ``logo`` key in the root manifest, and
@@ -18,10 +18,11 @@ one without the ``cursor-marketplace`` ref, one without the top-level
 one without the top-level
 ``homepage``, one without the top-level ``author.url``, one without the
 top-level ``description``, and one with mismatched top-level
-``keywords``; two for the fidelity pass of the write-ai-ready-issue skill
-(Issue #1816): one whose added-constraint rule is deleted and one whose
-``SKILL.md`` loses the relative-change rule) so a future change cannot
-silently turn the assertions into no-ops.
+``keywords``; three for the write-ai-ready-issue skill (Issues #1816,
+#1819): one whose added-constraint rule is deleted, one whose
+``SKILL.md`` loses the relative-change rule, and one whose ``SKILL.md``
+loses the evidence requirement for a line citation) so a future change
+cannot silently turn the assertions into no-ops.
 
 The checks are pure file reads: no ``orbi`` import, no network, no ``gh``.
 """
@@ -1049,6 +1050,43 @@ def test_skill_writes_preserve_and_append_as_a_relative_change():
     check_skill_writes_preserve_and_append_as_a_relative_change()
 
 
+# --- A line citation needs visible evidence (Issue #1819) --------------------
+
+# `Current state` requires file references. An exact line position is allowed
+# only when visible repository evidence establishes it; an unnumbered read
+# establishes no position, and a line the requested change would create is not
+# a current-state citation. An evidenced citation and a quantity the person
+# stated stay.
+CITATION_EVIDENCE_PHRASES = (
+    "with file references",
+    "visible repository evidence",
+    "unnumbered read establishes no position",
+    "only exists after the requested change",
+)
+
+
+def check_skill_requires_evidence_for_a_line_citation(
+    plugin_dir: Path = PLUGIN_DIR,
+) -> None:
+    """Issue #1819: `Current state` cites a file path, and cites an exact line
+    position only with visible evidence; the unnumbered full-form requirement
+    that invited unsupported precision is gone."""
+    flat = " ".join(read_plugin_file(plugin_dir, SKILL_REL).split())
+    assert "with file and line references" not in flat, (
+        f"{SKILL_REL}: `Current state` must require file references, not a "
+        "line reference an unnumbered read cannot support (Issue #1819)"
+    )
+    for phrase in CITATION_EVIDENCE_PHRASES:
+        assert phrase in flat, (
+            f"{SKILL_REL}: missing {phrase!r}, so an exact line citation "
+            "without visible evidence can come back (Issue #1819)"
+        )
+
+
+def test_skill_requires_evidence_for_a_line_citation():
+    check_skill_requires_evidence_for_a_line_citation()
+
+
 def write_skill_fixture(
     tmp_path: Path,
     skill_text: str | None = None,
@@ -1101,6 +1139,17 @@ def test_fixture_skill_without_the_relative_change_rule_fails(tmp_path):
     plugin_dir = write_skill_fixture(tmp_path, skill_text=skill_text)
     with pytest.raises(AssertionError):
         check_skill_writes_preserve_and_append_as_a_relative_change(plugin_dir)
+
+
+def test_fixture_skill_without_the_citation_evidence_rule_fails(tmp_path):
+    """Counter-proof: drop the evidence requirement for a line citation and
+    the check fails, so the assertion cannot become a no-op."""
+    skill_text = read_plugin_file(PLUGIN_DIR, SKILL_REL).replace(
+        "visible repository evidence", "the file"
+    )
+    plugin_dir = write_skill_fixture(tmp_path, skill_text=skill_text)
+    with pytest.raises(AssertionError):
+        check_skill_requires_evidence_for_a_line_citation(plugin_dir)
 
 
 # --- Counter-proof ------------------------------------------------------------
