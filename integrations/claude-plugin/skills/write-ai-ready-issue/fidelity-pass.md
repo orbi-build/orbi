@@ -29,16 +29,18 @@ Apply these rules in order:
    it.** An added constraint is a requirement the person did not make — most
    often a repository observation restated as an outcome, such as how many
    lines the file has today, which line the new one becomes, or a total the
-   person never named. Remove it from `User outcome`, `Acceptance`,
-   `Evidence`, `Assumptions` and `Decisions`, and reword or remove each
-   place that repeats or checks it (an evidence step verifying the invented
-   total, an assumption stating it, a decision phrased with it), so the draft
-   reads as one consistent specification. Keep the person's `Request`
-   verbatim, and keep unrelated grounded content — a `Current state` fact, an
-   unrelated assumption or decision, and the effect the person did ask for all
-   stay. When an item mixes the requested effect with an invented total, keep
-   the requested effect and drop only the total. An added constraint is
-   nobody's suggestion: it is not moved to `Not included (suggestions)`.
+   person never named. Remove it from every section that states a
+   requirement — `User outcome`, `Preconditions`, `Acceptance`, `Evidence`,
+   `Assumptions` and `Decisions` — so no section is left out, and reword or
+   remove each place that repeats or checks it (an evidence step verifying
+   the invented total, an assumption stating it, a decision phrased with
+   it), so the draft reads as one consistent specification. Keep the
+   person's `Request` verbatim, and keep unrelated grounded content — a
+   `Current state` fact, an unrelated assumption or decision, and the effect
+   the person did ask for all stay. When an item mixes the requested effect
+   with an invented total, keep the requested effect and drop only the
+   total. An added constraint is nobody's suggestion: it is not moved to
+   `Not included (suggestions)`.
 4. **A quantity the person stated stays.** When the request itself says
    "exactly 17 lines", that total is a requirement and rule 3 leaves it
    alone. Numbers are not the problem, and this pass removes no number the

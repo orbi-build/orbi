@@ -945,6 +945,7 @@ FIDELITY_RULE_RE = re.compile(
 # Sections in which a draft can restate an invented constraint.
 CONSTRAINT_SECTIONS = (
     "User outcome",
+    "Preconditions",
     "Acceptance",
     "Evidence",
     "Assumptions",
