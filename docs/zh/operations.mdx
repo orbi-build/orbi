@@ -773,7 +773,6 @@ orbi session --pretty --config orbi.toml   # 一行摘要
 
 生成建议时，Orbi 还会尝试把简短仓库摘要写到 `<deploy_home>/.orbi/suggest/<run_id>/understanding.md`；摘要失败不会让建议失败。成功或失败后，运行目录及已经生成的文件都会保留；结果通过校验后才会写入 `suggestions.json`。建议会避开最近三批已提过的内容；`--json` 只打印结果，不提交 Issue。交互模式只有你确认的建议才会提交。
 
-
 所有命令通过 `--config` 或 `ORBI_CONFIG` 环境变量接收配置
 （默认 `orbi.toml`）。`status` 和 `session` 是调试附件——
 journal 和 GitHub 仍是正常可观测路径。

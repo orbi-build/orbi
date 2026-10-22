@@ -897,10 +897,9 @@ orbi session --pretty --config orbi.toml   # one-line summaries
 
 ### Suggestion language and repository summary
 
-Use `--locale en` or `--locale zh` to choose the language of suggestions and the repository summary; Without `--locale`, Orbi follows the repository’s own language. `--count N` accepts 1–3, default 3. This command’s locale is separate from `message_language`, which controls delivery comments and notifications.
+Use `--locale en` or `--locale zh` to choose the language of suggestions and the repository summary; without `--locale`, Orbi follows the repository’s own language. `--count N` accepts 1–3, default 3. This command’s locale is separate from `message_language`, which controls delivery comments and notifications.
 
 While choosing suggestions, Orbi also tries to write a short repository summary to `<deploy_home>/.orbi/suggest/<run_id>/understanding.md`. A summary failure does not fail the suggestions. The run directory and any files already produced remain available after success or failure; `suggestions.json` is written once the result is validated. Suggestions avoid items from the three most recent batches; `--json` prints the result without submitting any Issue. In interactive mode, only the suggestions you confirm are submitted.
-
 
 All commands accept the config via `--config` or the
 `ORBI_CONFIG` environment variable (default

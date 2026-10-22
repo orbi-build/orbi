@@ -3,8 +3,6 @@ title: "Orbi 文档：自托管软件暗工厂"
 description: "如何安装自托管 Orbi，让 GitHub Issue 经过测试、独立 PR 评审、合并与发版?"
 ---
 
-
-
 按[安装指南](/zh/installation)和[快速开始](/zh/quickstart)自托管 Orbi，将标记 `ai-ready` 的 GitHub Issue 交付为经过测试、独立评审并合并的 PR，再用发版任务发布带 tag 的版本。
 
 Orbi 是一个开源的**软件暗工厂（software dark factory）**：可以在自己机器上运行的软件自动交付系统。你在 GitHub Issue 里定义目标和验收标准；Orbi 领取标记 `ai-ready` 的 Issue，在隔离 worktree 中实现、运行真实测试套件、创建 PR，完成独立审查、修复和合并。你用发版任务发起发布，Orbi 执行门禁、打 tag 并发布 release notes。整个交付过程记录在 GitHub Issue、评论和 PR 本身中。
@@ -13,7 +11,7 @@ Orbi 是一个开源的**软件暗工厂（software dark factory）**：可以�
 
 这个 MVP 只在 GitHub 中保存状态，而不是使用数据库或队列；每个 tick 运行一个 Issue，而不是 daemon；它不会自动发现仓库，也不会自行 push 保护分支。完整边界见[/zh/security](/zh/security)。
 
-<Note>这套文档跟随 Core 的 `main` 分支；默认安装器跟随最新正式版本。使用新选项前，先用 `orbi --version` 对照[已发布版本](https://github.com/orbi-build/orbi/releases)。仅开发主线可用的能力会单独标出。</Note>
+<Note>这套文档跟随 Core 的 `main` 分支；默认安装器跟随最新正式版本。使用新选项前，先用 `orbi --version` 对照[已发布版本](https://github.com/orbi-build/orbi/releases)。文档会在相应位置标注引入该能力的版本。</Note>
 
 ## 它有什么不同
 

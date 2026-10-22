@@ -3,8 +3,6 @@ title: "Orbi docs: self-hosted software dark factory"
 description: "How do I install self-hosted Orbi and deliver GitHub Issues through testing, independent PR review, merge, and release?"
 ---
 
-
-
 Use the [installation](/installation) and [quickstart](/quickstart) guides to self-host Orbi, deliver `ai-ready` GitHub Issues through tests, independent PR review and merge, then publish a tagged release with a release task.
 
 Orbi is an open-source **software dark factory**: a software delivery system you can run on your own machine. You define the goal and acceptance criteria in a GitHub Issue. Orbi claims it when you add `ai-ready`, implements it in an isolated worktree, runs the real test suite, opens a PR, and completes independent review, fixes, and merge. You initiate a release with a release task; Orbi runs its gates and publishes the tag and release notes. The whole delivery is recorded in GitHub Issues, comments and the PR itself.
@@ -13,7 +11,7 @@ The reviewing session can run on a **different model** than the implementing ses
 
 This MVP keeps state only in GitHub rather than a database or queue, runs one Issue per tick rather than a daemon, and does not discover repositories or push to protected branches itself. See [/security](/security) for the full boundary list.
 
-<Note>These docs follow Core’s `main` branch. The default installer follows the latest official release. Check `orbi --version` and the [published releases](https://github.com/orbi-build/orbi/releases) before using a new option; features available only on the development branch are marked below.</Note>
+<Note>These docs follow Core’s `main` branch. The default installer follows the latest official release. Check `orbi --version` and the [published releases](https://github.com/orbi-build/orbi/releases) before using a new option; the release that introduced a feature is noted where it matters.</Note>
 
 ## What makes it different
 
