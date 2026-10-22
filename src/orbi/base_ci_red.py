@@ -539,8 +539,8 @@ def _located(comments: list[dict]) -> tuple[BaseCIRed, dict] | None:
     return None
 
 
-def _edit_state(repo: str, issue_number: int, record: BaseCIRed,
-                comment: dict, state: str, *, language_code: str) -> bool:
+def _edit_state(repo: str, issue_number: int, comment: dict,
+                state: str, *, language_code: str) -> bool:
     """Patch the ONE comment in place; returns whether it was edited."""
     body = comment.get("body")
     if not isinstance(body, str):
@@ -617,7 +617,7 @@ def _remind(repo: str, issue_number: int, record: BaseCIRed,
     stale = with_state(record, STATE_STALE)
     comment_issue(issue_number, repo=repo,
                   body=_state_line(stale, language_code))
-    _edit_state(repo, issue_number, record, comment, STATE_STALE,
+    _edit_state(repo, issue_number, comment, STATE_STALE,
                 language_code=language_code)
     event(
         "base_ci_red_stale", issue=issue_number, pr=record.pr,
@@ -678,7 +678,7 @@ def recover(repo: str, *, language_code: str,
             )
             continue
         if pr_state == "MERGED":
-            _edit_state(repo, number, record, comment, STATE_MERGED,
+            _edit_state(repo, number, comment, STATE_MERGED,
                         language_code=language_code)
             event(
                 "base_ci_red_merged", issue=number, pr=record.pr,
@@ -688,7 +688,7 @@ def recover(repo: str, *, language_code: str,
         if _base_is_green(repo, record, base_head):
             edit_issue(number, repo=repo, add=FIX_NEEDED_LABEL,
                        remove=BLOCKED_LABEL)
-            _edit_state(repo, number, record, comment, STATE_RESUMING,
+            _edit_state(repo, number, comment, STATE_RESUMING,
                         language_code=language_code)
             event(
                 "base_ci_red_recovered", issue=number, pr=record.pr,
@@ -735,7 +735,7 @@ def note_merged(repo: str, issue_number: int, *, language_code: str) -> bool:
     record, comment = located
     if record.state not in (STATE_WAITING, STATE_RESUMING):
         return False
-    changed = _edit_state(repo, issue_number, record, comment, STATE_MERGED,
+    changed = _edit_state(repo, issue_number, comment, STATE_MERGED,
                           language_code=language_code)
     if changed:
         event(

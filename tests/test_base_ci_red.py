@@ -720,11 +720,11 @@ def test_a_comment_without_a_rest_id_is_reported_and_skipped(monkeypatch):
     monkeypatch.setattr(seam, "update_issue_comment",
                         lambda *a, **k: posted.append(k))
     assert base_ci_red._edit_state(
-        REPO, 1, record(), {"body": base_ci_red.render(record())},
+        REPO, 1, {"body": base_ci_red.render(record())},
         "merged", language_code="en",
     ) is False
     assert base_ci_red._edit_state(
-        REPO, 1, record(), {"id": 7}, "merged", language_code="en",
+        REPO, 1, {"id": 7}, "merged", language_code="en",
     ) is False
     assert posted == []
 
