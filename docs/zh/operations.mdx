@@ -969,7 +969,7 @@ release notes 中声明，以便下游自动化有计划地迁移：
   `ai-merged`、`ai-blocked` 状态机。
 - **可观测性：**journal 每行以 `[run_id]` 开头，并使用
   `run_start`、`run_end`、`activity`、`heartbeat`、`resumed`、`run_failed`
-  等稳定事件名，以及[日志（journal）](#日志journal)中记录的启动/恢复事件。
+  等稳定事件名，以及[日志（journal）](#日志（journal）)中记录的启动/恢复事件。
   Pi 实时记录位于 `<worktree>/.pi-session/*.jsonl`。
 - **交付命名和标记：**稳定的任务分支是
   `orbi/<owner>-<repo>-issue-<N>`；带 run 的 worktree 目录是
@@ -1049,7 +1049,7 @@ tick 记录 `branches_reclaimed count=N`。
 
 | 状态 | 发生了什么 | 怎么办 |
 |---|---|---|
-| `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50：现场无法恢复、base 分支变更、审查超轮、PR 未合并被关闭、交付分支已从远端删除）——comment 写明为什么不能自动恢复 | 读 Issue 评论（现场 + 原因）和 journal。修环境或修任务，然后把同一 PR 路径重新标为 `ai-fix-needed`（同一 run 继续），或移除标签重新派发为全新 `ai-ready`（新 run）。通常需要人处理。v0.7.15 起的 `base_ci_red` 是范围明确的自动恢复例外，见[流程](/zh/workflow#交付因基础分支已红而暂停base_ci_red)。 |
+| `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50：现场无法恢复、base 分支变更、审查超轮、PR 未合并被关闭、交付分支已从远端删除）——comment 写明为什么不能自动恢复 | 读 Issue 评论（现场 + 原因）和 journal。修环境或修任务，然后把同一 PR 路径重新标为 `ai-fix-needed`（同一 run 继续），或移除标签重新派发为全新 `ai-ready`（新 run）。通常需要人处理。v0.7.15 起的 `base_ci_red` 是范围明确的自动恢复例外，见[流程](/zh/workflow#交付因基础分支已红而暂停：base_ci_red)。 |
 | `ai-fix-needed` | PR head 尚不可合并（review finding、base 冲突），或已有 run/PR 的可恢复失败（Issue #50：Pi 执行失败、验证失败、未推送本地 commit） | 什么都不用做——下一 tick 在同一 run_id、branch、worktree、PR 上启动下一个审查会话，会话内吸收最新 base。worktree 缺失不是失败：resume 会从远端交付分支重建它（Issue #807）。 |
 | 被杀后残留的 `ai-in-progress` | Runner 在任务中途被 SIGKILL | 下一 tick 的重启扫描接回（仅当没有其他 Runner 活着时）：同一 run id、同一 worktree、同一条进度评论——不新建 run。 |
 
