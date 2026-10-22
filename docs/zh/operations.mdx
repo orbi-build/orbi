@@ -307,6 +307,8 @@ service。
 `unit_drift` 行、非零退出、不取 slot、不领取 Issue）：哈希校验和
 哨兵边界不变。
 
+<a id="日志journal"></a>
+
 ## 日志（journal）
 
 journal 是本地记录。一个 run 的每行都以 run id 前缀 `[<run_id>]` 开头，
@@ -712,10 +714,10 @@ orbi add "task title" --repo OWNER/BACKLOG-REPO --config orbi.toml
 # 读取仓库并最多提出三个待交付 Issue：--count N（1-3，默认 3）要求
 # session 最多给出 N 条；交互流程对每个建议问一次，把你确认的创建或打标签；
 # --json 把 Suggestions 文档（repo、base_sha、session_dir、suggestions）
-# 打印到 stdout 且不写任何东西
+# 打印到 stdout，不创建或修改 GitHub Issue；本地上下文和批次文件仍会保留
 orbi suggest --config orbi.toml
 orbi suggest --repo OWNER/REPO --json --config orbi.toml
-orbi suggest --repo OWNER/REPO --json --count 1 --config orbi.toml
+orbi suggest --repo OWNER/REPO --json --count 1 --locale zh --config orbi.toml
 
 # 只读作用域观察：每个已配置 source repo 的所有活跃交付
 # （ai-in-progress / ai-pr-opened / ai-fix-needed / ai-awaiting-merge），
@@ -764,6 +766,12 @@ orbi session --config orbi.toml
 orbi session --follow --config orbi.toml   # tail -f
 orbi session --pretty --config orbi.toml   # 一行摘要
 ```
+
+### 建议语言与仓库摘要
+
+用 `--locale en` 或 `--locale zh` 选择建议和仓库摘要的语言；不传 `--locale` 时跟随仓库自身的语言。`--count N` 接受 1–3，默认 3。它和控制交付评论、通知的 `message_language` 是两个设置。
+
+生成建议时，Orbi 还会尝试把简短仓库摘要写到 `<deploy_home>/.orbi/suggest/<run_id>/understanding.md`；摘要失败不会让建议失败。成功或失败后，运行目录及已经生成的文件都会保留；结果通过校验后才会写入 `suggestions.json`。建议会避开最近三批已提过的内容；`--json` 只打印结果，不提交 Issue。交互模式只有你确认的建议才会提交。
 
 所有命令通过 `--config` 或 `ORBI_CONFIG` 环境变量接收配置
 （默认 `orbi.toml`）。`status` 和 `session` 是调试附件——
@@ -1042,7 +1050,7 @@ tick 记录 `branches_reclaimed count=N`。
 
 | 状态 | 发生了什么 | 怎么办 |
 |---|---|---|
-| `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50：现场无法恢复、base 分支变更、审查超轮、PR 未合并被关闭、交付分支已从远端删除）——comment 写明为什么不能自动恢复 | 读 Issue 评论（现场 + 原因）和 journal。修环境或修任务，然后把同一 PR 路径重新标为 `ai-fix-needed`（同一 run 继续），或移除标签重新派发为全新 `ai-ready`（新 run）。它从不自动恢复。 |
+| `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50：现场无法恢复、base 分支变更、审查超轮、PR 未合并被关闭、交付分支已从远端删除）——comment 写明为什么不能自动恢复 | 读 Issue 评论（现场 + 原因）和 journal。修环境或修任务，然后把同一 PR 路径重新标为 `ai-fix-needed`（同一 run 继续），或移除标签重新派发为全新 `ai-ready`（新 run）。通常需要人处理。v0.7.15 起的 `base_ci_red` 是范围明确的自动恢复例外，见[流程](/zh/workflow#交付因基础分支已红而暂停base_ci_red)。 |
 | `ai-fix-needed` | PR head 尚不可合并（review finding、base 冲突），或已有 run/PR 的可恢复失败（Issue #50：Pi 执行失败、验证失败、未推送本地 commit） | 什么都不用做——下一 tick 在同一 run_id、branch、worktree、PR 上启动下一个审查会话，会话内吸收最新 base。worktree 缺失不是失败：resume 会从远端交付分支重建它（Issue #807）。 |
 | 被杀后残留的 `ai-in-progress` | Runner 在任务中途被 SIGKILL | 下一 tick 的重启扫描接回（仅当没有其他 Runner 活着时）：同一 run id、同一 worktree、同一条进度评论——不新建 run。 |
 
@@ -1094,8 +1102,10 @@ ls -la <任务 worktree>/.pi-session/      # 空
 
 `max_concurrency`（默认 1）限定本机并发交付数。slot 是
 `<repo_dir>/.orbi/slots/slot-N` 上的排他 `flock(2)` 锁，在任何
-领取之前取得，整个交付生命周期（implement → review → merge）持有；
-进程无论如何退出，内核都会释放它。拿不到 slot 的 Runner 记录
+领取之前取得，在当前 tick 执行交付步骤时持有。开出 PR 后该 tick 结束并
+释放 slot；后续 tick 再取得 slot 评审或合并。普通 PR 的 CI 和人工批准跨 tick 等待
+不持续占用 slot；发版的进程内 CI 轮询会持有一个 slot，默认最多 1800 秒
+（`release_ci_wait_seconds`，每次 CI 门禁的上限，不是整个发布总时限）。进程退出时，内核会释放锁。拿不到 slot 的 Runner 记录
 `capacity_full` 后退出，不领取 Issue。`max_concurrency = 2` 时两个 timer
 实例可能在同一 tick 启动两个 Runner 实例；为 `1` 时只启用 `@1.timer`。
 它们竞争同一组 slot。`max_concurrency` 的范围是 `1` 到

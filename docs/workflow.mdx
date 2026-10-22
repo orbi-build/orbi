@@ -69,9 +69,9 @@ ai-ready                a task is dispatched (orbi add, or a human
                         independent Pi session — the ONLY blocking phase,
                         so the slot is held for exactly the Pi run —
                         reviews the exact base/head SHAs and FIXES
-                        findings in-session (code, full test suite,
-                        tiered coverage gate (Issue #234), push only the
-                        task branch), then emits a REVIEW_VERDICT. Its
+                        findings in-session (code, the target repository’s
+                        declared tests and coverage checks, push only
+                        the task branch), then emits a REVIEW_VERDICT. Its
                         prompt carries the linked Issue's trusted timeline
                         and trusted human feedback on the CURRENT PR:
                         formal review state plus inline file/line anchors.
@@ -93,9 +93,9 @@ ai-ready                a task is dispatched (orbi add, or a human
   -> merge              clean verdict (its head field equals the PR
                         head, Issue #591) + merge gate (head contains
                         the latest base, CI concluded, PR mergeable,
-                        remote head unchanged — each read ONCE: pending
-                        CI or an UNKNOWN mergeability defers the merge
-                        to the next tick, Issue #788)
+                        remote head unchanged; pending CI defers to the
+                        next tick, while UNKNOWN mergeability gets the
+                        bounded re-reads described below)
   -> ai-merged          Orbi merge mode: success terminal state; the
                         merge also clears `ai-ready`, so the merged Issue
                         is `ai-merged` alone (Issue #1526; existing
@@ -124,8 +124,12 @@ an exhausted review round budget, a PR closed without merge, a delivery
 branch deleted from the remote — nothing left to rebuild the worktree
 from) fails fast:
 the Issue is marked `ai-blocked` with the explicit reason why automatic
-recovery is impossible, and the automatic loop never touches it again — a
+recovery is impossible, and the automatic loop never touches these unrecoverable scenes again — a
 human decides the next step.
+
+Opened-PR candidates are considered oldest Issue first, across a bounded scan of up to 100 candidates. Running or CI-pending candidates are skipped so another delivery can proceed.
+
+A saved clean review can avoid another review session after a deferred merge. Reuse requires the stored PR head and the hash of the Issue body actually included in the review prompt to match. An outside head change or a change to that rendered body requires review again; a custom prompt that omits `{{ISSUE_BODY}}` does not use body changes for this check. When the Runner absorbs a non-conflicting base update itself, it updates the recorded head, pushes it and defers merge until a later tick checks that head’s CI. The merge gate still verifies the current head and base before merging.
 
 ## Steering an active delivery
 
@@ -150,9 +154,10 @@ would expose a prompt-injection path. The initial trusted comment timeline is ca
 `issue_comments_limit` (200 by default): older comments are dropped and the
 injected context states how many were omitted.
 
-Dead-loop guard and comment dedup (Issue #825): a resume may bind a NEW
-run id (one recoverable failure is enough), while the PR body is written
-once at creation, so the resume verification accepts ANY run marker the
+Dead-loop guard and comment dedup (Issue #825): recovery of an existing
+attempt keeps its run id. A fresh claim or takeover can start a new attempt
+on the same delivery branch and PR. Since the PR body is written once at
+creation, the resume verification accepts ANY run marker the
 delivery line has used — the marker set is read from the Issue's TRUSTED
 comments (the same trust filter as the resume scene; a copied marker in a
 public comment widens nothing, and the branch, base, head and exact-URL
@@ -168,13 +173,16 @@ and the unchanged-precondition verdict in the comment.
 
 Rules of the chain:
 
-- One task = one run = one feature branch = one worktree = one PR. The PR
-  number never changes during the review/fix loop; only its head may
-  advance.
+- A development delivery keeps the same branch and PR through review/fix.
+  Each attempt has one run id and worktree; recovery of that attempt keeps
+  them. A fresh re-claim or takeover may use a new attempt on the same
+  branch/PR. Read the Issue’s trusted comments to find its attempt markers.
 - Only the two opened-PR states are picked up automatically:
   `ai-pr-opened` (awaiting review) and `ai-fix-needed` (awaiting the next
   review session). `ai-ready` is claimed as new work; `ai-blocked` is
-  never auto-recovered. A delivery that carries the backfilled
+  never auto-recovered for these unrecoverable conditions. The v0.7.15
+  [`base_ci_red` recovery](#a-delivery-paused-on-a-red-base-branch-base_ci_red)
+  is an explicit exception. A delivery that carries the backfilled
   `ai-in-progress` label is still picked up (Issue #178: a runner killed
   during review leaves it behind — the positive opened-PR qualifier
   already keeps implement-phase Issues out of the scan).
@@ -200,15 +208,13 @@ Rules of the chain:
   when the same failure reason already appears in two or more consecutive
   rounds, emits the findings verdict naming the repetition instead of
   repeating the fix — a wall is hit by at most two rounds.
-- No in-tick waiting (Issue #788): the old in-process wait loop
-  (`wait_for_delivery`, CI/mergeability polling with
-  `release_ci_wait_seconds` / `mergeable_wait_seconds`) is gone. Every
-  wait is the waiting primitive — write the state, return, release the
-  slot, and the next tick re-reads (`delivery_ci_pending`,
-  `merge_gate_ci_pending`, `merge_gate_mergeable_unknown`). The
-  resumable scan skips a CI-pending candidate outright (Issue #1473),
-  so a pending PR never costs a whole tick. The
-  crash-recovery path IS the path.
+- Ordinary development deliveries defer pending CI to a later tick (Issue #788):
+  they record the wait, return and release the slot. The next tick re-reads
+  the state (`delivery_ci_pending`, `merge_gate_ci_pending`,
+  `merge_gate_mergeable_unknown`). The review scan skips CI-pending candidates,
+  so other work can proceed. Releases have a separate in-process CI wait:
+  they keep a slot while polling, bounded by `release_ci_wait_seconds`
+  (default 1800 seconds per CI gate, not a total release timeout).
   One bounded exception is GitHub's asynchronously computed mergeability
   (Issue #1736): when the merge gate's first read says `UNKNOWN` and the
   head's CI has already concluded, the gate re-reads the whole PR state
@@ -421,6 +427,8 @@ an unfinished one) and the **single outcome** (one fix or one change, not
 several unrelated things). A passing verdict changes nothing and the
 delivery starts.
 
+Since v0.7.15, this judgment uses the meaning of the request rather than template headings. A concrete runtime failure with an unambiguous correction can state the result; several symptoms of the same failure can still be one outcome. A log from an earlier attempt does not by itself state an acceptance condition.
+
 A failing verdict stops the attempt before any work exists: ONE Issue
 comment lists every missing piece and the repair action, the repository's
 claim label (`ai-ready` by default — `dispatch_label` may name another)
@@ -491,8 +499,9 @@ path.
 ## Run marker and run_id
 
 Every task attempt generates one `run_id` (8 hex chars, e.g.
-`e07383c2`) and reuses it for every step of the attempt; a retry of the
-same Issue generates a new one. The same id appears in:
+`e07383c2`) and reuses it for every step and recovery of that attempt.
+A fresh claim or takeover starts a new attempt, which can continue the
+same Issue and PR with a new id. The same id appears in:
 
 - every journal line of the attempt (prefix `[e07383c2]`);
 - the Issue/PR comments: visible field `run_id=e07383c2` plus the hidden
@@ -512,13 +521,14 @@ same Issue generates a new one. The same id appears in:
   scene `<!-- orbi:scene:v1 {json} -->` (`src/orbi/scene.py`): the
   machine-readable recovery record the resume scan parses — a corrupted
   scene and a missing scene are distinct failure branches (Issue #786);
-- the stable Issue-based feature branch (`orbi/<owner>-<repo>-issue-<N>`);
 - the worktree name (`.worktrees/orbi-<owner>-<repo>-issue-<n>-e07383c2`), plus
   the Pi session directory and run artifacts;
 - the PR body — the stable marker `<!-- orbi:run=e07383c2 -->` is
   part of the PR contract; the Runner rejects a PR without it.
 
-Reconstruct a full timeline with one grep:
+The feature branch is stable by Issue (`orbi/<owner>-<repo>-issue-<N>`),
+not by run id. Use the Issue’s trusted comments to find all attempt ids,
+then inspect each attempt’s timeline:
 
 ```bash
 journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
@@ -609,6 +619,8 @@ the reader-facing action when the failure carries a specific repair path
 stderr is never cut to its first word.
 
 ### A delivery paused on a red base branch: `base_ci_red`
+
+**Available since v0.7.15, including `/orbi fix-base`.**
 
 When the reviewed PR is ready but a check it fails is ALSO failing on the
 configured base branch, the PR cannot turn it green and no review round can
@@ -745,8 +757,10 @@ DAG, no priority numbers, no separate queues:
      hold this gate. The bounded wait uses
      `RELEASE_DELIVERIES_WAIT_SECONDS`; exceeding it produces a delivery wait
      timeout and moves the release to `ai-blocked`. Then require CI green on
-     the release commit (no check runs passes
-     with explicit evidence; a pending check is an intermediate state —
+     the release commit (a repository with no observed CI may
+     pass with explicit no-checks evidence; once the base has CI, an empty
+     check list on a newly pushed version commit waits for registration.
+     A pending check is an intermediate state —
      the gate waits for the final conclusion, one `release_waiting_ci`
      journal line and one progress-comment update per poll, up to
      `release_ci_wait_seconds` (default 1800 s); a wait timeout fails
@@ -826,8 +840,9 @@ DAG, no priority numbers, no separate queues:
 
   The `ai-release` label is a type marker, NOT a delivery state: it is
   not part of the delivery-state machine, not an exclusion of the ready
-  scan, and the Runner never adds or removes it — only the human does
-  (at dispatch time, together with `ai-ready`).
+  scan, and ordinary delivery transitions never add or remove it. It is applied
+  when a person dispatches the release or when a configured milestone workflow
+  creates the release task, together with `ai-ready`.
 - **P0 priority**: the plain `p0` GitHub label marks an urgent Issue
   (a production outage). It is NOT a delivery state — it only orders the
   ready pickup, never changes the Issue granularity, any delivery state,
@@ -847,6 +862,8 @@ relation (`gh issue edit N --add-blocked-by M`); the Runner reads the
 field and skips Issues with open blockers. `Depends on #N` lines in an
 Issue body are not parsed.
 
+<a id="repository-level-delivery-policy-githuborbitoml"></a>
+
 ## Repository-level delivery policy (`.github/orbi.toml`)
 
 A repository can version its **delivery policy** as code. At claim the
@@ -865,6 +882,7 @@ Only delivery-policy keys are allowed:
 | `base_branch` | string | Delivery base branch for this repository; absent falls back to the matching `[[repositories]].base_branch`, else the host `base_branch`. |
 | `active_milestone` | string | The fresh-claim Milestone scope for this repository. Two scans carry NO Milestone qualifier. The external-takeover scan (Issue #842, decision D1): the fifth, last ready scan — an external triage ticket (body marker `<!-- orbi:external-pr:N -->`) is claimable regardless, because an external contribution belongs to no version's scope and must never block the release gate. A closed active Milestone with no newer open one (Issue #1391): that tick's claim scan runs unscoped (`active_milestone_closed_unscoped`), so a new `ai-ready` Issue is claimed right after the first release instead of waiting for a version nobody has decided yet; the configured value is left in place, and the ordinary advance moves the scope as soon as a newer open Milestone exists. |
 | `auto_next_milestone` | boolean | The idle auto-advance switch for this repository (Issue #1342): when `false`, a closed active Milestone with a pending higher one is not rewritten — the confirmation Issue carrying the in-ticket `/milestone <version>` command is posted instead. Absent falls back to the host value (default `true`). |
+| `message_language` | string | `en` or `zh` for Orbi’s comments and attribution footer in this repository; an explicit value overrides the host. It does not translate user content or override the host’s Telegram language. See [Comment language](#comment-language). |
 | `context_files` | string[] | Repository-relative context files; existence and a size cap are checked before injection. |
 | `dispatch_label` | string | The claim label for this repository (default `ai-ready`); the delivery lifecycle labels stay host constants. |
 | `steering_enabled` | boolean | Enables trusted correction polling for this repository; absent falls back to the host value. |

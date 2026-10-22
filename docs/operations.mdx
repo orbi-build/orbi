@@ -831,10 +831,11 @@ orbi add "task title" --repo OWNER/BACKLOG-REPO --config orbi.toml
 # (1-3, default 3) asks the session for at most N; the interactive flow
 # asks once per suggestion and files/labels the ones you confirm; --json
 # prints the Suggestions document (repo, base_sha, session_dir,
-# suggestions) to stdout and writes nothing
+# suggestions) to stdout without creating or changing GitHub Issues; local
+# context and batch files are still retained
 orbi suggest --config orbi.toml
 orbi suggest --repo OWNER/REPO --json --config orbi.toml
-orbi suggest --repo OWNER/REPO --json --count 1 --config orbi.toml
+orbi suggest --repo OWNER/REPO --json --count 1 --locale en --config orbi.toml
 
 # Read-only scoped observation: every active delivery (ai-in-progress /
 # ai-pr-opened / ai-fix-needed / ai-awaiting-merge) in every configured
@@ -893,6 +894,12 @@ orbi session --config orbi.toml
 orbi session --follow --config orbi.toml   # tail -f
 orbi session --pretty --config orbi.toml   # one-line summaries
 ```
+
+### Suggestion language and repository summary
+
+Use `--locale en` or `--locale zh` to choose the language of suggestions and the repository summary; without `--locale`, Orbi follows the repository’s own language. `--count N` accepts 1–3, default 3. This command’s locale is separate from `message_language`, which controls delivery comments and notifications.
+
+While choosing suggestions, Orbi also tries to write a short repository summary to `<deploy_home>/.orbi/suggest/<run_id>/understanding.md`. A summary failure does not fail the suggestions. The run directory and any files already produced remain available after success or failure; `suggestions.json` is written once the result is validated. Suggestions avoid items from the three most recent batches; `--json` prints the result without submitting any Issue. In interactive mode, only the suggestions you confirm are submitted.
 
 All commands accept the config via `--config` or the
 `ORBI_CONFIG` environment variable (default
@@ -1222,7 +1229,7 @@ continues, and a successful tick with deletions logs
 
 | State | What happened | What to do |
 |---|---|---|
-| `ai-blocked` | Only an external precondition the AI cannot safely judge or fix (Issue #50: unrecoverable scene, base-branch config change, review rounds exhausted, PR closed without merge, delivery branch deleted from the remote) — the comment states WHY automatic recovery is impossible | Read the Issue comment (scene + reason) and the journal. Fix the environment or the task, then either relabel the same PR path as `ai-fix-needed` (same run continues) or remove the labels and re-dispatch as a fresh `ai-ready` (new run). It is never auto-recovered. |
+| `ai-blocked` | Only an external precondition the AI cannot safely judge or fix (Issue #50: unrecoverable scene, base-branch config change, review rounds exhausted, PR closed without merge, delivery branch deleted from the remote) — the comment states WHY automatic recovery is impossible | Read the Issue comment (scene + reason) and the journal. Fix the environment or the task, then either relabel the same PR path as `ai-fix-needed` (same run continues) or remove the labels and re-dispatch as a fresh `ai-ready` (new run). It normally requires a person. Since v0.7.15, `base_ci_red` is a narrow automatic-recovery exception; see [Workflow](/workflow#a-delivery-paused-on-a-red-base-branch-base_ci_red). |
 | `ai-fix-needed` | The PR head is not mergeable yet (review finding, base conflict) or an AI-recoverable failure of the run/PR (Issue #50: Pi execution failure, verification failure, unpushed local commit) | Nothing — the next tick resumes the same run_id, branch, worktree and PR and starts the next review session, which absorbs the latest base in-session. A missing worktree is not a failure: the resume rebuilds it from the remote delivery branch (Issue #807). |
 | Leftover `ai-in-progress` after a kill | The Runner was SIGKILLed mid-task | The next tick's resume scan picks it up (only when no other Runner is alive): same run id, same worktree, same progress comment — no new run. |
 
@@ -1281,8 +1288,12 @@ lazily).
 `max_concurrency` (default 1) bounds the number of concurrent deliveries
 on the machine. A slot is an exclusive `flock(2)` lock on
 `<repo_dir>/.orbi/slots/slot-N`, taken before any claim and held
-for the whole delivery lifecycle (implement → review → merge); the kernel
-releases it when the process exits, however it exits. A Runner that
+while the current tick executes a delivery step. Opening a PR ends that
+tick and releases the slot; a later tick takes a slot for review or merge.
+Ordinary PR CI and human-approval waits do not hold a slot across ticks.
+A release’s in-process CI polling does hold a slot, up to
+`release_ci_wait_seconds` (default 1800 seconds per CI gate, not a total release timeout). The kernel
+releases the lock whenever the process exits. A Runner that
 cannot take a slot logs `capacity_full` and exits without claiming an
 Issue. At `max_concurrency = 2`, both timer instances may start two Runner
 instances in the same tick; at `1`, only `@1.timer` is enabled. They compete

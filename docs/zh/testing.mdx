@@ -1,9 +1,9 @@
 ---
 title: "测试"
-description: "Orbi 如何用测试和 CI 门禁控制交付?"
+description: "如何运行 Orbi Core 仓库自己的测试与覆盖率检查?"
 ---
 
-Orbi 用完整测试套件、分层覆盖率要求和仓库的远程 CI 检查为交付设置门禁。
+本页说明为 **Orbi Core 自身仓库**贡献代码时的测试与 CI 契约。交付到其他仓库时，遵循目标仓库声明的测试、覆盖率要求和 CI 检查，不会自动套用 Core 的 Python 工具或覆盖率阈值。
 
 仓库契约（见 `AGENTS.md`）：Python 代码的完整 pytest 套件，
 **分层覆盖率门禁**（Issue #234）。同一契约在 Runner 机器本地和
