@@ -2900,37 +2900,60 @@ def test_process_issue_notifications_stay_github_only_without_status_url(
     assert not any("Project status" in body for body in posted)
 
 
+@pytest.mark.parametrize(
+    ("raw", "reason", "language_code"),
+    [
+        ("https://user:secret@tasks.example.org/status", "userinfo_not_allowed",
+         language.LANGUAGE_EN),
+        # Issue #1830: the authority is `:443` — nonempty, but with no
+        # hostname — so the value must be rejected like any other invalid one.
+        # The same delivery posts its English and Chinese notification body.
+        ("https://:443/status", "missing_host", language.LANGUAGE_EN),
+        ("https://:443/status", "missing_host", language.LANGUAGE_ZH),
+        ("https://:443?repo=owner%2Frepo", "missing_host",
+         language.LANGUAGE_EN),
+        ("https://:443?repo=owner%2Frepo", "missing_host",
+         language.LANGUAGE_ZH),
+    ],
+)
 def test_invalid_status_url_warns_and_the_same_delivery_continues(
-    monkeypatch, tmp_path, caplog,
+    monkeypatch, tmp_path, caplog, raw, reason, language_code,
 ):
     """The real config loader ignores an invalid optional value with ONE
     safe warning (never the raw value) and the run's delivery continues
     exactly like an unconfigured host: GitHub links only, no link comment,
-    no failed start (Issue #1826)."""
+    no failed start (Issue #1826, #1830).
+
+    The same delivery posts its English and Chinese notification bodies
+    without a project-status link for the rejected value."""
     import logging
     from dataclasses import replace
 
     caplog.set_level(logging.WARNING, logger="orbi.bootstrap")
     config_path = tmp_path / "orbi.toml"
-    raw = "https://user:secret@tasks.example.org/status"
     config_path.write_text(
         f'source_repos = ["xqliu/orbi"]\nstatus_url = "{raw}"\n',
         encoding="utf-8",
     )
     loaded = config_domain.load_config(config_path)
     assert loaded.status_url is None
+    status_url_warnings = [
+        record for record in caplog.records
+        if "key=status_url" in record.getMessage()
+    ]
+    assert len(status_url_warnings) == 1
+    assert f"reason={reason}" in status_url_warnings[0].getMessage()
     assert not any(raw in record.getMessage() for record in caplog.records)
-    assert any(
-        "reason=userinfo_not_allowed" in record.getMessage()
-        for record in caplog.records
-    )
 
     calls, posted = make_fake_gh(monkeypatch)
     patch_process_deps(monkeypatch, tmp_path)
     config = replace(
         loaded, repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
-        base_branch="main",
+        base_branch="main", message_language=language_code,
     )
     runner.process_issue(make_issue(), config, "xqliu/orbi")
-    assert any("**Orbi progress**" in body for body in posted)
+    header = language.text(language_code, "progress.header")
+    assert header in {line for body in posted for line in body.splitlines()}
     assert not any("Project status" in body for body in posted)
+    assert not any("项目状态" in body for body in posted)
+    assert not any(raw in body for body in posted)

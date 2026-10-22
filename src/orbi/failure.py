@@ -64,6 +64,12 @@ REASON_CODES = frozenset({
     # The configured base branch does not exist in the repository
     # (Issue #1749): a repository/config precondition a human repairs.
     "base_branch_missing",
+    # The delivery check that failed on the PR head is ALSO failing on the
+    # configured base branch (Issue #1825): the PR cannot turn it green, so
+    # the fix belongs to the base. Not `retry_safe` — a plain requeue would
+    # hit the same red base — but recoverable: `base_ci_red.recover` resumes
+    # the SAME delivery once the base check turns green, no relabel.
+    "base_ci_red",
     # Any other runner exception the classifier does not recognize.
     "unclassified",
 })
@@ -348,6 +354,7 @@ DISPOSITIONS: dict[str, tuple[str, bool]] = {
     "credential_missing": ("check_credentials", False),
     "provider_quota": ("wait_quota", True),
     "base_branch_missing": ("fix_ticket", False),
+    "base_ci_red": ("fix_ticket", False),
     "unclassified": ("fix_ticket", False),
 }
 

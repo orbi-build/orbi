@@ -26,7 +26,9 @@ import os
 import re
 from pathlib import Path
 
-from orbi import failure, language, runner_health, scene, user_summary
+from orbi import (
+    base_ci_red, failure, language, runner_health, scene, user_summary,
+)
 from orbi.blocked_comment import post_blocked_comment
 from orbi.comment_kind import (
     COMMENT_KIND_FAILURE,
@@ -41,9 +43,8 @@ from orbi.failure import (
 )
 from orbi.comment_trust import latest_run_marker, trusted_comments
 from orbi.github import (
-    _pr_number, apply_label_patch, comment_issue,
-    commit_check_runs, issue_comments, issue_labels, issue_priority,
-    list_issues, pr_comments, run_gh_write_command,
+    _pr_number, apply_label_patch, comment_issue, issue_comments,
+    issue_labels, issue_priority, pr_comments, run_gh_write_command,
     update_issue_comment,
 )
 from orbi.journal import LOGGER, event, issue_context, run_command
@@ -77,9 +78,20 @@ class UnrecoverableDeliveryError(RuntimeError):
 class PreExistingCIFailure(UnrecoverableDeliveryError):
     """A failed delivery check is already failing on the PR's base.
 
-    Retrying review/fix rounds cannot change a failure that the PR did not
-    introduce, so this external precondition fails the delivery quickly.
+    No review round can change a failure the PR did not introduce, so the
+    record is decided HERE (Issue #1825): `base_ci_red`/`checks` carry
+    what the comment and `/orbi fix-base` read.
     """
+
+    def __init__(self, message: str, *,
+                 record: "base_ci_red.BaseCIRed | None" = None,
+                 checks: "list[base_ci_red.FailingCheck] | None" = None):
+        super().__init__(message)
+        self.base_ci_red = record
+        self.checks = list(checks or [])
+        self.failure_record = failure.Failure(
+            "base_ci_red", *failure.DISPOSITIONS["base_ci_red"],
+        )
 
 
 class GateCIFailure(RuntimeError):
@@ -553,47 +565,26 @@ def block_repo_config_failure(number: int, source_repo: str,
         LOGGER.exception("issue=%s repo_config_failure_report_failed", number)
 
 
-def _main_ci_triage_url(repo: str, check_name: str) -> str | None:
-    """Find the existing auto-created main CI issue, when present."""
-    try:
-        issues = list_issues(
-            repo, state="all",
-            search=f"CI failure: {check_name} on branch main",
-            json_fields="number,url,title", limit=20,
-        )
-    except Exception:
-        LOGGER.exception("delivery_ci_triage_lookup_failed repo=%s check=%s",
-                         repo, check_name)
-        return None
-    prefix = f"CI failure: {check_name} on branch main"
-    for issue in issues:
-        if isinstance(issue, dict) and str(issue.get("title", "")).startswith(prefix):
-            url = issue.get("url")
-            if isinstance(url, str) and url:
-                return url
-    return None
-
-
 def _raise_if_preexisting_ci_failure(
-        repo: str, failed_names: list[str], base_commit: str | None) -> None:
-    """Raise a fast, explicit error when base has the same failed check."""
-    if not base_commit:
+        repo: str, failed_names: list[str], base_commit: str | None,
+        *, base_branch: str, pr_number: int) -> None:
+    """Raise the fast base-branch-red failure (Issue #1825).
+
+    The CONFIGURED base branch and every failed base check with its run
+    link: one source for the comment and the recovery scan.
+    """
+    detected = base_ci_red.detect(
+        repo, failed_names, base_commit, base_branch=base_branch,
+        pr=pr_number)
+    if detected is None:
         return
-    base_checks = commit_check_runs(repo, base_commit)
-    base_failures = {
-        check.get("name") for check in base_checks
-        if check.get("status") == "completed"
-        and check.get("conclusion") not in ("success", "neutral", "skipped")
-    }
-    for name in failed_names:
-        if name not in base_failures:
-            continue
-        triage_url = _main_ci_triage_url(repo, name)
-        suffix = f"; triage: {triage_url}" if triage_url else ""
-        raise PreExistingCIFailure(
-            f"delivery gate: main is already red on check '{name}' — "
-            f"fix main first{suffix}"
-        )
+    record, checks = detected
+    triage_url = base_ci_red.triage_url(repo, checks[0].name, base_branch)
+    suffix = f"; triage: {triage_url}" if triage_url else ""
+    raise PreExistingCIFailure(
+        f"delivery gate: {base_branch} is already red on check "
+        f"'{checks[0].name}' — fix {base_branch} first{suffix}",
+        record=record, checks=checks)
 
 
 def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
@@ -795,8 +786,10 @@ def report_delivery_failure(
         current_labels if current_labels is not None
         else issue_labels(number, source_repo)
     )
-    evidence_detail = _failure_evidence(
-        worktree, exc, language_code=language_code) if evidence else ""
+    # Base-branch-red (Issue #1825) owns its body: no evidence segment.
+    red = getattr(exc, "base_ci_red", None)
+    evidence_detail = "" if red is not None or not evidence else (
+        _failure_evidence(worktree, exc, language_code=language_code))
     # The milestone is a short mobile notification: for the workflow
     # refusal it must carry the same cause AND repair path as the
     # detailed comment, so it shows the reader-facing action instead of
@@ -819,14 +812,20 @@ def report_delivery_failure(
         if review_scene_block is not None:
             scene += f"\n{_redact_local_paths(review_scene_block)}"
         outcome = "fix needed"
-    body = _failure_comment_body(
-        outcome="blocked" if blocked else "fix needed",
-        action=action, reason=reason, diagnosis=diagnosis, scene=scene,
-        evidence=evidence_detail, pr_url=pr_url,
-        issue=issue_context(source_repo, number), run_id=run_id or "-",
-        failure_record=failure_record, language_code=language_code,
-        issue_number=number, issue_title=title, status_url=status_url,
-    )
+    if isinstance(red, base_ci_red.BaseCIRed):
+        body = base_ci_red.comment_body(
+            red, getattr(exc, "checks", []),
+            failure_record=failure_record, language_code=language_code,
+            issue_number=number, issue_title=title, status_url=status_url)
+    else:
+        body = _failure_comment_body(
+            outcome="blocked" if blocked else "fix needed",
+            action=action, reason=reason, diagnosis=diagnosis, scene=scene,
+            evidence=evidence_detail, pr_url=pr_url,
+            issue=issue_context(source_repo, number), run_id=run_id or "-",
+            failure_record=failure_record, language_code=language_code,
+            issue_number=number, issue_title=title, status_url=status_url,
+        )
     if blocked and classify:
         body = body.replace(
             "</details>",

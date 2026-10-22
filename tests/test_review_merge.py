@@ -1062,29 +1062,11 @@ def test_merge_gate_merges_after_green_ci(monkeypatch, tmp_path):
     assert result["merged"] is True
 
 
-def test_preexisting_ci_triage_lookup_is_best_effort(monkeypatch):
-    monkeypatch.setattr(seam, "run_command", lambda *_args, **_kwargs: "{}")
-    assert failure_report._main_ci_triage_url("owner/repo", "tests") is None
-
-    monkeypatch.setattr(seam, "run_command", lambda *_args, **_kwargs: "not json")
-    assert failure_report._main_ci_triage_url("owner/repo", "tests") is None
-
-    monkeypatch.setattr(seam, "run_command",
-        lambda *_args, **_kwargs: json.dumps([{"title": "other", "url": ""}]),
-    )
-    assert failure_report._main_ci_triage_url("owner/repo", "tests") is None
-
-    monkeypatch.setattr(seam, "run_command",
-        lambda *_args, **_kwargs: json.dumps([{
-            "title": "CI failure: tests on branch main (push)", "url": 42,
-        }]),
-    )
-    assert failure_report._main_ci_triage_url("owner/repo", "tests") is None
-
-
 def test_preexisting_ci_check_skips_base_lookup_without_base(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda *_args, **_kwargs: "unused")
-    failure_report._raise_if_preexisting_ci_failure("owner/repo", ["tests"], None)
+    failure_report._raise_if_preexisting_ci_failure(
+        "owner/repo", ["tests"], None, base_branch="main", pr_number=7,
+    )
 
 
 def test_merge_gate_reads_the_state_once(monkeypatch, tmp_path):

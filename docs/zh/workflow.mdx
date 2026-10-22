@@ -476,6 +476,7 @@ review 与 ops session），因此自定义 prompt 模板同样会收到：会�
 | `review_budget_exhausted` | 有界 review/fix 预算用尽 | `decide` | false |
 | `human_decision_required` | 只有人能决策的外部前置条件 | `decide` | false |
 | `base_branch_missing` | 配置的 base branch 在仓库中不存在 | `fix_ticket` | false |
+| `base_ci_red` | PR 失败的 check 在配置的基础分支上本来也失败 | `fix_ticket` | false |
 | `credential_missing` | GitHub/provider 凭据缺失或被拒绝 | `check_credentials` | false |
 | `unclassified` | 其它任何 Runner 异常 | `fix_ticket` | false |
 
@@ -486,6 +487,46 @@ review 与 ops session），因此自定义 prompt 模板同样会收到：会�
 milestone 的可见摘要就是同一条有长度上限、不含本机路径的读者说明——理由，
 或在失败带有明确修复路径时使用 Action（Actions workflow 权限拒绝，Issue
 #1651）——完整的命令 stderr 绝不会被截成第一个词。
+
+### 交付因基础分支已红而暂停：`base_ci_red`
+
+评审已通过、测试也通过，但 PR 失败的那个 check 在配置的基础分支上本来也
+失败 —— PR 无法让它变绿，评审轮次也修不了。此时交付以 `ai-blocked` 暂停，
+`reason_code` 为 `base_ci_red`（`action_code` 为 `fix_ticket`，
+`retry_safe` 为 false：单纯重新入队仍会撞上同样红的基础分支），并留下
+**一条**评论：先说用户已经拿到的结果（PR 已就绪），再说明为何暂停，然后
+列出**每一个**失败的 base check 及其 run 链接和最初的错误行，最后给出两种
+修法。基础分支取自配置，绝不写死 `main`；非子进程失败不会输出空的证据
+区块。
+
+同一条评论在 `orbi:failure:v1` 旁边再携带一个隐藏块：
+
+```html
+<!-- orbi:base-ci-red:v1 {"schema":1,"state":"waiting","base_branch":"main","base_sha":"abc1234","pr":123,"failing_checks":["backend — build, vet, test"]} -->
+```
+
+`state` 为 `waiting`（恢复扫描仍在轮询）、`resuming`（基础分支变绿，交付
+已恢复）、`merged`（已合并）或 `stale`（有界等待到期）。`failing_checks`
+是扫描会重新检查的 base check 名称。
+
+恢复不需要人工改标签：
+
+- 每个 tick 在 resume 扫描**之前**跑一次有界扫描：读取仍然开着的
+  `ai-blocked` Issue 中**最新**块为 `waiting` 的那些，先执行待处理的
+  `/orbi fix-base` 评论，然后在当前 base HEAD 上只读一次 check 结果、
+  只比对块里列出的 check；
+- 全部变绿 -> Issue 从 `ai-blocked` 换成 `ai-fix-needed`（这是唯一一次
+  标签变更；没有新标签、没有新状态），现有 resume 流程吸收新 base、重跑
+  评审与合并，并把同一条评论原地改成 `merged`；
+- 仍然红，或有 check 还在跑 -> 不动；
+- 连续七天仍红 -> 只发一条提醒评论，块变为 `stale`，之后不再轮询。手动
+  去掉 `ai-blocked`、加上 `ai-fix-needed` 仍可恢复。
+
+`/orbi fix-base`（需要 write 权限，同一条评论只执行一次）为每个失败的
+base check 创建 —— 或复用一个**仍然开着**的 ——
+`CI failure: <check> on branch <base>` Issue，打上 `ai-ready` + `p0`
+并放进当前 active Milestone，然后在被暂停的 Issue 上回复
+`created #K` / `reused #K`。已关闭的 triage Issue 绝不复用。
 
 ## PR body 契约：`Fixes #N`
 
