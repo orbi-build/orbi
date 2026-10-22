@@ -633,9 +633,12 @@ wait expired). `failing_checks` names the base checks the scan re-reads.
 Recovery needs no relabel:
 
 - every tick, BEFORE the resume scans, one bounded scan reads the open
-  `ai-blocked` Issues whose NEWEST block is `waiting`, runs a pending
+  `ai-blocked` Issues whose LATEST TRUSTED failure is the `base_ci_red` one
+  and whose record in that same comment is `waiting`, runs a pending
   `/orbi fix-base` comment, then reads the current base head once and the
-  recorded check names against it;
+  recorded check names against it. A record copied by an author without
+  write permission authorizes nothing, and a newer trusted failure — even
+  one carrying no base-CI block — supersedes an older record;
 - all green -> the Issue goes `ai-blocked` -> `ai-fix-needed` (that is the
   only label change; no new label, no new state), the existing resume flow
   absorbs the base, re-runs the review and merge, and the same comment is

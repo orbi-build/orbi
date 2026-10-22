@@ -512,9 +512,11 @@ milestone 的可见摘要就是同一条有长度上限、不含本机路径的�
 恢复不需要人工改标签：
 
 - 每个 tick 在 resume 扫描**之前**跑一次有界扫描：读取仍然开着的
-  `ai-blocked` Issue 中**最新**块为 `waiting` 的那些，先执行待处理的
+  `ai-blocked` Issue 中**最新一条可信失败**为 `base_ci_red`、且同一个
+  评论里的块为 `waiting` 的那些，先执行待处理的
   `/orbi fix-base` 评论，然后在当前 base HEAD 上只读一次 check 结果、
-  只比对块里列出的 check；
+  只比对块里列出的 check。没有 write 权限的作者抄来的块不作数；更新的
+  可信失败（即使它不带 base-CI 块）会让更早的块失效；
 - 全部变绿 -> Issue 从 `ai-blocked` 换成 `ai-fix-needed`（这是唯一一次
   标签变更；没有新标签、没有新状态），现有 resume 流程吸收新 base、重跑
   评审与合并，并把同一条评论原地改成 `merged`；

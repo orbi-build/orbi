@@ -26,7 +26,7 @@ import orbi.base_ci_red as base_ci_red
 import orbi.runner as runner
 from orbi import failure, failure_report, ticket_command
 from orbi.comment_kind import COMMENT_KIND_FAILURE, comment_kind_marker
-from orbi.progress import run_marker
+from orbi.progress import field_block, run_marker
 from tests.fakes.github import FakeGh
 from seam import seam
 
@@ -411,7 +411,14 @@ def _run_command(gh, issue_number=1825, *, milestone=None):
     )
 
 
-def _blocks_issue(gh, number=1825, *, state="waiting", checks=(CHECK,)):
+def _blocks_issue(gh, number=1825, *, state="waiting", checks=(CHECK,),
+                  login="orbi-bot"):
+    """The paused scene's failure comment, written by the runner account.
+
+    The runner's own account is trusted without a repository permission
+    read (Issue #1806), which is exactly how the real base-CI comment is
+    written; the recovery gate reads trust (Issue #1833).
+    """
     gh.comment(number, "\n".join([
         run_marker("096197d2"),
         comment_kind_marker(COMMENT_KIND_FAILURE),
@@ -421,7 +428,7 @@ def _blocks_issue(gh, number=1825, *, state="waiting", checks=(CHECK,)):
         )),
         "⛔ paused",
         base_ci_red.render(record(state=state, failing_checks=checks)),
-    ]))
+    ]), login=login, association="NONE")
     # The block is FRESH: the fake's clock is a fixed past date, and the
     # 7-day reminder must not fire on a comment that was just written.
     gh.issues[number]["comments"][-1]["createdAt"] = datetime.now(
@@ -991,6 +998,230 @@ def test_note_merged_without_a_block_reports_no_change(monkeypatch):
     monkeypatch.setattr(seam, "run_command", gh)
     assert base_ci_red.note_merged(REPO, 1825, language_code="en") is False
 
+
+
+# --------------------------------------------------------------------------
+# Only the LATEST TRUSTED failure authorizes a resume (Issue #1833)
+# --------------------------------------------------------------------------
+
+GREEN_RUN = {"id": 1, "name": CHECK, "status": "completed",
+             "conclusion": "success", "html_url": "", "output": {}}
+
+
+def _trust_scene(monkeypatch, *, base_runs=(GREEN_RUN,)):
+    """The paused Issue with a green base and the two authors GitHub knows."""
+    gh = FakeGh(REPO)
+    gh.add_issue(1825, title="t", labels=("ai-blocked",))
+    gh.add_pr(PR_NUMBER, head="orbi/x", base=BASE_BRANCH)
+    gh.prs[PR_NUMBER]["baseRefOid"] = BASE_SHA
+    gh.add_branch(BASE_BRANCH, head=BASE_SHA)
+    gh.add_check_runs(BASE_SHA, list(base_runs))
+    gh.add_collaborator("visitor", "read")
+    gh.add_collaborator("maintainer", "write")
+    monkeypatch.setattr(seam, "run_command", gh)
+    return gh
+
+
+def _fresh(gh, number=1825):
+    """Stamp the newest comment NOW: the 7-day reminder never fires."""
+    gh.issues[number]["comments"][-1]["createdAt"] = datetime.now(
+        timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _base_ci_comment(gh, *, login, checks=(CHECK,),
+                     state=base_ci_red.STATE_WAITING,
+                     run_id="096197d2"):
+    """One base-CI failure comment as `login` writes it."""
+    gh.comment(1825, "\n".join([
+        run_marker(run_id),
+        comment_kind_marker(COMMENT_KIND_FAILURE),
+        failure.render(failure.Failure(
+            reason_code="base_ci_red", action_code="fix_ticket",
+            retry_safe=False, outcome="blocked",
+        )),
+        "⛔ paused",
+        base_ci_red.render(record(state=state, failing_checks=checks)),
+    ]), login=login, association="NONE")
+    _fresh(gh)
+
+
+def _other_failure_comment(gh, *, login, run_id="096197d2"):
+    """A newer failure comment carrying NO base-CI block."""
+    gh.comment(1825, "\n".join([
+        run_marker(run_id),
+        comment_kind_marker(COMMENT_KIND_FAILURE),
+        failure.render(failure.Failure(
+            reason_code="human_decision_required", action_code="decide",
+            retry_safe=False, outcome="blocked",
+        )),
+    ]), login=login, association="NONE")
+    _fresh(gh)
+
+
+def _snapshot(gh, number=1825):
+    """The Issue's comments as the reader sees them (id + body)."""
+    return [(comment["id"], comment["body"])
+            for comment in gh.issues[number]["comments"]]
+
+
+def test_a_read_only_copied_record_never_authorizes_a_resume(monkeypatch):
+    """Issue #1833: `comment_trust` rejects the copied record, so the scan
+    does too — no label change, no comment edit, no new comment."""
+    gh = _trust_scene(monkeypatch)
+    _base_ci_comment(gh, login="visitor")
+    before = _snapshot(gh)
+    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert gh.issues[1825]["labels"] == ["ai-blocked"]
+    assert _snapshot(gh) == before
+
+
+def test_a_read_only_copy_with_no_checks_never_authorizes_a_resume(
+        monkeypatch):
+    """An empty check list is vacuously green; a copied record must not
+    turn that into a resume either, with no check result at all."""
+    gh = _trust_scene(monkeypatch, base_runs=())
+    _base_ci_comment(gh, login="visitor", checks=())
+    before = _snapshot(gh)
+    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert gh.issues[1825]["labels"] == ["ai-blocked"]
+    assert _snapshot(gh) == before
+
+
+def test_a_newer_trusted_failure_supersedes_the_older_base_ci_record(
+        monkeypatch):
+    """The latest trusted failure is `human_decision_required` and carries
+    no base-CI block: the older waiting record is no longer eligible."""
+    gh = _trust_scene(monkeypatch)
+    _base_ci_comment(gh, login="orbi-bot")
+    _other_failure_comment(gh, login="orbi-bot")
+    before = _snapshot(gh)
+    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert gh.issues[1825]["labels"] == ["ai-blocked"]
+    assert _snapshot(gh) == before
+
+
+def test_a_current_trusted_record_resumes_and_a_later_copy_does_not_stop_it(
+        monkeypatch):
+    """A valid trusted recovery is unaffected by a newer untrusted copy:
+    the delivery resumes on the run id its own record carries."""
+    gh = _trust_scene(monkeypatch)
+    _base_ci_comment(gh, login="orbi-bot", run_id="abc12345")
+    _base_ci_comment(gh, login="visitor", run_id="abc12345")
+    assert base_ci_red.recover(REPO, language_code="en") == [1825]
+    labels = gh.issues[1825]["labels"]
+    assert "ai-fix-needed" in labels and "ai-blocked" not in labels
+    trusted_body, copied_body = [
+        comment["body"] for comment in gh.issues[1825]["comments"]
+    ]
+    assert base_ci_red.parse(trusted_body).state == base_ci_red.STATE_RESUMING
+    assert run_marker("abc12345") in trusted_body
+    # The untrusted copy stays exactly as its author wrote it.
+    assert base_ci_red.parse(copied_body).state == base_ci_red.STATE_WAITING
+
+
+def test_a_kindless_milestone_repeating_the_block_is_no_failure(
+        monkeypatch):
+    """The runner's short milestone comment is posted AFTER the failure
+    comment and repeats the same `orbi:failure:v1` block (Issue #1322).
+    It carries no kind marker, so it is not a failure: the base-CI comment
+    stays the latest trusted failure and a green base still recovers it."""
+    gh = _trust_scene(monkeypatch)
+    _base_ci_comment(gh, login="orbi-bot")
+    milestone = field_block(
+        "096197d2", "Orbi paused: base is red", {"run_id": "096197d2"},
+        language_code="en",
+    )
+    marker, _, rest = milestone.partition("\n")
+    gh.comment(1825, "\n".join([
+        marker,
+        failure.render(failure.Failure(
+            reason_code="base_ci_red", action_code="fix_ticket",
+            retry_safe=False, outcome="blocked",
+        )),
+        rest,
+    ]), login="orbi-bot", association="NONE")
+    _fresh(gh)
+    assert base_ci_red.recover(REPO, language_code="en") == [1825]
+    assert "ai-fix-needed" in gh.issues[1825]["labels"]
+
+
+def test_a_corrupted_failure_block_supersedes_the_older_record(monkeypatch):
+    """A corrupted `orbi:failure:v1` block is never read as "no reason"
+    (`failure.parse`): it is the latest trusted failure, it states no
+    `base_ci_red` reason, and it therefore ends the older record's
+    eligibility instead of hiding behind it."""
+    gh = _trust_scene(monkeypatch)
+    _base_ci_comment(gh, login="orbi-bot")
+    gh.comment(1825, "\n".join([
+        run_marker("096197d2"),
+        comment_kind_marker(COMMENT_KIND_FAILURE),
+        "<!-- orbi:failure:v1 not-json -->",
+    ]), login="orbi-bot", association="NONE")
+    _fresh(gh)
+    before = _snapshot(gh)
+    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert gh.issues[1825]["labels"] == ["ai-blocked"]
+    assert _snapshot(gh) == before
+
+
+def test_a_kinded_failure_without_a_record_supersedes_the_older_record(
+        monkeypatch):
+    """The real scene-blocked / resume-blocked comment: `failure` kind, no
+    `orbi:failure:v1` block. It states no `base_ci_red` reason, so it is
+    the latest trusted failure that ends the older record's eligibility —
+    the scan never falls back past it to an older base-CI block."""
+    gh = _trust_scene(monkeypatch)
+    _base_ci_comment(gh, login="orbi-bot")
+    gh.comment(1825, "\n".join([
+        run_marker("096197d2"),
+        comment_kind_marker(COMMENT_KIND_FAILURE),
+        "⛔ restore the scene comment, then relabel `ai-ready`",
+    ]), login="orbi-bot", association="NONE")
+    _fresh(gh)
+    before = _snapshot(gh)
+    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert gh.issues[1825]["labels"] == ["ai-blocked"]
+    assert _snapshot(gh) == before
+
+
+def test_a_corrupted_base_ci_block_in_the_selected_comment_is_skipped(
+        monkeypatch):
+    """A present-but-invalid block is never read as "no block", and it is
+    never acted on either: the Issue stays `ai-blocked` untouched."""
+    gh = _trust_scene(monkeypatch)
+    gh.comment(1825, "\n".join([
+        run_marker("096197d2"),
+        comment_kind_marker(COMMENT_KIND_FAILURE),
+        failure.render(failure.Failure(
+            reason_code="base_ci_red", action_code="fix_ticket",
+            retry_safe=False, outcome="blocked",
+        )),
+        "<!-- orbi:base-ci-red:v1 broken -->",
+    ]), login="orbi-bot", association="NONE")
+    _fresh(gh)
+    before = _snapshot(gh)
+    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert gh.issues[1825]["labels"] == ["ai-blocked"]
+    assert _snapshot(gh) == before
+
+
+def test_a_base_ci_red_failure_without_a_record_never_recovers(monkeypatch):
+    """The reason `base_ci_red` alone authorizes nothing: the record must
+    be in that same comment (Issue #1833)."""
+    gh = _trust_scene(monkeypatch)
+    gh.comment(1825, "\n".join([
+        run_marker("096197d2"),
+        comment_kind_marker(COMMENT_KIND_FAILURE),
+        failure.render(failure.Failure(
+            reason_code="base_ci_red", action_code="fix_ticket",
+            retry_safe=False, outcome="blocked",
+        )),
+    ]), login="orbi-bot", association="NONE")
+    _fresh(gh)
+    before = _snapshot(gh)
+    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert gh.issues[1825]["labels"] == ["ai-blocked"]
+    assert _snapshot(gh) == before
 
 
 # --------------------------------------------------------------------------
