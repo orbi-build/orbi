@@ -39,6 +39,93 @@ from tests.test_run_id_e2e import (
 ISSUE = {"number": 7, "title": "Thin ticket", "body": "Make it better."}
 RUN_ID = "a1b2c3d4"
 
+
+# --- Issue #1831: the six ticket texts the judgment is replayed on ---------
+
+@dataclasses.dataclass(frozen=True)
+class ClarifyCase:
+    """One real ticket text and the judgment the prompt must reach.
+
+    The gate is a model judgment, so a stub cannot prove the semantics:
+    `verdict` is what the refined prompt answers today and `expectation`
+    is the behavior the maintainer replays through the REAL prompt after
+    delivery (Issue #1831 assigns that replay to the maintainer). The test
+    below pins what the sandbox can prove — the author's text reaches the
+    judgment untouched and that verdict drives the documented stop/proceed
+    path.
+    """
+    name: str
+    title: str
+    body: str
+    expectation: str
+    verdict: tuple[str, ...]
+
+
+CLARIFY_CASES = (
+    ClarifyCase(
+        name="k8e_668_runtime_failures",
+        title="warm pool churn and flaky regression rounds",
+        body=(
+            "- warm pool 抖动：约每 60s 一次 trim surplus warm pod "
+            "(pool above target)——补一个再裁一个。来自上游 b68aef26，"
+            "我的 PR 未触及。它是那些 PVC 绑定冲突"
+            "（VolumeBinding: the object has been modified）的来源。\n"
+            "- 连续多轮回归偶发失败：节点残留上一轮 session pod/PVC 时，"
+            "下一轮会出 1~2 个 SandboxUnreachableException。清理残留后即恢复 "
+            "44/44，L6 隔离跑 3/3 通过——属资源竞争，非功能缺陷。"
+        ),
+        # Observable runtime behavior is NOT absent here; acceptance or
+        # scope clarification may still be requested.
+        expectation="reports no missing observable_result",
+        verdict=("acceptance_condition", "single_outcome"),
+    ),
+    ClarifyCase(
+        name="runtime_failure_with_implied_correction",
+        title="GET /health returns 500",
+        body=(
+            "GET /health returns 500; it should return 200, verified by a "
+            "regression test."
+        ),
+        expectation="proceeds without requiring template headings",
+        verdict=(),
+    ),
+    ClarifyCase(
+        name="one_behavior_in_two_bullets",
+        title="Login session lost after submit",
+        body=(
+            "- The login page reloads after submitting valid credentials.\n"
+            "- Keep the user signed in after that submit; verify with a "
+            "browser regression test."
+        ),
+        expectation="proceeds: both bullets specify one behavior",
+        verdict=(),
+    ),
+    ClarifyCase(
+        name="no_delivery_requirement",
+        title="Thin ticket",
+        body="Make it better.",
+        expectation="requests the missing details",
+        verdict=("observable_result", "acceptance_condition"),
+    ),
+    ClarifyCase(
+        name="two_unrelated_deliveries",
+        title="Password reset and CSV export",
+        body=(
+            "Add password reset and CSV export; verify both with regression "
+            "tests."
+        ),
+        expectation="requests a single delivery outcome",
+        verdict=("observable_result", "acceptance_condition", "single_outcome"),
+    ),
+    ClarifyCase(
+        name="historical_count_is_not_a_condition",
+        title="Improve performance",
+        body="The benchmark passed 44/44 yesterday; improve performance.",
+        expectation="requests a completion condition, not the past count",
+        verdict=("observable_result", "acceptance_condition"),
+    ),
+)
+
 # A thin `ai-ready` ticket as the claim scan sees it. `author` is the
 # `gh issue list --json author` shape: the gate reads `author.login`
 # from the same payload the claim already fetched (Issue #1336).
@@ -341,6 +428,49 @@ def test_enforce_fails_open_when_a_write_fails(
         assert edits == []
     else:
         assert len(comments) == 1
+
+
+# --- recorded ticket texts (Issue #1831) -----------------------------------
+
+@pytest.mark.parametrize(
+    "case", CLARIFY_CASES, ids=[case.name for case in CLARIFY_CASES],
+)
+def test_recorded_ticket_is_judged_as_written(case, monkeypatch):
+    """Each recorded text keeps its documented outcome.
+
+    The judgment itself is the model's; here the recorded verdict proves
+    the gate carries the author's text into the judgment unchanged (no
+    rewrite, no splitting) and that this verdict takes the documented
+    path: a passing one delivers without a write, a failing one stops with
+    ONE comment naming exactly the pieces the judgment named.
+    """
+    issue = {"number": 1831, "title": case.title, "body": case.body}
+    context = clarify.build_context(issue)
+    assert context.startswith(f"Issue #{issue['number']}: {case.title}")
+    assert case.body in context
+
+    verdict = clarify.ClarifyVerdict(
+        passed=not case.verdict, missing=case.verdict,
+    )
+    monkeypatch.setattr(seam, "judge_issue_body", lambda *a, **k: verdict)
+    comments, edits = _record_writes(monkeypatch)
+
+    proceed = clarify.enforce(
+        issue, config_domain.RunnerConfig(), REPO, RUN_ID,
+    )
+
+    assert proceed is (case.verdict == ())
+    if not case.verdict:
+        assert (comments, edits) == ([], [])
+        return
+    assert len(comments) == 1
+    body = comments[0][2]
+    for piece in case.verdict:
+        assert clarify.missing_text(piece, language_code="en") in body
+    assert edits == [(
+        issue["number"], REPO,
+        delivery_labels.NEEDS_DETAIL_LABEL, delivery_labels.READY_LABEL,
+    )]
 
 
 # --- real-runner end to end ------------------------------------------------
