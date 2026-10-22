@@ -180,7 +180,7 @@ Rules of the chain:
 - Only the two opened-PR states are picked up automatically:
   `ai-pr-opened` (awaiting review) and `ai-fix-needed` (awaiting the next
   review session). `ai-ready` is claimed as new work; `ai-blocked` is
-  is never auto-recovered for these unrecoverable conditions. The v0.7.15
+  never auto-recovered for these unrecoverable conditions. The v0.7.15
   [`base_ci_red` recovery](#a-delivery-paused-on-a-red-base-branch-base_ci_red)
   is an explicit exception. A delivery that carries the backfilled
   `ai-in-progress` label is still picked up (Issue #178: a runner killed

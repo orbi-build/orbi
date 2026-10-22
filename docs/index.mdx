@@ -9,7 +9,7 @@ Orbi is an open-source **software dark factory**: a software delivery system you
 
 The reviewing session can run on a **different model** than the implementing session ([learn how](/workflow#reviewing-with-a-different-model)).
 
-This MVP keeps state only in GitHub rather than a database or queue, runs one Issue per tick rather than a daemon, and does not discover repositories or push to protected branches itself. See [/security](/security) for the full boundary list.
+This MVP uses GitHub as the delivery record, with no database, queue or persistent daemon. Local configuration and run artifacts stay on the Runner machine. Each Runner invocation handles at most one Issue or opened PR, and `max_concurrency` controls parallel deliveries. Configure the repositories explicitly. See [Security](/security) for the execution and credential boundaries.
 
 <Note>These docs follow Core’s `main` branch. The default installer follows the latest official release. Check `orbi --version` and the [published releases](https://github.com/orbi-build/orbi/releases) before using a new option; the release that introduced a feature is noted where it matters.</Note>
 

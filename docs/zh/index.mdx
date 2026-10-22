@@ -9,7 +9,7 @@ Orbi 是一个开源的**软件暗工厂（software dark factory）**：可以�
 
 审查会话可以使用与实现会话**不同的模型**（different model）（见[工作流](/zh/workflow)）。
 
-这个 MVP 只在 GitHub 中保存状态，而不是使用数据库或队列；每个 tick 运行一个 Issue，而不是 daemon；它不会自动发现仓库，也不会自行 push 保护分支。完整边界见[/zh/security](/zh/security)。
+这个 MVP 用 GitHub 保存交付记录，不使用数据库、队列或常驻 daemon。本地配置和运行产物留在 Runner 机器上。每次 Runner 调用最多处理一个 Issue 或已打开的 PR，`max_concurrency` 控制并行交付数。需要显式配置接入的仓库。执行与凭据边界见[安全](/zh/security)。
 
 <Note>这套文档跟随 Core 的 `main` 分支；默认安装器跟随最新正式版本。使用新选项前，先用 `orbi --version` 对照[已发布版本](https://github.com/orbi-build/orbi/releases)。文档会在相应位置标注引入该能力的版本。</Note>
 

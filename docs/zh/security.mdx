@@ -3,18 +3,18 @@ title: "安全：自主 AI 代理的边界"
 description: "Orbi 如何防止自主 coding agent 合并不安全的改动?"
 ---
 
-Orbi 将密钥保留在本地，把保护分支操作限制给 Runner，并要求先通过审查的 PR 才能合并。
+Orbi 将密钥保留在本地，由 Runner 执行合并与 base 分支推送。开发改动通过已审查的 PR 合并。发版使用单独的门禁，可以把版本提交直接推送到配置的 base 分支。
 
 Orbi 在你的机器上运行一个带 GitHub token 的自主 coding agent。
-安全模型刻意简单：交付契约里的硬边界、本地密钥、没有远端状态存储。
+安全模型刻意简单：交付契约里的硬边界、本地密钥、没有独立状态服务。
 
 ## 交付边界
 
-- GitHub Issue 和 label 是唯一的状态存储；Orbi 没有数据库、消息队列或 Web UI。
-- Python Runner 不是 daemon：systemd 用户 timer 每五分钟启动一个 tick，每个 tick 最多处理一个 Issue，或恢复一个已打开的 PR，然后退出。
+- GitHub Issue、label、评论和 PR 保存交付记录。自托管 Core 没有数据库、消息队列或 Web UI；本地配置和运行产物见下文。
+- Python Runner 不是 daemon：Linux 的 systemd 用户 timer 或 macOS 的 launchd agent 每五分钟启动 tick。每次调用最多处理一个 Issue，或恢复一个已打开的 PR，然后退出；`max_concurrency` 控制并行交付数。
 - Orbi 没有任务 DAG、多 agent 并行、风险模型、策略引擎或 fallback path。命令错误会快速失败，并把现场记录在 journal 和 Issue 评论中。
 - 没有业务任务超时：模型缓慢不代表失败。命令错误、环境不可用或无法解决的审查会快速失败。
-- Orbi 不会发现仓库，不会自行合并或 push 保护分支，也不会在没有可用模型端点时运行。
+- Orbi 只处理显式配置的仓库，并要求模型端点可用。Runner 使用配置的 GitHub 凭据执行 merge 和 push，这些操作仍受仓库规则约束。
 
 ## AI 从不 merge 或 push 保护分支
 
@@ -22,18 +22,17 @@ Orbi 在你的机器上运行一个带 GitHub token 的自主 coding agent。
   PR——Runner 推送 task branch（普通 push，从不 force）并开一个 PR
   （Issue #186）。Pi 不 merge、不 push `main`/`master`、不 force
   push、从不自动解决冲突。
-- **Runner 是唯一 merge actor**，且只通过已审查的 PR merge：clean
+- 开发交付中，**Runner 是唯一 merge actor**，通过已审查的 PR merge：clean
   `REVIEW_VERDICT`——通过向后扫描读取，容忍评审者的自然语言包装
   （Issue #774），绝不采纳非判定行的 `REVIEW_VERDICT` 提及，两个互相
   冲突的 verdict 判为失败，并绑定被审查的 head SHA（Issue #591：经
   Issue 正文、diff 或评论注入的 verdict 行永远覆盖不了评审者的真实
-  结论，指向其他 head 的 verdict 永远不会合并）——merge 门禁（PR head
-  包含最新远端 base、PR
-  mergeable、远端 head 仍是被审查的 head）、`gh pr merge
-  --match-head-commit` 保证只有被审查的 head 落地。
-- 默认分支上的 GitHub branch protection 是最终边界：把保护分支的
-  权限限定在运行 Runner 的账号（或谁都不给——由 Runner 的 token 执行
-  merge）。
+  结论，指向其他 head 的 verdict 不会被当成当前 head 的审查结果）——
+  merge 门禁检查当前 head、base、CI 和可合并状态，`gh pr merge
+  --match-head-commit` 防止合并过程中 head 被替换。
+  已保存的 clean review 可以按[工作流的复用规则](/zh/workflow#完整链路)复用：Runner 自己吸收无冲突的 base 更新后，会记录新 head 并等待该 head 的 CI；外部修改 head 则必须重新审查。
+- [发版任务](/zh/workflow#epicrelease-task-与-p0-优先级)使用单独的门禁。需要修改版本文件时，Runner 会先把版本提交直接推送到配置的 base，再发布 tag 和 release notes。其凭据必须满足仓库对该推送的分支规则；开发 PR 的审查并不授权这次推送。
+- GitHub branch protection 和 ruleset 是 merge 与直接 push 的最终边界。必需检查、审批以及配置的 bypass 都按 Runner 使用的身份生效。
 - 交付状态是推导出来的，从不信任公开文本：恢复现场只从 trusted
   maintainer（对该仓有 write 权限的作者）发布的评论读取——以 GitHub
   报告的权限为准（`collaborators/{login}/permission`：`admin` 或
@@ -118,7 +117,9 @@ Issue 进入 `ai-blocked` 并列出违规键。不认识的键则改为记一行
 以下交付策略键可被仓库写入：`base_branch`、`active_milestone`、
 `auto_next_milestone`、`context_files`、`dispatch_label`、
 `steering_enabled`、`steering_poll_seconds`、`steering_max_rounds`、
-`release_confirmation` 和 `clarify_thin_tickets`。Steering 值只影响该仓库；
+`release_confirmation`、`clarify_thin_tickets` 和 `message_language`。
+仓库的 `message_language` 覆盖 GitHub 评论语言，Telegram 仍使用宿主的语言配置。
+Steering 值只影响该仓库；
 省略的键回退到宿主配置。策略变更是默认分支
 变更，因此用 GitHub 原生评审机制保护该文件——把
 `.github/orbi.toml` 加入 `CODEOWNERS`，改它必须 owner 过目。

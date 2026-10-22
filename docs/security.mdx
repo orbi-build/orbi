@@ -3,19 +3,19 @@ title: "Security: boundaries of an autonomous AI agent"
 description: "How does Orbi keep an autonomous coding agent from merging unsafe changes?"
 ---
 
-Orbi keeps secrets local, limits protected-branch operations to the Runner, and requires a reviewed PR before merge.
+Orbi keeps secrets local and leaves merges and base-branch pushes to the Runner. Development changes go through a reviewed PR. Releases follow separate gates and can push a version commit directly to the configured base branch.
 
 Orbi runs an autonomous coding agent with a GitHub token on your
 machine. The security model is deliberately simple: hard boundaries in
-the delivery contract, local-only secrets, and no remote state store.
+the delivery contract, local-only secrets, and no separate state service.
 
 ## Delivery boundaries
 
-- GitHub Issues and labels are the only state store; Orbi has no database, message queue, or web UI.
-- The Python Runner is not a daemon: a systemd user timer starts one tick every five minutes, and each tick processes at most one Issue or resumes one opened PR before exiting.
+- GitHub Issues, labels, comments and PRs hold the delivery record. Self-hosted Core has no database, message queue, or web UI; local configuration and run artifacts are listed below.
+- The Python Runner is not a daemon: systemd user timers on Linux or launchd agents on macOS start ticks every five minutes. Each invocation processes at most one Issue or resumes one opened PR before exiting; `max_concurrency` controls the number of concurrent deliveries.
 - Orbi has no task DAG, multi-agent parallelism, risk model, policy engine, or fallback path. Command errors fail fast and leave the scene in the journal and Issue comment.
 - There is no business task timeout: a slow model is not a failure. Command errors, an unavailable environment, or an unresolvable review fail fast.
-- Orbi does not discover repositories, merge or push protected branches itself, or run without a working model endpoint.
+- Orbi works on explicitly configured repositories and requires a working model endpoint. The Runner performs merge and push operations with its configured GitHub credentials; repository rules still govern those operations.
 
 ## The AI never merges or pushes protected branches
 
@@ -24,20 +24,19 @@ the delivery contract, local-only secrets, and no remote state store.
   pushes the task branch (plain push, never force) and opens one PR
   (Issue #186). The Pi does not merge, does not push `main`/`master`,
   does not force push, and never auto-resolves conflicts.
-- The **Runner is the only merge actor**, and it merges only through the
+- The **Runner is the only merge actor** for development deliveries, and it merges through the
   reviewed PR: a clean `REVIEW_VERDICT` — read by a backwards scan that
   tolerates the reviewer's natural-language wrapping (Issue #774), never
   adopts a `REVIEW_VERDICT` mention that is not a verdict line, fails on
   two conflicting verdicts, and is bound to the reviewed head SHA
   (Issue #591: a verdict line injected through the Issue body, the diff
   or a comment never overrides the reviewer's conclusion, and a verdict
-  naming another head never merges) — the merge gate (PR head contains
-  the latest remote base, PR mergeable, remote head still the reviewed
-  head), and `gh pr merge --match-head-commit` so exactly the reviewed
-  head lands.
-- GitHub branch protection on the default branch is the final boundary:
-  keep the protected branch restricted to the account that runs the
-  Runner (or to no one — the Runner's token performs the merge).
+  naming another head is not accepted as the current head’s review) — and the
+  merge gate verifies the current head, base, CI and mergeability.
+  `gh pr merge --match-head-commit` prevents a head change during merge.
+  A saved clean review may be reused under the [workflow’s reuse rules](/workflow#the-complete-chain): if the Runner absorbs a non-conflicting base update itself, it records the new head and waits for that head’s CI. An outside head change requires review again.
+- A [release task](/workflow#epics-release-tasks-and-p0-priority) follows separate gates. When version files need changing, the Runner pushes the version commit directly to the configured base before publishing the tag and release notes. Its credentials must satisfy the repository’s branch rules for that push; a development PR’s review does not authorize it.
+- GitHub branch protection and rulesets remain the final boundary for merges and direct pushes. Required checks, approvals and any configured bypass apply to the identity used by the Runner.
 - Delivery state is derived, never trusted from public text: the resume
   scene is only read from comments posted by an author who can WRITE to
   the repository — GitHub's reported permission for that login
@@ -142,7 +141,8 @@ warning instead (Issue #1329); the host-only set is unchanged by that.
 These delivery-policy keys are repository-writable:
 `base_branch`, `active_milestone`, `auto_next_milestone`, `context_files`,
 `dispatch_label`, `steering_enabled`, `steering_poll_seconds`,
-`steering_max_rounds`, `release_confirmation` and `clarify_thin_tickets`.
+`steering_max_rounds`, `release_confirmation`, `clarify_thin_tickets` and `message_language`.
+The repository’s `message_language` overrides GitHub comment language, while Telegram continues to use the host language setting.
 The steering values affect only that repository; omitted keys fall back to
 host configuration. Because a policy change is a default-branch change,
 protect the file with GitHub's native review mechanism — add
