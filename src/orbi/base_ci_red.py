@@ -41,7 +41,8 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from orbi import failure, language, user_summary
+from orbi import comment_trust, failure, language, user_summary
+from orbi.comment_kind import COMMENT_KIND_FAILURE, comment_kind
 from orbi.delivery_labels import (
     BLOCKED_LABEL, FIX_NEEDED_LABEL, P0_LABEL, READY_LABEL,
 )
@@ -69,6 +70,10 @@ STATE_RESUMING = "resuming"
 STATE_MERGED = "merged"
 STATE_STALE = "stale"
 STATES = frozenset({STATE_WAITING, STATE_RESUMING, STATE_MERGED, STATE_STALE})
+
+# The failure reason a recovery may act on: only a delivery that paused
+# because the BASE was red is recoverable by a green base (Issue #1825).
+REASON_BASE_CI_RED = "base_ci_red"
 
 # The one hidden block, next to `orbi:failure:v1` in the same comment.
 BLOCK_TEMPLATE = "<!-- orbi:base-ci-red:v1 {payload} -->"
@@ -540,7 +545,12 @@ def _rest_comment_id(comment: dict) -> int | None:
 
 
 def _located(comments: list[dict]) -> tuple[BaseCIRed, dict] | None:
-    """The newest comment carrying a valid block, and its record."""
+    """The newest comment carrying a valid block, and its record.
+
+    This is the MERGE-NOTE lookup (`note_merged`), which only rewrites
+    the comment after the delivery already landed. The recovery gate
+    never acts on it: `_latest_trusted_failure` decides (Issue #1833).
+    """
     for comment in reversed(comments):
         try:
             record = parse(comment.get("body"))
@@ -658,6 +668,40 @@ def _remind(repo: str, issue_number: int, record: BaseCIRed,
     )
 
 
+def _latest_trusted_failure(
+    comments: list[dict], *, repo: str,
+) -> tuple[failure.Failure, dict] | None:
+    """The Issue's LATEST trusted failure comment, and its record.
+
+    The recovery gate (Issue #1833): a record only authorizes a step
+    while the newest TRUSTED failure on the Issue is the failure that
+    carries it. Trust is the existing comment rule (repository write
+    permission, or the authenticated runner account): a run marker copied
+    by a read-only commenter widens nothing.
+
+    The failure comment is identified by its canonical `failure` kind
+    marker, never by the mere presence of an `orbi:failure:v1` block: the
+    short milestone comment repeats that block (Issue #1322) and is not
+    the failure itself, so reading it as one would pause every recovery.
+    """
+    for comment in reversed(
+            comment_trust.trusted_comments(comments, repo=repo)):
+        body = comment.get("body")
+        if comment_kind(body) != COMMENT_KIND_FAILURE:
+            continue
+        try:
+            parsed = failure.parse(body)
+        except failure.FailureError:
+            LOGGER.warning(
+                "unreadable orbi:failure:v1 block url=%s",
+                comment.get("url"),
+            )
+            continue
+        if parsed is not None:
+            return parsed, comment
+    return None
+
+
 def recover(repo: str, *, language_code: str,
             milestone: str | None = None,
             dispatch_label: str = READY_LABEL,
@@ -668,7 +712,10 @@ def recover(repo: str, *, language_code: str,
     Issue is a terminal state no claim scan picks up, so this is the only
     path back. The base branch is the BLOCK's (the configured one the
     delivery reported) — never a hard-coded `main`. For each Issue whose
-    NEWEST `orbi:base-ci-red:v1` block is `waiting`:
+    LATEST TRUSTED failure is the `base_ci_red` one and whose record in
+    that SAME comment is `waiting` (an older record a newer trusted
+    failure superseded, and a copied record from an author without write
+    permission, are never eligible — Issue #1833):
 
     1. run the in-ticket `/orbi fix-base` command (its own permission
        gate and receipts);
@@ -690,11 +737,20 @@ def recover(repo: str, *, language_code: str,
     for issue in issues:
         number = issue["number"]
         comments = issue_comments(number, repo=repo)
-        located = _located(comments)
+        located = _latest_trusted_failure(comments, repo=repo)
         if located is None:
             continue
-        record, comment = located
-        if record.state != STATE_WAITING:
+        failure_record, comment = located
+        if failure_record.reason_code != REASON_BASE_CI_RED:
+            continue
+        try:
+            record = parse(comment.get("body"))
+        except BaseCIRedError:
+            LOGGER.warning(
+                "unreadable base_ci_red block url=%s", comment.get("url"),
+            )
+            continue
+        if record is None or record.state != STATE_WAITING:
             continue
         process_commands(
             repo, number, [FIX_BASE_COMMAND],
