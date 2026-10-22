@@ -153,7 +153,7 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
 - 只有两个 opened-PR 状态会被自动拾取：`ai-pr-opened`（等待 review）
   和 `ai-fix-needed`（等待下一个审查会话）。`ai-ready` 作为新工作被
   领取；`ai-blocked` 通常等待人处理；v0.7.15 起的
-  [`base_ci_red` 恢复](#交付因基础分支已红而暂停：base_ci_red)是明确的例外。携带回填的 `ai-in-progress` 标签的
+  [`base_ci_red` 恢复](#交付因基础分支已红而暂停base_ci_red)是明确的例外。携带回填的 `ai-in-progress` 标签的
   交付仍会被拾取（Issue #178：review 中被杀的 Runner 会留下该标签——
   正向的 opened-PR 限定已保证 implement 阶段的 Issue 不会匹配该扫描）。
 - `ai-awaiting-merge` 是等维护者的等待态，因此永不与 Runner 能推进的工作
@@ -492,6 +492,8 @@ review 与 ops session），因此自定义 prompt 模板同样会收到：会�
 milestone 的可见摘要就是同一条有长度上限、不含本机路径的读者说明——理由，
 或在失败带有明确修复路径时使用 Action（Actions workflow 权限拒绝，Issue
 #1651）——完整的命令 stderr 绝不会被截成第一个词。
+
+<a id="交付因基础分支已红而暂停base_ci_red"></a>
 
 ### 交付因基础分支已红而暂停：`base_ci_red`
 
