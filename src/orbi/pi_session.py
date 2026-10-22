@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orbi import config as config_domain
-from orbi import language
+from orbi import language, user_summary
 from orbi.delivery_scene import RunContext
 from orbi.comment_trust import (
     _comment_is_trusted,
@@ -602,8 +602,14 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         if limit_reached:
             if (fresh or body_changed) and not steering_limit_notice_logged:
                 steering_limit_notice_logged = True
-                notice = language.text(
-                    language.of(config), "delivery.steering_limit_notice",
+                notice = user_summary.append_summary(
+                    language.text(
+                        language.of(config),
+                        "delivery.steering_limit_notice",
+                    ),
+                    status_url=config.status_url,
+                    issue=int(issue["number"]), title=issue.get("title"),
+                    language_code=language.of(config),
                 )
                 try:
                     comment_issue(

@@ -17,6 +17,10 @@ from pathlib import Path
 
 import pytest
 
+# Issue #1826: the operator's one optional project status page.
+TASK_STATUS_URL = "https://tasks.example.org/project-status?repo=example%2Fwidget"
+
+from orbi import language
 import orbi.failure_report as failure_report
 import orbi.runner as runner
 import orbi.review_merge as review_merge
@@ -1363,8 +1367,10 @@ def test_external_takeover_clean_verdict_stops_at_triage(
     caplog.set_level("INFO")
     merged = review_merge.review_and_merge_if_clean(
         tmp_path, "contributor-patch", "main",
-        config_domain.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main",
-                            repo_dir=tmp_path),
+        config_domain.RunnerConfig(
+            run_id=FAKE_RUN_ID, base_branch="main", repo_dir=tmp_path,
+            status_url=TASK_STATUS_URL,
+        ),
         "owner/repo", 39, title="task", priority="normal",
         scene={
             "run_id": FAKE_RUN_ID, "base_branch": "main",
@@ -1383,6 +1389,12 @@ def test_external_takeover_clean_verdict_stops_at_triage(
     assert "tests=COMPLETED/SUCCESS" in body
     assert "Review of the contributor diff" in body
     assert "ai-blocked" in body
+    # Issue #1826: the review report carries the readable summary between
+    # its state sentence and the report fold.
+    assert "**#39 task**" in body
+    assert language.text(
+        "en", "summary.project_status", url=TASK_STATUS_URL,
+    ) in body
     assert comments[0]["repo"] == "owner/repo"
     # The terminal triage state: ai-blocked ALONE (the opened-PR label
     # is cleared with the same blocked patch as every other terminal

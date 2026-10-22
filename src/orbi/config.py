@@ -12,7 +12,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from orbi import engine_source, language
+from orbi import engine_source, language, user_summary
 from orbi.pi_process import PI_MODEL_WAIT_DEAD_SECONDS, PI_MODEL_WAIT_PROBE_SECONDS
 from orbi.pilot_slots import slot_dir_for
 from orbi.release import RELEASE_CI_WAIT_SECONDS, RELEASE_DELIVERIES_WAIT_SECONDS
@@ -148,6 +148,12 @@ class RunnerConfig:
     message_language: str = language.DEFAULT_LANGUAGE
     attribution_footer: bool = True
     attribution_link: str = "https://github.com/orbi-build/orbi"
+    # The operator's ONE optional project status page (Issue #1826):
+    # a fixed HTTPS URL published unchanged in the run's task
+    # notifications. `load_config` validates it; an absent value is the
+    # normal GitHub-only case and an invalid one is ignored with a safe
+    # warning, so this value never gates a delivery.
+    status_url: str | None = None
     slot_dir: Path | None = None
     pi_provider: str | None = None
     pi_model: str | None = None
@@ -293,6 +299,12 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     )
     if not isinstance(attribution_link, str):
         raise ValueError("attribution_link must be a string")
+    # Optional project status page (Issue #1826): host config, never an
+    # Issue instruction. Validation lives in the one summary renderer;
+    # an invalid optional value is ignored there with a safe warning.
+    status_url = user_summary.normalize_status_url(
+        data.get(user_summary.STATUS_URL_KEY), source=str(path.resolve()),
+    )
     # Engine source update channel: what the deploy home
     # checkout follows at the next start — origin/main by default (the
     # exact pre-#535 dogfood behavior), a branch, the newest official
@@ -489,6 +501,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         message_language=message_language,
         attribution_footer=attribution_footer,
         attribution_link=attribution_link,
+        status_url=status_url,
         slot_dir=slot_dir_for(repo_dir),
         pi_provider=pi_provider,
         pi_model=pi_model,

@@ -38,7 +38,7 @@ from orbi.pilot_slots import slot_held_deliveries, slot_occupancy
 from orbi.resume_scan import (
     ResumeHooks, pick_awaiting_merge_delivery, pick_resumable_delivery,
 )
-from orbi import language
+from orbi import language, user_summary
 from orbi.progress import run_marker
 from orbi.release import _epic_audit, epic_audit_posted, release_target_milestone
 from orbi.repo_config import (
@@ -233,6 +233,7 @@ def orphan_pr_branch_issue(repo: str, head_ref: object) -> int | None:
 
 def reconcile_orphan_prs(
     repo: str, run_id: str, *, hooks: ResumeHooks, language_code: str,
+    status_url: str | None = None,
 ) -> list[str]:
     """Report open delivery PRs whose source Issue is closed.
 
@@ -278,9 +279,13 @@ def reconcile_orphan_prs(
             pr_number, repo=repo,
             body=(
                 f"{ORPHAN_PR_MARK}\n{run_marker(run_id)}\n"
-                + language.text(
-                    language_code, "claim.orphan_pr",
-                    issue_number=issue_number, run_id=run_id,
+                + user_summary.append_summary(
+                    language.text(
+                        language_code, "claim.orphan_pr",
+                        issue_number=issue_number, run_id=run_id,
+                    ),
+                    status_url=status_url, issue=issue_number,
+                    language_code=language_code,
                 )
             ),
         )
@@ -747,8 +752,11 @@ def pick_next_delivery(
         # pattern: a broken GitHub query must never prevent the ordinary
         # delivery scans.
         try:
-            reconcile_orphan_prs(repo, tick_run_id, hooks=hooks,
-                                 language_code=repo_language)
+            reconcile_orphan_prs(
+                repo, tick_run_id, hooks=hooks,
+                language_code=repo_language,
+                status_url=config.status_url if config is not None else None,
+            )
         except Exception:
             LOGGER.exception("orphan_pr_reconcile_failed repo=%s", repo)
         selected = pick_resumable_delivery(
@@ -756,6 +764,7 @@ def pick_next_delivery(
             repo_dir=config.repo_dir if config is not None else None,
             hooks=hooks, language_code=repo_language,
             ready_label=dispatch_label,
+            status_url=config.status_url if config is not None else None,
         )
         if selected is not None:
             issue, scene = selected
@@ -787,6 +796,7 @@ def pick_next_delivery(
             repo_dir=config.repo_dir if config is not None else None,
             hooks=hooks, language_code=repo_language,
             ready_label=dispatch_label,
+            status_url=config.status_url if config is not None else None,
         )
         if selected is not None:
             issue, scene = selected

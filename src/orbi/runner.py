@@ -55,7 +55,7 @@ from typing import NamedTuple
 from orbi import engine_source
 from orbi import language
 from orbi import milestone as milestone_bookkeeping
-from orbi import claim, clarify, notify
+from orbi import claim, clarify, notify, user_summary
 from orbi import config as config_domain
 from orbi.blocked_comment import post_blocked_comment
 from orbi.branch_reclaim import delete_merged_delivery_branch, reclaim_merged_delivery_branches
@@ -722,7 +722,7 @@ def _route_external_pr_ticket(issue: dict, repo: str, *,
 
 def _recover_missing_pr_scene(
     issue: dict, repo: str, repo_dir: Path, *,
-    language_code: str,
+    language_code: str, status_url: str | None = None,
 ) -> dict | None:
     """Retry a lost opened-PR scene from the durable local run state.
 
@@ -751,7 +751,8 @@ def _recover_missing_pr_scene(
         body = opened_pr_comment_body(
             run_id, f"base_branch={base_branch} base_sha={base_sha} "
             f"run_id={run_id} priority=normal", url,
-            language_code=language_code,
+            language_code=language_code, status_url=status_url,
+            issue=number, issue_title=issue.get("title"),
         )
         comment_issue(number, repo=repo, body=body)
         found = run_state.parse_pr_comment(body)
@@ -800,25 +801,6 @@ def _parse_version_title(title: object) -> tuple[int, int, int] | None:
         r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", title,
     )
     return tuple(map(int, match.groups())) if match else None
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1087,7 +1069,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
     run_info = f"run_id={run_id} priority={priority} task_type=ticket-only"
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
-        language_code=language.of(config),
+        language_code=language.of(config), status_url=config.status_url,
     )
     publish = functools.partial(
         _safe_publish, run_id=run_id, issue=number,
@@ -1111,6 +1093,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
                 ticket_ctx, title=title, role=ROLE_TICKET, started=started,
                 pr_url=None, review_round=0, priority=priority,
                 language_code=language.of(config),
+                status_url=config.status_url,
             ))),
         )
         output = pi_session.run_ticket_agent(
@@ -1125,12 +1108,12 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
             raise RuntimeError("ticket-only Agent returned no content")
         comment_issue(
             number, repo=source_repo,
-            body=(f"{run_marker(run_id)}\n"
-                  + language.text(
-                      language.of(config),
-                      "runner.ticket_only_delivered",
-                      run_id=run_id,
-                  ) + f"\n\n{output}"),
+            body=(user_summary.notice(
+                run_marker(run_id), "runner.ticket_only_delivered",
+                language_code=language.of(config),
+                status_url=config.status_url, issue=number,
+                title=issue.get("title"), run_id=run_id,
+            ) + f"\n\n{output}"),
         )
         close_issue(int(number), repo=source_repo)
         # The ticket-only delivery never enters the PR/review states: it
@@ -1148,6 +1131,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
                 ticket_ctx, title=title, role=ROLE_TICKET, started=started,
                 pr_url=None, review_round=0, priority=priority,
                 language_code=language.of(config),
+                status_url=config.status_url,
             ), outcome=language.text(
                 language.of(config), "runner.ticket_only_outcome",
             ))),
@@ -1165,12 +1149,12 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
         try:
             post_blocked_comment(
                 number, repo=source_repo,
-                body=(f"{run_marker(run_id)}\n"
-                      + language.text(
-                          language.of(config),
-                          "runner.ticket_only_failed",
-                          detail=detail, run_info=run_info, run_id=run_id,
-                      )),
+                body=user_summary.notice(
+                    run_marker(run_id), "runner.ticket_only_failed",
+                    language_code=language.of(config), issue=number,
+                    status_url=config.status_url, title=issue.get("title"),
+                    detail=detail, run_info=run_info, run_id=run_id,
+                ),
                 current_labels={IN_PROGRESS_LABEL, ready_label},
                 language_code=language.of(config), ready_label=ready_label)
             publish(
@@ -1924,7 +1908,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 exc, issue=issue, source_repo=source_repo,
                 run_id=current_run_id(), pr_url=scene["pr_url"],
                 worktree=worktree, branch=branch, role=ROLE_REVIEW,
-                language_code=lang,
+                language_code=lang, status_url=config.status_url,
                 ready_label=config.dispatch_label or READY_LABEL, action=(
                     language.text(lang, "delivery.resume_missing_fixes_action",
                                   pr_url=scene["pr_url"], number=number)
@@ -2583,7 +2567,8 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             failure_report._report_resume_failure(
                 number=number, source_repo=source_repo, run_id=run_id,
                 error=facts.resume_error,
-                language_code=language.of(config), ready_label=dispatch_label)
+                language_code=language.of(config), ready_label=dispatch_label,
+                status_url=config.status_url)
             raise facts.resume_error
         if facts.resume_scene is not None:
             run_id = facts.resume_scene[0]
@@ -2689,7 +2674,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         set_active_run(ctx, title)
         publisher = ProgressPublisher(
             number, source_repo, run_id, run_command=run_command,
-            language_code=language.of(config),
+            language_code=language.of(config), status_url=config.status_url,
         )
         publish = functools.partial(
             _safe_publish, run_id=run_id, issue=number,
@@ -2764,6 +2749,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             action=lambda: publisher.started(started_pi_comment_body(
                 ctx, run_info, extra_fields=repo_config_fields,
                 language_code=language.of(config),
+                status_url=config.status_url, issue_title=title,
             )),
         )
         # The whole ProgressPublisher path is a bypass — a
@@ -2775,6 +2761,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                     ctx, title=title, role=ROLE_IMPLEMENT,
                     started=started, pr_url=None, review_round=0,
                     priority=priority, language_code=language.of(config),
+                    status_url=config.status_url,
                 ),
             )),
         )
@@ -2824,6 +2811,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                             ctx, title=title, role=ROLE_IMPLEMENT,
                             started=started, pr_url=None, review_round=0,
                             priority=priority, language_code=language.of(config),
+                            status_url=config.status_url,
                         ),
                         outcome=language.text(
                             language.of(config),
@@ -2886,6 +2874,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                         ctx, title=title, role=ROLE_IMPLEMENT,
                         started=started, pr_url=None, review_round=0,
                         priority=priority, language_code=language.of(config),
+                        status_url=config.status_url,
                     ),
                     outcome=language.text(
                         language.of(config), "delivery.outcome_issue_closed"),
@@ -2927,7 +2916,9 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 number, repo=source_repo,
                 body=opened_pr_comment_body(
                     run_id, run_info, pr_url, external=external_takeover,
+                    issue=number, issue_title=title,
                     language_code=language.of(config),
+                    status_url=config.status_url,
                 ),
             )
         except Exception as exc:
@@ -2958,6 +2949,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                     test_status=test_status(
                         pr_delivery_rollup(pr_url, source_repo)[1],
                     ),
+                    issue=number, title=title,
                 )
                 if needs_person:
                     notify.human_review_waiting(source_repo, number, title)
@@ -2981,6 +2973,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 ctx, title=title, role=ROLE_IMPLEMENT, started=started,
                 pr_url=pr_url, review_round=0, priority=priority,
                 language_code=language.of(config), step="checks",
+                status_url=config.status_url,
             ), outcome=language.text(
                 language.of(config), "delivery.outcome_pr_opened"))),
         )
@@ -3043,6 +3036,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             run_id=run_id, recoverable_name=recoverable_name, record=record,
             detail=detail, run_info=run_info,
             language_code=language.of(config),
+            status_url=config.status_url, issue=number, title=title,
         )
         # The recovery comment is the delivery record, but the resume
         # does not parse it (the run state file, the worktree and the
@@ -3065,6 +3059,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 ctx, title=title, role=ROLE_IMPLEMENT, started=started,
                 pr_url=None, review_round=0, priority=priority,
                 language_code=language.of(config),
+                status_url=config.status_url,
             ), outcome=(
                 language.text(
                     language.of(config), "delivery.recoverable_outcome",
@@ -3123,6 +3118,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 run_id=run_id, pr_url=None,
                 worktree=worktree, branch=branch, role=ROLE_IMPLEMENT,
                 language_code=language.of(config),
+                status_url=config.status_url,
                 ready_label=dispatch_label, action=failure_report.terminal_action(
                     terminal_record, language.of(config),
                     base_branch=base_branch,
@@ -3246,7 +3242,7 @@ def _finish_progress(
     detail: str, next_step: str, title: str, outcome: str,
     role: str = ROLE_REVIEW, review_round: int = 0,
     priority: str = "normal", *,
-    language_code: str,
+    language_code: str, status_url: str | None = None,
 ) -> None:
     """Finish the tracked progress comment with the terminal scene.
 
@@ -3274,14 +3270,14 @@ def _finish_progress(
         return
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
-        language_code=language_code,
+        language_code=language_code, status_url=status_url,
     )
     publisher.ensure(progress._finish_progress_body(
         number=number, title=title, run_id=run_id, role=role,
         branch=branch, worktree=worktree, pr_url=pr_url,
         review_round=review_round, priority=priority, detail=detail,
         next_step=next_step, outcome=outcome, source_repo=source_repo,
-        language_code=language_code,
+        language_code=language_code, status_url=status_url,
     ))
 
 
@@ -3297,6 +3293,7 @@ _FIX_NEEDED_PHRASE = (
 def _requeue_closed_external_takeover(
     number: int, source_repo: str, pr_url: str, marker: str, run_id: str,
     *, language_code: str, ready_label: str = READY_LABEL,
+    status_url: str | None = None,
 ) -> None:
     """The #608 放弃/不可修 fallback: the external PR was closed without
     a merge (the contributor withdrew it, or a maintainer rejected it).
@@ -3450,6 +3447,7 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
             _requeue_closed_external_takeover(
                 number, source_repo, pr_url, marker, run_id,
                 language_code=language.of(config),
+                status_url=config.status_url,
                 ready_label=config.dispatch_label or READY_LABEL)
             return
         # The current labels are read ONCE before the transition:
@@ -3462,11 +3460,11 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
         )
         # The blocked patch leaves the terminal state `ai-blocked`
         # alone.
-        body = language.text(
-            language.of(config), "runner.pr_closed_comment", pr_url=pr_url,
+        body = user_summary.notice(
+            marker, "runner.pr_closed_comment", pr_url=pr_url,
+            language_code=language.of(config), status_url=config.status_url,
+            issue=number, title=issue.get("title"),
         )
-        if marker:
-            body = f"{marker}\n{body}"
         post_blocked_comment(
             number, repo=source_repo, body=body,
             current_labels=labels, language_code=language.of(config),
@@ -3482,6 +3480,7 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
                     number, source_repo, run_id,
                     run_command=run_command,
                     language_code=language.of(config),
+                    status_url=config.status_url,
                 ).milestone(
                     language.text(
                         language.of(config),
@@ -3519,6 +3518,7 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
                     role=ROLE_REVIEW, review_round=blocked_round,
                     priority=priority,
                     language_code=language.of(config),
+                    status_url=config.status_url,
                 ),
             )
         return
@@ -3946,6 +3946,7 @@ def main(argv: list[str] | None = None) -> int:
             failure_report.block_repo_config_failure(
                 int(issue["number"]), source_repo, exc, run_id,
                 language_code=language.of(config),
+                status_url=config.status_url,
                 ready_label=config.dispatch_label or READY_LABEL,
                 current_labels={
                     label.get("name") for label in issue.get("labels", [])

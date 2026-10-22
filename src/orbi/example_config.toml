@@ -106,6 +106,15 @@ engine_source_track = "release"
 # Default: true; set false to omit the attribution footer.
 # attribution_footer = true
 # The single link the footer carries. Defaults to Orbi's GitHub repo.
+# Optional project status page published in this runner's task notifications
+# (Issue #1826): a complete, fixed https URL with no template, no task id and
+# no tracking parameter. Orbi publishes it unchanged as the "Open project
+# status" link in the readable summary at the top of each task comment; the
+# page shows its current view, so an old notification's link does not point at
+# that historical run. Omitted = GitHub links only; an invalid value is ignored
+# with a safe warning and the delivery continues. Independent of
+# attribution_footer.
+# status_url = "https://tasks.example.org/project-status?repo=example%2Fwidget"
 # attribution_link = "https://github.com/orbi-build/orbi"
 # Claim scope: the active GitHub Milestone title (e.g.
 # "v0.2.0") that the fresh-claim scans (p0, bug, plain) are restricted

@@ -123,6 +123,8 @@ GOLDEN = {
 
 Orbi: blocked — waiting on a human decision
 
+**#42 Fix the thing**
+
 PR: [https://github.com/orbi-build/orbi/pull/7](https://github.com/orbi-build/orbi/pull/7)
 
 Issue: `orbi-build/orbi#42` · run_id=abcdef12
@@ -163,6 +165,8 @@ Need help? Join the Orbi community: https://t.me/+kJRTTpFGBRU0M2Y9""",
 <!-- orbi:failure:v1 {"schema":1,"outcome":"fix_needed","reason_code":"unclassified","action_code":"fix_ticket","retry_safe":false} -->
 
 Orbi: fix needed — the engine will retry
+
+**#42 Fix the thing**
 
 PR: [https://github.com/orbi-build/orbi/pull/7](https://github.com/orbi-build/orbi/pull/7)
 
@@ -221,6 +225,8 @@ collecting ...
 <!-- orbi:failure:v1 {"schema":1,"outcome":"fix_needed","reason_code":"unclassified","action_code":"fix_ticket","retry_safe":false} -->
 
 Orbi: fix needed — the engine will retry
+
+**#42 Fix the thing**
 
 PR: [https://github.com/orbi-build/orbi/pull/7](https://github.com/orbi-build/orbi/pull/7)
 
@@ -285,6 +291,8 @@ collecting ...
 
 Orbi: fix needed — the engine will retry
 
+**#42 Fix the thing**
+
 PR: [https://github.com/orbi-build/orbi/pull/7](https://github.com/orbi-build/orbi/pull/7)
 
 Issue: `orbi-build/orbi#42` · run_id=abcdef12
@@ -317,6 +325,8 @@ Issue: `orbi-build/orbi#42` · run_id=abcdef12
 <!-- orbi:failure:v1 {"schema":1,"outcome":"fix_needed","reason_code":"unclassified","action_code":"fix_ticket","retry_safe":false} -->
 
 Orbi: fix needed — the engine will retry
+
+**#42 Fix the thing**
 
 PR: [https://github.com/orbi-build/orbi/pull/7](https://github.com/orbi-build/orbi/pull/7)
 
@@ -360,6 +370,8 @@ provider failed
 
 **Orbi progress**
 
+**#42 Fix the thing**
+
 - role: review
 - step: review
 - reported at: 2026-10-15T06:20:20Z
@@ -370,7 +382,6 @@ provider failed
 
 <details><summary>Run details</summary>
 
-- issue: #42 Fix the thing
 - run_id=abcdef12
 - priority: normal
 - phase: bash

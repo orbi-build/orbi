@@ -251,7 +251,7 @@ def test_process_issue_creates_progress_comment_with_marker(monkeypatch, tmp_pat
     )
     body = progress_posts[0]
     # Issue #100: the issue line shows the number AND the title.
-    assert "- issue: #18 Publish progress" in body
+    assert "**#18 Publish progress**" in body
     assert "- role: implement" in body
     assert "- branch: orbi/xqliu-orbi-issue-18" in body
     assert "- PR: -" in body
@@ -342,7 +342,7 @@ def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
     assert "- priority: p0" in last_body
     assert "pi exploded" in last_body
     # Issue #100: the P0 blocked scene shows the number AND the title.
-    assert "- issue: #18 Publish progress" in last_body
+    assert "**#18 Publish progress**" in last_body
 
 
 def test_process_issue_fails_fast_on_missing_issue_title(
@@ -1999,7 +1999,7 @@ def test_delivery_step_closed_unmerged_posts_blocked_milestone(
     assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
     # Issue #100: the wait-loop blocked scene shows the number AND
     # the title, consistent with the other scenes.
-    assert "- issue: #39 t" in blocked
+    assert "**#39 t**" in blocked
     # The blocked scene carries the actual role (Issue #82: both
     # opened-PR states are review states, so always `review`) and the
     # completed review rounds (review round 2, PR #42).
@@ -2826,3 +2826,111 @@ def test_review_round_reports_checks_then_merge_in_the_same_comment(
     assert "- step: checks" in checks_body
 
 
+
+
+# --- Issue #1826: the fixed project status link in real task notifications
+
+
+STATUS_URL = "https://tasks.example.org/project-status?repo=example%2Fwidget"
+
+
+def test_process_issue_notifications_carry_the_configured_status_link(
+    monkeypatch, tmp_path,
+):
+    """The real orchestration entry posts the operator's fixed link in the
+    run's task notifications, before the routine diagnostics — while the
+    branding attribution stays disabled, because the link is independent
+    of it (Issue #1826)."""
+    calls, posted = make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path)
+    from dataclasses import replace
+
+    config = replace(
+        make_config(tmp_path), status_url=STATUS_URL,
+        attribution_footer=False,
+    )
+    runner.process_issue(make_issue(), config, "xqliu/orbi")
+
+    link = f"**Project status:** [Open project status]({STATUS_URL})"
+    started = [body for body in posted if "Orbi started Pi:" in body]
+    progress_posts = [body for body in posted if "**Orbi progress**" in body]
+    assert started and progress_posts
+    assert link in started[0]
+    assert "**#18 Publish progress**" in started[0]
+    body = progress_posts[-1]
+    header_at = body.splitlines().index("**Orbi progress**")
+    assert body.splitlines()[header_at + 2] == "**#18 Publish progress**"
+    assert body.splitlines()[header_at + 3] == link
+    # The milestone notifications (plan ready, findings, merged) go
+    # through the same publisher seam at the GitHub boundary.
+    milestone_posts = []
+
+    def fake_milestone_gh(command, **kwargs):
+        milestone_posts.append(command[command.index("--field") + 1][5:])
+        return json.dumps({"id": 88})
+
+    milestone_publisher = progress.ProgressPublisher(
+        18, "xqliu/orbi", "a1b2c3d4", run_command=fake_milestone_gh,
+        language_code="en", status_url=STATUS_URL,
+    )
+    milestone._publish_plan_milestone(milestone_publisher, derived_wt(tmp_path))
+    milestone_publisher.milestone(
+        "merged: https://github.com/xqliu/orbi/pull/40 "
+        "(merge_commit=m1 review_rounds=1 external_commits=0 commits=1)"
+    )
+    (derived_wt(tmp_path) / ".orbi").mkdir(parents=True, exist_ok=True)
+    (derived_wt(tmp_path) / ".orbi" / "plan.md").write_text("# Plan\n")
+    milestone._publish_plan_milestone(milestone_publisher, derived_wt(tmp_path))
+    assert len(milestone_posts) == 2
+    assert all(link in body for body in milestone_posts)
+    # The plan-ready milestone keeps its own event text (the publisher's
+    # notifications carry the run's identity + link, never a new state).
+    assert "plan ready" in milestone_posts[-1]
+
+
+def test_process_issue_notifications_stay_github_only_without_status_url(
+    monkeypatch, tmp_path,
+):
+    """Omitting the optional value is quiet: no link, no placeholder."""
+    calls, posted = make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path)
+    runner.process_issue(make_issue(), make_config(tmp_path), "xqliu/orbi")
+    assert posted
+    assert not any("Open project status" in body for body in posted)
+    assert not any("Project status" in body for body in posted)
+
+
+def test_invalid_status_url_warns_and_the_same_delivery_continues(
+    monkeypatch, tmp_path, caplog,
+):
+    """The real config loader ignores an invalid optional value with ONE
+    safe warning (never the raw value) and the run's delivery continues
+    exactly like an unconfigured host: GitHub links only, no link comment,
+    no failed start (Issue #1826)."""
+    import logging
+    from dataclasses import replace
+
+    caplog.set_level(logging.WARNING, logger="orbi.bootstrap")
+    config_path = tmp_path / "orbi.toml"
+    raw = "https://user:secret@tasks.example.org/status"
+    config_path.write_text(
+        f'source_repos = ["xqliu/orbi"]\nstatus_url = "{raw}"\n',
+        encoding="utf-8",
+    )
+    loaded = config_domain.load_config(config_path)
+    assert loaded.status_url is None
+    assert not any(raw in record.getMessage() for record in caplog.records)
+    assert any(
+        "reason=userinfo_not_allowed" in record.getMessage()
+        for record in caplog.records
+    )
+
+    calls, posted = make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path)
+    config = replace(
+        loaded, repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
+        base_branch="main",
+    )
+    runner.process_issue(make_issue(), config, "xqliu/orbi")
+    assert any("**Orbi progress**" in body for body in posted)
+    assert not any("Project status" in body for body in posted)

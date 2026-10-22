@@ -254,13 +254,23 @@ def test_run_pi_steering_limit_notice_follows_the_language(monkeypatch, tmp_path
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
-    config = _config(tmp_path, steering_max_rounds=0, message_language="zh")
+    config = _config(
+        tmp_path, steering_max_rounds=0, message_language="zh",
+        status_url="https://tasks.example.org/status?repo=o%2Fr",
+    )
     assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), config) == "done"
     assert captured["watch"].steering_check() is None
     assert len(comments) == 1
     assert "<!-- orbi:run=run1 -->" in comments[0][2]
     assert "已达到修正次数上限，因此这条修正未被执行。" in comments[0][2]
     assert "run_id=run1" in comments[0][2]
+    # Issue #1826: the notice carries the task identity and the
+    # operator's fixed project status link in the bound language.
+    assert "**#2 title**" in comments[0][2]
+    assert (
+        "**项目状态：**[查看项目状态]"
+        "(https://tasks.example.org/status?repo=o%2Fr)"
+    ) in comments[0][2]
 
 
 def test_run_pi_steering_limit_notice_failure_is_bypassed(monkeypatch, tmp_path):
