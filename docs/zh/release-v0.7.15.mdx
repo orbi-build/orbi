@@ -1,0 +1,45 @@
+---
+title: "v0.7.15 发布（最新）"
+description: "Orbi v0.7.15 发布说明：base 分支 CI 已红（base_ci_red）：清晰评论、/orbi fix-base 与自动恢复，另有 4 项改动。"
+---
+
+`v0.7.15` 于 2026-10-22T13:00:26Z 发布为 GitHub Release [v0.7.15](https://github.com/orbi-build/orbi/releases/tag/v0.7.15)。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.7.15` | 注解 tag `d5ffa4f0223cc4912e02fe265570591bc5e84c82` | 提交 `f40e62eb05ae3d299242772362fead7c567090f4` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- base 分支 CI 已红（base_ci_red）：清晰评论、/orbi fix-base 与自动恢复 ([Issue #1825](https://github.com/orbi-build/orbi/issues/1825); [PR #1829](https://github.com/orbi-build/orbi/pull/1829))
+- Add a fixed project status link and readable summaries to task notifications ([Issue #1826](https://github.com/orbi-build/orbi/issues/1826); [PR #1828](https://github.com/orbi-build/orbi/pull/1828))
+
+### Reliability and recovery
+
+- Restrict base-CI recovery to the latest trusted failure ([Issue #1833](https://github.com/orbi-build/orbi/issues/1833); [PR #1835](https://github.com/orbi-build/orbi/pull/1835))
+
+### Bug fixes
+
+- Reject a status_url whose authority has no hostname ([Issue #1830](https://github.com/orbi-build/orbi/issues/1830); [PR #1834](https://github.com/orbi-build/orbi/pull/1834))
+- Recognize concrete runtime failures in ticket preflight ([Issue #1831](https://github.com/orbi-build/orbi/issues/1831); [PR #1832](https://github.com/orbi-build/orbi/pull/1832))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
+
+- tag: `v0.7.15`
+- release commit: `f40e62eb05ae3d299242772362fead7c567090f4`
+- release task: Issue #1827
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit f40e62eb05ae3d299242772362fead7c567090f4 (the #268 CI-wait gate; no local test execution)
+
+
+Released by [Orbi](https://orbi.build/?ref=prfoot-orbi-build)
