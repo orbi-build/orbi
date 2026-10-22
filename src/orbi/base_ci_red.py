@@ -435,26 +435,39 @@ def comment_body(record: BaseCIRed, checks: list[FailingCheck], *,
         base_branch=record.base_branch, checks=repr_name(record),
     )
     parts.append(paused)
+    # The evidence is ONE tight list: every failed check with its run link,
+    # then its first error lines. A segment GitHub does not provide is
+    # omitted, never printed empty.
+    evidence: list[str] = []
     for check in checks:
         if check.url:
-            parts.append(language.text(
+            evidence.append(language.text(
                 language_code, "base_ci_red.check_run",
                 name=check.name, url=check.url,
             ))
         if check.errors:
-            parts.append(
+            evidence.append(
                 language.text(language_code, "base_ci_red.check_errors",
                               name=check.name)
                 + "\n" + _fenced("\n".join(check.errors))
             )
-    parts.append(language.text(language_code, "base_ci_red.next_steps"))
-    parts.append(language.text(
-        language_code, "base_ci_red.next_step_fix_base",
-        base_branch=record.base_branch,
-    ))
-    parts.append(language.text(language_code, "base_ci_red.next_step_command"))
+    if evidence:
+        parts.append("\n".join(evidence))
+    parts.extend(_next_steps(record, language_code))
     parts.append(render(record))
     return "\n\n".join(parts)
+
+
+def _next_steps(record: BaseCIRed, language_code: str) -> list[str]:
+    """The two repairs offered while the delivery waits."""
+    return [
+        language.text(language_code, "base_ci_red.next_steps"),
+        language.text(
+            language_code, "base_ci_red.next_step_fix_base",
+            base_branch=record.base_branch,
+        ),
+        language.text(language_code, "base_ci_red.next_step_command"),
+    ]
 
 
 def rewrite_state(body: str, state: str, *, language_code: str) -> str:
@@ -470,13 +483,25 @@ def rewrite_state(body: str, state: str, *, language_code: str) -> str:
     updated = with_state(record, state)
     line = _state_line(updated, language_code)
     lines = body.splitlines()
+    if state == STATE_MERGED:
+        # The delivery landed: the repairs the waiting comment offered are
+        # no longer next steps, so the merged comment does not repeat them.
+        offered = {text.strip() for text in _next_steps(record, language_code)}
+        # The removed section leaves its separator lines behind: keep one
+        # blank line, never a run of them.
+        kept: list[str] = []
+        for text in lines:
+            if text.strip() not in offered and (
+                    text.strip() or not kept or kept[-1].strip()):
+                kept.append(text)
+        lines = kept
     marker_index = next(
         (index for index, text in enumerate(lines)
          if BLOCK_TEMPLATE.split("{")[0].strip() in text),
         len(lines),
     )
     if line.strip() not in (text.strip() for text in lines[:marker_index]):
-        lines[marker_index:marker_index] = ["", line]
+        lines[marker_index:marker_index] = [line, ""]
     return "\n".join(lines).replace(
         render(record), render(updated), 1,
     ).rstrip() + "\n"

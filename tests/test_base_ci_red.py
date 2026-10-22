@@ -913,3 +913,18 @@ def test_the_claim_tick_runs_the_base_ci_scan_before_the_resume_scan(
     assert order[0][1]["dispatch_label"] == "ai-ready"
     assert order[0][1]["language_code"] == "en"
 
+
+
+def test_the_merged_comment_drops_the_next_steps(monkeypatch):
+    """The repairs the waiting comment offered are no longer next steps
+    once the delivery landed — the merged comment says so and stops
+    offering them."""
+    error = _preexisting_error(monkeypatch)
+    body = _reported_body(monkeypatch, error)
+    assert "Next steps" in body
+    merged = base_ci_red.rewrite_state(body, "merged", language_code="en")
+    assert "Next steps" not in merged
+    assert "/orbi fix-base" not in merged
+    assert "Merged:" in merged
+    assert base_ci_red.parse(merged).state == "merged"
+
