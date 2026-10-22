@@ -26,7 +26,9 @@ import os
 import re
 from pathlib import Path
 
-from orbi import base_ci_red, failure, language, runner_health, scene
+from orbi import (
+    base_ci_red, failure, language, runner_health, scene, user_summary,
+)
 from orbi.blocked_comment import post_blocked_comment
 from orbi.comment_kind import (
     COMMENT_KIND_FAILURE,
@@ -137,9 +139,7 @@ def is_unrecoverable_failure(exc: BaseException) -> bool:
     resumes the same run, branch, worktree and PR. A single failure
     must never permanently stop an Issue.
     """
-    return isinstance(
-        exc, (UnrecoverableDeliveryError, RateLimitExhaustedError),
-    )
+    return isinstance(exc, (UnrecoverableDeliveryError, RateLimitExhaustedError))
 
 
 # The delivery exception hierarchy is OURS; the closed code set and its
@@ -193,9 +193,7 @@ def _tail_text(path: Path, *, lines: int = 20, chars: int = 4000) -> str:
             # test log or session file into memory.
             window = min(size, chars * 4 + 1)
             handle.seek(size - window)
-            content = handle.read(window).decode(
-                "utf-8", errors="replace",
-            )
+            content = handle.read(window).decode("utf-8", errors="replace")
     except (OSError, UnicodeError):
         return "<unavailable>"
     tail = "\n".join(content.splitlines()[-lines:])
@@ -480,9 +478,19 @@ def _failure_streak(comments: list, run_id: str,
     return streak
 
 
+def _summary_scene(key: str, *, language_code: str, status_url: str | None,
+                   number: int, **fields: object) -> str:
+    """One short blocked scene plus the readable summary (Issue #1826)."""
+    return user_summary.append_summary(
+        language.text(language_code, key, **fields), status_url=status_url,
+        issue=number, title=fields.get("title"), language_code=language_code,
+    )
+
+
 def block_scene_failure(issue: dict, error: ValueError, repo: str,
                         comments: list[dict], *,
-                        language_code: str, ready_label: str = READY_LABEL) -> None:
+                        language_code: str, ready_label: str = READY_LABEL,
+                        status_url: str | None = None) -> None:
     """Mark an opened-PR Issue `ai-blocked` when its scene is malformed.
 
     The blocked transition is scoped to this one Issue: the
@@ -495,9 +503,7 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
     block.
     """
     number = int(issue["number"])
-    LOGGER.error(
-        "issue=%s resume scene is malformed: %s", number, error,
-    )
+    LOGGER.error("issue=%s resume scene is malformed: %s", number, error)
     marker = latest_run_marker(comments, repo=repo)
     try:
         # A scene that cannot be recovered is an external
@@ -513,8 +519,10 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
                 (f"{marker}\n"
                  f"{comment_kind_marker(COMMENT_KIND_FAILURE)}\n")
                 if marker else ""
-            ) + language.text(
-                language_code, "failure.scene_blocked", error=error,
+            ) + _summary_scene(
+                "failure.scene_blocked", language_code=language_code,
+                status_url=status_url, number=number, error=error,
+                title=issue.get("title"),
             ),
             current_labels={FIX_NEEDED_LABEL, ready_label},
             language_code=language_code, ready_label=ready_label,
@@ -526,7 +534,8 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
 def block_repo_config_failure(number: int, source_repo: str,
                               error: ValueError, run_id: str,
                               current_labels=(), *,
-                              language_code: str, ready_label: str = READY_LABEL
+                              language_code: str, ready_label: str = READY_LABEL,
+                              status_url: str | None = None,
                               ) -> None:
     """Mark an Issue `ai-blocked` when its repo config is invalid (#527).
 
@@ -544,8 +553,9 @@ def block_repo_config_failure(number: int, source_repo: str,
             body=(
                 f"{run_marker(run_id)}\n"
                 f"{comment_kind_marker(COMMENT_KIND_FAILURE)}\n"
-                + language.text(
-                    language_code, "failure.repo_config_blocked", error=error,
+                + _summary_scene(
+                    "failure.repo_config_blocked", language_code=language_code,
+                    status_url=status_url, number=number, error=error,
                 )
             ),
             current_labels=set(current_labels),
@@ -579,8 +589,8 @@ def _raise_if_preexisting_ci_failure(
 
 def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
                            error: Exception,
-                           language_code: str, ready_label: str = READY_LABEL
-                           ) -> None:
+                           language_code: str, ready_label: str = READY_LABEL,
+                           status_url: str | None = None) -> None:
     """Report a failed resume decision through the terminal path.
 
     The worktree of this issue exists but its run state cannot be
@@ -595,10 +605,14 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
         body=(
             f"{run_marker(run_id)}\n"
             f"{comment_kind_marker(COMMENT_KIND_FAILURE)}\n"
-            + language.text(
-                language_code, "failure.resume_blocked",
-                detail=_redact_local_paths(_failure_detail(error)),
-                run_id=run_id,
+            + user_summary.append_summary(
+                language.text(
+                    language_code, "failure.resume_blocked",
+                    detail=_redact_local_paths(_failure_detail(error)),
+                    run_id=run_id,
+                ),
+                status_url=status_url, issue=number,
+                language_code=language_code,
             )
         ),
         current_labels={IN_PROGRESS_LABEL, ready_label},
@@ -617,6 +631,7 @@ def report_delivery_failure(
     review_scene_block: str | None = None,
     finish: bool = True, publisher: ProgressPublisher | None = None,
     language_code: str, ready_label: str = READY_LABEL,
+    status_url: str | None = None,  # Issue #1826: the fixed project link
 ) -> str:
     """Report one delivery failure through the classified-failure flow.
 
@@ -688,14 +703,10 @@ def report_delivery_failure(
     # generic credential wording. One canonical explanation below feeds
     # the detailed comment, the terminal progress scene and the short
     # milestone so the three surfaces cannot disagree (Issue #1651).
-    workflow_refusal = failure.workflow_permission_refused(
-        _failure_detail(exc),
-    )
+    workflow_refusal = failure.workflow_permission_refused(_failure_detail(exc))
     if workflow_refusal:
         blocked = True
-        action = failure.workflow_permission_action(
-            pr_url, language_code=language_code,
-        )
+        action = failure.workflow_permission_action(pr_url, language_code=language_code)
         reason = failure.workflow_permission_cause(language_code)
     # The #825 dead-loop guard, recoverable failures only (blocked is
     # already terminal; `classify=False` is the implement handler's
@@ -711,17 +722,12 @@ def report_delivery_failure(
             history = issue_comments(number, repo=source_repo)
         except Exception:
             LOGGER.exception("issue=%s failure history read failed", number)
-            event(
-                "failure_history_read_failed", issue=number,
-                run_id=run_id,
-            )
+            event("failure_history_read_failed", issue=number, run_id=run_id)
         else:
             reported_failure = _reported_failure_comment(
                 history, run_id, fingerprint, repo=source_repo,
             )
-            streak = _failure_streak(
-                history, run_id, fingerprint, repo=source_repo,
-            )
+            streak = _failure_streak(history, run_id, fingerprint, repo=source_repo)
             if streak + 1 >= FAILURE_STREAK_LIMIT:
                 blocked = True
                 reason += language.text(
@@ -780,12 +786,10 @@ def report_delivery_failure(
         current_labels if current_labels is not None
         else issue_labels(number, source_repo)
     )
-    # The base-branch-red scene owns its whole readable body (Issue
-    # #1825): not a subprocess failure, so it renders NO evidence segment.
+    # Base-branch-red (Issue #1825) owns its body: no evidence segment.
     red = getattr(exc, "base_ci_red", None)
-    evidence_detail = _failure_evidence(
-        worktree, exc, language_code=language_code,
-    ) if evidence and red is None else ""
+    evidence_detail = "" if red is not None or not evidence else (
+        _failure_evidence(worktree, exc, language_code=language_code))
     # The milestone is a short mobile notification: for the workflow
     # refusal it must carry the same cause AND repair path as the
     # detailed comment, so it shows the reader-facing action instead of
@@ -811,7 +815,8 @@ def report_delivery_failure(
     if isinstance(red, base_ci_red.BaseCIRed):
         body = base_ci_red.comment_body(
             red, getattr(exc, "checks", []),
-            failure_record=failure_record, language_code=language_code)
+            failure_record=failure_record, language_code=language_code,
+            issue_number=number, issue_title=title, status_url=status_url)
     else:
         body = _failure_comment_body(
             outcome="blocked" if blocked else "fix needed",
@@ -819,6 +824,7 @@ def report_delivery_failure(
             evidence=evidence_detail, pr_url=pr_url,
             issue=issue_context(source_repo, number), run_id=run_id or "-",
             failure_record=failure_record, language_code=language_code,
+            issue_number=number, issue_title=title, status_url=status_url,
         )
     if blocked and classify:
         body = body.replace(
@@ -907,9 +913,7 @@ def report_delivery_failure(
                     body=bump_failure_repeat(body, fingerprint),
                 )
             except Exception:
-                LOGGER.exception(
-                    "issue=%s failure comment update failed", number,
-                )
+                LOGGER.exception("issue=%s failure comment update failed", number)
                 event(
                     "failure_comment_update_failed", level=logging.ERROR,
                     issue=number, run_id=run_id,
@@ -943,7 +947,7 @@ def report_delivery_failure(
             publisher if publisher is not None
             else ProgressPublisher(
                 number, source_repo, run_id, run_command=run_command,
-                language_code=language_code,
+                language_code=language_code, status_url=status_url,
             )
         )
         publish = functools.partial(
@@ -974,9 +978,7 @@ def report_delivery_failure(
                 block=failure.render(failure_record),
             ))
             finish_failure = reason
-            next_step = language.text(
-                language_code, "failure.next_step_fix_needed",
-            )
+            next_step = language.text(language_code, "failure.next_step_fix_needed")
             finish_outcome = "fix needed"
         if finish:
             publish(action=lambda: target.finish(_finish_progress_body(
@@ -992,6 +994,6 @@ def report_delivery_failure(
                 next_step=next_step, outcome=finish_outcome,
                 source_repo=source_repo, action=action,
                 reason=reason, diagnosis=diagnosis,
-                language_code=language_code,
+                language_code=language_code, status_url=status_url,
             )))
     return outcome

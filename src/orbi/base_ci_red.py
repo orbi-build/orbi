@@ -41,14 +41,14 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from orbi import failure, language
+from orbi import failure, language, user_summary
 from orbi.delivery_labels import (
     BLOCKED_LABEL, FIX_NEEDED_LABEL, P0_LABEL, READY_LABEL,
 )
 from orbi.failure import _redact_local_paths
 from orbi.github import (
-    comment_issue, commit_check_runs, edit_issue, issue_comments,
-    list_issues, pr_view, update_issue_comment,
+    branch_head_sha, comment_issue, commit_check_runs, edit_issue,
+    issue_comments, list_issues, pr_view, update_issue_comment,
 )
 from orbi.journal import LOGGER, event, run_command
 from orbi.pi_activity import parse_iso_utc
@@ -324,20 +324,15 @@ def open_triage_issue(repo: str, check_name: str,
     """The OPEN triage Issue for this check, or None.
 
     `state="open"` on purpose: a CLOSED Issue is done and must never be
-    reused as the tracker of a new red base.
+    reused as the tracker of a new red base. A failed read PROPAGATES: a
+    lookup that silently read as "none" would make `/orbi fix-base`
+    open a SECOND fix Issue beside the one it could not see.
     """
     prefix = triage_title(check_name, base_branch)
-    try:
-        issues = list_issues(
-            repo, state="open", search=f'"{prefix}" in:title',
-            json_fields="number,url,title", limit=_TRIAGE_SEARCH_LIMIT,
-        )
-    except Exception:
-        LOGGER.exception(
-            "delivery_ci_triage_lookup_failed repo=%s check=%s",
-            repo, check_name,
-        )
-        return None
+    issues = list_issues(
+        repo, state="open", search=f'"{prefix}" in:title',
+        json_fields="number,url,title", limit=_TRIAGE_SEARCH_LIMIT,
+    )
     for issue in issues:
         if str(issue.get("title", "")).startswith(prefix):
             return issue
@@ -345,8 +340,19 @@ def open_triage_issue(repo: str, check_name: str,
 
 
 def triage_url(repo: str, check_name: str, base_branch: str) -> str | None:
-    """The existing OPEN triage Issue's URL (best effort, never fails)."""
-    issue = open_triage_issue(repo, check_name, base_branch)
+    """The existing OPEN triage Issue's URL (best effort, never fails).
+
+    The failure comment is a bypass: a failed lookup drops the link, it
+    never changes the delivery's own outcome.
+    """
+    try:
+        issue = open_triage_issue(repo, check_name, base_branch)
+    except Exception:
+        LOGGER.exception(
+            "delivery_ci_triage_lookup_failed repo=%s check=%s",
+            repo, check_name,
+        )
+        return None
     url = issue.get("url") if issue else None
     return url if isinstance(url, str) and url else None
 
@@ -417,19 +423,28 @@ def _state_line(record: BaseCIRed, language_code: str) -> str:
 
 def comment_body(record: BaseCIRed, checks: list[FailingCheck], *,
                  failure_record: failure.Failure,
-                 language_code: str) -> str:
+                 language_code: str,
+                 issue_number: int | None = None,
+                 issue_title: str | None = None,
+                 status_url: str | None = None) -> str:
     """The ONE readable base-branch-red comment.
 
     Order is the user's: what they already have (a ready PR), why it
     paused, the evidence, the two repairs. The hidden
     `orbi:failure:v1` block leads (the resume path reads it there) and
     the `orbi:base-ci-red:v1` block closes the body. An empty evidence
-    segment is never rendered: this failure is not a subprocess exit.
+    segment is never rendered: this failure is not a subprocess exit. The
+    task identity and the optional project status link every task comment
+    carries (Issue #1826) sit right below the ready line.
     """
     parts = [
         failure.render(failure_record),
         language.text(language_code, "base_ci_red.ready", pr=record.pr),
     ]
+    parts.extend(user_summary.summary_lines(
+        status_url=status_url, issue=issue_number, title=issue_title,
+        language_code=language_code,
+    ))
     paused = language.text(
         language_code, "base_ci_red.paused",
         base_branch=record.base_branch, checks=repr_name(record),
@@ -563,15 +578,33 @@ def _edit_state(repo: str, issue_number: int, comment: dict,
 # The base head and the green decision
 # --------------------------------------------------------------------------
 
-def _base_head(repo: str, pr_number: int) -> tuple[str, str]:
-    """The paused PR's state and its CURRENT base head."""
-    state = pr_view(pr_number, "state,baseRefOid", repo=repo)
-    head = state.get("baseRefOid")
-    if not isinstance(head, str) or not head:
-        raise RuntimeError(
-            f"PR #{pr_number} reports no baseRefOid"
-        )
-    return str(state.get("state") or ""), head
+def _base_head(repo: str, pr_number: int,
+               base_branch: str) -> tuple[str, str]:
+    """The paused PR's state and the base branch's LIVING head.
+
+    The branch's current head, never the PR's recorded `baseRefOid`: that
+    field is the base snapshot the PR was compared against, so the fix a
+    maintainer pushes to the base AFTER the pause would never be observed
+    and the delivery would never resume.
+    """
+    state = pr_view(pr_number, "state", repo=repo)
+    return str(state.get("state") or ""), branch_head_sha(repo, base_branch)
+
+
+def _newest_runs(runs: list[dict]) -> dict[str, dict]:
+    """One current run per check name.
+
+    A RE-RUN of a check adds a second run under the same name, and the
+    check-runs endpoint lists a commit's runs newest first (descending
+    `started_at`/`id`, verified against the live endpoint), so the FIRST
+    occurrence is the current verdict. Reading the last one would keep an
+    old failure alive after the maintainer re-ran the check to green and
+    the delivery would never resume.
+    """
+    by_name: dict[str, dict] = {}
+    for run in runs:
+        by_name.setdefault(str(run.get("name")), run)
+    return by_name
 
 
 def _base_is_green(repo: str, record: BaseCIRed,
@@ -580,8 +613,7 @@ def _base_is_green(repo: str, record: BaseCIRed,
 
     A pending check is not green: the scan waits, it never guesses.
     """
-    runs = commit_check_runs(repo, base_head)
-    by_name = {run.get("name"): run for run in runs}
+    by_name = _newest_runs(commit_check_runs(repo, base_head))
     for name in record.failing_checks:
         run = by_name.get(name)
         if run is None:
@@ -670,7 +702,8 @@ def recover(repo: str, *, language_code: str,
             milestone=milestone, dispatch_label=dispatch_label,
         )
         try:
-            pr_state, base_head = _base_head(repo, record.pr)
+            pr_state, base_head = _base_head(
+                repo, record.pr, record.base_branch)
         except Exception:
             LOGGER.exception(
                 "base_ci_red_pr_read_failed issue=%s pr=%s repo=%s",
@@ -813,7 +846,14 @@ def _fix_base_apply(
         return
     lines: list[str] = []
     for check in checks:
-        existing = open_triage_issue(repo, check.name, record.base_branch)
+        try:
+            existing = open_triage_issue(
+                repo, check.name, record.base_branch)
+        except Exception as exc:
+            # Never open a second Issue beside one this read could not
+            # see: the command fails its own step and posts the receipt.
+            raise TicketCommandError(
+                "look up the triage Issue", str(exc)) from exc
         if existing is not None and isinstance(existing.get("number"), int):
             number = existing["number"]
             key = "base_ci_red.triage_reused"

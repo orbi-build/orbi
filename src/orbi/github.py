@@ -491,6 +491,27 @@ def commit_check_runs(repo: str, commit: str) -> list:
     return checks
 
 
+def branch_head_sha(repo: str, branch: str) -> str:
+    """The branch resource's CURRENT head SHA (the live base head).
+
+    The same `branches/{branch}` resource the merge-gate preflight reads.
+    A caller that must know where the base branch stands NOW (the
+    base-branch-red recovery, Issue #1825) can never use the PR's
+    `baseRefOid`: that field is the base snapshot the PR was compared
+    against, so a commit landing on the base afterwards stays invisible
+    there. A response without a commit SHA fails fast.
+    """
+    encoded_branch = quote(branch, safe="")
+    data = json.loads(run_gh_read_command([
+        "gh", "api", f"repos/{repo}/branches/{encoded_branch}",
+    ], timeout=30))
+    commit = data.get("commit") if isinstance(data, dict) else None
+    sha = commit.get("sha") if isinstance(commit, dict) else None
+    if not isinstance(sha, str) or not sha:
+        raise ValueError(f"branch {branch!r} reports no head sha")
+    return sha
+
+
 def issue_priority(issue: dict) -> str:
     """Return the pickup priority of one issue.
 

@@ -33,7 +33,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from orbi import language, notify
+from orbi import language, notify, user_summary
 from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
 from orbi.github import comment_issue, edit_issue
 from orbi.journal import event
@@ -154,7 +154,8 @@ def parse_verdict(output: str) -> ClarifyVerdict | None:
 
 def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
                    ready_label: str = READY_LABEL,
-                   language_code: str) -> str:
+                   language_code: str,
+                   status_url: str | None = None) -> str:
     """Render the ONE comment that names the missing pieces.
 
     The first line mentions the Issue author (`@<login>`, #1336) so the
@@ -172,13 +173,20 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
     pieces = "\n".join(
         f"- {missing_text(item, language_code)}" for item in verdict.missing
     )
+    # The task identity and the optional fixed project status link follow
+    # the state headline, before the missing-piece diagnostics (#1826).
+    summary = user_summary.summary_text(
+        status_url=status_url, issue=issue.get("number"),
+        title=issue.get("title"), language_code=language_code,
+    )
     mention = _author_mention(issue)
     prefix = f"{mention}\n" if mention else ""
     return (
         f"{prefix}"
         f"{run_marker(run_id)}\n"
-        f"{message('clarify.heading')}\n\n"
-        f"{message('clarify.intro')}\n\n"
+        f"{message('clarify.heading')}\n"
+        f"{summary}"
+        f"\n{message('clarify.intro')}\n\n"
         f"{pieces}\n\n"
         f"{message('clarify.repair', ready_label=ready_label)}\n\n"
         "```\n"
@@ -245,6 +253,7 @@ def enforce(issue: dict, config: RunnerConfig, source_repo: str,
             body=render_comment(
                 issue, verdict, run_id, ready_label=ready_label,
                 language_code=language.of(config),
+                status_url=config.status_url,
             ),
         )
         edit_issue(

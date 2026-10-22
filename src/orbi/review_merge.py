@@ -69,7 +69,8 @@ from orbi.github import (
     pr_delivery_rollup,
     pr_view,
 )
-from orbi import base_ci_red, language
+from orbi import base_ci_red, language, user_summary
+from orbi.delivery_comment import merged_pr_comment_body  # noqa: F401
 from orbi.gitops import (
     _is_ancestor,
     acquire_base_sync_lock,
@@ -128,57 +129,6 @@ class RecoverableMergeGateError(RuntimeError):
     absorbing the latest base or resolving merge conflicts. Callers must not
     infer delivery control flow from the human-readable error message.
     """
-
-
-def merged_pr_comment_body(run_id: str, pr_url: str, merge_commit: str,
-                           review_rounds: int, external_commits: object,
-                           commits: object, base_branch: str,
-                           review: str,
-                           language_code: str,
-                           ) -> str:
-    """Render the final delivery record.
-
-    The record carries the canonical ``<!-- orbi:comment=merged -->``
-    kind right after the run marker (Issue #1659), so a consumer
-    identifies it without parsing the translatable `Orbi merged PR:`
-    headline. The visible part carries only what the user acts on: the
-    PR headline, the review result and the target branch. Every other
-    field lives once, in `key=value` form, inside the single `Run
-    details` fold — those rows are machine-read anchors (orbi-cloud
-    `mergeCommentFields`, the reader contracts), so they keep the `=`
-    form while the visible review/merged-into rows use the human `:`.
-    The fixed rows are `merge_commit`, `review_rounds`, `commits`,
-    `external_commits`, `run_id` and `pr_url`: the PR URL is a
-    machine fact, never extracted from the translated heading.
-    """
-    visible_review = language.text(
-        language_code, "delivery.review_row", review=review,
-    )
-    if int(review_rounds) > 1:
-        visible_review += language.text(
-            language_code, "delivery.review_rounds",
-            rounds=review_rounds,
-        )
-    details_summary = language.text(language_code, "progress.run_details")
-    return (
-        f"{run_marker(run_id)}\n"
-        f"{comment_kind_marker(COMMENT_KIND_MERGED)}\n"
-        + language.text(
-            language_code, "delivery.merged_headline", pr_url=pr_url,
-        ) + "\n"
-        f"{visible_review}\n"
-        + language.text(
-            language_code, "delivery.merged_into", base_branch=base_branch,
-        ) + "\n\n"
-        f"<details><summary>{details_summary}</summary>\n\n"
-        f"- merge_commit={merge_commit}\n"
-        f"- review_rounds={review_rounds}\n"
-        f"- commits={commits}\n"
-        f"- external_commits={external_commits}\n"
-        f"- run_id={run_id}\n"
-        f"- pr_url={pr_url}\n\n"
-        "</details>"
-    )
 
 
 def _read_pushed(worktree: Path, key: str) -> str | None:
@@ -1120,7 +1070,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         log_recovery_ci_status(pr, source_repo)
     publisher = ProgressPublisher(
         number, source_repo, config.run_id, run_command=run_command,
-        language_code=language.of(config),
+        language_code=language.of(config), status_url=config.status_url,
     )
     publish = functools.partial(
         _safe_publish, run_id=config.run_id, issue=number,
@@ -1225,7 +1175,8 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
                 verdict_head_unknown_round=0,
             ),
             repo=source_repo, previous_comments=previous_comments,
-            language_code=language.of(config),
+            language_code=language.of(config), status_url=config.status_url,
+            issue=number, title=title,
         )
         comment_issue(number, repo=source_repo, body=body)
         failure_report.comment_pr(pr["number"], repo=source_repo, body=body)
@@ -1351,7 +1302,11 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
                 pr_number=pr["number"], verdict=verdict["verdict"],
                 blockers=verdict["blockers"], majors=verdict["majors"],
                 minors=verdict["minors"], state=state, checks=checks,
-            ) + "\n\n"
+            ) + "\n"
+            + user_summary.summary_text(
+                status_url=config.status_url, issue=number, title=title,
+                language_code=bound,
+            ) + "\n"
             + language.text(bound, "review.review_report_open")
             + "````\n" + output.rstrip("\n") + "\n````\n\n</details>\n\n"
             + language.text(
@@ -1436,7 +1391,8 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             # consume a round record (Issue #1659).
             kind=(COMMENT_KIND_REVIEW_ROUND if ci_failure
                   else COMMENT_KIND_FAILURE),
-            language_code=language.of(config),
+            language_code=language.of(config), status_url=config.status_url,
+            issue=number, title=title,
         )
         # CI evidence is best-effort observability.  A GitHub comment
         # outage must not prevent the required ai-fix-needed transition.
@@ -1491,6 +1447,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             number=number, repo=source_repo, pr_number=refrozen["number"],
             head=refrozen["head_oid"], preflight=exc.preflight, marker=marker,
             language_code=language.of(config), ready_label=ready_label,
+            status_url=config.status_url, title=title,
         )
     except DeliveryDeferred as exc:
         # A pending check or an UNKNOWN mergeability on the
@@ -1591,8 +1548,11 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         number, source_repo, merged_pr_comment_body(
             config.run_id, merged["url"], confirmed["merge_commit"], round,
             external_commits, pr_commits, base_branch, review_summary,
-            language_code=language.of(config)),
+            language_code=language.of(config), status_url=config.status_url,
+            issue=number, title=title,
+        ),
         language_code=language.of(config))
+
     if confirmed["state"] != "MERGED":  # Issue #1801: nothing else closes it
         run_state.close_issue_after_landed_merge(
             number, repo=source_repo, merge_commit=confirmed["merge_commit"])
@@ -1687,7 +1647,7 @@ def _delivery_checklist(
 
 def human_review_checklist(
     worktree: Path, config: config_domain.RunnerConfig, *, run_id: str, pr_url: str,
-    test_status: str | None,
+    test_status: str | None, title: str | None = None, issue: int | None = None,
 ) -> tuple[str, bool]:
     """Render the checklist comment and whether a person must confirm.
 
@@ -1702,6 +1662,7 @@ def human_review_checklist(
         human_review.render_checklist_comment(
             run_id=run_id, pr_url=pr_url,
             language_code=language.of(config), checklist=checklist,
+            status_url=config.status_url, issue=issue, title=title,
         ),
         bool(checklist["column2"]),
     )
@@ -1748,6 +1709,12 @@ def _run_review_round(
         )
         if marker:
             body = f"{marker}\n{body}"
+        # The blocked scene carries the readable summary before the
+        # implementation diagnostics (Issue #1826).
+        body = user_summary.append_summary(
+            body, status_url=config.status_url, issue=number, title=title,
+            language_code=language.of(config),
+        )
         post_blocked_comment(
             number, repo=source_repo, body=body,
             current_labels=labels, language_code=language.of(config),
@@ -1994,6 +1961,7 @@ def _run_review_round(
             run_id=run_id, pr_url=pr_url,
             worktree=worktree, branch=branch, role=ROLE_REVIEW,
             language_code=language_code, ready_label=ready_label,
+            status_url=config.status_url,
             action=action,
             reason=reason,
             diagnosis=detail, evidence=True,

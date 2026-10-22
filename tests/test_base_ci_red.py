@@ -340,6 +340,26 @@ def test_the_comment_lists_every_failing_check(monkeypatch):
     assert "lint error" in body
 
 
+def test_the_comment_carries_the_task_identity_and_the_status_link():
+    """Issue #1826: every task comment names the task and the operator's
+    project status page — this blocked one included, right below the
+    ready line (the first thing the reader sees)."""
+    body = base_ci_red.comment_body(
+        record(), [base_ci_red.FailingCheck(CHECK, url=RUN_URL)],
+        failure_record=failure.Failure(
+            reason_code="base_ci_red", action_code="fix_ticket",
+            retry_safe=False, outcome="blocked"),
+        language_code="en", issue_number=1825, issue_title="be nicer",
+        status_url="https://status.example.com/board",
+    )
+    lines = body.splitlines()
+    # The ready line the reader sees first, the identity right below it.
+    assert lines[2] == "✅ **PR #123 is ready:** review passed, tests pass."
+    assert lines[4] == "**#1825 be nicer**"
+    assert any("https://status.example.com/board" in line
+               for line in lines[:8])
+
+
 def test_the_comment_speaks_the_run_message_language(monkeypatch):
     error = _preexisting_error(monkeypatch)
     body = _reported_body(monkeypatch, error, language_code="zh")
@@ -476,6 +496,29 @@ def test_fix_base_runs_once_per_comment(monkeypatch, permission):
     assert len(replies) == 1
 
 
+def test_fix_base_fails_the_step_instead_of_opening_a_duplicate(
+        monkeypatch):
+    """A lookup that cannot be read must never read as "no triage Issue":
+    the command would open a SECOND `ai-ready`+`p0` fix Issue beside
+    the one it could not see. It fails its own step instead, and the
+    dispatcher posts the one idempotent failure receipt."""
+    gh = _command_fixture(monkeypatch)
+    _blocks_issue(gh)
+    gh.add_check_runs(BASE_SHA, [base_run()])
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("gh down")
+
+    monkeypatch.setattr(seam, "list_issues", boom)
+    ticket_command.process_commands(
+        REPO, 1825, [base_ci_red.FIX_BASE_COMMAND], language_code="en",
+        record=record(), milestone=None, dispatch_label="ai-ready",
+    )
+    assert [number for number in gh.issues if number != 1825] == []
+    bodies = [comment["body"] for comment in gh.issues[1825]["comments"]]
+    assert any("look up the triage Issue" in body for body in bodies), bodies
+
+
 def test_fix_base_never_triggers_on_the_runners_own_comment(monkeypatch):
     gh = _command_fixture(monkeypatch)
     gh.issues[1825]["comments"].clear()
@@ -532,13 +575,16 @@ def test_fix_base_apply_without_a_block_fails_as_a_command_step(monkeypatch):
 # --------------------------------------------------------------------------
 
 def _scan_gh(monkeypatch, *, base_runs, pr_state="OPEN", comments=None,
-             labels=("ai-blocked",)):
+             labels=("ai-blocked",), base_head=BASE_SHA):
     gh = FakeGh(REPO)
     gh.add_issue(1825, title="t", labels=labels)
     _blocks_issue(gh, number=1825, **({} if comments is None
                                       else {"state": comments}))
     gh.add_pr(PR_NUMBER, head="orbi/x", base=BASE_BRANCH, state=pr_state)
+    # The PR's recorded base snapshot: deliberately NOT the base branch's
+    # head (GitHub never moves it when the base branch advances).
     gh.prs[PR_NUMBER]["baseRefOid"] = BASE_SHA
+    gh.add_branch(BASE_BRANCH, head=base_head)
     gh.add_check_runs(BASE_SHA, list(base_runs))
     monkeypatch.setattr(seam, "run_command", gh)
     return gh
@@ -563,6 +609,19 @@ def test_the_scan_recovers_a_green_base_without_a_human(monkeypatch):
     assert "ai-fix-needed" in labels
     assert "ai-blocked" not in labels
     assert base_ci_red.parse(_block_comment(gh)["body"]).state == "resuming"
+
+
+def test_a_re_run_check_reads_its_newest_run(monkeypatch):
+    """A re-run adds a second run under the same name, newest first: the
+    current verdict is the FIRST one. Reading the older failure would keep
+    the delivery paused after the maintainer re-ran the check to green."""
+    gh = _scan_gh(monkeypatch, base_runs=[
+        {"id": 2, "name": CHECK, "status": "completed",
+         "conclusion": "success", "html_url": "", "output": {}},
+        base_run(),
+    ])
+    assert base_ci_red.recover(REPO, language_code="en") == [1825]
+    assert "ai-fix-needed" in gh.issues[1825]["labels"]
 
 
 def test_the_scan_leaves_a_still_red_base_alone(monkeypatch):
@@ -823,11 +882,28 @@ def test_fix_base_without_check_evidence_replies_instead_of_inventing_one(
     assert any("No failing check evidence" in body for body in bodies), bodies
 
 
-def test_a_pr_without_a_base_head_leaves_the_issue_alone(monkeypatch):
+def test_a_branch_without_a_head_leaves_the_issue_alone(monkeypatch):
     gh = _scan_gh(monkeypatch, base_runs=[base_run()])
-    gh.prs[PR_NUMBER]["baseRefOid"] = ""
+    gh.branches[BASE_BRANCH]["head"] = None
     assert base_ci_red.recover(REPO, language_code="en") == []
     assert gh.issues[1825]["labels"] == ["ai-blocked"]
+
+
+def test_the_scan_reads_the_live_base_head_not_the_prs_base_snapshot(
+        monkeypatch):
+    """The PR's `baseRefOid` is the base snapshot the PR was compared
+    against: GitHub never moves it when the base branch advances. A fix
+    that landed on the base AFTER the pause must still be seen, so the
+    scan reads the branch's CURRENT head (Issue #1825)."""
+    gh = _scan_gh(monkeypatch, base_runs=[base_run()])
+    gh.add_check_runs("live-base-head", [
+        {"id": 2, "name": CHECK, "status": "completed",
+         "conclusion": "success", "html_url": "", "output": {}},
+    ])
+    gh.branches[BASE_BRANCH]["head"] = "live-base-head"
+    assert base_ci_red.recover(REPO, language_code="en") == [1825]
+    assert "ai-fix-needed" in gh.issues[1825]["labels"]
+    assert base_ci_red.parse(_block_comment(gh)["body"]).state == "resuming"
 
 
 def test_an_issue_without_the_block_is_left_alone(monkeypatch):

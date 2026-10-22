@@ -528,6 +528,22 @@ def test_fake_list_issues_scopes_a_quoted_phrase_to_the_title(fake_gh):
     assert search('"CI failure: tests on branch main"') == [2]
 
 
+def test_branch_head_sha_reads_the_live_head_and_fails_fast(fake_gh,
+                                                            monkeypatch):
+    """Issue #1825: the live base head is the branch resource's commit
+    SHA (the PR's `baseRefOid` is a snapshot and never moves). A branch
+    name with a slash travels URL-encoded; a response without a commit
+    SHA fails fast instead of reading as a real head."""
+    fake_gh.add_branch("release/7", head="abc1234")
+    assert github.branch_head_sha("owner/repo", "release/7") == "abc1234"
+    fake_gh.add_branch("release/7", head=None)
+    with pytest.raises(ValueError):
+        github.branch_head_sha("owner/repo", "release/7")
+    monkeypatch.setattr(seam, "run_command", lambda *_a, **_k: "[]")
+    with pytest.raises(ValueError):
+        github.branch_head_sha("owner/repo", "main")
+
+
 def test_fake_issue_comments_carry_an_id_and_a_permalink(fake_gh):
     """Every real comment has a REST id and a permalink; the in-place edit
     path reads the id back from that URL (Issue #825's PATCH route)."""

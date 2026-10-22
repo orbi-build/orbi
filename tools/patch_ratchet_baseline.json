@@ -40,7 +40,7 @@
     "pi_session": 127,
     "pilot_setup": 18,
     "pilot_slots": 0,
-    "progress": 12,
+    "progress": 8,
     "progress_display": 0,
     "progress_outcome": 0,
     "progress_summary": 0,
@@ -54,6 +54,7 @@
     "review_rounds": 0,
     "run_state": 5,
     "runner_health": 14,
+    "runner_marker": 0,
     "scene": 0,
     "scheduler": 17,
     "scheduler_units": 0,
@@ -62,7 +63,8 @@
     "status_observe": 0,
     "suggest": 0,
     "systemd_deploy": 0,
-    "ticket_command": 0
+    "ticket_command": 0,
+    "user_summary": 0
   },
   "monkeypatch_setattr_runner": 131,
   "monkeypatch_setattr_runner_string": 3

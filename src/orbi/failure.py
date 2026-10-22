@@ -26,7 +26,7 @@ import json
 import re
 import subprocess
 
-from orbi import gh_response, language
+from orbi import gh_response, language, user_summary
 
 SCHEMA_VERSION = 1
 
@@ -631,6 +631,9 @@ def _failure_comment_body(*, outcome: str, action: str, reason: str,
                          pr_url: str | None, issue: str, run_id: str,
                          failure_record: Failure | None = None,
                          language_code: str,
+                         issue_number: int | None = None,
+                         issue_title: str | None = None,
+                         status_url: str | None = None,
                          ) -> str:
     """Build the reader-facing hierarchy shared by classified failures.
 
@@ -655,6 +658,15 @@ def _failure_comment_body(*, outcome: str, action: str, reason: str,
         else "failure.headline_blocked",
     )
     parts = [render(failure_record), headline]
+    # The task identity and the optional fixed project status link sit
+    # directly under the state headline, before the PR/Issue rows, the
+    # required action and the diagnosis fold (Issue #1826). The required
+    # action keeps its own `**Action:**` line right below, so it is not
+    # repeated here.
+    parts.extend(user_summary.summary_lines(
+        status_url=status_url, issue=issue_number, title=issue_title,
+        language_code=language_code,
+    ))
     if pr_url:
         parts.append(message("failure.pr_line", pr_url=pr_url))
     parts.append(message("failure.issue_line", issue=issue, run_id=run_id))

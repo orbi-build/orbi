@@ -26,6 +26,7 @@ import hashlib
 import json
 import re
 import subprocess
+from urllib.parse import unquote
 
 # The search qualifiers the ready scans use and the fake understands:
 # `label:<name>`, `-label:<name>`, a quoted phrase (with spaces in it)
@@ -174,15 +175,20 @@ class FakeGh:
         self.check_runs[commit] = runs
 
     def add_branch(self, name: str, *, protected: bool = False,
-                   protection: dict | None = None) -> None:
+                   protection: dict | None = None,
+                   head: str | None = None) -> None:
         """Seed one branch as the merge-gate preflight reads it: the
         branch's `protected` flag and, for a protected branch, the
         classic protection resource. `protection=None` on a protected
         branch is GitHub's 404 for protection the token cannot see
         (Issue #1174); an unseeded branch is a 404 too — the fake never
-        invents protection state."""
+        invents protection state.
+
+        `head` is the branch's CURRENT head (the `branches/{branch}`
+        resource's `commit.sha`, Issue #1825); it stays empty unless the
+        test seeds it, and an empty head never reads as a real commit."""
         self.branches[name] = {"protected": protected,
-                               "protection": protection}
+                               "protection": protection, "head": head}
 
     def set_rulesets_failure(self, mode: str) -> None:
         """Make the branch-rules endpoint fail as GitHub does: `plan`
@@ -630,15 +636,21 @@ class FakeGh:
         )
         if match:
             self._repo_or_fail(match.group(1))
-            protection = self._branch_or_fail(match.group(2))["protection"]
+            # GitHub's branch path carries the URL-encoded branch name
+            # (`release%2F7`), the way the adapter quotes it.
+            protection = self._branch_or_fail(
+                unquote(match.group(2)))["protection"]
             if protection is None:
                 self._fail(1, "gh: HTTP 404: Branch not protected")
             return json.dumps(protection)
         match = re.fullmatch(r"repos/([^/]+/[^/]+)/branches/([^/]+)", path)
         if match:
             self._repo_or_fail(match.group(1))
-            branch = self._branch_or_fail(match.group(2))
-            return json.dumps({"protected": branch["protected"]})
+            branch = self._branch_or_fail(unquote(match.group(2)))
+            return json.dumps({
+                "protected": branch["protected"],
+                "commit": {"sha": branch.get("head")},
+            })
         match = re.fullmatch(
             r"repos/([^/]+/[^/]+)/rules/branches/([^/]+)", path,
         )

@@ -19,14 +19,17 @@ from __future__ import annotations
 import json
 import logging
 import re
-import subprocess
 import time
-from importlib import metadata
 from pathlib import Path
 from typing import Callable
 
 from orbi.delivery_scene import RunContext
 from orbi.failure import Failure, REASON_CODES, _redact_local_paths
+# The runner identity probe is its own leaf (Issue #1229); the name is
+# re-exported here because the marker below renders through it, so an
+# existing `monkeypatch.setattr(progress, "runner_fingerprint", ...)`
+# keeps working.
+from orbi.runner_marker import runner_fingerprint  # noqa: F401
 from orbi.journal import (
     LOGGER,
     RUN_ID_PATTERN,
@@ -36,7 +39,7 @@ from orbi.journal import (
     redact_secrets,
     validate_run_id,
 )
-from orbi import language
+from orbi import language, user_summary
 from orbi.checks import test_status
 from orbi.pi_activity import activity_snapshot
 from orbi.comment_kind import (
@@ -88,40 +91,6 @@ STARTED_HEADER = "Orbi started Pi:"
 DETAIL_VALUE_LENGTH = 200
 
 
-def _checkout_root(path: Path) -> Path | None:
-    """Return the nearest checkout containing a Git marker."""
-    for parent in (path, *path.parents):
-        if (parent / ".git").exists():
-            return parent
-    return None
-
-
-def runner_fingerprint() -> str:
-    """Identify the code executing the Runner without fabricating a value.
-
-    An editable install points at a package inside its checkout, whose HEAD
-    is the useful deployment identity. A copied/non-editable package has no
-    checkout, so its distribution version is the only available identity.
-    Any probe failure is deliberately reported as ``unknown``.
-    """
-    try:
-        checkout = _checkout_root(Path(__file__).resolve().parent)
-        if checkout is not None:
-            result = subprocess.run(
-                ["git", "rev-parse", "--short=8", "HEAD"],
-                cwd=checkout, check=True, capture_output=True,
-                text=True, timeout=5,
-            )
-            fingerprint = result.stdout.strip()
-            if re.fullmatch(r"[0-9a-fA-F]{7,40}", fingerprint):
-                return fingerprint
-            return "unknown"
-        version = metadata.version("orbi-cli")
-        return version if isinstance(version, str) and version else "unknown"
-    except Exception:
-        return "unknown"
-
-
 def _has_progress_prefix(body: str, marker: str) -> bool:
     """True when the body's formal prefix is the run marker plus block."""
     return body.startswith(f"{marker}\n{PROGRESS_PREFIX}")
@@ -160,17 +129,26 @@ def _fenced(content: str, *, cap: int = 4000) -> str:
 def field_block(run_id: str, headline: str, fields: dict[str, object], *,
                 detail_keys: set[str] | None = None,
                 kind: str | None = None,
-                language_code: str) -> str:
+                language_code: str,
+                status_url: str | None = None, issue: int | None = None,
+                title: str | None = None, action: str | None = None) -> str:
     """Render a marker-first status comment with optional collapsed details.
 
     `kind` prepends the canonical kind marker right after the run marker
-    (Issue #1659); None keeps the historical kindless shape.
+    (Issue #1659); None keeps the historical kindless shape. The optional
+    summary arguments add the task identity, the required action and the
+    operator's fixed project status link directly below the headline
+    (Issue #1826), before the field rows and the details fold.
     """
     detail_keys = detail_keys or set()
     lines = [run_marker(run_id)]
     if kind is not None:
         lines.append(comment_kind_marker(kind))
     lines.append(headline)
+    lines.extend(user_summary.summary_lines(
+        status_url=status_url, issue=issue, title=title, action=action,
+        language_code=language_code,
+    ))
     visible = []
     details = []
     for key, value in fields.items():
@@ -340,7 +318,8 @@ def bump_recovered_repeat(body: str, reason_code: str, previous: int) -> str:
 def recoverable_scene_body(
     *, run_id: str, recoverable_name: str, record: Failure,
     detail: str, run_info: str,
-    language_code: str,
+    language_code: str, status_url: str | None = None,
+    issue: int | None = None, title: str | None = None,
 ) -> str:
     """Render the classified recoverable-failure comment (Issue #1465).
 
@@ -366,6 +345,10 @@ def recoverable_scene_body(
         retry_safe=str(record.retry_safe).lower(),
         detail=_fenced(_redact_local_paths(detail)),
         diagnosis=language.text(language_code, "failure.diagnosis_summary"),
+        summary=user_summary.summary_text(
+            status_url=status_url, issue=issue, title=title,
+            language_code=language_code,
+        ),
     )
 
 
@@ -492,6 +475,15 @@ def progress_body(state: dict) -> str:
         "",
         language.text(language_code, "progress.header"),
         "",
+        # The task's own identity and the operator's optional project
+        # status link come first, before the routine field rows (#1826).
+        # `issue_field` keeps the documented contract: a missing or empty
+        # title fails fast, never a comment without an identity.
+        f"**{issue_field(state['issue'], state['issue_title'])}**",
+        *user_summary.summary_lines(
+            status_url=state.get("status_url"), language_code=language_code,
+        ),
+        "",
         row("role", vocabulary(language_code, "role", value("role"))),
         row("step", vocabulary(
             language_code, "step", summary["step"] or "-",
@@ -513,7 +505,6 @@ def progress_body(state: dict) -> str:
     # Identifiers and routine bookkeeping remain available on demand.
     # Both hidden protocol markers stay outside this fold.
     details = [
-        row("issue", issue_field(state["issue"], state["issue_title"])),
         f"- run_id={state['run_id']}",
         row("priority", vocabulary(language_code, "priority",
                                    value("priority"))),
@@ -550,11 +541,13 @@ class ProgressPublisher:
 
     def __init__(self, issue: int, repo: str, run_id: str,
                  run_command: Callable[..., str],
-                 language_code: str) -> None:
+                 language_code: str,
+                 status_url: str | None = None) -> None:
         self.issue = issue
         self.repo = repo
         self.run_id = run_id
         self.language_code = language_code
+        self.status_url = status_url
         self._run_command = run_command
         self.comment_id: int | None = None
 
@@ -687,6 +680,7 @@ class ProgressPublisher:
             detail_keys={field_label(self.language_code, key)
                          for key in detail_keys},
             language_code=self.language_code,
+            status_url=self.status_url, issue=self.issue,
         )
         if block:
             marker, _, rest = body.partition("\n")
@@ -767,7 +761,8 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
                     step: str | None = None,
                     checks: list | None = None,
                     activity: dict | None = None,
-                    review: str = "pending") -> dict:
+                    review: str = "pending",
+                    status_url: str | None = None) -> dict:
     """Collect the current run state for the GitHub progress comment.
 
     `title` is the issue's GitHub title: the progress
@@ -802,6 +797,8 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
         "run_id": ctx.run_id,
         "issue": ctx.issue,
         "issue_title": title,
+        # The operator's optional fixed project status page (#1826).
+        "status_url": status_url,
         # The run's bound message language (Issue #1660), passed in by the
         # caller from the effective config -- the ONE source.
         "language": language_code,
@@ -881,6 +878,7 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
                           reason: str | None = None,
                           diagnosis: str | None = None,
                           language_code: str,
+                          status_url: str | None = None,
                           ) -> str:
     """Render the terminal progress scene shared by every finish path."""
     return _progress_body(_progress_state(
@@ -890,6 +888,7 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
         ),
         title=title, role=role, started=time.monotonic(), pr_url=pr_url,
         review_round=review_round, priority=priority, language_code=language_code,
+        status_url=status_url,
     ), outcome=_finish_outcome_body(
         outcome=outcome, detail=detail, next_step=next_step, pr_url=pr_url,
         number=number, source_repo=source_repo, action=action,
@@ -927,7 +926,7 @@ def step_publisher(publisher: ProgressPublisher, ctx: RunContext, *,
             ctx, title=title, role=role, step=step, started=started,
             pr_url=pr_url, review_round=review_round, priority=priority,
             checks=checks, review=review, language_code=publisher.language_code,
-
+            status_url=getattr(publisher, "status_url", None),
         ), outcome=outcome))
     return publish_step
 
@@ -954,6 +953,7 @@ def _live_progress(ctx: RunContext, publisher: ProgressPublisher, *,
         ctx, title=title, role=role, started=started,
         pr_url=pr_url, review_round=review_round, priority=priority,
         checks=checks, activity=activity, language_code=publisher.language_code,
+        status_url=getattr(publisher, "status_url", None),
     )
     publisher.patch(_progress_body(state))
 

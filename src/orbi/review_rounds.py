@@ -35,7 +35,7 @@ import json
 import logging
 import re
 
-from orbi import language, run_state, scene
+from orbi import language, user_summary, run_state, scene
 from orbi.comment_kind import (
     COMMENT_KIND_REVIEW_ROUND,
     comment_kind,
@@ -143,6 +143,9 @@ def review_round_comment_body(
     heading: str | None = None,
     kind: str = COMMENT_KIND_REVIEW_ROUND,
     language_code: str,
+    status_url: str | None = None,
+    issue: int | None = None,
+    title: str | None = None,
 ) -> str:
     """Build a readable, resumable review-round comment.
 
@@ -169,6 +172,12 @@ def review_round_comment_body(
         heading or language.text(
             language_code, "review.round_heading", round=round,
             pr_number=pr_number, blockers=blockers, majors=majors,
+        ),
+        # The task identity and the optional project status link sit under
+        # the round headline, before the findings (Issue #1826).
+        *user_summary.summary_lines(
+            status_url=status_url, issue=issue, title=title,
+            language_code=language_code,
         ),
     ]
     if messages:

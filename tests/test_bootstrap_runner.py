@@ -6170,6 +6170,10 @@ def test_progress_state_passes_startup_sub_phase_to_comment(tmp_path):
     assert state["phase"] == "test"
 
 
+# Issue #1826: the operator's one optional project status page.
+TASK_STATUS_URL = "https://tasks.example.org/project-status?repo=example%2Fwidget"
+
+
 def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch):
     """A labeled content task is delivered in its Issue, never through Git."""
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
@@ -6190,7 +6194,13 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
     monkeypatch.setattr(seam, "run_command",
                         lambda command, **kwargs: commands.append(command) or "")
 
-    result = runner.process_issue(issue, config_domain.RunnerConfig(repo_dir=Path("/repo")), "o/r")
+    result = runner.process_issue(
+        issue,
+        config_domain.RunnerConfig(
+            repo_dir=Path("/repo"), status_url=TASK_STATUS_URL,
+        ),
+        "o/r",
+    )
 
     assert result == runner.IssueResult("ticket-only", None)
     assert edits == [
@@ -6198,6 +6208,17 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
         (99, {"repo": "o/r", "remove": "ai-in-progress"}),
     ]
     assert comments and "\u53ef\u4ee5\u76f4\u63a5\u53d1\u5e03\u7684\u5e16\u5b50" in comments[0][1]["body"]
+    # Issue #1826: the delivery record carries the readable summary with
+    # the operator's fixed status link, before the agent's output.
+    delivered = comments[0][1]["body"]
+    assert "**#99 Launch thread**" in delivered
+    assert (
+        f"**Project status:** [Open project status]({TASK_STATUS_URL})"
+        in delivered
+    )
+    assert delivered.index("**Project status:**") < delivered.index(
+        "\u53ef\u4ee5\u76f4\u63a5\u53d1\u5e03"
+    )
     assert "<!-- orbi:run=a1b2c3d4 -->" in comments[0][1]["body"]
     assert "run_id=a1b2c3d4" in comments[0][1]["body"]
     assert commands == [["gh", "issue", "close", "99", "--repo", "o/r"]]
@@ -6254,7 +6275,7 @@ def test_process_ticket_only_failure_marks_blocked_without_git_delivery(
         runner.process_ticket_only(
             issue, config_domain.RunnerConfig(
                 repo_dir=Path("/repo"), message_language=language_code,
-                dispatch_label=dispatch_label,
+                dispatch_label=dispatch_label, status_url=TASK_STATUS_URL,
             ), "o/r",
         )
     assert edits[-2] == (99, {"repo": "o/r", "add": "ai-blocked",
@@ -6270,6 +6291,13 @@ def test_process_ticket_only_failure_marks_blocked_without_git_delivery(
         run_id="a1b2c3d4",
     ) in body
     assert "run_id=a1b2c3d4" in body
+    # Issue #1826: the blocked task message carries the readable summary
+    # (identity + the operator's fixed link) above the one help line.
+    assert "**#99 Launch thread**" in body
+    link = language.text(
+        language_code, "summary.project_status", url=TASK_STATUS_URL,
+    )
+    assert link in body
     help_line = language.text(language_code, "help.community")
     assert body.endswith(f"\n\n{help_line}")
     assert body.count(help_line) == 1
@@ -6834,6 +6862,20 @@ def test_reconcile_orphan_prs_reports_an_open_pr_of_a_closed_issue(monkeypatch, 
     assert "<!-- orbi:run=abc12345 -->" in body
     assert "#4" in body
     assert "orphan_pr_reported pr=9 issue=4 repo=o/r" in caplog.text
+    # Issue #1826: the same optional fixed project status link rides on
+    # this task message; omitting it (above call) stays GitHub-only.
+    pr_comments.clear()
+    claim.reconcile_orphan_prs(
+        "o/r", "abc12345", hooks=resume_deps(), language_code="en",
+        status_url="https://tasks.example.org/status?repo=o%2Fr",
+    )
+    assert len(posted) == 2
+    assert (
+        "**Project status:** [Open project status]"
+        "(https://tasks.example.org/status?repo=o%2Fr)"
+    ) in posted[1][2]
+    posted.pop()
+    pr_comments.clear()
     assert "pr=30" not in caplog.text
     # Idempotent: the marker on the PR means the next tick reports nothing.
     pr_comments.append({"body": posted[0][2]})

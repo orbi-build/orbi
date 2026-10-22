@@ -350,6 +350,13 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "<details><summary>Raw error</summary>\n{diagnosis}\n</details>",
         "<details><summary>原始错误</summary>\n{diagnosis}\n</details>",
     ),
+    # The readable summary section of a task notification (Issue #1826):
+    # the required action and the operator's optional project-status link.
+    "summary.action": ("**Action:** {action}", "**需要您做的操作：**{action}"),
+    "summary.project_status": (
+        "**Project status:** [Open project status]({url})",
+        "**项目状态：**[查看项目状态]({url})",
+    ),
     "claim.scene_missing": (
         "Orbi failed: {error}; no trusted 'Orbi opened PR' scene comment "
         "exists on this Issue, so the opened-PR delivery cannot be resumed "
@@ -385,7 +392,7 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "progress.recoverable_scene": (
         "{run_marker}\n{recovered_marker}\n"
         "Orbi {recoverable_name}: {reason_code}; retrying on the next "
-        "tick\n\n"
+        "tick\n{summary}\n"
         "The Issue stays ai-in-progress and the next tick resumes the "
         "same run ({run_info}).\n\n"
         "<details><summary>{diagnosis}</summary>\n\n"
@@ -395,7 +402,7 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "{detail}\n\n"
         "</details>",
         "{run_marker}\n{recovered_marker}\n"
-        "Orbi {recoverable_name}：{reason_code}；下一个 tick 自动重试\n\n"
+        "Orbi {recoverable_name}：{reason_code}；下一个 tick 自动重试\n{summary}\n"
         "Issue 保持 ai-in-progress，下一个 tick 会继续同一个运行（{run_info}）。\n\n"
         "<details><summary>{diagnosis}</summary>\n\n"
         "- reason_code：{reason_code}\n"
@@ -513,12 +520,6 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "the command line is malformed: write exactly one "
         "{label} on its own line, \u0060{usage}\u0060",
         "命令行格式不正确：请单独一行只写一个{label}，例如 \u0060{usage}\u0060",
-    ),
-    "command.reason_unknown_fix_base": (
-        "`{argument}` is not a known command; the only one here is "
-        "`/orbi fix-base`",
-        "`{argument}` 不是已知命令；这里唯一的命令是 "
-        "`/orbi fix-base`",
     ),
     "command.reason_not_candidate": (
         "\u0060{version}\u0060 is not an open milestone above the current "
@@ -922,10 +923,9 @@ MESSAGES: dict[str, tuple[str, str]] = {
     ),
 }
 
-# The display vocabulary of the run comments lives in its own module to
-# keep this catalog owner under the size cap (Issue #1729).
-MESSAGES.update(DISPLAY_TERMS)
-MESSAGES.update(BASE_CI_RED_MESSAGES)
+# The display vocabulary (Issue #1729) and the base-branch-red messages
+# (Issue #1825) live in sibling modules; one update keeps one reading point.
+MESSAGES.update({**DISPLAY_TERMS, **BASE_CI_RED_MESSAGES})
 
 
 UNBLOCK_STEP_FIELD = "unblock_step"
