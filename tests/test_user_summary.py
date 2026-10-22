@@ -52,6 +52,10 @@ def test_valid_url_renders_a_clearly_labeled_link_in_both_languages():
         ("tasks.example.org/status", "scheme_not_https"),
         ("https://user:pass@tasks.example.org/status", "userinfo_not_allowed"),
         ("https:///status", "missing_host"),
+        # Issue #1830: an authority without a hostname (a bare port, or a
+        # bare port plus a query) is nonempty but has hostname None.
+        ("https://:443/status", "missing_host"),
+        ("https://:443?repo=owner%2Frepo", "missing_host"),
         ("https://tasks.example.org/a b", "unsafe_characters"),
         ("https://tasks.example.org/a)b", "unsafe_characters"),
         ('https://tasks.example.org/"x"', "unsafe_characters"),

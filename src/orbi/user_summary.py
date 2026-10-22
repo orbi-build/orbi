@@ -71,11 +71,15 @@ def _rejection_reason(raw: object) -> str | None:
         parts = urlsplit(raw)
         # A non-numeric or out-of-range port is only validated on access.
         _ = parts.port
+        # Issue #1830: the authority can be nonempty without naming a host
+        # (`https://:443/status`), which no browser can reach — ask the
+        # parsed hostname, not the raw authority.
+        hostname = parts.hostname
     except ValueError:
         return "malformed_url"
     if parts.scheme != "https":
         return "scheme_not_https"
-    if not parts.netloc:
+    if not parts.netloc or not hostname:
         return "missing_host"
     if "@" in parts.netloc:
         return "userinfo_not_allowed"
