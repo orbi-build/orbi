@@ -15,6 +15,7 @@ import pytest
 from orbi import progress, progress_summary, run_state, scene
 from orbi.delivery_scene import RunContext
 
+from tests.fakes import runner_marker as runner_marker_fakes
 from tests.fakes.progress import freeze_report_time
 
 
@@ -78,13 +79,10 @@ def test_runner_fingerprint_uses_editable_checkout_head(monkeypatch, tmp_path):
     package = tmp_path / "checkout" / "src" / "orbi"
     package.mkdir(parents=True)
     (tmp_path / "checkout" / ".git").mkdir()
-    monkeypatch.setattr(progress, "__file__", str(package / "progress.py"))
-    monkeypatch.setattr(
-        progress.subprocess, "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args[0], 0, stdout="8a12fb1c\n", stderr="",
-        ),
+    runner_marker_fakes.use_package(
+        monkeypatch, package, module_file="runner_marker.py",
     )
+    runner_marker_fakes.fake_git(monkeypatch, "8a12fb1c\n")
     assert progress.runner_fingerprint() == "8a12fb1c"
 
 
@@ -93,12 +91,11 @@ def test_runner_fingerprint_uses_package_version_when_not_editable(
 ):
     package = tmp_path / "site-packages" / "orbi"
     package.mkdir(parents=True)
-    monkeypatch.setattr(progress, "__file__", str(package / "progress.py"))
-    seen: list[str] = []
-    monkeypatch.setattr(
-        progress.metadata, "version",
-        lambda name: seen.append(name) or "0.3.4",
+    runner_marker_fakes.use_package(
+        monkeypatch, package, module_file="runner_marker.py",
     )
+    seen: list[str] = []
+    runner_marker_fakes.fake_version(monkeypatch, seen)
     assert progress.runner_fingerprint() == "0.3.4"
     # Issue #874: the distribution is installed as `orbi-cli` — the
     # fingerprint must read THAT install metadata, never the old name.
@@ -111,13 +108,10 @@ def test_runner_fingerprint_returns_unknown_for_invalid_git_output(
     package = tmp_path / "checkout" / "src" / "orbi"
     package.mkdir(parents=True)
     (tmp_path / "checkout" / ".git").mkdir()
-    monkeypatch.setattr(progress, "__file__", str(package / "progress.py"))
-    monkeypatch.setattr(
-        progress.subprocess, "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args[0], 0, stdout="not-a-sha\n", stderr="",
-        ),
+    runner_marker_fakes.use_package(
+        monkeypatch, package, module_file="runner_marker.py",
     )
+    runner_marker_fakes.fake_git(monkeypatch, "not-a-sha\n")
     assert progress.runner_fingerprint() == "unknown"
 
 
@@ -127,12 +121,11 @@ def test_runner_fingerprint_returns_unknown_when_detection_fails(
     package = tmp_path / "checkout" / "src" / "orbi"
     package.mkdir(parents=True)
     (tmp_path / "checkout" / ".git").mkdir()
-    monkeypatch.setattr(progress, "__file__", str(package / "progress.py"))
-    monkeypatch.setattr(
-        progress.subprocess, "run",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            subprocess.CalledProcessError(128, args[0]),
-        ),
+    runner_marker_fakes.use_package(
+        monkeypatch, package, module_file="runner_marker.py",
+    )
+    runner_marker_fakes.failing_git(
+        monkeypatch, subprocess.CalledProcessError(128, ["git"]),
     )
     assert progress.runner_fingerprint() == "unknown"
 
@@ -182,9 +175,7 @@ def test_comment_rendering_degrades_to_runner_unknown(monkeypatch):
     # fabricated value, and never a publishing failure (Issue #79).
     # The probe's own catch-all owns the degradation (runner_fingerprint
     # returns ``unknown``), so the failure is injected one layer below.
-    def _raise(*args, **kwargs):
-        raise RuntimeError("git unavailable")
-    monkeypatch.setattr(progress.subprocess, "run", _raise)
+    runner_marker_fakes.failing_git(monkeypatch)
     for body in (
         progress.progress_body({"language": "en",
             "run_id": "abc12345", "issue": 18,
@@ -306,12 +297,14 @@ def test_progress_body_issue_line_carries_number_and_title():
         "pr": None,
         "session": None,
     })
-    assert (
-        "- issue: #89 Bug: resume 使用评论里的 PR URL，不再 verify_pr"
-        in body
+    # Issue #1826: the identity is the summary's first line, above the
+    # routine status rows; the `#89` prefix stays for existing parsing.
+    lines = body.splitlines()
+    header_at = lines.index("**Orbi progress**")
+    assert lines[header_at + 2] == (
+        "**#89 Bug: resume 使用评论里的 PR URL，不再 verify_pr**"
     )
-    # The `#89` prefix is preserved for existing parsing.
-    assert "- issue: #89" in body
+    assert "- issue:" not in body
 
 
 def test_progress_body_issue_line_is_single_line_for_any_title():
@@ -331,9 +324,10 @@ def test_progress_body_issue_line_is_single_line_for_any_title():
         "session": None,
     }
     body = progress.progress_body(state)
-    lines = body.splitlines()
-    issue_lines = [line for line in lines if line.startswith("- issue:")]
-    assert issue_lines == ["- issue: #7 a b c"]
+    issue_lines = [
+        line for line in body.splitlines() if line.startswith("**#7 ")
+    ]
+    assert issue_lines == ["**#7 a b c**"]
 
 
 def test_progress_body_fails_fast_without_issue_title():
@@ -381,7 +375,7 @@ def test_progress_body_starts_with_hidden_run_marker():
     assert lines[1].startswith("<!-- orbi:progress:v1 {")
     assert lines[1].endswith(" -->")
     assert "**Orbi progress**" in body
-    assert "- issue: #18 Publish progress" in body
+    assert "**#18 Publish progress**" in body
     assert "- role: implement" in body
     assert "- phase: test" in body
     assert "- elapsed: 3m 12s" in body
@@ -505,12 +499,15 @@ def test_progress_body_assigns_status_fields_to_visible_or_folded_sections():
 
     visible = field_names(body[:open_at])
     folded = field_names(body[open_at:close_at])
+    # Issue #1826: the task identity is the summary above the field rows,
+    # not a folded identifier.
+    assert "**#1165 Progress comment fold**" in body[:open_at]
     assert visible == {
         "role", "step", "reported at", "last activity", "activity",
         "tests", "PR", "recovery", "review/fix round",
     }
     assert folded == {
-        "issue", "run_id", "priority", "phase", "elapsed",
+        "run_id", "priority", "phase", "elapsed",
         "branch", "session",
     }
 

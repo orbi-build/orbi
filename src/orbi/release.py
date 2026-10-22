@@ -1222,7 +1222,7 @@ def process_release(issue: dict, config: RunnerConfig,
     run_info = f"run_id={run_id} priority={priority}"
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
-        language_code=language.of(config),
+        language_code=language.of(config), status_url=config.status_url,
     )
     branch = task_branch(source_repo, number, run_id)
     worktree = worktree_path(
@@ -1592,6 +1592,7 @@ def process_release(issue: dict, config: RunnerConfig,
                     scope_evidence, gate_evidence, test_evidence,
                     milestone_evidence,
                     language_code=language.of(config),
+                    status_url=config.status_url, issue=number, title=title,
                 ),
             )
         except Exception:
@@ -1679,6 +1680,7 @@ def process_release(issue: dict, config: RunnerConfig,
             body=release_failure_comment_body(
                 run_id, run_info, exc,
                 language_code=language.of(config),
+                status_url=config.status_url, issue=number, title=title,
             ),
             # A failed release is a blocked terminal: the claimed
             # ticket still carries the resolved queue label, so it is

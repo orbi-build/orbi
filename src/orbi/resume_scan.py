@@ -66,6 +66,7 @@ def pick_resumable_delivery(
     repo: str, slot_dir: Path, max_concurrency: int,
     repo_dir: Path | None = None, *, hooks: ResumeHooks,
     language_code: str, ready_label: str = READY_LABEL,
+    status_url: str | None = None,
 ) -> tuple[dict, dict] | None:
     """Return the oldest FREE reviewable opened-PR delivery and its scene.
 
@@ -109,6 +110,7 @@ def pick_resumable_delivery(
         repo, slot_dir, max_concurrency, repo_dir,
         search_labels=(FIX_NEEDED_LABEL, PR_OPENED_LABEL),
         hooks=hooks, language_code=language_code, ready_label=ready_label,
+        status_url=status_url,
     )
 
 
@@ -116,6 +118,7 @@ def pick_awaiting_merge_delivery(
     repo: str, slot_dir: Path, max_concurrency: int,
     repo_dir: Path | None = None, *, hooks: ResumeHooks,
     language_code: str, ready_label: str = READY_LABEL,
+    status_url: str | None = None,
 ) -> tuple[dict, dict] | None:
     """Return the oldest FREE `ai-awaiting-merge` delivery and its scene.
 
@@ -144,6 +147,7 @@ def pick_awaiting_merge_delivery(
         repo, slot_dir, max_concurrency, repo_dir,
         search_labels=(AWAITING_MERGE_LABEL,),
         hooks=hooks, language_code=language_code, ready_label=ready_label,
+        status_url=status_url,
     )
 
 
@@ -151,7 +155,7 @@ def _pick_opened_pr_delivery(
     repo: str, slot_dir: Path, max_concurrency: int,
     repo_dir: Path | None, *, search_labels: Sequence[str],
     hooks: ResumeHooks, language_code: str,
-    ready_label: str = READY_LABEL,
+    ready_label: str = READY_LABEL, status_url: str | None = None,
 ) -> tuple[dict, dict] | None:
     """Scan ONE opened-PR label set for the oldest FREE resumable delivery.
 
@@ -237,7 +241,7 @@ def _pick_opened_pr_delivery(
                 continue
             hooks.block_scene_failure(
                 issue, exc, repo, comments, language_code=language_code,
-                ready_label=ready_label)
+                ready_label=ready_label, status_url=status_url)
             continue
         except scene.SceneMissingError as exc:
             # No trusted comment carries a scene at all — a distinct branch
@@ -277,7 +281,9 @@ def _pick_opened_pr_delivery(
             # scene comment write. Retry it from the durable local run
             # state; keep ai-pr-opened for another tick if the retry fails.
             recovered = (
-                hooks.recover_missing_pr_scene(issue, repo, repo_dir, language_code=language_code)
+                hooks.recover_missing_pr_scene(
+                    issue, repo, repo_dir, language_code=language_code,
+                    status_url=status_url)
                 if repo_dir is not None else None
             )
             if recovered is not None:

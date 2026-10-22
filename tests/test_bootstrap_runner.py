@@ -6834,6 +6834,20 @@ def test_reconcile_orphan_prs_reports_an_open_pr_of_a_closed_issue(monkeypatch, 
     assert "<!-- orbi:run=abc12345 -->" in body
     assert "#4" in body
     assert "orphan_pr_reported pr=9 issue=4 repo=o/r" in caplog.text
+    # Issue #1826: the same optional fixed project status link rides on
+    # this task message; omitting it (above call) stays GitHub-only.
+    pr_comments.clear()
+    claim.reconcile_orphan_prs(
+        "o/r", "abc12345", hooks=resume_deps(), language_code="en",
+        status_url="https://tasks.example.org/status?repo=o%2Fr",
+    )
+    assert len(posted) == 2
+    assert (
+        "**Project status:** [Open project status]"
+        "(https://tasks.example.org/status?repo=o%2Fr)"
+    ) in posted[1][2]
+    posted.pop()
+    pr_comments.clear()
     assert "pr=30" not in caplog.text
     # Idempotent: the marker on the PR means the next tick reports nothing.
     pr_comments.append({"body": posted[0][2]})

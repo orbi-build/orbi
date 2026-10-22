@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 
-from orbi import comment_trust, github, journal, language
+from orbi import comment_trust, github, journal, language, user_summary
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL, EVENT_AWAITING_MERGE, READY_LABEL,
 )
@@ -76,7 +76,8 @@ _LEGACY_BLOCKER_RE = re.compile(
 
 def handoff_body(
     marker: str, *, pr_number: int, head: str, preflight: list[str],
-    language_code: str,
+    language_code: str, status_url: str | None = None,
+    issue: int | None = None, title: str | None = None,
 ) -> str:
     """Render the one maintainer-action comment for a waiting PR.
 
@@ -86,15 +87,23 @@ def handoff_body(
     """
     failed_lines = "\n".join(preflight)
     fence = "````"
+    next_step = language.text(language_code, "handoff.next_step")
     return (
         f"{marker}\n"
         + language.text(
             language_code, "handoff.headline", pr_number=pr_number,
         )
+        # The task identity, the maintainer's required action and the
+        # optional project status link come first (#1826).
+        + "\n" + "\n".join(user_summary.summary_lines(
+            status_url=status_url, issue=issue, title=title,
+            action=next_step, language_code=language_code,
+        ))
         + f"\n- pr: #{pr_number}\n- head: `{head}`\n"
         + language.text(language_code, "handoff.policy_heading") + "\n"
-        + f"{fence}\n{failed_lines}\n{fence}\n\n"
-        + language.text(language_code, "handoff.next_step")
+        # The required action already sits in the summary above, so the
+        # policy evidence is the body's last block (never a duplicate).
+        + f"{fence}\n{failed_lines}\n{fence}"
     )
 
 
@@ -137,6 +146,7 @@ def handle_merge_handoff(
     *, number: int, repo: str, pr_number: int, head: str,
     preflight: list[str], marker: str,
     language_code: str, ready_label: str = READY_LABEL,
+    status_url: str | None = None, title: str | None = None,
 ) -> bool:
     """Announce one maintainer-action handoff, idempotently.
 
@@ -170,7 +180,8 @@ def handle_merge_handoff(
         number, repo=repo,
         body=handoff_body(
             marker, pr_number=pr_number, head=head, preflight=preflight,
-            language_code=language_code,
+            language_code=language_code, status_url=status_url,
+            issue=number, title=title,
         ),
     )
     journal.event(

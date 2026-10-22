@@ -26,7 +26,7 @@ the run verified, column 2 is the minimal set a person still confirms.
 """
 import json
 
-from orbi import language
+from orbi import language, user_summary
 from orbi.delivery_labels import HUMAN_REVIEW_LABEL
 
 # The machine-parsable block marker (an HTML comment -- GitHub renders
@@ -157,6 +157,9 @@ def build_checklist(*, test_status: str | None,
 def render_checklist_comment(*, run_id: str, pr_url: str,
                              checklist: dict,
                              language_code: str,
+                             status_url: str | None = None,
+                             issue: int | None = None,
+                             title: str | None = None,
                              ) -> str:
     """Render the Issue comment: run marker, both columns, machine block.
 
@@ -177,6 +180,12 @@ def render_checklist_comment(*, run_id: str, pr_url: str,
     lines = [
         f"<!-- orbi:run={run_id} -->",
         message("human_review.title"),
+        # The task identity and the optional project status link follow
+        # the checklist headline, before the two columns (Issue #1826).
+        *user_summary.summary_lines(
+            status_url=status_url, issue=issue, title=title,
+            language_code=language_code,
+        ),
         "",
         message("human_review.method", pr_url=pr_url),
         "",

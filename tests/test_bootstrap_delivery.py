@@ -3502,7 +3502,9 @@ def test_finish_progress_blocked_creates_the_comment_when_missing(
     assert "the next step" in body
     assert "<!-- orbi:run=a1b2c3d4 -->" in body
     # Issue #100: the blocked scene shows the number AND the title.
-    assert "- issue: #39 Blocked task" in body
+    # Issue #1826: the task identity is the readable summary line at
+    # the top of the progress comment, not a folded identifier.
+    assert "**#39 Blocked task**" in body
 
 
 def test_finish_progress_carries_the_actual_role_and_round(
@@ -3606,7 +3608,7 @@ def test_finish_progress_renders_the_fix_needed_scene(monkeypatch):
     # The role default is the only post-PR role (Issue #82).
     assert "- role: review" in body
     assert "<!-- orbi:run=a1b2c3d4 -->" in body
-    assert "- issue: #39 Fix task" in body
+    assert "**#39 Fix task**" in body
 
 
 def test_delivery_step_returns_when_pr_merged(monkeypatch, caplog):

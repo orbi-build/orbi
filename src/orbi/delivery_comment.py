@@ -15,17 +15,26 @@ Extracted from `runner.py` unchanged apart from the language, so the
 frozen runner module does not grow (Issue #1229) and a caller keeps
 reaching both builders through `orbi.runner` (the names stay imported
 there).
+
+It also owns the merged receipt builder (moved here from the size-capped
+`review_merge.py`; `review_merge` re-exports it) so every run comment is
+rendered beside its siblings (Issue #1826).
 """
 from __future__ import annotations
 
-from orbi import language, scene
-from orbi.comment_kind import COMMENT_KIND_STARTED
+from orbi import language, scene, user_summary
+from orbi.comment_kind import (
+    COMMENT_KIND_MERGED,
+    COMMENT_KIND_STARTED,
+    comment_kind_marker,
+)
 from orbi.delivery_scene import RunContext
 from orbi.journal import validate_run_id
 from orbi.progress import (
     STARTED_HEADER,
     _run_info_fields,
     field_block,
+    run_marker,
 )
 from orbi.progress_display import (
     field_label,
@@ -36,7 +45,9 @@ from orbi.progress_display import (
 
 def started_pi_comment_body(ctx: RunContext, run_info: str,
                             extra_fields: dict | None = None, *,
-                            language_code: str) -> str:
+                            language_code: str,
+                            status_url: str | None = None,
+                            issue_title: str | None = None) -> str:
     """The start comment doubles as the recoverable run scene.
 
     `extra_fields` carries the repo-config audit fields;
@@ -71,6 +82,7 @@ def started_pi_comment_body(ctx: RunContext, run_info: str,
         detail_keys={field_label(language_code, key) for key in detail_keys},
         kind=COMMENT_KIND_STARTED,
         language_code=language_code,
+        status_url=status_url, issue=ctx.issue, title=issue_title,
     )
 
 
@@ -89,6 +101,9 @@ def pr_attribution_footer(issue: int, attribution_link: str, *,
 def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
                            external: bool = False, *,
                            language_code: str,
+                           status_url: str | None = None,
+                           issue: int | None = None,
+                           issue_title: str | None = None,
                            ) -> str:
     """The PR-opened comment records the recoverable run scene.
 
@@ -125,7 +140,69 @@ def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
         run_id, headline, localized_fields(language_code, fields),
         detail_keys={field_label(language_code, key) for key in detail_keys},
         language_code=language_code,
+        status_url=status_url, issue=issue, title=issue_title,
     )
     lines = body.splitlines()
     lines.insert(1, scene.render(scene_record))
     return "\n".join(lines)
+
+
+def merged_pr_comment_body(run_id: str, pr_url: str, merge_commit: str,
+                           review_rounds: int, external_commits: object,
+                           commits: object, base_branch: str,
+                           review: str,
+                           language_code: str,
+                           status_url: str | None = None,
+                           issue: int | None = None,
+                           title: str | None = None,
+                           ) -> str:
+    """Render the final delivery record.
+
+    The record carries the canonical ``<!-- orbi:comment=merged -->``
+    kind right after the run marker (Issue #1659), so a consumer
+    identifies it without parsing the translatable `Orbi merged PR:`
+    headline. The visible part carries only what the user acts on: the
+    PR headline, the review result and the target branch. Every other
+    field lives once, in `key=value` form, inside the single `Run
+    details` fold — those rows are machine-read anchors (orbi-cloud
+    `mergeCommentFields`, the reader contracts), so they keep the `=`
+    form while the visible review/merged-into rows use the human `:`.
+    The fixed rows are `merge_commit`, `review_rounds`, `commits`,
+    `external_commits`, `run_id` and `pr_url`: the PR URL is a
+    machine fact, never extracted from the translated heading.
+    """
+    visible_review = language.text(
+        language_code, "delivery.review_row", review=review,
+    )
+    if int(review_rounds) > 1:
+        visible_review += language.text(
+            language_code, "delivery.review_rounds",
+            rounds=review_rounds,
+        )
+    details_summary = language.text(language_code, "progress.run_details")
+    # The task identity and the optional project status link stay above
+    # the receipt rows; nothing renders when neither is known (#1826).
+    summary = "\n".join(user_summary.summary_lines(
+        status_url=status_url, issue=issue, title=title,
+        language_code=language_code,
+    )) + "\n" if title or status_url else ""
+    return (
+        f"{run_marker(run_id)}\n"
+        f"{comment_kind_marker(COMMENT_KIND_MERGED)}\n"
+        + language.text(
+            language_code, "delivery.merged_headline", pr_url=pr_url,
+        ) + "\n"
+        + summary
+        + f"{visible_review}\n"
+        + language.text(
+            language_code, "delivery.merged_into", base_branch=base_branch,
+        ) + "\n\n"
+        f"<details><summary>{details_summary}</summary>\n\n"
+        f"- merge_commit={merge_commit}\n"
+        f"- review_rounds={review_rounds}\n"
+        f"- commits={commits}\n"
+        f"- external_commits={external_commits}\n"
+        f"- run_id={run_id}\n"
+        f"- pr_url={pr_url}\n\n"
+        "</details>"
+    )
