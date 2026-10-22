@@ -670,7 +670,7 @@ def _remind(repo: str, issue_number: int, record: BaseCIRed,
 
 def _latest_trusted_failure(
     comments: list[dict], *, repo: str,
-) -> tuple[failure.Failure, dict] | None:
+) -> tuple[failure.Failure | None, dict] | None:
     """The Issue's LATEST trusted failure comment, and its record.
 
     The recovery gate (Issue #1833): a record only authorizes a step
@@ -683,6 +683,14 @@ def _latest_trusted_failure(
     marker, never by the mere presence of an `orbi:failure:v1` block: the
     short milestone comment repeats that block (Issue #1322) and is not
     the failure itself, so reading it as one would pause every recovery.
+
+    The selection STOPS at that comment, whatever its own record says: a
+    blocked failure that carries no `orbi:failure:v1` block at all
+    (`failure.scene_blocked`, the resume-blocked scene, the repo-config
+    scene) states no `base_ci_red` reason, and a corrupted block is never
+    read as "no reason" either (`failure.parse`), so neither may fall
+    back to an older record it superseded. `None` as the record is
+    therefore the newest failure's own answer: no machine-readable reason.
     """
     for comment in reversed(
             comment_trust.trusted_comments(comments, repo=repo)):
@@ -690,15 +698,13 @@ def _latest_trusted_failure(
         if comment_kind(body) != COMMENT_KIND_FAILURE:
             continue
         try:
-            parsed = failure.parse(body)
+            return failure.parse(body), comment
         except failure.FailureError:
             LOGGER.warning(
                 "unreadable orbi:failure:v1 block url=%s",
                 comment.get("url"),
             )
-            continue
-        if parsed is not None:
-            return parsed, comment
+            return None, comment
     return None
 
 
@@ -714,8 +720,9 @@ def recover(repo: str, *, language_code: str,
     delivery reported) — never a hard-coded `main`. For each Issue whose
     LATEST TRUSTED failure is the `base_ci_red` one and whose record in
     that SAME comment is `waiting` (an older record a newer trusted
-    failure superseded, and a copied record from an author without write
-    permission, are never eligible — Issue #1833):
+    failure superseded — including a newer failure that carries no record
+    or no base-CI block — and a copied record from an author without
+    write permission, are never eligible — Issue #1833):
 
     1. run the in-ticket `/orbi fix-base` command (its own permission
        gate and receipts);
@@ -741,7 +748,8 @@ def recover(repo: str, *, language_code: str,
         if located is None:
             continue
         failure_record, comment = located
-        if failure_record.reason_code != REASON_BASE_CI_RED:
+        if (failure_record is None
+                or failure_record.reason_code != REASON_BASE_CI_RED):
             continue
         try:
             record = parse(comment.get("body"))

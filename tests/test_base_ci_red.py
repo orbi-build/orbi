@@ -26,7 +26,7 @@ import orbi.base_ci_red as base_ci_red
 import orbi.runner as runner
 from orbi import failure, failure_report, ticket_command
 from orbi.comment_kind import COMMENT_KIND_FAILURE, comment_kind_marker
-from orbi.progress import run_marker
+from orbi.progress import field_block, run_marker
 from tests.fakes.github import FakeGh
 from seam import seam
 
@@ -1119,10 +1119,37 @@ def test_a_current_trusted_record_resumes_and_a_later_copy_does_not_stop_it(
     assert base_ci_red.parse(copied_body).state == base_ci_red.STATE_WAITING
 
 
-def test_a_corrupted_failure_block_never_hides_the_older_record(monkeypatch):
-    """One unreadable `orbi:failure:v1` block is skipped, not read as
-    "no failure": the older base-CI record is still the latest trusted
-    failure and recovers on a green base."""
+def test_a_kindless_milestone_repeating_the_block_is_no_failure(
+        monkeypatch):
+    """The runner's short milestone comment is posted AFTER the failure
+    comment and repeats the same `orbi:failure:v1` block (Issue #1322).
+    It carries no kind marker, so it is not a failure: the base-CI comment
+    stays the latest trusted failure and a green base still recovers it."""
+    gh = _trust_scene(monkeypatch)
+    _base_ci_comment(gh, login="orbi-bot")
+    milestone = field_block(
+        "096197d2", "Orbi paused: base is red", {"run_id": "096197d2"},
+        language_code="en",
+    )
+    marker, _, rest = milestone.partition("\n")
+    gh.comment(1825, "\n".join([
+        marker,
+        failure.render(failure.Failure(
+            reason_code="base_ci_red", action_code="fix_ticket",
+            retry_safe=False, outcome="blocked",
+        )),
+        rest,
+    ]), login="orbi-bot", association="NONE")
+    _fresh(gh)
+    assert base_ci_red.recover(REPO, language_code="en") == [1825]
+    assert "ai-fix-needed" in gh.issues[1825]["labels"]
+
+
+def test_a_corrupted_failure_block_supersedes_the_older_record(monkeypatch):
+    """A corrupted `orbi:failure:v1` block is never read as "no reason"
+    (`failure.parse`): it is the latest trusted failure, it states no
+    `base_ci_red` reason, and it therefore ends the older record's
+    eligibility instead of hiding behind it."""
     gh = _trust_scene(monkeypatch)
     _base_ci_comment(gh, login="orbi-bot")
     gh.comment(1825, "\n".join([
@@ -1131,14 +1158,18 @@ def test_a_corrupted_failure_block_never_hides_the_older_record(monkeypatch):
         "<!-- orbi:failure:v1 not-json -->",
     ]), login="orbi-bot", association="NONE")
     _fresh(gh)
-    assert base_ci_red.recover(REPO, language_code="en") == [1825]
-    assert "ai-fix-needed" in gh.issues[1825]["labels"]
+    before = _snapshot(gh)
+    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert gh.issues[1825]["labels"] == ["ai-blocked"]
+    assert _snapshot(gh) == before
 
 
-def test_a_kinded_failure_without_a_record_carries_no_reason(monkeypatch):
-    """A `failure`-kind comment with no `orbi:failure:v1` block (the
-    scene-blocked comment) states no machine-readable reason, so it never
-    supersedes the base-CI record."""
+def test_a_kinded_failure_without_a_record_supersedes_the_older_record(
+        monkeypatch):
+    """The real scene-blocked / resume-blocked comment: `failure` kind, no
+    `orbi:failure:v1` block. It states no `base_ci_red` reason, so it is
+    the latest trusted failure that ends the older record's eligibility —
+    the scan never falls back past it to an older base-CI block."""
     gh = _trust_scene(monkeypatch)
     _base_ci_comment(gh, login="orbi-bot")
     gh.comment(1825, "\n".join([
@@ -1147,7 +1178,10 @@ def test_a_kinded_failure_without_a_record_carries_no_reason(monkeypatch):
         "⛔ restore the scene comment, then relabel `ai-ready`",
     ]), login="orbi-bot", association="NONE")
     _fresh(gh)
-    assert base_ci_red.recover(REPO, language_code="en") == [1825]
+    before = _snapshot(gh)
+    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert gh.issues[1825]["labels"] == ["ai-blocked"]
+    assert _snapshot(gh) == before
 
 
 def test_a_corrupted_base_ci_block_in_the_selected_comment_is_skipped(
