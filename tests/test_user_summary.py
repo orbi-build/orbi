@@ -150,6 +150,28 @@ def test_summary_text_ends_with_one_newline_for_template_insertion():
     assert text == f"**A task**\n**项目状态：**[查看项目状态]({VALID_URL})\n"
 
 
+def test_notice_keeps_its_marker_prefix_and_appends_the_summary():
+    body = user_summary.notice(
+        "<!-- orbi:run=abc12345 -->", "claim.scene_missing", error="gone",
+        language_code=language.LANGUAGE_EN, status_url=VALID_URL, issue=7,
+        title="Start the work",
+    )
+    assert body.startswith("<!-- orbi:run=abc12345 -->\nOrbi failed:")
+    assert body.endswith(
+        "**#7 Start the work**\n"
+        f"**Project status:** [Open project status]({VALID_URL})"
+    )
+
+
+def test_notice_without_a_marker_or_summary_keeps_only_its_sentence():
+    body = user_summary.notice(
+        "", "claim.scene_missing", error="gone",
+        language_code=language.LANGUAGE_EN,
+    )
+    assert body.startswith("Orbi failed:")
+    assert "Project status" not in body
+
+
 # --- the callers: every task notification renders the same summary ------
 #
 # These call the public renderers of the audited caller list, not the

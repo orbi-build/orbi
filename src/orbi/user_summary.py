@@ -131,6 +131,26 @@ def append_summary(body: str, **fields: object) -> str:
     return body + "\n\n" + "\n".join(lines) if lines else body
 
 
+def notice(marker: str, key: str, *, language_code: str,
+           status_url: str | None = None, issue: int | None = None,
+           title: str | None = None, **fields: object) -> str:
+    """One short task message: its own sentence plus the summary.
+
+    The callers whose notification is a single localized sentence (a
+    ticket-only result, a blocked scene, a release wait) keep their exact
+    marker prefix and wording; the readable summary — the task identity
+    when the caller already knows it and the operator's optional fixed
+    project status link — follows directly below it, so the state comes
+    first and the routine diagnostics after it.
+    """
+    sentence = language.text(language_code, key, **fields)
+    return append_summary(
+        f"{marker}\n{sentence}" if marker else sentence,
+        status_url=status_url, issue=issue, title=title,
+        language_code=language_code,
+    )
+
+
 def summary_text(**fields: object) -> str:
     """:func:`summary_lines` as one template segment ('' when empty).
 

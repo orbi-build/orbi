@@ -49,6 +49,9 @@ from seam import resume_deps, seam
 from orbi.delivery_labels import EVENT_BLOCKED
 from orbi.delivery_scene import RunContext
 
+# Issue #1826: the operator's one optional project status page.
+TASK_STATUS_URL = "https://tasks.example.org/project-status?repo=example%2Fwidget"
+
 @pytest.fixture(autouse=True)
 def _repository_permissions(monkeypatch):
     """Issue #1806: the scene comments in these scenarios are written by
@@ -4700,7 +4703,9 @@ def test_delivery_step_pr_closed_comment_follows_the_language(monkeypatch):
     monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
     runner.delivery_step(
         PR_URL, {"number": 39, "title": "task", "body": ""},
-        config_domain.RunnerConfig(message_language="zh"),
+        config_domain.RunnerConfig(
+            message_language="zh", status_url=TASK_STATUS_URL,
+        ),
         "owner/repo",
     )
     body = comments[0]["body"]
@@ -4709,6 +4714,12 @@ def test_delivery_step_pr_closed_comment_follows_the_language(monkeypatch):
     assert body.count(help_line) == 1
     assert language.text(
         "zh", "runner.pr_closed_comment", pr_url=PR_URL,
+    ) in body
+    # Issue #1826: the blocked task message carries the readable summary
+    # (identity + the operator's fixed link) above the one help line.
+    assert "**#39 task**" in body
+    assert language.text(
+        "zh", "summary.project_status", url=TASK_STATUS_URL,
     ) in body
 
 
@@ -4827,7 +4838,8 @@ def test_delivery_step_blocks_when_in_progress_label_repair_fails(
         lambda *args, **kwargs: comments.append(kwargs))
     runner.delivery_step(
         PR_URL, {"number": 39, "title": "task", "body": ""},
-        config_domain.RunnerConfig(), "owner/repo",
+        config_domain.RunnerConfig(status_url=TASK_STATUS_URL),
+        "owner/repo",
     )
     assert patches[-1]["event"] == EVENT_BLOCKED
     assert "delivery_label_repair_failed" in caplog.text
@@ -4835,6 +4847,11 @@ def test_delivery_step_blocks_when_in_progress_label_repair_fails(
     help_line = language.text("en", "help.community")
     assert comments[0]["body"].endswith(f"\n\n{help_line}")
     assert comments[0]["body"].count(help_line) == 1
+    # Issue #1826: the readable summary follows the state sentence.
+    assert "**#39 task**" in comments[0]["body"]
+    assert language.text(
+        "en", "summary.project_status", url=TASK_STATUS_URL,
+    ) in comments[0]["body"]
 
 
 def test_delivery_step_keeps_holding_when_no_delivery_label(

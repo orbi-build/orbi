@@ -42,7 +42,7 @@ from orbi.progress import (
     progress_body,
     run_marker,
 )
-from orbi import language
+from orbi import language, user_summary
 from orbi.cli_source import refresh_cli_install
 from orbi.release_comments import (
     _epic_audit, epic_audit_posted, release_failure_comment_body,
@@ -1629,13 +1629,12 @@ def process_release(issue: dict, config: RunnerConfig,
         )
         comment_issue(
             number, repo=source_repo,
-            body=(
-                run_marker(run_id) + "\n"
-                + language.text(
-                    language.of(config), "release.yielded",
-                    tag=landed.tag, base_branch=landed.base_branch,
-                    remote_commit=landed.remote_commit, run_id=run_id,
-                )
+            body=user_summary.notice(
+                run_marker(run_id), "release.yielded",
+                language_code=language.of(config),
+                status_url=config.status_url, issue=number, title=title,
+                tag=landed.tag, base_branch=landed.base_branch,
+                remote_commit=landed.remote_commit, run_id=run_id,
             ),
         )
         publish(
@@ -1657,6 +1656,12 @@ def process_release(issue: dict, config: RunnerConfig,
                 + language.text(
                     language.of(config), "release.waiting",
                     detail=detail,
+                ) + "\n"
+                # The readable summary precedes the persisted wait fields
+                # (Issue #1826).
+                + user_summary.summary_text(
+                    status_url=config.status_url, issue=number, title=title,
+                    language_code=language.of(config),
                 ) + "\n"
                 f"open_deliveries: {detail}\n"
                 f"waited: {int(waiting.waited)}s / "

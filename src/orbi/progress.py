@@ -477,9 +477,11 @@ def progress_body(state: dict) -> str:
         "",
         # The task's own identity and the operator's optional project
         # status link come first, before the routine field rows (#1826).
+        # `issue_field` keeps the documented contract: a missing or empty
+        # title fails fast, never a comment without an identity.
+        f"**{issue_field(state['issue'], state['issue_title'])}**",
         *user_summary.summary_lines(
-            status_url=state.get("status_url"), issue=state["issue"],
-            title=state["issue_title"], language_code=language_code,
+            status_url=state.get("status_url"), language_code=language_code,
         ),
         "",
         row("role", vocabulary(language_code, "role", value("role"))),

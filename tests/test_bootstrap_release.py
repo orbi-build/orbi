@@ -28,6 +28,9 @@ import orbi.runner as runner
 from orbi import config as config_domain
 from orbi import failure
 from orbi import language
+
+# Issue #1826: the operator's one optional project status page.
+TASK_STATUS_URL = "https://tasks.example.org/project-status?repo=example%2Fwidget"
 from seam import seam
 from tests.fakes.bootstrap_release import (
     _EMPTY_SCOPE_BODY,
@@ -2587,7 +2590,10 @@ def test_process_release_waiting_returns_ready_and_records_open_deliveries(monke
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = release.process_release(
-        issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
+        issue, config_domain.RunnerConfig(
+            repo_dir=Path("/r"), base_branch="main",
+            status_url=TASK_STATUS_URL,
+        ), "o/r",
     )
     assert result == ""
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-ready",
@@ -2595,6 +2601,15 @@ def test_process_release_waiting_returns_ready_and_records_open_deliveries(monke
     waiting = [k["body"] for n, k in state["comments"]
                if n == 99 and "waiting for deliveries" in k["body"]]
     assert waiting and "open_deliveries: #7, #8" in waiting[0]
+    # Issue #1826: the release wait carries the readable summary above
+    # its persisted wait fields.
+    assert "**#99 Release v0.3.0**" in waiting[0]
+    assert language.text(
+        "en", "summary.project_status", url=TASK_STATUS_URL,
+    ) in waiting[0]
+    assert waiting[0].index("**#99 Release v0.3.0**") < waiting[0].index(
+        "wait_started: "
+    )
 
 
 def test_process_release_ignores_unrelated_milestone_deliveries(monkeypatch):
@@ -2788,7 +2803,10 @@ def test_process_release_yields_claim_when_version_already_landed(
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
         result = release.process_release(
             issue,
-            config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
+            config_domain.RunnerConfig(
+                repo_dir=Path("/r"), base_branch="main",
+                status_url=TASK_STATUS_URL,
+            ),
             "o/r",
         )
     assert result == ""
@@ -2806,6 +2824,11 @@ def test_process_release_yields_claim_when_version_already_landed(
     assert yield_comments
     # The yield comment must not seed the deliveries wait timer.
     assert "waiting for deliveries" not in yield_comments[0]
+    # Issue #1826: the yield notice carries the readable summary.
+    assert "**#99 Release v0.3.0**" in yield_comments[0]
+    assert language.text(
+        "en", "summary.project_status", url=TASK_STATUS_URL,
+    ) in yield_comments[0]
 
 
 def test_process_release_blocks_when_version_push_rejected(monkeypatch, caplog):

@@ -14,7 +14,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
-from orbi import language, scene
+from orbi import language, scene, user_summary
 from orbi.blocked_comment import post_blocked_comment
 from orbi.checks import _classify_rollup, _render_check
 from orbi.delivery_labels import (
@@ -302,9 +302,11 @@ def _pick_opened_pr_delivery(
                 try:
                     post_blocked_comment(
                         number, repo=repo,
-                        body=(f"{marker}\n" if marker else "")
-                        + language.text(
-                            language_code, "claim.scene_missing", error=exc,
+                        body=user_summary.notice(
+                            marker, "claim.scene_missing", error=exc,
+                            language_code=language_code,
+                            status_url=status_url, issue=number,
+                            title=issue.get("title"),
                         ),
                         # The claimed ticket carries the resolved
                         # queue label, so the blocked terminal clears it

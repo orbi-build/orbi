@@ -1302,7 +1302,11 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
                 pr_number=pr["number"], verdict=verdict["verdict"],
                 blockers=verdict["blockers"], majors=verdict["majors"],
                 minors=verdict["minors"], state=state, checks=checks,
-            ) + "\n\n"
+            ) + "\n"
+            + user_summary.summary_text(
+                status_url=config.status_url, issue=number, title=title,
+                language_code=bound,
+            ) + "\n"
             + language.text(bound, "review.review_report_open")
             + "````\n" + output.rstrip("\n") + "\n````\n\n</details>\n\n"
             + language.text(
@@ -1703,6 +1707,12 @@ def _run_review_round(
         )
         if marker:
             body = f"{marker}\n{body}"
+        # The blocked scene carries the readable summary before the
+        # implementation diagnostics (Issue #1826).
+        body = user_summary.append_summary(
+            body, status_url=config.status_url, issue=number, title=title,
+            language_code=language.of(config),
+        )
         post_blocked_comment(
             number, repo=source_repo, body=body,
             current_labels=labels, language_code=language.of(config),

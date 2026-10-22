@@ -33,6 +33,9 @@ from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL, IN_PROGRESS_LABEL, PR_OPENED_LABEL, READY_LABEL,
 )
 from orbi import scene as scene_mod
+
+# Issue #1826: the operator's one optional project status page.
+TASK_STATUS_URL = "https://tasks.example.org/project-status?repo=example%2Fwidget"
 from tests.test_progress_wiring import make_fake_gh
 from tests.fakes.github import FakeGh
 from tests.fakes.gitops import FakeGit
@@ -1477,6 +1480,7 @@ def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
         hooks=resume_deps(), language_code=language_code,
+        status_url=TASK_STATUS_URL,
     ) is None
     assert edits == [
         [
@@ -1488,6 +1492,12 @@ def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
          "--remove-label", "ai-ready"],
     ]
     assert "'Orbi opened PR'" in comments[0]
+    # Issue #1826: the blocked task message carries the readable summary
+    # (identity + the operator's fixed link) above the one help line.
+    assert "**#9 " in comments[0]
+    assert language.text(
+        language_code, "summary.project_status", url=TASK_STATUS_URL,
+    ) in comments[0]
     # The comment layer appends its hidden runner marker last; the visible
     # body ends with the language's one community help line (Issue #1730).
     help_line = language.text(language_code, "help.community")

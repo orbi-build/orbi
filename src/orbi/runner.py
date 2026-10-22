@@ -55,7 +55,7 @@ from typing import NamedTuple
 from orbi import engine_source
 from orbi import language
 from orbi import milestone as milestone_bookkeeping
-from orbi import claim, clarify, notify
+from orbi import claim, clarify, notify, user_summary
 from orbi import config as config_domain
 from orbi.blocked_comment import post_blocked_comment
 from orbi.branch_reclaim import delete_merged_delivery_branch, reclaim_merged_delivery_branches
@@ -1108,12 +1108,12 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
             raise RuntimeError("ticket-only Agent returned no content")
         comment_issue(
             number, repo=source_repo,
-            body=(f"{run_marker(run_id)}\n"
-                  + language.text(
-                      language.of(config),
-                      "runner.ticket_only_delivered",
-                      run_id=run_id,
-                  ) + f"\n\n{output}"),
+            body=(user_summary.notice(
+                run_marker(run_id), "runner.ticket_only_delivered",
+                language_code=language.of(config),
+                status_url=config.status_url, issue=number,
+                title=issue.get("title"), run_id=run_id,
+            ) + f"\n\n{output}"),
         )
         close_issue(int(number), repo=source_repo)
         # The ticket-only delivery never enters the PR/review states: it
@@ -1149,12 +1149,12 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
         try:
             post_blocked_comment(
                 number, repo=source_repo,
-                body=(f"{run_marker(run_id)}\n"
-                      + language.text(
-                          language.of(config),
-                          "runner.ticket_only_failed",
-                          detail=detail, run_info=run_info, run_id=run_id,
-                      )),
+                body=user_summary.notice(
+                    run_marker(run_id), "runner.ticket_only_failed",
+                    language_code=language.of(config), issue=number,
+                    status_url=config.status_url, title=issue.get("title"),
+                    detail=detail, run_info=run_info, run_id=run_id,
+                ),
                 current_labels={IN_PROGRESS_LABEL, ready_label},
                 language_code=language.of(config), ready_label=ready_label)
             publish(
@@ -3460,11 +3460,11 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
         )
         # The blocked patch leaves the terminal state `ai-blocked`
         # alone.
-        body = language.text(
-            language.of(config), "runner.pr_closed_comment", pr_url=pr_url,
+        body = user_summary.notice(
+            marker, "runner.pr_closed_comment", pr_url=pr_url,
+            language_code=language.of(config), status_url=config.status_url,
+            issue=number, title=issue.get("title"),
         )
-        if marker:
-            body = f"{marker}\n{body}"
         post_blocked_comment(
             number, repo=source_repo, body=body,
             current_labels=labels, language_code=language.of(config),
