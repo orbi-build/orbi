@@ -194,6 +194,13 @@ GitHub Issue 与标签仍是唯一状态存储。
 **Action**、**Reason** 与 `Diagnosis` 详情。失败记录的定义见
 [Workflow](/zh/workflow)。
 
+`base_ci_red` 失败评论在该记录旁再携带一个隐藏块 ——
+`<!-- orbi:base-ci-red:v1 {json} -->`，含 `schema`、`state`、
+`base_branch`、`base_sha`、`pr` 与 `failing_checks`。自动恢复就是
+原地编辑这条记录（`waiting` -> `resuming`/`stale` -> `merged`）；
+稳定性规则相同：一条评论只有一个该块，存在但无效的块绝不会被当作“没有
+块”，旁边的可读文字仅供展示。
+
 ## 工作示例
 
 ### 并发 Issue

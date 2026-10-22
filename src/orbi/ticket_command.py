@@ -302,7 +302,7 @@ def select_command(
     return target, rejections
 
 
-def _command_comment_key(comment: dict) -> str:
+def command_comment_key(comment: dict) -> str:
     for field in ("id", "url"):
         value = comment.get(field)
         if value:
@@ -319,8 +319,13 @@ def _command_comment_ref(comment: dict) -> str:
     return f"comment by @{login} at {comment.get('createdAt') or 'unknown time'}"
 
 
-def _command_receipt_marker(spec: CommandSpec) -> str:
-    """The hidden marker prefix derived from the command's name."""
+def command_receipt_marker(spec: CommandSpec) -> str:
+    """The hidden marker prefix derived from the command's name.
+
+    Public because a command's own success reply is its idempotency
+    record: carrying this marker lets the next scan recognize "this
+    comment already ran" (Issue #1825's `/orbi fix-base`).
+    """
     return f"orbi-{spec.name}-command"
 
 
@@ -331,7 +336,7 @@ def _post_command_receipt(
     language_code: str = language.DEFAULT_LANGUAGE,
 ) -> None:
     """Post one reason comment, at most once per occurrence (idempotent)."""
-    hidden = f"<!-- {marker} comment={_command_comment_key(comment)} -->"
+    hidden = f"<!-- {marker} comment={command_comment_key(comment)} -->"
     if any(
         isinstance(existing, dict) and isinstance(existing.get("body"), str)
         and hidden in existing["body"]
@@ -384,7 +389,7 @@ def process_commands(
         for comment, argument, reason in rejections:
             _post_command_receipt(
                 repo, issue_number, comments, comment, spec=spec,
-                marker=f"{_command_receipt_marker(spec)}-rejected",
+                marker=f"{command_receipt_marker(spec)}-rejected",
                 summary=language.text(
                     language_code, "command.not_applied", name=spec.name,
                 ),
@@ -394,12 +399,18 @@ def process_commands(
             continue
         comment, argument = target
         try:
-            spec.apply(argument, repo=repo, issue_number=issue_number, **context)
+            # The winning occurrence travels with the command: a handler
+            # that must run at most once per comment keys its own receipt
+            # on it (Issue #1825).
+            spec.apply(
+                argument, repo=repo, issue_number=issue_number,
+                command_comment=comment, comments=comments, **context,
+            )
         except TicketCommandError as exc:
             _post_command_receipt(
                 repo, issue_number, comments, comment, spec=spec,
                 marker=(
-                    f"{_command_receipt_marker(spec)}-failed step={exc.step}"
+                    f"{command_receipt_marker(spec)}-failed step={exc.step}"
                 ),
                 summary=language.text(
                     language_code, "command.failed",

@@ -1,6 +1,7 @@
 {
   "command_shape_asserts": 440,
   "monkeypatch_setattr_modules": {
+    "base_ci_red": 0,
     "blocked_comment": 0,
     "branch_reclaim": 0,
     "checks": 0,

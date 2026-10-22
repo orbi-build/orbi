@@ -37,7 +37,7 @@ import os
 import re
 from typing import Mapping
 
-from orbi.language_terms import DISPLAY_TERMS
+from orbi.language_terms import BASE_CI_RED_MESSAGES, DISPLAY_TERMS
 
 LANGUAGE_EN = "en"
 LANGUAGE_ZH = "zh"
@@ -514,6 +514,12 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "{label} on its own line, \u0060{usage}\u0060",
         "命令行格式不正确：请单独一行只写一个{label}，例如 \u0060{usage}\u0060",
     ),
+    "command.reason_unknown_fix_base": (
+        "`{argument}` is not a known command; the only one here is "
+        "`/orbi fix-base`",
+        "`{argument}` 不是已知命令；这里唯一的命令是 "
+        "`/orbi fix-base`",
+    ),
     "command.reason_not_candidate": (
         "\u0060{version}\u0060 is not an open milestone above the current "
         "one; candidates: {candidates}",
@@ -919,6 +925,7 @@ MESSAGES: dict[str, tuple[str, str]] = {
 # The display vocabulary of the run comments lives in its own module to
 # keep this catalog owner under the size cap (Issue #1729).
 MESSAGES.update(DISPLAY_TERMS)
+MESSAGES.update(BASE_CI_RED_MESSAGES)
 
 
 UNBLOCK_STEP_FIELD = "unblock_step"

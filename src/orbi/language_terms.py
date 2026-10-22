@@ -80,3 +80,103 @@ DISPLAY_TERMS: dict[str, tuple[str, str]] = {
     # English word would never be reached (Issue #1729).
     "progress.milestone_headline.merged": ("merged", "已合并"),
 }
+
+# The base-branch-red scene's own sentences (Issue #1825). They live here
+# for the same reason DISPLAY_TERMS does: the catalog owner stays under the
+# size cap, and `language.MESSAGES` merges this map in, so `language.text`
+# remains the ONE reading point. Every key is prose a human reads; the check
+# names, branches, SHAs, PR numbers and URLs inside them stay verbatim.
+BASE_CI_RED_MESSAGES: dict[str, tuple[str, str]] = {
+    # The base-branch-red scene (Issue #1825): a delivery PR that is ready
+    # but whose failing check is also red on the base branch. The comment
+    # leads with what the user already has (a ready PR), names why it
+    # paused, shows every failing base check with its run link and first
+    # error lines, and offers the two repairs. Names, URLs, SHAs and check
+    # names stay verbatim in both languages.
+    "base_ci_red.ready": (
+        "✅ **PR #{pr} is ready:** review passed, tests pass.",
+        "✅ **PR #{pr} 已就绪：** review 通过，测试通过。",
+    ),
+    "base_ci_red.paused": (
+        "⛔ **Paused** because the base branch `{base_branch}` is "
+        "already failing {checks} (not caused by this PR).",
+        "⛔ **已暂停**：基础分支 `{base_branch}` 上的 {checks} "
+        "本来就是失败的（不是这个 PR 造成的）。",
+    ),
+    "base_ci_red.check_run": (
+        "- **`{name}`** — failing run: {url}",
+        "- **`{name}`** —— 失败的 run：{url}",
+    ),
+    "base_ci_red.check_errors": (
+        "- **`{name}`** — first error lines:",
+        "- **`{name}`** —— 最初的错误行：",
+    ),
+    "base_ci_red.next_steps": (
+        "**Next steps** (pick one):",
+        "**下一步**（选一种）：",
+    ),
+    "base_ci_red.next_step_fix_base": (
+        "1. Fix `{base_branch}` yourself — Orbi merges this PR "
+        "automatically once that check is green. No relabel needed.",
+        "1. 自己修好 `{base_branch}` —— 那个 check 变绿后 Orbi 会"
+        "自动合并这个 PR，不需要改标签。",
+    ),
+    "base_ci_red.next_step_command": (
+        "2. Or comment `/orbi fix-base` (requires write access) and "
+        "Orbi opens a fix Issue for it.",
+        "2. 或者评论 `/orbi fix-base`（需要 write 权限），由 Orbi "
+        "开一张修复 Issue。",
+    ),
+    "base_ci_red.state_resuming": (
+        "✅ `{base_branch}` is green again — Orbi is resuming this "
+        "delivery automatically.",
+        "✅ `{base_branch}` 已经变绿 —— Orbi 正在自动恢复这次交付。",
+    ),
+    "base_ci_red.state_merged": (
+        "✅ Merged: `{base_branch}` turned green and Orbi merged "
+        "this PR.",
+        "✅ 已合并：`{base_branch}` 变绿后 Orbi 自动合并了这个 PR。",
+    ),
+    "base_ci_red.state_stale": (
+        "⏰ `{base_branch}` is still failing {checks} after {days} "
+        "days — Orbi stops checking this PR. Fix the base branch, or "
+        "comment `/orbi fix-base`, then remove `ai-blocked` "
+        "and add `ai-fix-needed` to resume.",
+        "⏰ `{base_branch}` 上的 {checks} 已经连续 {days} 天失败 —— "
+        "Orbi 停止检查这个 PR。请修好基础分支，或评论 `/orbi fix-base`，"
+        "然后去掉 `ai-blocked`、加上 `ai-fix-needed` 恢复。",
+    ),
+    "base_ci_red.triage_reason": (
+        "A delivery PR is paused because this check fails on the base "
+        "branch, not in the PR. Once it is green on `{base_branch}` "
+        "(commit `{base_sha}` is where it was first seen), Orbi "
+        "merges that PR automatically — no relabel needed.",
+        "有一个交付 PR 被暂停，因为失败的 check 出现在基础分支上，而不是这个 "
+        "PR 里。等 `{base_branch}` 上这个 check 变绿（首次发现时的"
+        "提交是 `{base_sha}`），Orbi 会自动合并那个 PR —— 不需要改"
+        "标签。",
+    ),
+    "base_ci_red.triage_check": (
+        "## Failing check: {name} on {base_branch}",
+        "## 失败的 check：{base_branch} 上的 {name}",
+    ),
+    "base_ci_red.triage_errors": (
+        "First error lines:",
+        "最初的错误行：",
+    ),
+    "base_ci_red.triage_created": (
+        "created #{number} — `{check}` on `{base_branch}`",
+        "已创建 #{number} —— `{base_branch}` 上的 `{check}`",
+    ),
+    "base_ci_red.triage_reused": (
+        "reused #{number} — `{check}` on `{base_branch}`",
+        "已复用 #{number} —— `{base_branch}` 上的 `{check}`",
+    ),
+    "base_ci_red.triage_no_evidence": (
+        "No failing check evidence is available for `{base_branch}` "
+        "any more; fix the base branch and Orbi resumes this PR "
+        "automatically.",
+        "`{base_branch}` 上已读不到失败 check 的证据；修好基础分支后 "
+        "Orbi 会自动恢复这个 PR。",
+    ),
+}

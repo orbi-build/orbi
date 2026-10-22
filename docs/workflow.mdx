@@ -593,6 +593,7 @@ at all — readers ignore it (`parse` returns `None`).
 | `review_budget_exhausted` | the bounded review/fix budget is spent | `decide` | false |
 | `human_decision_required` | an external precondition only a human can decide | `decide` | false |
 | `base_branch_missing` | the configured base branch does not exist in the repository | `fix_ticket` | false |
+| `base_ci_red` | the check the PR fails is also failing on the configured base branch | `fix_ticket` | false |
 | `credential_missing` | the GitHub/provider credential is missing or rejected | `check_credentials` | false |
 | `unclassified` | any other runner exception | `fix_ticket` | false |
 
@@ -606,6 +607,49 @@ is the same bounded, host-path free reader explanation — the reason, or
 the reader-facing action when the failure carries a specific repair path
 (the Actions-workflow permission refusal, Issue #1651) — a full command
 stderr is never cut to its first word.
+
+### A delivery paused on a red base branch: `base_ci_red`
+
+When the reviewed PR is ready but a check it fails is ALSO failing on the
+configured base branch, the PR cannot turn it green and no review round can
+repair it. The delivery pauses in `ai-blocked` with `reason_code`
+`base_ci_red` — `action_code` `fix_ticket`, `retry_safe` false, because a
+plain requeue would hit the same red base — and ONE comment that says what the
+reader already has (a ready PR), why it paused, EVERY failing base check with
+its run link and first error lines, and the two repairs. The base branch is the
+configured one, never a hard-coded `main`, and a non-subprocess failure prints
+no empty evidence section.
+
+The same comment carries a second hidden block beside `orbi:failure:v1`:
+
+```html
+<!-- orbi:base-ci-red:v1 {"schema":1,"state":"waiting","base_branch":"main","base_sha":"abc1234","pr":123,"failing_checks":["backend — build, vet, test"]} -->
+```
+
+`state` is `waiting` (the recovery scan polls), `resuming` (the base turned
+green and the delivery resumed), `merged` (it merged) or `stale` (the bounded
+wait expired). `failing_checks` names the base checks the scan re-reads.
+
+Recovery needs no relabel:
+
+- every tick, BEFORE the resume scans, one bounded scan reads the open
+  `ai-blocked` Issues whose NEWEST block is `waiting`, runs a pending
+  `/orbi fix-base` comment, then reads the current base head once and the
+  recorded check names against it;
+- all green -> the Issue goes `ai-blocked` -> `ai-fix-needed` (that is the
+  only label change; no new label, no new state), the existing resume flow
+  absorbs the base, re-runs the review and merge, and the same comment is
+  edited in place to `merged`;
+- still red, or a check still pending -> nothing moves;
+- still red after seven days -> ONE reminder comment, the block becomes
+  `stale`, and polling stops. Removing `ai-blocked` and adding
+  `ai-fix-needed` still resumes the delivery by hand.
+
+`/orbi fix-base` (write permission, one execution per comment) opens — or
+reuses an OPEN — `CI failure: <check> on branch <base>` Issue per failing base
+check, labelled `ai-ready` + `p0` and placed in the active Milestone, then
+replies `created #K` / `reused #K` on the paused Issue. A closed triage Issue
+is never reused.
 
 ## PR body contract: `Fixes #N`
 

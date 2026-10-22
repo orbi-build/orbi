@@ -15,7 +15,7 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
-from orbi import gitops
+from orbi import base_ci_red, gitops
 from orbi import milestone as milestone_bookkeeping
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
@@ -714,7 +714,9 @@ def pick_next_delivery(
     for repo in repos:
         repo_language = (language.DEFAULT_LANGUAGE if config is None
                          else merged_repo_language(config, repo))
-        _, dispatch_label = _repo_scan_keys(config, repo, active_milestone)
+        milestone, dispatch_label = _repo_scan_keys(
+            config, repo, active_milestone,
+        )
         # Epic reconciliation is a per-tick bypass: a broken GitHub query or
         # mutation must never prevent the ordinary delivery scans.
         try:
@@ -751,6 +753,18 @@ def pick_next_delivery(
                                  language_code=repo_language)
         except Exception:
             LOGGER.exception("orphan_pr_reconcile_failed repo=%s", repo)
+        # The base-branch-red scan runs BEFORE the resume scan (Issue
+        # #1825): an `ai-blocked` Issue is terminal for every claim scan,
+        # and a base that turned green must put it back on the resumable
+        # path in THIS tick. A bypass like the sweeps above: a failed scan
+        # never prevents the ordinary delivery scans.
+        try:
+            base_ci_red.recover(
+                repo, language_code=repo_language, milestone=milestone,
+                dispatch_label=dispatch_label,
+            )
+        except Exception:
+            LOGGER.exception("base_ci_red_scan_failed repo=%s", repo)
         selected = pick_resumable_delivery(
             repo, slot_dir, max_concurrency,
             repo_dir=config.repo_dir if config is not None else None,

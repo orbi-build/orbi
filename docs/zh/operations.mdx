@@ -642,6 +642,12 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `active_milestone_release_pending` | 已完成的 Milestone 仍在等待确认创建 release 票 |
 | `milestone_command_applied` | 票内 `/milestone` 命令已完成全部三步 |
 | `milestone_command_failed` | 票内 `/milestone` 命令在某一步失败 |
+| `fix_base_command_applied` | 票内 `/orbi fix-base` 命令已创建或复用了修复 Issue |
+| `fix_base_command_failed` | 票内 `/orbi fix-base` 命令在某一步失败 |
+| `base_ci_red_recovered` | 基础分支的 check 变绿，被暂停的交付自动恢复 |
+| `base_ci_red_stale` | 因基础分支已红而暂停的交付在提醒窗口后仍红，停止轮询 |
+| `base_ci_red_merged` | 交付落地后，基础分支已红的评论被更新为 merged |
+| `base_ci_red_triage` | `/orbi fix-base` 命令创建了一张 CI triage Issue |
 | `active_milestone_advance_failed` | 推进 active Milestone 失败 |
 | `active_milestone_variable_removed` | active_milestone 仓库变量已被移除 |
 | `active_milestone_variable_unchanged` | active_milestone 仓库变量与配置一致 |
@@ -886,6 +892,7 @@ orbi milestone set v0.5.7 --config orbi.toml
 | Command | Usage | Permission | Description |
 | --- | --- | --- | --- |
 | `milestone` | `/milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
+| `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
 
 新增一个命令：
 

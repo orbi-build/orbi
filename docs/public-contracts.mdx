@@ -203,6 +203,14 @@ version, enum and meaning unchanged), the
 reader-facing **Action**, **Reason** and `Diagnosis` details. The failure
 record's definition is in [Workflow](/workflow).
 
+A `base_ci_red` failure comment carries one more hidden block beside that
+record — `<!-- orbi:base-ci-red:v1 {json} -->` with `schema`, `state`,
+`base_branch`, `base_sha`, `pr` and `failing_checks`. It is the record the
+automatic recovery edits in place (`waiting` -> `resuming`/`stale` ->
+`merged`); the same stability rules apply: one block per comment, a present
+but invalid block is never read as "no block", and the prose beside it is
+display only.
+
 ## Worked examples
 
 ### Concurrent Issues

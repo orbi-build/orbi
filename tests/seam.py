@@ -10,6 +10,7 @@ does exactly that: reading resolves the current binding (monkeypatch's
 old-value capture) and writing fans the value out to all bindings, so
 monkeypatch's teardown fans the original back.
 """
+import orbi.base_ci_red as base_ci_red
 import orbi.blocked_comment as blocked_comment
 import orbi.cli as cli
 import orbi.cli_source as cli_source
@@ -43,6 +44,7 @@ _MODULES = (
     runner, review_merge, review_rounds, run_state, claim, resume_scan,
     repo_config, clarify, comment_trust,
     branch_reclaim, failure_report, suggest, cli, blocked_comment,
+    base_ci_red,
 )
 
 
