@@ -27,7 +27,7 @@ description: "使用者可以依赖什么，status 与进度文档又如何报�
 | 命名 | 分支 `orbi/<owner>-<repo>-issue-<N>`；worktree `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>` |
 | GitHub 标记 | 每个 run 范围内的评论与 PR body 使用 `<!-- orbi:run=<run_id> -->`；PR body 使用 `Fixes #<N>` |
 | 评论类型 | run marker 之后一行上的隐藏 `<!-- orbi:comment=started -->`、`<!-- orbi:comment=failure -->`、`<!-- orbi:comment=review-round -->` 与 `<!-- orbi:comment=merged -->` 标记识别 started、完整 failure、已完成 review-round 与 merged 评论；见[评论类型与机器元数据](#评论类型与机器元数据) |
-| Run 现场 | 可信的 `Orbi opened PR` 评论中的隐藏版本化块 `<!-- orbi:scene:v1 {json} -->`，由 `src/orbi/scene.py` 渲染与解析；交付唯一的机器可读恢复记录（旁边的可读文字仅供展示） |
+| Run 现场 | 可信的 `Orbi opened PR` 评论中的隐藏版本化块 `<!-- orbi:scene:v1 {json} -->`，由 `src/orbi/scene.py` 渲染与解析；接续已有 PR 交付的机器可读记录（旁边的可读文字仅供展示） |
 | 需求 skill | 目录 `integrations/claude-plugin/skills/write-ai-ready-issue/`——`SKILL.md`（agent 如何把一句话想法变成可交付 Issue）与 `fidelity-pass.md`（独立检查草稿是否恰好问了提问者想问的） |
 | Suggestions | `orbi suggest --json` 打印的文档——`{"repo", "base_sha", "session_dir", "suggestions": [{"kind": "existing" 或 "new", "issue": existing 为 Issue 号、new 为 null, "title", "why", "body": new 为 Issue body、existing 为 null}]}`，最多三条、按优先级排序；`session_dir` 是 `<deploy_home>/.orbi/suggest/<run_id>/.pi-session/`，存放与交付 session 文件同格式的 Pi session JSONL，命令退出后运行目录 `<deploy_home>/.orbi/suggest/<run_id>/` 在成功与失败时都保留——以及产出它的 skill 目录 `integrations/claude-plugin/skills/suggest-ai-ready-issues/` |
 

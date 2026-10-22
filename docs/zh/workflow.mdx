@@ -64,9 +64,8 @@ ai-ready                任务被派发（orbi add，或人工加标签）
                         交付）。否则独立
                         Pi session——唯一的阻塞阶段，槽位只被占用一段
                         Pi 运行时长——审查精确的 base/head SHA，并在
-                        会话内修复 findings（代码、完整测试、分层
-                        覆盖率门禁（Issue #234）、只 push task
-                        branch），然后输出 REVIEW_VERDICT。其 prompt
+                        会话内修复 findings（代码、目标仓库声明的
+                        测试与覆盖率检查、只 push task branch），然后输出 REVIEW_VERDICT。其 prompt
                         除关联 Issue 的受信任评论时间线外，还携带**当前
                         PR** 上受信任的人类反馈：正式 review 状态以及
                         行内评论的文件/行号锚点。交付身份自己的 review
@@ -84,9 +83,9 @@ ai-ready                任务被派发（orbi add，或人工加标签）
                         启动下一个审查会话
   -> merge              clean verdict（其 head 字段等于 PR head，
                         Issue #591）+ merge 门禁（head 包含最新 base、
-                        CI 已有结论、PR mergeable、远端 head 未变——
-                        每项只读一次：CI pending 或 mergeable UNKNOWN
-                        把合并顺延到下一 tick，Issue #788）
+                        CI 已有结论、PR mergeable、远端 head 未变；CI
+                        pending 顺延到下一 tick，mergeable UNKNOWN
+                        则按下文说明做有界重读）
   -> ai-merged          Orbi 自动合并模式：成功终态；合并同时清除
                         `ai-ready`，合并后的 Issue 只剩 `ai-merged`
                         （Issue #1526；不回溯已合并的 Issue）；
@@ -108,7 +107,11 @@ ai-ready                任务被派发（orbi add，或人工加标签）
 前置条件**（无可恢复现场、base 分支变更、审查超轮、PR 未合并被关闭、
 交付分支已从远端删除——没有任何东西可以用来重建 worktree）
 才 fail fast：Issue 被标记 `ai-blocked` 并写明为什么不能自动恢复，自动
-循环从此不再碰它——人工决定下一步。
+循环不再处理上述不可恢复现场——人工决定下一步。
+
+已有 PR 的候选按 Issue 创建时间从早到晚扫描，一次最多检查 100 个；正在执行或 CI 待完成的候选会跳过，让其他交付继续。
+
+延后合并时，已保存的通过评审可以省去一次新评审。复用要求保存的 PR head 和实际注入评审 prompt 的 Issue 正文 hash 都匹配。外部修改 head 或注入的正文时，需要重新评审；自定义 prompt 不含 `{{ISSUE_BODY}}` 时，正文改动不参与这项判断。Runner 自己吸收无冲突的 base 更新后，会更新记录里的 head、推送，并延后到后续 tick 检查这个 head 的 CI，合并门禁仍会核对当前 head 和 base。
 
 ## 运行中的交付修正
 
@@ -129,8 +132,9 @@ ai-ready                任务被派发（orbi add，或人工加标签）
 `issue_comments_limit` 限制（默认 200 条）：更早的评论会被丢弃，注入的上下文
 会明确说明省略了多少条。
 
-死循环守卫与评论去重（Issue #825）：恢复接续可能绑定**新的 run id**
-（一次可恢复失败就够了），而 PR body 只在创建时写入一次，所以 resume
+死循环守卫与评论去重（Issue #825）：接续现有 attempt 沿用 run id；
+重新领取或接管同一交付线时，可以用新 attempt 继续原 branch 和 PR。
+PR body 只在创建时写入一次，所以 resume
 校验接受本交付线曾用过的**任一** run marker——marker 集合读自 Issue 的
 受信任评论（与恢复现场同一信任过滤，公开评论里复制的 marker 不计入；
 branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语义不变）。
@@ -143,11 +147,13 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
 
 链路规则：
 
-- 一个任务 = 一个 run = 一个 feature branch = 一个 worktree = 一个 PR。
-  review/fix 循环期间 PR 编号永远不变；只有它的 head 可以前进。
+- 开发交付在 review/fix 期间保留同一 branch 和 PR。每个 attempt 有一个
+  run id 和 worktree，接续该 attempt 时沿用；重新领取或接管可在原
+  branch/PR 上开启新 attempt。沿 Issue 的受信任评论找各次 attempt 的标记。
 - 只有两个 opened-PR 状态会被自动拾取：`ai-pr-opened`（等待 review）
   和 `ai-fix-needed`（等待下一个审查会话）。`ai-ready` 作为新工作被
-  领取；`ai-blocked` 从不自动恢复。携带回填的 `ai-in-progress` 标签的
+  领取；`ai-blocked` 通常等待人处理；v0.7.15 起的
+  [`base_ci_red` 恢复](#交付因基础分支已红而暂停base_ci_red)是明确的例外。携带回填的 `ai-in-progress` 标签的
   交付仍会被拾取（Issue #178：review 中被杀的 Runner 会留下该标签——
   正向的 opened-PR 限定已保证 implement 阶段的 Issue 不会匹配该扫描）。
 - `ai-awaiting-merge` 是等维护者的等待态，因此永不与 Runner 能推进的工作
@@ -167,15 +173,12 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
   （同一 `run_id`）的轮次评论，当同一失败原因已连续出现在两轮及以上
   时，直接发点名重复的 findings verdict，不再重复同一修复路径——
   同一堵墙最多撞两轮。
-- tick 内零等待（Issue #788）：旧进程内等待循环（`wait_for_delivery`、
-  对 CI/mergeability 的轮询、`release_ci_wait_seconds` /
-  `mergeable_wait_seconds`）已移除。所有等待都走 waiting 原语——写状态、
-  返回、释放槽位，下一 tick 重读（`delivery_ci_pending`、
-  `merge_gate_ci_pending`、`merge_gate_mergeable_unknown`）。可恢复
-  扫描直接跳过 CI 仍 pending 的候选（Issue #1473），pending 的 PR
-  因此不再占掉一整个 tick。崩溃恢复
-  路径就是主路径。
-  唯一的有界例外是 GitHub 异步计算的 mergeability（Issue #1736）：merge
+- 普通开发交付把 CI 等待留到后续 tick（Issue #788）：记录状态、返回、
+  释放 slot，下一个 tick 重读（`delivery_ci_pending`、
+  `merge_gate_ci_pending`、`merge_gate_mergeable_unknown`）。评审扫描跳过
+  CI 待完成的候选，让其他工作继续。发版另用进程内的 CI 轮询，等待期间
+  持有一个 slot，上限由 `release_ci_wait_seconds` 决定，每次 CI 门禁默认 1800 秒，不是整个发布总时限。
+  开发交付还有一个短等待：GitHub 异步计算的 mergeability（Issue #1736）：merge
   gate 首次读到 `UNKNOWN` 且该 head 的 CI 已得出结论时，会在 2 s、4 s、
   8 s 后重读整个 PR 状态（`MERGEABLE_UNKNOWN_RETRY_DELAYS`），GitHub 一
   给出结果就在同一 tick 继续——最多约 15 s 槽位时间。rollup 仍 pending 或
@@ -341,6 +344,8 @@ worktree、无分支、不交付）判定 ticket 正文的三项检查：**可�
 **单一结果**（一个 fix 或一个 change，而不是几件互不相关的事）。判定通过
 则一切不变，交付照常开始。
 
+v0.7.15 起按需求含义判断，不要求固定模板标题。明确的运行失败及其清楚的纠正方向可以表达结果；同一失败的多个症状仍可算一个结果。过去某次运行的日志本身不等于验收条件。
+
 判定不通过则在任何工作存在之前中止本次尝试：只发一条评论列出全部缺失项
 与修复动作，把该仓库的认领标签（默认 `ai-ready`，可经 `dispatch_label` 改名）
 换成 `ai-needs-detail`，本 tick 结束——无
@@ -393,8 +398,8 @@ Issue #537 之前，`ai-ops-only` 标签派发的是内容代理（#530 只改�
 ## Run marker 与 run_id
 
 每个任务 attempt 生成一个 `run_id`（8 位 hex，例如 `e07383c2`），该
-attempt 的每一步复用同一个值；同一 Issue 的 retry 生成新的。同一个 id
-出现在：
+attempt 的执行与接续都复用这个值；重新领取或接管时开启新 attempt，
+可以用新 id 继续原 Issue 和 PR。同一个 id 出现在：
 
 - 该 attempt 的每条 journal 行（前缀 `[e07383c2]`）；
 - Issue/PR 评论：可见字段 `run_id=e07383c2` + 隐藏机器可读 marker
@@ -410,13 +415,13 @@ attempt 的每一步复用同一个值；同一 Issue 的 retry 生成新的。�
   `<!-- orbi:scene:v1 {json} -->`（`src/orbi/scene.py`）：这是 resume
   扫描解析的机器可读恢复记录——现场损坏与现场缺失是两个不同的失败
   分支（Issue #786）；
-- 稳定的按 Issue 命名的 feature branch（`orbi/<owner>-<repo>-issue-<N>`）；
 - worktree 名（`.worktrees/orbi-<owner>-<repo>-issue-<n>-e07383c2`），以及 Pi
   session 目录和 run 产物；
 - PR body——稳定 marker `<!-- orbi:run=e07383c2 -->` 是 PR 契约
   的一部分；Runner 拒绝没有它的 PR。
 
-一条 grep 还原完整时间线：
+feature branch 按 Issue 稳定命名（`orbi/<owner>-<repo>-issue-<N>`），
+不含 run id。先从 Issue 的受信任评论找齐各次 attempt 的 id，再分别查时间线：
 
 ```bash
 journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
@@ -490,7 +495,9 @@ milestone 的可见摘要就是同一条有长度上限、不含本机路径的�
 
 ### 交付因基础分支已红而暂停：`base_ci_red`
 
-评审已通过、测试也通过，但 PR 失败的那个 check 在配置的基础分支上本来也
+**v0.7.15 起可用，包括 `/orbi fix-base`。**
+
+PR 已完成评审，但它失败的那个 check 在配置的基础分支上本来也
 失败 —— PR 无法让它变绿，评审轮次也修不了。此时交付以 `ai-blocked` 暂停，
 `reason_code` 为 `base_ci_red`（`action_code` 为 `fix_ticket`，
 `retry_safe` 为 false：单纯重新入队仍会撞上同样红的基础分支），并留下
@@ -603,7 +610,7 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
      Issue 不会阻塞该门禁。这个有界等待使用
      `RELEASE_DELIVERIES_WAIT_SECONDS`；超时就是 delivery wait timeout，
      release 进入 `ai-blocked`。随后要求 release commit 的 CI 全绿
-     （no check runs passes 带明确证据；
+     （从未观察到 CI 的仓库可带无检查证据通过；基础分支已有 CI 时，新版本提交的空检查列表需要等检查注册；
      pending check 是中间态——门禁等待最终结论，每次轮询一条
      `release_waiting_ci` journal 行和一次进度评论更新，上限
      `release_ci_wait_seconds`（默认 1800 秒）；等待超时以独立原因
@@ -664,8 +671,8 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
      播让 tick fail fast。
 
   `ai-release` 标签是类型标记，**不是**交付状态：它不属于交付状态机、
-  不是 ready 扫描的排除条件，Runner 从不增删它——只有人在派发时
-  （与 `ai-ready` 一起）添加。
+  不是 ready 扫描的排除条件，普通交付状态转移不增删它。人在派发发布票时，或已配置的里程碑流程
+  创建发布票时，把它和 `ai-ready` 一起添加。
 - **P0 优先级**：普通 `p0` GitHub 标签标记紧急 Issue（生产故障）。它
   **不是**交付状态——只决定 ready 领取顺序，从不改变 Issue 粒度、任何
   交付状态或终态语义，Runner 也从不增删它。ready 领取顺序固定：
@@ -696,6 +703,7 @@ contents API 读取仓库**默认分支 tip** 上的 `.github/orbi.toml`——
 | `base_branch` | string | 该仓库的交付 base 分支；缺席时回退到匹配的 `[[repositories]].base_branch`，否则回退宿主 `base_branch`。 |
 | `active_milestone` | string | 该仓库 fresh claim 的 Milestone 范围，有两类扫描**不带** Milestone 限定。外部接管扫描（Issue #842 决策 D1）：第五条、排最后的 ready 扫描——带正文标记 `<!-- orbi:external-pr:N -->` 的外部 triage 票始终可被认领，因为外部贡献不属于任何版本的范围，绝不能阻塞发版门禁。已关闭且没有更新的开放 Milestone 的 active Milestone（Issue #1391）：该 tick 的 claim 扫描不带范围（`active_milestone_closed_unscoped`），因此第一个版本发布后新打的 `ai-ready` Issue 会被直接认领，而不必等一个还没人决定的新版本；配置值保持不变，一旦出现更新的开放 Milestone，原有的 advance 逻辑照常把范围移过去。 |
 | `auto_next_milestone` | boolean | 该仓库的空闲自动推进开关（Issue #1342）：为 `false` 时，已关闭的 active Milestone 即使有更高的待发布候选也不会被改写——改为发一条确认 Issue，携带票内 `/milestone <版本>` 命令。缺席时回退宿主值（默认 `true`）。 |
+| `message_language` | string | Orbi 在该仓库的评论和署名页脚语言，接受 `en` 或 `zh`；显式值覆盖宿主值，不翻译用户内容，也不覆盖宿主的 Telegram 语言。见[评论语言](#评论语言)。 |
 | `context_files` | string[] | 仓库内相对路径的上下文文件；注入前校验存在性与大小上限。 |
 | `dispatch_label` | string | 该仓库的认领标签（默认 `ai-ready`）；交付生命周期标签恒为宿主常量。 |
 | `steering_enabled` | boolean | 为该仓库启用受信任修正轮询；缺席时回退到宿主值。 |

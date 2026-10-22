@@ -1,9 +1,9 @@
 ---
 title: "Testing"
-description: "How are Orbi deliveries gated by tests and CI?"
+description: "How do I run Orbi Core’s own tests and coverage checks?"
 ---
 
-Orbi gates deliveries with the full test suite, tiered coverage requirements, and the repository’s remote CI checks.
+This page describes the tests and CI contract for contributing to **Orbi Core itself**. Deliveries into other repositories follow those repositories’ declared tests, coverage requirements and CI checks; they do not inherit Core’s Python tools or coverage thresholds.
 
 The repository contract (see `AGENTS.md`) is: the full pytest suite with
 the **tiered coverage gate** (Issue #234) for the Python code. The same
