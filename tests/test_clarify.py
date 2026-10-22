@@ -44,21 +44,22 @@ RUN_ID = "a1b2c3d4"
 
 @dataclasses.dataclass(frozen=True)
 class ClarifyCase:
-    """One real ticket text and the judgment the prompt must reach.
+    """One real ticket text and the judgment Issue #1831 expects for it.
 
-    The gate is a model judgment, so a stub cannot prove the semantics:
-    `verdict` is what the refined prompt answers today and `expectation`
-    is the behavior the maintainer replays through the REAL prompt after
-    delivery (Issue #1831 assigns that replay to the maintainer). The test
+    The gate is a model judgment, so a stub cannot prove the semantics and
+    the real-prompt replay stays with the maintainer (Issue #1831 assigns
+    it there). `expectation` is the behavior that replay must show and
+    `expected_missing` is the same answer as check identifiers — an
+    expectation, never a measured one: no model runs in this test. The test
     below pins what the sandbox can prove — the author's text reaches the
-    judgment untouched and that verdict drives the documented stop/proceed
-    path.
+    judgment untouched (no rewrite, no splitting) and the expected answer
+    drives the documented stop/proceed path.
     """
     name: str
     title: str
     body: str
     expectation: str
-    verdict: tuple[str, ...]
+    expected_missing: tuple[str, ...]
 
 
 CLARIFY_CASES = (
@@ -77,7 +78,7 @@ CLARIFY_CASES = (
         # Observable runtime behavior is NOT absent here; acceptance or
         # scope clarification may still be requested.
         expectation="reports no missing observable_result",
-        verdict=("acceptance_condition", "single_outcome"),
+        expected_missing=("acceptance_condition", "single_outcome"),
     ),
     ClarifyCase(
         name="runtime_failure_with_implied_correction",
@@ -87,7 +88,7 @@ CLARIFY_CASES = (
             "regression test."
         ),
         expectation="proceeds without requiring template headings",
-        verdict=(),
+        expected_missing=(),
     ),
     ClarifyCase(
         name="one_behavior_in_two_bullets",
@@ -98,14 +99,14 @@ CLARIFY_CASES = (
             "browser regression test."
         ),
         expectation="proceeds: both bullets specify one behavior",
-        verdict=(),
+        expected_missing=(),
     ),
     ClarifyCase(
         name="no_delivery_requirement",
         title="Thin ticket",
         body="Make it better.",
         expectation="requests the missing details",
-        verdict=("observable_result", "acceptance_condition"),
+        expected_missing=("observable_result", "acceptance_condition"),
     ),
     ClarifyCase(
         name="two_unrelated_deliveries",
@@ -114,15 +115,18 @@ CLARIFY_CASES = (
             "Add password reset and CSV export; verify both with regression "
             "tests."
         ),
+        # Both deliverables name a user-visible result and "verify both
+        # with regression tests" is already the acceptance condition, so
+        # the bundled deliverables are the only missing piece.
         expectation="requests a single delivery outcome",
-        verdict=("observable_result", "acceptance_condition", "single_outcome"),
+        expected_missing=("single_outcome",),
     ),
     ClarifyCase(
         name="historical_count_is_not_a_condition",
         title="Improve performance",
         body="The benchmark passed 44/44 yesterday; improve performance.",
         expectation="requests a completion condition, not the past count",
-        verdict=("observable_result", "acceptance_condition"),
+        expected_missing=("observable_result", "acceptance_condition"),
     ),
 )
 
@@ -430,19 +434,20 @@ def test_enforce_fails_open_when_a_write_fails(
         assert len(comments) == 1
 
 
-# --- recorded ticket texts (Issue #1831) -----------------------------------
+# --- the Issue #1831 ticket texts -----------------------------------------
 
 @pytest.mark.parametrize(
     "case", CLARIFY_CASES, ids=[case.name for case in CLARIFY_CASES],
 )
-def test_recorded_ticket_is_judged_as_written(case, monkeypatch):
-    """Each recorded text keeps its documented outcome.
+def test_expected_ticket_outcome_takes_the_documented_path(case, monkeypatch):
+    """Each Issue #1831 text keeps its expected outcome end to end.
 
-    The judgment itself is the model's; here the recorded verdict proves
-    the gate carries the author's text into the judgment unchanged (no
-    rewrite, no splitting) and that this verdict takes the documented
-    path: a passing one delivers without a write, a failing one stops with
-    ONE comment naming exactly the pieces the judgment named.
+    The judgment itself is the model's and Issue #1831 replays it with the
+    maintainer; here the expected answer proves the gate carries the
+    author's text into the judgment unchanged (no rewrite, no splitting)
+    and that this answer takes the documented path: a passing one delivers
+    without a write, a failing one stops with ONE comment naming exactly
+    the pieces the judgment named.
     """
     issue = {"number": 1831, "title": case.title, "body": case.body}
     context = clarify.build_context(issue)
@@ -450,7 +455,7 @@ def test_recorded_ticket_is_judged_as_written(case, monkeypatch):
     assert case.body in context
 
     verdict = clarify.ClarifyVerdict(
-        passed=not case.verdict, missing=case.verdict,
+        passed=not case.expected_missing, missing=case.expected_missing,
     )
     monkeypatch.setattr(seam, "judge_issue_body", lambda *a, **k: verdict)
     comments, edits = _record_writes(monkeypatch)
@@ -459,13 +464,13 @@ def test_recorded_ticket_is_judged_as_written(case, monkeypatch):
         issue, config_domain.RunnerConfig(), REPO, RUN_ID,
     )
 
-    assert proceed is (case.verdict == ())
-    if not case.verdict:
+    assert proceed is (case.expected_missing == ())
+    if not case.expected_missing:
         assert (comments, edits) == ([], [])
         return
     assert len(comments) == 1
     body = comments[0][2]
-    for piece in case.verdict:
+    for piece in case.expected_missing:
         assert clarify.missing_text(piece, language_code="en") in body
     assert edits == [(
         issue["number"], REPO,
