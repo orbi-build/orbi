@@ -746,6 +746,12 @@ registry — in both directions (a name only in code or only in docs fails
 | `active_milestone_release_pending` | a finished Milestone still needs its release ticket confirmed |
 | `milestone_command_applied` | an in-ticket `/milestone` command ran all three steps |
 | `milestone_command_failed` | an in-ticket `/milestone` command failed at one step |
+| `fix_base_command_applied` | an in-ticket `/orbi fix-base` command opened or reused the fix Issues |
+| `fix_base_command_failed` | an in-ticket `/orbi fix-base` command failed at one step |
+| `base_ci_red_recovered` | the base check turned green and the paused delivery resumed automatically |
+| `base_ci_red_stale` | a base-branch-red delivery was still red after the reminder window and polling stopped |
+| `base_ci_red_merged` | the base-branch-red comment was updated to merged after the delivery landed |
+| `base_ci_red_triage` | a `/orbi fix-base` command created a CI triage Issue |
 | `active_milestone_advance_failed` | advancing the active Milestone failed |
 | `active_milestone_variable_removed` | the active_milestone repo variable was removed |
 | `active_milestone_variable_unchanged` | the active_milestone repo variable matches the config |
@@ -1043,6 +1049,7 @@ handler.
 | Command | Usage | Permission | Description |
 | --- | --- | --- | --- |
 | `milestone` | `/milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
+| `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
 
 To add a command:
 

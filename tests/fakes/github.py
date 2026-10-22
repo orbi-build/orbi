@@ -26,11 +26,15 @@ import hashlib
 import json
 import re
 import subprocess
+from urllib.parse import unquote
 
 # The search qualifiers the ready scans use and the fake understands:
-# `label:<name>`, `-label:<name>` and `milestone:"<title>"` (quoted
+# `label:<name>`, `-label:<name>`, a quoted phrase (with spaces in it)
+# scoped by `in:body`/`in:title`, and `milestone:"<title>"` (quoted
 # titles may contain spaces — the same contract `ready_searches` pins).
-_SEARCH_TOKEN_RE = re.compile(r'milestone:"([^"]+)"|(\S+)')
+_SEARCH_TOKEN_RE = re.compile(
+    r'milestone:"([^"]+)"|"([^"]+)"|(\S+)'
+)
 # The one jq program the adapter runs against the milestones endpoint
 # (`milestone_open_issue_count`): the title-select reading GitHub's own
 # open-Issue counter.
@@ -104,12 +108,33 @@ class FakeGh:
     def comment(self, number: int, body: str, *, login: str = "maintainer",
                 association: str = "MEMBER") -> None:
         """Add a human comment with an explicit author association."""
-        self.issues[number]["comments"].append({
+        self._append_comment(
+            self.issues[number], body, login=login,
+            association=association,
+        )
+
+    def _append_comment(self, issue: dict, body: str, *, login: str,
+                        association: str) -> dict:
+        """Append one comment carrying GitHub's own id and URL.
+
+        Every real comment has a REST id and a permalink; the in-place
+        edit path (`repos/{repo}/issues/comments/{id}` PATCH) reads the
+        id from the URL, so the fake must answer the same shape.
+        """
+        clock = self._next_clock()
+        comment = {
+            "id": 1000 + clock,
+            "url": (
+                f"https://github.com/{self.repo}/issues/{issue['number']}"
+                f"#issuecomment-{1000 + clock}"
+            ),
             "author": {"login": login},
             "authorAssociation": association,
             "createdAt": self._next_stamp(),
             "body": body,
-        })
+        }
+        issue["comments"].append(comment)
+        return comment
 
     def add_pr(self, number: int, *, head: str, base: str = "main",
                state: str = "OPEN", oid: str = "0" * 40,
@@ -150,15 +175,20 @@ class FakeGh:
         self.check_runs[commit] = runs
 
     def add_branch(self, name: str, *, protected: bool = False,
-                   protection: dict | None = None) -> None:
+                   protection: dict | None = None,
+                   head: str | None = None) -> None:
         """Seed one branch as the merge-gate preflight reads it: the
         branch's `protected` flag and, for a protected branch, the
         classic protection resource. `protection=None` on a protected
         branch is GitHub's 404 for protection the token cannot see
         (Issue #1174); an unseeded branch is a 404 too — the fake never
-        invents protection state."""
+        invents protection state.
+
+        `head` is the branch's CURRENT head (the `branches/{branch}`
+        resource's `commit.sha`, Issue #1825); it stays empty unless the
+        test seeds it, and an empty head never reads as a real commit."""
         self.branches[name] = {"protected": protected,
-                               "protection": protection}
+                               "protection": protection, "head": head}
 
     def set_rulesets_failure(self, mode: str) -> None:
         """Make the branch-rules endpoint fail as GitHub does: `plan`
@@ -236,7 +266,7 @@ class FakeGh:
         "edit": ("--repo", "--add-label", "--remove-label", "--milestone"),
         "comment": ("--repo", "--body"),
         "close": ("--repo",),
-        "create": ("--repo", "--title", "--body", "--milestone"),
+        "create": ("--repo", "--title", "--body", "--milestone", "--label"),
     }
 
     def _issue(self, args: list[str]) -> str:
@@ -262,12 +292,10 @@ class FakeGh:
             self._issue_edit(issue, flags)
             return ""
         if sub == "comment":
-            issue["comments"].append({
-                "author": {"login": self.login},
-                "authorAssociation": "NONE",
-                "createdAt": self._next_stamp(),
-                "body": flags["--body"][0],
-            })
+            self._append_comment(
+                issue, flags["--body"][0], login=self.login,
+                association="NONE",
+            )
             return ""
         # `close` — the last verb `_ISSUE_FLAGS` admits above.
         issue["state"] = "closed"
@@ -291,7 +319,8 @@ class FakeGh:
         if "--milestone" in flags:
             milestone = self._milestone_number(flags["--milestone"][0])
         number = max(self.issues) + 1 if self.issues else 1
-        self.add_issue(number, title=title, body=body, milestone=milestone)
+        self.add_issue(number, title=title, body=body, milestone=milestone,
+                       labels=tuple(flags.get("--label") or []))
         return f"https://github.com/{self.repo}/issues/{number}"
 
     def _milestone_number(self, title: str) -> int:
@@ -318,13 +347,12 @@ class FakeGh:
         search = (flags.get("--search") or [None])[0]
         fields = flags["--json"][0].split(",")
         limit = int((flags.get("--limit") or ["30"])[0])
-        include, exclude, body_terms, milestone_title, oldest_first = (
-            self._parse_search(search)
-        )
+        (include, exclude, body_terms, title_terms, milestone_title,
+         oldest_first) = self._parse_search(search)
         matches = [
             issue for issue in self.issues.values()
             if self._matches(issue, state, label, include, exclude,
-                             body_terms, milestone_title)
+                             body_terms, title_terms, milestone_title)
         ]
         matches.sort(key=lambda issue: issue["_created"],
                      reverse=not oldest_first)
@@ -349,17 +377,25 @@ class FakeGh:
         include: list[list[str]] = []
         exclude: list[str] = []
         body_terms: list[str] = []
+        title_terms: list[str] = []
         milestone_title: str | None = None
         oldest_first = False
         if not search:
-            return include, exclude, body_terms, milestone_title, oldest_first
-        for qualifier, token in _SEARCH_TOKEN_RE.findall(search):
+            return (include, exclude, body_terms, title_terms,
+                    milestone_title, oldest_first)
+        # `in:title` / `in:body` scope the quoted phrase written BEFORE
+        # them (the documented GitHub qualifier the CI triage lookup
+        # uses); an unscoped phrase matches the body, as before.
+        pending: list[str] = []
+        for qualifier, phrase, token in _SEARCH_TOKEN_RE.findall(search):
             if qualifier:
                 if milestone_title is not None:
                     self._fail(
                         1, f"fake-gh: two milestone qualifiers: {search!r}"
                     )
                 milestone_title = qualifier
+            elif phrase:
+                pending.append(phrase)
             elif token.startswith("-label:"):
                 exclude.append(token[len("-label:"):])
             elif token.startswith("label:"):
@@ -367,20 +403,22 @@ class FakeGh:
             elif token == "sort:created-asc":
                 oldest_first = True
             elif token == "in:body":
-                # The scope modifier of the quoted phrase above: the fake
-                # matches a quoted phrase against the body only.
-                continue
-            elif token.startswith('"') and token.endswith('"'):
-                body_terms.append(token[1:-1])
+                body_terms.extend(pending)
+                pending = []
+            elif token == "in:title":
+                title_terms.extend(pending)
+                pending = []
             else:
                 self._fail(
                     1, f"fake-gh: unsupported search qualifier: {search!r}"
                 )
-        return include, exclude, body_terms, milestone_title, oldest_first
+        body_terms.extend(pending)
+        return (include, exclude, body_terms, title_terms,
+                milestone_title, oldest_first)
 
     def _matches(self, issue: dict, state: str, label: str | None,
                  include: list[list[str]], exclude: list[str],
-                 body_terms: list[str],
+                 body_terms: list[str], title_terms: list[str],
                  milestone_title: str | None) -> bool:
         # `--state all` lists both states (GitHub has no state filter to
         # apply); "open"/"closed" filter exactly.
@@ -394,6 +432,8 @@ class FakeGh:
         if any(name in issue["labels"] for name in exclude):
             return False
         if any(term not in issue["body"] for term in body_terms):
+            return False
+        if any(term not in issue["title"] for term in title_terms):
             return False
         if milestone_title is not None:
             milestone = self.milestones.get(issue["milestone"])
@@ -518,6 +558,11 @@ class FakeGh:
     def _api(self, args: list[str]) -> str:
         if args[:2] == ["--method", "PUT"]:
             return self._api_put(args[2:])
+        if "--method" in args and args[args.index("--method") + 1] == "PATCH":
+            # gh accepts the flag on either side of the path; the adapter
+            # writes `gh api <path> --method PATCH --field ...`.
+            index = args.index("--method")
+            return self._api_patch(args[:index] + args[index + 2:])
         path = args[0]
         flags = self._flags(args[1:])
         match = re.fullmatch(
@@ -591,15 +636,21 @@ class FakeGh:
         )
         if match:
             self._repo_or_fail(match.group(1))
-            protection = self._branch_or_fail(match.group(2))["protection"]
+            # GitHub's branch path carries the URL-encoded branch name
+            # (`release%2F7`), the way the adapter quotes it.
+            protection = self._branch_or_fail(
+                unquote(match.group(2)))["protection"]
             if protection is None:
                 self._fail(1, "gh: HTTP 404: Branch not protected")
             return json.dumps(protection)
         match = re.fullmatch(r"repos/([^/]+/[^/]+)/branches/([^/]+)", path)
         if match:
             self._repo_or_fail(match.group(1))
-            branch = self._branch_or_fail(match.group(2))
-            return json.dumps({"protected": branch["protected"]})
+            branch = self._branch_or_fail(unquote(match.group(2)))
+            return json.dumps({
+                "protected": branch["protected"],
+                "commit": {"sha": branch.get("head")},
+            })
         match = re.fullmatch(
             r"repos/([^/]+/[^/]+)/rules/branches/([^/]+)", path,
         )
@@ -615,6 +666,37 @@ class FakeGh:
             # (or the rulesets answered, and none blocks it).
             return "[]"
         return self._unsupported(["gh", "api", path])
+
+    def _api_patch(self, args: list[str]) -> str:
+        """The in-place Issue-comment edit (Issue #825's PATCH route).
+
+        Only `repos/{repo}/issues/comments/{id}` with a single
+        `--field body=<text>` is modelled: a mistyped write fails fast
+        instead of silently editing something else.
+        """
+        if len(args) < 2:
+            return self._unsupported(["gh", "api", "--method", "PATCH", *args])
+        match = re.fullmatch(
+            r"repos/([^/]+/[^/]+)/issues/comments/(\d+)", args[0],
+        )
+        if match is None:
+            return self._unsupported(["gh", "api", "--method", "PATCH", *args])
+        self._repo_or_fail(match.group(1))
+        comment_id = int(match.group(2))
+        flags = self._flags(args[1:])
+        self._known_flags(
+            flags, ("--field",), ["gh", "api", "--method", "PATCH", args[0]],
+        )
+        field = (flags.get("--field") or [""])[0]
+        key, _, body = field.partition("=")
+        if key != "body":
+            return self._unsupported(["gh", "api", "--method", "PATCH", *args])
+        for issue in self.issues.values():
+            for comment in issue["comments"]:
+                if comment.get("id") == comment_id:
+                    comment["body"] = body
+                    return json.dumps(comment)
+        self._fail(1, f"gh: Could not resolve an Issue comment {comment_id}.")
 
     def _api_put(self, args: list[str]) -> str:
         """The contents API PUT (create/update a file): `gh api --method

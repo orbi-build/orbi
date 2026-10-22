@@ -437,6 +437,13 @@ JOURNAL_EVENTS: dict[str, str] = {
     "active_milestone_variable_sync_failed": "the active_milestone repo variable sync failed",
     "milestone_command_applied": "an in-ticket `/milestone` command ran all three steps",
     "milestone_command_failed": "an in-ticket `/milestone` command failed at one step",
+    "fix_base_command_applied": "an in-ticket `/orbi fix-base` command opened or reused the fix Issues",
+    "fix_base_command_failed": "an in-ticket `/orbi fix-base` command failed at one step",
+    # Base-branch-red scene (Issue #1825).
+    "base_ci_red_recovered": "the base check turned green and the paused delivery resumed automatically",
+    "base_ci_red_stale": "a base-branch-red delivery was still red after the reminder window and polling stopped",
+    "base_ci_red_merged": "the base-branch-red comment was updated to merged after the delivery landed",
+    "base_ci_red_triage": "a `/orbi fix-base` command created or reused a CI triage Issue",
     # Releases.
     "release_not_claimed": "the release state machine did not claim the release Issue",
     "release_task": "the release state machine advanced (step report)",

@@ -37,7 +37,7 @@ import os
 import re
 from typing import Mapping
 
-from orbi.language_terms import DISPLAY_TERMS
+from orbi.language_terms import BASE_CI_RED_MESSAGES, DISPLAY_TERMS
 
 LANGUAGE_EN = "en"
 LANGUAGE_ZH = "zh"
@@ -923,9 +923,9 @@ MESSAGES: dict[str, tuple[str, str]] = {
     ),
 }
 
-# The display vocabulary of the run comments lives in its own module to
-# keep this catalog owner under the size cap (Issue #1729).
-MESSAGES.update(DISPLAY_TERMS)
+# The display vocabulary (Issue #1729) and the base-branch-red messages
+# (Issue #1825) live in sibling modules; one update keeps one reading point.
+MESSAGES.update({**DISPLAY_TERMS, **BASE_CI_RED_MESSAGES})
 
 
 UNBLOCK_STEP_FIELD = "unblock_step"

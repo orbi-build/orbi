@@ -489,7 +489,7 @@ def test_fake_fails_fast_on_bad_search_qualifiers(fake_gh):
     fake_gh.add_issue(1, labels=(READY_LABEL,))
     assert_fails_with(
         lambda: github.list_issues(
-            "owner/repo", state="open", search="label:ai-ready in:title",
+            "owner/repo", state="open", search="label:ai-ready author:x",
             json_fields="number", limit=200,
         ),
         "unsupported search qualifier",
@@ -501,6 +501,99 @@ def test_fake_fails_fast_on_bad_search_qualifiers(fake_gh):
             json_fields="number", limit=200,
         ),
         "two milestone qualifiers",
+    )
+
+
+def test_fake_list_issues_scopes_a_quoted_phrase_to_the_title(fake_gh):
+    """Issue #1825: the CI triage lookup searches a quoted TITLE phrase
+    (`"CI failure: <check> on branch <base>" in:title` — the documented
+    GitHub qualifier). Without the scope the phrase matches the body, as
+    before; `in:body` pins the body explicitly."""
+    fake_gh.add_issue(
+        1, title="CI failure: tests on branch main (push)",
+        body="unrelated",
+    )
+    fake_gh.add_issue(2, title="other", body="CI failure: tests on branch main")
+
+    def search(term):
+        return [
+            issue["number"] for issue in github.list_issues(
+                "owner/repo", state="open", search=term,
+                json_fields="number", limit=200,
+            )
+        ]
+
+    assert search('"CI failure: tests on branch main" in:title') == [1]
+    assert search('"CI failure: tests on branch main" in:body') == [2]
+    assert search('"CI failure: tests on branch main"') == [2]
+
+
+def test_branch_head_sha_reads_the_live_head_and_fails_fast(fake_gh,
+                                                            monkeypatch):
+    """Issue #1825: the live base head is the branch resource's commit
+    SHA (the PR's `baseRefOid` is a snapshot and never moves). A branch
+    name with a slash travels URL-encoded; a response without a commit
+    SHA fails fast instead of reading as a real head."""
+    fake_gh.add_branch("release/7", head="abc1234")
+    assert github.branch_head_sha("owner/repo", "release/7") == "abc1234"
+    fake_gh.add_branch("release/7", head=None)
+    with pytest.raises(ValueError):
+        github.branch_head_sha("owner/repo", "release/7")
+    monkeypatch.setattr(seam, "run_command", lambda *_a, **_k: "[]")
+    with pytest.raises(ValueError):
+        github.branch_head_sha("owner/repo", "main")
+
+
+def test_fake_issue_comments_carry_an_id_and_a_permalink(fake_gh):
+    """Every real comment has a REST id and a permalink; the in-place edit
+    path reads the id back from that URL (Issue #825's PATCH route)."""
+    fake_gh.add_issue(3)
+    fake_gh.comment(3, "first")
+    fake_gh(["gh", "issue", "comment", "3", "--repo", "owner/repo",
+             "--body", "second"])
+    comments = github.issue_comments(3, repo="owner/repo")
+    assert [comment["body"] for comment in comments] == ["first", "second"]
+    for comment in comments:
+        assert "#issuecomment-" + str(comment["id"]) in comment["url"]
+
+
+def test_fake_issue_comment_patch_edits_in_place(fake_gh):
+    fake_gh.add_issue(4)
+    fake_gh.comment(4, "waiting")
+    comment = github.issue_comments(4, repo="owner/repo")[0]
+    github.update_issue_comment(
+        comment["id"], repo="owner/repo", body="merged",
+    )
+    comments = github.issue_comments(4, repo="owner/repo")
+    assert len(comments) == 1
+    assert "merged" in comments[0]["body"]
+
+
+def test_fake_issue_comment_patch_fails_fast_on_a_mistyped_write(fake_gh):
+    """The PATCH route models exactly `gh api <comment path> --method
+    PATCH --field body=...`; every other shape fails like the real CLI
+    instead of silently editing the wrong thing."""
+    fake_gh.add_issue(4)
+    fake_gh.comment(4, "waiting")
+    assert_fails_with(
+        lambda: fake_gh(["gh", "api", "repos/owner/repo/issues/comments/1",
+                         "--method", "PATCH"]),
+        "unsupported command",
+    )
+    assert_fails_with(
+        lambda: fake_gh(["gh", "api", "repos/owner/repo/unknown",
+                         "--method", "PATCH", "--field", "body=x"]),
+        "unsupported command",
+    )
+    assert_fails_with(
+        lambda: fake_gh(["gh", "api", "repos/owner/repo/issues/comments/1",
+                         "--method", "PATCH", "--field", "state=x"]),
+        "unsupported command",
+    )
+    assert_fails_with(
+        lambda: fake_gh(["gh", "api", "repos/owner/repo/issues/comments/999",
+                         "--method", "PATCH", "--field", "body=x"]),
+        "Could not resolve an Issue comment",
     )
 
 

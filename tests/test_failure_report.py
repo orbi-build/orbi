@@ -78,7 +78,6 @@ MOVED = (
     "HumanDecisionRequired",
     "_SNAPSHOT_PLACEHOLDER",
     "_failure_scene",
-    "_main_ci_triage_url",
     "_snapshot_or_placeholder",
     "FAILURE_COMMENT_MAX_CHARS",
     "FAILURE_STREAK_LIMIT",

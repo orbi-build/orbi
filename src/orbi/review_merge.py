@@ -69,7 +69,7 @@ from orbi.github import (
     pr_delivery_rollup,
     pr_view,
 )
-from orbi import language, user_summary
+from orbi import base_ci_red, language, user_summary
 from orbi.delivery_comment import merged_pr_comment_body  # noqa: F401
 from orbi.gitops import (
     _is_ancestor,
@@ -552,8 +552,8 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         failed_names = [entry["name"] for entry in failed]
         failure_report._raise_if_preexisting_ci_failure(
             pr.get("_source_repo", source_repo or ""), failed_names,
-            pr.get("base_oid"),
-        )
+            pr.get("base_oid"), base_branch=base_branch,
+            pr_number=pr["number"])
         raise GateCIFailure(
             f"delivery gate: CI check '{failed_names[0]}' "
             f"failed on PR #{pr['number']}: "
@@ -1542,15 +1542,17 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         current_labels=issue_labels(number, source_repo),
         ready_label=ready_label,
     )
-    comment_issue(
-        number, repo=source_repo,
-        body=merged_pr_comment_body(
+    # Issue #1825: the merged outcome also edits the paused delivery's ONE
+    # base-branch-red comment in place (to `merged`).
+    base_ci_red.post_merged(
+        number, source_repo, merged_pr_comment_body(
             config.run_id, merged["url"], confirmed["merge_commit"], round,
             external_commits, pr_commits, base_branch, review_summary,
             language_code=language.of(config), status_url=config.status_url,
             issue=number, title=title,
         ),
-    )
+        language_code=language.of(config))
+
     if confirmed["state"] != "MERGED":  # Issue #1801: nothing else closes it
         run_state.close_issue_after_landed_merge(
             number, repo=source_repo, merge_commit=confirmed["merge_commit"])
