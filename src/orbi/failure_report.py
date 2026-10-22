@@ -77,9 +77,8 @@ class PreExistingCIFailure(UnrecoverableDeliveryError):
     """A failed delivery check is already failing on the PR's base.
 
     No review round can change a failure the PR did not introduce, so the
-    record is decided HERE, at the source (Issue #1825):
-    `base_ci_red`/`checks` carry what the comment and `/orbi fix-base`
-    read; a raise site without them keeps the generic classified comment.
+    record is decided HERE (Issue #1825): `base_ci_red`/`checks` carry
+    what the comment and `/orbi fix-base` read.
     """
 
     def __init__(self, message: str, *,
@@ -559,11 +558,10 @@ def block_repo_config_failure(number: int, source_repo: str,
 def _raise_if_preexisting_ci_failure(
         repo: str, failed_names: list[str], base_commit: str | None,
         *, base_branch: str, pr_number: int) -> None:
-    """Raise the fast, explicit base-branch-red failure (Issue #1825).
+    """Raise the fast base-branch-red failure (Issue #1825).
 
     The CONFIGURED base branch and every failed base check with its run
-    link: one source for the comment and the recovery scan (never a
-    hard-coded `main`, never prose parsed back).
+    link: one source for the comment and the recovery scan.
     """
     detected = base_ci_red.detect(
         repo, failed_names, base_commit, base_branch=base_branch,
@@ -783,8 +781,7 @@ def report_delivery_failure(
         else issue_labels(number, source_repo)
     )
     # The base-branch-red scene owns its whole readable body (Issue
-    # #1825): not a subprocess failure, so it renders NO evidence segment
-    # (the empty `exit_code=<unknown>` block was pure noise).
+    # #1825): not a subprocess failure, so it renders NO evidence segment.
     red = getattr(exc, "base_ci_red", None)
     evidence_detail = _failure_evidence(
         worktree, exc, language_code=language_code,

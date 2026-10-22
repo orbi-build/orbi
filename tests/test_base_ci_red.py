@@ -18,6 +18,7 @@ outcomes:
 import dataclasses
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -486,6 +487,44 @@ def test_fix_base_never_triggers_on_the_runners_own_comment(monkeypatch):
     gh.add_check_runs(BASE_SHA, [base_run()])
     _run_command(gh)
     assert len(gh.issues) == 1
+
+
+def test_fix_base_on_a_ticket_without_a_block_is_one_receipt(monkeypatch):
+    """The shared dispatcher evaluates EVERY registered command on every
+    ticket that dispatches commands — the milestone notice does
+    (`TICKET_COMMANDS.values()`, no base-ci-red block). A
+    `/orbi fix-base` comment there owes its author one readable
+    rejection, never an uncaught error that would also drop the ticket's
+    other command (Issue #1825)."""
+    gh = _command_fixture(monkeypatch)
+    gh.issues[1825]["comments"].clear()
+    gh.issues[1825]["labels"] = []
+    gh.comment(1825, "/orbi fix-base", login="maintainer")
+    ticket_command.process_commands(
+        REPO, 1825, commands=ticket_command.TICKET_COMMANDS.values(),
+        candidate_titles=["v0.7.15"], config_path=Path("orbi.toml"),
+        policy=None, policy_path="policy.toml", base_branch=BASE_BRANCH,
+        dispatch_label="ai-ready", version_file=None, language_code="en",
+    )
+    assert len(gh.issues) == 1
+    bodies = [comment["body"] for comment in gh.issues[1825]["comments"]]
+    assert any(
+        "no `orbi:base-ci-red:v1` block" in body for body in bodies
+    ), bodies
+
+
+def test_fix_base_apply_without_a_block_fails_as_a_command_step(monkeypatch):
+    """The layer's contract: a handler that cannot run raises its own
+    step error, so the dispatcher posts the shared failure receipt."""
+    gh = FakeGh(REPO)
+    gh.add_issue(1825, title="t")
+    monkeypatch.setattr(seam, "run_command", gh)
+    with pytest.raises(ticket_command.TicketCommandError):
+        base_ci_red.FIX_BASE_COMMAND.apply(
+            "fix-base", repo=REPO, issue_number=1825,
+            command_comment={"id": 1}, comments=[], language_code="en",
+        )
+    assert gh.issues[1825]["comments"] == []
 
 
 # --------------------------------------------------------------------------

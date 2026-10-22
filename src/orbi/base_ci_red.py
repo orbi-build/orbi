@@ -751,20 +751,32 @@ def note_merged(repo: str, issue_number: int, *, language_code: str) -> bool:
 
 def _fix_base_validate(
     argument: str, *, language_code: str = language.DEFAULT_LANGUAGE,
-    **_context: object,
+    record: BaseCIRed | None = None, **_context: object,
 ) -> str | None:
-    """The command's own business rule: the ONLY argument is `fix-base`."""
-    if argument == "fix-base":
-        return None
-    return language.text(
-        language_code, "command.reason_unknown_fix_base", argument=argument,
-    )
+    """The command's own business rules: `fix-base`, on a paused scene.
+
+    The shared dispatcher evaluates EVERY registered command on every
+    ticket that runs commands (`process_commands` is the single entry,
+    Issue #1294), so "is there a block to fix at all" is this command's
+    own precondition: without one the reader gets this receipt instead of
+    a handler running against state the ticket never carried.
+    """
+    if argument != "fix-base":
+        return language.text(
+            language_code, "command.reason_unknown_fix_base",
+            argument=argument,
+        )
+    if not isinstance(record, BaseCIRed):
+        return language.text(
+            language_code, "command.reason_fix_base_no_block",
+        )
+    return None
 
 
 def _fix_base_apply(
     argument: str, *, repo: str, issue_number: int, command_comment: dict,
-    comments: list[dict], record: BaseCIRed, milestone: str | None = None,
-    dispatch_label: str = READY_LABEL,
+    comments: list[dict], record: BaseCIRed | None = None,
+    milestone: str | None = None, dispatch_label: str = READY_LABEL,
     language_code: str = language.DEFAULT_LANGUAGE,
     **_context: object,
 ) -> None:
@@ -775,6 +787,14 @@ def _fix_base_apply(
     comment does nothing (the block stays `waiting` until the base turns
     green, so the comment is visible for several ticks).
     """
+    if not isinstance(record, BaseCIRed):
+        # The layer's contract: a handler that cannot run raises its own
+        # step error (never a bare TypeError) so the dispatcher posts the
+        # shared failure receipt.
+        raise TicketCommandError(
+            "locate base-ci-red block",
+            language.text(language_code, "command.reason_fix_base_no_block"),
+        )
     receipt = (
         f"<!-- {command_receipt_marker(FIX_BASE_COMMAND)} "
         f"comment={command_comment_key(command_comment)} -->"

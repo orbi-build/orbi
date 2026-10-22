@@ -172,6 +172,16 @@ BASE_CI_RED_MESSAGES: dict[str, tuple[str, str]] = {
         "reused #{number} — `{check}` on `{base_branch}`",
         "已复用 #{number} —— `{base_branch}` 上的 `{check}`",
     ),
+    # The command's own precondition (Issue #1825): the shared
+    # dispatcher evaluates this command on every ticket that runs
+    # commands, and only a paused base-branch-red delivery carries the
+    # block the handler needs.
+    "command.reason_fix_base_no_block": (
+        "`/orbi fix-base` only works on a delivery paused by a red "
+        "base branch; no `orbi:base-ci-red:v1` block is present here",
+        "`/orbi fix-base` 只对因基础分支已红而暂停的交付有效；这里没有 "
+        "`orbi:base-ci-red:v1` 块",
+    ),
     "base_ci_red.triage_no_evidence": (
         "No failing check evidence is available for `{base_branch}` "
         "any more; fix the base branch and Orbi resumes this PR "
