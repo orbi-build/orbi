@@ -553,6 +553,34 @@ def test_fake_issue_comment_patch_edits_in_place(fake_gh):
     assert "merged" in comments[0]["body"]
 
 
+def test_fake_issue_comment_patch_fails_fast_on_a_mistyped_write(fake_gh):
+    """The PATCH route models exactly `gh api <comment path> --method
+    PATCH --field body=...`; every other shape fails like the real CLI
+    instead of silently editing the wrong thing."""
+    fake_gh.add_issue(4)
+    fake_gh.comment(4, "waiting")
+    assert_fails_with(
+        lambda: fake_gh(["gh", "api", "repos/owner/repo/issues/comments/1",
+                         "--method", "PATCH"]),
+        "unsupported command",
+    )
+    assert_fails_with(
+        lambda: fake_gh(["gh", "api", "repos/owner/repo/unknown",
+                         "--method", "PATCH", "--field", "body=x"]),
+        "unsupported command",
+    )
+    assert_fails_with(
+        lambda: fake_gh(["gh", "api", "repos/owner/repo/issues/comments/1",
+                         "--method", "PATCH", "--field", "state=x"]),
+        "unsupported command",
+    )
+    assert_fails_with(
+        lambda: fake_gh(["gh", "api", "repos/owner/repo/issues/comments/999",
+                         "--method", "PATCH", "--field", "body=x"]),
+        "Could not resolve an Issue comment",
+    )
+
+
 def test_fake_list_issues_honours_the_requested_creation_order(fake_gh):
     """Issue #1734: `gh issue list` returns the newest-created issues first
     unless the documented `sort:created-asc` advanced-search qualifier asks

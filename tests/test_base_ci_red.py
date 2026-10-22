@@ -889,24 +889,22 @@ def test_the_claim_tick_runs_the_base_ci_scan_before_the_resume_scan(
     from orbi import claim
 
     order: list[tuple[str, dict]] = []
-    monkeypatch.setattr(claim, "reconcile_open_epics", lambda *a, **k: None)
+    # The seam fans the fakes out to every module that binds the name, so
+    # the test patches no package module directly (the patch ratchet).
+    for name in (
+        "reconcile_open_epics", "reconcile_orphan_prs",
+        "pick_resumable_delivery", "pick_in_progress_issue",
+        "pick_ready_issue", "pick_awaiting_merge_delivery",
+    ):
+        monkeypatch.setattr(seam, name, lambda *a, **k: None)
+    monkeypatch.setattr(seam, "milestone_reconcile_due",
+                        lambda *a, **k: False)
     monkeypatch.setattr(
-        claim.milestone_bookkeeping, "milestone_reconcile_due",
-        lambda *a, **k: False,
+        seam, "recover", lambda *a, **k: order.append(("recover", k)),
     )
-    monkeypatch.setattr(claim, "reconcile_orphan_prs", lambda *a, **k: None)
     monkeypatch.setattr(
-        claim.base_ci_red, "recover",
-        lambda *a, **k: order.append(("recover", k)),
-    )
-    monkeypatch.setattr(
-        claim, "pick_resumable_delivery",
+        seam, "pick_resumable_delivery",
         lambda *a, **k: order.append(("resume", k)) or None,
-    )
-    monkeypatch.setattr(claim, "pick_in_progress_issue", lambda *a, **k: None)
-    monkeypatch.setattr(claim, "pick_ready_issue", lambda *a, **k: None)
-    monkeypatch.setattr(
-        claim, "pick_awaiting_merge_delivery", lambda *a, **k: None,
     )
     assert claim.pick_next_delivery(
         ["acme/app"], tmp_path, 1, hooks=None,
