@@ -2126,3 +2126,126 @@ def test_command_receipts_stay_english_by_default(monkeypatch):
     assert "**`/milestone` command not applied**" in body
     assert "- reason: " in body
     assert "- version: `v9.9.9`" in body
+
+# --- one exact-title Milestone lookup (Issue #1890) ----------------------------
+
+def test_find_exact_milestone_returns_the_single_exact_match():
+    """The lookup rule is title equality on a dict entry — the Milestone's
+    state is NOT part of it (a closed title still resolves; the closed
+    refusal is the caller's policy)."""
+    milestones = [
+        "not-a-milestone",
+        {"title": "v0.5.40", "state": "closed", "number": 1},
+        {"title": "v0.5.4", "state": "open", "number": 2},
+    ]
+
+    assert milestone_command.find_exact_milestone(
+        milestones, "v0.5.40",
+    ) == {"title": "v0.5.40", "state": "closed", "number": 1}
+
+
+def test_find_exact_milestone_reports_a_missing_title():
+    milestones = [
+        {"title": "v0.5.40", "state": "closed"},
+        {"title": "v0.5.41", "state": "open", "open_issues": 2},
+    ]
+
+    with pytest.raises(milestone_command.MilestoneLookupError) as excinfo:
+        milestone_command.find_exact_milestone(milestones, "v9.9.9")
+
+    error = excinfo.value
+    assert error.reason == "missing"
+    assert error.count == 0
+    assert error.open_milestones == "v0.5.41(2)"
+    assert str(error) == (
+        "milestone_lookup_failed reason=missing title='v9.9.9' matches=0; "
+        "open milestones: v0.5.41(2)"
+    )
+
+
+def test_find_exact_milestone_reports_an_ambiguous_title():
+    milestones = [
+        {"title": "v0.6.0", "state": "open", "open_issues": 3},
+        {"title": "v0.6.0", "state": "closed"},
+    ]
+
+    with pytest.raises(milestone_command.MilestoneLookupError) as excinfo:
+        milestone_command.find_exact_milestone(milestones, "v0.6.0")
+
+    error = excinfo.value
+    assert error.reason == "ambiguous"
+    assert error.count == 2
+    assert str(error) == (
+        "milestone_lookup_failed reason=ambiguous title='v0.6.0' matches=2; "
+        "open milestones: v0.6.0(3)"
+    )
+
+
+def test_format_open_milestones_lists_open_titles_with_their_counts():
+    assert milestone_command.format_open_milestones([
+        {"title": "v0.5.40", "state": "closed"},
+        "not-a-milestone",
+        {"title": "v0.5.41", "state": "open", "open_issues": 0},
+        {"title": "v0.5.42", "state": "open", "open_issues": 7},
+    ]) == "v0.5.41(0), v0.5.42(7)"
+
+
+def test_format_open_milestones_says_none_when_nothing_is_open():
+    assert milestone_command.format_open_milestones([]) == "(none)"
+    assert milestone_command.format_open_milestones([
+        {"title": "v0.5.40", "state": "closed"},
+    ]) == "(none)"
+
+
+def _advance_milestones(monkeypatch, milestones):
+    """Patch the ONE subprocess seam with the Milestone list the idle
+    advance reads; the error lines below are the published contract."""
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: _milestone_responses(milestones),
+    )
+
+
+def test_advance_missing_title_error_stays_byte_identical(
+    monkeypatch, tmp_path,
+):
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
+    _advance_milestones(monkeypatch, [
+        {"title": "v0.5.40", "state": "closed"},
+        {"title": "v0.5.41", "state": "open", "open_issues": 8},
+    ])
+
+    with pytest.raises(RuntimeError) as excinfo:
+        milestone.advance_active_milestone_on_idle(
+            "owner/repo", "v9.9.9", config,
+            parse_version_title=runner._parse_version_title,
+        )
+
+    assert str(excinfo.value) == (
+        "active_milestone_missing current=v9.9.9; "
+        "open milestones: v0.5.41(8)"
+    )
+    assert config.read_text() == 'active_milestone = "v0.5.40"\n'
+
+
+def test_advance_ambiguous_title_error_stays_byte_identical(
+    monkeypatch, tmp_path,
+):
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
+    _advance_milestones(monkeypatch, [
+        {"title": "v0.5.40", "state": "open", "open_issues": 1},
+        {"title": "v0.5.40", "state": "closed", "number": 2},
+    ])
+
+    with pytest.raises(RuntimeError) as excinfo:
+        milestone.advance_active_milestone_on_idle(
+            "owner/repo", "v0.5.40", config,
+            parse_version_title=runner._parse_version_title,
+        )
+
+    assert str(excinfo.value) == (
+        "active_milestone v0.5.40: ambiguous exact-title match in "
+        "owner/repo, refusing to guess"
+    )

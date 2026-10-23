@@ -1,5 +1,5 @@
 {
-  "boundary_total": 1097,
+  "boundary_total": 1098,
   "command_shape_asserts": 440,
   "internal_total": 1640,
   "monkeypatch_setattr_runner": 109,
@@ -43,7 +43,7 @@
     "runner_seam": 33,
     "scheduler": 17,
     "script": 6,
-    "seam": 1709,
+    "seam": 1710,
     "setup_checks": 5,
     "setup_config": 2,
     "shutil": 22,
