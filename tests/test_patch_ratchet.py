@@ -136,6 +136,66 @@ def test_per_target_rise_is_reported_but_passes(tmp_path):
     assert module.main(["patch_ratchet.py", str(tests)], baseline_file=baseline) == 0
 
 
+REPORT_PREFIX = "patch ratchet per-target (reported, not gated):"
+
+
+def report_entries(output: str) -> dict[str, int]:
+    """Parse the printed per-target report into an ordered name->count map."""
+    line = next(
+        line for line in output.splitlines() if line.startswith(REPORT_PREFIX)
+    )
+    entries: dict[str, int] = {}
+    for token in line[len(REPORT_PREFIX):].split():
+        name, _, count = token.partition("=")
+        entries[name] = int(count)
+    return entries
+
+
+def test_per_target_report_prints_the_current_table(tmp_path, capsys):
+    """Issue #1869: a normal invocation prints the CURRENT per_target
+    table, not the frozen baseline table — a target that only exists in
+    the current corpus is reported with its measured count.
+    """
+    module = load_ratchet()
+    tests = make_corpus(tmp_path, {
+        "test_one.py": [MODULE_INTERNAL, MODULE_INTERNAL, SEAM_ADAPTER,
+                        RUNNER_BOUNDARY],
+    })
+    baseline = baseline_for(module, tests)
+    frozen = json.loads(baseline.read_text(encoding="utf-8"))
+    # Deliberately stale: "seam" is absent and the journal count is wrong,
+    # so a report copied from the baseline cannot match the corpus.
+    frozen["per_target"] = {"journal": 99}
+    baseline.write_text(json.dumps(frozen), encoding="utf-8")
+    assert module.main(
+        ["patch_ratchet.py", str(tests)], baseline_file=baseline,
+    ) == 0
+    current = module.counts(tests)
+    assert current["per_target"] == {"journal": 2, "runner": 1, "seam": 1}
+    printed = report_entries(capsys.readouterr().out)
+    assert printed == current["per_target"]
+    # Stable order: descending count, then target name.
+    assert list(printed) == ["journal", "runner", "seam"]
+
+
+def test_per_target_report_is_printed_when_the_gate_fails(tmp_path, capsys):
+    """Issue #1869: the hard-gate failure path carries the same report
+    next to the aggregate counts and the failure reason.
+    """
+    module = load_ratchet()
+    tests = make_corpus(tmp_path, {
+        "test_one.py": [MODULE_INTERNAL, SEAM_ADAPTER],
+    })
+    baseline = baseline_for(module, tests, internal_total=0, per_target={})
+    assert module.main(
+        ["patch_ratchet.py", str(tests)], baseline_file=baseline,
+    ) == 1
+    output = capsys.readouterr().out
+    assert report_entries(output) == module.counts(tests)["per_target"]
+    assert "internal=2/0" in output
+    assert "patch ratchet FAILED" in output
+
+
 def test_equal_total_relocation_passes(tmp_path):
     module = load_ratchet()
     baseline = module.counts(
