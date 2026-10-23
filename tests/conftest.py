@@ -172,12 +172,20 @@ def bind_run_id():
     file by file before this fixture existed.
     """
     previous = journal.current_run_id()
+    # Capture the public setters at setup (Issue #1882). A test may patch
+    # `seam.set_run_id`, which fans the fake out to `journal.set_run_id`,
+    # and pytest tears this fixture down BEFORE it undoes `monkeypatch`:
+    # reading the module attribute here would call the test's fake and
+    # leave the test's binding in place. The captured originals still
+    # write the real binding through the public API.
+    set_run_id = journal.set_run_id
+    clear_run_id = journal.clear_run_id
 
     def bind(value: str | None) -> None:
         if value is None:
-            journal.clear_run_id()
+            clear_run_id()
         else:
-            journal.set_run_id(value)
+            set_run_id(value)
 
     yield bind
     # Restore through the same entry: both branches are exercised by the
