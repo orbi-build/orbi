@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from orbi import cli
+from orbi import cli, cli_commands
 from orbi import pilot_setup
 
 # The systemd-shape deployment/setup contract, pinned to the systemd
@@ -570,7 +570,7 @@ def test_cli_check_success_prints_the_report_and_exits_zero(
 ):
     make_world(tmp_path)
     monkeypatch.setattr(
-        cli, "run_command", fake_run_factory({}),
+        cli_commands, "run_command", fake_run_factory({}),
     )
     assert cli.main([
         "check", "--config", str(tmp_path / "run" / "orbi.toml"),
@@ -586,7 +586,7 @@ def test_cli_check_failure_prints_one_structured_line_and_exits_one(
     config_path = tmp_path / "orbi.toml"
     config_path.write_text(f'source_repos = ["{REPO}"]\n', encoding="utf-8")
     monkeypatch.setattr(
-        cli, "run_command", fake_run_factory(state),
+        cli_commands, "run_command", fake_run_factory(state),
     )
     assert cli.main(["check", "--config", str(config_path)]) == 1
     captured = capsys.readouterr()
@@ -602,7 +602,7 @@ def test_cli_check_missing_config_reports_prerequisites_before_config(
 ):
     """A first run reports independent machine failures and the config hint."""
     config_path = tmp_path / "orbi.toml"
-    monkeypatch.setattr(cli, "run_command", fake_run_factory({}))
+    monkeypatch.setattr(cli_commands, "run_command", fake_run_factory({}))
     monkeypatch.setattr(
         pilot_setup.shutil, "which",
         lambda name: None if name in {"gh", "pi"} else "/usr/bin/x",
@@ -628,7 +628,7 @@ def test_cli_setup_missing_deployment_path_fails_structured(
     config_path = tmp_path / "orbi.toml"
     config_path.write_text(f'source_repos = ["{REPO}"]\n', encoding="utf-8")
     monkeypatch.setattr(
-        cli, "run_command", fake_run_factory({}),
+        cli_commands, "run_command", fake_run_factory({}),
     )
     assert cli.main([
         "setup", "--config", str(config_path),

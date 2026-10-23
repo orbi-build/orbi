@@ -14,6 +14,12 @@ import dataclasses
 
 import orbi.runner as runner
 import orbi.cli as orbi
+import orbi.cli_commands as cli_commands
+import orbi.cli_doctor as cli_doctor
+import orbi.cli_status as cli_status
+import orbi.scheduler as scheduler
+import orbi.session_command as session_command
+import orbi.source_pool as source_pool
 import orbi.claim as claim_domain
 import orbi.status_observe as observe
 from seam import seam
@@ -31,24 +37,24 @@ def _write_prompts(tmp_path):
 
 
 def test_issue_number_extracts_number_from_github_url():
-    assert orbi.issue_number(
+    assert cli_commands.issue_number(
         "https://github.com/xqliu/orbi/issues/3"
     ) == 3
 
 
 def test_issue_number_rejects_url_without_issue_number():
     with pytest.raises(ValueError, match="no issue number"):
-        orbi.issue_number("https://github.com/xqliu/orbi")
+        cli_commands.issue_number("https://github.com/xqliu/orbi")
 
 
 def test_create_issue_runs_gh_issue_create_and_returns_url(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        orbi, "run_command",
+        cli_commands, "run_command",
         lambda command, **kwargs: calls.append(command)
         or "https://github.com/xqliu/orbi/issues/13",
     )
-    url = orbi.create_issue(
+    url = cli_commands.create_issue(
         "xqliu/orbi", "New task", "Do it",
     )
     assert url == "https://github.com/xqliu/orbi/issues/13"
@@ -61,11 +67,11 @@ def test_create_issue_runs_gh_issue_create_and_returns_url(monkeypatch):
 def test_dispatch_issue_creates_issue_and_adds_ai_ready(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        orbi, "run_command",
+        cli_commands, "run_command",
         lambda command, **kwargs: calls.append(command)
         or "https://github.com/xqliu/orbi/issues/13",
     )
-    url = orbi.dispatch_issue("xqliu/orbi", "New task", "Do it")
+    url = cli_commands.dispatch_issue("xqliu/orbi", "New task", "Do it")
     assert url == "https://github.com/xqliu/orbi/issues/13"
     assert calls == [
         [
@@ -82,11 +88,11 @@ def test_dispatch_issue_creates_issue_and_adds_ai_ready(monkeypatch):
 def test_dispatch_issue_uses_english_first_body_when_body_is_omitted(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        orbi, "run_command",
+        cli_commands, "run_command",
         lambda command, **kwargs: calls.append(command)
         or "https://github.com/xqliu/orbi/issues/13",
     )
-    orbi.dispatch_issue("xqliu/orbi", "English task", "")
+    cli_commands.dispatch_issue("xqliu/orbi", "English task", "")
     body = calls[0][-1]
     assert body.startswith("## User outcome")
     assert all(section in body for section in (
@@ -96,13 +102,13 @@ def test_dispatch_issue_uses_english_first_body_when_body_is_omitted(monkeypatch
 
 def test_dispatch_issue_propagates_create_failure(monkeypatch):
     monkeypatch.setattr(
-        orbi, "run_command",
+        cli_commands, "run_command",
         lambda command, **kwargs: (_ for _ in ()).throw(
             runner.subprocess.CalledProcessError(1, command, stderr="nope"),
         ),
     )
     with pytest.raises(runner.subprocess.CalledProcessError):
-        orbi.dispatch_issue("xqliu/orbi", "t", "b")
+        cli_commands.dispatch_issue("xqliu/orbi", "t", "b")
 
 
 def test_list_labeled_issues_queries_github_with_label_and_state(monkeypatch):
@@ -112,7 +118,7 @@ def test_list_labeled_issues_queries_github_with_label_and_state(monkeypatch):
         lambda command, **kwargs: calls.append(command)
         or json.dumps([issue]),
     )
-    issues = orbi.list_labeled_issues(
+    issues = cli_status.list_labeled_issues(
         "xqliu/orbi", "ai-in-progress", state="open",
     )
     assert issues == [issue]
@@ -125,21 +131,21 @@ def test_list_labeled_issues_queries_github_with_label_and_state(monkeypatch):
 
 def test_list_labeled_issues_returns_empty_list_when_idle(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]")
-    assert orbi.list_labeled_issues("xqliu/orbi", "ai-ready") == []
+    assert cli_status.list_labeled_issues("xqliu/orbi", "ai-ready") == []
 
 
 def test_current_issue_returns_first_in_progress_issue(monkeypatch):
     issue = {"number": 3, "title": "task", "url": "u"}
     monkeypatch.setattr(
-        orbi, "list_labeled_issues",
+        cli_status, "list_labeled_issues",
         lambda repo, label, state="open": [issue] if label == "ai-in-progress" else [],
     )
-    assert orbi.current_issue("xqliu/orbi") == issue
+    assert cli_status.current_issue("xqliu/orbi") == issue
 
 
 def test_current_issue_returns_none_when_idle(monkeypatch):
-    monkeypatch.setattr(orbi, "list_labeled_issues", lambda *a, **k: [])
-    assert orbi.current_issue("xqliu/orbi") is None
+    monkeypatch.setattr(cli_status, "list_labeled_issues", lambda *a, **k: [])
+    assert cli_status.current_issue("xqliu/orbi") is None
 
 
 def test_ready_issue_runs_the_claim_searches_under_the_status_bound(
@@ -155,7 +161,7 @@ def test_ready_issue_runs_the_claim_searches_under_the_status_bound(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     config = config_domain.RunnerConfig(active_milestone="v1.0")
-    assert orbi.ready_issue("xqliu/orbi", config) is None
+    assert cli_status.ready_issue("xqliu/orbi", config) is None
     searches = [
         command[command.index("--search") + 1]
         for command, _ in calls
@@ -171,13 +177,13 @@ def test_ready_issue_runs_the_claim_searches_under_the_status_bound(
 
 def test_ready_issue_builds_no_search_of_its_own():
     """Criterion #1773: no second ready query lives in the CLI."""
-    source = inspect.getsource(orbi.ready_issue)
+    source = inspect.getsource(cli_status.ready_issue)
     assert "label:" not in source
 
 
 def test_ready_issue_returns_none_when_idle(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]")
-    assert orbi.ready_issue(
+    assert cli_status.ready_issue(
         "xqliu/orbi", config_domain.RunnerConfig(),
     ) is None
 
@@ -195,8 +201,8 @@ def test_recent_result_returns_newest_pr_opened_or_blocked_issue(monkeypatch):
             return []
         return [blocked]
 
-    monkeypatch.setattr(orbi, "list_labeled_issues", fake_list)
-    assert orbi.recent_result("xqliu/orbi") == blocked
+    monkeypatch.setattr(cli_status, "list_labeled_issues", fake_list)
+    assert cli_status.recent_result("xqliu/orbi") == blocked
     assert calls == [
         ("ai-pr-opened", "all"), ("ai-fix-needed", "all"),
         ("ai-merged", "all"), ("ai-blocked", "all"),
@@ -217,8 +223,8 @@ def test_recent_result_includes_fix_needed_issue(monkeypatch):
             return [blocked]
         return []
 
-    monkeypatch.setattr(orbi, "list_labeled_issues", fake_list)
-    assert orbi.recent_result("xqliu/orbi") == fix_needed
+    monkeypatch.setattr(cli_status, "list_labeled_issues", fake_list)
+    assert cli_status.recent_result("xqliu/orbi") == fix_needed
 
 
 def test_recent_result_includes_merged_issue(monkeypatch):
@@ -235,8 +241,8 @@ def test_recent_result_includes_merged_issue(monkeypatch):
             return [blocked]
         return []
 
-    monkeypatch.setattr(orbi, "list_labeled_issues", fake_list)
-    assert orbi.recent_result("xqliu/orbi") == merged
+    monkeypatch.setattr(cli_status, "list_labeled_issues", fake_list)
+    assert cli_status.recent_result("xqliu/orbi") == merged
 
 
 def test_recent_result_prefers_pr_opened_when_newer(monkeypatch):
@@ -250,18 +256,18 @@ def test_recent_result_prefers_pr_opened_when_newer(monkeypatch):
             return []
         return [blocked]
 
-    monkeypatch.setattr(orbi, "list_labeled_issues", fake_list)
-    assert orbi.recent_result("xqliu/orbi") == pr_opened
+    monkeypatch.setattr(cli_status, "list_labeled_issues", fake_list)
+    assert cli_status.recent_result("xqliu/orbi") == pr_opened
 
 
 def test_recent_result_returns_none_when_no_result(monkeypatch):
-    monkeypatch.setattr(orbi, "list_labeled_issues", lambda *a, **k: [])
-    assert orbi.recent_result("xqliu/orbi") is None
+    monkeypatch.setattr(cli_status, "list_labeled_issues", lambda *a, **k: [])
+    assert cli_status.recent_result("xqliu/orbi") is None
 
 
 def test_format_issue_shows_number_title_and_url():
     issue = {"number": 3, "title": "task", "url": "https://x/3"}
-    assert orbi.format_issue(issue) == "#3 task https://x/3"
+    assert cli_status.format_issue(issue) == "#3 task https://x/3"
 
 
 def _raw_delivery_issue(number, *, title="task", url="u", state="open",
@@ -283,9 +289,9 @@ def _status_observer(config, raw_by_repo):
     scope = observe.parse_scope(config.source_repos)
     observer = observe.StatusObserver(
         config, scope, read_issues=lambda repo: raw_by_repo.get(repo, []),
-        read_ready=lambda repo: orbi.ready_issue(repo, config),
-        read_result=orbi.recent_result,
-        read_base=orbi.freeze_base,
+        read_ready=lambda repo: cli_status.ready_issue(repo, config),
+        read_result=cli_status.recent_result,
+        read_base=cli_commands.freeze_base,
     )
     observer.refresh()
     return scope, observer
@@ -316,14 +322,14 @@ class _NoopObserver:
 def test_status_report_lists_sources_active_ready_and_result(monkeypatch):
     ready = {"number": 11, "title": "next", "url": "u11"}
     result = {"number": 2, "title": "done", "url": "u2"}
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: ready)
-    monkeypatch.setattr(orbi, "recent_result", lambda repo: result)
-    monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: ready)
+    monkeypatch.setattr(cli_status, "recent_result", lambda repo: result)
+    monkeypatch.setattr(cli_commands, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="main", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots"))
     scope, observer = _status_observer(config, {
         "xqliu/orbi": [_raw_delivery_issue(3, title="now", url="u3")],
     })
-    report = orbi.status_report(config, scope, observer)
+    report = cli_status.status_report(config, scope, observer)
     assert "source: xqliu/orbi" in report
     assert "base: main abc123def456" in report
     assert "active: #3 now u3 state=open labels=ai-in-progress" in report
@@ -334,24 +340,24 @@ def test_status_report_lists_sources_active_ready_and_result(monkeypatch):
 def test_status_report_freezes_base_from_configured_repo_dir(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        orbi, "freeze_base",
+        cli_commands, "freeze_base",
         lambda repo_dir, base_branch: calls.append((repo_dir, base_branch)) or "abc123def456",
     )
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
-    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
+    monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
+    monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="develop", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots"))
     scope, observer = _status_observer(config, {})
-    orbi.status_report(config, scope, observer)
+    cli_status.status_report(config, scope, observer)
     assert calls == [(Path("/srv/orbi/orbi"), "develop")]
 
 
 def test_status_report_marks_empty_lookups(monkeypatch):
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
-    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
+    monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
+    monkeypatch.setattr(cli_commands, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="main", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots"))
     scope, observer = _status_observer(config, {})
-    report = orbi.status_report(config, scope, observer)
+    report = cli_status.status_report(config, scope, observer)
     assert "base: main abc123def456" in report
     assert "active: -" in report
     assert "ready: -" in report
@@ -367,7 +373,7 @@ def test_main_add_dispatches_to_selected_source_repo(monkeypatch, tmp_path, caps
     _write_prompts(tmp_path)
     calls = []
     monkeypatch.setattr(
-        orbi, "dispatch_issue",
+        cli_commands, "dispatch_issue",
         lambda repo, title, body: calls.append((repo, title, body))
         or "https://github.com/xqliu/orbi/issues/13",
     )
@@ -389,7 +395,7 @@ def test_main_add_uses_explicit_repo_override(monkeypatch, tmp_path, capsys):
     _write_prompts(tmp_path)
     calls = []
     monkeypatch.setattr(
-        orbi, "dispatch_issue",
+        cli_commands, "dispatch_issue",
         lambda repo, title, body: calls.append(repo) or "https://github.com/x/y/issues/1",
     )
     assert orbi.main([
@@ -417,7 +423,7 @@ def test_main_status_prints_report(monkeypatch, tmp_path, capsys):
         lambda config, scope, **kwargs: _NoopObserver(),
     )
     monkeypatch.setattr(
-        orbi, "status_report",
+        cli_status, "status_report",
         lambda config, scope, observer: "source: xqliu/orbi\nactive: -",
     )
     assert orbi.main(["status", "--config", str(config)]) == 0
@@ -501,7 +507,7 @@ def test_main_status_reports_a_render_read_failure(
     def failing_report(config, scope, observer):
         raise subprocess.CalledProcessError(1, ["gh"], stderr="boom")
 
-    monkeypatch.setattr(orbi, "status_report", failing_report)
+    monkeypatch.setattr(cli_status, "status_report", failing_report)
     assert orbi.main(["status", "--config", str(config)]) == 1
     assert "status_failed scope=acme/shop" in capsys.readouterr().err
 
@@ -517,7 +523,7 @@ def test_main_status_follow_reports_a_read_failure(
         lambda config, scope, **kwargs: _FlakyObserver(),
     )
     monkeypatch.setattr(
-        orbi, "status_report", lambda config, scope, observer: "view",
+        cli_status, "status_report", lambda config, scope, observer: "view",
     )
     assert orbi.main([
         "status", "--follow", "--config", str(config),
@@ -542,7 +548,7 @@ def test_main_status_follow_reports_a_first_cycle_failure_without_a_view(
     def failing_report(config, scope, observer):
         raise subprocess.CalledProcessError(1, ["gh"], stderr="boom")
 
-    monkeypatch.setattr(orbi, "status_report", failing_report)
+    monkeypatch.setattr(cli_status, "status_report", failing_report)
     assert orbi.main([
         "status", "--follow", "--config", str(config),
     ]) == 1
@@ -562,7 +568,7 @@ def test_main_status_follow_ends_cleanly_on_ctrl_c(
         lambda config, scope, **kwargs: _NoopObserver(),
     )
     monkeypatch.setattr(
-        orbi, "status_report", lambda config, scope, observer: "view",
+        cli_status, "status_report", lambda config, scope, observer: "view",
     )
 
     def interrupt(*args, **kwargs):
@@ -653,7 +659,7 @@ def test_find_session_file_returns_newest_jsonl_under_worktrees(tmp_path):
     new = _write_session(tmp_path, name="new.jsonl", run="run2")
     old_time = old.stat().st_mtime
     os.utime(old, (old_time - 100, old_time - 100))
-    assert orbi.find_session_file(tmp_path) == new
+    assert session_command.find_session_file(tmp_path) == new
 
 
 def test_find_session_file_ignores_non_jsonl_and_missing_dir(tmp_path):
@@ -662,10 +668,10 @@ def test_find_session_file_ignores_non_jsonl_and_missing_dir(tmp_path):
     (tmp_path / ".worktrees" / "wt" / ".pi-session" / "notes.txt").write_text(
         "nope\n", encoding="utf-8",
     )
-    assert orbi.find_session_file(tmp_path) is None
+    assert session_command.find_session_file(tmp_path) is None
     empty = tmp_path / "empty"
     empty.mkdir()
-    assert orbi.find_session_file(empty) is None
+    assert session_command.find_session_file(empty) is None
 
 
 def test_session_prints_path_and_returns_zero(tmp_path, capsys):
@@ -713,7 +719,7 @@ def test_follow_session_file_yields_new_lines(tmp_path):
 
     thread = threading.Thread(target=appear_later)
     thread.start()
-    lines = list(orbi.follow_session_file(path, poll_interval=0.05))
+    lines = list(session_command.follow_session_file(path, poll_interval=0.05))
     thread.join(timeout=5)
     assert len(lines) == 2
     assert "sess-1" in lines[0]
@@ -729,7 +735,7 @@ def test_follow_session_file_stops_when_file_is_gone(tmp_path):
     ])
     path.unlink()
     assert list(
-        orbi.follow_session_file(path, poll_interval=0.05),
+        session_command.follow_session_file(path, poll_interval=0.05),
     ) == []
 
 
@@ -743,7 +749,7 @@ def test_session_follow_prints_new_lines_of_the_selected_file(
         {"type": "session", "id": "sess-1", "cwd": "/w"},
     ])
     monkeypatch.setattr(
-        orbi, "follow_session_file",
+        cli_commands, "follow_session_file",
         lambda path, poll_interval=0.5: iter([
             json.dumps({"type": "session", "id": "sess-1", "cwd": "/w"}),
             json.dumps({"type": "message", "id": "a1",
@@ -766,7 +772,7 @@ def test_session_follow_pretty_prints_summaries(tmp_path, capsys, monkeypatch):
         {"type": "session", "id": "sess-1", "cwd": "/w"},
     ])
     monkeypatch.setattr(
-        orbi, "follow_session_file",
+        cli_commands, "follow_session_file",
         lambda path, poll_interval=0.5: iter([
             json.dumps({"type": "message", "id": "a1",
                         "timestamp": "2026-08-26T00:00:00Z",
@@ -795,7 +801,7 @@ def test_follow_session_file_rereads_shrunk_file(tmp_path):
          "message": {"role": "assistant", "content": [
              {"type": "text", "text": "one"}]}},
     ])
-    generator = orbi.follow_session_file(path, poll_interval=0.05)
+    generator = session_command.follow_session_file(path, poll_interval=0.05)
     first = next(generator)
     second = next(generator)
     assert "s1" in first
@@ -821,7 +827,7 @@ def test_follow_session_file_skips_blank_lines(tmp_path):
         + "\n",
         encoding="utf-8",
     )
-    generator = orbi.follow_session_file(path, poll_interval=0.05)
+    generator = session_command.follow_session_file(path, poll_interval=0.05)
     first = next(generator)
     second = next(generator)
     assert "s1" in first
@@ -864,7 +870,7 @@ def test_follow_session_file_never_splits_a_record_being_written(
     thread = threading.Thread(target=write_in_chunks)
     thread.start()
     lines = list(
-        orbi.follow_session_file(path, poll_interval=0.05),
+        session_command.follow_session_file(path, poll_interval=0.05),
     )
     thread.join(timeout=5)
     # The record is yielded exactly once, complete, never as fragments.
@@ -887,7 +893,7 @@ def test_session_follow_without_session_file_fails_fast(tmp_path, capsys):
 
 
 def test_format_session_line_summarizes_message_roles(tmp_path):
-    line = orbi.format_session_line({
+    line = session_command.format_session_line({
         "type": "message", "id": "a1",
         "timestamp": "2026-08-26T00:00:00Z",
         "message": {"role": "assistant", "content": [
@@ -902,7 +908,7 @@ def test_format_session_line_summarizes_message_roles(tmp_path):
 
 
 def test_format_session_line_summarizes_tool_result(tmp_path):
-    line = orbi.format_session_line({
+    line = session_command.format_session_line({
         "type": "message", "id": "r1",
         "timestamp": "2026-08-26T00:01:00Z",
         "message": {"role": "toolResult", "toolName": "bash",
@@ -915,7 +921,7 @@ def test_format_session_line_summarizes_tool_result(tmp_path):
 
 
 def test_format_session_line_summarizes_session_record(tmp_path):
-    line = orbi.format_session_line({
+    line = session_command.format_session_line({
         "type": "session", "id": "sess-1",
         "timestamp": "2026-08-26T00:00:00Z", "cwd": "/w",
     })
@@ -924,7 +930,7 @@ def test_format_session_line_summarizes_session_record(tmp_path):
 
 
 def test_format_session_line_truncates_long_content(tmp_path):
-    line = orbi.format_session_line({
+    line = session_command.format_session_line({
         "type": "message", "id": "a1",
         "timestamp": "2026-08-26T00:00:00Z",
         "message": {"role": "assistant", "content": [
@@ -939,7 +945,7 @@ def test_format_session_line_tool_call_without_command_falls_back(
 ):
     """Issue #74: a tool call without a `command` argument shows the
     first path-like argument instead."""
-    line = orbi.format_session_line({
+    line = session_command.format_session_line({
         "type": "message", "id": "a1",
         "timestamp": "2026-08-26T00:00:00Z",
         "message": {"role": "assistant", "content": [
@@ -952,7 +958,7 @@ def test_format_session_line_tool_call_without_command_falls_back(
 
 
 def test_format_session_line_skips_non_dict_content_items(tmp_path):
-    line = orbi.format_session_line({
+    line = session_command.format_session_line({
         "type": "message", "id": "a1",
         "timestamp": "2026-08-26T00:00:00Z",
         "message": {"role": "assistant", "content": [
@@ -967,7 +973,7 @@ def test_format_session_line_skips_non_dict_content_items(tmp_path):
 
 
 def test_format_session_line_summarizes_thinking(tmp_path):
-    line = orbi.format_session_line({
+    line = session_command.format_session_line({
         "type": "message", "id": "a1",
         "timestamp": "2026-08-26T00:00:00Z",
         "message": {"role": "assistant", "content": [
@@ -979,7 +985,7 @@ def test_format_session_line_summarizes_thinking(tmp_path):
 
 
 def test_format_session_line_handles_non_list_content(tmp_path):
-    line = orbi.format_session_line({
+    line = session_command.format_session_line({
         "type": "message", "id": "a1",
         "timestamp": "2026-08-26T00:00:00Z",
         "message": {"role": "assistant", "content": "no list"},
@@ -988,7 +994,7 @@ def test_format_session_line_handles_non_list_content(tmp_path):
 
 
 def test_format_session_line_handles_unknown_record_kind(tmp_path):
-    line = orbi.format_session_line({
+    line = session_command.format_session_line({
         "type": "compaction",
         "timestamp": "2026-08-26T00:00:00Z",
     })
@@ -996,7 +1002,7 @@ def test_format_session_line_handles_unknown_record_kind(tmp_path):
 
 
 def test_format_session_line_handles_missing_message(tmp_path):
-    line = orbi.format_session_line({
+    line = session_command.format_session_line({
         "type": "message",
         "timestamp": "2026-08-26T00:00:00Z",
     })
@@ -1008,7 +1014,7 @@ def test_format_session_line_tool_call_without_any_known_argument(
 ):
     """Issue #74: a tool call whose arguments carry none of the known
     keys shows the tool name only (no guessed detail)."""
-    line = orbi.format_session_line({
+    line = session_command.format_session_line({
         "type": "message", "id": "a1",
         "timestamp": "2026-08-26T00:00:00Z",
         "message": {"role": "assistant", "content": [
@@ -1025,7 +1031,7 @@ def test_format_session_line_tool_call_skips_empty_argument_values(
 ):
     """Issue #74: empty argument values are skipped, the next known
     key wins."""
-    line = orbi.format_session_line({
+    line = session_command.format_session_line({
         "type": "message", "id": "a1",
         "timestamp": "2026-08-26T00:00:00Z",
         "message": {"role": "assistant", "content": [
@@ -1037,7 +1043,7 @@ def test_format_session_line_tool_call_skips_empty_argument_values(
 
 
 def test_format_session_line_thinking_without_text(tmp_path):
-    line = orbi.format_session_line({
+    line = session_command.format_session_line({
         "type": "message", "id": "a1",
         "timestamp": "2026-08-26T00:00:00Z",
         "message": {"role": "assistant", "content": [
@@ -1076,7 +1082,7 @@ def test_session_follow_pretty_skips_malformed_lines(
         {"type": "session", "id": "sess-1", "cwd": "/w"},
     ])
     monkeypatch.setattr(
-        orbi, "follow_session_file",
+        cli_commands, "follow_session_file",
         lambda path, poll_interval=0.5: iter([
             json.dumps({"type": "message", "id": "a1",
                         "timestamp": "2026-08-26T00:00:00Z",
@@ -1151,8 +1157,8 @@ def test_installed_unit_config_scan_ignores_directories_and_unconfigured_units(
         installed_unit_dir=lambda: installed,
         unit_config=lambda path: None,
     )
-    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
-    assert orbi._installed_unit_configs() == ()
+    monkeypatch.setattr(scheduler, "detect", lambda: fake)
+    assert source_pool.installed_unit_configs() == ()
 
 
 def test_check_reports_missing_config_when_no_unit_is_available(
@@ -1167,7 +1173,7 @@ def test_check_reports_missing_config_when_no_unit_is_available(
         installed_unit_dir=lambda: installed,
         unit_config=lambda path: None,
     )
-    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(scheduler, "detect", lambda: fake)
     monkeypatch.setattr(orbi.pilot_setup, "run_machine_checks", lambda **_: ([], []))
     assert orbi.main(["check"]) == 1
     assert "config_not_found" in capsys.readouterr().err
@@ -1188,7 +1194,7 @@ def test_check_resolves_the_single_existing_installed_unit_config(
         installed_unit_dir=lambda: installed,
         unit_config=lambda path: config if path == unit else None,
     )
-    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(scheduler, "detect", lambda: fake)
     monkeypatch.setattr(orbi.pilot_setup, "run_checks", lambda *args, **kwargs: ["ok"])
     assert orbi.main(["check"]) == 0
     assert capsys.readouterr().out.strip() == "ok"
@@ -1207,7 +1213,7 @@ def test_check_with_explicit_missing_config_keeps_unit_candidate_list(
         installed_unit_dir=lambda: installed,
         unit_config=lambda path: candidate if path == unit else None,
     )
-    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(scheduler, "detect", lambda: fake)
     monkeypatch.setattr(orbi.pilot_setup, "run_machine_checks", lambda **_: ([], []))
     monkeypatch.setattr(orbi.pilot_setup, "run_checks", lambda *args, **kwargs: ["ok"])
     missing = tmp_path / "missing.toml"
@@ -1226,7 +1232,7 @@ def test_setup_reports_missing_config_with_setup_prefix(
         installed_unit_dir=lambda: installed,
         unit_config=lambda path: None,
     )
-    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(scheduler, "detect", lambda: fake)
     monkeypatch.setattr(
         orbi.pilot_setup, "ensure_config",
         lambda path: (_ for _ in ()).throw(config_domain.ConfigFileMissingError(path)),
@@ -1257,13 +1263,13 @@ def test_status_resolves_the_single_existing_installed_unit_config(
         installed_unit_dir=lambda: installed,
         unit_config=lambda path: config if path == unit else None,
     )
-    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(scheduler, "detect", lambda: fake)
     monkeypatch.setattr(
         observe, "StatusObserver",
         lambda config, scope, **kwargs: _NoopObserver(),
     )
     monkeypatch.setattr(
-        orbi, "status_report", lambda config, scope, observer: "ok",
+        cli_status, "status_report", lambda config, scope, observer: "ok",
     )
     with caplog.at_level(logging.INFO, logger="orbi.cli"):
         assert orbi.main(["status"]) == 0
@@ -1284,8 +1290,8 @@ def test_unit_scan_ignores_unrelated_scheduler_files(
         installed_unit_dir=lambda: installed,
         unit_config=lambda path: candidate if path == unrelated else None,
     )
-    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
-    assert orbi._installed_unit_configs() == ()
+    monkeypatch.setattr(scheduler, "detect", lambda: fake)
+    assert source_pool.installed_unit_configs() == ()
 
 
 def test_status_does_not_guess_between_installed_unit_configs(
@@ -1304,7 +1310,7 @@ def test_status_does_not_guess_between_installed_unit_configs(
         installed_unit_dir=lambda: installed,
         unit_config=lambda path: configs[units.index(path)] if path in units else None,
     )
-    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(scheduler, "detect", lambda: fake)
     with caplog.at_level(logging.ERROR, logger="orbi.cli"):
         assert orbi.main(["status"]) == 1
     assert "config_not_found" in caplog.text
@@ -1325,7 +1331,7 @@ def test_mutating_command_lists_a_unit_config_without_using_it(
         installed_unit_dir=lambda: installed,
         unit_config=lambda path: config if path == unit else None,
     )
-    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(scheduler, "detect", lambda: fake)
     with caplog.at_level(logging.ERROR, logger="orbi.cli"):
         assert orbi.main(["milestone", "set", "v1"]) == 1
     assert "config_not_found" in caplog.text
@@ -1367,14 +1373,14 @@ def test_status_report_shows_active_observation_for_an_issue(
                 {"type": "toolCall", "id": "t1", "name": "read",
                  "arguments": {"path": "src/login.ts"}}]},
         }) + "\n")
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
-    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
+    monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
+    monkeypatch.setattr(cli_commands, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
     scope, observer = _status_observer(config, {
         "xqliu/orbi": [_raw_delivery_issue(3, title="now", url="u3")],
     })
-    report = orbi.status_report(config, scope, observer)
+    report = cli_status.status_report(config, scope, observer)
     assert "active: #3 now u3 state=open labels=ai-in-progress" in report
     assert (
         "    observation: run=86b57234 session=sess-1 "
@@ -1386,9 +1392,9 @@ def test_status_report_shows_active_observation_for_an_issue(
 def test_status_report_repo_scope_excludes_the_other_repository(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
-    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
+    monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
+    monkeypatch.setattr(cli_commands, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     config = config_domain.RunnerConfig(source_repos=("acme/shop", "acme/blog"), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
     scope = observe.parse_scope(config.source_repos, repo="acme/shop")
     observer = observe.StatusObserver(
@@ -1396,7 +1402,7 @@ def test_status_report_repo_scope_excludes_the_other_repository(
         read_issues=lambda repo: [_raw_delivery_issue(3, title="now", url="u3")],
     )
     observer.refresh()
-    report = orbi.status_report(config, scope, observer)
+    report = cli_status.status_report(config, scope, observer)
     assert "source: acme/shop" in report
     assert "acme/blog" not in report
     assert "active: #3 now u3 state=open labels=ai-in-progress" in report
@@ -1405,9 +1411,9 @@ def test_status_report_repo_scope_excludes_the_other_repository(
 def test_status_report_issue_scope_shows_confirmed_state(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
-    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
+    monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
+    monkeypatch.setattr(cli_commands, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
     scope = observe.parse_scope(config.source_repos, issue=7)
     observer = observe.StatusObserver(
@@ -1418,7 +1424,7 @@ def test_status_report_issue_scope_shows_confirmed_state(
         ),
     )
     observer.refresh()
-    report = orbi.status_report(config, scope, observer)
+    report = cli_status.status_report(config, scope, observer)
     assert "issue: #7 done u7 state=closed labels=ai-merged" in report
     assert "observation: none" in report
 
@@ -1426,24 +1432,24 @@ def test_status_report_issue_scope_shows_confirmed_state(
 def test_status_report_issue_scope_without_a_confirmed_read(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
-    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
+    monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
+    monkeypatch.setattr(cli_commands, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
     scope = observe.parse_scope(config.source_repos, issue=7)
     observer = observe.StatusObserver(config, scope)
-    report = orbi.status_report(config, scope, observer)
+    report = cli_status.status_report(config, scope, observer)
     assert "issue:" not in report
     assert "observation: none" in report
 
 
 def test_status_report_marks_no_active_delivery(monkeypatch, tmp_path):
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
-    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
+    monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
+    monkeypatch.setattr(cli_commands, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots")
     scope, observer = _status_observer(config, {})
-    report = orbi.status_report(config, scope, observer)
+    report = cli_status.status_report(config, scope, observer)
     assert "active: -" in report
     assert "ready: -" in report
 
@@ -1453,14 +1459,14 @@ def test_status_report_marks_no_active_delivery(monkeypatch, tmp_path):
 
 def test_status_report_shows_capacity_and_free_slots(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        orbi, "freeze_base",
+        cli_commands, "freeze_base",
         lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
-    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
+    monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
+    monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=2, slot_dir=tmp_path / ".orbi" / "slots")
     scope, observer = _status_observer(config, {})
-    report = orbi.status_report(config, scope, observer)
+    report = cli_status.status_report(config, scope, observer)
     assert "capacity: 2" in report
     assert "slots: 0/2" in report
     assert "slot-1" not in report
@@ -1475,14 +1481,14 @@ def test_status_report_shows_occupied_slots_with_pids(monkeypatch, tmp_path):
     held = pilot_slots.acquire_slot(slot_dir, 1, os.getpid())
     assert held is not None
     monkeypatch.setattr(
-        orbi, "freeze_base",
+        cli_commands, "freeze_base",
         lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
-    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
+    monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
+    monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=2, slot_dir=slot_dir)
     scope, observer = _status_observer(config, {})
-    report = orbi.status_report(config, scope, observer)
+    report = cli_status.status_report(config, scope, observer)
     assert "capacity: 2" in report
     assert "slots: 1/2" in report
     assert f"slot-1: pid={os.getpid()}" in report
@@ -1499,14 +1505,14 @@ def test_status_report_shows_free_slot_when_file_exists_without_lock(
     slot_dir.mkdir(parents=True)
     (slot_dir / "slot-1").write_text("4242\n", encoding="utf-8")
     monkeypatch.setattr(
-        orbi, "freeze_base",
+        cli_commands, "freeze_base",
         lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
-    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
+    monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
+    monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
     config = config_domain.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=slot_dir)
     scope, observer = _status_observer(config, {})
-    report = orbi.status_report(config, scope, observer)
+    report = cli_status.status_report(config, scope, observer)
     assert "slots: 0/1" in report
 
 
@@ -1514,7 +1520,7 @@ def test_slot_lines_ignores_corrupted_slot_file(tmp_path):
     slot_dir = tmp_path / "slots"
     slot_dir.mkdir()
     (slot_dir / "slot-1").write_text("garbage", encoding="utf-8")
-    lines = orbi.slot_lines(slot_dir, 1)
+    lines = cli_status.slot_lines(slot_dir, 1)
     assert lines == ["slots: 0/1"]
 
 
@@ -1522,10 +1528,10 @@ def test_slot_lines_reports_held_unknown_pid(monkeypatch, tmp_path):
     """A slot whose lock is held with an unreadable PID counts as taken
     and renders as `pid=unknown (held)` — never silently free."""
     monkeypatch.setattr(
-        orbi, "slot_occupancy",
+        cli_status, "slot_occupancy",
         lambda state_dir, capacity: [(1, -1)],
     )
-    assert orbi.slot_lines(tmp_path / "slots", 1) == [
+    assert cli_status.slot_lines(tmp_path / "slots", 1) == [
         "slots: 1/1", "  slot-1: pid=unknown (held)",
     ]
 
@@ -1603,8 +1609,8 @@ def _fake_doctor_commands(monkeypatch, ssh_down: bool = False,
             return "line one\nline two"
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(orbi, "run_command", fake_run)
-    monkeypatch.setattr(orbi, "merge_gate_preflight", lambda repo, branch: [
+    monkeypatch.setattr(cli_doctor, "run_command", fake_run)
+    monkeypatch.setattr(cli_doctor, "merge_gate_preflight", lambda repo, branch: [
         f"merge_gate: PASS repo={repo} branch={branch} protection readable",
     ])
     return calls
@@ -1635,11 +1641,11 @@ def test_install_units_command_reports_commit_and_hashes(monkeypatch,
         }
 
     monkeypatch.setattr(scheduler, "install_units", fake_install)
-    report = orbi.install_units_command(config, installed)
+    report = cli_commands.install_units_command(config, installed)
     assert captured["repo_dir"] == config.repo_dir
     assert captured["installed_dir"] == installed
     assert captured["max_concurrency"] == 2
-    assert captured["run_command"] is orbi.run_command
+    assert captured["run_command"] is cli_commands.run_command
     lines = report.splitlines()
     assert lines[0] == (
         "deployed commit=0123456789abcdef0123456789abcdef01234567 "
@@ -1680,7 +1686,7 @@ def test_install_units_command_uses_deploy_home(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(scheduler, "install_units", fake_install)
-    orbi.install_units_command(config, installed)
+    cli_commands.install_units_command(config, installed)
     assert captured["repo_dir"] == home
     assert captured["unit_name"] == "website"
     assert captured["repo_dir"] != config.repo_dir
@@ -1700,7 +1706,7 @@ def test_doctor_report_routes_home_checks_to_deploy_home(
     config = dataclasses.replace(config, deploy_home=home)
     config = dataclasses.replace(config, unit_name="website")
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
     seen = {}
 
     def spy_unit_status(repo_dir, installed_dir, unit_name=None, *,
@@ -1718,7 +1724,7 @@ def test_doctor_report_routes_home_checks_to_deploy_home(
     )
     monkeypatch.setattr(cli_source, "cli_source", spy_cli_source)
     monkeypatch.setattr(cli_source, "drift_line", lambda source: None)
-    report = orbi.doctor_report(config, installed)
+    report = cli_doctor.doctor_report(config, installed)
     assert seen["units"] == home
     assert seen["unit_name"] == "website"
     assert seen["cli"] == home
@@ -1740,7 +1746,7 @@ def test_main_install_units_prints_report_and_returns_zero(
         seen["installed_dir"] = installed_dir
         return "deployed commit=abc installed_dir=/x"
 
-    monkeypatch.setattr(orbi, "install_units_command", fake_command)
+    monkeypatch.setattr(cli_commands, "install_units_command", fake_command)
     assert orbi.main([
         "install-units", "--config", str(config),
         "--installed-dir", str(tmp_path / "u"),
@@ -2009,10 +2015,10 @@ def test_doctor_report_reports_the_notify_finding(tmp_path, monkeypatch):
     names the variable and the env file, never the (absent) value."""
     config, installed = _deploy_world(tmp_path, drift=False)
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
     monkeypatch.delenv("ORBI_TELEGRAM_BOT_TOKEN", raising=False)
     config = dataclasses.replace(config, telegram_chat_id="-1001234567890")
-    report = orbi.doctor_report(config, installed)
+    report = cli_doctor.doctor_report(config, installed)
     assert any(
         line.startswith("notify:") and "ORBI_TELEGRAM_BOT_TOKEN" in line
         for line in report.splitlines()
@@ -2022,12 +2028,12 @@ def test_doctor_report_reports_the_notify_finding(tmp_path, monkeypatch):
 def test_doctor_report_reports_provider_key_finding(tmp_path, monkeypatch):
     config, installed = _deploy_world(tmp_path, drift=False)
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
     config = dataclasses.replace(config, pi_provider_key_finding={
         "provider": "ollama", "variable": "OLLAMA_API_KEY",
         "state": "is set but empty", "path": tmp_path / ".orbi/pi-providers.json",
     })
-    report = orbi.doctor_report(config, installed)
+    report = cli_doctor.doctor_report(config, installed)
     assert (
         "model_endpoint: provider=ollama key=OLLAMA_API_KEY "
         f"is set but empty (file: {tmp_path / '.orbi/pi-providers.json'})"
@@ -2037,8 +2043,8 @@ def test_doctor_report_reports_provider_key_finding(tmp_path, monkeypatch):
 def test_doctor_report_clean(tmp_path, monkeypatch):
     config, installed = _deploy_world(tmp_path, drift=False)
     calls = _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     lines = report.splitlines()
     assert lines[0] == f"repo: {config.repo_dir}"
     assert lines[1] == "commit: 0123456789abcdef0123456789abcdef01234567"
@@ -2107,7 +2113,7 @@ def test_doctor_report_lists_unmanaged_units(tmp_path, monkeypatch):
 
     config, installed = _deploy_world(tmp_path, drift=False)
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
     core_cfg = tmp_path / "zcode-core" / "orbi-zai.toml"
     core_cfg.parent.mkdir()
     (installed / "orbi-core.service").write_text(
@@ -2120,7 +2126,7 @@ def test_doctor_report_lists_unmanaged_units(tmp_path, monkeypatch):
     (installed / "orbi-core.timer").write_text(
         "[Timer]\nOnCalendar=*-*-* *:00/5\n", encoding="utf-8",
     )
-    report = orbi.doctor_report(config, installed)
+    report = cli_doctor.doctor_report(config, installed)
     lines = report.splitlines()
     assert "unmanaged_units: 3" in lines
     assert (
@@ -2146,8 +2152,8 @@ def test_doctor_report_includes_the_engine_source_channel(
     config, installed = _deploy_world(tmp_path, drift=False)
     config = dataclasses.replace(config, engine_source_track="tag:v0.4.2")
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     assert (
         "engine_source: track=tag:v0.4.2 resolved=refs/tags/v0.4.2 "
         "head=0123456789abcdef0123456789abcdef01234567"
@@ -2162,8 +2168,8 @@ def test_doctor_report_resolves_the_release_track(
     config, installed = _deploy_world(tmp_path, drift=False)
     config = dataclasses.replace(config, engine_source_track="release")
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     assert (
         "engine_source: track=release resolved=refs/tags/v0.4.8 "
         "head=0123456789abcdef0123456789abcdef01234567"
@@ -2175,8 +2181,8 @@ def test_doctor_report_defaults_the_engine_source_track_to_main(
 ):
     config, installed = _deploy_world(tmp_path, drift=False)
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     assert (
         "engine_source: track=main resolved=refs/remotes/origin/main "
         "head=0123456789abcdef0123456789abcdef01234567"
@@ -2193,8 +2199,8 @@ def test_doctor_report_reports_a_failed_engine_source_channel(
     config, installed = _deploy_world(tmp_path, drift=False)
     config = dataclasses.replace(config, engine_source_track="tag:v9.9.9")
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     failed = [
         line for line in report.splitlines()
         if line.startswith("engine_source: FAILED")
@@ -2217,8 +2223,8 @@ def test_doctor_report_reports_a_drifted_engine_source_channel(
         monkeypatch,
         engine_expected="9999999999999999999999999999999999999999",
     )
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     drifted = [
         line for line in report.splitlines()
         if line.startswith("engine_source: DRIFT")
@@ -2239,8 +2245,8 @@ def test_doctor_report_reports_dirty_deploy_home(tmp_path, monkeypatch):
             "?? ignored.txt\n"
         ),
     )
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     lines = report.splitlines()
     assert "deploy_home: DRIFT" in lines
     assert "  files: src/orbi/pilot_setup.py, deleted.py, old.py -> new.py" in lines
@@ -2258,8 +2264,8 @@ def test_doctor_report_reports_a_failed_transport(tmp_path, monkeypatch):
     fail-fast gate is the pre-start check, not doctor."""
     config, installed = _deploy_world(tmp_path, drift=False)
     _fake_doctor_commands(monkeypatch, ssh_down=True)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     lines = report.splitlines()
     failed = [line for line in lines if line.startswith("transport: FAILED")]
     assert len(failed) == 1
@@ -2275,9 +2281,9 @@ def test_doctor_report_drift_carries_paths_hashes_and_fix(
 ):
     config, installed = _deploy_world(tmp_path, drift=True)
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
     from orbi import scheduler, systemd_deploy
-    report = orbi.doctor_report(config, installed)
+    report = cli_doctor.doctor_report(config, installed)
     lines = report.splitlines()
     assert "unit_drift: DRIFT" in lines
     drifted = [
@@ -2342,7 +2348,7 @@ def _fake_cli_source(monkeypatch, drifted: bool = False) -> dict:
     stub = types.SimpleNamespace(
         cli_source=fake_cli_source, drift_line=fake_drift_line,
     )
-    monkeypatch.setattr(orbi, "cli_source", stub)
+    monkeypatch.setattr(cli_doctor, "cli_source", stub)
     return state
 
 
@@ -2353,8 +2359,8 @@ def test_doctor_report_cli_source_clean(tmp_path, monkeypatch):
     config, installed = _deploy_world(tmp_path, drift=False)
     _fake_doctor_commands(monkeypatch)
     _fake_cli_source(monkeypatch, drifted=False)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     lines = report.splitlines()
     assert any(
         line.startswith("cli_source: clean") for line in lines
@@ -2378,8 +2384,8 @@ def test_doctor_report_cli_source_drift_carries_source_expected_fix(
     config, installed = _deploy_world(tmp_path, drift=False)
     _fake_doctor_commands(monkeypatch)
     _fake_cli_source(monkeypatch, drifted=True)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     lines = report.splitlines()
     assert "cli_source: DRIFT" in lines
     assert any(
@@ -2403,8 +2409,8 @@ def test_doctor_report_missing_installed_unit_is_drift(tmp_path, monkeypatch):
     config, installed = _deploy_world(tmp_path, drift=False)
     (installed / "orbi@.timer").unlink()
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     assert "unit_drift: DRIFT" in report
     assert "orbi@.timer" in report
     assert "installed_sha256=-" in report
@@ -2418,8 +2424,8 @@ def test_doctor_report_defaults_to_the_standard_installed_dir(
     config, installed = _deploy_world(tmp_path, drift=False)
     monkeypatch.setenv("ORBI_UNIT_DIR", str(installed))
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, None)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, None)
     assert "unit_drift: clean" in report
 
 
@@ -2429,13 +2435,13 @@ def test_doctor_report_shows_current_issue_and_session(tmp_path, monkeypatch):
     issue = {"number": 7, "title": "task",
              "url": "https://github.com/xqliu/orbi/issues/7"}
     monkeypatch.setattr(
-        orbi, "current_issue", lambda repo: issue,
+        cli_status, "current_issue", lambda repo: issue,
     )
     session = (config.repo_dir / ".worktrees" / "w" / ".pi-session"
                / "s.jsonl")
     session.parent.mkdir(parents=True)
     session.write_text("{}", encoding="utf-8")
-    report = orbi.doctor_report(config, installed)
+    report = cli_doctor.doctor_report(config, installed)
     assert "  current: #7 task https://github.com/xqliu/orbi/issues/7" in report
     assert f"pi: {session}" in report
 
@@ -2493,8 +2499,8 @@ def test_doctor_source_pool_reports_overlap_between_named_deployments(
     )
     _write_orbi_unit(installed, "orbi-other.service", other_config)
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     lines = report.splitlines()
     failed = [
         line for line in lines if line.startswith("source_pool: FAILED")
@@ -2521,8 +2527,8 @@ def test_doctor_source_pool_is_healthy_for_slots_and_aliases(
     alias.symlink_to(this_config)
     _write_orbi_unit(installed, "orbi-alias.service", alias)
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     lines = report.splitlines()
     assert "source_pool: healthy deployments=1" in lines
     assert not any(line.startswith("source_pool: FAILED") for line in lines)
@@ -2539,8 +2545,8 @@ def test_doctor_source_pool_is_healthy_for_disjoint_pools(
     )
     _write_orbi_unit(installed, "orbi-other.service", other_config)
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     assert "source_pool: healthy deployments=2" in report.splitlines()
 
 
@@ -2556,8 +2562,8 @@ def test_doctor_source_pool_detects_repository_case_variants(
     )
     _write_orbi_unit(installed, "orbi-other.service", other_config)
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     failed = [
         line for line in report.splitlines()
         if line.startswith("source_pool: FAILED")
@@ -2596,8 +2602,8 @@ def test_doctor_source_pool_reports_incomplete_discovered_config(
     # "missing": the unit points at a path that is never created.
     _write_orbi_unit(installed, "orbi-other.service", other_config)
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     lines = report.splitlines()
     incomplete = [
         line for line in lines if line.startswith("source_pool: INCOMPLETE")
@@ -2629,8 +2635,8 @@ def test_doctor_source_pool_reports_each_overlap_once(
     _write_orbi_unit(installed, "orbi-b.service", first)
     _write_orbi_unit(installed, "orbi-a.service", second)
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    report = orbi.doctor_report(config, installed)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
+    report = cli_doctor.doctor_report(config, installed)
     failed = [
         line for line in report.splitlines()
         if line.startswith("source_pool: FAILED")
@@ -2657,7 +2663,7 @@ def test_installed_unit_configs_discovers_systemd_and_launchd_fixtures(
     systemd_dir = tmp_path / "systemd-units"
     systemd_dir.mkdir()
     _write_orbi_unit(systemd_dir, "orbi-other.service", other_config)
-    assert orbi._installed_unit_configs(systemd_dir) == (
+    assert source_pool.installed_unit_configs(systemd_dir) == (
         (other_config.resolve(), "orbi-other.service"),
     )
 
@@ -2669,7 +2675,7 @@ def test_installed_unit_configs_discovers_systemd_and_launchd_fixtures(
             "EnvironmentVariables": {"ORBI_CONFIG": str(other_config)},
         }),
     )
-    assert orbi._installed_unit_configs(
+    assert source_pool.installed_unit_configs(
         launchd_dir, launchd_deploy.LaunchdScheduler(),
     ) == (
         (other_config.resolve(), "org.orbi.other.runner.1.plist"),
@@ -2690,7 +2696,7 @@ def test_main_doctor_reports_source_pool_overlap_via_cli(
     )
     _write_orbi_unit(installed, "orbi-other.service", other_config)
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
     assert orbi.main([
         "doctor", "--config", str(this_config),
         "--installed-dir", str(installed),
@@ -2726,7 +2732,7 @@ def test_doctor_source_pool_never_loads_or_mutates_other_deployments(
     )
     _write_orbi_unit(installed, "orbi-other.service", other_config)
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
 
     calls: list = []
     monkeypatch.setattr(
@@ -2734,7 +2740,7 @@ def test_doctor_source_pool_never_loads_or_mutates_other_deployments(
         lambda *args, **kwargs: calls.append(args),
     )
     before = dict(os.environ)
-    report = orbi.doctor_report(config, installed)
+    report = cli_doctor.doctor_report(config, installed)
     assert "source_pool: FAILED" in report
     assert calls == []
     assert "PI_MODEL_API_KEY" not in os.environ
@@ -2749,7 +2755,7 @@ def test_fake_doctor_commands_rejects_unexpected_commands(
     _deploy_world(tmp_path)
     _fake_doctor_commands(monkeypatch)
     with pytest.raises(AssertionError, match="unexpected command"):
-        orbi.run_command(["gh", "issue", "list"])
+        cli_doctor.run_command(["gh", "issue", "list"])
 
 
 def test_doctor_report_fails_fast_when_a_command_fails(tmp_path, monkeypatch):
@@ -2757,13 +2763,13 @@ def test_doctor_report_fails_fast_when_a_command_fails(tmp_path, monkeypatch):
 
     config, installed = _deploy_world(tmp_path, drift=False)
     monkeypatch.setattr(
-        orbi, "run_command",
+        cli_doctor, "run_command",
         lambda command, **kwargs: (_ for _ in ()).throw(
             subprocess.CalledProcessError(1, command, stderr="boom"),
         ),
     )
     with pytest.raises(subprocess.CalledProcessError):
-        orbi.doctor_report(config, installed)
+        cli_doctor.doctor_report(config, installed)
 
 
 def test_main_doctor_prints_report_and_returns_zero(
@@ -2779,7 +2785,7 @@ def test_main_doctor_prints_report_and_returns_zero(
         seen["installed_dir"] = installed_dir
         return "repo: /x\nunit_drift: clean"
 
-    monkeypatch.setattr(orbi, "doctor_report", fake_report)
+    monkeypatch.setattr(cli_commands, "doctor_report", fake_report)
     assert orbi.main([
         "doctor", "--config", str(config),
         "--installed-dir", str(tmp_path / "u"),
@@ -2792,7 +2798,7 @@ def test_main_doctor_prints_report_and_returns_zero(
 def test_doctor_report_reports_configured_model_provider(tmp_path, monkeypatch):
     config, installed = _deploy_world(tmp_path, drift=False)
     _fake_doctor_commands(monkeypatch)
-    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    monkeypatch.setattr(cli_status, "current_issue", lambda repo: None)
     config = dataclasses.replace(
         config,
         pi_providers=tmp_path / "providers.json", pi_provider="openai",
@@ -2800,7 +2806,7 @@ def test_doctor_report_reports_configured_model_provider(tmp_path, monkeypatch):
             "openai": {"apiKey": "$OPENAI_API_KEY"},
         }},
     )
-    report = orbi.doctor_report(config, installed)
+    report = cli_doctor.doctor_report(config, installed)
     assert "model_provider: ok provider=openai model=gpt key=OPENAI_API_KEY=set" in report
 
 
@@ -2813,10 +2819,10 @@ def _stub_status_github(monkeypatch, issue):
         observe, "run_gh_read_command",
         lambda command, **kwargs: json.dumps([[issue]]),
     )
-    monkeypatch.setattr(orbi, "ready_issue", lambda repo, config: None)
-    monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
+    monkeypatch.setattr(cli_status, "ready_issue", lambda repo, config: None)
+    monkeypatch.setattr(cli_status, "recent_result", lambda repo: None)
     monkeypatch.setattr(
-        orbi, "freeze_base", lambda repo_dir, base_branch: "abc123",
+        cli_commands, "freeze_base", lambda repo_dir, base_branch: "abc123",
     )
 
 

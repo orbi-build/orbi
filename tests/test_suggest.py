@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import pytest
 
 import orbi.cli as cli
+import orbi.cli_commands as cli_commands
 import orbi.config as config_domain
 import orbi.pilot_setup as pilot_setup
 import orbi.suggest as suggest
@@ -541,7 +542,7 @@ def test_suggest_interactive_requires_a_tty(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(seam, "stream_pi", stub)
     assert suggest.run_suggest(
         _loaded(world), "o/r", json_output=False,
-        dispatch_issue=cli.dispatch_issue,
+        dispatch_issue=cli_commands.dispatch_issue,
         stdin=Tty(False), stdout=Tty(True),
     ) == 2
     assert "--json" in capsys.readouterr().err
@@ -750,7 +751,7 @@ def test_suggest_interactive_labels_files_and_skips(tmp_path, monkeypatch):
     out = Tty(True)
     assert suggest.run_suggest(
         _loaded(world), "o/r", json_output=False,
-        dispatch_issue=cli.dispatch_issue,
+        dispatch_issue=cli_commands.dispatch_issue,
         stdin=Tty(True), stdout=out,
         ask=lambda prompt: asked.append(prompt) or next(answers),
     ) == 0
@@ -790,7 +791,7 @@ def test_suggest_interactive_omits_a_closed_milestone(tmp_path, monkeypatch):
     answers = iter(["y", "n", "n"])
     assert suggest.run_suggest(
         _loaded(world), "o/r", json_output=False,
-        dispatch_issue=cli.dispatch_issue,
+        dispatch_issue=cli_commands.dispatch_issue,
         stdin=Tty(True), stdout=Tty(True),
         ask=lambda prompt: next(answers),
     ) == 0
@@ -812,7 +813,7 @@ def test_suggest_interactive_enter_skips_every_suggestion(
     out = Tty(True)
     assert suggest.run_suggest(
         _loaded(world), "o/r", json_output=False,
-        dispatch_issue=cli.dispatch_issue,
+        dispatch_issue=cli_commands.dispatch_issue,
         stdin=Tty(True), stdout=out,
         ask=lambda prompt: "",
     ) == 0
@@ -833,7 +834,7 @@ def test_suggest_interactive_with_no_suggestions(tmp_path, monkeypatch):
     out = Tty(True)
     assert suggest.run_suggest(
         _loaded(world), "o/r", json_output=False,
-        dispatch_issue=cli.dispatch_issue,
+        dispatch_issue=cli_commands.dispatch_issue,
         stdin=Tty(True), stdout=out,
         ask=lambda prompt: "y",
     ) == 0
@@ -853,7 +854,7 @@ def _offer(world, config, *, tty, answers=()):
     answers_iter = iter(answers)
     result = {"setup": "ok", "repos": [{"repo": "o/r"}]}
     code = suggest.offer_setup_suggest(
-        config, result, dispatch_issue=cli.dispatch_issue,
+        config, result, dispatch_issue=cli_commands.dispatch_issue,
         stdin=Tty(tty), stdout=out,
         ask=lambda prompt: asked.append(prompt) or next(answers_iter),
     )
@@ -1095,7 +1096,7 @@ def test_suggest_interactive_without_a_resolved_milestone(
     asked: list[str] = []
     assert suggest.run_suggest(
         _loaded(world), "o/r", json_output=False,
-        dispatch_issue=cli.dispatch_issue,
+        dispatch_issue=cli_commands.dispatch_issue,
         stdin=Tty(True), stdout=Tty(True),
         ask=lambda prompt: asked.append(prompt) or "n",
     ) == 0
@@ -1357,7 +1358,7 @@ def test_run_suggest_locale_reaches_both_prompts(
     monkeypatch.setattr(seam, "stream_pi", stub)
     assert suggest.run_suggest(
         _loaded(world), "o/r", json_output=True, locale="zh",
-        dispatch_issue=cli.dispatch_issue,
+        dispatch_issue=cli_commands.dispatch_issue,
     ) == 0
     capsys.readouterr()
     assert stub.command[-1].endswith(suggest.SUGGESTION_LOCALE_RULES["zh"])
