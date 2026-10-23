@@ -1,10 +1,23 @@
 #!/usr/bin/env python3
-"""Patch ratchet gate (Issue #789).
+"""Patch ratchet gate (Issues #789, #1230, #1856).
 
-The test corpus may only SHRINK. The gate counts forbidden internal patches
-and command-shape assertions. Besides the historical runner metric, package
-module targets are discovered from ``src/orbi/*.py`` at runtime (excluding
-``runner`` and ``__init__``), so moving code cannot hide test coupling.
+The test corpus may only SHRINK. The gate separates the patches that
+simulate a real external boundary from the patches that reach into an
+orbi module or adapter method:
+
+* ``boundary_total`` — the subprocess/process/time/filesystem seam
+  (``run_command``, ``run_gh_read_command``, ``new_run_id``, ``PROC``,
+  ``Path``, ...). Reported, not failed: a boundary fake is legitimate.
+* ``internal_total`` — every other ``monkeypatch.setattr`` site: an
+  adapter method (``seam.edit_issue``, ``seam.comment_issue``, ...) or a
+  domain function (``claim.pick_next_delivery``, ``runner.verify_pr``,
+  ...). This is the coupling the ratchet hard-caps. A pure move between
+  modules does not change it; a new internal patch does.
+* ``command_shape_asserts`` — ``command[:N] ==`` assertions, hard-capped.
+
+``per_target`` is reported for visibility only. Moving a patch from one
+module to another never fails the gate; only a rise in the internal total
+or in the command-shape count does.
 
 Usage: python3 tools/patch_ratchet.py [--update] [tests_dir]
 """
@@ -17,62 +30,97 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_DIR = REPO_ROOT / "tests"
 BASELINE_FILE = Path(__file__).resolve().parent / "patch_ratchet_baseline.json"
 
-# Kept unchanged so the historical metric remains comparable.
+# The historical metric: direct `setattr(runner, ...)` sites, unchanged
+# so its history stays comparable. It is a reported subset, not a gate.
 SETATTR_RUNNER_RE = re.compile(r"monkeypatch\.setattr\(\s*runner\s*,")
 SETATTR_RUNNER_STRING_RE = re.compile(
     r"monkeypatch\.setattr\(\s*[\"']orbi\.runner\."
 )
 COMMAND_SHAPE_RE = re.compile(r"command\[\s*:\s*\d+\s*\]\s*==")
-MODULE_STEMS = tuple(sorted(
-    path.stem for path in (REPO_ROOT / "src" / "orbi").glob("*.py")
-    if path.stem not in {"runner", "__init__"}
-))
-MODULE_ATTRIBUTE_RES = {
-    stem: re.compile(
-        rf"monkeypatch\.setattr\(\s*(?:[A-Za-z_]\w*\.)*{re.escape(stem)}\s*,"
-    )
-    for stem in MODULE_STEMS
-}
-MODULE_STRING_RES = {
-    stem: re.compile(
-        rf"monkeypatch\.setattr\(\s*[\"']orbi\.{re.escape(stem)}\."
-    )
-    for stem in MODULE_STEMS
-}
+
+# One `monkeypatch.setattr(target, "name", ...)` site. The target is the
+# last dotted segment (`runner.github` -> `github`); the string form is
+# handled separately. Wrapped calls (target on the next line) match the
+# `\s*` spans.
+SETATTR_DIRECT_RE = re.compile(
+    r"monkeypatch\.setattr\(\s*(?:[A-Za-z_]\w*\.)*"
+    r"([A-Za-z_]\w*)\s*,\s*[\"']([^\"']+)[\"']"
+)
+SETATTR_STRING_RE = re.compile(
+    r"monkeypatch\.setattr\(\s*[\"']orbi\.([A-Za-z_]\w*)\.([^\"']+)[\"']"
+)
+
+# Names that denote a real external boundary, whichever module binds
+# them. A patch on one of these is a boundary fake, not internal
+# coupling.
+BOUNDARY_NAMES = frozenset({
+    "run_command",
+    "run_gh_read_command",
+    "run_gh_write_command",
+    "run_git_network_command",
+    "new_run_id",
+    "PROC",
+    "detect",
+})
+# Targets that are standard-library boundaries: patch them in one
+# fixture, never to reach into orbi logic.
+BOUNDARY_TARGETS = frozenset({"Path", "os", "subprocess", "time"})
 
 
-def counts(tests_dir: Path) -> dict[str, int | dict[str, int]]:
-    """Count ratcheted patterns, excluding the top-level ``tests/fakes/``."""
+def counts(tests_dir: Path) -> dict[str, object]:
+    """Count internal patches, boundary patches and command shapes.
+
+    ``tests/fakes/`` is excluded: it is the adapter contract itself.
+    ``*_fakes.py`` files may assert the argv contract and are excluded
+    from the command-shape metric, but their runner patches still count
+    internally (a runner patch dressed as a fake is still a patch).
+    """
     tests_dir = Path(tests_dir)
     fakes_dir = tests_dir / "fakes"
-    totals = {
+    totals: dict[str, object] = {
+        "internal_total": 0,
+        "boundary_total": 0,
         "monkeypatch_setattr_runner": 0,
         "monkeypatch_setattr_runner_string": 0,
-        "monkeypatch_setattr_modules": {stem: 0 for stem in MODULE_STEMS},
+        "per_target": {},
         "command_shape_asserts": 0,
     }
+    per_target: dict[str, int] = {}
     for path in sorted(tests_dir.rglob("*.py")):
         if path.parent == fakes_dir:
             continue
         text = path.read_text(encoding="utf-8")
-        totals["monkeypatch_setattr_runner"] += len(SETATTR_RUNNER_RE.findall(text))
+        totals["monkeypatch_setattr_runner"] += len(
+            SETATTR_RUNNER_RE.findall(text)
+        )
         totals["monkeypatch_setattr_runner_string"] += len(
             SETATTR_RUNNER_STRING_RE.findall(text)
         )
-        modules = totals["monkeypatch_setattr_modules"]
-        for stem in MODULE_STEMS:
-            modules[stem] += (
-                len(MODULE_ATTRIBUTE_RES[stem].findall(text))
-                + len(MODULE_STRING_RES[stem].findall(text))
-            )
+        for match in SETATTR_DIRECT_RE.finditer(text):
+            target, name = match.group(1), match.group(2)
+            per_target[target] = per_target.get(target, 0) + 1
+            if target in BOUNDARY_TARGETS or name in BOUNDARY_NAMES:
+                totals["boundary_total"] += 1
+            else:
+                totals["internal_total"] += 1
+        for match in SETATTR_STRING_RE.finditer(text):
+            target, name = match.group(1), match.group(2)
+            per_target[target] = per_target.get(target, 0) + 1
+            if target in BOUNDARY_TARGETS or name in BOUNDARY_NAMES:
+                totals["boundary_total"] += 1
+            else:
+                totals["internal_total"] += 1
         if path.name.endswith("_fakes.py"):
             continue
-        totals["command_shape_asserts"] += len(COMMAND_SHAPE_RE.findall(text))
+        totals["command_shape_asserts"] += len(
+            COMMAND_SHAPE_RE.findall(text)
+        )
+    totals["per_target"] = dict(sorted(per_target.items()))
     return totals
 
 
 def read_baseline(baseline_file: Path) -> dict | None:
-    """Read a valid nested baseline, returning ``None`` if malformed."""
+    """Read a valid baseline, returning ``None`` for a malformed/old one."""
     if not baseline_file.exists():
         return None
     try:
@@ -80,17 +128,20 @@ def read_baseline(baseline_file: Path) -> dict | None:
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     scalar_metrics = (
+        "internal_total",
+        "boundary_total",
         "monkeypatch_setattr_runner",
         "monkeypatch_setattr_runner_string",
         "command_shape_asserts",
     )
     if not isinstance(baseline, dict) or any(
-        not isinstance(baseline.get(metric), int) for metric in scalar_metrics
+        not isinstance(baseline.get(metric), int)
+        for metric in scalar_metrics
     ):
         return None
-    modules = baseline.get("monkeypatch_setattr_modules")
-    if not isinstance(modules, dict) or any(
-        not isinstance(value, int) for value in modules.values()
+    per_target = baseline.get("per_target")
+    if not isinstance(per_target, dict) or any(
+        not isinstance(value, int) for value in per_target.values()
     ):
         return None
     return baseline
@@ -108,12 +159,16 @@ def main(argv: list[str], *, tests_dir: Path | None = None,
         return 1
     tests = Path(arguments[0]) if arguments else (tests_dir or TESTS_DIR)
     if not tests.is_dir():
-        print(f"patch ratchet: tests directory not found: {tests}", file=sys.stderr)
+        print(
+            f"patch ratchet: tests directory not found: {tests}",
+            file=sys.stderr,
+        )
         return 1
     current = counts(tests)
     if update:
         baseline_file.write_text(
-            json.dumps(current, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            json.dumps(current, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
         )
         print(f"patch ratchet baseline frozen at {baseline_file}: {current}")
         return 0
@@ -125,41 +180,31 @@ def main(argv: list[str], *, tests_dir: Path | None = None,
             "(the current counts become the ceiling)"
         )
         return 1
-    scalar_failures = [
-        metric for metric in (
-            "monkeypatch_setattr_runner",
-            "monkeypatch_setattr_runner_string",
-            "command_shape_asserts",
-        ) if current[metric] > baseline[metric]
-    ]
-    module_failures = [
-        stem for stem, count in current["monkeypatch_setattr_modules"].items()
-        if count > baseline["monkeypatch_setattr_modules"].get(stem, 0)
+    failures = [
+        metric for metric in ("internal_total", "command_shape_asserts")
+        if current[metric] > baseline[metric]
     ]
     print(
-        "patch ratchet (Issue #789): "
-        f"monkeypatch.setattr(runner,)={current['monkeypatch_setattr_runner']}"
-        f"/{baseline['monkeypatch_setattr_runner']} "
-        f"runner strings={current['monkeypatch_setattr_runner_string']}"
-        f"/{baseline['monkeypatch_setattr_runner_string']} "
-        f"command[:N]==={current['command_shape_asserts']}"
+        "patch ratchet (Issues #789/#1230/#1856): "
+        f"internal={current['internal_total']}/{baseline['internal_total']} "
+        f"boundary={current['boundary_total']} "
+        f"command[:N]=={current['command_shape_asserts']}"
         f"/{baseline['command_shape_asserts']} "
-        "(current/baseline — the corpus may only shrink)"
+        f"runner={current['monkeypatch_setattr_runner']}"
+        f"/{baseline['monkeypatch_setattr_runner']} "
+        "(current/baseline — internal and command shapes may only shrink; "
+        "boundary and per-target are reported)"
     )
-    if scalar_failures or module_failures:
-        failures = [
-            f"{metric} {current[metric]} > {baseline[metric]}"
-            for metric in scalar_failures
-        ] + [
-            f"{stem} {current['monkeypatch_setattr_modules'][stem]} > "
-            f"{baseline['monkeypatch_setattr_modules'].get(stem, 0)}"
-            for stem in module_failures
-        ]
+    if failures:
         print(
-            "patch ratchet FAILED: new test patches are ratcheted shut "
-            "(Issue #789). Migrate to tests/fakes/ or remove the pattern; "
-            "`--update` is only for a PR that LOWERS the counts: "
-            + ", ".join(failures)
+            "patch ratchet FAILED: new internal test patches are "
+            "ratcheted shut (Issue #789). Move the test to tests/fakes/ "
+            "or remove the patch; `--update` is only for a PR that "
+            "LOWERS the internal total: "
+            + ", ".join(
+                f"{metric} {current[metric]} > {baseline[metric]}"
+                for metric in failures
+            )
         )
         return 1
     return 0

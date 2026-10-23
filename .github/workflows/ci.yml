@@ -152,14 +152,13 @@ jobs:
           python3 tools/coverage_gate.py
           python3 tools/diff_coverage_gate.py origin/main
 
-      # Patch ratchet (Issues #789, #1230): the test corpus may only
-      # shrink. tools/patch_ratchet.py preserves the historical
-      # `monkeypatch.setattr(runner,` metric, and also counts exact
-      # monkeypatch targets for every discovered src/orbi module plus
-      # string-form runner targets. `command[:N] ==` remains covered too.
-      # Each metric/module has its own frozen ceiling; tests/fakes/ is
-      # excluded. Moving code between modules therefore cannot hide
-      # unchanged test coupling.
+      # Patch ratchet (Issues #789, #1230, #1856): the test corpus may
+      # only shrink. tools/patch_ratchet.py separates boundary seam
+      # patches (run_command / new_run_id / PROC / Path / ...) from
+      # internal adapter/domain patches, hard-caps `internal_total` and
+      # `command[:N] ==`, and reports boundary/per-target. Moving code
+      # between modules is neutral when the internal total does not rise;
+      # tests/fakes/ is excluded.
       - name: Enforce the patch ratchet (contract, Issue #789)
         run: python3 tools/patch_ratchet.py
 
