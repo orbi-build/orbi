@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from orbi import pi_process
+from orbi import pi_idle
 
 
 def make_fake_pi(tmp_path: Path, *, session_records: list[tuple[float, dict]],
@@ -437,30 +437,30 @@ def make_idle_recovery_tracker(monkeypatch, *, window=0.3, targets=None,
         "pending_calls": 0,
     }
     monkeypatch.setattr(
-        pi_process, "snapshot_descendants",
+        pi_idle, "snapshot_descendants",
         lambda pid: {target["pid"]: target["start_ticks"]
                      for target in targets},
     )
     monkeypatch.setattr(
-        pi_process, "find_idle_descendants",
+        pi_idle, "find_idle_descendants",
         lambda recorded: targets,
     )
     monkeypatch.setattr(
-        pi_process, "_pending_timeout_targets",
+        pi_idle, "_pending_timeout_targets",
         lambda targets: (state.__setitem__(
             "pending_calls", state["pending_calls"] + 1
         ) or pending),
     )
     monkeypatch.setattr(
-        pi_process, "signal_pid",
+        pi_idle, "signal_pid",
         lambda pid, sig, *, expected_start_ticks=None:
         state["signals"].append((pid, sig)) or "sent",
     )
-    monkeypatch.setattr(pi_process, "pid_alive", lambda pid: alive)
+    monkeypatch.setattr(pi_idle, "pid_alive", lambda pid: alive)
     monkeypatch.setattr(
-        pi_process.time, "monotonic", lambda: state["mono"],
+        pi_idle.time, "monotonic", lambda: state["mono"],
     )
-    state["tracker"] = pi_process.IdleRecoveryTracker(
+    state["tracker"] = pi_idle.IdleRecoveryTracker(
         window, run_id="deadbeef", issue_ref="xqliu/orbi#94",
         role="implement",
     )

@@ -31,7 +31,7 @@ import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 import orbi.release as release
 import orbi.github as github
-from orbi import failure, pi_command, pi_process, progress
+from orbi import failure, pi_command, pi_stream_log, progress
 from tests.fakes.bootstrap_pi import (
     fake_session_records, fresh_timestamp, make_fake_pi,
 )
@@ -7287,13 +7287,14 @@ def test_run_failed_pin_detects_every_error_site():
 
 def test_run_failed_scene_logged_in_one_place():
     """Issue #292: the `run_failed` skeleton (the six-argument
-    `format_run_scene` + reason + raise) lives in exactly ONE place — the
-    local `_fail_run` helper in `stream_pi`; each terminal branch computes
-    its reason and exception and calls it once. A second literal
-    `LOGGER.error("run_failed ...` site is the duplicated debt this pin
-    rejects (a new log field would have to be edited per branch again)."""
+    `format_run_scene` + reason) lives in exactly ONE place —
+    `pi_stream_log._log_run_failed` (extracted from `pi_process`, Issue
+    #1860); each terminal branch computes its reason and exception and
+    calls it once. A second literal `LOGGER.error("run_failed ...` site is
+    the duplicated debt this pin rejects (a new log field would have to be
+    edited per branch again)."""
     sites = _run_failed_log_sites(
-        Path(pi_process.__file__).read_text(encoding="utf-8")
+        Path(pi_stream_log.__file__).read_text(encoding="utf-8")
     )
     assert len(sites) == 1, (
         "the run_failed scene must be logged in exactly one place (the "
