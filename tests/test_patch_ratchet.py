@@ -37,6 +37,22 @@ RUNNER_STRING = 'monkeypatch.setattr("orbi.' + 'runner.x", fake)'
 FALSE_MODULE = 'monkeypatch.setattr(' + 'my_journal_helper, "x", fake)'
 WRAPPED_RUNNER = 'monkeypatch.setattr(' + '\n        runner, "run_command", fake)'
 SHAPE = 'assert command[:' + '3] == ["gh", "issue", "view"]'
+STDLIB_WHICH = 'monkeypatch.setattr(' + 'shutil, "which", fake)'
+STDLIB_FLOCK = 'monkeypatch.setattr(' + 'fcntl, "flock", fake)'
+STDLIB_GETHOSTNAME = 'monkeypatch.setattr(' + 'socket, "gethostname", fake)'
+STDLIB_ARGV = 'monkeypatch.setattr(' + 'sys, "argv", fake)'
+QUALIFIED_STDLIB = 'monkeypatch.setattr(' + 'pilot_setup.shutil, "which", fake)'
+QUALIFIED_STDLIB_TIME = 'monkeypatch.setattr(' + 'github.time, "sleep", fake)'
+QUALIFIED_SUBMODULE = (
+    'monkeypatch.setattr(' + 'pi_recovery.urllib.request, "urlopen", fake)'
+)
+CLASS_IMPORT = 'from http.server import HTTPServer'
+CLASS_TARGET = 'monkeypatch.setattr(' + 'HTTPServer, "serve_forever", fake)'
+ALIAS_IMPORT = 'import shutil as sh'
+ALIAS_TARGET = 'monkeypatch.setattr(' + 'sh, "which", fake)'
+OWNED_INTERNAL_IMPORT = 'from orbi import journal'
+RELATIVE_IMPORT = 'from . import sibling'
+DOMAIN_PATCH = 'monkeypatch.setattr(' + 'claim, "pick_next_delivery", fake)'
 
 
 def load_ratchet():
@@ -53,8 +69,13 @@ def make_corpus(tmp_path: Path, files: dict[str, str]) -> Path:
     for name, lines in files.items():
         path = tests / name
         path.parent.mkdir(parents=True, exist_ok=True)
+        # A valid body even with no patch lines: the scanner parses the
+        # file's imports for target ownership (Issue #1868).
         path.write_text(
-            "\n".join(["def test_x():", *[f"    {line}" for line in lines]]),
+            "\n".join(
+                ["def test_x():", "    pass",
+                 *[f"    {line}" for line in lines]]
+            ),
             encoding="utf-8",
         )
     return tests
@@ -127,6 +148,89 @@ def test_boundary_growth_is_reported_but_passes(tmp_path, capsys):
     output = capsys.readouterr().out
     assert "boundary=2" in output
     assert "internal=0" in output
+
+
+def test_stdlib_module_targets_are_boundary(tmp_path):
+    """A stdlib module target is the real external seam, never internal
+    coupling (Issue #1868)."""
+    module = load_ratchet()
+    tests = make_corpus(tmp_path, {
+        "test_stdlib.py": [
+            STDLIB_WHICH, STDLIB_FLOCK, STDLIB_GETHOSTNAME, STDLIB_ARGV,
+        ],
+    })
+    counts = module.counts(tests)
+    assert counts["boundary_total"] == 4
+    assert counts["internal_total"] == 0
+
+
+def test_qualified_stdlib_targets_are_boundary(tmp_path):
+    """A qualified target owns its last segment: the stdlib module in the
+    chain decides, at any depth (Issue #1868)."""
+    module = load_ratchet()
+    tests = make_corpus(tmp_path, {
+        "test_qualified.py": [
+            QUALIFIED_STDLIB, QUALIFIED_STDLIB_TIME, QUALIFIED_SUBMODULE,
+        ],
+    })
+    counts = module.counts(tests)
+    assert counts["boundary_total"] == 3
+    assert counts["internal_total"] == 0
+    assert counts["per_target"]["shutil"] == 1
+    assert counts["per_target"]["request"] == 1
+
+
+def test_imported_class_and_alias_targets_are_boundary(tmp_path):
+    """The test file's own imports own a class or alias target: the
+    HTTP server class and an aliased stdlib module are boundaries, an
+    orbi import stays internal (Issue #1868)."""
+    module = load_ratchet()
+    tests = make_corpus(tmp_path, {
+        "test_owned.py": [
+            CLASS_IMPORT, CLASS_TARGET, ALIAS_IMPORT, ALIAS_TARGET,
+            OWNED_INTERNAL_IMPORT, MODULE_INTERNAL, RELATIVE_IMPORT,
+        ],
+    })
+    counts = module.counts(tests)
+    assert counts["boundary_total"] == 2
+    assert counts["internal_total"] == 1
+    assert counts["per_target"]["HTTPServer"] == 1
+    assert counts["per_target"]["sh"] == 1
+
+
+def test_stdlib_stub_keeps_the_internal_count_and_lifts_boundary(tmp_path):
+    """The Issue #1868 acceptance: against a baseline captured BEFORE the
+    addition, one stdlib stub leaves internal unchanged, raises boundary
+    and passes the gate."""
+    module = load_ratchet()
+    before = make_corpus(tmp_path / "before", {"test_one.py": [MODULE_INTERNAL]})
+    baseline = module.counts(before)
+    path = tmp_path / "baseline.json"
+    path.write_text(json.dumps(baseline), encoding="utf-8")
+    after = make_corpus(
+        tmp_path / "after", {"test_one.py": [MODULE_INTERNAL, STDLIB_WHICH]},
+    )
+    current = module.counts(after)
+    assert current["internal_total"] == baseline["internal_total"] == 1
+    assert current["boundary_total"] == baseline["boundary_total"] + 1
+    assert module.main(["patch_ratchet.py", str(after)], baseline_file=path) == 0
+
+
+def test_new_adapter_or_domain_patch_still_exceeds_the_ceiling(tmp_path, capsys):
+    """A stdlib boundary target must not weaken the hard cap: a new
+    adapter method or domain function patch still fails (Issue #1868)."""
+    module = load_ratchet()
+    before = make_corpus(tmp_path / "before", {"test_one.py": [STDLIB_WHICH]})
+    baseline = module.counts(before)
+    path = tmp_path / "baseline.json"
+    path.write_text(json.dumps(baseline), encoding="utf-8")
+    assert module.main(["patch_ratchet.py", str(before)], baseline_file=path) == 0
+    after = make_corpus(
+        tmp_path / "after",
+        {"test_one.py": [STDLIB_WHICH, SEAM_ADAPTER, DOMAIN_PATCH]},
+    )
+    assert module.main(["patch_ratchet.py", str(after)], baseline_file=path) == 1
+    assert "internal_total 2 > 0" in capsys.readouterr().out
 
 
 def test_per_target_rise_is_reported_but_passes(tmp_path):
@@ -203,6 +307,20 @@ def test_main_fails_fast_on_a_malformed_or_old_baseline(tmp_path):
         assert module.main(
             ["patch_ratchet.py", str(tests)], baseline_file=baseline,
         ) == 1, content
+
+
+def test_no_orbi_module_shares_a_name_with_a_stdlib_module():
+    """The classification premise (Issue #1868): a target segment that
+    names a stdlib module can never be an orbi module, so resolving
+    ownership through Python's module list cannot hide an internal
+    patch."""
+    import sys
+
+    stems = {
+        path.stem for path in (REPO_ROOT / "src" / "orbi").glob("*.py")
+    }
+    assert stems
+    assert not stems & set(sys.stdlib_module_names)
 
 
 def test_frozen_baseline_matches_the_real_corpus():
