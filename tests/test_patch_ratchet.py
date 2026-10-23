@@ -37,6 +37,10 @@ RUNNER_STRING = 'monkeypatch.setattr("orbi.' + 'runner.x", fake)'
 FALSE_MODULE = 'monkeypatch.setattr(' + 'my_journal_helper, "x", fake)'
 WRAPPED_RUNNER = 'monkeypatch.setattr(' + '\n        runner, "run_command", fake)'
 SHAPE = 'assert command[:' + '3] == ["gh", "issue", "view"]'
+STDLIB_WHICH = 'monkeypatch.setattr(' + 'shutil, "which", fake)'
+STDLIB_HOSTNAME = 'monkeypatch.setattr(' + 'socket, "gethostname", fake)'
+STDLIB_ARGV = 'monkeypatch.setattr(' + 'sys, "argv", fake)'
+STDLIB_SERVE = 'monkeypatch.setattr(' + 'HTTPServer, "serve_forever", fake)'
 
 
 def load_ratchet():
@@ -147,6 +151,45 @@ def test_equal_total_relocation_passes(tmp_path):
         tmp_path / "moved", {"test_one.py": ['monkeypatch.setattr(' + 'release, "x", fake)']}
     )
     assert module.main(["patch_ratchet.py", str(relocated)], baseline_file=path) == 0
+
+
+def test_stdlib_module_targets_are_boundary(tmp_path):
+    """A stdlib module target is a boundary fake: shutil.which,
+    socket.gethostname and sys.argv must never be hard-capped as
+    internal coupling (Issue #1856, option B).
+    """
+    module = load_ratchet()
+    tests = make_corpus(tmp_path, {
+        "test_stdlib.py": [
+            STDLIB_WHICH, STDLIB_HOSTNAME, STDLIB_ARGV, STDLIB_SERVE,
+        ],
+    })
+    counts = module.counts(tests)
+    assert counts["boundary_total"] == 4
+    assert counts["internal_total"] == 0
+    baseline = baseline_for(module, tests, internal_total=0)
+    assert module.main(
+        ["patch_ratchet.py", str(tests)], baseline_file=baseline,
+    ) == 0
+
+
+def test_per_target_table_is_printed(tmp_path, capsys):
+    """Issue #1856 option B asks for the per-target report in the CI
+    output: a split PR must see where the coupling sits, not only the
+    total.
+    """
+    module = load_ratchet()
+    tests = make_corpus(tmp_path, {
+        "test_one.py": [MODULE_INTERNAL, SEAM_ADAPTER],
+    })
+    baseline = baseline_for(module, tests)
+    assert module.main(
+        ["patch_ratchet.py", str(tests)], baseline_file=baseline,
+    ) == 0
+    output = capsys.readouterr().out
+    assert "patch ratchet per-target (reported, not gated):" in output
+    assert "journal=1" in output
+    assert "seam=1" in output
 
 
 def test_main_passes_at_the_baseline_and_on_a_decrease(tmp_path, capsys):

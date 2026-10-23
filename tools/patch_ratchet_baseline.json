@@ -1,7 +1,7 @@
 {
-  "boundary_total": 1056,
+  "boundary_total": 1084,
   "command_shape_asserts": 440,
-  "internal_total": 1755,
+  "internal_total": 1727,
   "monkeypatch_setattr_runner": 131,
   "monkeypatch_setattr_runner_string": 3,
   "per_target": {

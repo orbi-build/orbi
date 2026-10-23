@@ -7,7 +7,9 @@ orbi module or adapter method:
 
 * ``boundary_total`` — the subprocess/process/time/filesystem seam
   (``run_command``, ``run_gh_read_command``, ``new_run_id``, ``PROC``,
-  ``Path``, ...). Reported, not failed: a boundary fake is legitimate.
+  ``Path``, and any standard-library module target such as
+  ``shutil.which`` or ``socket.gethostname``). Reported, not failed: a
+  boundary fake is legitimate.
 * ``internal_total`` — every other ``monkeypatch.setattr`` site: an
   adapter method (``seam.edit_issue``, ``seam.comment_issue``, ...) or a
   domain function (``claim.pick_next_delivery``, ``runner.verify_pr``,
@@ -63,8 +65,15 @@ BOUNDARY_NAMES = frozenset({
     "detect",
 })
 # Targets that are standard-library boundaries: patch them in one
-# fixture, never to reach into orbi logic.
-BOUNDARY_TARGETS = frozenset({"Path", "os", "subprocess", "time"})
+# fixture, never to reach into orbi logic. Every stdlib MODULE is one
+# (shutil.which, socket.gethostname, sys.argv, ...), plus the stdlib
+# classes and submodule aliases a test reaches directly (Path,
+# http.server.HTTPServer, urllib.request as request). No orbi module
+# shares a name with a stdlib module, so this rule cannot hide an
+# internal patch.
+BOUNDARY_TARGETS = frozenset({"Path", "HTTPServer", "request"}) | frozenset(
+    sys.stdlib_module_names
+)
 
 
 def counts(tests_dir: Path) -> dict[str, object]:
@@ -194,6 +203,16 @@ def main(argv: list[str], *, tests_dir: Path | None = None,
         f"/{baseline['monkeypatch_setattr_runner']} "
         "(current/baseline — internal and command shapes may only shrink; "
         "boundary and per-target are reported)"
+    )
+    print(
+        "patch ratchet per-target (reported, not gated): "
+        + " ".join(
+            f"{target}={count}"
+            for target, count in sorted(
+                current["per_target"].items(),
+                key=lambda item: (-item[1], item[0]),
+            )
+        )
     )
     if failures:
         print(
