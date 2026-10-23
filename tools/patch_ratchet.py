@@ -7,7 +7,9 @@ orbi module or adapter method:
 
 * ``boundary_total`` — the subprocess/process/time/filesystem seam
   (``run_command``, ``run_gh_read_command``, ``new_run_id``, ``PROC``,
-  ``Path``, ...). Reported, not failed: a boundary fake is legitimate.
+  ``Path``, and every standard-library object a test stubs:
+  ``shutil.which``, ``socket.gethostname``, ``HTTPServer``, ...).
+  Reported, not failed: a boundary fake is legitimate.
 * ``internal_total`` — every other ``monkeypatch.setattr`` site: an
   adapter method (``seam.edit_issue``, ``seam.comment_issue``, ...) or a
   domain function (``claim.pick_next_delivery``, ``runner.verify_pr``,
@@ -22,6 +24,7 @@ does.
 
 Usage: python3 tools/patch_ratchet.py [--update] [tests_dir]
 """
+import ast
 import json
 import re
 import sys
@@ -39,13 +42,14 @@ SETATTR_RUNNER_STRING_RE = re.compile(
 )
 COMMAND_SHAPE_RE = re.compile(r"command\[\s*:\s*\d+\s*\]\s*==")
 
-# One `monkeypatch.setattr(target, "name", ...)` site. The target is the
-# last dotted segment (`runner.github` -> `github`); the string form is
-# handled separately. Wrapped calls (target on the next line) match the
-# `\s*` spans.
+# One `monkeypatch.setattr(target, "name", ...)` site. The patched
+# object's target is the last dotted segment (`runner.github` ->
+# `github`); the whole chain is kept because it owns the target. The
+# string form is handled separately. Wrapped calls (target on the next
+# line) match the `\s*` spans.
 SETATTR_DIRECT_RE = re.compile(
-    r"monkeypatch\.setattr\(\s*(?:[A-Za-z_]\w*\.)*"
-    r"([A-Za-z_]\w*)\s*,\s*[\"']([^\"']+)[\"']"
+    r"monkeypatch\.setattr\(\s*"
+    r"((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)\s*,\s*[\"']([^\"']+)[\"']"
 )
 SETATTR_STRING_RE = re.compile(
     r"monkeypatch\.setattr\(\s*[\"']orbi\.([A-Za-z_]\w*)\.([^\"']+)[\"']"
@@ -63,9 +67,61 @@ BOUNDARY_NAMES = frozenset({
     "PROC",
     "detect",
 })
-# Targets that are standard-library boundaries: patch them in one
-# fixture, never to reach into orbi logic.
-BOUNDARY_TARGETS = frozenset({"Path", "os", "subprocess", "time"})
+# Standard-library ownership is the boundary rule (Issue #1868): the
+# subprocess/time/filesystem/module seam IS the standard library, so a
+# patch on one of its objects is a boundary fake. Python's own module
+# list names the modules, the test file's imports own the classes and
+# aliases it patches, and no orbi module shares a name with a stdlib
+# module (pinned by the tests) — so the rule cannot hide an internal
+# patch. No exception list to grow.
+STDLIB_MODULE_NAMES = frozenset(sys.stdlib_module_names)
+BOUNDARY_TARGETS = frozenset({"Path"}) | STDLIB_MODULE_NAMES
+
+
+def import_owners(text: str) -> dict[str, str]:
+    """Map the names a test file imports to the module that owns them.
+
+    The file's own imports are the ownership information a class or
+    alias target needs: ``from http.server import HTTPServer`` owns
+    ``HTTPServer``, ``import shutil as sh`` owns ``sh``.
+    """
+    owners: dict[str, str] = {}
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                owners[alias.asname or alias.name.split(".")[0]] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                owners[alias.asname or alias.name] = (
+                    f"{node.module}.{alias.name}"
+                )
+    return owners
+
+
+def is_boundary_target(target: str, chain: str,
+                       owners: dict[str, str]) -> bool:
+    """Is the patched object a standard-library boundary?
+
+    ``target`` is the last dotted segment, ``chain`` the whole chain
+    (``pilot_setup.shutil``), ``owners`` the file's import map.
+    """
+    if target in BOUNDARY_TARGETS:
+        return True
+    owner = owners.get(target)
+    if owner is not None and owner.split(".")[0] in STDLIB_MODULE_NAMES:
+        return True
+    return any(part in STDLIB_MODULE_NAMES for part in chain.split("."))
+
+
+def record_patch(totals: dict[str, object], per_target: dict[str, int],
+                 owners: dict[str, str], chain: str, name: str) -> None:
+    """Count one ``setattr`` site against the internal or boundary total."""
+    target = chain.rsplit(".", 1)[-1]
+    per_target[target] = per_target.get(target, 0) + 1
+    boundary = is_boundary_target(target, chain, owners) or (
+        name in BOUNDARY_NAMES
+    )
+    totals["boundary_total" if boundary else "internal_total"] += 1
 
 
 def counts(tests_dir: Path) -> dict[str, object]:
@@ -91,6 +147,7 @@ def counts(tests_dir: Path) -> dict[str, object]:
         if path.parent == fakes_dir:
             continue
         text = path.read_text(encoding="utf-8")
+        owners = import_owners(text)
         totals["monkeypatch_setattr_runner"] += len(
             SETATTR_RUNNER_RE.findall(text)
         )
@@ -98,19 +155,11 @@ def counts(tests_dir: Path) -> dict[str, object]:
             SETATTR_RUNNER_STRING_RE.findall(text)
         )
         for match in SETATTR_DIRECT_RE.finditer(text):
-            target, name = match.group(1), match.group(2)
-            per_target[target] = per_target.get(target, 0) + 1
-            if target in BOUNDARY_TARGETS or name in BOUNDARY_NAMES:
-                totals["boundary_total"] += 1
-            else:
-                totals["internal_total"] += 1
+            record_patch(totals, per_target, owners, match.group(1),
+                         match.group(2))
         for match in SETATTR_STRING_RE.finditer(text):
-            target, name = match.group(1), match.group(2)
-            per_target[target] = per_target.get(target, 0) + 1
-            if target in BOUNDARY_TARGETS or name in BOUNDARY_NAMES:
-                totals["boundary_total"] += 1
-            else:
-                totals["internal_total"] += 1
+            record_patch(totals, per_target, owners, f"orbi.{match.group(1)}",
+                         match.group(2))
         if path.name.endswith("_fakes.py"):
             continue
         totals["command_shape_asserts"] += len(
