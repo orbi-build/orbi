@@ -20,7 +20,7 @@ import pytest
 import dataclasses
 
 import orbi.runner as runner
-from orbi import pilot_setup
+from orbi import pilot_setup, setup_checks, setup_config
 from orbi import systemd_deploy
 
 # The systemd-shape deployment/setup contract, pinned to the systemd
@@ -34,7 +34,7 @@ def _default_command_lookup(monkeypatch):
     CLI happens to be installed on the test machine. The dedicated
     `check_commands` tests re-stub `shutil.which` themselves."""
     monkeypatch.setattr(
-        pilot_setup.shutil, "which",
+        setup_checks.shutil, "which",
         lambda name: f"/usr/bin/{name}",
     )
 
@@ -348,7 +348,7 @@ def test_committed_labels_toml_covers_every_platform_label():
     path = Path(__file__).resolve().parent.parent / "labels.toml"
     defs = pilot_setup.load_label_defs(path)
     assert [entry["name"] for entry in defs] == list(
-        pilot_setup.REQUIRED_LABELS,
+        setup_config.REQUIRED_LABELS,
     )
 
 
@@ -385,7 +385,7 @@ def test_committed_labels_toml_points_at_the_real_setup_entry():
 
 def test_check_commands_reports_the_required_commands(monkeypatch):
     monkeypatch.setattr(
-        pilot_setup.shutil, "which",
+        setup_checks.shutil, "which",
         lambda name: f"/usr/bin/{name}",
     )
     result = pilot_setup.check_commands(
@@ -406,7 +406,7 @@ def test_check_commands_reports_the_required_commands(monkeypatch):
 
 def test_check_commands_fails_fast_on_a_missing_command(monkeypatch):
     monkeypatch.setattr(
-        pilot_setup.shutil, "which",
+        setup_checks.shutil, "which",
         lambda name: None if name == "gh" else f"/usr/bin/{name}",
     )
     with pytest.raises(pilot_setup.SetupError, match="gh"):
@@ -422,7 +422,7 @@ def test_check_commands_fails_fast_when_uv_is_missing(monkeypatch):
     carry actionable install guidance (the official uv installer, verified
     against https://docs.astral.sh/uv/getting-started/installation/)."""
     monkeypatch.setattr(
-        pilot_setup.shutil, "which",
+        setup_checks.shutil, "which",
         lambda name: None if name == "uv" else f"/usr/bin/{name}",
     )
     with pytest.raises(pilot_setup.SetupError) as excinfo:
@@ -453,7 +453,7 @@ def test_check_commands_fails_fast_on_an_unsupported_platform(monkeypatch):
 
 def test_check_commands_fails_fast_without_a_user_bus(monkeypatch):
     monkeypatch.setattr(
-        pilot_setup.shutil, "which",
+        setup_checks.shutil, "which",
         lambda name: f"/usr/bin/{name}",
     )
     with pytest.raises(
@@ -2101,11 +2101,11 @@ def test_ensure_config_creates_example_without_overwriting(tmp_path):
     )
     config = tmp_path / "orbi.toml"
 
-    assert pilot_setup.ensure_config(config) == config
+    assert setup_config.ensure_config(config) == config
     assert config.read_text(encoding="utf-8") == example.read_text(encoding="utf-8")
 
     config.write_text('source_repos = ["existing/repo"]\n', encoding="utf-8")
-    assert pilot_setup.ensure_config(config) == config
+    assert setup_config.ensure_config(config) == config
     assert "existing/repo" in config.read_text(encoding="utf-8")
     # An EXISTING file is never touched, not even to add the new key.
     assert "message_language" not in config.read_text(encoding="utf-8")
@@ -2129,7 +2129,7 @@ def test_ensure_config_seeds_a_top_level_key_before_a_trailing_table(
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LANG", "zh_CN.UTF-8")
     config = tmp_path / "orbi.toml"
-    assert pilot_setup.ensure_config(config) == config
+    assert setup_config.ensure_config(config) == config
     parsed = tomllib.loads(config.read_text(encoding="utf-8"))
     assert parsed["message_language"] == "zh"
     assert parsed["repositories"] == [
@@ -2157,7 +2157,7 @@ def test_ensure_config_seeds_the_new_configs_language_from_the_locale(
     for name, value in locale.items():
         monkeypatch.setenv(name, value)
     config = tmp_path / "orbi.toml"
-    assert pilot_setup.ensure_config(config) == config
+    assert setup_config.ensure_config(config) == config
     body = config.read_text(encoding="utf-8")
     assert f'message_language = "{expected}"' in body
     assert "# message_language" not in body
@@ -2170,7 +2170,7 @@ def test_ensure_config_falls_back_to_the_shipped_example(tmp_path):
     import importlib.resources
 
     config = tmp_path / "orbi.toml"
-    assert pilot_setup.ensure_config(config) == config
+    assert setup_config.ensure_config(config) == config
     packaged = (
         importlib.resources.files("orbi")
         .joinpath("example_config.toml")
@@ -2189,9 +2189,9 @@ def test_ensure_config_fails_when_no_example_is_available(tmp_path, monkeypatch)
     def broken_packaged():
         raise FileNotFoundError("no packaged example in this install")
 
-    monkeypatch.setattr(pilot_setup, "packaged_example_bytes", broken_packaged)
+    monkeypatch.setattr(setup_config, "packaged_example_bytes", broken_packaged)
     with pytest.raises(pilot_setup.SetupError, match="example config unavailable"):
-        pilot_setup.ensure_config(tmp_path / "orbi.toml")
+        setup_config.ensure_config(tmp_path / "orbi.toml")
     assert not (tmp_path / "orbi.toml").exists()
 
 
@@ -2200,7 +2200,7 @@ def test_ensure_config_reports_write_failure(tmp_path, monkeypatch):
     example.write_text("source_repos = [\"OWNER/REPO\"]\n", encoding="utf-8")
     monkeypatch.setattr(Path, "write_bytes", lambda *_: (_ for _ in ()).throw(OSError("read-only")))
     with pytest.raises(pilot_setup.SetupError, match="config creation failed"):
-        pilot_setup.ensure_config(tmp_path / "orbi.toml")
+        setup_config.ensure_config(tmp_path / "orbi.toml")
 
 
 def test_scaffold_model_config_is_idempotent_and_private(tmp_path):

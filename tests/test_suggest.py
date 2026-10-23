@@ -21,7 +21,7 @@ import pytest
 import orbi.cli as cli
 import orbi.cli_commands as cli_commands
 import orbi.config as config_domain
-import orbi.pilot_setup as pilot_setup
+import orbi.setup_checks as setup_checks
 import orbi.suggest as suggest
 from seam import seam
 from tests.fakes.github import FakeGh
@@ -948,7 +948,7 @@ def setup_world(tmp_path, monkeypatch):
     state = {"existing_labels": [dict(entry) for entry in VALID_DEFS]}
     fake_run, calls = fake_run_factory(state)
     monkeypatch.setattr(
-        pilot_setup.shutil, "which", lambda name: f"/usr/bin/{name}",
+        setup_checks.shutil, "which", lambda name: f"/usr/bin/{name}",
     )
     monkeypatch.setattr(seam, "run_command", fake_run)
     stub = PiStub(_answer_json())

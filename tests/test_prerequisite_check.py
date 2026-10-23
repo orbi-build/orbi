@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from orbi import cli, cli_commands
-from orbi import pilot_setup
+from orbi import pilot_setup, setup_checks, setup_config
 
 # The systemd-shape deployment/setup contract, pinned to the systemd
 # impl on every host (the conftest fixture documents the seam).
@@ -55,7 +55,7 @@ def make_world(tmp_path: Path) -> Path:
     (home / "prompts" / "prompt_review.md").write_text(
         "review\n", encoding="utf-8")
     (home / "pi-providers.json").write_text(
-        json.dumps(pilot_setup.PROVIDER_STARTER), encoding="utf-8")
+        json.dumps(setup_config.PROVIDER_STARTER), encoding="utf-8")
     (home / ".orbi").mkdir()
     (home / ".orbi" / "env").write_text(
         "PROVIDER_API_KEY=check-test-key\n", encoding="utf-8",
@@ -125,7 +125,7 @@ def fake_run_factory(state: dict):
 def _commands_found(monkeypatch):
     """The check must not depend on the host's real PATH contents."""
     monkeypatch.setattr(
-        pilot_setup.shutil, "which", lambda name: f"/usr/bin/{name}",
+        setup_checks.shutil, "which", lambda name: f"/usr/bin/{name}",
     )
 
 
@@ -167,13 +167,13 @@ def test_unsupported_platform_is_a_platform_finding_with_the_issue_link(
 
 
 def test_python_version_ok_on_the_supported_runtime():
-    pilot_setup.check_python_version()
+    setup_checks.check_python_version()
 
 
 def test_python_version_fails_fast_with_official_link(monkeypatch):
     monkeypatch.setattr(sys, "version_info", (3, 13, 0, "final", 0))
     with pytest.raises(pilot_setup.CheckError) as excinfo:
-        pilot_setup.check_python_version()
+        setup_checks.check_python_version()
     failure = excinfo.value
     assert failure.check == "python"
     assert "3.13" in failure.reason and "3.14" in failure.reason
@@ -200,7 +200,7 @@ def test_pi_check_executes_the_version_probe_and_names_the_node_floor():
         )
 
     with pytest.raises(pilot_setup.CheckError) as excinfo:
-        pilot_setup.check_pi_command(broken)
+        setup_checks.check_pi_command(broken)
     assert calls == [["pi", "--version"]]
     failure = excinfo.value
     assert failure.check == "pi"
@@ -208,7 +208,7 @@ def test_pi_check_executes_the_version_probe_and_names_the_node_floor():
 
 
 def test_pi_check_ok_when_the_probe_succeeds():
-    assert pilot_setup.check_pi_command(
+    assert setup_checks.check_pi_command(
         lambda command, **kwargs: "0.85.1"
     ) is None
 
@@ -217,7 +217,7 @@ def test_gate_reports_a_broken_pi_with_the_node_floor_in_the_fix_line():
     """The failure path: pi present but not executable → the structured
     `check_failed check=pi` line carries the Node floor in `fix=`."""
     with pytest.raises(pilot_setup.CheckError) as excinfo:
-        pilot_setup.run_machine_checks(
+        setup_checks.run_machine_checks(
             run_command=fake_run_factory({"pi_broken": True}),
         )
     failure = excinfo.value
@@ -233,7 +233,7 @@ def test_machine_collection_reports_all_independent_failures(monkeypatch):
     from orbi import scheduler
 
     monkeypatch.setattr(
-        pilot_setup, "check_python_version",
+        setup_checks, "check_python_version",
         lambda: (_ for _ in ()).throw(pilot_setup.CheckError(
             "python", "old", "upgrade", "https://docs.python.org",
         )),
@@ -244,13 +244,13 @@ def test_machine_collection_reports_all_independent_failures(monkeypatch):
             scheduler.UnsupportedPlatformError("unsupported"),
         ),
     )
-    monkeypatch.setattr(pilot_setup.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(setup_checks.shutil, "which", lambda _name: None)
     monkeypatch.setattr(
-        pilot_setup, "check_auth",
+        setup_checks, "check_auth",
         lambda _run: (_ for _ in ()).throw(pilot_setup.SetupError("logged out")),
     )
 
-    _, failures = pilot_setup.run_machine_checks(
+    _, failures = setup_checks.run_machine_checks(
         run_command=lambda *_args, **_kwargs: "", collect_failures=True,
     )
 
@@ -268,8 +268,8 @@ def test_machine_collection_reports_scheduler_session_failure(monkeypatch):
         probe_args=lambda _unit: ["systemctl"],
     )
     monkeypatch.setattr(scheduler, "detect", lambda: sched)
-    monkeypatch.setattr(pilot_setup.shutil, "which", lambda _name: "/bin/tool")
-    monkeypatch.setattr(pilot_setup, "check_auth", lambda _run: None)
+    monkeypatch.setattr(setup_checks.shutil, "which", lambda _name: "/bin/tool")
+    monkeypatch.setattr(setup_checks, "check_auth", lambda _run: None)
 
     # Only the scheduler probe fails; the pi version probe (Issue #1079)
     # is a separate check and succeeds here.
@@ -278,7 +278,7 @@ def test_machine_collection_reports_scheduler_session_failure(monkeypatch):
             return "0.85.1"
         raise RuntimeError("user bus unavailable")
 
-    _, failures = pilot_setup.run_machine_checks(
+    _, failures = setup_checks.run_machine_checks(
         run_command=run,
         collect_failures=True,
     )
@@ -288,7 +288,7 @@ def test_machine_collection_reports_scheduler_session_failure(monkeypatch):
 
 def test_missing_command_carries_the_install_hint_and_link(monkeypatch):
     monkeypatch.setattr(
-        pilot_setup.shutil, "which", lambda name: None if name == "gh" else "/usr/bin/x",
+        setup_checks.shutil, "which", lambda name: None if name == "gh" else "/usr/bin/x",
     )
     home = Path("/")
     with pytest.raises(pilot_setup.CheckError) as excinfo:
@@ -296,7 +296,7 @@ def test_missing_command_carries_the_install_hint_and_link(monkeypatch):
     failure = excinfo.value
     assert failure.check == "commands"
     assert "required command missing: gh" in failure.reason
-    assert pilot_setup.COMMAND_INSTALL_HINTS["gh"] in failure.fix
+    assert setup_checks.COMMAND_INSTALL_HINTS["gh"] in failure.fix
     assert failure.docs == "https://cli.github.com/"
 
 
@@ -308,7 +308,7 @@ def test_orbi_install_hint_uses_the_selected_interpreter():
     /usr/bin/python3 that fails on Ubuntu 24.04."""
     from orbi import cli_source
 
-    hint = pilot_setup.COMMAND_INSTALL_HINTS["orbi"]
+    hint = setup_checks.COMMAND_INSTALL_HINTS["orbi"]
     assert f"--python {cli_source.PYTHON_INTERPRETER}" in hint
     assert "/usr/bin/python3" not in hint
 
@@ -345,7 +345,7 @@ def test_gh_auth_failure_points_at_gh_auth_login(tmp_path):
 
 def test_missing_pi_cli_fails_with_the_pi_docs_link(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        pilot_setup.shutil, "which", lambda name: None if name == "pi" else "/usr/bin/x",
+        setup_checks.shutil, "which", lambda name: None if name == "pi" else "/usr/bin/x",
     )
     config_path = tmp_path / "orbi.toml"
     config_path.write_text(f'source_repos = ["{REPO}"]\n', encoding="utf-8")
@@ -604,7 +604,7 @@ def test_cli_check_missing_config_reports_prerequisites_before_config(
     config_path = tmp_path / "orbi.toml"
     monkeypatch.setattr(cli_commands, "run_command", fake_run_factory({}))
     monkeypatch.setattr(
-        pilot_setup.shutil, "which",
+        setup_checks.shutil, "which",
         lambda name: None if name in {"gh", "pi"} else "/usr/bin/x",
     )
     assert cli.main(["check", "--config", str(config_path)]) == 1
