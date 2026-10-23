@@ -23,6 +23,7 @@ import orbi.source_pool as source_pool
 import orbi.claim as claim_domain
 import orbi.status_observe as observe
 from seam import seam
+from tests.fakes.github import no_current_issue
 
 # The systemd-shape deployment/setup contract, pinned to the systemd
 # impl on every host (the conftest fixture documents the seam).
@@ -2808,6 +2809,99 @@ def test_doctor_report_reports_configured_model_provider(tmp_path, monkeypatch):
     )
     report = cli_doctor.doctor_report(config, installed)
     assert "model_provider: ok provider=openai model=gpt key=OPENAI_API_KEY=set" in report
+
+
+REVIEW_PROVIDER_KEY = "ORBI_DOCTOR_REVIEW_KEY"
+
+
+def _review_provider_world(tmp_path):
+    """A deploy world plus a real provider file and orbi.toml on disk."""
+    config, installed = _deploy_world(tmp_path, drift=False)
+    providers = {"providers": {
+        "implement": {
+            "baseUrl": "https://implement.example.test/v1",
+            "api": "openai-completions", "apiKey": "local",
+            "models": [{"id": "m"}],
+        },
+        "review": {
+            "baseUrl": "https://review.example.test/v1",
+            "api": "openai-completions",
+            "apiKey": f"${REVIEW_PROVIDER_KEY}",
+            "models": [{"id": "m"}],
+        },
+    }}
+    providers_path = config.repo_dir / "providers.json"
+    providers_path.write_text(json.dumps(providers), encoding="utf-8")
+    config_path = config.repo_dir / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["xqliu/orbi"]\n'
+        'pi_providers = "providers.json"\n'
+        'pi_provider = "implement"\n'
+        'pi_model = "m"\n'
+        'review_pi_provider = "review"\n'
+        'review_pi_model = "m"\n',
+        encoding="utf-8",
+    )
+    return config_path, providers_path, installed
+
+
+@pytest.mark.parametrize(("environment", "expected"), [
+    ("unset", "is not set"), ("empty", "is set but empty"),
+])
+def test_doctor_report_reports_the_review_provider_key_finding(
+    tmp_path, monkeypatch, environment, expected,
+):
+    """Issue #1893: a distinct review selection with an unresolved key is
+    still a doctor finding — the real loader, status and report agree."""
+    config_path, providers_path, installed = _review_provider_world(tmp_path)
+    if environment == "unset":
+        monkeypatch.delenv(REVIEW_PROVIDER_KEY, raising=False)
+    else:
+        monkeypatch.setenv(REVIEW_PROVIDER_KEY, "")
+    _fake_doctor_commands(monkeypatch)
+    no_current_issue(monkeypatch)
+    config = config_domain.load_config(
+        config_path, check_provider_api_keys=False,
+    )
+    finding = config.pi_provider_key_finding
+    assert (finding["provider"], finding["variable"]) == (
+        "review", REVIEW_PROVIDER_KEY,
+    )
+    assert finding["state"] == expected
+    assert finding["path"] == providers_path
+    status = orbi.pilot_setup.model_provider_status(config)
+    assert status["state"] == "NOT CONFIGURED"
+    assert status["env_variable"] == REVIEW_PROVIDER_KEY
+    lines = cli_doctor.doctor_report(config, installed).splitlines()
+    assert (
+        f"model_endpoint: provider=review key={REVIEW_PROVIDER_KEY} "
+        f"{expected} (file: {providers_path})"
+    ) in lines
+    provider_lines = [
+        line for line in lines if line.startswith("model_provider: ")
+    ]
+    assert len(provider_lines) == 1
+    assert provider_lines[0].startswith("model_provider: NOT CONFIGURED ")
+
+
+def test_doctor_report_keeps_ok_for_a_resolved_review_key(
+    tmp_path, monkeypatch,
+):
+    """A resolved review key keeps the existing report: no finding line
+    and the implement selection's ok status."""
+    config_path, _, installed = _review_provider_world(tmp_path)
+    monkeypatch.setenv(REVIEW_PROVIDER_KEY, "review-secret")
+    _fake_doctor_commands(monkeypatch)
+    no_current_issue(monkeypatch)
+    config = config_domain.load_config(
+        config_path, check_provider_api_keys=False,
+    )
+    assert config.pi_provider_key_finding is None
+    lines = cli_doctor.doctor_report(config, installed).splitlines()
+    assert not any(line.startswith("model_endpoint: ") for line in lines)
+    assert (
+        "model_provider: ok provider=implement model=m key=literal=set"
+    ) in lines
 
 
 # --- Issue #1669: orbi status and a maintainer-blocked delivery -----------
