@@ -42,7 +42,9 @@ import re
 from datetime import datetime, timezone
 
 from orbi import comment_trust, failure, language, user_summary
-from orbi.comment_kind import COMMENT_KIND_FAILURE, comment_kind
+from orbi.comment_kind import (
+    COMMENT_KIND_FAILURE, comment_kind, parse_versioned_block,
+)
 from orbi.delivery_labels import (
     BLOCKED_LABEL, FIX_NEEDED_LABEL, P0_LABEL, READY_LABEL,
 )
@@ -75,9 +77,11 @@ STATES = frozenset({STATE_WAITING, STATE_RESUMING, STATE_MERGED, STATE_STALE})
 # because the BASE was red is recoverable by a green base (Issue #1825).
 REASON_BASE_CI_RED = "base_ci_red"
 
-# The one hidden block, next to `orbi:failure:v1` in the same comment.
-BLOCK_TEMPLATE = "<!-- orbi:base-ci-red:v1 {payload} -->"
-_BLOCK_RE = re.compile(r"<!--\s*orbi:base-ci-red:v1\s+(.*?)-->", re.DOTALL)
+# The one hidden block, next to `orbi:failure:v1` in the same comment. Its
+# envelope (single block, JSON object, field diff) is the shared
+# `comment_kind.parse_versioned_block`; this module keeps the fields.
+_MARKER = "orbi:base-ci-red:v1"
+BLOCK_TEMPLATE = f"<!-- {_MARKER} {{payload}} -->"
 
 # How many failing checks' error lines one comment shows, and how many
 # lines per check: bounded evidence, never a log dump.
@@ -178,35 +182,9 @@ def parse(body: object) -> BaseCIRed | None:
     Raises `BaseCIRedError` when a block is present but corrupted — a
     corrupted record is never silently read as "no record".
     """
-    if not isinstance(body, str):
+    data = parse_versioned_block(body, _MARKER, _FIELDS, BaseCIRedError)
+    if data is None:
         return None
-    blocks = _BLOCK_RE.findall(body)
-    if len(blocks) > 1:
-        raise BaseCIRedError(
-            "multiple orbi:base-ci-red:v1 blocks in one comment body"
-        )
-    if not blocks:
-        return None
-    try:
-        data = json.loads(blocks[0])
-    except json.JSONDecodeError as exc:
-        raise BaseCIRedError(
-            f"orbi:base-ci-red:v1 block is not valid JSON: {exc}"
-        ) from exc
-    if not isinstance(data, dict):
-        raise BaseCIRedError(
-            "orbi:base-ci-red:v1 block payload must be a JSON object"
-        )
-    unknown = sorted(set(data) - set(_FIELDS))
-    if unknown:
-        raise BaseCIRedError(
-            f"orbi:base-ci-red:v1 block has unknown fields: {unknown}"
-        )
-    missing = sorted(name for name in _FIELDS if name not in data)
-    if missing:
-        raise BaseCIRedError(
-            f"orbi:base-ci-red:v1 block is missing fields: {missing}"
-        )
     checks = data["failing_checks"]
     if not isinstance(checks, list):
         raise BaseCIRedError(

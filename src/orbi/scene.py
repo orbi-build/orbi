@@ -25,19 +25,19 @@ import dataclasses
 import json
 import re
 
+from orbi.comment_kind import parse_versioned_block, versioned_block_pattern
 from orbi.journal import validate_run_id
 
 SCHEMA_VERSION = 1
 
 # The single hidden block: a versioned marker framing a JSON payload
 # that mirrors the `Scene` fields exactly (render writes every field).
-# The capture is non-greedy to the first `-->` so a truncated or
-# mangled payload still matches the marker and fails as corrupted
-# instead of falling back to the text beside it.
-SCENE_BLOCK_TEMPLATE = "<!-- orbi:scene:v1 {payload} -->"
-_SCENE_BLOCK_RE = re.compile(
-    r"<!--\s*orbi:scene:v1\s+(.*?)-->", re.DOTALL,
-)
+# The envelope (marker capture, single block, JSON object, field diff) is
+# `comment_kind.parse_versioned_block`; this module keeps the fields and
+# their checks.
+_MARKER = "orbi:scene:v1"
+SCENE_BLOCK_TEMPLATE = f"<!-- {_MARKER} {{payload}} -->"
+_SCENE_BLOCK_RE = versioned_block_pattern(_MARKER)
 
 # The legacy text grammar lives one version longer, for scenes written
 # before the block existed ("Accept both during recovery").
@@ -111,48 +111,25 @@ def parse(body: object) -> Scene | None:
     """
     if not isinstance(body, str):
         return None
-    blocks = _SCENE_BLOCK_RE.findall(body)
-    if len(blocks) > 1:
-        raise SceneError(
-            "multiple orbi:scene:v1 blocks in one comment body"
-        )
-    if blocks:
-        return _parse_block(blocks[0])
-    return _parse_legacy(body)
+    data = parse_versioned_block(
+        body, _MARKER, _SCENE_FIELDS, SceneError,
+        required=_SCENE_REQUIRED_FIELDS,
+    )
+    return _parse_legacy(body) if data is None else _parse_block(data)
 
 
 _SCENE_FIELDS = tuple(
     field.name for field in dataclasses.fields(Scene)
 )
+# These counters were added to the v1 payload without changing the
+# marker version; old v1 opened-PR comments must remain resumable.
+_SCENE_REQUIRED_FIELDS = tuple(
+    name for name in _SCENE_FIELDS
+    if name not in {"base_advance_round", "verdict_head_unknown_round"}
+)
 
 
-def _parse_block(payload: str) -> Scene:
-    try:
-        data = json.loads(payload)
-    except json.JSONDecodeError as exc:
-        raise SceneError(
-            f"orbi:scene:v1 block is not valid JSON: {exc}"
-        ) from exc
-    if not isinstance(data, dict):
-        # A scalar payload (`42`, `null`, `true`) is present but
-        # corrupted: it must raise `SceneError`, never a `TypeError`
-        # from the field-set diff below.
-        raise SceneError("orbi:scene:v1 block payload must be a JSON object")
-    unknown = sorted(set(data) - set(_SCENE_FIELDS))
-    if unknown:
-        raise SceneError(
-            f"orbi:scene:v1 block has unknown fields: {unknown}"
-        )
-    # These counters were added to the v1 payload without changing the
-    # marker version; old v1 opened-PR comments must remain resumable.
-    required_fields = set(_SCENE_FIELDS) - {
-        "base_advance_round", "verdict_head_unknown_round",
-    }
-    missing = sorted(name for name in required_fields if name not in data)
-    if missing:
-        raise SceneError(
-            f"orbi:scene:v1 block is missing fields: {missing}"
-        )
+def _parse_block(data: dict) -> Scene:
     for name in ("run_id", "base_branch", "base_sha", "pr_url"):
         if not isinstance(data[name], str) or not data[name]:
             raise SceneError(
