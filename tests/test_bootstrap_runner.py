@@ -25,6 +25,7 @@ import pytest
 import orbi.claim as claim
 import orbi.failure_report as failure_report
 import orbi.runner as runner
+import orbi.resume_verification as resume_verification
 import orbi.run_state as run_state
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
@@ -4299,7 +4300,7 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
     # The resume pre-validation (Issue #89) is stubbed: the dispatch
     # test proves the wait receives its verified URL.
     monkeypatch.setattr(
-        runner, "verify_resumed_pr",
+        resume_verification, "verify_resumed_pr",
         lambda *args, **kwargs: scene["pr_url"],
     )
     waits = []
@@ -4345,7 +4346,7 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
     # The resume pre-validation (Issue #89) is stubbed: the dispatch
     # test proves the wait receives its verified URL.
     monkeypatch.setattr(
-        runner, "verify_resumed_pr",
+        resume_verification, "verify_resumed_pr",
         lambda *args, **kwargs: scene["pr_url"],
     )
     waits = []
