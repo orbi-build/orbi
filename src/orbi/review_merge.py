@@ -59,16 +59,15 @@ from orbi.failure_report import (
 )
 from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
-    _check_summaries,
     apply_label_patch,
     comment_issue,
     commit_check_runs,
     issue_comments,
     issue_labels,
     issue_priority,
-    pr_delivery_rollup,
     pr_view,
 )
+from orbi.github_feedback import _check_summaries, pr_delivery_rollup
 from orbi import base_ci_red, language, user_summary
 from orbi.delivery_comment import merged_pr_comment_body  # noqa: F401
 from orbi.gitops import (

@@ -1,11 +1,10 @@
 {
   "oversized_modules": {
-    "github.py": 1144,
     "pi_process.py": 1749,
     "pilot_setup.py": 1326,
-    "release.py": 1763,
-    "review_merge.py": 2013,
-    "runner.py": 3382
+    "release.py": 1760,
+    "review_merge.py": 1980,
+    "runner.py": 3380
   },
   "runner_top_level_defs": 46
 }
