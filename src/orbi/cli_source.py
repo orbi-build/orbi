@@ -50,7 +50,7 @@ from orbi.progress import quote_value
 
 # The Python floor (Issue #861): the same floor as the PEP 621
 # `requires-python` — pinned together by tests/test_cli_packaging.py
-# (pilot_setup.REQUIRED_PYTHON is an alias of this constant, so pip,
+# (setup_checks.REQUIRED_PYTHON is an alias of this constant, so pip,
 # `orbi check` and the interpreter selection can never disagree).
 REQUIRED_PYTHON = (3, 14)
 
