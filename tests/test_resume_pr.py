@@ -23,6 +23,8 @@ import orbi.claim as claim
 import orbi.failure_report as failure_report
 import orbi.comment_trust as comment_trust
 import orbi.runner as runner
+import orbi.pr_verification as pr_verification
+import orbi.resume_verification as resume_verification
 import orbi.review_merge as review_merge
 import orbi.run_state as run_state
 import orbi.pi_session as pi_session
@@ -2337,7 +2339,7 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
     # verified URL that differs from the scene's comment string, so the
     # test proves the wait never sees the comment string.
     monkeypatch.setattr(
-        runner, "verify_resumed_pr",
+        resume_verification, "verify_resumed_pr",
         lambda *a, **k: verified_url,
     )
     # The dispatch test must not run the real delivery-wait loop (it would
@@ -2477,11 +2479,11 @@ def test_main_continues_to_ready_delivery_after_scene_failure(
 @pytest.mark.parametrize(
     "verification_error",
     [
-        runner.ReportedMissingFixesError(
+        pr_verification.ReportedMissingFixesError(
             "PR body is missing `Fixes #9`; the keyword must point at the "
             "source Issue so GitHub closes it natively"
         ),
-        runner.ResumeVerificationError("reported terminal resume failure"),
+        pr_verification.ResumeVerificationError("reported terminal resume failure"),
     ],
 )
 def test_main_ends_cleanly_after_reported_resume_failure(
@@ -2520,7 +2522,7 @@ def test_main_ends_cleanly_after_reported_resume_failure(
         lambda *a, **k: ("owner/repo", issue, make_resume_scene()),
     )
     monkeypatch.setattr(
-        runner, "verify_resumed_pr",
+        resume_verification, "verify_resumed_pr",
         lambda *a, **k: (_ for _ in ()).throw(verification_error),
     )
     monkeypatch.setattr(
@@ -2568,7 +2570,7 @@ def expected_resume_worktree(tmp_path) -> Path:
         ([], "MERGED", "scene_pr_state=MERGED", runner.UnrecoverableDeliveryError),
         ([{"url": "https://github.com/owner/repo/pull/10"},
          {"url": "https://github.com/owner/repo/pull/11"}],
-         "OPEN", "open_pr_count=2", runner.ResumeVerificationError),
+         "OPEN", "open_pr_count=2", pr_verification.ResumeVerificationError),
     ],
 )
 def test_verify_pr_resume_rejects_stale_or_ambiguous_scene_with_evidence(
@@ -2596,7 +2598,7 @@ def test_verify_pr_resume_rejects_stale_or_ambiguous_scene_with_evidence(
         fake_run(["unexpected"])
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(error_type) as excinfo:
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=9, branch=FAKE_BRANCH, worktree=worktree, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo="owner/repo", expected_url=FAKE_PR_URL, require_latest_base=False)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=9, branch=FAKE_BRANCH, worktree=worktree, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo="owner/repo", expected_url=FAKE_PR_URL, require_latest_base=False)
     message = str(excinfo.value)
     assert expected in message
     assert "open_prs=" in message
@@ -2631,10 +2633,10 @@ def test_verify_pr_resume_rejects_pr_based_on_wrong_branch_with_evidence(
         fake_run(["unexpected"])
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(
-        runner.ResumeVerificationError,
+        pr_verification.ResumeVerificationError,
         match="PR base is develop, expected main",
     ) as excinfo:
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=9, branch=FAKE_BRANCH, worktree=worktree, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo="owner/repo", expected_url=FAKE_PR_URL, require_latest_base=False)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=9, branch=FAKE_BRANCH, worktree=worktree, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo="owner/repo", expected_url=FAKE_PR_URL, require_latest_base=False)
     message = str(excinfo.value)
     assert "resume PR validation:" in message
     assert "open_pr_count=1" in message
@@ -2660,7 +2662,7 @@ def test_verify_pr_non_resume_rejects_multiple_open_prs(
         fake_run(["unexpected"])
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="multiple open PRs"):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=9, branch=FAKE_BRANCH, worktree=worktree, source_repo="owner/repo"), "main", repo_dir=tmp_path, require_latest_base=False)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=9, branch=FAKE_BRANCH, worktree=worktree, source_repo="owner/repo"), "main", repo_dir=tmp_path, require_latest_base=False)
 
 
 def test_verify_pr_resume_keeps_unknown_state_for_non_object_scene_lookup(
@@ -2683,8 +2685,8 @@ def test_verify_pr_resume_keeps_unknown_state_for_non_object_scene_lookup(
     with pytest.raises(AssertionError):
         fake_run(["unexpected"])
     monkeypatch.setattr(seam, "run_command", fake_run)
-    with pytest.raises(runner.ResumeVerificationError, match="scene_pr_state=unknown"):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=9, branch=FAKE_BRANCH, worktree=worktree, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo="owner/repo", expected_url=FAKE_PR_URL, require_latest_base=False)
+    with pytest.raises(pr_verification.ResumeVerificationError, match="scene_pr_state=unknown"):
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=9, branch=FAKE_BRANCH, worktree=worktree, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo="owner/repo", expected_url=FAKE_PR_URL, require_latest_base=False)
 
 
 def test_verify_pr_resume_keeps_failure_evidence_when_scene_lookup_fails(
@@ -2708,8 +2710,8 @@ def test_verify_pr_resume_keeps_failure_evidence_when_scene_lookup_fails(
     with pytest.raises(AssertionError):
         fake_run(["unexpected"])
     monkeypatch.setattr(seam, "run_command", fake_run)
-    with pytest.raises(runner.ResumeVerificationError, match="scene_pr_state=unknown"):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=9, branch=FAKE_BRANCH, worktree=worktree, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo="owner/repo", expected_url=FAKE_PR_URL, require_latest_base=False)
+    with pytest.raises(pr_verification.ResumeVerificationError, match="scene_pr_state=unknown"):
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=9, branch=FAKE_BRANCH, worktree=worktree, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo="owner/repo", expected_url=FAKE_PR_URL, require_latest_base=False)
     assert "resume_scene_pr_state_lookup_failed" in caplog.text
 
 
@@ -2747,11 +2749,11 @@ def test_verify_resumed_pr_verifies_scene_pr_and_returns_verified_url(
     def fake_edit(number, *, repo, add=None, remove=None):
         edits.append((number, repo, add, remove))
 
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     monkeypatch.setattr(seam, "edit_issue", fake_edit)
     # The derived worktree exists (a real delivery always has one).
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    url = runner.verify_resumed_pr(
+    url = resume_verification.verify_resumed_pr(
         make_resume_scene(), make_resume_issue(),
         make_resume_config(tmp_path), "owner/repo",
     )
@@ -2926,10 +2928,10 @@ def test_verify_resumed_pr_backfills_in_progress_label_before_continuing(
     def fake_edit(number, *, repo, add=None, remove=None):
         edits.append((number, repo, add, remove))
 
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     monkeypatch.setattr(seam, "edit_issue", fake_edit)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    url = runner.verify_resumed_pr(
+    url = resume_verification.verify_resumed_pr(
         make_resume_scene(), make_resume_issue(),
         make_resume_config(tmp_path), "owner/repo",
     )
@@ -2959,12 +2961,12 @@ def test_verify_resumed_pr_repeated_resume_backfill_is_idempotent(
     def fake_edit(number, *, repo, add=None, remove=None):
         edits.append((number, repo, add, remove))
 
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     monkeypatch.setattr(seam, "edit_issue", fake_edit)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     # Two consecutive ticks resume the same scene.
     for _ in range(2):
-        url = runner.verify_resumed_pr(
+        url = resume_verification.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
@@ -3010,12 +3012,12 @@ def test_verify_resumed_pr_external_scene_reads_branch_from_worktree(
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: "fix/outer",
     )
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     monkeypatch.setattr(seam, "edit_issue", fake_edit)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     scene = make_resume_scene("https://github.com/xqliu/orbi/pull/592")
     scene["external"] = "true"
-    url = runner.verify_resumed_pr(
+    url = resume_verification.verify_resumed_pr(
         scene, make_resume_issue(),
         make_resume_config(tmp_path), "owner/repo",
     )
@@ -3065,7 +3067,7 @@ def test_verify_resumed_pr_recreates_missing_worktree_from_remote_branch(
         return fake_gh(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    url = runner.verify_resumed_pr(
+    url = resume_verification.verify_resumed_pr(
         make_resume_scene(), make_resume_issue(),
         make_resume_config(tmp_path), "owner/repo",
     )
@@ -3108,7 +3110,7 @@ def test_verify_resumed_pr_preserves_diverged_local_branch_with_evidence(
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(gitops.socket, "gethostname", lambda: "runner-box")
     with pytest.raises(RuntimeError) as excinfo:
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
@@ -3146,11 +3148,11 @@ def test_verify_resumed_pr_branch_gone_from_origin_is_terminal(
         runner.UnrecoverableDeliveryError,
         match="no longer exists on origin",
     ) as excinfo:
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
-    assert type(excinfo.value) is runner.ResumeBranchGoneError
+    assert type(excinfo.value) is pr_verification.ResumeBranchGoneError
     labels = fake_gh.issues[9]["labels"]
     assert "ai-blocked" in labels
     assert "ai-pr-opened" not in labels
@@ -3191,7 +3193,7 @@ def test_verify_resumed_pr_external_scene_recreates_worktree_from_scene_pr(
     monkeypatch.setattr(seam, "run_command", fake_run)
     scene = make_resume_scene(external_url)
     scene["external"] = "true"
-    url = runner.verify_resumed_pr(
+    url = resume_verification.verify_resumed_pr(
         scene, make_resume_issue(),
         make_resume_config(tmp_path), "owner/repo",
     )
@@ -3227,7 +3229,7 @@ def test_verify_resumed_pr_backfill_label_api_failure_fails_fast(
             ((number,), {"repo": repo, "add": add, "remove": remove}),
         )
 
-    monkeypatch.setattr(runner, "verify_pr", lambda *a, **kw: FAKE_PR_URL)
+    monkeypatch.setattr(pr_verification, "verify_pr", lambda *a, **kw: FAKE_PR_URL)
     monkeypatch.setattr(seam, "edit_issue", failing_edit)
     reviews: list = []
     monkeypatch.setattr(
@@ -3238,7 +3240,7 @@ def test_verify_resumed_pr_backfill_label_api_failure_fails_fast(
     bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
@@ -3295,13 +3297,13 @@ def test_verify_resumed_pr_missing_fixes_stays_fix_needed(
     )
 
     def fake_verify_pr(*args, **kwargs):
-        raise runner.MissingFixesError(
+        raise pr_verification.MissingFixesError(
             "PR body is missing `Fixes #9`; the keyword must point at the "
             "source Issue so GitHub closes it natively when the PR merges"
         )
 
     reviews: list = []
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     monkeypatch.setattr(
         review_merge, "review_and_merge_if_clean",
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
@@ -3310,10 +3312,10 @@ def test_verify_resumed_pr_missing_fixes_stays_fix_needed(
     bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(
-        runner.ReportedMissingFixesError,
+        pr_verification.ReportedMissingFixesError,
         match="missing `Fixes #9`",
     ):
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(pr_url="https://github.com/owner/repo/pull/99"),
             make_resume_issue(), make_resume_config(tmp_path), "owner/repo",
         )
@@ -3378,13 +3380,13 @@ def test_verify_resumed_pr_missing_fixes_comment_follows_the_language(
     captured, _ = make_resume_failure_fake(monkeypatch)
 
     def fake_verify_pr(*args, **kwargs):
-        raise runner.MissingFixesError("PR body is missing `Fixes #9`")
+        raise pr_verification.MissingFixesError("PR body is missing `Fixes #9`")
 
-    monkeypatch.setitem(runner.__dict__, "verify_pr", fake_verify_pr)
+    monkeypatch.setitem(pr_verification.__dict__, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     journal.set_run_id(FAKE_RUN_ID)
-    with pytest.raises(runner.ReportedMissingFixesError):
-        runner.verify_resumed_pr(
+    with pytest.raises(pr_verification.ReportedMissingFixesError):
+        resume_verification.verify_resumed_pr(
             make_resume_scene(pr_url="https://github.com/owner/repo/pull/99"),
             make_resume_issue(),
             make_resume_config(tmp_path, message_language=message_language),
@@ -3429,12 +3431,12 @@ def test_verify_resumed_pr_blocked_comment_follows_the_language_without_path(
     def fake_verify_pr(*args, **kwargs):
         raise runner.UnrecoverableDeliveryError("boom")
 
-    monkeypatch.setitem(runner.__dict__, "verify_pr", fake_verify_pr)
+    monkeypatch.setitem(pr_verification.__dict__, "verify_pr", fake_verify_pr)
     worktree = expected_resume_worktree(tmp_path)
     worktree.mkdir(parents=True)
     journal.set_run_id(FAKE_RUN_ID)
     with pytest.raises(runner.UnrecoverableDeliveryError):
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(pr_url="https://github.com/owner/repo/pull/99"),
             make_resume_issue(),
             make_resume_config(tmp_path, message_language=message_language),
@@ -3492,8 +3494,8 @@ def test_verify_pr_zero_open_prs_raises_typed_closed_scene_error(
                 merged_at="2026-09-13T00:00:00Z")
     worktree = tmp_path / "worktree"
     worktree.mkdir()
-    with pytest.raises(runner.ResumePrClosedError) as excinfo:
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=9, branch=FAKE_BRANCH, worktree=worktree, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo="owner/repo", expected_url=FAKE_PR_URL, require_latest_base=False)
+    with pytest.raises(pr_verification.ResumePrClosedError) as excinfo:
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=9, branch=FAKE_BRANCH, worktree=worktree, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo="owner/repo", expected_url=FAKE_PR_URL, require_latest_base=False)
     assert excinfo.value.scene_pr_state == "MERGED"
     assert isinstance(excinfo.value, runner.UnrecoverableDeliveryError)
     assert "scene_pr_state=MERGED" in str(excinfo.value)
@@ -3515,8 +3517,8 @@ def test_verify_resumed_pr_scene_pr_merged_between_ticks_does_not_block(
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
-    with pytest.raises(runner.ResumePrClosedError):
-        runner.verify_resumed_pr(
+    with pytest.raises(pr_verification.ResumePrClosedError):
+        resume_verification.verify_resumed_pr(
             _closed_scene(external=False), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
@@ -3543,8 +3545,8 @@ def test_verify_resumed_pr_external_pr_closed_between_ticks_requeues(
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     bind_run_id(FAKE_RUN_ID)
     external_url = "https://github.com/owner/repo/pull/592"
-    with pytest.raises(runner.ResumePrClosedError):
-        runner.verify_resumed_pr(
+    with pytest.raises(pr_verification.ResumePrClosedError):
+        resume_verification.verify_resumed_pr(
             _closed_scene(external=True, pr_url=external_url),
             make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
@@ -3576,8 +3578,8 @@ def test_verify_resumed_pr_external_pr_merged_between_ticks_closes_triage(
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     bind_run_id(FAKE_RUN_ID)
     external_url = "https://github.com/owner/repo/pull/592"
-    with pytest.raises(runner.ResumePrClosedError):
-        runner.verify_resumed_pr(
+    with pytest.raises(pr_verification.ResumePrClosedError):
+        resume_verification.verify_resumed_pr(
             _closed_scene(external=True, pr_url=external_url),
             make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
@@ -3617,7 +3619,7 @@ def test_verify_resumed_pr_scene_pr_closed_between_ticks_still_blocks(
     bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(runner.UnrecoverableDeliveryError):
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             _closed_scene(external=False), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
@@ -3646,12 +3648,12 @@ def test_verify_resumed_pr_pr_repo_mismatch_stays_fix_needed(
             "must keep the PR of the configured source repo"
         )
 
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(RuntimeError, match="PR head repo is fork/repo"):
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
@@ -3682,13 +3684,13 @@ def test_verify_resumed_pr_recoverable_failure_keeps_fix_needed_label(
     def fake_verify_pr(*args, **kwargs):
         raise RuntimeError("expected exactly one open PR for the task branch")
 
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     bind_run_id(FAKE_RUN_ID)
     issue = make_resume_issue()
     issue["labels"] = [{"name": "ai-fix-needed"}]
     with pytest.raises(RuntimeError, match="exactly one open PR"):
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(), issue, make_resume_config(tmp_path), "owner/repo",
         )
     # The current label set already carries ai-fix-needed, so the
@@ -3719,7 +3721,7 @@ def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
         # Must never run: the base mismatch is terminal before it.
         raise AssertionError("verify_pr must not run on a base mismatch")
 
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     monkeypatch.setattr(seam, "run_command", counting)
     bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
@@ -3728,7 +3730,7 @@ def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
     with pytest.raises(
         runner.UnrecoverableDeliveryError, match="differs from configured",
     ):
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             scene, make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
@@ -3772,9 +3774,9 @@ def test_verify_resumed_pr_reraises_when_failure_reporting_fails(
     stops)."""
 
     def fake_verify_pr(*args, **kwargs):
-        raise runner.MissingFixesError("the original verification failure")
+        raise pr_verification.MissingFixesError("the original verification failure")
 
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     make_resume_failure_fake(monkeypatch)
 
     def broken_edit(*args, **kwargs):
@@ -3786,11 +3788,11 @@ def test_verify_resumed_pr_reraises_when_failure_reporting_fails(
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="the original verification failure",
     ) as excinfo:
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
-    assert type(excinfo.value) is runner.MissingFixesError
+    assert type(excinfo.value) is pr_verification.MissingFixesError
     assert "failure reporting failed" in caplog.text
 
 
@@ -3807,13 +3809,13 @@ def test_verify_resumed_pr_without_bound_run_id_still_fix_needed(
     def fake_verify_pr(*args, **kwargs):
         raise RuntimeError("the verification failure")
 
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     # The autouse fixture resets the run id to None; do not re-bind it.
     assert runner.current_run_id() is None
     caplog.set_level("INFO")
     with pytest.raises(RuntimeError, match="the verification failure"):
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
@@ -3896,7 +3898,7 @@ def test_verify_pr_resume_accepts_a_marker_of_the_delivery_line(
     )
     worktree = tmp_path / "worktree"
     worktree.mkdir()
-    url = runner.verify_pr(
+    url = pr_verification.verify_pr(
         RunContext(run_id=RESUME_RUN_ID, issue=9, branch=FAKE_BRANCH,
                worktree=worktree, source_repo="owner/repo"),
         "main", repo_dir=tmp_path, pr_repo="owner/repo",
@@ -3961,7 +3963,7 @@ def test_verify_resumed_pr_resume_under_a_new_run_id_continues(
     scene = make_resume_scene()
     scene["run_id"] = RESUME_RUN_ID
     bind_run_id(RESUME_RUN_ID)
-    url = runner.verify_resumed_pr(
+    url = resume_verification.verify_resumed_pr(
         scene, make_resume_issue(), make_resume_config(tmp_path),
         "owner/repo",
     )
@@ -3994,7 +3996,7 @@ def test_verify_pr_resume_still_rejects_a_foreign_line_marker(
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     with pytest.raises(RuntimeError, match="stable run marker"):
-        runner.verify_pr(
+        pr_verification.verify_pr(
             RunContext(run_id=RESUME_RUN_ID, issue=9, branch=FAKE_BRANCH,
                    worktree=worktree, source_repo="owner/repo"),
             "main", repo_dir=tmp_path, pr_repo="owner/repo",
@@ -4034,7 +4036,7 @@ def test_verify_pr_resume_ignores_public_comment_markers(
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     with pytest.raises(RuntimeError, match="stable run marker"):
-        runner.verify_pr(
+        pr_verification.verify_pr(
             RunContext(run_id=RESUME_RUN_ID, issue=9, branch=FAKE_BRANCH,
                    worktree=worktree, source_repo="owner/repo"),
             "main", repo_dir=tmp_path, pr_repo="owner/repo",
@@ -4070,7 +4072,7 @@ def _deliver_verify(worktree, tmp_path):
     already knows is its own source repo. A test that hands `pr_repo`
     in verifies a call shape production never makes (Issue #1300).
     """
-    return runner.verify_pr(
+    return pr_verification.verify_pr(
         RunContext(run_id=RECLAIM_RUN_ID, issue=9, branch=FAKE_BRANCH,
                    worktree=worktree, source_repo="owner/repo"),
         "main", repo_dir=tmp_path, require_latest_base=False,

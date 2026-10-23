@@ -1139,6 +1139,7 @@ def _run_ref_hammer(
     import threading
 
     import orbi.runner as runner
+    import orbi.pr_verification as pr_verification
     import orbi.review_merge as review_merge
     import orbi.gitops as gitops
 
@@ -1207,7 +1208,7 @@ def _run_ref_hammer(
                 runner.create_worktree(
                     clone, "owner/repo", number, "01234567", base_sha,
                 )
-                runner.verify_pr(RunContext(run_id="01234567", issue=9, branch="orbi/owner-repo-issue-9", worktree=worktree, source_repo="owner/repo"), "main", repo_dir=clone, require_latest_base=False)
+                pr_verification.verify_pr(RunContext(run_id="01234567", issue=9, branch="orbi/owner-repo-issue-9", worktree=worktree, source_repo="owner/repo"), "main", repo_dir=clone, require_latest_base=False)
                 review_merge.sync_base_checkout(clone, "main")
             except Exception as exc:
                 with errors_lock:

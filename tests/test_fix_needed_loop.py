@@ -23,6 +23,8 @@ TASK_STATUS_URL = "https://tasks.example.org/project-status?repo=example%2Fwidge
 from orbi import language
 import orbi.failure_report as failure_report
 import orbi.runner as runner
+import orbi.pr_verification as pr_verification
+import orbi.resume_verification as resume_verification
 import orbi.review_merge as review_merge
 import orbi.review_rounds as review_rounds
 import orbi.run_state as run_state
@@ -698,14 +700,14 @@ def test_verify_resumed_pr_diverged_pr_head_stays_fix_needed(
             "must not continue on this branch"
         )
 
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(
         RuntimeError, match="the branch diverged",
     ):
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
@@ -798,7 +800,7 @@ def test_verify_resumed_pr_local_ahead_of_pr_head_continues_to_review(
     caplog.set_level("INFO")
     issue = make_resume_issue()
     issue["labels"] = [{"name": "ai-fix-needed"}]
-    url = runner.verify_resumed_pr(
+    url = resume_verification.verify_resumed_pr(
         make_resume_scene(), issue, make_resume_config(tmp_path), "owner/repo",
     )
     assert url == "https://github.com/owner/repo/pull/9"
@@ -836,13 +838,13 @@ def test_verify_resumed_pr_unrecoverable_failure_marks_blocked_with_reason(
             "to merge; a human must re-target the PR"
         )
 
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     bind_run_id(FAKE_RUN_ID)
     with pytest.raises(
         runner.UnrecoverableDeliveryError, match="not authorized",
     ):
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
@@ -882,10 +884,10 @@ def test_verify_resumed_pr_recoverable_failure_with_session_file_includes_sessio
     def fake_verify_pr(*args, **kwargs):
         raise RuntimeError("the verified commit was not pushed")
 
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     bind_run_id(FAKE_RUN_ID)
     with pytest.raises(RuntimeError, match="not pushed"):
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
@@ -915,12 +917,12 @@ def test_verify_resumed_pr_recoverable_failure_scene_snapshot_failure_is_logged(
     def failing_snapshot(*args, **kwargs):
         raise OSError("session file unreadable")
 
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     monkeypatch.setattr(failure_report, "activity_snapshot", failing_snapshot)
     bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(RuntimeError, match="not pushed"):
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
@@ -949,13 +951,13 @@ def test_verify_resumed_pr_unrecoverable_failure_removes_leftover_fix_needed_lab
     def fake_verify_pr(*args, **kwargs):
         raise runner.UnrecoverableDeliveryError("human decision needed")
 
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     bind_run_id(FAKE_RUN_ID)
     with pytest.raises(
         runner.UnrecoverableDeliveryError, match="human decision",
     ):
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
@@ -1015,7 +1017,7 @@ def test_verify_resumed_pr_reports_the_current_pr_round(
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     bind_run_id(FAKE_RUN_ID)
     with pytest.raises(RuntimeError, match="not pushed"):
-        runner.verify_resumed_pr(
+        resume_verification.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )

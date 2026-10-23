@@ -5,7 +5,7 @@
     "pilot_setup.py": 1326,
     "release.py": 1763,
     "review_merge.py": 2013,
-    "runner.py": 4060
+    "runner.py": 3382
   },
-  "runner_top_level_defs": 58
+  "runner_top_level_defs": 46
 }
