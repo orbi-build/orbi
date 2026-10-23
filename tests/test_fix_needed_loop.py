@@ -1226,7 +1226,7 @@ def test_exhausted_review_enters_new_budget_after_human_recovery(
     ))
     run_state.record_pushed_head(tmp_path, "def")
     monkeypatch.setattr(review_merge, "log_recovery_ci_status", lambda *a, **k: None)
-    monkeypatch.setattr(seam, "_safe_publish", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "safe_publish", lambda *a, **k: None)
     monkeypatch.setattr(
         pi_session, "run_review",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("review started")),
@@ -1322,7 +1322,7 @@ def _external_review_env(monkeypatch, tmp_path, *, external: bool):
                             [{"name": "tests", "status": "COMPLETED",
                               "conclusion": "SUCCESS"}],
                         ))
-    monkeypatch.setattr(seam, "_safe_publish", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "safe_publish", lambda *a, **k: None)
     # The frozen head is the delivery's recorded engine push (the normal
     # in-flight state, Issue #833): the round-start adoption
     # short-circuits before any git call on the bare worktree.

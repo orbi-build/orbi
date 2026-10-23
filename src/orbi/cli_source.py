@@ -46,7 +46,7 @@ import subprocess
 from pathlib import Path
 
 import orbi
-from orbi.progress import quote_value
+from orbi.journal import quote_value
 
 # The Python floor (Issue #861): the same floor as the PEP 621
 # `requires-python` — pinned together by tests/test_cli_packaging.py
@@ -200,7 +200,7 @@ def drift_line(source: dict) -> str | None:
     the exact fix command (the editable force reinstall — the repair
     that makes the ExecStartPre sync reachable by the next CLI
     process). Values containing spaces are quoted (the
-    progress.quote_value convention, like every unit_drift line).
+    journal.quote_value convention, like every unit_drift line).
     """
     if source["editable"]:
         return None

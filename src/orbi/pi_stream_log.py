@@ -121,8 +121,8 @@ def _is_rate_limited(stderr: str) -> bool:
     return any(marker in lowered for marker in PI_RATE_LIMIT_MARKERS)
 
 
-def _log_provider_config_loaded(*, issue_ref: str, role: str, config: RunnerConfig,
-                                elapsed: float) -> None:
+def log_provider_config_loaded(*, issue_ref: str, role: str, config: RunnerConfig,
+                               elapsed: float) -> None:
     """Log the `provider_config_loaded` startup line.
 
     The provider file has been loaded and validated (at config load)

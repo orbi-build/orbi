@@ -56,7 +56,7 @@ from orbi.pi_command import (
     build_pi_command,
 )
 from orbi.pi_process import PiWatchOptions, stream_pi
-from orbi.pi_session import _pi_extension_env, prepare_pi_agent_dir
+from orbi.pi_session import pi_extension_env, prepare_pi_agent_dir
 from orbi.pilot_setup import model_provider_status
 
 
@@ -418,7 +418,7 @@ def _run_session(config: RunnerConfig, repo: str, run_id: str,
         tools=SUGGEST_TOOLS, extensions=True,
         no_skills=True, no_context_files=True, skills=[skill],
     )
-    pi_env = _pi_extension_env(config)
+    pi_env = pi_extension_env(config)
     if agent_dir is not None:
         pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
     output = stream_pi(

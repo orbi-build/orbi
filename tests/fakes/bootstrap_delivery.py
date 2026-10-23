@@ -255,7 +255,7 @@ def _review_round_env(
     """Shared fake GitHub/git scene for one direct `_run_review_round`
     call. Returns (edits, comments, reviews, publishes) capture lists;
     `edits` carries the `edit_issue` label patches, `publishes` the
-    `_safe_publish` progress calls."""
+    `safe_publish` progress calls."""
     def fake_run(command, **kwargs):
         if command[-1] == "comments":
             # The trusted scene comment.
@@ -329,7 +329,7 @@ def _review_round_env(
         review_merge, "review_and_merge_if_clean", fake_review,
     )
     publishes: list = []
-    monkeypatch.setattr(seam, "_safe_publish",
+    monkeypatch.setattr(seam, "safe_publish",
         lambda **kwargs: publishes.append(kwargs),
     )
     # The run the scene above carries; conftest's autouse

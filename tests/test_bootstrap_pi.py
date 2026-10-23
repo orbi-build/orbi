@@ -673,7 +673,7 @@ def test_stream_pi_logs_the_codex_usage_limit_as_provider_quota(
         'detail="Codex error: The usage limit has been reached"'
         in quota[0]
     )
-    detail = runner._failure_detail(excinfo.value)
+    detail = runner.failure_detail(excinfo.value)
     assert "usage limit has been reached" in detail.lower()
     assert runner._classify_failure(
         excinfo.value, outcome="blocked",

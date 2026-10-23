@@ -1171,7 +1171,7 @@ def test_process_release_parse_failure_publishes_final_comment(
     """Issue #474: a release that fails BEFORE `publisher.ensure` (the
     body is missing the `## Release` section) still publishes the final
     progress comment. Before the fix `finish()` raised
-    `RuntimeError: no progress comment to update`, `_safe_publish`
+    `RuntimeError: no progress comment to update`, `safe_publish`
     logged a `progress_publish_failed` traceback, and the final comment
     never landed.
 
@@ -2992,7 +2992,7 @@ def test_process_release_started_milestone_carries_base_branch(monkeypatch):
     def run_publish_actions(**kwargs):
         kwargs["action"]()
 
-    monkeypatch.setattr(seam, "_safe_publish", run_publish_actions)
+    monkeypatch.setattr(seam, "safe_publish", run_publish_actions)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -3020,11 +3020,11 @@ def test_process_release_status_comments_follow_the_message_language(
     state = make_release_process_env(monkeypatch)
 
     def run_publish_actions(**kwargs):
-        # The real `_safe_publish` runs the action (bypass); run it here
+        # The real `safe_publish` runs the action (bypass); run it here
         # so the milestone lambdas really render their text.
         kwargs["action"]()
 
-    monkeypatch.setattr(seam, "_safe_publish", run_publish_actions)
+    monkeypatch.setattr(seam, "safe_publish", run_publish_actions)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -3114,7 +3114,7 @@ def test_process_release_failure_comment_carries_failure_block(monkeypatch):
     body = comment_kwargs["body"]
     # The delivery path would classify this same cause the same way.
     expected = failure.classify(
-        failure._failure_detail(RuntimeError("HTTP 401: bad credentials")),
+        failure.failure_detail(RuntimeError("HTTP 401: bad credentials")),
     )
     assert failure.parse(body) == expected
     assert expected.reason_code in failure.REASON_CODES
@@ -3425,11 +3425,11 @@ def test_process_release_waits_for_pending_ci_and_succeeds(monkeypatch):
     monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
 
     def run_publish_actions(**kwargs):
-        # The real `_safe_publish` runs the action; run it so the
+        # The real `safe_publish` runs the action; run it so the
         # progress-comment wait reflection is actually recorded.
         kwargs["action"]()
 
-    monkeypatch.setattr(seam, "_safe_publish", run_publish_actions)
+    monkeypatch.setattr(seam, "safe_publish", run_publish_actions)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -4680,7 +4680,7 @@ def test_process_release_keeps_the_fresh_id_when_no_run_id_is_recoverable(
 
 def test_process_release_publishes_the_release_role_progress_body(
         monkeypatch):
-    # `_safe_publish` really invokes the action here, so the progress
+    # `safe_publish` really invokes the action here, so the progress
     # closure renders the body: role=release, run marker, branch.
     state = make_release_process_env(monkeypatch)
     publishes = []
@@ -4689,7 +4689,7 @@ def test_process_release_publishes_the_release_role_progress_body(
         publishes.append(kwargs)
         kwargs["action"]()
 
-    monkeypatch.setattr(seam, "_safe_publish", publish)
+    monkeypatch.setattr(seam, "safe_publish", publish)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}

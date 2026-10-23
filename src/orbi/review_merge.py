@@ -50,7 +50,7 @@ from orbi.delivery_labels import (
     needs_human_intervention,
 )
 from orbi.delivery_scene import RunContext
-from orbi.failure import _failure_detail
+from orbi.failure import failure_detail
 from orbi.failure_report import (
     GateCIFailure,
     HumanDecisionRequired,
@@ -100,10 +100,10 @@ from orbi.comment_kind import (
 from orbi.progress import (
     LiveProgressThrottle,
     ProgressPublisher,
-    _progress_body,
-    _progress_state,
-    _safe_publish,
+    progress_body_with_outcome,
+    progress_state,
     run_marker,
+    safe_publish,
     step_publisher,
 )
 from orbi.review_rounds import (
@@ -1072,7 +1072,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         language_code=language.of(config), status_url=config.status_url,
     )
     publish = functools.partial(
-        _safe_publish, run_id=config.run_id, issue=number,
+        safe_publish, run_id=config.run_id, issue=number,
         source_repo=source_repo, role=ROLE_REVIEW,
     )
     started = time.monotonic()
@@ -1917,7 +1917,7 @@ def _run_review_round(
             **review_kwargs,
         )
     except Exception as exc:
-        detail = _failure_detail(exc)
+        detail = failure_detail(exc)
         if isinstance(exc, (ReviewRoundsExhausted, HumanDecisionRequired)):
             # These are intentional human decision points, not Runner
             # bugs. Keep structured evidence without a traceback.

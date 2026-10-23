@@ -24,7 +24,7 @@ LAUNCHERS = (
     "prepare_pi_agent_dir",
     "run_review",
     "run_ticket_agent",
-    "_pi_extension_env",
+    "pi_extension_env",
 )
 
 

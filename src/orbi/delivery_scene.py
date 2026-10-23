@@ -87,7 +87,7 @@ def body_markers(body: object) -> frozenset[str]:
     return frozenset()
 
 
-def _issue_label_set(issue: dict) -> frozenset[str]:
+def issue_label_set(issue: dict) -> frozenset[str]:
     """The Issue's label names (the scans fetch `labels`).
 
     The fact shape `classify` reads; a missing or malformed `labels`

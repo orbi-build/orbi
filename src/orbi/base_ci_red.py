@@ -48,14 +48,14 @@ from orbi.comment_kind import (
 from orbi.delivery_labels import (
     BLOCKED_LABEL, FIX_NEEDED_LABEL, P0_LABEL, READY_LABEL,
 )
-from orbi.failure import _redact_local_paths
+from orbi.failure import redact_local_paths
 from orbi.github import (
     branch_head_sha, comment_issue, commit_check_runs, edit_issue,
     issue_comments, list_issues, pr_view, update_issue_comment,
 )
 from orbi.journal import LOGGER, event, run_command
 from orbi.pi_activity import parse_iso_utc
-from orbi.progress import _fenced
+from orbi.progress import fenced
 from orbi.ticket_command import (
     CommandSpec, TicketCommandError, command_comment_key,
     command_receipt_marker, process_commands, register_command,
@@ -225,7 +225,7 @@ def _error_lines(run: dict) -> tuple[str, ...]:
         value = output.get(field)
         if isinstance(value, str) and value.strip():
             return tuple(
-                _redact_local_paths(line.rstrip())
+                redact_local_paths(line.rstrip())
                 for line in value.splitlines()[:MAX_ERROR_LINES]
             )
     return ()
@@ -355,7 +355,7 @@ def _triage_body(check: FailingCheck, record: BaseCIRed,
     if check.errors:
         parts.append(
             f"{language.text(language_code, 'base_ci_red.triage_errors')}\n"
-            f"{_fenced('\n'.join(check.errors))}"
+            f"{fenced('\n'.join(check.errors))}"
         )
     return "\n\n".join(parts)
 
@@ -447,7 +447,7 @@ def comment_body(record: BaseCIRed, checks: list[FailingCheck], *,
             evidence.append(
                 language.text(language_code, "base_ci_red.check_errors",
                               name=check.name)
-                + "\n" + _fenced("\n".join(check.errors))
+                + "\n" + fenced("\n".join(check.errors))
             )
     if evidence:
         parts.append("\n".join(evidence))

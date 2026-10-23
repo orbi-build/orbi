@@ -269,7 +269,7 @@ def test_unit_status_reports_a_missing_template_as_drift(tmp_path):
 
 
 def test_drift_lines_carry_paths_hashes_and_the_fix_command(tmp_path):
-    from orbi.progress import quote_value
+    from orbi.journal import quote_value
 
     repo = make_repo(tmp_path)
     fake = FakeScheduler(tmp_path)

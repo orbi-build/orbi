@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Callable
 
 from orbi.delivery_scene import RunContext
-from orbi.failure import Failure, REASON_CODES, _redact_local_paths
+from orbi.failure import Failure, REASON_CODES, redact_local_paths
 # The runner identity probe is its own leaf (Issue #1229); the name is
 # re-exported here because the marker below renders through it, so an
 # existing `monkeypatch.setattr(progress, "runner_fingerprint", ...)`
@@ -35,7 +35,6 @@ from orbi.journal import (
     RUN_ID_PATTERN,
     event,
     issue_context,
-    quote_value,
     redact_secrets,
     validate_run_id,
 )
@@ -103,7 +102,7 @@ def _with_runner_marker(body: str) -> str:
     return body + "\n\n" + marker
 
 
-def _fenced(content: str, *, cap: int = 4000) -> str:
+def fenced(content: str, *, cap: int = 4000) -> str:
     """One raw-output segment inside a CommonMark code fence.
 
     GitHub renders fenced content literally and monospaced, so coverage
@@ -343,7 +342,7 @@ def recoverable_scene_body(
         run_info=run_info,
         action_code=record.action_code,
         retry_safe=str(record.retry_safe).lower(),
-        detail=_fenced(_redact_local_paths(detail)),
+        detail=fenced(redact_local_paths(detail)),
         diagnosis=language.text(language_code, "failure.diagnosis_summary"),
         summary=user_summary.summary_text(
             status_url=status_url, issue=issue, title=title,
@@ -747,7 +746,7 @@ class ProgressPublisher:
 # --- to the progress module) ----
 
 
-def _run_info_fields(run_info: str) -> dict[str, str]:
+def run_info_fields(run_info: str) -> dict[str, str]:
     """Extract the runner-owned key/value fields for comment rendering."""
     return dict(
         part.split("=", 1) for part in run_info.split()
@@ -755,14 +754,14 @@ def _run_info_fields(run_info: str) -> dict[str, str]:
     )
 
 
-def _progress_state(ctx: RunContext, *, title: str, role: str,
-                    started: float, pr_url: str | None,
-                    review_round: int, priority: str, language_code: str,
-                    step: str | None = None,
-                    checks: list | None = None,
-                    activity: dict | None = None,
-                    review: str = "pending",
-                    status_url: str | None = None) -> dict:
+def progress_state(ctx: RunContext, *, title: str, role: str,
+                   started: float, pr_url: str | None,
+                   review_round: int, priority: str, language_code: str,
+                   step: str | None = None,
+                   checks: list | None = None,
+                   activity: dict | None = None,
+                   review: str = "pending",
+                   status_url: str | None = None) -> dict:
     """Collect the current run state for the GitHub progress comment.
 
     `title` is the issue's GitHub title: the progress
@@ -822,7 +821,7 @@ def _progress_state(ctx: RunContext, *, title: str, role: str,
     }
 
 
-def _progress_body(state: dict, *, outcome: str | None = None) -> str:
+def progress_body_with_outcome(state: dict, *, outcome: str | None = None) -> str:
     """Render the progress body, optionally with a terminal outcome.
 
     The documented formal prefix is the run marker immediately followed
@@ -838,8 +837,8 @@ def _progress_body(state: dict, *, outcome: str | None = None) -> str:
     return f"{prefix}\n\n{outcome}\n\n{rest}"
 
 
-def _safe_publish(*, run_id: str, issue: int, source_repo: str,
-                  role: str, action: Callable[[], None]) -> None:
+def safe_publish(*, run_id: str, issue: int, source_repo: str,
+                 role: str, action: Callable[[], None]) -> None:
     """Run one progress-publishing step as a pure bypass.
 
     The main delivery path is claim -> worktree -> Pi -> verify PR ->
@@ -869,19 +868,19 @@ from orbi import progress_outcome  # noqa: E402
 _finish_outcome_body = progress_outcome.finish_outcome_body
 
 
-def _finish_progress_body(*, number: int, title: str, run_id: str,
-                          role: str, branch: str | None,
-                          worktree: Path | None, pr_url: str | None,
-                          review_round: int, priority: str, detail: str,
-                          next_step: str, outcome: str,
-                          source_repo: str, action: str | None = None,
-                          reason: str | None = None,
-                          diagnosis: str | None = None,
-                          language_code: str,
-                          status_url: str | None = None,
-                          ) -> str:
+def finish_progress_body(*, number: int, title: str, run_id: str,
+                         role: str, branch: str | None,
+                         worktree: Path | None, pr_url: str | None,
+                         review_round: int, priority: str, detail: str,
+                         next_step: str, outcome: str,
+                         source_repo: str, action: str | None = None,
+                         reason: str | None = None,
+                         diagnosis: str | None = None,
+                         language_code: str,
+                         status_url: str | None = None,
+                         ) -> str:
     """Render the terminal progress scene shared by every finish path."""
-    return _progress_body(_progress_state(
+    return progress_body_with_outcome(progress_state(
         RunContext(
             run_id=run_id, issue=number, branch=branch or "-",
             worktree=worktree or Path("-"), source_repo=source_repo,
@@ -892,8 +891,8 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
     ), outcome=_finish_outcome_body(
         outcome=outcome, detail=detail, next_step=next_step, pr_url=pr_url,
         number=number, source_repo=source_repo, action=action,
-        reason=reason and _redact_local_paths(reason),
-        diagnosis=diagnosis and _redact_local_paths(diagnosis),
+        reason=reason and redact_local_paths(reason),
+        diagnosis=diagnosis and redact_local_paths(diagnosis),
         language_code=language_code,
     ))
 
@@ -922,7 +921,7 @@ def step_publisher(publisher: ProgressPublisher, ctx: RunContext, *,
     def publish_step(pr_url: str | None, review_round: int, *,
                      step: str | None = None, review: str = "pending",
                      outcome: str | None = None) -> None:
-        publisher.finish(_progress_body(_progress_state(
+        publisher.finish(progress_body_with_outcome(progress_state(
             ctx, title=title, role=role, step=step, started=started,
             pr_url=pr_url, review_round=review_round, priority=priority,
             checks=checks, review=review, language_code=publisher.language_code,
@@ -949,13 +948,13 @@ def _live_progress(ctx: RunContext, publisher: ProgressPublisher, *,
     round's own `ensure` reports, so a heartbeat never falls back to `-`
     while the session runs.
     """
-    state = _progress_state(
+    state = progress_state(
         ctx, title=title, role=role, started=started,
         pr_url=pr_url, review_round=review_round, priority=priority,
         checks=checks, activity=activity, language_code=publisher.language_code,
         status_url=getattr(publisher, "status_url", None),
     )
-    publisher.patch(_progress_body(state))
+    publisher.patch(progress_body_with_outcome(state))
 
 class LiveProgressThrottle:
     """Throttle live GitHub PATCHes to change-driven or <=30-second cadence.
