@@ -55,9 +55,9 @@ from orbi.pi_process import (
     ROLE_IMPLEMENT,
     PiWatchOptions,
     SteeringRequest,
-    _log_provider_config_loaded,
     stream_pi,
 )
+from orbi.pi_stream_log import _log_provider_config_loaded
 from orbi.repo_config import validate_context_file
 
 # Runner-owned runtime paths inside a task worktree: created
