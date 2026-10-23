@@ -248,6 +248,43 @@ def test_milestone_set_policy_declares_without_host_line_succeeds(
     assert "active_milestone: v0.5.0 -> v0.6.0" in capsys.readouterr().out
 
 
+def test_milestone_set_through_a_config_symlink_updates_its_target(
+    tmp_path, monkeypatch, capsys,
+):
+    """Issue #1872: `--config` may be a symlink alias (here a relative
+    stored target into another directory) and the repository policy
+    declares no `active_milestone`, so the host config writer runs. The
+    link must survive and the original config must carry the new value."""
+    config_path = make_world(tmp_path)
+    original = config_path.read_text(encoding="utf-8")
+    alias_dir = tmp_path / "slot-alias"
+    alias_dir.mkdir()
+    alias = alias_dir / "alias.toml"
+    stored_target = os.path.join("..", "run", "orbi.toml")
+    alias.symlink_to(stored_target)
+    gh = FakeGh(REPO)
+    gh.add_milestone(1, title="v0.5.0", state="closed")
+    gh.add_milestone(2, title="v0.6.0", open_issues=3)
+    calls = wire(monkeypatch, gh)
+
+    exit_code = run_set(alias, "v0.6.0")
+
+    assert exit_code == 0
+    assert alias.is_symlink()
+    assert os.readlink(alias) == stored_target
+    expected = original.replace(
+        'active_milestone = "v0.5.0"', 'active_milestone = "v0.6.0"',
+    )
+    assert config_path.read_text(encoding="utf-8") == expected
+    # Both paths read the updated milestone back.
+    assert alias.read_text(encoding="utf-8") == expected
+    out = capsys.readouterr().out
+    assert "active_milestone: v0.5.0 -> v0.6.0" in out
+    assert f"wrote: host config {alias}" in out
+    # No repository policy declared the key: no contents PUT.
+    assert _policy_puts(calls) == []
+
+
 def test_milestone_set_preserves_comments_and_blank_lines(
     tmp_path, monkeypatch, capsys,
 ):
@@ -565,21 +602,30 @@ def test_milestone_set_missing_config_fails(
     assert "Traceback" not in captured.err
 
 
+@pytest.mark.parametrize("via_symlink", [False, True])
 @pytest.mark.skipif(
     os.geteuid() == 0, reason="root writes read-only files",
 )
 def test_milestone_set_unwritable_config_fails_without_touching_content(
-    tmp_path, monkeypatch, capsys,
+    tmp_path, monkeypatch, capsys, via_symlink,
 ):
     config_path = make_world(tmp_path)
     original = config_path.read_bytes()
     config_path.chmod(0o444)
+    # Issue #1872: the gate must read the RESOLVED target, so a read-only
+    # target behind a writable symlink alias still fails as documented.
+    requested = config_path
+    if via_symlink:
+        alias_dir = tmp_path / "slot-alias"
+        alias_dir.mkdir()
+        requested = alias_dir / "alias.toml"
+        requested.symlink_to(os.path.join("..", "run", "orbi.toml"))
     gh = FakeGh(REPO)
     gh.add_milestone(1, title="v0.6.0", open_issues=3)
     wire(monkeypatch, gh)
 
     try:
-        exit_code = run_set(config_path, "v0.6.0")
+        exit_code = run_set(requested, "v0.6.0")
     finally:
         config_path.chmod(0o644)
 
