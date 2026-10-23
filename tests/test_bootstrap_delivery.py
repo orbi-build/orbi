@@ -37,6 +37,8 @@ import pytest
 import orbi.claim as claim
 import orbi.failure_report as failure_report
 import orbi.runner as runner
+import orbi.pr_verification as pr_verification
+import orbi.resume_verification as resume_verification
 import orbi.review_merge as review_merge
 import orbi.run_state as run_state
 import orbi.gitops as gitops
@@ -2892,7 +2894,7 @@ def test_claim_route_decision_table():
 def test_verify_pr_rejects_wrong_branch(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "other-branch")
     with pytest.raises(RuntimeError, match="Pi changed branch"):
-        runner.verify_pr(RunContext(run_id="e07383c2", issue=4, branch="orbi/issue-4", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+        pr_verification.verify_pr(RunContext(run_id="e07383c2", issue=4, branch="orbi/issue-4", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
 
 
 def test_verify_pr_rejects_delivery_behind_latest_remote_base(monkeypatch, tmp_path, caplog):
@@ -2905,7 +2907,7 @@ def test_verify_pr_rejects_delivery_behind_latest_remote_base(monkeypatch, tmp_p
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="behind latest remote base",
     ):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
     assert "base_branch=main" in caplog.text
 
 
@@ -2920,7 +2922,7 @@ def test_verify_pr_rejects_missing_pr(monkeypatch, tmp_path):
     ])
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="exactly one open PR"):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
 
 
 def test_verify_pr_rejects_non_array(monkeypatch, tmp_path):
@@ -2929,7 +2931,7 @@ def test_verify_pr_rejects_non_array(monkeypatch, tmp_path):
     ])
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="exactly one open PR"):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
 
 
 def test_verify_pr_returns_url_when_delivery_contains_latest_base(monkeypatch, tmp_path):
@@ -2940,7 +2942,7 @@ def test_verify_pr_returns_url_when_delivery_contains_latest_base(monkeypatch, t
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path) == "https://github.com/orbi-build/orbi/pull/4"
+    assert pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path) == "https://github.com/orbi-build/orbi/pull/4"
     assert ["git", "fetch", "origin", "main"] in calls
     assert ["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"] in calls
 
@@ -2953,7 +2955,7 @@ def test_verify_pr_requires_the_repo_dir_lock_location(
     # dir) must be explicit — there is no bypass path.
     monkeypatch.setattr(seam, "run_command", fake_verify_run)
     with pytest.raises(TypeError):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main")
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main")
 
 
 def test_verify_pr_fetches_under_the_base_sync_lock(
@@ -2970,7 +2972,7 @@ def test_verify_pr_fetches_under_the_base_sync_lock(
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+    pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
     assert held == [True]
     assert _probe_lock_free(tmp_path) is True
 
@@ -2984,7 +2986,7 @@ def test_verify_pr_rejects_pr_without_url(monkeypatch, tmp_path):
     ])
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="open PR has no URL"):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
 
 
 def test_verify_pr_rejects_pr_based_on_wrong_branch(monkeypatch, tmp_path):
@@ -2997,7 +2999,7 @@ def test_verify_pr_rejects_pr_based_on_wrong_branch(monkeypatch, tmp_path):
     with pytest.raises(
         RuntimeError, match="PR base is develop, expected main",
     ):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
 
 
 def test_verify_pr_rejects_diverged_remote_pr_head(monkeypatch, tmp_path,
@@ -3024,7 +3026,7 @@ def test_verify_pr_rejects_diverged_remote_pr_head(monkeypatch, tmp_path,
         RuntimeError,
         match="PR head deadbeef.* is not local HEAD 01234567.*diverged",
     ):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
     assert "pr_head_diverged" in caplog.text
 
 
@@ -3050,7 +3052,7 @@ def test_verify_pr_passes_through_when_local_head_ahead_of_pr_head(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        url = runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+        url = pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
     assert url == FAKE_PR_URL
     assert "local_head_ahead_of_pr_head" in caplog.text
     assert "ed72915ed72915ed72915ed72915ed72915ed7291" in caplog.text
@@ -3067,7 +3069,7 @@ def test_verify_pr_rejects_pr_body_without_run_marker(monkeypatch, tmp_path, cap
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="missing the stable run marker",
     ):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
     assert "pr_run_marker_missing" in caplog.text
 
 
@@ -3081,7 +3083,7 @@ def test_verify_pr_rejects_pr_body_missing_field(monkeypatch, tmp_path):
     with pytest.raises(
         RuntimeError, match="missing the stable run marker",
     ):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
 
 
 # ------------------------------------------- Fixes #N (Issue #53)
@@ -3098,7 +3100,7 @@ def test_verify_pr_accepts_pr_body_with_fixes_keyword(monkeypatch, tmp_path):
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path) == FAKE_PR_URL
+    assert pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path) == FAKE_PR_URL
 
 
 @pytest.mark.parametrize("reference", ["Fixes #4", "Fixes 4"])
@@ -3113,7 +3115,7 @@ def test_verify_pr_accepts_hash_and_hashless_fixes_reference(
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path) == FAKE_PR_URL
+    assert pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path) == FAKE_PR_URL
 
 
 def test_verify_pr_rejects_pr_body_without_fixes_keyword(
@@ -3132,7 +3134,7 @@ def test_verify_pr_rejects_pr_body_without_fixes_keyword(
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match=r"missing `Fixes #4`",
     ):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
     assert "pr_fixes_missing" in caplog.text
     assert "issue=4" in caplog.text
 
@@ -3156,7 +3158,7 @@ def test_verify_pr_rejects_pr_body_with_wrong_issue_number(
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match=r"missing `Fixes #4`",
     ):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
     assert "pr_fixes_missing" in caplog.text
 
 
@@ -3179,7 +3181,7 @@ def test_verify_pr_rejects_pr_body_with_longer_issue_number(
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match=r"missing `Fixes #4`",
     ):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
     assert "pr_fixes_missing" in caplog.text
 
 
@@ -3206,7 +3208,7 @@ def test_verify_pr_external_mode_skips_marker_and_fixes_checks(
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.verify_pr(
+    assert pr_verification.verify_pr(
         RunContext(
             run_id=FAKE_RUN_ID, issue=4, branch="fix/outer",
             worktree=tmp_path, source_repo="owner/repo",
@@ -3228,7 +3230,7 @@ def test_verify_pr_normal_mode_still_requires_marker_and_fixes(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="run marker"):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
 
 
 def test_external_takeover_pr_fails_fast_on_a_malformed_view(
@@ -3344,7 +3346,7 @@ def test_verify_pr_queries_base_head_and_accepts_matching_pr(
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path) == "https://github.com/orbi-build/orbi/pull/4"
+    assert pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path) == "https://github.com/orbi-build/orbi/pull/4"
     assert ["git", "rev-parse", "HEAD"] in calls
     # Issue #291: verify_pr issues the ONE shared PR query contract.
     assert [
@@ -3364,7 +3366,7 @@ def test_verify_pr_queries_base_head_and_accepts_matching_pr(
 
 def test_verify_pr_accepts_pr_in_expected_repo_and_url(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command", fake_verify_run)
-    assert runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo=FAKE_PR_REPO, expected_url=FAKE_PR_URL) == FAKE_PR_URL
+    assert pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo=FAKE_PR_REPO, expected_url=FAKE_PR_URL) == FAKE_PR_URL
 
 
 def test_verify_pr_rejects_pr_head_in_another_repo(monkeypatch, tmp_path, caplog):
@@ -3381,7 +3383,7 @@ def test_verify_pr_rejects_pr_head_in_another_repo(monkeypatch, tmp_path, caplog
         RuntimeError, match="PR head repo is attacker/other, expected "
                             "orbi-build/orbi",
     ):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo=FAKE_PR_REPO)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo=FAKE_PR_REPO)
     assert "pr_repo_mismatch" in caplog.text
 
 
@@ -3398,7 +3400,7 @@ def test_verify_pr_rejects_pr_head_repo_missing_fields(monkeypatch, tmp_path):
         RuntimeError, match="PR head repo is <missing>, expected "
                             "orbi-build/orbi",
     ):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo=FAKE_PR_REPO)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo=FAKE_PR_REPO)
 
 
 def test_verify_pr_rejects_pr_head_repo_empty_fields(monkeypatch, tmp_path):
@@ -3414,7 +3416,7 @@ def test_verify_pr_rejects_pr_head_repo_empty_fields(monkeypatch, tmp_path):
         RuntimeError, match="PR head repo is <missing>, expected "
                             "orbi-build/orbi",
     ):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo=FAKE_PR_REPO)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path, pr_repo=FAKE_PR_REPO)
 
 
 def test_verify_pr_skips_repo_check_when_pr_repo_not_given(monkeypatch,
@@ -3435,7 +3437,7 @@ def test_verify_pr_skips_repo_check_when_pr_repo_not_given(monkeypatch,
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path) == FAKE_PR_URL
+    assert pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path) == FAKE_PR_URL
 
 
 def test_verify_pr_rejects_url_different_from_expected(monkeypatch, tmp_path, caplog):
@@ -3454,7 +3456,7 @@ def test_verify_pr_rejects_url_different_from_expected(monkeypatch, tmp_path, ca
             "https://github.com/orbi-build/orbi/pull/4"
         ),
     ):
-        runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path, expected_url=FAKE_PR_URL)
+        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path, expected_url=FAKE_PR_URL)
     assert "pr_url_mismatch" in caplog.text
 
 
@@ -3462,7 +3464,7 @@ def test_verify_pr_skips_url_check_when_expected_url_not_given(
     monkeypatch, tmp_path,
 ):
     monkeypatch.setattr(seam, "run_command", fake_verify_run)
-    assert runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path) == FAKE_PR_URL
+    assert pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path) == FAKE_PR_URL
 
 
 def test_verify_pr_skips_latest_base_check_when_not_required(
@@ -3478,7 +3480,7 @@ def test_verify_pr_skips_latest_base_check_when_not_required(
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path, require_latest_base=False) == FAKE_PR_URL
+    assert pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path, require_latest_base=False) == FAKE_PR_URL
     assert not any(c[:3] == ["git", "fetch", "origin"] for c in calls)
     assert not any(
         c[:3] == ["git", "merge-base", "--is-ancestor"] for c in calls
@@ -5951,8 +5953,7 @@ def test_deliver_pr_reports_a_closed_issue_and_skips_the_pr(
     monkeypatch.setattr(seam, "comment_issue",
         lambda number, *, repo, body: comments.append((number, repo, body)),
     )
-    monkeypatch.setattr(
-        runner, "verify_pr",
+    monkeypatch.setattr(pr_verification, "verify_pr",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("verify_pr must not run for a closed Issue")),
     )
@@ -6601,7 +6602,7 @@ def test_close_external_triage_issue_swallows_close_failure(
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("gh down")),
     )
     with caplog.at_level("ERROR"):
-        runner._close_external_triage_issue(
+        resume_verification._close_external_triage_issue(
             39, "owner/repo", PR_URL, "<!-- orbi:external-pr:55 -->",
             "a1b2c3d4", language_code="en",
         )
@@ -6618,11 +6619,11 @@ def test_external_triage_comments_follow_the_config_language(monkeypatch):
         seam, "comment_pr",
         lambda number, *, repo, body: comments.append(body),
     )
-    monkeypatch.setitem(runner.__dict__, "apply_label_patch", lambda *a, **k: None)
-    monkeypatch.setitem(runner.__dict__, "issue_labels", lambda *a, **k: [])
+    monkeypatch.setitem(resume_verification.__dict__, "apply_label_patch", lambda *a, **k: None)
+    monkeypatch.setitem(resume_verification.__dict__, "issue_labels", lambda *a, **k: [])
     monkeypatch.setattr(seam, "run_command", lambda *a, **k: "")
 
-    runner._requeue_closed_external_takeover(
+    resume_verification._requeue_closed_external_takeover(
         39, "owner/repo", PR_URL, "<!-- orbi:external-pr:55 -->",
         "a1b2c3d4", language_code="zh",
     )
@@ -6630,7 +6631,7 @@ def test_external_triage_comments_follow_the_config_language(monkeypatch):
     assert "未合并就被关闭" in comments[0]
     assert "run_id=a1b2c3d4" in comments[0]
 
-    runner._close_external_triage_issue(
+    resume_verification._close_external_triage_issue(
         39, "owner/repo", PR_URL, "<!-- orbi:external-pr:55 -->",
         "a1b2c3d4", language_code="zh",
     )

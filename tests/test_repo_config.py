@@ -19,6 +19,7 @@ import orbi.repo_config as repo_config
 import orbi.claim as claim
 import orbi.failure_report as failure_report
 import orbi.runner as runner
+import orbi.resume_verification as resume_verification
 import orbi.review_merge as review_merge
 import orbi.run_state as run_state
 import orbi.pi_session as pi_session
@@ -933,7 +934,7 @@ def test_main_applies_repo_base_branch_before_resume_verification(
         seen["verify_base"] = config_.base_branch
         return "https://github.com/owner/repo/pull/98"
 
-    monkeypatch.setattr(runner, "verify_resumed_pr", fake_verify)
+    monkeypatch.setattr(resume_verification, "verify_resumed_pr", fake_verify)
     monkeypatch.setattr(
         runner, "delivery_step",
         lambda *a, **k: seen.setdefault("wait_base", a[2].base_branch),
