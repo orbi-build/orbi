@@ -266,16 +266,16 @@ def _load_429_attempts(cwd: Path, run_id: str) -> int:
 
 def _record_429_attempts(cwd: Path, run_id: str, attempts: int) -> None:
     """Persist the cumulative count BEFORE the backoff sleep (Issue
-    #698): a kill during the wait keeps every retry already spent. A
-    failed write never breaks the retry loop — the in-memory count
-    still bounds this invocation."""
+    #698): a kill during the wait keeps every retry already spent. The
+    replace is atomic (Issue #1851), never a torn counter, and a failed
+    write never breaks the retry loop (the in-memory count bounds it)."""
     path = pi_429_attempts_path(cwd)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps({"run_id": run_id, "attempts": attempts}) + "\n",
-            encoding="utf-8",
-        )
+        state = {"run_id": run_id, "attempts": attempts}
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(state) + "\n", encoding="utf-8")
+        tmp.replace(path)
     except OSError:
         event(
             "pi_429_attempts_write_failed", level=logging.WARNING,

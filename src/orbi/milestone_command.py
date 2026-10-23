@@ -24,6 +24,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -71,7 +72,19 @@ def rewrite_active_milestone_line(config_path: Path, new_value: str) -> None:
         raise RuntimeError(
             f"active_milestone line not found in {config_path}"
         ) from exc
-    config_path.write_bytes(updated.encode("utf-8"))
+    # Atomic (Issue #1851): truncating the config left a truncated
+    # orbi.toml on a kill and every later tick failed config load. Same
+    # pid-scoped tmp + rename rule as `runner_health.save_health_state`;
+    # the resulting bytes are unchanged. The rename would also overwrite
+    # a read-only file in a writable directory, where the in-place write
+    # failed with EACCES and the documented `milestone_set_failed` path
+    # (an unwritable file) expects that failure — so the writability
+    # gate is explicit here.
+    if not os.access(config_path, os.W_OK):
+        raise PermissionError(f"config file {config_path} is not writable")
+    tmp = config_path.with_name(f"{config_path.name}.{os.getpid()}.tmp")
+    tmp.write_bytes(updated.encode("utf-8"))
+    tmp.replace(config_path)
 
 
 # --- the three idempotent steps -----------------------------------------

@@ -1087,6 +1087,29 @@ def test_429_attempt_counter_file_round_trip(tmp_path, monkeypatch, caplog):
         assert "pi_429_attempts" in caplog.text
 
 
+def test_429_attempt_counter_write_is_atomic(tmp_path, monkeypatch, caplog):
+    """Issue #1851: the 429 counter is written tmp+rename, so a kill
+    between truncate and write cannot reset the backoff. The bytes stay
+    the same single-line JSON, and a failure at the rename keeps the
+    previous count — one warning, never a broken retry loop."""
+    pi_process._record_429_attempts(tmp_path, "deadbeef", 3)
+    path = pi_process.pi_429_attempts_path(tmp_path)
+    golden = '{"run_id": "deadbeef", "attempts": 3}\n'
+    assert path.read_text(encoding="utf-8") == golden
+
+    def killed(src, dst):
+        raise OSError("killed before the rename")
+
+    # The stdlib rename boundary itself, never a src-module symbol.
+    monkeypatch.setattr(os, "replace", killed)
+    with caplog.at_level("INFO"):
+        pi_process._record_429_attempts(tmp_path, "deadbeef", 4)
+    assert path.is_file()
+    assert path.read_text(encoding="utf-8") == golden
+    assert pi_process._load_429_attempts(tmp_path, "deadbeef") == 3
+    assert "pi_429_attempts_write_failed" in caplog.text
+
+
 def test_stream_pi_non_rate_limited_exit_never_retries(tmp_path, caplog):
     """Issue #321: the business failure semantics are untouched — a non-
     429 exit fails exactly once, with no retry line."""

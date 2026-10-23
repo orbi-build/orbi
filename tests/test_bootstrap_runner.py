@@ -2882,6 +2882,31 @@ def test_rewrite_active_milestone_line_preserves_all_other_bytes(tmp_path):
     ).encode()
 
 
+def test_rewrite_active_milestone_line_keeps_the_old_config_when_killed(
+        tmp_path, monkeypatch):
+    """Issue #1851: a kill between truncate and write left a truncated
+    orbi.toml, and every later tick failed config load. The rewrite is
+    tmp+rename now, so a failure at the rename keeps the previous file
+    byte-identical and loadable."""
+    config = tmp_path / "orbi.toml"
+    original = (
+        '# keep\nsource_repos = ["owner/repo"]\n'
+        'active_milestone = "v0.3.0"\nother = "x"\n'
+    )
+    config.write_text(original, encoding="utf-8")
+
+    def killed(src, dst):
+        raise OSError("killed before the rename")
+
+    # The stdlib rename boundary itself, never a src-module symbol.
+    monkeypatch.setattr(os, "replace", killed)
+    with pytest.raises(OSError, match="killed before the rename"):
+        milestone.rewrite_active_milestone_line(config, "v0.3.1")
+    assert config.read_text(encoding="utf-8") == original
+    loaded = config_domain.load_config(config)
+    assert loaded.active_milestone == "v0.3.0"
+
+
 def test_rewrite_active_milestone_line_fails_when_missing(tmp_path):
     config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
