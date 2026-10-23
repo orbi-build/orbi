@@ -29,7 +29,6 @@ from conftest import git
 
 import orbi.runner as runner
 from seam import seam
-import orbi.journal as journal
 
 REPO = "owner/repo"
 ISSUE_NUMBER = 41
@@ -150,9 +149,9 @@ def clone(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _reset_run_id(monkeypatch):
+def _reset_run_id(bind_run_id):
     """Each test starts without a bound run id."""
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
 
 
 def install_fake_pi(monkeypatch, tmp_path: Path, script: str) -> None:

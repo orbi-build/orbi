@@ -332,7 +332,10 @@ def _review_round_env(
     monkeypatch.setattr(seam, "_safe_publish",
         lambda **kwargs: publishes.append(kwargs),
     )
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    # The run the scene above carries; conftest's autouse
+    # `bind_run_id` fixture restores the previous binding at teardown
+    # (Issue #1865).
+    journal.set_run_id("a1b2c3d4")
     return edits, comments, reviews, publishes
 
 

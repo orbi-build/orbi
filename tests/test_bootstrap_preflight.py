@@ -19,7 +19,6 @@ from pathlib import Path
 import pytest
 
 import orbi.claim as claim
-import orbi.journal as journal
 import orbi.milestone as milestone
 import orbi.pi_session as pi_session
 import orbi.runner as runner
@@ -47,7 +46,7 @@ _unit_drift_systemd = pytest.mark.usefixtures("systemd_scheduler")
 
 
 @pytest.fixture(autouse=True)
-def _unbound_run_id():
+def _unbound_run_id(bind_run_id):
     """Start every test here with no run id bound to the journal prefix.
 
     `journal.set_run_id` binds one attempt in a module global so every
@@ -59,7 +58,7 @@ def _unbound_run_id():
     module global is the same reset the binding tests already use; it
     only restores the pre-tick state and changes no moved assertion.
     """
-    journal._CURRENT_RUN_ID = None
+    bind_run_id(None)
 
 
 # --- configuration loading: the bootstrap config file ---------------

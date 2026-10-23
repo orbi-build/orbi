@@ -36,7 +36,6 @@ import pytest
 from conftest import git
 
 import orbi.runner as runner
-import orbi.journal as journal
 
 REPO = "owner/repo"
 ISSUE_NUMBER = 99
@@ -339,8 +338,8 @@ def install_fake_pi(monkeypatch, tmp_path: Path, script: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _reset_run_id(monkeypatch):
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+def _reset_run_id(bind_run_id):
+    bind_run_id(None)
 
 
 def ops_issue() -> dict:

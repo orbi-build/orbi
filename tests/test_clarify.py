@@ -232,9 +232,9 @@ def clone(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _reset_run_id(monkeypatch):
+def _reset_run_id(bind_run_id):
     """Each test starts without a bound run id."""
-    monkeypatch.setattr(seam, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
 
 
 def gate_config(clone: Path, tmp_path: Path, **overrides):

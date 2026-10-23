@@ -19,18 +19,6 @@ def freeze_report_time(
     return moment
 
 
-def bind_run_id(monkeypatch, run_id: str = "a1b2c3d4") -> str:
-    """Bind the run id the progress run marker carries.
-
-    A delivery step locates the run's tracked progress comment by this
-    marker, so a test asserting on the finish scene binds it first.
-    """
-    from orbi import journal
-
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", run_id)
-    return run_id
-
-
 def capture_finish_rounds(monkeypatch) -> list[int]:
     """Record the `review_round` every finish scene is published with.
 

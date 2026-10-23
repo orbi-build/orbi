@@ -292,9 +292,9 @@ def test_pick_missing_pr_scene_recovers_or_defers_or_blocks(monkeypatch, tmp_pat
 
 
 @pytest.fixture(autouse=True)
-def _reset_run_id(monkeypatch):
+def _reset_run_id(bind_run_id):
     """Each test starts without a bound run id."""
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
 
 
 def opened_pr_comment(run_id=FAKE_RUN_ID,
@@ -3207,7 +3207,7 @@ def test_verify_resumed_pr_external_scene_recreates_worktree_from_scene_pr(
 
 
 def test_verify_resumed_pr_backfill_label_api_failure_fails_fast(
-    monkeypatch, tmp_path, caplog,
+    monkeypatch, tmp_path, caplog, bind_run_id,
 ):
     """Issue #178: a label API failure during the resume backfill is a
     RECOVERABLE resume failure (never `ai-blocked`): the Issue is
@@ -3237,7 +3237,7 @@ def test_verify_resumed_pr_backfill_label_api_failure_fails_fast(
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
         resume_verification.verify_resumed_pr(
@@ -3279,7 +3279,7 @@ def test_verify_resumed_pr_backfill_label_api_failure_fails_fast(
 
 
 def test_verify_resumed_pr_missing_fixes_stays_fix_needed(
-    monkeypatch, tmp_path, caplog,
+    monkeypatch, tmp_path, caplog, bind_run_id,
 ):
     """Issue #1219 + #50: a staged PR body without `Fixes #N` is
     recoverably reported with an actionable repair. The Issue remains
@@ -3309,7 +3309,7 @@ def test_verify_resumed_pr_missing_fixes_stays_fix_needed(
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(
         pr_verification.ReportedMissingFixesError,
@@ -3502,7 +3502,7 @@ def test_verify_pr_zero_open_prs_raises_typed_closed_scene_error(
 
 
 def test_verify_resumed_pr_scene_pr_merged_between_ticks_does_not_block(
-    monkeypatch, tmp_path, caplog,
+    monkeypatch, tmp_path, caplog, bind_run_id,
 ):
     """Issue #788: the resumed path IS the path, so a scene PR merged
     between ticks is a NORMAL state, not a crash leftover. The `Fixes
@@ -3515,7 +3515,7 @@ def test_verify_resumed_pr_scene_pr_merged_between_ticks_does_not_block(
     fake.add_pr(9, head=FAKE_BRANCH, state="MERGED",
                 merged_at="2026-09-13T00:00:00Z")
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(pr_verification.ResumePrClosedError):
         resume_verification.verify_resumed_pr(
@@ -3531,7 +3531,7 @@ def test_verify_resumed_pr_scene_pr_merged_between_ticks_does_not_block(
 
 
 def test_verify_resumed_pr_external_pr_closed_between_ticks_requeues(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, bind_run_id,
 ):
     """Issue #608 + #788: the takeover delivery's PR was closed without
     a merge between ticks (the contributor withdrew it). The requeue —
@@ -3543,7 +3543,7 @@ def test_verify_resumed_pr_external_pr_closed_between_ticks_requeues(
     fake.add_issue(9, labels=("ai-pr-opened",))
     fake.add_pr(592, head=FAKE_BRANCH, state="CLOSED")
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     external_url = "https://github.com/owner/repo/pull/592"
     with pytest.raises(pr_verification.ResumePrClosedError):
         resume_verification.verify_resumed_pr(
@@ -3564,7 +3564,7 @@ def test_verify_resumed_pr_external_pr_closed_between_ticks_requeues(
 
 
 def test_verify_resumed_pr_external_pr_merged_between_ticks_closes_triage(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, bind_run_id,
 ):
     """Issue #608/#726 + #788: the takeover delivery's PR was MERGED
     between ticks (a maintainer clicked merge). The contribution
@@ -3576,7 +3576,7 @@ def test_verify_resumed_pr_external_pr_merged_between_ticks_closes_triage(
     fake.add_pr(592, head=FAKE_BRANCH, state="MERGED",
                 merged_at="2026-09-13T00:00:00Z")
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     external_url = "https://github.com/owner/repo/pull/592"
     with pytest.raises(pr_verification.ResumePrClosedError):
         resume_verification.verify_resumed_pr(
@@ -3594,7 +3594,7 @@ def test_verify_resumed_pr_external_pr_merged_between_ticks_closes_triage(
 
 
 def test_verify_resumed_pr_scene_pr_closed_between_ticks_still_blocks(
-    monkeypatch, tmp_path, caplog,
+    monkeypatch, tmp_path, caplog, bind_run_id,
 ):
     """Issue #494 + #788: an INTERNAL delivery whose PR was closed
     without a merge between ticks keeps its terminal contract —
@@ -3616,7 +3616,7 @@ def test_verify_resumed_pr_scene_pr_closed_between_ticks_still_blocks(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(runner.UnrecoverableDeliveryError):
         resume_verification.verify_resumed_pr(
@@ -3634,7 +3634,7 @@ def test_verify_resumed_pr_scene_pr_closed_between_ticks_still_blocks(
 
 
 def test_verify_resumed_pr_pr_repo_mismatch_stays_fix_needed(
-    monkeypatch, tmp_path, caplog,
+    monkeypatch, tmp_path, caplog, bind_run_id,
 ):
     """Issue #89 + #50: the PR head repo is not the configured source
     repo -> the same fail-fast, but RECOVERABLE: `ai-fix-needed` (the
@@ -3650,7 +3650,7 @@ def test_verify_resumed_pr_pr_repo_mismatch_stays_fix_needed(
 
     monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(RuntimeError, match="PR head repo is fork/repo"):
         resume_verification.verify_resumed_pr(
@@ -3670,7 +3670,7 @@ def test_verify_resumed_pr_pr_repo_mismatch_stays_fix_needed(
 
 
 def test_verify_resumed_pr_recoverable_failure_keeps_fix_needed_label(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, bind_run_id,
 ):
     """Issue #50: a RECOVERABLE resume failure while the Issue awaits
     the next review session (`ai-fix-needed`) keeps the `ai-fix-needed`
@@ -3686,7 +3686,7 @@ def test_verify_resumed_pr_recoverable_failure_keeps_fix_needed_label(
 
     monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     issue = make_resume_issue()
     issue["labels"] = [{"name": "ai-fix-needed"}]
     with pytest.raises(RuntimeError, match="exactly one open PR"):
@@ -3701,7 +3701,7 @@ def test_verify_resumed_pr_recoverable_failure_keeps_fix_needed_label(
 
 
 def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
-    monkeypatch, tmp_path, caplog,
+    monkeypatch, tmp_path, caplog, bind_run_id,
 ):
     """Issue #91 + #50 (pre-verify): the scene freezes the base the PR
     was opened against; when the configured base differs, the resume
@@ -3723,7 +3723,7 @@ def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
 
     monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     monkeypatch.setattr(seam, "run_command", counting)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     scene = make_resume_scene()
     scene["base_branch"] = "develop"
@@ -3767,7 +3767,7 @@ def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
 
 
 def test_verify_resumed_pr_reraises_when_failure_reporting_fails(
-    monkeypatch, caplog, tmp_path,
+    monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """When the blocked transition itself cannot be reported, the
     original verification error is still re-raised (the tick still
@@ -3784,7 +3784,7 @@ def test_verify_resumed_pr_reraises_when_failure_reporting_fails(
 
     monkeypatch.setattr(seam, "edit_issue", broken_edit)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="the original verification failure",
     ) as excinfo:
@@ -3908,7 +3908,7 @@ def test_verify_pr_resume_accepts_a_marker_of_the_delivery_line(
 
 
 def test_verify_resumed_pr_resume_under_a_new_run_id_continues(
-        monkeypatch, tmp_path):
+        monkeypatch, tmp_path, bind_run_id):
     """Issue #825: the full user path — a delivery line whose scene
     carries the NEW run id (the re-delivery wrote a new opened-PR scene
     for the SAME PR) resumes successfully: the PR body carries the
@@ -3962,7 +3962,7 @@ def test_verify_resumed_pr_resume_under_a_new_run_id_continues(
     ).mkdir(parents=True)
     scene = make_resume_scene()
     scene["run_id"] = RESUME_RUN_ID
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RESUME_RUN_ID)
+    bind_run_id(RESUME_RUN_ID)
     url = resume_verification.verify_resumed_pr(
         scene, make_resume_issue(), make_resume_config(tmp_path),
         "owner/repo",

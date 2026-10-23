@@ -20,9 +20,9 @@ from orbi.delivery_scene import RunContext
 
 
 @pytest.fixture(autouse=True)
-def _reset_journal_state(monkeypatch):
+def _reset_journal_state(monkeypatch, bind_run_id):
     """Isolate the module-level run binding between tests."""
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
     monkeypatch.setattr(journal, "_ACTIVE_RUN", None)
 
 
@@ -166,6 +166,23 @@ def test_run_id_filter_prefixes_journal_lines_only_while_bound(caplog):
 def test_set_run_id_rejects_an_invalid_id():
     with pytest.raises(ValueError, match="invalid run id"):
         journal.set_run_id("not-a-run-id")
+
+
+def test_clear_run_id_unbinds_the_attempt(caplog):
+    """Issue #1865: the public unbind the run-id fixture restores with.
+
+    A test binds an id through the public setter and must unbind through
+    the public setter too — writing the private global is the coupling
+    the patch ratchet counts."""
+    journal.set_run_id("a1b2c3d4")
+    journal.clear_run_id()
+    assert journal.current_run_id() is None
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
+        logging.getLogger("orbi.bootstrap").info("after the unbind")
+    assert caplog.messages[-1] == "after the unbind"
+    # Unbinding twice is a no-op, not an error.
+    journal.clear_run_id()
+    assert journal.current_run_id() is None
 
 
 def test_new_run_id_is_eight_hex_characters():

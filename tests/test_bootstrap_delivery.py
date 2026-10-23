@@ -3669,10 +3669,12 @@ def test_finish_progress_renders_the_fix_needed_scene(monkeypatch):
     assert "**#39 Fix task**" in body
 
 
-def test_delivery_step_returns_when_pr_merged(monkeypatch, caplog):
+def test_delivery_step_returns_when_pr_merged(
+    monkeypatch, caplog, bind_run_id,
+):
     seen, _ = fake_pr_view(monkeypatch, "MERGED")
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     caplog.set_level("INFO")
     runner.delivery_step(PR_URL, issue, config_domain.RunnerConfig(), "owner/repo")
     assert len(seen) == 1
@@ -3792,7 +3794,7 @@ def test_delivery_step_defers_when_ci_pending(
 
 
 def test_delivery_step_auto_merges_on_clean_review(
-        monkeypatch, caplog, tmp_path,
+        monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """A clean independent verdict merges the PR itself (Issue #34): the
     wait returns as soon as the review reports the merge, without any
@@ -3836,7 +3838,7 @@ def test_delivery_step_auto_merges_on_clean_review(
     (tmp_path / ".worktrees"
      / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     caplog.set_level("INFO")
     runner.delivery_step(
         PR_URL, issue, config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
@@ -3849,7 +3851,7 @@ def test_delivery_step_auto_merges_on_clean_review(
 
 
 def test_delivery_step_passes_p0_priority_to_the_review(
-        monkeypatch, caplog, tmp_path,
+        monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """Issue #101: a P0 delivery in an opened-PR state (the resumable
     scan fetches `labels`) keeps its priority end to end: the awaiting
@@ -3898,7 +3900,7 @@ def test_delivery_step_passes_p0_priority_to_the_review(
         "number": 39, "title": "p0 task", "body": "",
         "labels": [{"name": "ai-awaiting-merge"}, {"name": "p0"}],
     }
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     caplog.set_level("INFO")
     runner.delivery_step(
         PR_URL, issue, config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
@@ -3923,7 +3925,7 @@ def test_delivery_step_passes_p0_priority_to_the_review(
 
 
 def test_delivery_step_marks_blocked_when_review_fails(
-        monkeypatch, caplog, tmp_path,
+        monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """A review that cannot run (unrecoverable scene, missing worktree,
     malformed verdict, exhausted rounds) is a real failure: the Issue is
@@ -3990,7 +3992,7 @@ def test_delivery_step_marks_blocked_when_review_fails(
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     caplog.set_level("INFO")
     runner.delivery_step(
         PR_URL, issue, config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
@@ -4048,7 +4050,7 @@ def test_delivery_step_marks_blocked_when_review_fails(
 
 
 def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
-        monkeypatch, caplog, tmp_path,
+        monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """A review failure while the Issue is `ai-fix-needed` (awaiting the
     next review session) must leave the terminal state `ai-blocked`
@@ -4099,7 +4101,7 @@ def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     caplog.set_level("INFO")
     runner.delivery_step(
         PR_URL, issue, config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
@@ -4145,7 +4147,7 @@ def test_delivery_step_marks_blocked_when_review_fails_while_fix_needed(
 
 
 def test_delivery_step_blocks_when_scene_base_differs_from_config(
-        monkeypatch, caplog, tmp_path,
+        monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """Issue #91: the scene freezes the base the PR was opened against.
     When the configured base differs (config changed, or the comment is
@@ -4215,7 +4217,7 @@ def test_delivery_step_blocks_when_scene_base_differs_from_config(
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     caplog.set_level("INFO")
     # The configured base is main; the scene froze develop.
     runner.delivery_step(
@@ -4267,7 +4269,7 @@ def test_delivery_step_blocks_when_scene_base_differs_from_config(
 
 
 def test_delivery_step_worktree_missing_stays_fix_needed(
-        monkeypatch, caplog, tmp_path,
+        monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """Issue #90 + #50: the resume derives the worktree from the repo,
     Issue and run id (never from a comment). When that directory does
@@ -4349,7 +4351,7 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     caplog.set_level("INFO")
     runner.delivery_step(
         PR_URL, issue, config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
@@ -4431,7 +4433,7 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
 
 
 def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
-        monkeypatch, tmp_path,
+        monkeypatch, tmp_path, bind_run_id,
 ):
     """Issue #90 + #82 + #50: a missing resume worktree while the
     Issue is `ai-fix-needed` (awaiting the next review session) keeps
@@ -4494,7 +4496,7 @@ def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     runner.delivery_step(
         PR_URL, issue, config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
@@ -4514,7 +4516,7 @@ def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
 
 
 def test_delivery_step_runs_review_when_fix_needed(
-    monkeypatch, caplog, tmp_path,
+    monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """A fix-needed delivery runs the SAME independent review as an
     awaiting-review delivery (Issue #82: the review session fixes
@@ -4561,7 +4563,7 @@ def test_delivery_step_runs_review_when_fix_needed(
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     issue = {"number": 39, "title": "task", "body": "stale body"}
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     caplog.set_level("INFO")
     config = config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main")
     runner.delivery_step(PR_URL, issue, config, "owner/repo")
@@ -4579,7 +4581,7 @@ def test_delivery_step_runs_review_when_fix_needed(
 
 
 def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
-    monkeypatch, caplog,
+    monkeypatch, caplog, bind_run_id,
 ):
     api_calls: list = []
     existing = {
@@ -4638,7 +4640,7 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     caplog.set_level("INFO")
     runner.delivery_step(PR_URL, issue, config_domain.RunnerConfig(), "owner/repo")
     # The Issue is marked ai-blocked; the blocked patch clears every
@@ -4698,7 +4700,7 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
 
 
 def test_delivery_step_blocked_clears_the_repositorys_dispatch_label(
-        monkeypatch,
+        monkeypatch, bind_run_id,
 ):
     """Issue #1775: a repository whose `dispatch_label` is `ship` claims on
     `ship`; the blocked terminal must clear that same label, or the
@@ -4715,7 +4717,7 @@ def test_delivery_step_blocked_clears_the_repositorys_dispatch_label(
         return json.dumps(answers[tuple(command[:3])])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(seam, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     edits: list = []
     monkeypatch.setattr(seam, "edit_issue",
@@ -4735,7 +4737,9 @@ def test_delivery_step_blocked_clears_the_repositorys_dispatch_label(
     ]
 
 
-def test_delivery_step_pr_closed_comment_follows_the_language(monkeypatch):
+def test_delivery_step_pr_closed_comment_follows_the_language(
+    monkeypatch, bind_run_id,
+):
     """Issue #1730: the PR-closed blocked comment ends with the community
     help line in the run's bound language — the zh scene goes through the
     same blocked exit as the en one."""
@@ -4749,7 +4753,7 @@ def test_delivery_step_pr_closed_comment_follows_the_language(monkeypatch):
         return json.dumps(answers[tuple(command[:3])])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(seam, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
     comments: list = []
     monkeypatch.setattr(seam, "comment_issue",
         lambda number, **kwargs: comments.append(kwargs))
@@ -4779,11 +4783,11 @@ def test_delivery_step_pr_closed_comment_follows_the_language(monkeypatch):
 
 
 def test_delivery_step_review_failure_without_bound_run_id(
-        monkeypatch, tmp_path,
+        monkeypatch, tmp_path, bind_run_id,
 ):
     """When no run id is bound the review-failure comment simply carries
     no marker (the Issue is still marked ai-blocked)."""
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
@@ -4822,7 +4826,7 @@ def test_delivery_step_review_failure_without_bound_run_id(
 
 
 def test_delivery_step_repairs_in_progress_label_and_logs_ci(
-        monkeypatch, caplog, tmp_path,
+        monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """An open PR proves implementation reached delivery: repair a lost
     label transition and expose CI state before entering review."""
@@ -4856,7 +4860,7 @@ def test_delivery_step_repairs_in_progress_label_and_logs_ci(
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     monkeypatch.setattr(review_merge, "review_and_merge_if_clean", lambda *a, **k: True)
     (tmp_path / ".worktrees" /
      "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
@@ -4873,7 +4877,7 @@ def test_delivery_step_repairs_in_progress_label_and_logs_ci(
 
 
 def test_delivery_step_blocks_when_in_progress_label_repair_fails(
-        monkeypatch, caplog,
+        monkeypatch, caplog, bind_run_id,
 ):
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
@@ -4881,7 +4885,7 @@ def test_delivery_step_blocks_when_in_progress_label_repair_fails(
         return json.dumps({"labels": [{"name": "ai-in-progress"}]})
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     patches = []
     def fake_patch(number, **kwargs):
         patches.append(kwargs)
@@ -4910,7 +4914,7 @@ def test_delivery_step_blocks_when_in_progress_label_repair_fails(
 
 
 def test_delivery_step_keeps_holding_when_no_delivery_label(
-        monkeypatch, caplog,
+        monkeypatch, caplog, bind_run_id,
 ):
     """An OPEN PR whose Issue carries no delivery state label (neither
     awaiting review nor fix-needed) is simply re-checked: the slot stays
@@ -4935,7 +4939,7 @@ def test_delivery_step_keeps_holding_when_no_delivery_label(
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
     monkeypatch.setattr(runner.time, "sleep", lambda s: None)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
     issue = {"number": 39, "title": "task", "body": ""}
     caplog.set_level("INFO")
     runner.delivery_step(PR_URL, issue, config_domain.RunnerConfig(), "owner/repo")
@@ -4989,10 +4993,12 @@ def test_delivery_step_label_repair_failure_comment_follows_the_language(
     assert body.count(help_line) == 1
 
 
-def test_delivery_step_logs_awaiting_without_bound_run_id(monkeypatch, caplog):
+def test_delivery_step_logs_awaiting_without_bound_run_id(
+    monkeypatch, caplog, bind_run_id,
+):
     """When no run id is bound the wait still works: the failure comment
     simply carries no marker."""
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
