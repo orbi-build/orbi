@@ -104,13 +104,13 @@ from orbi.journal import (
 )
 from orbi.progress import (
     ProgressPublisher,
-    _progress_body,
-    _progress_state,
-    _run_info_fields,
-    _safe_publish,
     field_block,
     progress_body,
+    progress_body_with_outcome,
+    progress_state,
+    run_info_fields,
     run_marker,
+    safe_publish,
 )
 
 if TYPE_CHECKING:
@@ -1229,7 +1229,7 @@ def process_release(issue: dict, config: RunnerConfig,
         config.repo_dir, source_repo, number, run_id,
     )
     publish = functools.partial(
-        _safe_publish, run_id=run_id, issue=number,
+        safe_publish, run_id=run_id, issue=number,
         source_repo=source_repo, role=ROLE_RELEASE,
     )
 
@@ -1239,7 +1239,7 @@ def process_release(issue: dict, config: RunnerConfig,
     )
 
     def progress() -> dict:
-        return _progress_state(
+        return progress_state(
             ctx, title=title, role=ROLE_RELEASE, started=started,
             pr_url=None, review_round=0, priority=priority,
             activity={}, language_code=publisher.language_code,
@@ -1249,7 +1249,7 @@ def process_release(issue: dict, config: RunnerConfig,
         state = progress()
         state["phase"] = f"waiting deliveries: {detail}"
         publish(
-            action=lambda: publisher.patch(_progress_body(state)),
+            action=lambda: publisher.patch(progress_body_with_outcome(state)),
         )
 
     def on_ci_wait(detail: str) -> None:
@@ -1259,7 +1259,7 @@ def process_release(issue: dict, config: RunnerConfig,
         state = progress()
         state["phase"] = f"waiting CI: {detail}"
         publish(
-            action=lambda: publisher.patch(_progress_body(state)),
+            action=lambda: publisher.patch(progress_body_with_outcome(state)),
         )
 
     release_commit: str | None = None

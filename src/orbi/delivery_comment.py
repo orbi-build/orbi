@@ -32,8 +32,8 @@ from orbi.delivery_scene import RunContext
 from orbi.journal import validate_run_id
 from orbi.progress import (
     STARTED_HEADER,
-    _run_info_fields,
     field_block,
+    run_info_fields,
     run_marker,
 )
 from orbi.progress_display import (
@@ -56,11 +56,11 @@ def started_pi_comment_body(ctx: RunContext, run_info: str,
     historical English `STARTED_HEADER` stays the reader's fallback for a
     comment written before the kind marker existed.
     """
-    fields = _run_info_fields(run_info)
+    fields = run_info_fields(run_info)
     fields["branch"] = str(ctx.branch)
     if extra_fields:
         fields.update(extra_fields)
-    info = _run_info_fields(run_info)
+    info = run_info_fields(run_info)
     rendered_info = {
         key: (vocabulary(language_code, "priority", info[key])
               if key == "priority" else info[key])
@@ -122,7 +122,7 @@ def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
     block rendered from the `Scene`; the field lines below
     the headline stay for humans only.
     """
-    fields = _run_info_fields(run_info)
+    fields = run_info_fields(run_info)
     if external:
         fields["external"] = "true"
     headline = language.text(

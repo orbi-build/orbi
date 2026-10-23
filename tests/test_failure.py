@@ -390,7 +390,7 @@ def test_classify_maps_the_actions_workflow_refusal_to_credential_missing():
     """Issue #1651: the explicit GitHub App/workflows refusal reuses the
     existing `credential_missing` / `check_credentials` category (a
     repair is required before retry)."""
-    record = failure.classify(runner._failure_detail(workflow_refusal_error()))
+    record = failure.classify(runner.failure_detail(workflow_refusal_error()))
     assert record.reason_code == "credential_missing"
     assert record.action_code == "check_credentials"
     assert record.retry_safe is False
@@ -424,8 +424,8 @@ def test_workflow_permission_refusal_needs_the_full_sentence(detail):
 def test_failure_summary_keeps_the_workflow_refusal_above_gits_final_line():
     """Issue #1651: the decisive refusal line must not be replaced by Git's
     generic `error: failed to push some refs` final line."""
-    summary = failure._failure_summary(
-        runner._failure_detail(workflow_refusal_error()), language_code="en"
+    summary = failure.failure_summary(
+        runner.failure_detail(workflow_refusal_error()), language_code="en"
     )
     assert "refusing to allow a GitHub App" in summary
     assert "without `workflows` permission" in summary
@@ -536,7 +536,7 @@ def test_terminal_reason_names_the_configured_base_branch():
          "这个仓库里没有分支 `release/9`，Orbi 不知道该从哪个分支开始改。"),
     ):
         reason = failure.terminal_reason(
-            failure._failure_detail(error), record,
+            failure.failure_detail(error), record,
             base_branch="release/9", language_code=code,
         )
         assert reason == expected
@@ -620,7 +620,7 @@ def test_classify_failure_dispositions_cover_the_closed_reason_set():
 # --------------------------------------------------------------------------
 
 def test_failure_comment_body_renders_the_block_before_the_headline():
-    body = failure._failure_comment_body(
+    body = failure.failure_comment_body(
         outcome="blocked", action="relabel ai-ready", reason="boom",
         diagnosis="boom", scene="- run: `a1b2c3d4`", evidence="",
         pr_url=None, issue="orbi-build/orbi#7", run_id="a1b2c3d4",
@@ -646,7 +646,7 @@ def test_every_reason_code_renders_a_parsable_comment(
     record = runner._classify_failure(
         factory(), outcome="fix_needed" if outcome == "fix_needed" else "blocked",
     )
-    body = failure._failure_comment_body(
+    body = failure.failure_comment_body(
         outcome="fix needed" if outcome == "fix_needed" else "blocked",
         action="do the thing", reason="boom", diagnosis="boom",
         scene="- run: `-`", evidence="", pr_url=None,
@@ -665,7 +665,7 @@ def test_every_reason_code_renders_a_parsable_comment(
 
 
 def test_failure_comment_body_renders_a_fix_needed_block():
-    body = failure._failure_comment_body(
+    body = failure.failure_comment_body(
         outcome="fix needed", action="", reason="boom", diagnosis="boom",
         scene="- run: `-`", evidence="",
         pr_url=None, issue="orbi-build/orbi#7", run_id="-",
@@ -682,7 +682,7 @@ def test_failure_comment_body_renders_a_fix_needed_block():
 
 
 def test_failure_comment_body_defaults_to_unclassified_without_a_record():
-    body = failure._failure_comment_body(
+    body = failure.failure_comment_body(
         outcome="blocked", action="", reason="boom", diagnosis="boom",
         scene="- run: `-`", evidence="",
         pr_url=None, issue="orbi-build/orbi#7", run_id="-", language_code="en",
@@ -742,8 +742,8 @@ def test_report_delivery_failure_keeps_full_bounded_stderr(monkeypatch):
         issue={"number": 1322, "title": "t", "labels": []},
         source_repo="orbi-build/orbi", run_id=None, pr_url=None,
         worktree=None, branch="b", role=runner.ROLE_IMPLEMENT,
-        reason=f"the delivery command failed: {runner._failure_detail(error)}",
-        diagnosis=runner._failure_detail(error),
+        reason=f"the delivery command failed: {runner.failure_detail(error)}",
+        diagnosis=runner.failure_detail(error),
         classify=False, evidence=False, language_code="en",
     )
     body = posted[0]
@@ -843,8 +843,8 @@ def test_report_delivery_failure_milestone_is_machine_readable(monkeypatch):
         issue={"number": 1322, "title": "t", "labels": []},
         source_repo="orbi-build/orbi", run_id="c517c8c7", pr_url=None,
         worktree=None, branch="b", role=runner.ROLE_IMPLEMENT,
-        reason=f"The delivery stopped: {runner._failure_detail(error)}",
-        diagnosis=runner._failure_detail(error),
+        reason=f"The delivery stopped: {runner.failure_detail(error)}",
+        diagnosis=runner.failure_detail(error),
         classify=False, evidence=False, publisher=publisher, finish=False, language_code="en",
     )
     assert len(milestones) == 1
@@ -878,9 +878,9 @@ def test_report_delivery_failure_fix_needed_milestone_is_machine_readable(
         worktree=None, branch="b", role=runner.ROLE_REVIEW,
         reason=(
             "The independent review of PR 9 failed: "
-            f"{runner._failure_detail(error)}"
+            f"{runner.failure_detail(error)}"
         ),
-        diagnosis=runner._failure_detail(error),
+        diagnosis=runner.failure_detail(error),
         evidence=False, publisher=publisher, finish=False, language_code="en",
     )
     assert outcome == "fix needed"
@@ -938,9 +938,9 @@ def test_report_delivery_failure_workflow_refusal_no_pr_surfaces(monkeypatch):
         action="Fix the failure described below and re-run this Issue.",
         reason=(
             "The delivery stopped before it could be completed: "
-            f"{runner._failure_detail(workflow_refusal_error())}"
+            f"{runner.failure_detail(workflow_refusal_error())}"
         ),
-        diagnosis=runner._failure_detail(workflow_refusal_error()),
+        diagnosis=runner.failure_detail(workflow_refusal_error()),
         classify=False, evidence=False, publisher=publisher, finish=True, language_code="en",
     )
     assert outcome == "blocked"
@@ -987,9 +987,9 @@ def test_report_delivery_failure_workflow_refusal_with_pr_keeps_the_pr(
         worktree=None, branch="b", role=runner.ROLE_REVIEW,
         reason=(
             f"the independent review of PR {url} failed: "
-            f"{runner._failure_detail(workflow_refusal_error())}"
+            f"{runner.failure_detail(workflow_refusal_error())}"
         ),
-        diagnosis=runner._failure_detail(workflow_refusal_error()),
+        diagnosis=runner.failure_detail(workflow_refusal_error()),
         evidence=False, language_code="en",
     )
     assert outcome == "blocked"
@@ -1036,9 +1036,9 @@ def test_report_delivery_failure_other_push_errors_keep_generic_action(
         action="Fix the failure described below and re-run this Issue.",
         reason=(
             "The delivery stopped before it could be completed: "
-            f"{runner._failure_detail(error)}"
+            f"{runner.failure_detail(error)}"
         ),
-        diagnosis=runner._failure_detail(error),
+        diagnosis=runner.failure_detail(error),
         classify=False, evidence=False, language_code="en",
     )
     assert outcome == "blocked"
@@ -1059,7 +1059,7 @@ def test_report_delivery_failure_unknown_error_does_not_blame_the_issue(
     error = subprocess.CalledProcessError(
         1, ["git", "push", "origin", "HEAD:b"], stderr="totally unexpected",
     )
-    record = failure.classify(runner._failure_detail(error))
+    record = failure.classify(runner.failure_detail(error))
     outcome = failure_report.report_delivery_failure(
         error,
         issue={"number": 1651, "title": "t", "labels": []},
@@ -1068,9 +1068,9 @@ def test_report_delivery_failure_unknown_error_does_not_blame_the_issue(
         action=failure.terminal_action(record, language_code="en"),
         reason=(
             "The delivery stopped before it could be completed: "
-            f"{runner._failure_detail(error)}"
+            f"{runner.failure_detail(error)}"
         ),
-        diagnosis=runner._failure_detail(error),
+        diagnosis=runner.failure_detail(error),
         classify=False, evidence=False, language_code="en",
     )
     assert outcome == "blocked"
@@ -1200,13 +1200,13 @@ def test_classify_keeps_the_text_timeout_of_a_text_only_source():
                "Connection timed out",
     )
     assert failure.classify(
-        runner._failure_detail(git), error=git,
+        runner.failure_detail(git), error=git,
     ).reason_code == "github_transient"
     pi = subprocess.CalledProcessError(
         1, ["pi"], stderr="request timed out after 30s",
     )
     assert failure.classify(
-        runner._failure_detail(pi), error=pi,
+        runner.failure_detail(pi), error=pi,
     ).reason_code == "github_transient"
 
 
@@ -1219,7 +1219,7 @@ def test_classify_does_not_read_a_github_command_timeout_word():
         stderr="request timed out",
     )
     assert failure.classify(
-        runner._failure_detail(gh), error=gh,
+        runner.failure_detail(gh), error=gh,
     ).reason_code != "github_transient"
 
 

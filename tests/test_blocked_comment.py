@@ -156,7 +156,7 @@ class Publisher:
 @pytest.mark.parametrize("language_code", LANGUAGES)
 def test_delivery_failure_diagnostic_ends_with_the_help_line(
         monkeypatch, tmp_path, language_code):
-    """The classified blocked diagnostic (failure._failure_comment_body):
+    """The classified blocked diagnostic (failure.failure_comment_body):
     its renderer stopped appending the line; the exit adds it once."""
     calls = capture_blocked_writes(monkeypatch)
     outcome = failure_report.report_delivery_failure(

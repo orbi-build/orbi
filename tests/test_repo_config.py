@@ -876,7 +876,7 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
             "comment_id": None,
         })(),
     )
-    monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: kwargs["action"](),
+    monkeypatch.setattr(seam, "safe_publish", lambda **kwargs: kwargs["action"](),
     )
     monkeypatch.setattr(runner, "runner_health", type("H", (), {
         "record_pickup": staticmethod(lambda *a, **k: None),
@@ -1107,7 +1107,7 @@ def test_process_issue_accepts_a_pre_resolved_record(monkeypatch, tmp_path):
     monkeypatch.setattr(failure_report, "activity_snapshot", lambda session_dir: None)
     monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
-    monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(seam, "safe_publish", lambda **k: None)
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
     monkeypatch.setattr(runner, "runner_health", type("H", (), {
         "record_pickup": staticmethod(lambda *a, **k: None),

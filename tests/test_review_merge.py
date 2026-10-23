@@ -4392,7 +4392,7 @@ def test_pending_ci_tick_leaves_the_review_record_untouched(
     rounds = []
     monkeypatch.setattr(review_merge, "_run_review_round",
                         lambda *a, **k: rounds.append(1))
-    monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(seam, "safe_publish", lambda **k: None)
     bind_run_id("a1b2c3d4")
     runner.delivery_step(
         PR_URL, {"number": 4, "title": "task"},

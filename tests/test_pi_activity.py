@@ -14,8 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from orbi import pi_activity
-from orbi import progress
+from orbi import journal, pi_activity
 
 
 @pytest.mark.parametrize(
@@ -1057,7 +1056,7 @@ def test_parse_scene_unescapes_embedded_quotes():
 
 def test_parse_scene_round_trips_escaped_quotes():
     value = 'git commit -m "feat: a=b" && push'
-    field = f"action={progress.quote_value(value)}"
+    field = f"action={journal.quote_value(value)}"
     assert pi_activity.parse_scene(field)["action"] == value
 
 

@@ -595,7 +595,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     # (`ProgressPublisher.return_value`) through the returned state.
     state["publisher"] = publisher_class.return_value
     monkeypatch.setattr(release, "ProgressPublisher", publisher_class)
-    monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(seam, "safe_publish", lambda **k: None)
     monkeypatch.setattr(seam, "set_active_run",
                         lambda *a: state["active_runs"].append(a))
     monkeypatch.setattr(release, "LOGGER", Mock())
