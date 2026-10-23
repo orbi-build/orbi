@@ -379,34 +379,33 @@ def test_run_marker_is_shared_with_progress_formatter():
     assert runner.run_marker is progress.run_marker
 
 
-def test_set_run_id_binds_the_attempt_and_current_run_id_reads_it(monkeypatch):
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+def test_set_run_id_binds_the_attempt_and_current_run_id_reads_it(bind_run_id):
+    bind_run_id(None)
     assert runner.current_run_id() is None
     runner.set_run_id("e07383c2")
     assert runner.current_run_id() == "e07383c2"
 
 
-def test_set_run_id_fails_fast_on_invalid_run_id(monkeypatch):
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+def test_set_run_id_fails_fast_on_invalid_run_id(bind_run_id):
+    bind_run_id(None)
     with pytest.raises(ValueError, match="invalid run id"):
         runner.set_run_id("run1")
     assert runner.current_run_id() is None
 
 
 def test_run_id_filter_prefixes_messages_when_run_is_bound(caplog):
+    # The conftest `bind_run_id` fixture unbinds it again at teardown
+    # (Issue #1865): the binding needs no per-test try/finally.
     runner.set_run_id("e07383c2")
-    try:
-        with caplog.at_level("INFO"):
-            runner.LOGGER.info("hello %s", "world")
-        assert caplog.messages[-1] == "[e07383c2] hello world"
-    finally:
-        journal._CURRENT_RUN_ID = None
+    with caplog.at_level("INFO"):
+        runner.LOGGER.info("hello %s", "world")
+    assert caplog.messages[-1] == "[e07383c2] hello world"
 
 
 def test_run_id_filter_leaves_messages_untouched_without_bound_run(
-    monkeypatch, caplog,
+    caplog, bind_run_id,
 ):
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
     with caplog.at_level("INFO"):
         runner.LOGGER.info("hello")
     assert caplog.messages[-1] == "hello"
@@ -4271,7 +4270,7 @@ def test_main_release_success_ends_tick_without_pr_delivery_wait(
 
 
 def test_main_routes_fix_needed_resume_to_delivery_wait(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, bind_run_id,
 ):
     """A resumed `ai-fix-needed` delivery goes straight to the delivery
     wait (Issue #82: the review session fixes findings in the same
@@ -4280,7 +4279,7 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
     lines and comments carry it (Issue #41). Issue #89: the wait
     receives the URL the resume verification returned, never the raw
     comment string."""
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
@@ -4316,7 +4315,7 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
 
 
 def test_main_routes_awaiting_review_resume_to_delivery_wait(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, bind_run_id,
 ):
     """A resumed `ai-pr-opened` delivery (stranded by a dead runner or
     the Issue #70 progress 404) goes straight to the delivery wait:
@@ -4326,7 +4325,7 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
     lines and comments carry it (Issue #41). Issue #89: the wait
     receives the URL the resume verification returned, never the raw
     comment string."""
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
@@ -5680,12 +5679,12 @@ def _write_session_file(worktree: Path, session_id: str = "sess-1") -> None:
 
 
 def test_stop_handler_idle_logs_run_stopped_idle_and_exits(
-    monkeypatch, caplog,
+    monkeypatch, caplog, bind_run_id,
 ):
     # No run in flight (before the claim): the stop logs result=idle
     # WITHOUT any invented issue fields and exits 143.
     monkeypatch.setattr(journal, "_ACTIVE_RUN", None)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
     died = {}
     monkeypatch.setattr(
         runner, "_die_from_signal",
@@ -5704,7 +5703,7 @@ def test_stop_handler_idle_logs_run_stopped_idle_and_exits(
 
 
 def test_stop_handler_active_run_logs_stopping_then_stopped_and_exits(
-    monkeypatch, caplog, tmp_path,
+    monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     # Run in flight: run_stopping carries the full scene BEFORE the
     # stop, the live Pi child is TERMed and waited for, then
@@ -5712,7 +5711,7 @@ def test_stop_handler_active_run_logs_stopping_then_stopped_and_exits(
     worktree = tmp_path / "wt"
     worktree.mkdir()
     monkeypatch.setattr(journal, "_ACTIVE_RUN", None)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     runner.set_active_run(RunContext(run_id="a1b2c3d4", issue=48, branch="orbi/owner-repo-issue-48", worktree=str(worktree), source_repo="owner/repo"), "Log the stop scene")
     child = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(30)"],
@@ -5749,7 +5748,7 @@ def test_stop_handler_active_run_logs_stopping_then_stopped_and_exits(
 
 
 def test_stop_handler_active_run_uses_activity_snapshot_for_scene(
-    monkeypatch, caplog, tmp_path,
+    monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     # With a session file the run_stopping line carries the phase and
     # session of the existing activity snapshot (reused, not re-parsed
@@ -5758,7 +5757,7 @@ def test_stop_handler_active_run_uses_activity_snapshot_for_scene(
     worktree.mkdir()
     _write_session_file(worktree, session_id="sess-48")
     monkeypatch.setattr(journal, "_ACTIVE_RUN", None)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     runner.set_active_run(RunContext(run_id="a1b2c3d4", issue=48, branch="b", worktree=str(worktree), source_repo="owner/repo"), "t")
     died = {}
     monkeypatch.setattr(
@@ -5775,14 +5774,14 @@ def test_stop_handler_active_run_uses_activity_snapshot_for_scene(
 
 
 def test_stop_handler_active_run_without_live_child_still_stops(
-    monkeypatch, caplog, tmp_path,
+    monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     # Run in flight but no live Pi child (between sessions): both lines
     # are still logged and the process exits 143.
     worktree = tmp_path / "wt"
     worktree.mkdir()
     monkeypatch.setattr(journal, "_ACTIVE_RUN", None)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     runner.set_active_run(RunContext(run_id="a1b2c3d4", issue=48, branch="b", worktree=str(worktree), source_repo="owner/repo"), "t")
     died = {}
     monkeypatch.setattr(
@@ -5801,7 +5800,7 @@ def test_stop_handler_active_run_without_live_child_still_stops(
 
 
 def test_stop_handler_snapshot_failure_still_logs_and_exits(
-    monkeypatch, caplog,
+    monkeypatch, caplog, bind_run_id,
 ):
     # A failing activity snapshot never swallows the stop: the scene
     # falls back to `-` for phase/session and the stop still exits.
@@ -5809,7 +5808,7 @@ def test_stop_handler_snapshot_failure_still_logs_and_exits(
         {"issue": 48, "title": "t", "branch": "b", "worktree": "/w",
          "pi": None},
     )
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     died = {}
     monkeypatch.setattr(
         runner, "_die_from_signal",
@@ -5832,14 +5831,14 @@ def test_stop_handler_snapshot_failure_still_logs_and_exits(
 
 
 def test_stop_handler_reinstalls_default_disposition_and_raises_signal(
-    monkeypatch, caplog,
+    monkeypatch, caplog, bind_run_id,
 ):
     # After the stop work the handler restores SIGTERM's default
     # disposition and re-raises the signal at itself: the process dies
     # from the ORIGINAL signal (systemd sees a signal-caused stop, exit
     # 143) and a handler crash can never swallow the stop.
     monkeypatch.setattr(journal, "_ACTIVE_RUN", None)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
     monkeypatch.setattr(runner.os, "_exit", lambda code: None)
     raised = {}
     monkeypatch.setattr(
@@ -7039,7 +7038,9 @@ def test_the_orphan_branch_regex_is_gone():
     assert "orbi/.+-issue-" not in source
 
 
-def test_reconcile_orphan_prs_failure_is_fail_open(tmp_path, monkeypatch, caplog):
+def test_reconcile_orphan_prs_failure_is_fail_open(
+    tmp_path, monkeypatch, caplog, bind_run_id,
+):
     monkeypatch.setattr(claim, "reconcile_open_epics", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         milestone, "reconcile_release_milestones",
@@ -7053,7 +7054,7 @@ def test_reconcile_orphan_prs_failure_is_fail_open(tmp_path, monkeypatch, caplog
     monkeypatch.setattr(
         claim, "pick_issue", lambda *args, **kwargs: {"number": 1},
     )
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "abc12345")
+    bind_run_id("abc12345")
     slot_dir = tmp_path / "slots"
     milestone.record_milestone_reconcile_failure(
         slot_dir.parent, "o/r", github.MilestoneReconcileError(
@@ -7070,7 +7071,7 @@ def test_reconcile_orphan_prs_failure_is_fail_open(tmp_path, monkeypatch, caplog
     (None, "Orbi 孤儿 PR：", "Orbi orphan PR:"),
 ])
 def test_claim_time_comment_follows_the_repository_language(
-        monkeypatch, tmp_path, policy_text, expected, unexpected,
+        monkeypatch, tmp_path, policy_text, expected, unexpected, bind_run_id,
 ):
     """Issue #1687 acceptance 2: the claim-time comments use the
     repository's merged language, not the host's. A zh host whose
@@ -7120,7 +7121,7 @@ def test_claim_time_comment_follows_the_repository_language(
     monkeypatch.setitem(
         claim.__dict__, "pick_awaiting_merge_delivery", lambda *a, **k: None,
     )
-    monkeypatch.setitem(journal.__dict__, "_CURRENT_RUN_ID", "abc12345")
+    bind_run_id("abc12345")
     config = config_domain.RunnerConfig(
         repo_dir=tmp_path, source_repos=("o/r",), message_language="zh",
     )
@@ -7134,7 +7135,9 @@ def test_claim_time_comment_follows_the_repository_language(
         fake_run(["gh", "pr", "view", "9"])
 
 
-def test_reconcile_open_epics_failure_is_fail_open(tmp_path, monkeypatch, caplog):
+def test_reconcile_open_epics_failure_is_fail_open(
+    tmp_path, monkeypatch, caplog, bind_run_id,
+):
     monkeypatch.setattr(claim, "reconcile_open_epics", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
     monkeypatch.setattr(
         milestone, "reconcile_release_milestones",
@@ -7150,16 +7153,18 @@ def test_reconcile_open_epics_failure_is_fail_open(tmp_path, monkeypatch, caplog
     monkeypatch.setattr(
         claim, "pick_issue", lambda *args, **kwargs: {"number": 1},
     )
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "abc12345")
+    bind_run_id("abc12345")
     result = claim.pick_next_delivery(["o/r"], tmp_path / "slots", 1, hooks=resume_deps())
     assert result == ("o/r", {"number": 1}, None)
     assert "epic_reconcile_failed repo=o/r" in caplog.text
     assert "milestone_reconcile_not_found repo=o/r status=404" in caplog.text
 
 
-def test_reconcile_open_epics_runs_on_a_fresh_tick(monkeypatch, tmp_path):
+def test_reconcile_open_epics_runs_on_a_fresh_tick(
+    monkeypatch, tmp_path, bind_run_id,
+):
     calls = []
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(
         claim, "reconcile_open_epics",

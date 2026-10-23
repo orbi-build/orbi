@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+import orbi.journal as journal
 import orbi.runner as runner
 from seam import seam
 
@@ -149,6 +150,39 @@ def systemd_scheduler(monkeypatch):
     monkeypatch.setattr(
         scheduler, "detect", lambda system=None: real_detect("Linux"),
     )
+
+
+@pytest.fixture(autouse=True)
+def bind_run_id():
+    """Bind the journal run id through its public setters (Issue #1865).
+
+    A test that needs a tick's run id bound — the `[run_id]` prefix on
+    every journal line, a run marker in a comment — calls
+    ``bind_run_id("a1b2c3d4")``; ``bind_run_id(None)`` unbinds. The
+    binding goes through `journal.set_run_id` / `journal.clear_run_id`,
+    never the private `journal._CURRENT_RUN_ID` global: the patch
+    ratchet counts a test that writes an orbi global as internal
+    coupling, and the public setters are the contract the Runner itself
+    uses.
+
+    The fixture is autouse because it also owns the isolation: whatever
+    was bound when the test started is restored when it ends, so a test
+    (or a fake helper) that binds a run id cannot decide what the next
+    module's journal lines look like — Issue #1647 was that leak, patched
+    file by file before this fixture existed.
+    """
+    previous = journal.current_run_id()
+
+    def bind(value: str | None) -> None:
+        if value is None:
+            journal.clear_run_id()
+        else:
+            journal.set_run_id(value)
+
+    yield bind
+    # Restore through the same entry: both branches are exercised by the
+    # call sites above, so the fixture adds no uncovered branch.
+    bind(previous)
 
 
 @pytest.fixture

@@ -33,7 +33,6 @@ import orbi.resume_verification as resume_verification
 import orbi.runner as runner
 from seam import seam
 from tests.fakes.github import FakeGh
-from tests.fakes.progress import bind_run_id
 from tests.test_resume_pr import (
     FAKE_BRANCH,
     FAKE_PR_URL,
@@ -139,7 +138,7 @@ def _scene_run(fake_gh: FakeGh, *, local_head: str):
 
 
 def test_resume_decision_and_journal_line_are_golden(
-    monkeypatch, tmp_path, caplog,
+    monkeypatch, tmp_path, caplog, bind_run_id,
 ):
     """The recoverable unpushed-commit scene: the local HEAD is AHEAD of
     the PR head and the PR head is its ancestor. The resume CONTINUES
@@ -155,7 +154,7 @@ def test_resume_decision_and_journal_line_are_golden(
         seam, "run_command", _scene_run(fake, local_head=LOCAL_HEAD),
     )
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    bind_run_id(monkeypatch, FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
 
     url = resume_verification.verify_resumed_pr(
@@ -234,7 +233,7 @@ EXPECTED_PR_BODY = EXPECTED_ISSUE_BODY + "\n\n<!-- runner=8a12fb1c -->"
 
 
 def test_fix_needed_decision_and_comment_text_are_golden(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, bind_run_id,
 ):
     """A PR body that lost the delivery line's run marker is a
     RECOVERABLE verification failure: the Issue stays in the automatic
@@ -260,7 +259,7 @@ def test_fix_needed_decision_and_comment_text_are_golden(
 
     monkeypatch.setattr(seam, "run_command", run)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    bind_run_id(monkeypatch, FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
 
     with pytest.raises(RuntimeError, match="stable run marker"):
         resume_verification.verify_resumed_pr(

@@ -23,7 +23,6 @@ import orbi.failure_report as failure_report
 import orbi.runner as runner
 import orbi.review_merge as review_merge
 from seam import seam
-import orbi.journal as journal
 
 REPO = "owner/repo"
 PR_URL = f"https://github.com/{REPO}/pull/46"
@@ -248,7 +247,7 @@ def _gate_config(tmp_path, *, gate=True, dispatch_label=None):
 
 
 @pytest.fixture()
-def gate_env(tmp_path, monkeypatch):
+def gate_env(tmp_path, monkeypatch, bind_run_id):
     """A delivered worktree plus the label/scene/diff fakes
     `_run_review_round` reads. Issue #1613: only the PR head's CI check
     status is test evidence, so the fixture writes no local test log. The
@@ -292,7 +291,7 @@ def gate_env(tmp_path, monkeypatch):
         lambda number, **kwargs: calls["edit"].append(kwargs),
     )
     monkeypatch.setattr(review_merge, "review_and_merge_if_clean", fake_review)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
+    bind_run_id(RUN_ID)
     return {"worktree": worktree, "calls": calls, "reviews": reviews}
 
 

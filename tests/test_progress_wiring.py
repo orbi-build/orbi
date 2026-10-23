@@ -28,7 +28,7 @@ import orbi.journal as journal
 from orbi import language, pi_process, progress, scene
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
-from tests.fakes.progress import bind_run_id, patched_comment_bodies
+from tests.fakes.progress import patched_comment_bodies
 
 
 @pytest.fixture(autouse=True)
@@ -1946,7 +1946,7 @@ def test_review_and_merge_findings_publish_failure_does_not_block_issue(
 
 
 def test_delivery_step_closed_unmerged_posts_blocked_milestone(
-    monkeypatch,
+    monkeypatch, bind_run_id,
 ):
     pr_url = "https://github.com/owner/repo/pull/46"
     api_calls = []
@@ -1965,7 +1965,7 @@ def test_delivery_step_closed_unmerged_posts_blocked_milestone(
     )
     monkeypatch.setattr(seam, "edit_issue", Mock())
     monkeypatch.setattr(seam, "comment_issue", Mock())
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     runner.delivery_step(
         pr_url, {"number": 39, "title": "t", "body": ""},
         config_domain.RunnerConfig(), "owner/repo",
@@ -2008,7 +2008,7 @@ def test_delivery_step_closed_unmerged_posts_blocked_milestone(
 
 
 def test_delivery_step_review_failure_finishes_progress_comment_with_blocked_scene(
-    monkeypatch,
+    monkeypatch, bind_run_id,
 ):
     """A review that cannot run is a terminal failure: the Issue is
     marked `ai-blocked` AND the tracked progress comment becomes the
@@ -2031,7 +2031,7 @@ def test_delivery_step_review_failure_finishes_progress_comment_with_blocked_sce
     )
     monkeypatch.setattr(seam, "edit_issue", Mock())
     monkeypatch.setattr(seam, "comment_issue", Mock())
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     runner.delivery_step(
         pr_url, {"number": 39, "title": "t", "body": ""},
         config_domain.RunnerConfig(repo_dir=Path("/srv/repo")), "owner/repo",
@@ -2201,7 +2201,7 @@ def _current_round_scene_body(monkeypatch, *, pr_state,
     )
     monkeypatch.setattr(seam, "edit_issue", Mock())
     monkeypatch.setattr(seam, "comment_issue", Mock())
-    bind_run_id(monkeypatch)
+    journal.set_run_id("a1b2c3d4")
     runner.delivery_step(
         "https://github.com/owner/repo/pull/46",
         {"number": 39, "title": "t", "body": ""},
@@ -2274,7 +2274,7 @@ def _blocked_progress_failures(command) -> bool:
 
 
 def test_delivery_step_closed_unmerged_progress_failure_still_releases(
-    monkeypatch, caplog,
+    monkeypatch, caplog, bind_run_id,
 ):
     """Issue #79: the PR is closed without a merge and the blocked-scene
     progress publishing (milestone, blocked-scene finish) 404s. The
@@ -2299,7 +2299,7 @@ def test_delivery_step_closed_unmerged_progress_failure_still_releases(
     monkeypatch.setattr(seam, "comment_issue",
         lambda number, **kwargs: comments.append(kwargs),
     )
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     caplog.set_level("ERROR")
 
     # No exception: the loop completed the terminal failure and the
@@ -2353,7 +2353,7 @@ def test_delivery_step_closed_unmerged_progress_failure_still_releases(
 
 
 def test_delivery_step_review_failure_progress_failure_still_releases(
-    monkeypatch, caplog,
+    monkeypatch, caplog, bind_run_id,
 ):
     """Issue #79: the independent review cannot run (no trusted scene)
     and the blocked-scene progress publishing 404s. The terminal
@@ -2378,7 +2378,7 @@ def test_delivery_step_review_failure_progress_failure_still_releases(
     monkeypatch.setattr(seam, "comment_issue",
         lambda number, **kwargs: comments.append(kwargs),
     )
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     caplog.set_level("ERROR")
 
     # No exception: the loop completed the terminal failure and the
@@ -2598,12 +2598,14 @@ def _external_wait_fake(monkeypatch, *, pr_state, fail_progress=None):
     return close_calls, comments
 
 
-def test_delivery_step_external_merge_closes_the_triage_issue(monkeypatch):
+def test_delivery_step_external_merge_closes_the_triage_issue(
+    monkeypatch, bind_run_id,
+):
     """Issue #608: merging the external PR closes the triage Issue (the
     PR body carries no `Fixes #N` for it) — 合并外部 PR 即关票."""
     close_calls, _ = _external_wait_fake(monkeypatch, pr_state="MERGED")
     monkeypatch.setattr(seam, "comment_issue", Mock())
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     runner.delivery_step(
         "https://github.com/xqliu/orbi/pull/592",
         {"number": 608, "title": "t", "body": ""},
@@ -2618,8 +2620,9 @@ def test_delivery_step_external_merge_closes_the_triage_issue(monkeypatch):
     assert "external PR" in body
 
 
-def test_delivery_step_external_close_failure_never_rewrites(monkeypatch,
-                                                                 caplog):
+def test_delivery_step_external_close_failure_never_rewrites(
+    monkeypatch, caplog, bind_run_id,
+):
     """The merge already landed: a failed close/comment is logged
     (bypass) — the delivered fact is never rewritten as a failure."""
     _external_wait_fake(monkeypatch, pr_state="MERGED")
@@ -2631,7 +2634,7 @@ def test_delivery_step_external_close_failure_never_rewrites(monkeypatch,
 
     monkeypatch.setattr(seam, "run_command", failing_close)
     monkeypatch.setattr(seam, "comment_issue", Mock())
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     caplog.set_level("ERROR")
     runner.delivery_step(
         "https://github.com/xqliu/orbi/pull/592",
@@ -2643,7 +2646,7 @@ def test_delivery_step_external_close_failure_never_rewrites(monkeypatch,
 
 
 def test_delivery_step_external_closed_requeues_for_internal_redo(
-    monkeypatch,
+    monkeypatch, bind_run_id,
 ):
     """Issue #608: the external PR was closed without a merge (the
     contributor withdrew, or a maintainer rejected it) — the 放弃/不可修
@@ -2667,7 +2670,7 @@ def test_delivery_step_external_closed_requeues_for_internal_redo(
             (number, kwargs["body"]),
         ),
     )
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     runner.delivery_step(
         "https://github.com/xqliu/orbi/pull/592",
         {"number": 608, "title": "t", "body": ""},

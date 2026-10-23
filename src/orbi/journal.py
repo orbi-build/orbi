@@ -138,6 +138,18 @@ def set_run_id(run_id: str) -> None:
     _CURRENT_RUN_ID = validate_run_id(run_id)
 
 
+def clear_run_id() -> None:
+    """Unbind the attempt: later journal lines carry no prefix again.
+
+    The public counterpart of `set_run_id` (Issue #1865): a caller that
+    must return the process to "no run id bound" — the test fixture that
+    binds a run id for one test, a tick that ends — unbinds through this
+    entry instead of writing the private global.
+    """
+    global _CURRENT_RUN_ID
+    _CURRENT_RUN_ID = None
+
+
 def current_run_id() -> str | None:
     """Return the run id bound to this tick, or None before the claim."""
     return _CURRENT_RUN_ID
