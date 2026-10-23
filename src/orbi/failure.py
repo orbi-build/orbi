@@ -27,18 +27,17 @@ import re
 import subprocess
 
 from orbi import gh_response, language, user_summary
+from orbi.comment_kind import parse_versioned_block
 
 SCHEMA_VERSION = 1
 
 # The single hidden block: a versioned marker framing a JSON payload
 # that mirrors the `Failure` fields exactly (render writes every field).
-# The capture is non-greedy to the first `-->` so a truncated or
-# mangled payload still matches the marker and fails as corrupted
-# instead of being silently ignored.
-FAILURE_BLOCK_TEMPLATE = "<!-- orbi:failure:v1 {payload} -->"
-_FAILURE_BLOCK_RE = re.compile(
-    r"<!--\s*orbi:failure:v1\s+(.*?)-->", re.DOTALL,
-)
+# The envelope (marker capture, single block, JSON object, field diff) is
+# `comment_kind.parse_versioned_block`; this module keeps the fields and
+# their closed sets.
+_MARKER = "orbi:failure:v1"
+FAILURE_BLOCK_TEMPLATE = f"<!-- {_MARKER} {{payload}} -->"
 
 # Closed sets. A reason says WHY the delivery stopped; an action says
 # WHAT the reader (a human or the Cloud) should do. Adding a member is a
@@ -188,16 +187,10 @@ def parse(body: object) -> Failure | None:
     block in one body): a corrupted record is never silently read as
     "no reason".
     """
-    if not isinstance(body, str):
-        return None
-    blocks = _FAILURE_BLOCK_RE.findall(body)
-    if len(blocks) > 1:
-        raise FailureError(
-            "multiple orbi:failure:v1 blocks in one comment body"
-        )
-    if not blocks:
-        return None
-    return _parse_block(blocks[0])
+    data = parse_versioned_block(
+        body, _MARKER, _FAILURE_FIELDS, FailureError,
+    )
+    return None if data is None else _parse_block(data)
 
 
 _FAILURE_FIELDS = tuple(
@@ -205,27 +198,7 @@ _FAILURE_FIELDS = tuple(
 )
 
 
-def _parse_block(payload: str) -> Failure:
-    try:
-        data = json.loads(payload)
-    except json.JSONDecodeError as exc:
-        raise FailureError(
-            f"orbi:failure:v1 block is not valid JSON: {exc}"
-        ) from exc
-    if not isinstance(data, dict):
-        raise FailureError(
-            "orbi:failure:v1 block payload must be a JSON object"
-        )
-    unknown = sorted(set(data) - set(_FAILURE_FIELDS))
-    if unknown:
-        raise FailureError(
-            f"orbi:failure:v1 block has unknown fields: {unknown}"
-        )
-    missing = sorted(name for name in _FAILURE_FIELDS if name not in data)
-    if missing:
-        raise FailureError(
-            f"orbi:failure:v1 block is missing fields: {missing}"
-        )
+def _parse_block(data: dict) -> Failure:
     record = Failure(
         reason_code=data["reason_code"],
         action_code=data["action_code"],
