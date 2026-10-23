@@ -439,7 +439,7 @@ def prepare_pi_agent_dir(worktree: Path, config: config_domain.RunnerConfig,
     return agent_dir
 
 
-def _pi_extension_env(config: config_domain.RunnerConfig) -> dict[str, str]:
+def pi_extension_env(config: config_domain.RunnerConfig) -> dict[str, str]:
     """Return extension variables for the Pi child only; never log them."""
     values: dict[str, str] = {}
     for extension in config.pi_extensions:
@@ -673,7 +673,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         elapsed=time.monotonic() - started,
     )
     extra = {}
-    pi_env = _pi_extension_env(config)
+    pi_env = pi_extension_env(config)
     if agent_dir is not None:
         pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
     if pi_env:
@@ -837,7 +837,7 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
         elapsed=time.monotonic() - started,
     )
     extra = {}
-    pi_env = _pi_extension_env(config)
+    pi_env = pi_extension_env(config)
     if agent_dir is not None:
         pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
     if pi_env:
@@ -931,7 +931,7 @@ def run_ticket_agent(
             elapsed=time.monotonic() - started,
         )
         agent_dir = prepare_pi_agent_dir(ticket_dir, config, role=ROLE_TICKET)
-        pi_env = _pi_extension_env(config)
+        pi_env = pi_extension_env(config)
         if agent_dir is not None:
             pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
         return stream_pi(

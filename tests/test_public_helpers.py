@@ -35,6 +35,7 @@ PUBLIC_HELPERS = {
         "failure_comment_body",
     },
     "delivery_scene": {"issue_label_set"},
+    "pi_session": {"pi_extension_env"},
     "pi_command": {"skills_for"},
     "pi_stream_log": {"log_provider_config_loaded"},
 }

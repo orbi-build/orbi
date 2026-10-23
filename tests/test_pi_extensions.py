@@ -72,7 +72,7 @@ def test_pi_extension_args_and_env_isolate_disabled_and_secrets():
          "env": {"DISABLED": "no"}},))
     args = pi_command._pi_extension_args(config)
     assert args == ["--no-extensions", "--extension", "npm:fixture@1.2.3"]
-    assert pi_session._pi_extension_env(config) == {"FIXTURE_TOKEN": "secret"}
+    assert pi_session.pi_extension_env(config) == {"FIXTURE_TOKEN": "secret"}
     assert "secret" not in " ".join(args)
 
 
