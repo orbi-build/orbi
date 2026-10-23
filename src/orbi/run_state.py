@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from enum import Enum
 from pathlib import Path
@@ -262,7 +263,13 @@ def write_run_state(ctx: RunContext) -> None:
 def _write_run_state_file(worktree: Path, state: dict) -> None:
     path = run_state_path(worktree)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    # Atomic (Issue #1851): truncating the target left a half-written
+    # file on a kill, and `read_run_state` fails fast on it — a killed
+    # tick became an `ai-blocked` Issue on resume. Same pid-scoped tmp +
+    # rename rule as `runner_health.save_health_state`; bytes unchanged.
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
 
 
 def record_pushed_head(worktree: Path, head: str) -> None:

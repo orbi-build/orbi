@@ -2496,6 +2496,59 @@ def test_read_run_state_fails_fast_on_unreadable_or_malformed_state(tmp_path):
         run_state.read_run_state(worktree)
 
 
+def test_write_run_state_bytes_are_the_golden_json(tmp_path):
+    """Issue #1851: the atomic write keeps the exact previous bytes — a
+    two-space-indented JSON object plus one trailing newline."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    run_state.write_run_state(
+        runner.RunContext(
+            run_id="a1b2c3d4", issue=3, branch="orbi/owner-repo-issue-3",
+            worktree=worktree, source_repo="owner/repo",
+        ),
+    )
+    path = run_state.run_state_path(worktree)
+    text = path.read_text(encoding="utf-8")
+    assert text == json.dumps(json.loads(text), indent=2) + "\n"
+
+
+def test_write_run_state_keeps_the_old_file_when_killed_before_the_rename(
+        tmp_path, monkeypatch):
+    """Issue #1851: a kill between truncate and write left a half-written
+    run-state.json, and `read_run_state` then fails fast — the resume turns
+    a killed tick into an `ai-blocked` Issue. The write is tmp+rename now,
+    so a failure at the rename keeps the previous complete file readable."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    run_state.write_run_state(
+        runner.RunContext(
+            run_id="a1b2c3d4", issue=3, branch="orbi/owner-repo-issue-3",
+            worktree=worktree, source_repo="owner/repo",
+        ),
+    )
+    path = run_state.run_state_path(worktree)
+    before = path.read_bytes()
+
+    def killed(src, dst):
+        raise OSError("killed before the rename")
+
+    # The stdlib rename boundary itself, never a src-module symbol.
+    monkeypatch.setattr(os, "replace", killed)
+    with pytest.raises(OSError, match="killed before the rename"):
+        run_state.write_run_state(
+            runner.RunContext(
+                run_id="a1b2c3d4", issue=3, branch="orbi/other-branch",
+                worktree=worktree, source_repo="owner/repo",
+            ),
+        )
+    assert path.is_file()
+    assert path.read_bytes() == before
+    assert json.loads(path.read_text(encoding="utf-8"))["branch"] == (
+        "orbi/owner-repo-issue-3"
+    )
+    assert run_state.read_run_state(worktree)["run_id"] == "a1b2c3d4"
+
+
 def test_write_run_state_preserves_the_push_history(tmp_path):
     """The push-history fields (Issue #833) survive a resume's state
     refresh — the same delivery line keeps its recorded heads."""
