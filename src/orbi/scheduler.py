@@ -38,8 +38,7 @@ import logging
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from orbi.journal import event
-from orbi.progress import quote_value
+from orbi.journal import event, quote_value
 from orbi.scheduler_units import (
     MAX_RUNNER_INSTANCES,
     REPO_DIR_PLACEHOLDER,
@@ -332,7 +331,7 @@ def drift_lines(status: list[dict]) -> list[str]:
     Builds the lines carried by the ``UnitDriftError`` message: the
     repo path, the installed path, both hashes and the idempotent fix
     command. Values containing spaces are quoted (the
-    progress.quote_value convention) so the line stays parseable.
+    journal.quote_value convention) so the line stays parseable.
     This helper never logs — the journal emission goes through
     ``event()`` (:func:`_log_drifted_units`).
     """

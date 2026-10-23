@@ -48,8 +48,8 @@ from orbi.pi_command import (
     REVIEW_EXCLUDED_SKILLS,
     ROLE_REVIEW,
     ROLE_TICKET,
-    _skills_for,
     build_pi_command,
+    skills_for,
 )
 from orbi.pi_process import (
     ROLE_IMPLEMENT,
@@ -57,7 +57,7 @@ from orbi.pi_process import (
     SteeringRequest,
     stream_pi,
 )
-from orbi.pi_stream_log import _log_provider_config_loaded
+from orbi.pi_stream_log import log_provider_config_loaded
 from orbi.repo_config import validate_context_file
 
 # Runner-owned runtime paths inside a task worktree: created
@@ -498,7 +498,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         "CONTEXT_FILES": "\n".join(str(path) for path in context_files),
         "SKILLS": "\n".join(
             str(path)
-            for path in _skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)
+            for path in skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)
         ),
         "BASE_BRANCH": config.base_branch,
         "BASE_SHA": config.base_sha,
@@ -667,7 +667,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
     # materialized for this run (or resolved to Pi's own agent dir when
     # unconfigured) — the first startup line, before the process is
     # spawned.
-    _log_provider_config_loaded(
+    log_provider_config_loaded(
         issue_ref=issue_context(source_repo, int(issue["number"])),
         role=ROLE_IMPLEMENT, config=config,
         elapsed=time.monotonic() - started,
@@ -831,7 +831,7 @@ def run_review(ctx: RunContext, pr: dict, config: config_domain.RunnerConfig, ro
     agent_dir = prepare_pi_agent_dir(worktree, config, role=ROLE_REVIEW)
     # Startup phase: the review session's provider config
     # is loaded and materialized too (same line shape, role=review).
-    _log_provider_config_loaded(
+    log_provider_config_loaded(
         issue_ref=issue_context(source_repo, issue),
         role=ROLE_REVIEW, config=config,
         elapsed=time.monotonic() - started,
@@ -925,7 +925,7 @@ def run_ticket_agent(
         # Startup phase: the provider config is loaded and resolved
         # before the spawn; a configured provider file is materialized
         # into the transient dir (Pi's own agent dir otherwise).
-        _log_provider_config_loaded(
+        log_provider_config_loaded(
             issue_ref=issue_context(source_repo, int(issue["number"])),
             role=ROLE_TICKET, config=config,
             elapsed=time.monotonic() - started,

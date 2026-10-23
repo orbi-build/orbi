@@ -316,7 +316,7 @@ def test_clarification_comment_carries_the_summary():
 def test_blocked_failure_body_carries_the_summary():
     from orbi import failure
 
-    body = failure._failure_comment_body(
+    body = failure.failure_comment_body(
         outcome="blocked", action="Repair access.", reason="provider failed",
         diagnosis="provider failed", scene="- run: `abc12345`",
         evidence="", pr_url=None, issue="o/r#7", run_id="abc12345",

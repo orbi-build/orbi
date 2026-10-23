@@ -55,11 +55,11 @@ from orbi.pi_stream_log import (
     _is_rate_limited,
     _log_activity,
     _log_heartbeat,
-    _log_provider_config_loaded,
     _log_run_failed,
     _log_startup,
     _log_startup_failed,
     _startup_failed_reason,
+    log_provider_config_loaded,
 )
 
 

@@ -19,20 +19,6 @@ from tests.fakes import runner_marker as runner_marker_fakes
 from tests.fakes.progress import freeze_report_time
 
 
-def test_quote_value_quotes_only_values_with_spaces():
-    assert progress.quote_value("test") == "test"
-    assert progress.quote_value("bash pytest tests/") == (
-        '"bash pytest tests/"'
-    )
-
-
-def test_quote_value_escapes_embedded_quotes():
-    assert progress.quote_value('git commit -m "feat: x"') == (
-        '"git commit -m \\"feat: x\\""'
-    )
-    assert progress.quote_value('a"b') == '"a\\"b"'
-
-
 def test_format_status_comment_non_string_is_unchanged():
     assert progress.format_status_comment(None) is None
 
@@ -1169,7 +1155,7 @@ def test_progress_state_survives_an_activity_snapshot_failure(monkeypatch, tmp_p
         raise RuntimeError("unreadable session")
 
     monkeypatch.setattr(progress, "activity_snapshot", boom)
-    state = progress._progress_state(RunContext(run_id="a1b2c3d4", issue=4, branch="b", worktree=tmp_path, source_repo="owner/repo"), title="t", role="review", started=0.0, pr_url=None, review_round=0, priority="normal", language_code="en")
+    state = progress.progress_state(RunContext(run_id="a1b2c3d4", issue=4, branch="b", worktree=tmp_path, source_repo="owner/repo"), title="t", role="review", started=0.0, pr_url=None, review_round=0, priority="normal", language_code="en")
     assert state["phase"] == "starting"
     assert state["last_activity"] is None
     assert state["session"] is None
@@ -1188,7 +1174,7 @@ def _progress_state_for(tmp_path, **overrides):
         review_round=0, priority="normal", language_code="en",
     )
     kwargs.update(overrides)
-    return progress._progress_state(**kwargs)
+    return progress.progress_state(**kwargs)
 
 
 @pytest.mark.parametrize(
@@ -1328,7 +1314,7 @@ def test_failure_repeat_count_and_bump_round_trip():
 
 
 def _summary_state(**overrides):
-    """A complete state dict as `_progress_state` produces it."""
+    """A complete state dict as `progress_state` produces it."""
     state = {"language": "en",
         "run_id": "abc12345",
         "issue": 1657,
@@ -1426,7 +1412,7 @@ def test_blocked_finish_keeps_the_formal_prefix_above_the_explanation(
     """Acceptance: a blocked finish starts with the run marker and the v1
     block; the blocked explanation follows them."""
     freeze_report_time(monkeypatch)
-    body = progress._finish_progress_body(
+    body = progress.finish_progress_body(
         number=1667, title="Blocked task", run_id="86b57234",
         role="review", branch="orbi/orbi-1667", worktree=tmp_path,
         pr_url=None, review_round=0, priority="normal", detail="boom",
@@ -1455,7 +1441,7 @@ def test_failed_finish_redacts_local_paths_in_reason_and_diagnosis(
     (and its zh twin) or the raw error, and keeps the rest of both
     sentences."""
     freeze_report_time(monkeypatch)
-    body = progress._finish_progress_body(
+    body = progress.finish_progress_body(
         number=1721, title="Failed task", run_id="86b57234",
         role="implement", branch="orbi/orbi-1721", worktree=tmp_path,
         pr_url=None, review_round=0, priority="normal", detail="boom",
@@ -1767,7 +1753,7 @@ def test_progress_publication_failure_stays_a_pure_bypass(monkeypatch, tmp_path)
     publisher = progress.ProgressPublisher(
         18, "xqliu/orbi", "abc12345", run_command=boom, language_code="en",
     )
-    progress._safe_publish(
+    progress.safe_publish(
         run_id="abc12345", issue=18, source_repo="xqliu/orbi",
         role="implement",
         action=lambda: publisher.ensure(progress.progress_body(
@@ -1803,7 +1789,7 @@ def test_progress_state_projects_the_watcher_activity_safely(tmp_path):
         run_id="a1b2c3d4", issue=4, branch="b",
         worktree=worktree, source_repo="owner/repo",
     )
-    state = progress._progress_state(
+    state = progress.progress_state(
         ctx, title="t", role="review", started=0.0, pr_url=None,
         review_round=0, priority="normal",
         activity={
@@ -1820,7 +1806,7 @@ def test_progress_state_projects_the_watcher_activity_safely(tmp_path):
     }
     assert state["step"] == "review"
     # An unsafe target keeps the known kind and time, target null.
-    unsafe = progress._progress_state(
+    unsafe = progress.progress_state(
         ctx, title="t", role="implement", started=0.0, pr_url=None,
         review_round=0, priority="normal",
         activity={
@@ -1833,7 +1819,7 @@ def test_progress_state_projects_the_watcher_activity_safely(tmp_path):
         "at": "2026-10-15T06:20:18Z", "kind": "read", "target": None,
     }
     # An unknown tool publishes no activity at all.
-    unknown = progress._progress_state(
+    unknown = progress.progress_state(
         ctx, title="t", role="implement", started=0.0, pr_url=None,
         review_round=0, priority="normal",
         activity={"kind": None, "target": "/w/secret"}, language_code="en",
@@ -1846,7 +1832,7 @@ def test_progress_state_takes_the_explicit_runner_step(tmp_path):
         run_id="a1b2c3d4", issue=4, branch="b",
         worktree=tmp_path, source_repo="owner/repo",
     )
-    state = progress._progress_state(
+    state = progress.progress_state(
         ctx, title="t", role="review", step="merge", started=0.0,
         pr_url=None, review_round=0, priority="normal", activity={}, language_code="en",
     )

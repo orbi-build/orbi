@@ -36,8 +36,7 @@ from pathlib import Path
 from typing import Callable
 
 from orbi import scheduler
-from orbi.journal import event
-from orbi.progress import quote_value
+from orbi.journal import event, quote_value
 
 # One git fetch inside one sync; the unit's ExecStartPre timeout (90 s)
 # stays the outer bound and a timeout here is a fail-fast, never a retry.
