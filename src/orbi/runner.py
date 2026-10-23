@@ -240,10 +240,8 @@ from orbi.github import (
     parse_issue_array,
     parse_issue_list,
     parse_paginated_issue_array,
-    pr_delivery_status,
-    pr_delivery_rollup,
-    _check_summaries,
 )
+from orbi.github_feedback import _check_summaries, pr_delivery_status, pr_delivery_rollup
 from orbi.checks import _classify_rollup, _render_check, test_status
 from orbi.gitops import (
     acquire_base_sync_lock,

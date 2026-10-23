@@ -32,11 +32,11 @@ from orbi.github import (
     comment_issue,
     issue_comments,
     issue_view,
-    normalize_pr_feedback,
     pr_comments,
     pr_review_comments,
     pr_reviews,
 )
+from orbi.github_feedback import normalize_pr_feedback
 from orbi.gitops import base_sync_lock_path
 from orbi.journal import LOGGER, event, issue_context, run_command
 from orbi.pi_activity import (

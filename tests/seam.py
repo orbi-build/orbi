@@ -21,6 +21,7 @@ import orbi.clarify as clarify
 import orbi.claim as claim
 import orbi.failure_report as failure_report
 import orbi.github as github
+import orbi.github_feedback as github_feedback
 import orbi.gitops as gitops
 import orbi.journal as journal
 import orbi.milestone as milestone
@@ -41,7 +42,8 @@ import orbi.resume_verification as resume_verification
 import orbi.runner as runner
 
 _MODULES = (
-    journal, github, gitops, milestone, milestone_command, ticket_command,
+    journal, github, github_feedback, gitops, milestone, milestone_command,
+    ticket_command,
     progress, cli_source, release, release_git, release_notes, pi_session,
     runner, review_merge, review_rounds, run_state, claim, resume_scan,
     pr_verification, resume_verification,

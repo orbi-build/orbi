@@ -26,8 +26,9 @@ from orbi.delivery_scene import (
 )
 from orbi.comment_trust import latest_run_marker
 from orbi.github import (
-    issue_comments, list_issues, open_pr_for_branch, pr_delivery_rollup,
+    issue_comments, list_issues, open_pr_for_branch,
 )
+from orbi.github_feedback import pr_delivery_rollup
 from orbi.gitops import task_branch
 from orbi.journal import LOGGER, event
 from orbi.pilot_slots import slot_held_deliveries
