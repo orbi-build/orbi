@@ -13,6 +13,8 @@ monkeypatch's teardown fans the original back.
 import orbi.base_ci_red as base_ci_red
 import orbi.blocked_comment as blocked_comment
 import orbi.cli as cli
+import orbi.cli_commands as cli_commands
+import orbi.cli_doctor as cli_doctor
 import orbi.cli_source as cli_source
 import orbi.branch_reclaim as branch_reclaim
 import orbi.comment_trust as comment_trust
@@ -47,7 +49,7 @@ _MODULES = (
     pr_verification, resume_verification,
     repo_config, clarify, comment_trust,
     branch_reclaim, failure_report, suggest, cli, blocked_comment,
-    base_ci_red,
+    base_ci_red, cli_commands, cli_doctor,
 )
 
 

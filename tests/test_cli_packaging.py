@@ -109,13 +109,21 @@ def test_delivery_label_consumers_follow_the_authoritative_source(monkeypatch):
     monkeypatch.setattr(delivery_labels, "MERGED_LABEL", "changed-merged")
     monkeypatch.setattr(delivery_labels, "BLOCKED_LABEL", "changed-blocked")
 
-    cli = importlib.import_module("orbi.cli")
-    importlib.reload(cli)
+    # Issue #1862: the CLI's label consumers each live in the module that
+    # owns the command (cli_commands dispatches, cli_status reads), so the
+    # reload covers every module that binds the labels.
+    modules = [
+        importlib.import_module(name)
+        for name in ("orbi.cli", "orbi.cli_commands", "orbi.cli_status")
+    ]
+    for module in modules:
+        importlib.reload(module)
     importlib.reload(pilot_setup)
+    cli_commands, cli_status = modules[1], modules[2]
 
-    assert cli.READY_LABEL == "changed-ready"
-    assert cli.IN_PROGRESS_LABEL == "changed-progress"
-    assert cli.RESULT_LABELS == (
+    assert cli_commands.READY_LABEL == "changed-ready"
+    assert cli_status.IN_PROGRESS_LABEL == "changed-progress"
+    assert cli_status.RESULT_LABELS == (
         "changed-pr", "changed-fix", "changed-merged", "changed-blocked",
     )
     assert pilot_setup.REQUIRED_LABELS[:6] == (
@@ -126,7 +134,8 @@ def test_delivery_label_consumers_follow_the_authoritative_source(monkeypatch):
     # Keep the imported modules usable by the remaining tests after the
     # monkeypatch is reverted.
     monkeypatch.undo()
-    importlib.reload(cli)
+    for module in modules:
+        importlib.reload(module)
     importlib.reload(pilot_setup)
 
 

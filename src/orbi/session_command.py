@@ -5,8 +5,8 @@ The live Pi session viewer is a debug attachment (the journal and GitHub
 remain the daily entry points): it finds the newest
 `.pi-session/*.jsonl` under the configured repo's `.worktrees`
 directory and prints its path, or follows it like `tail -f`. The
-helpers and their constants live here so `cli.py` stays inside the
-Article 3 size ratchet; `cli.py` imports them unchanged.
+helpers and their constants live here so the CLI modules stay inside
+the Article 3 size ratchet; `cli_commands` imports them unchanged.
 """
 from __future__ import annotations
 

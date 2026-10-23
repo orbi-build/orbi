@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import orbi.status_observe as observe
-from orbi import cli
+from orbi import cli, cli_status
 from orbi.config import RunnerConfig
 from seam import seam
 
@@ -654,7 +654,7 @@ def test_render_re_reads_no_github_state(tmp_path):
     )
     observer.refresh()
     reads.clear()
-    report = cli.status_report(config, scope, observer)
+    report = cli_status.status_report(config, scope, observer)
     assert "  base: main abc123" in report
     assert reads == []
 
@@ -701,7 +701,7 @@ def test_render_keeps_each_issue_and_run_attributed(tmp_path):
         read_ready=lambda repo: None, read_result=lambda repo: None,
     )
     observer.refresh()
-    blocks = cli.status_report(config, scope, observer).split("  active: #")
+    blocks = cli_status.status_report(config, scope, observer).split("  active: #")
     assert len(blocks) == 3
     assert "run=aaaaaaaa session=sess-old" in blocks[1]
     assert "run=bbbbbbbb session=sess-new" in blocks[1]
@@ -975,8 +975,8 @@ def test_ready_issue_and_recent_result_read_under_the_status_bound(
         return "[]"
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert cli.ready_issue("acme/shop", _config(tmp_path)) is None
-    assert cli.recent_result("acme/shop") is None
+    assert cli_status.ready_issue("acme/shop", _config(tmp_path)) is None
+    assert cli_status.recent_result("acme/shop") is None
     assert {timeout for _, timeout in calls} == {
         observe.STATUS_READ_TIMEOUT_SECONDS,
     }
@@ -1182,7 +1182,7 @@ def test_render_excludes_a_maintainer_blocked_delivery_from_active(tmp_path):
         ],
     )
     observer.refresh()
-    report = cli.status_report(config, scope, observer)
+    report = cli_status.status_report(config, scope, observer)
     assert "  active: -" in report
     assert "#42" not in report
 
@@ -1221,7 +1221,7 @@ def test_render_issue_scope_shows_a_blocked_delivery_with_its_observations(
         ),
     )
     observer.refresh()
-    report = cli.status_report(config, scope, observer)
+    report = cli_status.status_report(config, scope, observer)
     assert (
         "  issue: #42 Fix login u42 state=open "
         "labels=ai-blocked,ai-pr-opened"
