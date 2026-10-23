@@ -27,7 +27,14 @@ import os
 import sys
 from pathlib import Path
 
-from orbi import cli_commands, config as config_domain, pilot_setup, runner
+from orbi import (
+    cli_commands,
+    config as config_domain,
+    pilot_setup,
+    runner,
+    setup_checks,
+    setup_config,
+)
 from orbi.cli_parser import build_parser
 from orbi.runner import (
     RunIdFilter,
@@ -85,7 +92,7 @@ def missing_config_check(args,
     check_candidates = candidates or _installed_unit_configs(
         getattr(args, "installed_dir", None),
     )
-    _, machine_failures = pilot_setup.run_machine_checks(
+    _, machine_failures = setup_checks.run_machine_checks(
         run_command=cli_commands.run_command, collect_failures=True,
     )
     for failure in machine_failures:
@@ -135,7 +142,7 @@ def load_command_config(args, candidates: tuple[tuple[Path, str], ...]):
     """
     try:
         if args.command == "setup":
-            pilot_setup.ensure_config(args.config)
+            setup_config.ensure_config(args.config)
         config = config_domain.load_config(
             args.config,
             # The engine-source sync and the milestone advance are

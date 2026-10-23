@@ -29,7 +29,7 @@ import pytest
 
 from orbi import delivery_labels
 from orbi import git_transport
-from orbi import pilot_setup
+from orbi import setup_checks, setup_config
 from orbi import scheduler, systemd_deploy
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +49,10 @@ RUNTIME_MODULES = (
     "git_transport",
     "systemd_deploy",
     "pilot_setup",
+    # Issue #1861: the setup split — the config/label scaffolding and
+    # the prerequisite checks are package modules too.
+    "setup_config",
+    "setup_checks",
     "pilot_slots",
     "pi_activity",
     "pi_recovery",
@@ -111,32 +115,40 @@ def test_delivery_label_consumers_follow_the_authoritative_source(monkeypatch):
 
     # Issue #1862: the CLI's label consumers each live in the module that
     # owns the command (cli_commands dispatches, cli_status reads), so the
-    # reload covers every module that binds the labels.
+    # reload covers every module that binds the labels. Issue #1861: the
+    # setup's platform label set lives in setup_config, and the modules
+    # that bind its error classes reload after it — a reload rebinds the
+    # names, so the order is dependency first.
     modules = [
         importlib.import_module(name)
-        for name in ("orbi.cli", "orbi.cli_commands", "orbi.cli_status")
+        for name in (
+            "orbi.setup_config",
+            "orbi.setup_checks",
+            "orbi.pilot_setup",
+            "orbi.cli",
+            "orbi.cli_commands",
+            "orbi.cli_status",
+        )
     ]
     for module in modules:
         importlib.reload(module)
-    importlib.reload(pilot_setup)
-    cli_commands, cli_status = modules[1], modules[2]
+    setup_config, cli_commands, cli_status = modules[0], modules[4], modules[5]
 
     assert cli_commands.READY_LABEL == "changed-ready"
     assert cli_status.IN_PROGRESS_LABEL == "changed-progress"
     assert cli_status.RESULT_LABELS == (
         "changed-pr", "changed-fix", "changed-merged", "changed-blocked",
     )
-    assert pilot_setup.REQUIRED_LABELS[:6] == (
+    assert setup_config.REQUIRED_LABELS[:6] == (
         "changed-ready", "changed-progress", "changed-pr",
         "changed-fix", "changed-merged", "changed-blocked",
     )
 
     # Keep the imported modules usable by the remaining tests after the
-    # monkeypatch is reverted.
+    # monkeypatch is reverted (same dependency order).
     monkeypatch.undo()
     for module in modules:
         importlib.reload(module)
-    importlib.reload(pilot_setup)
 
 
 def test_pyproject_declares_the_orbi_console_script():
@@ -222,14 +234,14 @@ def test_required_python_matches_the_check_gate():
     `requires-python` floor are the same requirement — pip enforces it at
     install time, the gate re-states it at runtime; the test pins the
     two together so they cannot drift. Issue #861: the interpreter
-    selection (cli_source) shares the SAME floor — pilot_setup's
+    selection (cli_source) shares the SAME floor — setup_checks'
     constant is an alias, never a second copy."""
-    from orbi import cli_source, pilot_setup
+    from orbi import cli_source
 
     assert load_pyproject()["project"]["requires-python"] == (
-        ">=" + ".".join(str(part) for part in pilot_setup.REQUIRED_PYTHON)
+        ">=" + ".".join(str(part) for part in setup_checks.REQUIRED_PYTHON)
     )
-    assert pilot_setup.REQUIRED_PYTHON == cli_source.REQUIRED_PYTHON
+    assert setup_checks.REQUIRED_PYTHON == cli_source.REQUIRED_PYTHON
 
 
 def test_every_runtime_module_lives_in_the_package():
@@ -500,12 +512,12 @@ def test_https_remote_migration_entry_is_the_cli():
 def test_setup_requires_the_installed_cli():
     """`setup` verifies the machine prerequisites; the installed CLI is
     one of them (the systemd entry it documents must exist)."""
-    assert "orbi" in pilot_setup.REQUIRED_COMMANDS
+    assert "orbi" in setup_checks.REQUIRED_COMMANDS
     for name in ("git", "gh"):
-        assert name in pilot_setup.REQUIRED_COMMANDS
+        assert name in setup_checks.REQUIRED_COMMANDS
     # Issue #156: setup calls `uv tool install` (the CLI editable step,
     # Issue #152), so the prerequisite check must verify uv explicitly.
-    assert "uv" in pilot_setup.REQUIRED_COMMANDS
+    assert "uv" in setup_checks.REQUIRED_COMMANDS
 
 
 # --- the documentation contract -----------------------------------------------
