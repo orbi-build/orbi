@@ -53,9 +53,9 @@ DYNAMIC_KINDS = (
 
 
 @pytest.fixture(autouse=True)
-def _reset_run_binding(monkeypatch):
+def _reset_run_binding(bind_run_id):
     """Isolate the module-level run binding between tests."""
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
 
 
 # ---------------------------------------------------------------------------

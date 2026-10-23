@@ -29,10 +29,8 @@ import orbi.run_state as run_state
 import orbi.pi_session as pi_session
 import orbi.runner_health as runner_health
 from orbi import language, progress, scene
-from tests.fakes.progress import bind_run_id
 from orbi.delivery_labels import EVENT_BLOCKED
 from seam import seam
-import orbi.journal as journal
 
 PR_URL = "https://github.com/owner/repo/pull/46"
 RUN_ID = "a1b2c3d4"
@@ -42,8 +40,8 @@ BRANCH = "orbi/owner-repo-issue-39"
 
 
 @pytest.fixture(autouse=True)
-def _reset_run_id(monkeypatch):
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+def _reset_run_id(bind_run_id):
+    bind_run_id(None)
 
 
 @pytest.fixture(autouse=True)
@@ -253,7 +251,7 @@ def test_snapshot_or_placeholder_logs_a_failed_read(
     RuntimeError(f"worktree missing: {WORKTREE}"),
 ])
 def test_delivery_step_recoverable_review_failure_stays_fix_needed(
-        monkeypatch, caplog, tmp_path, exc,
+        monkeypatch, caplog, tmp_path, exc, bind_run_id,
 ):
     """Issue #50: a recoverable review failure (Pi execution failure,
     model wait, runner exception, malformed verdict, missing worktree)
@@ -286,7 +284,7 @@ def test_delivery_step_recoverable_review_failure_stays_fix_needed(
         raise exc
 
     monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
+    bind_run_id(RUN_ID)
     caplog.set_level("INFO")
     # The wait returns (the slot is released by the caller); the next
     # timer picks the ai-fix-needed Issue up on the same run/PR.
@@ -357,7 +355,7 @@ def test_delivery_step_recoverable_review_failure_stays_fix_needed(
 
 
 def test_delivery_step_recoverable_failure_while_fix_needed_keeps_label(
-        monkeypatch, tmp_path,
+        monkeypatch, tmp_path, bind_run_id,
 ):
     """Issue #50 + #82: a recoverable failure while the Issue is ALREADY
     `ai-fix-needed` (awaiting the next review session) keeps the
@@ -379,7 +377,7 @@ def test_delivery_step_recoverable_failure_while_fix_needed_keeps_label(
         raise RuntimeError("pi_exit_1: the review Pi failed")
 
     monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
+    bind_run_id(RUN_ID)
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
     # The current label set contains only ai-fix-needed, so the
     # idempotent transition adds it without inventing a remove for the
@@ -400,7 +398,7 @@ def _write_session(worktree_dir, session_id="sess-1"):
 
 
 def test_delivery_step_recoverable_failure_with_session_file_includes_session_scene(
-        monkeypatch, tmp_path,
+        monkeypatch, tmp_path, bind_run_id,
 ):
     """Issue #50: when the worktree carries a session file, the
     failure comment's scene shows the ACTUAL session (not the '-'
@@ -423,7 +421,7 @@ def test_delivery_step_recoverable_failure_with_session_file_includes_session_sc
         raise RuntimeError("pi_exit_3: the review Pi failed")
 
     monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
+    bind_run_id(RUN_ID)
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
     body = issue_comments[0][1]["body"]
     assert "session=sess-1" in body
@@ -431,7 +429,7 @@ def test_delivery_step_recoverable_failure_with_session_file_includes_session_sc
 
 
 def test_delivery_step_recoverable_failure_scene_snapshot_failure_is_logged(
-        monkeypatch, caplog, tmp_path,
+        monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """Issue #50: a failing session-file read is best-effort
     observability: it is logged, the failure comment still carries the
@@ -461,7 +459,7 @@ def test_delivery_step_recoverable_failure_scene_snapshot_failure_is_logged(
 
     monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
     monkeypatch.setattr(failure_report, "activity_snapshot", failing_snapshot)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
+    bind_run_id(RUN_ID)
     caplog.set_level("INFO")
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
     assert "activity scene failed" in caplog.text
@@ -519,7 +517,7 @@ def test_delivery_step_recoverable_failure_without_bound_run_id(
 
 
 def test_delivery_step_unrecoverable_failure_marks_blocked_with_reason(
-        monkeypatch, caplog, tmp_path,
+        monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """Issue #50: an explicit UnrecoverableDeliveryError (an external
     precondition the AI cannot safely judge or fix) is the ONLY
@@ -548,7 +546,7 @@ def test_delivery_step_unrecoverable_failure_marks_blocked_with_reason(
         raise runner.ReviewRoundsExhausted(reason)
 
     monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
+    bind_run_id(RUN_ID)
     caplog.set_level("INFO")
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
 
@@ -590,7 +588,7 @@ def test_delivery_step_unrecoverable_failure_marks_blocked_with_reason(
 
 
 def test_delivery_step_real_unrecoverable_failure_keeps_traceback(
-        monkeypatch, caplog, tmp_path,
+        monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """Unexpected unrecoverable failures remain visible as failures."""
     (tmp_path / ".worktrees"
@@ -604,7 +602,7 @@ def test_delivery_step_real_unrecoverable_failure_keeps_traceback(
         raise runner.UnrecoverableDeliveryError("credential revoked")
 
     monkeypatch.setattr(review_merge, "review_and_merge_if_clean", failing_review)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
+    bind_run_id(RUN_ID)
     caplog.set_level("ERROR")
     runner.delivery_step(PR_URL, _issue(), _config(tmp_path), "owner/repo")
 
@@ -613,7 +611,7 @@ def test_delivery_step_real_unrecoverable_failure_keeps_traceback(
 
 
 def test_delivery_step_base_branch_mismatch_marks_blocked_with_reason(
-        monkeypatch, caplog, tmp_path,
+        monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """Issue #50 + #91: a resume scene frozen on another base branch
     than the configured one is an external precondition (a config
@@ -649,7 +647,7 @@ def test_delivery_step_base_branch_mismatch_marks_blocked_with_reason(
         review_merge, "review_and_merge_if_clean",
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
+    bind_run_id(RUN_ID)
     caplog.set_level("INFO")
     runner.delivery_step(
         PR_URL, _issue(),
@@ -674,7 +672,7 @@ def test_delivery_step_base_branch_mismatch_marks_blocked_with_reason(
 
 
 def test_verify_resumed_pr_diverged_pr_head_stays_fix_needed(
-        monkeypatch, caplog, tmp_path,
+        monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """Issue #50: a resume verification failure from `verify_pr` (here
     the diverged-head failure — the plain #158 unpushed-commit scene
@@ -702,7 +700,7 @@ def test_verify_resumed_pr_diverged_pr_head_stays_fix_needed(
 
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(
         RuntimeError, match="the branch diverged",
@@ -739,7 +737,7 @@ def test_verify_resumed_pr_diverged_pr_head_stays_fix_needed(
 
 
 def test_verify_resumed_pr_local_ahead_of_pr_head_continues_to_review(
-        monkeypatch, caplog, tmp_path,
+        monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """Issue #50 (the #158 `d13b0c56` scene): the local HEAD is ahead
     of the remote PR head (an unpushed commit from a killed session).
@@ -796,7 +794,7 @@ def test_verify_resumed_pr_local_ahead_of_pr_head_continues_to_review(
         fake_run(["gh", "release", "list"])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     issue = make_resume_issue()
     issue["labels"] = [{"name": "ai-fix-needed"}]
@@ -819,7 +817,7 @@ def test_verify_resumed_pr_local_ahead_of_pr_head_continues_to_review(
 
 
 def test_verify_resumed_pr_unrecoverable_failure_marks_blocked_with_reason(
-        monkeypatch, tmp_path,
+        monkeypatch, tmp_path, bind_run_id,
 ):
     """Issue #50: an explicit UnrecoverableDeliveryError from the resume
     verification (an external precondition the AI cannot safely judge
@@ -840,7 +838,7 @@ def test_verify_resumed_pr_unrecoverable_failure_marks_blocked_with_reason(
 
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     with pytest.raises(
         runner.UnrecoverableDeliveryError, match="not authorized",
     ):
@@ -866,7 +864,7 @@ def test_verify_resumed_pr_unrecoverable_failure_marks_blocked_with_reason(
 
 
 def test_verify_resumed_pr_recoverable_failure_with_session_file_includes_session_scene(
-        monkeypatch, tmp_path,
+        monkeypatch, tmp_path, bind_run_id,
 ):
     """Issue #50: when the worktree carries a session file, the resume
     failure comment's scene shows the ACTUAL session (not the '-'
@@ -885,7 +883,7 @@ def test_verify_resumed_pr_recoverable_failure_with_session_file_includes_sessio
         raise RuntimeError("the verified commit was not pushed")
 
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     with pytest.raises(RuntimeError, match="not pushed"):
         runner.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
@@ -897,7 +895,7 @@ def test_verify_resumed_pr_recoverable_failure_with_session_file_includes_sessio
 
 
 def test_verify_resumed_pr_recoverable_failure_scene_snapshot_failure_is_logged(
-        monkeypatch, caplog, tmp_path,
+        monkeypatch, caplog, tmp_path, bind_run_id,
 ):
     """Issue #50: a failing session-file read during the resume
     failure reporting is best-effort observability: it is logged, the
@@ -919,7 +917,7 @@ def test_verify_resumed_pr_recoverable_failure_scene_snapshot_failure_is_logged(
 
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
     monkeypatch.setattr(failure_report, "activity_snapshot", failing_snapshot)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(RuntimeError, match="not pushed"):
         runner.verify_resumed_pr(
@@ -933,7 +931,7 @@ def test_verify_resumed_pr_recoverable_failure_scene_snapshot_failure_is_logged(
 
 
 def test_verify_resumed_pr_unrecoverable_failure_removes_leftover_fix_needed_label(
-        monkeypatch, tmp_path,
+        monkeypatch, tmp_path, bind_run_id,
 ):
     """Issue #50 + #82: an UNRECOVERABLE resume failure while the
     Issue is in `ai-fix-needed` (awaiting the next review session)
@@ -953,7 +951,7 @@ def test_verify_resumed_pr_unrecoverable_failure_removes_leftover_fix_needed_lab
 
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     with pytest.raises(
         runner.UnrecoverableDeliveryError, match="human decision",
     ):
@@ -991,7 +989,7 @@ def _pr_scene_comment(pr_number, round_no, *, run_id, opened=False):
 
 
 def test_verify_resumed_pr_reports_the_current_pr_round(
-        monkeypatch, tmp_path,
+        monkeypatch, tmp_path, bind_run_id,
 ):
     """Issue #1772 acceptance 1 on the resume-verification path: five
     completed rounds on an EARLIER PR (#100) followed by the current PR at
@@ -1015,7 +1013,7 @@ def test_verify_resumed_pr_reports_the_current_pr_round(
     # runner-internal patch (Issue #789).
     monkeypatch.setattr(seam, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    bind_run_id(monkeypatch, FAKE_RUN_ID)
+    bind_run_id(FAKE_RUN_ID)
     with pytest.raises(RuntimeError, match="not pushed"):
         runner.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),

@@ -22,7 +22,6 @@ from unittest.mock import Mock
 
 import pytest
 
-import orbi.journal as journal
 import orbi.release as release
 import orbi.runner as runner
 from orbi import failure, pi_activity, pi_process, pi_session, progress
@@ -178,7 +177,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
 
 
 def test_stream_pi_high_frequency_lines_carry_run_id_exactly_once(
-    tmp_path, monkeypatch, caplog,
+    tmp_path, caplog, bind_run_id,
 ):
     """Issue #57: the `[run_id]` prefix (Issue #41) is the single
     run-id carrier on the high-frequency lines; the redundant `run=`
@@ -186,7 +185,7 @@ def test_stream_pi_high_frequency_lines_carry_run_id_exactly_once(
     single grep still reconstructs the whole timeline. The run is
     bound like in the real journal (`process_issue` binds it before
     starting Pi)."""
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     records = fake_session_records() + [
         (0.5, {"type": "message", "id": "r1",
                "timestamp": fresh_timestamp(2),
@@ -224,11 +223,11 @@ def test_stream_pi_high_frequency_lines_carry_run_id_exactly_once(
 
 
 def test_stream_pi_idle_lines_carry_run_id_exactly_once(
-    tmp_path, monkeypatch, caplog,
+    tmp_path, caplog, bind_run_id,
 ):
     """Issue #57: `pi_idle` / `pi_resumed` repeat the same rule as the
     other high-frequency lines: prefix only, no `run=` field."""
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     # The injected clock makes staleness deterministic: a1 is ten seconds
     # stale and a2 is current. The fake Pi waits for the streamer's
     # progress callback after a1, so a slow CI runner cannot coalesce the
@@ -269,13 +268,13 @@ def test_stream_pi_idle_lines_carry_run_id_exactly_once(
 
 
 def test_stream_pi_scene_lines_keep_run_field_for_parse_scene(
-    tmp_path, monkeypatch, caplog,
+    tmp_path, caplog, bind_run_id,
 ):
     """Issue #57: the low-frequency scene lines (run_start / run_failed)
     keep `run=` so `pi_activity.parse_scene` still returns the run id
     from the lines that need to be parsed. The run is bound like in
     the real journal."""
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     command = make_fake_pi(
         tmp_path, session_records=fake_session_records(),
         stderr="pi exploded", exit_code=3,

@@ -27,7 +27,6 @@ import pytest
 
 import orbi.comment_trust as comment_trust
 import orbi.github as github
-import orbi.journal as journal
 import orbi.runner as runner
 from orbi import progress
 from seam import seam
@@ -102,7 +101,7 @@ def test_single_line_flattens_line_breaks_to_visible_escapes():
 
 
 def test_run_command_logs_multiline_body_as_one_journal_line(
-        monkeypatch, tmp_path, caplog):
+        monkeypatch, tmp_path, caplog, bind_run_id):
     # The progress comment body (progress.py) is multi-line; it reaches
     # the journal through the `command=` log of the gh api call.
     body = (
@@ -118,7 +117,7 @@ def test_run_command_logs_multiline_body_as_one_journal_line(
         "gh", "api", "repos/xqliu/orbi/issues/143/comments",
         "--method", "POST", "--field", f"body={body}",
     ]
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    bind_run_id(None)
     completed = Mock(stdout='{"id": 1}', stderr="")
     monkeypatch.setattr(runner.subprocess, "run", Mock(return_value=completed))
     with caplog.at_level("INFO"):

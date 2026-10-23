@@ -30,7 +30,6 @@ from tests.fakes.gitops import remote_head_answer
 from tests.test_progress_wiring import make_fake_gh
 from tests.test_git_merge_smoke import git
 from seam import seam
-import orbi.journal as journal
 from orbi.delivery_scene import RunContext
 from conftest import rendered_prompt
 
@@ -4379,7 +4378,7 @@ def test_merge_gate_absorb_records_the_absorbed_head_and_defers(
 
 
 def test_pending_ci_tick_leaves_the_review_record_untouched(
-        monkeypatch, tmp_path):
+        monkeypatch, tmp_path, bind_run_id):
     """Issue #1626: the pre-review CI gate's pending early return never
     reaches the review round, so the record survives for the merge tick."""
     _seed_run_state(tmp_path)
@@ -4394,7 +4393,7 @@ def test_pending_ci_tick_leaves_the_review_record_untouched(
     monkeypatch.setattr(review_merge, "_run_review_round",
                         lambda *a, **k: rounds.append(1))
     monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
+    bind_run_id("a1b2c3d4")
     runner.delivery_step(
         PR_URL, {"number": 4, "title": "task"},
         _review_merge_config(tmp_path), "owner/repo",

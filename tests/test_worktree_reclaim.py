@@ -171,13 +171,15 @@ def test_keeps_worktree_within_retention_window(tmp_path, monkeypatch):
     assert str(worktree) in _registered(repo)
 
 
-def test_keeps_worktree_of_this_process_active_run(tmp_path, monkeypatch):
+def test_keeps_worktree_of_this_process_active_run(
+    tmp_path, monkeypatch, bind_run_id,
+):
     """The Issue's run_id criterion: a worktree held by THIS process's
     bound run is never reclaimed, even when its Issue reads closed."""
     repo = _git_repo(tmp_path / "repo")
     worktree = _register(repo, "orbi-owner-repo-issue-12-abcd1234")
     _stub_closed(monkeypatch, _closed(12, hours_ago=100))
-    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "abcd1234")
+    bind_run_id("abcd1234")
     runner.reclaim_released_worktrees(_config(repo), now=NOW)
     assert str(worktree) in _registered(repo)
 
