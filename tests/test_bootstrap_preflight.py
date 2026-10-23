@@ -576,6 +576,78 @@ def test_load_config_doctor_mode_keeps_provider_key_finding(
     assert "GROQ_API_KEY" in finding["error"]
 
 
+def _count_provider_reads(monkeypatch, providers_path):
+    """Count Path.read_text calls on the provider path (stdlib boundary)."""
+    reads = []
+    real_read_text = Path.read_text
+
+    def counting_read_text(self, *args, **kwargs):
+        if self == providers_path:
+            reads.append(self)
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+    return reads
+
+
+def test_load_config_reads_provider_file_once_for_both_selections(
+    tmp_path, monkeypatch,
+):
+    """Issue #1852: the implement and the review selection resolve from
+    one provider-file read — load_config parses once, not twice."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    providers = {"providers": {
+        "groq": GROQ_PROVIDERS["providers"]["groq"],
+        "review": {
+            "baseUrl": "https://review.example.test/v1",
+            "api": "openai-completions",
+            "apiKey": "local",
+            "models": [{"id": "review-model"}],
+        },
+    }}
+    config_path = _providers_config(
+        tmp_path, providers,
+        pi_provider='"groq"', pi_model='"qwen/qwen3.8-27b"',
+        review_pi_provider='"review"', review_pi_model='"review-model"',
+    )
+    reads = _count_provider_reads(monkeypatch, tmp_path / "pi-providers.json")
+    config = config_domain.load_config(config_path)
+    assert len(reads) == 1
+    assert config.pi_providers_data == providers
+    assert config.review_pi_provider == "review"
+    assert config.review_pi_model == "review-model"
+
+
+def test_load_config_review_selection_invalid_uses_the_single_read(
+    tmp_path, monkeypatch,
+):
+    """Issue #1852: the review selection is validated against the same
+    parsed data, so an invalid one fails without a second read."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    providers = {"providers": {
+        "groq": GROQ_PROVIDERS["providers"]["groq"],
+        "review": {
+            "baseUrl": "https://review.example.test/v1",
+            "api": "openai-completions",
+            "apiKey": "local",
+            "models": [{"id": "review-model"}],
+        },
+    }}
+    config_path = _providers_config(
+        tmp_path, providers,
+        pi_provider='"groq"', pi_model='"qwen/qwen3.8-27b"',
+        review_pi_provider='"review"', review_pi_model='"missing/model"',
+    )
+    reads = _count_provider_reads(monkeypatch, tmp_path / "pi-providers.json")
+    with pytest.raises(
+        ValueError,
+        match="review provider selection invalid: pi_model 'missing/model' "
+              "is not defined for provider 'review'",
+    ):
+        config_domain.load_config(config_path)
+    assert len(reads) == 1
+
+
 def test_load_config_pi_providers_accepts_groq_example(tmp_path, monkeypatch):
     """The Issue's Groq example parses verbatim with the key present."""
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
