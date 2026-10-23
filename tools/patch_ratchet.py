@@ -15,9 +15,10 @@ orbi module or adapter method:
   modules does not change it; a new internal patch does.
 * ``command_shape_asserts`` — ``command[:N] ==`` assertions, hard-capped.
 
-``per_target`` is reported for visibility only. Moving a patch from one
-module to another never fails the gate; only a rise in the internal total
-or in the command-shape count does.
+``per_target`` is printed for visibility only. Moving a patch from one
+module to another never fails the gate and never creates a per-target
+ceiling; only a rise in the internal total or in the command-shape count
+does.
 
 Usage: python3 tools/patch_ratchet.py [--update] [tests_dir]
 """
@@ -194,6 +195,16 @@ def main(argv: list[str], *, tests_dir: Path | None = None,
         f"/{baseline['monkeypatch_setattr_runner']} "
         "(current/baseline — internal and command shapes may only shrink; "
         "boundary and per-target are reported)"
+    )
+    print(
+        "patch ratchet per-target (reported, not gated): "
+        + " ".join(
+            f"{target}={count}"
+            for target, count in sorted(
+                current["per_target"].items(),
+                key=lambda item: (-item[1], item[0]),
+            )
+        )
     )
     if failures:
         print(
