@@ -2882,29 +2882,91 @@ def test_rewrite_active_milestone_line_preserves_all_other_bytes(tmp_path):
     ).encode()
 
 
+@pytest.mark.parametrize("via_symlink", [False, True])
 def test_rewrite_active_milestone_line_keeps_the_old_config_when_killed(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, via_symlink):
     """Issue #1851: a kill between truncate and write left a truncated
     orbi.toml, and every later tick failed config load. The rewrite is
     tmp+rename now, so a failure at the rename keeps the previous file
-    byte-identical and loadable."""
-    config = tmp_path / "orbi.toml"
+    byte-identical and loadable.
+
+    Issue #1872: the same holds when the config is a symlink alias — the
+    tmp file and the rename operate beside the RESOLVED target, so the
+    failure keeps the real config's bytes AND leaves the link a link."""
+    real = tmp_path / "deployment"
+    real.mkdir()
+    config = real / "orbi.toml"
     original = (
         '# keep\nsource_repos = ["owner/repo"]\n'
         'active_milestone = "v0.3.0"\nother = "x"\n'
     )
     config.write_text(original, encoding="utf-8")
+    written = config
+    alias = None
+    if via_symlink:
+        alias_dir = tmp_path / "slot"
+        alias_dir.mkdir()
+        alias = alias_dir / "alias.toml"
+        alias.symlink_to(os.path.join("..", "deployment", "orbi.toml"))
+        written = alias
+    renames: list[tuple[str, str]] = []
 
     def killed(src, dst):
+        renames.append((str(src), str(dst)))
         raise OSError("killed before the rename")
 
     # The stdlib rename boundary itself, never a src-module symbol.
     monkeypatch.setattr(os, "replace", killed)
     with pytest.raises(OSError, match="killed before the rename"):
-        milestone.rewrite_active_milestone_line(config, "v0.3.1")
+        milestone.rewrite_active_milestone_line(written, "v0.3.1")
+    # Both rename ends sit beside the resolved target, never beside the
+    # alias: that is what keeps a symlink a symlink.
+    assert len(renames) == 1
+    source, destination = renames[0]
+    assert Path(source).parent == config.resolve().parent
+    assert Path(destination) == config.resolve()
     assert config.read_text(encoding="utf-8") == original
     loaded = config_domain.load_config(config)
     assert loaded.active_milestone == "v0.3.0"
+    if alias is not None:
+        assert alias.is_symlink()
+        assert config_domain.load_config(alias).active_milestone == "v0.3.0"
+
+
+def test_rewrite_active_milestone_line_keeps_a_symlink_alias_intact(tmp_path):
+    """Issue #1872: the config may be a symlink alias (a relative stored
+    target pointing into another directory). The atomic write must land in
+    the RESOLVED target, never replace the link with a regular file."""
+    real = tmp_path / "deployment"
+    real.mkdir()
+    alias_dir = tmp_path / "slot"
+    alias_dir.mkdir()
+    config = real / "orbi.toml"
+    original = (
+        '# keep this comment\r\nsource_repos = ["owner/repo"]\r\n'
+        "active_milestone = 'v0.3.0'\r\nother = \"x\"\r\n"
+    )
+    config.write_bytes(original.encode())
+    alias = alias_dir / "alias.toml"
+    stored_target = os.path.join("..", "deployment", "orbi.toml")
+    alias.symlink_to(stored_target)
+
+    milestone.rewrite_active_milestone_line(alias, "v0.3.1")
+
+    # The alias is still the same relative symlink ...
+    assert alias.is_symlink()
+    assert os.readlink(alias) == stored_target
+    expected = original.replace(
+        "active_milestone = 'v0.3.0'", 'active_milestone = "v0.3.1"',
+    )
+    # ... the original file holds the new bytes, every other byte intact ...
+    assert config.read_bytes() == expected.encode()
+    assert alias.read_bytes() == expected.encode()
+    # ... and no tmp file is left behind on either path.
+    assert sorted(path.name for path in real.iterdir()) == ["orbi.toml"]
+    assert sorted(path.name for path in alias_dir.iterdir()) == ["alias.toml"]
+    assert config_domain.load_config(alias).active_milestone == "v0.3.1"
+    assert config_domain.load_config(config).active_milestone == "v0.3.1"
 
 
 def test_rewrite_active_milestone_line_fails_when_missing(tmp_path):

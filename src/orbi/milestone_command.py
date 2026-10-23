@@ -80,11 +80,18 @@ def rewrite_active_milestone_line(config_path: Path, new_value: str) -> None:
     # failed with EACCES and the documented `milestone_set_failed` path
     # (an unwritable file) expects that failure — so the writability
     # gate is explicit here.
-    if not os.access(config_path, os.W_OK):
+    #
+    # Resolve the target first (Issue #1872): a symlink alias is the same
+    # config (the deployment checks canonicalize it the same way), and a
+    # rename onto the LINK would replace the link with a regular file,
+    # leaving the real config — the file every service reads — unchanged.
+    # Resolving puts the tmp file and the rename beside the target.
+    target = config_path.resolve()
+    if not os.access(target, os.W_OK):
         raise PermissionError(f"config file {config_path} is not writable")
-    tmp = config_path.with_name(f"{config_path.name}.{os.getpid()}.tmp")
+    tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
     tmp.write_bytes(updated.encode("utf-8"))
-    tmp.replace(config_path)
+    tmp.replace(target)
 
 
 # --- the three idempotent steps -----------------------------------------
