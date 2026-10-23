@@ -32,6 +32,7 @@ import orbi.repo_config as repo_config
 import orbi.claim as claim
 import orbi.runner as runner
 import orbi.cli as cli
+import orbi.cli_status as cli_status
 import orbi.status_observe as observe
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
@@ -727,21 +728,21 @@ def _status_ready_line(config: RunnerConfig) -> str:
 
     The unrelated GitHub reads (active deliveries, recent result, frozen
     base) are injected exactly as `main` wires them, while the ready
-    queue goes through the REAL `cli.ready_issue` ->
+    queue goes through the REAL `cli_status.ready_issue` ->
     `claim.pick_ready_issue` path with the fake `gh` behind it.
     """
     scope = observe.parse_scope(config.source_repos)
     observer = observe.StatusObserver(
         config, scope,
         read_issues=lambda repo: [],
-        read_ready=lambda repo: cli.ready_issue(repo, config),
+        read_ready=lambda repo: cli_status.ready_issue(repo, config),
         read_result=lambda repo: None,
         read_base=lambda repo_dir, base_branch: "0" * 40,
     )
     observer.refresh()
     return next(
         line
-        for line in cli.status_report(config, scope, observer).splitlines()
+        for line in cli_status.status_report(config, scope, observer).splitlines()
         if line.startswith("  ready:")
     )
 
@@ -813,7 +814,7 @@ def test_status_ready_keeps_the_claim_journal_out_of_the_view(
     fake_gh.add_issue(2647, title="next", labels=(READY_LABEL,))
     config = _status_config(tmp_path)
     with caplog.at_level(logging.INFO):
-        assert cli.ready_issue("owner/repo", config)["number"] == 2647
+        assert cli_status.ready_issue("owner/repo", config)["number"] == 2647
         assert "picked" not in caplog.text
         # The claim's own tick still journals its decision.
         claim.pick_ready_issue("owner/repo")
@@ -889,7 +890,7 @@ def _status_cli_observer(monkeypatch) -> None:
     API) but not the status view's REST issue listing, so the
     active-delivery read is injected exactly as the report helper does;
     the ready decision under test stays the real
-    `cli.ready_issue` -> `claim.pick_ready_issue` path.
+    `cli_status.ready_issue` -> `claim.pick_ready_issue` path.
     """
     real = observe.StatusObserver
 

@@ -10,9 +10,10 @@ consistency nets hold the registry, the docs and the exporter together:
 - the exporter's `KNOWN_KINDS` (`3rd/monitoring/prometheus/orbi-exporter.py`)
   are a subset of the registry — the exporter is stdlib-only and cannot
   import the package, so this test IS the shared-registry binding;
-- no module outside `journal.py` (the kernel itself) and `cli.py`
-  (exempt by the Issue: non-journal output) builds a kind-shaped line
-  through the logger directly.
+- no module outside `journal.py` (the kernel itself) and the CLI
+  output layer (`cli.py` and its extracted `cli_commands.py`, exempt by
+  the Issue: non-journal output) builds a kind-shaped line through the
+  logger directly.
 
 `LOGGER.exception(...)` calls stay exempt from the AST net: they are
 failure records whose value is the traceback, not structured events.
@@ -332,7 +333,7 @@ def test_kind_offender_detector_reports_the_file_and_the_kind():
 
 
 def test_no_module_outside_journal_and_cli_builds_kind_lines():
-    exempt = {"journal.py", "cli.py"}
+    exempt = {"journal.py", "cli.py", "cli_commands.py"}
     files = [
         (path.name, path.read_text(encoding="utf-8"))
         for path in sorted(SRC.glob("*.py"))
@@ -340,8 +341,8 @@ def test_no_module_outside_journal_and_cli_builds_kind_lines():
     ]
     offenders = _kind_offenders(files)
     assert not offenders, (
-        "direct journal event lines outside journal.py/cli.py — emit "
-        f"through journal.event() instead: {offenders}"
+        "direct journal event lines outside journal.py and the CLI "
+        f"output layer — emit through journal.event() instead: {offenders}"
     )
 
 

@@ -179,10 +179,9 @@ class SuggestError(RuntimeError):
 def register_cli(subparsers, common) -> None:
     """Register `orbi suggest` and its flags (Issue #1671).
 
-    The parser lives here so `cli.py` adds it in one line, the way
-    `notify.register_cli` does — `cli.py` is the size ratchet's
-    largest baselined module, so the flag definitions belong to the
-    module that owns the command.
+    The parser lives here so the parser builder adds it in one line, the
+    way `notify.register_cli` does — the flag definitions belong to the
+    module that owns the command, never to the shared argparse tree.
     """
     parser = subparsers.add_parser(
         "suggest", parents=[common],

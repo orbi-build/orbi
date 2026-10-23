@@ -911,7 +911,7 @@ def pick_ready_issue(
     a live co-runner already holds during the seconds between that
     runner's slot-identity write and its `ai-in-progress` label (Issue
     #1782). Both readers decide on the same held set, and no held logic
-    lives in `cli.py`.
+    lives in the CLI's `cli_status`.
     """
     if held is None:
         held = _live_held_deliveries(config)
