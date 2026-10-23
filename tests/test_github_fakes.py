@@ -26,6 +26,7 @@ import pytest
 
 import orbi.comment_trust as comment_trust
 import orbi.github as github
+import orbi.github_feedback as github_feedback
 import orbi.pilot_slots as pilot_slots
 import orbi.repo_config as repo_config
 import orbi.claim as claim
@@ -318,7 +319,8 @@ def test_open_pr_for_branch_and_delivery_status(fake_gh, tmp_path):
     )
     pr = github.open_pr_for_branch(tmp_path, branch)
     assert pr["number"] == 11
-    state, summaries = github.pr_delivery_status(pr["url"], "owner/repo")
+    state, summaries = github_feedback.pr_delivery_status(
+        pr["url"], "owner/repo")
     assert (state, summaries) == ("OPEN", ["CI=COMPLETED/SUCCESS"])
     fake_gh.add_pr(12, head=branch)
     with pytest.raises(RuntimeError, match="multiple open PRs"):

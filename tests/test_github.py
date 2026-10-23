@@ -10,9 +10,11 @@ contracts are asserted here against that module.
 import json
 import logging
 import subprocess
+from pathlib import Path
 
 import pytest
 
+import orbi.github_feedback as github_feedback
 from orbi import comment_trust, github, release_git
 from seam import seam
 
@@ -27,6 +29,28 @@ def test_module_is_a_leaf_and_never_imports_runner_release_pi_process():
                       "from orbi import release", "from orbi.pi_process",
                       "from orbi import pi_process"):
         assert forbidden not in source, forbidden
+
+
+def test_pr_feedback_and_rollup_helpers_moved_to_github_feedback():
+    """Issue #1863: the PR feedback/rollup helpers leave the frozen
+    `github` leaf for `github_feedback`, which depends on `github` (the
+    `gh` reads and the auth identity stay there) and never the reverse —
+    no cycle, and both files stay under the size caps.
+    """
+    moved = (
+        "_normalize_pr_feedback_item", "normalize_pr_feedback",
+        "_check_summaries", "pr_delivery_rollup", "pr_delivery_status",
+    )
+    for name in moved:
+        assert hasattr(github_feedback, name), name
+        assert not hasattr(github, name), (
+            f"orbi.github must not re-export {name} (Issue #1863)"
+        )
+    github_source = Path(github.__file__).read_text(encoding="utf-8")
+    assert "github_feedback" not in github_source
+    feedback_source = Path(github_feedback.__file__).read_text(encoding="utf-8")
+    assert len(github_source.splitlines()) < 1000
+    assert len(feedback_source.splitlines()) < 300
 
 
 def test_run_gh_read_command_retries_transient_read_then_succeeds(monkeypatch):
@@ -424,7 +448,7 @@ def test_pr_feedback_normalizes_rest_inline_shape_and_graphql_review_shape(
     # Issue #1806: the author's repository permission, not the feedback
     # item's `authorAssociation`, decides trust.
     permissions["maintainer"] = "admin"
-    feedback = github.normalize_pr_feedback([
+    feedback = github_feedback.normalize_pr_feedback([
         {"user": {"login": "maintainer"},
          "author_association": "OWNER", "created_at": "2026-09-20T01:02:03Z",
          "path": "src/orbi/runner.py", "line": 42, "body": "Fix this line"},
@@ -881,7 +905,7 @@ def test_pr_delivery_status_parses_state_and_check_summaries(monkeypatch):
         ],
     })
     monkeypatch.setattr(seam, "run_command", lambda c, **k: payload)
-    state, summaries = github.pr_delivery_status(
+    state, summaries = github_feedback.pr_delivery_status(
         "https://github.com/o/r/pull/9", "o/r")
     assert state == "OPEN"
     assert summaries == ["ci=COMPLETED/SUCCESS", "legacy=PENDING"]
@@ -889,7 +913,8 @@ def test_pr_delivery_status_parses_state_and_check_summaries(monkeypatch):
     bad = json.dumps({"state": "WEIRD", "statusCheckRollup": None})
     monkeypatch.setattr(seam, "run_command", lambda c, **k: bad)
     with pytest.raises(ValueError, match="unexpected PR state"):
-        github.pr_delivery_status("https://github.com/o/r/pull/9", "o/r")
+        github_feedback.pr_delivery_status(
+            "https://github.com/o/r/pull/9", "o/r")
 
 
 def test_issue_priority_reads_the_p0_label():
