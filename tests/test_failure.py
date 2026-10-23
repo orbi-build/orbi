@@ -597,12 +597,13 @@ def test_classify_leaves_a_pytest_401_line_out_of_credential_missing():
 
 
 def test_auth_wording_is_shared_with_the_pi_startup_classifier():
-    """Issue #1465: `failure` and `pi_process` match ONE auth wording
-    list, so the two classifiers cannot drift."""
-    from orbi import pi_process
+    """Issue #1465: `failure` and the Pi startup classifier (extracted to
+    `pi_stream_log`, Issue #1860) match ONE auth wording list, so the two
+    classifiers cannot drift."""
+    from orbi import pi_stream_log
 
-    assert pi_process.PROVIDER_AUTH_WORDS is failure.PROVIDER_AUTH_WORDS
-    assert pi_process._classify_startup_exit(
+    assert pi_stream_log.PROVIDER_AUTH_WORDS is failure.PROVIDER_AUTH_WORDS
+    assert pi_stream_log._classify_startup_exit(
         "Bad unauthorized: the api key was rejected", 1,
     ) == "auth_failure"
 
