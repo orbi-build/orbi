@@ -1,12 +1,12 @@
 {
-  "boundary_total": 1096,
+  "boundary_total": 1097,
   "command_shape_asserts": 440,
   "internal_total": 1640,
   "monkeypatch_setattr_runner": 109,
   "monkeypatch_setattr_runner_string": 3,
   "per_target": {
     "HTTPServer": 1,
-    "Path": 13,
+    "Path": 14,
     "claim": 94,
     "cli_commands": 31,
     "cli_doctor": 4,

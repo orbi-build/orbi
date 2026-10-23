@@ -427,36 +427,41 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         _config_path(pi_providers, base) if pi_providers is not None
         else None
     )
-    _load_pi_providers.last_key_finding = None
     pi_providers_data = None
+    pi_provider_key_finding = None
     if pi_providers_path is not None:
+        env_file = deploy_home / ".orbi" / "env"
         try:
-            env_file = deploy_home / ".orbi" / "env"
-            pi_providers_data = _load_pi_providers(
+            pi_providers_data, pi_provider_key_finding = _load_pi_providers(
                 pi_providers_path, pi_provider, pi_model, env_file,
                 check_api_key=check_provider_api_keys,
             )
-            try:
-                _load_pi_providers(
-                    pi_providers_path,
-                    review_pi_provider or pi_provider,
-                    review_pi_model or pi_model,
-                    env_file,
-                    check_api_key=check_provider_api_keys,
-                )
-            except ValueError as exc:
-                raise ValueError(f"review provider selection invalid: {exc}") from exc
+            # The provider file is parsed once; a distinct review
+            # selection is validated against that same parsed data.
+            review_provider = review_pi_provider or pi_provider
+            review_model = review_pi_model or pi_model
+            if (review_provider, review_model) != (pi_provider, pi_model):
+                try:
+                    _select_pi_provider(
+                        pi_providers_data, pi_providers_path,
+                        review_provider, review_model, env_file,
+                        check_api_key=check_provider_api_keys,
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        f"review provider selection invalid: {exc}"
+                    ) from exc
         except FileNotFoundError:
             # A missing path is the setup/doctor diagnostic case.  Preserve
             # fail-fast behavior for an existing non-file path (for example,
             # a directory), which is an invalid provider configuration.
             if not allow_missing_pi_providers or pi_providers_path.exists():
                 raise
-            _load_pi_providers.last_key_finding = {
+            pi_provider_key_finding = {
                 "provider": pi_provider or "-",
                 "variable": "-",
                 "path": pi_providers_path,
-                "env_file": deploy_home / ".orbi" / "env",
+                "env_file": env_file,
                 "state": "file missing",
             }
     return RunnerConfig(
@@ -523,9 +528,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         release_deliveries_wait_seconds=release_deliveries_wait_seconds,
         pi_providers=pi_providers_path,
         pi_providers_data=pi_providers_data,
-        pi_provider_key_finding=getattr(
-            _load_pi_providers, "last_key_finding", None,
-        ),
+        pi_provider_key_finding=pi_provider_key_finding,
         # Multi-repo registry: the explicit per-repo entries
         # (name, path, github, base_branch). Absent section -> () so the
         # single-repo config keeps its exact shape and flow.
@@ -744,21 +747,33 @@ def _issue_comments_limit(data: dict) -> int:
 
 def _load_pi_providers(path: Path, pi_provider: str | None,
                        pi_model: str | None, env_file: Path, *,
-                       check_api_key: bool = True) -> dict:
-    """Load and validate the Pi provider file.
+                       check_api_key: bool = True) -> tuple[dict, dict | None]:
+    """Read the Pi provider file once, validate one selection.
+
+    Returns `(data, finding)`: the parsed provider file and the
+    value-free selected-provider key finding (None when the key
+    resolves or the selection does not reference one). The finding is
+    returned instead of stashed on the function so one call cannot
+    leak its result into another (Issue #1852).
+    """
+    data = _read_pi_providers(path)
+    finding = _select_pi_provider(
+        data, path, pi_provider, pi_model, env_file,
+        check_api_key=check_api_key,
+    )
+    return data, finding
+
+
+def _read_pi_providers(path: Path) -> dict:
+    """Read and structurally validate the Pi provider file.
 
     The file uses Pi's own `models.json` shape (`{"providers": {id:
     {baseUrl, api, apiKey, models: [...]}}}`) — verified against the
     installed Pi 0.84.3 docs (`docs/models.md`). Fail fast with a
     specific message: file missing, invalid JSON, missing `providers`
-    object, a provider entry with `models` but no `baseUrl` or no
-    `api` (provider- or model-level — Pi's own schema requirement),
-    the selected provider/model not defined in the file, or an
-    `apiKey` env-var reference (`$VAR` / `${VAR}`) whose variable is
-    missing or empty. The key value itself is never logged; only the
-    variable name is named in the error.
+    object, or a provider entry with `models` but no `baseUrl` or no
+    `api` (provider- or model-level — Pi's own schema requirement).
     """
-    _load_pi_providers.last_key_finding = None
     if not path.is_file():
         raise FileNotFoundError(path)
     try:
@@ -811,32 +826,45 @@ def _load_pi_providers(path: Path, pi_provider: str | None,
                         f"pi_providers file {path}: provider "
                         f"{provider_id!r} has a model without an id"
                     )
-    if pi_provider is not None:
-        if pi_provider not in providers:
-            raise ValueError(
-                f"pi_provider {pi_provider!r} is not defined in "
-                f"pi_providers file {path}"
-            )
-        entry = providers[pi_provider]
-        # Only the SELECTED provider's key must resolve: an unselected
-        # provider with a missing key just stays unavailable in Pi
-        # (verified against real Pi 0.84.3), it never breaks the run.
-        finding = _pi_provider_api_key_finding(
-            path, pi_provider, entry, env_file,
-        )
-        _load_pi_providers.last_key_finding = finding
-        if finding and check_api_key:
-            raise ValueError(finding["error"])
-        if pi_model is not None:
-            model_ids = [
-                model["id"] for model in entry.get("models", [])
-            ] if isinstance(entry.get("models"), list) else []
-            if pi_model not in model_ids:
-                raise ValueError(
-                    f"pi_model {pi_model!r} is not defined for provider "
-                    f"{pi_provider!r} in pi_providers file {path}"
-                )
     return data
+
+
+def _select_pi_provider(data: dict, path: Path, pi_provider: str | None,
+                        pi_model: str | None, env_file: Path, *,
+                        check_api_key: bool = True) -> dict | None:
+    """Validate one provider/model selection against parsed provider data.
+
+    Returns the value-free key finding for the selected provider (None when
+    the key resolves), raising the same errors as before. The finding is a
+    return value, never a function attribute (Issue #1852).
+    """
+    if pi_provider is None:
+        return None
+    providers = data["providers"]
+    if pi_provider not in providers:
+        raise ValueError(
+            f"pi_provider {pi_provider!r} is not defined in "
+            f"pi_providers file {path}"
+        )
+    entry = providers[pi_provider]
+    # Only the SELECTED provider's key must resolve: an unselected
+    # provider with a missing key just stays unavailable in Pi
+    # (verified against real Pi 0.84.3), it never breaks the run.
+    finding = _pi_provider_api_key_finding(
+        path, pi_provider, entry, env_file,
+    )
+    if finding and check_api_key:
+        raise ValueError(finding["error"])
+    if pi_model is not None:
+        model_ids = [
+            model["id"] for model in entry.get("models", [])
+        ] if isinstance(entry.get("models"), list) else []
+        if pi_model not in model_ids:
+            raise ValueError(
+                f"pi_model {pi_model!r} is not defined for provider "
+                f"{pi_provider!r} in pi_providers file {path}"
+            )
+    return finding
 
 
 def _pi_provider_api_key_finding(path: Path, provider_id: str,
