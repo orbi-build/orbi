@@ -1174,7 +1174,7 @@ def test_check_reports_missing_config_when_no_unit_is_available(
         unit_config=lambda path: None,
     )
     monkeypatch.setattr(scheduler, "detect", lambda: fake)
-    monkeypatch.setattr(orbi.pilot_setup, "run_machine_checks", lambda **_: ([], []))
+    monkeypatch.setattr(orbi.setup_checks, "run_machine_checks", lambda **_: ([], []))
     assert orbi.main(["check"]) == 1
     assert "config_not_found" in capsys.readouterr().err
 
@@ -1214,7 +1214,7 @@ def test_check_with_explicit_missing_config_keeps_unit_candidate_list(
         unit_config=lambda path: candidate if path == unit else None,
     )
     monkeypatch.setattr(scheduler, "detect", lambda: fake)
-    monkeypatch.setattr(orbi.pilot_setup, "run_machine_checks", lambda **_: ([], []))
+    monkeypatch.setattr(orbi.setup_checks, "run_machine_checks", lambda **_: ([], []))
     monkeypatch.setattr(orbi.pilot_setup, "run_checks", lambda *args, **kwargs: ["ok"])
     missing = tmp_path / "missing.toml"
     assert orbi.main(["check", "--config", str(missing)]) == 1
@@ -1234,7 +1234,7 @@ def test_setup_reports_missing_config_with_setup_prefix(
     )
     monkeypatch.setattr(scheduler, "detect", lambda: fake)
     monkeypatch.setattr(
-        orbi.pilot_setup, "ensure_config",
+        orbi.setup_config, "ensure_config",
         lambda path: (_ for _ in ()).throw(config_domain.ConfigFileMissingError(path)),
     )
     assert orbi.main(["setup"]) == 1

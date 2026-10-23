@@ -1,7 +1,6 @@
 {
   "oversized_modules": {
     "pi_process.py": 1749,
-    "pilot_setup.py": 1326,
     "release.py": 1760,
     "review_merge.py": 1980,
     "runner.py": 3380

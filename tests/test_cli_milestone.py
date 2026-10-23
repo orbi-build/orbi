@@ -35,7 +35,7 @@ from pathlib import Path
 import pytest
 
 from orbi import cli
-from orbi import pilot_setup
+from orbi import setup_config
 
 from seam import seam
 from tests.fakes.github import FakeGh
@@ -60,7 +60,7 @@ def make_world(
     (home / "prompts" / "prompt_review.md").write_text(
         "review\n", encoding="utf-8")
     (home / "pi-providers.json").write_text(
-        json.dumps(pilot_setup.PROVIDER_STARTER), encoding="utf-8")
+        json.dumps(setup_config.PROVIDER_STARTER), encoding="utf-8")
     (home / ".orbi").mkdir()
     (home / ".orbi" / "env").write_text(
         "PROVIDER_API_KEY=milestone-test-key\n", encoding="utf-8")
