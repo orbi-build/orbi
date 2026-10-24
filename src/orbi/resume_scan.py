@@ -16,7 +16,7 @@ from typing import NamedTuple
 
 from orbi import language, scene, user_summary
 from orbi.blocked_comment import post_blocked_comment
-from orbi.checks import _render_check, classify_checks
+from orbi.checks import render_check, classify_checks
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL, BLOCKED_LABEL, FIX_NEEDED_LABEL, MERGED_LABEL,
     PR_OPENED_LABEL, READY_LABEL, label_name_set,
@@ -346,7 +346,7 @@ def _pick_opened_pr_delivery(
         pending = classify_checks(rollup)[0] if pr_state == "OPEN" else []
         if pending:
             event("delivery_ci_pending", issue=int(issue["number"]),
-                  pr=found["pr_url"], pending="; ".join(map(_render_check, pending)))
+                  pr=found["pr_url"], pending="; ".join(map(render_check, pending)))
             continue
         return issue, found
     return None

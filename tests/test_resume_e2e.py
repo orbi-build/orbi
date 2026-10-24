@@ -423,7 +423,7 @@ def install_fake_gh(monkeypatch, comments: list[str],
     # this fake does not model, so the identity is pinned to the runner
     # bot it posts as.
     monkeypatch.setattr(
-        seam, "_authenticated_github_login", lambda: "orbi-bot",
+        seam, "authenticated_github_login", lambda: "orbi-bot",
     )
     monkeypatch.setattr(seam, "run_command", fake_run)
 

@@ -46,7 +46,7 @@ from orbi.delivery_scene import RunContext
 from orbi.failure import failure_detail
 from orbi.failure_report import UnrecoverableDeliveryError
 from orbi.github import (
-    _pr_number,
+    pr_number,
     apply_label_patch,
     comment_issue,
     issue_labels,
@@ -152,7 +152,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 # head branch — the worktree that carried it is gone,
                 # so the scene PR is the remaining authority.
                 head = json.loads(run_gh_read_command(
-                    ["gh", "pr", "view", str(_pr_number(scene["pr_url"])),
+                    ["gh", "pr", "view", str(pr_number(scene["pr_url"])),
                      "--repo", source_repo, "--json", "headRefName"],
                     cwd=config.repo_dir,
                 ))
@@ -169,7 +169,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
             create_worktree(
                 config.repo_dir, source_repo, number, run_id,
                 scene["base_sha"], existing_branch=True, branch=branch,
-                pr_number=_pr_number(scene["pr_url"]) if external else None,
+                pr_number=pr_number(scene["pr_url"]) if external else None,
             )
             event(
                 "worktree_recreated", issue=number, branch=branch,
@@ -363,7 +363,7 @@ def _requeue_closed_external_takeover(
         )
     )
     comment_issue(number, repo=source_repo, body=body)
-    failure_report.comment_pr(_pr_number(pr_url), repo=source_repo, body=body)
+    failure_report.comment_pr(pr_number(pr_url), repo=source_repo, body=body)
 
 
 def _close_external_triage_issue(

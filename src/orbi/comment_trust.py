@@ -16,7 +16,7 @@ maintainer share one account still trusts its own comments.
 
 Every function here is a pure scan over an already-fetched comment list;
 the only GitHub read is the permission read inside
-`_comment_is_trusted`, and `trusted_comments` keeps a scan to one read
+`comment_is_trusted`, and `trusted_comments` keeps a scan to one read
 per author. A failed permission read is a GitHub read failure and
 propagates — it is never turned into "no permission" or a silently
 dropped comment.
@@ -25,14 +25,14 @@ from __future__ import annotations
 
 from orbi.github import (
     WRITE_PERMISSIONS,
-    _authenticated_github_login,
-    _strip_bot_suffix,
+    authenticated_github_login,
+    strip_bot_suffix,
     repository_permission,
 )
 from orbi.progress import RUN_MARKER_PATTERN, run_marker
 
 
-def _comment_is_trusted(
+def comment_is_trusted(
     comment: object, *, repo: str,
     permissions: dict[str, str] | None = None,
 ) -> bool:
@@ -60,22 +60,22 @@ def _comment_is_trusted(
     # represented by the currently authenticated installation token. The
     # optional `[bot]` suffix is normalized on both sides because GraphQL
     # drops it and REST keeps it.
-    return _strip_bot_suffix(login) == _strip_bot_suffix(
-        _authenticated_github_login()
+    return strip_bot_suffix(login) == strip_bot_suffix(
+        authenticated_github_login()
     )
 
 
 def trusted_comments(comments: list[dict], *, repo: str) -> list[dict]:
     """The comments whose author can write to `repo`, or is this runner.
 
-    The scan form of `_comment_is_trusted` — order preserved, one
+    The scan form of `comment_is_trusted` — order preserved, one
     permission read per author (a long Issue history is one read per
     person, not one per comment).
     """
     permissions: dict[str, str] = {}
     return [
         comment for comment in comments
-        if _comment_is_trusted(comment, repo=repo, permissions=permissions)
+        if comment_is_trusted(comment, repo=repo, permissions=permissions)
     ]
 
 

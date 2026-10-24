@@ -39,7 +39,7 @@ def test_pr_feedback_and_rollup_helpers_moved_to_github_feedback():
     """
     moved = (
         "_normalize_pr_feedback_item", "normalize_pr_feedback",
-        "_check_summaries", "pr_delivery_rollup", "pr_delivery_status",
+        "check_summaries", "pr_delivery_rollup", "pr_delivery_status",
     )
     for name in moved:
         assert hasattr(github_feedback, name), name
@@ -443,7 +443,7 @@ def test_pr_reviews_and_inline_comments_use_bounded_read_only_api(monkeypatch):
 
 def test_pr_feedback_normalizes_rest_inline_shape_and_graphql_review_shape(
         monkeypatch, permissions):
-    monkeypatch.setattr(seam, "_authenticated_github_login",
+    monkeypatch.setattr(seam, "authenticated_github_login",
                         lambda: "orbi-bot[bot]")
     # Issue #1806: the author's repository permission, not the feedback
     # item's `authorAssociation`, decides trust.
@@ -505,28 +505,28 @@ def test_comment_is_trusted_by_repository_permission_and_by_bot_login(
     permissions["writer"] = "write"
     permissions["reader"] = "read"
     permissions["member-reader"] = "read"
-    assert comment_trust._comment_is_trusted(
+    assert comment_trust.comment_is_trusted(
         {"author": {"login": "admin-author"}, "authorAssociation": "CONTRIBUTOR"},
         repo="owner/repo",
     ) is True
-    assert comment_trust._comment_is_trusted(
+    assert comment_trust.comment_is_trusted(
         {"author": {"login": "writer"}, "authorAssociation": "NONE"},
         repo="owner/repo",
     ) is True
     # MEMBER/COLLABORATOR without write access is not a maintainer.
-    assert comment_trust._comment_is_trusted(
+    assert comment_trust.comment_is_trusted(
         {"author": {"login": "member-reader"},
          "authorAssociation": "MEMBER"},
         repo="owner/repo",
     ) is False
-    assert comment_trust._comment_is_trusted(
+    assert comment_trust.comment_is_trusted(
         {"author": {"login": "reader"}, "authorAssociation": "OWNER"},
         repo="owner/repo",
     ) is False
-    assert comment_trust._comment_is_trusted("not-a-comment", repo="owner/repo") \
+    assert comment_trust.comment_is_trusted("not-a-comment", repo="owner/repo") \
         is False
     # No readable author login is no identity to check.
-    assert comment_trust._comment_is_trusted(
+    assert comment_trust.comment_is_trusted(
         {"authorAssociation": "OWNER"}, repo="owner/repo",
     ) is False
 
@@ -536,14 +536,14 @@ def test_comment_is_trusted_by_repository_permission_and_by_bot_login(
     # #1806), so the credential fallback is what trusts the engine's own
     # comments.
     permissions["orbi-bot[bot]"] = "none"
-    monkeypatch.setattr(seam, "_authenticated_github_login",
+    monkeypatch.setattr(seam, "authenticated_github_login",
                         lambda: "orbi-bot[bot]")
-    assert comment_trust._comment_is_trusted(
+    assert comment_trust.comment_is_trusted(
         {"author": {"login": "orbi-bot[bot]"}, "authorAssociation": "NONE"},
         repo="owner/repo",
     ) is True
     # A login that is neither a writer nor this credential is not trusted.
-    assert comment_trust._comment_is_trusted(
+    assert comment_trust.comment_is_trusted(
         {"author": {"login": "someone-else"}, "authorAssociation": "MEMBER"},
         repo="owner/repo",
     ) is False
@@ -833,12 +833,12 @@ def test_merge_gate_preflight_ruleset_without_id_names_settings(monkeypatch):
 def test_authenticated_github_login_requires_an_active_account(monkeypatch):
     monkeypatch.setattr(seam, "run_gh_read_command",
         lambda c, **k: "account a\nActive account: true\n")
-    assert github._authenticated_github_login() == "a"
+    assert github.authenticated_github_login() == "a"
 
     monkeypatch.setattr(seam, "run_gh_read_command",
         lambda c, **k: "account a\n")
     with pytest.raises(ValueError, match="active account"):
-        github._authenticated_github_login()
+        github.authenticated_github_login()
 
 
 def test_open_pr_for_branch_returns_the_sole_open_pr(monkeypatch):
@@ -976,7 +976,7 @@ def test_authenticated_github_login_fails_fast_when_auth_status_fails(monkeypatc
 
     monkeypatch.setattr(github, "run_gh_read_command", failing)
     with pytest.raises(ValueError, match="identity resolution failed"):
-        github._authenticated_github_login()
+        github.authenticated_github_login()
 
 
 def test_authenticated_github_login_requires_an_account_line(monkeypatch):
@@ -985,7 +985,7 @@ def test_authenticated_github_login_requires_an_account_line(monkeypatch):
         github, "run_gh_read_command",
         lambda c, **k: "Active account: true\n")
     with pytest.raises(ValueError, match="active account"):
-        github._authenticated_github_login()
+        github.authenticated_github_login()
 
 
 # ------------------------------------------------- line run markers (Issue #825)

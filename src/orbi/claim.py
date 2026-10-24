@@ -27,7 +27,7 @@ from orbi.delivery_scene import (
     EXTERNAL_PR_MARKER, DeliveryScene, body_markers, classify,
 )
 from orbi.github import (
-    _verify_epic_complete, close_issue,
+    verify_epic_complete, close_issue,
     comment_issue, issue_comments, issue_priority, issue_view,
     list_issues, milestone_open_issue_count,
     open_blocker_numbers, pr_comments,
@@ -181,7 +181,7 @@ def reconcile_open_epics(repo: str, run_id: str, language_code: str) -> list[str
     for listed_epic in epics:
         number = listed_epic.get("number")
         try:
-            child_evidence = _verify_epic_complete(repo, listed_epic)
+            child_evidence = verify_epic_complete(repo, listed_epic)
         except (ValueError, json.JSONDecodeError) as exc:
             reason = str(exc)
             event("epic_kept_open", issue=number, repo=repo, reason=reason)
