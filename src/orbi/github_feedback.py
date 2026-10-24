@@ -1,17 +1,17 @@
 """PR feedback normalization and delivery-rollup helpers (Issue #1863).
 
 Split out of `orbi.github` once that leaf crossed the 1,000-line cap. The
-`gh` reads and the auth identity helpers (`pr_view`, `_pr_number`,
-`_authenticated_github_login`, `_strip_bot_suffix`) stay in `orbi.github`;
+`gh` reads and the auth identity helpers (`pr_view`, `pr_number`,
+`authenticated_github_login`, `strip_bot_suffix`) stay in `orbi.github`;
 this module imports them one way. `orbi.github` never imports this module
 back, so the adapter stays a leaf and the runtime import graph stays acyclic.
 """
 from __future__ import annotations
 
 from orbi.github import (
-    _authenticated_github_login,
-    _pr_number,
-    _strip_bot_suffix,
+    authenticated_github_login,
+    pr_number,
+    strip_bot_suffix,
     pr_view,
 )
 
@@ -39,15 +39,15 @@ def _normalize_pr_feedback_item(item: dict) -> dict:
 
 def normalize_pr_feedback(items: list[dict]) -> list[dict]:
     """Normalize PR feedback and exclude the delivery identity."""
-    identity = _strip_bot_suffix(_authenticated_github_login())
+    identity = strip_bot_suffix(authenticated_github_login())
     normalized = [_normalize_pr_feedback_item(item) for item in items]
     return [
         item for item in normalized
-        if _strip_bot_suffix(item["author"]["login"] or "") != identity
+        if strip_bot_suffix(item["author"]["login"] or "") != identity
     ]
 
 
-def _check_summaries(rollup: list) -> list[str]:
+def check_summaries(rollup: list) -> list[str]:
     """Render one status check rollup as compact `name=STATUS[/CONCLUSION]`
     strings (delivery-journal evidence)."""
     summaries = []
@@ -70,7 +70,7 @@ def pr_delivery_rollup(pr_url: str, source_repo: str) -> tuple[str, list]:
     The delivery step classifies this rollup once per tick: pending
     checks defer the delivery to the next tick instead of sleeping.
     """
-    number = _pr_number(pr_url)
+    number = pr_number(pr_url)
     data = pr_view(number, "state,statusCheckRollup", repo=source_repo)
     state = data.get("state")
     if state not in ("OPEN", "MERGED", "CLOSED"):
@@ -86,4 +86,4 @@ def pr_delivery_rollup(pr_url: str, source_repo: str) -> tuple[str, list]:
 def pr_delivery_status(pr_url: str, source_repo: str) -> tuple[str, list[str]]:
     """Return PR state and CI summaries for delivery-wait evidence."""
     state, rollup = pr_delivery_rollup(pr_url, source_repo)
-    return state, _check_summaries(rollup)
+    return state, check_summaries(rollup)

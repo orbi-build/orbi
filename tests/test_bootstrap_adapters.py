@@ -407,7 +407,7 @@ def test_verify_epic_complete_uses_native_sub_issue_shapes(monkeypatch):
     base = {"number": 20, "blockedBy": {"nodes": []}}
     monkeypatch.setattr(seam, "epic_issue_with_blockers", lambda repo, issue: {"number": "bad", "blockedBy": {"nodes": []}})
     with pytest.raises(ValueError, match="Epic number is missing"):
-        github._verify_epic_complete("o/r", base)
+        github.verify_epic_complete("o/r", base)
     cases = [
         ({"number": "bad"}, "invalid number"),
         ({"number": 21, "repository": {}, "state": "closed"}, "repository state is malformed"),
@@ -418,7 +418,7 @@ def test_verify_epic_complete_uses_native_sub_issue_shapes(monkeypatch):
         monkeypatch.setattr(seam, "epic_issue_with_blockers", lambda repo, issue: base)
         monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: json.dumps([[child]]))
         with pytest.raises(ValueError, match=message):
-            github._verify_epic_complete("o/r", base)
+            github.verify_epic_complete("o/r", base)
     pr = {"number": 21, "repository": {"full_name": "o/r"},
           "state": "closed", "pull_request": {}}
     def pr_run(command, **kwargs):
@@ -431,7 +431,7 @@ def test_verify_epic_complete_uses_native_sub_issue_shapes(monkeypatch):
         raise AssertionError(command)
     monkeypatch.setattr(seam, "run_command", pr_run)
     with pytest.raises(ValueError, match="not merged"):
-        github._verify_epic_complete("o/r", base)
+        github.verify_epic_complete("o/r", base)
     with pytest.raises(AssertionError):
         pr_run(["x", "y", "z"])
 
@@ -441,12 +441,12 @@ def test_verify_epic_complete_rejects_malformed_native_blockers(monkeypatch):
         "number": 20, "body": "## Children\n- #21",
     }))
     with pytest.raises(ValueError, match="native blocker/dependency state is unavailable"):
-        github._verify_epic_complete("o/r", {"number": 20})
+        github.verify_epic_complete("o/r", {"number": 20})
 
 
 def test_verify_epic_complete_rejects_malformed_native_blocker_node():
     with pytest.raises(ValueError, match="native blocker/dependency state is malformed"):
-        github._verify_epic_complete("o/r", {
+        github.verify_epic_complete("o/r", {
             "number": 20, "body": "## Children\n- #21",
             "blockedBy": {"nodes": [{"state": "OPEN"}]},
         })

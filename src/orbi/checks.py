@@ -21,7 +21,7 @@ _FINAL_STATUSES = ("COMPLETED", "SUCCESS", "FAILURE", "ERROR")
 _PASSING_CONCLUSIONS = ("SUCCESS", "NEUTRAL", "SKIPPED")
 
 
-def _render_check(entry: dict) -> str:
+def render_check(entry: dict) -> str:
     """Render one classified check entry for humans, from the data.
 
     The rendered string is presentation only — never parsed back
@@ -45,7 +45,7 @@ def classify_checks(
     `completed/success` reach the same bucket and the two gates cannot
     drift apart. The entry keeps the fields exactly as reported
     (`name`, `status`, `conclusion`; Issue #906 — callers read them and
-    `_render_check` derives the human wording from them), so each gate
+    `render_check` derives the human wording from them), so each gate
     renders its own data verbatim.
 
     A check is pending while its status is anything but a final one

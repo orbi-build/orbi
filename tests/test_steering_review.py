@@ -21,7 +21,7 @@ def _repository_permissions(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+        seam, "authenticated_github_login", lambda: "orbi-bot[bot]",
     )
 
 
@@ -53,7 +53,7 @@ def test_run_pi_steering_callback_filters_and_deduplicates(monkeypatch, tmp_path
     ]
     monkeypatch.setitem(pi_session.__dict__, "issue_view",
         lambda *a, **k: _snapshot(comments))
-    monkeypatch.setitem(pi_session.__dict__, "_comment_is_trusted", lambda c, *, repo: c["id"] == "new")
+    monkeypatch.setitem(pi_session.__dict__, "comment_is_trusted", lambda c, *, repo: c["id"] == "new")
     monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
     monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     captured = {}
@@ -156,7 +156,7 @@ def test_run_pi_steering_body_edit_and_comment_is_one_request(monkeypatch, tmp_p
     ]
     monkeypatch.setitem(pi_session.__dict__, "issue_view",
         lambda *a, **k: _snapshot(comments, body="edited body"))
-    monkeypatch.setitem(pi_session.__dict__, "_comment_is_trusted", lambda c, *, repo: c["id"] == "new")
+    monkeypatch.setitem(pi_session.__dict__, "comment_is_trusted", lambda c, *, repo: c["id"] == "new")
     monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
     monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     captured = {}

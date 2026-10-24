@@ -52,7 +52,7 @@ def _current_delivery_labels(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+        seam, "authenticated_github_login", lambda: "orbi-bot[bot]",
     )
 
 
@@ -509,7 +509,7 @@ def test_run_review_hands_an_oversized_prompt_to_pi_as_a_file(
 def test_assess_base_freshness_has_one_typed_three_state_contract(monkeypatch,
                                                                   tmp_path):
     outcomes = iter([True, False, False])
-    monkeypatch.setattr(seam, "_is_ancestor", lambda *args, **kwargs: next(outcomes))
+    monkeypatch.setattr(seam, "is_ancestor", lambda *args, **kwargs: next(outcomes))
 
     assert run_state.assess_base_freshness(tmp_path, "main") is run_state.BaseFreshness.FRESH
     assert run_state.assess_base_freshness(
@@ -522,7 +522,7 @@ def test_assess_base_freshness_has_one_typed_three_state_contract(monkeypatch,
 
 def test_assess_base_freshness_moved_reviewed_head_is_conflicted(
         monkeypatch, tmp_path):
-    monkeypatch.setattr(seam, "_is_ancestor", lambda *args, **kwargs: True)
+    monkeypatch.setattr(seam, "is_ancestor", lambda *args, **kwargs: True)
     assert run_state.assess_base_freshness(
         tmp_path, "main", head="new", reviewed_head="reviewed",
     ) is run_state.BaseFreshness.CONFLICTED
@@ -3276,8 +3276,8 @@ def _install_base_probe(monkeypatch, ancestor: list, *,
     `ancestor` is a per-read queue for the gate-time
     `git merge-base --is-ancestor` re-read: one entry per call. True = the
     base is contained; an int is the exit code (1 = behind — real git's
-    normal negative, 128 = unreadable — the non-answer `_is_ancestor`
-    re-raises). The runner's `_is_ancestor` resolves the command through
+    normal negative, 128 = unreadable — the non-answer `is_ancestor`
+    re-raises). The runner's `is_ancestor` resolves the command through
     the same seam, so this drives the REAL gitops check with no
     runner-module patch (the patch ratchet, Issue #789)."""
     make_fake_gh(monkeypatch)
@@ -3410,7 +3410,7 @@ def test_review_and_merge_unreadable_mergeability_leaves_round_unarmed(
 def test_review_and_merge_gate_time_probe_unreadable_keeps_plain_comment(
         monkeypatch, tmp_path):
     """Issue #877: an armed round whose gate-time re-read cannot answer
-    (exit 128, the non-answer `_is_ancestor` re-raises) never invents a
+    (exit 128, the non-answer `is_ancestor` re-raises) never invents a
     violation either — the comment stays the plain recoverable sentence."""
     calls = []
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])

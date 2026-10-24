@@ -120,7 +120,7 @@ def latest_run_id(repo_dir: Path, source_repo: str, number: int) -> str | None:
     return newest.name.rsplit("-", 1)[-1]
 
 
-def _is_ancestor(commit: str, base: str, *, cwd: Path) -> bool:
+def is_ancestor(commit: str, base: str, *, cwd: Path) -> bool:
     """Return whether *commit* is reachable from *base*.
 
     Git uses exit code 1 for the normal negative answer. Any other failure
@@ -232,7 +232,7 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
                 ["git", "rev-parse", f"origin/{branch}"], cwd=repo_dir,
             )
             if local_head != remote_head:
-                if not _is_ancestor(local_head, remote_head, cwd=repo_dir):
+                if not is_ancestor(local_head, remote_head, cwd=repo_dir):
                     raise RuntimeError(
                         "cannot recreate worktree from remote HEAD: local "
                         f"branch {branch} is ahead of or diverged from "

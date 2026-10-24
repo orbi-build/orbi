@@ -37,7 +37,7 @@ from orbi import config as config_domain
 from orbi import failure_report, github, gitops, human_review, pi_session, run_state, scene
 from orbi.blocked_comment import post_blocked_comment
 from orbi.branch_reclaim import delete_merged_delivery_branch
-from orbi.checks import _render_check, classify_checks, test_status
+from orbi.checks import render_check, classify_checks, test_status
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL,
     BLOCKED_LABEL,
@@ -71,11 +71,11 @@ from orbi.github import (
     issue_priority,
     pr_view,
 )
-from orbi.github_feedback import _check_summaries, pr_delivery_rollup
+from orbi.github_feedback import check_summaries, pr_delivery_rollup
 from orbi import base_ci_red, language, user_summary
 from orbi.delivery_comment import merged_pr_comment_body  # noqa: F401
 from orbi.gitops import (
-    _is_ancestor,
+    is_ancestor,
     acquire_base_sync_lock,
     fetch_base_ref,
     task_branch,
@@ -407,10 +407,10 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         raise GateCIFailure(
             f"delivery gate: CI check '{failed_names[0]}' "
             f"failed on PR #{pr['number']}: "
-            + ", ".join(_render_check(entry) for entry in failed)
+            + ", ".join(render_check(entry) for entry in failed)
         )
     if pending:
-        detail = ", ".join(_render_check(entry) for entry in pending)
+        detail = ", ".join(render_check(entry) for entry in pending)
         event(
             "merge_gate_ci_pending", pr=pr["number"], pending=detail,
         )
@@ -541,7 +541,7 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str,
         event("confirm_merged_landed_on_base", pr=pr["number"],
               head=pr["head_oid"], merge_commit=merge_commit)
         return {"state": state.get("state"), "merge_commit": merge_commit}
-    if not _is_ancestor(merge_commit, f"origin/{base_branch}", cwd=worktree):
+    if not is_ancestor(merge_commit, f"origin/{base_branch}", cwd=worktree):
         event(
             "confirm_merged_missing_on_base", level=logging.ERROR,
             pr=pr["number"], merge_commit=merge_commit,
@@ -593,12 +593,12 @@ def merge_commit_metrics(worktree: Path, merge_commit: str,
         ))
         if pushed_head is None:
             return "unknown", str(commits)
-        if not _is_ancestor(pushed_head, f"{merge_commit}^2", cwd=worktree):
+        if not is_ancestor(pushed_head, f"{merge_commit}^2", cwd=worktree):
             return "unknown", str(commits)
         command = ["git", "rev-list", "--count", pushed_head,
                    "--not", f"{merge_commit}^1"]
         if pushed_base is not None:
-            if not _is_ancestor(pushed_base, f"{merge_commit}^2",
+            if not is_ancestor(pushed_base, f"{merge_commit}^2",
                                 cwd=worktree):
                 return "unknown", str(commits)
             command.append(pushed_base)
@@ -1143,7 +1143,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         # accepting the contribution and picking its version is the
         # maintainer's.
         state, rollup = pr_delivery_rollup(pr["url"], source_repo)
-        checks = ", ".join(_check_summaries(rollup)) or "none"
+        checks = ", ".join(check_summaries(rollup)) or "none"
         bound = language.of(config)
         body = (
             f"{marker}\n"
@@ -1329,7 +1329,7 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         absorb_abandoned = False
         if absorb_required:
             try:
-                absorb_abandoned = not _is_ancestor(
+                absorb_abandoned = not is_ancestor(
                     f"origin/{base_branch}", refrozen["head_oid"], cwd=worktree,
                 )
             except subprocess.CalledProcessError:

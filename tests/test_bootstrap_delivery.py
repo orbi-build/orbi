@@ -74,7 +74,7 @@ def _repository_permissions(monkeypatch):
     # The runner's own account is the bot these fakes authenticate as, so
     # no scenario reaches the host's real `gh auth status`.
     monkeypatch.setattr(
-        seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+        seam, "authenticated_github_login", lambda: "orbi-bot[bot]",
     )
 
 
