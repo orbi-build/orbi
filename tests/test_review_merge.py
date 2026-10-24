@@ -10,8 +10,11 @@ against the latest origin/main, and merges via `gh pr merge
 """
 from orbi import config as config_domain
 import fcntl
+import inspect
 import json
+import logging
 import os
+import re
 import subprocess
 from pathlib import Path
 from unittest.mock import Mock
@@ -21,6 +24,7 @@ import dataclasses
 
 import orbi.checks as checks
 import orbi.failure_report as failure_report
+import orbi.journal as journal
 import orbi.runner as runner
 import orbi.review_merge as review_merge
 import orbi.run_state as run_state
@@ -2610,18 +2614,22 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
 
 
 def _merged_round(monkeypatch, tmp_path, *, gate, state="MERGED",
-                  close=None):
-    """Drive one clean round whose merge result is `gate` (Issue #1801).
+                  close=None, verdict=None):
+    """Drive one round whose merge result is `gate` (Issues #1801, #1858).
 
     Returns the round's answer and ONE ordered list of every write the
-    merged path made — the gh commands, the label edits and the Issue
+    round made — the gh commands, the label edits and the Issue
     comments — so their order is assertable. Every patch goes through the
     `seam` fan-out, which adds no per-module patch site (Issue #789).
+    `verdict` is the review session's verdict text (a clean pass when
+    omitted), so a findings or human-decision round reuses the same world.
     """
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(
         seam, "run_review",
-        lambda *a, **k: _review_session(_pass_verdict_text()),
+        lambda *a, **k: _review_session(
+            _pass_verdict_text() if verdict is None else verdict,
+        ),
     )
     monkeypatch.setattr(seam, "merge_gate", gate)
     monkeypatch.setattr(
@@ -4948,3 +4956,177 @@ def test_write_run_state_preserves_the_review_record(tmp_path):
         worktree=tmp_path, source_repo="owner/repo",
     ))
     assert run_state.read_reviewed(tmp_path) == ("h1", "b" * 64)
+
+
+# ---------------------------------------------------------------------------
+# the round's behavior golden (Issue #1858)
+# ---------------------------------------------------------------------------
+
+_TRACE_GOLDEN = (
+    Path(__file__).resolve().parent / "golden" / "review-round-trace.txt"
+)
+_TRACE_SCENARIOS = (
+    "clean-merge", "findings", "gate-failure", "handoff", "deferred",
+)
+# Values that legitimately differ between two runs of the same code: the
+# engine checkout's own HEAD (the runner fingerprint every comment
+# carries). The round's worktree path is normalised in _render_trace.
+_TRACE_NORMALISERS = (
+    (re.compile(r"<!-- runner=[^>]* -->"), "<!-- runner=<fingerprint> -->"),
+)
+
+
+def _scenario_gate(scenario, calls):
+    """The faked merge gate of one trace scenario, recording its call.
+
+    `clean-merge` answers a landed merge; `gate-failure`, `handoff`
+    and `deferred` raise the three gate outcomes the round handles
+    itself; a `findings` round never reaches the gate.
+    """
+    def gate(worktree, pr, base_branch, **kwargs):
+        calls.append({
+            "pr": pr["number"], "head": pr["head_oid"],
+            "base": base_branch, "repo_dir": str(kwargs["repo_dir"]),
+            "issue": kwargs["issue_number"], "run_id": kwargs["run_id"],
+            "language": kwargs["language_code"],
+        })
+        if scenario == "gate-failure":
+            raise review_merge.RecoverableMergeGateError(
+                "PR #4 head h1 is behind latest remote base origin/main "
+                "(b2); absorb the latest base, rerun tests and review, "
+                "then retry"
+            )
+        if scenario == "handoff":
+            raise runner.MergeHandoffRequired(
+                "approval required",
+                preflight=["merge_gate: FAILED exact repair action"],
+            )
+        if scenario == "deferred":
+            raise review_merge.DeliveryDeferred(
+                "PR #4 CI is still running (tests); the merge is deferred "
+                "to the next tick"
+            )
+        return {**_pr(), "merged": True}
+    return gate
+
+
+def _journal_lines(caplog) -> list[str]:
+    """The round's journal events, in order, as `LEVEL kind=...` lines.
+
+    A record counts as an event when its first field is a registered kind
+    (`journal.JOURNAL_EVENTS`), so `run_command`'s own context lines
+    stay out of the trace.
+    """
+    return [
+        f"{record.levelname} {record.getMessage()}"
+        for record in caplog.records
+        if record.name == journal.LOGGER.name
+        and record.getMessage().split(" ", 1)[0] in journal.JOURNAL_EVENTS
+    ]
+
+
+def _render_trace(answer, events, gate_calls, journal_lines,
+                  worktree: Path) -> str:
+    """One scenario's externally visible record, normalised to text.
+
+    `events` is `_merged_round`'s ordered write list: a gh command, a
+    label edit or an Issue comment body. Progress-comment writes
+    (`gh api`) are bypass observability with their own tests, so the
+    trace keeps the round's own effects only.
+    """
+    lines = [f"answer: {answer}"]
+    for event in events:
+        if isinstance(event, list):
+            if event[:2] == ["gh", "api"]:
+                continue
+            lines.append("command " + json.dumps(event))
+        elif event[0] == "comment":
+            lines.append("comment")
+            lines.extend("  " + line for line in event[1].splitlines())
+        else:
+            lines.append("label " + json.dumps(event[1], sort_keys=True))
+    lines.append(
+        "merge_gate: " + json.dumps(gate_calls, sort_keys=True)
+        if gate_calls else "merge_gate: not called"
+    )
+    lines.append("journal:")
+    lines.extend("  " + line for line in journal_lines)
+    text = "\n".join(lines) + "\n"
+    for pattern, replacement in _TRACE_NORMALISERS:
+        text = pattern.sub(replacement, text)
+    return text.replace(str(worktree), "<worktree>")
+
+
+def test_review_round_behavior_golden(monkeypatch, tmp_path, caplog):
+    """Issue #1858: the round's behavior is pinned byte for byte.
+
+    `_review_and_merge_round` was split into named phase helpers with no
+    behavior change. `tests/golden/review-round-trace.txt` was captured
+    from the unmodified source (the base commit) and records, per round
+    outcome, the exact round comment bodies, label transitions, merge
+    gate call (the merge call) and maintainer-handoff comment, plus the
+    journal events in order. A reworded comment, a reordered label
+    transition, a changed merge call or a skipped/added journal event
+    fails here — no manual diff.
+
+    Set `ORBI_UPDATE_REVIEW_ROUND_GOLDEN=1` only when the behavior is
+    meant to change.
+    """
+    traces = []
+    for scenario in _TRACE_SCENARIOS:
+        caplog.clear()
+        gate_calls: list = []
+        verdict = (
+            _findings_verdict_text() if scenario == "findings"
+            else _pass_verdict_text()
+        )
+        with caplog.at_level(logging.INFO, logger=journal.LOGGER.name):
+            answer, events = _merged_round(
+                monkeypatch, tmp_path,
+                gate=_scenario_gate(scenario, gate_calls), verdict=verdict,
+            )
+        traces.append(
+            f"## scenario: {scenario}\n"
+            + _render_trace(
+                answer, events, gate_calls, _journal_lines(caplog), tmp_path,
+            )
+        )
+    _check_golden("\n".join(traces), _TRACE_GOLDEN)
+
+
+def _check_golden(trace: str, path: Path) -> None:
+    """Freeze the trace on demand, then require the file to match it."""
+    if os.environ.get("ORBI_UPDATE_REVIEW_ROUND_GOLDEN") == "1":
+        path.write_text(trace, encoding="utf-8")
+    assert trace == path.read_text(encoding="utf-8")
+
+
+def test_review_round_trace_golden_regeneration_writes_the_file(
+        monkeypatch, tmp_path):
+    """The regeneration switch is a write + compare, nothing else."""
+    monkeypatch.setenv("ORBI_UPDATE_REVIEW_ROUND_GOLDEN", "1")
+    target = tmp_path / "review-round-trace.txt"
+    _check_golden("## scenario: clean-merge\n", target)
+    assert target.read_text(encoding="utf-8") == "## scenario: clean-merge\n"
+
+
+def test_review_round_is_a_thin_orchestration_of_named_phases():
+    """Issue #1858 acceptance: the round reads as an orchestration.
+
+    `_review_and_merge_round` stays under 100 lines and each extracted
+    phase stays under 150, so the split cannot silently regress into one
+    long function again.
+    """
+    round_lines, _ = inspect.getsourcelines(
+        review_merge._review_and_merge_round,
+    )
+    assert len(round_lines) < 100, len(round_lines)
+    phases = [
+        name for name in vars(review_merge)
+        if name.startswith("_round_") and name.endswith("_phase")
+    ]
+    assert phases, "the round names its phases"
+    for name in sorted(phases):
+        lines, _ = inspect.getsourcelines(getattr(review_merge, name))
+        assert len(lines) < 150, (name, len(lines))
+

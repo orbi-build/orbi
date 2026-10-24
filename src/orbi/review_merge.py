@@ -29,7 +29,8 @@ import os
 import re
 import subprocess
 import time
-from dataclasses import replace
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 
@@ -765,146 +766,99 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             run_state.clear_reviewed(worktree)
 
 
-def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
-                            config: config_domain.RunnerConfig, source_repo: str,
-                            number: int, title: str, priority: str,
-                            *, scene: dict,
-                            previous_comments: list[dict] | None = None,
-                            merge_only: bool = False,
-                            checks: list | None = None,
-                            review_record: tuple[str, str] | None = None,
-                            issue_body_sha256: str | None = None,
-                            keep_review_record: list[bool]) -> bool:
-    """Run one independent review round; merge when the verdict is clean.
+@dataclass
+class _Round:
+    """One review round: the entry point's inputs plus the state its
+    phases derive. Each phase fills the fields it owns, so the phases
+    share one typed record instead of a dozen positional parameters."""
+    worktree: Path
+    branch: str
+    base_branch: str
+    config: config_domain.RunnerConfig
+    source_repo: str
+    number: int
+    title: str
+    priority: str
+    scene: dict
+    previous_comments: list[dict] | None
+    merge_only: bool
+    checks: list | None
+    review_record: tuple[str, str] | None
+    issue_body_sha256: str | None
+    keep_review_record: list[bool]
+    marker: str = ""
+    ready_label: str = READY_LABEL
+    round: int = 0
+    base_advance_rounds: int = 0
+    external_pr_url: str | None = None
+    pr: dict = field(default_factory=dict)
+    merge_only_from_record: bool = False
+    absorb_required: bool = False
+    publisher: ProgressPublisher | None = None
+    publish: Callable[..., None] | None = None
+    round_update: Callable[..., None] | None = None
+    verdict: dict = field(default_factory=dict)
+    review_summary: str = ""
+    reviewed_body_sha256: str | None = None
+    session_output: str | None = None
+    refrozen: dict = field(default_factory=dict)
 
-    `title` is the issue's GitHub title: the review
-    progress scenes (ensure, findings, merged) show `#<number> <title>`
-    like every other scene; it is required, never fabricated.
 
-    `scene` is the delivery's recovered resume scene (run_id, base,
-    PR URL, `review_round`, `scene_at`): the round budget reads
-    `review_rounds.effective_review_round` of it — the scene's count with
-    a maintainer recovery after the scene reset (Issue #483) — so the
-    budget, the round in progress and every failure report show one
-    number (Issue #1779). The scene is the waiting primitive's state
-    anchor, and every round comment carries the updated scene block, so
-    the next resume continues the count.
+def _round_preflight_phase(work: _Round) -> None:
+    """Open the round: budget, PR freeze, absorb arm, push adoption.
 
-    The delivery step calls this while the PR is open and the Issue
-    awaits review (`ai-pr-opened`) or awaits the next review session
-    (`ai-fix-needed`). It freezes the PR, runs the independent review
-    (streamed, role=review), and then:
-
-    - clean verdict -> the reviewer may have fixed findings IN THE SAME
-      SESSION and pushed the task branch, so the PR is
-      RE-FROZEN before the merge gate: the gate (latest-base ancestor,
-      one-shot CI read, mergeable, head match,
-      `gh pr merge --match-head-commit`) then runs against the head the
-      verdict actually covers; confirm the merge landed on
-      origin/<base>, sync the deployment checkout, label the Issue
-      `ai-merged`; returns True. An EXTERNAL takeover (the scene marks
-      `external`) NEVER merges: its clean verdict ends at the triage
-      stop below — the review conclusion stays on the Issue and the
-      ticket is labeled `ai-blocked` for the maintainer's acceptance
-      decision (Issue #842, decision D2); returns False;
-    - an intermediate gate state (CI still pending on the reviewed head,
-      or mergeability still UNKNOWN) -> one journal line and return
-      without a comment or a label change: "pending" is a
-      state, not a failure — the next tick re-reads it, the round budget
-      does not advance; returns False;
-    - `blocked_on_human_decision` -> raise `HumanDecisionRequired` with
-      the finding note and fix direction; the caller marks the Issue
-      `ai-blocked` immediately, without recording another review round;
-    - Blocker/Major findings the reviewer could not fix in-session ->
-      comment them to Issue and PR (the comment carries the updated
-      scene) and label the Issue `ai-fix-needed`; the next tick resumes
-      the same PR with the next round — no cold-start fixer, no third
-      review; returns False;
-    - a gate failure because the head is behind the latest base, has a
-      merge conflict, or its CI is red -> label the Issue
-      `ai-fix-needed` with the finding (the next review session absorbs
-      the latest base in-session or repairs the red CI); returns False;
-    - missing/malformed verdict -> raise; the caller keeps the Issue in
-      the automatic fix loop (`ai-fix-needed`). A mismatched head is
-      recoverable when it names another real commit, and an unknown
-      object gets two retries per review run before becoming terminal
-      (`ai-blocked`);
-    - an exhausted round budget -> raise `UnrecoverableDeliveryError`
-      (the bounded loop is a human decision, not a
-      recoverable failure); the caller marks the Issue `ai-blocked`
-      with the explicit reason.
+    The budget is the scene's count of COMPLETED rounds with a maintainer's
+    blocked -> ai-fix-needed recovery reset applied, owned by
+    review_rounds (Issue #1779), so the round in progress and the failure
+    reports share one number; an exhausted budget is a human decision and
+    fails fast. A recorded pass whose head and Issue-body hash still match
+    authorizes this tick to merge without a session (Issue #1626), the
+    absorb arm needs GitHub's CONFLICTING read (Issue #877), and a remote
+    head this worktree's own session pushed is adopted into the push
+    history so the merge record never counts it as external (Issue #833).
     """
-    marker = run_marker(config.run_id)
-    # The queue entry the claim scanned: the repository's resolved
-    # `dispatch_label` (default `ai-ready`), never a second constant
-    # (Issue #1775).
-    ready_label = config.dispatch_label or READY_LABEL
-    # The round budget lives in the scene: `review_round` counts the
-    # COMPLETED rounds recorded by the round comments' scene blocks, with
-    # a maintainer's blocked -> ai-fix-needed recovery reset applied — ONE
-    # decision owned by `review_rounds` (Issue #1779): the budget, the
-    # round in progress and failure reports share it (Issue #1783).
+    worktree, branch = work.worktree, work.branch
+    config, scene = work.config, work.scene
+    number, source_repo = work.number, work.source_repo
+    work.marker = run_marker(config.run_id)
+    work.ready_label = config.dispatch_label or READY_LABEL
     scene_round = int(scene["review_round"])
     rounds = effective_review_round(scene, number=number, repo=source_repo)
     recovered = rounds != scene_round
-    base_advance_rounds = (
+    work.base_advance_rounds = (
         0 if recovered else int(scene.get("base_advance_round", 0))
     )
-    if rounds >= MAX_REVIEW_ROUNDS and not merge_only:
+    if rounds >= MAX_REVIEW_ROUNDS and not work.merge_only:
         event(
-            "review_rounds_exhausted", level=logging.ERROR,
-            issue=number, rounds=rounds,
-            terminal="expected_human_decision",
+            "review_rounds_exhausted", level=logging.ERROR, issue=number,
+            rounds=rounds, terminal="expected_human_decision",
         )
-        # The loop is bounded by MAX_REVIEW_ROUNDS on purpose
-        # — after 5 rounds without a clean verdict the remaining findings
-        # need a human decision, so the AI cannot safely continue this PR.
         raise ReviewRoundsExhausted(
             f"review/fix loop exhausted after {MAX_REVIEW_ROUNDS} rounds "
             "without a clean verdict; the bounded loop is a human "
             "decision, so the AI cannot safely continue this PR"
         )
-    round = rounds if merge_only else rounds + 1
-    scene["review_round_running"] = round  # the failure report's source
-    external_pr_url = scene["pr_url"] if scene.get("external") else None
-    pr = freeze_pr(
-        worktree, branch, base_branch,
-        external_pr_url=external_pr_url, source_repo=source_repo,
+    work.round = rounds if work.merge_only else rounds + 1
+    scene["review_round_running"] = work.round  # the failure report's source
+    work.external_pr_url = scene["pr_url"] if scene.get("external") else None
+    work.pr = pr = freeze_pr(
+        worktree, branch, work.base_branch,
+        external_pr_url=work.external_pr_url, source_repo=source_repo,
     )
-    # Issue #1626: a record whose reviewed head and rendered-Issue-body hash
-    # both still match authorizes THIS tick to merge without a session.
-    merge_only_from_record = (
-        review_record is not None
-        and not merge_only
-        and not scene.get("external")
-        and issue_body_sha256 == review_record[1]
-        and pr["head_oid"] == review_record[0]
+    work.merge_only_from_record = (
+        work.review_record is not None
+        and not work.merge_only and not scene.get("external")
+        and work.issue_body_sha256 == work.review_record[1]
+        and pr["head_oid"] == work.review_record[0]
     )
-    # Issue #877: the absorb contract is armed only when GitHub reports the
-    # PR CONFLICTING at round start (one mergeable read, Issue #1626). A
-    # head that is merely behind is absorbed by the Runner's gate, not by
-    # the session; UNKNOWN does not arm, and an unreadable read leaves the
-    # round unarmed (the gate's own fresh-fetch ancestor check still guards
-    # the merge).
-    absorb_required = False
-    if not merge_only and not merge_only_from_record:
+    work.absorb_required = False
+    if not work.merge_only and not work.merge_only_from_record:
         try:
-            absorb_required = pr_view(
+            work.absorb_required = pr_view(
                 pr["number"], "mergeable", cwd=worktree,
             ).get("mergeable") == "CONFLICTING"
         except (subprocess.CalledProcessError, ValueError, TypeError):
-            absorb_required = False
-    # A fix push whose round ended before the re-freeze record (a
-    # findings verdict, or a malformed verdict head) still left an
-    # engine-pushed head on the remote (Issue #833). When the frozen
-    # remote head is exactly this worktree's checked-out head, only
-    # this worktree's own sessions push it — adopt it into the push
-    # history. The adoption is internal-only: an external takeover's
-    # worktree legitimately starts on the contributor's foreign head,
-    # whose base the claim recorded instead; an external push leaves
-    # the local head behind and is never adopted. The recorded-head
-    # check runs first: the common already-recorded round never pays a
-    # git call.
+            work.absorb_required = False
     if (not scene.get("external")
             and read_pushed_head(worktree) != pr["head_oid"]
             and pr["head_oid"] == run_command(
@@ -912,85 +866,92 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
         run_state.record_pushed_head(worktree, pr["head_oid"])
         event(
             "pushed_head_recorded", pr=pr["number"],
-            head=pr["head_oid"], round=round,
+            head=pr["head_oid"], round=work.round,
         )
     if recovered:
-        # Only the explicit recovery reset reaches this branch. Check the
-        # latest PR CI before spending the newly granted review budget.
+        # Check the latest PR CI before spending the granted budget.
         log_recovery_ci_status(pr, source_repo)
-    publisher = ProgressPublisher(
+
+
+def _round_verdict_phase(work: _Round) -> bool:
+    """Acquire the verdict, then apply it; True when the round ends here.
+
+    A merge-only resume (the ai-awaiting-merge label, or the recorded pass
+    of Issue #1626) synthesizes a clean verdict on the frozen head and
+    starts no session; every other round clears any stale record, runs the
+    independent review session and parses its machine-readable verdict. A
+    blocked_on_human_decision verdict raises HumanDecisionRequired with the
+    finding note and fix direction; unfixed Blocker/Major findings are
+    commented to the Issue and the PR and move the Issue to ai-fix-needed,
+    so the next tick resumes the same PR with the next round.
+    """
+    worktree = work.worktree
+    config, pr, marker = work.config, work.pr, work.marker
+    number, source_repo = work.number, work.source_repo
+    round = work.round
+    work.publisher = ProgressPublisher(
         number, source_repo, config.run_id, run_command=run_command,
         language_code=language.of(config), status_url=config.status_url,
     )
-    publish = functools.partial(
+    work.publish = functools.partial(
         safe_publish, run_id=config.run_id, issue=number,
         source_repo=source_repo, role=ROLE_REVIEW,
     )
     started = time.monotonic()
-    # The whole review/merge phase PATCHes the run's live progress
-    # comment, so the publisher above carries the bound message language
-    # too (#1660/#1687): the header and field labels follow it exactly
-    # like the implementation phase's.
     ctx = RunContext(
-        run_id=config.run_id, issue=number, branch=branch,
+        run_id=config.run_id, issue=number, branch=work.branch,
         worktree=worktree, source_repo=source_repo,
     )
-    # The step's own updates (this ensure, the merge gate's `checks`
-    # stage, the findings/merged finishes) render through one call shape
-    # (Issue #1657). Publishing is a bypass — a 404 here must not stop the
-    # review (the delivery is already open and awaiting review; the
-    # journal is the record, the progress comment is observability).
-    round_update = step_publisher(
-        publisher, ctx, role=ROLE_REVIEW, title=title,
-        started=started, priority=priority, checks=checks,
+    # Publishing is a bypass: a 404 must not stop the review.
+    work.round_update = step_publisher(
+        work.publisher, ctx, role=ROLE_REVIEW, title=work.title,
+        started=started, priority=work.priority, checks=work.checks,
     )
-    publish(action=lambda: round_update(pr["url"], round))
-    if merge_only or merge_only_from_record:
-        verdict = {
-            "verdict": "pass", "head": pr["head_oid"],
-            "findings": [], "blockers": 0, "majors": 0,
+    work.publish(action=lambda: work.round_update(pr["url"], round))
+    if work.merge_only or work.merge_only_from_record:
+        work.verdict = {
+            "verdict": "pass", "head": pr["head_oid"], "findings": [],
+            "blockers": 0, "majors": 0,
         }
-        review_summary = (
+        work.review_summary = (
             language.text(
                 language.of(config), "review.summary_human_action",
-            ) if merge_only else language.text(
+            ) if work.merge_only else language.text(
                 language.of(config), "review.summary_pass_recorded",
                 head=pr["head_oid"],
             )
         )
-        reviewed_body_sha256 = None
-    else:
-        # Issue #1626: a record must never outlive the session that
-        # replaces it, even if the process dies mid-session.
-        run_state.clear_reviewed(worktree)
-        result = pi_session.run_review(
-            ctx, pr, config, round,
-            progress=LiveProgressThrottle(
-                ctx, publisher, title=title, role=ROLE_REVIEW,
-                started=started, pr_url=pr["url"], review_round=round,
-                priority=priority, checks=checks,
-            ),
+        work.reviewed_body_sha256 = None
+        return False
+    # The record must never outlive the session that replaces it (#1626).
+    run_state.clear_reviewed(worktree)
+    result = pi_session.run_review(
+        ctx, pr, config, round,
+        progress=LiveProgressThrottle(
+            ctx, work.publisher, title=work.title, role=ROLE_REVIEW,
+            started=started, pr_url=pr["url"], review_round=round,
+            priority=work.priority, checks=work.checks,
+        ),
+    )
+    run_state.clear_reviewed(worktree)
+    work.session_output = result.output
+    work.reviewed_body_sha256 = result.issue_body_sha256
+    work.verdict = parse_review_verdict(work.session_output)
+    fixed_findings = len(work.verdict["findings"])
+    work.review_summary = (
+        language.text(language.of(config), "review.summary_pass_clean")
+        if fixed_findings == 0
+        else language.text(
+            language.of(config), "review.summary_pass_fixed",
+            findings=fixed_findings,
         )
-        # Drop any record the session wrote: only the Runner's own record
-        # (written below on a pass) may authorize a later merge.
-        run_state.clear_reviewed(worktree)
-        output = result.output
-        reviewed_body_sha256 = result.issue_body_sha256
-        verdict = parse_review_verdict(output)
-        fixed_findings = len(verdict["findings"])
-        review_summary = (
-            language.text(language.of(config), "review.summary_pass_clean")
-            if fixed_findings == 0
-            else language.text(
-                language.of(config), "review.summary_pass_fixed",
-                findings=fixed_findings,
-            )
-        )
-        event(
-            "review", pr=pr["number"], round=round,
-            verdict=verdict["verdict"], blockers=verdict["blockers"],
-            majors=verdict["majors"],
-        )
+    )
+    event(
+        "review", pr=pr["number"], round=round,
+        verdict=work.verdict["verdict"],
+        blockers=work.verdict["blockers"], majors=work.verdict["majors"],
+    )
+    verdict = work.verdict
     if verdict["verdict"] == "blocked_on_human_decision":
         decisions = "; ".join(
             f"note: {finding.get('note', '')}; "
@@ -1007,81 +968,72 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             "review requires human decision: " + decisions,
             action=actions,
         )
-    if review_has_findings(verdict):
-        # The reviewer could not make the PR mergeable in this session
-        # (findings are fixed in the same session; reaching
-        # this branch means the fix was not verifiable or not this
-        # session's to decide). The Issue moves to the explicit
-        # fix-needed state: the next review session retries the same PR
-        # (no cold-start fixer), and the round budget bounds the loop.
-        event(
-            "review_findings_unfixed", pr=pr["number"], round=round,
-        )
-        body = review_round_comment_body(
-            marker, round, pr["number"], verdict["blockers"],
-            verdict["majors"], verdict["findings"],
-            _round_scene_block(
-                scene, pr["url"], round,
-                verdict_head_unknown_round=0,
-            ),
-            repo=source_repo, previous_comments=previous_comments,
-            language_code=language.of(config), status_url=config.status_url,
-            issue=number, title=title,
-        )
-        comment_issue(number, repo=source_repo, body=body)
-        failure_report.comment_pr(pr["number"], repo=source_repo, body=body)
-        # The findings publishing is bypass — a 404 here
-        # must not stop the `ai-fix-needed` transition below (the next
-        # review session retries the same PR either way).
-        publish(
-            action=lambda: publisher.milestone(
-                language.text(
-                    language.of(config), "review.findings_milestone",
-                    round=round, blockers=verdict["blockers"],
-                    majors=verdict["majors"], pr_number=pr["number"],
-                )
-            ),
-        )
-        publish(action=lambda: round_update(
-            pr["url"], round, outcome=language.text(
-                language.of(config), "review.findings_outcome",
-                round=round, blockers=verdict["blockers"],
-                majors=verdict["majors"],
-            ),
-        ))
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_FIX_NEEDED,
-            current_labels=issue_labels(number, source_repo),
-        )
+    if not review_has_findings(verdict):
         return False
-    # The reviewer fixes findings in the same session and
-    # pushes the task branch, so the head the verdict covers may be
-    # NEWER than the frozen head. Re-freeze before the merge gate: the
-    # gate then checks the latest-base ancestor, mergeability and the
-    # exact reviewed head against the current remote head, and merges
-    # only that head via --match-head-commit.
-    refrozen = freeze_pr(
-        worktree, branch, base_branch,
-        external_pr_url=external_pr_url, source_repo=source_repo,
+    event("review_findings_unfixed", pr=pr["number"], round=round)
+    body = review_round_comment_body(
+        marker, round, pr["number"], verdict["blockers"],
+        verdict["majors"], verdict["findings"],
+        _round_scene_block(
+            work.scene, pr["url"], round,
+            verdict_head_unknown_round=0,
+        ),
+        repo=source_repo, previous_comments=work.previous_comments,
+        language_code=language.of(config), status_url=config.status_url,
+        issue=number, title=work.title,
+    )
+    comment_issue(number, repo=source_repo, body=body)
+    failure_report.comment_pr(pr["number"], repo=source_repo, body=body)
+    work.publish(
+        action=lambda: work.publisher.milestone(
+            language.text(
+                language.of(config), "review.findings_milestone",
+                round=round, blockers=verdict["blockers"],
+                majors=verdict["majors"], pr_number=pr["number"],
+            )
+        ),
+    )
+    work.publish(action=lambda: work.round_update(
+        pr["url"], round, outcome=language.text(
+            language.of(config), "review.findings_outcome",
+            round=round, blockers=verdict["blockers"],
+            majors=verdict["majors"],
+        ),
+    ))
+    apply_label_patch(
+        number, repo=source_repo, event=EVENT_FIX_NEEDED,
+        current_labels=issue_labels(number, source_repo),
+    )
+    return True
+
+
+def _round_refreeze_phase(work: _Round) -> bool:
+    """Re-freeze the PR and bind the clean verdict to the reviewed head.
+
+    The reviewer fixes findings in the same session and pushes the task
+    branch, so the head the verdict covers may be NEWER than the frozen
+    head; the gate merges exactly this head. A verdict naming another head
+    (forged, replayed or stale) never merges: a real alternate commit is a
+    recoverable branch race, an object that is not a commit is terminal
+    after three attempts (Issue #988). A head pushed in this tick is
+    recorded and deferred, never merged in the tick that pushed it (#1626).
+    """
+    worktree, branch = work.worktree, work.branch
+    scene, pr = work.scene, work.pr
+    source_repo = work.source_repo
+    round = work.round
+    work.refrozen = refrozen = freeze_pr(
+        worktree, branch, work.base_branch,
+        external_pr_url=work.external_pr_url, source_repo=source_repo,
     )
     if refrozen["head_oid"] != pr["head_oid"]:
         event(
             "review_head_advanced", pr=pr["number"], round=round,
             frozen=pr["head_oid"], reviewed=refrozen["head_oid"],
         )
-    # The clean verdict is bound to the head it covers. The
-    # gate below merges exactly `refrozen["head_oid"]`, so a verdict
-    # naming any other head (forged by injected text, replayed from an
-    # older round, or stale after a fix the reviewer forgot to state)
-    # never merges: it is a malformed verdict. The object probe below
-    # distinguishes a recoverable branch race from a terminal unknown head.
-    if verdict["head"] != refrozen["head_oid"]:
-        # A real alternate commit means the branch moved during review and
-        # remains recoverable. An object that is not a commit cannot be a
-        # race: it is a malformed/model-invented verdict and retrying the
-        # same review would only reproduce the dead loop (Issue #988).
+    if work.verdict["head"] != refrozen["head_oid"]:
         object_probe = run_command(
-            ["git", "cat-file", "-e", f"{verdict['head']}^{{commit}}"],
+            ["git", "cat-file", "-e", f"{work.verdict['head']}^{{commit}}"],
             cwd=worktree, check=False, timeout=10,
         )
         if object_probe.returncode != 0:
@@ -1091,41 +1043,35 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             scene["verdict_head_unknown_round"] = unknown_round
             event(
                 "review_verdict_head_unknown", level=logging.WARNING,
-                pr=pr["number"], verdict_head=verdict["head"],
-                round=unknown_round,
-            )
+                pr=pr["number"], verdict_head=work.verdict["head"],
+                round=unknown_round)
             if unknown_round >= 3:
                 raise UnrecoverableDeliveryError(
-                    f"review verdict points to unknown object {verdict['head']} "
-                    f"on attempt {unknown_round}; the verdict head is not a "
-                    "commit in the delivery repository; human intervention "
-                    "is required"
+                    f"review verdict points to unknown object "
+                    f"{work.verdict['head']} on attempt {unknown_round}; the "
+                    "verdict head is not a commit in the delivery "
+                    "repository; human intervention is required"
                 )
             raise ValueError(
-                f"review verdict points to unknown object {verdict['head']} "
+                f"review verdict points to unknown object "
+                f"{work.verdict['head']} "
                 f"(unknown-head attempt {unknown_round}/3); retrying review"
             )
         raise ValueError(
-            f"review verdict head {verdict['head']} does not match the "
+            f"review verdict head {work.verdict['head']} does not match the "
             f"PR head {refrozen['head_oid']}; the merge gate only merges "
             "the head the verdict covers"
         )
     if refrozen["head_oid"] != pr["head_oid"]:
-        # The advanced head is verdict-covered (checked above), so it
-        # is this round's own review/fix output — an engine-pushed
-        # head (Issue #833): the merge record's external_commits must
-        # not count the session's own fixes as external commits.
+        # The advanced head is this round's own review/fix output.
         run_state.record_pushed_head(worktree, refrozen["head_oid"])
     if (not scene.get("external")
-            and not merge_only and not merge_only_from_record
+            and not work.merge_only and not work.merge_only_from_record
             and refrozen["head_oid"] != pr["head_oid"]):
-        # Issue #1626: a head pushed in this tick is never merged in this
-        # tick — its CI has not registered yet. Record the pass and defer;
-        # the next tick with green CI on that head merges without a session.
         run_state.record_reviewed(
-            worktree, refrozen["head_oid"], reviewed_body_sha256,
+            worktree, refrozen["head_oid"], work.reviewed_body_sha256,
         )
-        keep_review_record.append(True)
+        work.keep_review_record.append(True)
         event(
             "review_merge_deferred", pr=refrozen["number"], round=round,
             reason=(
@@ -1133,297 +1079,309 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
                 "its CI is not read in this tick"
             ),
         )
-        return False
-    if scene.get("external"):
-        # D2 (Issue #842): an external contribution's clean verdict is
-        # the engine's FINAL output — the PR is NEVER auto-merged and
-        # no Milestone is ever written. The review conclusion stays on
-        # the Issue and the ticket stops at `ai-blocked` (the human
-        # decision point): code quality is the engine's judgment, but
-        # accepting the contribution and picking its version is the
-        # maintainer's.
-        state, rollup = pr_delivery_rollup(pr["url"], source_repo)
-        checks = ", ".join(check_summaries(rollup)) or "none"
-        bound = language.of(config)
-        body = (
-            f"{marker}\n"
-            + language.text(
-                bound, "review.external_pr_round", round=round,
-                pr_number=pr["number"], verdict=verdict["verdict"],
-                blockers=verdict["blockers"], majors=verdict["majors"],
-                minors=verdict["minors"], state=state, checks=checks,
-            ) + "\n"
-            + user_summary.summary_text(
-                status_url=config.status_url, issue=number, title=title,
-                language_code=bound,
-            ) + "\n"
-            + language.text(bound, "review.review_report_open")
-            + "````\n" + output.rstrip("\n") + "\n````\n\n</details>\n\n"
-            + language.text(
-                bound, "review.external_conclusion", run_id=config.run_id,
-            )
-        )
-        post_blocked_comment(
-            number, repo=source_repo, body=body,
-            current_labels=issue_labels(number, source_repo),
-            language_code=bound, ready_label=ready_label,
-        )
-        event(
-            "external_takeover_triage", pr=pr["number"], round=round,
-            verdict=verdict["verdict"],
-        )
-        return False
-    def handle_gate_failure(message: str, *, ci_failure: bool,
-                            absorb_abandoned: bool = False) -> None:
-        # Issue #877: the machine-checked absorb violation rides the same
-        # counted round comment, so the next session and the human both see
-        # that the round neither merged the base nor reported the
-        # abandonment — the gate now names the silent abandon instead of
-        # showing only the final behind/conflict state.
-        violation = ""
-        if absorb_abandoned:
-            violation = (
-                language.text(
-                    language.of(config), "review.absorb_violation",
-                    base_branch=base_branch,
-                )
-            )
-        next_base_advance_round = base_advance_rounds + (0 if ci_failure else 1)
-        base_advance_exhausted = (
-            not ci_failure and next_base_advance_round > MAX_BASE_ADVANCE_ROUNDS
-        )
-        if ci_failure:
-            gate_messages = [
-                language.text(
-                    language.of(config), "review.gate_ci_blocked",
-                    message=message, run_id=config.run_id,
-                ),
-                language.text(
-                    language.of(config), "review.gate_next_step",
-                    base_branch=base_branch,
-                ),
-            ]
-        else:
-            gate_messages = [
-                language.text(
-                    language.of(config), "review.gate_blocked",
-                    message=message, run_id=config.run_id,
-                ),
-                (language.text(
-                    language.of(config), "review.gate_exhausted",
-                ) if base_advance_exhausted else language.text(
-                    language.of(config), "review.gate_next_step",
-                    base_branch=base_branch,
-                )),
-            ]
-        if violation:
-            gate_messages.append(violation.strip())
-        body = review_round_comment_body(
-            marker, round, pr["number"], 0, 0, [],
-            _round_scene_block(
-                scene, pr["url"],
-                round if ci_failure else int(scene["review_round"]),
-                base_advance_round=(
-                    scene.get("base_advance_round", 0)
-                    if ci_failure else min(
-                        next_base_advance_round, MAX_BASE_ADVANCE_ROUNDS,
-                    )
-                ),
-                verdict_head_unknown_round=0,
-            ),
-            messages=gate_messages, repo=source_repo,
-            heading=(None if ci_failure else language.text(
-                language.of(config), "review.base_advance_heading",
-                round=next_base_advance_round, pr_number=pr["number"],
-            )),
-            # A base-advance retry reuses the SAME round scene: it is a
-            # review failure, not a completed round, so it must not
-            # consume a round record (Issue #1659).
-            kind=(COMMENT_KIND_REVIEW_ROUND if ci_failure
-                  else COMMENT_KIND_FAILURE),
-            language_code=language.of(config), status_url=config.status_url,
-            issue=number, title=title,
-        )
-        # CI evidence is best-effort observability.  A GitHub comment
-        # outage must not prevent the required ai-fix-needed transition.
-        try:
-            comment_issue(number, repo=source_repo, body=body)
-            failure_report.comment_pr(pr["number"], repo=source_repo, body=body)
-        except Exception:
-            LOGGER.exception(
-                "delivery_ci_evidence_publish_failed pr=%s run_id=%s",
-                pr["number"], config.run_id,
-            )
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_FIX_NEEDED,
-            current_labels=issue_labels(number, source_repo),
-        )
-        if base_advance_exhausted:
-            event(
-                "base_advance_rounds_exhausted", level=logging.ERROR,
-                issue=number, rounds=next_base_advance_round,
-                terminal="expected_human_decision",
-            )
-            raise UnrecoverableDeliveryError(
-                "base-advance retry loop exhausted after "
-                f"{MAX_BASE_ADVANCE_ROUNDS} base advances; the bounded loop "
-                "is a human decision, so the AI cannot safely continue this PR"
-            )
+        return True
+    return False
 
-    # Issue #1626: record the pass before the gate, so the gate's own base
-    # absorb can point the record at the pushed head and defer.
-    if not merge_only and not merge_only_from_record:
-        run_state.record_reviewed(
-            worktree, refrozen["head_oid"], reviewed_body_sha256,
+
+def _round_external_phase(work: _Round) -> bool:
+    """Stop an external contribution's clean verdict at the triage point.
+
+    D2 (Issue #842): an external contribution's clean verdict is the
+    engine's FINAL output — the PR is NEVER auto-merged and no Milestone is
+    ever written. The review conclusion stays on the Issue and the ticket
+    stops at ai-blocked: quality is the engine's judgment, but accepting
+    the contribution and picking its version is the maintainer's.
+    """
+    if not work.scene.get("external"):
+        return False
+    config, pr = work.config, work.pr
+    number, source_repo = work.number, work.source_repo
+    round = work.round
+    state, rollup = pr_delivery_rollup(pr["url"], source_repo)
+    checks = ", ".join(check_summaries(rollup)) or "none"
+    bound = language.of(config)
+    body = (
+        f"{work.marker}\n"
+        + language.text(
+            bound, "review.external_pr_round", round=round,
+            pr_number=pr["number"], verdict=work.verdict["verdict"],
+            blockers=work.verdict["blockers"],
+            majors=work.verdict["majors"],
+            minors=work.verdict["minors"], state=state, checks=checks,
+        ) + "\n"
+        + user_summary.summary_text(
+            status_url=config.status_url, issue=number, title=work.title,
+            language_code=bound,
+        ) + "\n"
+        + language.text(bound, "review.review_report_open")
+        # A merge-only resume ran no session, so it has no report to quote.
+        + "````\n" + work.session_output.rstrip("\n")
+        + "\n````\n\n</details>\n\n"
+        + language.text(
+            bound, "review.external_conclusion", run_id=config.run_id,
         )
-    # The Runner has entered the merge gate's CI-check action on the
-    # reviewed head: the one live comment reports that stage before the
-    # gate waits for CI and merges (Issue #1657). Best effort like every
-    # progress update - a publication failure cannot affect the merge.
-    publish(action=lambda: round_update(
+    )
+    post_blocked_comment(
+        number, repo=source_repo, body=body,
+        current_labels=issue_labels(number, source_repo),
+        language_code=bound, ready_label=work.ready_label,
+    )
+    event(
+        "external_takeover_triage", pr=pr["number"], round=round,
+        verdict=work.verdict["verdict"],
+    )
+    return True
+
+
+def _round_gate_failure_phase(work: _Round, message: str, *,
+                              ci_failure: bool,
+                              absorb_abandoned: bool = False) -> None:
+    """Hand a gate failure to the next review session (ai-fix-needed).
+
+    The counted round comment names the failure — the CI block for a red
+    check, the base-advance block for a behind/conflicting head — the Issue
+    moves to ai-fix-needed, and the base-advance budget is spent one round
+    at a time (a base-advance retry reuses the SAME scene, Issue #1659). An
+    absorb violation rides the same comment (Issue #877), and an exhausted
+    budget is a human decision that fails fast. CI evidence is best-effort.
+    """
+    config, pr, marker = work.config, work.pr, work.marker
+    number, source_repo = work.number, work.source_repo
+    round = work.round
+    bound = language.of(config)
+    violation = ""
+    if absorb_abandoned:
+        violation = language.text(
+            bound, "review.absorb_violation",
+            base_branch=work.base_branch,
+        )
+    next_base_advance_round = work.base_advance_rounds + (
+        0 if ci_failure else 1
+    )
+    base_advance_exhausted = (
+        not ci_failure
+        and next_base_advance_round > MAX_BASE_ADVANCE_ROUNDS
+    )
+    if ci_failure:
+        gate_messages = [
+            language.text(
+                bound, "review.gate_ci_blocked",
+                message=message, run_id=config.run_id,
+            ),
+            language.text(
+                bound, "review.gate_next_step",
+                base_branch=work.base_branch,
+            ),
+        ]
+    else:
+        gate_messages = [
+            language.text(
+                bound, "review.gate_blocked",
+                message=message, run_id=config.run_id,
+            ),
+            (language.text(bound, "review.gate_exhausted",
+                           ) if base_advance_exhausted else language.text(
+                               bound, "review.gate_next_step",
+                               base_branch=work.base_branch,
+                           )),
+        ]
+    if violation:
+        gate_messages.append(violation.strip())
+    body = review_round_comment_body(
+        marker, round, pr["number"], 0, 0, [],
+        _round_scene_block(
+            work.scene, pr["url"],
+            round if ci_failure else int(work.scene["review_round"]),
+            base_advance_round=(
+                work.scene.get("base_advance_round", 0)
+                if ci_failure else min(
+                    next_base_advance_round, MAX_BASE_ADVANCE_ROUNDS,
+                )
+            ),
+            verdict_head_unknown_round=0,
+        ),
+        messages=gate_messages, repo=source_repo,
+        heading=(None if ci_failure else language.text(
+            bound, "review.base_advance_heading",
+            round=next_base_advance_round, pr_number=pr["number"],
+        )),
+        kind=(COMMENT_KIND_REVIEW_ROUND if ci_failure
+              else COMMENT_KIND_FAILURE),
+        language_code=bound, status_url=config.status_url,
+        issue=number, title=work.title,
+    )
+    try:
+        comment_issue(number, repo=source_repo, body=body)
+        failure_report.comment_pr(pr["number"], repo=source_repo, body=body)
+    except Exception:
+        LOGGER.exception(
+            "delivery_ci_evidence_publish_failed pr=%s run_id=%s",
+            pr["number"], config.run_id,
+        )
+    apply_label_patch(
+        number, repo=source_repo, event=EVENT_FIX_NEEDED,
+        current_labels=issue_labels(number, source_repo),
+    )
+    if not base_advance_exhausted:
+        return
+    event(
+        "base_advance_rounds_exhausted", level=logging.ERROR, issue=number,
+        rounds=next_base_advance_round, terminal="expected_human_decision",
+    )
+    raise UnrecoverableDeliveryError(
+        "base-advance retry loop exhausted after "
+        f"{MAX_BASE_ADVANCE_ROUNDS} base advances; the bounded loop "
+        "is a human decision, so the AI cannot safely continue this PR"
+    )
+
+
+def _round_merge_phase(work: _Round) -> dict | None:
+    """Run the merge gate; the merged PR record, or None when it stops.
+
+    The pass is recorded before the gate, so the gate's own base absorb can
+    point the record at the pushed head and defer (Issue #1626). A policy
+    blocker is a resumable handoff, a pending check or UNKNOWN mergeability
+    is an intermediate state that writes nothing, an ai-blocked label stops
+    the merge, and a recoverable failure hands over the next session.
+    """
+    worktree = work.worktree
+    config, pr = work.config, work.pr
+    number, source_repo = work.number, work.source_repo
+    round = work.round
+    refrozen = work.refrozen
+    if not work.merge_only and not work.merge_only_from_record:
+        run_state.record_reviewed(
+            worktree, refrozen["head_oid"], work.reviewed_body_sha256,
+        )
+    work.publish(action=lambda: work.round_update(
         pr["url"], round, step="checks",
     ))
     try:
-        merged = merge_gate(
+        return merge_gate(
             worktree,
             {**refrozen, "_source_repo": source_repo},
-            base_branch, repo_dir=config.repo_dir,
+            work.base_branch, repo_dir=config.repo_dir,
             issue_number=number, run_id=config.run_id,
             language_code=language.of(config),
         )
     except MergeHandoffRequired as exc:
-        # A known policy blocker is a successful, resumable handoff.
-        return handle_merge_handoff(
-            number=number, repo=source_repo, pr_number=refrozen["number"],
-            head=refrozen["head_oid"], preflight=exc.preflight, marker=marker,
-            language_code=language.of(config), ready_label=ready_label,
-            status_url=config.status_url, title=title,
+        handle_merge_handoff(
+            number=number, repo=source_repo,
+            pr_number=refrozen["number"], head=refrozen["head_oid"],
+            preflight=exc.preflight, marker=work.marker,
+            language_code=language.of(config), ready_label=work.ready_label,
+            status_url=config.status_url, title=work.title,
         )
+        return None
     except DeliveryDeferred as exc:
-        # A pending check or an UNKNOWN mergeability on the
-        # reviewed head is an intermediate state, not a failure — the
-        # next tick re-reads it. No comment, no label change, no round
-        # consumed: the scene's counter only advances on round comments.
+        # An intermediate state, not a failure: the next tick re-reads it.
         event(
-            "review_merge_deferred", pr=refrozen["number"], round=round,
-            reason=str(exc),
+            "review_merge_deferred", pr=refrozen["number"],
+            round=round, reason=str(exc),
         )
-        keep_review_record.append(True)
-        return False
+        work.keep_review_record.append(True)
+        return None
     except MergeBlockedByIssueLabel as exc:
-        # Issue #1504: a maintainer labelled the source Issue `ai-blocked`
-        # while the PR was in review. The gate already posted the skip
-        # comment; the labels stay as the human set them and the PR stays
-        # open (no `ai-merged`, no `ai-fix-needed`). The Issue is terminal
-        # for the engine, so no next tick re-claims it.
+        # Issue #1504: a maintainer labelled the Issue ai-blocked during
+        # review; the gate posted the skip comment and the PR stays open.
         event(
             "review_merge_skipped_issue_blocked",
             pr=refrozen["number"], round=round, reason=str(exc),
         )
-        return False
+        return None
     except RecoverableMergeGateError as exc:
-        # Issue #877 machine check: an armed round whose verdict was `pass`
-        # and whose head STILL lacks the latest base (re-read against the
-        # gate's fresh fetch) neither absorbed nor reported findings — log
-        # the structured fact and name the violation in the round comment.
         absorb_abandoned = False
-        if absorb_required:
+        if work.absorb_required:
             try:
                 absorb_abandoned = not is_ancestor(
-                    f"origin/{base_branch}", refrozen["head_oid"], cwd=worktree,
+                    f"origin/{work.base_branch}", refrozen["head_oid"],
+                    cwd=worktree,
                 )
             except subprocess.CalledProcessError:
                 absorb_abandoned = False
         if absorb_abandoned:
             event(
                 "review_absorb_abandoned", level=logging.ERROR,
-                pr=pr["number"], round=round, head=refrozen["head_oid"],
-                base_branch=base_branch,
+                pr=pr["number"], round=round,
+                head=refrozen["head_oid"], base_branch=work.base_branch,
             )
-        handle_gate_failure(str(exc), ci_failure=False,
-                            absorb_abandoned=absorb_abandoned)
-        return False
+        _round_gate_failure_phase(
+            work, str(exc), ci_failure=False,
+            absorb_abandoned=absorb_abandoned,
+        )
+        return None
     except GateCIFailure as exc:
-        # Issue #906: the recoverable CI failure is identified by TYPE,
-        # never by matching text inside the message — rewording a gate
-        # message cannot change which recovery path runs. `GateCIFailure`
-        # is a sibling of `PreExistingCIFailure` and
-        # `RecoverableMergeGateError`, so an already-red main and a
-        # behind-base/conflict head propagate untouched and fail fast.
-        handle_gate_failure(str(exc), ci_failure=True)
-        return False
-    # Issue #1802: use the gate's confirmation; a success reads it here.
+        # Issue #906: the exception TYPE decides, never the message text.
+        _round_gate_failure_phase(work, str(exc), ci_failure=True)
+        return None
+
+
+def _round_closeout_phase(work: _Round, merged: dict) -> None:
+    """Close a landed merge: record, labels, receipt, checkout sync.
+
+    Issue #1802: the gate's confirmation wins; a success confirms the merge
+    itself. The counts degrade to unknown instead of failing a landed merge
+    (Issue #833), the labels land before the deployment checkout is touched
+    (a checkout that cannot fast-forward is runner ops), a landed-but-
+    unmerged PR closes its Issue (Issue #1801), and the sync is skipped for
+    a locked engine channel or a split layout (Issue #535).
+    """
+    config = work.config
+    number, source_repo = work.number, work.source_repo
+    round = work.round
     confirmed = merged.get("confirmation") or confirm_merged(
-        worktree, merged, base_branch, repo_dir=config.repo_dir,
+        work.worktree, merged, work.base_branch, repo_dir=config.repo_dir,
     )
-    # The merged-as-is fact (Issue #833): every count failure degrades
-    # to `unknown` inside merge_commit_metrics — a landed merge is
-    # never re-failed by its own record.
     external_commits, pr_commits = merge_commit_metrics(
-        worktree, confirmed["merge_commit"], read_pushed_head(worktree),
-        read_pushed_base(worktree),
+        work.worktree, confirmed["merge_commit"],
+        read_pushed_head(work.worktree), read_pushed_base(work.worktree),
         merge_method=merged.get("merge_method", "--merge"),
     )
-    # The merged publishing is bypass — the GitHub merge already landed; a
-    # 404 here must not stop `ai-merged` and the merged record below.
-    publish(
-        action=lambda: publisher.milestone(
+    work.publish(
+        action=lambda: work.publisher.milestone(
             f"merged: {merged['url']} "
             f"(merge_commit={confirmed['merge_commit']} "
-            f"review_rounds={round} "
+            f"rounds={round} "
             f"external_commits={external_commits} "
             f"commits={pr_commits})"
         ),
     )
-    publish(action=lambda: round_update(
-        merged["url"], round, step="merge", review=review_summary,
+    work.publish(action=lambda: work.round_update(
+        merged["url"], round, step="merge", review=work.review_summary,
         outcome=language.text(
             language.of(config), "review.delivered_outcome",
             pr_url=merged["url"],
             merge_commit=confirmed["merge_commit"], round=round,
         ),
     ))
-    # The GitHub merge already landed. Read the labels after it (a resumed
-    # fix round may carry `ai-in-progress` and `ai-fix-needed`), record
-    # `ai-merged` — clearing every state label present — before touching the
-    # systemd checkout: a checkout that cannot fast-forward is runner ops.
     apply_label_patch(
         number, repo=source_repo, event=EVENT_MERGED,
         current_labels=issue_labels(number, source_repo),
-        ready_label=ready_label,
+        ready_label=work.ready_label,
     )
-    # Issue #1825: the merged outcome also edits the paused delivery's ONE
-    # base-branch-red comment in place (to `merged`).
     base_ci_red.post_merged(
         number, source_repo, merged_pr_comment_body(
-            config.run_id, merged["url"], confirmed["merge_commit"], round,
-            external_commits, pr_commits, base_branch, review_summary,
+            config.run_id, merged["url"], confirmed["merge_commit"],
+            round, external_commits, pr_commits, work.base_branch,
+            work.review_summary,
             language_code=language.of(config), status_url=config.status_url,
-            issue=number, title=title,
+            issue=number, title=work.title,
         ),
         language_code=language.of(config))
-
     if confirmed["state"] != "MERGED":  # Issue #1801: nothing else closes it
         run_state.close_issue_after_landed_merge(
-            number, repo=source_repo, merge_commit=confirmed["merge_commit"])
+            number, repo=source_repo,
+            merge_commit=confirmed["merge_commit"])
     try:
-        # A config built by config_domain.load_config always carries both paths (the
-        # deploy home defaults to the repo dir). A split layout does not
-        # use the delivery checkout for the next tick; same-checkout
-        # configs retain the existing engine-channel guard below.
         if (
-            # ``Path(".")`` is the placeholder on hand-built partial
-            # configs; only config_domain.load_config's resolved path represents an
-            # explicitly configured split deployment.
+            # Path(".") is the placeholder on hand-built partial configs;
+            # only load_config's resolved path is a split deployment.
             config.deploy_home != Path(".")
             and config.repo_dir != config.deploy_home
         ):
-            # The delivery checkout is not the engine source in a split
-            # deployment layout. The next tick loads code from deploy_home,
-            # so syncing this delivery checkout has no runtime effect.
             event(
                 "base_checkout_sync_skipped", repo_dir=config.repo_dir,
-                base_branch=base_branch,
+                base_branch=work.base_branch,
                 reason="repo_dir_is_not_deploy_home",
             )
         elif (
@@ -1432,24 +1390,63 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
             and config.repo_dir == config.deploy_home
             and config.engine_source_track != "main"
         ):
-            # The delivery checkout IS the engine source in
-            # the dogfood layout, and the engine channel is locked (or
-            # tracks a non-main branch) — fast-forwarding it to
-            # origin/<base_branch> would break the lock. The next tick's
-            # ExecStartPre engine sync owns this checkout instead.
+            # Fast-forwarding a locked engine checkout would break the
+            # lock; the next tick's ExecStartPre engine sync owns it.
             event(
                 "base_checkout_sync_skipped", repo_dir=config.repo_dir,
                 engine_source_track=config.engine_source_track,
-                base_branch=base_branch,
+                base_branch=work.base_branch,
             )
         else:
-            sync_base_checkout(config.repo_dir, base_branch)
+            sync_base_checkout(config.repo_dir, work.base_branch)
     except RuntimeError:
         LOGGER.exception(
             "base_checkout_sync_failed after merge pr=%s repo_dir=%s; "
             "the delivery already landed on origin/%s",
-            merged["url"], config.repo_dir, base_branch,
+            merged["url"], config.repo_dir, work.base_branch,
         )
+
+
+def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
+                            config: config_domain.RunnerConfig, source_repo: str,
+                            number: int, title: str, priority: str,
+                            *, scene: dict,
+                            previous_comments: list[dict] | None = None,
+                            merge_only: bool = False,
+                            checks: list | None = None,
+                            review_record: tuple[str, str] | None = None,
+                            issue_body_sha256: str | None = None,
+                            keep_review_record: list[bool]) -> bool:
+    """Run one independent review round; merge when the verdict is clean.
+
+    The delivery step calls this while the PR is open and the Issue awaits
+    review (ai-pr-opened) or the next review session (ai-fix-needed). The
+    phases run in one fixed order, each owning one decision: the preflight
+    (budget, PR freeze, absorb arm, push adoption), the verdict and its
+    decision, the verdict/head binding, the external-takeover stop, the
+    merge gate with its handoffs (or the gate-failure handoff), and the
+    merged closeout. True only when the PR merged; every other stop returns
+    False, and a failure raises the exception type its phase documents.
+    """
+    work = _Round(
+        worktree=worktree, branch=branch, base_branch=base_branch,
+        config=config, source_repo=source_repo, number=number, title=title,
+        priority=priority, scene=scene, previous_comments=previous_comments,
+        merge_only=merge_only, checks=checks, review_record=review_record,
+        issue_body_sha256=issue_body_sha256,
+        keep_review_record=keep_review_record,
+    )
+    _round_preflight_phase(work)
+    if _round_verdict_phase(work):
+        return False
+    if _round_refreeze_phase(work):
+        return False
+    if _round_external_phase(work):
+        return False
+    merged = _round_merge_phase(work)
+    if merged is None:
+        return False
+    _round_closeout_phase(work, merged)
     return True
 
 
