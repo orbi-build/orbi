@@ -212,6 +212,13 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     # is open in these scenes.
                     if command[-1] == "state":
                         return json.dumps({"state": "OPEN"})
+                    if command[-1] == "comments":
+                        # The thin-ticket gate's stop history (Issue
+                        # #1904): the real call returns the Issue's
+                        # comments oldest first.
+                        return json.dumps({"comments": [
+                            {"body": body} for body in comments
+                        ]})
                     tracked = (labels or {}).get(int(command[3]), [])
                     return json.dumps({"labels": [
                         {"name": label} for label in tracked

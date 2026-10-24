@@ -26,6 +26,10 @@ from orbi import delivery_labels
 import orbi.runner as runner
 from seam import seam
 
+from tests.fakes.clarify import (
+    FakeGate, fix_run_id, record_label_notifications, stub_stop_history,
+)
+
 from tests.test_run_id_e2e import (
     ISSUE_NUMBER,
     PR_URL,
@@ -367,6 +371,7 @@ def test_enforce_removes_the_repositorys_dispatch_label(monkeypatch, caplog):
     verdict = clarify.ClarifyVerdict(
         passed=False, missing=("observable_result", "single_outcome"),
     )
+    stub_stop_history(monkeypatch, [])
     monkeypatch.setattr(seam, "judge_issue_body", lambda *a, **k: verdict)
     comments, edits = _record_writes(monkeypatch)
     caplog.set_level("INFO")
@@ -415,6 +420,7 @@ def test_enforce_fails_open_when_a_write_fails(
     verdict = clarify.ClarifyVerdict(
         passed=False, missing=("observable_result",),
     )
+    stub_stop_history(monkeypatch, [])
     monkeypatch.setattr(seam, "judge_issue_body", lambda *a, **k: verdict)
     comments, edits = _record_writes(monkeypatch)
 
@@ -432,6 +438,150 @@ def test_enforce_fails_open_when_a_write_fails(
         assert edits == []
     else:
         assert len(comments) == 1
+
+
+# --- Issue #1904: one stop per unchanged ticket text ----------------------
+
+def _stop_comment(issue: dict, run_id: str = "deadbeef") -> str:
+    """The stop comment a previous claim left on the Issue."""
+    return (
+        f"<!-- orbi:run={run_id} -->\n"
+        f"{clarify.stop_marker(issue)}\n"
+        "Orbi: this ticket is not ready to deliver."
+    )
+
+
+def test_render_comment_carries_the_judged_text_digest():
+    """The stop comment records WHICH text it judged (Issue #1904)."""
+    body = clarify.render_comment(
+        ISSUE,
+        clarify.ClarifyVerdict(
+            passed=False, missing=("single_outcome",),
+        ),
+        RUN_ID, language_code="en",
+    )
+    assert clarify.stop_marker(ISSUE) in body
+    # The run marker stays first: the progress contract keys on it.
+    assert body.index(f"<!-- orbi:run={RUN_ID} -->") < body.index(
+        clarify.stop_marker(ISSUE)
+    )
+
+
+def test_enforce_does_not_rejudge_an_unchanged_stopped_ticket(
+    monkeypatch, caplog,
+):
+    """Acceptance: no model call, no comment, no notification."""
+    gate = FakeGate(
+        monkeypatch, history=[{"body": _stop_comment(ISSUE)}],
+    )
+    caplog.set_level("INFO")
+
+    assert clarify.enforce(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is False
+    assert gate.judged == []
+    assert gate.comments == []
+    assert gate.notified == []
+    # The stop labels are re-applied so the ticket leaves the claim queue.
+    assert gate.edits == [(
+        ISSUE["number"], REPO,
+        delivery_labels.NEEDS_DETAIL_LABEL, delivery_labels.READY_LABEL,
+    )]
+    assert "clarify_already_stopped" in caplog.text
+    assert "clarify_needs_detail" not in caplog.text
+
+
+def test_enforce_judges_again_after_the_body_changes(monkeypatch):
+    """Acceptance: an edited body is judged again and gets its new stop."""
+    stopped = dict(ISSUE, body="Make it better somehow.")
+    verdict = clarify.ClarifyVerdict(
+        passed=False, missing=("observable_result",),
+    )
+    gate = FakeGate(
+        monkeypatch, history=[{"body": _stop_comment(stopped)}],
+        verdict=verdict,
+    )
+
+    assert clarify.enforce(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is False
+    assert len(gate.judged) == 1
+    assert len(gate.comments) == 1
+    assert clarify.stop_marker(ISSUE) in gate.comments[0][2]
+    assert gate.edits == [(
+        ISSUE["number"], REPO,
+        delivery_labels.NEEDS_DETAIL_LABEL, delivery_labels.READY_LABEL,
+    )]
+
+
+def test_enforce_judges_a_ticket_never_stopped(monkeypatch):
+    """Acceptance: a ticket without a stop comment behaves as today."""
+    gate = FakeGate(
+        monkeypatch,
+        # Malformed history entries are data, never a crash.
+        history=[None, {}, {"body": None}, {"body": "a human comment"}],
+        verdict=clarify.ClarifyVerdict(passed=True, missing=()),
+    )
+
+    assert clarify.enforce(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is True
+    assert len(gate.judged) == 1
+    assert (gate.comments, gate.edits) == ([], [])
+
+
+def test_enforce_uses_the_newest_stop_comment(monkeypatch):
+    """A later stop of an edited body is the one the next claim compares."""
+    older = dict(ISSUE, body="first text")
+    gate = FakeGate(
+        monkeypatch,
+        history=[
+            {"body": _stop_comment(older, "aaaaaaaa")},
+            {"body": _stop_comment(ISSUE, "bbbbbbbb")},
+        ],
+    )
+
+    assert clarify.enforce(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is False
+    assert gate.judged == []
+
+
+def test_enforce_still_stops_when_reapplying_the_labels_fails(
+    monkeypatch, caplog,
+):
+    """A failed label write never turns an unchanged stop into delivery."""
+    gate = FakeGate(
+        monkeypatch, history=[{"body": _stop_comment(ISSUE)}],
+        edit_error=RuntimeError("gh write failed"),
+    )
+    caplog.set_level("INFO")
+
+    assert clarify.enforce(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is False
+    assert gate.judged == []
+    assert gate.comments == []
+    assert "clarify_already_stopped" in caplog.text
+    assert "reason=RuntimeError" in caplog.text
+
+
+def test_enforce_fails_open_when_the_stop_history_is_unreadable(
+    monkeypatch, caplog,
+):
+    """A broken history read keeps today's fail-open behavior."""
+    gate = FakeGate(
+        monkeypatch, history_error=RuntimeError("gh read failed"),
+        verdict=clarify.ClarifyVerdict(passed=True, missing=()),
+    )
+    caplog.set_level("INFO")
+
+    assert clarify.enforce(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is True
+    assert len(gate.judged) == 1
+    assert "clarify_check_skipped" in caplog.text
+    assert "reason=RuntimeError" in caplog.text
 
 
 # --- the Issue #1831 ticket texts -----------------------------------------
@@ -457,6 +607,7 @@ def test_expected_ticket_outcome_takes_the_documented_path(case, monkeypatch):
     verdict = clarify.ClarifyVerdict(
         passed=not case.expected_missing, missing=case.expected_missing,
     )
+    stub_stop_history(monkeypatch, [])
     monkeypatch.setattr(seam, "judge_issue_body", lambda *a, **k: verdict)
     comments, edits = _record_writes(monkeypatch)
 
@@ -575,3 +726,138 @@ def test_model_error_lets_the_ticket_through(
     assert result.url == PR_URL
     assert delivery_labels.NEEDS_DETAIL_LABEL not in labels[ISSUE_NUMBER]
     assert "clarify_check_skipped" in caplog.text
+
+
+# --- Issue #1904: the real runner does not repeat an unchanged stop -------
+
+def _pi_that_must_not_run(marker: Path) -> str:
+    """A fake Pi that records any invocation and fails the run."""
+    return (
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        f"pathlib.Path({str(marker)!r}).write_text('invoked')\n"
+        "sys.exit(1)\n"
+    )
+
+
+def test_unchanged_ticket_re_labelled_ready_is_not_judged_again(
+    clone, tmp_path, monkeypatch, caplog,
+):
+    """Acceptance #1/#2: one stop per text, the queue keeps moving.
+
+    The repository automation re-adds `ai-ready` without editing the
+    body. The next claim must make no model call, post no comment and
+    send no notification, and must re-apply the stop labels so the
+    ticket leaves the `label:ai-ready` scan and never starves the other
+    ready tickets.
+    """
+    fix_run_id(monkeypatch, RUN_ID)
+    install_fake_pi(monkeypatch, tmp_path, fake_pi_thin(["single_outcome"]))
+    comments: list[str] = []
+    labels = {ISSUE_NUMBER: [delivery_labels.READY_LABEL]}
+    install_fake_gh(monkeypatch, comments, labels)
+    notified = record_label_notifications(monkeypatch)
+    config = gate_config(clone, tmp_path)
+    caplog.set_level("INFO")
+
+    assert runner.process_issue(THIN_ISSUE, config, REPO) == (
+        runner.IssueResult("needs-detail", None)
+    )
+    assert len(comments) == 1
+    assert clarify.stop_marker(THIN_ISSUE) in comments[0]
+    assert len(notified) == 1
+
+    # The repository automation re-adds the claim label, body untouched.
+    labels[ISSUE_NUMBER].append(delivery_labels.READY_LABEL)
+    calls = tmp_path / "pi-invoked"
+    install_fake_pi(monkeypatch, tmp_path, _pi_that_must_not_run(calls))
+    caplog.clear()
+
+    assert runner.process_issue(THIN_ISSUE, config, REPO) == (
+        runner.IssueResult("needs-detail", None)
+    )
+    # NO model call, NO second comment, NO second notification.
+    assert not calls.exists()
+    assert len(comments) == 1
+    assert len(notified) == 1
+    # The ticket is stopped again, so the ai-ready scan no longer sees it
+    # and the other ready tickets stay claimable.
+    assert labels[ISSUE_NUMBER] == [delivery_labels.NEEDS_DETAIL_LABEL]
+    assert not delivery_labels.is_pickup_eligible(labels[ISSUE_NUMBER])
+    assert "clarify_already_stopped" in caplog.text
+    assert "clarify_needs_detail" not in caplog.text
+    assert not worktree_for(clone, RUN_ID).exists()
+
+
+def test_edited_failing_ticket_is_judged_again_and_gets_a_new_comment(
+    clone, tmp_path, monkeypatch,
+):
+    """Acceptance #3 (failing path): an edit re-runs the judgment."""
+    fix_run_id(monkeypatch, RUN_ID)
+    install_fake_pi(monkeypatch, tmp_path, fake_pi_thin(["single_outcome"]))
+    comments: list[str] = []
+    labels = {ISSUE_NUMBER: [delivery_labels.READY_LABEL]}
+    install_fake_gh(monkeypatch, comments, labels)
+    config = gate_config(clone, tmp_path)
+
+    assert runner.process_issue(THIN_ISSUE, config, REPO) == (
+        runner.IssueResult("needs-detail", None)
+    )
+    assert len(comments) == 1
+
+    edited = dict(
+        THIN_ISSUE,
+        body=THIN_ISSUE["body"] + "\n\nAlso add CSV export.",
+        labels=[
+            {"name": delivery_labels.READY_LABEL},
+            {"name": delivery_labels.NEEDS_DETAIL_LABEL},
+        ],
+    )
+    labels[ISSUE_NUMBER].append(delivery_labels.READY_LABEL)
+
+    assert runner.process_issue(edited, config, REPO) == (
+        runner.IssueResult("needs-detail", None)
+    )
+    assert len(comments) == 2
+    assert clarify.stop_marker(edited) in comments[1]
+    assert comments[0] != comments[1]
+    assert labels[ISSUE_NUMBER] == [delivery_labels.NEEDS_DETAIL_LABEL]
+    assert not worktree_for(clone, RUN_ID).exists()
+
+
+def test_edited_passing_ticket_is_judged_again_and_delivered(
+    clone, tmp_path, monkeypatch,
+):
+    """Acceptance #3 (passing path): the repaired body is delivered."""
+    fix_run_id(monkeypatch, RUN_ID)
+    install_fake_pi(monkeypatch, tmp_path, fake_pi_thin(["single_outcome"]))
+    comments: list[str] = []
+    labels = {ISSUE_NUMBER: [delivery_labels.READY_LABEL]}
+    install_fake_gh(monkeypatch, comments, labels)
+    config = gate_config(clone, tmp_path)
+
+    assert runner.process_issue(THIN_ISSUE, config, REPO) == (
+        runner.IssueResult("needs-detail", None)
+    )
+    assert len(comments) == 1
+
+    edited = dict(
+        THIN_ISSUE,
+        body=(
+            "GET /health returns 500; it should return 200, verified by a "
+            "regression test."
+        ),
+        labels=[
+            {"name": delivery_labels.READY_LABEL},
+            {"name": delivery_labels.NEEDS_DETAIL_LABEL},
+        ],
+    )
+    labels[ISSUE_NUMBER].append(delivery_labels.READY_LABEL)
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI_PASSING_GATE)
+
+    result = runner.process_issue(edited, config, REPO)
+
+    assert result.url == PR_URL
+    assert worktree_for(clone, RUN_ID).is_dir()
+    assert delivery_labels.NEEDS_DETAIL_LABEL not in labels[ISSUE_NUMBER]
+    assert len(comments) > 1

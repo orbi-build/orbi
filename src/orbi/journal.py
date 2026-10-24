@@ -218,6 +218,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "foreign_pr_ignored": "a cross-repository PR was ignored in a branch lookup",
     "claim_yield": "the claim was yielded to a concurrent claimant",
     "clarify_needs_detail": "the thin-ticket gate stopped the claim: the missing pieces are on the Issue",
+    "clarify_already_stopped": "the thin-ticket gate saw an unchanged, already-stopped body: no model call, comment or notification",
     "clarify_check_skipped": "the thin-ticket gate could not decide or could not write (fail open)",
     "blocked_by": "an Issue was skipped: open blockedBy blockers",
     "blocked_by_check_failed": "the blockedBy query failed (fail open)",
