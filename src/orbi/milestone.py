@@ -24,7 +24,8 @@ from orbi.journal import (
     run_command, single_line,
 )
 from orbi.milestone_command import (
-    _land_active_milestone, rewrite_active_milestone_line,
+    MilestoneLookupError, _land_active_milestone, find_exact_milestone,
+    rewrite_active_milestone_line,
 )
 from orbi.progress import ProgressPublisher
 from orbi.repo_config import REPO_CONFIG_PATH, RepoPolicy
@@ -737,27 +738,20 @@ def advance_active_milestone_on_idle(
 ) -> tuple[str, str | None]:
     """Check and advance a configured milestone after no_ready_issue."""
     milestones = list_milestones(repo, timeout=30)
-    matches = [
-        milestone for milestone in milestones
-        if isinstance(milestone, dict)
-        and milestone.get("title") == active_milestone
-    ]
-    if not matches:
-        open_list = ", ".join(
-            f"{milestone.get('title')}({milestone.get('open_issues')})"
-            for milestone in milestones
-            if isinstance(milestone, dict) and milestone.get("state") == "open"
-        ) or "(none)"
-        raise RuntimeError(
-            f"active_milestone_missing current={active_milestone}; "
-            f"open milestones: {open_list}"
-        )
-    if len(matches) > 1:
+    try:
+        active = find_exact_milestone(milestones, active_milestone)
+    except MilestoneLookupError as exc:
+        # Issue #1890: the exact-title rule and its two failure reasons are
+        # the shared lookup's; only this path's structured line is local.
+        if exc.reason == "missing":
+            raise RuntimeError(
+                f"active_milestone_missing current={active_milestone}; "
+                f"open milestones: {exc.open_milestones}"
+            ) from None
         raise RuntimeError(
             f"active_milestone {active_milestone}: ambiguous exact-title "
             f"match in {repo}, refusing to guess"
-        )
-    active = matches[0]
+        ) from None
     state = str(active.get("state"))
     open_issues = _milestone_open_issue_count(active)
     if state == "open":
