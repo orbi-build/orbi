@@ -19,6 +19,7 @@ from unittest.mock import Mock
 import pytest
 import dataclasses
 
+import orbi.checks as checks
 import orbi.failure_report as failure_report
 import orbi.runner as runner
 import orbi.review_merge as review_merge
@@ -1002,14 +1003,16 @@ def test_merge_gate_rejects_failed_status_context(monkeypatch, tmp_path):
         )
 
 
-def test_classify_rollup_sorts_pending_and_failed_checks():
+def test_classify_checks_sorts_pending_failed_and_passed_checks():
     """Issue #788: one pure classifier serves the pre-review CI gate and
     the merge gate — a non-final status is pending, a completed check
     with a non-passing conclusion (or a legacy FAILURE/ERROR context)
     is failed. Issue #906: the classifier returns structured entries
     carrying name, status and conclusion — rendering is derived from the
-    data, never the source of it."""
-    pending, failed = runner._classify_rollup([
+    data, never the source of it. Issue #1889: the same function also
+    reports the passed checks and is the only classifier the merge and
+    release gates use."""
+    pending, failed, passed = checks.classify_checks([
         {"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
         {"name": "docs", "status": "COMPLETED", "conclusion": "neutral"},
         {"name": "deploy", "status": "COMPLETED", "conclusion": "skipped"},
@@ -1017,19 +1020,27 @@ def test_classify_rollup_sorts_pending_and_failed_checks():
         {"name": "lint", "status": "QUEUED", "conclusion": None},
         {"name": "e2e", "status": "COMPLETED", "conclusion": "FAILURE"},
         {"context": "status", "state": "ERROR"},
+        {"context": "legacy", "state": "SUCCESS"},
     ])
     assert pending == [
-        {"name": "build", "status": "IN_PROGRESS", "conclusion": ""},
-        {"name": "lint", "status": "QUEUED", "conclusion": ""},
+        {"name": "build", "status": "IN_PROGRESS", "conclusion": None},
+        {"name": "lint", "status": "QUEUED", "conclusion": None},
     ]
     assert failed == [
         {"name": "e2e", "status": "COMPLETED", "conclusion": "FAILURE"},
-        {"name": "status", "status": "ERROR", "conclusion": ""},
+        {"name": "status", "status": "ERROR", "conclusion": None},
+    ]
+    assert passed == [
+        {"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        {"name": "docs", "status": "COMPLETED", "conclusion": "neutral"},
+        {"name": "deploy", "status": "COMPLETED", "conclusion": "skipped"},
+        # A legacy status context reports its conclusion as `state`.
+        {"name": "legacy", "status": "SUCCESS", "conclusion": None},
     ]
 
 
-def test_classify_rollup_reads_a_missing_status_as_pending():
-    pending, failed = runner._classify_rollup([
+def test_classify_checks_reads_a_missing_status_as_pending():
+    pending, failed, _passed = checks.classify_checks([
         {"name": "ghost", "status": "", "conclusion": ""},
     ])
     assert pending == [
@@ -1038,15 +1049,62 @@ def test_classify_rollup_reads_a_missing_status_as_pending():
     assert failed == []
 
 
-def test_classify_rollup_keeps_apostrophe_names_intact():
+def test_classify_checks_keeps_apostrophe_names_intact():
     """Issue #906: the structured entry carries the check name verbatim —
     an apostrophe can never corrupt it (the old rendered-string round
     trip split on the apostrophe)."""
-    _pending, failed = runner._classify_rollup([
+    _pending, failed, _passed = checks.classify_checks([
         {"name": "Bob's lint", "status": "COMPLETED", "conclusion": "FAILURE"},
     ])
     assert failed == [
         {"name": "Bob's lint", "status": "COMPLETED", "conclusion": "FAILURE"},
+    ]
+
+
+def test_classify_checks_reads_both_github_shapes_identically():
+    """Issue #1889: the merge gate reads a PR status check rollup
+    (uppercase `COMPLETED`/`SUCCESS`/`NEUTRAL`/`SKIPPED`, a legacy
+    status context carrying `state`) and the release gate reads commit
+    check runs (lowercase `completed`/`success`). One classifier, so the
+    two gates cannot drift: the same checks in either casing land in the
+    same buckets, and the entry keeps the reported fields verbatim."""
+    rollup_shape = [
+        {"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        {"name": "docs", "status": "COMPLETED", "conclusion": "NEUTRAL"},
+        {"name": "deploy", "status": "COMPLETED", "conclusion": "SKIPPED"},
+        {"name": "build", "status": "IN_PROGRESS", "conclusion": None},
+        {"name": "lint", "status": "QUEUED", "conclusion": None},
+        {"name": "e2e", "status": "COMPLETED", "conclusion": "FAILURE"},
+        {"name": "regress", "status": "COMPLETED", "conclusion": "TIMED_OUT"},
+        {"context": "legacy", "state": "ERROR"},
+    ]
+    check_run_shape = [
+        {"name": "tests", "status": "completed", "conclusion": "success"},
+        {"name": "docs", "status": "completed", "conclusion": "neutral"},
+        {"name": "deploy", "status": "completed", "conclusion": "skipped"},
+        {"name": "build", "status": "in_progress", "conclusion": None},
+        {"name": "lint", "status": "queued", "conclusion": None},
+        {"name": "e2e", "status": "completed", "conclusion": "failure"},
+        {"name": "regress", "status": "completed", "conclusion": "timed_out"},
+        {"name": "legacy", "status": "error", "conclusion": None},
+    ]
+
+    def names(buckets):
+        return tuple(
+            tuple(entry["name"] for entry in bucket) for bucket in buckets
+        )
+
+    rollup_buckets = names(checks.classify_checks(rollup_shape))
+    assert rollup_buckets == names(checks.classify_checks(check_run_shape))
+    assert rollup_buckets == (
+        ("build", "lint"),
+        ("e2e", "regress", "legacy"),
+        ("tests", "docs", "deploy"),
+    )
+    # Presentation reads the reported fields, never the normalized form.
+    assert checks.classify_checks(check_run_shape)[0] == [
+        {"name": "build", "status": "in_progress", "conclusion": None},
+        {"name": "lint", "status": "queued", "conclusion": None},
     ]
 
 

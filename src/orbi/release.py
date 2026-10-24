@@ -23,7 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from orbi import failure, gh_response
+from orbi import checks, failure, gh_response
 from orbi.blocked_comment import post_blocked_comment
 from orbi.delivery_scene import RunContext
 from orbi.delivery_labels import (
@@ -706,7 +706,8 @@ def check_release_gates(repo: str, release_commit: str,
        `release_waiting_ci` journal line per poll, the wait reflected
        through `on_wait`), then decides on the final conclusions.
        Waiting past `ci_wait_seconds` fails with its own timeout
-       reason, explicitly distinct from a CI failure.
+       reason, explicitly distinct from a CI failure. The rule is
+       `checks.classify_checks` (Issue #1889), shared with the merge gate.
 
     Open PRs are deliberately NOT a gate: an open PR is queue state, never a release
     premise. The release contract is the milestone's closed-Issue scope
@@ -796,24 +797,26 @@ def check_release_gates(repo: str, release_commit: str,
     check_runs = fetch_check_runs()
     waited = 0.0
     while True:
-        pending = [
-            f"check '{check.get('name')}' is "
-            f"{check.get('status')}/{check.get('conclusion')}"
-            for check in check_runs if check.get("status") != "completed"
-        ]
+        # One pending/failed/passed rule for both GitHub shapes
+        # (Issue #1889), shared with the merge gate.
+        pending, failed, _passed = checks.classify_checks(check_runs)
         if repo_has_ci and not check_runs:
             # An empty list on a just-pushed commit in a CI
             # repository is "not registered yet", not "nothing to gate"
             # — wait for the first check within the same budget; a
             # timeout below fails with the wait-timeout reason.
-            pending = [
+            detail = (
                 "the first check run to register on the just-pushed "
                 f"commit {release_commit} (GitHub creates CheckRuns "
                 "seconds after the push)"
-            ]
-        if not pending:
+            )
+        elif pending:
+            detail = ", ".join(
+                f"check '{check['name']}' is {check['status']}/"
+                f"{check['conclusion']}" for check in pending
+            )
+        else:
             break
-        detail = ", ".join(pending)
         event(
             "release_waiting_ci", issue=release_number, commit=release_commit,
             pending=detail, waited=f"{int(waited)}s",
@@ -835,17 +838,13 @@ def check_release_gates(repo: str, release_commit: str,
         time.sleep(step)
         waited += step
         check_runs = fetch_check_runs()
-    for check in check_runs:
-        name = check.get("name")
-        status = check.get("status")
-        conclusion = check.get("conclusion")
-        if status != "completed" or conclusion not in (
-            "success", "neutral", "skipped",
-        ):
-            raise RuntimeError(
-                f"release gate: CI check '{name}' is {status}/{conclusion} "
-                f"on the release commit {release_commit}"
-            )
+    if failed:
+        check = failed[0]
+        raise RuntimeError(
+            f"release gate: CI check '{check['name']}' is "
+            f"{check['status']}/{check['conclusion']} "
+            f"on the release commit {release_commit}"
+        )
     if check_runs:
         evidence.append(
             f"CI on the release commit: {len(check_runs)} check(s) all "
