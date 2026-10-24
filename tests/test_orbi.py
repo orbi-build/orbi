@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 import dataclasses
 
+import orbi.pi_activity as pi_activity
 import orbi.runner as runner
 import orbi.cli as orbi
 import orbi.cli_commands as cli_commands
@@ -661,6 +662,24 @@ def test_find_session_file_returns_newest_jsonl_under_worktrees(tmp_path):
     old_time = old.stat().st_mtime
     os.utime(old, (old_time - 100, old_time - 100))
     assert session_command.find_session_file(tmp_path) == new
+
+
+def test_find_session_file_uses_the_shared_newest_rule(tmp_path):
+    """Issue #1854: every worktree `.pi-session` is resolved through the
+    one newest-`*.jsonl` helper, so the rule cannot drift."""
+    old = _write_session(tmp_path, name="old.jsonl", run="run1")
+    new = _write_session(tmp_path, name="new.jsonl", run="run2")
+    old_time = old.stat().st_mtime
+    os.utime(old, (old_time - 100, old_time - 100))
+    per_directory = [
+        pi_activity.latest_session_file(directory)
+        for directory in (tmp_path / ".worktrees").glob("*/.pi-session")
+    ]
+    assert per_directory
+    assert session_command.find_session_file(tmp_path) == new
+    assert session_command.find_session_file(tmp_path) == max(
+        per_directory, key=lambda path: path.stat().st_mtime,
+    )
 
 
 def test_find_session_file_ignores_non_jsonl_and_missing_dir(tmp_path):

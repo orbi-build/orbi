@@ -272,7 +272,14 @@ def worktree_attributions(repo_dir: Path, source_repo: str,
 
 
 def session_files(worktree: Path) -> list[Path]:
-    """Return the worktree's complete session JSONL files, name-ordered."""
+    """Return the worktree's complete session JSONL files, name-ordered.
+
+    Documented exception to the one session-file rule (Issue #1854): the
+    status view lists EVERY session file in a stable order to show the
+    run's sessions, so `pi_activity.latest_session_file` (the newest file
+    by mtime — the one the failure report, the live activity watcher and
+    `orbi session` pick) is not the answer here.
+    """
     directory = worktree / ".pi-session"
     if not directory.is_dir():
         return []

@@ -48,7 +48,7 @@ from orbi.github import (
     update_issue_comment,
 )
 from orbi.journal import LOGGER, event, issue_context, run_command
-from orbi.pi_activity import activity_snapshot
+from orbi.pi_activity import activity_snapshot, latest_session_file
 from orbi.pi_process import RateLimitExhaustedError
 from orbi.progress import (
     FAILURE_MARKER_PATTERN, RUN_MARKER_PATTERN, ProgressPublisher,
@@ -206,15 +206,16 @@ SESSION_SUMMARY_LIMIT = 20
 
 
 def _latest_session_file(worktree: Path | None) -> Path | None:
-    """The most recent pi session log in the worktree, or None."""
+    """The most recent pi session log in the worktree, or None.
+
+    Only the root is resolved here: the "newest `*.jsonl` by mtime" rule
+    is `pi_activity.latest_session_file`, the single implementation the
+    live activity watcher also uses, so the rule cannot drift (Issue
+    #1854).
+    """
     if worktree is None:
         return None
-    session_files = sorted(
-        (p for p in (worktree / ".pi-session").glob("*.jsonl")
-         if p.is_file()),
-        key=lambda p: p.stat().st_mtime,
-    )
-    return session_files[-1] if session_files else None
+    return latest_session_file(worktree / ".pi-session")
 
 
 def _session_summary(session_file: Path,
