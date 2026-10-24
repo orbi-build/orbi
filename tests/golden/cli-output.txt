@@ -52,8 +52,6 @@ options:
   -h, --help            show this help message and exit
   --config CONFIG
   --version             show program's version number and exit
-$ orbi --version
-orbi 0.7.15
 $ orbi add --help
 usage: python3 -m orbi.cli add [-h] [--config CONFIG] [--body BODY]
                                [--repo REPO]

@@ -1,14 +1,19 @@
-"""The CLI help/version surface is a golden contract (Issue #1862).
+"""The CLI help surface is a golden contract (Issue #1862).
 
 `orbi.cli` was split into `cli_parser` (the argparse tree),
 `cli_commands` (one handler per subcommand), `cli_status` (the status
 read/render layer) and `cli_doctor` (the doctor report) with no behavior
 change. This test pins the user-visible surface byte for byte: a real
-`python3 -m orbi.cli` run for `--help`, `--version` and every
-subcommand's `--help`. `tests/golden/cli-output.txt` was captured from
-the unmodified base commit (the tree before the move), so a reworded
-flag, a reordered option, a changed description or a changed exit code
-fails here.
+`python3 -m orbi.cli` run for `--help` and every subcommand's `--help`.
+`tests/golden/cli-output.txt` was captured from the unmodified base
+commit (the tree before the move), so a reworded flag, a reordered
+option, a changed description or a changed exit code fails here.
+
+`--version` is NOT part of the golden capture (Issue #1912): its output
+carries the package version, which every release bump changes through
+`pyproject.toml` and `orbi/__init__.py`, so a recorded copy turns a
+release into a red suite. The output format is asserted against the
+package version instead, in `test_version_reports_the_package_version`.
 
 The golden run pins `COLUMNS=80` so argparse's wrapping is deterministic
 outside a terminal (`shutil.get_terminal_size` fallback).
@@ -22,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from orbi import cli, cli_commands
+from orbi import __version__, cli, cli_commands
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GOLDEN = Path(__file__).resolve().parent / "golden" / "cli-output.txt"
@@ -72,6 +77,33 @@ def test_cli_output_is_byte_identical_to_the_golden_capture(
         f"`orbi {' '.join(argv)}` output changed:\n"
         f"--- expected ---\n{expected}\n--- actual ---\n{result.stdout}"
     )
+    assert result.stderr == ""
+
+
+VERSION_OUTPUT_LINE = re.compile(r"^orbi \d+\.\d+\.\d+$", re.MULTILINE)
+
+
+def test_the_golden_capture_records_no_package_version():
+    """Issue #1912: release metadata never enters the golden capture —
+    re-recording a `--version` case is what turned main red on the
+    v0.7.16 release commit."""
+    text = GOLDEN.read_text(encoding="utf-8")
+    assert not VERSION_OUTPUT_LINE.search(text), (
+        "the golden capture records an `orbi <version>` output line; "
+        "drop it and let test_version_reports_the_package_version pin it"
+    )
+
+
+def test_version_reports_the_package_version():
+    """Issue #1912: `--version` prints the package version, not a golden
+    string — a release bump changes it without failing any test, while a
+    changed output format still fails here."""
+    result = run_cli(("--version",))
+    assert result.returncode == 0, (
+        f"`orbi --version` failed rc={result.returncode}: "
+        f"{result.stderr.strip()}"
+    )
+    assert result.stdout == f"orbi {__version__}\n"
     assert result.stderr == ""
 
 
