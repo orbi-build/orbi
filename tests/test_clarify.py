@@ -21,7 +21,7 @@ import pytest
 from conftest import git
 
 from orbi import clarify, config as config_domain
-from orbi import delivery_labels, failure, failure_report
+from orbi import delivery_labels, failure, failure_report, progress
 
 import orbi.runner as runner
 from seam import seam
@@ -474,6 +474,31 @@ def test_render_comment_carries_the_judged_text_digest():
     assert body.index(f"<!-- orbi:run={RUN_ID} -->") < body.index(
         clarify.stop_marker(ISSUE)
     )
+
+
+@pytest.mark.parametrize("author", [None, {"login": "alice"}])
+def test_the_gate_recognizes_the_stop_comment_it_wrote(monkeypatch, author):
+    """The read accepts the writer's real prefix (Issue #1908).
+
+    Round trip through `render_comment` and the renderer `comment_issue`
+    posts through (`progress.format_status_comment`), never a hand-built
+    fixture: the formal prefix the gate writes and the prefix it reads are
+    one contract, so a change to the writer cannot silently disable the
+    dedup (the repeated model call, comment and notification of #1904).
+    `author=None` is the run without the optional mention line.
+    """
+    issue = dict(ISSUE, author=author)
+    written = progress.format_status_comment(clarify.render_comment(
+        issue,
+        clarify.ClarifyVerdict(passed=False, missing=("single_outcome",)),
+        RUN_ID, language_code="en",
+    ))
+    gate = FakeGate(monkeypatch, history=[stop_comment_entry(written)])
+
+    assert clarify.enforce(
+        issue, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is False
+    assert (gate.judged, gate.comments, gate.notified) == ([], [], [])
 
 
 @pytest.mark.parametrize("mention", ["", "@alice"])
