@@ -89,6 +89,7 @@ MERGE_METHOD_FIELDS = (
     ("allow_rebase_merge", "--rebase"),
 )
 
+
 def select_merge_method(repo: str) -> str:
     """Pick the `gh pr merge` flag from the repository's GitHub settings.
 
@@ -505,6 +506,7 @@ def sync_base_checkout(repo_dir: Path, base_branch: str,
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
 
+
 def _sync_base_checkout_locked(repo_dir: Path, base_branch: str) -> None:
     """The actual fetch + fast-forward + verify, under the base-sync
     flock (see ``sync_base_checkout``)."""
@@ -567,6 +569,7 @@ def delivered_changed_files(worktree: Path, base: str) -> list[str] | None:
         return None
     return [line.strip() for line in raw.splitlines() if line.strip()]
 
+
 def _delivery_checklist(
     worktree: Path, config: config_domain.RunnerConfig, *, test_status: str | None,
 ) -> dict:
@@ -585,6 +588,7 @@ def _delivery_checklist(
         changed_files=delivered_changed_files(worktree, base),
         language_code=language.of(config),
     )
+
 
 def human_review_checklist(
     worktree: Path, config: config_domain.RunnerConfig, *, run_id: str, pr_url: str,
