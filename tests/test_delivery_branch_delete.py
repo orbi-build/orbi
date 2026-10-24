@@ -21,7 +21,6 @@ import pytest
 from orbi import branch_reclaim
 from orbi import runner
 import orbi.merge_exec as merge_exec
-import orbi.review_merge as review_merge
 from seam import seam
 
 LOGGER_NAME = "orbi.bootstrap"

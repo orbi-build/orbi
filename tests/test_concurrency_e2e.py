@@ -1141,7 +1141,6 @@ def _run_ref_hammer(
     import orbi.runner as runner
     import orbi.pr_verification as pr_verification
     import orbi.merge_exec as merge_exec
-    import orbi.review_merge as review_merge
     import orbi.gitops as gitops
 
     # The fake `gh` on PATH answers the PR commands of the verify path
