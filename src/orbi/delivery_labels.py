@@ -50,6 +50,32 @@ OPS_LABEL = "ai-ops-only"
 HUMAN_REVIEW_LABEL = "ai-human-review"
 NEEDS_DETAIL_LABEL = "ai-needs-detail"
 
+# --- Reading an Issue's label names ---
+
+def label_names(issue: dict) -> list[str]:
+    """The Issue's label names, in the order the Issue carries them.
+
+    The one label-name parser (Issue #1853): every Issue-dict call site
+    reads its labels through it, so the label-payload rule lives in one
+    place. The scans fetch `labels` as an array of `{name, ...}` nodes.
+    A missing or malformed `labels` field — and any entry that is not a
+    named label — yields no label: a shape the payload cannot have is
+    an unlabelled Issue, never a crash.
+    """
+    labels = issue.get("labels")
+    if not isinstance(labels, list):
+        return []
+    return [
+        label["name"] for label in labels
+        if isinstance(label, dict) and isinstance(label.get("name"), str)
+    ]
+
+
+def label_name_set(issue: dict) -> frozenset[str]:
+    """The Issue's label names as a set (the label-state comparisons)."""
+    return frozenset(label_names(issue))
+
+
 # --- Events that drive label transitions ---
 EVENT_CLAIM = "claim"
 EVENT_PR_OPENED = "pr_opened"

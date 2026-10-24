@@ -19,10 +19,10 @@ from orbi.blocked_comment import post_blocked_comment
 from orbi.checks import _render_check, classify_checks
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL, BLOCKED_LABEL, FIX_NEEDED_LABEL, MERGED_LABEL,
-    PR_OPENED_LABEL, READY_LABEL,
+    PR_OPENED_LABEL, READY_LABEL, label_name_set,
 )
 from orbi.delivery_scene import (
-    DeliveryScene, body_markers, classify, issue_label_set,
+    DeliveryScene, body_markers, classify,
 )
 from orbi.comment_trust import latest_run_marker
 from orbi.github import (
@@ -260,7 +260,7 @@ def _pick_opened_pr_delivery(
             # Probe the exact branch (and require the helper's sole-PR
             # contract); no open PR falls through to the existing missing-
             # scene failure below.
-            current_labels = issue_label_set(issue)
+            current_labels = label_name_set(issue)
             if (repo_dir is not None
                     and FIX_NEEDED_LABEL in current_labels
                     and open_pr_for_branch(
@@ -325,7 +325,7 @@ def _pick_opened_pr_delivery(
         # and the scan moves on. A candidate with no readable labels fails
         # open (the is_epic / is_release convention): the trusted scene is
         # the authority.
-        current_labels = issue_label_set(issue)
+        current_labels = label_name_set(issue)
         if current_labels:
             found_scene = classify(
                 labels=current_labels, scene=found, pr_state=None,

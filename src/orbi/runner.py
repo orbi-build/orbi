@@ -95,6 +95,7 @@ from orbi.delivery_labels import (
     EVENT_MERGED,
     EVENT_PR_OPENED,
     is_resumable,
+    label_name_set,
     label_patch,
     needs_human_intervention,
 )
@@ -935,11 +936,7 @@ def reclaim_released_worktrees(config: config_domain.RunnerConfig, *,
             continue
         if now - closed_at < retain:
             continue
-        raw_labels = issue.get("labels")
-        labels = {
-            label.get("name") for label in raw_labels
-            if isinstance(label, dict)
-        } if isinstance(raw_labels, list) else set()
+        labels = label_name_set(issue)
         if (not labels & _WORKTREE_TERMINAL_LABELS
                 and labels & _WORKTREE_INFLIGHT_LABELS):
             continue
@@ -990,11 +987,7 @@ def is_content_only(issue: dict) -> bool:
     The content path dispatches ONLY on the explicit
     `ai-content-only` marker, never on derived state.
     """
-    labels = issue.get("labels", [])
-    return isinstance(labels, list) and any(
-        isinstance(label, dict) and label.get("name") == CONTENT_ONLY_LABEL
-        for label in labels
-    )
+    return CONTENT_ONLY_LABEL in label_name_set(issue)
 
 
 def is_ops(issue: dict) -> bool:
@@ -1006,11 +999,7 @@ def is_ops(issue: dict) -> bool:
     posted on the Issue, unless the session commits code (then the
     delivery takes the normal PR ceremony).
     """
-    labels = issue.get("labels", [])
-    return isinstance(labels, list) and any(
-        isinstance(label, dict) and label.get("name") == OPS_LABEL
-        for label in labels
-    )
+    return OPS_LABEL in label_name_set(issue)
 
 
 def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_repo: str) -> str:
@@ -1032,9 +1021,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
     started = time.monotonic()
     apply_label_patch(
         number, repo=source_repo, event=EVENT_CLAIM,
-        current_labels={label.get("name") for label in issue.get(
-            "labels", []) if isinstance(label, dict)
-            and isinstance(label.get("name"), str)},
+        current_labels=label_name_set(issue),
     )
     ticket_ctx = RunContext(
         run_id=run_id, issue=number, branch="-", worktree=Path("-"),
@@ -1785,7 +1772,7 @@ def _gather_claim_facts(issue: dict, config: config_domain.RunnerConfig,
     # The claim label is a delivery-policy key; the lifecycle
     # labels stay host constants.
     dispatch_label = (config.dispatch_label or READY_LABEL)
-    claim_labels = claim.issue_label_set(issue)
+    claim_labels = label_name_set(issue)
     stable_branch = task_branch(source_repo, number)
     in_progress = has_in_progress_label(number, source_repo)
     takeover_pr: dict | None = None
@@ -2603,7 +2590,7 @@ def process_issue(issue: dict, config: config_domain.RunnerConfig, source_repo: 
     # `progress.issue_field`) — it is never fabricated.
     title = issue["title"]
     ticket_scene = classify(
-        labels=claim.issue_label_set(issue), scene=None, pr_state=None,
+        labels=label_name_set(issue), scene=None, pr_state=None,
         body_markers=body_markers(issue.get("body")),
     )
     task_handler = _TASK_TYPE_DISPATCH.get(ticket_scene)
@@ -3268,11 +3255,7 @@ def main(argv: list[str] | None = None) -> int:
                 language_code=language.of(config),
                 status_url=config.status_url,
                 ready_label=config.dispatch_label or READY_LABEL,
-                current_labels={
-                    label.get("name") for label in issue.get("labels", [])
-                    if isinstance(label, dict)
-                    and isinstance(label.get("name"), str)
-                },
+                current_labels=label_name_set(issue),
             )
             return 0
         # Fuse the entry fallback UNCONDITIONALLY: with no policy file
