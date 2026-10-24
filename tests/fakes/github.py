@@ -140,6 +140,7 @@ class FakeGh:
                state: str = "OPEN", oid: str = "0" * 40,
                url: str | None = None, checks: tuple[dict, ...] = (),
                merged_at: str | None = None, body: str = "",
+               merge_commit: str | None = None,
                title: str = "Pull request") -> None:
         owner, name = self.repo.split("/", 1)
         self.prs[number] = {
@@ -156,6 +157,10 @@ class FakeGh:
             "body": body,
             "headRepository": {"name": name},
             "headRepositoryOwner": {"login": owner},
+            # The merge commit (`gh pr view --json mergeCommit`): GitHub's
+            # documented `{"oid": ...}` object for a merged PR, null for a
+            # PR that never merged (Issue #1895).
+            "mergeCommit": {"oid": merge_commit} if merge_commit else None,
             "_created": self._next_clock(),
         }
 

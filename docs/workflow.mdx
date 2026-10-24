@@ -102,7 +102,13 @@ ai-ready                a task is dispatched (orbi add, or a human
                         merged Issues are not backfilled); the PR body's
                         Fixes #N closes the Issue natively, and a merge
                         that landed while GitHub never marked the PR
-                        merged is closed by the engine itself (Issue #1801)
+                        merged is closed by the engine itself (Issue #1801);
+                        so is a resumed delivery whose PR GitHub reports
+                        merged while the Issue is still open — a merge made
+                        with a workflow's GITHUB_TOKEN gets no closing
+                        keyword, so the resume records ai-merged and closes
+                        the Issue instead of resuming it on every tick
+                        (Issue #1895)
   -> ai-awaiting-merge  known policy blocker: the Issue comment names the
                         one maintainer action; Orbi re-checks the merge only
                         on a tick whose queue is otherwise empty, and merges

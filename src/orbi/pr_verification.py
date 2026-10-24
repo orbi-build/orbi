@@ -75,11 +75,22 @@ class ResumePrClosedError(UnrecoverableDeliveryError):
     caller because only it knows the delivery's takeover flag; the
     typed error keeps the zero-open-PR classification testable at the
     `verify_pr` seam.
+
+    A MERGED scene also carries the PR's merge commit (Issue #1895):
+    GitHub does not apply the closing keyword on a merge made with a
+    workflow's `GITHUB_TOKEN`, so the resume records the merged
+    closeout itself and journals the same commit a normal merge does.
     """
 
-    def __init__(self, message: str, *, scene_pr_state: str) -> None:
+    def __init__(self, message: str, *, scene_pr_state: str,
+                 merge_commit: str = "") -> None:
         super().__init__(message)
         self.scene_pr_state = scene_pr_state
+        # The merged PR's merge commit (Issue #1895): the resume records
+        # the merged closeout with the same commit the normal merge
+        # journals. Empty when GitHub reports none (a PR that never
+        # merged, or a closed scene).
+        self.merge_commit = merge_commit
 
 
 class ResumeBranchGoneError(UnrecoverableDeliveryError):
@@ -209,16 +220,24 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
             # PR separately so zero open PRs (a closed/merged or missing
             # scene PR) have a different outcome from an ambiguous branch.
             scene_state = "unknown"
+            merge_commit = ""
             try:
                 scene_pr = run_gh_read_command([
                     "gh", "pr", "view", str(_pr_number(expected_url)),
-                    "--repo", pr_repo or "", "--json", "state,mergedAt",
+                    "--repo", pr_repo or "",
+                    "--json", "state,mergedAt,mergeCommit",
                 ], cwd=worktree, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
                 state = json.loads(scene_pr)
                 if isinstance(state, dict):
                     scene_state = str(state.get("state", "unknown"))
                     if state.get("mergedAt"):
                         scene_state = "MERGED"
+                        # GitHub's documented `{"oid": ...}` shape; a merged PR
+                        # always carries it, so a missing one is not a
+                        # reason to skip the close.
+                        merge_commit = (
+                            (state.get("mergeCommit") or {}).get("oid") or ""
+                        )
             except Exception:
                 LOGGER.exception("resume_scene_pr_state_lookup_failed")
             evidence = (
@@ -243,6 +262,7 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
                         f"resume PR is {scene_state.lower()} and cannot be "
                         f"resumed or replaced: {evidence}",
                         scene_pr_state=scene_state,
+                        merge_commit=merge_commit,
                     )
                 event(
                     "resume_pr_missing", level=logging.ERROR,
