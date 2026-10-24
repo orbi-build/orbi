@@ -6,14 +6,14 @@ for the ancestor checks. The test patches the ONE subprocess seam
 (``monkeypatch.setattr(seam, "run_command", fake)``), grows the DAG
 and refs with the helpers, runs the real gitops entry points
 (``create_worktree``, ``freeze_base``, ``fetch_base_ref``,
-``create_release_worktree``, ``_is_ancestor``), and asserts the public
+``create_release_worktree``, ``is_ancestor``), and asserts the public
 surface (returned paths, branch heads, call records).
 
 Real git semantics the fake preserves:
 
 - ``git merge-base --is-ancestor a b`` exits 0 when `a` is reachable
   from `b`, exits 1 (empty stderr) when it is not, and exits 128 for
-  an unknown object — the exact distinction `_is_ancestor` relies on;
+  an unknown object — the exact distinction `is_ancestor` relies on;
 - ``git worktree add -b`` on an existing branch exits 255 (the
   Issue #662 orphan-branch reuse contract);
 - ``git ls-remote`` prints ``<sha>\\trefs/heads/<name>`` only for
@@ -219,7 +219,7 @@ class FakeGit:
         if self.is_ancestor(ancestor, descendant):
             return ""
         # Real git answers the normal negative with exit code 1 and no
-        # output — the case `_is_ancestor` maps to False.
+        # output — the case `is_ancestor` maps to False.
         self._fail(1, "")
 
     def is_ancestor(self, ancestor: str, descendant: str) -> bool:

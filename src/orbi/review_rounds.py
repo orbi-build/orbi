@@ -24,7 +24,7 @@ budget's read fails fast, so a rate-limited label history is a
 recoverable failure, never a hidden "exhausted" verdict.
 
 Imports pull in `comment_trust` (which comments count), `github`
-(`_pr_number`, `run_gh_read_command`), `delivery_labels` (the recovery
+(`pr_number`, `run_gh_read_command`), `delivery_labels` (the recovery
 transition) and `progress` (`run_marker`); nothing here imports
 `runner` back (Article 3.3). The module is small and pure apart from
 those helpers.
@@ -42,9 +42,9 @@ from orbi.comment_kind import (
     comment_kind_marker,
 )
 from orbi.delivery_labels import BLOCKED_LABEL, FIX_NEEDED_LABEL
-from orbi.comment_trust import _comment_is_trusted, trusted_comments
+from orbi.comment_trust import comment_is_trusted, trusted_comments
 from orbi.github import (
-    _pr_number,
+    pr_number,
     run_gh_read_command,
 )
 from orbi.journal import event
@@ -88,10 +88,10 @@ def _review_findings_markdown(findings: list[dict],
     return "\n".join(items)
 
 
-def _scene_matches_pr(parsed: scene.Scene, pr_number: int) -> bool:
+def _scene_matches_pr(parsed: scene.Scene, number: int) -> bool:
     """True when a parsed scene names the expected PR number."""
     try:
-        return _pr_number(parsed.pr_url) == pr_number
+        return pr_number(parsed.pr_url) == number
     except (TypeError, ValueError):
         return False
 
@@ -116,7 +116,7 @@ def same_findings_round(
         return False
     if rendered not in body:
         return False
-    if not _comment_is_trusted(comment, repo=repo):
+    if not comment_is_trusted(comment, repo=repo):
         return False
     kind = comment_kind(body)
     if kind is None:

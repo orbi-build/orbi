@@ -724,7 +724,7 @@ def test_previous_repo_config_sha_reads_the_newest_trusted_comment(monkeypatch):
         {"authorAssociation": "MEMBER", "author": {"login": "maintainer"},
          "body": "- repo_config: " + "d" * 40},
     ]
-    monkeypatch.setattr(seam, "_authenticated_github_login", lambda: "orbi")
+    monkeypatch.setattr(seam, "authenticated_github_login", lambda: "orbi")
     monkeypatch.setattr(
         seam, "repository_permission",
         lambda login, *, repo: "none" if login == "drive-by" else "admin",

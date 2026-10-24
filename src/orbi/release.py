@@ -50,7 +50,7 @@ from orbi.release_comments import (
 )
 from orbi.comment_trust import trusted_comments
 from orbi.github import (
-    _verify_epic_complete,
+    verify_epic_complete,
     apply_label_patch,
     close_issue,
     close_milestone,
@@ -67,7 +67,7 @@ from orbi.github import (
     pr_view,
 )
 from orbi.gitops import (
-    _is_ancestor,
+    is_ancestor,
     acquire_base_sync_lock,
     create_release_worktree,
     freeze_base,
@@ -547,7 +547,7 @@ def verify_release_scope(repo: str, scope: list[int], repo_dir: Path,
                     f"release scope PR #{number} is merged but has no "
                     "merge commit evidence"
                 )
-            if not _is_ancestor(merge_commit, release_commit, cwd=repo_dir):
+            if not is_ancestor(merge_commit, release_commit, cwd=repo_dir):
                 raise RuntimeError(
                     f"release scope PR #{number} merge commit {merge_commit} "
                     f"is not contained in release commit {release_commit}"
@@ -941,7 +941,7 @@ def tag_commit_is_ancestor_of_base(tag_commit: str, base_commit: str,
                                    repo_dir: Path) -> bool:
     """True when the tag commit is an ancestor of the base commit — the
     resume case where an existing tag is behind an advanced base."""
-    return _is_ancestor(tag_commit, base_commit, cwd=repo_dir)
+    return is_ancestor(tag_commit, base_commit, cwd=repo_dir)
 
 
 def publish_release(*, repo: str, tag: str, version: str,
@@ -1745,7 +1745,7 @@ def reconcile_release_epics(repo: str, milestone_number: int, version: str,
             continue
         number = listed_epic.get("number")
         try:
-            child_evidence = _verify_epic_complete(repo, listed_epic)
+            child_evidence = verify_epic_complete(repo, listed_epic)
         except (ValueError, json.JSONDecodeError) as exc:
             evidence.append(f"Epic #{number} kept open: {exc}")
             continue

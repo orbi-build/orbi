@@ -584,7 +584,7 @@ def open_blocker_numbers(issue: dict) -> list[int]:
     return numbers
 
 
-def _verify_epic_complete(repo: str, listed_epic: dict) -> list[str]:
+def verify_epic_complete(repo: str, listed_epic: dict) -> list[str]:
     """Verify native sub-issues and blockers; otherwise fail closed.
 
     Live API shape (measured 2026-09-09 against #305):
@@ -880,7 +880,7 @@ def pr_review_comments(number: int, *, repo: str) -> list[dict]:
 
 
 
-def _authenticated_github_login() -> str:
+def authenticated_github_login() -> str:
     """Return the login represented by the active ``gh`` credential.
 
     ``gh api installation`` is unavailable with installation tokens, while
@@ -931,7 +931,7 @@ def _authenticated_github_login() -> str:
     return active_account
 
 
-def _strip_bot_suffix(login: str) -> str:
+def strip_bot_suffix(login: str) -> str:
     """Drop the optional ``[bot]`` suffix from an App login.
 
     ``gh issue view --json comments`` reads comments through GraphQL and
@@ -992,6 +992,6 @@ def has_in_progress_label(number: int, repo: str) -> bool:
     )
 
 
-def _pr_number(pr_url: str) -> int:
+def pr_number(pr_url: str) -> int:
     """Extract the PR number from its URL (the last path segment)."""
     return int(pr_url.rstrip("/").rsplit("/", 1)[-1])

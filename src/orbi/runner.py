@@ -215,7 +215,7 @@ from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
     run_gh_read_command,
     run_gh_write_command,
-    _verify_epic_complete,
+    verify_epic_complete,
     apply_label_patch,
     close_issue,
     close_milestone,
@@ -240,8 +240,8 @@ from orbi.github import (
     parse_issue_list,
     parse_paginated_issue_array,
 )
-from orbi.github_feedback import _check_summaries, pr_delivery_status, pr_delivery_rollup
-from orbi.checks import _render_check, classify_checks, test_status
+from orbi.github_feedback import check_summaries, pr_delivery_status, pr_delivery_rollup
+from orbi.checks import render_check, classify_checks, test_status
 from orbi.gitops import (
     acquire_base_sync_lock,
     create_release_worktree,
@@ -2739,7 +2739,7 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
     if state == "OPEN":
         event(
             "delivery_ci", issue=number, pr=pr_url,
-            checks=",".join(_check_summaries(rollup)) or "none",
+            checks=",".join(check_summaries(rollup)) or "none",
         )
     if state == "MERGED":
         event(
@@ -2852,7 +2852,7 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
     if pending:
         event(
             "delivery_ci_pending", issue=number, pr=pr_url,
-            pending="; ".join(_render_check(entry) for entry in pending),
+            pending="; ".join(render_check(entry) for entry in pending),
         )
         return
     # One OPEN round — the label read/repair, the
