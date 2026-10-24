@@ -46,6 +46,7 @@ from orbi.delivery_labels import (
     IN_PROGRESS_LABEL,
     MERGED_LABEL,
     PR_OPENED_LABEL,
+    label_names,
 )
 from orbi.delivery_scene import RunContext
 from orbi.github import list_issues, list_milestones
@@ -215,16 +216,6 @@ def _is_tty(stream) -> bool:
     return bool(probe()) if callable(probe) else False
 
 
-def _label_names(labels) -> list[str]:
-    names: list[str] = []
-    for entry in labels or []:
-        if isinstance(entry, dict) and isinstance(entry.get("name"), str):
-            names.append(entry["name"])
-        elif isinstance(entry, str):
-            names.append(entry)
-    return names
-
-
 def _suggest_root(config: RunnerConfig) -> Path:
     return (Path(config.deploy_home) / ".orbi" / "suggest").resolve()
 
@@ -382,7 +373,7 @@ def _gather_context(repo: str) -> dict:
                 "body": issue.get("body", ""),
                 "state": issue.get("state"),
                 "url": issue.get("url"),
-                "labels": _label_names(issue.get("labels")),
+                "labels": label_names(issue),
             }
             for issue in issues
         ],

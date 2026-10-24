@@ -5,7 +5,7 @@ A shared helper is a module's public surface. When one module imported a
 helper through another module's `_private` name, renaming or moving that
 helper broke an import at process start, in a module that had no
 business owning the name. This guard pins the progress / failure /
-delivery_scene / pi_session cluster (Issue #1849) and the checks /
+delivery_labels / pi_session cluster (Issue #1849) and the checks /
 github / gitops / comment_trust cluster (Issue #1848): every helper the
 cluster shares is exported under a public name and nothing imports it
 privately.
@@ -37,7 +37,7 @@ PUBLIC_HELPERS = {
         "failure_summary",
         "failure_comment_body",
     },
-    "delivery_scene": {"issue_label_set"},
+    "delivery_labels": {"label_names", "label_name_set"},
     "pi_session": {"pi_extension_env"},
     "pi_command": {"skills_for"},
     "pi_stream_log": {"log_provider_config_loaded"},

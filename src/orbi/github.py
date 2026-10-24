@@ -29,6 +29,7 @@ from orbi.delivery_labels import (
     IN_PROGRESS_LABEL,
     P0_LABEL,
     READY_LABEL,
+    label_name_set,
     label_patch,
 )
 from orbi.journal import (LOGGER, MilestoneReconcileError,
@@ -524,13 +525,7 @@ def issue_priority(issue: dict) -> str:
     field fails open): a P0 misread as normal only loses its ordering
     for one run, never the delivery.
     """
-    labels = issue.get("labels")
-    if not isinstance(labels, list):
-        return "normal"
-    for label in labels:
-        if isinstance(label, dict) and label.get("name") == P0_LABEL:
-            return "p0"
-    return "normal"
+    return "p0" if P0_LABEL in label_name_set(issue) else "normal"
 
 
 def epic_issue_with_blockers(repo: str, issue: dict) -> dict:

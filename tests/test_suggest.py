@@ -992,10 +992,13 @@ def test_setup_json_prints_neither_the_question_nor_the_hint(
 # --- defensive paths ---------------------------------------------------------
 
 
-def test_label_names_reads_dicts_and_strings():
-    assert suggest._label_names([
-        {"name": "ai-ready"}, "plain", {"nope": 1}, 7,
-    ]) == ["ai-ready", "plain"]
+def test_gathered_context_carries_the_issue_label_names(tmp_path, monkeypatch):
+    """The context the session reads labels each Issue through the one
+    shared label-name parser (`delivery_labels.label_names`, #1853)."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=("ai-merged", "bug"))
+    context = suggest._gather_context("o/r")
+    assert context["issues"][0]["labels"] == ["ai-merged", "bug"]
 
 
 def test_setup_repo_falls_back_to_the_first_source_repo(tmp_path, monkeypatch):

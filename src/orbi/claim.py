@@ -21,10 +21,10 @@ from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
     BLOCKED_LABEL, EPIC_LABEL,
     FIX_NEEDED_LABEL, IN_PROGRESS_LABEL, MERGED_LABEL, P0_LABEL,
-    PR_OPENED_LABEL, READY_LABEL, RELEASE_LABEL,
+    PR_OPENED_LABEL, READY_LABEL, RELEASE_LABEL, label_name_set,
 )
 from orbi.delivery_scene import (
-    EXTERNAL_PR_MARKER, DeliveryScene, body_markers, classify, issue_label_set,
+    EXTERNAL_PR_MARKER, DeliveryScene, body_markers, classify,
 )
 from orbi.github import (
     verify_epic_complete, close_issue,
@@ -155,13 +155,7 @@ def is_epic(issue: dict) -> bool:
     the scan always requests `labels`, so a shape change only loses
     the Epic guard for one run — it must never deadlock the queue.
     """
-    labels = issue.get("labels")
-    if not isinstance(labels, list):
-        return False
-    for label in labels:
-        if isinstance(label, dict) and label.get("name") == EPIC_LABEL:
-            return True
-    return False
+    return EPIC_LABEL in label_name_set(issue)
 
 
 def is_release(issue: dict) -> bool:
@@ -174,13 +168,7 @@ def is_release(issue: dict) -> bool:
     shape change only loses the release routing for one run — it must
     never deadlock the queue.
     """
-    labels = issue.get("labels")
-    if not isinstance(labels, list):
-        return False
-    for label in labels:
-        if isinstance(label, dict) and label.get("name") == RELEASE_LABEL:
-            return True
-    return False
+    return RELEASE_LABEL in label_name_set(issue)
 
 
 def reconcile_open_epics(repo: str, run_id: str, language_code: str) -> list[str]:
@@ -419,7 +407,7 @@ def _pick_from_scan(
             event("blocked_by", issue=issue.get("number"), repo=repo,
                   blockers=",".join(str(number) for number in blockers))
             continue
-        current_labels = issue_label_set(issue)
+        current_labels = label_name_set(issue)
         if current_labels:
             scene_value = classify(
                 labels=current_labels, scene=None, pr_state=None,
@@ -646,7 +634,7 @@ def pick_in_progress_issue(
         # candidate that left EVERY claimable state (a relabel inside
         # the query's staleness window); a candidate with no readable
         # labels fails open (the is_epic/is_release convention).
-        current_labels = issue_label_set(candidate)
+        current_labels = label_name_set(candidate)
         if current_labels:
             scene_value = classify(
                 labels=current_labels, scene=None, pr_state=None,
