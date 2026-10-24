@@ -305,15 +305,15 @@ def test_is_ancestor_distinguishes_reachable_unrelated_and_unknown(
     side = fake_git.commit([root])
     merge = fake_git.commit([linear, side])  # diamond: two paths to root
     unrelated = fake_git.commit([])
-    assert gitops._is_ancestor(root, child, cwd=fake_git.repo_dir) is True
-    assert gitops._is_ancestor(child, root, cwd=fake_git.repo_dir) is False
-    assert gitops._is_ancestor(root, merge, cwd=fake_git.repo_dir) is True
+    assert gitops.is_ancestor(root, child, cwd=fake_git.repo_dir) is True
+    assert gitops.is_ancestor(child, root, cwd=fake_git.repo_dir) is False
+    assert gitops.is_ancestor(root, merge, cwd=fake_git.repo_dir) is True
     # The diamond walk revisits `root` via both parents — the fake must
     # terminate (the seen-set) and answer False for an unrelated root.
-    assert gitops._is_ancestor(unrelated, merge, cwd=fake_git.repo_dir) \
+    assert gitops.is_ancestor(unrelated, merge, cwd=fake_git.repo_dir) \
         is False
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
-        gitops._is_ancestor(
+        gitops.is_ancestor(
             "unknown-sha", child, cwd=fake_git.repo_dir,
         )
     assert excinfo.value.returncode == 128

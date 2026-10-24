@@ -209,7 +209,7 @@ def permissions(monkeypatch):
     as `"none"` (GitHub's answer for a user with no access), so nothing
     is trusted by accident. The authenticated identity is pinned to a bot
     nobody's comment names, so the own-account fallback of
-    `_comment_is_trusted` stays out of these tests (a test that exercises
+    `comment_is_trusted` stays out of these tests (a test that exercises
     it patches the login itself, which wins over this default).
     """
     grants: dict[str, str] = {}
@@ -217,6 +217,6 @@ def permissions(monkeypatch):
         seam, "repository_permission",
         lambda login, *, repo: grants.get(login, "none"),
     )
-    monkeypatch.setattr(seam, "_authenticated_github_login",
+    monkeypatch.setattr(seam, "authenticated_github_login",
                         lambda: "orbi-bot[bot]")
     return grants

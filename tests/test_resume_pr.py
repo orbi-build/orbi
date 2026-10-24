@@ -537,7 +537,7 @@ def test_authenticated_github_login_uses_active_gh_account(monkeypatch):
             "  - Active account: true\n"
         ),
     )
-    assert github._authenticated_github_login() == "orbi-dev-test[bot]"
+    assert github.authenticated_github_login() == "orbi-dev-test[bot]"
     assert calls == [["gh", "auth", "status", "--hostname", "github.com"]]
 
 
@@ -551,7 +551,7 @@ def test_authenticated_github_login_selects_active_account(monkeypatch):
             "  - Active account: true\n"
         ),
     )
-    assert github._authenticated_github_login() == "orbi-dev-test[bot]"
+    assert github.authenticated_github_login() == "orbi-dev-test[bot]"
 
 
 def test_authenticated_github_login_reports_identity_resolution_failure(monkeypatch):
@@ -560,14 +560,14 @@ def test_authenticated_github_login_reports_identity_resolution_failure(monkeypa
 
     monkeypatch.setattr(seam, "run_command", fail)
     with pytest.raises(ValueError, match="identity resolution.*gh auth status"):
-        github._authenticated_github_login()
+        github.authenticated_github_login()
 
 
 def test_authenticated_github_login_rejects_missing_active_account(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda command: "Active account: true\n",
     )
     with pytest.raises(ValueError, match="identity resolution"):
-        github._authenticated_github_login()
+        github.authenticated_github_login()
 
 
 def test_authenticated_github_login_resolves_despite_a_failed_inactive_account(
@@ -592,7 +592,7 @@ def test_authenticated_github_login_resolves_despite_a_failed_inactive_account(
             1, command, output="", stderr=measured_report)
 
     monkeypatch.setattr(seam, "run_command", exit_one)
-    assert github._authenticated_github_login() == "orbi-build[bot]"
+    assert github.authenticated_github_login() == "orbi-build[bot]"
 
 
 def test_authenticated_github_login_exit_one_without_an_active_account_fails(
@@ -608,7 +608,7 @@ def test_authenticated_github_login_exit_one_without_an_active_account_fails(
 
     monkeypatch.setattr(seam, "run_command", exit_one)
     with pytest.raises(ValueError, match="did not report an active account"):
-        github._authenticated_github_login()
+        github.authenticated_github_login()
 
 
 def test_resume_scene_accepts_the_authenticated_runner_app_bot(monkeypatch):
@@ -640,7 +640,7 @@ def test_resume_scene_rejects_another_app_bot_even_with_the_marker(monkeypatch):
         "author": {"login": "unrelated-app[bot]"},
     }]
     monkeypatch.setattr(
-        seam, "_authenticated_github_login",
+        seam, "authenticated_github_login",
         lambda: "orbi-dev-test[bot]",
     )
     with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
@@ -668,7 +668,7 @@ def test_comment_is_trusted_normalizes_optional_bot_suffix(
     monkeypatch, login, expected,
 ):
     monkeypatch.setattr(
-        seam, "_authenticated_github_login",
+        seam, "authenticated_github_login",
         lambda: "orbi-dev-test[bot]",
     )
     comment = {
@@ -676,7 +676,7 @@ def test_comment_is_trusted_normalizes_optional_bot_suffix(
         "authorAssociation": "NONE",
         "author": {"login": login},
     }
-    assert comment_trust._comment_is_trusted(comment, repo="owner/repo") is expected
+    assert comment_trust.comment_is_trusted(comment, repo="owner/repo") is expected
 
 
 def test_resume_scene_accepts_graphql_shaped_runner_app_bot(monkeypatch):
@@ -687,7 +687,7 @@ def test_resume_scene_accepts_graphql_shaped_runner_app_bot(monkeypatch):
         "author": {"login": "orbi-dev-test"},
     }]
     monkeypatch.setattr(
-        seam, "_authenticated_github_login",
+        seam, "authenticated_github_login",
         lambda: "orbi-dev-test[bot]",
     )
     scene = run_state.resume_scene(comments, repo="owner/repo")
@@ -704,7 +704,7 @@ def test_comment_is_trusted_rejects_missing_or_non_string_login(
     monkeypatch, author,
 ):
     monkeypatch.setattr(
-        seam, "_authenticated_github_login",
+        seam, "authenticated_github_login",
         lambda: "orbi-dev-test[bot]",
     )
     comment = {
@@ -712,7 +712,7 @@ def test_comment_is_trusted_rejects_missing_or_non_string_login(
         "authorAssociation": "NONE",
         "author": author,
     }
-    assert comment_trust._comment_is_trusted(comment, repo="owner/repo") is False
+    assert comment_trust.comment_is_trusted(comment, repo="owner/repo") is False
 
 
 # ------------------------------------------------- trusted comments (F1)

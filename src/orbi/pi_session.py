@@ -25,7 +25,7 @@ from orbi import config as config_domain
 from orbi import language, user_summary
 from orbi.delivery_scene import RunContext
 from orbi.comment_trust import (
-    _comment_is_trusted,
+    comment_is_trusted,
     trusted_issue_comments_block,
 )
 from orbi.github import (
@@ -595,7 +595,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
             steering_seen.add(identifier)
             if str(comment.get("createdAt") or "") < started_at:
                 continue
-            if _comment_is_trusted(comment, repo=source_repo):
+            if comment_is_trusted(comment, repo=source_repo):
                 item = dict(comment)
                 item["issue"] = issue["number"]
                 fresh.append(item)

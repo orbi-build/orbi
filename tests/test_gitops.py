@@ -97,15 +97,15 @@ def test_is_ancestor_maps_exit_1_to_false(monkeypatch):
 
     # exit 0 -> True
     monkeypatch.setattr(seam, "run_command", ok)
-    assert gitops._is_ancestor("c1", "c2", cwd="/w") is True
+    assert gitops.is_ancestor("c1", "c2", cwd="/w") is True
     assert commands[-1] == ["git", "merge-base", "--is-ancestor", "c1", "c2"]
 
     monkeypatch.setattr(seam, "run_command", negative)
-    assert gitops._is_ancestor("c1", "c2", cwd="/w") is False
+    assert gitops.is_ancestor("c1", "c2", cwd="/w") is False
 
     monkeypatch.setattr(seam, "run_command", broken)
     with pytest.raises(subprocess.CalledProcessError):
-        gitops._is_ancestor("c1", "c2", cwd="/w")
+        gitops.is_ancestor("c1", "c2", cwd="/w")
 
 
 def test_stable_branch_exists_probes_the_remote_head(monkeypatch):

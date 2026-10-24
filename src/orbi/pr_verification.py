@@ -34,12 +34,12 @@ from orbi.delivery_scene import RunContext
 from orbi.failure_report import UnrecoverableDeliveryError
 from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
-    _pr_number,
+    pr_number,
     issue_comments,
     pr_view,
     run_gh_read_command,
 )
-from orbi.gitops import _is_ancestor, fetch_base_ref
+from orbi.gitops import is_ancestor, fetch_base_ref
 from orbi.journal import LOGGER, event, run_command
 from orbi.progress import run_marker
 
@@ -204,7 +204,7 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
         # classified against the scene PR's state.
         if external_pr:
             external = pr_view(
-                _pr_number(expected_url),
+                pr_number(expected_url),
                 (
                     "number,url,state,baseRefName,baseRefOid,headRefName,"
                     "headRefOid,headRepository,headRepositoryOwner,body"
@@ -223,7 +223,7 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
             merge_commit = ""
             try:
                 scene_pr = run_gh_read_command([
-                    "gh", "pr", "view", str(_pr_number(expected_url)),
+                    "gh", "pr", "view", str(pr_number(expected_url)),
                     "--repo", pr_repo or "",
                     "--json", "state,mergedAt,mergeCommit",
                 ], cwd=worktree, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
@@ -336,7 +336,7 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
         # ancestor of the local HEAD (diverged) is still a failure: a
         # plain push would be rejected and only a force push or a
         # human decision could continue it.
-        if not _is_ancestor(head_oid, "HEAD", cwd=worktree):
+        if not is_ancestor(head_oid, "HEAD", cwd=worktree):
             event(
                 "pr_head_diverged", level=logging.ERROR,
                 pr_head=head_oid, local_head=local_head, branch=branch,

@@ -1428,7 +1428,7 @@ def test_run_pi_injects_trusted_issue_comments_into_the_prompt(
         lambda login, *, repo: "none" if login == "mallory" else "admin",
     )
     monkeypatch.setattr(
-        seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
+        seam, "authenticated_github_login", lambda: "ci-runner[bot]"
     )
     calls = []
     monkeypatch.setattr(
@@ -1568,7 +1568,7 @@ def test_run_review_combines_current_pr_feedback_with_issue_comments(
          "line": 7, "body": "inline fix"},
     ])
     monkeypatch.setattr(
-        seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
+        seam, "authenticated_github_login", lambda: "ci-runner[bot]"
     )
     # Issue #1806: the human comments of these timelines are writers;
     # the permission read is answered here so no test reaches GitHub.
@@ -1625,7 +1625,7 @@ def test_run_review_pr_feedback_failure_logs_and_keeps_issue_comments(
         seam, "repository_permission", lambda login, *, repo: "admin",
     )
     monkeypatch.setattr(
-        seam, "_authenticated_github_login", lambda: "ci-runner[bot]",
+        seam, "authenticated_github_login", lambda: "ci-runner[bot]",
     )
 
     def fail_reviews(*args, **kwargs):
@@ -4237,7 +4237,7 @@ def test_main_release_success_ends_tick_without_pr_delivery_wait(
     `process_release` already closed the delivery (tag pushed, GitHub
     Release published, Issue `ai-merged` and closed), so `main` must end
     the tick with exit code 0 and NEVER enter the PR delivery wait —
-    `_pr_number` on `.../releases/tag/v0.3.0` raises `ValueError` and
+    `pr_number` on `.../releases/tag/v0.3.0` raises `ValueError` and
     crashed the Runner (run_id=37216af5)."""
     issue = {
         "number": 254, "title": "Release v0.3.0", "body": "Release v0.3.0",
@@ -6739,7 +6739,7 @@ def test_reconcile_open_epics_closes_and_deduplicates_audit(monkeypatch, caplog)
         commands.append(command)
         return json.dumps([epic]) if command[:3] == ["gh", "issue", "list"] else ""
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(seam, "_verify_epic_complete", lambda repo, item: ["Issue #21 closed"])
+    monkeypatch.setattr(seam, "verify_epic_complete", lambda repo, item: ["Issue #21 closed"])
     comments = []
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
     monkeypatch.setattr(seam, "comment_issue", lambda number, *, repo, body: comments.append({"body": body}))
@@ -6764,7 +6764,7 @@ def test_reconcile_open_epics_posts_the_audit_in_the_bound_language(monkeypatch)
 
     comments = []
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(seam, "_verify_epic_complete",
+    monkeypatch.setattr(seam, "verify_epic_complete",
                         lambda repo, item: ["Issue #21 closed"])
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
     monkeypatch.setattr(seam, "comment_issue",
@@ -6793,7 +6793,7 @@ def test_reconcile_open_epics_keeps_one_audit_across_languages(monkeypatch):
                "no open native blockers/dependencies.")
     comments = [{"body": f"<!-- orbi:run=old -->\n{english}\nrun_id=old"}]
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(seam, "_verify_epic_complete",
+    monkeypatch.setattr(seam, "verify_epic_complete",
                         lambda repo, item: ["Issue #21 closed"])
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
     monkeypatch.setattr(seam, "comment_issue",
@@ -6808,7 +6808,7 @@ def test_reconcile_open_epics_keeps_incomplete_without_comment(monkeypatch, capl
     caplog.set_level("INFO")
     epic = {"number": 20}
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: json.dumps([epic]))
-    monkeypatch.setattr(seam, "_verify_epic_complete", lambda repo, item: (_ for _ in ()).throw(ValueError("open blockers: #3")))
+    monkeypatch.setattr(seam, "verify_epic_complete", lambda repo, item: (_ for _ in ()).throw(ValueError("open blockers: #3")))
     comments = []
     monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: comments.append(True))
     claim.reconcile_open_epics("o/r", "abc12345", "en")

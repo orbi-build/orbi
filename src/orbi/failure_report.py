@@ -43,7 +43,7 @@ from orbi.failure import (
 )
 from orbi.comment_trust import latest_run_marker, trusted_comments
 from orbi.github import (
-    _pr_number, apply_label_patch, comment_issue, issue_comments,
+    pr_number, apply_label_patch, comment_issue, issue_comments,
     issue_labels, issue_priority, pr_comments, run_gh_write_command,
     update_issue_comment,
 )
@@ -937,7 +937,7 @@ def report_delivery_failure(
             # The recoverable scene is written to the PR too:
             # the next review session and any human watcher see it where
             # the delivery lives. A blocked Issue is terminal — Issue only.
-            comment_pr(_pr_number(pr_url), repo=source_repo, body=body)
+            comment_pr(pr_number(pr_url), repo=source_repo, body=body)
     if run_id:
         # One publisher for the milestone and the terminal scene: the
         # run's LIVE publisher when the caller holds one (its `finish`

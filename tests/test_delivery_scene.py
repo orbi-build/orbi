@@ -67,7 +67,7 @@ def _repository_permissions(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        runner_seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+        runner_seam, "authenticated_github_login", lambda: "orbi-bot[bot]",
     )
 
 

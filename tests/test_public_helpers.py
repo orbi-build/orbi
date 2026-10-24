@@ -1,11 +1,14 @@
-"""Cross-module helpers are imported by their public names (Issue #1849).
+"""Cross-module helpers are imported by their public names (Issues #1848,
+#1849).
 
 A shared helper is a module's public surface. When one module imported a
 helper through another module's `_private` name, renaming or moving that
 helper broke an import at process start, in a module that had no
 business owning the name. This guard pins the progress / failure /
-delivery_labels / pi_session cluster: every helper the cluster shares is
-exported under a public name and nothing imports it privately.
+delivery_labels / pi_session cluster (Issue #1849) and the checks /
+github / gitops / comment_trust cluster (Issue #1848): every helper the
+cluster shares is exported under a public name and nothing imports it
+privately.
 
 It also pins the second defect: `progress` re-exported
 `journal.quote_value`, so four modules took the journal's quoting rule
@@ -38,6 +41,16 @@ PUBLIC_HELPERS = {
     "pi_session": {"pi_extension_env"},
     "pi_command": {"skills_for"},
     "pi_stream_log": {"log_provider_config_loaded"},
+    "checks": {"render_check"},
+    "github": {
+        "pr_number",
+        "verify_epic_complete",
+        "authenticated_github_login",
+        "strip_bot_suffix",
+    },
+    "github_feedback": {"check_summaries"},
+    "gitops": {"is_ancestor"},
+    "comment_trust": {"comment_is_trusted"},
 }
 
 

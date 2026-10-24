@@ -575,7 +575,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     # The runner's own account is the second trust channel; pin it so a
     # non-writer's comment never reaches the host's real `gh auth status`.
     monkeypatch.setattr(
-        seam, "_authenticated_github_login", lambda: "orbi-bot[bot]",
+        seam, "authenticated_github_login", lambda: "orbi-bot[bot]",
     )
     monkeypatch.setattr(seam, "has_in_progress_label",
                         lambda n, r: in_progress)

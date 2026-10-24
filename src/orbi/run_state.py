@@ -23,11 +23,11 @@ from orbi.delivery_scene import RunContext
 from orbi.comment_trust import trusted_comments
 from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
-    _pr_number,
+    pr_number,
     pr_view,
     run_gh_read_command,
 )
-from orbi.gitops import _is_ancestor
+from orbi.gitops import is_ancestor
 from orbi.journal import event, run_command
 
 
@@ -52,7 +52,7 @@ def assess_base_freshness(worktree: Path, base_branch: str, *,
     """
     if reviewed_head is not None and head != reviewed_head:
         return BaseFreshness.CONFLICTED
-    if _is_ancestor(f"origin/{base_branch}", head, cwd=worktree):
+    if is_ancestor(f"origin/{base_branch}", head, cwd=worktree):
         return BaseFreshness.FRESH
     if mergeable is not None and mergeable != "MERGEABLE":
         return BaseFreshness.CONFLICTED
@@ -69,7 +69,7 @@ def landed_merge_commit(head: str, base_ref: str, *,
     --reverse` lists parents before children on that ancestry path, so the
     first commit is the one that landed the head.
     """
-    if not _is_ancestor(head, base_ref, cwd=cwd):
+    if not is_ancestor(head, base_ref, cwd=cwd):
         return None
     commits = run_command([
         "git", "rev-list", "--ancestry-path", "--topo-order", "--reverse",
@@ -188,7 +188,7 @@ def resume_scene(comments: list[dict], *, repo: str) -> dict:
     Only trusted comments are considered: a comment is trusted when its
     author can WRITE to `repo` (the repository permission GitHub reports)
     or is the account the `gh` credentials resolve to
-    (`_comment_is_trusted`, comment_trust.py) — never the comment's
+    (`comment_is_trusted`, comment_trust.py) — never the comment's
     `authorAssociation` (Issue #1806). A public comment can never
     become the recovery scene. The two
     failure shapes stay distinct for the caller:
@@ -512,7 +512,7 @@ def _single_open_pr(
         if source_repo is None:
             raise ValueError("external PR lookup requires source_repo")
         external = pr_view(
-            _pr_number(external_pr_url),
+            pr_number(external_pr_url),
             (
                 "number,url,state,baseRefName,baseRefOid,headRefName,"
                 "headRefOid,headRepository,headRepositoryOwner,body"
