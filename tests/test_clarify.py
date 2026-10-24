@@ -21,7 +21,7 @@ import pytest
 from conftest import git
 
 from orbi import clarify, config as config_domain
-from orbi import delivery_labels
+from orbi import delivery_labels, failure, failure_report, progress
 
 import orbi.runner as runner
 from seam import seam
@@ -443,9 +443,17 @@ def test_enforce_fails_open_when_a_write_fails(
 
 # --- Issue #1904: one stop per unchanged ticket text ----------------------
 
-def _stop_comment(issue: dict, run_id: str = "deadbeef") -> str:
-    """The stop comment a previous claim left on the Issue."""
+def _stop_comment(issue: dict, run_id: str = "deadbeef",
+                 mention: str = "") -> str:
+    """The stop comment a previous claim left on the Issue.
+
+    `render_comment()` puts the optional `@author` mention line in front
+    of the run marker (Issue #1336); the rest of the formal prefix is the
+    run marker immediately followed by the stop marker.
+    """
+    prefix = f"{mention}\n" if mention else ""
     return (
+        f"{prefix}"
         f"<!-- orbi:run={run_id} -->\n"
         f"{clarify.stop_marker(issue)}\n"
         "Orbi: this ticket is not ready to deliver."
@@ -468,12 +476,43 @@ def test_render_comment_carries_the_judged_text_digest():
     )
 
 
+@pytest.mark.parametrize("author", [None, {"login": "alice"}])
+def test_the_gate_recognizes_the_stop_comment_it_wrote(monkeypatch, author):
+    """The read accepts the writer's real prefix (Issue #1908).
+
+    Round trip through `render_comment` and the renderer `comment_issue`
+    posts through (`progress.format_status_comment`), never a hand-built
+    fixture: the formal prefix the gate writes and the prefix it reads are
+    one contract, so a change to the writer cannot silently disable the
+    dedup (the repeated model call, comment and notification of #1904).
+    `author=None` is the run without the optional mention line.
+    """
+    issue = dict(ISSUE, author=author)
+    written = progress.format_status_comment(clarify.render_comment(
+        issue,
+        clarify.ClarifyVerdict(passed=False, missing=("single_outcome",)),
+        RUN_ID, language_code="en",
+    ))
+    gate = FakeGate(monkeypatch, history=[stop_comment_entry(written)])
+
+    assert clarify.enforce(
+        issue, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is False
+    assert (gate.judged, gate.comments, gate.notified) == ([], [], [])
+
+
+@pytest.mark.parametrize("mention", ["", "@alice"])
 def test_enforce_does_not_rejudge_an_unchanged_stopped_ticket(
-    monkeypatch, caplog,
+    monkeypatch, caplog, mention,
 ):
-    """Acceptance: no model call, no comment, no notification."""
+    """Acceptance: no model call, no comment, no notification.
+
+    Both stop prefixes `render_comment()` emits are recognized: with the
+    `@author` mention line and without it (Issue #1908).
+    """
     gate = FakeGate(
-        monkeypatch, history=[stop_comment_entry(_stop_comment(ISSUE))],
+        monkeypatch,
+        history=[stop_comment_entry(_stop_comment(ISSUE, mention=mention))],
     )
     caplog.set_level("INFO")
 
@@ -492,9 +531,13 @@ def test_enforce_does_not_rejudge_an_unchanged_stopped_ticket(
     assert "clarify_needs_detail" not in caplog.text
 
 
-def test_enforce_judges_again_after_the_body_changes(monkeypatch):
-    """Acceptance: an edited body is judged again and gets its new stop."""
-    stopped = dict(ISSUE, body="Make it better somehow.")
+@pytest.mark.parametrize(
+    ("field", "value"), [("body", "Make it better somehow."),
+                         ("title", "A different thin ticket")],
+)
+def test_enforce_judges_again_after_the_text_changes(monkeypatch, field, value):
+    """Acceptance: an edited title or body is judged again (#1904, #1908)."""
+    stopped = dict(ISSUE, **{field: value})
     verdict = clarify.ClarifyVerdict(
         passed=False, missing=("observable_result",),
     )
@@ -637,6 +680,98 @@ def test_enforce_fails_open_when_the_runner_identity_is_unreadable(
     assert len(gate.judged) == 1
     assert "clarify_check_skipped" in caplog.text
     assert "reason=ValueError" in caplog.text
+
+
+# --- Issue #1908: only the formal stop prefix is stop state ---------------
+
+def _failure_comment_quoting(quoted: str) -> str:
+    """The runner's own failure comment with `quoted` in its raw output.
+
+    The REAL reporter path (the Issue #1908 reproduction): a failed test
+    prints the marker, `_failure_evidence` copies the bounded stdout into
+    a code fence, and `failure_comment_body` renders the comment the
+    runner posts — whose prefix is the run marker plus the `failure` kind,
+    never a stop marker.
+    """
+    error = subprocess.CalledProcessError(1, ["pytest"], output=quoted)
+    evidence = failure_report._failure_evidence(
+        None, error, language_code="en",
+    )
+    return (
+        "<!-- orbi:run=aabbccdd -->\n"
+        "<!-- orbi:comment=failure -->\n"
+        + failure.failure_comment_body(
+            outcome="blocked", action="Repair the test", reason="Test failed",
+            diagnosis="Test failed", scene="- run: `aabbccdd`",
+            evidence=evidence, pr_url=None, issue="owner/project#7",
+            run_id="aabbccdd", language_code="en", issue_number=7,
+            issue_title=ISSUE["title"],
+        )
+    )
+
+
+def _comment_quoting(variant: str) -> str:
+    """One runner comment that mentions the stop marker without stopping."""
+    marker = clarify.stop_marker(ISSUE)
+    if variant == "failure_stdout":
+        body = _failure_comment_quoting(marker)
+    elif variant == "prose":
+        body = f"<!-- orbi:run=deadbeef -->\nThe log printed {marker} once.\n"
+    else:
+        assert variant == "code_fence"
+        body = f"<!-- orbi:run=deadbeef -->\n\n```\n{marker}\n```\n"
+    # The fixture reproduces the defect: the marker IS in the body.
+    assert marker in body
+    return body
+
+
+@pytest.mark.parametrize("variant", ["failure_stdout", "prose", "code_fence"])
+def test_enforce_ignores_a_stop_marker_quoted_in_a_runner_comment(
+    monkeypatch, caplog, variant,
+):
+    """Acceptance #1: quoted marker text is not stop state (Issue #1908).
+
+    docs/public-contracts.mdx: official metadata is the contiguous prefix
+    that begins with the run marker, so marker-shaped text quoted in prose,
+    a raw log or a code fence is not metadata. A failure comment the runner
+    posted earlier must not stop a ticket that was never stopped.
+    """
+    gate = FakeGate(
+        monkeypatch, history=[stop_comment_entry(_comment_quoting(variant))],
+        verdict=clarify.ClarifyVerdict(passed=True, missing=()),
+    )
+    caplog.set_level("INFO")
+
+    assert clarify.enforce(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is True
+    assert len(gate.judged) == 1
+    assert (gate.comments, gate.edits, gate.notified) == ([], [], [])
+    assert "clarify_already_stopped" not in caplog.text
+
+
+@pytest.mark.parametrize("variant", ["failure_stdout", "prose", "code_fence"])
+def test_enforce_still_stops_when_a_quoted_marker_is_newer(monkeypatch,
+                                                          variant):
+    """Acceptance #3: a newer quote never overrides an older genuine stop."""
+    gate = FakeGate(
+        monkeypatch,
+        history=[
+            stop_comment_entry(_stop_comment(ISSUE)),
+            # The runner's OWN newer comment that merely quotes it.
+            stop_comment_entry(_comment_quoting(variant)),
+        ],
+    )
+
+    assert clarify.enforce(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is False
+    assert gate.judged == []
+    assert gate.comments == []
+    assert gate.edits == [(
+        ISSUE["number"], REPO,
+        delivery_labels.NEEDS_DETAIL_LABEL, delivery_labels.READY_LABEL,
+    )]
 
 
 # --- the Issue #1831 ticket texts -----------------------------------------

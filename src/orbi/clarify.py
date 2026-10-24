@@ -26,9 +26,11 @@ ticket whose text still hashes to the newest stop is not judged,
 commented or notified again — it is simply stopped again (the claim label
 is removed, so it leaves the queue). Editing the ticket changes the digest
 and the next claim judges it again. Because that marker decides a claim,
-it is read only from THIS runner's own comments: the digest is derived
-from public ticket text, so anyone could compute a forged one, and a
-hidden marker never authenticates its author (docs/public-contracts.mdx).
+it is read only from the formal prefix of THIS runner's own comments: the
+digest is derived from public ticket text, so anyone could compute a
+forged one, a hidden marker never authenticates its author, and
+marker-shaped text quoted in prose, a raw log or a code fence is not
+official metadata (docs/public-contracts.mdx).
 
 The module is the pure judgment layer: the model call is the
 `pi_session.run_ticket_agent` leaf and the GitHub writes are the
@@ -52,7 +54,7 @@ from orbi.github import (
 )
 from orbi.journal import event
 from orbi.pi_session import run_ticket_agent
-from orbi.progress import run_marker
+from orbi.progress import RUN_MARKER_PATTERN, run_marker
 
 if TYPE_CHECKING:
     from orbi.config import RunnerConfig
@@ -122,8 +124,17 @@ _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 # stop's digest is not judged again: the comment and notification already
 # on the Issue cover it. Hidden because it is machine state, never prose.
 CLARIFY_STOP_MARKER = "orbi:clarify-stop"
+# The marker counts only in the formal prefix `render_comment()` writes
+# (Issue #1908): the optional `@author` mention line, then the comment's
+# run marker and then the stop marker. Marker-shaped text quoted deeper in
+# a comment — prose, a raw log or a code fence such as a failure comment's
+# `stdout_tail` — is not official metadata (docs/public-contracts.mdx),
+# and honoring it would stop a ticket the gate never rejected.
 _CLARIFY_STOP_RE = re.compile(
-    r"<!--\s*" + re.escape(CLARIFY_STOP_MARKER) + r":([0-9a-f]{64})\s*-->"
+    r"\A(?:@[^\s\n]+\n)?"
+    + RUN_MARKER_PATTERN.pattern
+    + r"\n<!-- " + re.escape(CLARIFY_STOP_MARKER)
+    + r":(?P<digest>[0-9a-f]{64}) -->"
 )
 
 
@@ -195,6 +206,11 @@ def _runner_login(issue: dict) -> str | None:
 def last_judged_digest(issue: dict, source_repo: str) -> str | None:
     """Return the digest of the newest stop by THIS runner, or None.
 
+    Only the formal prefix counts (Issue #1908): the optional author
+    mention line, the run marker and then the stop marker. Marker text
+    quoted anywhere else — including a failure comment's fenced stdout —
+    is not stop state, so a ticket that was never stopped keeps its claim.
+
     A marker on somebody else's comment is ignored (and journaled): it is
     a forged or copied marker, never a stop this engine recorded. The
     read fails open: an unreadable comment history means the gate judges
@@ -216,7 +232,7 @@ def last_judged_digest(issue: dict, source_repo: str) -> str | None:
         body = comment.get("body")
         if not isinstance(body, str):
             continue
-        match = _CLARIFY_STOP_RE.search(body)
+        match = _CLARIFY_STOP_RE.match(body)
         if match is None:
             continue
         if own is None:
@@ -231,7 +247,7 @@ def last_judged_digest(issue: dict, source_repo: str) -> str | None:
                 issue=issue["number"],
             )
             continue
-        return match.group(1)
+        return match.group("digest")
     return None
 
 
