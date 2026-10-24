@@ -14,6 +14,8 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
+from orbi.pi_activity import latest_session_file
+
 
 # Live Pi session following: the session subcommand is a
 # debug attachment (the journal and GitHub remain the daily entry
@@ -37,13 +39,17 @@ def find_session_file(repo_dir: Path) -> Path | None:
     worktrees = repo_dir / ".worktrees"
     if not worktrees.is_dir():
         return None
-    files = [
-        path for path in worktrees.glob("*/.pi-session/*.jsonl")
-        if path.is_file()
+    newest = [
+        found
+        for found in (
+            latest_session_file(directory)
+            for directory in worktrees.glob("*/.pi-session")
+        )
+        if found is not None
     ]
-    if not files:
+    if not newest:
         return None
-    return max(files, key=lambda path: path.stat().st_mtime)
+    return max(newest, key=lambda path: path.stat().st_mtime)
 
 
 def follow_session_file(path: Path,

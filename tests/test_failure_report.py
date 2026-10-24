@@ -20,6 +20,7 @@ against the post-move call, and the AI/human decision (`blocked` vs
 import ast
 import json
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -27,7 +28,8 @@ from pathlib import Path
 import pytest
 
 from orbi import (
-    failure_report, language, progress, runner, runner_health, scene,
+    failure_report, language, pi_activity, progress, runner, runner_health,
+    scene,
 )
 from tests.fakes.github import FakeGh
 from tests.fakes.progress import freeze_report_time
@@ -466,6 +468,31 @@ def test_failure_report_never_imports_runner():
     ]
     assert offenders == []
     assert not hasattr(failure_report, "runner")
+
+
+def test_latest_session_file_is_the_shared_newest_rule(tmp_path):
+    """Issue #1854: the worktree's `.pi-session` goes through the one
+    newest-`*.jsonl` rule in `pi_activity`, never a second copy of it."""
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir()
+    (session_dir / "notes.txt").write_text("nope\n", encoding="utf-8")
+    old = session_dir / "old.jsonl"
+    new = session_dir / "new.jsonl"
+    old.write_text("{}\n", encoding="utf-8")
+    new.write_text("{}\n", encoding="utf-8")
+    old_time = old.stat().st_mtime
+    os.utime(old, (old_time - 100, old_time - 100))
+    found = failure_report._latest_session_file(tmp_path)
+    assert found == new
+    assert found == pi_activity.latest_session_file(session_dir)
+
+
+def test_latest_session_file_is_none_without_a_worktree_or_a_session(
+        tmp_path):
+    assert failure_report._latest_session_file(None) is None
+    assert failure_report._latest_session_file(tmp_path) is None
+    (tmp_path / ".pi-session").mkdir()
+    assert failure_report._latest_session_file(tmp_path) is None
 
 
 def test_finish_progress_body_moved_to_progress():
