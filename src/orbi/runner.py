@@ -241,7 +241,7 @@ from orbi.github import (
     parse_paginated_issue_array,
 )
 from orbi.github_feedback import _check_summaries, pr_delivery_status, pr_delivery_rollup
-from orbi.checks import _classify_rollup, _render_check, test_status
+from orbi.checks import _render_check, classify_checks, test_status
 from orbi.gitops import (
     acquire_base_sync_lock,
     create_release_worktree,
@@ -2848,7 +2848,7 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
     # that a later read replaces. A failed check still runs the review:
     # the review session is the fixer, and the merge gate
     # re-reads the CI of the verdict's head one-shot.
-    pending, _failed = _classify_rollup(rollup)
+    pending, _failed, _passed = classify_checks(rollup)
     if pending:
         event(
             "delivery_ci_pending", issue=number, pr=pr_url,
