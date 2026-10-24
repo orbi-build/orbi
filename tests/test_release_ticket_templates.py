@@ -1,6 +1,6 @@
 """Release-ticket template contract (Issue #749).
 
-`parse_release_declaration` (src/orbi/release.py) is a strict, fail-fast
+`parse_release_declaration` (src/orbi/release_declaration.py) is a strict, fail-fast
 machine-readable contract, but before #749 it lived only in the parser
 docstring and in past release tickets — every new release ticket was
 copied from a historical one, and orbi-build/orbi-cloud#246 stalled on
@@ -36,13 +36,14 @@ import re
 from pathlib import Path
 
 from orbi.delivery_labels import READY_LABEL, RELEASE_LABEL
-from orbi.release import parse_release_declaration
+from orbi.release_declaration import parse_release_declaration
 
 ROOT = Path(__file__).resolve().parent.parent
 UI_TEMPLATE = ROOT / ".github" / "ISSUE_TEMPLATE" / "release.md"
 BODY_TEMPLATE = ROOT / ".github" / "release-ticket-template.md"
 
-# The parser's known keys (src/orbi/release.py parse_release_declaration;
+# The parser's known keys (src/orbi/release_declaration.py
+# parse_release_declaration;
 # the removed legacy `test_command` is an unknown field since #805).
 KNOWN_KEYS = frozenset({
     "version",

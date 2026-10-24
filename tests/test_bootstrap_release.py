@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -23,6 +24,7 @@ import orbi.github as github
 import orbi.journal as journal
 import orbi.milestone as milestone
 import orbi.release as release
+import orbi.release_declaration as release_declaration
 import orbi.release_git as release_git
 import orbi.runner as runner
 from orbi import config as config_domain
@@ -59,7 +61,7 @@ from tests.test_progress_wiring import make_fake_gh
 
 
 def test_parse_release_declaration_returns_all_fields():
-    decl = release.parse_release_declaration(RELEASE_DECLARATION_BODY)
+    decl = release_declaration.parse_release_declaration(RELEASE_DECLARATION_BODY)
     assert decl == {
         "version": "v0.3.0",
         "base_branch": "main",
@@ -75,7 +77,7 @@ def test_parse_release_declaration_rejects_a_legacy_test_command():
     CI result on the release commit), and an unknown field fails fast
     instead of being silently ignored."""
     with pytest.raises(ValueError, match="unknown field"):
-        release.parse_release_declaration(
+        release_declaration.parse_release_declaration(
             LEGACY_TEST_COMMAND_DECLARATION_BODY,
         )
 
@@ -87,21 +89,21 @@ def test_parse_release_declaration_rejects_test_timeout_seconds():
         "- scope:", "- test_timeout_seconds: 42\n- scope:",
     )
     with pytest.raises(ValueError, match="unknown field"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_accepts_package_json_version_file():
     body = RELEASE_DECLARATION_BODY.replace(
         "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: package.json\n",
     )
-    assert release.parse_release_declaration(body)["version_file"] == "package.json"
+    assert release_declaration.parse_release_declaration(body)["version_file"] == "package.json"
 
 
 def test_parse_release_declaration_accepts_none_version_file():
     body = RELEASE_DECLARATION_BODY.replace(
         "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: none\n",
     )
-    assert release.parse_release_declaration(body)["version_file"] == "none"
+    assert release_declaration.parse_release_declaration(body)["version_file"] == "none"
 
 
 @pytest.mark.parametrize(
@@ -114,7 +116,7 @@ def test_parse_release_declaration_accepts_ecosystem_version_file(version_file):
         "- version: v0.3.0\n",
         f"- version: v0.3.0\n- version_file: {version_file}\n",
     )
-    assert release.parse_release_declaration(body)["version_file"] == version_file
+    assert release_declaration.parse_release_declaration(body)["version_file"] == version_file
 
 
 def test_parse_release_declaration_rejects_invalid_version_file():
@@ -122,11 +124,11 @@ def test_parse_release_declaration_rejects_invalid_version_file():
         "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: version.txt\n",
     )
     with pytest.raises(ValueError, match="version_file"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_allows_milestone_only_tickets():
-    assert release.parse_release_declaration("no section here\n") == {}
+    assert release_declaration.parse_release_declaration("no section here\n") == {}
 
 
 def test_resolve_release_declaration_derives_milestone_contract(monkeypatch):
@@ -230,13 +232,13 @@ def test_resolve_release_declaration_requires_milestone_or_scope():
 def test_parse_release_declaration_requires_version():
     body = RELEASE_DECLARATION_BODY.replace("- version: v0.3.0\n", "")
     with pytest.raises(ValueError, match="version"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_requires_base_branch():
     body = RELEASE_DECLARATION_BODY.replace("- base_branch: main\n", "")
     with pytest.raises(ValueError, match="base_branch"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_requires_scope():
@@ -244,14 +246,14 @@ def test_parse_release_declaration_requires_scope():
              if not line.strip().startswith("- #")]
     body = "\n".join(line for line in lines if line.strip() != "- scope:") + "\n"
     with pytest.raises(ValueError, match="scope"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_empty_scope():
     lines = [line for line in RELEASE_DECLARATION_BODY.splitlines()
              if not line.strip().startswith("- #")]
     with pytest.raises(ValueError, match="scope"):
-        release.parse_release_declaration("\n".join(lines) + "\n")
+        release_declaration.parse_release_declaration("\n".join(lines) + "\n")
 
 
 def test_parse_release_declaration_rejects_duplicate_field():
@@ -259,7 +261,7 @@ def test_parse_release_declaration_rejects_duplicate_field():
         "\n## Notes", "\n- version: v9.9.9\n\n## Notes",
     )
     with pytest.raises(ValueError, match="version"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_unknown_key():
@@ -267,7 +269,7 @@ def test_parse_release_declaration_rejects_unknown_key():
         "\n## Notes", "\n- channel: stable\n\n## Notes",
     )
     with pytest.raises(ValueError, match="channel"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_version_with_space():
@@ -275,32 +277,56 @@ def test_parse_release_declaration_rejects_version_with_space():
         "- version: v0.3.0", "- version: v0.3 .0",
     )
     with pytest.raises(ValueError, match="version"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_empty_value():
     body = RELEASE_DECLARATION_BODY.replace("- base_branch: main",
                                             "- base_branch:")
     with pytest.raises(ValueError, match="base_branch"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_malformed_scope_item():
     body = RELEASE_DECLARATION_BODY.replace("  - #123", "  - #abc")
     with pytest.raises(ValueError, match="scope item"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_scope_item_without_hash():
     body = RELEASE_DECLARATION_BODY.replace("  - #123", "  - 123")
     with pytest.raises(ValueError, match="scope item"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_zero_scope_item():
     body = RELEASE_DECLARATION_BODY.replace("  - #123", "  - #0")
     with pytest.raises(ValueError, match="scope item"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
+
+
+def test_declaration_parser_is_a_leaf_of_the_release_state_machine():
+    """Issue #1643: the declaration syntax is readable, reviewable and
+    changeable on its own — importing the parser must not drag in the
+    release state machine (`orbi.release`) or the Runner (`orbi.runner`)."""
+    probe = (
+        "import sys\n"
+        "import orbi.release_declaration as declaration\n"
+        "assert declaration.parse_release_declaration('no section\\n') == {}\n"
+        "pulled = sorted(\n"
+        "    name for name in ('orbi.release', 'orbi.runner')\n"
+        "    if name in sys.modules\n"
+        ")\n"
+        "assert not pulled, pulled\n"
+    )
+    root = Path(__file__).resolve().parent.parent
+    env = dict(os.environ, PYTHONPATH=str(root / "src"))
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=str(root), env=env,
+        capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 # Issue #831: every declaration parse error names the violation AND the
@@ -311,8 +337,8 @@ def test_parse_release_declaration_rejects_zero_scope_item():
 # error copy cannot drift from the parser's supported set.
 
 def test_release_declaration_example_is_valid_parser_input():
-    assert release.parse_release_declaration(
-        release.RELEASE_DECLARATION_EXAMPLE,
+    assert release_declaration.parse_release_declaration(
+        release_declaration.RELEASE_DECLARATION_EXAMPLE,
     ) == {
         "version": "v1.2.0",
         "base_branch": "main",
@@ -323,7 +349,7 @@ def test_release_declaration_example_is_valid_parser_input():
 
 
 def test_missing_section_is_an_empty_override():
-    assert release.parse_release_declaration("release 1.2.0\n") == {}
+    assert release_declaration.parse_release_declaration("release 1.2.0\n") == {}
 
 
 @pytest.mark.parametrize(
@@ -415,12 +441,12 @@ def test_missing_section_is_an_empty_override():
 )
 def test_parse_error_messages_carry_the_expected_form(body, expected_form):
     with pytest.raises(ValueError) as excinfo:
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
     assert expected_form in str(excinfo.value)
 
 
 def test_parse_release_declaration_scope_from_milestone():
-    decl = release.parse_release_declaration(RELEASE_MILESTONE_DECLARATION_BODY)
+    decl = release_declaration.parse_release_declaration(RELEASE_MILESTONE_DECLARATION_BODY)
     assert decl == {
         "version": "v0.3.0",
         "base_branch": "main",
@@ -483,7 +509,7 @@ def test_verify_release_version_file_without_supported_file_points_at_none(monke
 
 
 def test_parse_release_declaration_manual_scope_has_no_milestone():
-    decl = release.parse_release_declaration(RELEASE_DECLARATION_BODY)
+    decl = release_declaration.parse_release_declaration(RELEASE_DECLARATION_BODY)
     assert decl["scope_from_milestone"] is None
 
 
@@ -492,7 +518,7 @@ def test_parse_release_declaration_rejects_scope_and_scope_from_milestone():
         "\n## Notes", "\n- scope:\n  - #123\n\n## Notes",
     )
     with pytest.raises(ValueError, match="exactly one"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_empty_scope_from_milestone():
@@ -500,7 +526,7 @@ def test_parse_release_declaration_rejects_empty_scope_from_milestone():
         "- scope_from_milestone: v0.3.0", "- scope_from_milestone:",
     )
     with pytest.raises(ValueError, match="scope_from_milestone"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_scope_from_milestone_with_space():
@@ -508,7 +534,7 @@ def test_parse_release_declaration_rejects_scope_from_milestone_with_space():
         "- scope_from_milestone: v0.3.0", "- scope_from_milestone: v0.3 .0",
     )
     with pytest.raises(ValueError, match="scope_from_milestone"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_is_release_detects_the_label():
@@ -4618,13 +4644,13 @@ def test_close_release_milestone_reraises_a_real_gh_failure(monkeypatch):
 
 def test_parse_release_declaration_rejects_non_string_body():
     with pytest.raises(ValueError, match="must be a string"):
-        release.parse_release_declaration(123)
+        release_declaration.parse_release_declaration(123)
 
 
 def test_parse_release_declaration_rejects_empty_section():
     # `## Release` is the very last line: the section holds no fields.
     with pytest.raises(ValueError, match="version"):
-        release.parse_release_declaration("Ship it.\n\n## Release\n")
+        release_declaration.parse_release_declaration("Ship it.\n\n## Release\n")
 
 
 def test_parse_release_declaration_rejects_colonless_field_line():
@@ -4634,19 +4660,19 @@ def test_parse_release_declaration_rejects_colonless_field_line():
         "## Release\n", "## Release\n\n- broken\n",
     )
     with pytest.raises(ValueError, match=r"field 'broken' is malformed"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_inline_scope_value():
     body = RELEASE_DECLARATION_BODY.replace("- scope:\n", "- scope: 123\n")
     with pytest.raises(ValueError, match="not an inline value"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_plain_line_in_scope():
     body = RELEASE_DECLARATION_BODY.replace("  - #123", "hello")
     with pytest.raises(ValueError, match=r"scope item 'hello' is malformed"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_plain_line_outside_scope():
@@ -4657,7 +4683,7 @@ def test_parse_release_declaration_rejects_plain_line_outside_scope():
         "## Release\n", "## Release\n\nhello\n",
     )
     with pytest.raises(ValueError, match=r"line 'hello' is not a"):
-        release.parse_release_declaration(body)
+        release_declaration.parse_release_declaration(body)
 
 
 def test_verify_release_scope_reraises_real_issue_gh_failure(monkeypatch):
