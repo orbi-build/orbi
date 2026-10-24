@@ -2586,6 +2586,15 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     assert "external_commits=" in comment
     assert "commits=" in comment
     assert "<!-- orbi:run=a1b2c3d4 -->" in comment
+    # Issue #1858: the merged milestone folds into the run's LIVE progress
+    # comment as `key: value` rows, and `progress_display` renders a known
+    # key under its localised label (`review_rounds` -> 评审轮次). The round
+    # count keeps that row: a renamed raw `rounds` row would silently drop
+    # the field from the progress comment (the golden trace skips the
+    # progress writes, so the milestone is asserted here).
+    milestone = [body for body in posted if "Orbi: merged" in body]
+    assert len(milestone) == 1
+    assert "- review_rounds: 1\n" in milestone[0]
     # Delivery labels land before the local checkout sync: a sync
     # failure must not rewrite a landed merge as ai-blocked.
     assert calls.index(("edit", {"repo": "owner/repo", "add": "ai-merged",

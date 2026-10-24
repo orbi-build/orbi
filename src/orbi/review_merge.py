@@ -1114,7 +1114,6 @@ def _round_external_phase(work: _Round) -> bool:
             language_code=bound,
         ) + "\n"
         + language.text(bound, "review.review_report_open")
-        # A merge-only resume ran no session, so it has no report to quote.
         + "````\n" + work.session_output.rstrip("\n")
         + "\n````\n\n</details>\n\n"
         + language.text(
@@ -1341,7 +1340,7 @@ def _round_closeout_phase(work: _Round, merged: dict) -> None:
         action=lambda: work.publisher.milestone(
             f"merged: {merged['url']} "
             f"(merge_commit={confirmed['merge_commit']} "
-            f"rounds={round} "
+            f"review_rounds={round} "
             f"external_commits={external_commits} "
             f"commits={pr_commits})"
         ),
