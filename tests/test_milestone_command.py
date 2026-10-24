@@ -27,7 +27,7 @@ from orbi import milestone
 from orbi import milestone_command
 from orbi import ticket_command
 from orbi.delivery_labels import READY_LABEL, RELEASE_LABEL
-from orbi.release import parse_release_declaration
+from orbi.release_declaration import parse_release_declaration
 from orbi.repo_config import RepoPolicy
 
 from tests.fakes.milestone_gh import FakeMilestoneGh

@@ -277,7 +277,6 @@ from orbi.journal import (
 from orbi.release import (
     RELEASE_CI_WAIT_SECONDS,
     RELEASE_DELIVERIES_WAIT_SECONDS,
-    RELEASE_SECTION,
     ROLE_RELEASE,
     ReleaseDeliveriesWaiting,
     release_target_milestone,
