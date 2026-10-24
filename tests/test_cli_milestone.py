@@ -541,6 +541,48 @@ def test_milestone_set_duplicate_exact_title_fails_without_touching_config(
     assert config_path.read_text(encoding="utf-8") == original
 
 
+def test_milestone_set_missing_title_error_line_is_byte_identical(
+    tmp_path, monkeypatch, capsys,
+):
+    """Issue #1890: the missing-title line is the command's published
+    contract (a maintainer reads it to pick the exact title), so the shared
+    lookup helper must not change one byte of it."""
+    config_path = make_world(tmp_path)
+    gh = FakeGh(REPO)
+    gh.add_milestone(1, title="v0.5.0", state="closed")
+    gh.add_milestone(2, title="v0.6.0", open_issues=3)
+    wire(monkeypatch, gh)
+
+    assert run_set(config_path, "v0.9.9") == 1
+
+    assert capsys.readouterr().err == (
+        "milestone_set_failed reason=milestone_not_found title='v0.9.9' "
+        f"repo={REPO} open milestones: v0.6.0(3); fix=use one exact title "
+        f"from `gh api repos/{REPO}/milestones?state=open "
+        "--jq '.[].title'`\n"
+    )
+
+
+def test_milestone_set_ambiguous_title_error_line_is_byte_identical(
+    tmp_path, monkeypatch, capsys,
+):
+    """Issue #1890: the duplicate-title refusal keeps its exact wording and
+    its match count, which the shared lookup helper supplies."""
+    config_path = make_world(tmp_path)
+    gh = FakeGh(REPO)
+    gh.add_milestone(1, title="v0.6.0", open_issues=3)
+    gh.add_milestone(2, title="v0.6.0", state="closed")
+    wire(monkeypatch, gh)
+
+    assert run_set(config_path, "v0.6.0") == 1
+
+    assert capsys.readouterr().err == (
+        "milestone_set_failed reason=milestone_ambiguous title='v0.6.0' "
+        f"repo={REPO}: the exact title matches 2 Milestones; fix=rename or "
+        "close the duplicate Milestone first\n"
+    )
+
+
 def test_milestone_set_gh_api_failure_fails_fast_without_touching_config(
     tmp_path, monkeypatch, capsys,
 ):

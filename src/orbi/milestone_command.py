@@ -368,6 +368,66 @@ def _land_active_milestone(
     return f"host config {config_path}"
 
 
+def format_open_milestones(milestones: list[object]) -> str:
+    """The open Milestone titles with their open-Issue counts, or "(none)".
+
+    The repair input every exact-title lookup prints: which titles a
+    maintainer can actually choose. GitHub's own ``open_issues`` counter is
+    used verbatim, never derived (Issue #663).
+    """
+    return ", ".join(
+        f"{milestone.get('title')}({milestone.get('open_issues')})"
+        for milestone in milestones
+        if isinstance(milestone, dict) and milestone.get("state") == "open"
+    ) or "(none)"
+
+
+class MilestoneLookupError(Exception):
+    """An exact Milestone title did not resolve to exactly one Milestone.
+
+    ``reason`` is ``"missing"`` (no Milestone carries the title) or
+    ``"ambiguous"`` (GitHub does not enforce unique Milestone titles, so a
+    duplicate is a hard error, never a guess). The facts are carried
+    instead of a finished message because each caller prints its own
+    structured line — the idle advance's ``active_milestone_*`` line versus
+    the CLI's ``milestone_set_failed`` line — so the lookup rule and its
+    two failure reasons are written once (Issue #1890).
+    """
+
+    def __init__(self, reason: str, title: object, *, count: int,
+                 open_milestones: str) -> None:
+        super().__init__(
+            f"milestone_lookup_failed reason={reason} title={title!r} "
+            f"matches={count}; open milestones: {open_milestones}"
+        )
+        self.reason = reason
+        self.title = title
+        self.count = count
+        self.open_milestones = open_milestones
+
+
+def find_exact_milestone(milestones: list[object], title: object) -> dict:
+    """Return the ONE Milestone whose title is exactly ``title``.
+
+    The single exact-title rule the idle advance and ``orbi milestone set``
+    both read (Issue #1890): a dict entry whose ``title`` equals the
+    configured/requested value, whatever its state — the closed-target
+    policy belongs to the caller. A missing or duplicated title raises
+    ``MilestoneLookupError`` with the facts the caller's error line needs.
+    """
+    matches = [
+        milestone for milestone in milestones
+        if isinstance(milestone, dict) and milestone.get("title") == title
+    ]
+    if len(matches) != 1:
+        raise MilestoneLookupError(
+            "missing" if not matches else "ambiguous", title,
+            count=len(matches),
+            open_milestones=format_open_milestones(milestones),
+        )
+    return matches[0]
+
+
 class MilestoneSetError(Exception):
     """The `milestone set` fail-fast error: one structured line (reason + fix)."""
 
@@ -440,29 +500,23 @@ def milestone_set(
             "fix=check `gh auth status` and Milestone read access to "
             f"{repo}"
         ) from exc
-    matches = [
-        milestone for milestone in milestones
-        if isinstance(milestone, dict) and milestone.get("title") == title
-    ]
-    if not matches:
-        open_list = ", ".join(
-            f"{milestone.get('title')}({milestone.get('open_issues')})"
-            for milestone in milestones
-            if isinstance(milestone, dict) and milestone.get("state") == "open"
-        ) or "(none)"
-        raise MilestoneSetError(
-            f"milestone_set_failed reason=milestone_not_found title={title!r} "
-            f"repo={repo} open milestones: {open_list}; fix=use one exact "
-            "title from `gh api "
-            f"repos/{repo}/milestones?state=open --jq '.[].title'`"
-        )
-    if len(matches) > 1:
+    try:
+        target_milestone = find_exact_milestone(milestones, title)
+    except MilestoneLookupError as exc:
+        if exc.reason == "missing":
+            raise MilestoneSetError(
+                "milestone_set_failed reason=milestone_not_found "
+                f"title={title!r} repo={repo} open milestones: "
+                f"{exc.open_milestones}; "
+                "fix=use one exact title from `gh api "
+                f"repos/{repo}/milestones?state=open --jq '.[].title'`"
+            ) from None
         raise MilestoneSetError(
             f"milestone_set_failed reason=milestone_ambiguous title={title!r} "
-            f"repo={repo}: the exact title matches {len(matches)} "
+            f"repo={repo}: the exact title matches {exc.count} "
             "Milestones; fix=rename or close the duplicate Milestone first"
-        )
-    if auto_next_milestone and matches[0].get("state") == "closed":
+        ) from None
+    if auto_next_milestone and target_milestone.get("state") == "closed":
         # A closed active_milestone is exactly what the next idle tick's
         # auto-advance rewrites (Issue #933): reporting success here would
         # promise a claim scope that is undone one tick later.
