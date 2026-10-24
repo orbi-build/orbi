@@ -266,7 +266,6 @@ from orbi.journal import (
     issue_context,
     log_format,
     new_run_id,
-    quote_value,
     run_command,
     run_git_network_command,
     set_active_pi,
