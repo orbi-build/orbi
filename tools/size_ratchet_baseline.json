@@ -1,7 +1,6 @@
 {
   "oversized_modules": {
     "pi_process.py": 1174,
-    "release.py": 1520,
     "review_merge.py": 1263,
     "runner.py": 3065
   },

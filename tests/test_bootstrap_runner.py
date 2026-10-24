@@ -29,7 +29,7 @@ import orbi.resume_verification as resume_verification
 import orbi.run_state as run_state
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
-import orbi.release as release
+import orbi.release_run as release_run
 import orbi.github as github
 from orbi import failure, pi_command, pi_stream_log, progress
 from tests.fakes.bootstrap_pi import (
@@ -577,7 +577,7 @@ def _spy_process_release(monkeypatch) -> list:
         calls.append(args)
         return "done"
 
-    import orbi.release as release_module
+    import orbi.release_run as release_module
     monkeypatch.setattr(release_module, "process_release", spy)
     return calls
 
@@ -6111,7 +6111,7 @@ def test_process_issue_routes_release_to_process_release(monkeypatch):
     monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps({"labels": []}),
     )
-    monkeypatch.setattr(release, "process_release",
+    monkeypatch.setattr(release_run, "process_release",
                         lambda i, c, r: calls.append("release") or "rel-url")
     monkeypatch.setattr(pi_session, "run_pi", Mock(
         side_effect=AssertionError("run_pi must not run for a release task")))

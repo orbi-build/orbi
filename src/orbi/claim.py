@@ -40,7 +40,8 @@ from orbi.resume_scan import (
 )
 from orbi import language, user_summary
 from orbi.progress import run_marker
-from orbi.release import _epic_audit, epic_audit_posted, release_target_milestone
+from orbi.release import release_target_milestone
+from orbi.release_comments import _epic_audit, epic_audit_posted
 from orbi.repo_config import (
     RepoConfigError, RepoPolicy, load_repo_policy, merged_repo_language,
 )
