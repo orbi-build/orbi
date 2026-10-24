@@ -94,6 +94,9 @@ FAKE_RUN_ID = "a1b2c3d4"
 FAKE_BRANCH = f"orbi/owner-repo-issue-9"
 FAKE_WORKTREE = "/srv/repo/.worktrees/orbi-owner-repo-issue-9-a1b2c3d4"
 FAKE_PR_URL = "https://github.com/owner/repo/pull/9"
+# The merge commit of a MERGED scene PR (`gh pr view --json mergeCommit`),
+# the fact a resume closeout journals (Issue #1895).
+MERGED_COMMIT = "9f1e2d3c4b5a69788796a5b4c3d2e1f009182736"
 
 
 def test_missing_pr_scene_recovery_republishes_from_run_state(monkeypatch):
@@ -3456,17 +3459,24 @@ def test_verify_resumed_pr_blocked_comment_follows_the_language_without_path(
     assert str(worktree) not in body
 
 
-def _closed_scene_gh(monkeypatch):
+def _closed_scene_gh(monkeypatch, *, issue_close_fails: bool = False):
     """The FakeGh wired into the ONE subprocess seam beside the two
     local git reads the resume verification makes (the branch and HEAD
     of the derived worktree). The git dispatch indexes single argv
-    elements — no argv-shape asserts (Issue #789)."""
+    elements — no argv-shape asserts (Issue #789).
+
+    `issue_close_fails` makes the merged scene's `gh issue close` fail
+    as a real 5xx does (Issue #1895's #1801 failure path)."""
     fake = FakeGh("owner/repo")
     git_reads = {"branch": FAKE_BRANCH, "rev-parse": "head"}
 
     def run(command, **kwargs):
         if command[0] == "git":
             return git_reads[command[1]]
+        if issue_close_fails and command[1:3] == ["issue", "close"]:
+            raise subprocess.CalledProcessError(
+                1, command, output="", stderr="gh: HTTP 502",
+            )
         return fake(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", run)
@@ -3504,16 +3514,26 @@ def test_verify_pr_zero_open_prs_raises_typed_closed_scene_error(
 def test_verify_resumed_pr_scene_pr_merged_between_ticks_does_not_block(
     monkeypatch, tmp_path, caplog, bind_run_id,
 ):
-    """Issue #788: the resumed path IS the path, so a scene PR merged
-    between ticks is a NORMAL state, not a crash leftover. The `Fixes
-    #N` keyword closed the Issue natively when the merge landed — the
-    runner journals the fact and stops; blocking a DELIVERED Issue as
-    `ai-blocked` (a human must decide) writes noise on a decided fact
-    and is gone."""
+    """Issue #788 + #1895: the resumed path IS the path, so a scene PR
+    merged between ticks is a NORMAL state, not a crash leftover — the
+    delivery is recorded exactly like a normal merge closeout and the
+    tick ends handled (never `ai-blocked`, which would make a DELIVERED
+    Issue a human decision).
+
+    GitHub only applies the `Fixes #N` keyword when the PR merge is
+    made by a person or an App: a merge made with a workflow's
+    `GITHUB_TOKEN` leaves the Issue open, the resume scan re-selected
+    the same Issue every tick and the queue stopped for 108 minutes
+    (production, 2026-10-23). So the resume closes it itself: `ai-merged`
+    (the opened-PR state label and the resolved ready label cleared) and
+    the source Issue closed through `close_issue_after_landed_merge`
+    with the PR's merge commit (Issue #1801's closeout, reached from the
+    resume path)."""
     fake = _closed_scene_gh(monkeypatch)
-    fake.add_issue(9, labels=("ai-pr-opened",))
+    fake.add_issue(9, labels=("ai-fix-needed", READY_LABEL))
     fake.add_pr(9, head=FAKE_BRANCH, state="MERGED",
-                merged_at="2026-09-13T00:00:00Z")
+                merged_at="2026-09-13T00:00:00Z",
+                merge_commit=MERGED_COMMIT)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
@@ -3522,12 +3542,47 @@ def test_verify_resumed_pr_scene_pr_merged_between_ticks_does_not_block(
             _closed_scene(external=False), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
-    # No label change, no comment: the native Fixes #N close owns the
-    # delivered Issue; only the journal records the observation.
-    assert fake.issues[9]["labels"] == ["ai-pr-opened"]
+    # The terminal state a normal merge produces: `ai-merged` alone, and
+    # no comment — nothing is left for a human to read on a decided fact.
+    assert fake.issues[9]["labels"] == ["ai-merged"]
+    assert fake.issues[9]["state"] == "closed"
     assert fake.issues[9]["comments"] == []
     assert fake.prs[9]["comments"] == []
     assert "delivery_merged" in caplog.text
+    # The close carries the PR's merge commit, the same fact the normal
+    # merge closeout journals.
+    assert "issue_closed_after_landed_merge" in caplog.text
+    assert MERGED_COMMIT in caplog.text
+
+
+def test_verify_resumed_pr_merged_scene_close_failure_still_lands_merged(
+    monkeypatch, tmp_path, caplog, bind_run_id,
+):
+    """Issue #1801 failure semantics reached from the resume path
+    (#1895): the merge already landed, so a failed `gh issue close` is
+    bookkeeping. `ai-merged` is applied anyway, the failure is journaled
+    as `issue_close_failed` with the merge commit, and the scene stays
+    the SAME handled resume outcome (`ResumePrClosedError`, exit 0) —
+    never a failed delivery and never `ai-blocked`."""
+    fake = _closed_scene_gh(monkeypatch, issue_close_fails=True)
+    fake.add_issue(9, labels=("ai-pr-opened",))
+    fake.add_pr(9, head=FAKE_BRANCH, state="MERGED",
+                merged_at="2026-09-13T00:00:00Z",
+                merge_commit=MERGED_COMMIT)
+    expected_resume_worktree(tmp_path).mkdir(parents=True)
+    bind_run_id(FAKE_RUN_ID)
+    caplog.set_level("INFO")
+    with pytest.raises(pr_verification.ResumePrClosedError):
+        resume_verification.verify_resumed_pr(
+            _closed_scene(external=False), make_resume_issue(),
+            make_resume_config(tmp_path), "owner/repo",
+        )
+    assert fake.issues[9]["labels"] == ["ai-merged"]
+    assert fake.issues[9]["state"] == "open"
+    assert "issue_close_failed" in caplog.text
+    assert MERGED_COMMIT in caplog.text
+    # Nothing reported the delivery as failed: no failure comment.
+    assert fake.issues[9]["comments"] == []
 
 
 def test_verify_resumed_pr_external_pr_closed_between_ticks_requeues(

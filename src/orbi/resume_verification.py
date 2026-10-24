@@ -34,8 +34,10 @@ from orbi import config as config_domain
 from orbi import failure_report
 from orbi import language
 from orbi import pr_verification
+from orbi import run_state
 from orbi.delivery_labels import (
     EVENT_CLAIM,
+    EVENT_MERGED,
     EVENT_REQUEUE,
     PR_OPENED_LABEL,
     READY_LABEL,
@@ -241,10 +243,24 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 raise
             if exc.scene_pr_state == "MERGED":
                 # A human merged the delivery PR (or a crash landed
-                # between the merge and the label write): the `Fixes #N`
-                # keyword closed the Issue natively — nothing to decide.
+                # between the merge and the label write): the merge is a
+                # decided fact, so nothing is left to decide — the
+                # delivery is recorded and the tick ends handled.
                 event(
                     "delivery_merged", issue=number, pr=scene["pr_url"],
+                )
+                # GitHub applies the `Fixes #N` keyword only to a merge
+                # made by a person or an App; a merge made with a
+                # workflow's `GITHUB_TOKEN` leaves the source Issue open,
+                # and the resume scan then re-selected this same Issue on
+                # every tick while the whole queue waited (Issue #1895).
+                # So the resume applies the SAME merged closeout a normal
+                # merge does (#1801's landing close included): the
+                # Issue becomes `ai-merged` and is closed. On the ordinary
+                # path GitHub's own keyword still owns that close.
+                _record_merged_issue(
+                    number, source_repo, merge_commit=exc.merge_commit,
+                    ready_label=config.dispatch_label or READY_LABEL,
                 )
                 raise
         LOGGER.exception(
@@ -296,6 +312,27 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
         if reported and isinstance(exc, MissingFixesError):
             raise ReportedMissingFixesError(str(exc)) from exc
         raise
+
+
+def _record_merged_issue(number: int, source_repo: str, *,
+                         merge_commit: str, ready_label: str) -> None:
+    """Record a resumed delivery whose scene PR GitHub reports MERGED.
+
+    The terminal label transition is the normal merge's (`EVENT_MERGED`:
+    `ai-merged` alone), and the source Issue is closed through the
+    existing landed-merge closeout (Issue #1801) — a failed close is
+    journaled by that helper and never rewrites the merge, which already
+    landed. On the ordinary path GitHub's closing keyword still closes
+    the Issue; no keyword is parsed here (Issue #1895).
+    """
+    apply_label_patch(
+        number, repo=source_repo, event=EVENT_MERGED,
+        current_labels=issue_labels(number, repo=source_repo),
+        ready_label=ready_label,
+    )
+    run_state.close_issue_after_landed_merge(
+        number, repo=source_repo, merge_commit=merge_commit,
+    )
 
 
 def _requeue_closed_external_takeover(

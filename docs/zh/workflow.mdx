@@ -91,7 +91,11 @@ ai-ready                任务被派发（orbi add，或人工加标签）
                         （Issue #1526；不回溯已合并的 Issue）；
                         PR body 的 Fixes #N 原生关闭 Issue；若合并已落地但
                         GitHub 从未把 PR 标记为 merged，则由引擎自行关闭
-                        （Issue #1801）
+                        （Issue #1801）；resume 时若 PR 已被 GitHub 报告为
+                        merged 而 Issue 仍未关闭也由引擎关闭——用 workflow 的
+                        GITHUB_TOKEN 合并不会触发关闭关键字，resume 因此记录
+                        ai-merged 并关闭 Issue，而不是每个 tick 反复恢复它
+                        （Issue #1895）
   -> ai-awaiting-merge  已知策略阻塞：Issue 评论写明维护者要做的一件事；
                         Orbi 只在队列无事可做的 tick 重试合并，
                         维护者完成后合并指定 head
