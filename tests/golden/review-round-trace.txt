@@ -1,0 +1,102 @@
+## scenario: clean-merge
+answer: True
+command ["gh", "pr", "view", "4", "--json", "mergeable"]
+command ["git", "rev-parse", "HEAD"]
+command ["git", "rev-list", "--count", "m1^1..m1^2"]
+label {"add": "ai-merged", "remove": "ai-pr-opened", "repo": "owner/repo"}
+comment
+  <!-- orbi:run=a1b2c3d4 -->
+  <!-- orbi:comment=merged -->
+  Orbi merged PR: u
+  **#4 Review task**
+  - review: pass, no findings
+  - merged into: main
+  
+  <details><summary>Run details</summary>
+  
+  - merge_commit=m1
+  - review_rounds=1
+  - commits=unknown
+  - external_commits=unknown
+  - run_id=a1b2c3d4
+  - pr_url=u
+  
+  </details>
+command ["gh", "issue", "view", "4", "--repo", "owner/repo", "--json", "comments"]
+merge_gate: [{"base": "main", "head": "h1", "issue": 4, "language": "en", "pr": 4, "repo_dir": "<worktree>", "run_id": "a1b2c3d4"}]
+journal:
+  INFO review pr=4 round=1 verdict=pass blockers=0 majors=0
+
+## scenario: findings
+answer: False
+command ["gh", "pr", "view", "4", "--json", "mergeable"]
+command ["git", "rev-parse", "HEAD"]
+comment
+  <!-- orbi:run=a1b2c3d4 -->
+  <!-- orbi:comment=review-round -->
+  Orbi review round 1 for PR #4: 1 blocker(s), 0 major(s).
+  **#4 Review task**
+  
+  ### Findings
+  
+  - **Level:** Blocker
+    **Location:** a.py:1
+    **Note:** x
+    **Fix:** 
+  <!-- orbi:scene:v1 {"base_advance_round": 0, "base_branch": "main", "base_sha": "b1", "external": "", "pr_url": "u", "review_round": 1, "run_id": "a1b2c3d4", "schema": 1, "verdict_head_unknown_round": 0} -->
+command ["gh", "pr", "comment", "4", "--repo", "owner/repo", "--body", "<!-- orbi:run=a1b2c3d4 -->\n<!-- orbi:comment=review-round -->\nOrbi review round 1 for PR #4: 1 blocker(s), 0 major(s).\n**#4 Review task**\n\n### Findings\n\n- **Level:** Blocker\n  **Location:** a.py:1\n  **Note:** x\n  **Fix:** \n<!-- orbi:scene:v1 {\"base_advance_round\": 0, \"base_branch\": \"main\", \"base_sha\": \"b1\", \"external\": \"\", \"pr_url\": \"u\", \"review_round\": 1, \"run_id\": \"a1b2c3d4\", \"schema\": 1, \"verdict_head_unknown_round\": 0} -->\n\n<!-- runner=<fingerprint> -->"]
+label {"add": "ai-fix-needed", "remove": "ai-pr-opened", "repo": "owner/repo"}
+merge_gate: not called
+journal:
+  INFO review pr=4 round=1 verdict=findings blockers=1 majors=0
+  INFO review_findings_unfixed pr=4 round=1
+
+## scenario: gate-failure
+answer: False
+command ["gh", "pr", "view", "4", "--json", "mergeable"]
+command ["git", "rev-parse", "HEAD"]
+comment
+  <!-- orbi:run=a1b2c3d4 -->
+  <!-- orbi:comment=failure -->
+  Orbi base advance retry 1 for PR #4:
+  **#4 Review task**
+  
+  Merge gate blocked: PR #4 head h1 is behind latest remote base origin/main (b2); absorb the latest base, rerun tests and review, then retry (run_id=a1b2c3d4)
+  
+  The next review session merges the latest origin/main into the branch in-session, resolves conflicts, and reruns the full test suite
+  <!-- orbi:scene:v1 {"base_advance_round": 1, "base_branch": "main", "base_sha": "b1", "external": "", "pr_url": "u", "review_round": 0, "run_id": "a1b2c3d4", "schema": 1, "verdict_head_unknown_round": 0} -->
+command ["gh", "pr", "comment", "4", "--repo", "owner/repo", "--body", "<!-- orbi:run=a1b2c3d4 -->\n<!-- orbi:comment=failure -->\nOrbi base advance retry 1 for PR #4:\n**#4 Review task**\n\nMerge gate blocked: PR #4 head h1 is behind latest remote base origin/main (b2); absorb the latest base, rerun tests and review, then retry (run_id=a1b2c3d4)\n\nThe next review session merges the latest origin/main into the branch in-session, resolves conflicts, and reruns the full test suite\n<!-- orbi:scene:v1 {\"base_advance_round\": 1, \"base_branch\": \"main\", \"base_sha\": \"b1\", \"external\": \"\", \"pr_url\": \"u\", \"review_round\": 0, \"run_id\": \"a1b2c3d4\", \"schema\": 1, \"verdict_head_unknown_round\": 0} -->\n\n<!-- runner=<fingerprint> -->"]
+label {"add": "ai-fix-needed", "remove": "ai-pr-opened", "repo": "owner/repo"}
+merge_gate: [{"base": "main", "head": "h1", "issue": 4, "language": "en", "pr": 4, "repo_dir": "<worktree>", "run_id": "a1b2c3d4"}]
+journal:
+  INFO review pr=4 round=1 verdict=pass blockers=0 majors=0
+
+## scenario: handoff
+answer: False
+command ["gh", "pr", "view", "4", "--json", "mergeable"]
+command ["git", "rev-parse", "HEAD"]
+label {"add": "ai-awaiting-merge", "remove": "ai-pr-opened", "repo": "owner/repo"}
+comment
+  <!-- orbi:run=a1b2c3d4 -->
+  Orbi: PR #4 is delivered and waiting for a maintainer action.
+  **#4 Review task**
+  **Action:** After the named policy action, Orbi will resume and merge the PR.
+  - pr: #4
+  - head: `h1`
+  blocked by this repository policy:
+  ````
+  merge_gate: FAILED exact repair action
+  ````
+merge_gate: [{"base": "main", "head": "h1", "issue": 4, "language": "en", "pr": 4, "repo_dir": "<worktree>", "run_id": "a1b2c3d4"}]
+journal:
+  INFO review pr=4 round=1 verdict=pass blockers=0 majors=0
+  INFO delivery_awaiting_human_merge issue=4 pr=4 head=h1
+
+## scenario: deferred
+answer: False
+command ["gh", "pr", "view", "4", "--json", "mergeable"]
+command ["git", "rev-parse", "HEAD"]
+merge_gate: [{"base": "main", "head": "h1", "issue": 4, "language": "en", "pr": 4, "repo_dir": "<worktree>", "run_id": "a1b2c3d4"}]
+journal:
+  INFO review pr=4 round=1 verdict=pass blockers=0 majors=0
+  INFO review_merge_deferred pr=4 round=1 reason="PR #4 CI is still running (tests); the merge is deferred to the next tick"
