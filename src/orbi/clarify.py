@@ -20,6 +20,16 @@ every error path: a model error, timeout or malformed answer, or a failed
 comment/label write, logs `clarify_check_skipped` and lets the delivery
 proceed — a broken bypass must never silently lose a ticket.
 
+A stop is recorded ONCE per ticket text (Issue #1904): the stop comment
+carries a hidden digest of the text the gate judged, and a re-readied
+ticket whose text still hashes to the newest stop is not judged,
+commented or notified again — it is simply stopped again (the claim label
+is removed, so it leaves the queue). Editing the ticket changes the digest
+and the next claim judges it again. Because that marker decides a claim,
+it is read only from THIS runner's own comments: the digest is derived
+from public ticket text, so anyone could compute a forged one, and a
+hidden marker never authenticates its author (docs/public-contracts.mdx).
+
 The module is the pure judgment layer: the model call is the
 `pi_session.run_ticket_agent` leaf and the GitHub writes are the
 `orbi.github` leaves, both resolved at call time so a test's seam patch
@@ -27,6 +37,7 @@ intercepts them.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -35,7 +46,10 @@ from typing import TYPE_CHECKING
 
 from orbi import language, notify, user_summary
 from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
-from orbi.github import comment_issue, edit_issue
+from orbi.github import (
+    authenticated_github_login, comment_issue, edit_issue, issue_comments,
+    strip_bot_suffix,
+)
 from orbi.journal import event
 from orbi.pi_session import run_ticket_agent
 from orbi.progress import run_marker
@@ -103,6 +117,15 @@ CLARIFY_TIMEOUT_SECONDS = 120
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+# The stop comment carries the digest of the exact text the gate judged
+# (Issue #1904). A re-readied ticket whose text still hashes to the newest
+# stop's digest is not judged again: the comment and notification already
+# on the Issue cover it. Hidden because it is machine state, never prose.
+CLARIFY_STOP_MARKER = "orbi:clarify-stop"
+_CLARIFY_STOP_RE = re.compile(
+    r"<!--\s*" + re.escape(CLARIFY_STOP_MARKER) + r":([0-9a-f]{64})\s*-->"
+)
+
 
 def _author_mention(issue: dict) -> str:
     """Return the `@login` mention for the Issue author, or "".
@@ -137,6 +160,89 @@ def build_context(issue: dict) -> str:
         f"Issue #{issue['number']}: {issue['title']}\n\n"
         f"{issue.get('body') or ''}"
     )
+
+
+def judged_digest(issue: dict) -> str:
+    """The digest of the exact text one judgment reads (Issue #1904)."""
+    return hashlib.sha256(build_context(issue).encode("utf-8")).hexdigest()
+
+
+def stop_marker(issue: dict) -> str:
+    """The hidden marker a stop comment carries for its judged text."""
+    return f"<!-- {CLARIFY_STOP_MARKER}:{judged_digest(issue)} -->"
+
+
+def _runner_login(issue: dict) -> str | None:
+    """The login this runner posts with, or None when it cannot be read.
+
+    The stop marker steers a claim, so it is only accepted from this
+    runner's own comments: the digest is computed from public ticket text,
+    so any commenter could forge one, and a hidden marker never
+    authenticates its author (docs/public-contracts.mdx). The identity
+    read fails OPEN — an unreadable login means the gate judges the
+    ticket exactly as before Issue #1904.
+    """
+    try:
+        return strip_bot_suffix(authenticated_github_login())
+    except Exception as exc:
+        event(
+            "clarify_check_skipped", level=logging.WARNING,
+            issue=issue["number"], reason=type(exc).__name__,
+        )
+        return None
+
+
+def last_judged_digest(issue: dict, source_repo: str) -> str | None:
+    """Return the digest of the newest stop by THIS runner, or None.
+
+    A marker on somebody else's comment is ignored (and journaled): it is
+    a forged or copied marker, never a stop this engine recorded. The
+    read fails open: an unreadable comment history means the gate judges
+    the ticket exactly as it did before Issue #1904, so a broken read
+    never loses a delivery.
+    """
+    try:
+        comments = issue_comments(issue["number"], repo=source_repo)
+    except Exception as exc:
+        event(
+            "clarify_check_skipped", level=logging.WARNING,
+            issue=issue["number"], reason=type(exc).__name__,
+        )
+        return None
+    own: str | None = None
+    for comment in reversed(comments):
+        if not isinstance(comment, dict):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        match = _CLARIFY_STOP_RE.search(body)
+        if match is None:
+            continue
+        if own is None:
+            own = _runner_login(issue)
+            if own is None:
+                return None
+        author = comment.get("author")
+        login = author.get("login") if isinstance(author, dict) else None
+        if not isinstance(login, str) or strip_bot_suffix(login) != own:
+            event(
+                "clarify_stop_untrusted", level=logging.WARNING,
+                issue=issue["number"],
+            )
+            continue
+        return match.group(1)
+    return None
+
+
+def already_stopped(issue: dict, source_repo: str) -> bool:
+    """True when the newest stop judged exactly this ticket text.
+
+    Compares against `build_context`, the text the model reads: a title
+    or body change is a new judgment, an unchanged ticket is not.
+    """
+    previous = last_judged_digest(issue, source_repo)
+    return previous is not None and previous == judged_digest(issue)
 
 
 def parse_verdict(output: str) -> ClarifyVerdict | None:
@@ -199,6 +305,7 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
     return (
         f"{prefix}"
         f"{run_marker(run_id)}\n"
+        f"{stop_marker(issue)}\n"
         f"{message('clarify.heading')}\n"
         f"{summary}"
         f"\n{message('clarify.intro')}\n\n"
@@ -251,17 +358,45 @@ def enforce(issue: dict, config: RunnerConfig, source_repo: str,
 
     `True` lets the delivery proceed; `False` stops it (the ticket waits
     for a human). A failed comment or label write is a bypass: it is
-    logged as `clarify_check_skipped` and the delivery proceeds.
+    logged as `clarify_check_skipped` and the delivery proceeds. The one
+    exception is the unchanged, already-stopped ticket (Issue #1904): its
+    stop was already written and notified, so a failed label re-write is
+    logged as `clarify_already_stopped` and the ticket is STILL stopped —
+    delivering a text the gate already rejected would be the worse
+    outcome, and the ticket keeps the claim label for the next tick to
+    stop again.
     """
-    verdict = judge_issue_body(issue, config, source_repo, run_id)
-    if verdict is None or verdict.passed:
-        return True
     # The stop removes the label the claim scan actually reads: the
     # repository's dispatch label (default `ai-ready`, #527). Removing a
     # hardcoded `ai-ready` in a custom-label repository would leave the
     # ticket claimable, and the next tick would judge it again — the gate
     # would repeat instead of stopping.
     ready_label = config.dispatch_label or READY_LABEL
+    if already_stopped(issue, source_repo):
+        # Issue #1904: the automation re-added the claim label without
+        # touching the text. The stop already named the missing pieces
+        # and notified the author, so this claim must not judge, comment
+        # or notify again. Re-applying the stop labels keeps the ticket
+        # out of the claim queue, so it never starves other ready
+        # tickets. A failed label write is logged and still not
+        # delivered: delivering an unchanged, already-rejected ticket
+        # would be the worse outcome.
+        try:
+            edit_issue(
+                issue["number"], repo=source_repo,
+                add=NEEDS_DETAIL_LABEL, remove=ready_label,
+            )
+        except Exception as exc:
+            event(
+                "clarify_already_stopped", level=logging.WARNING,
+                issue=issue["number"], reason=type(exc).__name__,
+            )
+        else:
+            event("clarify_already_stopped", issue=issue["number"])
+        return False
+    verdict = judge_issue_body(issue, config, source_repo, run_id)
+    if verdict is None or verdict.passed:
+        return True
     try:
         comment_issue(
             issue["number"], repo=source_repo,
