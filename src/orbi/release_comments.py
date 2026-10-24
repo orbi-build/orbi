@@ -3,7 +3,8 @@
 The auditable success record and the blocked failure scene of a
 release task. They live in their own sibling of `release.py` so the
 localized wording does not grow the frozen release module (Issue
-#1229); `release.py` imports them unchanged.
+#1229); the release execution (`orbi.release_run`) and the tag/publish
+closeout (`orbi.release_closeout`) import them unchanged (Issue #1859).
 
 It also owns the Epic reconciliation audit sentence and its
 either-language duplicate check (Issue #1705): the per-tick claim sweep

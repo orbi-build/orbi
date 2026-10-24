@@ -33,7 +33,9 @@ import orbi.ticket_command as ticket_command
 import orbi.progress as progress
 import orbi.repo_config as repo_config
 import orbi.release as release
+import orbi.release_closeout as release_closeout
 import orbi.release_git as release_git
+import orbi.release_run as release_run
 import orbi.release_notes as release_notes
 import orbi.review_merge as review_merge
 import orbi.review_rounds as review_rounds
@@ -47,7 +49,8 @@ import orbi.runner as runner
 _MODULES = (
     journal, github, github_feedback, gitops, milestone, milestone_command,
     ticket_command,
-    progress, cli_source, release, release_git, release_notes, pi_session,
+    progress, cli_source, release, release_closeout, release_git,
+    release_notes, release_run, pi_session,
     runner, review_merge, merge_exec, review_rounds, run_state, claim,
     resume_scan,
     pr_verification, resume_verification,

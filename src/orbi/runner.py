@@ -1378,9 +1378,9 @@ def _dispatch_release(issue: dict, config: config_domain.RunnerConfig,
     the normal `run_pi` development path (scope verification, gates,
     tests, tag, GitHub Release)."""
     number = int(issue["number"])
-    # `orbi.release` imports the runner primitives back, so the
-    # dispatch imports it lazily here — a module-level import would
-    # be circular.
+    # `orbi.release_run` is imported lazily here: the release state
+    # machine is only reachable on a release tick, and the module-level
+    # imports above stay limited to the release constants.
     #
     # The ready scan's stale snapshot can hand an
     # already-claimed release ticket to a second live runner. The
@@ -1402,10 +1402,10 @@ def _dispatch_release(issue: dict, config: config_domain.RunnerConfig,
                 reason="release_in_progress_live_runner",
             )
             return IssueResult("claim-yielded", None)
-    from orbi import release
+    from orbi import release_run
 
     return IssueResult(
-        "release", release.process_release(issue, config, source_repo),
+        "release", release_run.process_release(issue, config, source_repo),
     )
 
 

@@ -12,7 +12,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import Mock
 
-import orbi.release as release
+import orbi.release_closeout as release_closeout
+import orbi.release_run as release_run
 import orbi.runner as runner
 from orbi import gh_response
 from seam import seam
@@ -594,12 +595,18 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     # Issue #811: the milestone-capturing tests read the publisher mock
     # (`ProgressPublisher.return_value`) through the returned state.
     state["publisher"] = publisher_class.return_value
-    monkeypatch.setattr(release, "ProgressPublisher", publisher_class)
+    monkeypatch.setattr(release_run, "ProgressPublisher", publisher_class)
+    # The one comment marker that is not part of the release contract:
+    # the fingerprint is the executing checkout's HEAD, so it is pinned
+    # here and the release comment bytes stay hermetic (Issue #1859).
+    monkeypatch.setattr(seam, "runner_fingerprint", lambda: "deadbeef")
     monkeypatch.setattr(seam, "safe_publish", lambda **k: None)
     monkeypatch.setattr(seam, "set_active_run",
                         lambda *a: state["active_runs"].append(a))
-    monkeypatch.setattr(release, "LOGGER", Mock())
-    monkeypatch.setattr(release, "release_tag_commit",
+    # The closeout module owns the terminal comment logging (Issue
+    # #1859): the release success/failure bypasses log there.
+    monkeypatch.setattr(release_closeout, "LOGGER", Mock())
+    monkeypatch.setattr(release_run, "release_tag_commit",
                         lambda r, t: tag_commit)
     resolved_range_prs = {123} if range_prs is None else set(range_prs)
 
@@ -608,7 +615,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             raise prepare_release_version_error
         return "abc123"
 
-    monkeypatch.setattr(release, "prepare_release_version",
+    monkeypatch.setattr(release_run, "prepare_release_version",
                         fake_prepare_release_version)
     monkeypatch.setattr(seam, "refresh_cli_install",
         lambda worktree, **kwargs: "installed",
@@ -617,7 +624,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
         state["published"].append(kwargs)
         return release_url
 
-    monkeypatch.setattr(release, "publish_release", fake_publish_release)
+    monkeypatch.setattr(release_run, "publish_release", fake_publish_release)
     return state
 
 

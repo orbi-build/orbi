@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 import orbi.runner as runner
-import orbi.release as release
+import orbi.release_run as release_run
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
@@ -1149,7 +1149,7 @@ def test_release_state_contract_matches_terminal_code_order():
     contracts = (
         page_text("workflow"),
         (DOCS_DIR / "zh" / "workflow.mdx").read_text(encoding="utf-8"),
-        inspect.getdoc(release.process_release),
+        inspect.getdoc(release_run.process_release),
     )
     for text in contracts:
         step8 = re.search(
