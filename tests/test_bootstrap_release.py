@@ -937,6 +937,30 @@ def test_check_release_gates_fails_on_failing_ci(monkeypatch):
         release.check_release_gates("o/r", "abc123", 99)
 
 
+def test_check_release_gates_classifies_checks_through_the_shared_checker(
+        monkeypatch):
+    """Issue #1889: the release gate decides pending/failed/passed through
+    `checks.classify_checks` — the same function the merge gate uses — so a
+    check whose status and conclusion are reported in the rollup casing
+    (`COMPLETED`/`SUCCESS`) is the same pass as the lowercase check-run
+    casing. One classifier, one decision, whichever gate reads it."""
+    make_gate_gh(
+        monkeypatch,
+        check_runs=[
+            ("tests", "completed", "SUCCESS"),
+            ("lint", "COMPLETED", "success"),
+        ],
+    )
+    # No wait: the classified checks are final on the first read.
+    evidence, gated = release.check_release_gates(
+        "o/r", "abc123", 99, ci_wait_seconds=5.0,
+    )
+    assert gated is True
+    assert evidence[-1] == (
+        "CI on the release commit: 2 check(s) all success/neutral/skipped"
+    )
+
+
 def test_check_release_gates_waits_for_pending_ci_then_passes(
         monkeypatch, caplog):
     """Issue #268 regression (the 2026-09-04 v0.3.0 scene): the release

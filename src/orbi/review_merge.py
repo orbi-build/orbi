@@ -33,7 +33,7 @@ from orbi import config as config_domain
 from orbi import failure_report, github, gitops, human_review, pi_session, run_state, scene
 from orbi.blocked_comment import post_blocked_comment
 from orbi.branch_reclaim import delete_merged_delivery_branch
-from orbi.checks import _classify_rollup, _render_check, test_status
+from orbi.checks import _render_check, classify_checks, test_status
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL,
     BLOCKED_LABEL,
@@ -435,8 +435,8 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
     mergeable = state.get("mergeable")
     # Issue #1736: in-tick re-read; always the WHOLE state, no mixed facts.
     for delay in MERGEABLE_UNKNOWN_RETRY_DELAYS:
-        rollup = _classify_rollup(state.get("statusCheckRollup") or [])
-        if mergeable != "UNKNOWN" or any(rollup):
+        rollup = classify_checks(state.get("statusCheckRollup") or [])
+        if mergeable != "UNKNOWN" or any(rollup[:2]):  # (pending, failed)
             break
         time.sleep(delay)
         state = pr_view(pr["number"],
@@ -546,7 +546,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             f"(reviewed={pr['head_oid']} remote={state.get('headRefOid')}); "
             "re-review before merging"
         )
-    pending, failed = _classify_rollup(state.get("statusCheckRollup") or [])
+    pending, failed, _passed = classify_checks(state.get("statusCheckRollup") or [])
     if failed:
         failed_names = [entry["name"] for entry in failed]
         failure_report._raise_if_preexisting_ci_failure(
