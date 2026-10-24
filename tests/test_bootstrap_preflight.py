@@ -23,6 +23,7 @@ import orbi.milestone as milestone
 import orbi.pi_session as pi_session
 import orbi.runner as runner
 from orbi import config as config_domain
+from orbi import setup_config
 from orbi.delivery_scene import RunContext
 from seam import seam
 from tests.fakes.bootstrap_preflight import (
@@ -646,6 +647,99 @@ def test_load_config_review_selection_invalid_uses_the_single_read(
     ):
         config_domain.load_config(config_path)
     assert len(reads) == 1
+
+
+REVIEW_KEY_PROVIDERS = {"providers": {
+    "implement": {
+        "baseUrl": "https://implement.example.test/v1",
+        "api": "openai-completions",
+        "apiKey": "local",
+        "models": [{"id": "m"}],
+    },
+    "review": {
+        "baseUrl": "https://review.example.test/v1",
+        "api": "openai-completions",
+        "apiKey": "$ORBI_REVIEW_KEY",
+        "models": [{"id": "m"}],
+    },
+}}
+
+
+def _review_key_config(tmp_path):
+    return _providers_config(
+        tmp_path, REVIEW_KEY_PROVIDERS,
+        pi_provider='"implement"', pi_model='"m"',
+        review_pi_provider='"review"', review_pi_model='"m"',
+    )
+
+
+@pytest.mark.parametrize(("environment", "expected"), [
+    ("unset", "is not set"), ("empty", "is set but empty"),
+])
+def test_load_config_keeps_the_review_key_finding_for_diagnostics(
+    tmp_path, monkeypatch, environment, expected,
+):
+    """Issue #1893: the diagnostic load disables the API-key exception so
+    doctor can report it — the review selection's finding must therefore
+    be kept in the single finding field, from one provider-file read."""
+    if environment == "unset":
+        monkeypatch.delenv("ORBI_REVIEW_KEY", raising=False)
+    else:
+        monkeypatch.setenv("ORBI_REVIEW_KEY", "")
+    config_path = _review_key_config(tmp_path)
+    providers_path = tmp_path / "pi-providers.json"
+    reads = _count_provider_reads(monkeypatch, providers_path)
+    config = config_domain.load_config(
+        config_path, check_provider_api_keys=False,
+    )
+    finding = config.pi_provider_key_finding
+    assert finding["provider"] == "review"
+    assert finding["variable"] == "ORBI_REVIEW_KEY"
+    assert finding["state"] == expected
+    assert finding["path"] == providers_path
+    assert "ORBI_REVIEW_KEY" in finding["error"]
+    assert len(reads) == 1
+    assert not hasattr(config_domain._load_pi_providers, "last_key_finding")
+
+
+def test_load_config_resolved_review_key_keeps_the_existing_result(
+    tmp_path, monkeypatch,
+):
+    """A resolved review key leaves no finding behind: the report stays
+    the implement selection's ok state (pre-#1888 behavior)."""
+    monkeypatch.setenv("ORBI_REVIEW_KEY", "review-secret")
+    config = config_domain.load_config(
+        _review_key_config(tmp_path), check_provider_api_keys=False,
+    )
+    assert config.pi_provider_key_finding is None
+    status = setup_config.model_provider_status(config)
+    assert status["state"] == "ok"
+    assert status["provider"] == "implement"
+    assert status["key"] == "literal=set"
+
+
+@pytest.mark.parametrize(("environment", "expected"), [
+    ("unset", "is not set"), ("empty", "is set but empty"),
+])
+def test_load_config_strict_review_key_error_keeps_its_cause(
+    tmp_path, monkeypatch, environment, expected,
+):
+    """Strict loading still fails with the review-provider wrap and the
+    original ValueError as its cause."""
+    if environment == "unset":
+        monkeypatch.delenv("ORBI_REVIEW_KEY", raising=False)
+    else:
+        monkeypatch.setenv("ORBI_REVIEW_KEY", "")
+    config_path = _review_key_config(tmp_path)
+    with pytest.raises(ValueError, match=(
+        "review provider selection invalid: API key for provider 'review' "
+        f"references environment variable ORBI_REVIEW_KEY {expected}"
+    )) as excinfo:
+        config_domain.load_config(config_path)
+    cause = excinfo.value.__cause__
+    assert isinstance(cause, ValueError)
+    assert "references environment variable ORBI_REVIEW_KEY" in str(cause)
+    assert str(tmp_path / "pi-providers.json") in str(cause)
 
 
 def test_load_config_pi_providers_accepts_groq_example(tmp_path, monkeypatch):

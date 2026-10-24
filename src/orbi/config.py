@@ -442,7 +442,11 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
             review_model = review_pi_model or pi_model
             if (review_provider, review_model) != (pi_provider, pi_model):
                 try:
-                    _select_pi_provider(
+                    # With the API-key gate disabled (the doctor
+                    # diagnostic load) this returns the review
+                    # selection's finding instead of raising; keeping it
+                    # preserves the pre-#1888 field behavior (Issue #1893).
+                    pi_provider_key_finding = _select_pi_provider(
                         pi_providers_data, pi_providers_path,
                         review_provider, review_model, env_file,
                         check_api_key=check_provider_api_keys,
