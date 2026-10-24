@@ -184,7 +184,7 @@ from orbi.pi_command import (
 # calls them through the module and never imports a launcher name into
 # its own namespace (Article 3.3: `pi_session` imports no runner).
 from orbi import pi_session
-from orbi import review_merge
+from orbi import merge_exec, review_merge
 from orbi import run_state
 
 # The shared primitives live in the leaf modules now — the
@@ -2015,7 +2015,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             # label check in the review rounds, and a checklist-less
             # delivery still holds there when column 2 is non-empty.
             try:
-                body, needs_person = review_merge.human_review_checklist(
+                body, needs_person = merge_exec.human_review_checklist(
                     worktree, config,
                     run_id=run_id, pr_url=pr_url,
                     test_status=test_status(

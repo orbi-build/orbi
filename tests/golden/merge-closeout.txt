@@ -1,0 +1,37 @@
+<<<golden:merged-comment>>>
+<!-- orbi:run=a1b2c3d4 -->
+<!-- orbi:comment=merged -->
+Orbi merged PR: u
+**#4 Review task**
+- review: pass, no findings
+- merged into: main
+
+<details><summary>Run details</summary>
+
+- merge_commit=m1
+- review_rounds=1
+- commits=unknown
+- external_commits=unknown
+- run_id=a1b2c3d4
+- pr_url=u
+
+</details>
+<<<golden:merged-labels>>>
+[
+  {
+    "repo": "owner/repo",
+    "add": "ai-merged",
+    "remove": "ai-pr-opened"
+  },
+  {
+    "repo": "owner/repo",
+    "remove": "ai-ready"
+  }
+]
+<<<golden:blocked-comment>>>
+<!-- orbi:run=a1b2c3d4 -->
+Orbi merge skipped for PR #4: the source Issue is labelled `ai-blocked`, so the reviewed head h1 was not merged (run_id=a1b2c3d4).
+
+The PR is left open and the labels are unchanged; a human decides the next step.
+<<<golden:blocked-labels>>>
+[]
