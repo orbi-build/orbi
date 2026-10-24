@@ -92,9 +92,15 @@ def _default_runner_source_preflight(monkeypatch):
     The in-process dispatch tests run inside THIS worktree, whose HEAD
     is a task branch — exactly the scene the real gate must reject — so
     the gate's own tests stub or exercise it explicitly (a
-    `monkeypatch` always wins over this default)."""
+    `monkeypatch` always wins over this default).
+
+    Issue #1650: the gate lives in `orbi.runner_source` and the tick
+    holds the module object, so the stub patches THAT module's global —
+    the binding `main()` actually reads."""
+    import orbi.runner_source as runner_source
+
     monkeypatch.setattr(
-        runner, "check_runner_source_freshness", lambda *a, **k: {},
+        runner_source, "check_runner_source_freshness", lambda *a, **k: {},
     )
 
 
