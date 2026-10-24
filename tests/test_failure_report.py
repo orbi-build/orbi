@@ -13,7 +13,7 @@ three rendering modes: the implement-phase terminal template
 (`classify=True, evidence=True` — the bounded `stderr_tail` /
 `stdout_tail` / `session_last_events` / `test_log_tail` segments) and the
 terminal progress scene (`finish=True`, rendered through
-`progress._finish_progress_body`). Each golden is asserted byte for byte
+`progress.finish_progress_body`). Each golden is asserted byte for byte
 against the post-move call, and the AI/human decision (`blocked` vs
 `fix needed`) with it.
 """
@@ -469,7 +469,7 @@ def test_failure_report_never_imports_runner():
 
 
 def test_finish_progress_body_moved_to_progress():
-    moved = {"_finish_outcome_body", "_finish_progress_body"}
+    moved = {"_finish_outcome_body", "finish_progress_body"}
     assert moved <= _module_names("progress")
     assert moved.isdisjoint(_module_names("runner"))
 
@@ -633,7 +633,7 @@ def test_full_failure_is_kinded_but_the_short_milestone_is_not(
 def test_finish_mode_body_is_byte_identical_to_the_pre_extraction_render(
         monkeypatch, tmp_path):
     """The terminal progress scene (`finish=True`) renders through
-    `progress._finish_progress_body` with the same bytes."""
+    `progress.finish_progress_body` with the same bytes."""
     publisher = FakePublisher()
     outcome, posted, pr_comments = _report(
         monkeypatch, tmp_path, session=True, publisher=publisher,

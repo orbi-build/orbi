@@ -26,6 +26,20 @@ def _reset_journal_state(monkeypatch, bind_run_id):
     monkeypatch.setattr(journal, "_ACTIVE_RUN", None)
 
 
+def test_quote_value_quotes_only_values_with_spaces():
+    assert journal.quote_value("test") == "test"
+    assert journal.quote_value("bash pytest tests/") == (
+        '"bash pytest tests/"'
+    )
+
+
+def test_quote_value_escapes_embedded_quotes():
+    assert journal.quote_value('git commit -m "feat: x"') == (
+        '"git commit -m \\"feat: x\\""'
+    )
+    assert journal.quote_value('a"b') == '"a\\"b"'
+
+
 def test_run_command_returns_stdout_and_logs_the_command(caplog):
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
         out = journal.run_command(

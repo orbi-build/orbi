@@ -101,7 +101,7 @@ def _skill_name(entry: str | Path) -> str:
     return path.stem
 
 
-def _skills_for(config: RunnerConfig, excluded: frozenset[str]) -> list[str | Path]:
+def skills_for(config: RunnerConfig, excluded: frozenset[str]) -> list[str | Path]:
     """Return one role's configured skills, dropping excluded names."""
     return [
         skill for skill in config.skills
@@ -167,7 +167,7 @@ def build_pi_command(
         else (["--no-extensions"] if no_extensions else [])
     )
     if skills is None:
-        skills = _skills_for(config, excluded_skills)
+        skills = skills_for(config, excluded_skills)
     skill_args = _skill_args(skills)
     model_args = _pi_model_args(config, role)
     if isinstance(tools, str):

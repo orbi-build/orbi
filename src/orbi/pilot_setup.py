@@ -58,8 +58,7 @@ from orbi import gitops
 from orbi import cli_source
 from orbi import git_transport
 from orbi import scheduler
-from orbi.progress import quote_value
-from orbi.journal import event
+from orbi.journal import event, quote_value
 from orbi.setup_checks import (
     DOCS_LINKS,
     CheckError,
@@ -521,7 +520,7 @@ def format_setup(result: dict) -> list[str]:
     """Render the result document as stable key=value lines.
 
     One line per concern; values containing spaces are quoted (the
-    ``progress.quote_value`` convention) so the output stays
+    ``journal.quote_value`` convention) so the output stays
     parseable.
     """
     lines = [

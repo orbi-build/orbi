@@ -4455,7 +4455,7 @@ def test_tail_text_preserves_non_sgr_lookalikes(tmp_path):
 
 
 def test_failure_summary_removes_command_and_stderr_duplication():
-    summary = failure._failure_summary(
+    summary = failure.failure_summary(
         "Review failed: Command ['pi', '--session', '/home/runner/session'] "
         "returned non-zero exit status 1; stderr=provider exploded", language_code="en",
     )
@@ -4465,17 +4465,17 @@ def test_failure_summary_removes_command_and_stderr_duplication():
     assert "/home/" not in summary
     assert summary.count("provider exploded") == 1
     assert "delivery command failed" in summary
-    assert failure._failure_summary(
+    assert failure.failure_summary(
         "provider exploded stderr=provider exploded", language_code="en"
     ) == "provider exploded"
 
 
 def test_failure_summary_defaults_when_reason_has_no_readable_content():
-    assert failure._failure_summary(" stderr=", language_code="en") == "the delivery command failed"
+    assert failure.failure_summary(" stderr=", language_code="en") == "the delivery command failed"
 
 
 def test_failure_summary_uses_concrete_final_stderr_line_and_redacts_it():
-    summary = failure._failure_summary(
+    summary = failure.failure_summary(
         "the independent review failed: Command ['pi', '--session-dir', "
         "'/home/runner/session'] returned non-zero exit status 1. "
         "stderr=mise installed 0 tools\n"
@@ -4508,7 +4508,7 @@ def test_failure_scene_is_structured_and_redacts_local_paths():
 
 
 def test_failure_comment_layout_keeps_raw_evidence_collapsed():
-    body = failure._failure_comment_body(
+    body = failure.failure_comment_body(
         outcome="fix needed", action="Repair the delivery.",
         reason="the provider rejected the request",
         diagnosis="provider rejected the request",
@@ -4528,7 +4528,7 @@ def test_failure_comment_layout_keeps_raw_evidence_collapsed():
     assert "```" in collapsed
     assert body.endswith("</details>")
 
-    without_diagnosis = failure._failure_comment_body(
+    without_diagnosis = failure.failure_comment_body(
         outcome="fix needed", action="", reason="provider failed",
         diagnosis="", scene="- run: `abcdef12`", evidence="",
         pr_url=None, issue="o/r#1221", run_id="abcdef12", language_code="en",
@@ -5524,7 +5524,7 @@ def test_terminal_failure_parts_render_missing_reason_explicitly():
 
 
 def test_finish_progress_body_uses_fixed_sections_for_blocked_error(caplog):
-    body = progress._finish_progress_body(
+    body = progress.finish_progress_body(
         number=39, title="Blocked task", run_id="a1b2c3d4",
         role=runner.ROLE_REVIEW, branch=None, worktree=None,
         pr_url="https://github.com/owner/repo/pull/46", review_round=0,
@@ -5544,7 +5544,7 @@ def test_finish_progress_body_uses_fixed_sections_for_blocked_error(caplog):
 
 
 def test_finish_progress_body_keeps_next_step_in_user_section():
-    body = progress._finish_progress_body(
+    body = progress.finish_progress_body(
         number=39, title="Blocked task", run_id="a1b2c3d4",
         role=runner.ROLE_REVIEW, branch=None, worktree=None, pr_url=None,
         review_round=0, priority="normal", detail="failure detail",
@@ -5557,7 +5557,7 @@ def test_finish_progress_body_keeps_next_step_in_user_section():
 
 
 def test_finish_progress_body_defaults_orbi_action_when_fix_step_missing(caplog):
-    body = progress._finish_progress_body(
+    body = progress.finish_progress_body(
         number=39, title="Fix task", run_id="a1b2c3d4",
         role=runner.ROLE_REVIEW, branch=None, worktree=None, pr_url=None,
         review_round=0, priority="normal", detail="failure detail",
@@ -6247,12 +6247,12 @@ def test_progress_state_passes_startup_sub_phase_to_comment(tmp_path):
     startup sub-phase (session_pending / request_pending) instead of
     the generic `starting` while the first response is outstanding."""
     for sub_phase in ("session_pending", "request_pending"):
-        state = runner._progress_state(RunContext(run_id="a1b2c3d4", issue=176, branch="b", worktree=tmp_path, source_repo="owner/repo"), title="t", role="implement", started=time.monotonic(), pr_url=None, review_round=0, priority="normal", activity={"phase": sub_phase, "last_activity": None,
+        state = runner.progress_state(RunContext(run_id="a1b2c3d4", issue=176, branch="b", worktree=tmp_path, source_repo="owner/repo"), title="t", role="implement", started=time.monotonic(), pr_url=None, review_round=0, priority="normal", activity={"phase": sub_phase, "last_activity": None,
                       "action": None, "session_id": None}, language_code="en")
         assert state["phase"] == sub_phase
     # The tool-based phase passes through unchanged once the first
     # response arrived.
-    state = runner._progress_state(RunContext(run_id="a1b2c3d4", issue=176, branch="b", worktree=tmp_path, source_repo="owner/repo"), title="t", role="implement", started=time.monotonic(), pr_url=None, review_round=0, priority="normal", activity={"phase": "test", "last_activity": None,
+    state = runner.progress_state(RunContext(run_id="a1b2c3d4", issue=176, branch="b", worktree=tmp_path, source_repo="owner/repo"), title="t", role="implement", started=time.monotonic(), pr_url=None, review_round=0, priority="normal", activity={"phase": "test", "last_activity": None,
                   "action": "bash pytest tests/", "session_id": "s1"}, language_code="en")
     assert state["phase"] == "test"
 
@@ -6277,7 +6277,7 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
     monkeypatch.setattr(pi_session, "run_ticket_agent",
                         lambda *args, **kwargs: "\u53ef\u4ee5\u76f4\u63a5\u53d1\u5e03\u7684\u5e16\u5b50")
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
-    monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
+    monkeypatch.setattr(seam, "safe_publish", lambda **kwargs: None)
     monkeypatch.setattr(seam, "run_command",
                         lambda command, **kwargs: commands.append(command) or "")
 
@@ -6322,7 +6322,7 @@ def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
     monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(pi_session, "run_ticket_agent", lambda *args, **kwargs: "")
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
-    monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
+    monkeypatch.setattr(seam, "safe_publish", lambda **kwargs: None)
     with pytest.raises(RuntimeError, match="returned no content"):
         runner.process_ticket_only(issue, config_domain.RunnerConfig(repo_dir=Path("/repo")), "o/r")
     assert edits[-2][1]["add"] == "ai-blocked"
@@ -6357,7 +6357,7 @@ def test_process_ticket_only_failure_marks_blocked_without_git_delivery(
     monkeypatch.setattr(pi_session, "run_ticket_agent",
                         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Pi failed")))
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
-    monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
+    monkeypatch.setattr(seam, "safe_publish", lambda **kwargs: None)
     with pytest.raises(RuntimeError, match="Pi failed"):
         runner.process_ticket_only(
             issue, config_domain.RunnerConfig(
@@ -6401,7 +6401,7 @@ def test_process_ticket_only_keeps_original_error_when_failure_reporting_fails(m
     monkeypatch.setattr(pi_session, "run_ticket_agent",
                         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Pi failed")))
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
-    monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
+    monkeypatch.setattr(seam, "safe_publish", lambda **kwargs: None)
     with pytest.raises(RuntimeError, match="Pi failed"):
         runner.process_ticket_only(issue, config_domain.RunnerConfig(repo_dir=Path("/repo")), "o/r")
 
@@ -6441,7 +6441,7 @@ def test_process_issue_keeps_pr_ready_label_when_scene_comment_5xx_exhausts(
     monkeypatch.setattr(seam, "run_command", run)
     monkeypatch.setattr(seam, "delivery_step", Mock())
     monkeypatch.setattr(seam, "activity_snapshot", lambda p: None)
-    monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(seam, "safe_publish", lambda **k: None)
     monkeypatch.setattr(seam, "format_end_scene", lambda **k: "end")
     monkeypatch.setattr(seam, "issue_context", lambda r, n: "#n")
     monkeypatch.setattr(seam, "format_run_scene", lambda *a, **k: "scene")
@@ -6485,7 +6485,7 @@ def test_process_issue_keeps_normal_flow_without_release_label(
     monkeypatch.setattr(seam, "edit_issue", Mock())
     monkeypatch.setattr(seam, "LOGGER", Mock())
     monkeypatch.setattr(failure_report, "activity_snapshot", lambda p: None)
-    monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(seam, "safe_publish", lambda **k: None)
     monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
     monkeypatch.setattr(seam, "issue_context", lambda r, n: "#n")
     monkeypatch.setattr(runner, "format_run_scene", lambda *a, **k: "scene")
@@ -6522,7 +6522,7 @@ def _ops_issue_mocks(monkeypatch, tmp_path, *, head_sha: str, dirty: str):
     monkeypatch.setattr(seam, "comment_issue", Mock())
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
     monkeypatch.setattr(failure_report, "activity_snapshot", lambda p: None)
-    monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(seam, "safe_publish", lambda **k: None)
     monkeypatch.setattr(
         pi_session, "run_pi",
         lambda issue_arg, ctx, config, **k: configs.append(config),

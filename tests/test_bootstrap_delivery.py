@@ -4425,7 +4425,7 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
     # so the expectation is derived with the same helper instead of
     # hard-coding the redacted form.
     missing_worktree = gitops.worktree_path(tmp_path, "owner/repo", 39, "a1b2c3d4")
-    assert progress._redact_local_paths(
+    assert progress.redact_local_paths(
         f"worktree missing: {missing_worktree}",
     ) in fix_needed
     assert "branch: orbi/owner-repo-issue-39" in fix_needed
@@ -4759,7 +4759,7 @@ def test_delivery_step_pr_closed_comment_follows_the_language(
         lambda number, **kwargs: comments.append(kwargs))
     monkeypatch.setattr(seam, "apply_label_patch",
         lambda number, **kwargs: None)
-    monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
+    monkeypatch.setattr(seam, "safe_publish", lambda **kwargs: None)
     runner.delivery_step(
         PR_URL, {"number": 39, "title": "task", "body": ""},
         config_domain.RunnerConfig(
@@ -5097,7 +5097,7 @@ def _recovered_review_round_env(monkeypatch, tmp_path):
     from tests.fakes.progress import capture_finish_rounds
 
     real_round = review_merge.review_and_merge_if_clean
-    real_publish = progress._safe_publish
+    real_publish = progress.safe_publish
     edits, comments, reviews, publishes = _review_round_env(
         monkeypatch, tmp_path, scene_round=review_merge.MAX_REVIEW_ROUNDS,
     )
@@ -5109,7 +5109,7 @@ def _recovered_review_round_env(monkeypatch, tmp_path):
 
     monkeypatch.setattr(seam, "run_review", fake_run_review)
     # The bypass stub hides the built scene; the real one runs it.
-    monkeypatch.setattr(seam, "_safe_publish", real_publish)
+    monkeypatch.setattr(seam, "safe_publish", real_publish)
     monkeypatch.setattr(seam, "human_review_recovery_at",
                         lambda *a, **k: "2026-02-01T00:00:00Z")
     monkeypatch.setattr(seam, "pr_view",
@@ -5176,12 +5176,12 @@ def test_run_review_round_reports_five_when_no_recovery_happened(
     from tests.fakes.progress import capture_finish_rounds
 
     real_round = review_merge.review_and_merge_if_clean
-    real_publish = progress._safe_publish
+    real_publish = progress.safe_publish
     _review_round_env(
         monkeypatch, tmp_path, scene_round=review_merge.MAX_REVIEW_ROUNDS,
     )
     monkeypatch.setattr(seam, "review_and_merge_if_clean", real_round)
-    monkeypatch.setattr(seam, "_safe_publish", real_publish)
+    monkeypatch.setattr(seam, "safe_publish", real_publish)
     monkeypatch.setattr(seam, "human_review_recovery_at",
                         lambda *a, **k: None)
     rounds = capture_finish_rounds(monkeypatch)
@@ -5202,10 +5202,10 @@ def _executing_review_round_env(monkeypatch, tmp_path, *, scene_round=2):
     from tests.fakes.progress import capture_finish_rounds
 
     real_round = review_merge.review_and_merge_if_clean
-    real_publish = progress._safe_publish
+    real_publish = progress.safe_publish
     _review_round_env(monkeypatch, tmp_path, scene_round=scene_round)
     monkeypatch.setattr(seam, "review_and_merge_if_clean", real_round)
-    monkeypatch.setattr(seam, "_safe_publish", real_publish)
+    monkeypatch.setattr(seam, "safe_publish", real_publish)
     worktree = (tmp_path / ".worktrees"
                 / "orbi-owner-repo-issue-39-a1b2c3d4")
     run_state.write_run_state(RunContext(

@@ -544,7 +544,7 @@ def test_list_issues_does_not_retry_a_rejected_credential(monkeypatch):
     assert len(calls) == 1
     assert gh_response_status(caught.value) is None
     assert failure.classify(
-        runner._failure_detail(caught.value), error=caught.value,
+        runner.failure_detail(caught.value), error=caught.value,
     ).reason_code == "credential_missing"
 
 

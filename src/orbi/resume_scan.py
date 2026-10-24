@@ -22,7 +22,7 @@ from orbi.delivery_labels import (
     PR_OPENED_LABEL, READY_LABEL,
 )
 from orbi.delivery_scene import (
-    DeliveryScene, _issue_label_set, body_markers, classify,
+    DeliveryScene, body_markers, classify, issue_label_set,
 )
 from orbi.comment_trust import latest_run_marker
 from orbi.github import (
@@ -260,7 +260,7 @@ def _pick_opened_pr_delivery(
             # Probe the exact branch (and require the helper's sole-PR
             # contract); no open PR falls through to the existing missing-
             # scene failure below.
-            current_labels = _issue_label_set(issue)
+            current_labels = issue_label_set(issue)
             if (repo_dir is not None
                     and FIX_NEEDED_LABEL in current_labels
                     and open_pr_for_branch(
@@ -325,7 +325,7 @@ def _pick_opened_pr_delivery(
         # and the scan moves on. A candidate with no readable labels fails
         # open (the is_epic / is_release convention): the trusted scene is
         # the authority.
-        current_labels = _issue_label_set(issue)
+        current_labels = issue_label_set(issue)
         if current_labels:
             found_scene = classify(
                 labels=current_labels, scene=found, pr_state=None,

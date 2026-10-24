@@ -13,7 +13,7 @@ frozen module grows for the catalog text.
 from __future__ import annotations
 
 from orbi import failure, language
-from orbi.progress import _run_info_fields, field_block
+from orbi.progress import field_block, run_info_fields
 
 
 def _epic_audit(child_evidence: list[str], version: str | None,
@@ -74,7 +74,7 @@ def release_success_comment_body(run_id: str, run_info: str,
     the Milestone evidence (the Milestone whose title is the released
     version is closed on the success path).
     """
-    info = _run_info_fields(run_info)
+    info = run_info_fields(run_info)
     return "\n".join([
         field_block(
             run_id,
@@ -119,11 +119,11 @@ def release_failure_comment_body(run_id: str, run_info: str,
     machine-readable `orbi:failure:v1` block the delivery path emits
     (`failure.classify`, Issue #1323), and the concrete reason.
     """
-    detail = failure._failure_detail(error)
+    detail = failure.failure_detail(error)
     body = field_block(
         run_id,
         language.text(language_code, "release.failed_headline"),
-        {**_run_info_fields(run_info), "failure": detail},
+        {**run_info_fields(run_info), "failure": detail},
         language_code=language_code, status_url=status_url,
         issue=issue, title=title,
     )

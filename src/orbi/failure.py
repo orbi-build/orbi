@@ -345,7 +345,7 @@ class BaseBranchMissingError(RuntimeError):
     `base_branch` is the CONFIGURED branch and `failure_record` is the
     record the failure report uses as it is; the text classifier never
     runs for this failure. `stderr` keeps the failed fetch's own output
-    as evidence: `_failure_detail` reads it into the run details, so the
+    as evidence: `failure_detail` reads it into the run details, so the
     reader still sees what Git said without it deciding anything
     (Issues #1749, #1753).
     """
@@ -520,7 +520,7 @@ def terminal_reason(detail: str, record: Failure, *,
 # The comment: bounded detail + the reader-facing hierarchy
 # --------------------------------------------------------------------------
 
-def _failure_detail(exc: BaseException) -> str:
+def failure_detail(exc: BaseException) -> str:
     """One-line failure description; keeps bounded subprocess stderr visible."""
     detail = str(exc)
     stderr = getattr(exc, "stderr", None)
@@ -535,7 +535,7 @@ _LOCAL_PATH_RE = re.compile(
 )
 
 
-def _redact_local_paths(value: str) -> str:
+def redact_local_paths(value: str) -> str:
     """Keep GitHub comments free of host-specific filesystem paths."""
     return _LOCAL_PATH_RE.sub("local runner path", value)
 
@@ -555,8 +555,8 @@ def _workflow_permission_line(text: str) -> str | None:
     return None
 
 
-def _failure_summary(reason: str,
-                     language_code: str) -> str:
+def failure_summary(reason: str,
+                    language_code: str) -> str:
     """Turn a runner exception description into a short reader summary."""
     command_failed = language.text(language_code, "failure.command_failed")
     stderr_match = re.search(r"\s+stderr=(.*)$", reason,
@@ -574,7 +574,7 @@ def _failure_summary(reason: str,
     )
     summary = re.sub(r"CalledProcessError\([^)]*\)",
                      command_failed, summary)
-    summary = _redact_local_paths(summary)
+    summary = redact_local_paths(summary)
     # Trailing dots are kept: a catalog sentence ("... start from.")
     # reaches the reader as written (Issue #1753), while a trailing
     # separator from exception text is noise.
@@ -588,7 +588,7 @@ def _failure_summary(reason: str,
         # line above Git's generic `failed to push some refs` and which
         # the classifier recognizes (Issue #1651).
         refusal_line = _workflow_permission_line(stderr)
-        stderr_summary = _redact_local_paths(
+        stderr_summary = redact_local_paths(
             refusal_line if refusal_line
             else stderr.rstrip().rsplit("\n", 1)[-1].strip()
         )
@@ -599,7 +599,7 @@ def _failure_summary(reason: str,
     return summary[:500]
 
 
-def _failure_comment_body(*, outcome: str, action: str, reason: str,
+def failure_comment_body(*, outcome: str, action: str, reason: str,
                          diagnosis: str, scene: str, evidence: str,
                          pr_url: str | None, issue: str, run_id: str,
                          failure_record: Failure | None = None,
@@ -645,11 +645,11 @@ def _failure_comment_body(*, outcome: str, action: str, reason: str,
     parts.append(message("failure.issue_line", issue=issue, run_id=run_id))
     if action:
         parts.append(
-            f"{message('failure.action_label')} {_redact_local_paths(action)}"
+            f"{message('failure.action_label')} {redact_local_paths(action)}"
         )
     parts.append(
         f"{message('failure.reason_label')} "
-        f"{_failure_summary(reason, language_code)}"
+        f"{failure_summary(reason, language_code)}"
     )
     disposition = message(
         "failure.disposition_needs_fix" if retrying
@@ -679,8 +679,8 @@ def _failure_comment_body(*, outcome: str, action: str, reason: str,
         message("failure.correlation_row", correlation=correlation),
     ]
     if diagnosis:
-        reason_summary = _failure_summary(reason, language_code)
-        diagnosis_summary = _failure_summary(diagnosis, language_code)
+        reason_summary = failure_summary(reason, language_code)
+        diagnosis_summary = failure_summary(diagnosis, language_code)
         if diagnosis_summary == reason_summary or diagnosis_summary in reason_summary:
             details.append(message(
                 "failure.detail_row_same", disposition=disposition,

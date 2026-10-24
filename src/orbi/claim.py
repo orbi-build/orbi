@@ -24,7 +24,7 @@ from orbi.delivery_labels import (
     PR_OPENED_LABEL, READY_LABEL, RELEASE_LABEL,
 )
 from orbi.delivery_scene import (
-    EXTERNAL_PR_MARKER, DeliveryScene, _issue_label_set, body_markers, classify,
+    EXTERNAL_PR_MARKER, DeliveryScene, body_markers, classify, issue_label_set,
 )
 from orbi.github import (
     _verify_epic_complete, close_issue,
@@ -419,7 +419,7 @@ def _pick_from_scan(
             event("blocked_by", issue=issue.get("number"), repo=repo,
                   blockers=",".join(str(number) for number in blockers))
             continue
-        current_labels = _issue_label_set(issue)
+        current_labels = issue_label_set(issue)
         if current_labels:
             scene_value = classify(
                 labels=current_labels, scene=None, pr_state=None,
@@ -646,7 +646,7 @@ def pick_in_progress_issue(
         # candidate that left EVERY claimable state (a relabel inside
         # the query's staleness window); a candidate with no readable
         # labels fails open (the is_epic/is_release convention).
-        current_labels = _issue_label_set(candidate)
+        current_labels = issue_label_set(candidate)
         if current_labels:
             scene_value = classify(
                 labels=current_labels, scene=None, pr_state=None,

@@ -121,16 +121,15 @@ from orbi.repo_config import (
 from orbi.progress import (
     LiveProgressThrottle,
     ProgressPublisher,
-    _progress_body,
-    _progress_state,
-    _run_info_fields,
-    _safe_publish,
     field_block,
     format_elapsed,
     progress_body,
-    quote_value,
+    progress_body_with_outcome,
+    progress_state,
     recoverable_scene_body,
+    run_info_fields,
     run_marker,
+    safe_publish,
     validate_run_id,
 )
 from orbi.delivery_comment import (
@@ -193,7 +192,7 @@ from orbi import run_state
 from orbi import github, gitops, journal, progress, release, scene
 # The failure record lives in its own lean module (Issue #1229); these
 # helpers are re-exported so `runner.<name>` keeps working for callers.
-from orbi.failure import _failure_detail, terminal_reason
+from orbi.failure import failure_detail, terminal_reason
 # The delivery failure report is its own module (Issue #1260): the runner
 # reaches it as `failure_report.<name>` and imports back only the exception
 # types it raises or catches, plus the classifier the delivery flow uses.
@@ -264,6 +263,7 @@ from orbi.journal import (
     issue_context,
     log_format,
     new_run_id,
+    quote_value,
     run_command,
     run_git_network_command,
     set_active_pi,
@@ -1026,7 +1026,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
         language_code=language.of(config), status_url=config.status_url,
     )
     publish = functools.partial(
-        _safe_publish, run_id=run_id, issue=number,
+        safe_publish, run_id=run_id, issue=number,
         source_repo=source_repo, role=ROLE_TICKET,
     )
     started = time.monotonic()
@@ -1043,7 +1043,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
     set_active_run(ticket_ctx, title)
     try:
         publish(
-            action=lambda: publisher.ensure(_progress_body(_progress_state(
+            action=lambda: publisher.ensure(progress_body_with_outcome(progress_state(
                 ticket_ctx, title=title, role=ROLE_TICKET, started=started,
                 pr_url=None, review_round=0, priority=priority,
                 language_code=language.of(config),
@@ -1081,7 +1081,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
             )),
         )
         publish(
-            action=lambda: publisher.finish(_progress_body(_progress_state(
+            action=lambda: publisher.finish(progress_body_with_outcome(progress_state(
                 ticket_ctx, title=title, role=ROLE_TICKET, started=started,
                 pr_url=None, review_round=0, priority=priority,
                 language_code=language.of(config),
@@ -1098,7 +1098,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
         return "ticket-only"
     except Exception as exc:
         LOGGER.exception("issue=%s ticket-only failed", number)
-        detail = _failure_detail(exc)
+        detail = failure_detail(exc)
         ready_label = config.dispatch_label or READY_LABEL
         try:
             post_blocked_comment(
@@ -1785,7 +1785,7 @@ def _gather_claim_facts(issue: dict, config: config_domain.RunnerConfig,
     # The claim label is a delivery-policy key; the lifecycle
     # labels stay host constants.
     dispatch_label = (config.dispatch_label or READY_LABEL)
-    claim_labels = claim._issue_label_set(issue)
+    claim_labels = claim.issue_label_set(issue)
     stable_branch = task_branch(source_repo, number)
     in_progress = has_in_progress_label(number, source_repo)
     takeover_pr: dict | None = None
@@ -2059,7 +2059,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             language_code=language.of(config), status_url=config.status_url,
         )
         publish = functools.partial(
-            _safe_publish, run_id=run_id, issue=number,
+            safe_publish, run_id=run_id, issue=number,
             source_repo=source_repo, role=ROLE_IMPLEMENT,
         )
         worktree = create_worktree(
@@ -2138,8 +2138,8 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         # failure here (404, rate limit) is logged and never skips
         # `run_pi` or fails the delivery.
         publish(
-            action=lambda: publisher.ensure(_progress_body(
-                _progress_state(
+            action=lambda: publisher.ensure(progress_body_with_outcome(
+                progress_state(
                     ctx, title=title, role=ROLE_IMPLEMENT,
                     started=started, pr_url=None, review_round=0,
                     priority=priority, language_code=language.of(config),
@@ -2188,8 +2188,8 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                     )),
                 )
                 publish(
-                    action=lambda: publisher.finish(_progress_body(
-                        _progress_state(
+                    action=lambda: publisher.finish(progress_body_with_outcome(
+                        progress_state(
                             ctx, title=title, role=ROLE_IMPLEMENT,
                             started=started, pr_url=None, review_round=0,
                             priority=priority, language_code=language.of(config),
@@ -2251,8 +2251,8 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             # naturally), no scene comment, nothing to wait for: the
             # tick ends cleanly.
             publish(
-                action=lambda: publisher.finish(_progress_body(
-                    _progress_state(
+                action=lambda: publisher.finish(progress_body_with_outcome(
+                    progress_state(
                         ctx, title=title, role=ROLE_IMPLEMENT,
                         started=started, pr_url=None, review_round=0,
                         priority=priority, language_code=language.of(config),
@@ -2351,7 +2351,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         # own `checks` stage, published through the same `step=`
         # path — instead of the finished `implement` action.
         publish(
-            action=lambda: publisher.finish(_progress_body(_progress_state(
+            action=lambda: publisher.finish(progress_body_with_outcome(progress_state(
                 ctx, title=title, role=ROLE_IMPLEMENT, started=started,
                 pr_url=pr_url, review_round=0, priority=priority,
                 language_code=language.of(config), step="checks",
@@ -2413,7 +2413,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
         # decides whether the run blocks: the recovery stays
         # `ai-in-progress` (#1455/#227).
         record = _classify_failure(exc, outcome="blocked")
-        detail = _failure_detail(exc)
+        detail = failure_detail(exc)
         body = recoverable_scene_body(
             run_id=run_id, recoverable_name=recoverable_name, record=record,
             detail=detail, run_info=run_info,
@@ -2437,7 +2437,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 "issue=%s model_wait_recovered_comment_failed", number,
             )
         publish(
-            action=lambda: publisher.finish(_progress_body(_progress_state(
+            action=lambda: publisher.finish(progress_body_with_outcome(progress_state(
                 ctx, title=title, role=ROLE_IMPLEMENT, started=started,
                 pr_url=None, review_round=0, priority=priority,
                 language_code=language.of(config),
@@ -2506,11 +2506,11 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                     base_branch=base_branch,
                 ),
                 reason=terminal_reason(
-                    _failure_detail(exc), terminal_record,
+                    failure_detail(exc), terminal_record,
                     base_branch=base_branch, language_code=language.of(config),
                 ),
                 diagnosis=(
-                    f"{_failure_detail(exc)}\n"
+                    f"{failure_detail(exc)}\n"
                     f"- base_branch: {base_branch}\n"
                     f"- base_sha: {base_sha or '-'}\n"
                     f"run_id={run_id}\n"
@@ -2603,7 +2603,7 @@ def process_issue(issue: dict, config: config_domain.RunnerConfig, source_repo: 
     # `progress.issue_field`) — it is never fabricated.
     title = issue["title"]
     ticket_scene = classify(
-        labels=claim._issue_label_set(issue), scene=None, pr_state=None,
+        labels=claim.issue_label_set(issue), scene=None, pr_state=None,
         body_markers=body_markers(issue.get("body")),
     )
     task_handler = _TASK_TYPE_DISPATCH.get(ticket_scene)
@@ -2654,7 +2654,7 @@ def _finish_progress(
         number, source_repo, run_id, run_command=run_command,
         language_code=language_code, status_url=status_url,
     )
-    publisher.ensure(progress._finish_progress_body(
+    publisher.ensure(progress.finish_progress_body(
         number=number, title=title, run_id=run_id, role=role,
         branch=branch, worktree=worktree, pr_url=pr_url,
         review_round=review_round, priority=priority, detail=detail,
@@ -2731,7 +2731,7 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
         "delivery_awaiting", issue=number, pr=pr_url, priority=priority,
     )
     publish = functools.partial(
-        _safe_publish, run_id=run_id, issue=number,
+        safe_publish, run_id=run_id, issue=number,
         source_repo=source_repo, role=ROLE_REVIEW,
     )
 

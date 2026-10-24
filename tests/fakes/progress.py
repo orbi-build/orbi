@@ -29,13 +29,13 @@ def capture_finish_rounds(monkeypatch) -> list[int]:
     from orbi import failure_report
 
     rounds: list[int] = []
-    real = failure_report._finish_progress_body
+    real = failure_report.finish_progress_body
 
     def spy(**kwargs):
         rounds.append(kwargs["review_round"])
         return real(**kwargs)
 
-    monkeypatch.setattr(failure_report, "_finish_progress_body", spy)
+    monkeypatch.setattr(failure_report, "finish_progress_body", spy)
     return rounds
 
 

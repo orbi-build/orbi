@@ -41,7 +41,7 @@ from orbi.delivery_labels import (
     READY_LABEL,
 )
 from orbi.delivery_scene import RunContext
-from orbi.failure import _failure_detail
+from orbi.failure import failure_detail
 from orbi.failure_report import UnrecoverableDeliveryError
 from orbi.github import (
     _pr_number,
@@ -275,9 +275,9 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 ),
                 reason=language.text(
                     lang, "delivery.resume_verify_reason",
-                    pr_url=scene["pr_url"], detail=_failure_detail(exc),
+                    pr_url=scene["pr_url"], detail=failure_detail(exc),
                 ),
-                diagnosis=_failure_detail(exc),
+                diagnosis=failure_detail(exc),
                 # The branch-gone scene destroyed the
                 # delivery state — nothing is left to preserve, and the
                 # preserved-objects note would contradict the reason.

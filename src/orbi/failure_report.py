@@ -38,8 +38,8 @@ from orbi.delivery_labels import (
     EVENT_FIX_NEEDED, FIX_NEEDED_LABEL, IN_PROGRESS_LABEL, READY_LABEL,
 )
 from orbi.failure import (
-    _failure_comment_body, _failure_detail, _failure_summary,
-    _redact_local_paths, terminal_action,
+    failure_comment_body, failure_detail, failure_summary,
+    redact_local_paths, terminal_action,
 )
 from orbi.comment_trust import latest_run_marker, trusted_comments
 from orbi.github import (
@@ -51,9 +51,9 @@ from orbi.journal import LOGGER, event, issue_context, run_command
 from orbi.pi_activity import activity_snapshot
 from orbi.pi_process import RateLimitExhaustedError
 from orbi.progress import (
-    FAILURE_MARKER_PATTERN, RUN_MARKER_PATTERN, ProgressPublisher, _fenced,
-    _finish_progress_body, _safe_publish, bump_failure_repeat, failure_marker,
-    failure_repeat_count, format_status_comment, run_marker,
+    FAILURE_MARKER_PATTERN, RUN_MARKER_PATTERN, ProgressPublisher,
+    bump_failure_repeat, failure_marker, failure_repeat_count, fenced,
+    finish_progress_body, format_status_comment, run_marker, safe_publish,
 )
 from orbi.review_rounds import current_review_round, review_rounds_so_far
 
@@ -150,7 +150,7 @@ def _classify_failure(exc: BaseException, *, outcome: str) -> failure.Failure:
     if isinstance(carried, failure.Failure):  # decided at the source (#1756)
         return carried.with_outcome(outcome)
     return failure.classify(
-        _failure_detail(exc),
+        failure_detail(exc),
         provider_quota=isinstance(exc, RateLimitExhaustedError),
         review_budget=isinstance(exc, ReviewRoundsExhausted),
         human_decision=isinstance(exc, HumanDecisionRequired),
@@ -288,7 +288,7 @@ def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
     """Render run facts as wrapping Markdown, never as a host-path dump.
 
     The field labels are human prose and follow the run's message
-    language; `failure._failure_comment_body` reads the correlation row
+    language; `failure.failure_comment_body` reads the correlation row
     through the SAME labels, so the stable journal lookup shape survives
     a translation.
     """
@@ -297,7 +297,7 @@ def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
 
     def field(name: str, value: object) -> str:
         label = message(f"failure.scene.{name}")
-        return f"- {label}: `{_redact_local_paths(str(value))}`"
+        return f"- {label}: `{redact_local_paths(str(value))}`"
 
     session_log = (
         message("failure.scene.local_session_log")
@@ -326,7 +326,7 @@ def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
     )
 
 
-# One evidence segment's cap (Issue #1711, `_fenced`'s default) and one
+# One evidence segment's cap (Issue #1711, `fenced`'s default) and one
 # fitting step: an oversized comment shrinks these, never its structure.
 EVIDENCE_SEGMENT_CAP = 4000
 _EVIDENCE_CAP_STEP = 500
@@ -371,11 +371,11 @@ def _failure_evidence(worktree: Path | None, exc: BaseException, *,
     return (
         f"\n\n{language.text(language_code, 'failure.evidence.heading')}\n"
         f"exit_code={return_code if return_code is not None else '<unknown>'}\n"
-        f"\nstderr_tail:\n{_fenced(_redact_local_paths(stderr), cap=cap)}\n"
-        f"\nstdout_tail:\n{_fenced(_redact_local_paths(stdout), cap=cap)}\n"
+        f"\nstderr_tail:\n{fenced(redact_local_paths(stderr), cap=cap)}\n"
+        f"\nstdout_tail:\n{fenced(redact_local_paths(stdout), cap=cap)}\n"
         f"\n{language.text(language_code, 'failure.evidence.session_last_events', limit=SESSION_SUMMARY_LIMIT, label=session_label)}\n"
-        f"{_fenced(_redact_local_paths(session), cap=cap)}\n"
-        f"\ntest_log_tail:\n{_fenced(_redact_local_paths(test_log), cap=cap)}"
+        f"{fenced(redact_local_paths(session), cap=cap)}\n"
+        f"\ntest_log_tail:\n{fenced(redact_local_paths(test_log), cap=cap)}"
     )
 
 
@@ -608,7 +608,7 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
             + user_summary.append_summary(
                 language.text(
                     language_code, "failure.resume_blocked",
-                    detail=_redact_local_paths(_failure_detail(error)),
+                    detail=redact_local_paths(failure_detail(error)),
                     run_id=run_id,
                 ),
                 status_url=status_url, issue=number,
@@ -693,9 +693,9 @@ def report_delivery_failure(
     # Keep `cause` as a compatibility input for callers outside the three
     # production paths; new callers provide the three named parts.
     if reason is None:
-        reason = cause or _failure_detail(exc)
+        reason = cause or failure_detail(exc)
     if diagnosis is None:
-        diagnosis = cause or _failure_detail(exc)
+        diagnosis = cause or failure_detail(exc)
     blocked = not classify or is_unrecoverable_failure(exc)
     # The GitHub App Actions-workflow refusal is an authorization only a
     # human can grant: it is terminal (`ai-blocked`) whichever path
@@ -703,7 +703,7 @@ def report_delivery_failure(
     # generic credential wording. One canonical explanation below feeds
     # the detailed comment, the terminal progress scene and the short
     # milestone so the three surfaces cannot disagree (Issue #1651).
-    workflow_refusal = failure.workflow_permission_refused(_failure_detail(exc))
+    workflow_refusal = failure.workflow_permission_refused(failure_detail(exc))
     if workflow_refusal:
         blocked = True
         action = failure.workflow_permission_action(pr_url, language_code=language_code)
@@ -797,7 +797,7 @@ def report_delivery_failure(
     # extended `reason`.
     milestone_summary = (
         action if workflow_refusal and action
-        else _failure_summary(reason, language_code)
+        else failure_summary(reason, language_code)
     )
     scene = scene_line() or "- run: `-`"
     if blocked:
@@ -810,7 +810,7 @@ def report_delivery_failure(
             current_labels=labels,
         )
         if review_scene_block is not None:
-            scene += f"\n{_redact_local_paths(review_scene_block)}"
+            scene += f"\n{redact_local_paths(review_scene_block)}"
         outcome = "fix needed"
     if isinstance(red, base_ci_red.BaseCIRed):
         body = base_ci_red.comment_body(
@@ -818,7 +818,7 @@ def report_delivery_failure(
             failure_record=failure_record, language_code=language_code,
             issue_number=number, issue_title=title, status_url=status_url)
     else:
-        body = _failure_comment_body(
+        body = failure_comment_body(
             outcome="blocked" if blocked else "fix needed",
             action=action, reason=reason, diagnosis=diagnosis, scene=scene,
             evidence=evidence_detail, pr_url=pr_url,
@@ -951,7 +951,7 @@ def report_delivery_failure(
             )
         )
         publish = functools.partial(
-            _safe_publish, run_id=run_id, issue=number,
+            safe_publish, run_id=run_id, issue=number,
             source_repo=source_repo, role=role,
         )
         if outcome == "blocked":
@@ -981,7 +981,7 @@ def report_delivery_failure(
             next_step = language.text(language_code, "failure.next_step_fix_needed")
             finish_outcome = "fix needed"
         if finish:
-            publish(action=lambda: target.finish(_finish_progress_body(
+            publish(action=lambda: target.finish(finish_progress_body(
                 number=number, title=title, run_id=run_id, role=role,
                 branch=branch, worktree=worktree, pr_url=pr_url,
                 review_round=(

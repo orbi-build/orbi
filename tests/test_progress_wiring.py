@@ -198,11 +198,11 @@ def test_delivery_head_advanced_fails_fast_when_git_fails(monkeypatch, tmp_path)
 
 def test_failure_detail_keeps_subprocess_stderr_visible():
     exc = subprocess.CalledProcessError(1, ["pi"], stderr="boom")
-    assert "boom" in runner._failure_detail(exc)
+    assert "boom" in runner.failure_detail(exc)
 
 
 def test_failure_detail_without_stderr_uses_message():
-    assert runner._failure_detail(RuntimeError("plain")) == "plain"
+    assert runner.failure_detail(RuntimeError("plain")) == "plain"
 
 
 def test_progress_body_outcome_renders_below_the_formal_prefix():
@@ -215,12 +215,12 @@ def test_progress_body_outcome_renders_below_the_formal_prefix():
         "last_action": None, "tests": None, "review_round": 0,
         "branch": "b", "pr": None, "session": None,
     }
-    body = runner._progress_body(state, outcome="**done**")
+    body = runner.progress_body_with_outcome(state, outcome="**done**")
     lines = body.splitlines()
     assert lines[0] == "<!-- orbi:run=a1b2c3d4 -->"
     assert lines[1].startswith("<!-- orbi:progress:v1 ")
     assert body.index("**done**") > body.index("<!-- orbi:progress:v1")
-    assert runner._progress_body(state) == progress.progress_body(state)
+    assert runner.progress_body_with_outcome(state) == progress.progress_body(state)
 
 
 def test_publish_plan_milestone_posts_only_when_plan_exists(tmp_path):
@@ -2699,9 +2699,9 @@ def _safe_publish_pin(source: str) -> tuple[int, list[str]]:
     """Scan one Python source; return (publish call count, violations).
 
     The Issue #294 pin: every bare `publish(...)` call forwards exactly
-    one keyword `action` (the four constant `_safe_publish` params stay
+    one keyword `action` (the four constant `safe_publish` params stay
     in the per-function `functools.partial` binding); a direct
-    `_safe_publish(...)` call anywhere is a violation.
+    `safe_publish(...)` call anywhere is a violation.
     """
     repeats: list[str] = []
     publish_calls = 0
@@ -2709,8 +2709,8 @@ def _safe_publish_pin(source: str) -> tuple[int, list[str]]:
         if not (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)):
             continue
-        if node.func.id == "_safe_publish":
-            repeats.append(f"line {node.lineno}: direct _safe_publish call")
+        if node.func.id == "safe_publish":
+            repeats.append(f"line {node.lineno}: direct safe_publish call")
         elif node.func.id == "publish":
             publish_calls += 1
             bad = (["<positional>"] if node.args else []) + [
@@ -2725,25 +2725,25 @@ def _safe_publish_pin(source: str) -> tuple[int, list[str]]:
 
 
 def test_safe_publish_pin_detects_the_boilerplate_debt():
-    """The detector really detects: a direct `_safe_publish` call, a
+    """The detector really detects: a direct `safe_publish` call, a
     repeated context param and a positional publish arg all violate."""
     calls, repeats = _safe_publish_pin(
-        "_safe_publish(action=f)\n"
+        "safe_publish(action=f)\n"
         "publish(action=f, run_id='r')\n"
         "publish(f)\n"
     )
     assert calls == 2
     assert len(repeats) == 3
-    assert "direct _safe_publish call" in repeats[0]
+    assert "direct safe_publish call" in repeats[0]
     assert "publish passes run_id" in repeats[1]
     assert "publish passes <positional>" in repeats[2]
 
 
 def test_safe_publish_call_sites_pass_only_action():
-    """Issue #294: the four constant `_safe_publish` params (`run_id`,
+    """Issue #294: the four constant `safe_publish` params (`run_id`,
     `issue`, `source_repo`, `role`) are bound once per function with a
     local `publish = functools.partial(...)`. Every call site forwards
-    only `action`; a direct `_safe_publish(...)` call anywhere is the
+    only `action`; a direct `safe_publish(...)` call anywhere is the
     boilerplate debt this pin rejects."""
     calls, repeats = _safe_publish_pin(
         Path(runner.__file__).read_text(encoding="utf-8")
@@ -2771,7 +2771,7 @@ def test_process_ticket_only_publishes_the_bound_context(monkeypatch):
         pi_session, "run_ticket_agent", lambda *args, **kwargs: "content")
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "")
-    monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: seen.append(kwargs))
+    monkeypatch.setattr(seam, "safe_publish", lambda **kwargs: seen.append(kwargs))
 
     runner.process_ticket_only(issue, config_domain.RunnerConfig(repo_dir=Path("/repo")), "o/r")
 
