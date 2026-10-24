@@ -44,6 +44,7 @@ from orbi.delivery_labels import (
     FIX_NEEDED_LABEL,
     IN_PROGRESS_LABEL,
     PR_OPENED_LABEL,
+    label_names,
 )
 from orbi.github import issue_view, parse_paginated_issue_array, run_gh_read_command
 from orbi.pi_activity import activity_kind_for, read_new_events
@@ -143,17 +144,6 @@ class Delivery:
     labels: tuple[str, ...]
 
 
-def _label_names(labels: object) -> tuple[str, ...]:
-    """Normalize gh/REST label objects to their names (order preserved)."""
-    if not isinstance(labels, list):
-        return ()
-    names = []
-    for label in labels:
-        if isinstance(label, dict) and isinstance(label.get("name"), str):
-            names.append(label["name"])
-    return tuple(names)
-
-
 def delivery_from_issue(repo: str, issue: object) -> Delivery:
     """Map one raw gh/REST Issue object to a Delivery."""
     if not isinstance(issue, dict):
@@ -170,7 +160,7 @@ def delivery_from_issue(repo: str, issue: object) -> Delivery:
         title=title if isinstance(title, str) else "",
         url=url if isinstance(url, str) else "",
         state=state.lower() if isinstance(state, str) else "",
-        labels=_label_names(issue.get("labels")),
+        labels=tuple(label_names(issue)),
     )
 
 

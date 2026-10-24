@@ -429,6 +429,36 @@ def test_needs_human_intervention_true_only_for_ai_blocked():
     assert dl.needs_human_intervention({"ai-ready"}) is False
 
 
+# --- the one label-name parser (Issue #1853) ----------------------------
+
+def test_label_names_preserves_the_order_the_issue_carries():
+    assert dl.label_names({"labels": [
+        {"name": "ai-ready"}, {"name": "p0"}, {"name": "ai-epic"},
+    ]}) == ["ai-ready", "p0", "ai-epic"]
+
+
+def test_label_names_skips_entries_that_are_not_a_named_label():
+    assert dl.label_names({"labels": [
+        {"name": "ai-ready"}, {"nope": 1}, 7, {"name": 3}, None, "ai-ready",
+    ]}) == ["ai-ready"]
+
+
+def test_label_name_set_is_the_label_names_as_a_set():
+    issue = {"labels": [
+        {"name": "ai-ready"}, {"name": "ai-ready"}, {"name": "p0"},
+    ]}
+    assert dl.label_name_set(issue) == frozenset({"ai-ready", "p0"})
+
+
+@pytest.mark.parametrize("issue", [
+    {}, {"labels": None}, {"labels": "ai-ready"},
+    {"labels": {"name": "ai-ready"}}, {"labels": []},
+])
+def test_label_names_fails_open_to_no_label(issue):
+    assert dl.label_names(issue) == []
+    assert dl.label_name_set(issue) == frozenset()
+
+
 # --- the ops-only marker name (Issue #530) --------------------------------
 
 # Composed so this guard file does not contain the very name it forbids
