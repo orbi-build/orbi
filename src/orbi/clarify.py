@@ -25,7 +25,10 @@ carries a hidden digest of the text the gate judged, and a re-readied
 ticket whose text still hashes to the newest stop is not judged,
 commented or notified again — it is simply stopped again (the claim label
 is removed, so it leaves the queue). Editing the ticket changes the digest
-and the next claim judges it again.
+and the next claim judges it again. Because that marker decides a claim,
+it is read only from THIS runner's own comments: the digest is derived
+from public ticket text, so anyone could compute a forged one, and a
+hidden marker never authenticates its author (docs/public-contracts.mdx).
 
 The module is the pure judgment layer: the model call is the
 `pi_session.run_ticket_agent` leaf and the GitHub writes are the
@@ -43,7 +46,10 @@ from typing import TYPE_CHECKING
 
 from orbi import language, notify, user_summary
 from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
-from orbi.github import comment_issue, edit_issue, issue_comments
+from orbi.github import (
+    authenticated_github_login, comment_issue, edit_issue, issue_comments,
+    strip_bot_suffix,
+)
 from orbi.journal import event
 from orbi.pi_session import run_ticket_agent
 from orbi.progress import run_marker
@@ -166,12 +172,34 @@ def stop_marker(issue: dict) -> str:
     return f"<!-- {CLARIFY_STOP_MARKER}:{judged_digest(issue)} -->"
 
 
-def last_judged_digest(issue: dict, source_repo: str) -> str | None:
-    """Return the digest carried by the newest stop comment, or None.
+def _runner_login(issue: dict) -> str | None:
+    """The login this runner posts with, or None when it cannot be read.
 
-    The read fails open: an unreadable comment history means the gate
-    judges the ticket exactly as it did before Issue #1904, so a broken
-    read never loses a delivery.
+    The stop marker steers a claim, so it is only accepted from this
+    runner's own comments: the digest is computed from public ticket text,
+    so any commenter could forge one, and a hidden marker never
+    authenticates its author (docs/public-contracts.mdx). The identity
+    read fails OPEN — an unreadable login means the gate judges the
+    ticket exactly as before Issue #1904.
+    """
+    try:
+        return strip_bot_suffix(authenticated_github_login())
+    except Exception as exc:
+        event(
+            "clarify_check_skipped", level=logging.WARNING,
+            issue=issue["number"], reason=type(exc).__name__,
+        )
+        return None
+
+
+def last_judged_digest(issue: dict, source_repo: str) -> str | None:
+    """Return the digest of the newest stop by THIS runner, or None.
+
+    A marker on somebody else's comment is ignored (and journaled): it is
+    a forged or copied marker, never a stop this engine recorded. The
+    read fails open: an unreadable comment history means the gate judges
+    the ticket exactly as it did before Issue #1904, so a broken read
+    never loses a delivery.
     """
     try:
         comments = issue_comments(issue["number"], repo=source_repo)
@@ -181,13 +209,29 @@ def last_judged_digest(issue: dict, source_repo: str) -> str | None:
             issue=issue["number"], reason=type(exc).__name__,
         )
         return None
+    own: str | None = None
     for comment in reversed(comments):
-        body = comment.get("body") if isinstance(comment, dict) else None
+        if not isinstance(comment, dict):
+            continue
+        body = comment.get("body")
         if not isinstance(body, str):
             continue
         match = _CLARIFY_STOP_RE.search(body)
-        if match is not None:
-            return match.group(1)
+        if match is None:
+            continue
+        if own is None:
+            own = _runner_login(issue)
+            if own is None:
+                return None
+        author = comment.get("author")
+        login = author.get("login") if isinstance(author, dict) else None
+        if not isinstance(login, str) or strip_bot_suffix(login) != own:
+            event(
+                "clarify_stop_untrusted", level=logging.WARNING,
+                issue=issue["number"],
+            )
+            continue
+        return match.group(1)
     return None
 
 
@@ -314,7 +358,13 @@ def enforce(issue: dict, config: RunnerConfig, source_repo: str,
 
     `True` lets the delivery proceed; `False` stops it (the ticket waits
     for a human). A failed comment or label write is a bypass: it is
-    logged as `clarify_check_skipped` and the delivery proceeds.
+    logged as `clarify_check_skipped` and the delivery proceeds. The one
+    exception is the unchanged, already-stopped ticket (Issue #1904): its
+    stop was already written and notified, so a failed label re-write is
+    logged as `clarify_already_stopped` and the ticket is STILL stopped —
+    delivering a text the gate already rejected would be the worse
+    outcome, and the ticket keeps the claim label for the next tick to
+    stop again.
     """
     # The stop removes the label the claim scan actually reads: the
     # repository's dispatch label (default `ai-ready`, #527). Removing a

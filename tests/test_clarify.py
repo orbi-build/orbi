@@ -27,7 +27,8 @@ import orbi.runner as runner
 from seam import seam
 
 from tests.fakes.clarify import (
-    FakeGate, fix_run_id, record_label_notifications, stub_stop_history,
+    FakeGate, fix_run_id, record_label_notifications, stop_comment_entry,
+    stub_stop_history,
 )
 
 from tests.test_run_id_e2e import (
@@ -472,7 +473,7 @@ def test_enforce_does_not_rejudge_an_unchanged_stopped_ticket(
 ):
     """Acceptance: no model call, no comment, no notification."""
     gate = FakeGate(
-        monkeypatch, history=[{"body": _stop_comment(ISSUE)}],
+        monkeypatch, history=[stop_comment_entry(_stop_comment(ISSUE))],
     )
     caplog.set_level("INFO")
 
@@ -498,7 +499,7 @@ def test_enforce_judges_again_after_the_body_changes(monkeypatch):
         passed=False, missing=("observable_result",),
     )
     gate = FakeGate(
-        monkeypatch, history=[{"body": _stop_comment(stopped)}],
+        monkeypatch, history=[stop_comment_entry(_stop_comment(stopped))],
         verdict=verdict,
     )
 
@@ -536,8 +537,8 @@ def test_enforce_uses_the_newest_stop_comment(monkeypatch):
     gate = FakeGate(
         monkeypatch,
         history=[
-            {"body": _stop_comment(older, "aaaaaaaa")},
-            {"body": _stop_comment(ISSUE, "bbbbbbbb")},
+            stop_comment_entry(_stop_comment(older, "aaaaaaaa")),
+            stop_comment_entry(_stop_comment(ISSUE, "bbbbbbbb")),
         ],
     )
 
@@ -552,7 +553,7 @@ def test_enforce_still_stops_when_reapplying_the_labels_fails(
 ):
     """A failed label write never turns an unchanged stop into delivery."""
     gate = FakeGate(
-        monkeypatch, history=[{"body": _stop_comment(ISSUE)}],
+        monkeypatch, history=[stop_comment_entry(_stop_comment(ISSUE))],
         edit_error=RuntimeError("gh write failed"),
     )
     caplog.set_level("INFO")
@@ -582,6 +583,60 @@ def test_enforce_fails_open_when_the_stop_history_is_unreadable(
     assert len(gate.judged) == 1
     assert "clarify_check_skipped" in caplog.text
     assert "reason=RuntimeError" in caplog.text
+
+
+def test_enforce_ignores_a_stop_marker_from_another_author(monkeypatch, caplog):
+    """The hidden marker only counts on the runner's OWN comment.
+
+    docs/public-contracts.mdx: a hidden marker "does not authenticate an
+    author, so a consumer keeps its own trusted-author rules". The digest
+    is computed from public ticket text, so any commenter could forge one;
+    honouring it would let a stranger stop a ticket silently — no stop
+    comment, no notification.
+    """
+    gate = FakeGate(
+        monkeypatch,
+        history=[
+            stop_comment_entry(_stop_comment(ISSUE), login="alice"),
+            # A marker on a comment that names no author is no better.
+            {"body": _stop_comment(ISSUE)},
+        ],
+        verdict=clarify.ClarifyVerdict(
+            passed=False, missing=("single_outcome",),
+        ),
+    )
+    caplog.set_level("INFO")
+
+    assert clarify.enforce(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is False
+    # Judged as today, and the real stop comment (with its own marker,
+    # naming the missing piece) lands on the Issue.
+    assert len(gate.judged) == 1
+    assert len(gate.comments) == 1
+    assert clarify.stop_marker(ISSUE) in gate.comments[0][2]
+    assert "clarify_stop_untrusted" in caplog.text
+    assert "clarify_needs_detail" in caplog.text
+
+
+def test_enforce_fails_open_when_the_runner_identity_is_unreadable(
+    monkeypatch, caplog,
+):
+    """An unreadable own-account read keeps today's judgment (fail open)."""
+    gate = FakeGate(
+        monkeypatch,
+        history=[stop_comment_entry(_stop_comment(ISSUE))],
+        login_error=ValueError("gh auth status failed"),
+        verdict=clarify.ClarifyVerdict(passed=True, missing=()),
+    )
+    caplog.set_level("INFO")
+
+    assert clarify.enforce(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is True
+    assert len(gate.judged) == 1
+    assert "clarify_check_skipped" in caplog.text
+    assert "reason=ValueError" in caplog.text
 
 
 # --- the Issue #1831 ticket texts -----------------------------------------

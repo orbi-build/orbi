@@ -443,9 +443,11 @@ no Pi session, no PR, and the slot is released for the next Issue. The
 ticket then waits for a human exactly like `ai-blocked`: the next chance to
 be delivered comes from editing the Issue and adding that claim label
 again, which re-runs the judgment from scratch. Re-adding the claim label
-without editing the text does NOT judge, comment or notify again: the stop
-comment records the text it judged, so the next claim re-applies the stop,
-removes the claim label and leaves the rest of the queue untouched.
+without editing the text does NOT judge, comment or notify again: the
+runner's own stop comment records the text it judged, so the next claim
+re-applies the stop, removes the claim label and leaves the rest of the
+queue untouched. A comment carrying such a marker without being written by
+the runner is ignored.
 
 Every error path is a **bypass** — the gate never loses a delivery. A model
 error or timeout, an unusable answer, or a failed comment/label write logs

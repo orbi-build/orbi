@@ -30,9 +30,15 @@ from conftest import git
 import orbi.runner as runner
 from seam import seam
 
+from tests.fakes.clarify import stub_runner_login
+
 REPO = "owner/repo"
 ISSUE_NUMBER = 41
 PR_URL = "https://github.com/owner/repo/pull/41"
+# The account the fake runner posts its comments with: the real runner's
+# identity read reports an App with its [bot] suffix while GraphQL drops
+# it (Issue #1806), so the fake exercises one login in both shapes.
+FAKE_RUNNER_LOGIN = "orbi-bot[bot]"
 
 # The fake pi behaves like the delivery agent: it extracts the run id from
 # the injected system prompt (exactly where the real runner puts it), writes
@@ -215,9 +221,15 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     if command[-1] == "comments":
                         # The thin-ticket gate's stop history (Issue
                         # #1904): the real call returns the Issue's
-                        # comments oldest first.
+                        # comments oldest first, each with its author.
                         return json.dumps({"comments": [
-                            {"body": body} for body in comments
+                            {
+                                "body": body,
+                                "author": {
+                                    "login": FAKE_RUNNER_LOGIN[:-5],
+                                },
+                            }
+                            for body in comments
                         ]})
                     tracked = (labels or {}).get(int(command[3]), [])
                     return json.dumps({"labels": [
@@ -296,6 +308,9 @@ def install_fake_gh(monkeypatch, comments: list[str],
         return real_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
+    # The identity the runner's own comments are recognized by — the thin
+    # ticket gate reads its stop marker only from them (Issue #1904).
+    stub_runner_login(monkeypatch, FAKE_RUNNER_LOGIN)
 
 
 def write_prompt(tmp_path: Path) -> Path:
