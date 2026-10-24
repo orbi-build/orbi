@@ -1140,7 +1140,7 @@ def _run_ref_hammer(
 
     import orbi.runner as runner
     import orbi.pr_verification as pr_verification
-    import orbi.review_merge as review_merge
+    import orbi.merge_exec as merge_exec
     import orbi.gitops as gitops
 
     # The fake `gh` on PATH answers the PR commands of the verify path
@@ -1209,7 +1209,7 @@ def _run_ref_hammer(
                     clone, "owner/repo", number, "01234567", base_sha,
                 )
                 pr_verification.verify_pr(RunContext(run_id="01234567", issue=9, branch="orbi/owner-repo-issue-9", worktree=worktree, source_repo="owner/repo"), "main", repo_dir=clone, require_latest_base=False)
-                review_merge.sync_base_checkout(clone, "main")
+                merge_exec.sync_base_checkout(clone, "main")
             except Exception as exc:
                 with errors_lock:
                     errors.append(repr(exc))

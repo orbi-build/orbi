@@ -21,6 +21,7 @@ from orbi import human_review
 
 import orbi.failure_report as failure_report
 import orbi.runner as runner
+import orbi.merge_exec as merge_exec
 import orbi.review_merge as review_merge
 from seam import seam
 
@@ -447,7 +448,7 @@ def test_delivered_changed_files_failure_is_missing_evidence(
         raise RuntimeError("git down")
 
     monkeypatch.setattr(seam, "run_command", boom)
-    assert review_merge.delivered_changed_files(worktree, "main") is None
+    assert merge_exec.delivered_changed_files(worktree, "main") is None
     # Missing evidence lands in column 2 (the gate holds).
     checklist = human_review.build_checklist(
         test_status="passed", changed_files=None, language_code="en",
