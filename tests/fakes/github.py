@@ -814,3 +814,17 @@ class FakeGh:
         self._fail(
             2, "fake-gh: unsupported command: " + " ".join(command)
         )
+
+
+def no_current_issue(monkeypatch) -> None:
+    """Fake the `gh issue list` boundary: no current Issue is observed.
+
+    A `doctor` report over a real loaded config reads the current Issue
+    per source repo. Keeping that fake here, in the sanctioned fakes
+    home, means the test patches the gh boundary once instead of adding
+    an internal `cli_status.current_issue` coupling (patch ratchet,
+    Issue #789).
+    """
+    from orbi import github
+
+    monkeypatch.setattr(github, "run_gh_read_command", lambda *a, **k: "[]")
