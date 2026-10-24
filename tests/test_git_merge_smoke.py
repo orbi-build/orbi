@@ -26,6 +26,7 @@ from orbi import config as config_domain
 import orbi.gh_response as gh_response
 import orbi.pi_session as pi_session
 import orbi.runner as runner
+import orbi.merge_exec as merge_exec
 import orbi.review_merge as review_merge
 import orbi.run_state as run_state
 from seam import seam
@@ -105,7 +106,7 @@ def test_merge_gate_merges_head_containing_latest_base(clone, monkeypatch):
           "head_ref": "orbi/owner-repo-issue-4",
           "head_oid": head_oid}
     commands = install_fake_gh(monkeypatch, clone, make_pr(head_oid))
-    merged = review_merge.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
+    merged = merge_exec.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
     assert merged["merged"] is True
     # The merge used --match-head-commit with the reviewed head SHA.
     merge_cmd = [c for c in commands if c[:2] == ["gh", "pr"]
@@ -125,7 +126,7 @@ def test_merge_gate_merges_head_containing_latest_base(clone, monkeypatch):
             else ""
         ),
     )
-    confirmed = review_merge.confirm_merged(clone, merged, "main", repo_dir=clone)
+    confirmed = merge_exec.confirm_merged(clone, merged, "main", repo_dir=clone)
     assert confirmed["state"] == "MERGED"
     assert confirmed["merge_commit"] == merge_commit
 
@@ -170,8 +171,8 @@ def test_merge_gate_absorbs_clean_behind_base_then_defers(
           "base_oid": git(clone, "rev-parse", "origin/main~1"),
           "head_ref": "orbi/owner-repo-issue-4", "head_oid": head_oid}
     with caplog.at_level("INFO"):
-        with pytest.raises(review_merge.DeliveryDeferred):
-            review_merge.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
+        with pytest.raises(merge_exec.DeliveryDeferred):
+            merge_exec.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
     # Issue #1626: the gate absorbed the base and pushed the merged head,
     # then deferred instead of reading the new head's CI. No merge command
     # ran in this tick.
@@ -183,7 +184,7 @@ def test_merge_gate_absorbs_clean_behind_base_then_defers(
 
     # The next gate pass (the branch now contains the base) merges the
     # absorbed head with --match-head-commit.
-    merged = review_merge.merge_gate(
+    merged = merge_exec.merge_gate(
         clone, {**pr, "head_oid": absorbed_head}, "main", repo_dir=clone, language_code="en",
     )
     assert merged["merged"] is True
@@ -211,8 +212,8 @@ def test_merge_gate_conflicted_absorb_stays_recoverable(clone, monkeypatch):
     pr = {"number": 4, "url": "u", "base_ref": "main",
           "base_oid": git(clone, "rev-parse", "origin/main~1"),
           "head_ref": "orbi/owner-repo-issue-4", "head_oid": head_oid}
-    with pytest.raises(review_merge.RecoverableMergeGateError, match="cannot absorb"):
-        review_merge.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
+    with pytest.raises(merge_exec.RecoverableMergeGateError, match="cannot absorb"):
+        merge_exec.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
     assert git(clone, "status", "--porcelain", "--untracked-files=no") == ""
 
 
@@ -231,7 +232,7 @@ def test_merge_gate_rejects_conflicting_pr_reports_mergeable(
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="mergeable=DIRTY",
     ):
-        review_merge.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
+        merge_exec.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
     assert "merge_gate_not_mergeable" in caplog.text
 
 
@@ -262,7 +263,7 @@ def test_deployment_checkout_fast_forwards_after_independent_merge(
           "head_ref": "orbi/owner-repo-issue-4",
           "head_oid": head_oid}
     install_fake_gh(monkeypatch, clone, make_pr(head_oid))
-    merged = review_merge.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
+    merged = merge_exec.merge_gate(clone, pr, "main", repo_dir=clone, language_code="en")
     assert merged["merged"] is True
     merge_commit = git(clone, "rev-parse", "origin/main")
     # The remote advanced; the deployment checkout has not yet.
@@ -277,11 +278,11 @@ def test_deployment_checkout_fast_forwards_after_independent_merge(
         return real_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    confirmed = review_merge.confirm_merged(clone, merged, "main", repo_dir=clone)
+    confirmed = merge_exec.confirm_merged(clone, merged, "main", repo_dir=clone)
     assert confirmed["merge_commit"] == merge_commit
 
     # The deployment checkout now fast-forwards to the merged base.
-    review_merge.sync_base_checkout(checkout, "main")
+    merge_exec.sync_base_checkout(checkout, "main")
     synced = git(checkout, "rev-parse", "HEAD")
     assert synced == merge_commit
     git(checkout, "merge-base", "--is-ancestor", head_oid, "HEAD")
@@ -309,7 +310,7 @@ def test_sync_base_checkout_fails_fast_on_drifted_checkout(
     git(clone, "push", "origin", "main")
 
     with pytest.raises(RuntimeError, match="cannot fast-forward"):
-        review_merge.sync_base_checkout(checkout, "main")
+        merge_exec.sync_base_checkout(checkout, "main")
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +381,7 @@ def test_merge_gate_accepts_a_merge_that_landed_despite_a_502(
         ),
     )
     with caplog.at_level("WARNING"):
-        merged = review_merge.merge_gate(
+        merged = merge_exec.merge_gate(
             clone, _delivery_pr(clone, head_oid), "main",
             repo_dir=clone, language_code="en",
         )
@@ -390,7 +391,7 @@ def test_merge_gate_accepts_a_merge_that_landed_despite_a_502(
     assert len([c for c in calls
                 if c[0] == "gh" and c[1] == "pr" and "merge" in c]) == 1
     merge_commit = git(clone, "rev-parse", "origin/main")
-    confirmed = review_merge.confirm_merged(clone, merged, "main",
+    confirmed = merge_exec.confirm_merged(clone, merged, "main",
                                             repo_dir=clone)
     assert confirmed == {"state": "MERGED", "merge_commit": merge_commit}
 
@@ -406,7 +407,7 @@ def test_merge_gate_accepts_a_landed_head_while_the_pr_reads_open(
     head_oid = commit_file(clone, "delivery.txt", "delivery")
     calls = install_failing_merge_gh(monkeypatch, clone, head_oid)
     with caplog.at_level("INFO"):
-        merged = review_merge.merge_gate(
+        merged = merge_exec.merge_gate(
             clone, _delivery_pr(clone, head_oid), "main",
             repo_dir=clone, language_code="en",
         )
@@ -425,7 +426,7 @@ def test_merge_gate_accepts_a_landed_head_while_the_pr_reads_open(
     # second parent is that head.
     assert git(clone, "rev-parse", f"{merge_commit}^2") == head_oid
     with caplog.at_level("INFO"):
-        confirmed = review_merge.confirm_merged(clone, merged, "main",
+        confirmed = merge_exec.confirm_merged(clone, merged, "main",
                                                 repo_dir=clone)
     # Issue #1801: the PR never reads MERGED, so GitHub never closes the
     # Issue through the closing keyword; the answer says OPEN and the
@@ -444,11 +445,11 @@ def test_a_landed_merge_that_never_reads_merged_closes_the_issue(
     git(clone, "checkout", "-b", "orbi/owner-repo-issue-4")
     head_oid = commit_file(clone, "delivery.txt", "delivery")
     calls = install_failing_merge_gh(monkeypatch, clone, head_oid)
-    merged = review_merge.merge_gate(
+    merged = merge_exec.merge_gate(
         clone, _delivery_pr(clone, head_oid), "main",
         repo_dir=clone, language_code="en",
     )
-    confirmed = review_merge.confirm_merged(clone, merged, "main",
+    confirmed = merge_exec.confirm_merged(clone, merged, "main",
                                             repo_dir=clone)
     assert confirmed["state"] != "MERGED"
     with caplog.at_level("INFO"):
@@ -475,7 +476,7 @@ def test_merge_gate_still_fails_when_the_merge_did_not_land(
         lambda *args: ["merge_gate: PASS protection readable"],
     )
     with pytest.raises(subprocess.CalledProcessError) as raised:
-        review_merge.merge_gate(
+        merge_exec.merge_gate(
             clone, pr, "main", repo_dir=clone, language_code="en",
         )
     assert raised.value.returncode == 1
@@ -618,7 +619,7 @@ def test_round_uses_the_gates_landed_verdict_after_a_failed_merge_call(
     # Every later landing read is the 5xx that used to escape the round
     # after the merge landed: the round needed no second one.
     with pytest.raises(gh_response.GitHubRequestFailed):
-        review_merge.confirm_merged(
+        merge_exec.confirm_merged(
             clone, _delivery_pr(clone, head_oid), "main", repo_dir=clone,
         )
 

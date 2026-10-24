@@ -40,6 +40,7 @@ from conftest import git
 
 import orbi.claim as claim
 import orbi.runner as runner
+import orbi.merge_exec as merge_exec
 import orbi.review_merge as review_merge
 import orbi.run_state as run_state
 from orbi import human_review
@@ -1162,7 +1163,7 @@ def test_e2e_human_review_checklist_failure_is_a_bypass(
     def boom(*args, **kwargs):
         raise RuntimeError("github down")
 
-    monkeypatch.setattr(review_merge, "human_review_checklist", boom)
+    monkeypatch.setattr(merge_exec, "human_review_checklist", boom)
     result = runner.process_issue(issue(), config, REPO)
     assert result.url == PR_URL
     assert not [

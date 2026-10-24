@@ -26,6 +26,7 @@ import orbi.checks as checks
 import orbi.failure_report as failure_report
 import orbi.journal as journal
 import orbi.runner as runner
+import orbi.merge_exec as merge_exec
 import orbi.review_merge as review_merge
 import orbi.run_state as run_state
 import orbi.gitops as gitops
@@ -562,7 +563,7 @@ def test_merge_gate_rejects_failed_github_ci(monkeypatch, tmp_path):
     # (GateCIFailure), never by matching text inside the message.
     with pytest.raises(runner.GateCIFailure,
                        match="delivery gate: CI check 'tests'"):
-        review_merge.merge_gate(tmp_path, {"number": 4, "url": "u",
+        merge_exec.merge_gate(tmp_path, {"number": 4, "url": "u",
                                      "base_ref": "main", "base_oid": "b1",
                                      "head_ref": "h", "head_oid": "h1"},
                           "main", repo_dir=tmp_path, source_repo="owner/repo", language_code="en")
@@ -591,7 +592,7 @@ def test_merge_gate_rejects_preexisting_failed_ci_as_unrecoverable(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(failure_report.PreExistingCIFailure, match="main is already red"):
-        review_merge.merge_gate(
+        merge_exec.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path, source_repo="owner/repo", language_code="en",
@@ -617,7 +618,7 @@ def test_merge_gate_preexisting_failure_matches_apostrophe_name(
     ))
     with pytest.raises(failure_report.PreExistingCIFailure,
                        match="main is already red on check 'Bob's lint'"):
-        review_merge.merge_gate(
+        merge_exec.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path, source_repo="owner/repo", language_code="en",
@@ -631,7 +632,7 @@ def test_merge_gate_rejects_failed_status_context(monkeypatch, tmp_path):
         }]),
     )
     with pytest.raises(runner.GateCIFailure, match="CI check 'status'"):
-        review_merge.merge_gate(
+        merge_exec.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path, language_code="en",
@@ -747,7 +748,7 @@ def test_merge_gate_merges_after_green_ci(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command", _merge_gate_fake(check_runs=[{
         "name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS",
     }]))
-    result = review_merge.merge_gate(tmp_path, {"number": 4, "url": "u",
+    result = merge_exec.merge_gate(tmp_path, {"number": 4, "url": "u",
                                           "base_ref": "main", "base_oid": "b1",
                                           "head_ref": "h", "head_oid": "h1"},
                                "main", repo_dir=tmp_path, language_code="en")
@@ -781,8 +782,8 @@ def test_merge_gate_reads_the_state_once(monkeypatch, tmp_path):
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    with pytest.raises(review_merge.DeliveryDeferred):
-        review_merge.merge_gate(tmp_path, {"number": 4, "url": "u",
+    with pytest.raises(merge_exec.DeliveryDeferred):
+        merge_exec.merge_gate(tmp_path, {"number": 4, "url": "u",
                                      "base_ref": "main", "base_oid": "b1",
                                      "head_ref": "h", "head_oid": "h1"},
                           "main", repo_dir=tmp_path, language_code="en")
@@ -844,7 +845,7 @@ def test_merge_gate_absorb_remote_head_mismatch_is_fail_fast(monkeypatch, tmp_pa
                         _absorb_merge_command_fake([_absorb_pr_state("h1")],
                                                     remote_head="other"))
     with pytest.raises(RuntimeError, match="does not match absorbed head"):
-        review_merge.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
+        merge_exec.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
                                      "head_ref": "h", "base_oid": "b1"},
                           "main", repo_dir=tmp_path, language_code="en")
 
@@ -860,7 +861,7 @@ def test_merge_gate_absorb_detects_head_moved_after_push(monkeypatch, tmp_path):
                             _absorb_pr_state("h1"), _absorb_pr_state("other"),
                         ]))
     with pytest.raises(RuntimeError, match="head moved after base absorb"):
-        review_merge.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
+        merge_exec.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
                                      "head_ref": "h", "base_oid": "b1"},
                           "main", repo_dir=tmp_path, language_code="en")
 
@@ -876,8 +877,8 @@ def test_merge_gate_absorb_rejects_newly_dirty_pr(monkeypatch, tmp_path):
                             _absorb_pr_state("h1"),
                             _absorb_pr_state("h2", mergeable="DIRTY"),
                         ]))
-    with pytest.raises(review_merge.RecoverableMergeGateError, match="not mergeable"):
-        review_merge.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
+    with pytest.raises(merge_exec.RecoverableMergeGateError, match="not mergeable"):
+        merge_exec.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
                                      "head_ref": "h", "base_oid": "b1"},
                           "main", repo_dir=tmp_path, language_code="en")
 
@@ -886,7 +887,7 @@ def test_merge_gate_without_ci_proceeds_to_mergeable_gate(monkeypatch, tmp_path)
     monkeypatch.setattr(seam, "run_command",
         _merge_gate_fake(check_runs=[]),
     )
-    result = review_merge.merge_gate(tmp_path, {"number": 4, "url": "u",
+    result = merge_exec.merge_gate(tmp_path, {"number": 4, "url": "u",
                                           "base_ref": "main", "base_oid": "b1",
                                           "head_ref": "h", "head_oid": "h1"},
                                "main", repo_dir=tmp_path, language_code="en")
@@ -901,7 +902,7 @@ def test_merge_gate_merges_reviewed_head_with_match_head_commit(monkeypatch, tmp
         return _merge_gate_fake()(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    pr = review_merge.merge_gate(tmp_path, {"number": 4, "url": "u",
+    pr = merge_exec.merge_gate(tmp_path, {"number": 4, "url": "u",
                                       "base_ref": "main", "base_oid": "b1",
                                       "head_ref": "h", "head_oid": "h1"},
                            "main", repo_dir=tmp_path, language_code="en")
@@ -933,8 +934,8 @@ def test_merge_gate_skips_merge_when_issue_is_blocked(monkeypatch, tmp_path):
         return _merge_gate_fake()(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    with pytest.raises(review_merge.MergeBlockedByIssueLabel, match="ai-blocked"):
-        review_merge.merge_gate(
+    with pytest.raises(merge_exec.MergeBlockedByIssueLabel, match="ai-blocked"):
+        merge_exec.merge_gate(
             tmp_path,
             {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
              "head_ref": "h", "head_oid": "h1"},
@@ -946,11 +947,17 @@ def test_merge_gate_skips_merge_when_issue_is_blocked(monkeypatch, tmp_path):
                 if isinstance(c, list) and c[:2] == ["gh", "pr"]
                 and "merge" in c]
     # ...no label is added (the human's labels stay as they are)...
-    assert [c for c in calls if isinstance(c, tuple)] == []
-    # ...and exactly one skip comment names the reviewed head.
+    # Issue #1857: the label transition after the move is byte-identical
+    # to the pre-move golden — for the blocked path that means NO edit.
+    assert json.dumps(
+        [c[1] for c in calls if isinstance(c, tuple)], indent=2,
+    ) == closeout_golden()["blocked-labels"]
+    # ...and exactly one skip comment names the reviewed head, with the
+    # exact pre-move body (Issue #1857).
     assert len(comments) == 1
     assert comments[0]["repo"] == "owner/repo"
     body = comments[0]["body"]
+    assert body == closeout_golden()["blocked-comment"]
     assert "<!-- orbi:run=a1b2c3d4 -->" in body
     assert "ai-blocked" in body
     assert "h1" in body
@@ -977,8 +984,8 @@ def test_merge_gate_issue_blocked_skip_comment_follows_the_language(
         return _merge_gate_fake()(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    with pytest.raises(review_merge.MergeBlockedByIssueLabel, match="ai-blocked"):
-        review_merge.merge_gate(
+    with pytest.raises(merge_exec.MergeBlockedByIssueLabel, match="ai-blocked"):
+        merge_exec.merge_gate(
             tmp_path,
             {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
              "head_ref": "h", "head_oid": "h1"},
@@ -1016,8 +1023,8 @@ def test_merge_gate_issue_blocked_comment_failure_is_bypass(
         return _merge_gate_fake()(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    with pytest.raises(review_merge.MergeBlockedByIssueLabel, match="ai-blocked"):
-        review_merge.merge_gate(
+    with pytest.raises(merge_exec.MergeBlockedByIssueLabel, match="ai-blocked"):
+        merge_exec.merge_gate(
             tmp_path,
             {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
              "head_ref": "h", "head_oid": "h1"},
@@ -1046,7 +1053,7 @@ def test_merge_gate_merges_when_issue_is_not_blocked(monkeypatch, tmp_path):
         return _merge_gate_fake()(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    pr = review_merge.merge_gate(
+    pr = merge_exec.merge_gate(
         tmp_path,
         {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
          "head_ref": "h", "head_oid": "h1"},
@@ -1080,7 +1087,7 @@ def test_select_merge_method_reads_the_repository_settings(
         return json.dumps(settings)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert review_merge.select_merge_method("owner/repo") == expected
+    assert merge_exec.select_merge_method("owner/repo") == expected
     assert calls == [["gh", "api", "repos/owner/repo"]]
 
 
@@ -1093,7 +1100,7 @@ def test_select_merge_method_falls_back_and_warns_on_a_failed_read(
 
     monkeypatch.setattr(seam, "run_command", boom)
     with caplog.at_level("WARNING"):
-        assert review_merge.select_merge_method("owner/repo") == "--merge"
+        assert merge_exec.select_merge_method("owner/repo") == "--merge"
     assert "merge_method_unknown" in caplog.text
 
 
@@ -1106,7 +1113,7 @@ def test_select_merge_method_falls_back_when_no_field_is_boolean(
         lambda command, **kwargs: json.dumps({"allow_merge_commit": "yes"}),
     )
     with caplog.at_level("WARNING"):
-        assert review_merge.select_merge_method("owner/repo") == "--merge"
+        assert merge_exec.select_merge_method("owner/repo") == "--merge"
     assert "merge_method_unknown" in caplog.text
 
 
@@ -1118,7 +1125,7 @@ def test_merge_gate_requires_the_repo_dir_lock_location(
     # dir) must be explicit — there is no bypass path.
     monkeypatch.setattr(seam, "run_command", _merge_gate_fake())
     with pytest.raises(TypeError):
-        review_merge.merge_gate(tmp_path, {"number": 4, "url": "u",
+        merge_exec.merge_gate(tmp_path, {"number": 4, "url": "u",
                                      "base_ref": "main", "base_oid": "b1",
                                      "head_ref": "h", "head_oid": "h1"},
                          "main", language_code="en")
@@ -1140,7 +1147,7 @@ def test_merge_gate_fetches_under_the_base_sync_lock(
         return _merge_gate_fake()(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    review_merge.merge_gate(tmp_path, {"number": 4, "url": "u",
+    merge_exec.merge_gate(tmp_path, {"number": 4, "url": "u",
                                  "base_ref": "main", "base_oid": "b1",
                                  "head_ref": "h", "head_oid": "h1"},
                       "main", repo_dir=tmp_path, language_code="en")
@@ -1161,7 +1168,7 @@ def test_merge_gate_reraises_merge_base_errors(monkeypatch, tmp_path):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
-        review_merge.merge_gate(
+        merge_exec.merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1"}, "main",
             repo_dir=tmp_path, language_code="en",
         )
@@ -1181,9 +1188,9 @@ def test_merge_gate_behind_conflicted_pr_remains_recoverable(
         return ""
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
-        review_merge.RecoverableMergeGateError, match="not mergeable",
+        merge_exec.RecoverableMergeGateError, match="not mergeable",
     ):
-        review_merge.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
+        merge_exec.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
                                      "head_oid": "h1"}, "main",
                           repo_dir=tmp_path, language_code="en")
@@ -1197,8 +1204,8 @@ def test_merge_gate_defers_when_ci_pending(monkeypatch, tmp_path, caplog):
     monkeypatch.setattr(seam, "run_command", _merge_gate_fake(check_runs=[{
         "name": "tests", "status": "QUEUED", "conclusion": None,
     }]))
-    with caplog.at_level("INFO"), pytest.raises(review_merge.DeliveryDeferred):
-        review_merge.merge_gate(
+    with caplog.at_level("INFO"), pytest.raises(merge_exec.DeliveryDeferred):
+        merge_exec.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path, language_code="en",
@@ -1239,14 +1246,14 @@ def test_merge_gate_rereads_a_transient_unknown_mergeability(
     ))
     sleeps = []
     monkeypatch.setattr("time.sleep", sleeps.append)
-    result = review_merge.merge_gate(
+    result = merge_exec.merge_gate(
         tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                    "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
         "main", repo_dir=tmp_path, language_code="en",
     )
     assert result["merged"] is True
     assert len(views) == 2
-    assert sleeps == [review_merge.MERGEABLE_UNKNOWN_RETRY_DELAYS[0]]
+    assert sleeps == [merge_exec.MERGEABLE_UNKNOWN_RETRY_DELAYS[0]]
 
 
 def test_merge_gate_reread_uses_the_whole_last_state_for_a_stale_head(
@@ -1269,8 +1276,8 @@ def test_merge_gate_reread_uses_the_whole_last_state_for_a_stale_head(
     )
     sleeps = []
     monkeypatch.setattr("time.sleep", sleeps.append)
-    with caplog.at_level("INFO"), pytest.raises(review_merge.DeliveryDeferred):
-        review_merge.merge_gate(
+    with caplog.at_level("INFO"), pytest.raises(merge_exec.DeliveryDeferred):
+        merge_exec.merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1", "head_ref": "h",
                        "base_oid": "b1"},
             "main", repo_dir=tmp_path, language_code="en",
@@ -1286,20 +1293,20 @@ def test_merge_gate_defers_when_mergeable_unknown(monkeypatch, tmp_path, caplog)
     views = []
     monkeypatch.setattr(seam, "run_command", _mergeable_sequence(
         [_pr_state("UNKNOWN") for _ in range(
-            1 + len(review_merge.MERGEABLE_UNKNOWN_RETRY_DELAYS))], views,
+            1 + len(merge_exec.MERGEABLE_UNKNOWN_RETRY_DELAYS))], views,
     ))
     sleeps = []
     monkeypatch.setattr("time.sleep", sleeps.append)
     with caplog.at_level("INFO"), pytest.raises(
-        review_merge.DeliveryDeferred, match="mergeable state is UNKNOWN",
+        merge_exec.DeliveryDeferred, match="mergeable state is UNKNOWN",
     ):
-        review_merge.merge_gate(
+        merge_exec.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path, language_code="en",
         )
-    assert len(views) == 1 + len(review_merge.MERGEABLE_UNKNOWN_RETRY_DELAYS)
-    assert sleeps == list(review_merge.MERGEABLE_UNKNOWN_RETRY_DELAYS)
+    assert len(views) == 1 + len(merge_exec.MERGEABLE_UNKNOWN_RETRY_DELAYS)
+    assert sleeps == list(merge_exec.MERGEABLE_UNKNOWN_RETRY_DELAYS)
     assert "merge_gate_mergeable_unknown" in caplog.text
 
 
@@ -1317,9 +1324,9 @@ def test_merge_gate_does_not_reread_while_ci_is_pending(
     sleeps = []
     monkeypatch.setattr("time.sleep", sleeps.append)
     with caplog.at_level("INFO"), pytest.raises(
-        review_merge.DeliveryDeferred, match="CI is still running",
+        merge_exec.DeliveryDeferred, match="CI is still running",
     ):
-        review_merge.merge_gate(
+        merge_exec.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path, language_code="en",
@@ -1331,8 +1338,8 @@ def test_merge_gate_does_not_reread_while_ci_is_pending(
 
 def test_merge_gate_rejects_non_mergeable_pr(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command", _merge_gate_fake(pr_state="DIRTY"))
-    with pytest.raises(review_merge.RecoverableMergeGateError, match="not mergeable"):
-        review_merge.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
+    with pytest.raises(merge_exec.RecoverableMergeGateError, match="not mergeable"):
+        merge_exec.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
                                      "head_oid": "h1"}, "main",
                           repo_dir=tmp_path, language_code="en")
@@ -1342,7 +1349,7 @@ def test_merge_gate_rejects_head_that_moved_since_review(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command", _merge_gate_fake(head_oid="moved"),
     )
     with pytest.raises(RuntimeError, match="head moved since review"):
-        review_merge.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
+        merge_exec.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
                                      "head_oid": "h1"}, "main",
                           repo_dir=tmp_path, language_code="en")
@@ -1380,7 +1387,7 @@ def test_merge_gate_hands_off_each_actionable_policy_rejection(
         "merge_gate: UNKNOWN unrelated unreadable protection",
     ])
     with pytest.raises(runner.MergeHandoffRequired) as raised:
-        review_merge.merge_gate(
+        merge_exec.merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1", "head_ref": "h",
                        "base_oid": "b1", "_source_repo": "owner/repo"},
             "main", repo_dir=tmp_path, language_code="en",
@@ -1417,7 +1424,7 @@ def test_merge_gate_does_not_hand_off_without_failed_preflight(
         runner.github, "merge_gate_preflight", lambda *a: preflight,
     )
     with pytest.raises(subprocess.CalledProcessError):
-        review_merge.merge_gate(
+        merge_exec.merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1", "head_ref": "h",
                        "base_oid": "b1", "_source_repo": "owner/repo"},
             "main", repo_dir=tmp_path, language_code="en",
@@ -1433,7 +1440,7 @@ def test_review_handoff_marks_issue_awaiting_merge(monkeypatch, tmp_path):
                 pi_session, "run_review",
                 side_effect=AssertionError("merge retry must not start review"),
             ), patch.object(
-                review_merge, "merge_gate",
+                merge_exec, "merge_gate",
                 lambda *a, **k: (_ for _ in ()).throw(
                     runner.MergeHandoffRequired(
                         "approval required",
@@ -1497,7 +1504,7 @@ def _drive_merge_handoff(monkeypatch, tmp_path, state, *, preflight=None,
                 pi_session, "run_review",
                 side_effect=AssertionError("merge retry must not start review"),
             ), patch.object(
-                review_merge, "merge_gate",
+                merge_exec, "merge_gate",
                 lambda *a, **k: (_ for _ in ()).throw(
                     runner.MergeHandoffRequired(
                         "approval required", preflight=blocker,
@@ -1629,12 +1636,12 @@ def test_resumed_awaiting_merge_succeeds_without_review(monkeypatch, tmp_path):
                 pi_session, "run_review",
                 side_effect=AssertionError("merge retry must not start review"),
             ), patch.object(
-                review_merge, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
+                merge_exec, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
             ), patch.object(
-                review_merge, "confirm_merged",
+                merge_exec, "confirm_merged",
                 lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
             ), patch.object(
-                review_merge, "sync_base_checkout", lambda *a, **k: None,
+                merge_exec, "sync_base_checkout", lambda *a, **k: None,
             ):
         assert review_merge.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
@@ -1662,7 +1669,7 @@ def test_confirm_merged_accepts_merged_pr_on_origin_main(monkeypatch, tmp_path):
             })
         return ""
     monkeypatch.setattr(seam, "run_command", fake_run)
-    result = review_merge.confirm_merged(
+    result = merge_exec.confirm_merged(
         tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                    "base_oid": "b1", "head_ref": "h", "head_oid": "h1"}, "main",
         repo_dir=tmp_path,
@@ -1678,7 +1685,7 @@ def test_confirm_merged_requires_the_repo_dir_lock_location(
     # ref, so the lock location must be explicit — no bypass path.
     monkeypatch.setattr(seam, "run_command", _merge_gate_fake())
     with pytest.raises(TypeError):
-        review_merge.confirm_merged(
+        merge_exec.confirm_merged(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main",
@@ -1707,7 +1714,7 @@ def test_confirm_merged_fetches_under_the_base_sync_lock(
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    review_merge.confirm_merged(
+    merge_exec.confirm_merged(
         tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                    "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
         "main", repo_dir=tmp_path,
@@ -1733,7 +1740,7 @@ def test_confirm_merged_rejects_unmerged_pr(monkeypatch, tmp_path):
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="not merged"):
-        review_merge.confirm_merged(
+        merge_exec.confirm_merged(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path,
@@ -1765,7 +1772,7 @@ def test_confirm_merged_accepts_a_reviewed_head_that_landed_on_base(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        result = review_merge.confirm_merged(
+        result = merge_exec.confirm_merged(
             tmp_path, {"number": 4, "head_oid": "h1"}, "main",
             repo_dir=tmp_path,
         )
@@ -1797,7 +1804,7 @@ def test_confirm_merged_needs_a_landing_commit_for_an_open_pr(
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="not merged",
     ):
-        review_merge.confirm_merged(
+        merge_exec.confirm_merged(
             tmp_path, {"number": 4, "head_oid": "h1"}, "main",
             repo_dir=tmp_path,
         )
@@ -1821,7 +1828,7 @@ def test_confirm_merged_rejects_merge_commit_missing_from_origin_main(
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="not on origin/main",
     ):
-        review_merge.confirm_merged(
+        merge_exec.confirm_merged(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path,
@@ -1837,7 +1844,7 @@ def test_confirm_merged_rejects_merged_pr_without_commit_oid(monkeypatch, tmp_pa
         }),
     )
     with pytest.raises(RuntimeError, match="no merge commit oid"):
-        review_merge.confirm_merged(
+        merge_exec.confirm_merged(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path,
@@ -1987,7 +1994,7 @@ def test_sync_base_checkout_fast_forwards_and_verifies(tmp_path):
     runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
     old_head = runner.run_command(["git", "rev-parse", "HEAD"], cwd=checkout)
 
-    review_merge.sync_base_checkout(checkout, "main")
+    merge_exec.sync_base_checkout(checkout, "main")
 
     new_head = runner.run_command(["git", "rev-parse", "HEAD"], cwd=checkout)
     remote = runner.run_command(
@@ -2016,7 +2023,7 @@ def test_sync_base_checkout_is_a_noop_when_already_at_remote(
         return real(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", spy)
-    review_merge.sync_base_checkout(checkout, "main")
+    merge_exec.sync_base_checkout(checkout, "main")
     # Only fetch + rev-parse; no merge is issued when already current.
     assert not any(c[:2] == ["git", "merge"] for c in calls)
 
@@ -2041,7 +2048,7 @@ def test_sync_base_checkout_fails_fast_when_not_fast_forwardable(tmp_path):
     with pytest.raises(
         RuntimeError, match="cannot fast-forward",
     ):
-        review_merge.sync_base_checkout(checkout, "main")
+        merge_exec.sync_base_checkout(checkout, "main")
 
 
 def test_sync_base_checkout_fails_fast_when_synced_head_mismatches(
@@ -2057,7 +2064,7 @@ def test_sync_base_checkout_fails_fast_when_synced_head_mismatches(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="after the sync"):
-        review_merge.sync_base_checkout(tmp_path, "main")
+        merge_exec.sync_base_checkout(tmp_path, "main")
 
 
 def test_sync_base_checkout_lock_path_is_the_shared_state_dir_file(
@@ -2086,7 +2093,7 @@ def test_sync_base_checkout_fails_fast_while_the_lock_is_held(
         with pytest.raises(
             RuntimeError, match="base-sync.lock",
         ):
-            review_merge.sync_base_checkout(
+            merge_exec.sync_base_checkout(
                 tmp_path, "main", lock_timeout_seconds=0.5,
             )
     finally:
@@ -2113,7 +2120,7 @@ def test_sync_base_checkout_releases_the_lock_after_sync(
                        cwd=actor)
     runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
 
-    review_merge.sync_base_checkout(checkout, "main")
+    merge_exec.sync_base_checkout(checkout, "main")
 
     # After the sync the lock is free: a non-blocking probe acquires
     # and releases it immediately.
@@ -2149,7 +2156,7 @@ def test_sync_base_checkout_releases_the_lock_on_failure(
     runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
 
     with pytest.raises(RuntimeError, match="cannot fast-forward"):
-        review_merge.sync_base_checkout(checkout, "main")
+        merge_exec.sync_base_checkout(checkout, "main")
 
     lock_path = gitops.base_sync_lock_path(checkout)
     probe = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
@@ -2520,7 +2527,7 @@ def test_review_and_merge_skips_ai_merged_when_issue_blocked(
     calls = []
 
     def blocked_gate(*a, **k):
-        raise review_merge.MergeBlockedByIssueLabel(
+        raise merge_exec.MergeBlockedByIssueLabel(
             "Issue #4 is labelled ai-blocked; not merged"
         )
 
@@ -2548,13 +2555,13 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
-        review_merge, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
+        merge_exec, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
     )
     monkeypatch.setattr(
-        review_merge, "confirm_merged",
+        merge_exec, "confirm_merged",
         lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
     )
-    monkeypatch.setattr(review_merge, "sync_base_checkout",
+    monkeypatch.setattr(merge_exec, "sync_base_checkout",
                         lambda *a, **k: calls.append("sync"))
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -2577,8 +2584,17 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     # Issue ends `ai-merged` ALONE (the extra remove is a second,
     # remove-only edit_issue call).
     assert ("edit", {"repo": "owner/repo", "remove": "ai-ready"}) in calls
-    comment = [c for c in calls if c[0] == "comment"][0][1]
-    assert "Orbi merged PR: u" in comment
+    comments = [c[1] for c in calls if c[0] == "comment"]
+    receipts = [body for body in comments if "Orbi merged PR: u" in body]
+    assert len(receipts) == 1, comments
+    comment = receipts[0]
+    # Issue #1857: the merged receipt and the label transition it makes
+    # are byte-identical to the pre-move golden — a moved merge execution
+    # must not reword a comment or reorder a label patch.
+    assert comment == closeout_golden()["merged-comment"]
+    assert json.dumps(
+        [c[1] for c in calls if c[0] == "edit"], indent=2,
+    ) == closeout_golden()["merged-labels"]
     assert "merge_commit=m1" in comment
     assert "review_rounds=1" in comment
     # Issue #833: the merge record carries the merged-as-is fact — the
@@ -2773,13 +2789,13 @@ def test_review_and_merge_skips_checkout_sync_for_a_locked_engine_source(
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
-        review_merge, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
+        merge_exec, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
     )
     monkeypatch.setattr(
-        review_merge, "confirm_merged",
+        merge_exec, "confirm_merged",
         lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
     )
-    monkeypatch.setattr(review_merge, "sync_base_checkout",
+    monkeypatch.setattr(merge_exec, "sync_base_checkout",
                         lambda *a, **k: calls.append("sync"))
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
@@ -2845,13 +2861,13 @@ def test_review_and_merge_fix_round_clears_live_delivery_labels(
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
-        review_merge, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
+        merge_exec, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
     )
     monkeypatch.setattr(
-        review_merge, "confirm_merged",
+        merge_exec, "confirm_merged",
         lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
     )
-    monkeypatch.setattr(review_merge, "sync_base_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(merge_exec, "sync_base_checkout", lambda *a, **k: None)
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: calls.append(k),
     )
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
@@ -2909,12 +2925,12 @@ def test_review_and_merge_defers_a_head_pushed_in_the_same_tick(
         calls.append(("gate", pr["head_oid"], repo_dir))
         return {**pr, "merged": True}
 
-    monkeypatch.setattr(review_merge, "merge_gate", fake_gate)
+    monkeypatch.setattr(merge_exec, "merge_gate", fake_gate)
     monkeypatch.setattr(
-        review_merge, "confirm_merged",
+        merge_exec, "confirm_merged",
         lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
     )
-    monkeypatch.setattr(review_merge, "sync_base_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(merge_exec, "sync_base_checkout", lambda *a, **k: None)
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     caplog.set_level("INFO")
@@ -2960,7 +2976,7 @@ def test_review_and_merge_verdict_head_mismatch_real_commit_is_recoverable(
         pi_session, "run_review",
         lambda *a, **k: _review_session(_pass_verdict_text(head="other-real-commit")),
     )
-    monkeypatch.setattr(review_merge, "merge_gate", gate)
+    monkeypatch.setattr(merge_exec, "merge_gate", gate)
     make_fake_gh(monkeypatch)
     monkeypatch.setattr(
         seam, "run_command",
@@ -3091,12 +3107,12 @@ def test_review_and_merge_clean_verdict_without_head_advance_keeps_frozen_head(
         calls.append(("gate", pr["head_oid"], repo_dir))
         return {**pr, "merged": True}
 
-    monkeypatch.setattr(review_merge, "merge_gate", fake_gate)
+    monkeypatch.setattr(merge_exec, "merge_gate", fake_gate)
     monkeypatch.setattr(
-        review_merge, "confirm_merged",
+        merge_exec, "confirm_merged",
         lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
     )
-    monkeypatch.setattr(review_merge, "sync_base_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(merge_exec, "sync_base_checkout", lambda *a, **k: None)
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     caplog.set_level("INFO")
@@ -3120,17 +3136,17 @@ def test_review_and_merge_keeps_merged_when_checkout_sync_fails(
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
-        review_merge, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
+        merge_exec, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
     )
     monkeypatch.setattr(
-        review_merge, "confirm_merged",
+        merge_exec, "confirm_merged",
         lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
     )
 
     def boom(*a, **k):
         raise RuntimeError("deployment checkout cannot fast-forward")
 
-    monkeypatch.setattr(review_merge, "sync_base_checkout", boom)
+    monkeypatch.setattr(merge_exec, "sync_base_checkout", boom)
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
     )
@@ -3165,7 +3181,7 @@ def test_review_and_merge_findings_labels_fix_needed_and_comments(
     monkeypatch.setattr(
         pi_session, "run_review", lambda *a, **k: _review_session(_findings_verdict_text()),
     )
-    monkeypatch.setattr(review_merge, "merge_gate", lambda *a, **k:
+    monkeypatch.setattr(merge_exec, "merge_gate", lambda *a, **k:
                         (_ for _ in ()).throw(AssertionError("no merge")))
     monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("issue", k.get("body"))),
@@ -3206,9 +3222,9 @@ def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
-        review_merge, "merge_gate",
+        merge_exec, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            review_merge.RecoverableMergeGateError(
+            merge_exec.RecoverableMergeGateError(
                 "PR #4 head h1 is behind latest remote base origin/main "
                 "(b2); absorb the latest base, rerun tests and review, "
                 "then retry"
@@ -3253,9 +3269,9 @@ def test_review_gate_comment_outage_never_blocks_fix_needed(
     monkeypatch.setattr(
         pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
-        review_merge, "merge_gate",
+        merge_exec, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            review_merge.RecoverableMergeGateError(
+            merge_exec.RecoverableMergeGateError(
                 "PR #4 head h1 is behind latest remote base origin/main "
                 "(b2); absorb the latest base, rerun tests and review, "
                 "then retry"
@@ -3333,7 +3349,7 @@ def test_review_and_merge_absorb_abandon_is_machine_named(
     monkeypatch.setattr(
         seam, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            review_merge.RecoverableMergeGateError(
+            merge_exec.RecoverableMergeGateError(
                 "PR #4 head h1 is behind latest remote base origin/main "
                 "(b2); absorb the latest base, rerun tests and review, "
                 "then retry"
@@ -3397,7 +3413,7 @@ def test_review_and_merge_unreadable_mergeability_leaves_round_unarmed(
     monkeypatch.setattr(
         seam, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            review_merge.RecoverableMergeGateError(
+            merge_exec.RecoverableMergeGateError(
                 "PR #4 head h1 is behind latest remote base origin/main "
                 "(b2); absorb the latest base, rerun tests and review, "
                 "then retry"
@@ -3440,7 +3456,7 @@ def test_review_and_merge_gate_time_probe_unreadable_keeps_plain_comment(
     monkeypatch.setattr(
         seam, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            review_merge.RecoverableMergeGateError(
+            merge_exec.RecoverableMergeGateError(
                 "PR #4 head h1 is behind latest remote base origin/main "
                 "(b2); absorb the latest base, rerun tests and review, "
                 "then retry"
@@ -3484,7 +3500,7 @@ def test_review_and_merge_midround_base_advance_is_not_a_violation(
     monkeypatch.setattr(
         seam, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            review_merge.RecoverableMergeGateError(
+            merge_exec.RecoverableMergeGateError(
                 "PR #4 head h1 is behind latest remote base origin/main "
                 "(b2); absorb the latest base, rerun tests and review, "
                 "then retry"
@@ -3534,7 +3550,7 @@ def test_review_and_merge_absorbed_head_is_not_a_violation(
     monkeypatch.setattr(
         seam, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            review_merge.RecoverableMergeGateError(
+            merge_exec.RecoverableMergeGateError(
                 "PR #4 is not mergeable (mergeable=DIRTY); "
                 "resolve conflicts and retry"
             ),
@@ -3570,7 +3586,7 @@ def test_review_and_merge_ci_failure_labels_fix_needed(monkeypatch, tmp_path):
     # message is REWORDED here — control flow must follow the type,
     # never the old "delivery gate: CI" literal.
     monkeypatch.setattr(
-        review_merge, "merge_gate",
+        merge_exec, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
             runner.GateCIFailure(
                 "check 'tests' failed on PR #4 "
@@ -3614,7 +3630,7 @@ def test_review_and_merge_ci_failure_comment_counts_toward_round_budget(
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
-        review_merge, "merge_gate",
+        merge_exec, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
             runner.GateCIFailure(
                 "check 'tests' failed on PR #4 "
@@ -3700,9 +3716,9 @@ def test_review_and_merge_deferred_gate_writes_nothing(
     calls = []
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(
-        review_merge, "merge_gate",
+        merge_exec, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            review_merge.DeliveryDeferred(
+            merge_exec.DeliveryDeferred(
                 "PR #4 CI is still running; the merge is deferred",
             ),
         ),
@@ -3735,9 +3751,9 @@ def test_review_record_records_the_reviewed_head_and_body_hash_on_deferral(
         lambda *a, **k: _review_session(_pass_verdict_text(), body_sha),
     )
     monkeypatch.setattr(
-        review_merge, "merge_gate",
+        merge_exec, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            review_merge.DeliveryDeferred("CI pending"),
+            merge_exec.DeliveryDeferred("CI pending"),
         ),
     )
     make_fake_gh(monkeypatch)
@@ -3809,9 +3825,9 @@ def test_review_record_is_dropped_when_the_gate_skips_ai_blocked(
         lambda *a, **k: _review_session(_pass_verdict_text()),
     )
     monkeypatch.setattr(
-        review_merge, "merge_gate",
+        merge_exec, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            review_merge.MergeBlockedByIssueLabel("issue is ai-blocked"),
+            merge_exec.MergeBlockedByIssueLabel("issue is ai-blocked"),
         ),
     )
     make_fake_gh(monkeypatch)
@@ -3838,14 +3854,14 @@ def test_merge_only_resume_merges_without_a_session_and_new_summary(
     )
     gates = []
     monkeypatch.setattr(
-        review_merge, "merge_gate",
+        merge_exec, "merge_gate",
         lambda *a, **k: gates.append("gate") or {**_pr(), "merged": True},
     )
     monkeypatch.setattr(
-        review_merge, "confirm_merged",
+        merge_exec, "confirm_merged",
         lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
     )
-    monkeypatch.setattr(review_merge, "sync_base_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(merge_exec, "sync_base_checkout", lambda *a, **k: None)
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
     comment = {}
     monkeypatch.setattr(
@@ -3881,14 +3897,14 @@ def test_merge_only_from_record_requires_the_recorded_head(
         lambda *a, **k: sessions.append(1) or _review_session(_pass_verdict_text()),
     )
     monkeypatch.setattr(
-        review_merge, "merge_gate",
+        merge_exec, "merge_gate",
         lambda *a, **k: {**_pr(), "merged": True},
     )
     monkeypatch.setattr(
-        review_merge, "confirm_merged",
+        merge_exec, "confirm_merged",
         lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
     )
-    monkeypatch.setattr(review_merge, "sync_base_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(merge_exec, "sync_base_checkout", lambda *a, **k: None)
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     make_fake_gh(monkeypatch)
@@ -3916,14 +3932,14 @@ def test_merge_only_from_record_requires_the_rendered_issue_body(
         lambda *a, **k: sessions.append(1) or _review_session(_pass_verdict_text()),
     )
     monkeypatch.setattr(
-        review_merge, "merge_gate",
+        merge_exec, "merge_gate",
         lambda *a, **k: {**_pr(), "merged": True},
     )
     monkeypatch.setattr(
-        review_merge, "confirm_merged",
+        merge_exec, "confirm_merged",
         lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
     )
-    monkeypatch.setattr(review_merge, "sync_base_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(merge_exec, "sync_base_checkout", lambda *a, **k: None)
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     make_fake_gh(monkeypatch)
@@ -3956,7 +3972,7 @@ def test_external_takeover_never_uses_a_record_for_merge_only(
         ),
     )
     monkeypatch.setattr(
-        review_merge, "merge_gate",
+        merge_exec, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError("external must not merge"),
         ),
@@ -3991,7 +4007,7 @@ def test_merge_only_gate_failure_clears_the_record_for_the_next_review(
         ),
     )
     monkeypatch.setattr(
-        review_merge, "merge_gate",
+        merge_exec, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
             runner.GateCIFailure("check 'tests' failed on PR #4"),
         ),
@@ -4034,7 +4050,7 @@ def test_absorb_contract_arms_only_on_a_conflicting_pr(
     monkeypatch.setattr(
         seam, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            review_merge.RecoverableMergeGateError(
+            merge_exec.RecoverableMergeGateError(
                 "PR #4 head h1 is behind latest remote base origin/main (b2)",
             ),
         ),
@@ -4074,8 +4090,8 @@ def test_merge_gate_absorb_records_the_absorbed_head_and_defers(
             _absorb_pr_state("h1"), _absorb_pr_state("h2"),
         ]),
     )
-    with pytest.raises(review_merge.DeliveryDeferred):
-        review_merge.merge_gate(
+    with pytest.raises(merge_exec.DeliveryDeferred):
+        merge_exec.merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1",
                        "head_ref": "h", "base_oid": "b1"},
             "main", repo_dir=tmp_path, language_code="en",
@@ -4218,7 +4234,7 @@ def test_base_advance_budget_exhausts_separately(monkeypatch, tmp_path):
     monkeypatch.setattr(
         seam, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            review_merge.RecoverableMergeGateError(
+            merge_exec.RecoverableMergeGateError(
                 "PR #4 head h1 is behind latest remote base origin/main (b2)"
             ),
         ),
@@ -4251,9 +4267,9 @@ def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
-        review_merge, "merge_gate",
+        merge_exec, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            review_merge.RecoverableMergeGateError(
+            merge_exec.RecoverableMergeGateError(
                 "PR #4 is not mergeable (mergeable=CONFLICTING); "
                 "resolve conflicts and retry"
             ),
@@ -4290,7 +4306,7 @@ def test_review_and_merge_reraises_non_fixable_gate_error(monkeypatch, tmp_path)
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(pi_session, "run_review", lambda *a, **k: _review_session(_pass_verdict_text()))
     monkeypatch.setattr(
-        review_merge, "merge_gate",
+        merge_exec, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
             RuntimeError(
                 "PR #4 head moved since review "
@@ -4722,23 +4738,23 @@ def test_merge_commit_metrics_degrades_on_a_corrupt_or_foreign_record(
     (merge_clone / ".orbi").mkdir(parents=True, exist_ok=True)
     (merge_clone / ".orbi" / "run-state.json").write_text(
         "{not json", encoding="utf-8")
-    assert review_merge.merge_commit_metrics(
+    assert merge_exec.merge_commit_metrics(
         merge_clone, merge_commit, review_merge.read_pushed_head(merge_clone),
         review_merge.read_pushed_base(merge_clone),
     ) == ("unknown", "1")
     # A foreign head (the base tip is not a commit of the PR branch).
-    assert review_merge.merge_commit_metrics(
+    assert merge_exec.merge_commit_metrics(
         merge_clone, merge_commit, base_tip, None,
     ) == ("unknown", "1")
     # A foreign base (a takeover record whose base the merged head does
     # not contain) degrades the same way.
-    assert review_merge.merge_commit_metrics(
+    assert merge_exec.merge_commit_metrics(
         merge_clone, merge_commit, delivery, base_tip,
     ) == ("unknown", "1")
     # The honest record subtracts exactly the delivery commit.
     _seed_run_state(merge_clone)
     run_state.record_pushed_head(merge_clone, delivery)
-    assert review_merge.merge_commit_metrics(
+    assert merge_exec.merge_commit_metrics(
         merge_clone, merge_commit, review_merge.read_pushed_head(merge_clone),
         review_merge.read_pushed_base(merge_clone),
     ) == ("0", "1")
@@ -4758,7 +4774,7 @@ def test_merge_commit_metrics_excludes_the_takeover_base(merge_clone):
     git(merge_clone, "merge", "--no-ff", TASK_BRANCH, "-m", "merge")
     merge_commit = git(merge_clone, "rev-parse", "HEAD")
     # commits = contrib + engine; engine = only the engine's own commit.
-    assert review_merge.merge_commit_metrics(
+    assert merge_exec.merge_commit_metrics(
         merge_clone, merge_commit, engine, contrib,
     ) == ("1", "2")
 
@@ -5139,3 +5155,34 @@ def test_review_round_is_a_thin_orchestration_of_named_phases():
         lines, _ = inspect.getsourcelines(getattr(review_merge, name))
         assert len(lines) < 150, (name, len(lines))
 
+
+# ---------------------------------------------------------------------------
+# closeout golden: the merge execution posts the same bytes (Issue #1857)
+#
+# `merge_gate`, `confirm_merged`, `merge_commit_metrics`,
+# `sync_base_checkout` and the human-review checklist moved out of this
+# module into `orbi.merge_exec`. The behaviour they own is user-visible:
+# the merged receipt comment with its `ai-merged` label transition, and
+# the `ai-blocked` merge-skip comment that changes NO label. Both are
+# pinned byte for byte against `tests/golden/merge-closeout.txt`, which
+# was captured from the unmodified base tree BEFORE the move, so the
+# extraction is proven behaviour-preserving instead of diffed by hand.
+# The two outcome tests that already drive these paths assert it:
+# `test_review_and_merge_clean_verdict_merges_and_labels_merged` and
+# `test_merge_gate_skips_merge_when_issue_is_blocked`.
+# ---------------------------------------------------------------------------
+
+CLOSEOUT_GOLDEN = Path(__file__).resolve().parent / "golden" / "merge-closeout.txt"
+_CLOSEOUT_SECTION = re.compile(r"^<<<golden:([a-z-]+)>>>$", re.MULTILINE)
+
+
+def closeout_golden() -> dict:
+    """The recorded closeout sections, keyed by their `<<<golden:...>>>` name."""
+    text = CLOSEOUT_GOLDEN.read_text(encoding="utf-8")
+    matches = list(_CLOSEOUT_SECTION.finditer(text))
+    assert matches, f"the closeout golden has no sections: {CLOSEOUT_GOLDEN}"
+    sections = {}
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        sections[match.group(1)] = text[match.end():end].strip("\n")
+    return sections

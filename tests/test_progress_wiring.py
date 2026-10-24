@@ -19,6 +19,7 @@ import pytest
 
 import orbi.failure_report as failure_report
 import orbi.runner as runner
+import orbi.merge_exec as merge_exec
 import orbi.review_merge as review_merge
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
@@ -1777,19 +1778,19 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
     monkeypatch.setattr(seam, "comment_issue", Mock())
     monkeypatch.setattr(failure_report, "comment_pr", Mock())
     if "pass" in verdict:
-        monkeypatch.setattr(review_merge, "merge_gate", lambda *a, **k: {
+        monkeypatch.setattr(merge_exec, "merge_gate", lambda *a, **k: {
             "number": 4, "url": "https://github.com/xqliu/orbi/pull/40",
             "base_ref": "main", "base_oid": "b1",
             "head_ref": "h", "head_oid": "h1", "merged": True,
         })
-        monkeypatch.setattr(review_merge, "confirm_merged", lambda *a, **k: {
+        monkeypatch.setattr(merge_exec, "confirm_merged", lambda *a, **k: {
             "state": "MERGED", "merge_commit": "m1",
         })
-        monkeypatch.setattr(review_merge, "sync_base_checkout", Mock())
+        monkeypatch.setattr(merge_exec, "sync_base_checkout", Mock())
     else:
         # Findings: the merge gate must never be reached (the Issue
         # moves to ai-fix-needed instead).
-        monkeypatch.setattr(review_merge, "merge_gate",
+        monkeypatch.setattr(merge_exec, "merge_gate",
                             lambda *a, **k: (_ for _ in ()).throw(
                                 AssertionError("no merge")))
     merged = review_merge.review_and_merge_if_clean(
