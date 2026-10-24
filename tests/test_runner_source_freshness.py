@@ -20,7 +20,9 @@ newer one (the stale-deployment shape), and a linked worktree pinned to
 the old commit (the exact incident scene).
 """
 from orbi import config as config_domain
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -30,18 +32,24 @@ from conftest import git
 import orbi.cli_source as cli_source
 import orbi.claim as claim
 import orbi.runner as runner
+# Issue #1650: the gate lives in its own domain module; the tick entry
+# calls it through the module object, so this is the module the tests
+# (and the conftest default stub) patch.
+import orbi.runner_source as runner_source
 from seam import seam
 
 # The conftest autouse fixture stubs the gate for the in-process
 # dispatch tests; the gate's OWN tests restore the real implementation
 # (module import happens before any fixture runs, so this is the real
 # function; this module's fixture runs after conftest's and wins).
-_REAL_GATE = runner.check_runner_source_freshness
+_REAL_GATE = runner_source.check_runner_source_freshness
 
 
 @pytest.fixture(autouse=True)
 def _restore_real_gate(monkeypatch):
-    monkeypatch.setattr(runner, "check_runner_source_freshness", _REAL_GATE)
+    monkeypatch.setattr(
+        runner_source, "check_runner_source_freshness", _REAL_GATE,
+    )
 
 
 def recording_run_command(commands: list[list[str]]):
@@ -112,7 +120,7 @@ def test_fresh_editable_checkout_uses_engine_branch_for_all_delivery_targets(
     git(repo, "reset", "--hard", new)
     point_module_file(monkeypatch, repo)
     with caplog.at_level("INFO"):
-        info = runner.check_runner_source_freshness(
+        info = runner_source.check_runner_source_freshness(
             gate_config(repo, base_branch=delivery_base),
             run_command=recording_run_command([]),
         )
@@ -132,7 +140,7 @@ def test_fresh_editable_checkout_passes_with_only_local_git(
     git(repo, "reset", "--hard", new)
     point_module_file(monkeypatch, repo)
     commands: list[list[str]] = []
-    info = runner.check_runner_source_freshness(
+    info = runner_source.check_runner_source_freshness(
         gate_config(repo), run_command=recording_run_command(commands),
     )
     assert info["install"] == "editable"
@@ -151,8 +159,8 @@ def test_stale_editable_checkout_fails_fast(monkeypatch, tmp_path, caplog):
     repo, old, new = build_stale_repo(tmp_path)
     point_module_file(monkeypatch, repo)
     with caplog.at_level("ERROR"):
-        with pytest.raises(runner.RunnerSourceStaleError) as excinfo:
-            runner.check_runner_source_freshness(
+        with pytest.raises(runner_source.RunnerSourceStaleError) as excinfo:
+            runner_source.check_runner_source_freshness(
                 gate_config(repo), run_command=recording_run_command([]),
             )
     assert "runner_source_stale" in caplog.text
@@ -171,8 +179,8 @@ def test_stale_editable_worktree_scene_is_rejected(monkeypatch, tmp_path):
     worktree = tmp_path / "orbi-issue-467-950d1bfc"
     git(repo, "worktree", "add", str(worktree), "-b", "task", old)
     point_module_file(monkeypatch, worktree)
-    with pytest.raises(runner.RunnerSourceStaleError):
-        runner.check_runner_source_freshness(
+    with pytest.raises(runner_source.RunnerSourceStaleError):
+        runner_source.check_runner_source_freshness(
             gate_config(repo), run_command=recording_run_command([]),
         )
 
@@ -183,7 +191,7 @@ def test_allow_stale_runner_downgrades_to_warning(monkeypatch, tmp_path, caplog)
     repo, old, new = build_stale_repo(tmp_path)
     point_module_file(monkeypatch, repo)
     with caplog.at_level("WARNING"):
-        info = runner.check_runner_source_freshness(
+        info = runner_source.check_runner_source_freshness(
             gate_config(repo, allow_stale_runner=True),
             run_command=recording_run_command([]),
         )
@@ -199,8 +207,8 @@ def test_editable_without_origin_ref_cannot_pass(monkeypatch, tmp_path, caplog):
     git(repo, "update-ref", "-d", "refs/remotes/origin/main")
     point_module_file(monkeypatch, repo)
     with caplog.at_level("ERROR"):
-        with pytest.raises(runner.RunnerSourceStaleError):
-            runner.check_runner_source_freshness(
+        with pytest.raises(runner_source.RunnerSourceStaleError):
+            runner_source.check_runner_source_freshness(
                 gate_config(repo), run_command=recording_run_command([]),
             )
     assert "runner_source_stale" in caplog.text
@@ -215,7 +223,7 @@ def _non_editable_install(monkeypatch, tmp_path: Path, version: str) -> Path:
     site_pkg.mkdir(parents=True, exist_ok=True)
     (site_pkg / "__init__.py").write_text("", encoding="utf-8")
     monkeypatch.setattr(cli_source, "module_file", lambda: site_pkg / "__init__.py")
-    monkeypatch.setattr(runner, "_orbi_distribution_version", lambda: version)
+    monkeypatch.setattr(runner_source, "_orbi_distribution_version", lambda: version)
     return site_pkg
 
 
@@ -236,8 +244,8 @@ def test_non_editable_version_older_than_latest_tag_fails(
     repo = _tagged_repo(tmp_path)
     _non_editable_install(monkeypatch, tmp_path, "0.3.4")
     with caplog.at_level("ERROR"):
-        with pytest.raises(runner.RunnerSourceStaleError):
-            runner.check_runner_source_freshness(
+        with pytest.raises(runner_source.RunnerSourceStaleError):
+            runner_source.check_runner_source_freshness(
                 gate_config(repo), run_command=recording_run_command([]),
             )
     assert "install=non_editable" in caplog.text
@@ -248,7 +256,7 @@ def test_non_editable_version_older_than_latest_tag_fails(
 def test_non_editable_version_at_latest_tag_passes(monkeypatch, tmp_path):
     repo = _tagged_repo(tmp_path)
     _non_editable_install(monkeypatch, tmp_path, "0.3.5")
-    info = runner.check_runner_source_freshness(
+    info = runner_source.check_runner_source_freshness(
         gate_config(repo), run_command=recording_run_command([]),
     )
     assert info["install"] == "non_editable"
@@ -266,7 +274,7 @@ def test_orbi_distribution_version_reads_install_metadata(monkeypatch):
         return "9.9.9"
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
-    assert runner._orbi_distribution_version() == "9.9.9"
+    assert runner_source._orbi_distribution_version() == "9.9.9"
     assert seen == ["orbi-cli"]
 
 
@@ -283,10 +291,10 @@ def test_non_editable_unreadable_version_cannot_pass(
     def boom():
         raise importlib.metadata.PackageNotFoundError("orbi-cli")
 
-    monkeypatch.setattr(runner, "_orbi_distribution_version", boom)
+    monkeypatch.setattr(runner_source, "_orbi_distribution_version", boom)
     with caplog.at_level("ERROR"):
-        with pytest.raises(runner.RunnerSourceStaleError):
-            runner.check_runner_source_freshness(
+        with pytest.raises(runner_source.RunnerSourceStaleError):
+            runner_source.check_runner_source_freshness(
                 gate_config(repo), run_command=recording_run_command([]),
             )
     assert "runner_source_stale" in caplog.text
@@ -313,7 +321,7 @@ def test_fresh_editable_tag_lock_passes(monkeypatch, tmp_path, caplog):
     _tagged_at(repo, new, "v0.4.2")
     point_module_file(monkeypatch, repo)
     with caplog.at_level("INFO"):
-        info = runner.check_runner_source_freshness(
+        info = runner_source.check_runner_source_freshness(
             gate_config(repo, engine_source_track="tag:v0.4.2"),
             run_command=recording_run_command([]),
         )
@@ -330,8 +338,8 @@ def test_stale_editable_tag_lock_fails_fast(monkeypatch, tmp_path, caplog):
     _tagged_at(repo, new, "v0.4.2")
     point_module_file(monkeypatch, repo)
     with caplog.at_level("ERROR"):
-        with pytest.raises(runner.RunnerSourceStaleError):
-            runner.check_runner_source_freshness(
+        with pytest.raises(runner_source.RunnerSourceStaleError):
+            runner_source.check_runner_source_freshness(
                 gate_config(repo, engine_source_track="tag:v0.4.2"),
                 run_command=recording_run_command([]),
             )
@@ -346,8 +354,8 @@ def test_editable_tag_lock_without_the_tag_is_unverifiable(
     repo, old, new = build_stale_repo(tmp_path)
     point_module_file(monkeypatch, repo)
     with caplog.at_level("ERROR"):
-        with pytest.raises(runner.RunnerSourceStaleError):
-            runner.check_runner_source_freshness(
+        with pytest.raises(runner_source.RunnerSourceStaleError):
+            runner_source.check_runner_source_freshness(
                 gate_config(repo, engine_source_track="tag:v9.9.9"),
                 run_command=recording_run_command([]),
             )
@@ -368,7 +376,7 @@ def test_fresh_editable_release_track_ignores_pre_releases(
     # is about the version, not the tag object.
     _tagged_at(repo, new, "v0.5.0-rc.1", annotated=False)
     point_module_file(monkeypatch, repo)
-    info = runner.check_runner_source_freshness(
+    info = runner_source.check_runner_source_freshness(
         gate_config(repo, engine_source_track="release"),
         run_command=recording_run_command([]),
     )
@@ -380,7 +388,7 @@ def test_fresh_editable_sha_lock_passes(monkeypatch, tmp_path):
     repo, old, new = build_stale_repo(tmp_path)
     git(repo, "reset", "--hard", new)
     point_module_file(monkeypatch, repo)
-    info = runner.check_runner_source_freshness(
+    info = runner_source.check_runner_source_freshness(
         gate_config(repo, engine_source_track=f"sha:{new}"),
         run_command=recording_run_command([]),
     )
@@ -397,7 +405,7 @@ def test_fresh_editable_branch_track_uses_that_branch_ref(
     git(repo, "reset", "--hard", new)
     git(repo, "update-ref", "refs/remotes/origin/beta", new)
     point_module_file(monkeypatch, repo)
-    info = runner.check_runner_source_freshness(
+    info = runner_source.check_runner_source_freshness(
         gate_config(repo, engine_source_track="branch:beta"),
         run_command=recording_run_command([]),
     )
@@ -412,8 +420,8 @@ def test_non_editable_release_track_compares_against_the_resolved_tag(
     repo = _tagged_repo(tmp_path)
     _non_editable_install(monkeypatch, tmp_path, "0.3.4")
     with caplog.at_level("ERROR"):
-        with pytest.raises(runner.RunnerSourceStaleError):
-            runner.check_runner_source_freshness(
+        with pytest.raises(runner_source.RunnerSourceStaleError):
+            runner_source.check_runner_source_freshness(
                 gate_config(repo, engine_source_track="release"),
                 run_command=recording_run_command([]),
             )
@@ -426,7 +434,7 @@ def test_non_editable_tag_lock_at_the_locked_version_passes(
 ):
     repo = _tagged_repo(tmp_path)
     _non_editable_install(monkeypatch, tmp_path, "0.3.4")
-    info = runner.check_runner_source_freshness(
+    info = runner_source.check_runner_source_freshness(
         gate_config(repo, engine_source_track="tag:v0.3.4"),
         run_command=recording_run_command([]),
     )
@@ -442,8 +450,8 @@ def test_non_editable_sha_lock_is_unverifiable_and_fails_closed(
     repo, old, new = build_stale_repo(tmp_path)
     _non_editable_install(monkeypatch, tmp_path, "0.3.5")
     with caplog.at_level("ERROR"):
-        with pytest.raises(runner.RunnerSourceStaleError):
-            runner.check_runner_source_freshness(
+        with pytest.raises(runner_source.RunnerSourceStaleError):
+            runner_source.check_runner_source_freshness(
                 gate_config(repo, engine_source_track=f"sha:{new}"),
                 run_command=recording_run_command([]),
             )
@@ -454,10 +462,44 @@ def test_non_editable_sha_lock_is_unverifiable_and_fails_closed(
 
 
 def test_parse_release_version_handles_tags_and_rejects_noise():
-    assert runner._parse_release_version("v0.3.4") == (0, 3, 4)
-    assert runner._parse_release_version("0.3.10") > (0, 3, 9)
-    assert runner._parse_release_version("not-a-version") is None
-    assert runner._parse_release_version("") is None
+    assert runner_source._parse_release_version("v0.3.4") == (0, 3, 4)
+    assert runner_source._parse_release_version("0.3.10") > (0, 3, 9)
+    assert runner_source._parse_release_version("not-a-version") is None
+    assert runner_source._parse_release_version("") is None
+
+
+# --- module ownership (Issue #1650) ----------------------------------------------
+
+
+def test_gate_module_is_a_leaf_without_the_runner():
+    """The extracted gate is a leaf: a FRESH interpreter importing
+    `orbi.runner_source` must not load `orbi.runner`. A reverse dependency
+    would put the delivery orchestration back into every import of the
+    startup invariant and let the gate drift with it."""
+    repo_root = Path(__file__).resolve().parent.parent
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo_root / "src")
+    result = subprocess.run(
+        [
+            sys.executable, "-c",
+            "import sys, orbi.runner_source\n"
+            "print('runner' if 'orbi.runner' in sys.modules else 'leaf')",
+        ],
+        cwd=str(repo_root), env=env, capture_output=True, text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "leaf", result.stdout
+
+
+def test_gate_has_one_owner_module():
+    """One implementation, one owner: the tick holds the module object
+    and calls the gate through it, and `runner` keeps NO second binding
+    (no compatibility re-export) that a future edit could call by
+    mistake."""
+    assert vars(runner)["runner_source"] is runner_source
+    assert not hasattr(runner, "check_runner_source_freshness")
+    assert not hasattr(runner, "RunnerSourceStaleError")
 
 
 # --- config field ----------------------------------------------------------------
@@ -502,14 +544,14 @@ def test_main_source_gate_blocks_claim_before_slot(monkeypatch, tmp_path):
 
     monkeypatch.setattr(claim, "pick_next_delivery", fail_if_called)
     monkeypatch.setattr(
-        runner, "check_runner_source_freshness",
+        runner_source, "check_runner_source_freshness",
         lambda *a, **k: (_ for _ in ()).throw(
-            runner.RunnerSourceStaleError(
+            runner_source.RunnerSourceStaleError(
                 "runner_source_stale head=old origin_main=new",
             ),
         ),
     )
-    with pytest.raises(runner.RunnerSourceStaleError, match="runner_source_stale"):
+    with pytest.raises(runner_source.RunnerSourceStaleError, match="runner_source_stale"):
         runner.main(["--config", str(config)])
     assert not (tmp_path / ".orbi" / "slots").exists()
 
@@ -521,7 +563,7 @@ def test_main_source_gate_clean_proceeds_to_claim(monkeypatch, tmp_path):
     config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
-        runner, "check_runner_source_freshness",
+        runner_source, "check_runner_source_freshness",
         lambda *a, **k: {"install": "editable"},
     )
     monkeypatch.setattr(
@@ -530,3 +572,85 @@ def test_main_source_gate_clean_proceeds_to_claim(monkeypatch, tmp_path):
     )
     assert runner.main(["--config", str(config)]) == 0
     assert (tmp_path / ".orbi" / "slots" / "slot-1").exists()
+
+
+# --- the real tick (subprocess) ---------------------------------------------------
+
+# The wrapper drives the REAL tick entry in a fresh interpreter: only the
+# import-source probe is redirected (a subprocess cannot be monkeypatched),
+# which is the seam the gate itself reads. Everything else — the config
+# load, `_preflight`, the extracted gate, its local git probes and the
+# structured journal line — is the production code path.
+_TICK_SCRIPT = """
+import sys
+from pathlib import Path
+
+from orbi import cli_source
+import orbi.runner as runner
+
+package_dir = Path(sys.argv[1])
+cli_source.module_file = lambda: package_dir / "__init__.py"
+raise SystemExit(runner.main(["--config", sys.argv[2]]))
+"""
+
+
+def test_real_tick_with_a_stale_source_exits_before_any_slot(tmp_path):
+    """Acceptance (Issue #1650): a REAL runner tick whose executing source
+    is stale exits non-zero with the structured `runner_source_stale` line
+    BEFORE any slot, worktree, claim or label transition.
+
+    The fake `gh` on PATH fails every pre-gate GitHub read, so the scene
+    proves the gate alone stops the tick: a label write would have to go
+    through the same seam, and no slot directory may appear."""
+    stale, old, new = build_stale_repo(tmp_path)
+    package_dir = stale / "src" / "orbi"
+    package_dir.mkdir(parents=True)
+    (package_dir / "__init__.py").write_text("", encoding="utf-8")
+    # The deployment home carries the packaging input and a MATCHING
+    # last-install fingerprint, so the editable CLI refresh is the real
+    # "unchanged" no-op: no uv install runs in this scene, and the tick
+    # reaches the gate.
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "pyproject.toml").write_text(
+        '[project]\nname = "orbi-cli"\nversion = "0.0.0"\n', encoding="utf-8",
+    )
+    cli_source.write_install_state(
+        home, cli_source.packaging_fingerprint(home),
+    )
+    _write_prompts(home)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        f'source_repos = ["owner/repo"]\ndeploy_home = "{home}"\n',
+        encoding="utf-8",
+    )
+    script = tmp_path / "tick.py"
+    script.write_text(_TICK_SCRIPT, encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text(
+        "#!/bin/sh\necho 'gh: no GitHub in this scene' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    repo_root = Path(__file__).resolve().parent.parent
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    env["PYTHONPATH"] = str(repo_root / "src")
+
+    result = subprocess.run(
+        [sys.executable, str(script), str(package_dir), str(config)],
+        cwd=str(tmp_path), env=env, capture_output=True, text=True,
+        timeout=300,
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert "runner_source_stale" in result.stderr
+    assert old in result.stderr and new in result.stderr
+    assert cli_source.reinstall_command(home) in result.stderr
+    # No slot -> no worktree, no claim, no label transition. The only
+    # .orbi dir in this scene is the deployment home's install state,
+    # written by the setup above; the tick itself creates none.
+    assert not (tmp_path / ".orbi").exists()
+    assert not (stale / ".orbi").exists()
