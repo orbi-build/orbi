@@ -130,7 +130,7 @@ def test_pick_issue_uses_github_queue(monkeypatch):
             "--state", "open", "--search",
             "label:ai-ready label:p0 -label:ai-in-progress "
             "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
-            "-label:ai-blocked",
+            "-label:ai-blocked sort:created-asc",
             "--json", "number,title,body,labels,blockedBy,author",
             "--limit", "200",
         ],
@@ -139,7 +139,7 @@ def test_pick_issue_uses_github_queue(monkeypatch):
             "--state", "open", "--search",
             "label:ai-ready label:bug -label:ai-in-progress "
             "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
-            "-label:ai-blocked",
+            "-label:ai-blocked sort:created-asc",
             "--json", "number,title,body,labels,blockedBy,author",
             "--limit", "200",
         ],
@@ -147,7 +147,8 @@ def test_pick_issue_uses_github_queue(monkeypatch):
             "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
             "--state", "open", "--search",
             "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
-            "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
+            "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
+            "sort:created-asc",
             "--json", "number,title,body,labels,blockedBy,author",
             "--limit", "200",
         ],
@@ -427,29 +428,29 @@ def test_pick_issue_scopes_all_three_ready_scans_to_active_milestone(
         "xqliu/orbi-backlog", active_milestone="v0.2.0",
     ) == issue
     scope = ' milestone:"v0.2.0"'
-    exclusions = (
+    qualifiers = (
         "-label:ai-in-progress -label:ai-pr-opened -label:ai-fix-needed "
-        "-label:ai-merged -label:ai-blocked"
+        "-label:ai-merged -label:ai-blocked sort:created-asc"
     )
     assert calls == [
         [
             "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
             "--state", "open", "--search",
-            f"label:ai-ready label:p0{scope} {exclusions}",
+            f"label:ai-ready label:p0{scope} {qualifiers}",
             "--json", "number,title,body,labels,blockedBy,author",
             "--limit", "200",
         ],
         [
             "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
             "--state", "open", "--search",
-            f"label:ai-ready label:bug{scope} {exclusions}",
+            f"label:ai-ready label:bug{scope} {qualifiers}",
             "--json", "number,title,body,labels,blockedBy,author",
             "--limit", "200",
         ],
         [
             "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
             "--state", "open", "--search",
-            f"label:ai-ready{scope} {exclusions}",
+            f"label:ai-ready{scope} {qualifiers}",
             "--json", "number,title,body,labels,blockedBy,author",
             "--limit", "200",
         ],
@@ -473,25 +474,50 @@ def test_pick_issue_p0_scan_keeps_the_milestone_scope():
 
 def test_ready_searches_without_milestone_are_the_compat_scans():
     """Issue #139 compat: without a configured Milestone the three
-    ready scans are byte-identical to the pre-#139 scans — a config
-    without `active_milestone` behaves exactly like before."""
+    ready scans carry no `milestone:` qualifier — a config without
+    `active_milestone` scopes nothing (the Issue #1914 order qualifier
+    every ready-queue scan carries is the only addition since)."""
     p0_search, bug_search, plain_search = claim.ready_searches(None)
     assert p0_search == (
         "label:ai-ready label:p0 -label:ai-in-progress "
         "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
-        "-label:ai-blocked"
+        "-label:ai-blocked sort:created-asc"
     )
     assert bug_search == (
         "label:ai-ready label:bug -label:ai-in-progress "
         "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
-        "-label:ai-blocked"
+        "-label:ai-blocked sort:created-asc"
     )
     assert plain_search == (
         "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
-        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked"
+        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
+        "sort:created-asc"
     )
     # The default (no argument) is the same compat behavior.
     assert claim.ready_searches() == claim.ready_searches(None)
+
+
+def test_every_ready_queue_scan_reads_the_oldest_issue_first():
+    """Issue #1914: every search that starts a NEW delivery carries the
+    documented `sort:created-asc` advanced-search qualifier.
+
+    A search without an order qualifier returns the NEWEST-created Issue
+    first, and `_pick_from_scan` claims the first claimable one — the
+    production scene where a fresh ticket overtook Issues queued hours
+    earlier. The opened-PR scans already read oldest-first (#1734,
+    #1792); these five were the remaining newest-first searches. All
+    five share one qualifier string, so a scan added later cannot drift
+    back out of the order."""
+    searches = (
+        *claim.ready_searches(None),
+        *claim.ready_searches("v0.2.0"),
+        claim.release_fallback_search(None),
+        claim.release_fallback_search("v0.2.0"),
+        claim.external_takeover_search(),
+    )
+    assert len(searches) == 9
+    for search in searches:
+        assert search.endswith(" sort:created-asc"), search
 
 
 def test_pick_issue_keeps_epic_and_blocked_by_guards_with_milestone(
@@ -603,12 +629,12 @@ def test_pick_issue_bug_scan_keeps_existing_exclusions(monkeypatch):
     assert searches[0] == (
         "label:ai-ready label:p0 -label:ai-in-progress "
         "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
-        "-label:ai-blocked"
+        "-label:ai-blocked sort:created-asc"
     )
     assert searches[1] == (
         "label:ai-ready label:bug -label:ai-in-progress "
         "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
-        "-label:ai-blocked"
+        "-label:ai-blocked sort:created-asc"
     )
 
 
@@ -747,7 +773,7 @@ def test_pick_issue_p0_scan_keeps_existing_exclusions(monkeypatch):
     assert searches[0] == (
         "label:ai-ready label:p0 -label:ai-in-progress "
         "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
-        "-label:ai-blocked"
+        "-label:ai-blocked sort:created-asc"
     )
 
 
@@ -762,7 +788,7 @@ def test_release_fallback_search_query():
     same quoted `milestone:"<title>"` scope."""
     exclusions = (
         "-label:ai-in-progress -label:ai-pr-opened -label:ai-fix-needed "
-        "-label:ai-merged -label:ai-blocked"
+        "-label:ai-merged -label:ai-blocked sort:created-asc"
     )
     assert claim.release_fallback_search(None) == (
         f"label:ai-ready label:ai-release {exclusions}"
@@ -939,7 +965,7 @@ def test_external_takeover_search_query():
     `_pick_from_scan`."""
     exclusions = (
         "-label:ai-in-progress -label:ai-pr-opened -label:ai-fix-needed "
-        "-label:ai-merged -label:ai-blocked"
+        "-label:ai-merged -label:ai-blocked sort:created-asc"
     )
     query = claim.external_takeover_search()
     assert query == f'label:ai-ready "orbi:external-pr" in:body {exclusions}'

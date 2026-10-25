@@ -81,9 +81,11 @@ def test_pickup_prefers_a_bug_over_plain_ready(fake_gh):
 def test_pickup_yields_an_issue_a_live_co_runner_holds(fake_gh, caplog):
     """Issue #1319: the ready scan skips the delivery a live co-runner
     already holds (the first runner wrote its identity into its slot
-    file) and claims the next free one, logging the yield."""
-    fake_gh.add_issue(7, labels=(READY_LABEL,))
+    file) and claims the next free one, logging the yield. The scans
+    read oldest-created first (Issue #1914), so the HELD Issue #8 is
+    seeded first and heads this scan."""
     fake_gh.add_issue(8, labels=(READY_LABEL,))
+    fake_gh.add_issue(7, labels=(READY_LABEL,))
     with caplog.at_level(logging.INFO):
         picked = claim.pick_issue(
             "owner/repo", held=frozenset({("owner/repo", 8)}),
@@ -109,11 +111,12 @@ def test_pickup_claims_the_p0_scan_before_the_bug_scan(fake_gh):
 
 
 def test_pickup_skips_a_blocked_issue_and_claims_the_next(fake_gh, caplog):
-    # gh lists newest first: #2 seeds first so #1 heads the scan.
-    fake_gh.add_issue(2, labels=(READY_LABEL,))
-    fake_gh.add_issue(3)
+    # The scan reads oldest-created first (Issue #1914), so #1 seeds
+    # first and heads it: it is blocked, #2 is claimed.
     fake_gh.add_issue(1, labels=(READY_LABEL,))
+    fake_gh.add_issue(3)
     fake_gh.add_blocker(1, 3, state="OPEN")
+    fake_gh.add_issue(2, labels=(READY_LABEL,))
     with caplog.at_level(logging.INFO):
         picked = claim.pick_issue("owner/repo")
     assert picked["number"] == 2
@@ -122,17 +125,66 @@ def test_pickup_skips_a_blocked_issue_and_claims_the_next(fake_gh, caplog):
     assert "blocked_by issue=1" in caplog.text
 
 
+def test_pickup_claims_the_longest_waiting_ready_issue(fake_gh):
+    """Issue #1914, the production scene: three plain `ai-ready` Issues
+    queued at t1 < t2 < t3, nothing held and nothing blocked.
+
+    The fake lists a scan newest-created first unless the query carries
+    `sort:created-asc` (exactly as `gh issue list` does), so this test
+    reads the REAL query `pick_issue` builds: the oldest Issue is the
+    one claimed, never the newest. Before the fix the same three Issues
+    picked #160 while #158 waited."""
+    for number in (158, 159, 160):
+        fake_gh.add_issue(number, labels=(READY_LABEL,))
+    assert claim.pick_issue("owner/repo")["number"] == 158
+
+
+def test_pickup_walks_past_the_oldest_when_it_has_an_open_blocker(
+    fake_gh, caplog,
+):
+    """Issue #1914, the failure path: the longest-waiting Issue carries
+    an open native `blockedBy` blocker, so the scan logs the structured
+    `blocked_by` line and claims the next oldest claimable Issue
+    instead of stalling the queue."""
+    for number in (158, 159, 160):
+        fake_gh.add_issue(number, labels=(READY_LABEL,))
+    fake_gh.add_issue(200)  # the blocker: open, but not in the queue
+    fake_gh.add_blocker(158, 200, state="OPEN")
+    with caplog.at_level(logging.INFO):
+        picked = claim.pick_issue("owner/repo")
+    assert picked["number"] == 159
+    assert "blocked_by issue=158" in caplog.text
+    # A skip never touches a label: the blocked Issue stays queued.
+    assert github.issue_labels(158, "owner/repo") == [READY_LABEL]
+
+
+def test_pickup_keeps_a_newer_p0_ahead_of_an_older_plain_issue(fake_gh):
+    """Issue #1914, the unchanged priority: oldest-first orders the
+    candidates INSIDE one scan. The pickup order between the scans is
+    still P0 -> bug -> plain, so a P0 created after a plain Issue is
+    claimed first."""
+    fake_gh.add_issue(158, labels=(READY_LABEL,))
+    fake_gh.add_issue(176, labels=(READY_LABEL, P0_LABEL))
+    picked = claim.pick_issue("owner/repo")
+    assert picked["number"] == 176
+    assert github.issue_priority(picked) == "p0"
+
+
 def test_pickup_claims_an_issue_whose_blocker_is_closed(fake_gh):
-    fake_gh.add_issue(2, labels=(READY_LABEL,))
-    fake_gh.add_issue(3, state="closed")
+    # #1 heads the (oldest-first, Issue #1914) scan; its blocker is
+    # closed, so the CLOSED relation is inert and #1 is claimed.
     fake_gh.add_issue(1, labels=(READY_LABEL,))
+    fake_gh.add_issue(3, state="closed")
     fake_gh.add_blocker(1, 3, state="CLOSED")
+    fake_gh.add_issue(2, labels=(READY_LABEL,))
     assert claim.pick_issue("owner/repo")["number"] == 1
 
 
 def test_pickup_skips_an_epic(fake_gh, caplog):
-    fake_gh.add_issue(2, labels=(READY_LABEL,))
+    # The Epic is the oldest Issue here, so it heads the scan and is
+    # skipped (Issue #1914's order) before #2 is claimed.
     fake_gh.add_issue(1, labels=(READY_LABEL, EPIC_LABEL))
+    fake_gh.add_issue(2, labels=(READY_LABEL,))
     with caplog.at_level(logging.INFO):
         picked = claim.pick_issue("owner/repo")
     assert picked["number"] == 2
