@@ -688,6 +688,9 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
   交付状态或终态语义，Runner 也从不增删它。ready 领取顺序固定：
   `ai-ready`+`p0` → `ai-ready`+`bug` → 普通 `ai-ready`（三次
   `gh issue list` 扫描，共享完全相同的排除条件和 blockedBy 语义）。
+  每次扫描内部先领取排队最久的 Issue（`sort:created-asc`，Issue
+  #1914——release 与 external-takeover 回退扫描同一顺序），所以繁忙队列
+  按维护者排队的顺序消化，新票永远不会超过更早加标签的票。
   P0 遵守所有现有排除规则和单 slot 约束：被阻塞的 P0 被跳过（回退到
   bug/普通扫描），在途的 P0 由重启扫描接回。P0 运行失败单独进入
   `ai-blocked`（领取标签被移除；`ai-ready` 残留被所有 ready 扫描排除），

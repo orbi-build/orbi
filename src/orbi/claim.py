@@ -56,10 +56,21 @@ from orbi.repo_config import (
 # new state machine: three `gh issue list` searches with the same
 # blockedBy semantics. `p0` is a plain label, not a
 # delivery state: it only orders the pickup.
-READY_SCAN_EXCLUSIONS = (
+#
+# Every ready-queue scan (these three plus the release and
+# external-takeover fallbacks) reads its candidates through THIS one
+# qualifier string, so none of them can drift out of the shared
+# contract: the five delivery-state exclusions AND the creation order.
+# `sort:created-asc` (Issue #1914) is GitHub's documented
+# advanced-search order qualifier — `gh issue list --help` ships it,
+# the opened-PR scans already use it (#1734, #1792). A search without
+# it returns the NEWEST-created Issue first, and `_pick_from_scan`
+# claims the first claimable one: newer tickets then overtook Issues
+# that had waited hours in a busy queue.
+READY_SCAN_QUALIFIERS = (
     f"-label:{IN_PROGRESS_LABEL} -label:{PR_OPENED_LABEL} "
     f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
-    f"-label:{BLOCKED_LABEL}"
+    f"-label:{BLOCKED_LABEL} sort:created-asc"
 )
 
 
@@ -79,8 +90,14 @@ def ready_searches(active_milestone: str | None = None,
     cross milestones: the active Milestone is
     the claim scope of EVERY fresh claim, and `p0` only orders the
     pickup inside it — one uniform rule, no special case. Without a
-    configured Milestone the searches are byte-identical to the
-    pre-#139 scans (compat).
+    configured Milestone the scans carry no `milestone:` scope at all
+    (the pre-#139 queries, plus the Issue #1914 order qualifier).
+
+    Every scan reads its candidates oldest-created first
+    (`sort:created-asc`, Issue #1914): inside one scan the Issue that
+    has waited longest is claimed first, so a busy queue drains in the
+    order the maintainer queued it. The order BETWEEN the scans is
+    unchanged (p0, then bug, then plain).
     """
     scope = (
         f' milestone:"{active_milestone}"' if active_milestone else ""
@@ -89,9 +106,9 @@ def ready_searches(active_milestone: str | None = None,
     # labels (`ai-in-progress`/`ai-merged`/...) stay host constants.
     label = dispatch_label or READY_LABEL
     return (
-        f"label:{label} label:{P0_LABEL}{scope} {READY_SCAN_EXCLUSIONS}",
-        f"label:{label} label:bug{scope} {READY_SCAN_EXCLUSIONS}",
-        f"label:{label}{scope} {READY_SCAN_EXCLUSIONS}",
+        f"label:{label} label:{P0_LABEL}{scope} {READY_SCAN_QUALIFIERS}",
+        f"label:{label} label:bug{scope} {READY_SCAN_QUALIFIERS}",
+        f"label:{label}{scope} {READY_SCAN_QUALIFIERS}",
     )
 
 
@@ -104,8 +121,9 @@ def release_fallback_search(active_milestone: str | None = None,
     ordinary ready scans (p0/bug/plain) found nothing claimable. The
     query keeps `label:ai-ready` (the human execution switch — a release
     Issue without it stays waiting, as before) plus `label:ai-release`
-    and the same five delivery-state exclusions as the ordinary scans
-    (`READY_SCAN_EXCLUSIONS`). With a configured `active_milestone` it
+    and the same five delivery-state exclusions and oldest-created
+    order as the ordinary scans (`READY_SCAN_QUALIFIERS`, Issue
+    #1914). With a configured `active_milestone` it
     carries the same `milestone:"<title>"` scope (the quoted form is the
     contract, same as `ready_searches`). `ai-epic` is excluded by the
     code-layer Epic guard in `_pick_from_scan`, not the query.
@@ -116,7 +134,7 @@ def release_fallback_search(active_milestone: str | None = None,
     label = dispatch_label or READY_LABEL
     return (
         f"label:{label} label:{RELEASE_LABEL}{scope} "
-        f"{READY_SCAN_EXCLUSIONS}"
+        f"{READY_SCAN_QUALIFIERS}"
     )
 
 
@@ -138,12 +156,13 @@ def external_takeover_search(dispatch_label: str = READY_LABEL) -> str:
     only); the exact `EXTERNAL_PR_RE` marker check is the code-layer
     guard in `_pick_from_scan` (`external_only=True`). `ai-epic` and
     `ai-release` stay excluded by the same code-layer guards as every
-    other scan.
+    other scan. The candidate order is the ready queue's own: oldest
+    Issue first (`READY_SCAN_QUALIFIERS`, Issue #1914).
     """
     label = dispatch_label or READY_LABEL
     return (
         f'label:{label} "orbi:external-pr" in:body '
-        f"{READY_SCAN_EXCLUSIONS}"
+        f"{READY_SCAN_QUALIFIERS}"
     )
 
 

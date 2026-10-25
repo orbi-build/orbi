@@ -860,7 +860,12 @@ DAG, no priority numbers, no separate queues:
   or the terminal-state semantics, and the Runner never adds or removes
   it. The ready pickup order is fixed: `ai-ready`+`p0` →
   `ai-ready`+`bug` → plain `ai-ready` (three `gh issue list` scans
-  sharing the exact same exclusions and blockedBy semantics). P0 obeys
+  sharing the exact same exclusions and blockedBy semantics). Inside
+  each scan the Issue that has waited longest is claimed first
+  (`sort:created-asc`, Issue #1914 — the release and external-takeover
+  fallback scans share the same order), so a busy queue drains in the
+  order the maintainer queued it and a newer ticket never overtakes one
+  labeled earlier. P0 obeys
   every existing exclusion rule and the single-slot constraint: a
   blocked P0 is skipped (falling back to the bug/plain scans) and an
   in-flight P0 is resumed by the restart scan. A failed P0 run enters
