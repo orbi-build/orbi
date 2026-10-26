@@ -116,6 +116,16 @@ engine_source_track = "release"
 # attribution_footer.
 # status_url = "https://tasks.example.org/project-status?repo=example%2Fwidget"
 # attribution_link = "https://github.com/orbi-build/orbi"
+# The GitHub App installation this deployment's token belongs to
+# (Issue #1918). When the installation has not approved a permission the
+# PR's check read needs, GitHub answers "Resource not accessible by
+# integration" (HTTP 403): the delivery stops with ONE comment naming the
+# missing `statuses: read` permission and linking the page an account
+# owner approves it on. Orbi re-tries the read every tick and resumes the
+# delivery by itself once it succeeds. Unset -> the comment links the
+# account's installation list instead of a guessed id. Host-only: an
+# installation is a deployment fact, never a repository policy.
+# installation_id = 12345678
 # Claim scope: the active GitHub Milestone title (e.g.
 # "v0.2.0") that the fresh-claim scans (p0, bug, plain) are restricted
 # to. The milestone:"<title>" qualifier is part of the gh search query,

@@ -68,6 +68,7 @@ def test_reason_and_action_codes_are_closed_sets_with_expected_members():
         "provider_quota",
         "base_branch_missing",
         "base_ci_red",
+        "checks_permission_missing",
         "unclassified",
     }
     assert failure.ACTION_CODES == {

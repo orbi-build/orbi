@@ -15,7 +15,7 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
-from orbi import base_ci_red, gitops
+from orbi import base_ci_red, check_permission, gitops
 from orbi import milestone as milestone_bookkeeping
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
@@ -769,11 +769,16 @@ def pick_next_delivery(
             )
         except Exception:
             LOGGER.exception("orphan_pr_reconcile_failed repo=%s", repo)
-        # The base-branch-red scan runs BEFORE the resume scan (Issue
-        # #1825): an `ai-blocked` Issue is terminal for every claim scan,
-        # and a base that turned green must put it back on the resumable
-        # path in THIS tick. A bypass like the sweeps above: a failed scan
-        # never prevents the ordinary delivery scans.
+        # The two automatic-recovery scans run BEFORE the resume scan: an
+        # `ai-blocked` Issue is terminal for every claim scan, and a
+        # recovered precondition must put it back on the resumable path in
+        # THIS tick — the missing check-read permission (Issue #1918), then
+        # the base-branch-red scan (Issue #1825). Bypasses like the sweeps
+        # above: a failed scan never prevents the ordinary delivery scans.
+        try:
+            check_permission.recover(repo, language_code=repo_language)
+        except Exception:
+            LOGGER.exception("check_permission_scan_failed repo=%s", repo)
         try:
             base_ci_red.recover(
                 repo, language_code=repo_language, milestone=milestone,

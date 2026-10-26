@@ -196,3 +196,37 @@ BASE_CI_RED_MESSAGES: dict[str, tuple[str, str]] = {
         "Orbi 会自动恢复这个 PR。",
     ),
 }
+
+# The missing check-read permission scene (Issue #1918): the App
+# installation has not approved a permission the check read needs, and the
+# delivery stops with one comment naming the permission and the approval
+# page. Same reason as the two maps above: the catalog owner stays under the
+# size cap and `language.text` remains the ONE reading point. The permission
+# name (`statuses: read`), the URLs and the PR numbers stay verbatim.
+CHECK_PERMISSION_MESSAGES: dict[str, tuple[str, str]] = {
+    "check_permission.open": (
+        "🔒 **PR #{pr} is open, but Orbi cannot read its check results.**",
+        "🔒 **PR #{pr} 已打开，但 Orbi 读不到它的 check 结果。**",
+    ),
+    "check_permission.reason": (
+        "GitHub answers `Resource not accessible by integration` (HTTP 403) "
+        "because this App installation has not approved the `{permission}` "
+        "permission (Commit statuses, read-only) the Orbi App now requests. "
+        "Orbi re-tries that read every tick and resumes this delivery by "
+        "itself as soon as it succeeds — no relabel needed.",
+        "GitHub 返回 `Resource not accessible by integration`（HTTP 403）："
+        "这个 App 安装尚未批准 Orbi App 现在申请的 `{permission}` 权限"
+        "（Commit statuses，只读）。Orbi 每个 tick 都会重试这次读取，一旦成功"
+        "就自动恢复这次交付 —— 不需要改标签。",
+    ),
+    "check_permission.approve": (
+        "**Approve it here:** {url}",
+        "**在这里批准：** {url}",
+    ),
+}
+
+# The one map `language.MESSAGES` merges (the reading point stays
+# `language.py`; this module only keeps the entries).
+EXTRA_MESSAGES: dict[str, tuple[str, str]] = {
+    **DISPLAY_TERMS, **BASE_CI_RED_MESSAGES, **CHECK_PERMISSION_MESSAGES,
+}

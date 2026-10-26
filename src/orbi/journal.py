@@ -453,6 +453,9 @@ JOURNAL_EVENTS: dict[str, str] = {
     "milestone_command_failed": "an in-ticket `/milestone` command failed at one step",
     "fix_base_command_applied": "an in-ticket `/orbi fix-base` command opened or reused the fix Issues",
     "fix_base_command_failed": "an in-ticket `/orbi fix-base` command failed at one step",
+    # Missing check-read permission scene (Issue #1918).
+    "checks_permission_blocked": "the check read was refused for a missing App permission; the Issue goes ai-blocked with the approval page",
+    "checks_permission_recovered": "the check read works again and the paused delivery resumed automatically",
     # Base-branch-red scene (Issue #1825).
     "base_ci_red_recovered": "the base check turned green and the paused delivery resumed automatically",
     "base_ci_red_stale": "a base-branch-red delivery was still red after the reminder window and polling stopped",
