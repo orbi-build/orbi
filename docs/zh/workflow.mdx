@@ -567,10 +567,12 @@ owner 的账号类型和部署的 `installation_id` 拼出。
 ```
 
 `state` 为 `waiting`（恢复扫描会重试读取）或 `resumed`。恢复不需要改标签：
-每个 tick 在 resume 扫描之前，会有一个有界扫描重试每一个带受信 `waiting` 记录的
-开放 `ai-blocked` Issue 的读取。再次被拒绝则什么也不变、也不会记为崩溃——权限
-仍未批准；读取成功则把 `ai-blocked` 换成 `ai-fix-needed`（唯一的标签变化），
-随后既有的 resume 流程照常合并该 PR。其它任何读取失败保留原有的失败处理。
+每个 tick 在 resume 扫描之前，会有一个有界扫描重试那些**最近一次受信失败就是这个
+暂停**、且记录仍为 `waiting` 的开放 `ai-blocked` Issue 的读取（与基础分支已红的
+扫描同一个门槛：旧暂停留下的记录永远不会清掉之后因其它原因产生的
+`ai-blocked`）。再次被拒绝则什么也不变、也不会记为崩溃——权限仍未批准；读取
+成功则把 `ai-blocked` 换成 `ai-fix-needed`（唯一的标签变化），随后既有的 resume
+流程照常合并该 PR。其它任何读取失败保留原有的失败处理。
 
 ## PR body 契约：`Fixes #N`
 

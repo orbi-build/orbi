@@ -46,7 +46,8 @@ import subprocess
 from orbi import comment_trust, failure, gh_response, language, user_summary
 from orbi.blocked_comment import post_blocked_comment
 from orbi.comment_kind import (
-    COMMENT_KIND_FAILURE, comment_kind_marker, parse_versioned_block,
+    COMMENT_KIND_FAILURE, comment_kind, comment_kind_marker,
+    parse_versioned_block,
 )
 from orbi.delivery_labels import (
     BLOCKED_LABEL, FIX_NEEDED_LABEL, READY_LABEL,
@@ -79,6 +80,9 @@ MISSING_PERMISSION = "statuses: read"
 _MARKER = "orbi:check-permission:v1"
 BLOCK_TEMPLATE = f"<!-- {_MARKER} {{payload}} -->"
 _FIELDS = ("schema", "pr", "state")
+
+# The REST id carried by a comment's permalink (see `rest_comment_id`).
+_COMMENT_URL_ID_RE = re.compile(r"#issuecomment-(\d+)$")
 
 # One bounded page per recovered scan: `ai-blocked` Issues are few, and an
 # unbounded scan would multiply the per-tick read cost.
@@ -306,34 +310,88 @@ def read_rollup(pr_url: str, repo: str, issue: dict, config,
 # The automatic recovery scan
 # --------------------------------------------------------------------------
 
+def _latest_trusted_failure(
+    comments: list[dict], *, repo: str,
+) -> tuple[failure.Failure | None, dict] | None:
+    """The Issue's NEWEST trusted failure comment, and its record.
+
+    The recovery gate (the Issue #1833 rule the base-branch-red scan
+    follows): a record only authorizes a step while the newest TRUSTED
+    failure on the Issue is the failure that carries it. An older
+    `waiting` record a later stop superseded — the account owner
+    relabelled the Issue, or a second stop blocked it for another reason —
+    must never clear that later `ai-blocked`.
+
+    The failure comment is the canonical `failure` kind marker, never the
+    mere presence of an `orbi:failure:v1` block: the short milestone
+    comment repeats that block (Issue #1322) and is not a failure.
+    """
+    for comment in reversed(
+            comment_trust.trusted_comments(comments, repo=repo)):
+        body = comment.get("body")
+        if comment_kind(body) != COMMENT_KIND_FAILURE:
+            continue
+        try:
+            return failure.parse(body), comment
+        except failure.FailureError:
+            LOGGER.warning(
+                "unreadable orbi:failure:v1 block url=%s", comment.get("url"),
+            )
+            return None, comment
+    return None
+
+
 def _waiting_block(comments: list[dict], *,
                    repo: str) -> tuple[CheckPermission, dict] | None:
-    """The newest TRUSTED `waiting` block and its comment.
+    """The `waiting` record of the Issue's OWN permission stop, and its
+    comment.
 
     Trust is the existing comment rule (repository write permission, or the
     authenticated runner account): a copied block from a read-only
-    commenter authorizes nothing.
+    commenter authorizes nothing. The record is read only from the Issue's
+    newest trusted failure, and only while that failure is this refusal.
     """
-    trusted = comment_trust.trusted_comments(comments, repo=repo)
-    for comment in reversed(trusted):
-        try:
-            record = parse(comment.get("body"))
-        except CheckPermissionError:
-            LOGGER.warning(
-                "unreadable check_permission block url=%s", comment.get("url"),
-            )
-            continue
-        if record is not None and record.state == STATE_WAITING:
-            return record, comment
-    return None
+    located = _latest_trusted_failure(comments, repo=repo)
+    if located is None:
+        return None
+    refusal, comment = located
+    if refusal is None or refusal.reason_code != REASON_CODE:
+        return None
+    try:
+        record = parse(comment.get("body"))
+    except CheckPermissionError:
+        LOGGER.warning(
+            "unreadable check_permission block url=%s", comment.get("url"),
+        )
+        return None
+    if record is None or record.state != STATE_WAITING:
+        return None
+    return record, comment
+
+
+def rest_comment_id(comment: dict) -> int | None:
+    """The REST id of one Issue comment, from its id field or its permalink.
+
+    `gh issue view --json comments` reports the GraphQL node id — an
+    `"IC_kw..."` string no REST route accepts — next to the permalink, and
+    the permalink's `#issuecomment-<digits>` suffix IS the REST id the
+    in-place edit's `PATCH /repos/{repo}/issues/comments/{id}` takes (the
+    same rule `base_ci_red` and the failure reporter follow).
+    """
+    comment_id = comment.get("id")
+    if isinstance(comment_id, int) and not isinstance(comment_id, bool):
+        return comment_id
+    url = comment.get("url")
+    match = _COMMENT_URL_ID_RE.search(url) if isinstance(url, str) else None
+    return int(match.group(1)) if match else None
 
 
 def _edit_state(repo: str, issue_number: int, comment: dict,
                 record: CheckPermission) -> None:
     """Patch the ONE comment in place to the record's next state."""
     body = comment.get("body")
-    comment_id = comment.get("id")
-    if not isinstance(body, str) or not isinstance(comment_id, int):
+    comment_id = rest_comment_id(comment)
+    if not isinstance(body, str) or comment_id is None:
         LOGGER.warning(
             "check_permission comment has no REST id issue=%s repo=%s",
             issue_number, repo,
@@ -346,7 +404,7 @@ def _edit_state(repo: str, issue_number: int, comment: dict,
     )
 
 
-def recover(repo: str, *, language_code: str) -> list[int]:
+def recover(repo: str) -> list[int]:
     """Re-try every paused check read once; resume the ones that work.
 
     One bounded scan per tick, before the resume scan: an `ai-blocked`

@@ -703,9 +703,12 @@ The same comment carries a second hidden block beside `orbi:failure:v1`:
 
 `state` is `waiting` (the recovery scan re-tries the read) or `resumed`.
 Recovery needs no relabel: every tick, BEFORE the resume scans, one bounded
-scan re-tries the refused read of each open `ai-blocked` Issue that carries a
-trusted `waiting` record. A refused read again changes nothing and logs no
-crash — the permission is still not approved; a successful read swaps
+scan re-tries the refused read of each open `ai-blocked` Issue whose newest
+trusted failure is this stop and whose record is still `waiting` (the same
+gate the base-branch-red scan uses: a record an older stop left behind never
+clears a later `ai-blocked` decided for another reason). A refused read again
+changes nothing and logs no crash — the permission is still not approved; a
+successful read swaps
 `ai-blocked` for `ai-fix-needed` (the only label change) and the existing
 resume flow merges the PR as usual. Every other failed read keeps its existing
 failure handling.

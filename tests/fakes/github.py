@@ -61,6 +61,18 @@ _PLAN_LIMIT_403 = (
     "this feature. (HTTP 403)"
 )
 
+# The REST id a comment's permalink carries (`#issuecomment-<digits>`):
+# `gh issue view --json comments` reports the GraphQL node id in `id`, while
+# every in-place edit takes this number (Issue #1918).
+_PERMALINK_ID_RE = re.compile(r"#issuecomment-(\d+)$")
+
+
+def _permalink_id(comment: dict) -> int | None:
+    """The REST id in one comment's permalink, or None."""
+    url = comment.get("url")
+    match = _PERMALINK_ID_RE.search(url) if isinstance(url, str) else None
+    return int(match.group(1)) if match else None
+
 
 class FakeGh:
     """One repository's GitHub state, answering the adapter's gh argv."""
@@ -739,7 +751,11 @@ class FakeGh:
             return self._unsupported(["gh", "api", "--method", "PATCH", *args])
         for issue in self.issues.values():
             for comment in issue["comments"]:
-                if comment.get("id") == comment_id:
+                # The REST id is the id field, or the permalink's
+                # `#issuecomment-<digits>` suffix: `gh issue view --json
+                # comments` reports the GraphQL node id there, and the
+                # PATCH route takes the REST id (Issue #1918).
+                if comment_id in (comment.get("id"), _permalink_id(comment)):
                     comment["body"] = body
                     return json.dumps(comment)
         self._fail(1, f"gh: Could not resolve an Issue comment {comment_id}.")

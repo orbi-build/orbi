@@ -776,7 +776,7 @@ def pick_next_delivery(
         # the base-branch-red scan (Issue #1825). Bypasses like the sweeps
         # above: a failed scan never prevents the ordinary delivery scans.
         try:
-            check_permission.recover(repo, language_code=repo_language)
+            check_permission.recover(repo)
         except Exception:
             LOGGER.exception("check_permission_scan_failed repo=%s", repo)
         try:
