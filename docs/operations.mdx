@@ -750,6 +750,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `milestone_command_failed` | an in-ticket `/milestone` command failed at one step |
 | `fix_base_command_applied` | an in-ticket `/orbi fix-base` command opened or reused the fix Issues |
 | `fix_base_command_failed` | an in-ticket `/orbi fix-base` command failed at one step |
+| `checks_permission_blocked` | the check read was refused for a missing App permission; the Issue goes ai-blocked with the approval page |
+| `checks_permission_recovered` | the check read works again and the paused delivery resumed automatically |
 | `base_ci_red_recovered` | the base check turned green and the paused delivery resumed automatically |
 | `base_ci_red_stale` | a base-branch-red delivery was still red after the reminder window and polling stopped |
 | `base_ci_red_merged` | the base-branch-red comment was updated to merged after the delivery landed |

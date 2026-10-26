@@ -1298,3 +1298,35 @@ def test_validate_config_rejects_repository_path_not_a_git_checkout(
     }])
     with pytest.raises(ValueError, match="not a git checkout"):
         runner.validate_config(config)
+
+
+# --- Issue #1918: the App installation id of this deployment ----------------
+
+def test_load_config_defaults_the_installation_id_to_none(tmp_path):
+    """Omitted -> None: the missing-permission comment links the account's
+    installation list instead of a guessed id."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    assert config_domain.load_config(config_path).installation_id is None
+
+
+def test_load_config_reads_the_installation_id(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\ninstallation_id = 4242\n',
+        encoding="utf-8",
+    )
+    assert config_domain.load_config(config_path).installation_id == 4242
+
+
+@pytest.mark.parametrize("value", ['"4242"', "true", "0", "-1", "4.5"])
+def test_load_config_rejects_an_invalid_installation_id(tmp_path, value):
+    """A guessed id would send the reader to another installation's page."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        f"installation_id = {value}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="installation_id must be a positive"):
+        config_domain.load_config(config_path)

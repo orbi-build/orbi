@@ -154,6 +154,9 @@ class RunnerConfig:
     # normal GitHub-only case and an invalid one is ignored with a safe
     # warning, so this value never gates a delivery.
     status_url: str | None = None
+    # The GitHub App installation id of this deployment (Issue #1918): the
+    # page an account owner approves a newly requested permission on.
+    installation_id: int | None = None
     slot_dir: Path | None = None
     pi_provider: str | None = None
     pi_model: str | None = None
@@ -305,6 +308,13 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     status_url = user_summary.normalize_status_url(
         data.get(user_summary.STATUS_URL_KEY), source=str(path.resolve()),
     )
+    # The GitHub App installation this Runner's token belongs to (Issue
+    # #1918): the id the missing-permission comment turns into the
+    # approval page. Host-only — an installation is a deployment fact, not
+    # a repository policy — absent -> the comment links the account's
+    # installation list instead of a guessed id; a non-positive or
+    # non-integer value fails the load fast.
+    installation_id = _optional_positive_int(data, "installation_id")
     # Engine source update channel: what the deploy home
     # checkout follows at the next start — origin/main by default (the
     # exact pre-#535 dogfood behavior), a branch, the newest official
@@ -511,6 +521,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         attribution_footer=attribution_footer,
         attribution_link=attribution_link,
         status_url=status_url,
+        installation_id=installation_id,
         slot_dir=slot_dir_for(repo_dir),
         pi_provider=pi_provider,
         pi_model=pi_model,
@@ -540,6 +551,21 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
             parse_repositories(data.get("repositories", []), base)
         ),
     )
+
+
+def _optional_positive_int(data: dict, key: str) -> int | None:
+    """Read one optional positive-integer key (an id, never a count).
+
+    Absent -> None. Anything that is not a positive integer (a string, a
+    bool, zero or a negative number) fails the load fast: a guessed id
+    would send the reader to another installation's page.
+    """
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError(f"{key} must be a positive integer")
+    return value
 
 
 def _optional_pi_string(data: dict, key: str) -> str | None:

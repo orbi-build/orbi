@@ -615,6 +615,7 @@ at all — readers ignore it (`parse` returns `None`).
 | `human_decision_required` | an external precondition only a human can decide | `decide` | false |
 | `base_branch_missing` | the configured base branch does not exist in the repository | `fix_ticket` | false |
 | `base_ci_red` | the check the PR fails is also failing on the configured base branch | `fix_ticket` | false |
+| `checks_permission_missing` | the App installation has not approved `statuses: read`, so the PR's check read is refused (HTTP 403 `Resource not accessible by integration`) | `check_credentials` | false |
 | `credential_missing` | the GitHub/provider credential is missing or rejected | `check_credentials` | false |
 | `unclassified` | any other runner exception | `fix_ticket` | false |
 
@@ -676,6 +677,41 @@ reuses an OPEN — `CI failure: <check> on branch <base>` Issue per failing base
 check, labelled `ai-ready` + `p0` and placed in the active Milestone, then
 replies `created #K` / `reused #K` on the paused Issue. A closed triage Issue
 is never reused.
+
+### A delivery paused on an unapproved App permission: `checks_permission_missing`
+
+**Available since v0.7.18.**
+
+An App installation keeps the permissions it was granted until the account
+owner approves a newly requested one. When the Runner reads a PR's
+`statusCheckRollup` — the check result a review cannot merge without — GitHub
+answers `Resource not accessible by integration` (HTTP 403), and no retry on
+the same permission can succeed. The delivery stops in `ai-blocked` with
+`reason_code` `checks_permission_missing` (`action_code`
+`check_credentials`, `retry_safe` false) and ONE comment that says the PR is
+open, names the `statuses: read` permission, and links the approval page of
+THIS installation — `https://github.com/settings/installations/<id>` for a
+user account, `https://github.com/organizations/<org>/settings/installations/<id>`
+for an organization, built from the repository owner's account type and the
+deployment's `installation_id`.
+
+The same comment carries a second hidden block beside `orbi:failure:v1`:
+
+```html
+<!-- orbi:check-permission:v1 {"schema":1,"pr":123,"state":"waiting"} -->
+```
+
+`state` is `waiting` (the recovery scan re-tries the read) or `resumed`.
+Recovery needs no relabel: every tick, BEFORE the resume scans, one bounded
+scan re-tries the refused read of each open `ai-blocked` Issue whose newest
+trusted failure is this stop and whose record is still `waiting` (the same
+gate the base-branch-red scan uses: a record an older stop left behind never
+clears a later `ai-blocked` decided for another reason). A refused read again
+changes nothing and logs no crash — the permission is still not approved; a
+successful read swaps
+`ai-blocked` for `ai-fix-needed` (the only label change) and the existing
+resume flow merges the PR as usual. Every other failed read keeps its existing
+failure handling.
 
 ## PR body contract: `Fixes #N`
 

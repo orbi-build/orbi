@@ -488,6 +488,7 @@ review 与 ops session），因此自定义 prompt 模板同样会收到：会�
 | `human_decision_required` | 只有人能决策的外部前置条件 | `decide` | false |
 | `base_branch_missing` | 配置的 base branch 在仓库中不存在 | `fix_ticket` | false |
 | `base_ci_red` | PR 失败的 check 在配置的基础分支上本来也失败 | `fix_ticket` | false |
+| `checks_permission_missing` | App 安装尚未批准 `statuses: read`，导致 PR 的 check 读取被拒绝（HTTP 403 `Resource not accessible by integration`） | `check_credentials` | false |
 | `credential_missing` | GitHub/provider 凭据缺失或被拒绝 | `check_credentials` | false |
 | `unclassified` | 其它任何 Runner 异常 | `fix_ticket` | false |
 
@@ -544,6 +545,34 @@ base check 创建 —— 或复用一个**仍然开着**的 ——
 `CI failure: <check> on branch <base>` Issue，打上 `ai-ready` + `p0`
 并放进当前 active Milestone，然后在被暂停的 Issue 上回复
 `created #K` / `reused #K`。已关闭的 triage Issue 绝不复用。
+
+### 交付因 App 权限未批准而暂停：`checks_permission_missing`
+
+**v0.7.18 起可用。**
+
+App 安装会一直保持当初授予的权限，直到账号所有者批准新申请的权限。当 Runner
+读取 PR 的 `statusCheckRollup`（评审无法绕过的 check 结果）时，GitHub 返回
+`Resource not accessible by integration`（HTTP 403），再用同一权限重试永远不会
+成功。交付会停在 `ai-blocked`，`reason_code` 为 `checks_permission_missing`
+（`action_code` 为 `check_credentials`，`retry_safe` 为 false），并只发一条
+评论：说明 PR 已打开、指明缺失的 `statuses: read` 权限，并给出**这个**安装的
+批准页面——用户账号是 `https://github.com/settings/installations/<id>`，组织是
+`https://github.com/organizations/<org>/settings/installations/<id>`，由仓库
+owner 的账号类型和部署的 `installation_id` 拼出。
+
+同一条评论在 `orbi:failure:v1` 旁边还带一个隐藏块：
+
+```html
+<!-- orbi:check-permission:v1 {"schema":1,"pr":123,"state":"waiting"} -->
+```
+
+`state` 为 `waiting`（恢复扫描会重试读取）或 `resumed`。恢复不需要改标签：
+每个 tick 在 resume 扫描之前，会有一个有界扫描重试那些**最近一次受信失败就是这个
+暂停**、且记录仍为 `waiting` 的开放 `ai-blocked` Issue 的读取（与基础分支已红的
+扫描同一个门槛：旧暂停留下的记录永远不会清掉之后因其它原因产生的
+`ai-blocked`）。再次被拒绝则什么也不变、也不会记为崩溃——权限仍未批准；读取
+成功则把 `ai-blocked` 换成 `ai-fix-needed`（唯一的标签变化），随后既有的 resume
+流程照常合并该 PR。其它任何读取失败保留原有的失败处理。
 
 ## PR body 契约：`Fixes #N`
 

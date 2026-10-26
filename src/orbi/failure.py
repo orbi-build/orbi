@@ -69,6 +69,11 @@ REASON_CODES = frozenset({
     # hit the same red base — but recoverable: `base_ci_red.recover` resumes
     # the SAME delivery once the base check turns green, no relabel.
     "base_ci_red",
+    # The App installation has not approved a permission the check read
+    # needs, so GitHub answers `Resource not accessible by integration`
+    # (Issue #1918). A human approves it on the installation page; the
+    # paused delivery then resumes by itself, no relabel.
+    "checks_permission_missing",
     # Any other runner exception the classifier does not recognize.
     "unclassified",
 })
@@ -328,6 +333,7 @@ DISPOSITIONS: dict[str, tuple[str, bool]] = {
     "provider_quota": ("wait_quota", True),
     "base_branch_missing": ("fix_ticket", False),
     "base_ci_red": ("fix_ticket", False),
+    "checks_permission_missing": ("check_credentials", False),
     "unclassified": ("fix_ticket", False),
 }
 

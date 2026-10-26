@@ -244,6 +244,7 @@ from orbi.github import (
     parse_paginated_issue_array,
 )
 from orbi.github_feedback import check_summaries, pr_delivery_status, pr_delivery_rollup
+from orbi import check_permission
 from orbi.checks import render_check, classify_checks, test_status
 from orbi.gitops import (
     acquire_base_sync_lock,
@@ -281,7 +282,6 @@ from orbi.release import (
     ReleaseDeliveriesWaiting,
     release_target_milestone,
 )
-
 
 
 # Stop-handler grace: when the Runner is stopped with SIGTERM
@@ -333,15 +333,9 @@ _WORKTREE_NAME_PATTERN = re.compile(
 )
 
 
-
-
-
-
-
-
-# The health check's journal lines carry the same `[run_id]`
-# prefix as every other Runner line (the RunIdFilter is attached per
-# logger; the health module must not import this one — circular).
+# The health check's journal lines carry the same `[run_id]` prefix as
+# every other Runner line (the RunIdFilter is attached per logger; the
+# health module must not import this one — circular).
 
 
 def _stop_delivery(signum: int) -> None:
@@ -2359,8 +2353,6 @@ _FIX_NEEDED_PHRASE = (
 )
 
 
-
-
 def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
                   source_repo: str, *, external_takeover: bool = False) -> None:
     """Run ONE step of an opened-PR delivery: the resume path IS the path.
@@ -2424,7 +2416,10 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
         source_repo=source_repo, role=ROLE_REVIEW,
     )
 
-    state, rollup = pr_delivery_rollup(pr_url, source_repo)
+    state, rollup = check_permission.read_rollup(
+        pr_url, source_repo, issue, config, run_id)
+    if state is None:
+        return
     if state == "OPEN":
         event(
             "delivery_ci", issue=number, pr=pr_url,

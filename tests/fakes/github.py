@@ -61,6 +61,18 @@ _PLAN_LIMIT_403 = (
     "this feature. (HTTP 403)"
 )
 
+# The REST id a comment's permalink carries (`#issuecomment-<digits>`):
+# `gh issue view --json comments` reports the GraphQL node id in `id`, while
+# every in-place edit takes this number (Issue #1918).
+_PERMALINK_ID_RE = re.compile(r"#issuecomment-(\d+)$")
+
+
+def _permalink_id(comment: dict) -> int | None:
+    """The REST id in one comment's permalink, or None."""
+    url = comment.get("url")
+    match = _PERMALINK_ID_RE.search(url) if isinstance(url, str) else None
+    return int(match.group(1)) if match else None
+
 
 class FakeGh:
     """One repository's GitHub state, answering the adapter's gh argv."""
@@ -80,6 +92,14 @@ class FakeGh:
         # login whose read fails server-side.
         self.collaborators: dict[str, str] = {}
         self.permission_failure: str | None = None
+        # The App permission the check read needs (Issue #1918): while
+        # set, `gh pr view --json state,statusCheckRollup` answers GitHub's
+        # documented App refusal instead of the rollup — production's own
+        # shape (a GraphQL subcommand prints no response status line).
+        self.check_read_failure: str | None = None
+        # The repository owner's account type (`gh api repos/<repo>` ->
+        # `owner.type`), which picks the installation approval URL form.
+        self.owner_type = "Organization"
         self._clock = 0
 
     # --- state arrangement (what a test does instead of patching) -------
@@ -210,6 +230,21 @@ class FakeGh:
         see: the fake never invents access it was not given.
         """
         self.collaborators[login] = permission
+
+    def set_check_read_failure(
+        self, enabled: bool = True, *,
+        message: str = "gh: Resource not accessible by integration (HTTP 403)",
+    ) -> None:
+        """Refuse the PR's check read like an unapproved App permission.
+
+        `message` is the refusal the fake raises, so a test can also model
+        every OTHER failed read (a 404, a 5xx) on the same call.
+        """
+        self.check_read_failure = message if enabled else None
+
+    def set_owner_type(self, account_type: str) -> None:
+        """Set the repository owner's account type (User/Organization)."""
+        self.owner_type = account_type
 
     def set_permission_failure(self, login: str) -> None:
         """Make that user's permission read fail server-side (a 5xx)."""
@@ -551,6 +586,11 @@ class FakeGh:
         self._known_flags(flags, ("--repo", "--json"), ["gh", "pr", "view"])
         self._repo_or_fail((flags.get("--repo") or [self.repo])[0])
         fields = flags["--json"][0].split(",")
+        if self.check_read_failure and "statusCheckRollup" in fields:
+            # The App permission refusal on the check read (Issue #1918),
+            # verbatim: `gh pr view` is a GraphQL subcommand, so the
+            # failure carries GitHub's sentence and no response status.
+            self._fail(1, self.check_read_failure)
         rendered = {}
         for field in fields:
             if field not in pr:
@@ -621,6 +661,19 @@ class FakeGh:
             if runs is None:
                 self._fail(1, f"gh: HTTP 404: no commit {match.group(2)}")
             return json.dumps(runs)
+        match = re.fullmatch(r"repos/([^/]+/[^/]+)", path)
+        if match:
+            # The repository resource: `owner.type` is what picks the
+            # installation approval URL form (Issue #1918); a payload
+            # without the merge-method booleans keeps the merge exec's
+            # documented `--merge` fallback.
+            self._repo_or_fail(match.group(1))
+            return json.dumps({
+                "owner": {
+                    "login": match.group(1).split("/", 1)[0],
+                    "type": self.owner_type,
+                },
+            })
         match = re.fullmatch(
             r"repos/([^/]+/[^/]+)/contents/\.github/orbi\.toml", path,
         )
@@ -698,7 +751,11 @@ class FakeGh:
             return self._unsupported(["gh", "api", "--method", "PATCH", *args])
         for issue in self.issues.values():
             for comment in issue["comments"]:
-                if comment.get("id") == comment_id:
+                # The REST id is the id field, or the permalink's
+                # `#issuecomment-<digits>` suffix: `gh issue view --json
+                # comments` reports the GraphQL node id there, and the
+                # PATCH route takes the REST id (Issue #1918).
+                if comment_id in (comment.get("id"), _permalink_id(comment)):
                     comment["body"] = body
                     return json.dumps(comment)
         self._fail(1, f"gh: Could not resolve an Issue comment {comment_id}.")
