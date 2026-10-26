@@ -340,6 +340,27 @@ def test_a_later_stop_for_another_reason_is_never_resumed(monkeypatch):
     assert gh.issues[ISSUE_NUMBER]["labels"] == ["ai-blocked"]
 
 
+def test_a_newer_stop_without_its_own_record_never_falls_back(monkeypatch):
+    """The gate reads the record of the SAME comment: a newer trusted
+    failure that names the reason but carries no permission block
+    authorizes nothing, and the older waiting record it superseded is
+    never resumed."""
+    gh = _scene(monkeypatch)
+    _blocked_issue(gh)
+    _append_comment(gh, body=(
+        "<!-- orbi:run=e5f6a7b8 -->\n"
+        "<!-- orbi:comment=failure -->\n\n"
+        + failure.render(failure.Failure(
+            reason_code=check_permission.REASON_CODE,
+            action_code="check_credentials", retry_safe=False,
+            outcome="blocked",
+        ))
+    ), number=100)
+    gh.set_check_read_failure(False)
+    assert check_permission.recover(REPO) == []
+    assert gh.issues[ISSUE_NUMBER]["labels"] == ["ai-blocked"]
+
+
 def test_an_unexpected_read_failure_is_logged_and_skipped(
     monkeypatch, caplog,
 ):
