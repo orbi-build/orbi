@@ -20,6 +20,7 @@ guarantees are pinned independently of the milestone's business rules:
 """
 import contextlib
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -507,6 +508,87 @@ def test_a_receipt_names_a_comment_by_its_url_when_it_has_one(monkeypatch):
         "- command comment: https://github.com/owner/repo/issues/436#issuecomment-11"
         in body
     )
+
+
+# --- the terminal spelling is the same execution path (Issue #1930) -----
+
+
+def test_the_command_supplies_the_context_its_caller_cannot(monkeypatch):
+    """A CLI caller has no ticket scan to inherit context from: the spec
+    reads it from the ticket itself, so the CLI never passes a
+    placeholder."""
+    seen: list[object] = []
+    reads: list[int] = []
+
+    def context(*, comments, record=None, **_context):
+        if record is not None:
+            return {}
+        reads.append(len(comments))
+        return {"record": "from the ticket"}
+
+    spec = ticket_command.CommandSpec(
+        name="ctx", subcommand="ctx", arity=0, permission="write",
+        validate=lambda argument, *, record=None, **_c: None,
+        apply=lambda argument, *, record=None, **_c: seen.append(record),
+        usage="/orbi ctx", description="a command with its own context",
+        context=context,
+    )
+    posts: list = []
+    events: list = []
+    _patch_dispatch(monkeypatch, [], posts, events)
+
+    outcome = ticket_command.execute_command(
+        "owner/repo", 436, spec,
+        caller=ticket_command.cli_caller(
+            "alice", now=datetime(2026, 10, 27, 11, 45, tzinfo=timezone.utc),
+        ),
+    )
+    assert outcome.applied is True
+    assert outcome.receipt is None
+    assert seen == ["from the ticket"]
+    assert reads == [0]
+
+    # A caller that already located the value pays no ticket read.
+    ticket_command.execute_command(
+        "owner/repo", 436, spec, comments=[_comment("/orbi ctx", cid=61)],
+        record="from the scan",
+    )
+    assert seen == ["from the ticket", "from the scan"]
+    assert reads == [0]
+
+
+def test_a_cli_occurrence_is_named_in_its_receipt_and_printed(monkeypatch):
+    """The rejection names where the command came from, and the caller
+    that SHOWS the receipt (the CLI) gets the text the ticket carries."""
+    posts: list = []
+    events: list = []
+    _patch_dispatch(monkeypatch, [], posts, events)
+    # `outsider` is the module fixture's read-only login: the CLI caller is
+    # judged by the same repository-permission gate as a comment author.
+    outcome = ticket_command.execute_command(
+        "owner/repo", 436, _noop_spec(),
+        caller=ticket_command.cli_caller(
+            "outsider",
+            now=datetime(2026, 10, 27, 11, 45, tzinfo=timezone.utc),
+        ),
+        allowed_targets=["alpha"],
+    )
+    body = posts[0][posts[0].index("--body") + 1]
+    assert "comment=cli@2026-10-27T11:45:00Z" in body
+    assert (
+        "- command comment: the `orbi` CLI on the host (login @outsider)"
+        in body
+    )
+    assert outcome.applied is False
+    assert outcome.receipt == body
+
+
+def test_the_cli_specs_are_the_arity_zero_commands():
+    """``/orbi milestone <version>`` needs an argument, so it keeps its own
+    ``orbi milestone set`` instead of a generated entry."""
+    specs = ticket_command.cli_specs()
+    assert [spec.name for spec in specs] == ["fix_base"]
+    assert all(spec.arity == 0 for spec in specs)
 
 
 # --- the registry is pinned to the docs -----------------------------------

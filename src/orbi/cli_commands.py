@@ -26,8 +26,10 @@ from orbi import (
     scheduler,
     status_observe,
     suggest,
+    ticket_command,
 )
 from orbi.cli_doctor import doctor_report
+from orbi.cli_ticket_command import command_ticket_command
 from orbi.delivery_labels import READY_LABEL
 from orbi.milestone_command import MilestoneSetError, milestone_set
 from orbi.runner import freeze_base, run_command
@@ -67,15 +69,22 @@ Describe the observable result the user should get.
 # installed units; a mutating command never does.
 READ_ONLY_COMMANDS = frozenset({"status", "doctor", "session", "check"})
 
+# The registered ticket commands (`orbi fix-base`, ...) are GitHub-only
+# actions like the maintenance ones: no model call, so the same rule
+# applies (Issue #1930).
+_TICKET_COMMANDS = frozenset(
+    spec.subcommand for spec in ticket_command.cli_specs()
+)
+
 # A missing provider key must never block these deployment maintenance
 # operations (the Runner's own start enforces the key), so they load the
 # config with the doctor's lenient provider flags.
 LENIENT_PROVIDER_COMMANDS = frozenset(
     {"setup", "doctor", "sync-engine-source", "milestone", "notify"},
-)
+) | _TICKET_COMMANDS
 NO_PROVIDER_KEY_CHECK_COMMANDS = frozenset(
     {"doctor", "sync-engine-source", "milestone", "notify"},
-)
+) | _TICKET_COMMANDS
 
 
 def issue_number(url: str) -> int:
@@ -374,4 +383,11 @@ COMMAND_HANDLERS = {
     "notify": command_notify,
     "setup": command_setup,
     "milestone": command_milestone,
+    # One generated entry per registered arity-0 ticket command (Issue
+    # #1930): `orbi fix-base --repo … --issue …` is the terminal spelling
+    # of `/orbi fix-base`, so the table is derived from the registry.
+    **{
+        spec.subcommand: command_ticket_command
+        for spec in ticket_command.cli_specs()
+    },
 }

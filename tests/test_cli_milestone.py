@@ -45,14 +45,16 @@ REPO = "octocat/hello-world"
 
 def make_world(
     tmp_path: Path, *, milestone: str | None = "v0.5.0",
-    auto_next_milestone: bool | None = None,
+    auto_next_milestone: bool | None = None, repo: str = REPO,
 ) -> Path:
     """A minimal valid deployment layout; returns the config path.
 
     The same shape `orbi check`'s world uses: an explicit deploy home
     (prompts + provider starter + env file) and a `run/orbi.toml`
     carrying the source repo — plus the `active_milestone` line this
-    command advances (omitted for the no-field failure path).
+    command advances (omitted for the no-field failure path). `repo`
+    is the configured source repository: the milestone tests use the
+    default, the ticket-command tests their own (Issue #1930).
     """
     home = tmp_path / "home"
     (home / "prompts").mkdir(parents=True)
@@ -69,7 +71,7 @@ def make_world(
     run_dir.mkdir()
     config_path = run_dir / "orbi.toml"
     lines = [
-        f'source_repos = ["{REPO}"]',
+        f'source_repos = ["{repo}"]',
         f'repo_dir = "{tmp_path / "repo"}"',
         f'deploy_home = "{home}"',
         'pi_provider = "openai"',

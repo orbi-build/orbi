@@ -233,4 +233,10 @@ EXTRA_MESSAGES: dict[str, tuple[str, str]] = {
         "write it on a line of its own",
         "命令行格式不正确：`{usage}` 不接受参数，请单独一行只写它",
     ),
+    # A receipt's origin for the terminal spelling (Issue #1930): the
+    # command came from the host CLI, not from a comment.
+    "command.cli_caller": (
+        "the `orbi` CLI on the host (login @{login})",
+        "主机上的 `orbi` CLI（登录 @{login}）",
+    ),
 }

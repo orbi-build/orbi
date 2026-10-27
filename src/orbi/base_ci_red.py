@@ -686,6 +686,37 @@ def _latest_trusted_failure(
     return None
 
 
+def paused_scene(
+    comments: list[dict], *, repo: str,
+) -> tuple[BaseCIRed, dict] | None:
+    """The `waiting` base-CI-red record this Issue pauses on, and its comment.
+
+    The ONE eligibility rule (Issue #1825's trust gate): the newest
+    TRUSTED failure on the Issue must be the base-CI one, and the block in
+    that same comment must still be `waiting`. The recovery scan and the
+    `/orbi fix-base` command's own context both read it from here — the
+    terminal spelling acts on exactly the scene the scan would (Issue
+    #1930).
+    """
+    located = _latest_trusted_failure(comments, repo=repo)
+    if located is None:
+        return None
+    failure_record, comment = located
+    if (failure_record is None
+            or failure_record.reason_code != REASON_BASE_CI_RED):
+        return None
+    try:
+        record = parse(comment.get("body"))
+    except BaseCIRedError:
+        LOGGER.warning(
+            "unreadable base_ci_red block url=%s", comment.get("url"),
+        )
+        return None
+    if record is None or record.state != STATE_WAITING:
+        return None
+    return record, comment
+
+
 def recover(repo: str, *, language_code: str,
             milestone: str | None = None,
             dispatch_label: str = READY_LABEL,
@@ -721,23 +752,10 @@ def recover(repo: str, *, language_code: str,
     )
     for issue in issues:
         number = issue["number"]
-        comments = issue_comments(number, repo=repo)
-        located = _latest_trusted_failure(comments, repo=repo)
-        if located is None:
+        scene = paused_scene(issue_comments(number, repo=repo), repo=repo)
+        if scene is None:
             continue
-        failure_record, comment = located
-        if (failure_record is None
-                or failure_record.reason_code != REASON_BASE_CI_RED):
-            continue
-        try:
-            record = parse(comment.get("body"))
-        except BaseCIRedError:
-            LOGGER.warning(
-                "unreadable base_ci_red block url=%s", comment.get("url"),
-            )
-            continue
-        if record is None or record.state != STATE_WAITING:
-            continue
+        record, comment = scene
         process_commands(
             repo, number, [FIX_BASE_COMMAND],
             language_code=language_code, record=record,
@@ -824,6 +842,24 @@ def note_merged(repo: str, issue_number: int, *, language_code: str) -> bool:
 # /orbi fix-base
 # --------------------------------------------------------------------------
 
+def _fix_base_context(
+    *, repo: str, comments: list[dict], record: BaseCIRed | None = None,
+    **_context: object,
+) -> dict[str, object]:
+    """The command's own context: the record this ticket pauses on.
+
+    The comment scan located the record while walking the ticket and hands
+    it over; a terminal caller (`orbi fix-base`, Issue #1930) has no such
+    scan, so the command reads the SAME record from the ticket itself —
+    the CLI never passes a placeholder, and a caller that already has it
+    costs no second read.
+    """
+    if record is not None:
+        return {}
+    scene = paused_scene(comments, repo=repo)
+    return {"record": scene[0] if scene is not None else None}
+
+
 def _fix_base_validate(
     argument: str, *, language_code: str = language.DEFAULT_LANGUAGE,
     record: BaseCIRed | None = None, **_context: object,
@@ -831,12 +867,13 @@ def _fix_base_validate(
     """The command's own business rule: a paused scene to fix.
 
     The shared dispatcher evaluates EVERY registered command on every
-    ticket that runs commands (`process_commands` is the single entry,
-    Issue #1294), so "is there a block to fix at all" is this command's
-    own precondition: without one the reader gets this receipt instead of
-    a handler running against state the ticket never carried. The command
-    takes no argument (Issue #1922): the `/orbi` prefix and `fix-base`
-    are matched by the shared layer, not by this rule.
+    ticket that runs commands (`process_commands` runs each one through
+    `execute_command`, Issue #1294), so "is there a block to fix at all" is
+    this command's own precondition: without one the reader gets this
+    receipt instead of a handler running against state the ticket never
+    carried. The command takes no argument (Issue #1922): the `/orbi`
+    prefix and `fix-base` are matched by the shared layer, not by this
+    rule.
     """
     if not isinstance(record, BaseCIRed):
         return language.text(
@@ -928,6 +965,7 @@ FIX_BASE_COMMAND = CommandSpec(
     description=(
         "open a fix Issue for the base checks that pause this delivery"
     ),
+    context=_fix_base_context,
 )
 
 register_command(FIX_BASE_COMMAND)

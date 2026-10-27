@@ -13,7 +13,7 @@ import argparse
 import os
 from pathlib import Path
 
-from orbi import __version__, notify, suggest
+from orbi import __version__, cli_ticket_command, notify, suggest
 
 
 def build_parser(description: str) -> argparse.ArgumentParser:
@@ -125,6 +125,11 @@ def build_parser(description: str) -> argparse.ArgumentParser:
         "--json", action="store_true",
         help="print the result as JSON instead of key=value lines",
     )
+    # One subcommand per registered ticket command (Issue #1930): the
+    # registry is the source, so a new command gets its terminal spelling
+    # without an edit here. `/orbi milestone <version>` is arity 1 and
+    # keeps the explicit `orbi milestone set` below.
+    cli_ticket_command.register_cli(subparsers, common)
     milestone_parser = subparsers.add_parser(
         "milestone", parents=[common],
         help="advance active_milestone (the manual command behind the "

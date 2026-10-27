@@ -902,8 +902,9 @@ orbi milestone set v0.5.7 --config orbi.toml
 权限门禁、围栏/引用处理、后发命令覆盖先发、以及回执。命令只提供
 `subcommand`（绝不是正则）、`arity`（0 或 1）、可选的旧拼写 `aliases`、
 一个声明式权限级别、一个 `validate` 回调（命令自己的业务规则：返回可读
-原因，参数被接受时返回 `None`）和一个 `apply` 回调。只有调度入口
-`process_commands(...)` 能触达 handler。
+原因，参数被接受时返回 `None`）和一个 `apply` 回调。调度入口
+`process_commands(...)` 把每条已登记的命令都交给同一个执行函数
+`execute_command(...)`——只有它能触达 handler。
 
 注册表的键是稳定的机器 id（`fix_base`、`milestone`）：回执标记
 （`orbi-<name>-command`）与 journal 事件名都用它，因此改名之前发过的回执
@@ -913,6 +914,15 @@ orbi milestone set v0.5.7 --config orbi.toml
 | --- | --- | --- | --- |
 | `milestone` | `/orbi milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
 | `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
+
+每条已登记的命令在主机上还有一个拼写（Issue #1930）：
+`orbi <subcommand> --repo <owner/name> --issue <N>`，例如
+`orbi fix-base --repo acme/app --issue 42`。它走的是与评论**同一条**执行
+路径——同一套仓库权限门禁（这里是主机上已认证的 `gh` 登录）、同一套校验、
+同一个动作，并在 Issue 上留下恰好一条回执。退出码 `0` 表示命令已执行；
+被拒绝或某一步失败时退出非零，并打印该回执的正文。子命令由注册表生成，
+因此登记一条命令就等于给了两种拼写；`/orbi milestone <version>` 需要一个
+参数，所以它保留自己的 `orbi milestone set`。
 
 以 `/orbi` 加一个没有任何命令登记的词开头的评论什么也不做：它就是一条
 无关评论，而不是格式错误的命令。
@@ -931,7 +941,9 @@ orbi milestone set v0.5.7 --config orbi.toml
 3. 确保命令模块在处理票据前被 import（调用点所在模块是
    `orbi/milestone.py`）：`register_command` 在 import 时执行。唯一的
    `process_commands(...)` 调用传入整张 `TICKET_COMMANDS` 注册表，已登记的
-   命令无需改动调用点就会被调度。
+   命令无需改动调用点就会被调度。主机上的拼写同样由这张注册表生成
+   （`orbi.cli_ticket_command.register_cli`），所以 arity 为 0 的命令无需
+   第二次编辑就得到自己的 `orbi <subcommand>` 子命令。
 
 ### 已完成但没有 release 票的 Milestone
 
