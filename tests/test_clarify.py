@@ -1490,6 +1490,109 @@ def test_the_parser_accepts_an_edited_section():
     )
 
 
+def _dependency_text(proposal):
+    """The result text of the slice the LAST slice depends on.
+
+    The dependency itself is what matters, never the number written next
+    to it: a fix is free to renumber the items (Issue #1935). A slice
+    without a dependency is a failed expectation here, not a case to map.
+    """
+    return proposal.items[proposal.items[-1].after - 1].text
+
+
+@pytest.mark.parametrize("language_code", LANGUAGES)
+@pytest.mark.parametrize(
+    "numbers", [(5, 9), (9, 5)], ids=["gaps", "reordered"],
+)
+def test_a_renumbered_proposal_keeps_each_dependency_on_its_item(
+    language_code, numbers,
+):
+    """Acceptance 1 (Issue #1935): the contract allows removing and
+    reordering items with unique numbers, so neither gaps nor a descending
+    order may cost the dependency its target. The check is the target's
+    text after parsing, rendering and parsing again — the rendered numbers
+    are the renderer's (1..N), not the numbers the person typed."""
+    def line(key, **fields):
+        return language.text(language_code, key, **fields)
+
+    first, second = numbers
+    body = _section([
+        line("clarify.suggestion.item", number=first,
+             result="Users can tag a note"),
+        line(
+            "clarify.suggestion.acceptance", text="the tag survives a reload",
+        ),
+        " ".join((
+            line("clarify.suggestion.item", number=second,
+                 result="Users can export tags"),
+            line("clarify.suggestion.after", number=first),
+        )),
+        line("clarify.suggestion.acceptance", text="the export carries tags"),
+    ])
+    expected = clarify.Suggestion(kind=clarify.SUGGESTION_SPLIT, items=(
+        clarify.SuggestionItem(
+            text="Users can tag a note",
+            acceptance="the tag survives a reload",
+        ),
+        clarify.SuggestionItem(
+            text="Users can export tags",
+            acceptance="the export carries tags",
+            after=1,
+        ),
+    ))
+
+    proposal = clarify.parse_suggestion(body)
+    assert proposal == expected
+    assert _dependency_text(proposal) == "Users can tag a note"
+
+    reparsed = clarify.parse_suggestion(
+        clarify.render_suggestion(proposal, language_code),
+    )
+    assert reparsed == expected
+    assert _dependency_text(reparsed) == "Users can tag a note"
+
+
+@pytest.mark.parametrize("name, body, expected_line", [
+    (
+        "a dependency on an item written later across a gap",
+        _section([
+            "5. Users can tag a note (after 9)",
+            "   Acceptance: filtering by the tag finds the note",
+            "9. Users can export a note",
+            "   Acceptance: a .md file downloads",
+        ]),
+        2,
+    ),
+    (
+        "duplicate numbers across a gap",
+        _section([
+            "5. Users can tag a note",
+            "   Acceptance: filtering by the tag finds the note",
+            "5. Users can export a note",
+            "   Acceptance: a .md file downloads",
+        ]),
+        4,
+    ),
+    (
+        "a dependency on a missing item across a gap",
+        _section([
+            "5. Users can tag a note",
+            "   Acceptance: filtering by the tag finds the note",
+            "9. Users can export a note (after 7)",
+            "   Acceptance: a .md file downloads",
+        ]),
+        4,
+    ),
+], ids=["later target", "duplicate numbers", "missing target"])
+def test_a_numbering_gap_never_weakens_the_rejection(
+    name, body, expected_line,
+):
+    """Acceptance 2 (Issue #1935): resolving the written number must not
+    make a gap or a descending order accept a duplicate, a missing target
+    or a later one; the first invalid source line is reported."""
+    assert clarify.parse_suggestion(body) == expected_line, name
+
+
 # The invalid examples the contract doc documents, with the line number the
 # parser reports for each (Issue #1926 acceptance 3).
 INVALID_SECTION_EXAMPLES = (
