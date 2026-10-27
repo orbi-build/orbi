@@ -210,6 +210,14 @@ SUGGESTION_FOR_MISSING = {
     "acceptance_condition": SUGGESTION_CRITERIA,
 }
 
+# The one command sentence each proposal kind adds below its edit sentence
+# (Issue #1927 for a split, Issue #1929 for criteria): the reader never
+# copies the lines by hand, and the command reads the SAME section.
+SUGGESTION_REPLY = {
+    SUGGESTION_SPLIT: "clarify.suggestion.split_reply",
+    SUGGESTION_CRITERIA: "clarify.suggestion.criteria_reply",
+}
+
 
 @dataclass(frozen=True)
 class SuggestionItem:
@@ -343,11 +351,10 @@ def render_suggestion(suggestion: Suggestion, language_code: str) -> str:
             message("clarify.suggestion.acceptance", text=item.acceptance)
         )
     lines.extend((SUGGESTION_END, "", message("clarify.suggestion.edit")))
-    if suggestion.kind == SUGGESTION_SPLIT:
-        # A split proposal is also an offer (Issue #1927): the command that
-        # turns these very lines into child tickets is named here, so the
-        # reader never copies them into new Issues by hand.
-        lines.append(message("clarify.suggestion.split_reply"))
+    # A proposal is also an offer: the command that acts on these very
+    # lines is named here (a split creates the tickets, criteria land in
+    # the ticket body), so the reader never copies them by hand.
+    lines.append(message(SUGGESTION_REPLY[suggestion.kind]))
     return "\n".join(lines)
 
 

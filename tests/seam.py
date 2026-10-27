@@ -18,6 +18,7 @@ import orbi.cli_doctor as cli_doctor
 import orbi.cli_source as cli_source
 import orbi.branch_reclaim as branch_reclaim
 import orbi.check_permission as check_permission
+import orbi.criteria_command as criteria_command
 import orbi.comment_trust as comment_trust
 import orbi.suggest as suggest
 import orbi.split_command as split_command
@@ -59,6 +60,7 @@ _MODULES = (
     repo_config, clarify, comment_trust,
     branch_reclaim, failure_report, suggest, cli, blocked_comment,
     base_ci_red, cli_commands, cli_doctor, check_permission, split_command,
+    criteria_command,
 )
 
 

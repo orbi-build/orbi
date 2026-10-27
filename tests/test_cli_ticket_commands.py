@@ -264,7 +264,7 @@ def test_only_arity_zero_commands_are_generated():
     """`/orbi milestone <version>` keeps its own `orbi milestone set`:
     the generated entry has no argument slot, so it is arity 0 only."""
     assert [spec.name for spec in ticket_command.cli_specs()] == [
-        "fix_base", "split",
+        "fix_base", "add_criteria", "split",
     ]
     assert ticket_command.TICKET_COMMANDS["milestone"].arity == 1
 
