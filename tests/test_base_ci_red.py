@@ -904,6 +904,7 @@ def test_an_argument_fix_base_cannot_take_is_rejected_with_the_usage(
     bodies = [comment["body"] for comment in gh.issues[1825]["comments"]]
     assert any(
         "command not applied" in body and "`/orbi fix-base`" in body
+        and "takes no argument" in body
         for body in bodies
     ), bodies
 

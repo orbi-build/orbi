@@ -311,6 +311,14 @@ def _permission_reason(
 
 
 def _malformed_reason(spec: CommandSpec, language_code: str) -> str:
+    # An arity-0 command has no argument slot, so the "exactly one
+    # {label}" wording would contradict the usage line it prints beside
+    # (Issue #1922: `/orbi fix-base now`).
+    if spec.arity == 0:
+        return language.text(
+            language_code, "command.reason_malformed_no_argument",
+            usage=spec.usage,
+        )
     return language.text(
         language_code, "command.reason_malformed",
         label=_argument_label(spec, language_code), usage=spec.usage,

@@ -2031,12 +2031,18 @@ def test_advance_confirmation_body_follows_the_message_language(
     # The machine fingerprint the close sweep searches for is unchanged.
     assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.41" in zh
     assert "awaiting manual confirmation" not in zh
+    # Issue #1922: the rendered reply instruction is the canonical form in
+    # BOTH languages, never the pre-prefix spelling.
+    assert "`/orbi milestone <version>`" in zh
+    assert "`/milestone" not in zh
     en = _confirmation_body(
         monkeypatch, tmp_path, milestones, language_code="en",
     )
     assert "## Milestone auto-advance awaiting manual confirmation" in en
     assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.41" in en
     assert "- `v0.5.41`: 2 open issues" in en
+    assert "`/orbi milestone <version>`" in en
+    assert "`/milestone" not in en
 
 
 def test_release_confirmation_body_follows_the_message_language(
@@ -2050,12 +2056,18 @@ def test_release_confirmation_body_follows_the_message_language(
     assert "## Milestone 已完成，等待人工确认发布" in zh
     assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.40" in zh
     assert "awaiting manual release confirmation" not in zh
+    # Issue #1922: the reply instruction is the canonical form in both
+    # languages, never the pre-prefix spelling.
+    assert "`/orbi milestone v0.5.40`" in zh
+    assert "`/milestone" not in zh
     en = _confirmation_body(
         monkeypatch, tmp_path, milestones, language_code="en",
         release_confirmation=True,
     )
     assert "## Milestone complete, awaiting manual release confirmation" in en
     assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.40" in en
+    assert "`/orbi milestone v0.5.40`" in en
+    assert "`/milestone" not in en
 
 
 def test_stale_notice_close_receipt_follows_the_message_language():

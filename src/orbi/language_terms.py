@@ -223,4 +223,14 @@ CHECK_PERMISSION_MESSAGES: dict[str, tuple[str, str]] = {
 # `language.py`; this module only keeps the entries).
 EXTRA_MESSAGES: dict[str, tuple[str, str]] = {
     **DISPLAY_TERMS, **BASE_CI_RED_MESSAGES, **CHECK_PERMISSION_MESSAGES,
+    # The rejection a NO-ARGUMENT in-ticket command owes its author
+    # (Issue #1922): the shared "write exactly one {label}" wording would
+    # contradict the usage line printed beside it for an arity-0 command
+    # (`/orbi fix-base now`). It lives here so the catalog owner stays
+    # under the size ratchet's cap, like the three maps above.
+    "command.reason_malformed_no_argument": (
+        "the command line is malformed: `{usage}` takes no argument — "
+        "write it on a line of its own",
+        "命令行格式不正确：`{usage}` 不接受参数，请单独一行只写它",
+    ),
 }

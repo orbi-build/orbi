@@ -162,6 +162,26 @@ def test_an_arity_zero_command_takes_no_argument():
     assert ticket_command.parse_commands("/orbi zero please", spec) == [None]
 
 
+def test_an_arity_zero_malformed_receipt_does_not_ask_for_an_argument():
+    """The rejection a no-argument command owes its author must match the
+    usage it prints beside it (Issue #1922): the shared "write exactly one
+    {label}" wording would tell the author to add an argument the command
+    cannot take."""
+    spec = ticket_command.CommandSpec(
+        name="zero", subcommand="zero", arity=0, permission="write",
+        validate=lambda *a, **k: None, apply=lambda *a, **k: None,
+        usage="/orbi zero", description="x",
+    )
+    target, rejections = ticket_command.select_command(
+        [_comment("/orbi zero please")], spec, repo="owner/repo",
+    )
+    assert target is None
+    reason = rejections[0][2]
+    assert "`/orbi zero`" in reason
+    assert "takes no argument" in reason
+    assert "exactly one" not in reason
+
+
 def test_a_command_spec_carries_no_raw_regex():
     import dataclasses
     fields = {field.name for field in dataclasses.fields(ticket_command.CommandSpec)}
