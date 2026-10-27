@@ -30,8 +30,10 @@ Because the scan label goes last, a run interrupted at any earlier step is
 still scanned on the next tick and the same command continues from what is
 already on GitHub; a ticket that already carries this command's success
 receipt only gets step 7. The success receipt uses the command layer's own
-marker keyed on the command comment, so "has this command already
-succeeded?" is a marker lookup over the raw bodies, never prose.
+marker keyed on the command comment AND must be a comment this runner wrote
+(`_runner_receipt`): the marker is public text, so "has this command already
+succeeded?" is a marker lookup over the raw bodies, never prose, and never a
+copy someone else pasted (Issue #1938).
 
 A re-run adopts an existing child only when THIS runner authored it, its
 hidden marker names this parent and item, and its title, acceptance lines
@@ -252,6 +254,27 @@ def _author_login(state: dict) -> str | None:
     author = state.get("author")
     login = author.get("login") if isinstance(author, dict) else None
     return _login_key(login) if isinstance(login, str) and login else None
+
+
+def _runner_receipt(comments: list[dict], receipt: str) -> bool:
+    """True when a comment THIS runner wrote carries the success receipt.
+
+    The marker is public text on a public ticket, so anyone who can comment
+    can copy it. Only the authenticated account's own comment authenticates
+    a completion record — a different or unreadable author is never one, so
+    a copied marker cannot make an authorized split look done, skip its
+    children or release its scan label (Issue #1938).
+    """
+    candidates = [
+        comment for comment in comments
+        if isinstance(comment, dict)
+        and isinstance(comment.get("body"), str)
+        and receipt in comment["body"]
+    ]
+    if not candidates:
+        return False
+    runner = _step("identify this runner", _runner_login)
+    return any(_author_login(comment) == runner for comment in candidates)
 
 
 def _parent_number(state: dict) -> int | None:
@@ -556,7 +579,7 @@ def _split_apply(
         f"<!-- {command_receipt_marker(SPLIT_COMMAND)} "
         f"comment={command_comment_key(command_comment)} -->"
     )
-    if not any(receipt in str(other.get("body")) for other in comments):
+    if not _runner_receipt(comments, receipt):
         items = suggestion.items
         found = _find_children(
             repo, issue_number, items, language_code=language_code,

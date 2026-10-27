@@ -655,6 +655,98 @@ def test_two_matching_children_stop_before_adopting_either(
 
 
 # --------------------------------------------------------------------------
+# a copied completion receipt is never a completion (Issue #1938)
+# --------------------------------------------------------------------------
+
+def receipt_marker(key: str) -> str:
+    """The hidden marker this command's OWN success receipt carries."""
+    return (
+        f"<!-- "
+        f"{ticket_command.command_receipt_marker(split_command.SPLIT_COMMAND)}"
+        f" comment={key} -->"
+    )
+
+
+def command_key(gh: FakeGh) -> str:
+    """The key of the ticket's `/orbi split` comment."""
+    return ticket_command.command_comment_key(
+        gh.issues[PARENT]["comments"][-1]
+    )
+
+
+def receipt_comments(gh: FakeGh, key: str) -> list[dict]:
+    return [
+        comment for comment in gh.issues[PARENT]["comments"]
+        if receipt_marker(key) in comment["body"]
+    ]
+
+
+def test_a_copied_success_receipt_is_not_a_completion(monkeypatch, tmp_path):
+    """The marker is public text: a read-only commenter can copy it.
+
+    Reading the marker without its author made the authorized split look
+    done — no children, the parent lost `ai-needs-detail`, and the only
+    "receipt" was the stranger's copy (Issue #1938).
+    """
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    reply(gh)
+    key = command_key(gh)
+    gh.comment(
+        PARENT, receipt_marker(key), login="stranger", association="NONE",
+    )
+    gh.add_collaborator("stranger", "read")
+
+    assert tick(monkeypatch, tmp_path, gh) is not None
+
+    # The authorized split runs: two linked, queued children and an Epic.
+    assert titles(gh) == ["Users can tag a note", "Users can export a note"]
+    assert all(kid["parent"] == PARENT for kid in children(gh))
+    assert EPIC_LABEL in gh.issues[PARENT]["labels"]
+    assert NEEDS_DETAIL_LABEL not in gh.issues[PARENT]["labels"]
+    # The genuine receipt is the runner's own, beside the copied one.
+    receipts = receipt_comments(gh, key)
+    assert [c["author"]["login"] for c in receipts] == [
+        "stranger", gh.login,
+    ]
+    assert "Users can tag a note" in receipts[1]["body"]
+
+    # A second tick has nothing left to do: the label is gone and the
+    # runner's receipt is now the completion record.
+    tick(monkeypatch, tmp_path, gh)
+    assert len(children(gh)) == 2
+    assert len(receipt_comments(gh, key)) == 2
+
+
+@pytest.mark.parametrize("author", [
+    {"login": "stranger"},   # a different account
+    {},                      # an unreadable author payload
+    None,
+])
+def test_an_untrusted_receipt_author_does_not_authenticate(
+    monkeypatch, author,
+):
+    """Only the authenticated account's own comment is a completion."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    key = "1"
+    comment = {"body": receipt_marker(key)}
+    if author is not None:
+        comment["author"] = author
+
+    split_command.SPLIT_COMMAND.apply(
+        "", repo=REPO, issue_number=PARENT, command_comment={"id": key},
+        comments=[comment],
+        issue={"number": PARENT, "labels": [{"name": NEEDS_DETAIL_LABEL}]},
+        suggestion=TWO_ITEMS, language_code="en",
+    )
+
+    # The split executed instead of trusting the copied record.
+    assert titles(gh) == ["Users can tag a note", "Users can export a note"]
+    assert NEEDS_DETAIL_LABEL not in gh.issues[PARENT]["labels"]
+
+
+# --------------------------------------------------------------------------
 # acceptance 5: an interrupted run finishes exactly once
 # --------------------------------------------------------------------------
 
@@ -913,18 +1005,30 @@ def test_the_context_reads_the_ticket_and_its_proposal(monkeypatch):
     assert supplied == {"issue": {"number": PARENT}, "suggestion": TWO_ITEMS}
 
 
-def test_the_final_step_is_a_no_op_when_the_scan_label_is_gone(monkeypatch):
-    """A resumed caller whose ticket already lost the label only checks."""
+@pytest.mark.parametrize("author_shape", [
+    "{login}",       # the login the fake's own comments carry
+    "app/{login}",   # `gh issue view --json author` on an App-created Issue
+    "{login}[bot]",  # the REST shape of the same App credential
+])
+def test_the_final_step_is_a_no_op_when_the_scan_label_is_gone(
+    monkeypatch, author_shape,
+):
+    """A resumed caller whose ticket already lost the label only checks.
+
+    The completion record is this runner's own comment — in any of the
+    payload shapes GitHub names the one account (Issue #1938).
+    """
     gh = _gh(monkeypatch)
     stopped_ticket(gh)
-    receipt = (
-        f"<!-- {ticket_command.command_receipt_marker(split_command.SPLIT_COMMAND)}"
-        " comment=1 -->"
-    )
+    receipt = receipt_marker("1")
     before = [list(issue["labels"]) for issue in gh.issues.values()]
     split_command.SPLIT_COMMAND.apply(
         "", repo=REPO, issue_number=PARENT, command_comment={"id": 1},
-        comments=[{"body": receipt}], issue={"number": PARENT, "labels": []},
+        comments=[{
+            "body": receipt,
+            "author": {"login": author_shape.format(login=gh.login)},
+        }],
+        issue={"number": PARENT, "labels": []},
         suggestion=TWO_ITEMS, language_code="en",
     )
     assert [list(issue["labels"]) for issue in gh.issues.values()] == before
