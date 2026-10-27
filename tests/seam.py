@@ -65,7 +65,14 @@ _MODULES = (
 
 
 class Seam:
-    """Set/read a seam name across every module that binds it."""
+    """Set/read/undo a seam name across every module that binds it."""
+
+    def __init__(self) -> None:
+        # Per overlaid name, the (module, binding) pairs its FIRST write
+        # replaced, so the overlay can be undone (Issue #1948). Written
+        # without `__setattr__`: the proxy keeps no instance attribute of
+        # its own, which is exactly why pytest's undo path deletes.
+        object.__setattr__(self, "_previous", {})
 
     def __getattr__(self, name: str):
         for module in _MODULES:
@@ -83,9 +90,33 @@ class Seam:
         # `getattr(self, name, None)` keeps an unknown name a no-op (the
         # membership check below then matches no module).
         original = getattr(self, name, None)
-        for module in _MODULES:
-            if name in vars(module) and vars(module)[name] is original:
-                setattr(module, name, value)
+        overlaid = [
+            (module, original) for module in _MODULES
+            if name in vars(module) and vars(module)[name] is original
+        ]
+        if not overlaid:
+            return
+        previous = self._previous.setdefault(name, overlaid)
+        if all(value is binding for _, binding in previous):
+            # Writing back what the overlay replaced is an undo — a test
+            # restoring `seam.x = original` by hand — so nothing is left
+            # for a later teardown to restore.
+            del self._previous[name]
+        for module, _ in overlaid:
+            setattr(module, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        """Undo the overlay of `name` (pytest 9.2.0's undo path).
+
+        pytest 9.2.0 reads a patch's old value from the target's instance
+        `__dict__`; the proxy's dict is empty, so its `MonkeyPatch.undo`
+        DELETES the attribute instead of restoring it (Issue #1948). The
+        overlay lives in the modules, so the delete fans the recorded
+        original bindings back. A name with no overlay left — already
+        restored, or the seam changed nothing — is a no-op.
+        """
+        for module, previous in self._previous.pop(name, ()):
+            setattr(module, name, previous)
 
 
 seam = Seam()
