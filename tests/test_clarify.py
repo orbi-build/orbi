@@ -1200,13 +1200,12 @@ def test_the_rendered_proposal_matches_its_fixture(kind, language_code):
     fixture = FIXTURES / f"{kind}.{language_code}.md"
     assert block + "\n" == fixture.read_text(encoding="utf-8")
     assert block.startswith(f"<!-- orbi:suggestion:v1 kind={kind} -->\n")
+    # Every proposal names the command that acts on it: a split creates the
+    # tickets (Issue #1927), criteria land in the ticket body (#1929).
     tail = language.text(language_code, "clarify.suggestion.edit")
-    if kind == clarify.SUGGESTION_SPLIT:
-        # A split proposal also names the command that creates the tickets
-        # (Issue #1927); a criteria draft has no command yet.
-        tail += "\n" + language.text(
-            language_code, "clarify.suggestion.split_reply",
-        )
+    tail += "\n" + language.text(
+        language_code, clarify.SUGGESTION_REPLY[kind],
+    )
     assert block.rstrip().endswith(tail)
 
 

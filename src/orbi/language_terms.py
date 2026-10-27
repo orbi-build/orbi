@@ -242,6 +242,13 @@ CLARIFY_SUGGESTION_MESSAGES: dict[str, tuple[str, str]] = {
         "Reply `/orbi split` to create these tickets.",
         "回复 `/orbi split` 即可创建这些工单。",
     ),
+    # A criteria proposal is also an offer (Issue #1929): the section
+    # names the command that appends these conditions to the ticket and
+    # starts it, so the reader never copies them into the body by hand.
+    "clarify.suggestion.criteria_reply": (
+        "Reply `/orbi add-criteria` to add these and start.",
+        "回复 `/orbi add-criteria` 即可把这些加入工单并开始交付。",
+    ),
 }
 
 # The `/orbi split` command (Issue #1927): its rejections, its receipt and
@@ -298,11 +305,46 @@ SPLIT_MESSAGES: dict[str, tuple[str, str]] = {
     ),
 }
 
+# The `/orbi add-criteria` command (Issue #1929): its rejections and the ONE
+# receipt it leaves. Every entry is display text; the machine contract (the
+# markers, the heading, the labels) stays in English and outside the catalog.
+ADD_CRITERIA_MESSAGES: dict[str, tuple[str, str]] = {
+    "criteria.reason_no_suggestion": (
+        "the newest stop comment carries no acceptance-criteria proposal; "
+        "edit that comment into a `kind=criteria` section, then reply again",
+        "最新一条停止评论里没有验收条件提案；把那条评论改成 `kind=criteria` "
+        "段落，然后再回复一次",
+    ),
+    "criteria.reason_invalid_line": (
+        "the acceptance-criteria proposal on the newest stop comment is "
+        "invalid at line {line}; fix that line and reply again",
+        "最新一条停止评论里的验收条件提案在第 {line} 行无效；修好那一行后再回复一次",
+    ),
+    "criteria.reason_not_criteria": (
+        "the newest stop comment proposes `{kind}`, not acceptance "
+        "criteria; `/orbi add-criteria` only adds a `kind=criteria` "
+        "proposal",
+        "最新一条停止评论的提案是 `{kind}`，不是验收条件；"
+        "`/orbi add-criteria` 只添加 `kind=criteria` 提案",
+    ),
+    "criteria.receipt_title": (
+        "**Added the proposed acceptance criteria to this ticket.**",
+        "**已把提案中的验收条件加入这张工单。**",
+    ),
+    "criteria.receipt_item": ("- {text}", "- {text}"),
+    "criteria.receipt_done": (
+        "They are under `## Acceptance`; the ticket is queued with "
+        "`{label}`.",
+        "它们位于 `## Acceptance` 之下；工单已用 `{label}` 进入队列。",
+    ),
+}
+
 # The one map `language.MESSAGES` merges (the reading point stays
 # `language.py`; this module only keeps the entries).
 EXTRA_MESSAGES: dict[str, tuple[str, str]] = {
     **DISPLAY_TERMS, **BASE_CI_RED_MESSAGES, **CHECK_PERMISSION_MESSAGES,
     **CLARIFY_SUGGESTION_MESSAGES, **SPLIT_MESSAGES,
+    **ADD_CRITERIA_MESSAGES,
     # The rejection a NO-ARGUMENT in-ticket command owes its author
     # (Issue #1922): the shared "write exactly one {label}" wording would
     # contradict the usage line printed beside it for an arity-0 command

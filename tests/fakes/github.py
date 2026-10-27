@@ -304,7 +304,7 @@ class FakeGh:
     _ISSUE_FLAGS = {
         "view": ("--repo", "--json"),
         "edit": ("--repo", "--add-label", "--remove-label", "--milestone",
-                 "--add-sub-issue", "--add-blocked-by"),
+                 "--add-sub-issue", "--add-blocked-by", "--body"),
         "comment": ("--repo", "--body"),
         "close": ("--repo",),
         "create": ("--repo", "--title", "--body", "--milestone", "--label"),
@@ -509,6 +509,10 @@ class FakeGh:
             issue["milestone"] = self._milestone_number(
                 flags["--milestone"][0]
             )
+        # The documented `gh issue edit --body`: the issue keeps its
+        # labels and relations and takes the new text.
+        if "--body" in flags:
+            issue["body"] = flags["--body"][0]
         for child_number in flags.get("--add-sub-issue") or []:
             self._issue_or_fail(int(child_number))["parent"] = issue["number"]
         for blocker_number in flags.get("--add-blocked-by") or []:
