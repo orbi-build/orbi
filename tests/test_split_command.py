@@ -21,7 +21,9 @@ from orbi.delivery_labels import (
     NEEDS_DETAIL_LABEL,
     P0_LABEL,
     READY_LABEL,
+    RELEASE_LABEL,
 )
+from orbi.github import list_issues
 from orbi.resume_scan import ResumeHooks
 from seam import seam
 
@@ -812,6 +814,66 @@ def test_only_ai_needs_detail_tickets_are_scanned(monkeypatch, tmp_path):
 
     assert children(gh) == []
     assert rejection_or_none(gh) is None
+
+
+# --------------------------------------------------------------------------
+# one stopped ticket's command never starves another's (Issue #1939)
+# --------------------------------------------------------------------------
+
+OTHER = 200
+
+
+def stopped_tickets(gh: FakeGh) -> list[int]:
+    """The stopped-ticket list the scan reads, in the order it scans it."""
+    return [
+        int(issue["number"]) for issue in list_issues(
+            REPO, state="open", label=NEEDS_DETAIL_LABEL,
+            json_fields="number", limit=200,
+        )
+    ]
+
+
+def test_a_milestone_command_on_another_stopped_ticket_never_starves_a_split(
+    monkeypatch, tmp_path,
+):
+    """Issue #1939: the scan dispatches EVERY registered command on every
+    stopped ticket, so a command whose own flow supplies its context must
+    reject the ticket it cannot run on — never raise inside the scan and
+    leave an older valid `/orbi split` unprocessed."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)                       # older: the real split request
+    reply(gh)
+    # Newer, and therefore scanned FIRST: an ordinary stopped ticket whose
+    # maintainer typed the milestone command outside the confirmation flow.
+    gh.add_issue(
+        OTHER, title="Another thin ticket", labels=(NEEDS_DETAIL_LABEL,),
+    )
+    gh.comment(OTHER, "/orbi milestone v1", login="maintainer")
+
+    assert stopped_tickets(gh) == [OTHER, PARENT]
+
+    tick(monkeypatch, tmp_path, gh)
+
+    # The older ticket's split ran in the SAME tick: two linked children
+    # and one receipt (the scan never stopped at #200).
+    assert titles(gh) == ["Users can tag a note", "Users can export a note"]
+    assert len(success_receipts(gh)) == 1
+    # The newer ticket got exactly one readable rejection and no action.
+    rejected = [
+        body for body in comment_bodies(gh, OTHER)
+        if "orbi-milestone-command-rejected" in body
+    ]
+    assert len(rejected) == 1, comment_bodies(gh, OTHER)
+    assert "`/orbi milestone` command not applied" in rejected[0]
+    assert "needs context this ticket does not carry" in rejected[0]
+    assert "candidate_titles" in rejected[0]
+    # No invented candidate set: no Milestone, no release ticket, and the
+    # stopped ticket is still stopped for the next tick.
+    assert gh.milestones == {}
+    assert not any(
+        RELEASE_LABEL in issue["labels"] for issue in gh.issues.values()
+    )
+    assert NEEDS_DETAIL_LABEL in gh.issues[OTHER]["labels"]
 
 
 def rejection_or_none(gh: FakeGh) -> str | None:

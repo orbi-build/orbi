@@ -1081,6 +1081,16 @@ open Issues carrying that label (`ticket_command.process_labeled_commands`,
 one call site beside the milestone and base-CI scans). That is what makes
 `/orbi split` reachable: the proposal it acts on lives in a stop comment.
 
+A command can also declare the caller-supplied context it cannot run
+without (`required_context`, Issue #1939). The stopped-ticket scan runs
+every registered command on every ticket it reads, so `/orbi milestone
+<version>` — whose candidate set and landing configuration come from the
+confirmation flow that opened its ticket — also reaches ordinary stopped
+tickets. There it is REJECTED with one receipt naming the missing context,
+nothing is written, and the other tickets' commands still run in the same
+tick; a command with no declared context (`/orbi split`, `/orbi fix-base`)
+is unaffected.
+
 `/orbi split` (Issue #1927) turns the newest trusted stop comment's
 `kind=split` section — as the comment reads when the command runs — into
 child tickets: `gh issue create` per item, each child attached as a native

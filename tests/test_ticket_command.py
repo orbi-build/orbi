@@ -510,6 +510,78 @@ def test_a_receipt_names_a_comment_by_its_url_when_it_has_one(monkeypatch):
     )
 
 
+# --- the context a command cannot run without (Issue #1939) --------------
+#
+# A command whose `validate`/`apply` read caller-supplied context (the
+# milestone command's candidate set comes from its confirmation flow) must
+# never be handed a missing keyword: the dispatcher rejects the occurrence
+# with a readable receipt, so one ticket's command cannot abort the scan
+# that is also serving another ticket's command.
+
+def _needs_context_spec(applied: list) -> ticket_command.CommandSpec:
+    return ticket_command.CommandSpec(
+        name="needsctx",
+        subcommand="needsctx",
+        arity=1,
+        permission="write",
+        validate=lambda target, *, candidate_titles, **_context: (
+            None if target in candidate_titles else "not a candidate"
+        ),
+        apply=lambda target, *, candidate_titles, **_context: applied.append(
+            target,
+        ),
+        usage="/orbi needsctx <target>",
+        description="a probe whose caller must supply its context",
+        required_context=("candidate_titles",),
+    )
+
+
+def test_a_command_without_the_context_it_needs_is_rejected_not_crashed(
+    monkeypatch,
+):
+    applied: list = []
+    spec = _needs_context_spec(applied)
+    posts: list = []
+    events: list = []
+    _patch_dispatch(
+        monkeypatch, [_comment("/orbi needsctx alpha", cid=71)], posts, events,
+    )
+
+    ticket_command.process_commands("owner/repo", 436, commands=[spec])
+
+    body = posts[0][posts[0].index("--body") + 1]
+    assert "comment=71" in body
+    assert "`/orbi needsctx` command not applied" in body
+    assert "needs context this ticket does not carry" in body
+    assert "candidate_titles" in body
+    assert applied == []
+    assert events == []
+
+
+def test_the_context_a_command_declares_it_needs_still_runs_with_it(
+    monkeypatch,
+):
+    applied: list = []
+    spec = _needs_context_spec(applied)
+    posts: list = []
+    events: list = []
+    _patch_dispatch(
+        monkeypatch, [_comment("/orbi needsctx alpha", cid=72)], posts, events,
+    )
+    with _registered(spec):
+        ticket_command.process_commands(
+            "owner/repo", 436, commands=[spec],
+            candidate_titles=["alpha"],
+        )
+
+    assert applied == ["alpha"]
+    assert posts == []
+    assert events == [(
+        "needsctx_command_applied",
+        {"repo": "owner/repo", "needsctx": "alpha", "issue": "#436"},
+    )]
+
+
 # --- the terminal spelling is the same execution path (Issue #1930) -----
 
 

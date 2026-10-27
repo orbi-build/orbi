@@ -32,6 +32,10 @@ The shared layer owns the matching and the permission check:
 - a command that needs context its caller cannot know declares
   ``context``, read from the ticket itself (a receipt marker, a record) —
   the CLI never passes a placeholder;
+- a command whose context only ITS OWN flow can supply declares
+  ``required_context``: a caller that cannot supply it gets one readable
+  rejection receipt, never a TypeError that aborts the ticket scan the
+  other tickets' commands share (Issue #1939);
 - ``execute_command`` is the single EXECUTION path for one command on
   one ticket — the only path to a handler — and ``process_commands`` is
   its comment-scan entry (``execute_command`` once per spec). The CLI
@@ -136,6 +140,15 @@ class CommandSpec:
     # has no ticket scan to inherit it from, so the command reads it from
     # the ticket itself instead of a placeholder the CLI would invent.
     context: Callable[..., dict[str, object]] | None = None
+    # The caller-supplied context this command cannot run without — the
+    # keys its ``validate`` / ``apply`` read and its own ``context``
+    # callback does not supply (Issue #1939). The ticket scan runs every
+    # registered command on every ticket it scans, so a command whose
+    # context belongs to one flow reaches tickets that flow never opened:
+    # the dispatcher rejects those occurrences with a readable receipt
+    # instead of raising inside the scan, where the exception would abort
+    # the other tickets' commands too.
+    required_context: tuple[str, ...] = ()
 
     @property
     def canonical(self) -> str:
@@ -341,6 +354,13 @@ def _malformed_reason(spec: CommandSpec, language_code: str) -> str:
     )
 
 
+def _missing_context(spec: CommandSpec, context: dict[str, object]) -> str:
+    """The declared context this caller does not supply, comma-separated."""
+    return ", ".join(
+        name for name in spec.required_context if name not in context
+    )
+
+
 def _occurrences(
     comments: list[dict], spec: CommandSpec,
 ) -> list[tuple[dict, str | None]]:
@@ -373,11 +393,18 @@ def _selection(
     callback: the last word wins, so an operator can correct a typo by
     commenting again. Every rejected occurrence is returned with a
     readable reason so the caller can leave one receipt each.
+
+    An occurrence is also rejected when the command declares
+    ``required_context`` this caller does not supply (Issue #1939): the
+    command belongs to one flow and this ticket is not it, so the receipt
+    names the missing context instead of ``validate`` raising a TypeError
+    that would abort the whole scan.
     """
     language_code = _language_code(context)
     rejections: list[tuple[dict, str | None, str]] = []
     target: tuple[dict, str] | None = None
     permissions: dict[str, str] = {}
+    missing = _missing_context(spec, context)
     for comment, argument in occurrences:
         permission = _author_permission(comment, repo=repo, cache=permissions)
         if permission not in PERMISSION_LEVELS[spec.permission]:
@@ -392,6 +419,16 @@ def _selection(
             rejections.append((
                 comment, argument, _malformed_reason(spec, language_code),
             ))
+            continue
+        # A command whose own flow supplies the context is not runnable on a
+        # ticket that flow never opened: rejecting it here keeps one ticket's
+        # command from aborting the scan of another's (Issue #1939).
+        if missing:
+            target = None
+            rejections.append((comment, argument, language.text(
+                language_code, "command.reason_context_unavailable",
+                command=spec.canonical, context=missing,
+            )))
             continue
         reason = spec.validate(argument, **context)
         if reason is not None:
