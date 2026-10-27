@@ -391,7 +391,17 @@ heading, followed by the hidden `<!-- orbi:acceptance:v1 -->` marker:
 ```
 
 The marker makes the append idempotent: a re-run after a failed step finds
-it and appends nothing, so the body gains the section exactly once. Only a
+it and appends nothing, so the body gains the section exactly once. The
+marker alone is not proof that the CURRENT proposal is on the ticket: before
+it resumes from that section, the command compares the text the body
+carries with the section the proposal renders now (Issue #1945). A
+difference is a conflict, not a resume — the body is left exactly as it is
+(the appended section is never overwritten and work already queued is never
+cancelled), `ai-needs-detail` stays, and the failed receipt at the
+`append the criteria` step shows the section the body carries beside the
+one the stop comment now proposes, with its repair: make the proposal match
+the body, or remove that section (its marker included) so the new
+conditions can be appended. Only a
 `kind=criteria` section is valid input: a `kind=split` proposal, a missing
 section or an invalid line is rejected with a receipt naming the reason
 (and, for an invalid line, its number) and nothing is written. The ticket

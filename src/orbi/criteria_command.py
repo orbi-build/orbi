@@ -19,7 +19,7 @@ It is not a second state machine. The steps ride GitHub's own primitives —
 queue — and what this module owns is the ORDER and the idempotency of the
 four steps:
 
-1. append the section, with its hidden marker, unless the marker is there;
+1. append the section, with its hidden marker, unless it is there;
 2. add the dispatch label to a ticket that does not carry it;
 3. post ONE receipt listing the conditions;
 4. remove `ai-needs-detail` LAST.
@@ -30,6 +30,15 @@ already on the ticket; a ticket that already carries this command's success
 receipt only gets step 4. The success receipt uses the command layer's own
 marker keyed on the command comment, so "has this command already
 succeeded?" is a marker lookup over the raw bodies, never prose.
+
+Resuming from the append marker compares what it records with the proposal
+as the stop comment reads NOW (Issue #1945): the marker alone is never
+proof that the current conditions are on the ticket. A section that differs
+— the person edited the proposal between two ticks — stops the command at
+the append step with a receipt showing both sides, so the ticket is never
+queued and never answered with a receipt for conditions its body does not
+carry. Nothing is overwritten: the section and any work already queued stay
+exactly as they are, and the human decides which side to change.
 
 The two steps that change what the next tick reads — the append and the
 dispatch label — are wrapped in the shared `ticket_command.run_step`, so
@@ -57,8 +66,9 @@ from orbi.ticket_command import (
 )
 
 # The heading the conditions land under and the hidden marker that makes the
-# append idempotent: the second run of the command finds the marker in the
-# body and adds nothing (docs/public-contracts.mdx).
+# append idempotent: the second run of the command reads the section back
+# from the body, adds nothing when it still IS the proposal and stops with a
+# conflict when it is not (docs/public-contracts.mdx).
 ACCEPTANCE_HEADING = "## Acceptance"
 ACCEPTANCE_MARKER = "orbi:acceptance:v1"
 # What this command reads from the ticket: the body it appends to, the labels
@@ -95,6 +105,30 @@ def appended_body(body: object, section: str) -> str:
         return section
     kept = existing.rstrip("\n")
     return f"{kept}\n\n{section}"
+
+
+def appended_section(body: object) -> str:
+    """The section the body carries, as written, or "" when it carries none.
+
+    The section is the block that ENDS with the hidden marker, read back
+    from the body itself: a person's own `## Acceptance` section elsewhere
+    in the text is never mistaken for Orbi's, and the marker line alone
+    records nothing unless its block reaches it. The marker line is part of
+    the result, so it compares equal to `render_acceptance` of the same
+    conditions and the receipt can show the exact text to remove.
+    """
+    if not isinstance(body, str) or appended_marker() not in body:
+        return ""
+    lines = body.rpartition(appended_marker())[0].splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    block: list[str] = []
+    while lines and lines[-1].strip():
+        block.append(lines.pop())
+    block.reverse()
+    # The marker is separated from the section by one blank line, exactly
+    # as `render_acceptance` writes it, so the two compare as text.
+    return "\n".join([*block, "", appended_marker()])
 
 
 def write_body(number: int, *, repo: str, body: str) -> None:
@@ -184,8 +218,8 @@ def _criteria_apply(
     )
     if not any(receipt in str(other.get("body")) for other in comments):
         current = issue.get("body") or ""
+        section = render_acceptance(suggestion.items)
         if appended_marker() not in current:
-            section = render_acceptance(suggestion.items)
             run_step(
                 "append the criteria",
                 lambda: write_body(
@@ -193,6 +227,20 @@ def _criteria_apply(
                     body=appended_body(current, section),
                 ),
             )
+        else:
+            # Resuming: what the marker records is compared with the proposal
+            # as it reads now (Issue #1945). A mismatch is a conflict, never
+            # an append (the earlier section is work of its own) and never a
+            # receipt for conditions the body does not carry.
+            existing = appended_section(current)
+            if existing != section:
+                raise TicketCommandError(
+                    "append the criteria",
+                    language.text(
+                        language_code, "criteria.reason_conflict",
+                        existing=existing, proposed=section,
+                    ),
+                )
         if dispatch_label not in label_names(issue):
             run_step(
                 "add the dispatch label",

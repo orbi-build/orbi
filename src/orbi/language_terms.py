@@ -357,6 +357,28 @@ ADD_CRITERIA_MESSAGES: dict[str, tuple[str, str]] = {
         "最新一条停止评论的提案是 `{kind}`，不是验收条件；"
         "`/orbi add-criteria` 只添加 `kind=criteria` 提案",
     ),
+    # A retry whose appended section is not the current proposal
+    # (Issue #1945): both sides are shown verbatim, so the reader compares
+    # the conditions instead of trusting a summary, and the repair names the
+    # ONE change that unblocks each side — the earlier section is never
+    # overwritten for them.
+    "criteria.reason_conflict": (
+        "this ticket's body already carries these acceptance conditions:"
+        "\n\n{existing}\n\n"
+        "but the newest stop comment now proposes:"
+        "\n\n{proposed}\n\n"
+        "nothing was appended and the ticket was left as it is; make the "
+        "stop comment propose exactly what the ticket already carries, or "
+        "remove that section (its hidden `orbi:acceptance:v1` marker "
+        "included) so the new conditions can be appended, then reply again",
+        "这张工单的正文里已经有这些验收条件："
+        "\n\n{existing}\n\n"
+        "但最新一条停止评论现在提案的是："
+        "\n\n{proposed}\n\n"
+        "没有追加任何内容，工单保持原样；把停止评论改成与工单上已有的完全一致，"
+        "或删掉那段正文（包括其中的隐藏标记 `orbi:acceptance:v1`）让新条件"
+        "可以被追加，然后再回复一次",
+    ),
     "criteria.receipt_title": (
         "**Added the proposed acceptance criteria to this ticket.**",
         "**已把提案中的验收条件加入这张工单。**",

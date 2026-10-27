@@ -16,6 +16,7 @@ import pytest
 
 import orbi.criteria_command as criteria_command
 from orbi import claim, clarify, journal, language, ticket_command
+from orbi.config import RunnerConfig
 from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
 from orbi.resume_scan import ResumeHooks
 from seam import seam
@@ -109,9 +110,11 @@ def _hooks() -> ResumeHooks:
     )
 
 
-def tick(monkeypatch, tmp_path, gh: FakeGh):
+def tick(monkeypatch, tmp_path, gh: FakeGh, *, config=None):
     """One real Runner tick over the fake GitHub."""
-    return claim.pick_next_delivery([REPO], tmp_path, 1, hooks=_hooks())
+    return claim.pick_next_delivery(
+        [REPO], tmp_path, 1, config=config, hooks=_hooks(),
+    )
 
 
 def comment_bodies(gh: FakeGh, number: int = TICKET) -> list[str]:
@@ -140,6 +143,14 @@ def failures(gh: FakeGh) -> list[str]:
     return [
         body for body in comment_bodies(gh)
         if "orbi-add_criteria-command-failed" in body
+    ]
+
+
+def conflicts(gh: FakeGh) -> list[str]:
+    """The append step's failed receipts: a retry refusing a changed section."""
+    return [
+        body for body in comment_bodies(gh)
+        if "orbi-add_criteria-command-failed step=append the criteria" in body
     ]
 
 
@@ -200,6 +211,31 @@ def test_the_appended_section_carries_the_heading_lines_and_marker():
 def test_the_section_is_appended_after_the_existing_body(body, expected):
     section = criteria_command.render_acceptance(TWO_CRITERIA.items)
     assert criteria_command.appended_body(body, section).startswith(expected)
+
+
+def test_the_appended_section_is_read_back_from_the_body():
+    """The record is the body: the block that ends with the marker.
+
+    A person's own `## Acceptance` section elsewhere in the text is not
+    what the marker records, and an edited section reads back edited — the
+    comparison a retry makes (Issue #1945).
+    """
+    section = criteria_command.render_acceptance(TWO_CRITERIA.items)
+    body = criteria_command.appended_body(BODY, section)
+    assert criteria_command.appended_section(body) == section
+    assert criteria_command.appended_section(section) == section
+    own = f"{BODY}\n## Acceptance\n- A line a person wrote\n"
+    assert criteria_command.appended_section(own + "\n" + section) == section
+    edited = body.replace(
+        "- The tag survives a reload", "- The tag survives a reload and a move",
+    )
+    assert criteria_command.appended_section(edited) != section
+    # No marker, no body, or a marker with no section records nothing.
+    assert criteria_command.appended_section(BODY) == ""
+    assert criteria_command.appended_section(None) == ""
+    assert criteria_command.ACCEPTANCE_HEADING not in (
+        criteria_command.appended_section(APPENDED_MARKER)
+    )
 
 
 # --------------------------------------------------------------------------
@@ -307,6 +343,173 @@ def test_a_failed_label_step_continues_on_the_next_tick(monkeypatch, tmp_path):
 # --------------------------------------------------------------------------
 # acceptance 4: a failed receipt is posted once on the next tick
 # --------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------
+# Issue #1945: a retry compares what was appended with the proposal
+# --------------------------------------------------------------------------
+
+EDITED_CRITERIA = criteria(
+    "Removing a tag excludes the note from the filtered list",
+)
+
+
+def _appended_partial_run(monkeypatch, tmp_path, gh: FakeGh) -> str:
+    """The Issue's step 1-2: the append lands, the label write fails."""
+    stopped_ticket(gh)
+    reply(gh)
+    monkeypatch.setattr(seam, "run_command", fail_on(gh, label_add))
+    tick(monkeypatch, tmp_path, gh)
+    monkeypatch.setattr(seam, "run_command", gh)
+    appended = gh.issues[TICKET]["body"]
+    assert APPENDED_MARKER in appended
+    assert READY_LABEL not in labels(gh)
+    assert NEEDS_DETAIL_LABEL in labels(gh)
+    return appended
+
+
+def test_a_changed_proposal_after_a_partial_run_is_a_conflict(
+    monkeypatch, tmp_path,
+):
+    """The marker alone is not proof the current proposal is on the ticket.
+
+    The edited stop comment is never appended (the section is already
+    there), so the success receipt would list conditions the body does not
+    carry. The retry reports the two sides instead and writes nothing.
+    """
+    gh = _gh(monkeypatch)
+    appended = _appended_partial_run(monkeypatch, tmp_path, gh)
+
+    # A person edits the trusted stop comment; no second command comment.
+    gh.issues[TICKET]["comments"][0]["body"] = stop_body(
+        clarify.render_suggestion(EDITED_CRITERIA, "en")
+    )
+    tick(monkeypatch, tmp_path, gh)
+
+    assert gh.issues[TICKET]["body"] == appended
+    assert READY_LABEL not in labels(gh)
+    assert NEEDS_DETAIL_LABEL in labels(gh)
+    assert success_receipts(gh) == []
+    reported = conflicts(gh)
+    assert len(reported) == 1
+    assert language.text(
+        "en", "command.failed_step", step="append the criteria",
+    ) in reported[0]
+    # Both sides of the conflict are readable: what the body carries and
+    # what the newest stop comment now proposes.
+    assert (
+        "- Adding a tag makes the note findable by filtering" in reported[0]
+    )
+    assert "- The tag survives a reload" in reported[0]
+    assert (
+        "- Removing a tag excludes the note from the filtered list"
+        in reported[0]
+    )
+
+
+def test_a_changed_proposal_keeps_the_other_text_and_the_queued_work(
+    monkeypatch, tmp_path,
+):
+    """A conflict never overwrites an earlier section or cancels a queue.
+
+    The append and the dispatch label already landed when the receipt write
+    failed, so the retry must stop at the conflict with the ticket exactly
+    as it is — the queued work is the maintainer's, not this command's to
+    undo.
+    """
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    reply(gh)
+    monkeypatch.setattr(seam, "run_command", fail_on(
+        gh, lambda command: command[1:3] == ["issue", "comment"],
+    ))
+    tick(monkeypatch, tmp_path, gh)
+    queued = gh.issues[TICKET]["body"]
+    assert READY_LABEL in labels(gh)
+    assert success_receipts(gh) == []
+
+    monkeypatch.setattr(seam, "run_command", gh)
+    gh.issues[TICKET]["comments"][0]["body"] = stop_body(
+        clarify.render_suggestion(EDITED_CRITERIA, "en")
+    )
+    tick(monkeypatch, tmp_path, gh)
+
+    assert gh.issues[TICKET]["body"] == queued
+    assert "## Outcome\nUsers keep notes." in queued
+    assert READY_LABEL in labels(gh)
+    assert success_receipts(gh) == []
+    assert len(conflicts(gh)) == 1
+    assert gh.issues[TICKET]["body"].count(APPENDED_MARKER) == 1
+
+
+def test_a_matching_retry_still_finishes_without_a_second_append(
+    monkeypatch, tmp_path,
+):
+    """The comparison accepts an appended section that IS the proposal."""
+    gh = _gh(monkeypatch)
+    appended = _appended_partial_run(monkeypatch, tmp_path, gh)
+
+    tick(monkeypatch, tmp_path, gh)
+
+    assert gh.issues[TICKET]["body"] == appended
+    assert gh.issues[TICKET]["body"].count(APPENDED_MARKER) == 1
+    assert READY_LABEL in labels(gh)
+    assert NEEDS_DETAIL_LABEL not in labels(gh)
+    assert len(success_receipts(gh)) == 1
+    assert conflicts(gh) == []
+
+
+def test_a_changed_proposal_is_a_conflict_in_the_ticket_language(
+    monkeypatch, tmp_path,
+):
+    """The conflict is display text: a zh ticket reads it in Chinese."""
+    gh = _gh(monkeypatch)
+    appended = _appended_partial_run(monkeypatch, tmp_path, gh)
+    moved = criteria("移除标签后，该笔记不再出现在筛选结果里")
+    gh.issues[TICKET]["comments"][0]["body"] = stop_body(
+        clarify.render_suggestion(moved, "zh")
+    )
+
+    tick(
+        monkeypatch, tmp_path, gh,
+        config=RunnerConfig(source_repos=(REPO,), message_language="zh"),
+    )
+
+    assert gh.issues[TICKET]["body"] == appended
+    assert success_receipts(gh) == []
+    reported = conflicts(gh)
+    assert len(reported) == 1
+    assert "这张工单的正文里已经有这些验收条件" in reported[0]
+    assert "- Adding a tag makes the note findable by filtering" in reported[0]
+    assert "- 移除标签后，该笔记不再出现在筛选结果里" in reported[0]
+
+
+def test_the_terminal_spelling_reports_the_same_conflict(
+    monkeypatch, tmp_path,
+):
+    """`orbi add-criteria` is the same execution path, so the same refusal."""
+    gh = _gh(monkeypatch)
+    appended = _appended_partial_run(monkeypatch, tmp_path, gh)
+    gh.issues[TICKET]["comments"][0]["body"] = stop_body(
+        clarify.render_suggestion(EDITED_CRITERIA, "en")
+    )
+    gh.add_collaborator("orbi-bot", "admin")
+
+    outcome = ticket_command.execute_command(
+        REPO, TICKET, criteria_command.ADD_CRITERIA_COMMAND,
+        caller=ticket_command.cli_caller("orbi-bot"),
+        dispatch_label=READY_LABEL, language_code="en",
+    )
+
+    assert outcome.applied is False
+    assert outcome.receipt is not None
+    assert "Removing a tag excludes the note from the filtered list" in (
+        outcome.receipt
+    )
+    assert gh.issues[TICKET]["body"] == appended
+    assert READY_LABEL not in labels(gh)
+    assert NEEDS_DETAIL_LABEL in labels(gh)
+    assert success_receipts(gh) == []
+
 
 def test_a_failed_receipt_write_is_finished_on_the_next_tick(
     monkeypatch, tmp_path,
