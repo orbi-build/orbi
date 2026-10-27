@@ -52,6 +52,7 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TypeVar
 
 from orbi import language
 from orbi.github import (
@@ -160,6 +161,41 @@ class TicketCommandError(RuntimeError):
         super().__init__(f"{step}: {reason}")
         self.step = step
         self.reason = reason
+
+
+T = TypeVar("T")
+
+
+def failure_reason(exc: BaseException) -> str:
+    """The concrete error text of one failed command step.
+
+    `gh` explains itself on stderr and `run_command` attaches the process
+    output to the exception, so a receipt names GitHub's own sentence
+    instead of a bare exit status.
+    """
+    detail = getattr(exc, "stderr", None) or getattr(exc, "output", None)
+    if isinstance(detail, bytes):
+        detail = detail.decode("utf-8", "replace")
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()
+    return str(exc)
+
+
+def run_step(step: str, action: Callable[[], T]) -> T:
+    """Run one GitHub step of a command, naming it when it fails.
+
+    The dispatcher's one failed receipt is posted for a
+    `TicketCommandError` only, so a `gh` refusal inside a step is turned
+    into exactly that: the receipt and the `<name>_command_failed` journal
+    line name the step and GitHub's own sentence, and the ticket keeps its
+    scan label for the next tick. Every command wraps its steps here, so a
+    refusal inside one cannot escape into the tick's bypass log where the
+    person who replied would see no receipt.
+    """
+    try:
+        return action()
+    except Exception as exc:
+        raise TicketCommandError(step, failure_reason(exc)) from exc
 
 
 # The command registry: name -> CommandSpec, written out explicitly (the

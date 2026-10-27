@@ -415,8 +415,13 @@ def test_a_failed_relation_step_names_it_and_continues(monkeypatch, tmp_path):
     (RuntimeError("plain failure"), "plain failure"),
 ])
 def test_the_failure_reason_names_githubs_own_sentence(failure, expected):
-    """The receipt carries GitHub's sentence (stderr), not an exit status."""
-    assert split_command._failure_reason(failure) == expected
+    """The receipt carries GitHub's sentence (stderr), not an exit status.
+
+    The step wrapper and its reason are the shared layer's (every in-ticket
+    command names a failed step the same way), so the contract is pinned
+    where it lives.
+    """
+    assert ticket_command.failure_reason(failure) == expected
 
 
 def test_a_failed_second_child_continues_on_the_next_tick(

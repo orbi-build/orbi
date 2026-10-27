@@ -41,7 +41,7 @@ and dependency still equal the item. Anything else — a copied marker, an
 edited item, two matches — is never adopted blindly: the command stops with
 a receipt that lists what already exists.
 
-Every GitHub call a step makes is wrapped in `_step`: the shared layer posts
+Every GitHub call a step makes is wrapped in `run_step`: the shared layer posts
 its one failed receipt only for a `TicketCommandError` (the same rule
 `/orbi fix-base` follows), so a raw `gh` refusal must never escape into the
 tick's bypass log — the person who replied would see no receipt at all.
@@ -49,9 +49,7 @@ tick's bypass log — the person who replied would see no receipt at all.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TypeVar
 
 from orbi import clarify, language
 from orbi.delivery_labels import (
@@ -79,6 +77,7 @@ from orbi.ticket_command import (
     command_comment_key,
     command_receipt_marker,
     register_command,
+    run_step,
 )
 
 # The hidden marker every child carries: it names the parent ticket and the
@@ -195,40 +194,6 @@ def parse_child_body(body: object) -> SplitChild | None:
     )
 
 
-# One step's return value (the helpers below wrap an arbitrary GitHub call).
-T = TypeVar("T")
-
-
-def _failure_reason(exc: BaseException) -> str:
-    """The concrete error text of one failed step.
-
-    `gh` explains itself on stderr and `run_command` attaches the process
-    output to the exception, so the receipt names GitHub's own sentence
-    instead of a bare exit status.
-    """
-    detail = getattr(exc, "stderr", None) or getattr(exc, "output", None)
-    if isinstance(detail, bytes):
-        detail = detail.decode("utf-8", "replace")
-    if isinstance(detail, str) and detail.strip():
-        return detail.strip()
-    return str(exc)
-
-
-def _step(step: str, action: Callable[[], T]) -> T:
-    """Run one GitHub step, naming it when it fails.
-
-    The dispatcher's one failed receipt is posted for a
-    `TicketCommandError` only, so a `gh` refusal inside a step is turned
-    into exactly that: the receipt and the `split_command_failed` journal
-    line name the step and GitHub's own sentence, and the ticket keeps
-    `ai-needs-detail` for the next tick.
-    """
-    try:
-        return action()
-    except Exception as exc:
-        raise TicketCommandError(step, _failure_reason(exc)) from exc
-
-
 # The App prefix gh puts on an author login. A real call against a ticket
 # this runner opened reads {"is_bot": true, "login": "app/orbi-build"} from
 # the issue view author field, while the SAME credential's comments and
@@ -299,7 +264,7 @@ def _blocked_numbers(state: dict) -> set[int]:
 
 def _child_state(repo: str, number: int) -> dict:
     """One child ticket as the adoption check and the steps read it."""
-    return _step(
+    return run_step(
         "find or open the child",
         lambda: issue_view(number, CHILD_FIELDS, repo=repo),
     )
@@ -308,7 +273,7 @@ def _child_state(repo: str, number: int) -> dict:
 def _existing_candidates(repo: str, parent: int, item: int) -> list[dict]:
     """Every issue whose body carries this parent-and-item marker."""
     marker = child_marker(parent, item)
-    return _step(
+    return run_step(
         "find or open the child",
         lambda: list_issues(
             repo, state="all", search=f'"{marker}" in:body',
@@ -327,7 +292,7 @@ def _find_children(
     so a copied one is never adopted. Two counted matches stop the command
     (there is no way to know which one the earlier run meant).
     """
-    runner = _step("identify this runner", _runner_login)
+    runner = run_step("identify this runner", _runner_login)
     found: dict[int, dict] = {}
     for item_number in range(1, len(items) + 1):
         counted = [
@@ -414,7 +379,7 @@ def _attach_sub_issue(child: int, *, parent: int, repo: str) -> None:
     The documented `gh issue edit --add-sub-issue` spelling: the edited
     Issue is the parent and the argument is its child.
     """
-    _step("attach the child as a sub-issue", lambda: run_gh_write_command([
+    run_step("attach the child as a sub-issue", lambda: run_gh_write_command([
         "gh", "issue", "edit", str(parent), "--repo", repo,
         "--add-sub-issue", str(child),
     ]))
@@ -426,7 +391,7 @@ def _add_blocked_by(issue: int, blocker: int, *, repo: str) -> None:
     GitHub clears the relation's effect when the blocker closes, so there
     is no local dependency bookkeeping to keep.
     """
-    _step("add the blockedBy edge", lambda: run_gh_write_command([
+    run_step("add the blockedBy edge", lambda: run_gh_write_command([
         "gh", "issue", "edit", str(issue), "--repo", repo,
         "--add-blocked-by", str(blocker),
     ]))
@@ -456,7 +421,7 @@ def _create_child(
         command += ["--label", BUG_LABEL]
     if milestone:
         command += ["--milestone", milestone]
-    url = _step(
+    url = run_step(
         "create the child ticket",
         lambda: run_command(command, timeout=30).strip(),
     )
@@ -490,7 +455,7 @@ def _process_child(
     if blocker is not None and blocker not in _blocked_numbers(state):
         _add_blocked_by(number, blocker, repo=repo)
     if not LIFECYCLE_STATES & set(label_names(state)):
-        _step(
+        run_step(
             "add the dispatch label",
             lambda: edit_issue(number, repo=repo, add=dispatch_label),
         )
@@ -622,7 +587,7 @@ def _split_apply(
         add = None if EPIC_LABEL in parent_labels else EPIC_LABEL
         remove = dispatch_label if dispatch_label in parent_labels else None
         if add is not None or remove is not None:
-            _step(
+            run_step(
                 "mark the parent ai-epic",
                 lambda: edit_issue(
                     issue_number, repo=repo, add=add, remove=remove,
