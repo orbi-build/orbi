@@ -1422,6 +1422,12 @@ def test_advance_pending_processes_commands_on_the_confirmation_ticket(
     assert kwargs["policy_path"] == ".github/orbi.toml"
     assert kwargs["base_branch"] == "main"
     assert kwargs["version_file"] == "package.json"
+    # The declaration and its ONLY real caller must not drift (Issue #1939):
+    # one key missing here rejects the maintainer's own `/orbi milestone`
+    # reply on this confirmation ticket instead of advancing the Milestone.
+    assert set(
+        milestone_command.MILESTONE_COMMAND.required_context
+    ) <= set(kwargs)
     # The path never auto-advances: waiting for the human is intentional.
     assert notes == []
     assert config.read_text() == 'active_milestone = "v0.5.40"\n'

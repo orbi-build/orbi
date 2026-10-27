@@ -349,7 +349,7 @@ Split from #<父工单号>
 票内命令（`/orbi milestone <version>`、`/orbi fix-base`、`/orbi split`、`/orbi add-criteria`）对每种结果各留一条回执评论。回执的隐藏标记同时标明命令与结果，其 `comment=` 键标明它所回答的命令评论：
 
 - `<!-- orbi-<name>-command comment=<key> -->`：命令已执行；
-- `<!-- orbi-<name>-command-rejected comment=<key> -->`：未被采纳（权限、参数形状或命令自身的规则）；
+- `<!-- orbi-<name>-command-rejected comment=<key> -->`：未被采纳（权限、参数形状、命令自身的规则，或只有命令自身流程才会提供的上下文）；
 - `<!-- orbi-<name>-command-failed step=<step> comment=<key> -->`：已进入处理函数并在该步骤失败。
 
 `<name>` 是命令稳定的机器 id（`fix_base`、`milestone`、`split`、`add_criteria`），不是人输入的词，因此 `/orbi` 前缀之前发出的回执仍然匹配。`<key>` 是被回答评论的 GitHub id，其次是它的 URL，都读不到时是 `<login>@<createdAt>`——与 `/orbi fix-base` 成功回执已经使用的键相同。标记周围的文字是工单语言的显示文本，因此消费方从标记前缀与 `step` 字段判定结果，通过 `comment=` 定位命令评论，绝不解析被翻译过的句子。
