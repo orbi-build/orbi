@@ -365,8 +365,8 @@ picked up again by the next tick.
 
 ### Command receipts
 
-An in-ticket command (`/orbi milestone <version>`, `/orbi fix-base`) answers
-with one receipt comment per outcome. The receipt's hidden marker identifies
+An in-ticket command (`/orbi milestone <version>`, `/orbi fix-base`,
+`/orbi split`) answers with one receipt comment per outcome. The receipt's hidden marker identifies
 the command and its outcome, and its `comment=` key identifies the command
 comment it answers:
 
@@ -376,9 +376,9 @@ comment it answers:
 - `<!-- orbi-<name>-command-failed step=<step> comment=<key> -->`: it reached
   its handler and failed at that step.
 
-`<name>` is the command's stable machine id (`fix_base`, `milestone`), never
-the word a person types, so a receipt posted before the `/orbi` prefix keeps
-matching. `<key>` is the answered comment's GitHub id, then its URL, then
+`<name>` is the command's stable machine id (`fix_base`, `milestone`,
+`split`), never the word a person types, so a receipt posted before the
+`/orbi` prefix keeps matching. `<key>` is the answered comment's GitHub id, then its URL, then
 `<login>@<createdAt>` when neither is readable — the key the `/orbi fix-base`
 success receipt already uses. The prose around the marker is display text in
 the ticket language, so a consumer classifies the outcome from the marker

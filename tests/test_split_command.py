@@ -328,6 +328,97 @@ def test_an_item_removed_by_the_edit_is_not_created(monkeypatch, tmp_path):
 # acceptance 3: a failing run continues on the next tick
 # --------------------------------------------------------------------------
 
+def test_a_failed_write_step_leaves_one_receipt_naming_it(
+    monkeypatch, tmp_path,
+):
+    """A `gh` refusal is a STEP failure, never silence.
+
+    The shared layer posts its one failed receipt for a
+    `TicketCommandError` only, so a step that let the raw `gh` error
+    escape left the person who replied with no receipt at all — no step,
+    no GitHub sentence, no repair action. The ticket kept
+    `ai-needs-detail`, so the same command finishes once GitHub answers.
+    """
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    reply(gh)
+    monkeypatch.setattr(seam, "run_command", fail_on(
+        gh, lambda command: command[1] == "issue" and command[2] == "create",
+    ))
+
+    tick(monkeypatch, tmp_path, gh)
+
+    reported = failures(gh)
+    assert len(reported) == 1
+    assert language.text(
+        "en", "command.failed_step", step="create the child ticket",
+    ) in reported[0]
+    assert "gh: HTTP 422: Validation Failed" in reported[0]
+    assert children(gh) == []
+    assert NEEDS_DETAIL_LABEL in gh.issues[PARENT]["labels"]
+
+    # The same refusal on the next tick is still ONE receipt for that
+    # comment (the failed receipt deduplicates like every other one).
+    tick(monkeypatch, tmp_path, gh)
+    assert len(failures(gh)) == 1
+
+    # GitHub answers again: the same command finishes exactly once.
+    monkeypatch.setattr(seam, "run_command", gh)
+    tick(monkeypatch, tmp_path, gh)
+
+    assert titles(gh) == ["Users can tag a note", "Users can export a note"]
+    assert len(success_receipts(gh)) == 1
+    assert NEEDS_DETAIL_LABEL not in gh.issues[PARENT]["labels"]
+
+
+def test_a_failed_relation_step_names_it_and_continues(monkeypatch, tmp_path):
+    """The native relations are steps too: a refused `--add-sub-issue`
+    names itself, and the child it was meant for is still adopted (never
+    opened twice) on the next tick."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    reply(gh)
+    monkeypatch.setattr(seam, "run_command", fail_on(
+        gh, lambda command: "--add-sub-issue" in command,
+    ))
+
+    tick(monkeypatch, tmp_path, gh)
+
+    reported = failures(gh)
+    assert len(reported) == 1
+    assert language.text(
+        "en", "command.failed_step",
+        step="attach the child as a sub-issue",
+    ) in reported[0]
+    # The child was opened; only its relation is missing.
+    opened = [
+        issue for number, issue in gh.issues.items() if number != PARENT
+    ]
+    assert [issue["title"] for issue in opened] == ["Users can tag a note"]
+    assert opened[0]["parent"] is None
+    assert NEEDS_DETAIL_LABEL in gh.issues[PARENT]["labels"]
+
+    monkeypatch.setattr(seam, "run_command", gh)
+    tick(monkeypatch, tmp_path, gh)
+
+    # The unattached child is adopted, never opened a second time.
+    assert sorted(gh.issues) == [PARENT, 101, 102]
+    assert titles(gh) == ["Users can tag a note", "Users can export a note"]
+    assert {kid["parent"] for kid in children(gh)} == {PARENT}
+    assert len(success_receipts(gh)) == 1
+    assert NEEDS_DETAIL_LABEL not in gh.issues[PARENT]["labels"]
+
+
+@pytest.mark.parametrize("failure, expected", [
+    (subprocess.CalledProcessError(1, ["gh"], stderr="gh: nope\n"), "gh: nope"),
+    (subprocess.CalledProcessError(1, ["gh"], stderr=b"gh: bytes"), "gh: bytes"),
+    (RuntimeError("plain failure"), "plain failure"),
+])
+def test_the_failure_reason_names_githubs_own_sentence(failure, expected):
+    """The receipt carries GitHub's sentence (stderr), not an exit status."""
+    assert split_command._failure_reason(failure) == expected
+
+
 def test_a_failed_second_child_continues_on_the_next_tick(
     monkeypatch, tmp_path,
 ):
