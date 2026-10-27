@@ -449,10 +449,10 @@ JOURNAL_EVENTS: dict[str, str] = {
     "active_milestone_variable_absent": "the active_milestone repo variable is absent",
     "active_milestone_variable_created": "the active_milestone repo variable was created",
     "active_milestone_variable_sync_failed": "the active_milestone repo variable sync failed",
-    "milestone_command_applied": "an in-ticket `/milestone` command ran all three steps",
-    "milestone_command_failed": "an in-ticket `/milestone` command failed at one step",
-    "fix_base_command_applied": "an in-ticket `/orbi fix-base` command opened or reused the fix Issues",
-    "fix_base_command_failed": "an in-ticket `/orbi fix-base` command failed at one step",
+    # The `<name>_command_applied` / `<name>_command_failed` pair of every
+    # in-ticket command is registered by `register_command`
+    # (`ticket_command.py`, Issue #1922), never written out here: a new
+    # command is one `CommandSpec` plus one registration.
     # Missing check-read permission scene (Issue #1918).
     "checks_permission_blocked": "the check read was refused for a missing App permission; the Issue goes ai-blocked with the approval page",
     "checks_permission_recovered": "the check read works again and the paused delivery resumed automatically",

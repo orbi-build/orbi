@@ -432,12 +432,12 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "这个 Issue 不会自动创建 release ticket；只有在您确认之后才会创建。",
     ),
     "milestone.confirm_release_command": (
-        "Comment \u0060/milestone {old}\u0060 on this Issue to create the release "
-        "ticket (rendered from \u0060.github/release-ticket-template.md\u0060 and "
-        "carrying the \u0060{release_label}\u0060 label; each of the three steps "
-        "is idempotent).",
-        "在本 Issue 上评论 \u0060/milestone {old}\u0060 来创建 release ticket（由 "
-        "\u0060.github/release-ticket-template.md\u0060 渲染，并带有 "
+        "Comment \u0060/orbi milestone {old}\u0060 on this Issue to create the "
+        "release ticket (rendered from \u0060.github/release-ticket-template.md\u0060 "
+        "and carrying the \u0060{release_label}\u0060 label; each of the three "
+        "steps is idempotent).",
+        "在本 Issue 上评论 \u0060/orbi milestone {old}\u0060 来创建 release ticket"
+        "（由 \u0060.github/release-ticket-template.md\u0060 渲染，并带有 "
         "\u0060{release_label}\u0060 标签；三个步骤都是幂等的）。",
     ),
     "milestone.confirm_write_permission": (
@@ -458,9 +458,9 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "- \u0060{title}\u0060：{open_issues} 个未关闭 Issue",
     ),
     "milestone.confirm_advance_command": (
-        "Comment \u0060/milestone <version>\u0060 on this Issue (exact match "
-        "against a candidate title):",
-        "在本 Issue 上评论 \u0060/milestone <version>\u0060（需与某个候选标题完全一致）：",
+        "Comment \u0060/orbi milestone <version>\u0060 on this Issue (exact "
+        "match against a candidate title):",
+        "在本 Issue 上评论 \u0060/orbi milestone <version>\u0060（需与某个候选标题完全一致）：",
     ),
     "milestone.confirm_advance_steps": (
         "the command creates the milestone, opens a release ticket "
@@ -492,16 +492,16 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "command.argument_label.argument": ("argument", "参数"),
     "command.argument_label.version": ("version", "版本"),
     "command.not_applied": (
-        "**\u0060/{name}\u0060 command not applied**",
-        "**\u0060/{name}\u0060 命令未执行**",
+        "**\u0060{command}\u0060 command not applied**",
+        "**\u0060{command}\u0060 命令未执行**",
     ),
     "command.failed": (
-        "**\u0060/{name} {argument}\u0060 command failed**",
-        "**\u0060/{name} {argument}\u0060 命令执行失败**",
+        "**\u0060{command}\u0060 command failed**",
+        "**\u0060{command}\u0060 命令执行失败**",
     ),
     "command.reason": ("- reason: {reason}", "- 原因：{reason}"),
     "command.command_line": (
-        "- command line: \u0060/{name}\u0060", "- 命令行：\u0060/{name}\u0060",
+        "- command line: \u0060{command}\u0060", "- 命令行：\u0060{command}\u0060",
     ),
     "command.argument": (
         "- {label}: \u0060{argument}\u0060", "- {label}：\u0060{argument}\u0060",

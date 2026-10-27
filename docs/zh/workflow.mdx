@@ -744,14 +744,14 @@ contents API 读取仓库**默认分支 tip** 上的 `.github/orbi.toml`——
 | --- | --- | --- |
 | `base_branch` | string | 该仓库的交付 base 分支；缺席时回退到匹配的 `[[repositories]].base_branch`，否则回退宿主 `base_branch`。 |
 | `active_milestone` | string | 该仓库 fresh claim 的 Milestone 范围，有两类扫描**不带** Milestone 限定。外部接管扫描（Issue #842 决策 D1）：第五条、排最后的 ready 扫描——带正文标记 `<!-- orbi:external-pr:N -->` 的外部 triage 票始终可被认领，因为外部贡献不属于任何版本的范围，绝不能阻塞发版门禁。已关闭且没有更新的开放 Milestone 的 active Milestone（Issue #1391）：该 tick 的 claim 扫描不带范围（`active_milestone_closed_unscoped`），因此第一个版本发布后新打的 `ai-ready` Issue 会被直接认领，而不必等一个还没人决定的新版本；配置值保持不变，一旦出现更新的开放 Milestone，原有的 advance 逻辑照常把范围移过去。 |
-| `auto_next_milestone` | boolean | 该仓库的空闲自动推进开关（Issue #1342）：为 `false` 时，已关闭的 active Milestone 即使有更高的待发布候选也不会被改写——改为发一条确认 Issue，携带票内 `/milestone <版本>` 命令。缺席时回退宿主值（默认 `true`）。 |
+| `auto_next_milestone` | boolean | 该仓库的空闲自动推进开关（Issue #1342）：为 `false` 时，已关闭的 active Milestone 即使有更高的待发布候选也不会被改写——改为发一条确认 Issue，携带票内 `/orbi milestone <版本>` 命令。缺席时回退宿主值（默认 `true`）。 |
 | `message_language` | string | Orbi 在该仓库的评论和署名页脚语言，接受 `en` 或 `zh`；显式值覆盖宿主值，不翻译用户内容，也不覆盖宿主的 Telegram 语言。见[评论语言](#评论语言)。 |
 | `context_files` | string[] | 仓库内相对路径的上下文文件；注入前校验存在性与大小上限。 |
 | `dispatch_label` | string | 该仓库的认领标签（默认 `ai-ready`）；交付生命周期标签恒为宿主常量。 |
 | `steering_enabled` | boolean | 为该仓库启用受信任修正轮询；缺席时回退到宿主值。 |
 | `steering_poll_seconds` | number | 该仓库的轮询间隔；缺席时回退到宿主值，且必须为有限正数。 |
 | `steering_max_rounds` | integer | 该仓库最多重启 Steering 的次数；缺席时回退到宿主值。 |
-| `release_confirmation` | boolean | 选择开启“已完成 Milestone 发布确认”（Issue #856）：当 active Milestone 已无 open Issue 且尚无 release 票时，空闲路径会发一条决策通知，携带票内 `/milestone <版本>` 命令，不再静默等待。默认 `false`：不发 release 通知，发布等待保持静默。决策通知的清理不受该键约束——过期通知（`old=` 不再等于 `active_milestone`）在 OPEN 与 CLOSED 两条 Milestone 路径上都会被关闭（Issue #1475）。见下节《等待 Milestone 决策时的唯一回复》。 |
+| `release_confirmation` | boolean | 选择开启“已完成 Milestone 发布确认”（Issue #856）：当 active Milestone 已无 open Issue 且尚无 release 票时，空闲路径会发一条决策通知，携带票内 `/orbi milestone <版本>` 命令，不再静默等待。默认 `false`：不发 release 通知，发布等待保持静默。决策通知的清理不受该键约束——过期通知（`old=` 不再等于 `active_milestone`）在 OPEN 与 CLOSED 两条 Milestone 路径上都会被关闭（Issue #1475）。见下节《等待 Milestone 决策时的唯一回复》。 |
 | `clarify_thin_tickets` | boolean | 选择开启薄 ticket 闸门（Issue #1088）：fresh claim 先用一次无工具 Pi session 判定该票是否说清可观察结果、验收条件与单一结果。判定不通过时在任何 worktree、分支、Pi session 或 PR 存在之前中止（只发一条列出缺失项的评论，把 `ai-ready` 换成 `ai-needs-detail`）。默认 `false`；闸门的任何错误都 fail open。见上文《薄 ticket 闸门》。 |
 
 ```toml
@@ -797,12 +797,12 @@ diff `repo_config_diff`（中文仓库显示为「仓库配置差异」），让
 通过**同一个**决策通知呈现——一张带有指纹
 `orbi-milestone-advance old=<active> candidates=<titles>` 的 Issue——两者
 都由票内同一条命令回答：在该通知上以受信任评论形式发出的
-`/milestone <版本>`：
+`/orbi milestone <版本>`（#1922 之前的 `/milestone <版本>` 写法仍作为声明过的别名有效）：
 
 | 等待状态 | 何时出现 | 回答它的唯一回复 |
 | --- | --- | --- |
-| 推进等待 | `auto_next_milestone = false` 且 active Milestone 已 CLOSED——推进是有意停下的。 | `/milestone <下一个版本>`——把下一个待发布 Milestone 落为 active。 |
-| 发布等待 | active Milestone 为 OPEN、已无 open Issue，且还没有人开它的 release 票，同时仓库策略设置了 `release_confirmation = true`（Issue #856）。未设置该键时保持 #856 之前的静默等待。 | `/milestone <当前版本>`——为已完成的 Milestone 打开 release 票。 |
+| 推进等待 | `auto_next_milestone = false` 且 active Milestone 已 CLOSED——推进是有意停下的。 | `/orbi milestone <下一个版本>`——把下一个待发布 Milestone 落为 active。 |
+| 发布等待 | active Milestone 为 OPEN、已无 open Issue，且还没有人开它的 release 票，同时仓库策略设置了 `release_confirmation = true`（Issue #856）。未设置该键时保持 #856 之前的静默等待。 | `/orbi milestone <当前版本>`——为已完成的 Milestone 打开 release 票。 |
 
 两种通知都是幂等的（每种等待只有一张 open 通知，绝不是每 tick 一张），
 等待结束后自动关闭并留下回执，而且都不会自行行动：Runner 绝不自己创建

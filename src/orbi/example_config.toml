@@ -140,20 +140,21 @@ engine_source_track = "release"
 # When false, a closed active milestone pauses here and creates one
 # ai-ready + p0 confirmation Issue instead of rewriting this file.
 # Missing keeps the existing automatic-advance behavior. That Issue is the
-# decision channel: a trusted `/milestone <version>` comment on it answers
-# the wait. This key is also a REPOSITORY policy (Issue #1342): a value
-# declared in .github/orbi.toml wins over this host value, so a managed
-# tenant can stop the engine advancing its own active_milestone; an omitted
-# repository key falls back to this line, and true when neither declares it.
+# decision channel: a trusted `/orbi milestone <version>` comment on it
+# answers the wait (`/milestone <version>` also still works). This key is
+# also a REPOSITORY policy (Issue #1342): a value declared in
+# .github/orbi.toml wins over this host value, so a managed tenant can stop
+# the engine advancing its own active_milestone; an omitted repository key
+# falls back to this line, and true when neither declares it.
 # A second wait uses the same notice (Issue #856): an OPEN active
 # milestone with no open Issue left and no release ticket yet. It is
 # opted in by the REPOSITORY policy `release_confirmation = true` in
 # .github/orbi.toml (see docs/workflow.mdx) — never by this host file —
-# and the notice then carries the same `/milestone <active-version>`
+# and the notice then carries the same `/orbi milestone <active-version>`
 # reply. In both waits the engine never acts by itself: it creates no
 # release ticket and advances no milestone without the reply.
 # auto_next_milestone = true
-# The version file the in-ticket `/milestone <version>` command writes
+# The version file the in-ticket `/orbi milestone <version>` command writes
 # into the release ticket it opens for the milestone. Leave it unset
 # to detect the file from the base-branch tree; when detection finds no
 # supported file the release-ticket step fails with a receipt naming the

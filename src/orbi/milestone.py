@@ -38,7 +38,7 @@ _MILESTONE_FAILURE_STATUSES = (401, 404)
 # The waiting states one active Milestone can be in on the idle path
 # (Issue #856). `in_progress` and `nothing_to_do` need no human reply;
 # the two `awaiting_*` states each own one decision notice the maintainer
-# answers with `/milestone <version>`.
+# answers with `/orbi milestone <version>`.
 MILESTONE_IN_PROGRESS = "in_progress"
 MILESTONE_AWAITING_RELEASE = "awaiting_release"
 MILESTONE_AWAITING_NEXT = "awaiting_next"

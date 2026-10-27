@@ -1,10 +1,12 @@
-"""In-ticket `/milestone <version>` command (Issue #1290).
+"""In-ticket `/orbi milestone <version>` command (Issue #1290, #1922).
 
 With `auto_next_milestone = false` the engine posts a confirmation ticket and
 waits. The ticket used to tell a human to run `orbi milestone set` — which a
 hosted sandbox tenant cannot do (no host access, no CLI). The ticket now
-carries the command itself: a comment line `/milestone vX.Y.Z` runs the same
-three deterministic steps a maintainer would.
+carries the command itself: a comment line `/orbi milestone vX.Y.Z` runs the
+same three deterministic steps a maintainer would. The pre-#1922 spelling
+`/milestone vX.Y.Z` stays a declared alias, so the old input keeps working
+and those tests are kept beside the canonical-form ones.
 
 The tests below drive the real entry points:
 `ticket_command.process_commands` (parsing, authorization, receipts) and
@@ -145,13 +147,63 @@ def test_select_rejects_a_malformed_command_with_a_readable_reason():
     assert len(rejections) == 1
     assert rejections[0][1] is None
     assert "malformed" in rejections[0][2]
-    assert "`/milestone <version>`" in rejections[0][2]
+    assert "`/orbi milestone <version>`" in rejections[0][2]
 
 
 def test_non_string_or_empty_bodies_are_ignored():
     assert ticket_command.parse_commands(None, milestone_command.MILESTONE_COMMAND) == []
     assert ticket_command.parse_commands("", milestone_command.MILESTONE_COMMAND) == []
     assert ticket_command.parse_commands(123, milestone_command.MILESTONE_COMMAND) == []
+
+
+# --- one /orbi prefix, the old spelling kept as an alias (Issue #1922) ----
+
+
+def test_the_canonical_form_is_orbi_milestone():
+    assert ticket_command.parse_commands(
+        "please run this:\n/orbi milestone v1.2.3",
+        milestone_command.MILESTONE_COMMAND,
+    ) == ["v1.2.3"]
+    assert ticket_command.parse_commands(
+        "/ORBI MILESTONE v1.2.3", milestone_command.MILESTONE_COMMAND,
+    ) == ["v1.2.3"]
+    # The same quoting/fence rules as the alias.
+    assert ticket_command.parse_commands(
+        "> /orbi milestone v1.2.3", milestone_command.MILESTONE_COMMAND,
+    ) == []
+    assert ticket_command.parse_commands(
+        "```\n/orbi milestone v1.2.3\n```", milestone_command.MILESTONE_COMMAND,
+    ) == []
+    # ... and the same one-argument rule.
+    assert ticket_command.parse_commands(
+        "/orbi milestone", milestone_command.MILESTONE_COMMAND,
+    ) == [None]
+    assert ticket_command.parse_commands(
+        "/orbi milestone v1.2.3 v1.2.4", milestone_command.MILESTONE_COMMAND,
+    ) == [None]
+
+
+def test_the_old_spelling_is_a_declared_alias_of_the_same_command():
+    spec = milestone_command.MILESTONE_COMMAND
+    assert spec.subcommand == "milestone"
+    assert spec.aliases == ("milestone",)
+    assert ticket_command.parse_commands(
+        "/milestone v1.2.3", spec,
+    ) == ["v1.2.3"]
+    assert ticket_command.parse_commands(
+        "/orbi milestone v1.2.3", spec,
+    ) == ["v1.2.3"]
+    # Receipts show the canonical form, never the alias.
+    assert spec.command_text("v1.2.3") == "/orbi milestone v1.2.3"
+
+
+def test_an_unknown_orbi_subcommand_is_an_unrelated_comment():
+    assert ticket_command.parse_commands(
+        "/orbi accept v1.2.3", milestone_command.MILESTONE_COMMAND,
+    ) == []
+    assert ticket_command.parse_commands(
+        "/orbi milestone-extra v1.2.3", milestone_command.MILESTONE_COMMAND,
+    ) == []
 
 
 # --- selection ------------------------------------------------------------
@@ -933,7 +985,7 @@ def test_process_answers_a_malformed_command_on_the_ticket(monkeypatch):
     assert len(posts) == 1
     body = _receipt_body(posts)
     assert "not applied" in body
-    assert "- command line: `/milestone`" in body
+    assert "- command line: `/orbi milestone`" in body
     assert "malformed" in body
 
 
@@ -981,7 +1033,7 @@ def test_process_names_the_failed_step_on_the_ticket(monkeypatch, caplog):
             dispatch_label=READY_LABEL, version_file=None,
         )
     body = _receipt_body(posts)
-    assert "`/milestone v0.5.41` command failed" in body
+    assert "`/orbi milestone v0.5.41` command failed" in body
     assert "- reason: template missing" in body
     assert "- failed step: `release ticket`" in body
     assert 'step="release ticket"' in caplog.text
@@ -1009,7 +1061,7 @@ def test_process_posts_the_version_file_fix_and_creates_no_ticket(
     ] == []
     assert len(fake.comments) == 1
     body = fake.comments[0]["body"]
-    assert "`/milestone v0.5.41` command failed" in body
+    assert "`/orbi milestone v0.5.41` command failed" in body
     assert "- reason: version_file_unresolved" in body
     assert ".github/orbi.toml" in body
     assert '"none"' in body
@@ -1017,8 +1069,16 @@ def test_process_posts_the_version_file_fix_and_creates_no_ticket(
     assert 'step="release ticket"' in caplog.text
 
 
-def test_process_applies_the_winning_command_and_logs_it(monkeypatch, caplog):
-    comments = [_comment("/milestone v0.5.41", cid=31)]
+@pytest.mark.parametrize(
+    "command_line", ["/orbi milestone v0.5.41", "/milestone v0.5.41"],
+)
+def test_process_applies_the_winning_command_and_logs_it(
+    monkeypatch, caplog, command_line,
+):
+    """Acceptance (Issue #1922): the canonical `/orbi milestone <version>`
+    and the alias `/milestone <version>` both reach the same handler, with
+    the same permission gate and no receipt."""
+    comments = [_comment(command_line, cid=31)]
     applied = []
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
     monkeypatch.setattr(
@@ -1105,7 +1165,7 @@ def test_a_real_receipt_authored_by_the_runner_is_ignored(monkeypatch):
         "owner/repo", 436, [], rejected,
         spec=milestone_command.MILESTONE_COMMAND,
         marker="orbi-milestone-command-rejected",
-        summary="**`/milestone` command not applied**",
+        summary="**`/orbi milestone` command not applied**",
         argument="v9.9.9", reason="not a candidate",
     )
     body = _receipt_body(posts)
@@ -1212,9 +1272,10 @@ def test_full_command_is_idempotent_and_lands_every_step(
 def test_the_release_confirmation_reply_opens_the_release_ticket(
     monkeypatch, tmp_path,
 ):
-    """Issue #856 user journey: the maintainer replies `/milestone <active>`
-    on the finished-Milestone notice and the release ticket appears — the
-    engine never creates it on its own, and `active_milestone` is kept."""
+    """Issue #856 user journey: the maintainer replies
+    `/orbi milestone <active>` on the finished-Milestone notice and the
+    release ticket appears — the engine never creates it on its own, and
+    `active_milestone` is kept."""
     config = tmp_path / "orbi.toml"
     config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
     fake = FakeMilestoneGh(
@@ -1499,7 +1560,7 @@ def test_advance_release_confirmation_opens_one_notice_and_processes_commands(
     monkeypatch, tmp_path, caplog,
 ):
     """Issue #856 user journey: a finished Milestone with no release ticket
-    produces ONE decision notice that carries the `/milestone <version>`
+    produces ONE decision notice that carries the `/orbi milestone <version>`
     reply, and the maintainer's reply is processed from that same place."""
     config = tmp_path / "orbi.toml"
     config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
@@ -1526,7 +1587,7 @@ def test_advance_release_confirmation_opens_one_notice_and_processes_commands(
         "Milestone v0.5.40 complete, awaiting release confirmation"
     )
     assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.40" in notice["body"]
-    assert "/milestone v0.5.40" in notice["body"]
+    assert "/orbi milestone v0.5.40" in notice["body"]
     assert [entry[2]["candidate_titles"] for entry in processed] == [
         ["v0.5.40"], ["v0.5.40"],
     ]
@@ -1542,8 +1603,9 @@ _CJK_RE = re.compile("[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]")
 def test_decision_notices_render_english_without_cjk(monkeypatch, tmp_path):
     """Issue #1463: both Milestone decision notices follow the Language
     contract — English title and body with no CJK characters — while
-    keeping the `orbi-milestone-advance` fingerprint and the `/milestone`
-    reply so existing notices are still matched and acted on."""
+    keeping the `orbi-milestone-advance` fingerprint and the
+    `/orbi milestone` reply so existing notices are still matched and acted
+    on."""
     release_config = tmp_path / "release.toml"
     release_config.write_text(
         'active_milestone = "v0.5.40"\n', encoding="utf-8",
@@ -1582,7 +1644,7 @@ def test_decision_notices_render_english_without_cjk(monkeypatch, tmp_path):
         text = notice["title"] + "\n" + notice["body"]
         assert _CJK_RE.search(text) is None, notice
         assert "orbi-milestone-advance old=v0.5.40" in notice["body"]
-        assert "/milestone" in notice["body"]
+        assert "/orbi milestone" in notice["body"]
 
 
 def test_advance_release_notice_is_kept_then_closed_once_its_ticket_exists(
@@ -1881,8 +1943,8 @@ def test_repo_policy_auto_next_milestone_false_stops_the_idle_advance(
     """Issue #1342 user journey: a managed tenant declares
     `auto_next_milestone = false` in `.github/orbi.toml`; the closed active
     Milestone is NOT rewritten to the higher candidate and the confirmation
-    Issue carrying the in-ticket `/milestone <version>` command is opened
-    instead, so the tenant decides the next version."""
+    Issue carrying the in-ticket `/orbi milestone <version>` command is
+    opened instead, so the tenant decides the next version."""
     config = tmp_path / "orbi.toml"
     config.write_text('active_milestone = "v0.5.40"\n', encoding="utf-8")
     fake = FakeMilestoneGh(
@@ -1969,12 +2031,18 @@ def test_advance_confirmation_body_follows_the_message_language(
     # The machine fingerprint the close sweep searches for is unchanged.
     assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.41" in zh
     assert "awaiting manual confirmation" not in zh
+    # Issue #1922: the rendered reply instruction is the canonical form in
+    # BOTH languages, never the pre-prefix spelling.
+    assert "`/orbi milestone <version>`" in zh
+    assert "`/milestone" not in zh
     en = _confirmation_body(
         monkeypatch, tmp_path, milestones, language_code="en",
     )
     assert "## Milestone auto-advance awaiting manual confirmation" in en
     assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.41" in en
     assert "- `v0.5.41`: 2 open issues" in en
+    assert "`/orbi milestone <version>`" in en
+    assert "`/milestone" not in en
 
 
 def test_release_confirmation_body_follows_the_message_language(
@@ -1988,12 +2056,18 @@ def test_release_confirmation_body_follows_the_message_language(
     assert "## Milestone 已完成，等待人工确认发布" in zh
     assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.40" in zh
     assert "awaiting manual release confirmation" not in zh
+    # Issue #1922: the reply instruction is the canonical form in both
+    # languages, never the pre-prefix spelling.
+    assert "`/orbi milestone v0.5.40`" in zh
+    assert "`/milestone" not in zh
     en = _confirmation_body(
         monkeypatch, tmp_path, milestones, language_code="en",
         release_confirmation=True,
     )
     assert "## Milestone complete, awaiting manual release confirmation" in en
     assert "orbi-milestone-advance old=v0.5.40 candidates=v0.5.40" in en
+    assert "`/orbi milestone v0.5.40`" in en
+    assert "`/milestone" not in en
 
 
 def test_stale_notice_close_receipt_follows_the_message_language():
@@ -2057,7 +2131,7 @@ def test_command_receipts_follow_the_message_language(monkeypatch):
     permission, malformed, candidate = (
         _receipt_body(posts, index) for index in range(3)
     )
-    assert "**`/milestone` 命令未执行**" in permission
+    assert "**`/orbi milestone` 命令未执行**" in permission
     assert "- 原因：" in permission
     assert "没有 write 权限" in permission
     # The receipt names the repository permission it read, never the
@@ -2065,7 +2139,7 @@ def test_command_receipts_follow_the_message_language(monkeypatch):
     assert "仓库权限='none'" in permission
     assert "命令行格式不正确" in malformed
     assert "版本" in malformed
-    assert "`/milestone <version>`" in malformed
+    assert "`/orbi milestone <version>`" in malformed
     assert "不是当前版本之上的开放 Milestone" in candidate
     assert "候选版本：v0.5.41" in candidate
     assert "- 版本：`v9.9.9`" in candidate
@@ -2101,7 +2175,7 @@ def test_a_failed_command_receipt_follows_the_message_language(monkeypatch):
         language_code="zh", **_receipt_context(),
     )
     body = _receipt_body(posts)
-    assert "**`/milestone v0.5.41` 命令执行失败**" in body
+    assert "**`/orbi milestone v0.5.41` 命令执行失败**" in body
     # The failure reason stays the raw exception text (#1687).
     assert "- 原因：template missing" in body
     assert "- 失败步骤：`release ticket`" in body
@@ -2123,7 +2197,7 @@ def test_command_receipts_stay_english_by_default(monkeypatch):
         **_receipt_context(),
     )
     body = _receipt_body(posts)
-    assert "**`/milestone` command not applied**" in body
+    assert "**`/orbi milestone` command not applied**" in body
     assert "- reason: " in body
     assert "- version: `v9.9.9`" in body
 
