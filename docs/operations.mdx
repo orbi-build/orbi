@@ -752,6 +752,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `fix_base_command_failed` | an in-ticket `/orbi fix-base` command failed at one step |
 | `split_command_applied` | an in-ticket `/orbi split` command turned the proposal into child tickets |
 | `split_command_failed` | an in-ticket `/orbi split` command failed at one step |
+| `add_criteria_command_applied` | an in-ticket `/orbi add-criteria` command appended the proposed criteria and queued the ticket |
+| `add_criteria_command_failed` | an in-ticket `/orbi add-criteria` command failed at one step |
 | `checks_permission_blocked` | the check read was refused for a missing App permission; the Issue goes ai-blocked with the approval page |
 | `checks_permission_recovered` | the check read works again and the paused delivery resumed automatically |
 | `base_ci_red_recovered` | the base check turned green and the paused delivery resumed automatically |
@@ -1073,13 +1075,15 @@ receipts posted before a rename keep deduplicating.
 | `milestone` | `/orbi milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
 | `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
 | `split` | `/orbi split` | `write` | turn the split proposal on this ticket's stop comment into child tickets |
+| `add_criteria` | `/orbi add-criteria` | `write` | append the proposed acceptance criteria to this ticket and queue it |
 
 A command on a STOPPED ticket still runs. The clarification gate leaves
 its ticket `ai-needs-detail`, so no delivery label is on it and no claim scan
 reads its comments; every tick runs the registered commands once over the
 open Issues carrying that label (`ticket_command.process_labeled_commands`,
 one call site beside the milestone and base-CI scans). That is what makes
-`/orbi split` reachable: the proposal it acts on lives in a stop comment.
+`/orbi split` and `/orbi add-criteria` reachable: the proposal they act
+on lives in a stop comment.
 
 A command can also declare the caller-supplied context it cannot run
 without (`required_context`, Issue #1939). The stopped-ticket scan runs
@@ -1103,6 +1107,17 @@ continues. A re-run adopts an existing child only when this runner authored
 it, its `<!-- orbi:split-child:<parent>:<n> -->` marker names that parent
 and item, and its title, acceptance lines and dependency still equal the
 item; anything else stops with a receipt that lists what exists.
+
+`/orbi add-criteria` (Issue #1929) appends the newest trusted stop
+comment's `kind=criteria` section — as the comment reads when the command
+runs — to the ticket body under an `## Acceptance` heading, followed by the
+hidden `<!-- orbi:acceptance:v1 -->` marker, adds the dispatch label,
+posts one receipt listing the conditions and removes `ai-needs-detail`
+LAST. The marker makes the append idempotent: a re-run after a failed step
+finds it and adds nothing, and a ticket that already carries the success
+receipt only gets the last step. Only a `kind=criteria` section is valid
+input: a split proposal, a missing section or an invalid line is rejected
+with a receipt naming the reason (and, for an invalid line, its number).
 
 Every registered command also has a spelling on the host (Issue #1930):
 `orbi <subcommand> --repo <owner/name> --issue <N>`, e.g.

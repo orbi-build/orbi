@@ -191,6 +191,7 @@ PROPOSAL_CONTRACT_MARKERS = (
     "验收：",
     "Editing this comment changes the proposal",
     "1-based number of the FIRST invalid line",
+    "<!-- orbi:acceptance:v1 -->",
     "never edit time",
     "the same trust rule the stop marker itself uses",
 )

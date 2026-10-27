@@ -650,6 +650,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `fix_base_command_failed` | 票内 `/orbi fix-base` 命令在某一步失败 |
 | `split_command_applied` | 票内 `/orbi split` 命令已把提案拆成子工单 |
 | `split_command_failed` | 票内 `/orbi split` 命令在某一步失败 |
+| `add_criteria_command_applied` | 票内 `/orbi add-criteria` 命令已把提案中的验收条件加入工单并让工单进入队列 |
+| `add_criteria_command_failed` | 票内 `/orbi add-criteria` 命令在某一步失败 |
 | `checks_permission_blocked` | check 读取因 App 权限未批准被拒绝；Issue 变为 ai-blocked 并附批准页面 |
 | `checks_permission_recovered` | check 读取恢复正常，被暂停的交付自动恢复 |
 | `base_ci_red_recovered` | 基础分支的 check 变绿，被暂停的交付自动恢复 |
@@ -917,6 +919,7 @@ orbi milestone set v0.5.7 --config orbi.toml
 | `milestone` | `/orbi milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
 | `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
 | `split` | `/orbi split` | `write` | turn the split proposal on this ticket's stop comment into child tickets |
+| `add_criteria` | `/orbi add-criteria` | `write` | append the proposed acceptance criteria to this ticket and queue it |
 
 每条已登记的命令在主机上还有一个拼写（Issue #1930）：
 `orbi <subcommand> --repo <owner/name> --issue <N>`，例如
@@ -931,8 +934,8 @@ orbi milestone set v0.5.7 --config orbi.toml
 `ai-needs-detail`，因此它不携带任何交付标签，也不会被领取扫描读到；每个
 tick 都会对带有该标签的开放工单运行一次已登记命令
 （`ticket_command.process_labeled_commands`，与里程碑确认、base-CI 扫描
-并列的一个调用点）。`/orbi split` 正是靠它才能被读到：它要处理的提案就在
-一条停止评论里。
+并列的一个调用点）。`/orbi split` 与 `/orbi add-criteria` 正是靠它
+才能被读到：它们要处理的提案就在一条停止评论里。
 
 命令还可以声明它无法运行、必须由调用方提供的上下文
 （`required_context`，Issue #1939）。停止工单扫描会在它读到的每张工单上
@@ -952,6 +955,15 @@ tick 都会对带有该标签的开放工单运行一次已登记命令
 `<!-- orbi:split-child:<parent>:<n> -->` 标记指向这个父工单和这个条目、
 且标题、验收行与依赖仍与条目一致时才会被复用；其余情况一律停下并发一条
 列出已有内容的回执。
+
+`/orbi add-criteria`（Issue #1929）把最新一条可信停止评论里的
+`kind=criteria` 段落 —— 按命令运行那一刻评论的内容 —— 追加到工单正文
+的 `## Acceptance` 标题下，并在其后写入隐藏标记
+`<!-- orbi:acceptance:v1 -->`；然后补上派发标签、发一条列出这些条件
+的回执，并且**最后**才移除 `ai-needs-detail`。该标记让追加幂等：某一步
+失败后重跑会读到它而不再追加；已经带有成功回执的工单只补最后一步。只有
+`kind=criteria` 段落是合法输入：拆分提案、没有提案或某一行无效都会被
+拒绝，回执写明原因（行无效时还给出行号）。
 
 以 `/orbi` 加一个没有任何命令登记的词开头的评论什么也不做：它就是一条
 无关评论，而不是格式错误的命令。

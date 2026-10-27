@@ -18,7 +18,7 @@ The [Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md)
 
 | Surface | Definition |
 |---|---|
-| CLI | `orbi` (one Runner tick), `orbi add`, `orbi suggest`, `orbi status`, `orbi session`, `orbi install-units`, `orbi sync-engine-source`, `orbi doctor`, `orbi check`, `orbi setup`, `orbi fix-base`, `orbi split` (one subcommand per registered arity-0 ticket command), `orbi milestone` (`milestone set <title>`), `orbi notify` (`notify test`) |
+| CLI | `orbi` (one Runner tick), `orbi add`, `orbi suggest`, `orbi status`, `orbi session`, `orbi install-units`, `orbi sync-engine-source`, `orbi doctor`, `orbi check`, `orbi setup`, `orbi fix-base`, `orbi split`, `orbi add-criteria` (one subcommand per registered arity-0 ticket command), `orbi milestone` (`milestone set <title>`), `orbi notify` (`notify test`) |
 | Config | `orbi.toml` fields documented in [Getting started](/getting-started) — including the Telegram notification key `telegram_chat_id`; `.orbi/env` loaded as systemd `EnvironmentFile` (it carries `ORBI_TELEGRAM_BOT_TOKEN`); the `pi_providers` JSON file |
 | Deployment | `systemd/orbi@.service` and `systemd/orbi@.timer` templates; `.orbi/` as the run-artifact and lock directory |
 | Label state machine | `labels.toml` (names, colors, descriptions) and `src/orbi/delivery_labels.py` (transitions) |
@@ -254,11 +254,13 @@ only a person can make — stays unchanged and carries no section.
 
 A rendered section is followed by one display sentence — English
 `Editing this comment changes the proposal.`, zh
-`编辑这条评论即可修改这份提案。` — carrying no meaning beyond that. A
-`kind=split` section adds a second display sentence naming the command that
-acts on it: English *Reply `/orbi split` to create these tickets.*, zh
-*回复 `/orbi split` 即可创建这些工单。*. The
-item number, the `(after N)` phrase (zh `（等第 N 条）`) and the
+`编辑这条评论即可修改这份提案。` — carrying no meaning beyond that. Each kind adds a second
+display sentence naming the command that acts on it: a
+`kind=split` section English *Reply `/orbi split` to create these
+tickets.*, zh *回复 `/orbi split` 即可创建这些工单。*; a
+`kind=criteria` section English *Reply `/orbi add-criteria` to add
+these and start.*, zh *回复 `/orbi add-criteria` 即可把这些加入工单并
+开始交付。* The item number, the `(after N)` phrase (zh `（等第 N 条）`) and the
 `Acceptance:` prefix (zh `验收：`) come from the message catalog, so a
 Chinese ticket renders the Chinese line grammar and the parser accepts every
 catalog language.
@@ -363,10 +365,36 @@ Milestone, and it receives the dispatch label. The parent then carries
 last, after the one receipt listing the children — so an interrupted run is
 picked up again by the next tick.
 
+### Adding the proposed acceptance criteria
+
+`/orbi add-criteria` — an issue comment, or on the host
+`orbi add-criteria --repo <owner/name> --issue <N>` — reads the newest
+trusted stop comment of the ticket it runs on, parses the section exactly as
+this page describes, and appends every `kind=criteria` condition — as the
+comment reads at that moment — to the ticket body under an `## Acceptance`
+heading, followed by the hidden `<!-- orbi:acceptance:v1 -->` marker:
+
+```text
+## Acceptance
+- <the first condition>
+- <the second condition>
+
+<!-- orbi:acceptance:v1 -->
+```
+
+The marker makes the append idempotent: a re-run after a failed step finds
+it and appends nothing, so the body gains the section exactly once. Only a
+`kind=criteria` section is valid input: a `kind=split` proposal, a missing
+section or an invalid line is rejected with a receipt naming the reason
+(and, for an invalid line, its number) and nothing is written. The ticket
+then carries the dispatch label and one receipt listing the conditions, and
+`ai-needs-detail` is removed last.
+
 ### Command receipts
 
 An in-ticket command (`/orbi milestone <version>`, `/orbi fix-base`,
-`/orbi split`) answers with one receipt comment per outcome. The receipt's hidden marker identifies
+`/orbi split`, `/orbi add-criteria`) answers with one receipt comment per
+outcome. The receipt's hidden marker identifies
 the command and its outcome, and its `comment=` key identifies the command
 comment it answers:
 
@@ -377,7 +405,7 @@ comment it answers:
   its handler and failed at that step.
 
 `<name>` is the command's stable machine id (`fix_base`, `milestone`,
-`split`), never the word a person types, so a receipt posted before the
+`split`, `add_criteria`), never the word a person types, so a receipt posted before the
 `/orbi` prefix keeps matching. `<key>` is the answered comment's GitHub id, then its URL, then
 `<login>@<createdAt>` when neither is readable — the key the `/orbi fix-base`
 success receipt already uses. The prose around the marker is display text in
