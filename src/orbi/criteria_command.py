@@ -31,11 +31,14 @@ receipt only gets step 4. The success receipt uses the command layer's own
 marker keyed on the command comment, so "has this command already
 succeeded?" is a marker lookup over the raw bodies, never prose.
 
-Every GitHub call a step makes is wrapped in the shared
-`ticket_command.run_step`: the shared layer posts its one failed receipt
-only for a `TicketCommandError`, so a raw `gh` refusal must never escape
-into the tick's bypass log — the person who replied would see no receipt at
-all.
+The two steps that change what the next tick reads — the append and the
+dispatch label — are wrapped in the shared `ticket_command.run_step`, so
+their refusal becomes the failed receipt and journal line naming that step
+(the shared layer posts its one failed receipt only for a
+`TicketCommandError`). The success receipt and the final label removal are
+deliberately NOT wrapped: each of them is retried by the next tick over what
+is already on the ticket, and a "failed" receipt beside the success would
+read as a second run.
 """
 from __future__ import annotations
 

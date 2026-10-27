@@ -188,9 +188,9 @@ def run_step(step: str, action: Callable[[], T]) -> T:
     `TicketCommandError` only, so a `gh` refusal inside a step is turned
     into exactly that: the receipt and the `<name>_command_failed` journal
     line name the step and GitHub's own sentence, and the ticket keeps its
-    scan label for the next tick. Every command's GitHub calls go through
-    this one wrapper, so no command can let a raw refusal escape into the
-    tick's bypass log where the person who replied would see no receipt.
+    scan label for the next tick. Every command wraps its steps here, so a
+    refusal inside one cannot escape into the tick's bypass log where the
+    person who replied would see no receipt.
     """
     try:
         return action()

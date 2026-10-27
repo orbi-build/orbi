@@ -367,12 +367,12 @@ picked up again by the next tick.
 
 ### Adding the proposed acceptance criteria
 
-`/orbi add-criteria` (issue comment or `orbi add-criteria --repo
-<owner/name> --issue <N>`) reads the newest trusted stop comment of the
-ticket it runs on, parses the section exactly as this page describes, and
-appends every `kind=criteria` condition — as the comment reads at that
-moment — to the ticket body under an `## Acceptance` heading, followed by
-the hidden `<!-- orbi:acceptance:v1 -->` marker:
+`/orbi add-criteria` — an issue comment, or on the host
+`orbi add-criteria --repo <owner/name> --issue <N>` — reads the newest
+trusted stop comment of the ticket it runs on, parses the section exactly as
+this page describes, and appends every `kind=criteria` condition — as the
+comment reads at that moment — to the ticket body under an `## Acceptance`
+heading, followed by the hidden `<!-- orbi:acceptance:v1 -->` marker:
 
 ```text
 ## Acceptance

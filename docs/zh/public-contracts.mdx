@@ -319,10 +319,10 @@ Split from #<父工单号>
 
 ### 追加提案中的验收条件
 
-`/orbi add-criteria`（票内评论，或 `orbi add-criteria --repo
-<owner/name> --issue <N>`）读取该工单最新一条可信停止评论，按本页规则解析
-其中的段落，并把每条 `kind=criteria` 条件 —— 按评论当时的内容 —— 追加
-到工单正文 `## Acceptance` 标题下，其后跟隐藏标记
+`/orbi add-criteria` —— 票内评论，或在主机上运行
+`orbi add-criteria --repo <owner/name> --issue <N>` —— 读取该工单最新一条
+可信停止评论，按本页规则解析其中的段落，并把每条 `kind=criteria` 条件
+—— 按评论当时的内容 —— 追加到工单正文 `## Acceptance` 标题下，其后跟隐藏标记
 `<!-- orbi:acceptance:v1 -->`：
 
 ```text
