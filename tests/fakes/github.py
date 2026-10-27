@@ -361,10 +361,14 @@ class FakeGh:
             milestone = self._milestone_number(flags["--milestone"][0])
         number = max(self.issues) + 1 if self.issues else 1
         # `gh` creates the Issue as the authenticated account, which is
-        # this runner: the author of engine-created tickets.
+        # this runner: the author of engine-created tickets. GitHub reports
+        # that account on the ISSUE as `app/<login>` (a real call against an
+        # engine-created ticket answers {"is_bot": true, "login":
+        # "app/orbi-build"}), while the same account's comments keep the
+        # bare login (Issue #1927).
         self.add_issue(number, title=title, body=body, milestone=milestone,
                        labels=tuple(flags.get("--label") or []),
-                       author=self.login)
+                       author=f"app/{self.login}")
         return f"https://github.com/{self.repo}/issues/{number}"
 
     def _milestone_number(self, title: str) -> int:

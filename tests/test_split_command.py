@@ -415,6 +415,42 @@ def test_a_matching_existing_child_is_adopted_and_queued(
     assert sorted(kid["number"] for kid in children(gh)) == [55, 101]
 
 
+@pytest.mark.parametrize("author_shape", [
+    "app/{login}",   # what `gh issue view --json author` really reports
+    "{login}[bot]",  # the REST shape of the same App credential
+    "{login}",       # a comment payload, and a user-credential install
+])
+def test_the_runner_author_has_every_github_payload_shape_adopted(
+    monkeypatch, tmp_path, author_shape,
+):
+    """The adoption check compares ACCOUNTS, not payload shapes.
+
+    GitHub names one credential three ways: an Issue this runner opened
+    answers `app/<login>` on its `author` field (a real call against an
+    engine-created ticket), its comments keep `<login>`, and REST keeps
+    the `[bot]` suffix. A re-run that matched only one shape would open a
+    duplicate child on every retry (Issue #1927).
+    """
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    existing_child(gh, number=55, author=author_shape.format(login=gh.login))
+    before = set(gh.issues)
+    reply(gh)
+
+    tick(monkeypatch, tmp_path, gh)
+
+    # No duplicate: the existing child is adopted and only item 2 is new.
+    assert before | {101} == set(gh.issues)
+    assert sorted(kid["number"] for kid in children(gh)) == [55, 101]
+    assert len(success_receipts(gh)) == 1
+
+
+def test_the_login_key_normalizes_every_payload_shape():
+    assert split_command._login_key("app/orbi-build") == "orbi-build"
+    assert split_command._login_key("orbi-build[bot]") == "orbi-build"
+    assert split_command._login_key("orbi-build") == "orbi-build"
+
+
 def _mismatch_tick(monkeypatch, tmp_path, gh, field) -> str:
     """Run one tick and return the single difference receipt."""
     before = set(gh.issues)

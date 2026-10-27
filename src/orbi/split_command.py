@@ -186,15 +186,31 @@ def parse_child_body(body: object) -> SplitChild | None:
     )
 
 
+# The App prefix gh puts on an author login. A real call against a ticket
+# this runner opened reads {"is_bot": true, "login": "app/orbi-build"} from
+# the issue view author field, while the SAME credential's comments and
+# auth status say "orbi-build" / "orbi-build[bot]": three shapes, one
+# account. The author is the adoption trust signal, so every comparison
+# normalizes the shapes first (Issue #1927).
+API_LOGIN_PREFIX = "app/"
+
+
+def _login_key(login: str) -> str:
+    """The comparable form of one GitHub account login."""
+    if login.startswith(API_LOGIN_PREFIX):
+        login = login[len(API_LOGIN_PREFIX):]
+    return strip_bot_suffix(login)
+
+
 def _runner_login() -> str:
     """The login a child must carry to be adopted by a re-run."""
-    return strip_bot_suffix(authenticated_github_login())
+    return _login_key(authenticated_github_login())
 
 
 def _author_login(state: dict) -> str | None:
     author = state.get("author")
     login = author.get("login") if isinstance(author, dict) else None
-    return login if isinstance(login, str) and login else None
+    return _login_key(login) if isinstance(login, str) and login else None
 
 
 def _parent_number(state: dict) -> int | None:
