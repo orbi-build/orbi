@@ -216,9 +216,11 @@ class SuggestionItem:
     """One proposed line.
 
     A "split" item is one new ticket: "text" is its result, "acceptance"
-    its acceptance line and "after" the number of an earlier item it
-    depends on. A "criteria" item is one condition and carries "text"
-    only.
+    its acceptance line and "after" the 1-based position of the earlier
+    item it depends on — a position, never the number a person wrote in an
+    edited section, so a renumbered or reordered proposal keeps every
+    dependency on its own item (Issue #1935). A "criteria" item is one
+    condition and carries "text" only.
     """
 
     text: str
@@ -492,7 +494,12 @@ def parse_suggestion(body: object) -> Suggestion | int | None:
     if end is None:
         return start + 1
     items: list[SuggestionItem] = []
-    numbers: set[int] = set()
+    # The number written in the section -> the item's 1-based position in
+    # "items". A person may leave gaps (5, 9) or reorder the lines, so the
+    # written number is resolved here and never leaves the parser: the
+    # stored dependency is the target item's position, exactly what the
+    # model's answer carries and what the renderer numbers (Issue #1935).
+    positions: dict[int, int] = {}
     index = start + 1
     while index < end:
         line = lines[index].strip()
@@ -523,12 +530,16 @@ def parse_suggestion(body: object) -> Suggestion | int | None:
             acceptance = _acceptance_line(lines[acceptance_index].rstrip())
         if acceptance is None:
             return line_number
-        if number in numbers or (after is not None and after not in numbers):
+        if number in positions or (
+            after is not None and after not in positions
+        ):
             return line_number
-        numbers.add(number)
-        items.append(
-            SuggestionItem(text=text, acceptance=acceptance, after=after)
-        )
+        items.append(SuggestionItem(
+            text=text,
+            acceptance=acceptance,
+            after=None if after is None else positions[after],
+        ))
+        positions[number] = len(items)
         index = acceptance_index + 1
     if not items:
         return end + 1
