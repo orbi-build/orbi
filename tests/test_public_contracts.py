@@ -175,3 +175,71 @@ def test_chinese_page_mirrors_the_contract_and_structure():
         "15",
     ):
         assert marker in chinese, f"Chinese page misses: {marker!r}"
+
+
+# --- Issue #1926: the clarification proposal and the command receipts ------
+
+# The proposal surface is a public contract: the markers, the line grammar,
+# the authoritative comment and the existing receipt markers are documented
+# so a consumer reads them from machine metadata, never from prose.
+PROPOSAL_CONTRACT_MARKERS = (
+    "<!-- orbi:suggestion:v1 kind=split -->",
+    "<!-- orbi:suggestion:v1 kind=criteria -->",
+    "<!-- /orbi/suggestion -->",
+    "   Acceptance: ",
+    "（等第 N 条）",
+    "验收：",
+    "Editing this comment changes the proposal",
+    "1-based number of the FIRST invalid line",
+    "never edit time",
+    "the same trust rule the stop marker itself uses",
+)
+
+RECEIPT_CONTRACT_MARKERS = (
+    "orbi-<name>-command",
+    "orbi-<name>-command-rejected",
+    "orbi-<name>-command-failed step=<step>",
+    "comment=<key>",
+    "stable machine id",
+    "never by parsing a translated sentence",
+)
+
+
+def test_the_clarification_proposal_contract_is_documented():
+    text = public_contracts_text()
+    for marker in PROPOSAL_CONTRACT_MARKERS:
+        assert marker in text, f"proposal contract misses: {marker!r}"
+
+
+def test_the_command_receipt_contract_is_documented():
+    text = public_contracts_text()
+    for marker in RECEIPT_CONTRACT_MARKERS:
+        assert marker in text, f"receipt contract misses: {marker!r}"
+
+
+def test_every_documented_invalid_proposal_example_has_a_line_number():
+    """Acceptance 3/4: the invalid examples the page lists are exactly the
+    ones the parser returns a line number for."""
+    from tests.test_clarify import INVALID_SECTION_EXAMPLES
+
+    text = public_contracts_text()
+    for name, body, expected_line in INVALID_SECTION_EXAMPLES:
+        assert f"{name}:" in text, f"undocumented invalid example: {name}"
+        from orbi import clarify
+
+        assert clarify.parse_suggestion(body) == expected_line, name
+
+
+def test_the_chinese_page_mirrors_the_proposal_and_receipt_contract():
+    chinese = ZH_PUBLIC_CONTRACTS.read_text(encoding="utf-8")
+    for marker in (
+        "## 澄清提案与命令回执",
+        "orbi:suggestion:v1",
+        "kind=split",
+        "kind=criteria",
+        "验收：",
+        "（等第 N 条）",
+        "orbi-<name>-command",
+        "comment=<key>",
+    ):
+        assert marker in chinese, f"Chinese page misses: {marker!r}"

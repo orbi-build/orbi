@@ -30,6 +30,7 @@ description: "使用者可以依赖什么，status 与进度文档又如何报�
 | Run 现场 | 可信的 `Orbi opened PR` 评论中的隐藏版本化块 `<!-- orbi:scene:v1 {json} -->`，由 `src/orbi/scene.py` 渲染与解析；接续已有 PR 交付的机器可读记录（旁边的可读文字仅供展示） |
 | 需求 skill | 目录 `integrations/claude-plugin/skills/write-ai-ready-issue/`——`SKILL.md`（agent 如何把一句话想法变成可交付 Issue）与 `fidelity-pass.md`（独立检查草稿是否恰好问了提问者想问的） |
 | Suggestions | `orbi suggest --json` 打印的文档——`{"repo", "base_sha", "session_dir", "suggestions": [{"kind": "existing" 或 "new", "issue": existing 为 Issue 号、new 为 null, "title", "why", "body": new 为 Issue body、existing 为 null}]}`，最多三条、按优先级排序；`session_dir` 是 `<deploy_home>/.orbi/suggest/<run_id>/.pi-session/`，存放与交付 session 文件同格式的 Pi session JSONL，命令退出后运行目录 `<deploy_home>/.orbi/suggest/<run_id>/` 在成功与失败时都保留——以及产出它的 skill 目录 `integrations/claude-plugin/skills/suggest-ai-ready-issues/` |
+| 澄清提案 | 澄清停止评论中隐藏的 `<!-- orbi:suggestion:v1 kind=split -->` / `kind=criteria` 区块、其行语法、权威停止评论规则，以及公开的回执标记（`orbi-<name>-command`、`orbi-<name>-command-rejected`、`orbi-<name>-command-failed step=...` 及其 `comment=...` 键）；见[澄清提案与命令回执](#澄清提案与命令回执) |
 
 表中没有的一切都属于内部实现，可能随时变化。
 
@@ -200,6 +201,93 @@ GitHub Issue 与标签仍是唯一状态存储。
 原地编辑这条记录（`waiting` -> `resuming`/`stale` -> `merged`）；
 稳定性规则相同：一条评论只有一个该块，存在但无效的块绝不会被当作“没有
 块”，旁边的可读文字仅供展示。
+
+## 澄清提案与命令回执
+
+工单评论上有两处机器可读的公开接口：澄清停止评论可能携带的提案，以及票内命令留下的回执。两者都从固定标记读取，绝不依赖旁边可被翻译的文字。
+
+### 澄清提案区块
+
+当 Orbi 的澄清门禁（认领时对可观察结果、验收条件与单一结果的检查）停下一张正文已经足以给出修复方案的工单时，停止评论会在两个固定标记之间携带这份提案。只有两种情况会渲染：
+
+- 仅缺少 `single_outcome`：`kind=split`，每个新工单一个编号条目，各带自己的验收行，并可选依赖更早的条目；
+- 仅缺少 `acceptance_condition`：`kind=criteria`，每个验收条件一行。
+
+其他所有停止评论——缺少别的要素、缺少第二个要素、工单缺少提案所需的事实，或修复需要只有人才能做的决定——保持原样，不带任何区块。
+
+```html
+<!-- orbi:suggestion:v1 kind=split -->
+1. Users can tag a note
+   Acceptance: after adding a tag, filtering by it finds the note; the tag survives a reload
+2. Users can export a note as Markdown (after 1)
+   Acceptance: Export downloads a .md file with title, body and tags
+<!-- /orbi/suggestion -->
+```
+
+```html
+<!-- orbi:suggestion:v1 kind=criteria -->
+- Adding a tag makes the note findable by filtering
+- The tag survives a reload
+<!-- /orbi/suggestion -->
+```
+
+渲染出的区块之后会跟一句显示文字——英文 `Editing this comment changes the proposal.`，中文 `编辑这条评论即可修改这份提案。`——除上述含义外不承载任何语义。条目编号、`(after N)` 短语（中文为 `（等第 N 条）`）与 `Acceptance:` 前缀（中文为 `验收：`）来自消息目录，因此中文工单渲染中文行语法，而解析器接受所有目录语言。
+
+### 行语法与解析
+
+标记之间每一行都是下列之一：
+
+- 起始标记 `<!-- orbi:suggestion:v1 kind=split -->` 或
+  `<!-- orbi:suggestion:v1 kind=criteria -->`；
+- `kind=split` 的条目行 `<n>. <result>`，紧接验收行
+  `   Acceptance: <text>`，结果后可带 ` (after <n>)`；
+- `kind=criteria` 的条目行 `- <condition>`；
+- 结束标记 `<!-- /orbi/suggestion -->`。
+
+区块内的空行会被忽略。条目编号必须唯一，`(after N)` 必须指向区块中更早写出的条目：因此可以删除、改名与重排行，只需保持这一条规则。
+
+一个解析器读取整条评论正文，返回解析出的条目，或第一条无效行的行号（从 1 起算，包含标记与文字）：
+
+- 没有起始标记：没有提案，这不是错误（与这份契约之前的停止评论同一结果）；
+- 未知的 `kind` 或缺少结束标记：起始标记所在行；
+- 结束标记之前出现第二个起始标记：该行；
+- 空区块：结束标记所在行；
+- 既不是上述形状的行、重复的条目编号、下一行不是自己验收行的条目（报告该条目行）、`(after N)` 指向自己、之后的条目或不存在条目：该行。
+
+```text
+missing end marker: the body ends before the end marker, so the start marker's line is reported
+empty section: the start marker immediately followed by the end marker
+duplicate item numbers: two items carrying the same number
+item without acceptance: an item line followed by anything but its acceptance line
+item line without a number: Users can export a note
+acceptance line without its prefix: Receipt: filtering by the tag finds the note
+after itself: 2. Export a note (after 2)
+after a later item: 1. Tag a note (after 2), written above item 2
+after a missing item: 2. Export a note (after 7), with no item 7 above it
+unknown kind: kind=plan
+criteria item is not a condition: 1. Tag a note inside a kind=criteria section
+second start marker: a start marker appearing before the end marker
+```
+
+### 权威停止评论
+
+权威停止评论是 Issue 上最新一条同时满足两点：带有正式停止前缀——可选的 `@author` 提及行、run marker 以及隐藏的 `<!-- orbi:clarify-stop:<digest> -->` 标记——且由本 Runner 撰写（与停止标记本身相同的信任规则）。选择依据是评论创建顺序，绝不是编辑时间，因此编辑一条停止评论不会改变它的位置。最新的受信停止评论就是权威，即使它没有携带提案：绝不沿用更早停止评论里的提案，别人写的更新评论也不会被选中。
+
+### 命令回执
+
+票内命令（`/orbi milestone <version>`、`/orbi fix-base`）对每种结果各留一条回执评论。回执的隐藏标记同时标明命令与结果，其 `comment=` 键标明它所回答的命令评论：
+
+- `<!-- orbi-<name>-command comment=<key> -->`：命令已执行；
+- `<!-- orbi-<name>-command-rejected comment=<key> -->`：未被采纳（权限、参数形状或命令自身的规则）；
+- `<!-- orbi-<name>-command-failed step=<step> comment=<key> -->`：已进入处理函数并在该步骤失败。
+
+`<name>` 是命令稳定的机器 id（`fix_base`、`milestone`），不是人输入的词，因此 `/orbi` 前缀之前发出的回执仍然匹配。`<key>` 是被回答评论的 GitHub id，其次是它的 URL，都读不到时是 `<login>@<createdAt>`——与 `/orbi fix-base` 成功回执已经使用的键相同。标记周围的文字是工单语言的显示文本，因此消费方从标记前缀与 `step` 字段判定结果，通过 `comment=` 定位命令评论，绝不解析被翻译过的句子。
+
+```text
+<!-- orbi-fix_base-command comment=3456789012 -->
+<!-- orbi-fix_base-command-rejected comment=3456789013 -->
+<!-- orbi-fix_base-command-failed step=look up the triage Issue comment=3456789014 -->
+```
 
 ## 工作示例
 
