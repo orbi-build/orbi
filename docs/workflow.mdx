@@ -933,14 +933,14 @@ Only delivery-policy keys are allowed:
 | --- | --- | --- |
 | `base_branch` | string | Delivery base branch for this repository; absent falls back to the matching `[[repositories]].base_branch`, else the host `base_branch`. |
 | `active_milestone` | string | The fresh-claim Milestone scope for this repository. Two scans carry NO Milestone qualifier. The external-takeover scan (Issue #842, decision D1): the fifth, last ready scan — an external triage ticket (body marker `<!-- orbi:external-pr:N -->`) is claimable regardless, because an external contribution belongs to no version's scope and must never block the release gate. A closed active Milestone with no newer open one (Issue #1391): that tick's claim scan runs unscoped (`active_milestone_closed_unscoped`), so a new `ai-ready` Issue is claimed right after the first release instead of waiting for a version nobody has decided yet; the configured value is left in place, and the ordinary advance moves the scope as soon as a newer open Milestone exists. |
-| `auto_next_milestone` | boolean | The idle auto-advance switch for this repository (Issue #1342): when `false`, a closed active Milestone with a pending higher one is not rewritten — the confirmation Issue carrying the in-ticket `/milestone <version>` command is posted instead. Absent falls back to the host value (default `true`). |
+| `auto_next_milestone` | boolean | The idle auto-advance switch for this repository (Issue #1342): when `false`, a closed active Milestone with a pending higher one is not rewritten — the confirmation Issue carrying the in-ticket `/orbi milestone <version>` command is posted instead. Absent falls back to the host value (default `true`). |
 | `message_language` | string | `en` or `zh` for Orbi’s comments and attribution footer in this repository; an explicit value overrides the host. It does not translate user content or override the host’s Telegram language. See [Comment language](#comment-language). |
 | `context_files` | string[] | Repository-relative context files; existence and a size cap are checked before injection. |
 | `dispatch_label` | string | The claim label for this repository (default `ai-ready`); the delivery lifecycle labels stay host constants. |
 | `steering_enabled` | boolean | Enables trusted correction polling for this repository; absent falls back to the host value. |
 | `steering_poll_seconds` | number | Poll interval for this repository; absent falls back to the host value and must be positive and finite. |
 | `steering_max_rounds` | integer | Maximum steering restarts for this repository; absent falls back to the host value. |
-| `release_confirmation` | boolean | Opt in to the finished-Milestone release confirmation (Issue #856): when the active Milestone has no open Issue left and no release ticket yet, the idle path posts ONE decision notice carrying the in-ticket `/milestone <version>` command instead of waiting silently. Default `false`: no release notice is posted and the release wait stays silent. The decision-notice sweep is not gated by this key — an obsolete notice (its `old=` no longer matches `active_milestone`) is closed on the OPEN and on the CLOSED Milestone path alike (Issue #1475). See *Waiting for a Milestone decision* below. |
+| `release_confirmation` | boolean | Opt in to the finished-Milestone release confirmation (Issue #856): when the active Milestone has no open Issue left and no release ticket yet, the idle path posts ONE decision notice carrying the in-ticket `/orbi milestone <version>` command instead of waiting silently. Default `false`: no release notice is posted and the release wait stays silent. The decision-notice sweep is not gated by this key — an obsolete notice (its `old=` no longer matches `active_milestone`) is closed on the OPEN and on the CLOSED Milestone path alike (Issue #1475). See *Waiting for a Milestone decision* below. |
 | `clarify_thin_tickets` | boolean | Opt in to the thin-ticket clarification gate (Issue #1088): a fresh claim first asks one no-tools Pi session whether the ticket states an observable result, an acceptance condition and a single outcome. A failing verdict stops the attempt (ONE comment naming the missing pieces, `ai-ready` swapped for `ai-needs-detail`) before any worktree, branch, Pi session or PR exists. Default `false`; every gate error fails open. See *Thin-ticket clarification gate* above. |
 
 ```toml
@@ -997,13 +997,14 @@ When the whole chain goes quiet, the Runner says WHY instead of waiting
 silently. Two idle states are surfaced through the SAME decision notice — one
 Issue carrying the fingerprint
 `orbi-milestone-advance old=<active> candidates=<titles>` — and each of them is
-answered by the same in-ticket command, a trusted `/milestone <version>`
-comment posted on that notice:
+answered by the same in-ticket command, a trusted `/orbi milestone <version>`
+comment posted on that notice (the pre-#1922 `/milestone <version>` spelling
+keeps working as a declared legacy alias):
 
 | Waiting state | When it appears | The one reply that answers it |
 | --- | --- | --- |
-| Advance wait | `auto_next_milestone = false` and the active Milestone is CLOSED — the advance stopped on purpose. | `/milestone <next-version>` — lands the next pending Milestone as active. |
-| Release wait | The active Milestone is OPEN with no open Issue left and nobody has opened its release ticket, and the repository policy sets `release_confirmation = true` (Issue #856). Without the key the pre-#856 silent wait is unchanged. | `/milestone <active-version>` — opens the release ticket for the finished Milestone. |
+| Advance wait | `auto_next_milestone = false` and the active Milestone is CLOSED — the advance stopped on purpose. | `/orbi milestone <next-version>` — lands the next pending Milestone as active. |
+| Release wait | The active Milestone is OPEN with no open Issue left and nobody has opened its release ticket, and the repository policy sets `release_confirmation = true` (Issue #856). Without the key the pre-#856 silent wait is unchanged. | `/orbi milestone <active-version>` — opens the release ticket for the finished Milestone. |
 
 Both notices are idempotent (one open notice per wait, never one per tick),
 are closed automatically with a receipt once the wait ends, and never act by

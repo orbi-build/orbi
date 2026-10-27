@@ -644,8 +644,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `active_milestone_closed_unscoped` | active Milestone 已关闭且没有更新的开放 Milestone，因此该 tick 不限定 Milestone 范围地认领 |
 | `active_milestone_advance_pending` | 存在待定的 Milestone 候选在等待 |
 | `active_milestone_release_pending` | 已完成的 Milestone 仍在等待确认创建 release 票 |
-| `milestone_command_applied` | 票内 `/milestone` 命令已完成全部三步 |
-| `milestone_command_failed` | 票内 `/milestone` 命令在某一步失败 |
+| `milestone_command_applied` | 票内 `/orbi milestone` 命令已完成全部三步 |
+| `milestone_command_failed` | 票内 `/orbi milestone` 命令在某一步失败 |
 | `fix_base_command_applied` | 票内 `/orbi fix-base` 命令已创建或复用了修复 Issue |
 | `fix_base_command_failed` | 票内 `/orbi fix-base` 命令在某一步失败 |
 | `checks_permission_blocked` | check 读取因 App 权限未批准被拒绝；Issue 变为 ai-blocked 并附批准页面 |
@@ -762,7 +762,7 @@ orbi setup --config orbi.toml
 
 # 把 active milestone 推进到一个 exact 的 GitHub Milestone 标题
 # （仓库策略声明 active_milestone 时写策略，否则写主机配置；
-# auto_next_milestone=false 的确认 Issue 自带票内 `/milestone <标题>` 命令）
+# auto_next_milestone=false 的确认 Issue 自带票内 `/orbi milestone <标题>` 命令）
 orbi milestone set v0.6.0 --config orbi.toml
 
 # 打印当前 run 的 Pi session JSONL 路径（没有 session 时 fail fast）
@@ -865,8 +865,9 @@ orbi milestone set v0.5.7 --config orbi.toml
 
 `auto_next_milestone = false` 时，已关闭的 active Milestone 会产生一张
 确认 Issue，票内自带命令（Issue #1290）：评论中以行首开始的
-`/milestone <标题>` 会执行维护者本来要做的三步，托管租户无需主机访问
-权限，也无需 CLI。
+`/orbi milestone <标题>` 会执行维护者本来要做的三步，托管租户无需主机
+访问权限，也无需 CLI。#1922 之前的 `/milestone <标题>` 写法仍作为声明过
+的别名有效。
 
 - 命令锚定在行首：长评论的任意一行都生效，`>` 引用回复永远不触发；
   匹配前先剥离 ```/~~~ 围栏代码块，因此「怎么用这条命令」的说明不会真的
@@ -895,28 +896,39 @@ orbi milestone set v0.5.7 --config orbi.toml
 ### 票内命令
 
 票内可以携带的命令集中在一张显式注册表 `TICKET_COMMANDS`
-（`src/orbi/ticket_command.py`）。共享层负责第二个命令不该重复实现的部分：
-行首锚定匹配、权限门禁、围栏/引用处理、后发命令覆盖先发、以及回执。命令
-只提供 verbs（绝不是正则）、一个声明式权限级别、一个 `validate` 回调
-（命令自己的业务规则：返回可读原因，参数被接受时返回 `None`）和一个
-`apply` 回调。只有调度入口 `process_commands(...)` 能触达 handler。
+（`src/orbi/ticket_command.py`），且每条都写作
+`/orbi <subcommand> [argument]`（Issue #1922）：前缀由共享层掌管，登记的
+命令自动继承。共享层还负责第二个命令不该重复实现的部分：行首锚定匹配、
+权限门禁、围栏/引用处理、后发命令覆盖先发、以及回执。命令只提供
+`subcommand`（绝不是正则）、`arity`（0 或 1）、可选的旧拼写 `aliases`、
+一个声明式权限级别、一个 `validate` 回调（命令自己的业务规则：返回可读
+原因，参数被接受时返回 `None`）和一个 `apply` 回调。只有调度入口
+`process_commands(...)` 能触达 handler。
+
+注册表的键是稳定的机器 id（`fix_base`、`milestone`）：回执标记
+（`orbi-<name>-command`）与 journal 事件名都用它，因此改名之前发过的回执
+仍然可以幂等去重。
 
 | Command | Usage | Permission | Description |
 | --- | --- | --- | --- |
-| `milestone` | `/milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
+| `milestone` | `/orbi milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
 | `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
+
+以 `/orbi` 加一个没有任何命令登记的词开头的评论什么也不做：它就是一条
+无关评论，而不是格式错误的命令。
 
 新增一个命令：
 
-1. 在命令自己的模块里定义 `CommandSpec`（`/milestone` 是第一个注册者）并
-   调用 `register_command(spec)`。注册即校验：名称重复、verb 已被其他命令
-   占用、权限级别不在 `PERMISSION_LEVELS` 中，都会在 import 时快速失败。
-2. 在 `JOURNAL_EVENTS`（`src/orbi/journal.py`）中登记事件类型
-   `<name>_command_applied` 与 `<name>_command_failed`，并在上面的"事件参考"
-   中补上对应行；`event()` 会拒绝未登记的 kind。
-3. 在本表（及中文页）补上该命令行：绑定测试
-   `tests/test_ticket_command.py` 会读取两张表，出现偏差即失败。
-4. 确保命令模块在处理票据前被 import（调用点所在模块是
+1. 在命令自己的模块里定义 `CommandSpec`（`/orbi milestone` 是第一个注册
+   者）并调用 `register_command(spec)`——这一次调用就是全部接线。注册即
+   校验：名称重复、subcommand 或旧别名已被其他命令占用、arity 不是 0 或 1、
+   权限级别不在 `PERMISSION_LEVELS` 中，都会在 import 时快速失败。注册同时
+   登记该命令的 journal 事件类型 `<name>_command_applied` 与
+   `<name>_command_failed`，`event()` 无需第二次编辑就会接受它们。
+2. 在上面"事件参考"中补上该命令的事件行，并在本表（及英文页）补上该命令
+   行：绑定测试 `tests/test_journal_events.py` 与
+   `tests/test_ticket_command.py` 会读取它们，出现偏差即失败。
+3. 确保命令模块在处理票据前被 import（调用点所在模块是
    `orbi/milestone.py`）：`register_command` 在 import 时执行。唯一的
    `process_commands(...)` 调用传入整张 `TICKET_COMMANDS` 注册表，已登记的
    命令无需改动调用点就会被调度。
@@ -929,9 +941,9 @@ Issue #856：active Milestone 已无 open Issue，却没人开它的 release 票
 `release_confirmation = true` 后，空闲路径会通过与推进等待相同的
 决策通知机制把这个状态呈现出来：恰好一条通知 Issue，指纹相同
 （`orbi-milestone-advance old=<active> candidates=<active>`），同样自带
-票内 `/milestone <版本>` 回复。引擎绝不自己创建 release 票——通知告知
-维护者，受信任的 `/milestone <active>` 评论执行上面记录的三步确定性
-操作。
+票内 `/orbi milestone <版本>` 回复。引擎绝不自己创建 release 票——通知
+告知维护者，受信任的 `/orbi milestone <active>` 评论执行上面记录的三步
+确定性操作。
 
 - 幂等：每个已完成的 Milestone 只存在一条 open 通知，绝不每 tick 一条。
 - release 票缺失时通知保持打开；等待结束后自动关闭——该 Milestone 的
@@ -943,7 +955,7 @@ Issue #856：active Milestone 已无 open Issue，却没人开它的 release 票
 - 这个等待是有意为之，不是故障：待做的决定是「为已完成的 Milestone
   打开 release 票」。未开启该键（默认 `false`）时行为与 #856 之前完全
   一致。
-- `/milestone` 的 release-ticket 步骤无法解析 `version_file` 时，通知会
+- `/orbi milestone` 的 release-ticket 步骤无法解析 `version_file` 时，通知会
   收到 `version_file_unresolved` 回执并给出修复方式；设置 `version_file`
   （或 `"none"`）后重新回复即可。
 
@@ -967,8 +979,9 @@ release notes 中声明，以便下游自动化有计划地迁移：
 - **部署：**`systemd/orbi@.service` 和 `systemd/orbi@.timer` 模板，及其
   `orbi@1..N` 实例（N = `max_concurrency`，上限为
   `MAX_RUNNER_INSTANCES = 5`）。
-- **票内命令：**milestone 确认 Issue 上的 `/milestone <标题>` 评论
-  （Issue #1290）。
+- **票内命令：**milestone 确认 Issue 上的 `/orbi milestone <标题>` 评论
+  （Issue #1290；`/milestone <标题>` 仍作为声明过的旧别名有效，Issue
+  #1922），以及 `/orbi fix-base`（Issue #1825）。
 - **标签和生命周期：**`labels.toml` 与 `src/orbi/delivery_labels.py`，
   以及 `ai-ready`、`ai-in-progress`、`ai-pr-opened`、`ai-fix-needed`、
   `ai-merged`、`ai-blocked` 状态机。

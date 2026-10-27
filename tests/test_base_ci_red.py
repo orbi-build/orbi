@@ -503,6 +503,33 @@ def test_fix_base_runs_once_per_comment(monkeypatch, permission):
     assert len(replies) == 1
 
 
+def test_a_success_receipt_from_before_the_prefix_still_dedupes(
+        monkeypatch):
+    """Acceptance (Issue #1922): the machine id did not change with the
+    `/orbi` prefix, so the `orbi-fix_base-command` marker of a success
+    reply posted by the OLD build still stops the next scan — the comment
+    is not executed twice."""
+    gh = _command_fixture(monkeypatch)
+    gh.issues[1825]["comments"].clear()
+    gh.comment(1825, "/orbi fix-base", login="maintainer")
+    command_id = gh.issues[1825]["comments"][0]["id"]
+    # The pre-#1922 success reply: same marker shape, written before the
+    # prefix existed.
+    gh.comment(
+        1825,
+        "created #950 — `backend — build, vet, test` on `release/7`\n\n"
+        f"<!-- orbi-fix_base-command comment={command_id} -->",
+        login="orbi-bot",
+    )
+    _blocks_issue(gh)
+    gh.add_check_runs(BASE_SHA, [base_run()])
+    before = len(gh.issues[1825]["comments"])
+    _run_command(gh)
+    # No triage Issue opened and no second reply posted for that comment.
+    assert [number for number in gh.issues if number != 1825] == []
+    assert len(gh.issues[1825]["comments"]) == before
+
+
 def test_fix_base_fails_the_step_instead_of_opening_a_duplicate(
         monkeypatch):
     """A lookup that cannot be read must never read as "no triage Issue":
@@ -863,7 +890,27 @@ def test_a_garbage_issue_create_answer_fails_the_command(monkeypatch):
         )
 
 
-def test_an_unknown_argument_is_rejected_with_the_usage(monkeypatch):
+def test_an_argument_fix_base_cannot_take_is_rejected_with_the_usage(
+        monkeypatch):
+    """Issue #1922: `fix-base` has arity 0, so a trailing word is a
+    malformed command — one readable receipt naming the canonical usage."""
+    gh = _command_fixture(monkeypatch)
+    gh.issues[1825]["comments"].clear()
+    gh.comment(1825, "/orbi fix-base now", login="maintainer")
+    _blocks_issue(gh)
+    gh.add_check_runs(BASE_SHA, [base_run()])
+    _run_command(gh)
+    assert len(gh.issues) == 1
+    bodies = [comment["body"] for comment in gh.issues[1825]["comments"]]
+    assert any(
+        "command not applied" in body and "`/orbi fix-base`" in body
+        for body in bodies
+    ), bodies
+
+
+def test_an_unknown_orbi_subcommand_gets_no_receipt(monkeypatch):
+    """Acceptance (Issue #1922): `/orbi <unknown>` is an unrelated comment
+    — no action, no receipt."""
     gh = _command_fixture(monkeypatch)
     gh.issues[1825]["comments"].clear()
     gh.comment(1825, "/orbi retry", login="maintainer")
@@ -872,7 +919,8 @@ def test_an_unknown_argument_is_rejected_with_the_usage(monkeypatch):
     _run_command(gh)
     assert len(gh.issues) == 1
     bodies = [comment["body"] for comment in gh.issues[1825]["comments"]]
-    assert any("/orbi fix-base" in body for body in bodies), bodies
+    assert not any("command not applied" in body for body in bodies), bodies
+    assert not any("command failed" in body for body in bodies), bodies
 
 
 def test_fix_base_without_check_evidence_replies_instead_of_inventing_one(

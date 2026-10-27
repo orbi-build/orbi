@@ -828,19 +828,16 @@ def _fix_base_validate(
     argument: str, *, language_code: str = language.DEFAULT_LANGUAGE,
     record: BaseCIRed | None = None, **_context: object,
 ) -> str | None:
-    """The command's own business rules: `fix-base`, on a paused scene.
+    """The command's own business rule: a paused scene to fix.
 
     The shared dispatcher evaluates EVERY registered command on every
     ticket that runs commands (`process_commands` is the single entry,
     Issue #1294), so "is there a block to fix at all" is this command's
     own precondition: without one the reader gets this receipt instead of
-    a handler running against state the ticket never carried.
+    a handler running against state the ticket never carried. The command
+    takes no argument (Issue #1922): the `/orbi` prefix and `fix-base`
+    are matched by the shared layer, not by this rule.
     """
-    if argument != "fix-base":
-        return language.text(
-            language_code, "command.reason_unknown_fix_base",
-            argument=argument,
-        )
     if not isinstance(record, BaseCIRed):
         return language.text(
             language_code, "command.reason_fix_base_no_block",
@@ -922,7 +919,8 @@ def _fix_base_apply(
 
 FIX_BASE_COMMAND = CommandSpec(
     name="fix_base",
-    verbs=("orbi",),
+    subcommand="fix-base",
+    arity=0,
     permission="write",
     validate=_fix_base_validate,
     apply=_fix_base_apply,

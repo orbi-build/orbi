@@ -1,22 +1,32 @@
 """The in-ticket command layer (Issue #1294).
 
 A ticket the engine opened can carry a command in one of its comments: the
-first was ``/milestone <version>`` (Issue #1290), which a hosted tenant can
-send without host access or the CLI. This module is the generic layer that
+first was ``/milestone <version>`` (Issue #1290; canonical
+``/orbi milestone <version>`` since #1922), which a hosted tenant can send
+without host access or the CLI. This module is the generic layer that
 extraction produced: regex construction, fenced/quoted handling, permission
 enforcement, last-occurrence-wins and the receipts.
+
+Every command is written ``/orbi <subcommand> [argument]`` (Issue #1922):
+the shared layer owns the prefix, so a registered command inherits it. The
+machine id (``name``) stays separate from what a user types
+(``subcommand``) because it is baked into the receipt markers and the
+journal event names of receipts already posted.
 
 Each command registers a `CommandSpec` **explicitly** — no decorators
 discovering things, no entry points, no dynamic import — the way
 `JOURNAL_EVENTS` registers the journal events. `register_command` validates
-the registration, so a duplicate name, an overlapping verb or an unknown
-permission fails fast at import time instead of silently overwriting.
+the registration, so a duplicate name, a duplicate subcommand or alias, or
+an unknown permission fails fast at import time instead of silently
+overwriting, and it registers the command's journal events: a new command
+is one spec plus one registration.
 
 The shared layer owns the matching and the permission check:
 
-- a command author supplies ``verbs``, never a regex, so the anchored
-  pattern (which keeps ``> /milestone vX`` and fenced examples from firing)
-  cannot be forgotten;
+- a command author supplies a ``subcommand`` (plus optional legacy
+  ``aliases``), never a regex, so the anchored pattern (which keeps
+  ``> /orbi fix-base`` and fenced examples from firing) cannot be
+  forgotten;
 - a command declares a ``permission`` level, and the dispatcher enforces it
   before the handler ever sees the caller;
 - ``process_commands`` is the single dispatch entry for one ticket — the
@@ -37,7 +47,7 @@ from dataclasses import dataclass
 
 from orbi import language
 from orbi.github import WRITE_PERMISSIONS, issue_comments, repository_permission
-from orbi.journal import event, run_command
+from orbi.journal import JOURNAL_EVENTS, event, run_command
 
 
 # Every Runner-authored comment carries one of these hidden markers: the run
@@ -79,7 +89,14 @@ PERMISSION_LEVELS: dict[str, frozenset[str]] = {
 
 @dataclass(frozen=True)
 class CommandSpec:
-    """One in-ticket command: its verbs, its permission and its callbacks.
+    """One in-ticket command: its spelling, its permission and its callbacks.
+
+    ``name`` is the stable MACHINE id: the registry key, the receipt marker
+    (``orbi-<name>-command``) and the journal event names
+    (``<name>_command_applied|failed``). ``subcommand`` is the canonical
+    word a user types after ``/orbi`` (Issue #1922); ``aliases`` are legacy
+    top-level spellings still accepted. ``arity`` is the number of
+    arguments the command takes (0 or 1).
 
     ``validate(argument, **context)`` is the command's own business rule: it
     returns a readable rejection reason, or ``None`` when the argument is
@@ -89,7 +106,8 @@ class CommandSpec:
     """
 
     name: str
-    verbs: tuple[str, ...]
+    subcommand: str
+    arity: int
     permission: str
     validate: Callable[..., str | None]
     apply: Callable[..., None]
@@ -98,6 +116,21 @@ class CommandSpec:
     # The argument's human label is a message-catalog key (Issue #1704),
     # so the receipt renders `version` / `版本` in the ticket's language.
     argument_label: str = "command.argument_label.argument"
+    # Top-level spellings accepted before the `/orbi` prefix existed
+    # (Issue #1922): ``/milestone`` keeps working, receipts show the
+    # canonical form.
+    aliases: tuple[str, ...] = ()
+
+    @property
+    def canonical(self) -> str:
+        """The canonical spelling every receipt and help text shows."""
+        return f"/orbi {self.subcommand}"
+
+    def command_text(self, argument: str | None = None) -> str:
+        """The canonical command line, with the argument when it has one."""
+        if argument and self.arity:
+            return f"{self.canonical} {argument}"
+        return self.canonical
 
 
 class TicketCommandRegistryError(RuntimeError):
@@ -115,7 +148,7 @@ class TicketCommandError(RuntimeError):
 
 # The command registry: name -> CommandSpec, written out explicitly (the
 # JOURNAL_EVENTS convention). A registrant adds its spec with
-# register_command; the duplicate-name / overlapping-verb / unknown-
+# register_command; the duplicate-name / duplicate-spelling / unknown-
 # permission checks make the registration itself the validation, so a typo
 # fails at import time instead of at the first ticket that carries it.
 TICKET_COMMANDS: dict[str, CommandSpec] = {}
@@ -124,31 +157,52 @@ TICKET_COMMANDS: dict[str, CommandSpec] = {}
 def register_command(spec: CommandSpec) -> None:
     """Register one command; fail fast on a contract violation.
 
-    Raises `TicketCommandRegistryError` for an empty name/verb set, a
-    duplicate name, a verb already owned by another command, or a
-    permission level not declared in `PERMISSION_LEVELS`.
+    Raises `TicketCommandRegistryError` for an empty name/subcommand, an
+    arity other than 0 or 1, a duplicate name, a subcommand or legacy alias
+    already owned by another command, or a permission level not declared in
+    `PERMISSION_LEVELS`. Registration also registers the command's journal
+    events, so a new command needs nothing else (Issue #1922).
     """
-    if not spec.name or not spec.verbs:
+    if not spec.name or not spec.subcommand:
         raise TicketCommandRegistryError(
-            f"a ticket command needs a name and at least one verb: {spec.name!r}"
+            f"a ticket command needs a name and a subcommand: {spec.name!r}"
+        )
+    if spec.arity not in (0, 1):
+        raise TicketCommandRegistryError(
+            f"ticket command {spec.name!r} declares arity {spec.arity!r}; "
+            "only 0 or 1 arguments are supported"
         )
     if spec.name in TICKET_COMMANDS:
         raise TicketCommandRegistryError(
             f"duplicate ticket command name: {spec.name!r}"
         )
-    for verb in spec.verbs:
-        for existing in TICKET_COMMANDS.values():
-            if verb in existing.verbs:
-                raise TicketCommandRegistryError(
-                    f"ticket command verb {verb!r} on {spec.name!r} is "
-                    f"already registered by {existing.name!r}"
-                )
+    for existing in TICKET_COMMANDS.values():
+        if spec.subcommand == existing.subcommand:
+            raise TicketCommandRegistryError(
+                f"ticket subcommand {spec.subcommand!r} on {spec.name!r} is "
+                f"already registered by {existing.name!r}"
+            )
+        duplicate_aliases = set(spec.aliases) & set(existing.aliases)
+        if duplicate_aliases:
+            raise TicketCommandRegistryError(
+                f"ticket command alias {sorted(duplicate_aliases)[0]!r} on "
+                f"{spec.name!r} is already registered by {existing.name!r}"
+            )
     if spec.permission not in PERMISSION_LEVELS:
         raise TicketCommandRegistryError(
             f"unknown permission level {spec.permission!r} for "
             f"ticket command {spec.name!r}"
         )
     TICKET_COMMANDS[spec.name] = spec
+    # The command's journal events are the registry's own business: a
+    # registrant that had to add them to JOURNAL_EVENTS by hand could ship
+    # a command whose first run raises inside ``event()`` (Issue #1922).
+    JOURNAL_EVENTS[f"{spec.name}_command_applied"] = (
+        f"an in-ticket `{spec.canonical}` command ran"
+    )
+    JOURNAL_EVENTS[f"{spec.name}_command_failed"] = (
+        f"an in-ticket `{spec.canonical}` command failed at one step"
+    )
 
 
 def strip_fenced_code_blocks(text: str) -> str:
@@ -181,28 +235,40 @@ def strip_fenced_code_blocks(text: str) -> str:
 
 
 def _command_pattern(spec: CommandSpec) -> re.Pattern[str]:
-    """The anchored matcher the shared layer compiles from a spec's verbs.
+    """The anchored matcher the shared layer compiles from a spec.
 
-    A command author supplies verbs, never a pattern, so the anchor and the
-    whitespace shape are identical for every command.
+    The canonical form is ``/orbi <subcommand>``; every declared legacy
+    alias keeps its old top-level spelling (Issue #1922). A command author
+    supplies spellings, never a pattern, so the anchor and the whitespace
+    shape are identical for every command.
     """
-    verbs = "|".join(re.escape(verb) for verb in spec.verbs)
-    return re.compile(rf"(?mi)^/(?:{verbs})\b[ \t]*([^\r\n]*)$")
+    # The spelling must end at whitespace or the line end: `/orbi
+    # milestone-extra` and `/milestones` are other words, not a command
+    # with an argument (Issue #1922).
+    forms = [rf"/orbi[ \t]+{re.escape(spec.subcommand)}(?=[ \t]|$)"]
+    forms.extend(
+        rf"/{re.escape(alias)}(?=[ \t]|$)" for alias in spec.aliases
+    )
+    return re.compile(rf"(?mi)^(?:{'|'.join(forms)})[ \t]*([^\r\n]*)$")
 
 
 def parse_commands(text: object, spec: CommandSpec) -> list[str | None]:
     """Every command ``spec`` issues in a comment body, in line order.
 
-    A command line whose argument is not exactly one field yields `None`: it
-    is readable as a command but malformed, and the caller owes its author
-    one readable receipt instead of silence.
+    A command line whose argument count is not the spec's ``arity`` yields
+    `None`: it is readable as a command but malformed, and the caller owes
+    its author one readable receipt instead of silence. An arity-0 command
+    yields the empty argument for a well-formed line.
     """
     if not isinstance(text, str) or not text:
         return []
     parsed: list[str | None] = []
     for argument in _command_pattern(spec).findall(strip_fenced_code_blocks(text)):
         fields = argument.split()
-        parsed.append(fields[0] if len(fields) == 1 else None)
+        if len(fields) != spec.arity:
+            parsed.append(None)
+        else:
+            parsed.append(fields[0] if fields else "")
     return parsed
 
 
@@ -347,9 +413,14 @@ def _post_command_receipt(
         summary, "",
         language.text(language_code, "command.reason", reason=reason),
     ]
+    # The command line, never the machine id: a receipt shows the canonical
+    # ``/orbi <subcommand>`` form (Issue #1922). An arity-0 command has no
+    # argument to name, so its parsed empty argument shows the line too.
     lines.append(
-        language.text(language_code, "command.command_line", name=spec.name)
-        if argument is None else language.text(
+        language.text(
+            language_code, "command.command_line", command=spec.canonical,
+        )
+        if not argument else language.text(
             language_code, "command.argument",
             label=_argument_label(spec, language_code), argument=argument,
         )
@@ -391,7 +462,8 @@ def process_commands(
                 repo, issue_number, comments, comment, spec=spec,
                 marker=f"{command_receipt_marker(spec)}-rejected",
                 summary=language.text(
-                    language_code, "command.not_applied", name=spec.name,
+                    language_code, "command.not_applied",
+                    command=spec.canonical,
                 ),
                 argument=argument, reason=reason, language_code=language_code,
             )
@@ -414,7 +486,7 @@ def process_commands(
                 ),
                 summary=language.text(
                     language_code, "command.failed",
-                    name=spec.name, argument=argument,
+                    command=spec.command_text(argument),
                 ),
                 argument=argument, reason=exc.reason, step=exc.step,
                 language_code=language_code,

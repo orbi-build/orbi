@@ -746,8 +746,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `active_milestone_closed_unscoped` | the active Milestone is closed with no newer open one, so the tick claims without a Milestone scope |
 | `active_milestone_advance_pending` | a pending Milestone candidate is waiting |
 | `active_milestone_release_pending` | a finished Milestone still needs its release ticket confirmed |
-| `milestone_command_applied` | an in-ticket `/milestone` command ran all three steps |
-| `milestone_command_failed` | an in-ticket `/milestone` command failed at one step |
+| `milestone_command_applied` | an in-ticket `/orbi milestone` command ran all three steps |
+| `milestone_command_failed` | an in-ticket `/orbi milestone` command failed at one step |
 | `fix_base_command_applied` | an in-ticket `/orbi fix-base` command opened or reused the fix Issues |
 | `fix_base_command_failed` | an in-ticket `/orbi fix-base` command failed at one step |
 | `checks_permission_blocked` | the check read was refused for a missing App permission; the Issue goes ai-blocked with the approval page |
@@ -890,7 +890,7 @@ orbi setup --config orbi.toml
 # Advance the active milestone to an exact GitHub Milestone title
 # (the repository policy when it declares active_milestone, else the
 # host config; the auto_next_milestone=false confirmation Issue carries
-# the in-ticket `/milestone <title>` command)
+# the in-ticket `/orbi milestone <title>` command)
 orbi milestone set v0.6.0 --config orbi.toml
 
 # Print the live Pi session JSONL path (fail fast when no session exists)
@@ -1008,9 +1008,10 @@ orbi milestone set v0.5.7 --config orbi.toml
 
 The confirmation Issue a closed active Milestone produces with
 `auto_next_milestone = false` carries an in-ticket command (Issue #1290):
-a comment whose own line is `/milestone <title>` runs the same three
+a comment whose own line is `/orbi milestone <title>` runs the same three
 steps a maintainer would, and a hosted tenant can send it without host
-access or the CLI.
+access or the CLI. The pre-#1922 spelling `/milestone <title>` keeps
+working as a declared legacy alias.
 
 - The line is anchored at the line start, so the command works on any
   line of a long comment and a `>` quoted reply never triggers it; fenced
@@ -1048,33 +1049,44 @@ the candidate list and the repository state. The event kinds it logs are
 ### In-ticket commands
 
 Every command a ticket can carry lives in one explicit registry,
-`TICKET_COMMANDS` (`src/orbi/ticket_command.py`). The shared layer owns the
-parts a second command must not re-implement: the anchored matcher, the
+`TICKET_COMMANDS` (`src/orbi/ticket_command.py`), and every one of them is
+written `/orbi <subcommand> [argument]` (Issue #1922): the shared layer owns
+the prefix, so a registered command inherits it. The shared layer also owns
+the parts a second command must not re-implement: the anchored matcher, the
 permission gate, the fenced/quoted handling, last-occurrence-wins and the
-receipts. A command supplies its verbs — never a regex — a declarative
-permission level, a `validate` callback (its own business rule: it returns
-a readable reason, or `None` when the argument is accepted) and an `apply`
-callback. The dispatcher `process_commands(...)` is the only path to a
-handler.
+receipts. A command supplies its `subcommand` (never a regex), its
+`arity` (0 or 1), any legacy `aliases`, a declarative permission level, a
+`validate` callback (its own business rule: it returns a readable reason,
+or `None` when the argument is accepted) and an `apply` callback. The
+dispatcher `process_commands(...)` is the only path to a handler.
+
+The registry key is the stable machine id (`fix_base`, `milestone`): it
+names the receipt markers (`orbi-<name>-command`) and the journal events, so
+receipts posted before a rename keep deduplicating.
 
 | Command | Usage | Permission | Description |
 | --- | --- | --- | --- |
-| `milestone` | `/milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
+| `milestone` | `/orbi milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
 | `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
+
+A comment that starts with `/orbi` and a word no command registered does
+nothing: it is an unrelated comment, not a malformed command.
 
 To add a command:
 
-1. Define a `CommandSpec` in the command's own module (`/milestone` is the
-   first registrant) and call `register_command(spec)`. Registration is the
-   validation: a duplicate name, a verb another command already owns, or a
-   permission level outside `PERMISSION_LEVELS` fails at import time.
-2. Register the journal event kinds `<name>_command_applied` and
-   `<name>_command_failed` in `JOURNAL_EVENTS` (`src/orbi/journal.py`) and
-   add their rows to the event reference above; `event()` refuses an
-   unregistered kind.
-3. Add the command's row to this table (and the Chinese page): the binding
-   test `tests/test_ticket_command.py` reads both tables and fails on drift.
-4. Make sure the command's module is imported before tickets are
+1. Define a `CommandSpec` in the command's own module (`/orbi milestone` is
+   the first registrant) and call `register_command(spec)`; that one call is
+   the whole wiring. Registration is the validation: a duplicate name, a
+   subcommand or legacy alias another command already owns, an arity other
+   than 0 or 1, or a permission level outside `PERMISSION_LEVELS` fails at
+   import time. Registration also registers the command's journal event kinds
+   `<name>_command_applied` and `<name>_command_failed`, so `event()` accepts
+   them without a second edit.
+2. Add the command's rows to the event reference and its row to this table
+   (and the Chinese page): the binding tests
+   `tests/test_journal_events.py` and `tests/test_ticket_command.py` read
+   them and fail on drift.
+3. Make sure the command's module is imported before tickets are
    processed (`orbi/milestone.py` is the module that owns the call site):
    `register_command` runs at import time. The single `process_commands(...)`
    call already passes the whole `TICKET_COMMANDS` registry, so a registered
@@ -1089,10 +1101,10 @@ owed. With `release_confirmation = true` in the repository's
 `.github/orbi.toml` the idle path surfaces that state through the SAME
 decision-notice mechanism as the advance wait: exactly one notice Issue,
 carrying the same fingerprint (`orbi-milestone-advance old=<active>
-candidates=<active>`) and the same in-ticket `/milestone <version>` reply.
-The engine never creates the release ticket by itself — the notice tells
-the maintainer, and a trusted `/milestone <active>` comment runs the three
-deterministic steps documented above.
+candidates=<active>`) and the same in-ticket `/orbi milestone <version>`
+reply. The engine never creates the release ticket by itself — the notice
+tells the maintainer, and a trusted `/orbi milestone <active>` comment runs
+the three deterministic steps documented above.
 
 - Idempotent: one open notice per finished Milestone, never one per tick.
 - Kept open while the release ticket is missing; closed automatically once
@@ -1134,8 +1146,9 @@ downstream automation can migrate deliberately:
 - **Deployment:** the `systemd/orbi@.service` and `systemd/orbi@.timer`
   templates and their `orbi@1..N` instances (N = `max_concurrency`,
   at most `MAX_RUNNER_INSTANCES = 5`).
-- **In-ticket commands:** the `/milestone <title>` comment on a milestone
-  confirmation Issue (Issue #1290).
+- **In-ticket commands:** the `/orbi milestone <title>` comment on a
+  milestone confirmation Issue (Issue #1290; `/milestone <title>` remains a
+  declared legacy alias, Issue #1922) and `/orbi fix-base` (Issue #1825).
 - **Labels and lifecycle:** `labels.toml` together with
   `src/orbi/delivery_labels.py`, and the `ai-ready`, `ai-in-progress`,
   `ai-pr-opened`, `ai-fix-needed`, `ai-merged`, and `ai-blocked` state machine.

@@ -1,26 +1,30 @@
-"""The shared in-ticket command layer (Issue #1294).
+"""The shared in-ticket command layer (Issue #1294, Issue #1922).
 
 `/milestone` was the first in-ticket command; Issue #1294 lifted the
 generic machinery (matching, permission gate, receipts) into
 `orbi.ticket_command` so a second command is a registration, not a copy.
-These tests drive that layer through a FICTIONAL command, `/noop`, so the
+Issue #1922 gave the layer the `/orbi` prefix and the per-spec arity, so a
+command supplies its `subcommand` and declares any legacy alias. These
+tests drive that layer through a FICTIONAL command, `/orbi noop`, so the
 guarantees are pinned independently of the milestone's business rules:
 
-- a command supplies verbs, never a regex — the shared layer builds the
-  anchored pattern;
-- registration is the validation (duplicate name, overlapping verb,
-  unknown permission fail at import time);
+- a command supplies spellings, never a regex — the shared layer builds the
+  anchored pattern and owns the prefix;
+- registration is the validation (duplicate name, duplicate subcommand or
+  alias, unknown permission, bad arity fail at import time) and registers
+  the command's journal events;
 - the dispatcher is the only path to a handler;
 - the rejections are one readable receipt per occurrence, idempotent;
 - `TICKET_COMMANDS` matches the command tables in the EN and ZH docs
   (`docs/operations.mdx`, `docs/zh/operations.mdx`).
 """
+import contextlib
 import logging
 from pathlib import Path
 
 import pytest
 
-from orbi import milestone_command
+from orbi import journal, milestone_command
 from orbi import ticket_command
 
 from tests.seam import seam
@@ -75,14 +79,33 @@ def _noop_apply(target, *, repo, issue_number, applied, **_context):
     applied.append((repo, issue_number, target))
 
 
+@contextlib.contextmanager
+def _registered(spec):
+    """Register `spec` in the REAL registry and journal for one test.
+
+    No registry is patched: the point of the acceptance test below is that
+    `register_command` alone wires everything (Issue #1922), so the test
+    runs against the real `TICKET_COMMANDS` / `JOURNAL_EVENTS` and undoes
+    only what it added.
+    """
+    ticket_command.register_command(spec)
+    try:
+        yield spec
+    finally:
+        ticket_command.TICKET_COMMANDS.pop(spec.name, None)
+        for suffix in ("applied", "failed"):
+            journal.JOURNAL_EVENTS.pop(f"{spec.name}_command_{suffix}", None)
+
+
 def _noop_spec():
     return ticket_command.CommandSpec(
         name="noop",
-        verbs=("noop",),
+        subcommand="noop",
+        arity=1,
         permission="write",
         validate=_noop_validate,
         apply=_noop_apply,
-        usage="/noop <target>",
+        usage="/orbi noop <target>",
         description="no-op probe for the shared command layer",
         # A message-catalog key: the receipt renders the label in the
         # ticket's language (Issue #1704).
@@ -93,23 +116,50 @@ def _noop_spec():
 # --- matching is shared, never a command-supplied regex ------------------
 
 
-def test_the_shared_layer_compiles_the_pattern_from_verbs_alone():
+def test_the_shared_layer_owns_the_prefix_and_compiles_the_pattern():
     spec = _noop_spec()
     assert ticket_command.parse_commands(
-        "please run this:\n/noop alpha", spec,
+        "please run this:\n/orbi noop alpha", spec,
     ) == ["alpha"]
+    # Case-insensitive, like every spelling before it.
+    assert ticket_command.parse_commands("/ORBI NOOP alpha", spec) == ["alpha"]
     # A quoted reply and a fenced example never trigger.
-    assert ticket_command.parse_commands("> /noop alpha", spec) == []
+    assert ticket_command.parse_commands("> /orbi noop alpha", spec) == []
     assert ticket_command.parse_commands(
-        "how:\n```\n/noop alpha\n```\n", spec,
+        "how:\n```\n/orbi noop alpha\n```\n", spec,
     ) == []
-    assert ticket_command.parse_commands("use `/noop alpha`", spec) == []
+    assert ticket_command.parse_commands("use `/orbi noop alpha`", spec) == []
     # A malformed line is readable as a command attempt, so it gets a reason.
-    assert ticket_command.parse_commands("/noop", spec) == [None]
-    assert ticket_command.parse_commands("/noop a b", spec) == [None]
-    # An indented line is never a command, and a longer word is not this verb.
-    assert ticket_command.parse_commands("  /noop alpha", spec) == []
-    assert ticket_command.parse_commands("/noops alpha", spec) == []
+    assert ticket_command.parse_commands("/orbi noop", spec) == [None]
+    assert ticket_command.parse_commands("/orbi noop a b", spec) == [None]
+    # An indented line is never a command, and a longer word is not this
+    # subcommand.
+    assert ticket_command.parse_commands("  /orbi noop alpha", spec) == []
+    assert ticket_command.parse_commands("/orbi noops alpha", spec) == []
+    # The bare subcommand without the prefix is not a command any more
+    # (a spec only matches `/orbi <subcommand>` or a declared alias).
+    assert ticket_command.parse_commands("/noop alpha", spec) == []
+    assert ticket_command.parse_commands("/noop", spec) == []
+
+
+def test_an_unknown_orbi_word_is_not_a_command():
+    """Acceptance: `/orbi unknown` produces no action and no receipt."""
+    spec = _noop_spec()
+    assert ticket_command.parse_commands("/orbi unknown", spec) == []
+    assert ticket_command.parse_commands("/orbi unknown alpha", spec) == []
+    assert ticket_command.parse_commands("/orbi", spec) == []
+
+
+def test_an_arity_zero_command_takes_no_argument():
+    spec = ticket_command.CommandSpec(
+        name="zero", subcommand="zero", arity=0, permission="write",
+        validate=lambda *a, **k: None, apply=lambda *a, **k: None,
+        usage="/orbi zero", description="x",
+    )
+    assert ticket_command.parse_commands("/orbi zero", spec) == [""]
+    assert ticket_command.parse_commands("/orbi zero  ", spec) == [""]
+    # An argument this command cannot take is still a command attempt.
+    assert ticket_command.parse_commands("/orbi zero please", spec) == [None]
 
 
 def test_a_command_spec_carries_no_raw_regex():
@@ -118,14 +168,23 @@ def test_a_command_spec_carries_no_raw_regex():
     assert "regex" not in fields and "pattern" not in fields
 
 
-def test_registration_rejects_a_spec_without_name_or_verbs():
-    for name, verbs in (("", ("noop",)), ("noop", ())):
+def test_registration_rejects_a_spec_without_name_or_subcommand():
+    for name, subcommand in (("", "noop"), ("noop", "")):
         with pytest.raises(ticket_command.TicketCommandRegistryError):
             ticket_command.register_command(ticket_command.CommandSpec(
-                name=name, verbs=verbs, permission="write",
+                name=name, subcommand=subcommand, arity=1, permission="write",
                 validate=lambda *a, **k: None, apply=lambda *a, **k: None,
-                usage="/noop", description="x",
+                usage="/orbi noop", description="x",
             ))
+
+
+def test_registration_rejects_an_arity_other_than_zero_or_one():
+    with pytest.raises(ticket_command.TicketCommandRegistryError, match="arity"):
+        ticket_command.register_command(ticket_command.CommandSpec(
+            name="other", subcommand="other", arity=2, permission="write",
+            validate=lambda *a, **k: None, apply=lambda *a, **k: None,
+            usage="/orbi other", description="x",
+        ))
 
 
 # --- registration is the validation --------------------------------------
@@ -134,37 +193,60 @@ def test_registration_rejects_a_spec_without_name_or_verbs():
 def test_registration_rejects_a_duplicate_name():
     with pytest.raises(ticket_command.TicketCommandRegistryError, match="duplicate"):
         ticket_command.register_command(ticket_command.CommandSpec(
-            name="milestone", verbs=("milestone2",), permission="write",
+            name="milestone", subcommand="milestone2", arity=1,
+            permission="write",
             validate=lambda *a, **k: None, apply=lambda *a, **k: None,
-            usage="/milestone2", description="x",
+            usage="/orbi milestone2", description="x",
         ))
 
 
-def test_registration_rejects_a_verb_another_command_owns():
-    with pytest.raises(ticket_command.TicketCommandRegistryError, match="already registered"):
+def test_registration_rejects_a_duplicate_subcommand():
+    with pytest.raises(
+        ticket_command.TicketCommandRegistryError, match="already registered",
+    ):
         ticket_command.register_command(ticket_command.CommandSpec(
-            name="other", verbs=("milestone",), permission="write",
+            name="other", subcommand="milestone", arity=1, permission="write",
             validate=lambda *a, **k: None, apply=lambda *a, **k: None,
-            usage="/other", description="x",
+            usage="/orbi other", description="x",
+        ))
+
+
+def test_registration_rejects_a_duplicate_legacy_alias():
+    with pytest.raises(
+        ticket_command.TicketCommandRegistryError, match="alias 'milestone'",
+    ):
+        ticket_command.register_command(ticket_command.CommandSpec(
+            name="other", subcommand="other", arity=1, permission="write",
+            validate=lambda *a, **k: None, apply=lambda *a, **k: None,
+            usage="/orbi other", description="x", aliases=("milestone",),
         ))
 
 
 def test_registration_rejects_an_unknown_permission_level():
     with pytest.raises(ticket_command.TicketCommandRegistryError, match="permission"):
         ticket_command.register_command(ticket_command.CommandSpec(
-            name="other", verbs=("other",), permission="admin",
+            name="other", subcommand="other", arity=1, permission="admin",
             validate=lambda *a, **k: None, apply=lambda *a, **k: None,
-            usage="/other", description="x",
+            usage="/orbi other", description="x",
         ))
 
 
-def test_registration_accepts_a_valid_spec_and_then_shuts_the_door(monkeypatch):
-    monkeypatch.setattr(seam, "TICKET_COMMANDS", {})
+def test_registration_accepts_a_valid_spec_and_then_shuts_the_door():
     spec = _noop_spec()
-    ticket_command.register_command(spec)
-    assert ticket_command.TICKET_COMMANDS == {"noop": spec}
-    with pytest.raises(ticket_command.TicketCommandRegistryError, match="duplicate"):
-        ticket_command.register_command(spec)
+    with _registered(spec):
+        assert ticket_command.TICKET_COMMANDS["noop"] is spec
+        # Registration wired the journal events too (Issue #1922): a new
+        # command needs no second edit.
+        assert journal.JOURNAL_EVENTS["noop_command_applied"].endswith(
+            "`/orbi noop` command ran"
+        )
+        assert journal.JOURNAL_EVENTS["noop_command_failed"].endswith(
+            "`/orbi noop` command failed at one step"
+        )
+        with pytest.raises(
+            ticket_command.TicketCommandRegistryError, match="duplicate",
+        ):
+            ticket_command.register_command(spec)
 
 
 # --- selection: permission, the command's own rule, last word wins -------
@@ -172,7 +254,7 @@ def test_registration_accepts_a_valid_spec_and_then_shuts_the_door(monkeypatch):
 
 def test_selection_enforces_the_declared_permission():
     comments = [_comment(
-        "/noop alpha", login="outsider", association="NONE",
+        "/orbi noop alpha", login="outsider", association="NONE",
     )]
     target, rejections = ticket_command.select_command(
         comments, _noop_spec(), repo="owner/repo", allowed_targets=["alpha"],
@@ -189,7 +271,7 @@ def test_selection_enforces_the_declared_permission():
 
 def test_selection_reports_the_commands_own_validation_reason():
     target, rejections = ticket_command.select_command(
-        [_comment("/noop beta")], _noop_spec(), repo="owner/repo",
+        [_comment("/orbi noop beta")], _noop_spec(), repo="owner/repo",
         allowed_targets=["alpha"],
     )
     assert target is None
@@ -200,11 +282,11 @@ def test_selection_reports_the_commands_own_validation_reason():
 def test_selection_skips_comments_carrying_the_runner_marker():
     comments = [
         _comment(
-            "<!-- orbi:run=deadbeef -->\n/noop alpha",
+            "<!-- orbi:run=deadbeef -->\n/orbi noop alpha",
             login="orbi-build[bot]", association="NONE", cid=1,
         ),
-        _comment("/noop alpha", cid=2),
-        _comment("/noop beta", cid=3),
+        _comment("/orbi noop alpha", cid=2),
+        _comment("/orbi noop beta", cid=3),
     ]
     target, rejections = ticket_command.select_command(
         comments, _noop_spec(), repo="owner/repo",
@@ -217,8 +299,8 @@ def test_selection_skips_comments_carrying_the_runner_marker():
 
 def test_selection_ignores_unreadable_comments_and_unreadable_authors():
     target, rejections = ticket_command.select_command(
-        ["not-a-dict", None, {"body": "/noop alpha"},
-         _comment("/noop beta"), _comment("thanks")],
+        ["not-a-dict", None, {"body": "/orbi noop alpha"},
+         _comment("/orbi noop beta"), _comment("thanks")],
         _noop_spec(), repo="owner/repo", allowed_targets=["alpha", "beta"],
     )
     # An entry that is not a comment is ignored; a comment whose author
@@ -271,8 +353,8 @@ def test_dispatch_posts_one_idempotent_receipt_per_rejected_occurrence(
     monkeypatch,
 ):
     comments = [
-        _comment("/noop alpha", login="outsider", association="NONE", cid=11),
-        _comment("/noop beta", cid=12),
+        _comment("/orbi noop alpha", login="outsider", association="NONE", cid=11),
+        _comment("/orbi noop beta", cid=12),
     ]
     posts: list = []
     events: list = []
@@ -301,7 +383,7 @@ def test_dispatch_posts_one_idempotent_receipt_per_rejected_occurrence(
 def test_dispatch_runs_the_winning_command_and_emits_the_applied_event(
     monkeypatch,
 ):
-    comments = [_comment("/noop alpha", cid=31)]
+    comments = [_comment("/orbi noop alpha", cid=31)]
     posts: list = []
     events: list = []
     applied: list = []
@@ -321,7 +403,7 @@ def test_dispatch_runs_the_winning_command_and_emits_the_applied_event(
 def test_dispatch_names_the_failed_step_and_emits_the_failed_event(
     monkeypatch,
 ):
-    comments = [_comment("/noop fail", cid=41)]
+    comments = [_comment("/orbi noop fail", cid=41)]
     posts: list = []
     events: list = []
     _patch_dispatch(monkeypatch, comments, posts, events)
@@ -330,7 +412,7 @@ def test_dispatch_names_the_failed_step_and_emits_the_failed_event(
         allowed_targets=["fail"], applied=[],
     )
     body = posts[0][posts[0].index("--body") + 1]
-    assert "`/noop fail` command failed" in body
+    assert "`/orbi noop fail` command failed" in body
     assert "- reason: boom" in body
     assert "- failed step: `noop step`" in body
     assert "<!-- orbi-noop-command-failed step=noop step comment=41 -->" in body
@@ -343,9 +425,34 @@ def test_dispatch_names_the_failed_step_and_emits_the_failed_event(
     )]
 
 
+def test_a_third_command_needs_only_a_spec_and_a_registration(
+    monkeypatch, caplog,
+):
+    """Acceptance: a new subcommand is one `CommandSpec` plus
+    `register_command` — no edit to the matcher, the dispatcher or the
+    journal registry — and `/orbi <name> arg` reaches its handler through
+    the REAL `event()` (only the GitHub reads are faked)."""
+    applied: list = []
+    spec = ticket_command.CommandSpec(
+        name="third", subcommand="third", arity=1, permission="write",
+        validate=lambda argument, **_context: None,
+        apply=lambda argument, *, applied, **_context: applied.append(argument),
+        usage="/orbi third <target>", description="a third command",
+    )
+    comments = [_comment("/orbi third alpha", cid=51)]
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
+    with _registered(spec), caplog.at_level(logging.INFO):
+        ticket_command.process_commands(
+            "owner/repo", 436, commands=[spec], applied=applied,
+        )
+    assert applied == ["alpha"]
+    assert "third_command_applied" in caplog.text
+    assert "third=alpha" in caplog.text
+
+
 def test_a_receipt_names_the_comment_without_an_id_or_url(monkeypatch):
     comments = [{
-        "body": "/noop beta",
+        "body": "/orbi noop beta",
         "author": {"login": "outsider"},
         "authorAssociation": "NONE",
         "createdAt": "2026-09-15T01:00:00Z",
@@ -364,7 +471,7 @@ def test_a_receipt_names_the_comment_without_an_id_or_url(monkeypatch):
 
 def test_a_receipt_names_a_comment_by_its_url_when_it_has_one(monkeypatch):
     comments = [_comment(
-        "/noop alpha", login="outsider", association="NONE", cid=11,
+        "/orbi noop alpha", login="outsider", association="NONE", cid=11,
         url="https://github.com/owner/repo/issues/436#issuecomment-11",
     )]
     posts: list = []
@@ -449,8 +556,38 @@ def test_milestone_is_the_first_registrant():
     assert "milestone" in ticket_command.TICKET_COMMANDS
     spec = ticket_command.TICKET_COMMANDS["milestone"]
     assert spec is milestone_command.MILESTONE_COMMAND
-    assert spec.verbs == ("milestone",)
+    assert spec.subcommand == "milestone"
+    assert spec.arity == 1
+    # The pre-#1922 spelling stays a declared alias, not a second command.
+    assert spec.aliases == ("milestone",)
+    assert spec.canonical == "/orbi milestone"
     assert spec.permission == "write"
+
+
+def test_the_machine_id_stays_separate_from_the_typed_subcommand():
+    """Receipts already posted and journal consumers key on the machine id
+    (Issue #1922): it must keep matching what shipped before the prefix."""
+    fix_base = ticket_command.TICKET_COMMANDS["fix_base"]
+    assert fix_base.name == "fix_base"
+    assert fix_base.subcommand == "fix-base"
+    assert ticket_command.command_receipt_marker(fix_base) == (
+        "orbi-fix_base-command"
+    )
+    assert "fix_base_command_applied" in journal.JOURNAL_EVENTS
+    assert "fix_base_command_failed" in journal.JOURNAL_EVENTS
+
+
+def test_a_declared_alias_matches_but_is_not_the_canonical_form():
+    spec = ticket_command.CommandSpec(
+        name="legacy", subcommand="legacy", arity=1, permission="write",
+        validate=lambda *a, **k: None, apply=lambda *a, **k: None,
+        usage="/orbi legacy <target>", description="x", aliases=("old",),
+    )
+    assert ticket_command.parse_commands("/orbi legacy alpha", spec) == ["alpha"]
+    assert ticket_command.parse_commands("/old alpha", spec) == ["alpha"]
+    assert ticket_command.parse_commands("/oldish alpha", spec) == []
+    assert spec.command_text("alpha") == "/orbi legacy alpha"
+    assert spec.command_text() == "/orbi legacy"
 
 
 def test_the_generic_layer_left_the_milestone_module():

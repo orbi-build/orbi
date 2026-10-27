@@ -1,12 +1,13 @@
-"""The in-ticket `/milestone <version>` command (Issue #1290).
+"""The in-ticket `/orbi milestone <version>` command (Issue #1290).
 
 A closed active milestone with ``auto_next_milestone = false`` puts the
 engine in an intentional wait, and the confirmation ticket asks a human to
 advance it. A hosted tenant can neither run the CLI nor edit the host
 config, so the ticket itself carries the command: a comment line
-``/milestone vX.Y.Z`` runs the same deterministic three steps a maintainer
-would — create the milestone, open its release ticket, land
-``active_milestone``.
+``/orbi milestone vX.Y.Z`` runs the same deterministic three steps a
+maintainer would — create the milestone, open its release ticket, land
+``active_milestone``. The pre-#1922 ``/milestone vX.Y.Z`` spelling stays a
+declared alias of the same command.
 
 Deliberate limits: the command never advances anything by itself, never
 infers the next version, and never calls a model. It only accepts a title
@@ -602,18 +603,21 @@ def _milestone_apply(
     )
 
 
-# `/milestone` is the first registrant of the shared in-ticket command layer
-# (`orbi.ticket_command`). Registration validates itself: the shared layer
-# owns the anchored matcher, the permission gate and the receipts, so this
-# module supplies only the verbs, the declarative permission, and the two
-# callbacks that carry the milestone's business.
+# `/orbi milestone` is the first registrant of the shared in-ticket command
+# layer (`orbi.ticket_command`). Registration validates itself: the shared
+# layer owns the prefix, the anchored matcher, the permission gate and the
+# receipts, so this module supplies only the subcommand, its one legacy
+# alias (`/milestone`, the pre-#1922 spelling), the declarative permission,
+# and the two callbacks that carry the milestone's business.
 MILESTONE_COMMAND = CommandSpec(
     name="milestone",
-    verbs=("milestone",),
+    subcommand="milestone",
+    arity=1,
+    aliases=("milestone",),
     permission="write",
     validate=_milestone_validate,
     apply=_milestone_apply,
-    usage="/milestone <version>",
+    usage="/orbi milestone <version>",
     description="advance the active Milestone from a confirmation Issue",
     argument_label="command.argument_label.version",
 )

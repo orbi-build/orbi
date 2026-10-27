@@ -176,12 +176,6 @@ BASE_CI_RED_MESSAGES: dict[str, tuple[str, str]] = {
     # dispatcher evaluates this command on every ticket that runs
     # commands, and only a paused base-branch-red delivery carries the
     # block the handler needs.
-    "command.reason_unknown_fix_base": (
-        "`{argument}` is not a known command; the only one here is "
-        "`/orbi fix-base`",
-        "`{argument}` 不是已知命令；这里唯一的命令是 "
-        "`/orbi fix-base`",
-    ),
     "command.reason_fix_base_no_block": (
         "`/orbi fix-base` only works on a delivery paused by a red "
         "base branch; no `orbi:base-ci-red:v1` block is present here",

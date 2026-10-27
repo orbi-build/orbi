@@ -201,10 +201,10 @@ Choose the Milestone from those live values:
 - `auto_next_milestone = false`: do not choose for them. File without
   `--milestone` and tell the person in one line that Orbi is waiting for them
   to confirm the next Milestone, linking the existing confirmation Issue,
-  where they reply with `/milestone`. Find it by its fingerprint; when the
-  search returns several duplicates, link the lowest number, and when it
-  returns none yet, say Orbi will post the confirmation Issue on its next
-  idle tick — do not create it:
+  where they reply with `/orbi milestone <version>`. Find it by its
+  fingerprint; when the search returns several duplicates, link the lowest
+  number, and when it returns none yet, say Orbi will post the confirmation
+  Issue on its next idle tick — do not create it:
 
 ```
 gh issue list --state open --limit 200 \
