@@ -44,6 +44,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from string import Formatter
 from typing import TYPE_CHECKING
 
 from orbi import language, notify, user_summary
@@ -108,8 +109,23 @@ CLARIFY_SYSTEM_PROMPT = (
     '{"missing": []}\n\n'
     "`missing` lists the failed checks using exactly these identifiers: "
     '"observable_result", "acceptance_condition", "single_outcome"; it '
-    "is empty when all three checks pass. Do not explain and do not add "
-    "other keys."
+    "is empty when all three checks pass.\n\n"
+    "Optional proposal. Add one suggestion key to the same object ONLY "
+    "in these two cases, and only when the proposal follows from the "
+    "ticket text alone: every result and every acceptance line must be "
+    "stated there, adding and dropping nothing. When the text lacks a "
+    "fact a proposal needs, or writing one needs a decision only a "
+    "person can make, omit the key and answer with the missing list "
+    "alone.\n"
+    '- ONLY single_outcome failed: {"kind": "split", "items": '
+    '[{"result": "...", "acceptance": "...", "after": 1}]}. One item '
+    "per new ticket: the fewest vertical slices that cover every goal "
+    "of the text; after names the number of an earlier item this slice "
+    "depends on and is omitted otherwise; there is no count cap.\n"
+    '- ONLY acceptance_condition failed: {"kind": "criteria", "items": '
+    '["..."]}. One string per acceptance condition the ticket needs; '
+    "never invent a goal.\n"
+    "Do not explain and do not add other keys."
 )
 
 # A small fixed bound on the judgment call: a hung model request must
@@ -159,10 +175,359 @@ def _author_mention(issue: dict) -> str:
 
 @dataclass(frozen=True)
 class ClarifyVerdict:
-    """One judgment of a ticket body."""
+    """One judgment of a ticket body.
+
+    "suggestion" is the optional proposal the model attached to a failing
+    verdict (Issue #1926): present only when the ticket text was enough to
+    write one, and rendered only when it answers the one missing piece.
+    """
 
     passed: bool
     missing: tuple[str, ...]
+    suggestion: Suggestion | None = None
+
+
+# --- the editable proposal the stop comment may carry (Issue #1926) -------
+
+SUGGESTION_SPLIT = "split"
+SUGGESTION_CRITERIA = "criteria"
+SUGGESTION_KINDS = (SUGGESTION_SPLIT, SUGGESTION_CRITERIA)
+
+# The fixed markers around the proposal (docs/public-contracts.mdx). A
+# person edits the plain lines between them; the markers are machine
+# metadata and are never translated.
+SUGGESTION_MARKER = "orbi:suggestion:v1"
+SUGGESTION_START = f"<!-- {SUGGESTION_MARKER} kind="
+SUGGESTION_END = "<!-- /orbi/suggestion -->"
+SUGGESTION_START_PREFIX = f"<!-- {SUGGESTION_MARKER}"
+
+# The one missing piece each proposal kind answers: a split plan proposes
+# the split a "single_outcome" failure asks for, a criteria draft the
+# acceptance an "acceptance_condition" failure asks for. Every other
+# verdict renders no proposal.
+SUGGESTION_FOR_MISSING = {
+    "single_outcome": SUGGESTION_SPLIT,
+    "acceptance_condition": SUGGESTION_CRITERIA,
+}
+
+
+@dataclass(frozen=True)
+class SuggestionItem:
+    """One proposed line.
+
+    A "split" item is one new ticket: "text" is its result, "acceptance"
+    its acceptance line and "after" the number of an earlier item it
+    depends on. A "criteria" item is one condition and carries "text"
+    only.
+    """
+
+    text: str
+    acceptance: str = ""
+    after: int | None = None
+
+
+@dataclass(frozen=True)
+class Suggestion:
+    """The proposal the gate may attach to a failing verdict."""
+
+    kind: str
+    items: tuple[SuggestionItem, ...]
+
+
+def _single_line(value: object) -> str | None:
+    """A usable proposal line: non-empty, one line, or None."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text.splitlines()) != 1:
+        return None
+    return text
+
+
+def _usable(suggestion: Suggestion) -> bool:
+    """Can this proposal be rendered, and is it a proposal at all?
+
+    A split needs at least two slices (splitting into one contradicts the
+    "single_outcome" diagnosis), a non-empty result and acceptance per
+    slice, and an "after" that names an earlier slice; a criteria draft
+    needs at least one condition. An unusable proposal renders nothing, so
+    the stop comment stays exactly the pre-#1926 one.
+    """
+    if suggestion.kind not in SUGGESTION_KINDS or not suggestion.items:
+        return False
+    if any(not item.text for item in suggestion.items):
+        return False
+    if suggestion.kind == SUGGESTION_CRITERIA:
+        return True
+    if len(suggestion.items) < 2:
+        return False
+    for number, item in enumerate(suggestion.items, start=1):
+        if not item.acceptance:
+            return False
+        if item.after is not None and not 1 <= item.after < number:
+            return False
+    return True
+
+
+def suggestion_answer(value: object) -> Suggestion | None:
+    """Parse the model's optional proposal; None when it is unusable.
+
+    The answer is {"kind": "split"|"criteria", "items": [...]}: a split
+    item is {"result", "acceptance", "after"?}, a criteria item one plain
+    string. Anything else -- a wrong type, an unknown kind, an empty or
+    single-slice split, a multi-line value, an "after" that does not name
+    an earlier item -- is unusable and yields None: the verdict still stops
+    the ticket with today's comment.
+    """
+    if not isinstance(value, dict):
+        return None
+    kind = value.get("kind")
+    raw_items = value.get("items")
+    if kind not in SUGGESTION_KINDS or not isinstance(raw_items, list):
+        return None
+    items: list[SuggestionItem] = []
+    for entry in raw_items:
+        if kind == SUGGESTION_CRITERIA:
+            text = _single_line(entry)
+            if text is None:
+                return None
+            items.append(SuggestionItem(text=text))
+            continue
+        if not isinstance(entry, dict):
+            return None
+        text = _single_line(entry.get("result"))
+        acceptance = _single_line(entry.get("acceptance"))
+        after = entry.get("after")
+        if text is None or acceptance is None:
+            return None
+        if after is not None and (
+            isinstance(after, bool) or not isinstance(after, int)
+        ):
+            return None
+        items.append(
+            SuggestionItem(text=text, acceptance=acceptance, after=after)
+        )
+    suggestion = Suggestion(kind=kind, items=tuple(items))
+    return suggestion if _usable(suggestion) else None
+
+
+def render_suggestion(suggestion: Suggestion, language_code: str) -> str:
+    """Render one proposal as the editable, marker-delimited section.
+
+    The markers are fixed; the numbered slice, the "(after N)" phrase, the
+    "Acceptance:" prefix and the edit sentence come from the message
+    catalog, so a Chinese ticket gets the Chinese line grammar and the
+    parser, which derives its patterns from the same templates, reads both.
+    """
+    def message(key: str, **fields: object) -> str:
+        return language.text(language_code, key, **fields)
+
+    lines = [f"{SUGGESTION_START}{suggestion.kind} -->"]
+    for number, item in enumerate(suggestion.items, start=1):
+        if suggestion.kind == SUGGESTION_CRITERIA:
+            lines.append(
+                message("clarify.suggestion.criteria_item", text=item.text)
+            )
+            continue
+        line = message(
+            "clarify.suggestion.item", number=number, result=item.text,
+        )
+        if item.after is not None:
+            line = f"{line} " + message(
+                "clarify.suggestion.after", number=item.after,
+            )
+        lines.append(line)
+        lines.append(
+            message("clarify.suggestion.acceptance", text=item.acceptance)
+        )
+    lines.extend((SUGGESTION_END, "", message("clarify.suggestion.edit")))
+    return "\n".join(lines)
+
+
+def verdict_suggestion(verdict: ClarifyVerdict, language_code: str) -> str:
+    """The proposal section for one failing verdict, or "".
+
+    Rendered only when exactly one piece is missing, it is the piece this
+    proposal kind answers, and the proposal is usable. Every other stop
+    keeps the pre-#1926 comment byte for byte: no section, no edit
+    sentence.
+    """
+    suggestion = verdict.suggestion
+    if suggestion is None or len(verdict.missing) != 1:
+        return ""
+    if suggestion.kind != SUGGESTION_FOR_MISSING.get(verdict.missing[0]):
+        return ""
+    if not _usable(suggestion):
+        return ""
+    return render_suggestion(suggestion, language_code)
+
+
+def _template_pattern(template: str,
+                      fields: dict[str, tuple[str, str]]) -> str:
+    """Compile one catalog template into a regex with named groups.
+
+    "fields" maps a template placeholder to (group name, sub-pattern); the
+    literal text around the placeholders is escaped. The parser's grammar is
+    therefore generated from the very catalog templates the renderer
+    formats, so the two cannot drift apart (Issue #1926).
+    """
+    pattern: list[str] = []
+    for literal, name, _spec, _conversion in Formatter().parse(template):
+        pattern.append(re.escape(literal))
+        if name is not None:
+            group, sub = fields[name]
+            pattern.append(f"(?P<{group}>{sub})")
+    return "".join(pattern)
+
+
+def _acceptance_line(line: str) -> str | None:
+    """The condition an acceptance line carries, in any catalog language."""
+    for code in language.LANGUAGES:
+        match = re.fullmatch(
+            _template_pattern(
+                language.text(code, "clarify.suggestion.acceptance"),
+                {"text": ("text", r".+")},
+            ),
+            line,
+        )
+        if match is not None:
+            return match.group("text").strip()
+    return None
+
+
+def _criteria_line(line: str) -> str | None:
+    """The condition a criteria item line carries, in any language."""
+    for code in language.LANGUAGES:
+        match = re.fullmatch(
+            _template_pattern(
+                language.text(code, "clarify.suggestion.criteria_item"),
+                {"text": ("text", r".+")},
+            ),
+            line,
+        )
+        if match is not None:
+            return match.group("text").strip()
+    return None
+
+
+def _split_item_line(line: str) -> tuple[int, str, int | None] | None:
+    """One split item line: (number, result, after) in any language.
+
+    The dependency form is tried in EVERY language before the plain form:
+    a plain item pattern would otherwise swallow the "(after N)" phrase of
+    the other catalog language into its result text.
+    """
+    patterns = []
+    for code in language.LANGUAGES:
+        patterns.append((
+            _template_pattern(
+                language.text(code, "clarify.suggestion.item"),
+                {
+                    "number": ("number", r"[0-9]+"),
+                    "result": ("result", r".+"),
+                },
+            ),
+            _template_pattern(
+                language.text(code, "clarify.suggestion.after"),
+                {"number": ("after", r"[0-9]+")},
+            ),
+        ))
+    for item, after in patterns:
+        match = re.fullmatch(f"{item} {after}", line)
+        if match is not None:
+            return (
+                int(match.group("number")),
+                match.group("result").strip(),
+                int(match.group("after")),
+            )
+    for item, _after in patterns:
+        match = re.fullmatch(item, line)
+        if match is not None:
+            return (
+                int(match.group("number")),
+                match.group("result").strip(),
+                None,
+            )
+    return None
+
+
+def parse_suggestion(body: object) -> Suggestion | int | None:
+    """The proposal one comment body carries (Issue #1926).
+
+    Returns the Suggestion when the section is valid, the 1-based line
+    number of the FIRST invalid line when it is not, and None when the body
+    carries no start marker at all: no proposal is never an error. Line
+    numbers count every line of the body from 1, markers included
+    (docs/public-contracts.mdx).
+    """
+    if not isinstance(body, str):
+        return None
+    lines = body.splitlines()
+    start = next(
+        (index for index, line in enumerate(lines)
+         if line.strip().startswith(SUGGESTION_START_PREFIX)),
+        None,
+    )
+    if start is None:
+        return None
+    header = lines[start].strip()
+    if not header.startswith(SUGGESTION_START) or not header.endswith(" -->"):
+        return start + 1
+    kind = header[len(SUGGESTION_START):-len(" -->")]
+    if kind not in SUGGESTION_KINDS:
+        return start + 1
+    end: int | None = None
+    for index in range(start + 1, len(lines)):
+        line = lines[index].strip()
+        if line == SUGGESTION_END:
+            end = index
+            break
+        if line.startswith(SUGGESTION_START_PREFIX):
+            return index + 1
+    if end is None:
+        return start + 1
+    items: list[SuggestionItem] = []
+    numbers: set[int] = set()
+    index = start + 1
+    while index < end:
+        line = lines[index].strip()
+        if not line:
+            index += 1
+            continue
+        line_number = index + 1
+        if kind == SUGGESTION_CRITERIA:
+            text = _criteria_line(line)
+            if text is None:
+                return line_number
+            items.append(SuggestionItem(text=text))
+            index += 1
+            continue
+        parsed = _split_item_line(line)
+        if parsed is None:
+            return line_number
+        number, text, after = parsed
+        acceptance_index = index + 1
+        while (
+            acceptance_index < end and not lines[acceptance_index].strip()
+        ):
+            acceptance_index += 1
+        acceptance = None
+        if acceptance_index < end:
+            # The acceptance line keeps its indentation: it is part of the
+            # catalog's grammar (three spaces, then the acceptance prefix).
+            acceptance = _acceptance_line(lines[acceptance_index].rstrip())
+        if acceptance is None:
+            return line_number
+        if number in numbers or (after is not None and after not in numbers):
+            return line_number
+        numbers.add(number)
+        items.append(
+            SuggestionItem(text=text, acceptance=acceptance, after=after)
+        )
+        index = acceptance_index + 1
+    if not items:
+        return end + 1
+    return Suggestion(kind=kind, items=tuple(items))
 
 
 def build_context(issue: dict) -> str:
@@ -203,8 +568,11 @@ def _runner_login(issue: dict) -> str | None:
         return None
 
 
-def last_judged_digest(issue: dict, source_repo: str) -> str | None:
-    """Return the digest of the newest stop by THIS runner, or None.
+def authoritative_stop(issue: dict, source_repo: str) -> dict | None:
+    """The newest stop comment THIS runner wrote, or None.
+
+    The one locator of the authoritative stop (Issue #1926), so the digest
+    check and every reader of the proposal select the same comment.
 
     Only the formal prefix counts (Issue #1908): the optional author
     mention line, the run marker and then the stop marker. Marker text
@@ -216,6 +584,11 @@ def last_judged_digest(issue: dict, source_repo: str) -> str | None:
     read fails open: an unreadable comment history means the gate judges
     the ticket exactly as it did before Issue #1904, so a broken read
     never loses a delivery.
+
+    Selection is comment creation order (oldest first), never the edit
+    time: a stop keeps its position when a person edits it. The newest
+    trusted stop wins even when it carries no proposal, and an older
+    stop's proposal is never reused.
     """
     try:
         comments = issue_comments(issue["number"], repo=source_repo)
@@ -232,8 +605,7 @@ def last_judged_digest(issue: dict, source_repo: str) -> str | None:
         body = comment.get("body")
         if not isinstance(body, str):
             continue
-        match = _CLARIFY_STOP_RE.match(body)
-        if match is None:
+        if _CLARIFY_STOP_RE.match(body) is None:
             continue
         if own is None:
             own = _runner_login(issue)
@@ -247,8 +619,31 @@ def last_judged_digest(issue: dict, source_repo: str) -> str | None:
                 issue=issue["number"],
             )
             continue
-        return match.group("digest")
+        return comment
     return None
+
+
+def last_judged_digest(issue: dict, source_repo: str) -> str | None:
+    """Return the digest of the newest stop by THIS runner, or None."""
+    comment = authoritative_stop(issue, source_repo)
+    if comment is None:
+        return None
+    match = _CLARIFY_STOP_RE.match(comment["body"])
+    return match.group("digest") if match is not None else None
+
+
+def stop_suggestion(issue: dict, source_repo: str) -> Suggestion | int | None:
+    """The proposal on the authoritative stop comment, or None.
+
+    Same result convention as parse_suggestion: the Suggestion, the
+    1-based line number of its first invalid line, or None when the newest
+    trusted stop carries no section. The commands of #1927 and #1929
+    consume this contract; this ticket only publishes it.
+    """
+    comment = authoritative_stop(issue, source_repo)
+    if comment is None:
+        return None
+    return parse_suggestion(comment.get("body"))
 
 
 def already_stopped(issue: dict, source_repo: str) -> bool:
@@ -286,7 +681,10 @@ def parse_verdict(output: str) -> ClarifyVerdict | None:
         for item in missing
     ):
         return None
-    return ClarifyVerdict(passed=not missing, missing=tuple(missing))
+    return ClarifyVerdict(
+        passed=not missing, missing=tuple(missing),
+        suggestion=suggestion_answer(data.get("suggestion")),
+    )
 
 
 def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
@@ -310,6 +708,11 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
     pieces = "\n".join(
         f"- {missing_text(item, language_code)}" for item in verdict.missing
     )
+    # The editable proposal, only when this verdict's one missing piece is
+    # the piece the proposal answers (Issue #1926). Without one the string
+    # is empty, so the comment stays byte for byte as before.
+    proposal = verdict_suggestion(verdict, language_code)
+    proposal_block = f"{proposal}\n\n" if proposal else ""
     # The task identity and the optional fixed project status link follow
     # the state headline, before the missing-piece diagnostics (#1826).
     summary = user_summary.summary_text(
@@ -326,6 +729,7 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
         f"{summary}"
         f"\n{message('clarify.intro')}\n\n"
         f"{pieces}\n\n"
+        f"{proposal_block}"
         f"{message('clarify.repair', ready_label=ready_label)}\n\n"
         "```\n"
         f"{message('clarify.repair_outcome')}\n"

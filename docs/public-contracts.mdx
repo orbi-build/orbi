@@ -30,6 +30,7 @@ The [Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md)
 | Run scene | the hidden versioned block `<!-- orbi:scene:v1 {json} -->` in the trusted `Orbi opened PR` comment, rendered and parsed by `src/orbi/scene.py`; the machine-readable record used to resume an opened-PR delivery (the human-readable text beside it is display only) |
 | Requirements skill | the directory `integrations/claude-plugin/skills/write-ai-ready-issue/` — `SKILL.md` (how an agent turns a one-line idea into a deliverable Issue) and `fidelity-pass.md` (the independent check that the draft asks for exactly what the person asked) |
 | Suggestions | the document `orbi suggest --json` prints — `{"repo", "base_sha", "session_dir", "suggestions": [{"kind": "existing" or "new", "issue": the Issue number for existing and null for new, "title", "why", "body": the Issue body for new and null for existing}]}`, at most three entries, ordered by priority; `session_dir` is `<deploy_home>/.orbi/suggest/<run_id>/.pi-session/`, holding the run's Pi session JSONL in the same format as delivery session files, and the run directory `<deploy_home>/.orbi/suggest/<run_id>/` is kept after the command exits, on success and on failure — and the skill directory `integrations/claude-plugin/skills/suggest-ai-ready-issues/` that produces it |
+| Clarification proposal | the hidden `<!-- orbi:suggestion:v1 kind=split -->` / `kind=criteria` section of the clarification stop comment, its line grammar, the authoritative-stop rule and the public refusal/failure markers (`orbi-<name>-command`, `orbi-<name>-command-rejected`, `orbi-<name>-command-failed step=...` with their `comment=...` key); see [The clarification proposal and command receipts](#the-clarification-proposal-and-command-receipts) |
 
 Anything not in this table is internal and may change without notice.
 
@@ -210,6 +211,137 @@ automatic recovery edits in place (`waiting` -> `resuming`/`stale` ->
 `merged`); the same stability rules apply: one block per comment, a present
 but invalid block is never read as "no block", and the prose beside it is
 display only.
+
+## The clarification proposal and command receipts
+
+Two machine surfaces of a ticket comment are public: the proposal the
+clarification stop comment may carry, and the receipt an in-ticket command
+leaves behind. Both are read from fixed markers, never from the translated
+prose beside them.
+
+### The clarification proposal section
+
+When Orbi's clarification gate — the claim-time check for an observable
+result, an acceptance condition and a single outcome — stops a ticket whose
+text already states enough to propose the fix, the stop comment carries that
+proposal between two fixed markers. It is rendered in exactly two cases:
+
+- only `single_outcome` missing: `kind=split`, one numbered item per new
+  ticket, each with its own acceptance line and optionally depending on an
+  earlier item;
+- only `acceptance_condition` missing: `kind=criteria`, one line per
+  acceptance condition.
+
+Every other stop comment — another missing piece, a second missing piece, a
+ticket that lacks a fact a proposal needs, or one whose fix needs a decision
+only a person can make — stays unchanged and carries no section.
+
+```html
+<!-- orbi:suggestion:v1 kind=split -->
+1. Users can tag a note
+   Acceptance: after adding a tag, filtering by it finds the note; the tag survives a reload
+2. Users can export a note as Markdown (after 1)
+   Acceptance: Export downloads a .md file with title, body and tags
+<!-- /orbi/suggestion -->
+```
+
+```html
+<!-- orbi:suggestion:v1 kind=criteria -->
+- Adding a tag makes the note findable by filtering
+- The tag survives a reload
+<!-- /orbi/suggestion -->
+```
+
+A rendered section is followed by one display sentence — English
+`Editing this comment changes the proposal.`, zh
+`编辑这条评论即可修改这份提案。` — carrying no meaning beyond that. The
+item number, the `(after N)` phrase (zh `（等第 N 条）`) and the
+`Acceptance:` prefix (zh `验收：`) come from the message catalog, so a
+Chinese ticket renders the Chinese line grammar and the parser accepts every
+catalog language.
+
+### Line grammar and parsing
+
+Between the markers every line is one of:
+
+- the start marker `<!-- orbi:suggestion:v1 kind=split -->` or
+  `<!-- orbi:suggestion:v1 kind=criteria -->`;
+- for `kind=split`: `<n>. <result>`, immediately followed by the acceptance
+  line `   Acceptance: <text>`, the result optionally ending with
+  ` (after <n>)`;
+- for `kind=criteria`: `- <condition>`;
+- the end marker `<!-- /orbi/suggestion -->`.
+
+Blank lines inside the section are ignored. Item numbers must be unique, and
+`(after N)` must name an item written EARLIER in the section: a person can
+remove, rename and reorder lines and only has to keep that rule.
+
+One parser reads a whole comment body and returns either the items or the
+1-based number of the FIRST invalid line, counting every line of the body
+from 1, markers and prose included:
+
+- no start marker: no proposal, which is not an error (the same answer as a
+  stop comment from before this contract);
+- an unknown `kind` or a missing end marker: the start marker's line;
+- a second start marker before the end marker: that line;
+- an empty section: the end marker's line;
+- a line that is none of the shapes above, a duplicate item number, an item
+  whose next line is not its acceptance line (the item's own line), an
+  `(after N)` naming the item itself, a later item or no item: that line.
+
+```text
+missing end marker: the body ends before the end marker, so the start marker's line is reported
+empty section: the start marker immediately followed by the end marker
+duplicate item numbers: two items carrying the same number
+item without acceptance: an item line followed by anything but its acceptance line
+item line without a number: Users can export a note
+acceptance line without its prefix: Receipt: filtering by the tag finds the note
+after itself: 2. Export a note (after 2)
+after a later item: 1. Tag a note (after 2), written above item 2
+after a missing item: 2. Export a note (after 7), with no item 7 above it
+unknown kind: kind=plan
+criteria item is not a condition: 1. Tag a note inside a kind=criteria section
+second start marker: a start marker appearing before the end marker
+```
+
+### The authoritative stop comment
+
+The authoritative stop is the newest comment on the Issue that carries the
+formal stop prefix — the optional `@author` mention line, the run marker and
+the hidden `<!-- orbi:clarify-stop:<digest> -->` marker — and that this
+runner authored (the same trust rule the stop marker itself uses). Selection
+is comment creation order, never edit time, so editing a stop keeps its
+position. The newest trusted stop is authoritative even when it carries no
+proposal: a proposal from an older stop is never reused, and a newer stop
+written by somebody else is not selected at all.
+
+### Command receipts
+
+An in-ticket command (`/orbi milestone <version>`, `/orbi fix-base`) answers
+with one receipt comment per outcome. The receipt's hidden marker identifies
+the command and its outcome, and its `comment=` key identifies the command
+comment it answers:
+
+- `<!-- orbi-<name>-command comment=<key> -->`: the command ran;
+- `<!-- orbi-<name>-command-rejected comment=<key> -->`: it was not applied
+  (permission, argument shape or the command's own rule);
+- `<!-- orbi-<name>-command-failed step=<step> comment=<key> -->`: it reached
+  its handler and failed at that step.
+
+`<name>` is the command's stable machine id (`fix_base`, `milestone`), never
+the word a person types, so a receipt posted before the `/orbi` prefix keeps
+matching. `<key>` is the answered comment's GitHub id, then its URL, then
+`<login>@<createdAt>` when neither is readable — the key the `/orbi fix-base`
+success receipt already uses. The prose around the marker is display text in
+the ticket language, so a consumer classifies the outcome from the marker
+prefix and the `step` field, and finds the command comment through
+`comment=`, never by parsing a translated sentence.
+
+```text
+<!-- orbi-fix_base-command comment=3456789012 -->
+<!-- orbi-fix_base-command-rejected comment=3456789013 -->
+<!-- orbi-fix_base-command-failed step=look up the triage Issue comment=3456789014 -->
+```
 
 ## Worked examples
 

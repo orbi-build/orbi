@@ -219,10 +219,29 @@ CHECK_PERMISSION_MESSAGES: dict[str, tuple[str, str]] = {
     ),
 }
 
+# The clarification proposal's line grammar (Issue #1926). The item
+# number, the dependency phrase, the acceptance prefix and the criteria
+# item are rendered from these templates AND parsed back from them, so a
+# translated line grammar and the reader of a translated proposal cannot
+# drift apart. The last entry is the one sentence a rendered section adds.
+CLARIFY_SUGGESTION_MESSAGES: dict[str, tuple[str, str]] = {
+    "clarify.suggestion.item": ("{number}. {result}", "{number}. {result}"),
+    "clarify.suggestion.after": ("(after {number})", "（等第 {number} 条）"),
+    "clarify.suggestion.acceptance": (
+        "   Acceptance: {text}", "   验收：{text}",
+    ),
+    "clarify.suggestion.criteria_item": ("- {text}", "- {text}"),
+    "clarify.suggestion.edit": (
+        "Editing this comment changes the proposal.",
+        "编辑这条评论即可修改这份提案。",
+    ),
+}
+
 # The one map `language.MESSAGES` merges (the reading point stays
 # `language.py`; this module only keeps the entries).
 EXTRA_MESSAGES: dict[str, tuple[str, str]] = {
     **DISPLAY_TERMS, **BASE_CI_RED_MESSAGES, **CHECK_PERMISSION_MESSAGES,
+    **CLARIFY_SUGGESTION_MESSAGES,
     # The rejection a NO-ARGUMENT in-ticket command owes its author
     # (Issue #1922): the shared "write exactly one {label}" wording would
     # contradict the usage line printed beside it for an arity-0 command

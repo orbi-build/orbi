@@ -21,14 +21,14 @@ import pytest
 from conftest import git
 
 from orbi import clarify, config as config_domain
-from orbi import delivery_labels, failure, failure_report, progress
+from orbi import delivery_labels, failure, failure_report, language, progress
 
 import orbi.runner as runner
 from seam import seam
 
 from tests.fakes.clarify import (
     FakeGate, fix_run_id, record_label_notifications, stop_comment_entry,
-    stub_stop_history,
+    stub_runner_login, stub_stop_history,
 )
 
 from tests.test_run_id_e2e import (
@@ -865,6 +865,84 @@ def test_thin_ticket_stops_before_any_worktree_or_session(
     assert not list(clone.glob("**/impl.py"))
 
 
+SPLIT_ANSWER = {
+    "missing": ["single_outcome"],
+    "suggestion": {
+        "kind": "split",
+        "items": [
+            {
+                "result": "Users can tag a note",
+                "acceptance": (
+                    "after adding a tag, filtering by it finds the note; "
+                    "the tag survives a reload"
+                ),
+            },
+            {
+                "result": "Users can export a note as Markdown",
+                "acceptance": (
+                    "Export downloads a .md file with title, body and tags"
+                ),
+                "after": 1,
+            },
+        ],
+    },
+}
+
+CRITERIA_ANSWER = {
+    "missing": ["acceptance_condition"],
+    "suggestion": {
+        "kind": "criteria",
+        "items": [
+            "Adding a tag makes the note findable by filtering",
+            "The tag survives a reload",
+        ],
+    },
+}
+
+
+def fake_pi_answer(answer: dict) -> str:
+    """The gate session's answer: a full verdict carrying a proposal."""
+    return (
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        f"sys.stdout.write({json.dumps(answer)!r})\n"
+    )
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+@pytest.mark.parametrize("answer, kind", [
+    (SPLIT_ANSWER, "split"),
+    (CRITERIA_ANSWER, "criteria"),
+])
+def test_the_real_runner_posts_the_proposal_in_the_stop_comment(
+    clone, tmp_path, monkeypatch, language_code, answer, kind,
+):
+    """The user path: the claim-time gate stops the ticket and the comment
+    the author reads carries the rendered section, in their language."""
+    fix_run_id(monkeypatch, RUN_ID)
+    install_fake_pi(monkeypatch, tmp_path, fake_pi_answer(answer))
+    comments: list[str] = []
+    labels = {ISSUE_NUMBER: [delivery_labels.READY_LABEL]}
+    install_fake_gh(monkeypatch, comments, labels)
+
+    result = runner.process_issue(
+        THIN_ISSUE,
+        gate_config(clone, tmp_path, message_language=language_code),
+        REPO,
+    )
+
+    assert result == runner.IssueResult("needs-detail", None)
+    assert len(comments) == 1
+    body = comments[0]
+    # The rendered fixture IS the engine output a person may depend on.
+    assert (FIXTURES / f"{kind}.{language_code}.md").read_text() in body
+    assert language.text(
+        language_code, "clarify.suggestion.edit",
+    ) in body
+    assert labels[ISSUE_NUMBER] == [delivery_labels.NEEDS_DETAIL_LABEL]
+    assert not worktree_for(clone, RUN_ID).exists()
+
+
 def test_ticket_the_gate_accepts_is_delivered(clone, tmp_path, monkeypatch):
     """The gate is a gate, not a wall: a passing verdict delivers.
 
@@ -1051,3 +1129,602 @@ def test_edited_passing_ticket_is_judged_again_and_delivered(
     assert worktree_for(clone, RUN_ID).is_dir()
     assert delivery_labels.NEEDS_DETAIL_LABEL not in labels[ISSUE_NUMBER]
     assert len(comments) > 1
+
+
+# --- Issue #1926: the proposal the stop comment may carry ------------------
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "suggestion"
+
+# The two proposals the engine renders. They are the fixtures every other
+# consumer tests against, so the same values drive the renderer and the
+# parser here.
+SPLIT_PROPOSAL = clarify.Suggestion(kind=clarify.SUGGESTION_SPLIT, items=(
+    clarify.SuggestionItem(
+        text="Users can tag a note",
+        acceptance=(
+            "after adding a tag, filtering by it finds the note; the tag "
+            "survives a reload"
+        ),
+    ),
+    clarify.SuggestionItem(
+        text="Users can export a note as Markdown",
+        acceptance="Export downloads a .md file with title, body and tags",
+        after=1,
+    ),
+))
+
+CRITERIA_PROPOSAL = clarify.Suggestion(
+    kind=clarify.SUGGESTION_CRITERIA,
+    items=(
+        clarify.SuggestionItem(
+            text="Adding a tag makes the note findable by filtering",
+        ),
+        clarify.SuggestionItem(text="The tag survives a reload"),
+    ),
+)
+
+# kind -> (proposal, the one missing piece it answers)
+PROPOSALS = {
+    clarify.SUGGESTION_SPLIT: (SPLIT_PROPOSAL, "single_outcome"),
+    clarify.SUGGESTION_CRITERIA: (
+        CRITERIA_PROPOSAL, "acceptance_condition",
+    ),
+}
+
+LANGUAGES = ("en", "zh")
+
+
+def _failing(missing, suggestion=None):
+    return clarify.ClarifyVerdict(
+        passed=False, missing=missing, suggestion=suggestion,
+    )
+
+
+def _section(lines, kind=clarify.SUGGESTION_SPLIT):
+    """One proposal section around the given item lines."""
+    return "\n".join([
+        f"<!-- orbi:suggestion:v1 kind={kind} -->",
+        *lines,
+        "<!-- /orbi/suggestion -->",
+    ])
+
+
+@pytest.mark.parametrize("language_code", LANGUAGES)
+@pytest.mark.parametrize("kind", sorted(PROPOSALS))
+def test_the_rendered_proposal_matches_its_fixture(kind, language_code):
+    """Acceptance 1: both kinds render in en and zh, markers included."""
+    proposal, missing = PROPOSALS[kind]
+    block = clarify.verdict_suggestion(
+        _failing((missing,), proposal), language_code,
+    )
+    fixture = FIXTURES / f"{kind}.{language_code}.md"
+    assert block + "\n" == fixture.read_text(encoding="utf-8")
+    assert block.startswith(f"<!-- orbi:suggestion:v1 kind={kind} -->\n")
+    assert block.rstrip().endswith(
+        language.text(language_code, "clarify.suggestion.edit")
+    )
+
+
+@pytest.mark.parametrize("language_code", LANGUAGES)
+@pytest.mark.parametrize("kind", sorted(PROPOSALS))
+def test_the_stop_comment_carries_the_proposal_and_the_edit_sentence(
+    kind, language_code,
+):
+    """Acceptance 1: the section lands in the stop comment, in the ticket
+    language, before the repair instruction."""
+    proposal, missing = PROPOSALS[kind]
+    verdict = _failing((missing,), proposal)
+    body = clarify.render_comment(
+        ISSUE, verdict, RUN_ID, language_code=language_code,
+    )
+    block = clarify.verdict_suggestion(verdict, language_code)
+    repair = language.text(
+        language_code, "clarify.repair", ready_label="ai-ready",
+    )
+    assert block in body
+    assert body.index(block) < body.index(repair)
+    assert body.index(clarify.missing_text(missing, language_code)) < (
+        body.index(block)
+    )
+    assert language.text(
+        language_code, "clarify.suggestion.edit",
+    ) in body
+
+
+@pytest.mark.parametrize("suggestion, missing", [
+    # The model declined, or could not propose: nothing is rendered.
+    (None, ("single_outcome",)),
+    (None, ("acceptance_condition",)),
+    # Kind mismatch: each proposal answers one missing piece only.
+    (SPLIT_PROPOSAL, ("acceptance_condition",)),
+    (CRITERIA_PROPOSAL, ("single_outcome",)),
+    # A second missing piece: the proposal would cover only part of it.
+    (SPLIT_PROPOSAL, ("single_outcome", "observable_result")),
+    (CRITERIA_PROPOSAL, ("acceptance_condition", "single_outcome")),
+    (SPLIT_PROPOSAL, ("observable_result",)),
+    # Unusable proposals.
+    (
+        clarify.Suggestion(
+            kind=clarify.SUGGESTION_SPLIT,
+            items=SPLIT_PROPOSAL.items[:1],
+        ),
+        ("single_outcome",),
+    ),
+    (
+        clarify.Suggestion(kind=clarify.SUGGESTION_SPLIT, items=(
+            clarify.SuggestionItem(text="Users can tag a note", acceptance=""),
+            clarify.SuggestionItem(
+                text="Users can export a note", acceptance="a", after=1,
+            ),
+        )),
+        ("single_outcome",),
+    ),
+    (
+        clarify.Suggestion(kind=clarify.SUGGESTION_SPLIT, items=(
+            clarify.SuggestionItem(text="", acceptance="a"),
+            clarify.SuggestionItem(
+                text="Users can export a note", acceptance="b",
+            ),
+        )),
+        ("single_outcome",),
+    ),
+    (
+        clarify.Suggestion(kind=clarify.SUGGESTION_SPLIT, items=(
+            clarify.SuggestionItem(
+                text="Users can tag a note", acceptance="a",
+            ),
+            clarify.SuggestionItem(
+                text="Users can export a note", acceptance="b", after=2,
+            ),
+        )),
+        ("single_outcome",),
+    ),
+    (
+        clarify.Suggestion(kind=clarify.SUGGESTION_CRITERIA, items=()),
+        ("acceptance_condition",),
+    ),
+])
+def test_an_unusable_proposal_keeps_the_stop_comment_byte_for_byte(
+    suggestion, missing,
+):
+    """Acceptance 2: no section, no edit sentence, identical bytes."""
+    with_proposal = clarify.render_comment(
+        ISSUE, _failing(missing, suggestion), RUN_ID, language_code="en",
+    )
+    without = clarify.render_comment(
+        ISSUE, _failing(missing), RUN_ID, language_code="en",
+    )
+    assert with_proposal == without
+    assert "orbi:suggestion" not in with_proposal
+    assert "Editing this comment" not in with_proposal
+
+
+def test_the_gate_prompt_guards_the_proposal():
+    """The model may propose only from the ticket text, only for the two
+    documented cases, and must decline when a fact or a decision is
+    missing (Issue #1926)."""
+    prompt = clarify.CLARIFY_SYSTEM_PROMPT
+    for marker in (
+        "ONLY single_outcome failed",
+        "ONLY acceptance_condition failed",
+        "adding and dropping nothing",
+        "no count cap",
+        "never invent a goal",
+        "omit the key",
+        "decision only a person can make",
+    ):
+        assert marker in prompt, marker
+
+
+@pytest.mark.parametrize("answer", [
+    None,
+    "not a proposal",
+    {},
+    {"kind": "split"},
+    {"kind": "plan", "items": ["Users can tag a note"]},
+    {"kind": "split", "items": []},
+    {"kind": "criteria", "items": []},
+    {"kind": "criteria", "items": ["  "]},
+    {"kind": "criteria", "items": [["nested"]]},
+    # A single item is not a split of anything.
+    {"kind": "split", "items": [{"result": "A", "acceptance": "a"}]},
+    # A split item is an object, and it needs both lines.
+    {"kind": "split", "items": ["A plain string", "Another one"]},
+    {"kind": "split", "items": [{"result": "A"}, {"result": "B"}]},
+    {"kind": "split", "items": [
+        {"result": "A", "acceptance": "a"},
+        {"result": "B", "acceptance": "b", "after": True},
+    ]},
+    # A multi-line value would break the one-line grammar.
+    {"kind": "criteria", "items": ["first\nsecond"]},
+    {"kind": "split", "items": [
+        {"result": "A", "acceptance": "a"},
+        {"result": "B", "acceptance": "b", "after": "1"},
+    ]},
+    # The dependency must name an earlier item.
+    {"kind": "split", "items": [
+        {"result": "A", "acceptance": "a"},
+        {"result": "B", "acceptance": "b", "after": 2},
+    ]},
+])
+def test_suggestion_answer_rejects_an_unusable_proposal(answer):
+    assert clarify.suggestion_answer(answer) is None
+
+
+def test_parse_verdict_reads_the_optional_proposal():
+    verdict = clarify.parse_verdict(json.dumps({
+        "missing": ["single_outcome"],
+        "suggestion": {
+            "kind": "split",
+            "items": [
+                {
+                    "result": "Users can tag a note",
+                    "acceptance": (
+                        "after adding a tag, filtering by it finds the note; "
+                        "the tag survives a reload"
+                    ),
+                },
+                {
+                    "result": "Users can export a note as Markdown",
+                    "acceptance": (
+                        "Export downloads a .md file with title, body and tags"
+                    ),
+                    "after": 1,
+                },
+            ],
+        },
+    }))
+    assert verdict == clarify.ClarifyVerdict(
+        passed=False, missing=("single_outcome",), suggestion=SPLIT_PROPOSAL,
+    )
+
+
+def test_parse_verdict_reads_a_criteria_proposal():
+    verdict = clarify.parse_verdict(json.dumps({
+        "missing": ["acceptance_condition"],
+        "suggestion": {
+            "kind": "criteria",
+            "items": [
+                "Adding a tag makes the note findable by filtering",
+                "The tag survives a reload",
+            ],
+        },
+    }))
+    assert verdict == clarify.ClarifyVerdict(
+        passed=False, missing=("acceptance_condition",),
+        suggestion=CRITERIA_PROPOSAL,
+    )
+
+
+def test_a_broken_proposal_never_discards_the_verdict():
+    """The verdict is what stops the ticket: an unusable proposal beside it
+    only means today's comment."""
+    assert clarify.parse_verdict(
+        '{"missing": ["single_outcome"], "suggestion": {"kind": "split"}}'
+    ) == clarify.ClarifyVerdict(passed=False, missing=("single_outcome",))
+    assert clarify.parse_verdict(
+        '{"missing": [], "suggestion": "nonsense"}'
+    ) == clarify.ClarifyVerdict(passed=True, missing=())
+
+
+# --- the parser: rendered, edited and invalid sections --------------------
+
+@pytest.mark.parametrize("language_code", LANGUAGES)
+@pytest.mark.parametrize("kind", sorted(PROPOSALS))
+def test_the_parser_reads_the_rendered_fixture(kind, language_code):
+    """Acceptance 3: the parser accepts what the engine renders, both
+    languages and both kinds (the fixture keeps its edit sentence)."""
+    proposal, _missing = PROPOSALS[kind]
+    fixture = (FIXTURES / f"{kind}.{language_code}.md").read_text(
+        encoding="utf-8",
+    )
+    assert clarify.parse_suggestion(fixture) == proposal
+
+
+def test_the_parser_accepts_an_edited_section():
+    """Acceptance 3: an edit — a slice removed, renamed, reordered — still
+    parses, because the grammar reads numbered lines and earlier-only
+    dependencies, never the rendered text."""
+    removed = _section([
+        "1. Users can tag a note",
+        "   Acceptance: filtering by the tag finds the note",
+        "2. Users can export a note as Markdown",
+        "   Acceptance: Export downloads a .md file",
+    ])
+    assert clarify.parse_suggestion(removed) == clarify.Suggestion(
+        kind=clarify.SUGGESTION_SPLIT, items=(
+            clarify.SuggestionItem(
+                text="Users can tag a note",
+                acceptance="filtering by the tag finds the note",
+            ),
+            clarify.SuggestionItem(
+                text="Users can export a note as Markdown",
+                acceptance="Export downloads a .md file",
+            ),
+        ),
+    )
+
+    renamed = _section([
+        "1. Users can label a note",
+        "   Acceptance: filtering by the label finds the note",
+        "2. Export (after 1)",
+        "   Acceptance: a .md file downloads",
+    ])
+    assert clarify.parse_suggestion(renamed) == clarify.Suggestion(
+        kind=clarify.SUGGESTION_SPLIT, items=(
+            clarify.SuggestionItem(
+                text="Users can label a note",
+                acceptance="filtering by the label finds the note",
+            ),
+            clarify.SuggestionItem(
+                text="Export", acceptance="a .md file downloads", after=1,
+            ),
+        ),
+    )
+
+    # Reordered lines with the dependency re-pointed at an earlier slice.
+    reordered = _section([
+        "1. Users can tag a note",
+        "   Acceptance: filtering by the tag finds the note",
+        "2. Export downloads a .md file",
+        "   Acceptance: the file carries title, body and tags",
+        "3. Filter a note by its tag (after 1)",
+        "   Acceptance: the note is listed",
+    ])
+    assert clarify.parse_suggestion(reordered) == clarify.Suggestion(
+        kind=clarify.SUGGESTION_SPLIT, items=(
+            clarify.SuggestionItem(
+                text="Users can tag a note",
+                acceptance="filtering by the tag finds the note",
+            ),
+            clarify.SuggestionItem(
+                text="Export downloads a .md file",
+                acceptance="the file carries title, body and tags",
+            ),
+            clarify.SuggestionItem(
+                text="Filter a note by its tag",
+                acceptance="the note is listed",
+                after=1,
+            ),
+        ),
+    )
+
+
+# The invalid examples the contract doc documents, with the line number the
+# parser reports for each (Issue #1926 acceptance 3).
+INVALID_SECTION_EXAMPLES = (
+    (
+        "missing end marker",
+        "\n".join([
+            "<!-- orbi:suggestion:v1 kind=split -->",
+            "1. Users can tag a note",
+            "   Acceptance: filtering by the tag finds the note",
+        ]),
+        1,
+    ),
+    (
+        "empty section",
+        "\n".join([
+            "<!-- orbi:suggestion:v1 kind=criteria -->",
+            "<!-- /orbi/suggestion -->",
+        ]),
+        2,
+    ),
+    (
+        "item without acceptance",
+        _section([
+            "1. Users can tag a note",
+            "   Acceptance: filtering by the tag finds the note",
+            "2. Users can export a note",
+        ]),
+        4,
+    ),
+    (
+        "duplicate item numbers",
+        _section([
+            "1. Users can tag a note",
+            "   Acceptance: filtering by the tag finds the note",
+            "1. Users can export a note",
+            "   Acceptance: a .md file downloads",
+        ]),
+        4,
+    ),
+    (
+        "after itself",
+        _section([
+            "1. Users can tag a note",
+            "   Acceptance: filtering by the tag finds the note",
+            "2. Users can export a note (after 2)",
+            "   Acceptance: a .md file downloads",
+        ]),
+        4,
+    ),
+    (
+        "after a later item",
+        _section([
+            "1. Users can tag a note (after 2)",
+            "   Acceptance: filtering by the tag finds the note",
+            "2. Users can export a note",
+            "   Acceptance: a .md file downloads",
+        ]),
+        2,
+    ),
+    (
+        "after a missing item",
+        _section([
+            "1. Users can tag a note",
+            "   Acceptance: filtering by the tag finds the note",
+            "2. Users can export a note (after 7)",
+            "   Acceptance: a .md file downloads",
+        ]),
+        4,
+    ),
+    (
+        "item line without a number",
+        _section([
+            "1. Users can tag a note",
+            "   Acceptance: filtering by the tag finds the note",
+            "Users can export a note",
+            "   Acceptance: a .md file downloads",
+        ]),
+        4,
+    ),
+    (
+        "acceptance line without its prefix",
+        _section([
+            "1. Users can tag a note",
+            "   Receipt: filtering by the tag finds the note",
+        ]),
+        2,
+    ),
+    (
+        "unknown kind",
+        _section(["- Users can tag a note"], kind="plan"),
+        1,
+    ),
+    (
+        "criteria item is not a condition",
+        _section(["1. Users can tag a note"], kind="criteria"),
+        2,
+    ),
+    (
+        "second start marker",
+        "\n".join([
+            "<!-- orbi:suggestion:v1 kind=criteria -->",
+            "- The tag survives a reload",
+            "<!-- orbi:suggestion:v1 kind=criteria -->",
+            "<!-- /orbi/suggestion -->",
+        ]),
+        3,
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "name, body, expected_line",
+    INVALID_SECTION_EXAMPLES,
+    ids=[example[0] for example in INVALID_SECTION_EXAMPLES],
+)
+def test_the_parser_reports_the_first_invalid_line(name, body, expected_line):
+    """Acceptance 3: every invalid example in the contract doc returns its
+    line number."""
+    assert clarify.parse_suggestion(body) == expected_line, name
+
+
+def test_blank_lines_inside_a_section_are_ignored():
+    body = _section([
+        "",
+        "1. Users can tag a note",
+        "",
+        "   Acceptance: after adding a tag, filtering by it finds the note; "
+        "the tag survives a reload",
+        "",
+        "2. Users can export a note as Markdown (after 1)",
+        "",
+        "   Acceptance: Export downloads a .md file with title, body and tags",
+        "",
+    ])
+    assert clarify.parse_suggestion(body) == SPLIT_PROPOSAL
+
+
+def test_a_malformed_start_marker_is_invalid_at_its_own_line():
+    assert clarify.parse_suggestion("<!-- orbi:suggestion:v1 -->") == 1
+    assert clarify.parse_suggestion(
+        "<!-- orbi:suggestion:v1 kind=split\n1. A"
+    ) == 1
+
+
+def test_invalid_line_numbers_count_the_whole_comment_body():
+    """The convention the contract documents: 1-based over the body the
+    parser receives, markers and prose included."""
+    body = "\n".join([
+        f"<!-- orbi:run={RUN_ID} -->",
+        clarify.stop_marker(ISSUE),
+        "**Orbi: this ticket is not ready to deliver.**",
+        "",
+        "<!-- orbi:suggestion:v1 kind=split -->",
+        "1. Users can tag a note",
+        "   Acceptance: filtering by the tag finds the note",
+        "2. Users can export a note",
+        "<!-- /orbi/suggestion -->",
+    ])
+    assert clarify.parse_suggestion(body) == 8
+
+
+def test_a_body_without_a_start_marker_carries_no_proposal():
+    """A missing start marker is not an error: the comment simply has no
+    proposal (the same answer as a stop from before this contract)."""
+    assert clarify.parse_suggestion("just prose") is None
+    assert clarify.parse_suggestion("") is None
+    assert clarify.parse_suggestion(None) is None
+    assert clarify.parse_suggestion(
+        "<!-- /orbi/suggestion -->"
+    ) is None
+
+
+# --- the authoritative stop comment ---------------------------------------
+
+def _stop_body(extra="", run_id="deadbeef"):
+    return "\n".join([
+        f"<!-- orbi:run={run_id} -->",
+        clarify.stop_marker(ISSUE),
+        extra,
+    ])
+
+
+def test_the_newest_trusted_stop_is_authoritative_even_without_proposal(
+    monkeypatch,
+):
+    """Acceptance: the newest trusted stop wins, and an older stop's
+    proposal is never reused."""
+    older = stop_comment_entry(
+        _stop_body(clarify.render_suggestion(SPLIT_PROPOSAL, "en")),
+    )
+    newer = stop_comment_entry(_stop_body("no proposal here"))
+    stub_stop_history(monkeypatch, [older, newer])
+    stub_runner_login(monkeypatch)
+    assert clarify.authoritative_stop(ISSUE, REPO) == newer
+    assert clarify.stop_suggestion(ISSUE, REPO) is None
+
+
+def test_the_authoritative_stop_carries_the_proposal(monkeypatch):
+    older = stop_comment_entry(_stop_body("no proposal here"))
+    newer = stop_comment_entry(
+        _stop_body(clarify.render_suggestion(SPLIT_PROPOSAL, "en")),
+    )
+    stub_stop_history(monkeypatch, [older, newer])
+    stub_runner_login(monkeypatch)
+    assert clarify.stop_suggestion(ISSUE, REPO) == SPLIT_PROPOSAL
+
+
+def test_an_untrusted_newer_stop_is_never_authoritative(monkeypatch, caplog):
+    """The same trust rule as the stop marker: a marker on somebody else's
+    comment is not stop state."""
+    trusted = stop_comment_entry(
+        _stop_body(clarify.render_suggestion(CRITERIA_PROPOSAL, "zh")),
+    )
+    forged = stop_comment_entry(
+        _stop_body(clarify.render_suggestion(SPLIT_PROPOSAL, "en")),
+        login="mallory",
+    )
+    stub_stop_history(monkeypatch, [trusted, forged])
+    stub_runner_login(monkeypatch)
+    caplog.set_level("INFO")
+    assert clarify.stop_suggestion(ISSUE, REPO) == CRITERIA_PROPOSAL
+    assert "clarify_stop_untrusted" in caplog.text
+
+
+def test_a_ticket_without_a_stop_has_no_authoritative_comment(monkeypatch):
+    stub_stop_history(monkeypatch, [])
+    stub_runner_login(monkeypatch)
+    assert clarify.authoritative_stop(ISSUE, REPO) is None
+    assert clarify.stop_suggestion(ISSUE, REPO) is None
+
+
+def test_an_unreadable_history_has_no_authoritative_comment(
+    monkeypatch, caplog,
+):
+    FakeGate(monkeypatch, history_error=RuntimeError("gh down"))
+    caplog.set_level("INFO")
+    assert clarify.authoritative_stop(ISSUE, REPO) is None
+    assert "clarify_check_skipped" in caplog.text
