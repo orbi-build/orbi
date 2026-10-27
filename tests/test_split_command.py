@@ -649,6 +649,9 @@ def test_two_matching_children_stop_before_adopting_either(
     reported = failures(gh)
     assert len(reported) == 1
     assert "2 issues carry the marker" in reported[0]
+    # The receipt LISTS what exists, so the reader closes the right Issue
+    # instead of searching GitHub for the marker (the published contract).
+    assert "#55, #56" in reported[0]
 
 
 # --------------------------------------------------------------------------

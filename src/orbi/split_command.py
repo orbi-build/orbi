@@ -314,11 +314,18 @@ def _find_children(
         if not counted:
             continue
         if len(counted) > 1:
+            # The receipt lists what exists (the published contract), so the
+            # reader closes the right Issue instead of searching the marker.
+            numbers = ", ".join(
+                f"#{number}" for number in sorted(
+                    int(issue["number"]) for issue in counted
+                )
+            )
             raise TicketCommandError(
                 "find or open the child",
                 language.text(
                     language_code, "split.reason_duplicate",
-                    count=len(counted),
+                    count=len(counted), numbers=numbers,
                     marker=child_marker(parent, item_number),
                 ),
             )

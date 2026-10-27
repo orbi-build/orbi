@@ -271,11 +271,13 @@ SPLIT_MESSAGES: dict[str, tuple[str, str]] = {
         "a child ticket is not split again",
         "这张工单已经是 #{parent} 的原生子工单；子工单不再拆一次",
     ),
+    # The receipt LISTS what exists (`docs/public-contracts.mdx`): a count
+    # alone would leave the reader searching GitHub for its own children.
     "split.reason_duplicate": (
-        "{count} issues carry the marker `{marker}`; refusing to adopt "
-        "any of them (close the extra one and reply again)",
-        "有 {count} 张工单都带着标记 `{marker}`；不会擅自采纳其中任何一张"
-        "（关掉多余的那张再回复一次）",
+        "{count} issues carry the marker `{marker}`: {numbers}; refusing "
+        "to adopt any of them (close the extra one and reply again)",
+        "有 {count} 张工单都带着标记 `{marker}`：{numbers}；不会擅自采纳其中"
+        "任何一张（关掉多余的那张再回复一次）",
     ),
     "split.reason_differs": (
         "issue #{number} carries the marker `{marker}` but its {field} "
