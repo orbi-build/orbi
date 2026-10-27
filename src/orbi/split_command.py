@@ -238,7 +238,7 @@ def _runner_receipt(comments: list[dict], receipt: str) -> bool:
     ]
     if not candidates:
         return False
-    runner = _step("identify this runner", _runner_login)
+    runner = run_step("identify this runner", _runner_login)
     return any(_author_login(comment) == runner for comment in candidates)
 
 
