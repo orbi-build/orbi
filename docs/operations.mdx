@@ -1105,7 +1105,10 @@ hidden `<!-- orbi:acceptance:v1 -->` marker, adds the dispatch label,
 posts one receipt listing the conditions and removes `ai-needs-detail`
 LAST. The marker makes the append idempotent: a re-run after a failed step
 finds it and adds nothing, and a ticket that already carries the success
-receipt only gets the last step. Only a `kind=criteria` section is valid
+receipt only gets the last step. That receipt counts only when this runner
+wrote it: its marker is public text, so a copied one from another account is
+never a completion — the authorized command still appends, queues and posts
+its own receipt (Issue #1944). Only a `kind=criteria` section is valid
 input: a split proposal, a missing section or an invalid line is rejected
 with a receipt naming the reason (and, for an invalid line, its number).
 

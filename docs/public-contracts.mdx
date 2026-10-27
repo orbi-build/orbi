@@ -390,6 +390,13 @@ section or an invalid line is rejected with a receipt naming the reason
 then carries the dispatch label and one receipt listing the conditions, and
 `ai-needs-detail` is removed last.
 
+That success receipt is the command's completion record, so a ticket that
+already carries one only gets the last step — but only a receipt the
+currently authenticated account itself posted counts. The marker is public
+text on a public ticket: a copied one from another account (or one whose
+author cannot be read) is ignored, and the authorized command appends,
+queues the ticket and posts its own receipt (Issue #1944).
+
 ### Command receipts
 
 An in-ticket command (`/orbi milestone <version>`, `/orbi fix-base`,

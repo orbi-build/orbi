@@ -136,6 +136,28 @@ def success_receipts(gh: FakeGh) -> list[str]:
     ]
 
 
+def receipt_for(key: str) -> str:
+    """The hidden marker THIS command's success receipt carries."""
+    marker = ticket_command.command_receipt_marker(
+        criteria_command.ADD_CRITERIA_COMMAND,
+    )
+    return f"<!-- {marker} comment={key} -->"
+
+
+def command_key(gh: FakeGh) -> str:
+    """The key of the ticket's `/orbi add-criteria` comment."""
+    return ticket_command.command_comment_key(
+        gh.issues[TICKET]["comments"][-1]
+    )
+
+
+def receipt_comments(gh: FakeGh, key: str) -> list[dict]:
+    return [
+        comment for comment in gh.issues[TICKET]["comments"]
+        if receipt_for(key) in comment["body"]
+    ]
+
+
 def failures(gh: FakeGh) -> list[str]:
     return [
         body for body in comment_bodies(gh)
@@ -442,6 +464,116 @@ def test_a_stop_without_a_proposal_is_rejected(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------------------------------
+# a copied completion receipt is never a completion (Issue #1944)
+# --------------------------------------------------------------------------
+
+def test_a_copied_success_receipt_is_not_a_completion(monkeypatch, tmp_path):
+    """The marker is public text: a read-only commenter can copy it.
+
+    Reading the marker without its author made the authorized command look
+    done — no append, no dispatch label, the ticket lost
+    `ai-needs-detail` and left the stopped scan unqueued, and the only
+    "receipt" was the stranger's copy (Issue #1944).
+    """
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    reply(gh)
+    key = command_key(gh)
+    gh.comment(
+        TICKET, receipt_for(key), login="stranger", association="NONE",
+    )
+    gh.add_collaborator("stranger", "read")
+
+    assert tick(monkeypatch, tmp_path, gh) is not None
+
+    # The authorized command runs: the criteria land, the ticket is queued
+    # and the genuine receipt is the runner's own, beside the copied one.
+    body = gh.issues[TICKET]["body"]
+    assert body.count(APPENDED_MARKER) == 1
+    assert "- Adding a tag makes the note findable by filtering" in body
+    assert "- The tag survives a reload" in body
+    assert READY_LABEL in labels(gh)
+    assert NEEDS_DETAIL_LABEL not in labels(gh)
+    receipts = receipt_comments(gh, key)
+    assert [comment["author"]["login"] for comment in receipts] == [
+        "stranger", gh.login,
+    ]
+    assert "Adding a tag makes the note findable by filtering" in (
+        receipts[1]["body"]
+    )
+
+    # A second tick has nothing left to do: the label is gone and the
+    # runner's receipt is now the completion record.
+    tick(monkeypatch, tmp_path, gh)
+    assert gh.issues[TICKET]["body"].count(APPENDED_MARKER) == 1
+    assert len(receipt_comments(gh, key)) == 2
+
+
+@pytest.mark.parametrize("author", [
+    {"login": "stranger"},   # a different account
+    {},                      # an unreadable author payload
+    None,
+])
+def test_an_untrusted_receipt_author_does_not_authenticate(
+    monkeypatch, author,
+):
+    """Only the authenticated account's own comment is a completion."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    comment = {"body": receipt_for("1")}
+    if author is not None:
+        comment["author"] = author
+
+    criteria_command.ADD_CRITERIA_COMMAND.apply(
+        "", repo=REPO, issue_number=TICKET, command_comment={"id": "1"},
+        comments=[comment],
+        issue={
+            "number": TICKET, "body": BODY,
+            "labels": [{"name": NEEDS_DETAIL_LABEL}],
+        },
+        suggestion=TWO_CRITERIA, language_code="en",
+    )
+
+    # The command executed instead of trusting the copied record.
+    assert gh.issues[TICKET]["body"].count("## Acceptance") == 1
+    assert NEEDS_DETAIL_LABEL not in labels(gh)
+    assert len(success_receipts(gh)) == 1
+
+
+@pytest.mark.parametrize("author_shape", [
+    "{login}",
+    "{login}[bot]",     # REST keeps the App suffix
+    "app/{login}",      # the issue-author payload shape
+])
+def test_a_runner_receipt_in_every_payload_shape_authenticates(
+    monkeypatch, author_shape,
+):
+    """The three shapes name one account (Issue #1927): the runner's own
+    receipt on an interrupted-final-label retry finishes the label only."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh, labels=(READY_LABEL, NEEDS_DETAIL_LABEL),
+                   body=f"{BODY}\n{APPENDED_MARKER}")
+    comments = [{
+        "body": receipt_for("1"),
+        "author": {"login": author_shape.format(login=gh.login)},
+    }]
+    before = comment_bodies(gh)
+
+    criteria_command.ADD_CRITERIA_COMMAND.apply(
+        "", repo=REPO, issue_number=TICKET, command_comment={"id": "1"},
+        comments=comments,
+        issue={
+            "number": TICKET, "body": f"{BODY}\n{APPENDED_MARKER}",
+            "labels": [{"name": READY_LABEL}, {"name": NEEDS_DETAIL_LABEL}],
+        },
+        suggestion=TWO_CRITERIA, language_code="en",
+    )
+
+    assert comment_bodies(gh) == before
+    assert NEEDS_DETAIL_LABEL not in labels(gh)
+
+
+# --------------------------------------------------------------------------
 # the scan and the registration
 # --------------------------------------------------------------------------
 
@@ -485,7 +617,10 @@ def test_a_ticket_that_already_carries_the_success_receipt_only_checks(
     before = comment_bodies(gh)
     criteria_command.ADD_CRITERIA_COMMAND.apply(
         "", repo=REPO, issue_number=TICKET, command_comment={"id": 1},
-        comments=[{"body": f"<!-- {marker} comment=1 -->"}],
+        comments=[{
+            "body": f"<!-- {marker} comment=1 -->",
+            "author": {"login": gh.login},
+        }],
         issue={"number": TICKET, "body": BODY, "labels": []},
         suggestion=TWO_CRITERIA, language_code="en",
     )

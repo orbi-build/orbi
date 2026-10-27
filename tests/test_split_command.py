@@ -541,12 +541,6 @@ def test_the_runner_author_has_every_github_payload_shape_adopted(
     assert len(success_receipts(gh)) == 1
 
 
-def test_the_login_key_normalizes_every_payload_shape():
-    assert split_command._login_key("app/orbi-build") == "orbi-build"
-    assert split_command._login_key("orbi-build[bot]") == "orbi-build"
-    assert split_command._login_key("orbi-build") == "orbi-build"
-
-
 def _mismatch_tick(monkeypatch, tmp_path, gh, field) -> str:
     """Run one tick and return the single difference receipt."""
     before = set(gh.issues)
