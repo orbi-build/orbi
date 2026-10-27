@@ -587,7 +587,7 @@ def test_the_cli_specs_are_the_arity_zero_commands():
     """``/orbi milestone <version>`` needs an argument, so it keeps its own
     ``orbi milestone set`` instead of a generated entry."""
     specs = ticket_command.cli_specs()
-    assert [spec.name for spec in specs] == ["fix_base"]
+    assert [spec.name for spec in specs] == ["fix_base", "split"]
     assert all(spec.arity == 0 for spec in specs)
 
 

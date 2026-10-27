@@ -54,7 +54,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from orbi import language
-from orbi.github import WRITE_PERMISSIONS, issue_comments, repository_permission
+from orbi.github import (
+    WRITE_PERMISSIONS, issue_comments, list_issues, repository_permission,
+)
 from orbi.journal import JOURNAL_EVENTS, event, run_command
 
 
@@ -639,3 +641,23 @@ def process_commands(
         execute_command(
             repo, issue_number, spec, comments=comments, **context,
         )
+
+
+def process_labeled_commands(
+    repo: str, label: str, *, commands: Iterable[CommandSpec] | None = None,
+    limit: int = 200, **context: object,
+) -> None:
+    """Run the registered commands on every open ticket carrying ``label``.
+
+    The stopped-ticket scan (Issue #1927): the clarification gate leaves a
+    ticket `ai-needs-detail` and outside every delivery label, so no claim
+    scan reads its comments — this scan is the one place a command on it is
+    seen. The tick runs it once per repository, as a bypass like the other
+    sweeps; a per-ticket read failure propagates to that caller, which logs
+    it and leaves the ticket stopped for the next tick.
+    """
+    specs = list(TICKET_COMMANDS.values() if commands is None else commands)
+    for issue in list_issues(
+        repo, state="open", label=label, json_fields="number", limit=limit,
+    ):
+        process_commands(repo, int(issue["number"]), specs, **context)

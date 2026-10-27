@@ -106,12 +106,12 @@ class FakeGh:
 
     def add_issue(self, number: int, *, title: str = "Issue", body: str = "",
                   labels: tuple[str, ...] = (), milestone: int | None = None,
-                  state: str = "open",
+                  state: str = "open", parent: int | None = None,
                   author: str = "issue-author") -> None:
         self.issues[number] = {
             "number": number, "title": title, "body": body,
             "state": state, "labels": list(labels), "milestone": milestone,
-            "comments": [], "blocked_by": [],
+            "comments": [], "blocked_by": [], "parent": parent,
             # The claim scans fetch `author` for the thin-ticket gate
             # (Issue #1336); `login` is the field `clarify` mentions.
             "author": {"login": author},
@@ -303,7 +303,8 @@ class FakeGh:
     # uninterpreted search qualifier).
     _ISSUE_FLAGS = {
         "view": ("--repo", "--json"),
-        "edit": ("--repo", "--add-label", "--remove-label", "--milestone"),
+        "edit": ("--repo", "--add-label", "--remove-label", "--milestone",
+                 "--add-sub-issue", "--add-blocked-by"),
         "comment": ("--repo", "--body"),
         "close": ("--repo",),
         "create": ("--repo", "--title", "--body", "--milestone", "--label"),
@@ -359,8 +360,11 @@ class FakeGh:
         if "--milestone" in flags:
             milestone = self._milestone_number(flags["--milestone"][0])
         number = max(self.issues) + 1 if self.issues else 1
+        # `gh` creates the Issue as the authenticated account, which is
+        # this runner: the author of engine-created tickets.
         self.add_issue(number, title=title, body=body, milestone=milestone,
-                       labels=tuple(flags.get("--label") or []))
+                       labels=tuple(flags.get("--label") or []),
+                       author=self.login)
         return f"https://github.com/{self.repo}/issues/{number}"
 
     def _milestone_number(self, title: str) -> int:
@@ -501,6 +505,17 @@ class FakeGh:
             issue["milestone"] = self._milestone_number(
                 flags["--milestone"][0]
             )
+        for child_number in flags.get("--add-sub-issue") or []:
+            self._issue_or_fail(int(child_number))["parent"] = issue["number"]
+        for blocker_number in flags.get("--add-blocked-by") or []:
+            blocker = self._issue_or_fail(int(blocker_number))
+            if blocker["number"] not in {
+                node["number"] for node in issue["blocked_by"]
+            }:
+                issue["blocked_by"].append({
+                    "number": blocker["number"],
+                    "state": blocker["state"].upper(),
+                })
 
     def _issue_fields(self, issue: dict, fields: list[str]) -> dict:
         rendered: dict = {}
@@ -520,6 +535,14 @@ class FakeGh:
                 nodes = issue["blocked_by"]
                 rendered[field] = {
                     "nodes": list(nodes), "totalCount": len(nodes),
+                }
+            elif field == "parent":
+                # `gh issue view --json parent` reports the native parent
+                # Issue object, or null when the Issue has none.
+                parent = self.issues.get(issue.get("parent"))
+                rendered[field] = None if parent is None else {
+                    "number": parent["number"], "title": parent["title"],
+                    "state": parent["state"].upper(),
                 }
             elif field == "state":
                 rendered[field] = issue["state"].upper()

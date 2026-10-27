@@ -18,7 +18,7 @@ description: "使用者可以依赖什么，status 与进度文档又如何报�
 
 | 接口 | 定义 |
 |---|---|
-| CLI | `orbi`（一次 Runner tick）、`orbi add`、`orbi suggest`、`orbi status`、`orbi session`、`orbi install-units`、`orbi sync-engine-source`、`orbi doctor`、`orbi check`、`orbi setup`、`orbi fix-base`（每条 arity 为 0 的已登记票内命令各一个子命令）、`orbi milestone`（`milestone set <title>`）、`orbi notify`（`notify test`） |
+| CLI | `orbi`（一次 Runner tick）、`orbi add`、`orbi suggest`、`orbi status`、`orbi session`、`orbi install-units`、`orbi sync-engine-source`、`orbi doctor`、`orbi check`、`orbi setup`、`orbi fix-base`、`orbi split`（每条 arity 为 0 的已登记票内命令各一个子命令）、`orbi milestone`（`milestone set <title>`）、`orbi notify`（`notify test`） |
 | 配置 | [Getting started](/zh/getting-started) 中记录的 `orbi.toml` 字段——包括 Telegram 通知键 `telegram_chat_id`；作为 systemd `EnvironmentFile` 加载的 `.orbi/env`（其中携带 `ORBI_TELEGRAM_BOT_TOKEN`）；`pi_providers` JSON 文件 |
 | 部署 | `systemd/orbi@.service` 与 `systemd/orbi@.timer` 模板；作为 run 产物与锁目录的 `.orbi/` |
 | Label 状态机 | `labels.toml`（名称、颜色、描述）与 `src/orbi/delivery_labels.py`（状态迁移） |
@@ -231,7 +231,11 @@ GitHub Issue 与标签仍是唯一状态存储。
 <!-- /orbi/suggestion -->
 ```
 
-渲染出的区块之后会跟一句显示文字——英文 `Editing this comment changes the proposal.`，中文 `编辑这条评论即可修改这份提案。`——除上述含义外不承载任何语义。条目编号、`(after N)` 短语（中文为 `（等第 N 条）`）与 `Acceptance:` 前缀（中文为 `验收：`）来自消息目录，因此中文工单渲染中文行语法，而解析器接受所有目录语言。
+渲染出的区块之后会跟一句显示文字——英文 `Editing this comment changes the proposal.`，中文 `编辑这条评论即可修改这份提案。`——除上述含义外不承载任何语义。`kind=split` 段落还会多一句显示文本，点名处理它的命令：英文
+*Reply `/orbi split` to create these tickets.*，中文
+*回复 `/orbi split` 即可创建这些工单。*。
+
+条目编号、`(after N)` 短语（中文为 `（等第 N 条）`）与 `Acceptance:` 前缀（中文为 `验收：`）来自消息目录，因此中文工单渲染中文行语法，而解析器接受所有目录语言。
 
 ### 行语法与解析
 
@@ -273,9 +277,46 @@ second start marker: a start marker appearing before the end marker
 
 权威停止评论是 Issue 上最新一条同时满足两点：带有正式停止前缀——可选的 `@author` 提及行、run marker 以及隐藏的 `<!-- orbi:clarify-stop:<digest> -->` 标记——且由本 Runner 撰写（与停止标记本身相同的信任规则）。选择依据是评论创建顺序，绝不是编辑时间，因此编辑一条停止评论不会改变它的位置。最新的受信停止评论就是权威，即使它没有携带提案：绝不沿用更早停止评论里的提案，别人写的更新评论也不会被选中。
 
+### 把提案变成子工单
+
+`/orbi split`（票内评论，或 `orbi split --repo <owner/name> --issue <N>`）读取
+它所运行工单最新一条可信停止评论，按本页描述的语法解析段落，为每个
+`kind=split` 条目创建一张子工单 —— 按运行那一刻评论的内容，所以先编辑评论
+就会改变创建结果。只有 `kind=split` 段落是合法输入：`kind=criteria` 提案、
+缺少段落或某一行无效都会被拒绝，回执写明原因（行无效时还写明行号）。
+
+子工单是一张普通工单，它的正文同样是公开契约：
+
+```text
+## Outcome
+<条目的结果>
+
+## Acceptance
+- <条目的验收行>
+
+Split from #<父工单号>
+
+<details><summary>Parent ticket text</summary>
+
+<父工单的正文>
+
+</details>
+
+<!-- orbi:split-child:<父工单号>:<条目号> -->
+```
+
+该标记让重跑找到已经创建的子工单；只有当工单由本 Runner 创建、且标题、
+验收行与原生 `after` 依赖仍与条目一致时才算数：伪造或复制的标记、被编辑过
+的条目、或两张同时匹配的工单都会让命令停下并发一条列出已有内容的回执 ——
+绝不盲目复用。子工单会挂成父工单的原生子工单，`(after N)` 记为原生
+`blockedBy` 关系，只继承父工单的 `p0`（若有）、`bug`（若有）与里程碑，
+并得到派发标签。父工单随后标记 `ai-epic` 并摘掉派发标签，`ai-needs-detail`
+在最后、在列出子工单的那条回执之后才移除 —— 因此中断的运行会被下一个 tick
+接着做完。
+
 ### 命令回执
 
-票内命令（`/orbi milestone <version>`、`/orbi fix-base`）对每种结果各留一条回执评论。回执的隐藏标记同时标明命令与结果，其 `comment=` 键标明它所回答的命令评论：
+票内命令（`/orbi milestone <version>`、`/orbi fix-base`、`/orbi split`）对每种结果各留一条回执评论。回执的隐藏标记同时标明命令与结果，其 `comment=` 键标明它所回答的命令评论：
 
 - `<!-- orbi-<name>-command comment=<key> -->`：命令已执行；
 - `<!-- orbi-<name>-command-rejected comment=<key> -->`：未被采纳（权限、参数形状或命令自身的规则）；

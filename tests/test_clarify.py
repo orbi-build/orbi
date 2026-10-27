@@ -1200,9 +1200,14 @@ def test_the_rendered_proposal_matches_its_fixture(kind, language_code):
     fixture = FIXTURES / f"{kind}.{language_code}.md"
     assert block + "\n" == fixture.read_text(encoding="utf-8")
     assert block.startswith(f"<!-- orbi:suggestion:v1 kind={kind} -->\n")
-    assert block.rstrip().endswith(
-        language.text(language_code, "clarify.suggestion.edit")
-    )
+    tail = language.text(language_code, "clarify.suggestion.edit")
+    if kind == clarify.SUGGESTION_SPLIT:
+        # A split proposal also names the command that creates the tickets
+        # (Issue #1927); a criteria draft has no command yet.
+        tail += "\n" + language.text(
+            language_code, "clarify.suggestion.split_reply",
+        )
+    assert block.rstrip().endswith(tail)
 
 
 @pytest.mark.parametrize("language_code", LANGUAGES)

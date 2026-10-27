@@ -341,6 +341,11 @@ def render_suggestion(suggestion: Suggestion, language_code: str) -> str:
             message("clarify.suggestion.acceptance", text=item.acceptance)
         )
     lines.extend((SUGGESTION_END, "", message("clarify.suggestion.edit")))
+    if suggestion.kind == SUGGESTION_SPLIT:
+        # A split proposal is also an offer (Issue #1927): the command that
+        # turns these very lines into child tickets is named here, so the
+        # reader never copies them into new Issues by hand.
+        lines.append(message("clarify.suggestion.split_reply"))
     return "\n".join(lines)
 
 
@@ -568,7 +573,9 @@ def _runner_login(issue: dict) -> str | None:
         return None
 
 
-def authoritative_stop(issue: dict, source_repo: str) -> dict | None:
+def authoritative_stop(
+    issue: dict, source_repo: str, *, comments: list[dict] | None = None,
+) -> dict | None:
     """The newest stop comment THIS runner wrote, or None.
 
     The one locator of the authoritative stop (Issue #1926), so the digest
@@ -589,9 +596,14 @@ def authoritative_stop(issue: dict, source_repo: str) -> dict | None:
     time: a stop keeps its position when a person edits it. The newest
     trusted stop wins even when it carries no proposal, and an older
     stop's proposal is never reused.
+
+    ``comments`` lets a caller that already read the ticket's comments
+    (the command dispatcher) reuse that read instead of paying a second
+    one; the selection itself is unchanged.
     """
     try:
-        comments = issue_comments(issue["number"], repo=source_repo)
+        if comments is None:
+            comments = issue_comments(issue["number"], repo=source_repo)
     except Exception as exc:
         event(
             "clarify_check_skipped", level=logging.WARNING,
@@ -632,15 +644,17 @@ def last_judged_digest(issue: dict, source_repo: str) -> str | None:
     return match.group("digest") if match is not None else None
 
 
-def stop_suggestion(issue: dict, source_repo: str) -> Suggestion | int | None:
+def stop_suggestion(
+    issue: dict, source_repo: str, *, comments: list[dict] | None = None,
+) -> Suggestion | int | None:
     """The proposal on the authoritative stop comment, or None.
 
     Same result convention as parse_suggestion: the Suggestion, the
     1-based line number of its first invalid line, or None when the newest
-    trusted stop carries no section. The commands of #1927 and #1929
-    consume this contract; this ticket only publishes it.
+    trusted stop carries no section. `/orbi split` (#1927) consumes this
+    contract and passes the comments it already read.
     """
-    comment = authoritative_stop(issue, source_repo)
+    comment = authoritative_stop(issue, source_repo, comments=comments)
     if comment is None:
         return None
     return parse_suggestion(comment.get("body"))

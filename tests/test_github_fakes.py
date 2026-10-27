@@ -612,6 +612,29 @@ def test_fake_issue_comments_carry_an_id_and_a_permalink(fake_gh):
         assert "#issuecomment-" + str(comment["id"]) in comment["url"]
 
 
+def test_fake_issue_edit_models_sub_issues_parents_and_blockers(fake_gh):
+    """`gh issue edit --add-sub-issue` / `--add-blocked-by` (Issue #1927):
+    the edited Issue is the parent of the listed numbers, each blocked-by
+    number becomes one native edge, and `--json parent` reports the parent
+    object (null when there is none). Both flags repeat, as gh's do."""
+    for number in (1, 2, 3, 4, 5):
+        fake_gh.add_issue(number, title=f"Issue {number}")
+    fake_gh(["gh", "issue", "edit", "1", "--repo", "owner/repo",
+             "--add-sub-issue", "2", "--add-sub-issue", "3",
+             "--add-blocked-by", "4", "--add-blocked-by", "5"])
+    # Re-adding an existing relation is idempotent, like the fake's labels.
+    fake_gh(["gh", "issue", "edit", "1", "--repo", "owner/repo",
+             "--add-blocked-by", "4"])
+    assert github.issue_view(1, "parent", repo="owner/repo")["parent"] is None
+    assert github.issue_view(2, "parent", repo="owner/repo")["parent"] == {
+        "number": 1, "title": "Issue 1", "state": "OPEN",
+    }
+    assert [
+        node["number"] for node in
+        github.issue_view(1, "blockedBy", repo="owner/repo")["blockedBy"]["nodes"]
+    ] == [4, 5]
+
+
 def test_fake_issue_comment_patch_edits_in_place(fake_gh):
     fake_gh.add_issue(4)
     fake_gh.comment(4, "waiting")

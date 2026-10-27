@@ -358,7 +358,10 @@ If you only want a sample, say so; do not conclude "does not exist" from it.
 
 - An Epic is a coordination Issue that groups related tasks; it carries the plain `ai-epic` label and is NOT an executable task — the work is split into independent `ai-ready` sub-Issues, each with one PR, one independent review and one merge.
 - The ready claim scan NEVER claims an `ai-epic` Issue (no `ai-in-progress`, no label change, no worktree, no run, no slot) and the restart-resume scan excludes it too.
-- The Runner never marks an Epic complete or closes it: while any completion condition (sub-Issues done, PRs merged, remote tag/artifacts, no leftover `ai-in-progress`) is unmet the Epic stays open.
+- The Runner never *claims* an Epic, and never marks one complete by hand: the per-tick
+  reconciliation closes an Epic only when GitHub's own native state says it is done —
+  every native sub-issue closed (or its PR merged) and no open native `blockedBy`
+  dependency. Anything else (including an Epic with no sub-issues) leaves it open.
 - Explanation: `docs/workflow.mdx` (EN/ZH).
 
 ## Release tasks (ai-release)
