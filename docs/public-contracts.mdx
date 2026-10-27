@@ -351,19 +351,27 @@ Split from #<parent number>
 ```
 
 The hidden marker names the parent and the item, so a re-run can find the
-children it already created. It counts only when THIS runner authored the
-Issue — GitHub reports that account on an Issue as `app/<name>` and in a
-comment as `<name>`, so the check compares accounts, never payload shapes —
-and the title, the acceptance lines and the native `after` dependency still
-equal the item: a copied or forged marker, an edited item, or two
-matching Issues stop the command with a receipt that lists what exists —
-nothing is adopted blindly. The child is attached as a native sub-issue of
-the parent, its `(after N)` becomes a native `blockedBy` edge, it inherits
-only the parent's `p0` label (when present), `bug` (when present) and
-Milestone, and it receives the dispatch label. The parent then carries
-`ai-epic` instead of the dispatch label, and `ai-needs-detail` is removed
-last, after the one receipt listing the children — so an interrupted run is
-picked up again by the next tick.
+children it already created — every item marker of this parent, including
+one that a later edit removed from the proposal. It counts only when THIS
+runner authored the Issue — GitHub reports that account on an Issue as
+`app/<name>` and in a comment as `<name>`, so the check compares accounts,
+never payload shapes — and the title, the acceptance lines and the native
+dependencies still match the item **and the proposal as it reads now**: a
+copied or forged marker, an edited item, a child whose item the proposal no
+longer has, a native `blockedBy` edge the proposal does not ask for, or two
+matching markers stop the command with a receipt that lists what exists and
+names the conflicting child and dependency — nothing is adopted blindly,
+and the command never closes, deletes, relabels or cancels an existing
+child. Two matching markers are never resolved by guessing: the receipt
+names the intended child to keep and asks for that marker to be removed
+from the extra Issue's body — closing it alone is not enough, the lookup
+reads closed Issues too — then for the reply again. The child is attached
+as a native sub-issue of the parent, its `(after N)` becomes a native
+`blockedBy` edge, it inherits only the parent's `p0` label (when present),
+`bug` (when present) and Milestone, and it receives the dispatch label.
+The parent then carries `ai-epic` instead of the dispatch label, and
+`ai-needs-detail` is removed last, after the one receipt listing the
+children — so an interrupted run is picked up again by the next tick.
 
 ### Adding the proposed acceptance criteria
 
