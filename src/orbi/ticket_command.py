@@ -29,9 +29,16 @@ The shared layer owns the matching and the permission check:
   forgotten;
 - a command declares a ``permission`` level, and the dispatcher enforces it
   before the handler ever sees the caller;
-- ``process_commands`` is the single dispatch entry for one ticket — the
-  only path to a handler — and it takes no caller state, so widening the
-  scanning scope later is adding a call site, not changing an interface.
+- a command that needs context its caller cannot know declares
+  ``context``, read from the ticket itself (a receipt marker, a record) —
+  the CLI never passes a placeholder;
+- ``execute_command`` is the single EXECUTION path for one command on
+  one ticket — the only path to a handler — and ``process_commands`` is
+  its comment-scan entry (``execute_command`` once per spec). The CLI
+  entry (``orbi <subcommand>`, Issue #1930) is the same function with the
+  host's login as the one occurrence, so registering a command gives both
+  spellings and the permission gate, ``validate``, ``apply`` and the
+  receipt cannot drift between them.
 
 The decision functions (`parse_commands` / `select_command`) are
 deterministic over the gathered comments and the command's ``validate``
@@ -44,6 +51,7 @@ import logging
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from orbi import language
 from orbi.github import WRITE_PERMISSIONS, issue_comments, repository_permission
@@ -120,6 +128,12 @@ class CommandSpec:
     # (Issue #1922): ``/milestone`` keeps working, receipts show the
     # canonical form.
     aliases: tuple[str, ...] = ()
+    # ``context(repo=…, issue_number=…, comments=…, **caller_context)``
+    # supplies the extra keyword context this command's ``validate`` /
+    # ``apply`` read when the caller has none (Issue #1930): the CLI entry
+    # has no ticket scan to inherit it from, so the command reads it from
+    # the ticket itself instead of a placeholder the CLI would invent.
+    context: Callable[..., dict[str, object]] | None = None
 
     @property
     def canonical(self) -> str:
@@ -325,10 +339,30 @@ def _malformed_reason(spec: CommandSpec, language_code: str) -> str:
     )
 
 
-def select_command(
-    comments: list[dict], spec: CommandSpec, *, repo: str, **context: object,
+def _occurrences(
+    comments: list[dict], spec: CommandSpec,
+) -> list[tuple[dict, str | None]]:
+    """Every command occurrence `spec` has in the ticket's comments.
+
+    A comment carrying a hidden ``<!-- orbi`` Runner marker is skipped
+    silently: the bot must never trigger itself off its own output, and a
+    self-hosted maintainer whose own account is the Runner is evaluated
+    like anyone else (Issue #1460).
+    """
+    occurrences: list[tuple[dict, str | None]] = []
+    for comment in comments:
+        if not isinstance(comment, dict) or is_runner_comment(comment):
+            continue
+        for argument in parse_commands(comment.get("body"), spec):
+            occurrences.append((comment, argument))
+    return occurrences
+
+
+def _selection(
+    occurrences: list[tuple[dict, str | None]], spec: CommandSpec, *,
+    repo: str, **context: object,
 ) -> tuple[tuple[dict, str] | None, list[tuple[dict, str | None, str]]]:
-    """Resolve the ticket's occurrences of ``spec`` to one executable command.
+    """Resolve the gathered occurrences to one executable command.
 
     Returns `(target, rejections)`. `target` is the LAST occurrence when
     it is authorized — its author's REPOSITORY PERMISSION allows the
@@ -336,19 +370,9 @@ def select_command(
     never read) — well-formed and accepted by the command's ``validate``
     callback: the last word wins, so an operator can correct a typo by
     commenting again. Every rejected occurrence is returned with a
-    readable reason so the caller can leave one receipt each. A comment
-    carrying a hidden ``<!-- orbi`` Runner marker is skipped silently:
-    the bot must never trigger itself off its own output, and a
-    self-hosted maintainer whose own account is the Runner is evaluated
-    like anyone else (Issue #1460).
+    readable reason so the caller can leave one receipt each.
     """
     language_code = _language_code(context)
-    occurrences: list[tuple[dict, str | None]] = []
-    for comment in comments:
-        if not isinstance(comment, dict) or is_runner_comment(comment):
-            continue
-        for argument in parse_commands(comment.get("body"), spec):
-            occurrences.append((comment, argument))
     rejections: list[tuple[dict, str | None, str]] = []
     target: tuple[dict, str] | None = None
     permissions: dict[str, str] = {}
@@ -376,6 +400,53 @@ def select_command(
     return target, rejections
 
 
+def select_command(
+    comments: list[dict], spec: CommandSpec, *, repo: str, **context: object,
+) -> tuple[tuple[dict, str] | None, list[tuple[dict, str | None, str]]]:
+    """Resolve the ticket's occurrences of ``spec`` to one executable command.
+
+    The comment scan's view of `_selection`: every occurrence comes from
+    the ticket's own comments, in line order.
+    """
+    return _selection(_occurrences(comments, spec), spec, repo=repo, **context)
+
+
+# The occurrence a terminal caller issues (Issue #1930). There is no
+# comment to key the receipt on, so one CLI invocation is one occurrence —
+# the same "one receipt per occurrence" rule a comment gets.
+CLI_OCCURRENCE_FLAG = "cli"
+
+
+def cli_caller(login: str, *, now: datetime | None = None) -> dict:
+    """The one occurrence `orbi <subcommand>` contributes.
+
+    `login` is the host's authenticated `gh` account, so the SAME
+    repository-permission gate judges the terminal caller; the key is the
+    invocation's UTC stamp (an occurrence, like a comment, is acted on
+    once), and the receipt names the CLI instead of a comment URL.
+    """
+    stamp = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {
+        "id": f"cli@{stamp}",
+        "author": {"login": login},
+        CLI_OCCURRENCE_FLAG: True,
+    }
+
+
+def cli_specs() -> list[CommandSpec]:
+    """The registered commands that also get a CLI subcommand.
+
+    Arity-0 only (Issue #1930): the generated entry takes `--repo` and
+    `--issue` and no argument, so a command that needs one — `/orbi
+    milestone <version>` — keeps its own explicit CLI command (`orbi
+    milestone set`). Registering a command therefore gives both spellings
+    without a hand edit; `orbi.cli_ticket_command` imports the registrants
+    before it reads this list, the same way the comment scan's call site
+    does.
+    """
+    return [spec for spec in TICKET_COMMANDS.values() if spec.arity == 0]
+
+
 def command_comment_key(comment: dict) -> str:
     for field in ("id", "url"):
         value = comment.get(field)
@@ -385,7 +456,12 @@ def command_comment_key(comment: dict) -> str:
     return f"{login}@{comment.get('createdAt') or 'unknown'}"
 
 
-def _command_comment_ref(comment: dict) -> str:
+def _command_comment_ref(comment: dict, language_code: str) -> str:
+    if comment.get(CLI_OCCURRENCE_FLAG):
+        return language.text(
+            language_code, "command.cli_caller",
+            login=comment_author_login(comment) or "unknown",
+        )
     url = comment.get("url")
     if isinstance(url, str) and url:
         return url
@@ -408,15 +484,14 @@ def _post_command_receipt(
     *, spec: CommandSpec, marker: str, summary: str, argument: str | None,
     reason: str, step: str | None = None,
     language_code: str = language.DEFAULT_LANGUAGE,
-) -> None:
-    """Post one reason comment, at most once per occurrence (idempotent)."""
+) -> str:
+    """Post one reason comment, at most once per occurrence (idempotent).
+
+    Returns the receipt's text whether or not it was posted now, so the
+    caller that SHOWS the receipt (the CLI entry, Issue #1930) prints what
+    the ticket carries.
+    """
     hidden = f"<!-- {marker} comment={command_comment_key(comment)} -->"
-    if any(
-        isinstance(existing, dict) and isinstance(existing.get("body"), str)
-        and hidden in existing["body"]
-        for existing in existing_comments
-    ):
-        return
     lines = [
         summary, "",
         language.text(language_code, "command.reason", reason=reason),
@@ -438,15 +513,114 @@ def _post_command_receipt(
     lines.extend([
         language.text(
             language_code, "command.comment",
-            ref=_command_comment_ref(comment),
+            ref=_command_comment_ref(comment, language_code),
         ),
         "",
         hidden,
     ])
-    run_command([
-        "gh", "issue", "comment", str(issue_number), "--repo", repo,
-        "--body", "\n".join(lines),
-    ], timeout=30)
+    body = "\n".join(lines)
+    if not any(
+        isinstance(existing, dict) and isinstance(existing.get("body"), str)
+        and hidden in existing["body"]
+        for existing in existing_comments
+    ):
+        run_command([
+            "gh", "issue", "comment", str(issue_number), "--repo", repo,
+            "--body", body,
+        ], timeout=30)
+    return body
+
+
+@dataclass(frozen=True)
+class CommandOutcome:
+    """What one command run did (Issue #1930).
+
+    ``applied`` is the result; ``receipt`` is the readable comment the run
+    left on the ticket — the rejection reason or the failed step — or
+    ``None`` when the command applied (its own success reply is the
+    receipt). The CLI entry prints the receipt and exits non-zero.
+    """
+
+    applied: bool
+    receipt: str | None = None
+
+
+def execute_command(
+    repo: str, issue_number: int, spec: CommandSpec, *,
+    comments: list[dict] | None = None,
+    caller: dict | None = None,
+    **context: object,
+) -> CommandOutcome:
+    """Run ONE registered command on one ticket — the single execution path.
+
+    ``process_commands`` runs it once per spec over the ticket's comments;
+    the CLI entry (``orbi <subcommand> --repo … --issue …`, Issue #1930)
+    runs it with ``caller`` — the host's authenticated login as the one
+    occurrence — so the permission gate, ``validate``, ``apply`` and the
+    receipt are the same code for both spellings. The spec's own
+    ``context`` fills what a caller has none of (read from the ticket), and
+    a caller's value always wins: a scan that already located it pays no
+    second read.
+    """
+    if comments is None:
+        comments = issue_comments(issue_number, repo=repo)
+    if spec.context is not None:
+        context = {
+            **spec.context(
+                repo=repo, issue_number=issue_number, comments=comments,
+                **context,
+            ),
+            **context,
+        }
+    language_code = _language_code(context)
+    occurrences = (
+        [(caller, "")]
+        if caller is not None
+        else _occurrences(comments, spec)
+    )
+    target, rejections = _selection(occurrences, spec, repo=repo, **context)
+    receipt = None
+    for comment, argument, reason in rejections:
+        receipt = _post_command_receipt(
+            repo, issue_number, comments, comment, spec=spec,
+            marker=f"{command_receipt_marker(spec)}-rejected",
+            summary=language.text(
+                language_code, "command.not_applied", command=spec.canonical,
+            ),
+            argument=argument, reason=reason, language_code=language_code,
+        )
+    if target is None:
+        return CommandOutcome(applied=False, receipt=receipt)
+    comment, argument = target
+    try:
+        # The winning occurrence travels with the command: a handler
+        # that must run at most once per occurrence keys its own receipt
+        # on it (Issue #1825).
+        spec.apply(
+            argument, repo=repo, issue_number=issue_number,
+            command_comment=comment, comments=comments, **context,
+        )
+    except TicketCommandError as exc:
+        receipt = _post_command_receipt(
+            repo, issue_number, comments, comment, spec=spec,
+            marker=f"{command_receipt_marker(spec)}-failed step={exc.step}",
+            summary=language.text(
+                language_code, "command.failed",
+                command=spec.command_text(argument),
+            ),
+            argument=argument, reason=exc.reason, step=exc.step,
+            language_code=language_code,
+        )
+        event(
+            f"{spec.name}_command_failed", level=logging.ERROR, repo=repo,
+            **{spec.name: argument}, step=exc.step, reason=exc.reason,
+        )
+        return CommandOutcome(applied=False, receipt=receipt)
+    event(
+        f"{spec.name}_command_applied", repo=repo,
+        **{spec.name: argument}, issue=f"#{issue_number}",
+    )
+    return CommandOutcome(applied=True)
 
 
 def process_commands(
@@ -455,56 +629,13 @@ def process_commands(
 ) -> None:
     """Evaluate a pending ticket's comments and run the winning command.
 
-    The single dispatch entry: each spec in ``commands`` is parsed from the
-    same comments, its rejections get one receipt each, and its winning
-    occurrence reaches ``apply`` only through here.
+    The comment-scan entry: each spec in ``commands`` is run through
+    `execute_command` over the SAME comments read, so its rejections get
+    one receipt each and its winning occurrence reaches ``apply`` only
+    through the one execution path.
     """
-    language_code = _language_code(context)
     comments = issue_comments(issue_number, repo=repo)
     for spec in commands:
-        target, rejections = select_command(
-            comments, spec, repo=repo, **context,
-        )
-        for comment, argument, reason in rejections:
-            _post_command_receipt(
-                repo, issue_number, comments, comment, spec=spec,
-                marker=f"{command_receipt_marker(spec)}-rejected",
-                summary=language.text(
-                    language_code, "command.not_applied",
-                    command=spec.canonical,
-                ),
-                argument=argument, reason=reason, language_code=language_code,
-            )
-        if target is None:
-            continue
-        comment, argument = target
-        try:
-            # The winning occurrence travels with the command: a handler
-            # that must run at most once per comment keys its own receipt
-            # on it (Issue #1825).
-            spec.apply(
-                argument, repo=repo, issue_number=issue_number,
-                command_comment=comment, comments=comments, **context,
-            )
-        except TicketCommandError as exc:
-            _post_command_receipt(
-                repo, issue_number, comments, comment, spec=spec,
-                marker=(
-                    f"{command_receipt_marker(spec)}-failed step={exc.step}"
-                ),
-                summary=language.text(
-                    language_code, "command.failed",
-                    command=spec.command_text(argument),
-                ),
-                argument=argument, reason=exc.reason, step=exc.step,
-                language_code=language_code,
-            )
-            event(
-                f"{spec.name}_command_failed", level=logging.ERROR, repo=repo,
-                **{spec.name: argument}, step=exc.step, reason=exc.reason,
-            )
-            continue
-        event(
-            f"{spec.name}_command_applied", repo=repo,
-            **{spec.name: argument}, issue=f"#{issue_number}",
+        execute_command(
+            repo, issue_number, spec, comments=comments, **context,
         )
