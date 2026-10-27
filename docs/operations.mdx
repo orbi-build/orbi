@@ -1095,8 +1095,15 @@ children, and `ai-needs-detail` removed LAST — so a run interrupted at any
 earlier step is still scanned on the next tick and the same command
 continues. A re-run adopts an existing child only when this runner authored
 it, its `<!-- orbi:split-child:<parent>:<n> -->` marker names that parent
-and item, and its title, acceptance lines and dependency still equal the
-item; anything else stops with a receipt that lists what exists.
+and item, and its title, acceptance lines and native dependencies still
+match the item and the proposal as it reads now — every item marker of this
+parent is checked, so a child whose item an edit removed, and a native
+`blockedBy` edge the proposal does not ask for, are conflicts too; anything
+else stops with a receipt that lists what exists, names the conflicting
+child and dependency, and leaves that child exactly as it is. Two matching
+markers are never resolved by guessing: the receipt asks for the intended
+child to be kept and the conflicting marker removed from the extra Issue's
+body (closing it alone does not help — the lookup reads closed Issues too).
 
 `/orbi add-criteria` (Issue #1929) appends the newest trusted stop
 comment's `kind=criteria` section — as the comment reads when the command

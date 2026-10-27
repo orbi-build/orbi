@@ -15,6 +15,7 @@ import pytest
 
 import orbi.split_command as split_command
 from orbi import claim, clarify, journal, language, ticket_command
+from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
     BUG_LABEL,
     EPIC_LABEL,
@@ -103,9 +104,11 @@ def _hooks() -> ResumeHooks:
     )
 
 
-def tick(monkeypatch, tmp_path, gh: FakeGh):
+def tick(monkeypatch, tmp_path, gh: FakeGh, *, config=None):
     """One real Runner tick over the fake GitHub."""
-    return claim.pick_next_delivery([REPO], tmp_path, 1, hooks=_hooks())
+    return claim.pick_next_delivery(
+        [REPO], tmp_path, 1, config=config, hooks=_hooks(),
+    )
 
 
 def comment_bodies(gh: FakeGh, number: int = PARENT) -> list[str]:
@@ -648,9 +651,285 @@ def test_two_matching_children_stop_before_adopting_either(
     reported = failures(gh)
     assert len(reported) == 1
     assert "2 issues carry the marker" in reported[0]
-    # The receipt LISTS what exists, so the reader closes the right Issue
+    # The receipt LISTS what exists, so the reader picks the right Issue
     # instead of searching GitHub for the marker (the published contract).
     assert "#55, #56" in reported[0]
+    # The repair names the ONE action that works: the lookup covers every
+    # state, so closing alone would reject both again (Issue #1940).
+    assert "remove that marker from the extra issue's body" in reported[0]
+
+
+def test_the_named_duplicate_repair_adopts_only_the_retained_child(
+    monkeypatch, tmp_path,
+):
+    """The receipt's repair works end to end: the marker goes, not the Issue.
+
+    Candidate lookup reads every state (`state="all"`), so a closed extra
+    Issue still carrying the marker keeps blocking the retry. A maintainer
+    who follows the receipt -- keep #55, remove the conflicting marker from
+    #56's body, reply again -- gets the split finished for the two items,
+    never a duplicate child and never #56 adopted.
+    """
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    existing_child(gh, number=55)
+    existing_child(gh, number=56)
+    before = set(gh.issues)
+    reply(gh)
+
+    tick(monkeypatch, tmp_path, gh)
+    assert set(gh.issues) == before
+    assert success_receipts(gh) == []
+    rejected = failures(gh)
+    assert len(rejected) == 1
+    assert "2 issues carry the marker" in rejected[0]
+
+    # The maintainer keeps #55, closes #56 and removes the conflicting
+    # marker from its body.
+    gh.issues[56]["state"] = "closed"
+    gh.issues[56]["body"] = gh.issues[56]["body"].replace(
+        split_command.child_marker(PARENT, 1), "",
+    )
+    tick(monkeypatch, tmp_path, gh)
+
+    # Only the retained child is adopted; item 2 is the one new ticket. The
+    # extra Issue keeps its closed state and its sub-issue link: the command
+    # repairs nothing itself, it only stops guessing.
+    assert set(gh.issues) == before | {101}
+    receipt = success_receipts(gh)
+    assert len(receipt) == 1
+    assert "- #55 Users can tag a note" in receipt[0]
+    assert "- #101 Users can export a note" in receipt[0]
+    assert "#56" not in receipt[0]
+    assert gh.issues[56]["state"] == "closed"
+    assert NEEDS_DETAIL_LABEL not in gh.issues[PARENT]["labels"]
+    assert failures(gh) == rejected
+
+
+# --------------------------------------------------------------------------
+# acceptance 4b: the whole proposal is compared, not only this run's items
+# --------------------------------------------------------------------------
+
+def test_a_dependency_to_an_unrelated_issue_stops_the_split(
+    monkeypatch, tmp_path,
+):
+    """An extra native dependency is a conflict, never silently adopted.
+
+    Item 1 has no `after`, so its child must carry NO `blockedBy` edge. The
+    intersection this check used to take -- edges to the children found
+    this run -- never saw an edge to an unrelated Issue, so the tick adopted
+    the child and reported a success that was not one (Issue #1940).
+    """
+    gh = _gh(monkeypatch)
+    gh.add_issue(90, title="Unrelated work")
+    stopped_ticket(gh)
+    existing_child(gh, number=55, blocked_by=(90,))
+    before = set(gh.issues)
+    reply(gh)
+
+    tick(monkeypatch, tmp_path, gh)
+
+    assert set(gh.issues) == before          # nothing more is created
+    assert success_receipts(gh) == []
+    reported = failures(gh)
+    assert len(reported) == 1
+    # The receipt names the child AND the dependency it does not expect.
+    assert "#55" in reported[0]
+    assert "#90" in reported[0]
+    assert "`after` dependency" in reported[0]
+    assert NEEDS_DETAIL_LABEL in gh.issues[PARENT]["labels"]
+    assert EPIC_LABEL not in gh.issues[PARENT]["labels"]
+    # The child keeps its dependency: the command repairs nothing itself.
+    assert gh.issues[55]["blocked_by"] == [{"number": 90, "state": "OPEN"}]
+
+
+def _receipt_write_fails(gh: FakeGh):
+    """The success-receipt write is the one step that fails."""
+    return fail_on(gh, lambda command: (
+        command[1] == "issue" and command[2] == "comment"
+        and str(PARENT) in command
+    ))
+
+
+THREE_ITEMS = proposal(
+    item("Users can tag a note", "filtering by the tag finds the note"),
+    item("Users can export a note", "Export downloads a .md file", after=1),
+    item("Users can sync a note", "the note reaches the other device", after=2),
+)
+
+
+def test_an_item_removed_by_the_edit_leaves_its_child_as_a_conflict(
+    monkeypatch, tmp_path,
+):
+    """An interrupted run plus a smaller proposal is a conflict, not success.
+
+    The three children were created and queued; only the success receipt
+    failed, so the ticket stayed in the scan. Editing the proposal down to
+    two items must not report "split into 2" while three children sit
+    attached and queued (Issue #1940).
+    """
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh, section=clarify.render_suggestion(THREE_ITEMS, "en"))
+    reply(gh)
+    monkeypatch.setattr(seam, "run_command", _receipt_write_fails(gh))
+
+    tick(monkeypatch, tmp_path, gh)
+    assert len(children(gh)) == 3
+    assert success_receipts(gh) == []
+    assert NEEDS_DETAIL_LABEL in gh.issues[PARENT]["labels"]
+    extra = children(gh)[2]
+    untouched = (
+        extra["number"], list(extra["labels"]), extra["parent"],
+        list(extra["blocked_by"]), extra["state"], extra["body"],
+    )
+
+    # While the ticket is still stopped, the proposal is edited down to the
+    # first two items.
+    monkeypatch.setattr(seam, "run_command", gh)
+    gh.issues[PARENT]["comments"][0]["body"] = stop_body(
+        clarify.render_suggestion(proposal(*THREE_ITEMS.items[:2]), "en"),
+    )
+    tick(monkeypatch, tmp_path, gh)
+
+    # Nothing created, nothing cancelled: the command stops and lists it.
+    assert len(children(gh)) == 3
+    assert success_receipts(gh) == []
+    reported = failures(gh)
+    assert len(reported) == 1
+    assert f"#{extra['number']}" in reported[0]
+    assert split_command.child_marker(PARENT, 3) in reported[0]
+    assert NEEDS_DETAIL_LABEL in gh.issues[PARENT]["labels"]
+    after = gh.issues[extra["number"]]
+    assert (
+        after["number"], list(after["labels"]), after["parent"],
+        list(after["blocked_by"]), after["state"], after["body"],
+    ) == untouched
+
+
+def test_an_item_removed_by_the_edit_with_a_matching_proposal_finishes(
+    monkeypatch, tmp_path,
+):
+    """The other repair keeps the queued child: put its item back."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh, section=clarify.render_suggestion(THREE_ITEMS, "en"))
+    reply(gh)
+    monkeypatch.setattr(seam, "run_command", _receipt_write_fails(gh))
+    tick(monkeypatch, tmp_path, gh)
+    assert len(children(gh)) == 3
+
+    # The two-item edit is refused (the third child exists)...
+    monkeypatch.setattr(seam, "run_command", gh)
+    gh.issues[PARENT]["comments"][0]["body"] = stop_body(
+        clarify.render_suggestion(proposal(*THREE_ITEMS.items[:2]), "en"),
+    )
+    tick(monkeypatch, tmp_path, gh)
+    assert success_receipts(gh) == []
+    assert len(failures(gh)) == 1
+
+    # ...and putting the item back makes the proposal match the children.
+    gh.issues[PARENT]["comments"][0]["body"] = stop_body(
+        clarify.render_suggestion(THREE_ITEMS, "en"),
+    )
+    tick(monkeypatch, tmp_path, gh)
+
+    assert len(children(gh)) == 3
+    assert len(success_receipts(gh)) == 1
+    assert NEEDS_DETAIL_LABEL not in gh.issues[PARENT]["labels"]
+
+
+def test_a_marker_of_an_item_below_one_is_a_conflict_too(monkeypatch, tmp_path):
+    """A hand-edited item number is never read as a proposal position."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    existing_child(gh, number=55, item_number=0)
+    before = set(gh.issues)
+    reply(gh)
+
+    tick(monkeypatch, tmp_path, gh)
+
+    assert set(gh.issues) == before
+    assert success_receipts(gh) == []
+    reported = failures(gh)
+    assert len(reported) == 1
+    assert "#55" in reported[0]
+    assert NEEDS_DETAIL_LABEL in gh.issues[PARENT]["labels"]
+
+
+def test_the_claimed_item_comes_from_the_marker_of_this_parent():
+    assert split_command._claimed_item(None, PARENT) is None
+    assert split_command._claimed_item("no marker", PARENT) is None
+    assert split_command._claimed_item(
+        "<!-- orbi:split-child:999:1 -->", PARENT,
+    ) is None
+    assert split_command._claimed_item(
+        "<!-- orbi:split-child:100:4 -->", PARENT,
+    ) == 4
+
+
+def test_an_issue_that_only_mentions_the_marker_is_not_a_child(
+    monkeypatch, tmp_path,
+):
+    """Prose that names the marker phrase is never a child of this parent.
+
+    The search phrase is matched by its tokens, so a note that talks ABOUT
+    the marker appears in the results; only a real `<!-- ... -->` marker
+    naming this parent and an item makes an Issue a candidate.
+    """
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    gh.add_issue(
+        70, title="notes", author="orbi-bot",
+        body=f"children carry `orbi:split-child:{PARENT}` markers",
+    )
+    before = set(gh.issues)
+    reply(gh)
+
+    tick(monkeypatch, tmp_path, gh)
+
+    assert set(gh.issues) == before | {101, 102}
+    assert gh.issues[70]["parent"] is None
+    assert gh.issues[70]["labels"] == []
+    assert len(success_receipts(gh)) == 1
+
+
+# --------------------------------------------------------------------------
+# acceptance 4c: edited numbering and `after` targets, in both languages
+# --------------------------------------------------------------------------
+
+def test_a_chinese_proposal_with_edited_numbering_and_after_still_splits(
+    monkeypatch, tmp_path,
+):
+    """Written numbers resolve to positions; `after` targets them.
+
+    A zh proposal numbered 5 and 9 (a person may leave gaps) with a zh
+    `（等第 5 条）` dependency creates two children whose `blockedBy` edge
+    follows the POSITION, not the written number.
+    """
+    gh = _gh(monkeypatch)
+    section = "\n".join([
+        "<!-- orbi:suggestion:v1 kind=split -->",
+        "5. 用户可以给笔记打标签",
+        "   验收：按标签筛选能找到该笔记",
+        "9. 用户可以导出笔记 （等第 5 条）",
+        "   验收：导出会下载一个 .md 文件",
+        STOP_END,
+    ])
+    stopped_ticket(gh, section=section, prose="这张工单需要拆分。")
+    reply(gh)
+
+    tick(
+        monkeypatch, tmp_path, gh,
+        config=RunnerConfig(source_repos=(REPO,), message_language="zh"),
+    )
+
+    assert titles(gh) == ["用户可以给笔记打标签", "用户可以导出笔记"]
+    first, second = children(gh)
+    assert second["blocked_by"] == [
+        {"number": first["number"], "state": "OPEN"},
+    ]
+    assert len(success_receipts(gh)) == 1
+    assert "已拆分为 2 张子工单" in success_receipts(gh)[0]
+    assert NEEDS_DETAIL_LABEL not in gh.issues[PARENT]["labels"]
 
 
 # --------------------------------------------------------------------------

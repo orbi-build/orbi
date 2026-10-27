@@ -37,9 +37,13 @@ prose, and never a copy someone else pasted (Issue #1938).
 
 A re-run adopts an existing child only when THIS runner authored it, its
 hidden marker names this parent and item, and its title, acceptance lines
-and dependency still equal the item. Anything else — a copied marker, an
-edited item, two matches — is never adopted blindly: the command stops with
-a receipt that lists what already exists.
+and dependency still equal the item **and the proposal as it reads now**:
+the search covers every item marker of this parent, so a child whose item
+was edited out of the proposal, or a child carrying a native dependency
+the proposal does not ask for, is a conflict too. Anything else — a copied
+marker, an edited item, two matches, an extra child, an extra dependency —
+is never adopted blindly: the command stops with a receipt that lists what
+already exists.
 
 Every GitHub call a step makes is wrapped in `run_step`: the shared layer posts
 its one failed receipt only for a `TicketCommandError` (the same rule
@@ -223,40 +227,59 @@ def _child_state(repo: str, number: int) -> dict:
     )
 
 
-def _existing_candidates(repo: str, parent: int, item: int) -> list[dict]:
-    """Every issue whose body carries this parent-and-item marker."""
-    marker = child_marker(parent, item)
+def _existing_candidates(repo: str, parent: int) -> list[dict]:
+    """Every issue whose body carries a child marker naming this parent.
+
+    The phrase is matched by its TOKENS (GitHub drops the punctuation), so
+    it finds the marker of EVERY item of this parent — including one the
+    proposal no longer has — and no other parent's, whose marker carries a
+    different number token. One query replaces one search per item.
+    """
     return run_step(
         "find or open the child",
         lambda: list_issues(
-            repo, state="all", search=f'"{marker}" in:body',
+            repo, state="all", search=f'"{CHILD_MARKER}:{parent}" in:body',
             json_fields="number,title,body,author", limit=SEARCH_LIMIT,
         ),
     )
 
 
-def _find_children(
-    repo: str, parent: int, items: tuple[clarify.SuggestionItem, ...],
-    *, language_code: str,
-) -> dict[int, dict]:
-    """The existing child of every item, keyed by the item's position.
+def _claimed_item(body: object, parent: int) -> int | None:
+    """The proposal item this body's child marker names for this parent."""
+    if not isinstance(body, str):
+        return None
+    for claimed_parent, item in CHILD_MARKER_RE.findall(body):
+        if int(claimed_parent) == parent:
+            return int(item)
+    return None
 
-    Only an issue THIS runner authored counts: the marker is public text,
-    so a copied one is never adopted. Two counted matches stop the command
-    (there is no way to know which one the earlier run meant).
+
+def _find_children(
+    repo: str, parent: int, *, language_code: str,
+) -> dict[int, dict]:
+    """The existing child of every item marker written for this parent.
+
+    The item number comes from the marker, not from the current proposal, so
+    a child of an item that a later edit removed is found too (it is
+    verified against the proposal and stops the command). Only an issue THIS
+    runner authored counts: the marker is public text, so a copied one is
+    never adopted. Two counted matches stop the command (there is no way to
+    know which one the earlier run meant).
     """
     runner = run_step("identify this runner", runner_account)
-    found: dict[int, dict] = {}
-    for item_number in range(1, len(items) + 1):
-        counted = [
-            issue for issue in _existing_candidates(repo, parent, item_number)
-            if account_login(issue) == runner
-        ]
-        if not counted:
+    claimed: dict[int, list[dict]] = {}
+    for issue in _existing_candidates(repo, parent):
+        if account_login(issue) != runner:
             continue
+        item_number = _claimed_item(issue.get("body"), parent)
+        if item_number is None:
+            continue
+        claimed.setdefault(item_number, []).append(issue)
+    found: dict[int, dict] = {}
+    for item_number, counted in sorted(claimed.items()):
         if len(counted) > 1:
             # The receipt lists what exists (the published contract), so the
-            # reader closes the right Issue instead of searching the marker.
+            # reader picks the intended Issue instead of searching the marker.
             numbers = ", ".join(
                 f"#{number}" for number in sorted(
                     int(issue["number"]) for issue in counted
@@ -276,9 +299,14 @@ def _find_children(
 
 def _mismatch(
     item: clarify.SuggestionItem, state: dict, *,
-    parent: int, item_number: int, child_numbers: dict[int, int],
+    parent: int, item_number: int,
 ) -> str | None:
-    """The first field where one existing child differs from its item."""
+    """The first field where one existing child differs from its item.
+
+    The dependency is compared separately: a missing expected edge is a
+    recoverable interrupted step, while an unexpected one is a conflict
+    that names its blocker.
+    """
     child = parse_child_body(state.get("body"))
     if child is None or child.parent != parent or child.item != item_number:
         return "split marker"
@@ -289,41 +317,74 @@ def _mismatch(
     parent_number = _parent_number(state)
     if parent_number is not None and parent_number != parent:
         return "parent"
-    sibling_edges = _blocked_numbers(state) & set(child_numbers.values())
-    if item.after is None:
-        return "`after` dependency" if sibling_edges else None
-    expected = child_numbers.get(item.after)
-    # An `after` whose item has no child yet cannot be compared: the edge
-    # is added by the dependency step of this run.
-    if expected is not None and sibling_edges not in ({expected}, set()):
-        return "`after` dependency"
     return None
+
+
+def _expected_blocker(
+    item: clarify.SuggestionItem, child_numbers: dict[int, int],
+) -> set[int]:
+    """The one sibling edge the proposal asks this item's child to carry.
+
+    An item with no ``after`` asks for none. An ``after`` whose item has no
+    child yet cannot be compared: the edge is added by the dependency step
+    of this run (a missing edge is a recoverable interrupted step).
+    """
+    if item.after is None:
+        return set()
+    expected = child_numbers.get(item.after)
+    return set() if expected is None else {expected}
 
 
 def _verify_existing(
     items: tuple[clarify.SuggestionItem, ...], found: dict[int, dict], *,
     parent: int, language_code: str,
 ) -> None:
-    """Stop before any write when one existing child no longer matches."""
+    """Stop before any write when one existing child no longer matches.
+
+    Every child found for this parent is compared with the WHOLE proposal:
+    a marker for an item the proposal no longer has, and a native dependency
+    the proposal does not ask for, are conflicts like an edited title.
+    """
     child_numbers = {
         item_number: int(state["number"]) for item_number, state in found.items()
     }
     for item_number, state in sorted(found.items()):
+        marker = child_marker(parent, item_number)
+        if not 1 <= item_number <= len(items):
+            raise TicketCommandError(
+                "find or open the child",
+                language.text(
+                    language_code, "split.reason_extra_child",
+                    number=state["number"], marker=marker,
+                    item=item_number, count=len(items),
+                ),
+            )
+        item = items[item_number - 1]
         field = _mismatch(
-            items[item_number - 1], state, parent=parent,
-            item_number=item_number, child_numbers=child_numbers,
+            item, state, parent=parent, item_number=item_number,
         )
-        if field is None:
-            continue
-        raise TicketCommandError(
-            "find or open the child",
-            language.text(
-                language_code, "split.reason_differs",
-                number=state["number"],
-                marker=child_marker(parent, item_number),
-                field=field, item=item_number,
-            ),
+        if field is not None:
+            raise TicketCommandError(
+                "find or open the child",
+                language.text(
+                    language_code, "split.reason_differs",
+                    number=state["number"], marker=marker,
+                    field=field, item=item_number,
+                ),
+            )
+        extra = _blocked_numbers(state) - _expected_blocker(
+            item, child_numbers,
         )
+        if extra:
+            raise TicketCommandError(
+                "find or open the child",
+                language.text(
+                    language_code, "split.reason_extra_dependency",
+                    number=state["number"], marker=marker,
+                    item=item_number,
+                    blockers=", ".join(f"#{number}" for number in sorted(extra)),
+                ),
+            )
 
 
 def _attach_sub_issue(child: int, *, parent: int, repo: str) -> None:
@@ -500,7 +561,7 @@ def _split_apply(
     if not runner_receipt(comments, receipt):
         items = suggestion.items
         found = _find_children(
-            repo, issue_number, items, language_code=language_code,
+            repo, issue_number, language_code=language_code,
         )
         _verify_existing(
             items, found, parent=issue_number, language_code=language_code,

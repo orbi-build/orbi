@@ -280,18 +280,48 @@ SPLIT_MESSAGES: dict[str, tuple[str, str]] = {
     ),
     # The receipt LISTS what exists (`docs/public-contracts.mdx`): a count
     # alone would leave the reader searching GitHub for its own children.
+    # The repair names the ONE step that works: the lookup reads every state,
+    # so closing the extra Issue alone would reject both again (Issue #1940).
     "split.reason_duplicate": (
         "{count} issues carry the marker `{marker}`: {numbers}; refusing "
-        "to adopt any of them (close the extra one and reply again)",
+        "to adopt any of them — choose the child you meant, remove that "
+        "marker from the extra issue's body, then reply again",
         "有 {count} 张工单都带着标记 `{marker}`：{numbers}；不会擅自采纳其中"
-        "任何一张（关掉多余的那张再回复一次）",
+        "任何一张 —— 选定你要保留的那张子工单，把那个标记从多余那张的正文里删掉，"
+        "然后再回复一次",
     ),
     "split.reason_differs": (
         "issue #{number} carries the marker `{marker}` but its {field} "
         "differs from item {item} of the proposal; nothing more was "
-        "created — close or correct that issue and reply again",
+        "created — correct that issue (or remove its marker) and reply "
+        "again",
         "工单 #{number} 带有标记 `{marker}`，但它的{field}与提案第 {item} 条"
-        "不一致；没有继续创建任何工单 —— 关掉或改正那张工单后再回复一次",
+        "不一致；没有继续创建任何工单 —— 改正那张工单（或删掉它的标记）后再回复"
+        "一次",
+    ),
+    # A child whose item the edited proposal no longer has (Issue #1940):
+    # the command never closes, deletes, relabels or cancels it — the child
+    # may be work the maintainer already queued.
+    "split.reason_extra_child": (
+        "issue #{number} carries the marker `{marker}` for item {item}, but "
+        "the proposal now has {count} items; nothing more was created and "
+        "that issue was left as it is — put the item back in the proposal "
+        "or remove the marker from that issue's body, then reply again",
+        "工单 #{number} 带着标记 `{marker}`（第 {item} 条），但提案现在只有 "
+        "{count} 条；没有继续创建任何工单，那张工单也保持原样 —— 把这一条加回"
+        "提案，或把标记从那张工单的正文里删掉，然后再回复一次",
+    ),
+    # A native dependency the proposal does not ask for (Issue #1940): an
+    # extra `blockedBy` edge would silently leave the child blocked.
+    "split.reason_extra_dependency": (
+        "issue #{number} carries the marker `{marker}` but its `after` "
+        "dependency differs from item {item} of the proposal: it is blocked "
+        "by {blockers}, which the proposal does not ask for; nothing more "
+        "was created — remove that dependency (or add it to the proposal) "
+        "and reply again",
+        "工单 #{number} 带着标记 `{marker}`，但它的 `after` 依赖与提案第 "
+        "{item} 条不一致：它被 {blockers} 阻塞，而提案没有要求这个依赖；"
+        "没有继续创建任何工单 —— 去掉这个依赖（或把它写进提案）后再回复一次",
     ),
     "split.receipt_title": (
         "**Split into {count} child tickets.**",
