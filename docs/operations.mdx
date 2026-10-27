@@ -1058,7 +1058,9 @@ receipts. A command supplies its `subcommand` (never a regex), its
 `arity` (0 or 1), any legacy `aliases`, a declarative permission level, a
 `validate` callback (its own business rule: it returns a readable reason,
 or `None` when the argument is accepted) and an `apply` callback. The
-dispatcher `process_commands(...)` is the only path to a handler.
+dispatcher `process_commands(...)` runs every registered command through
+one execution function, `execute_command(...)` — the only path to a
+handler.
 
 The registry key is the stable machine id (`fix_base`, `milestone`): it
 names the receipt markers (`orbi-<name>-command`) and the journal events, so
@@ -1068,6 +1070,17 @@ receipts posted before a rename keep deduplicating.
 | --- | --- | --- | --- |
 | `milestone` | `/orbi milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
 | `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
+
+Every registered command also has a spelling on the host (Issue #1930):
+`orbi <subcommand> --repo <owner/name> --issue <N>`, e.g.
+`orbi fix-base --repo acme/app --issue 42`. It is the SAME execution path
+as the comment — the same repository-permission gate (here: the host's
+authenticated `gh` login), the same validation, the same action and
+exactly one receipt on the Issue. Exit code `0` means the command ran; a
+rejection or a failed step exits non-zero and prints that receipt's text.
+The subcommands are generated from the registry, so registering a command
+gives both spellings; `/orbi milestone <version>` takes an argument and
+therefore keeps its own `orbi milestone set`.
 
 A comment that starts with `/orbi` and a word no command registered does
 nothing: it is an unrelated comment, not a malformed command.
@@ -1090,7 +1103,10 @@ To add a command:
    processed (`orbi/milestone.py` is the module that owns the call site):
    `register_command` runs at import time. The single `process_commands(...)`
    call already passes the whole `TICKET_COMMANDS` registry, so a registered
-   command is dispatched without changing the call site.
+   command is dispatched without changing the call site. The terminal
+   spelling is generated from the same registry
+   (`orbi.cli_ticket_command.register_cli`), so an arity-0 command gets its
+   `orbi <subcommand>` subcommand without a second edit.
 
 ### A finished Milestone with no release ticket
 

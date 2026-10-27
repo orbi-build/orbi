@@ -18,7 +18,7 @@ description: "使用者可以依赖什么，status 与进度文档又如何报�
 
 | 接口 | 定义 |
 |---|---|
-| CLI | `orbi`（一次 Runner tick）、`orbi add`、`orbi suggest`、`orbi status`、`orbi session`、`orbi install-units`、`orbi sync-engine-source`、`orbi doctor`、`orbi check`、`orbi setup`、`orbi milestone`（`milestone set <title>`）、`orbi notify`（`notify test`） |
+| CLI | `orbi`（一次 Runner tick）、`orbi add`、`orbi suggest`、`orbi status`、`orbi session`、`orbi install-units`、`orbi sync-engine-source`、`orbi doctor`、`orbi check`、`orbi setup`、`orbi fix-base`（每条 arity 为 0 的已登记票内命令各一个子命令）、`orbi milestone`（`milestone set <title>`）、`orbi notify`（`notify test`） |
 | 配置 | [Getting started](/zh/getting-started) 中记录的 `orbi.toml` 字段——包括 Telegram 通知键 `telegram_chat_id`；作为 systemd `EnvironmentFile` 加载的 `.orbi/env`（其中携带 `ORBI_TELEGRAM_BOT_TOKEN`）；`pi_providers` JSON 文件 |
 | 部署 | `systemd/orbi@.service` 与 `systemd/orbi@.timer` 模板；作为 run 产物与锁目录的 `.orbi/` |
 | Label 状态机 | `labels.toml`（名称、颜色、描述）与 `src/orbi/delivery_labels.py`（状态迁移） |
