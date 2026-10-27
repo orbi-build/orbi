@@ -648,6 +648,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `milestone_command_failed` | 票内 `/orbi milestone` 命令在某一步失败 |
 | `fix_base_command_applied` | 票内 `/orbi fix-base` 命令已创建或复用了修复 Issue |
 | `fix_base_command_failed` | 票内 `/orbi fix-base` 命令在某一步失败 |
+| `split_command_applied` | 票内 `/orbi split` 命令已把提案拆成子工单 |
+| `split_command_failed` | 票内 `/orbi split` 命令在某一步失败 |
 | `checks_permission_blocked` | check 读取因 App 权限未批准被拒绝；Issue 变为 ai-blocked 并附批准页面 |
 | `checks_permission_recovered` | check 读取恢复正常，被暂停的交付自动恢复 |
 | `base_ci_red_recovered` | 基础分支的 check 变绿，被暂停的交付自动恢复 |
@@ -914,6 +916,7 @@ orbi milestone set v0.5.7 --config orbi.toml
 | --- | --- | --- | --- |
 | `milestone` | `/orbi milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
 | `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
+| `split` | `/orbi split` | `write` | turn the split proposal on this ticket's stop comment into child tickets |
 
 每条已登记的命令在主机上还有一个拼写（Issue #1930）：
 `orbi <subcommand> --repo <owner/name> --issue <N>`，例如
@@ -923,6 +926,24 @@ orbi milestone set v0.5.7 --config orbi.toml
 被拒绝或某一步失败时退出非零，并打印该回执的正文。子命令由注册表生成，
 因此登记一条命令就等于给了两种拼写；`/orbi milestone <version>` 需要一个
 参数，所以它保留自己的 `orbi milestone set`。
+
+**已停止**的工单上的命令同样会执行。澄清门会给工单留下
+`ai-needs-detail`，因此它不携带任何交付标签，也不会被领取扫描读到；每个
+tick 都会对带有该标签的开放工单运行一次已登记命令
+（`ticket_command.process_labeled_commands`，与里程碑确认、base-CI 扫描
+并列的一个调用点）。`/orbi split` 正是靠它才能被读到：它要处理的提案就在
+一条停止评论里。
+
+`/orbi split`（Issue #1927）把最新一条可信停止评论里的 `kind=split`
+段落 —— 按命令运行那一刻评论的内容 —— 变成子工单：每个条目
+`gh issue create` 一张，各自挂成原生子工单，`(after N)` 记为原生
+`blockedBy` 关系，从未有过交付标签的子工单补上派发标签，父工单加上
+`ai-epic` 并摘掉派发标签，最后发一条列出所有子工单的回执，并且**最后**
+才移除 `ai-needs-detail` —— 因此在任何更早步骤中断的运行在下一个 tick
+仍会被扫描到，同一条命令继续。重跑时只有当子工单由本 Runner 创建、其
+`<!-- orbi:split-child:<parent>:<n> -->` 标记指向这个父工单和这个条目、
+且标题、验收行与依赖仍与条目一致时才会被复用；其余情况一律停下并发一条
+列出已有内容的回执。
 
 以 `/orbi` 加一个没有任何命令登记的词开头的评论什么也不做：它就是一条
 无关评论，而不是格式错误的命令。
@@ -938,10 +959,11 @@ orbi milestone set v0.5.7 --config orbi.toml
 2. 在上面"事件参考"中补上该命令的事件行，并在本表（及英文页）补上该命令
    行：绑定测试 `tests/test_journal_events.py` 与
    `tests/test_ticket_command.py` 会读取它们，出现偏差即失败。
-3. 确保命令模块在处理票据前被 import（调用点所在模块是
-   `orbi/milestone.py`）：`register_command` 在 import 时执行。唯一的
-   `process_commands(...)` 调用传入整张 `TICKET_COMMANDS` 注册表，已登记的
-   命令无需改动调用点就会被调度。主机上的拼写同样由这张注册表生成
+3. 确保命令模块在处理票据前被 import：`register_command` 在 import 时执行，
+   tick 的登记模块 import 位于 `orbi/claim.py`（`ai-needs-detail` 扫描）与
+   `orbi/milestone.py`（确认通知）。每个 `process_commands(...)` 调用点都
+   传入整张 `TICKET_COMMANDS` 注册表，已登记的命令无需改动任何调用点就会被
+   调度。主机上的拼写同样由这张注册表生成
    （`orbi.cli_ticket_command.register_cli`），所以 arity 为 0 的命令无需
    第二次编辑就得到自己的 `orbi <subcommand>` 子命令。
 

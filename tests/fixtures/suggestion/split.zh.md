@@ -6,3 +6,4 @@
 <!-- /orbi/suggestion -->
 
 编辑这条评论即可修改这份提案。
+回复 `/orbi split` 即可创建这些工单。

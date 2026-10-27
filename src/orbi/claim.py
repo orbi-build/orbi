@@ -15,13 +15,17 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
-from orbi import base_ci_red, check_permission, gitops
+from orbi import base_ci_red, check_permission, gitops, ticket_command
+# Imported for its registration side effect: `ai-needs-detail` tickets run
+# the registered commands below, and `/orbi split` must be in the registry
+# by then (Issue #1927).
+from orbi import split_command  # noqa: F401
 from orbi import milestone as milestone_bookkeeping
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
     BLOCKED_LABEL, EPIC_LABEL,
-    FIX_NEEDED_LABEL, IN_PROGRESS_LABEL, MERGED_LABEL, P0_LABEL,
-    PR_OPENED_LABEL, READY_LABEL, RELEASE_LABEL, label_name_set,
+    FIX_NEEDED_LABEL, IN_PROGRESS_LABEL, MERGED_LABEL, NEEDS_DETAIL_LABEL,
+    P0_LABEL, PR_OPENED_LABEL, READY_LABEL, RELEASE_LABEL, label_name_set,
 )
 from orbi.delivery_scene import (
     EXTERNAL_PR_MARKER, DeliveryScene, body_markers, classify,
@@ -786,6 +790,18 @@ def pick_next_delivery(
             )
         except Exception:
             LOGGER.exception("base_ci_red_scan_failed repo=%s", repo)
+        # A ticket the clarification gate stopped carries `ai-needs-detail`
+        # and no delivery label, so no claim scan reads its comments. This
+        # is the one place a registered command on such a ticket (`/orbi
+        # split`, Issue #1927) is executed; it is a bypass like the two
+        # recovery scans above.
+        try:
+            ticket_command.process_labeled_commands(
+                repo, NEEDS_DETAIL_LABEL, dispatch_label=dispatch_label,
+                language_code=repo_language,
+            )
+        except Exception:
+            LOGGER.exception("ticket_command_scan_failed repo=%s", repo)
         selected = pick_resumable_delivery(
             repo, slot_dir, max_concurrency,
             repo_dir=config.repo_dir if config is not None else None,

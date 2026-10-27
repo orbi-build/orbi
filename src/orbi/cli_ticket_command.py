@@ -29,7 +29,7 @@ import sys
 # dispatch table are derived from the registry (Issue #1930). A new
 # command module is added here once, exactly like the comment scan's call
 # site imports it.
-from orbi import base_ci_red, ticket_command  # noqa: F401
+from orbi import base_ci_red, split_command, ticket_command  # noqa: F401
 from orbi.claim import _repo_scan_keys
 from orbi.github import authenticated_github_login
 from orbi.repo_config import merged_repo_language

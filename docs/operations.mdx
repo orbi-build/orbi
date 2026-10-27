@@ -750,6 +750,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `milestone_command_failed` | an in-ticket `/orbi milestone` command failed at one step |
 | `fix_base_command_applied` | an in-ticket `/orbi fix-base` command opened or reused the fix Issues |
 | `fix_base_command_failed` | an in-ticket `/orbi fix-base` command failed at one step |
+| `split_command_applied` | an in-ticket `/orbi split` command turned the proposal into child tickets |
+| `split_command_failed` | an in-ticket `/orbi split` command failed at one step |
 | `checks_permission_blocked` | the check read was refused for a missing App permission; the Issue goes ai-blocked with the approval page |
 | `checks_permission_recovered` | the check read works again and the paused delivery resumed automatically |
 | `base_ci_red_recovered` | the base check turned green and the paused delivery resumed automatically |
@@ -1070,6 +1072,27 @@ receipts posted before a rename keep deduplicating.
 | --- | --- | --- | --- |
 | `milestone` | `/orbi milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
 | `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
+| `split` | `/orbi split` | `write` | turn the split proposal on this ticket's stop comment into child tickets |
+
+A command on a STOPPED ticket still runs. The clarification gate leaves
+its ticket `ai-needs-detail`, so no delivery label is on it and no claim scan
+reads its comments; every tick runs the registered commands once over the
+open Issues carrying that label (`ticket_command.process_labeled_commands`,
+one call site beside the milestone and base-CI scans). That is what makes
+`/orbi split` reachable: the proposal it acts on lives in a stop comment.
+
+`/orbi split` (Issue #1927) turns the newest trusted stop comment's
+`kind=split` section — as the comment reads when the command runs — into
+child tickets: `gh issue create` per item, each child attached as a native
+sub-issue, its `(after N)` recorded as a native `blockedBy` edge, the
+dispatch label added to a child that never had a delivery label, the parent
+marked `ai-epic` with its dispatch label released, one receipt listing the
+children, and `ai-needs-detail` removed LAST — so a run interrupted at any
+earlier step is still scanned on the next tick and the same command
+continues. A re-run adopts an existing child only when this runner authored
+it, its `<!-- orbi:split-child:<parent>:<n> -->` marker names that parent
+and item, and its title, acceptance lines and dependency still equal the
+item; anything else stops with a receipt that lists what exists.
 
 Every registered command also has a spelling on the host (Issue #1930):
 `orbi <subcommand> --repo <owner/name> --issue <N>`, e.g.
@@ -1100,10 +1123,12 @@ To add a command:
    `tests/test_journal_events.py` and `tests/test_ticket_command.py` read
    them and fail on drift.
 3. Make sure the command's module is imported before tickets are
-   processed (`orbi/milestone.py` is the module that owns the call site):
-   `register_command` runs at import time. The single `process_commands(...)`
-   call already passes the whole `TICKET_COMMANDS` registry, so a registered
-   command is dispatched without changing the call site. The terminal
+   processed: `register_command` runs at import time, and the tick's
+   registrant imports live in `orbi/claim.py` (the `ai-needs-detail` scan)
+   and `orbi/milestone.py` (the confirmation notice). Every
+   `process_commands(...)` call site passes the whole `TICKET_COMMANDS`
+   registry, so a registered command is dispatched without changing a call
+   site. The terminal
    spelling is generated from the same registry
    (`orbi.cli_ticket_command.register_cli`), so an arity-0 command gets its
    `orbi <subcommand>` subcommand without a second edit.

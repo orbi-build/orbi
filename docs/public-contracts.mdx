@@ -18,7 +18,7 @@ The [Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md)
 
 | Surface | Definition |
 |---|---|
-| CLI | `orbi` (one Runner tick), `orbi add`, `orbi suggest`, `orbi status`, `orbi session`, `orbi install-units`, `orbi sync-engine-source`, `orbi doctor`, `orbi check`, `orbi setup`, `orbi fix-base` (one subcommand per registered arity-0 ticket command), `orbi milestone` (`milestone set <title>`), `orbi notify` (`notify test`) |
+| CLI | `orbi` (one Runner tick), `orbi add`, `orbi suggest`, `orbi status`, `orbi session`, `orbi install-units`, `orbi sync-engine-source`, `orbi doctor`, `orbi check`, `orbi setup`, `orbi fix-base`, `orbi split` (one subcommand per registered arity-0 ticket command), `orbi milestone` (`milestone set <title>`), `orbi notify` (`notify test`) |
 | Config | `orbi.toml` fields documented in [Getting started](/getting-started) — including the Telegram notification key `telegram_chat_id`; `.orbi/env` loaded as systemd `EnvironmentFile` (it carries `ORBI_TELEGRAM_BOT_TOKEN`); the `pi_providers` JSON file |
 | Deployment | `systemd/orbi@.service` and `systemd/orbi@.timer` templates; `.orbi/` as the run-artifact and lock directory |
 | Label state machine | `labels.toml` (names, colors, descriptions) and `src/orbi/delivery_labels.py` (transitions) |
@@ -254,7 +254,10 @@ only a person can make — stays unchanged and carries no section.
 
 A rendered section is followed by one display sentence — English
 `Editing this comment changes the proposal.`, zh
-`编辑这条评论即可修改这份提案。` — carrying no meaning beyond that. The
+`编辑这条评论即可修改这份提案。` — carrying no meaning beyond that. A
+`kind=split` section adds a second display sentence naming the command that
+acts on it: English *Reply `/orbi split` to create these tickets.*, zh
+*回复 `/orbi split` 即可创建这些工单。*. The
 item number, the `(after N)` phrase (zh `（等第 N 条）`) and the
 `Acceptance:` prefix (zh `验收：`) come from the message catalog, so a
 Chinese ticket renders the Chinese line grammar and the parser accepts every
@@ -315,10 +318,55 @@ position. The newest trusted stop is authoritative even when it carries no
 proposal: a proposal from an older stop is never reused, and a newer stop
 written by somebody else is not selected at all.
 
+### Turning a proposal into child tickets
+
+`/orbi split` (issue comment or `orbi split --repo <owner/name> --issue <N>`)
+reads the newest trusted stop comment of the ticket it runs on, parses the
+section exactly as this page describes, and creates one child Issue per
+`kind=split` item — as the comment reads at that moment, so editing it first
+changes what is created. Only a `kind=split` section is valid input: a
+`kind=criteria` proposal, a missing section or an invalid line is rejected
+with a receipt naming the reason (and, for an invalid line, its number).
+
+Each child is a normal Issue whose body is a public contract too:
+
+```text
+## Outcome
+<the item's result>
+
+## Acceptance
+- <the item's acceptance line>
+
+Split from #<parent number>
+
+<details><summary>Parent ticket text</summary>
+
+<the parent ticket's text>
+
+</details>
+
+<!-- orbi:split-child:<parent number>:<item number> -->
+```
+
+The hidden marker names the parent and the item, so a re-run can find the
+children it already created. It counts only when THIS runner authored the
+Issue — GitHub reports that account on an Issue as `app/<name>` and in a
+comment as `<name>`, so the check compares accounts, never payload shapes —
+and the title, the acceptance lines and the native `after` dependency still
+equal the item: a copied or forged marker, an edited item, or two
+matching Issues stop the command with a receipt that lists what exists —
+nothing is adopted blindly. The child is attached as a native sub-issue of
+the parent, its `(after N)` becomes a native `blockedBy` edge, it inherits
+only the parent's `p0` label (when present), `bug` (when present) and
+Milestone, and it receives the dispatch label. The parent then carries
+`ai-epic` instead of the dispatch label, and `ai-needs-detail` is removed
+last, after the one receipt listing the children — so an interrupted run is
+picked up again by the next tick.
+
 ### Command receipts
 
-An in-ticket command (`/orbi milestone <version>`, `/orbi fix-base`) answers
-with one receipt comment per outcome. The receipt's hidden marker identifies
+An in-ticket command (`/orbi milestone <version>`, `/orbi fix-base`,
+`/orbi split`) answers with one receipt comment per outcome. The receipt's hidden marker identifies
 the command and its outcome, and its `comment=` key identifies the command
 comment it answers:
 
@@ -328,9 +376,9 @@ comment it answers:
 - `<!-- orbi-<name>-command-failed step=<step> comment=<key> -->`: it reached
   its handler and failed at that step.
 
-`<name>` is the command's stable machine id (`fix_base`, `milestone`), never
-the word a person types, so a receipt posted before the `/orbi` prefix keeps
-matching. `<key>` is the answered comment's GitHub id, then its URL, then
+`<name>` is the command's stable machine id (`fix_base`, `milestone`,
+`split`), never the word a person types, so a receipt posted before the
+`/orbi` prefix keeps matching. `<key>` is the answered comment's GitHub id, then its URL, then
 `<login>@<createdAt>` when neither is readable — the key the `/orbi fix-base`
 success receipt already uses. The prose around the marker is display text in
 the ticket language, so a consumer classifies the outcome from the marker

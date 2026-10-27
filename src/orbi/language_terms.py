@@ -235,13 +235,74 @@ CLARIFY_SUGGESTION_MESSAGES: dict[str, tuple[str, str]] = {
         "Editing this comment changes the proposal.",
         "编辑这条评论即可修改这份提案。",
     ),
+    # A split proposal is also an offer (Issue #1927): the section names the
+    # command that turns the SAME lines into child tickets, so the reader
+    # never has to copy them into new Issues by hand.
+    "clarify.suggestion.split_reply": (
+        "Reply `/orbi split` to create these tickets.",
+        "回复 `/orbi split` 即可创建这些工单。",
+    ),
+}
+
+# The `/orbi split` command (Issue #1927): its rejections, its receipt and
+# the parent references a child ticket carries. Every entry is display text;
+# the machine contract (the marker, the labels, the native relations) stays
+# in English and outside the catalog.
+SPLIT_MESSAGES: dict[str, tuple[str, str]] = {
+    "split.reason_no_suggestion": (
+        "the newest stop comment carries no split proposal; edit that "
+        "comment into a `kind=split` section, then reply again",
+        "最新一条停止评论里没有拆分提案；把那条评论改成 `kind=split` 段落，"
+        "然后再回复一次",
+    ),
+    "split.reason_invalid_line": (
+        "the split proposal on the newest stop comment is invalid at line "
+        "{line}; fix that line and reply again",
+        "最新一条停止评论里的拆分提案在第 {line} 行无效；修好那一行后再回复一次",
+    ),
+    "split.reason_not_split": (
+        "the newest stop comment proposes `{kind}`, not a split; "
+        "`/orbi split` only turns a `kind=split` proposal into tickets",
+        "最新一条停止评论的提案是 `{kind}`，不是拆分；`/orbi split` 只把 "
+        "`kind=split` 提案变成工单",
+    ),
+    "split.reason_child": (
+        "this ticket is already a native sub-issue of #{parent}; "
+        "a child ticket is not split again",
+        "这张工单已经是 #{parent} 的原生子工单；子工单不再拆一次",
+    ),
+    # The receipt LISTS what exists (`docs/public-contracts.mdx`): a count
+    # alone would leave the reader searching GitHub for its own children.
+    "split.reason_duplicate": (
+        "{count} issues carry the marker `{marker}`: {numbers}; refusing "
+        "to adopt any of them (close the extra one and reply again)",
+        "有 {count} 张工单都带着标记 `{marker}`：{numbers}；不会擅自采纳其中"
+        "任何一张（关掉多余的那张再回复一次）",
+    ),
+    "split.reason_differs": (
+        "issue #{number} carries the marker `{marker}` but its {field} "
+        "differs from item {item} of the proposal; nothing more was "
+        "created — close or correct that issue and reply again",
+        "工单 #{number} 带有标记 `{marker}`，但它的{field}与提案第 {item} 条"
+        "不一致；没有继续创建任何工单 —— 关掉或改正那张工单后再回复一次",
+    ),
+    "split.receipt_title": (
+        "**Split into {count} child tickets.**",
+        "**已拆分为 {count} 张子工单。**",
+    ),
+    "split.receipt_child": ("- #{number} {title}", "- #{number} {title}"),
+    "split.receipt_parent": (
+        "This ticket is now their parent (`ai-epic`) and every child is "
+        "queued.",
+        "这张工单现在是它们的父工单（`ai-epic`），每张子工单都已进入队列。",
+    ),
 }
 
 # The one map `language.MESSAGES` merges (the reading point stays
 # `language.py`; this module only keeps the entries).
 EXTRA_MESSAGES: dict[str, tuple[str, str]] = {
     **DISPLAY_TERMS, **BASE_CI_RED_MESSAGES, **CHECK_PERMISSION_MESSAGES,
-    **CLARIFY_SUGGESTION_MESSAGES,
+    **CLARIFY_SUGGESTION_MESSAGES, **SPLIT_MESSAGES,
     # The rejection a NO-ARGUMENT in-ticket command owes its author
     # (Issue #1922): the shared "write exactly one {label}" wording would
     # contradict the usage line printed beside it for an arity-0 command
