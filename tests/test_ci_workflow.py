@@ -496,6 +496,51 @@ def test_ci_workflow_pins_the_mintlify_cli_version():
         )
 
 
+# Issue #1983: `mint@4.2.890` validates through @mintlify/previewing's
+# `is-online@10` connectivity probe: three got requests raced under a
+# `pTimeout`, and when the timeout fired it called `.cancel()` on every
+# probe — got's p-cancelable throws "The `onCancel` handler was attached
+# after the promise settled." for a probe that had already settled, inside
+# the `.catch()` handler, so the throw is uncaught and kills the CLI
+# (2026-10-28, run 40708890646: one slow probe on a GitHub runner). The
+# newer @mintlify/previewing pulls no `is-online`/`got` probe at all: its
+# own `local-preview/is-online.js` uses native `fetch` under an
+# AbortController and `catch { return false }`, so a slow probe can no
+# longer terminate the process. `mint@4.2.1157` is the pinned version of
+# that fixed tree; the pin is a FLOOR (bumping further is the deliberate
+# one-line change #744 describes, a downgrade comes back to the crash).
+MINTLIFY_MIN_VERSION = (4, 2, 1157)
+
+
+def test_ci_workflow_pins_the_mintlify_cli_without_the_fragile_connectivity_probe():
+    """Issue #1983: the docs build smoke must not run a Mintlify CLI whose
+    `validate` ships the p-cancelable/is-online probe that aborts the whole
+    process when a connectivity probe is slow. A slow probe is runner
+    weather, not a docs defect, and it turned `main` red."""
+    commands = step_commands(steps_of(load_workflow()))
+    installs = [
+        command for command in commands
+        if re.search(r"npm (i|install)( -g)? mint\b", command)
+    ]
+    assert installs, (
+        "CI must install the official Mintlify CLI (mint), "
+        f"steps run: {commands!r}"
+    )
+    for command in installs:
+        match = re.search(r"\bmint@([0-9]+)\.([0-9]+)\.([0-9]+)\b", command)
+        assert match, (
+            "the Mintlify CLI install must pin an exact version "
+            f"(npm install -g mint@<semver>, Issue #744), got: {command!r}"
+        )
+        pinned = tuple(int(part) for part in match.groups())
+        assert pinned >= MINTLIFY_MIN_VERSION, (
+            "the pinned Mintlify CLI must be at least "
+            f"{'.'.join(str(part) for part in MINTLIFY_MIN_VERSION)}: older "
+            "versions ship the is-online/got connectivity probe that crashes "
+            f"`mint validate` on a slow probe (Issue #1983), got: {command!r}"
+        )
+
+
 def test_testing_documents_remote_ci():
     """Issue #241: the remote CI contract lives in docs/testing.mdx
     (the README homepage keeps only the summary plus the docs link):

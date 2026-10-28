@@ -209,8 +209,20 @@ jobs:
       # resolves a dependency tree that propagated long ago and blocks
       # a genuinely broken release too. Upgrading is a deliberate
       # one-line change: bump the version here.
+      #
+      # Issue #1983: 4.2.890 validates through @mintlify/previewing's
+      # `is-online@10` probe (three got requests under a pTimeout). When
+      # a connectivity probe is slow the timeout cancels every query, and
+      # got's p-cancelable throws "The `onCancel` handler was attached
+      # after the promise settled." for an already-settled one — inside the
+      # `.catch()`, so the throw is uncaught and kills the CLI (run
+      # 40708890646: docs red on `main` because the runner's network was
+      # momentarily slow, no docs defect). The pinned tree ships the fixed
+      # probe (native fetch + AbortController, `catch { return false }`),
+      # so a slow probe can no longer abort `mint validate`. Never pin
+      # below 4.2.1157 (tests/test_ci_workflow.py enforces the floor).
       - name: Install the Mintlify CLI (docs build smoke)
-        run: npm install -g mint@4.2.890
+        run: npm install -g mint@4.2.1157
 
       - name: Validate the Mintlify docs build (Issue #116)
         run: cd docs && mint validate
