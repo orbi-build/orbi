@@ -75,7 +75,10 @@ where = ["src"]
 # install can create an orbi.toml without any checkout-adjacent file
 # (setup_config.ensure_config falls back to it).
 [tool.setuptools.package-data]
-orbi = ["example_config.toml"]
+# Issue #1955: the clarification gate's Pi extension ships with the engine
+# — the gate passes this file to pi --extension, so a wheel install must
+# carry it exactly like the example config (Issue #163).
+orbi = ["example_config.toml", "extensions/*.ts"]
 
 # The contract test command (`python3 -m coverage run --branch -m pytest
 # tests/ -q`) runs WITHOUT installing the package: pytest puts `src/` on

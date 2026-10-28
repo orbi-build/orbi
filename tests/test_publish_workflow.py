@@ -161,6 +161,9 @@ def test_publish_workflow_verifies_complete_and_clean_artifacts():
     for needle in (
         "src/orbi",  # every runtime module walked from the package dir
         "orbi/example_config.toml",  # in the wheel AND the sdist
+        # Issue #1955: the clarification gate's Pi extension, in both
+        # artifacts — an installed CLI must reach it with `--extension`.
+        "orbi/extensions/clarify_verdict.ts",
         "orbi_cli-",  # Issue #874: the orbi-cli artifact filename prefix
         ".pi-session/",
         "github_pat_",

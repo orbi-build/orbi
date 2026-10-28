@@ -174,9 +174,10 @@ class RunnerConfig:
     steering_poll_seconds: float = 60.0
     steering_max_rounds: int = 3
     # Thin-ticket clarification gate (Issue #1088): before a fresh claim
-    # starts any work, one no-tools Pi session judges the ticket body on
-    # the observable result, the acceptance condition and the single
-    # outcome. OFF by default; a repository turns it on in
+    # starts any work, one Pi session with no built-in tools judges the
+    # ticket body on the observable result, the acceptance condition and
+    # the single outcome (Issue #1955: its only answer path is the shipped
+    # clarify_verdict tool). OFF by default; a repository turns it on in
     # `.github/orbi.toml`. Any error fails OPEN (the delivery proceeds).
     clarify_thin_tickets: bool = False
     release_ci_wait_seconds: float = RELEASE_CI_WAIT_SECONDS

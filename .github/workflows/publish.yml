@@ -133,6 +133,12 @@ jobs:
           assert "orbi/example_config.toml" in names, (
               "the shipped example config is missing from the wheel"
           )
+          # Issue #1955: the clarification gate's Pi extension. Without it
+          # in the wheel an installed CLI cannot pass it to `--extension`,
+          # and the thin-ticket gate could never stop a ticket.
+          assert "orbi/extensions/clarify_verdict.ts" in names, (
+              "the clarification extension is missing from the wheel"
+          )
           forbidden_members = (
               ".pi-session/", ".worktrees/", "orbi.toml", ".coverage",
               "dist/", ".orbi/",
@@ -158,7 +164,11 @@ jobs:
                   )
           with tarfile.open(sdist) as tf:
               snames = tf.getnames()
-          for member in ("pyproject.toml", "src/orbi/example_config.toml"):
+          for member in (
+              "pyproject.toml",
+              "src/orbi/example_config.toml",
+              "src/orbi/extensions/clarify_verdict.ts",
+          ):
               assert f"orbi_cli-{version}/{member}" in snames, (
                   f"{member} missing from the sdist (a wheel built from "
                   "this sdist would lose it)"

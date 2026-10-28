@@ -26,6 +26,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_FILE = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 TEST_ENTRY = REPO_ROOT / "scripts" / "test"
 PYPROJECT_FILE = REPO_ROOT / "pyproject.toml"
+# Issue #1955: the Pi extension contract runs under Node's own runner. The
+# positional argument is the test FILE glob — a bare directory is treated
+# as a test file by Node 24 and fails there.
+NODE_TEST_DIR = REPO_ROOT / "tests" / "js"
+NODE_EXTENSION_TEST = "timeout 120 node --test tests/js/*.test.mjs"
 
 # Issue #569: the repository carries NO local test chain — the CI
 # environment declaration belongs to ci.yml (the Actions territory) and
@@ -413,6 +418,35 @@ def test_ci_workflow_enforces_the_tiered_coverage_gate():
     ), (
         "CI must keep the coverage report with --show-missing as "
         f"evidence (both real numbers), steps run: {commands!r}"
+    )
+
+
+def test_ci_workflow_runs_the_node_extension_test():
+    """Issue #1955: the clarification gate's Pi extension is TypeScript the
+    Pi runtime loads, so CI runs its contract with Node's own runner
+    (`node --test tests/js/*.test.mjs`) — the coverage gate only sees
+    Python. The validator (`typebox`) is pinned to the version Pi itself
+    resolves and validates extension tool arguments with; an unpinned
+    install would let a schema test pass against a different library than
+    production."""
+    commands = step_commands(steps_of(load_workflow()))
+    # The exact command, never a bare directory argument: a loose match on
+    # "node --test tests/js" passes while Node 24 treats that positional
+    # path as a test FILE and fails with a module-not-found error for the
+    # directory (its red CI run on the first head). The glob is what runs.
+    assert NODE_EXTENSION_TEST in commands, (
+        "CI must run the Node extension test over the test files, "
+        f"steps run: {commands!r}"
+    )
+    assert list(NODE_TEST_DIR.glob("*.test.mjs")), (
+        f"{NODE_TEST_DIR} must carry the extension test files"
+    )
+    assert any(
+        re.search(r"\btypebox@[0-9]+\.[0-9]+\.[0-9]+\b", command)
+        for command in commands
+    ), (
+        "the extension test validator must pin an exact typebox version, "
+        f"steps run: {commands!r}"
     )
 
 

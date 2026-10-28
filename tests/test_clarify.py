@@ -28,7 +28,7 @@ from seam import seam
 
 from tests.fakes.clarify import (
     FakeGate, fix_run_id, record_label_notifications, stop_comment_entry,
-    stub_runner_login, stub_stop_history, stub_ticket_agent,
+    stub_runner_login, stub_stop_history, verdict_agent,
 )
 
 from tests.test_run_id_e2e import (
@@ -146,14 +146,17 @@ THIN_ISSUE = {
     "author": {"login": "alice"},
 }
 
-# The clarify session is the `pi --no-tools` call; the delivery session is
-# the ordinary one. The two-faced fake answers both: a passing verdict for
-# the gate, a real commit for the implementer.
+# The clarify session is the isolated `clarify_verdict` tool call
+# (Issue #1955: `--no-builtin-tools --no-extensions --extension <shipped>`);
+# the delivery session is the ordinary one. The two-faced fake answers both:
+# a passing verdict through the tool's file for the gate, a real commit for
+# the implementer.
 FAKE_PI_PASSING_GATE = """#!/usr/bin/env python3
 import os, re, subprocess, sys
 args = sys.argv[1:]
-if "--no-tools" in args:
-    sys.stdout.write('{"missing": []}')
+if "--no-builtin-tools" in args:
+    with open(os.environ["ORBI_CLARIFY_OUT"], "w", encoding="utf-8") as out:
+        out.write('{"missing": []}')
     sys.exit(0)
 prompt_arg = args[args.index("--system-prompt") + 1]
 # Issue #1634: --system-prompt carries a FILE path; Pi reads the
@@ -182,8 +185,11 @@ def fake_pi_thin(missing: list[str]) -> str:
     verdict = json.dumps({"missing": missing})
     return (
         "#!/usr/bin/env python3\n"
-        "import sys\n"
-        f"sys.stdout.write({verdict!r})\n"
+        "import os, sys\n"
+        "with open(os.environ['ORBI_CLARIFY_OUT'], 'w',\n"
+        "          encoding='utf-8') as handle:\n"
+        f"    handle.write({verdict!r})\n"
+        "sys.stdout.write('verdict sent')\n"
     )
 
 
@@ -192,7 +198,7 @@ def fake_pi_thin(missing: list[str]) -> str:
 FAKE_PI_MODEL_ERROR = """#!/usr/bin/env python3
 import os, re, subprocess, sys
 args = sys.argv[1:]
-if "--no-tools" in args:
+if "--no-builtin-tools" in args:
     sys.stderr.write("model unreachable")
     sys.exit(1)
 prompt_arg = args[args.index("--system-prompt") + 1]
@@ -251,47 +257,49 @@ def gate_config(clone: Path, tmp_path: Path, **overrides):
 # --- parse_verdict ---------------------------------------------------------
 
 def test_parse_verdict_reads_the_missing_list():
-    """One field carries the verdict: empty passes, non-empty fails."""
-    assert clarify.parse_verdict('{"missing": []}') == clarify.ClarifyVerdict(
+    """One field carries the verdict: empty passes, non-empty fails.
+
+    Since Issue #1955 the input is the DECODED JSON the shipped
+    `clarify_verdict` tool wrote, never a line of model prose: Pi
+    validated the arguments against the tool schema before `execute`.
+    """
+    assert clarify.parse_verdict({"missing": []}) == clarify.ClarifyVerdict(
         passed=True, missing=(),
     )
     assert clarify.parse_verdict(
-        '{"missing": ["single_outcome", "observable_result"]}'
+        {"missing": ["single_outcome", "observable_result"]}
     ) == clarify.ClarifyVerdict(
         passed=False, missing=("single_outcome", "observable_result"),
     )
     # The `satisfied` field is no longer read (Issue #1379): a stale one
     # must not change the verdict the `missing` list gives.
     assert clarify.parse_verdict(
-        '{"satisfied": false, "missing": []}'
-    ) == clarify.ClarifyVerdict(passed=True, missing=())
-    assert clarify.parse_verdict(
-        'My verdict follows: {"missing": []} — done.'
+        {"satisfied": False, "missing": []}
     ) == clarify.ClarifyVerdict(passed=True, missing=())
 
 
-@pytest.mark.parametrize("output", [
-    "I could not decide.",
-    '{"missing": true}',
-    '{"missing": [7]}',
-    '{"missing": ["whatever"]}',
-    '{"missing": []',
-    '{"missing": [] "x": 1}',
+@pytest.mark.parametrize("payload", [
+    None,
+    [],
+    "not a verdict",
+    {},
+    {"missing": True},
+    {"missing": [7]},
+    {"missing": ["whatever"]},
 ])
-def test_parse_verdict_rejects_unusable_output(output):
-    assert clarify.parse_verdict(output) is None
+def test_parse_verdict_rejects_unusable_payloads(payload):
+    assert clarify.parse_verdict(payload) is None
 
 
 # --- judge_issue_body ------------------------------------------------------
 
-def test_judge_issue_body_asks_the_shared_helper_with_a_timeout(monkeypatch):
+def test_judge_issue_body_asks_the_shared_helper_for_the_verdict_tool(
+    monkeypatch,
+):
+    """The judgment is the isolated extension session (Issue #1955): the
+    shipped `clarify_verdict` tool plus the file it writes, never stdout."""
     calls = []
-
-    def fake_agent(issue, config, source_repo, **kwargs):
-        calls.append((issue, config, source_repo, kwargs))
-        return '{"missing": []}'
-
-    monkeypatch.setattr(seam, "run_ticket_agent", fake_agent)
+    verdict_agent(monkeypatch, {"missing": []}, calls=calls)
     config = config_domain.RunnerConfig()
     verdict = clarify.judge_issue_body(ISSUE, config, REPO, RUN_ID)
     assert verdict == clarify.ClarifyVerdict(passed=True, missing=())
@@ -301,6 +309,63 @@ def test_judge_issue_body_asks_the_shared_helper_with_a_timeout(monkeypatch):
     assert kwargs["timeout"] == clarify.CLARIFY_TIMEOUT_SECONDS
     assert kwargs["system_prompt"] == clarify.CLARIFY_SYSTEM_PROMPT
     assert ISSUE["body"] in kwargs["context"]
+    # Exactly the shipped extension loads, and the tool writes to the path
+    # the engine names in the environment.
+    assert Path(kwargs["extension"]) == clarify.CLARIFY_EXTENSION
+    assert clarify.CLARIFY_EXTENSION.is_file()
+    out = kwargs["env"][clarify.CLARIFY_VERDICT_ENV]
+    assert Path(out).name == "verdict.json"
+
+
+# Acceptance 1 (Issue #1955): the verdict file the tool writes reaches the
+# comment. The beta dropped every proposal because the answer lived in
+# stdout where the parser never looked; this is the same answer read from
+# the file the schema-checked tool wrote.
+def test_judge_issue_body_reads_the_verdict_tool_file(monkeypatch):
+    verdict_agent(monkeypatch, {
+        "missing": ["single_outcome"],
+        "suggestion": {
+            "kind": "split",
+            "items": [
+                {
+                    "result": "Users can tag a note",
+                    "acceptance": "filtering by the tag finds the note",
+                },
+                {
+                    "result": "Users can export a note as Markdown",
+                    "acceptance": "export downloads a .md file",
+                    "after": 1,
+                },
+            ],
+        },
+    })
+    verdict = clarify.judge_issue_body(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    )
+    assert verdict == clarify.ClarifyVerdict(
+        passed=False, missing=("single_outcome",),
+        suggestion=clarify.Suggestion(
+            kind=clarify.SUGGESTION_SPLIT,
+            items=(
+                clarify.SuggestionItem(
+                    text="Users can tag a note",
+                    acceptance="filtering by the tag finds the note",
+                ),
+                clarify.SuggestionItem(
+                    text="Users can export a note as Markdown",
+                    acceptance="export downloads a .md file",
+                    after=1,
+                ),
+            ),
+        ),
+    )
+    body = clarify.render_comment(ISSUE, verdict, RUN_ID, language_code="en")
+    assert f"{clarify.SUGGESTION_START}split -->" in body
+    assert "1. Users can tag a note" in body
+    assert "2. Users can export a note as Markdown (after 1)" in body
+    # The public parser reads the rendered section back: `/orbi split`
+    # consumes this exact contract.
+    assert clarify.parse_suggestion(body) == verdict.suggestion
 
 
 def test_judge_issue_body_fails_open_when_the_agent_raises(
@@ -331,18 +396,55 @@ def test_judge_issue_body_fails_open_on_a_timeout(monkeypatch, caplog):
     assert "reason=TimeoutError" in caplog.text
 
 
-def test_judge_issue_body_fails_open_on_an_unparsable_answer(
-    monkeypatch, caplog,
+# Acceptance 1 (Issue #1955): a missing or invalid verdict file fails
+# open exactly as a missing answer always did.
+@pytest.mark.parametrize("raw", [None, "not json", '{"missing": ["unknown"]}'])
+def test_judge_issue_body_fails_open_without_a_usable_verdict_file(
+    monkeypatch, caplog, raw,
 ):
-    monkeypatch.setattr(
-        seam, "run_ticket_agent", lambda *a, **k: "not a verdict",
-    )
+    verdict_agent(monkeypatch, raw=raw)
     caplog.set_level("INFO")
     assert clarify.judge_issue_body(
         ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
     ) is None
     assert "clarify_check_skipped" in caplog.text
     assert "reason=no_verdict" in caplog.text
+
+
+def _gate_fake_pi(argv_path: Path) -> str:
+    """A fake `pi` that records its argv and answers through the tool file."""
+    payload = json.dumps({"missing": ["single_outcome"]})
+    return (
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        f"with open({str(argv_path)!r}, 'w', encoding='utf-8') as handle:\n"
+        "    json.dump(sys.argv[1:], handle)\n"
+        "with open(os.environ['ORBI_CLARIFY_OUT'], 'w',\n"
+        "          encoding='utf-8') as handle:\n"
+        f"    handle.write({payload!r})\n"
+        "sys.stdout.write('verdict sent')\n"
+    )
+
+
+# Acceptance 2 (Issue #1955): the gate's Pi command loads exactly the
+# shipped extension and no built-in tools.
+def test_the_gate_pi_command_loads_only_the_shipped_extension(
+    monkeypatch, tmp_path,
+):
+    argv_path = tmp_path / "argv.json"
+    install_fake_pi(monkeypatch, tmp_path, _gate_fake_pi(argv_path))
+    verdict = clarify.judge_issue_body(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    )
+    argv = json.loads(argv_path.read_text(encoding="utf-8"))
+    assert argv.count("--extension") == 1
+    assert argv[argv.index("--extension") + 1] == str(clarify.CLARIFY_EXTENSION)
+    assert "--no-extensions" in argv
+    assert "--no-builtin-tools" in argv
+    assert "--no-tools" not in argv
+    assert verdict == clarify.ClarifyVerdict(
+        passed=False, missing=("single_outcome",),
+    )
 
 
 # --- enforce / mention -----------------------------------------------------
@@ -901,11 +1003,18 @@ CRITERIA_ANSWER = {
 
 
 def fake_pi_answer(answer: dict) -> str:
-    """The gate session's answer: a full verdict carrying a proposal."""
+    """The gate session's answer: the verdict its tool writes to the file.
+
+    Issue #1955: the gate reads `ORBI_CLARIFY_OUT`, not stdout, so the
+    fake plays the `clarify_verdict` tool rather than a chat reply.
+    """
     return (
         "#!/usr/bin/env python3\n"
-        "import sys\n"
-        f"sys.stdout.write({json.dumps(answer)!r})\n"
+        "import os, sys\n"
+        "with open(os.environ['ORBI_CLARIFY_OUT'], 'w',\n"
+        "          encoding='utf-8') as handle:\n"
+        f"    handle.write({json.dumps(answer)!r})\n"
+        "sys.stdout.write('verdict sent')\n"
     )
 
 
@@ -1314,7 +1423,7 @@ def test_the_gate_prompt_guards_the_proposal():
         "adding and dropping nothing",
         "no count cap",
         "never invent a goal",
-        "omit the key",
+        "omit the argument",
         "decision only a person can make",
     ):
         assert marker in prompt, marker
@@ -1356,7 +1465,7 @@ def test_suggestion_answer_rejects_an_unusable_proposal(answer):
 
 
 def test_parse_verdict_reads_the_optional_proposal():
-    verdict = clarify.parse_verdict(json.dumps({
+    verdict = clarify.parse_verdict({
         "missing": ["single_outcome"],
         "suggestion": {
             "kind": "split",
@@ -1377,14 +1486,14 @@ def test_parse_verdict_reads_the_optional_proposal():
                 },
             ],
         },
-    }))
+    })
     assert verdict == clarify.ClarifyVerdict(
         passed=False, missing=("single_outcome",), suggestion=SPLIT_PROPOSAL,
     )
 
 
 def test_parse_verdict_reads_a_criteria_proposal():
-    verdict = clarify.parse_verdict(json.dumps({
+    verdict = clarify.parse_verdict({
         "missing": ["acceptance_condition"],
         "suggestion": {
             "kind": "criteria",
@@ -1393,7 +1502,7 @@ def test_parse_verdict_reads_a_criteria_proposal():
                 "The tag survives a reload",
             ],
         },
-    }))
+    })
     assert verdict == clarify.ClarifyVerdict(
         passed=False, missing=("acceptance_condition",),
         suggestion=CRITERIA_PROPOSAL,
@@ -1404,13 +1513,13 @@ def test_a_broken_proposal_never_discards_the_verdict():
     """The verdict is what stops the ticket: an unusable proposal beside it
     only means today's comment, plus the one drop line (Issue #1958)."""
     verdict = clarify.parse_verdict(
-        '{"missing": ["single_outcome"], "suggestion": {"kind": "split"}}'
+        {"missing": ["single_outcome"], "suggestion": {"kind": "split"}}
     )
     assert (verdict.passed, verdict.missing) == (False, ("single_outcome",))
     assert verdict.suggestion is None
     assert verdict.suggestion_dropped == "unusable"
     assert clarify.parse_verdict(
-        '{"missing": [], "suggestion": "nonsense"}'
+        {"missing": [], "suggestion": "nonsense"}
     ) == clarify.ClarifyVerdict(passed=True, missing=())
 
 
@@ -1418,15 +1527,18 @@ def test_a_broken_proposal_never_discards_the_verdict():
 
 # The answer the model really gave when the dropped proposal went unnoticed
 # (orbi-build/orbi#1955): the proposal keys sit at the TOP LEVEL instead of
-# under the "suggestion" key the protocol asks for.
-MISPLACED_ANSWER = json.dumps({
+# under the "suggestion" key the protocol asks for. Since Issue #1955 the
+# engine reads the decoded JSON its `clarify_verdict` tool wrote (the tool
+# schema now refuses this shape), so this payload is what the reader must
+# still handle if a verdict file ever carries it: dropped, never a crash.
+MISPLACED_ANSWER = {
     "missing": ["single_outcome"],
     "kind": "split",
     "items": [
         {"result": "Users can tag a note", "acceptance": "A tag finds it"},
         {"result": "Users can export a note", "acceptance": "A .md downloads"},
     ],
-})
+}
 
 
 def test_parse_verdict_records_a_misplaced_proposal():
@@ -1451,9 +1563,9 @@ def test_parse_verdict_records_a_misplaced_proposal():
 ])
 def test_parse_verdict_records_an_unusable_proposal(suggestion):
     """Acceptance 2: a value that fails validation is dropped as unusable."""
-    verdict = clarify.parse_verdict(json.dumps({
+    verdict = clarify.parse_verdict({
         "missing": ["single_outcome"], "suggestion": suggestion,
-    }))
+    })
     assert (verdict.passed, verdict.missing) == (
         False, ("single_outcome",),
     )
@@ -1468,28 +1580,28 @@ def test_parse_verdict_records_no_drop_without_a_proposal():
     there is nothing to report.
     """
     assert clarify.parse_verdict(
-        '{"missing": ["single_outcome"]}'
+        {"missing": ["single_outcome"]}
     ).suggestion_dropped is None
-    assert clarify.parse_verdict(json.dumps({
+    assert clarify.parse_verdict({
         "missing": ["acceptance_condition"],
         "suggestion": {"kind": "criteria", "items": ["A tag finds it"]},
-    })).suggestion_dropped is None
+    }).suggestion_dropped is None
     assert clarify.parse_verdict(
-        '{"missing": [], "kind": "split"}'
+        {"missing": [], "kind": "split"}
     ).suggestion_dropped is None
 
 
 @pytest.mark.parametrize("answer,reason", [
     (MISPLACED_ANSWER, "misplaced"),
-    (json.dumps({
+    ({
         "missing": ["single_outcome"], "suggestion": {"kind": "split"},
-    }), "unusable"),
+    }, "unusable"),
 ])
 def test_judge_issue_body_journals_the_dropped_proposal(
     monkeypatch, caplog, answer, reason,
 ):
     """Acceptance 1+3: ONE registered event names the Issue and the reason."""
-    stub_ticket_agent(monkeypatch, answer)
+    verdict_agent(monkeypatch, answer)
     caplog.set_level("INFO")
 
     verdict = clarify.judge_issue_body(
@@ -1505,7 +1617,7 @@ def test_judge_issue_body_journals_nothing_without_a_proposal(
     monkeypatch, caplog,
 ):
     """Acceptance 2: the common answer adds no drop line."""
-    stub_ticket_agent(monkeypatch, '{"missing": ["single_outcome"]}')
+    verdict_agent(monkeypatch, {"missing": ["single_outcome"]})
     caplog.set_level("INFO")
 
     assert clarify.judge_issue_body(
@@ -1524,7 +1636,7 @@ def test_enforce_stops_todays_way_around_a_misplaced_proposal(
     """
     stub_stop_history(monkeypatch, [])
     notified = record_label_notifications(monkeypatch)
-    stub_ticket_agent(monkeypatch, MISPLACED_ANSWER)
+    verdict_agent(monkeypatch, MISPLACED_ANSWER)
     comments, edits = _record_writes(monkeypatch)
     caplog.set_level("INFO")
 

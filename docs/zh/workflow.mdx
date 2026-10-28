@@ -342,11 +342,18 @@ host 配置打开门禁（`orbi.toml` 里 `human_review_gate = true`——这是
 `.github/orbi.toml` 里的 `clarify_thin_tickets = true` 打开；未启用的仓库
 行为与之前完全一致。
 
-闸门打开时，一次 fresh claim 会先问一次 Pi session（`--no-tools`，无
-worktree、无分支、不交付）判定 ticket 正文的三项检查：**可观察结果**
-（用户会看到或做得了什么不同的）、**验收条件**（怎么区分完成与未完成）、
-**单一结果**（一个 fix 或一个 change，而不是几件互不相关的事）。判定通过
-则一切不变，交付照常开始。
+闸门打开时，一次 fresh claim 会先问一次 Pi session（无 worktree、无分支、
+不交付）判定 ticket 正文的三项检查：**可观察结果**（用户会看到或做得了
+什么不同的）、**验收条件**（怎么区分完成与未完成）、**单一结果**（一个
+fix 或一个 change，而不是几件互不相关的事）。判定通过则一切不变，交付
+照常开始。
+
+判定 session 不加载任何内建工具：它以
+`--no-builtin-tools --no-extensions --extension <随引擎发布的 clarify_verdict>`
+运行，模型只有一条回答途径——调用一次这个受 schema 校验的工具，由工具把
+判定写进引擎读取的文件。既没有自由文本答案，也不解析 stdout。任何不可用的
+答案（没有文件、文件内容不合 schema、未知的检查 id）都与模型不可用一样是
+bypass。
 
 v0.7.15 起按需求含义判断，不要求固定模板标题。明确的运行失败及其清楚的纠正方向可以表达结果；同一失败的多个症状仍可算一个结果。过去某次运行的日志本身不等于验收条件。
 
@@ -752,7 +759,7 @@ contents API 读取仓库**默认分支 tip** 上的 `.github/orbi.toml`——
 | `steering_poll_seconds` | number | 该仓库的轮询间隔；缺席时回退到宿主值，且必须为有限正数。 |
 | `steering_max_rounds` | integer | 该仓库最多重启 Steering 的次数；缺席时回退到宿主值。 |
 | `release_confirmation` | boolean | 选择开启“已完成 Milestone 发布确认”（Issue #856）：当 active Milestone 已无 open Issue 且尚无 release 票时，空闲路径会发一条决策通知，携带票内 `/orbi milestone <版本>` 命令，不再静默等待。默认 `false`：不发 release 通知，发布等待保持静默。决策通知的清理不受该键约束——过期通知（`old=` 不再等于 `active_milestone`）在 OPEN 与 CLOSED 两条 Milestone 路径上都会被关闭（Issue #1475）。见下节《等待 Milestone 决策时的唯一回复》。 |
-| `clarify_thin_tickets` | boolean | 选择开启薄 ticket 闸门（Issue #1088）：fresh claim 先用一次无工具 Pi session 判定该票是否说清可观察结果、验收条件与单一结果。判定不通过时在任何 worktree、分支、Pi session 或 PR 存在之前中止（只发一条列出缺失项的评论，把 `ai-ready` 换成 `ai-needs-detail`）。默认 `false`；闸门的任何错误都 fail open。见上文《薄 ticket 闸门》。 |
+| `clarify_thin_tickets` | boolean | 选择开启薄 ticket 闸门（Issue #1088）：fresh claim 先用一次不加载内建工具的 Pi session 判定该票是否说清可观察结果、验收条件与单一结果（其唯一回答途径是随引擎发布的 `clarify_verdict` 工具，Issue #1955）。判定不通过时在任何 worktree、分支、Pi session 或 PR 存在之前中止（只发一条列出缺失项的评论，把 `ai-ready` 换成 `ai-needs-detail`）。默认 `false`；闸门的任何错误都 fail open。见上文《薄 ticket 闸门》。 |
 
 ```toml
 # .github/orbi.toml

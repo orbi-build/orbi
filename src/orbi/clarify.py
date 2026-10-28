@@ -3,10 +3,12 @@
 
 A confident delivery against a vague `ai-ready` ticket is worse than no
 delivery: it burns a run, opens a PR nobody can accept and buries the
-real question. Before the claim starts any work, one no-tools Pi session
-judges the ticket body against the three pieces every deliverable needs —
-an **observable result**, an **acceptance condition** and a **single
-outcome** — and a failing verdict stops the ticket at the claim:
+real question. Before the claim starts any work, one Pi session with no
+built-in tools — the shipped `clarify_verdict` tool is its only answer
+path (Issue #1955) — judges the ticket body against the three pieces
+every deliverable needs — an **observable result**, an **acceptance
+condition** and a **single outcome** — and a failing verdict stops the
+ticket at the claim:
 
 - ONE Issue comment names every missing piece and the repair action;
 - the repository's claim label (default `ai-ready`) is removed and
@@ -43,7 +45,9 @@ import hashlib
 import json
 import logging
 import re
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from string import Formatter
 from typing import TYPE_CHECKING
 
@@ -78,6 +82,17 @@ def missing_text(item: str, language_code: str,
     """The human sentence for one failed check, in one language."""
     return language.text(language_code, MISSING[item])
 
+
+# The gate's answer is a schema-checked Pi tool call, not free text
+# (Issue #1955). The extension ships INSIDE the package
+# (`pyproject` package-data), so both the editable install and the wheel
+# resolve the same file; the engine names the file the tool writes in
+# `CLARIFY_VERDICT_ENV` and reads it after the session.
+CLARIFY_EXTENSION = Path(__file__).resolve().parent.joinpath(
+    "extensions", "clarify_verdict.ts",
+)
+CLARIFY_VERDICT_ENV = "ORBI_CLARIFY_OUT"
+
 CLARIFY_SYSTEM_PROMPT = (
     "You are Orbi's ticket gate. Before an unattended delivery starts, "
     "you decide whether this Issue states enough to deliver it. Judge "
@@ -105,35 +120,37 @@ CLARIFY_SYSTEM_PROMPT = (
     "or several symptoms of the same behavior, is one outcome no "
     "matter how many bullets or sentences describe it; report this "
     "check only when the text bundles independent deliverables.\n\n"
-    "Answer with ONE JSON object on one line and nothing else:\n"
-    '{"missing": []}\n\n'
-    "`missing` lists the failed checks using exactly these identifiers: "
-    '"observable_result", "acceptance_condition", "single_outcome"; it '
-    "is empty when all three checks pass.\n\n"
-    "Optional proposal. Add one suggestion key to the same object ONLY "
-    "in these two cases, and only when the proposal follows from the "
+    "Answer by calling the clarify_verdict tool exactly once: it is "
+    "the only tool in this session, and the run ends with that call. Do "
+    "not answer in prose.\n\n"
+    "The tool's missing argument lists the failed checks using exactly "
+    'these identifiers: "observable_result", '
+    '"acceptance_condition", "single_outcome"; it is empty when all '
+    "three checks pass.\n\n"
+    "Optional proposal. Add the tool's suggestion argument ONLY in "
+    "these two cases, and only when the proposal follows from the "
     "ticket text alone: every result and every acceptance line must be "
     "stated there, adding and dropping nothing. When the text lacks a "
     "fact a proposal needs, or writing one needs a decision only a "
-    "person can make, omit the key and answer with the missing list "
+    "person can make, omit the argument and answer with missing "
     "alone.\n"
-    '- ONLY single_outcome failed: {"kind": "split", "items": '
-    '[{"result": "...", "acceptance": "...", "after": 1}]}. One item '
-    "per new ticket: the fewest vertical slices that cover every goal "
-    "of the text; after names the number of an earlier item this slice "
-    "depends on and is omitted otherwise; there is no count cap.\n"
-    '- ONLY acceptance_condition failed: {"kind": "criteria", "items": '
-    '["..."]}. One string per acceptance condition the ticket needs; '
-    "never invent a goal.\n"
-    "Do not explain and do not add other keys."
+    '- ONLY single_outcome failed: suggestion {"kind": "split", '
+    '"items": [{"result": "...", "acceptance": "...", "after": 1}]}. '
+    "One item per new ticket: the fewest vertical slices that cover "
+    "every goal of the text; after names the number of an earlier item "
+    "this slice depends on and is omitted otherwise; there is no count "
+    "cap.\n"
+    '- ONLY acceptance_condition failed: suggestion {"kind": '
+    '"criteria", "items": ["..."]}. One string per acceptance condition '
+    "the ticket needs; never invent a goal.\n"
+    "Every value stays on one line. Do not explain, and do not pass "
+    "kind or items outside suggestion: the tool schema rejects them."
 )
 
 # A small fixed bound on the judgment call: a hung model request must
 # not hold the slot. A timeout raises out of the shared helper and the
 # caller's fail-open path lets the delivery proceed (Issue #1379).
 CLARIFY_TIMEOUT_SECONDS = 120
-
-_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 # The stop comment carries the digest of the exact text the gate judged
 # (Issue #1904). A re-readied ticket whose text still hashes to the newest
@@ -695,24 +712,23 @@ def already_stopped(issue: dict, source_repo: str) -> bool:
     return previous is not None and previous == judged_digest(issue)
 
 
-def parse_verdict(output: str) -> ClarifyVerdict | None:
-    """Parse one model answer; `None` means "no usable verdict".
+def parse_verdict(data: object) -> ClarifyVerdict | None:
+    """Read one decoded tool answer; `None` means "no usable verdict".
 
-    The answer is a JSON object with a `missing` list of known check
-    identifiers; an empty list passes and a non-empty one fails. Anything
-    else — prose without an object, broken JSON, a wrong type, or an
-    unknown identifier — is `None`, and the caller fails open. The
-    `satisfied` field is gone (#1379): one field carries the whole
-    verdict. A proposal the answer carries but the engine cannot render is
-    NOT a parse failure: the verdict keeps its `missing` list and records
-    why the proposal went with `suggestion_dropped` (Issue #1958).
+    The answer is the JSON object the shipped `clarify_verdict` tool
+    wrote (Issue #1955): Pi validated its arguments against the tool
+    schema before `execute`, so this reader only re-checks the contract
+    the engine itself depends on — a `missing` list of known identifiers,
+    where an empty list passes and a non-empty one fails. Anything else —
+    a payload that is not an object, a wrong type, an unknown identifier
+    — is `None`, and the caller fails open exactly as it did when the
+    same answer arrived as prose. The `satisfied` field is gone (#1379):
+    one field carries the whole verdict. A proposal the answer carries but
+    the engine cannot render is NOT a parse failure: the verdict keeps its
+    `missing` list and records why the proposal went with
+    `suggestion_dropped` (Issue #1958).
     """
-    match = _JSON_OBJECT_RE.search(output)
-    if match is None:
-        return None
-    try:
-        data = json.loads(match.group())
-    except json.JSONDecodeError:
+    if not isinstance(data, dict):
         return None
     missing = data.get("missing")
     if not isinstance(missing, list):
@@ -806,29 +822,52 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
     )
 
 
+def verdict_file_answer(path: Path) -> ClarifyVerdict | None:
+    """The verdict written by the tool at `path`, or `None`.
+
+    The gate's answer is a file, not stdout (Issue #1955): a session that
+    never called the tool leaves no file, and a broken or schema-breaking
+    write leaves unreadable JSON. Both are the same unusable answer as
+    before — no verdict — so the caller fails open.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return parse_verdict(data)
+
+
 def judge_issue_body(issue: dict, config: RunnerConfig, source_repo: str,
                      run_id: str) -> ClarifyVerdict | None:
     """Judge one ticket body; `None` when the judgment is unavailable.
 
-    A model error or an unusable answer is recorded as
-    `clarify_check_skipped` and returns `None` — the gate fails open and
-    the delivery proceeds.
+    The session loads ONLY the shipped `clarify_verdict` extension with no
+    built-in tools, and the engine names the file its `execute` writes in
+    `CLARIFY_VERDICT_ENV`; the file is read after the session and lives
+    outside it, so the temp dir the session runs in can be discarded. A
+    model error or an unusable answer — no file, broken JSON, an unknown
+    check id — is recorded as `clarify_check_skipped` and returns `None`:
+    the gate fails open and the delivery proceeds.
     """
-    try:
-        output = run_ticket_agent(
-            issue, config, source_repo,
-            system_prompt=CLARIFY_SYSTEM_PROMPT,
-            context=build_context(issue),
-            run_id=run_id,
-            timeout=CLARIFY_TIMEOUT_SECONDS,
-        )
-    except Exception as exc:
-        event(
-            "clarify_check_skipped", level=logging.WARNING,
-            issue=issue["number"], reason=type(exc).__name__,
-        )
-        return None
-    verdict = parse_verdict(output)
+    with tempfile.TemporaryDirectory(prefix="orbi-clarify-") as directory:
+        verdict_path = Path(directory) / "verdict.json"
+        try:
+            run_ticket_agent(
+                issue, config, source_repo,
+                system_prompt=CLARIFY_SYSTEM_PROMPT,
+                context=build_context(issue),
+                run_id=run_id,
+                timeout=CLARIFY_TIMEOUT_SECONDS,
+                extension=str(CLARIFY_EXTENSION),
+                env={CLARIFY_VERDICT_ENV: str(verdict_path)},
+            )
+        except Exception as exc:
+            event(
+                "clarify_check_skipped", level=logging.WARNING,
+                issue=issue["number"], reason=type(exc).__name__,
+            )
+            return None
+        verdict = verdict_file_answer(verdict_path)
     if verdict is None:
         event(
             "clarify_check_skipped", level=logging.WARNING,

@@ -132,6 +132,8 @@ def build_pi_command(
     no_context_files: bool = False,
     skills: list[str | Path] | None = None,
     no_extensions: bool = False,
+    only_extension: str | Path | None = None,
+    no_builtin_tools: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Return one Pi session's `(command, log_command)` argv pair.
 
@@ -154,6 +156,14 @@ def build_pi_command(
     auto-discovery denied and NONE of the configured `--extension`
     entries (the understanding session of `orbi suggest`); it is
     ignored when `extensions=True`.
+    `only_extension` (Issue #1955) adds `--no-extensions` plus exactly
+    that one `--extension <path>`: discovery is denied and no configured
+    extension loads, so the session reaches only the extension the engine
+    ships (the clarification gate's `clarify_verdict` tool). It wins over
+    `extensions`/`no_extensions`.
+    `no_builtin_tools` (Issue #1955) adds Pi's `--no-builtin-tools`
+    INSTEAD of the `tools` decision: built-in tools are off while
+    extension/custom tools (such as `clarify_verdict`) stay callable.
 
     `log_command` is derived here from the SAME extension flags, model
     flags and session dir as `command`, so the two cannot drift. The
@@ -162,15 +172,23 @@ def build_pi_command(
     boundary flags are never logged (matching the frozen pre-#1231
     journal shape).
     """
-    extension_args = (
-        _pi_extension_args(config) if extensions
-        else (["--no-extensions"] if no_extensions else [])
-    )
+    if only_extension is not None:
+        extension_args = [
+            "--no-extensions", "--extension", str(only_extension),
+        ]
+    elif extensions:
+        extension_args = _pi_extension_args(config)
+    elif no_extensions:
+        extension_args = ["--no-extensions"]
+    else:
+        extension_args = []
     if skills is None:
         skills = skills_for(config, excluded_skills)
     skill_args = _skill_args(skills)
     model_args = _pi_model_args(config, role)
-    if isinstance(tools, str):
+    if no_builtin_tools:
+        tools_args = ["--no-builtin-tools"]
+    elif isinstance(tools, str):
         tools_args = ["--tools", tools]
     elif tools:
         tools_args = []
