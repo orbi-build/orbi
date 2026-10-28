@@ -16,7 +16,8 @@
  *   - proves `execute` writes the validated arguments to the environment
  *     path the engine passes and terminates the run.
  *
- * Run with `node --test tests/js` (CI step "Run the Node extension test").
+ * Run with `node --test tests/js/*.test.mjs` (CI step "Run the Node
+ * extension test"); a bare `tests/js` is a FILE to Node 24, not a dir.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
