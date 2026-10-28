@@ -186,8 +186,13 @@ jobs:
       - name: Install the pinned extension test validator (typebox)
         run: npm install --no-save --no-package-lock typebox@1.3.27
 
+      # The positional argument is a test FILE glob, never the bare
+      # directory: Node 24 treats a positional path as a test file and a
+      # directory fails there with a module-not-found error for
+      # `tests/js` (the red CI on the first head). The glob form runs on
+      # every Node version the step can select.
       - name: Run the Node extension test (contract, Issue #1955)
-        run: timeout 120 node --test tests/js
+        run: timeout 120 node --test tests/js/*.test.mjs
 
       # Mintlify docs build smoke (Issue #116): the official `mint` CLI
       # validates the docs/ build (docs.json config, pages, links) in

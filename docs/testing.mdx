@@ -70,9 +70,9 @@ to the repository (Issue #569).
 One more contract step covers the code the Python suite cannot import:
 the Pi extension the clarification gate ships
 (`src/orbi/extensions/clarify_verdict.ts`, Issue #1955). CI sets up Node
-and runs `node --test tests/js` with `typebox` pinned to the version Pi
-itself resolves, because Pi validates extension tool arguments with that
-library. The test proves the tool schema rejects the answers the gate
+and runs `node --test tests/js/*.test.mjs` with `typebox` pinned to
+the version Pi itself resolves, because Pi validates extension tool
+arguments with that library. The test proves the tool schema rejects the answers the gate
 must never receive and that `execute` writes the verdict file — no
 model and no network are involved.
 

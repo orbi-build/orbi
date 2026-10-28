@@ -59,7 +59,7 @@ workflow 自含环境声明——CI 的工具链属于 ci.yml，不属于仓库�
 
 还有一步契约覆盖 Python 测试无法 import 的代码：澄清闸门随引擎发布的
 Pi 扩展（`src/orbi/extensions/clarify_verdict.ts`，Issue #1955）。CI 准备
-Node 并运行 `node --test tests/js`，其中 `typebox` 固定为 Pi 自身解析的
+Node 并运行 `node --test tests/js/*.test.mjs`，其中 `typebox` 固定为 Pi 自身解析的
 版本（Pi 正是用这个库校验扩展工具参数）。该测试证明工具 schema 会拒绝
 闸门绝不能收到的答案，并证明 `execute` 写出判定文件——不涉及模型，也不
 联网。
