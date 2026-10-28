@@ -1,9 +1,9 @@
-"""`/orbi add-criteria`: put the proposed acceptance criteria on the ticket.
+"""`/orbi amend`: put the proposed acceptance criteria on the ticket.
 
 The clarification gate stops a thin ticket and may attach a `kind=criteria`
 proposal to its stop comment (Issue #1926). This module registers the one
 command that acts on it: a person with write permission replies
-`/orbi add-criteria` and the proposed conditions — **as the comment reads at
+`/orbi amend` and the proposed conditions — **as the comment reads at
 that moment**, so editing it first changes what lands — are appended to the
 ticket body under an acceptance heading that follows the repository's
 `message_language` (`## Acceptance` in English, `## 验收` in Chinese,
@@ -231,12 +231,12 @@ def _criteria_apply(
 
 ADD_CRITERIA_COMMAND = CommandSpec(
     name="add_criteria",
-    subcommand="add-criteria",
+    subcommand="amend",
     arity=0,
     permission="write",
     validate=_criteria_validate,
     apply=_criteria_apply,
-    usage="/orbi add-criteria",
+    usage="/orbi amend",
     description=(
         "append the proposed acceptance criteria to this ticket and queue it"
     ),

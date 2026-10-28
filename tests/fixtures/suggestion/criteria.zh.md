@@ -4,4 +4,4 @@
 <!-- /orbi/suggestion -->
 
 编辑这条评论即可修改这份提案。
-回复 `/orbi add-criteria` 即可把这些加入工单并开始交付。
+回复 `/orbi amend` 即可把这些加入工单并开始交付。

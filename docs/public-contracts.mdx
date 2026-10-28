@@ -18,7 +18,7 @@ The [Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md)
 
 | Surface | Definition |
 |---|---|
-| CLI | `orbi` (one Runner tick), `orbi add`, `orbi suggest`, `orbi status`, `orbi session`, `orbi install-units`, `orbi sync-engine-source`, `orbi doctor`, `orbi check`, `orbi setup`, `orbi fix-base`, `orbi split`, `orbi add-criteria` (one subcommand per registered arity-0 ticket command), `orbi milestone` (`milestone set <title>`), `orbi notify` (`notify test`) |
+| CLI | `orbi` (one Runner tick), `orbi add`, `orbi suggest`, `orbi status`, `orbi session`, `orbi install-units`, `orbi sync-engine-source`, `orbi doctor`, `orbi check`, `orbi setup`, `orbi fix-base`, `orbi split`, `orbi amend` (one subcommand per registered arity-0 ticket command), `orbi milestone` (`milestone set <title>`), `orbi notify` (`notify test`) |
 | Config | `orbi.toml` fields documented in [Getting started](/getting-started) — including the Telegram notification key `telegram_chat_id`; `.orbi/env` loaded as systemd `EnvironmentFile` (it carries `ORBI_TELEGRAM_BOT_TOKEN`); the `pi_providers` JSON file |
 | Deployment | `systemd/orbi@.service` and `systemd/orbi@.timer` templates; `.orbi/` as the run-artifact and lock directory |
 | Label state machine | `labels.toml` (names, colors, descriptions) and `src/orbi/delivery_labels.py` (transitions) |
@@ -258,8 +258,8 @@ A rendered section is followed by one display sentence — English
 display sentence naming the command that acts on it: a
 `kind=split` section English *Reply `/orbi split` to create these
 tickets.*, zh *回复 `/orbi split` 即可创建这些工单。*; a
-`kind=criteria` section English *Reply `/orbi add-criteria` to add
-these and start.*, zh *回复 `/orbi add-criteria` 即可把这些加入工单并
+`kind=criteria` section English *Reply `/orbi amend` to add
+these and start.*, zh *回复 `/orbi amend` 即可把这些加入工单并
 开始交付。* The item number, the `(after N)` phrase (zh `（等第 N 条）`) and the
 `Acceptance:` prefix (zh `验收：`) come from the message catalog, so a
 Chinese ticket renders the Chinese line grammar and the parser accepts every
@@ -375,8 +375,8 @@ children — so an interrupted run is picked up again by the next tick.
 
 ### Adding the proposed acceptance criteria
 
-`/orbi add-criteria` — an issue comment, or on the host
-`orbi add-criteria --repo <owner/name> --issue <N>` — reads the newest
+`/orbi amend` — an issue comment, or on the host
+`orbi amend --repo <owner/name> --issue <N>` — reads the newest
 trusted stop comment of the ticket it runs on, parses the section exactly as
 this page describes, and appends every `kind=criteria` condition — as the
 comment reads at that moment — to the ticket body under an acceptance
@@ -405,7 +405,7 @@ then carries the dispatch label and one receipt listing the conditions, and
 ### Command receipts
 
 An in-ticket command (`/orbi milestone <version>`, `/orbi fix-base`,
-`/orbi split`, `/orbi add-criteria`) answers with one receipt comment per
+`/orbi split`, `/orbi amend`) answers with one receipt comment per
 outcome. The receipt's hidden marker identifies
 the command and its outcome, and its `comment=` key identifies the command
 comment it answers:

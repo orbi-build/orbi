@@ -1,5 +1,5 @@
-"""`/orbi add-criteria`: the proposed acceptance criteria start the ticket
-(Issue #1929).
+"""`/orbi amend`: the proposed acceptance criteria start the ticket
+(Issue #1929; renamed from `add-criteria` in Issue #1975).
 
 Every scenario here drives the REAL tick entry (`claim.pick_next_delivery`)
 over the in-memory gh fake: the stopped ticket is picked up by the
@@ -15,13 +15,14 @@ import subprocess
 import pytest
 
 import orbi.criteria_command as criteria_command
-from orbi import claim, clarify, journal, language, ticket_command
+from orbi import claim, clarify, cli, journal, language, ticket_command
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
 from orbi.resume_scan import ResumeHooks
 from seam import seam
 
 from tests.fakes.github import FakeGh
+from tests.test_cli_milestone import make_world
 
 REPO = "acme/app"
 TICKET = 100
@@ -92,7 +93,7 @@ def stopped_ticket(
 
 
 def reply(gh: FakeGh, *, login: str = "maintainer",
-          command: str = "/orbi add-criteria", permission: str = "write",
+          command: str = "/orbi amend", permission: str = "write",
           number: int = TICKET) -> None:
     gh.comment(number, command, login=login)
     gh.add_collaborator(login, permission)
@@ -537,9 +538,9 @@ def test_the_command_is_registered_with_the_shared_layer():
     spec = ticket_command.TICKET_COMMANDS["add_criteria"]
     assert spec is criteria_command.ADD_CRITERIA_COMMAND
     assert (spec.name, spec.subcommand, spec.arity, spec.permission) == (
-        "add_criteria", "add-criteria", 0, "write",
+        "add_criteria", "amend", 0, "write",
     )
-    assert spec.usage == "/orbi add-criteria"
+    assert spec.usage == "/orbi amend"
     assert spec.aliases == ()
     assert "add_criteria_command_applied" in journal.JOURNAL_EVENTS
     assert "add_criteria_command_failed" in journal.JOURNAL_EVENTS
@@ -581,7 +582,7 @@ def test_apply_refuses_a_ticket_without_a_proposal(monkeypatch):
 
 
 def test_the_terminal_spelling_runs_the_same_append(monkeypatch):
-    """`orbi add-criteria --repo … --issue N` (Issue #1930) is the same
+    """`orbi amend --repo … --issue N` (Issues #1930, #1975) is the same
     execution path: the host login is the one occurrence and the ticket
     itself supplies the proposal."""
     gh = _gh(monkeypatch)
@@ -602,6 +603,49 @@ def test_the_terminal_spelling_runs_the_same_append(monkeypatch):
     # The receipt names the terminal occurrence it answers, exactly like a
     # comment's receipt names the comment.
     assert "comment=cli@" in receipts[0]
+
+
+def test_the_terminal_subcommand_is_orbi_amend(tmp_path, monkeypatch):
+    """Acceptance 4 (Issue #1975): `orbi amend --repo … --issue N` on the
+    host runs the same command through the real CLI entry."""
+    config_path = make_world(tmp_path, milestone=None, repo=REPO)
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    gh.add_collaborator("orbi-bot", "write")
+
+    exit_code = cli.main([
+        "amend", "--repo", REPO, "--issue", str(TICKET),
+        "--config", str(config_path),
+    ])
+
+    assert exit_code == 0
+    body = gh.issues[TICKET]["body"]
+    assert body.count(APPENDED_MARKER) == 1
+    assert "- The tag survives a reload" in body
+    assert READY_LABEL in labels(gh)
+    assert NEEDS_DETAIL_LABEL not in labels(gh)
+    receipts = success_receipts(gh)
+    assert len(receipts) == 1
+    assert "comment=cli@" in receipts[0]
+
+
+def test_the_old_word_is_not_a_command(monkeypatch, tmp_path):
+    """Acceptance 2 (Issue #1975): the command word was renamed and no alias
+    kept, so the old spelling is an ordinary comment: nothing is written and
+    no receipt is posted."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    reply(gh, command="/orbi add-criteria")
+
+    tick(monkeypatch, tmp_path, gh)
+
+    assert gh.issues[TICKET]["body"] == BODY
+    assert READY_LABEL not in labels(gh)
+    assert NEEDS_DETAIL_LABEL in labels(gh)
+    assert [
+        body for body in comment_bodies(gh)
+        if "orbi-add_criteria-command" in body
+    ] == []
 
 
 def test_the_context_reads_the_ticket_and_its_proposal(monkeypatch):

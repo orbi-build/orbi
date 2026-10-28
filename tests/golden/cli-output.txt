@@ -1,6 +1,6 @@
 $ orbi --help
 usage: python3 -m orbi.cli [-h] [--config CONFIG] [--version]
-                           {add,suggest,status,session,install-units,sync-engine-source,doctor,check,setup,fix-base,add-criteria,split,milestone,notify} ...
+                           {add,suggest,status,session,install-units,sync-engine-source,doctor,check,setup,fix-base,amend,split,milestone,notify} ...
 
 Orbi task dispatch and status CLI. With NO subcommand the CLI IS the Runner
 entry: it runs one tick, exactly like `python3 -m orbi.runner` — this is what
@@ -17,7 +17,7 @@ queue, or web UI. Command failures are logged and raised by the reused
 runner.run_command; there is no fallback.
 
 positional arguments:
-  {add,suggest,status,session,install-units,sync-engine-source,doctor,check,setup,fix-base,add-criteria,split,milestone,notify}
+  {add,suggest,status,session,install-units,sync-engine-source,doctor,check,setup,fix-base,amend,split,milestone,notify}
     add                 create an Issue in a source repo and add ai-ready
     suggest             read the repository and propose up to three Issues to
                         deliver (interactive; --json prints the Suggestions
@@ -47,9 +47,8 @@ positional arguments:
     fix-base            run the registered `/orbi fix-base` ticket command on
                         one Issue: the same rules and one receipt as the
                         comment
-    add-criteria        run the registered `/orbi add-criteria` ticket command
-                        on one Issue: the same rules and one receipt as the
-                        comment
+    amend               run the registered `/orbi amend` ticket command on one
+                        Issue: the same rules and one receipt as the comment
     split               run the registered `/orbi split` ticket command on one
                         Issue: the same rules and one receipt as the comment
     milestone           advance active_milestone (the manual command behind
@@ -208,9 +207,9 @@ options:
   --config CONFIG
   --repo REPO      the Issue's repository (owner/name)
   --issue ISSUE    the number of the Issue the command acts on
-$ orbi add-criteria --help
-usage: python3 -m orbi.cli add-criteria [-h] [--config CONFIG] --repo REPO
-                                        --issue ISSUE
+$ orbi amend --help
+usage: python3 -m orbi.cli amend [-h] [--config CONFIG] --repo REPO
+                                 --issue ISSUE
 
 options:
   -h, --help       show this help message and exit
