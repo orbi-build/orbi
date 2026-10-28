@@ -28,7 +28,7 @@ from seam import seam
 
 from tests.fakes.clarify import (
     FakeGate, fix_run_id, record_label_notifications, stop_comment_entry,
-    stub_runner_login, stub_stop_history,
+    stub_runner_login, stub_stop_history, stub_ticket_agent,
 )
 
 from tests.test_run_id_e2e import (
@@ -1402,13 +1402,148 @@ def test_parse_verdict_reads_a_criteria_proposal():
 
 def test_a_broken_proposal_never_discards_the_verdict():
     """The verdict is what stops the ticket: an unusable proposal beside it
-    only means today's comment."""
-    assert clarify.parse_verdict(
+    only means today's comment, plus the one drop line (Issue #1958)."""
+    verdict = clarify.parse_verdict(
         '{"missing": ["single_outcome"], "suggestion": {"kind": "split"}}'
-    ) == clarify.ClarifyVerdict(passed=False, missing=("single_outcome",))
+    )
+    assert (verdict.passed, verdict.missing) == (False, ("single_outcome",))
+    assert verdict.suggestion is None
+    assert verdict.suggestion_dropped == "unusable"
     assert clarify.parse_verdict(
         '{"missing": [], "suggestion": "nonsense"}'
     ) == clarify.ClarifyVerdict(passed=True, missing=())
+
+
+# --- Issue #1958: a proposal the gate drops is journaled, never silent ----
+
+# The answer the model really gave when the dropped proposal went unnoticed
+# (orbi-build/orbi#1955): the proposal keys sit at the TOP LEVEL instead of
+# under the "suggestion" key the protocol asks for.
+MISPLACED_ANSWER = json.dumps({
+    "missing": ["single_outcome"],
+    "kind": "split",
+    "items": [
+        {"result": "Users can tag a note", "acceptance": "A tag finds it"},
+        {"result": "Users can export a note", "acceptance": "A .md downloads"},
+    ],
+})
+
+
+def test_parse_verdict_records_a_misplaced_proposal():
+    """Acceptance 1: the top-level proposal is dropped, the verdict stays."""
+    verdict = clarify.parse_verdict(MISPLACED_ANSWER)
+    assert (verdict.passed, verdict.missing) == (
+        False, ("single_outcome",),
+    )
+    assert verdict.suggestion is None
+    assert verdict.suggestion_dropped == "misplaced"
+
+
+@pytest.mark.parametrize("suggestion", [
+    # A split with no items at all.
+    {"kind": "split"},
+    # A split that would split into one ticket.
+    {"kind": "split", "items": [
+        {"result": "Only slice", "acceptance": "It is delivered"},
+    ]},
+    # Not an object, so not a proposal.
+    "nonsense",
+])
+def test_parse_verdict_records_an_unusable_proposal(suggestion):
+    """Acceptance 2: a value that fails validation is dropped as unusable."""
+    verdict = clarify.parse_verdict(json.dumps({
+        "missing": ["single_outcome"], "suggestion": suggestion,
+    }))
+    assert (verdict.passed, verdict.missing) == (
+        False, ("single_outcome",),
+    )
+    assert verdict.suggestion is None
+    assert verdict.suggestion_dropped == "unusable"
+
+
+def test_parse_verdict_records_no_drop_without_a_proposal():
+    """Acceptance 2: no proposal, no event — and a usable one never drops.
+
+    A passing verdict drops nothing either: it renders no proposal, so
+    there is nothing to report.
+    """
+    assert clarify.parse_verdict(
+        '{"missing": ["single_outcome"]}'
+    ).suggestion_dropped is None
+    assert clarify.parse_verdict(json.dumps({
+        "missing": ["acceptance_condition"],
+        "suggestion": {"kind": "criteria", "items": ["A tag finds it"]},
+    })).suggestion_dropped is None
+    assert clarify.parse_verdict(
+        '{"missing": [], "kind": "split"}'
+    ).suggestion_dropped is None
+
+
+@pytest.mark.parametrize("answer,reason", [
+    (MISPLACED_ANSWER, "misplaced"),
+    (json.dumps({
+        "missing": ["single_outcome"], "suggestion": {"kind": "split"},
+    }), "unusable"),
+])
+def test_judge_issue_body_journals_the_dropped_proposal(
+    monkeypatch, caplog, answer, reason,
+):
+    """Acceptance 1+3: ONE registered event names the Issue and the reason."""
+    stub_ticket_agent(monkeypatch, answer)
+    caplog.set_level("INFO")
+
+    verdict = clarify.judge_issue_body(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    )
+    assert verdict is not None and verdict.passed is False
+    assert "clarify_suggestion_dropped" in caplog.text
+    assert f"issue={ISSUE['number']}" in caplog.text
+    assert f"reason={reason}" in caplog.text
+
+
+def test_judge_issue_body_journals_nothing_without_a_proposal(
+    monkeypatch, caplog,
+):
+    """Acceptance 2: the common answer adds no drop line."""
+    stub_ticket_agent(monkeypatch, '{"missing": ["single_outcome"]}')
+    caplog.set_level("INFO")
+
+    assert clarify.judge_issue_body(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ).passed is False
+    assert "clarify_suggestion_dropped" not in caplog.text
+
+
+def test_enforce_stops_todays_way_around_a_misplaced_proposal(
+    monkeypatch, caplog,
+):
+    """Acceptance 1: the ticket still stops with today's comment and labels.
+
+    The real parser runs (only the model seam is stubbed), so the proposal
+    is dropped exactly as it was in production — the drop is now visible.
+    """
+    stub_stop_history(monkeypatch, [])
+    notified = record_label_notifications(monkeypatch)
+    stub_ticket_agent(monkeypatch, MISPLACED_ANSWER)
+    comments, edits = _record_writes(monkeypatch)
+    caplog.set_level("INFO")
+
+    assert clarify.enforce(
+        ISSUE, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is False
+    assert len(comments) == 1
+    body = comments[0][2]
+    assert clarify.missing_text("single_outcome", language_code="en") in body
+    # No proposal section: the draft really was dropped, not rendered.
+    assert clarify.SUGGESTION_START_PREFIX not in body
+    assert edits == [(
+        ISSUE["number"], REPO,
+        delivery_labels.NEEDS_DETAIL_LABEL, delivery_labels.READY_LABEL,
+    )]
+    assert len(notified) == 1
+    assert "clarify_suggestion_dropped" in caplog.text
+    assert "reason=misplaced" in caplog.text
+    assert "clarify_needs_detail" in caplog.text
 
 
 # --- the parser: rendered, edited and invalid sections --------------------
