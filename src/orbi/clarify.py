@@ -133,7 +133,8 @@ CLARIFY_SYSTEM_PROMPT = (
     "state. When the text lacks a fact a proposal needs, or writing one "
     "needs a decision only a person can make, omit the argument and "
     "answer with missing alone.\n"
-    '- ONLY single_outcome failed: suggestion {"kind": "split", '
+    '- single_outcome failed, with or without "acceptance_condition" '
+    'also failing: suggestion {"kind": "split", '
     '"items": [{"result": "...", "acceptance": "...", "after": 1}]}. '
     "One item per new ticket, each result and acceptance stated in the "
     "text: the fewest vertical slices that cover every goal of the "
@@ -215,7 +216,9 @@ class ClarifyVerdict:
 
     "suggestion" is the optional proposal the model attached to a failing
     verdict (Issue #1926): present only when the ticket text was enough to
-    write one, and rendered only when it answers the one missing piece.
+    write one, and rendered only when it answers the failed checks — a split
+    answers `single_outcome` with or without a missing acceptance condition
+    (Issue #1978), a criteria draft an acceptance condition alone.
     "suggestion_dropped" says WHY a proposal the answer carried was
     discarded (Issue #1958) — "misplaced" when the keys sat at the top
     level instead of under "suggestion", "unusable" when the value failed
@@ -243,15 +246,6 @@ SUGGESTION_MARKER = "orbi:suggestion:v1"
 SUGGESTION_START = f"<!-- {SUGGESTION_MARKER} kind="
 SUGGESTION_END = "<!-- /orbi/suggestion -->"
 SUGGESTION_START_PREFIX = f"<!-- {SUGGESTION_MARKER}"
-
-# The one missing piece each proposal kind answers: a split plan proposes
-# the split a "single_outcome" failure asks for, a criteria draft the
-# acceptance an "acceptance_condition" failure asks for. Every other
-# verdict renders no proposal.
-SUGGESTION_FOR_MISSING = {
-    "single_outcome": SUGGESTION_SPLIT,
-    "acceptance_condition": SUGGESTION_CRITERIA,
-}
 
 # The one command sentence each proposal kind adds below its edit sentence
 # (Issue #1927 for a split, Issue #1929 for criteria): the reader never
@@ -404,17 +398,22 @@ def render_suggestion(suggestion: Suggestion, language_code: str) -> str:
 def verdict_suggestion(verdict: ClarifyVerdict, language_code: str) -> str:
     """The proposal section for one failing verdict, or "".
 
-    Rendered only when exactly one piece is missing, it is the piece this
-    proposal kind answers, and the proposal is usable. Every other stop
-    keeps the pre-#1926 comment byte for byte: no section, no edit
-    sentence.
+    A split is rendered whenever `single_outcome` is among the failed checks,
+    with or without a missing acceptance condition (Issue #1978): every split
+    item carries its own acceptance line, so one split plan answers both
+    failures, and a ticket that should be split gets the split plan. The
+    criteria draft keeps its single-piece rule — it answers an
+    `acceptance_condition` failure alone (Issue #1926). An unusable proposal
+    renders nothing, so every other stop keeps the pre-#1926 comment byte for
+    byte: no section, no edit sentence.
     """
     suggestion = verdict.suggestion
-    if suggestion is None or len(verdict.missing) != 1:
+    if suggestion is None or not _usable(suggestion):
         return ""
-    if suggestion.kind != SUGGESTION_FOR_MISSING.get(verdict.missing[0]):
-        return ""
-    if not _usable(suggestion):
+    if suggestion.kind == SUGGESTION_SPLIT:
+        if "single_outcome" not in verdict.missing:
+            return ""
+    elif verdict.missing != ("acceptance_condition",):
         return ""
     return render_suggestion(suggestion, language_code)
 
@@ -813,9 +812,9 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
     pieces = "\n".join(
         f"- {missing_text(item, language_code)}" for item in verdict.missing
     )
-    # The editable proposal, only when this verdict's one missing piece is
-    # the piece the proposal answers (Issue #1926). Without one the string
-    # is empty, so the comment stays byte for byte as before.
+    # The editable proposal, only when it answers this verdict's failed
+    # checks (Issue #1926, #1978). Without one the string is empty, so the
+    # comment stays byte for byte as before.
     proposal = verdict_suggestion(verdict, language_code)
     # A proposal IS the instruction (Issue #1962): the comment then carries
     # the proposal, its edit sentence and its command sentence, and never
