@@ -1,0 +1,52 @@
+---
+title: "v0.7.20 发布（最新）"
+description: "Orbi v0.7.20 发布说明：Clarification stop comment proposes a split plan or acceptance criteria，另有 9 项改动。"
+---
+
+`v0.7.20` 于 2026-10-28T01:03:43Z 发布为 GitHub Release [v0.7.20](https://github.com/orbi-build/orbi/releases/tag/v0.7.20)（release task：Issue #1932）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.7.20` | 注解 tag `8952803133af666159cd15075595a1b11fa7e499` | 提交 `38d2499ae873611654863f71d3d8d11122c4d6cb` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Clarification stop comment proposes a split plan or acceptance criteria ([Issue #1926](https://github.com/orbi-build/orbi/issues/1926); [PR #1934](https://github.com/orbi-build/orbi/pull/1934))
+- /orbi split: turn the proposed split into child tickets ([Issue #1927](https://github.com/orbi-build/orbi/issues/1927); [PR #1936](https://github.com/orbi-build/orbi/pull/1936))
+- /orbi add-criteria: add the proposed acceptance criteria and start ([Issue #1929](https://github.com/orbi-build/orbi/issues/1929); [PR #1941](https://github.com/orbi-build/orbi/pull/1941))
+
+### Deployment and operations
+
+- Run registered ticket commands from the CLI ([Issue #1930](https://github.com/orbi-build/orbi/issues/1930); [PR #1933](https://github.com/orbi-build/orbi/pull/1933))
+
+### Bug fixes
+
+- Preserve dependency targets when parsing edited proposal numbers ([Issue #1935](https://github.com/orbi-build/orbi/issues/1935); [PR #1937](https://github.com/orbi-build/orbi/pull/1937))
+- Ignore forged split completion receipts from other commenters ([Issue #1938](https://github.com/orbi-build/orbi/issues/1938); [PR #1942](https://github.com/orbi-build/orbi/pull/1942))
+- Reject milestone commands on stopped tickets without starving valid split commands ([Issue #1939](https://github.com/orbi-build/orbi/issues/1939); [PR #1943](https://github.com/orbi-build/orbi/pull/1943))
+- Reject split retries when existing children differ from the edited proposal ([Issue #1940](https://github.com/orbi-build/orbi/issues/1940); [PR #1946](https://github.com/orbi-build/orbi/pull/1946))
+- CI failure: tests on branch main (push) ([Issue #1948](https://github.com/orbi-build/orbi/issues/1948); [PR #1952](https://github.com/orbi-build/orbi/pull/1952))
+- Preserve the outer seam patch when an inner MonkeyPatch context exits ([Issue #1953](https://github.com/orbi-build/orbi/issues/1953); [PR #1954](https://github.com/orbi-build/orbi/pull/1954))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
+
+- tag: `v0.7.20`
+- release commit: `38d2499ae873611654863f71d3d8d11122c4d6cb`
+- release task: Issue #1932
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 38d2499ae873611654863f71d3d8d11122c4d6cb (the #268 CI-wait gate; no local test execution)
+
+
+Released by [Orbi](https://orbi.build/?ref=prfoot-orbi-build)
+
+[![Download Orbi](https://a.fsdn.com/con/app/sf-download-button)](https://sourceforge.net/projects/orbi/files/v0.7.20/v0.7.20%20source%20code.zip/download)
