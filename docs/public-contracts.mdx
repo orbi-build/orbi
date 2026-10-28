@@ -226,15 +226,17 @@ result, an acceptance condition and a single outcome — stops a ticket whose
 text already states enough to propose the fix, the stop comment carries that
 proposal between two fixed markers. It is rendered in exactly two cases:
 
-- only `single_outcome` missing: `kind=split`, one numbered item per new
-  ticket, each with its own acceptance line and optionally depending on an
-  earlier item;
-- only `acceptance_condition` missing: `kind=criteria`, one line per
+- `single_outcome` failing, whether or not another piece is also missing
+  (most often `acceptance_condition`): `kind=split`, one numbered item per
+  new ticket, each with its own acceptance line and optionally depending on
+  an earlier item — the split answers both failures, because every item
+  carries its own acceptance;
+- `acceptance_condition` missing alone: `kind=criteria`, one line per
   acceptance condition.
 
-Every other stop comment — another missing piece, a second missing piece, a
-ticket that lacks a fact a proposal needs, or one whose fix needs a decision
-only a person can make — stays unchanged and carries no section.
+Every other stop comment — another missing piece, a ticket that lacks a fact
+a proposal needs, or one whose fix needs a decision only a person can make —
+stays unchanged and carries no section.
 
 ```html
 <!-- orbi:suggestion:v1 kind=split -->

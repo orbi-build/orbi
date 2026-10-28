@@ -1032,6 +1032,47 @@ def fake_pi_answer(answer: dict) -> str:
 
 
 @pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_the_real_runner_proposes_the_split_for_a_bundled_ticket(
+    clone, tmp_path, monkeypatch, language_code,
+):
+    """Acceptance 1 (Issue #1978) at the real entry point: a ticket that
+    fails `single_outcome` AND `acceptance_condition` (the evidence shape:
+    xqliu/orbi-e2e-2609260042#253) is stopped with the split plan, not with
+    the generic repair block. `/orbi split` reads that very section."""
+    fix_run_id(monkeypatch, RUN_ID)
+    answer = {
+        "missing": ["acceptance_condition", "single_outcome"],
+        "suggestion": SPLIT_ANSWER["suggestion"],
+    }
+    install_fake_pi(monkeypatch, tmp_path, fake_pi_answer(answer))
+    comments: list[str] = []
+    labels = {ISSUE_NUMBER: [delivery_labels.READY_LABEL]}
+    install_fake_gh(monkeypatch, comments, labels)
+
+    result = runner.process_issue(
+        THIN_ISSUE,
+        gate_config(clone, tmp_path, message_language=language_code),
+        REPO,
+    )
+
+    assert result == runner.IssueResult("needs-detail", None)
+    assert len(comments) == 1
+    body = comments[0]
+    assert (FIXTURES / f"split.{language_code}.md").read_text() in body
+    # The section the comment carries is exactly what `/orbi split` parses.
+    assert clarify.parse_suggestion(body) == SPLIT_PROPOSAL
+    assert language.text(
+        language_code, clarify.SUGGESTION_REPLY[clarify.SUGGESTION_SPLIT],
+    ) in body
+    # One instruction: no generic repair block beside the proposal.
+    assert language.text(
+        language_code, "clarify.repair", ready_label="ai-ready",
+    ) not in body
+    assert labels[ISSUE_NUMBER] == [delivery_labels.NEEDS_DETAIL_LABEL]
+    assert not worktree_for(clone, RUN_ID).exists()
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
 @pytest.mark.parametrize("answer, kind", [
     (SPLIT_ANSWER, "split"),
     (CRITERIA_ANSWER, "criteria"),
@@ -1458,15 +1499,101 @@ def test_a_stop_without_a_proposal_keeps_the_repair_block(language_code):
     assert clarify.SUGGESTION_START_PREFIX not in body
 
 
+@pytest.mark.parametrize("language_code", LANGUAGES)
+def test_a_bundled_ticket_gets_the_split_proposal(language_code):
+    """Acceptance 1 (Issue #1978): the most common broken shape — several
+    unrelated goals and no acceptance condition — gets the split plan.
+
+    Every split item carries its own acceptance line, so one split answers
+    both failures; the comment still gives ONE instruction (Issue #1962):
+    the proposal and the `/orbi split` sentence, never the generic repair
+    block beside it."""
+    verdict = _failing(
+        ("acceptance_condition", "single_outcome"), SPLIT_PROPOSAL,
+    )
+    body = clarify.render_comment(
+        ISSUE, verdict, RUN_ID, language_code=language_code,
+    )
+    block = clarify.verdict_suggestion(verdict, language_code)
+    assert block
+    assert block in body
+    assert block.startswith(clarify.SUGGESTION_START + "split -->")
+    # Both failed pieces are still named, and before the instruction.
+    for item in ("acceptance_condition", "single_outcome"):
+        assert clarify.missing_text(item, language_code) in body
+        assert body.index(clarify.missing_text(item, language_code)) < (
+            body.index(block)
+        )
+    # The split instruction, and only it: no criteria sentence, no generic
+    # repair block, no `Outcome/Acceptance` template, no follow-up.
+    reply = language.text(
+        language_code, clarify.SUGGESTION_REPLY[clarify.SUGGESTION_SPLIT],
+    )
+    assert reply in body
+    assert language.text(
+        language_code,
+        clarify.SUGGESTION_REPLY[clarify.SUGGESTION_CRITERIA],
+    ) not in body
+    for key in (
+        "clarify.repair", "clarify.repair_outcome",
+        "clarify.repair_acceptance", "clarify.followup",
+    ):
+        assert language.text(
+            language_code, key, ready_label="ai-ready",
+            needs_detail_label=delivery_labels.NEEDS_DETAIL_LABEL,
+        ) not in body
+    assert "```" not in body
+
+
+@pytest.mark.parametrize("language_code", LANGUAGES)
+def test_a_split_is_rendered_whatever_else_is_missing(language_code):
+    """Issue #1978: the renderer maps a verdict that fails
+    `single_outcome` to the split proposal, whatever else also failed —
+    one rule, not a per-pair special case."""
+    verdict = _failing(
+        ("single_outcome", "observable_result"), SPLIT_PROPOSAL,
+    )
+    body = clarify.render_comment(
+        ISSUE, verdict, RUN_ID, language_code=language_code,
+    )
+    assert clarify.SUGGESTION_START + "split -->" in body
+    assert language.text(
+        language_code, clarify.SUGGESTION_REPLY[clarify.SUGGESTION_SPLIT],
+    ) in body
+
+
+@pytest.mark.parametrize("language_code", LANGUAGES)
+def test_an_acceptance_only_stop_still_renders_the_criteria_draft(
+    language_code,
+):
+    """Acceptance 2 (Issue #1978): a stop for `acceptance_condition` alone
+    keeps today's criteria draft and its `/orbi amend` sentence, and never
+    the split instruction."""
+    verdict = _failing(("acceptance_condition",), CRITERIA_PROPOSAL)
+    body = clarify.render_comment(
+        ISSUE, verdict, RUN_ID, language_code=language_code,
+    )
+    block = clarify.verdict_suggestion(verdict, language_code)
+    assert block
+    assert block.startswith(clarify.SUGGESTION_START + "criteria -->")
+    assert block in body
+    assert language.text(
+        language_code, clarify.SUGGESTION_REPLY[clarify.SUGGESTION_CRITERIA],
+    ) in body
+    assert language.text(
+        language_code, clarify.SUGGESTION_REPLY[clarify.SUGGESTION_SPLIT],
+    ) not in body
+    assert "```" not in body
+
+
 @pytest.mark.parametrize("suggestion, missing", [
     # The model declined, or could not propose: nothing is rendered.
     (None, ("single_outcome",)),
     (None, ("acceptance_condition",)),
-    # Kind mismatch: each proposal answers one missing piece only.
+    # Kind mismatch: the split answers `single_outcome` and the criteria
+    # draft `acceptance_condition` alone, never each other's failure.
     (SPLIT_PROPOSAL, ("acceptance_condition",)),
     (CRITERIA_PROPOSAL, ("single_outcome",)),
-    # A second missing piece: the proposal would cover only part of it.
-    (SPLIT_PROPOSAL, ("single_outcome", "observable_result")),
     (CRITERIA_PROPOSAL, ("acceptance_condition", "single_outcome")),
     (SPLIT_PROPOSAL, ("observable_result",)),
     # Unusable proposals.
@@ -1526,6 +1653,22 @@ def test_an_unusable_proposal_keeps_the_stop_comment_byte_for_byte(
     assert "Editing this comment" not in with_proposal
 
 
+def test_the_gate_prompt_allows_the_split_when_acceptance_also_fails():
+    """Acceptance 3 (Issue #1978): the split proposal is allowed whenever
+    `single_outcome` fails, with or without a missing acceptance condition,
+    because every split item carries its own acceptance line; the criteria
+    draft keeps its "ONLY acceptance_condition" rule."""
+    prompt = clarify.CLARIFY_SYSTEM_PROMPT
+    assert (
+        '- single_outcome failed, with or without "acceptance_condition" '
+        'also failing: suggestion {"kind": "split", '
+    ) in prompt
+    assert '- ONLY acceptance_condition failed: suggestion {"kind": ' in prompt
+    # The pre-#1978 restriction is gone: a split was proposed only when
+    # `single_outcome` failed alone.
+    assert "ONLY single_outcome failed" not in prompt
+
+
 def test_the_gate_prompt_names_the_configured_output_language():
     """Issue #1971: the proposal's VALUES follow the repository's
     `message_language`, named from the catalog.
@@ -1550,7 +1693,7 @@ def test_the_gate_prompt_guards_the_proposal():
     missing (Issue #1926)."""
     prompt = clarify.CLARIFY_SYSTEM_PROMPT
     for marker in (
-        "ONLY single_outcome failed",
+        'single_outcome failed, with or without "acceptance_condition" ',
         "ONLY acceptance_condition failed",
         "adding no goal or scope the text does not state",
         "no count cap",
