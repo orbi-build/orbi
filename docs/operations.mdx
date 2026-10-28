@@ -550,6 +550,7 @@ registry — in both directions (a name only in code or only in docs fails
 | `clarify_needs_detail` | the thin-ticket gate stopped the claim: the missing pieces are on the Issue |
 | `clarify_already_stopped` | the thin-ticket gate saw an unchanged, already-stopped body: no model call, comment or notification |
 | `clarify_stop_untrusted` | a comment carried a stop marker this runner did not write: ignored, the gate judges normally |
+| `clarify_suggestion_dropped` | the gate dropped the answer's proposal (`reason=misplaced` when `kind`/`items` sat at the top level instead of under `suggestion`, `reason=unusable` when the `suggestion` value failed validation): the stop comment carries no proposal |
 | `clarify_check_skipped` | the thin-ticket gate could not decide or could not write (fail open) |
 | `blocked_by` | an Issue was skipped: open blockedBy blockers |
 | `blocked_by_check_failed` | the blockedBy query failed (fail open) |

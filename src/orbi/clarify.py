@@ -180,11 +180,18 @@ class ClarifyVerdict:
     "suggestion" is the optional proposal the model attached to a failing
     verdict (Issue #1926): present only when the ticket text was enough to
     write one, and rendered only when it answers the one missing piece.
+    "suggestion_dropped" says WHY a proposal the answer carried was
+    discarded (Issue #1958) — "misplaced" when the keys sat at the top
+    level instead of under "suggestion", "unusable" when the value failed
+    validation — so the gate can journal the drop instead of losing it
+    silently. It stays None when the answer carried no proposal and on a
+    passing verdict (which renders no proposal at all).
     """
 
     passed: bool
     missing: tuple[str, ...]
     suggestion: Suggestion | None = None
+    suggestion_dropped: str | None = None
 
 
 # --- the editable proposal the stop comment may carry (Issue #1926) -------
@@ -696,7 +703,9 @@ def parse_verdict(output: str) -> ClarifyVerdict | None:
     else — prose without an object, broken JSON, a wrong type, or an
     unknown identifier — is `None`, and the caller fails open. The
     `satisfied` field is gone (#1379): one field carries the whole
-    verdict.
+    verdict. A proposal the answer carries but the engine cannot render is
+    NOT a parse failure: the verdict keeps its `missing` list and records
+    why the proposal went with `suggestion_dropped` (Issue #1958).
     """
     match = _JSON_OBJECT_RE.search(output)
     if match is None:
@@ -713,10 +722,34 @@ def parse_verdict(output: str) -> ClarifyVerdict | None:
         for item in missing
     ):
         return None
+    suggestion = suggestion_answer(data.get("suggestion"))
     return ClarifyVerdict(
-        passed=not missing, missing=tuple(missing),
-        suggestion=suggestion_answer(data.get("suggestion")),
+        passed=not missing, missing=tuple(missing), suggestion=suggestion,
+        suggestion_dropped=_suggestion_dropped(data, missing, suggestion),
     )
+
+
+def _suggestion_dropped(
+    data: dict, missing: list, suggestion: Suggestion | None,
+) -> str | None:
+    """Why this failing answer's proposal was dropped, or None (Issue #1958).
+
+    A failing answer that carries a proposal the engine cannot render used
+    to lose it without a trace: the stop comment posted exactly as if the
+    model had proposed nothing, so a broken proposal path looked healthy
+    (#1955). The reason names the drift a person can repair —
+    "misplaced" when "kind"/"items" sit at the top level instead of under
+    "suggestion", "unusable" when the "suggestion" value fails validation.
+    No proposal at all, and a passing verdict (nothing to render), drop
+    nothing.
+    """
+    if not missing or suggestion is not None:
+        return None
+    if "suggestion" in data:
+        return "unusable"
+    if "kind" in data or "items" in data:
+        return "misplaced"
+    return None
 
 
 def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
@@ -800,6 +833,13 @@ def judge_issue_body(issue: dict, config: RunnerConfig, source_repo: str,
         event(
             "clarify_check_skipped", level=logging.WARNING,
             issue=issue["number"], reason="no_verdict",
+        )
+    elif verdict.suggestion_dropped is not None:
+        # Issue #1958: the stop comment posts without the proposal, so the
+        # only trace of a broken proposal path is this line.
+        event(
+            "clarify_suggestion_dropped", level=logging.WARNING,
+            issue=issue["number"], reason=verdict.suggestion_dropped,
         )
     return verdict
 
