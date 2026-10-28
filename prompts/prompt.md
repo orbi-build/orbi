@@ -124,6 +124,14 @@ Hard rules for test evidence (Issue #180):
   and then `tail` the file, or run the pipeline with `set -o pipefail`.
   The test command's exit code — not the pipeline's — is the result.
 
+Hard rules for a test that already fails on the base (Issue #1980):
+
+- A test that already fails at `{{BASE_SHA}}` is outside this ticket. Do not
+  delete, skip, xfail or edit it, and do not weaken its assertion, to get your
+  own checks green: a removed test lets the PR merge over a base defect nobody
+  fixed. Leave it failing, finish the ticket's own work, and let the Runner's
+  base-red handling (`/orbi fix-base`) take it from there.
+
 Context recovery after compaction (Issue #180):
 
 When the session context is compacted, recover from the run artifacts —

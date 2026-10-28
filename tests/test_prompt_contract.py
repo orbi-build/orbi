@@ -886,3 +886,72 @@ def test_prompt_md_step_4_does_not_use_pytest_as_completion_evidence():
     text = _text(PROMPT)
     assert "unit tests alone are not completion evidence" in text
     assert "pytest alone is not completion evidence" not in text
+
+
+# --- Issue #1980: a base-red test is outside the ticket ----------------------
+
+# A test that already fails at the delivery base SHA is not the ticket's to
+# change: the delivery leaves it failing and the Runner's base-red pause
+# (/orbi fix-base) handles it. The beta incident (#260 -> PR #261) deleted the
+# failing test instead, review passed and the PR merged green over a hidden
+# base defect, so both prompts must state the rule up front and this test
+# renders the real templates (the exact string Pi receives) to lock it.
+
+BASE_RED_PROMPT_ITEMS = (
+    ("base-red-failing-test",
+     "already fails at `77e7f0ea54d8e9748f2debfd5a8f49739dd89b66`"),
+    ("base-red-outside", "outside this ticket"),
+    ("base-red-forbidden-actions", "delete, skip, xfail or edit it"),
+    ("base-red-no-weaken", "do not weaken its assertion"),
+    ("base-red-leave-failing", "leave it failing"),
+    ("base-red-runner-handling", "base-red handling"),
+)
+
+
+def test_prompt_md_leaves_a_test_that_already_fails_on_the_base_alone():
+    """Issue #1980: the rendered implementer prompt states that a test already
+    failing at the frozen base SHA is outside the ticket — never deleted,
+    skipped, xfail-ed or weakened to get green; it stays failing and the
+    Runner's base-red handling takes it from there."""
+    from orbi import pi_session
+
+    rendered = pi_session.render_prompt(
+        PROMPT.read_text(encoding="utf-8"),
+        {"BASE_SHA": "77e7f0ea54d8e9748f2debfd5a8f49739dd89b66",
+         "BASE_BRANCH": "main"},
+    )
+    text = " ".join(rendered.lower().split())
+    missing = _missing(text, BASE_RED_PROMPT_ITEMS)
+    assert not missing, (
+        f"prompt.md does not leave a base-red test alone (Issue #1980): "
+        f"{missing}"
+    )
+    # Rendered against a real base SHA, the rule names that SHA.
+    assert "77e7f0ea54d8e9748f2debfd5a8f49739dd89b66" in text
+
+
+BASE_RED_REVIEW_ITEMS = (
+    ("review-base-red-delete", "deleting, skipping or weakening"),
+    ("review-base-red-unrelated", "unrelated existing test"),
+    ("review-base-red-blocking", "blocking finding (blocker)"),
+)
+
+
+def test_prompt_review_md_flags_a_deleted_or_weakened_existing_test():
+    """Issue #1980: the rendered review prompt lists deleting, skipping or
+    weakening an unrelated existing test as a blocking finding, so a PR that
+    removes the customer's red test is rejected instead of merged."""
+    from orbi import pi_session
+
+    rendered = pi_session.render_prompt(
+        PROMPT_REVIEW.read_text(encoding="utf-8"),
+        {"BASE_SHA": "77e7f0ea54d8e9748f2debfd5a8f49739dd89b66",
+         "BASE_BRANCH": "main"},
+    )
+    text = " ".join(rendered.lower().split())
+    missing = _missing(text, BASE_RED_REVIEW_ITEMS)
+    assert not missing, (
+        f"prompt_review.md does not flag a deleted or weakened existing test "
+        f"(Issue #1980): {missing}"
+    )
+    assert "77e7f0ea54d8e9748f2debfd5a8f49739dd89b66" in text

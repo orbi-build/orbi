@@ -149,6 +149,13 @@ compaction.
   contract; a more complex design that adds no required behavior is a
   finding. Every such finding states the minimal fix direction: delete or
   shrink the out-of-scope part until only the acceptance criteria remain.
+- Deleting, skipping or weakening an unrelated existing test is a
+  **blocking finding (Blocker)** (R8, Issue #1980). A test that already fails
+  at `{{BASE_SHA}}`, or any existing test the ticket does not ask to change,
+  stays as it is: removing, skipping, xfail-ing or loosening its assertion
+  hides a real failure while the PR turns green. Restore the test unchanged in
+  this session — the base-red pause (`/orbi fix-base`) handles a red base,
+  never a deleted test — and do not emit `pass` over one.
 - Verify the run evidence: the real test/build commands were run and pass in
   the repository's declared runtime; tests meet the coverage and test
   requirements the repository itself declares (its CI and its context files
