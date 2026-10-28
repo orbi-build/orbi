@@ -18,7 +18,7 @@ description: "使用者可以依赖什么，status 与进度文档又如何报�
 
 | 接口 | 定义 |
 |---|---|
-| CLI | `orbi`（一次 Runner tick）、`orbi add`、`orbi suggest`、`orbi status`、`orbi session`、`orbi install-units`、`orbi sync-engine-source`、`orbi doctor`、`orbi check`、`orbi setup`、`orbi fix-base`、`orbi split`、`orbi add-criteria`（每条 arity 为 0 的已登记票内命令各一个子命令）、`orbi milestone`（`milestone set <title>`）、`orbi notify`（`notify test`） |
+| CLI | `orbi`（一次 Runner tick）、`orbi add`、`orbi suggest`、`orbi status`、`orbi session`、`orbi install-units`、`orbi sync-engine-source`、`orbi doctor`、`orbi check`、`orbi setup`、`orbi fix-base`、`orbi split`、`orbi amend`（每条 arity 为 0 的已登记票内命令各一个子命令）、`orbi milestone`（`milestone set <title>`）、`orbi notify`（`notify test`） |
 | 配置 | [Getting started](/zh/getting-started) 中记录的 `orbi.toml` 字段——包括 Telegram 通知键 `telegram_chat_id`；作为 systemd `EnvironmentFile` 加载的 `.orbi/env`（其中携带 `ORBI_TELEGRAM_BOT_TOKEN`）；`pi_providers` JSON 文件 |
 | 部署 | `systemd/orbi@.service` 与 `systemd/orbi@.timer` 模板；作为 run 产物与锁目录的 `.orbi/` |
 | Label 状态机 | `labels.toml`（名称、颜色、描述）与 `src/orbi/delivery_labels.py`（状态迁移） |
@@ -234,8 +234,8 @@ GitHub Issue 与标签仍是唯一状态存储。
 渲染出的区块之后会跟一句显示文字——英文 `Editing this comment changes the proposal.`，中文 `编辑这条评论即可修改这份提案。`——除上述含义外不承载任何语义。每种提案还会多一句显示文本，点名处理它的命令：
 `kind=split` 段落为英文 *Reply `/orbi split` to create these tickets.*，
 中文 *回复 `/orbi split` 即可创建这些工单。*；
-`kind=criteria` 段落为英文 *Reply `/orbi add-criteria` to add these and
-start.*，中文 *回复 `/orbi add-criteria` 即可把这些加入工单并开始交付。*
+`kind=criteria` 段落为英文 *Reply `/orbi amend` to add these and
+start.*，中文 *回复 `/orbi amend` 即可把这些加入工单并开始交付。*
 
 条目编号、`(after N)` 短语（中文为 `（等第 N 条）`）与 `Acceptance:` 前缀（中文为 `验收：`）来自消息目录，因此中文工单渲染中文行语法，而解析器接受所有目录语言。
 
@@ -324,8 +324,8 @@ Split from #<父工单号>
 
 ### 追加提案中的验收条件
 
-`/orbi add-criteria` —— 票内评论，或在主机上运行
-`orbi add-criteria --repo <owner/name> --issue <N>` —— 读取该工单最新一条
+`/orbi amend` —— 票内评论，或在主机上运行
+`orbi amend --repo <owner/name> --issue <N>` —— 读取该工单最新一条
 可信停止评论，按本页规则解析其中的段落，并把每条 `kind=criteria` 条件
 —— 按评论当时的内容 —— 追加到工单正文的验收标题下，其后跟隐藏标记
 `<!-- orbi:acceptance:v1 -->`。标题跟随仓库的 `message_language`
@@ -347,7 +347,7 @@ Split from #<父工单号>
 
 ### 命令回执
 
-票内命令（`/orbi milestone <version>`、`/orbi fix-base`、`/orbi split`、`/orbi add-criteria`）对每种结果各留一条回执评论。回执的隐藏标记同时标明命令与结果，其 `comment=` 键标明它所回答的命令评论：
+票内命令（`/orbi milestone <version>`、`/orbi fix-base`、`/orbi split`、`/orbi amend`）对每种结果各留一条回执评论。回执的隐藏标记同时标明命令与结果，其 `comment=` 键标明它所回答的命令评论：
 
 - `<!-- orbi-<name>-command comment=<key> -->`：命令已执行；
 - `<!-- orbi-<name>-command-rejected comment=<key> -->`：未被采纳（权限、参数形状、命令自身的规则，或只有命令自身流程才会提供的上下文）；

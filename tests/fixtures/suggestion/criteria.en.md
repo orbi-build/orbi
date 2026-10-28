@@ -4,4 +4,4 @@
 <!-- /orbi/suggestion -->
 
 Editing this comment changes the proposal.
-Reply `/orbi add-criteria` to add these and start.
+Reply `/orbi amend` to add these and start.

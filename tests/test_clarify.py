@@ -1382,6 +1382,20 @@ def test_the_rendered_proposal_matches_its_fixture(kind, language_code):
     assert block.rstrip().endswith(tail)
 
 
+@pytest.mark.parametrize("language_code, expected", [
+    ("en", "Reply `/orbi amend` to add these and start."),
+    ("zh", "回复 `/orbi amend` 即可把这些加入工单并开始交付。"),
+])
+def test_the_criteria_proposal_tells_the_reader_to_reply_amend(
+    language_code, expected,
+):
+    """Acceptance 3 (Issue #1975): the rendered stop comment names the typed
+    command word `amend` in both languages."""
+    assert language.text(
+        language_code, clarify.SUGGESTION_REPLY[clarify.SUGGESTION_CRITERIA],
+    ) == expected
+
+
 @pytest.mark.parametrize("language_code", LANGUAGES)
 @pytest.mark.parametrize("kind", sorted(PROPOSALS))
 def test_the_stop_comment_carries_the_proposal_and_the_edit_sentence(

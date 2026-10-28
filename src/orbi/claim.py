@@ -18,7 +18,8 @@ from pathlib import Path
 from orbi import base_ci_red, check_permission, gitops, ticket_command
 # Imported for its registration side effect: `ai-needs-detail` tickets run
 # the registered commands below, and `/orbi split` (Issue #1927) and
-# `/orbi add-criteria` (Issue #1929) must be in the registry by then.
+# `/orbi amend` (Issue #1929, typed word renamed by #1975) must be in the
+# registry by then.
 from orbi import criteria_command, split_command  # noqa: F401
 from orbi import milestone as milestone_bookkeeping
 from orbi.config import RunnerConfig

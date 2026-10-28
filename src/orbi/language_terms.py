@@ -246,8 +246,8 @@ CLARIFY_SUGGESTION_MESSAGES: dict[str, tuple[str, str]] = {
     # names the command that appends these conditions to the ticket and
     # starts it, so the reader never copies them into the body by hand.
     "clarify.suggestion.criteria_reply": (
-        "Reply `/orbi add-criteria` to add these and start.",
-        "回复 `/orbi add-criteria` 即可把这些加入工单并开始交付。",
+        "Reply `/orbi amend` to add these and start.",
+        "回复 `/orbi amend` 即可把这些加入工单并开始交付。",
     ),
     # The language the PROPOSAL VALUES are written in (Issue #1971): the
     # engine's own setting, named in the gate's prompt instead of left to
@@ -343,11 +343,12 @@ SPLIT_MESSAGES: dict[str, tuple[str, str]] = {
     ),
 }
 
-# The `/orbi add-criteria` command (Issue #1929): its rejections and the ONE
-# receipt it leaves. Every entry is display text; the machine contract (the
-# markers, the labels) stays in English and outside the catalog. The heading
-# is display text too: it follows the message language (Issue #1971), while
-# the marker that makes the append idempotent is the same in every language.
+# The `/orbi amend` command (Issue #1929, typed word renamed by #1975):
+# its rejections and the ONE receipt it leaves. Every entry is display
+# text; the machine contract (the markers, the labels) stays in English
+# and outside the catalog. The heading is display text too: it follows the
+# message language (Issue #1971), while the marker that makes the append
+# idempotent is the same in every language.
 ADD_CRITERIA_MESSAGES: dict[str, tuple[str, str]] = {
     "criteria.reason_no_suggestion": (
         "the newest stop comment carries no acceptance-criteria proposal; "
@@ -362,10 +363,10 @@ ADD_CRITERIA_MESSAGES: dict[str, tuple[str, str]] = {
     ),
     "criteria.reason_not_criteria": (
         "the newest stop comment proposes `{kind}`, not acceptance "
-        "criteria; `/orbi add-criteria` only adds a `kind=criteria` "
+        "criteria; `/orbi amend` only adds a `kind=criteria` "
         "proposal",
         "最新一条停止评论的提案是 `{kind}`，不是验收条件；"
-        "`/orbi add-criteria` 只添加 `kind=criteria` 提案",
+        "`/orbi amend` 只添加 `kind=criteria` 提案",
     ),
     "criteria.receipt_title": (
         "**Added the proposed acceptance criteria to this ticket.**",

@@ -753,8 +753,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `fix_base_command_failed` | an in-ticket `/orbi fix-base` command failed at one step |
 | `split_command_applied` | an in-ticket `/orbi split` command turned the proposal into child tickets |
 | `split_command_failed` | an in-ticket `/orbi split` command failed at one step |
-| `add_criteria_command_applied` | an in-ticket `/orbi add-criteria` command appended the proposed criteria and queued the ticket |
-| `add_criteria_command_failed` | an in-ticket `/orbi add-criteria` command failed at one step |
+| `add_criteria_command_applied` | an in-ticket `/orbi amend` command appended the proposed criteria and queued the ticket |
+| `add_criteria_command_failed` | an in-ticket `/orbi amend` command failed at one step |
 | `checks_permission_blocked` | the check read was refused for a missing App permission; the Issue goes ai-blocked with the approval page |
 | `checks_permission_recovered` | the check read works again and the paused delivery resumed automatically |
 | `base_ci_red_recovered` | the base check turned green and the paused delivery resumed automatically |
@@ -1076,14 +1076,14 @@ receipts posted before a rename keep deduplicating.
 | `milestone` | `/orbi milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
 | `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
 | `split` | `/orbi split` | `write` | turn the split proposal on this ticket's stop comment into child tickets |
-| `add_criteria` | `/orbi add-criteria` | `write` | append the proposed acceptance criteria to this ticket and queue it |
+| `add_criteria` | `/orbi amend` | `write` | append the proposed acceptance criteria to this ticket and queue it |
 
 A command on a STOPPED ticket still runs. The clarification gate leaves
 its ticket `ai-needs-detail`, so no delivery label is on it and no claim scan
 reads its comments; every tick runs the registered commands once over the
 open Issues carrying that label (`ticket_command.process_labeled_commands`,
 one call site beside the milestone and base-CI scans). That is what makes
-`/orbi split` and `/orbi add-criteria` reachable: the proposal they act
+`/orbi split` and `/orbi amend` reachable: the proposal they act
 on lives in a stop comment.
 
 A command can also declare the caller-supplied context it cannot run
@@ -1116,7 +1116,7 @@ markers are never resolved by guessing: the receipt asks for the intended
 child to be kept and the conflicting marker removed from the extra Issue's
 body (closing it alone does not help — the lookup reads closed Issues too).
 
-`/orbi add-criteria` (Issue #1929) appends the newest trusted stop
+`/orbi amend` (Issue #1929) appends the newest trusted stop
 comment's `kind=criteria` section — as the comment reads when the command
 runs — to the ticket body under an acceptance heading that follows the
 repository's `message_language` (`## Acceptance` in English, `## 验收` in
