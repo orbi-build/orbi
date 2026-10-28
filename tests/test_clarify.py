@@ -1456,13 +1456,34 @@ def test_the_gate_prompt_guards_the_proposal():
     for marker in (
         "ONLY single_outcome failed",
         "ONLY acceptance_condition failed",
-        "adding and dropping nothing",
+        "adding no goal or scope the text does not state",
         "no count cap",
         "never invent a goal",
         "omit the argument",
         "decision only a person can make",
     ):
         assert marker in prompt, marker
+
+
+def test_the_criteria_proposal_is_not_limited_to_stated_acceptance_lines():
+    """A ticket stopped only for a missing acceptance condition states no
+    acceptance line, so requiring one in the text would leave the criteria
+    proposal unreachable (Issue #1967). The split proposal keeps that
+    requirement: its items restate goals the text already states."""
+    prompt = clarify.CLARIFY_SYSTEM_PROMPT
+    assert "every result and every acceptance line must be stated" not in prompt
+    # Criteria: a concrete check over the goals the text states, invented
+    # goals still forbidden.
+    assert (
+        "One string per acceptance condition: a concrete check that tells a "
+        "finished delivery of the goals the text states from an unfinished "
+        "one; never invent a goal."
+    ) in prompt
+    # Split: each item's result and acceptance still come from the text.
+    assert (
+        "One item per new ticket, each result and acceptance stated in the "
+        "text:"
+    ) in prompt
 
 
 @pytest.mark.parametrize("answer", [
