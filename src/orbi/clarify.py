@@ -129,20 +129,21 @@ CLARIFY_SYSTEM_PROMPT = (
     "three checks pass.\n\n"
     "Optional proposal. Add the tool's suggestion argument ONLY in "
     "these two cases, and only when the proposal follows from the "
-    "ticket text alone: every result and every acceptance line must be "
-    "stated there, adding and dropping nothing. When the text lacks a "
-    "fact a proposal needs, or writing one needs a decision only a "
-    "person can make, omit the argument and answer with missing "
-    "alone.\n"
+    "ticket text alone, adding no goal or scope the text does not "
+    "state. When the text lacks a fact a proposal needs, or writing one "
+    "needs a decision only a person can make, omit the argument and "
+    "answer with missing alone.\n"
     '- ONLY single_outcome failed: suggestion {"kind": "split", '
     '"items": [{"result": "...", "acceptance": "...", "after": 1}]}. '
-    "One item per new ticket: the fewest vertical slices that cover "
-    "every goal of the text; after names the number of an earlier item "
+    "One item per new ticket, each result and acceptance stated in the "
+    "text: the fewest vertical slices that cover every goal of the "
+    "text; after names the number of an earlier item "
     "this slice depends on and is omitted otherwise; there is no count "
     "cap.\n"
     '- ONLY acceptance_condition failed: suggestion {"kind": '
-    '"criteria", "items": ["..."]}. One string per acceptance condition '
-    "the ticket needs; never invent a goal.\n"
+    '"criteria", "items": ["..."]}. One string per acceptance condition: '
+    "a concrete check that tells a finished delivery of the goals the "
+    "text states from an unfinished one; never invent a goal.\n"
     "Every value stays on one line. Do not explain, and do not pass "
     "kind or items outside suggestion: the tool schema rejects them."
 )
