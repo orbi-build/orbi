@@ -124,13 +124,16 @@ Hard rules for test evidence (Issue #180):
   and then `tail` the file, or run the pipeline with `set -o pipefail`.
   The test command's exit code — not the pipeline's — is the result.
 
-Hard rules for a test that already fails on the base (Issue #1980):
+Hard rules for scope and green checks (Issue #1980):
 
-- A test that already fails at `{{BASE_SHA}}` is outside this ticket. Do not
-  delete, skip, xfail or edit it, and do not weaken its assertion, to get your
-  own checks green: a removed test lets the PR merge over a base defect nobody
-  fixed. Leave it failing, finish the ticket's own work, and let the Runner's
-  base-red handling (`/orbi fix-base`) take it from there.
+- Change only what the ticket asks for: do not edit unrelated code, tests or
+  CI configuration to make your own checks pass. A check already failing at
+  `{{BASE_SHA}}` is not this ticket's to fix — leave it. That includes a test
+  that already fails at `{{BASE_SHA}}`: it is outside this ticket, so do not
+  delete, skip, xfail or edit it and do not weaken its assertion — a removed
+  test lets the PR merge over a base defect nobody fixed. Leave it failing,
+  finish the ticket's own work, and let the Runner's base-red handling
+  (`/orbi fix-base`) take it from there.
 
 Context recovery after compaction (Issue #180):
 

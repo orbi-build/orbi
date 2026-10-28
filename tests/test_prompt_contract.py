@@ -888,16 +888,30 @@ def test_prompt_md_step_4_does_not_use_pytest_as_completion_evidence():
     assert "pytest alone is not completion evidence" not in text
 
 
-# --- Issue #1980: a base-red test is outside the ticket ----------------------
+# --- Issue #1980: a delivery changes only what the ticket asks for -----------
 
-# A test that already fails at the delivery base SHA is not the ticket's to
-# change: the delivery leaves it failing and the Runner's base-red pause
-# (/orbi fix-base) handles it. The beta incident (#260 -> PR #261) deleted the
-# failing test instead, review passed and the PR merged green over a hidden
-# base defect, so both prompts must state the rule up front and this test
-# renders the real templates (the exact string Pi receives) to lock it.
+# The beta incident (Issue #1980) had two shapes on the same evening: ticket
+# #260 -> PR #261 deleted a false-red test file, and ticket #262 -> PR #265
+# removed an `exit 1` CI job from .github/workflows/ci.yml, both unmentioned,
+# review passed, both merged. The base-red gate itself works (#254 paused), so
+# the missing piece is the scope rule: a delivery changes only what the ticket
+# asks for and never edits unrelated code, tests or CI configuration to get its
+# own checks green. Both prompts must state it up front; these tests render the
+# real templates (the exact string Pi receives) so the rule cannot silently
+# drift away.
 
 BASE_RED_PROMPT_ITEMS = (
+    # The general scope sentence (the ticket's acceptance 1), not a per-file
+    # list: unrelated code, tests AND CI configuration are all named.
+    ("scope-only-ticket", "change only what the ticket asks for"),
+    ("scope-unrelated-files",
+     "do not edit unrelated code, tests or ci configuration to make your own "
+     "checks pass"),
+    # A check already red at the frozen base belongs to the base, not the
+    # ticket — the Runner's base-red pause decides it.
+    ("scope-base-check-not-mine",
+     "a check already failing at "
+     "`77e7f0ea54d8e9748f2debfd5a8f49739dd89b66` is not this ticket's to fix"),
     ("base-red-failing-test",
      "already fails at `77e7f0ea54d8e9748f2debfd5a8f49739dd89b66`"),
     ("base-red-outside", "outside this ticket"),
@@ -915,10 +929,12 @@ BASE_RED_PROMPT_ITEMS = (
 
 
 def test_prompt_md_leaves_a_test_that_already_fails_on_the_base_alone():
-    """Issue #1980: the rendered implementer prompt states that a test already
-    failing at the frozen base SHA is outside the ticket — never deleted,
-    skipped, xfail-ed or weakened to get green; it stays failing and the
-    Runner's base-red handling takes it from there."""
+    """Issue #1980: the rendered implementer prompt carries the scope sentence
+    — change only what the ticket asks for, never unrelated code, tests or CI
+    configuration to get checks green — and states that a check already
+    failing at the frozen base SHA is outside the ticket, never deleted,
+    skipped, xfail-ed or weakened; it stays failing and the Runner's base-red
+    handling takes it from there."""
     from orbi import pi_session
 
     rendered = pi_session.render_prompt(
@@ -937,16 +953,26 @@ def test_prompt_md_leaves_a_test_that_already_fails_on_the_base_alone():
 
 
 BASE_RED_REVIEW_ITEMS = (
+    # Acceptance 2: out-of-scope changes made to get checks green are a
+    # blocking finding, and the rule names all three file kinds, so a removed
+    # CI job (the #265 shape) is caught like a deleted test (the #261 shape).
+    ("review-base-red-scope",
+     "out-of-scope changes made to get checks green are a **blocking "
+     "finding (blocker)**"),
     ("review-base-red-delete", "deleting, skipping or weakening"),
     ("review-base-red-unrelated", "unrelated existing test"),
-    ("review-base-red-blocking", "blocking finding (blocker)"),
+    ("review-base-red-other-files",
+     "editing unrelated code, tests or ci configuration"),
+    ("review-base-red-ci", "disabled ci job"),
 )
 
 
 def test_prompt_review_md_flags_a_deleted_or_weakened_existing_test():
-    """Issue #1980: the rendered review prompt lists deleting, skipping or
-    weakening an unrelated existing test as a blocking finding, so a PR that
-    removes the customer's red test is rejected instead of merged."""
+    """Issue #1980: the rendered review prompt treats out-of-scope changes
+    made to get checks green — a deleted or weakened test, unrelated code or
+    CI configuration, a disabled CI job — as a blocking finding, so the PR
+    that removes the customer's red test or red job is rejected instead of
+    merged."""
     from orbi import pi_session
 
     rendered = pi_session.render_prompt(
