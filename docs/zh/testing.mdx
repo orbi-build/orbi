@@ -57,6 +57,13 @@ Python 行或分支未达 100% 覆盖时退出非零。
 文档 PR 没有变更的 Python，直接通过）。没有 lint、没有矩阵、没有缓存。
 workflow 自含环境声明——CI 的工具链属于 ci.yml，不属于仓库（Issue #569）。
 
+还有一步契约覆盖 Python 测试无法 import 的代码：澄清闸门随引擎发布的
+Pi 扩展（`src/orbi/extensions/clarify_verdict.ts`，Issue #1955）。CI 准备
+Node 并运行 `node --test tests/js`，其中 `typebox` 固定为 Pi 自身解析的
+版本（Pi 正是用这个库校验扩展工具参数）。该测试证明工具 schema 会拒绝
+闸门绝不能收到的答案，并证明 `execute` 写出判定文件——不涉及模型，也不
+联网。
+
 Checkout 保持默认浅克隆并加 `fetch-tags: true`，随后用有界命令显式
 抓取 base ref 和 `+refs/tags/*:refs/tags/*`。diff coverage 的 base
 比较还会解除 shallow history；删除的一次性对账测试不再需要该设置。

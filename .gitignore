@@ -38,6 +38,9 @@ verify.md
 .ruff_cache/
 .hypothesis/
 .venv/
+# Node dependencies of the Pi extension test (Issue #1955): CI installs the
+# pinned typebox here and node --test tests/js resolves it; never tracked.
+node_modules/
 *.py[cod]
 .DS_Store
 *.swp

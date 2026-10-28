@@ -879,8 +879,10 @@ def run_ticket_agent(
     run_id: str | None = None,
     timeout: int | None = None,
     progress: Callable[[dict], None] | None = None,
+    extension: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> str:
-    """Run one no-tools Pi session and return its stdout.
+    """Run one tool-less Pi session and return its stdout.
 
     The ONE no-tools launcher: the ticket-only content agent (#209) and
     the thin-ticket clarify judgment (#1088) share this body and differ
@@ -889,6 +891,13 @@ def run_ticket_agent(
     `config.run_id`; `timeout` bounds the session (the clarify gate
     passes a small fixed one — a timeout fails open through the
     caller's error path).
+
+    `extension` (Issue #1955) turns the session into the isolated
+    structured-answer mode: `--no-builtin-tools --no-extensions
+    --extension <path>`, i.e. exactly that one extension's tools, no
+    built-in tool and none of the configured extensions. `env` adds
+    variables to the Pi child only (the extension reads its output path
+    from one); they are never logged.
 
     Pi's session is transient OS state, not a task worktree or
     repository artifact: it runs in a temp dir and leaves nothing
@@ -920,7 +929,9 @@ def run_ticket_agent(
             config, ROLE_TICKET, IMPLEMENT_EXCLUDED_SKILLS, session_dir,
             system_prompt, context,
             context_placeholder="<issue-context-redacted>",
-            tools=False, extensions=True,
+            tools=False, extensions=extension is None,
+            only_extension=extension,
+            no_builtin_tools=extension is not None,
         )
         # Startup phase: the provider config is loaded and resolved
         # before the spawn; a configured provider file is materialized
@@ -932,6 +943,8 @@ def run_ticket_agent(
         )
         agent_dir = prepare_pi_agent_dir(ticket_dir, config, role=ROLE_TICKET)
         pi_env = pi_extension_env(config)
+        if env:
+            pi_env.update(env)
         if agent_dir is not None:
             pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
         return stream_pi(

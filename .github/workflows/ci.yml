@@ -170,6 +170,25 @@ jobs:
       - name: Enforce the size ratchet (contract, Issue #1229)
         run: python3 tools/size_ratchet.py
 
+      # Issue #1955: the shipped Pi extension (the clarification gate's
+      # `clarify_verdict` tool) is TypeScript the Pi runtime loads, so its
+      # schema and `execute` are tested with Node's own runner. The
+      # validator is `typebox` pinned to the version Pi itself resolves
+      # (package.json of @earendil-works/pi-coding-agent), because Pi
+      # validates extension tool arguments with exactly that library.
+      # Node >= 22.18 strips the TypeScript types natively (Pi's own floor
+      # is 22.19), so no build step exists.
+      - name: Set up Node (the Pi extension test, Issue #1955)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install the pinned extension test validator (typebox)
+        run: npm install --no-save --no-package-lock typebox@1.3.27
+
+      - name: Run the Node extension test (contract, Issue #1955)
+        run: timeout 120 node --test tests/js
+
       # Mintlify docs build smoke (Issue #116): the official `mint` CLI
       # validates the docs/ build (docs.json config, pages, links) in
       # strict mode — non-zero exit on any warning or error. Same single

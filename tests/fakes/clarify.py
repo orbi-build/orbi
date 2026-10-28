@@ -7,7 +7,10 @@ ratchet (Issue #789) excludes `tests/fakes/`, the adapter contract.
 """
 from __future__ import annotations
 
-from orbi import notify
+import json
+from pathlib import Path
+
+from orbi import clarify, notify
 from seam import seam
 
 # The login the fake runner posts its comments with. The real `gh auth
@@ -86,6 +89,34 @@ class FakeGate:
 
     def _notify(self, *args, **kwargs):
         self.notified.append(args)
+
+
+def verdict_agent(monkeypatch, payload=None, *, raw=None, calls=None):
+    """Stub the gate's model call as a fake Pi that writes its verdict file.
+
+    Since Issue #1955 the gate asks for the verdict through the shipped
+    `clarify_verdict` Pi tool: the engine names the output file in
+    `ORBI_CLARIFY_OUT` and reads the JSON the tool wrote there. This fake
+    mirrors that contract from the engine side — it takes the path out of
+    the `env` the gate passes, writes `payload` (or `raw` verbatim) and
+    returns empty stdout, which the gate no longer parses. Both None
+    writes nothing: the missing-answer path.
+
+    `calls` (a list, when given) receives (issue, config, source_repo,
+    kwargs) per judgment, the same shape the old inline stubs recorded.
+    """
+    def agent(issue, config, source_repo, **kwargs):
+        if calls is not None:
+            calls.append((issue, config, source_repo, kwargs))
+        path = Path(kwargs["env"][clarify.CLARIFY_VERDICT_ENV])
+        if raw is not None:
+            path.write_text(raw, encoding="utf-8")
+        elif payload is not None:
+            path.write_text(json.dumps(payload), encoding="utf-8")
+        return ""
+
+    monkeypatch.setattr(seam, "run_ticket_agent", agent)
+    return calls
 
 
 def stub_runner_login(monkeypatch, login: str = RUNNER_LOGIN) -> None:

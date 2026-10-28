@@ -305,6 +305,44 @@ def test_understanding_command_denies_extensions_without_loading_any():
     ]
 
 
+def test_extension_only_session_loads_the_one_extension_and_no_builtins():
+    """Issue #1955: the clarification gate's judgment session runs with
+    exactly the shipped `clarify_verdict` extension — `--no-extensions`
+    (<- no discovery, no configured extension) plus one explicit
+    `--extension` — and `--no-builtin-tools`, so that tool is the only
+    thing the model can call."""
+    shipped = "/srv/orbi/extensions/clarify_verdict.ts"
+    command, log_command = pi_command.build_pi_command(
+        _configured(), pi_command.ROLE_TICKET,
+        pi_command.IMPLEMENT_EXCLUDED_SKILLS, SESSION_DIR,
+        SYSTEM_PROMPT, CONTEXT,
+        context_placeholder="<issue-context-redacted>",
+        tools=False, extensions=False, only_extension=shipped,
+        no_builtin_tools=True,
+    )
+    assert command == [
+        "pi", "--no-builtin-tools",
+        "--no-extensions", "--extension", shipped, *IMPLEMENT_SKILL_ARGS,
+        "--provider", "openai", "--model", "gpt-5.6-sol",
+        "--thinking", "medium",
+        "--print", "--session-dir", str(SESSION_DIR),
+        "--system-prompt", _prompt_path(), CONTEXT,
+    ]
+    # None of the configured extensions load, and no tool allowlist flag
+    # competes with the extension's own tool.
+    assert "npm:fixture@1.2.3" not in command
+    assert "--no-tools" not in command
+    assert "--tools" not in command
+    assert log_command == [
+        "pi",
+        "--no-extensions", "--extension", shipped,
+        "--provider", "openai", "--model", "gpt-5.6-sol",
+        "--thinking", "medium",
+        "--print", "--session-dir", str(SESSION_DIR),
+        "--system-prompt", "<redacted>", "<issue-context-redacted>",
+    ]
+
+
 def test_extension_flags_are_omitted_when_extensions_is_false():
     """`extensions=False` without `no_extensions` keeps the pre-#1600
     behavior: no extension flag at all."""

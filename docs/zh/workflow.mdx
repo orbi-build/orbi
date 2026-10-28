@@ -342,11 +342,18 @@ host 配置打开门禁（`orbi.toml` 里 `human_review_gate = true`——这是
 `.github/orbi.toml` 里的 `clarify_thin_tickets = true` 打开；未启用的仓库
 行为与之前完全一致。
 
-闸门打开时，一次 fresh claim 会先问一次 Pi session（`--no-tools`，无
-worktree、无分支、不交付）判定 ticket 正文的三项检查：**可观察结果**
-（用户会看到或做得了什么不同的）、**验收条件**（怎么区分完成与未完成）、
-**单一结果**（一个 fix 或一个 change，而不是几件互不相关的事）。判定通过
-则一切不变，交付照常开始。
+闸门打开时，一次 fresh claim 会先问一次 Pi session（无 worktree、无分支、
+不交付）判定 ticket 正文的三项检查：**可观察结果**（用户会看到或做得了
+什么不同的）、**验收条件**（怎么区分完成与未完成）、**单一结果**（一个
+fix 或一个 change，而不是几件互不相关的事）。判定通过则一切不变，交付
+照常开始。
+
+判定 session 不加载任何内建工具：它以
+`--no-builtin-tools --no-extensions --extension <随引擎发布的 clarify_verdict>`
+运行，模型只有一条回答途径——调用一次这个受 schema 校验的工具，由工具把
+判定写进引擎读取的文件。既没有自由文本答案，也不解析 stdout。任何不可用的
+答案（没有文件、文件内容不合 schema、未知的检查 id）都与模型不可用一样是
+bypass。
 
 v0.7.15 起按需求含义判断，不要求固定模板标题。明确的运行失败及其清楚的纠正方向可以表达结果；同一失败的多个症状仍可算一个结果。过去某次运行的日志本身不等于验收条件。
 

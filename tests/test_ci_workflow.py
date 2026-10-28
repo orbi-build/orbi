@@ -416,6 +416,27 @@ def test_ci_workflow_enforces_the_tiered_coverage_gate():
     )
 
 
+def test_ci_workflow_runs_the_node_extension_test():
+    """Issue #1955: the clarification gate's Pi extension is TypeScript the
+    Pi runtime loads, so CI runs its contract with Node's own runner
+    (`node --test tests/js`) — the coverage gate only sees Python. The
+    validator (`typebox`) is pinned to the version Pi itself resolves and
+    validates extension tool arguments with; an unpinned install would let
+    a schema test pass against a different library than production."""
+    commands = step_commands(steps_of(load_workflow()))
+    assert any(
+        re.search(r"\bnode --test tests/js\b", command)
+        for command in commands
+    ), f"CI must run the Node extension test, steps run: {commands!r}"
+    assert any(
+        re.search(r"\btypebox@[0-9]+\.[0-9]+\.[0-9]+\b", command)
+        for command in commands
+    ), (
+        "the extension test validator must pin an exact typebox version, "
+        f"steps run: {commands!r}"
+    )
+
+
 def test_ci_workflow_runs_the_mintlify_docs_build_smoke():
     """Issue #116: the docs build smoke runs in CI with the official
     Mintlify CLI — `mint validate` (strict build validation, non-zero
