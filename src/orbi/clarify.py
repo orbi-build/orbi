@@ -3,10 +3,12 @@
 
 A confident delivery against a vague `ai-ready` ticket is worse than no
 delivery: it burns a run, opens a PR nobody can accept and buries the
-real question. Before the claim starts any work, one no-tools Pi session
-judges the ticket body against the three pieces every deliverable needs —
-an **observable result**, an **acceptance condition** and a **single
-outcome** — and a failing verdict stops the ticket at the claim:
+real question. Before the claim starts any work, one Pi session with no
+built-in tools — the shipped `clarify_verdict` tool is its only answer
+path (Issue #1955) — judges the ticket body against the three pieces
+every deliverable needs — an **observable result**, an **acceptance
+condition** and a **single outcome** — and a failing verdict stops the
+ticket at the claim:
 
 - ONE Issue comment names every missing piece and the repair action;
 - the repository's claim label (default `ai-ready`) is removed and
@@ -195,11 +197,18 @@ class ClarifyVerdict:
     "suggestion" is the optional proposal the model attached to a failing
     verdict (Issue #1926): present only when the ticket text was enough to
     write one, and rendered only when it answers the one missing piece.
+    "suggestion_dropped" says WHY a proposal the answer carried was
+    discarded (Issue #1958) — "misplaced" when the keys sat at the top
+    level instead of under "suggestion", "unusable" when the value failed
+    validation — so the gate can journal the drop instead of losing it
+    silently. It stays None when the answer carried no proposal and on a
+    passing verdict (which renders no proposal at all).
     """
 
     passed: bool
     missing: tuple[str, ...]
     suggestion: Suggestion | None = None
+    suggestion_dropped: str | None = None
 
 
 # --- the editable proposal the stop comment may carry (Issue #1926) -------
@@ -714,7 +723,10 @@ def parse_verdict(data: object) -> ClarifyVerdict | None:
     a payload that is not an object, a wrong type, an unknown identifier
     — is `None`, and the caller fails open exactly as it did when the
     same answer arrived as prose. The `satisfied` field is gone (#1379):
-    one field carries the whole verdict.
+    one field carries the whole verdict. A proposal the answer carries but
+    the engine cannot render is NOT a parse failure: the verdict keeps its
+    `missing` list and records why the proposal went with
+    `suggestion_dropped` (Issue #1958).
     """
     if not isinstance(data, dict):
         return None
@@ -726,10 +738,34 @@ def parse_verdict(data: object) -> ClarifyVerdict | None:
         for item in missing
     ):
         return None
+    suggestion = suggestion_answer(data.get("suggestion"))
     return ClarifyVerdict(
-        passed=not missing, missing=tuple(missing),
-        suggestion=suggestion_answer(data.get("suggestion")),
+        passed=not missing, missing=tuple(missing), suggestion=suggestion,
+        suggestion_dropped=_suggestion_dropped(data, missing, suggestion),
     )
+
+
+def _suggestion_dropped(
+    data: dict, missing: list, suggestion: Suggestion | None,
+) -> str | None:
+    """Why this failing answer's proposal was dropped, or None (Issue #1958).
+
+    A failing answer that carries a proposal the engine cannot render used
+    to lose it without a trace: the stop comment posted exactly as if the
+    model had proposed nothing, so a broken proposal path looked healthy
+    (#1955). The reason names the drift a person can repair —
+    "misplaced" when "kind"/"items" sit at the top level instead of under
+    "suggestion", "unusable" when the "suggestion" value fails validation.
+    No proposal at all, and a passing verdict (nothing to render), drop
+    nothing.
+    """
+    if not missing or suggestion is not None:
+        return None
+    if "suggestion" in data:
+        return "unusable"
+    if "kind" in data or "items" in data:
+        return "misplaced"
+    return None
 
 
 def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
@@ -836,6 +872,13 @@ def judge_issue_body(issue: dict, config: RunnerConfig, source_repo: str,
         event(
             "clarify_check_skipped", level=logging.WARNING,
             issue=issue["number"], reason="no_verdict",
+        )
+    elif verdict.suggestion_dropped is not None:
+        # Issue #1958: the stop comment posts without the proposal, so the
+        # only trace of a broken proposal path is this line.
+        event(
+            "clarify_suggestion_dropped", level=logging.WARNING,
+            issue=issue["number"], reason=verdict.suggestion_dropped,
         )
     return verdict
 
