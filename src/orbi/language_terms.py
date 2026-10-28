@@ -385,6 +385,16 @@ EXTRA_MESSAGES: dict[str, tuple[str, str]] = {
         "write it on a line of its own",
         "命令行格式不正确：`{usage}` 不接受参数，请单独一行只写它",
     ),
+    # The rejection a command owes a caller that cannot supply the context
+    # only its own flow knows (Issue #1939): the ticket scan dispatches the
+    # whole registry, so the command reaches tickets its flow never opened.
+    "command.reason_context_unavailable": (
+        "the \u0060{command}\u0060 command needs context this ticket does not "
+        "carry ({context}); only the flow that opened the command's own "
+        "ticket supplies it, so nothing was changed",
+        "\u0060{command}\u0060 命令需要此工单未携带的上下文（{context}）；"
+        "只有打开该命令自身工单的流程才会提供它，因此本次未做任何改动",
+    ),
     # A receipt's origin for the terminal spelling (Issue #1930): the
     # command came from the host CLI, not from a comment.
     "command.cli_caller": (

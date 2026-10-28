@@ -408,7 +408,8 @@ comment it answers:
 
 - `<!-- orbi-<name>-command comment=<key> -->`: the command ran;
 - `<!-- orbi-<name>-command-rejected comment=<key> -->`: it was not applied
-  (permission, argument shape or the command's own rule);
+  (permission, argument shape, the command's own rule, or context only the
+  command's own flow can supply);
 - `<!-- orbi-<name>-command-failed step=<step> comment=<key> -->`: it reached
   its handler and failed at that step.
 

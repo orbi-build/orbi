@@ -74,7 +74,25 @@ def _comment(body, *, login="alice", association="MEMBER", cid=1, url=None):
     return comment
 
 
-# --- matching rules -------------------------------------------------------
+def _confirmation(candidate_titles):
+    """The context the milestone confirmation flow supplies (Issue #1939).
+
+    The milestone command runs only inside its own confirmation flow, so the
+    command declares those keys as required context; a test that drives
+    selection directly states them the way that flow does.
+    """
+    return {
+        "candidate_titles": candidate_titles,
+        "config_path": Path("/nope"),
+        "policy": None,
+        "policy_path": ".github/orbi.toml",
+        "base_branch": "main",
+        "dispatch_label": READY_LABEL,
+        "version_file": None,
+    }
+
+
+# --- matching rules ------------------------------------------------------
 
 
 def test_command_matches_any_line_not_only_the_comment_start():
@@ -141,7 +159,7 @@ def test_select_rejects_a_malformed_command_with_a_readable_reason():
     comments = [_comment("/milestone")]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
-        candidate_titles=["v0.5.41"],
+        **_confirmation(["v0.5.41"]),
     )
     assert target is None
     assert len(rejections) == 1
@@ -215,7 +233,7 @@ def test_select_requires_write_permission_and_reports_the_reason():
     )]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
-        candidate_titles=["v0.5.41"],
+        **_confirmation(["v0.5.41"]),
     )
     assert target is None
     assert len(rejections) == 1
@@ -227,7 +245,7 @@ def test_select_rejects_a_version_outside_the_candidate_set():
     comments = [_comment("/milestone v9.9.9")]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
-        candidate_titles=["v0.5.41", "v0.6.0"],
+        **_confirmation(["v0.5.41", "v0.6.0"]),
     )
     assert target is None
     assert "not an open milestone above the current one" in rejections[0][2]
@@ -237,7 +255,7 @@ def test_select_rejects_a_version_outside_the_candidate_set():
 def test_select_reports_an_empty_candidate_set_readably():
     _target, rejections = ticket_command.select_command(
         [_comment("/milestone v0.5.41")], milestone_command.MILESTONE_COMMAND,
-        repo="owner/repo", candidate_titles=[],
+        repo="owner/repo", **_confirmation([]),
     )
     assert "(none)" in rejections[0][2]
 
@@ -252,7 +270,7 @@ def test_select_skips_a_runner_marker_comment_silently():
     )]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
-        candidate_titles=["v0.5.41"],
+        **_confirmation(["v0.5.41"]),
     )
     assert target is None
     assert rejections == []
@@ -267,7 +285,7 @@ def test_select_applies_a_command_from_the_runners_own_login():
     )]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
-        candidate_titles=["v0.5.41"],
+        **_confirmation(["v0.5.41"]),
     )
     assert rejections == []
     assert target is not None and target[1] == "v0.5.41"
@@ -282,7 +300,7 @@ def test_select_ignores_a_runner_comment_quoting_the_command():
     )]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
-        candidate_titles=["v0.5.41"],
+        **_confirmation(["v0.5.41"]),
     )
     assert target is None
     assert rejections == []
@@ -292,7 +310,7 @@ def test_select_accepts_a_trusted_author():
     comments = [_comment("/milestone v0.5.41")]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
-        candidate_titles=["v0.5.41"],
+        **_confirmation(["v0.5.41"]),
     )
     assert rejections == []
     assert target is not None
@@ -306,7 +324,7 @@ def test_select_lets_the_last_command_win():
     ]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
-        candidate_titles=["v0.5.41", "v0.6.0"],
+        **_confirmation(["v0.5.41", "v0.6.0"]),
     )
     assert rejections == []
     assert target is not None and target[1] == "v0.6.0"
@@ -320,7 +338,7 @@ def test_select_lets_a_later_bad_command_shadow_an_earlier_good_one():
     ]
     target, rejections = ticket_command.select_command(
         comments, milestone_command.MILESTONE_COMMAND, repo="owner/repo",
-        candidate_titles=["v0.5.41"],
+        **_confirmation(["v0.5.41"]),
     )
     assert target is None
     assert len(rejections) == 1 and rejections[0][1] == "v9.9.9"
@@ -329,7 +347,7 @@ def test_select_lets_a_later_bad_command_shadow_an_earlier_good_one():
 def test_select_ignores_non_comment_entries():
     target, rejections = ticket_command.select_command(
         ["not-a-dict", None], milestone_command.MILESTONE_COMMAND,
-        repo="owner/repo", candidate_titles=["v0.5.41"],
+        repo="owner/repo", **_confirmation(["v0.5.41"]),
     )
     assert target is None and rejections == []
 
@@ -1214,6 +1232,14 @@ def test_process_ignores_a_ticket_without_any_command(monkeypatch):
     )
 
 
+def test_the_milestone_command_declares_the_confirmation_context_it_needs():
+    """The layer can only reject an unmet context it is told about."""
+    assert milestone_command.MILESTONE_COMMAND.required_context == (
+        "candidate_titles", "config_path", "policy", "policy_path",
+        "base_branch", "dispatch_label", "version_file",
+    )
+
+
 # --- the whole deterministic chain ---------------------------------------
 
 
@@ -1396,6 +1422,12 @@ def test_advance_pending_processes_commands_on_the_confirmation_ticket(
     assert kwargs["policy_path"] == ".github/orbi.toml"
     assert kwargs["base_branch"] == "main"
     assert kwargs["version_file"] == "package.json"
+    # The declaration and its ONLY real caller must not drift (Issue #1939):
+    # one key missing here rejects the maintainer's own `/orbi milestone`
+    # reply on this confirmation ticket instead of advancing the Milestone.
+    assert set(
+        milestone_command.MILESTONE_COMMAND.required_context
+    ) <= set(kwargs)
     # The path never auto-advances: waiting for the human is intentional.
     assert notes == []
     assert config.read_text() == 'active_milestone = "v0.5.40"\n'

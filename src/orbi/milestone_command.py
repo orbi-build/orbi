@@ -620,6 +620,13 @@ MILESTONE_COMMAND = CommandSpec(
     usage="/orbi milestone <version>",
     description="advance the active Milestone from a confirmation Issue",
     argument_label="command.argument_label.version",
+    # The confirmation flow supplies these and no other caller can; a
+    # stopped ticket is not that flow (Issue #1939). `candidate_titles` is
+    # the set the idle analysis derived, never one invented here.
+    required_context=(
+        "candidate_titles", "config_path", "policy", "policy_path",
+        "base_branch", "dispatch_label", "version_file",
+    ),
 )
 
 register_command(MILESTONE_COMMAND)
