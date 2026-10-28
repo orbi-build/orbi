@@ -5,9 +5,10 @@ proposal to its stop comment (Issue #1926). This module registers the one
 command that acts on it: a person with write permission replies
 `/orbi add-criteria` and the proposed conditions — **as the comment reads at
 that moment**, so editing it first changes what lands — are appended to the
-ticket body under an `## Acceptance` heading. The ticket is then queued with
-the dispatch label, so the next claim scan (this one, in the same tick) takes
-it like any ready ticket.
+ticket body under an acceptance heading that follows the repository's
+`message_language` (`## Acceptance` in English, `## 验收` in Chinese,
+Issue #1971). The ticket is then queued with the dispatch label, so the next
+claim scan (this one, in the same tick) takes it like any ready ticket.
 
 The command runs from the stopped ticket's own scan
 (`ticket_command.process_labeled_commands`): the ticket carries
@@ -56,10 +57,11 @@ from orbi.ticket_command import (
     run_step,
 )
 
-# The heading the conditions land under and the hidden marker that makes the
-# append idempotent: the second run of the command finds the marker in the
-# body and adds nothing (docs/public-contracts.mdx).
-ACCEPTANCE_HEADING = "## Acceptance"
+# The heading the conditions land under follows the message language
+# (Issue #1971), and the hidden marker that makes the append idempotent is
+# the same in every language: the second run of the command finds the marker
+# in the body and adds nothing (docs/public-contracts.mdx).
+ACCEPTANCE_HEADING_KEY = "criteria.acceptance_heading"
 ACCEPTANCE_MARKER = "orbi:acceptance:v1"
 # What this command reads from the ticket: the body it appends to, the labels
 # it moves and the number it writes to.
@@ -71,14 +73,21 @@ def appended_marker() -> str:
     return f"<!-- {ACCEPTANCE_MARKER} -->"
 
 
-def render_acceptance(items: tuple[clarify.SuggestionItem, ...]) -> str:
+def acceptance_heading(language_code: str) -> str:
+    """The section heading in one message language."""
+    return language.text(language_code, ACCEPTANCE_HEADING_KEY)
+
+
+def render_acceptance(
+    items: tuple[clarify.SuggestionItem, ...], language_code: str,
+) -> str:
     """The section appended to the ticket body: the conditions, verbatim.
 
     The heading and the list grammar are the ones a filed Issue uses, so the
     result reads like an acceptance section a person wrote, and the hidden
     marker after it records that Orbi appended it.
     """
-    lines = [ACCEPTANCE_HEADING]
+    lines = [acceptance_heading(language_code)]
     lines.extend(f"- {item.text}" for item in items)
     lines.extend(["", appended_marker()])
     return "\n".join(lines)
@@ -119,6 +128,7 @@ def _receipt(items: tuple[clarify.SuggestionItem, ...], *,
         "",
         language.text(
             language_code, "criteria.receipt_done", label=dispatch_label,
+            heading=acceptance_heading(language_code),
         ),
     ]
     return "\n".join(lines)
@@ -185,7 +195,7 @@ def _criteria_apply(
     if not any(receipt in str(other.get("body")) for other in comments):
         current = issue.get("body") or ""
         if appended_marker() not in current:
-            section = render_acceptance(suggestion.items)
+            section = render_acceptance(suggestion.items, language_code)
             run_step(
                 "append the criteria",
                 lambda: write_body(

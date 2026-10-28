@@ -379,8 +379,10 @@ children — so an interrupted run is picked up again by the next tick.
 `orbi add-criteria --repo <owner/name> --issue <N>` — reads the newest
 trusted stop comment of the ticket it runs on, parses the section exactly as
 this page describes, and appends every `kind=criteria` condition — as the
-comment reads at that moment — to the ticket body under an `## Acceptance`
-heading, followed by the hidden `<!-- orbi:acceptance:v1 -->` marker:
+comment reads at that moment — to the ticket body under an acceptance
+heading followed by the hidden `<!-- orbi:acceptance:v1 -->` marker. The
+heading follows the repository's `message_language` (Issue #1971):
+`## Acceptance` in English, `## 验收` in Chinese.
 
 ```text
 ## Acceptance
@@ -390,8 +392,10 @@ heading, followed by the hidden `<!-- orbi:acceptance:v1 -->` marker:
 <!-- orbi:acceptance:v1 -->
 ```
 
-The marker makes the append idempotent: a re-run after a failed step finds
-it and appends nothing, so the body gains the section exactly once. Only a
+With `message_language = "zh"` the same section uses the Chinese heading
+`## 验收`; the marker below it is identical in every language, and it is
+what makes the append idempotent: a re-run after a failed step finds it and
+appends nothing, so the body gains the section exactly once. Only a
 `kind=criteria` section is valid input: a `kind=split` proposal, a missing
 section or an invalid line is rejected with a receipt naming the reason
 (and, for an invalid line, its number) and nothing is written. The ticket

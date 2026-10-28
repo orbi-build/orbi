@@ -148,6 +148,24 @@ CLARIFY_SYSTEM_PROMPT = (
     "kind or items outside suggestion: the tool schema rejects them."
 )
 
+# The proposal's VALUES are the model's own prose, so their language cannot
+# be left to the model (Issue #1971): on beta a zh repository's criteria
+# draft came out English inside a Chinese stop comment, and asking the model
+# to detect the ticket's language changed the verdict itself. The configured
+# message language -- the engine's own setting, never a detection -- is
+# named in one catalog sentence.
+CLARIFY_OUTPUT_LANGUAGE_KEY = "clarify.prompt.output_language"
+
+
+def render_system_prompt(language_code: str) -> str:
+    """The language-independent protocol plus the proposal's output
+    language, so the draft follows `message_language`, never a guess."""
+    return "\n\n".join((
+        CLARIFY_SYSTEM_PROMPT,
+        language.text(language_code, CLARIFY_OUTPUT_LANGUAGE_KEY),
+    ))
+
+
 # A small fixed bound on the judgment call: a hung model request must
 # not hold the slot. A timeout raises out of the shared helper and the
 # caller's fail-open path lets the delivery proceed (Issue #1379).
@@ -870,7 +888,7 @@ def judge_issue_body(issue: dict, config: RunnerConfig, source_repo: str,
         try:
             run_ticket_agent(
                 issue, config, source_repo,
-                system_prompt=CLARIFY_SYSTEM_PROMPT,
+                system_prompt=render_system_prompt(language.of(config)),
                 context=build_context(issue),
                 run_id=run_id,
                 timeout=CLARIFY_TIMEOUT_SECONDS,
