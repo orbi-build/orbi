@@ -905,6 +905,12 @@ BASE_RED_PROMPT_ITEMS = (
     ("base-red-no-weaken", "do not weaken its assertion"),
     ("base-red-leave-failing", "leave it failing"),
     ("base-red-runner-handling", "base-red handling"),
+    # Step 5 forbids committing a change whose tests were seen failing; the
+    # carve-out keeps that rule from stalling the delivery on the base's own
+    # red test (the ticket must still end in a commit).
+    ("base-red-step5-carve-out",
+     "never includes a test that already fails at "
+     "`77e7f0ea54d8e9748f2debfd5a8f49739dd89b66`"),
 )
 
 
