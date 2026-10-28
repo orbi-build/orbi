@@ -65,14 +65,22 @@ _MODULES = (
 
 
 class Seam:
-    """Set/read/undo a seam name across every module that binds it."""
+    """Set/read/undo a seam name across every module that binds it.
 
-    def __init__(self) -> None:
-        # Per overlaid name, the (module, binding) pairs its FIRST write
-        # replaced, so the overlay can be undone (Issue #1948). Written
-        # without `__setattr__`: the proxy keeps no instance attribute of
-        # its own, which is exactly why pytest's undo path deletes.
-        object.__setattr__(self, "_previous", {})
+    The proxy is stateless on purpose (Issue #1953). pytest 9.2.0's
+    `MonkeyPatch.setattr` reads a patch's old value from the target's
+    instance `__dict__` when the name is not a data descriptor, and
+    `undo()` then deletes an attribute it found no entry for. A proxy
+    whose instance dict is empty therefore undid a patch with `delattr`,
+    and a remembered original restored while an outer patch was still
+    active. `__slots__ = ()` leaves the instance with no `__dict__` at
+    all, so pytest keeps the old value it resolved through `__getattr__`
+    and undoes the patch with `setattr` — the path pytest 9.0.3 always
+    took — and `__setattr__` below is the whole undo: it fans the value
+    that was current back out to every module bound to it.
+    """
+
+    __slots__ = ()
 
     def __getattr__(self, name: str):
         for module in _MODULES:
@@ -90,33 +98,9 @@ class Seam:
         # `getattr(self, name, None)` keeps an unknown name a no-op (the
         # membership check below then matches no module).
         original = getattr(self, name, None)
-        overlaid = [
-            (module, original) for module in _MODULES
-            if name in vars(module) and vars(module)[name] is original
-        ]
-        if not overlaid:
-            return
-        previous = self._previous.setdefault(name, overlaid)
-        if all(value is binding for _, binding in previous):
-            # Writing back what the overlay replaced is an undo — a test
-            # restoring `seam.x = original` by hand — so nothing is left
-            # for a later teardown to restore.
-            del self._previous[name]
-        for module, _ in overlaid:
-            setattr(module, name, value)
-
-    def __delattr__(self, name: str) -> None:
-        """Undo the overlay of `name` (pytest 9.2.0's undo path).
-
-        pytest 9.2.0 reads a patch's old value from the target's instance
-        `__dict__`; the proxy's dict is empty, so its `MonkeyPatch.undo`
-        DELETES the attribute instead of restoring it (Issue #1948). The
-        overlay lives in the modules, so the delete fans the recorded
-        original bindings back. A name with no overlay left — already
-        restored, or the seam changed nothing — is a no-op.
-        """
-        for module, previous in self._previous.pop(name, ()):
-            setattr(module, name, previous)
+        for module in _MODULES:
+            if name in vars(module) and vars(module)[name] is original:
+                setattr(module, name, value)
 
 
 seam = Seam()
