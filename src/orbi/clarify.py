@@ -782,6 +782,11 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
     scan really reads, never a hardcoded default a custom-label
     repository does not use. The comment ends with the community help
     line (Issue #1684): this stop asks the author to step in.
+
+    A verdict that renders a proposal gives ONE instruction (Issue #1962):
+    the proposal, its edit sentence and the command sentence that acts on
+    it. The generic repair block is rendered only when there is no
+    proposal, so the reader never has to choose between two instructions.
     """
     def message(key: str, **fields: object) -> str:
         return language.text(language_code, key, **fields)
@@ -793,7 +798,23 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
     # the piece the proposal answers (Issue #1926). Without one the string
     # is empty, so the comment stays byte for byte as before.
     proposal = verdict_suggestion(verdict, language_code)
-    proposal_block = f"{proposal}\n\n" if proposal else ""
+    # A proposal IS the instruction (Issue #1962): the comment then carries
+    # the proposal, its edit sentence and its command sentence, and never
+    # the generic repair block — the reader would otherwise see two
+    # competing instructions. Without a proposal the comment keeps the one
+    # repair instruction it always gave.
+    if proposal:
+        instruction = f"{proposal}\n\n"
+    else:
+        instruction = (
+            f"{message('clarify.repair', ready_label=ready_label)}\n\n"
+            "```\n"
+            f"{message('clarify.repair_outcome')}\n"
+            f"{message('clarify.repair_acceptance')}\n"
+            "```\n\n"
+            f"{message('clarify.followup', needs_detail_label=NEEDS_DETAIL_LABEL)}"
+            "\n\n"
+        )
     # The task identity and the optional fixed project status link follow
     # the state headline, before the missing-piece diagnostics (#1826).
     summary = user_summary.summary_text(
@@ -810,14 +831,8 @@ def render_comment(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
         f"{summary}"
         f"\n{message('clarify.intro')}\n\n"
         f"{pieces}\n\n"
-        f"{proposal_block}"
-        f"{message('clarify.repair', ready_label=ready_label)}\n\n"
-        "```\n"
-        f"{message('clarify.repair_outcome')}\n"
-        f"{message('clarify.repair_acceptance')}\n"
-        "```\n\n"
-        f"{message('clarify.followup', needs_detail_label=NEEDS_DETAIL_LABEL)}"
-        f"\n\nrun_id={run_id}"
+        f"{instruction}"
+        f"run_id={run_id}"
         f"\n\n{message('help.community')}\n"
     )
 

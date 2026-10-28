@@ -1323,25 +1323,61 @@ def test_the_rendered_proposal_matches_its_fixture(kind, language_code):
 def test_the_stop_comment_carries_the_proposal_and_the_edit_sentence(
     kind, language_code,
 ):
-    """Acceptance 1: the section lands in the stop comment, in the ticket
-    language, before the repair instruction."""
+    """Acceptance 1 and 2 (Issue #1962): a proposal comment gives ONE
+    instruction — the proposal, its edit sentence and the command sentence
+    that acts on it (a split creates the tickets, criteria land in the
+    body). The generic repair block and its follow-up paragraph are a
+    second, competing instruction and are not rendered beside a proposal.
+    """
     proposal, missing = PROPOSALS[kind]
     verdict = _failing((missing,), proposal)
     body = clarify.render_comment(
         ISSUE, verdict, RUN_ID, language_code=language_code,
     )
     block = clarify.verdict_suggestion(verdict, language_code)
-    repair = language.text(
-        language_code, "clarify.repair", ready_label="ai-ready",
-    )
     assert block in body
-    assert body.index(block) < body.index(repair)
     assert body.index(clarify.missing_text(missing, language_code)) < (
         body.index(block)
     )
+    edit = language.text(language_code, "clarify.suggestion.edit")
+    reply = language.text(language_code, clarify.SUGGESTION_REPLY[kind])
+    assert block.rstrip().endswith(f"{edit}\n{reply}")
+    assert edit in body and reply in body
+    # One instruction, not two: no repair sentence, no `Outcome/Acceptance`
+    # template, no follow-up paragraph.
+    for key in (
+        "clarify.repair", "clarify.repair_outcome",
+        "clarify.repair_acceptance", "clarify.followup",
+    ):
+        assert language.text(
+            language_code, key, ready_label="ai-ready",
+            needs_detail_label=delivery_labels.NEEDS_DETAIL_LABEL,
+        ) not in body
+    assert "```" not in body
+    # The run correlation line still closes the instruction.
+    assert f"\n\nrun_id={RUN_ID}\n\n" in body
+
+
+@pytest.mark.parametrize("language_code", LANGUAGES)
+def test_a_stop_without_a_proposal_keeps_the_repair_block(language_code):
+    """Acceptance 3 (Issue #1962): a stop the gate cannot propose for is
+    unchanged — the repair sentence, the `Outcome/Acceptance` template and
+    the follow-up paragraph still tell the reader how to fix the body."""
+    body = clarify.render_comment(
+        ISSUE,
+        _failing(("observable_result", "acceptance_condition")),
+        RUN_ID, language_code=language_code,
+    )
     assert language.text(
-        language_code, "clarify.suggestion.edit",
+        language_code, "clarify.repair", ready_label="ai-ready",
     ) in body
+    assert language.text(language_code, "clarify.repair_outcome") in body
+    assert language.text(language_code, "clarify.repair_acceptance") in body
+    assert language.text(
+        language_code, "clarify.followup",
+        needs_detail_label=delivery_labels.NEEDS_DETAIL_LABEL,
+    ) in body
+    assert clarify.SUGGESTION_START_PREFIX not in body
 
 
 @pytest.mark.parametrize("suggestion, missing", [
