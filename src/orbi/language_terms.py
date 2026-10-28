@@ -249,6 +249,14 @@ CLARIFY_SUGGESTION_MESSAGES: dict[str, tuple[str, str]] = {
         "Reply `/orbi add-criteria` to add these and start.",
         "回复 `/orbi add-criteria` 即可把这些加入工单并开始交付。",
     ),
+    # The language the PROPOSAL VALUES are written in (Issue #1971): the
+    # engine's own setting, named in the gate's prompt instead of left to
+    # the model. Machine-facing, so both renderings stay English -- the
+    # model reads the NAME of the target language, never a translation.
+    "clarify.prompt.output_language": (
+        "Write every proposal value in English.",
+        "Write every proposal value in Chinese.",
+    ),
 }
 
 # The `/orbi split` command (Issue #1927): its rejections, its receipt and
@@ -337,7 +345,9 @@ SPLIT_MESSAGES: dict[str, tuple[str, str]] = {
 
 # The `/orbi add-criteria` command (Issue #1929): its rejections and the ONE
 # receipt it leaves. Every entry is display text; the machine contract (the
-# markers, the heading, the labels) stays in English and outside the catalog.
+# markers, the labels) stays in English and outside the catalog. The heading
+# is display text too: it follows the message language (Issue #1971), while
+# the marker that makes the append idempotent is the same in every language.
 ADD_CRITERIA_MESSAGES: dict[str, tuple[str, str]] = {
     "criteria.reason_no_suggestion": (
         "the newest stop comment carries no acceptance-criteria proposal; "
@@ -363,10 +373,14 @@ ADD_CRITERIA_MESSAGES: dict[str, tuple[str, str]] = {
     ),
     "criteria.receipt_item": ("- {text}", "- {text}"),
     "criteria.receipt_done": (
-        "They are under `## Acceptance`; the ticket is queued with "
+        "They are under `{heading}`; the ticket is queued with "
         "`{label}`.",
-        "它们位于 `## Acceptance` 之下；工单已用 `{label}` 进入队列。",
+        "它们位于 `{heading}` 之下；工单已用 `{label}` 进入队列。",
     ),
+    # The heading the appended conditions land under (Issue #1971): a zh
+    # repository reads a Chinese section in an otherwise Chinese ticket,
+    # exactly like the rest of the stop comment's prose.
+    "criteria.acceptance_heading": ("## Acceptance", "## 验收"),
 }
 
 # The one map `language.MESSAGES` merges (the reading point stays

@@ -307,7 +307,7 @@ def test_judge_issue_body_asks_the_shared_helper_for_the_verdict_tool(
     assert (issue, got_config, repo) == (ISSUE, config, REPO)
     assert kwargs["run_id"] == RUN_ID
     assert kwargs["timeout"] == clarify.CLARIFY_TIMEOUT_SECONDS
-    assert kwargs["system_prompt"] == clarify.CLARIFY_SYSTEM_PROMPT
+    assert kwargs["system_prompt"] == clarify.render_system_prompt("en")
     assert ISSUE["body"] in kwargs["context"]
     # Exactly the shipped extension loads, and the tool writes to the path
     # the engine names in the environment.
@@ -315,6 +315,19 @@ def test_judge_issue_body_asks_the_shared_helper_for_the_verdict_tool(
     assert clarify.CLARIFY_EXTENSION.is_file()
     out = kwargs["env"][clarify.CLARIFY_VERDICT_ENV]
     assert Path(out).name == "verdict.json"
+
+
+def test_judge_issue_body_asks_for_the_repository_language(monkeypatch):
+    """A zh repository's gate session is told to write Chinese (Issue
+    #1971): the reading point is the same `message_language` the stop
+    comment itself is rendered in."""
+    calls = []
+    verdict_agent(monkeypatch, {"missing": []}, calls=calls)
+    config = config_domain.RunnerConfig(message_language="zh")
+
+    clarify.judge_issue_body(ISSUE, config, REPO, RUN_ID)
+
+    assert calls[0][3]["system_prompt"] == clarify.render_system_prompt("zh")
 
 
 # Acceptance 1 (Issue #1955): the verdict file the tool writes reaches the
@@ -1052,6 +1065,57 @@ def test_the_real_runner_posts_the_proposal_in_the_stop_comment(
     assert not worktree_for(clone, RUN_ID).exists()
 
 
+def fake_pi_answer_dumping_prompt(answer: dict, dump: Path) -> str:
+    """The gate session, recording the system prompt the engine handed it.
+
+    Issue #1634: `--system-prompt` carries a FILE path, so the fake reads
+    that file — this is the exact text Pi receives.
+    """
+    return (
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "args = sys.argv[1:]\n"
+        "path = args[args.index('--system-prompt') + 1]\n"
+        f"with open({str(dump)!r}, 'w', encoding='utf-8') as handle:\n"
+        "    handle.write(open(path, encoding='utf-8').read())\n"
+        "with open(os.environ['ORBI_CLARIFY_OUT'], 'w',\n"
+        "          encoding='utf-8') as handle:\n"
+        f"    handle.write({json.dumps(answer)!r})\n"
+        "sys.stdout.write('verdict sent')\n"
+    )
+
+
+@pytest.mark.parametrize("language_code, sentence", [
+    ("en", "Write every proposal value in English."),
+    ("zh", "Write every proposal value in Chinese."),
+])
+def test_the_real_runner_tells_the_gate_which_language_to_propose_in(
+    clone, tmp_path, monkeypatch, language_code, sentence,
+):
+    """Issue #1971 acceptance 1, at the real entry point: the session the
+    claim starts for a zh repository is told to write Chinese, so the
+    proposal inside the Chinese stop comment cannot come out English."""
+    fix_run_id(monkeypatch, RUN_ID)
+    dump = tmp_path / "gate-system-prompt.txt"
+    install_fake_pi(
+        monkeypatch, tmp_path, fake_pi_answer_dumping_prompt(CRITERIA_ANSWER, dump),
+    )
+    comments: list[str] = []
+    labels = {ISSUE_NUMBER: [delivery_labels.READY_LABEL]}
+    install_fake_gh(monkeypatch, comments, labels)
+
+    result = runner.process_issue(
+        THIN_ISSUE,
+        gate_config(clone, tmp_path, message_language=language_code),
+        REPO,
+    )
+
+    assert result == runner.IssueResult("needs-detail", None)
+    assert sentence in dump.read_text(encoding="utf-8")
+    assert len(comments) == 1
+    assert (FIXTURES / f"criteria.{language_code}.md").read_text() in comments[0]
+
+
 def test_ticket_the_gate_accepts_is_delivered(clone, tmp_path, monkeypatch):
     """The gate is a gate, not a wall: a passing verdict delivers.
 
@@ -1446,6 +1510,24 @@ def test_an_unusable_proposal_keeps_the_stop_comment_byte_for_byte(
     assert with_proposal == without
     assert "orbi:suggestion" not in with_proposal
     assert "Editing this comment" not in with_proposal
+
+
+def test_the_gate_prompt_names_the_configured_output_language():
+    """Issue #1971: the proposal's VALUES follow the repository's
+    `message_language`, named from the catalog.
+
+    The language the model has to write in comes from the configuration the
+    engine already has, never from the ticket text: telling the model to
+    detect the language changed the verdict itself (Issue #1971's
+    evidence)."""
+    en = clarify.render_system_prompt("en")
+    zh = clarify.render_system_prompt("zh")
+    assert "Write every proposal value in English." in en
+    assert "Write every proposal value in Chinese." in zh
+    assert "Write every proposal value in English." not in zh
+    # The judgment protocol and the tool schema stay untouched.
+    assert en.startswith(clarify.CLARIFY_SYSTEM_PROMPT)
+    assert zh.startswith(clarify.CLARIFY_SYSTEM_PROMPT)
 
 
 def test_the_gate_prompt_guards_the_proposal():

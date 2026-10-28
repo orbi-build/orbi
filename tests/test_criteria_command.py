@@ -16,6 +16,7 @@ import pytest
 
 import orbi.criteria_command as criteria_command
 from orbi import claim, clarify, journal, language, ticket_command
+from orbi.config import RunnerConfig
 from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
 from orbi.resume_scan import ResumeHooks
 from seam import seam
@@ -109,9 +110,11 @@ def _hooks() -> ResumeHooks:
     )
 
 
-def tick(monkeypatch, tmp_path, gh: FakeGh):
+def tick(monkeypatch, tmp_path, gh: FakeGh, *, config=None):
     """One real Runner tick over the fake GitHub."""
-    return claim.pick_next_delivery([REPO], tmp_path, 1, hooks=_hooks())
+    return claim.pick_next_delivery(
+        [REPO], tmp_path, 1, config=config, hooks=_hooks(),
+    )
 
 
 def comment_bodies(gh: FakeGh, number: int = TICKET) -> list[str]:
@@ -181,7 +184,9 @@ def label_remove(command: list[str]) -> bool:
 # --------------------------------------------------------------------------
 
 def test_the_appended_section_carries_the_heading_lines_and_marker():
-    assert criteria_command.render_acceptance(TWO_CRITERIA.items) == (
+    assert criteria_command.render_acceptance(
+        TWO_CRITERIA.items, "en",
+    ) == (
         "## Acceptance\n"
         "- Adding a tag makes the note findable by filtering\n"
         "- The tag survives a reload\n"
@@ -198,8 +203,37 @@ def test_the_appended_section_carries_the_heading_lines_and_marker():
     (None, "## Acceptance"),
 ])
 def test_the_section_is_appended_after_the_existing_body(body, expected):
-    section = criteria_command.render_acceptance(TWO_CRITERIA.items)
+    section = criteria_command.render_acceptance(TWO_CRITERIA.items, "en")
     assert criteria_command.appended_body(body, section).startswith(expected)
+
+
+# Issue #1971: the heading follows the message language the repository
+# configures; the marker that makes the append idempotent does not.
+def test_the_heading_follows_the_message_language():
+    assert criteria_command.acceptance_heading("en") == "## Acceptance"
+    assert criteria_command.acceptance_heading("zh") == "## 验收"
+    zh = criteria_command.render_acceptance(TWO_CRITERIA.items, "zh")
+    assert zh == (
+        "## 验收\n"
+        "- Adding a tag makes the note findable by filtering\n"
+        "- The tag survives a reload\n"
+        "\n"
+        "<!-- orbi:acceptance:v1 -->"
+    )
+
+
+@pytest.mark.parametrize("language_code, heading", [
+    ("en", "## Acceptance"),
+    ("zh", "## 验收"),
+])
+def test_the_appended_heading_is_the_one_the_receipt_names(
+    language_code, heading,
+):
+    receipt = criteria_command._receipt(
+        TWO_CRITERIA.items, dispatch_label=READY_LABEL,
+        language_code=language_code,
+    )
+    assert heading in receipt
 
 
 # --------------------------------------------------------------------------
@@ -227,6 +261,45 @@ def test_the_criteria_are_appended_once_and_the_ticket_is_queued(
     assert len(receipts) == 1
     assert "Adding a tag makes the note findable by filtering" in receipts[0]
     assert "The tag survives a reload" in receipts[0]
+
+
+def test_a_chinese_repository_appends_under_the_chinese_heading(
+    monkeypatch, tmp_path,
+):
+    """Issue #1971: the zh repository gets the zh heading, once.
+
+    The whole command runs through the real tick, so the language is the
+    one the claim resolves for the repository, exactly like the stop
+    comment's own language.
+    """
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    reply(gh)
+
+    tick(
+        monkeypatch, tmp_path, gh,
+        config=RunnerConfig(source_repos=(REPO,), message_language="zh"),
+    )
+
+    body = gh.issues[TICKET]["body"]
+    assert "## 验收" in body
+    assert "## Acceptance" not in body
+    assert body.count(APPENDED_MARKER) == 1
+    assert "- Adding a tag makes the note findable by filtering" in body
+    receipts = success_receipts(gh)
+    assert len(receipts) == 1
+    assert "`## 验收`" in receipts[0]
+
+    # A re-run finds the existing section by the marker and appends
+    # nothing: the same conditions are not added a second time.
+    before = body
+    criteria_command.ADD_CRITERIA_COMMAND.apply(
+        "", repo=REPO, issue_number=TICKET, command_comment={"id": 999},
+        comments=[],
+        issue={"number": TICKET, "body": before, "labels": [READY_LABEL]},
+        suggestion=TWO_CRITERIA, language_code="zh",
+    )
+    assert gh.issues[TICKET]["body"] == before
 
 
 def test_the_queued_ticket_is_claimed_by_the_same_tick(monkeypatch, tmp_path):
