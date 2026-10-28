@@ -124,6 +124,17 @@ Hard rules for test evidence (Issue #180):
   and then `tail` the file, or run the pipeline with `set -o pipefail`.
   The test command's exit code — not the pipeline's — is the result.
 
+Hard rules for scope and green checks (Issue #1980):
+
+- Change only what the ticket asks for: do not edit unrelated code, tests or
+  CI configuration to make your own checks pass. A check already failing at
+  `{{BASE_SHA}}` is not this ticket's to fix — leave it. That includes a test
+  that already fails at `{{BASE_SHA}}`: it is outside this ticket, so do not
+  delete, skip, xfail or edit it and do not weaken its assertion — a removed
+  test lets the PR merge over a base defect nobody fixed. Leave it failing,
+  finish the ticket's own work, and let the Runner's base-red handling
+  (`/orbi fix-base`) take it from there.
+
 Context recovery after compaction (Issue #180):
 
 When the session context is compacted, recover from the run artifacts —
@@ -148,7 +159,7 @@ Work through this exact loop:
 2. Write `.orbi/plan.md` with the goal, inspected context, repository decision, tasks, and verification commands.
 3. Implement the smallest complete change.
 4. Add or update tests. For UI work, use Playwright against the real running application, assert the changed flow, check browser errors, and save screenshots under the run artifacts. Verify the defined User Journey at the matching real entry point; unit tests alone are not completion evidence.
-5. Verify the change with the repository's own tests, the way its CI and its docs run them. Local runs are your own verification, not evidence the Runner reads; the PR's GitHub Actions checks are the test authority. Do not rerun the full suite on code you have already seen pass. Do not commit a change whose tests you saw fail.
+5. Verify the change with the repository's own tests, the way its CI and its docs run them. Local runs are your own verification, not evidence the Runner reads; the PR's GitHub Actions checks are the test authority. Do not rerun the full suite on code you have already seen pass. Do not commit a change whose tests you saw fail; that never includes a test that already fails at `{{BASE_SHA}}` — it belongs to the base, leave it failing (see the base-red rule above).
 6. Verify the result yourself.
 7. Commit the change on the task branch. Your job ends at the committed delivery: you do not fetch the base, push, or create the PR. The Runner then completes the deterministic closeout (Issue #186): it re-fetches the base under the shared base-sync lock, absorbs a base advance with a plain merge, pushes the task branch, and opens exactly one PR for this Issue whose body contains the run marker and `Fixes #{{ISSUE_NUMBER}}` (it may be on the first line) so GitHub natively closes the source Issue when the PR merges into the default branch. After the PR is open, the Runner runs an independent review/fix loop and merges it itself; you do not review, fix, or merge.
 

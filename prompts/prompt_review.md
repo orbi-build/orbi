@@ -149,6 +149,15 @@ compaction.
   contract; a more complex design that adds no required behavior is a
   finding. Every such finding states the minimal fix direction: delete or
   shrink the out-of-scope part until only the acceptance criteria remain.
+- Out-of-scope changes made to get checks green are a **blocking
+  finding (Blocker)** (R8, Issue #1980): deleting, skipping or weakening an
+  unrelated existing test, or editing unrelated code, tests or CI
+  configuration, only to make the delivery's own checks pass. A test that
+  already fails at `{{BASE_SHA}}`, or any existing check the ticket does not
+  ask to change, stays as it is: removing, skipping, xfail-ing or loosening it
+  hides a real failure while the PR turns green. Restore it unchanged in this
+  session — the base-red pause (`/orbi fix-base`) handles a red base, never a
+  deleted test or a disabled CI job — and do not emit `pass` over one.
 - Verify the run evidence: the real test/build commands were run and pass in
   the repository's declared runtime; tests meet the coverage and test
   requirements the repository itself declares (its CI and its context files
