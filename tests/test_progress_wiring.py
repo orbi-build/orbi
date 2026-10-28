@@ -29,7 +29,7 @@ import orbi.journal as journal
 from orbi import language, pi_process, progress, scene
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
-from tests.fakes.progress import patched_comment_bodies
+from tests.fakes.progress import freeze_report_time, patched_comment_bodies
 
 
 @pytest.fixture(autouse=True)
@@ -206,22 +206,62 @@ def test_failure_detail_without_stderr_uses_message():
     assert runner.failure_detail(RuntimeError("plain")) == "plain"
 
 
-def test_progress_body_outcome_renders_below_the_formal_prefix():
-    """Issue #1667: the run marker and the v1 block stay first; the
-    terminal outcome renders below them, never in front."""
-    state = {"language": "en",
+def _outcome_state() -> dict:
+    """The state both outcome-rendering tests render."""
+    return {"language": "en",
         "run_id": "a1b2c3d4", "issue": 18,
         "issue_title": "Publish progress", "role": "implement",
         "phase": "test", "elapsed": "1s", "last_activity": None,
         "last_action": None, "tests": None, "review_round": 0,
         "branch": "b", "pr": None, "session": None,
     }
+
+
+def _without_report_time(body: str, moment: str) -> str:
+    """The rendered body with the one clock-generated value blanked.
+
+    `reported_at` is the only field the report clock fills; it renders
+    in the v1 block and in the visible row. Every other byte of two
+    renders of the same state must agree no matter when they ran.
+    """
+    assert moment in body
+    return body.replace(moment, "<report time>")
+
+
+def test_progress_body_outcome_renders_below_the_formal_prefix(monkeypatch):
+    """Issue #1667: the run marker and the v1 block stay first; the
+    terminal outcome renders below them, never in front.
+
+    Issue #1961: the report clock is pinned for both renders — the v1
+    block carries the report time, so comparing two real-time renders
+    fails whenever the clock ticks between them.
+    """
+    state = _outcome_state()
+    freeze_report_time(monkeypatch)
     body = runner.progress_body_with_outcome(state, outcome="**done**")
     lines = body.splitlines()
     assert lines[0] == "<!-- orbi:run=a1b2c3d4 -->"
     assert lines[1].startswith("<!-- orbi:progress:v1 ")
     assert body.index("**done**") > body.index("<!-- orbi:progress:v1")
     assert runner.progress_body_with_outcome(state) == progress.progress_body(state)
+
+
+def test_progress_body_outcome_ignores_a_report_time_tick(monkeypatch):
+    """Issue #1961: the pass-through must hold when the clock ticks
+    between the two renders.
+
+    The release gate of v0.7.21 saw this assertion fail on a
+    `macos-compatibility` run (the two renders crossed a second
+    boundary), so the case is pinned instead of left to timing: render,
+    advance the report clock by exactly one second, render again.
+    """
+    state = _outcome_state()
+    first = freeze_report_time(monkeypatch, "2026-10-15T06:20:20Z")
+    with_outcome = runner.progress_body_with_outcome(state)
+    second = freeze_report_time(monkeypatch, "2026-10-15T06:20:21Z")
+    plain = progress.progress_body(state)
+    assert _without_report_time(with_outcome, first) \
+        == _without_report_time(plain, second)
 
 
 def test_publish_plan_milestone_posts_only_when_plan_exists(tmp_path):
