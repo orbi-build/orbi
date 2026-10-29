@@ -429,14 +429,29 @@ def test_load_config_health_alert_repo_default_and_override(tmp_path):
         "fork-owner/orbi-fork"
 
 
-def test_load_config_rejects_empty_health_alert_repo(tmp_path):
+def test_load_config_keeps_empty_health_alert_repo_as_off(tmp_path):
+    """Issue #1985: an explicit empty string turns health-alert FILING off
+    while the detection stays; it loads instead of failing the whole
+    config."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\nhealth_alert_repo = ""\n',
         encoding="utf-8",
     )
+    assert config_domain.load_config(config_path).health_alert_repo == ""
+
+
+def test_load_config_rejects_non_string_health_alert_repo(tmp_path):
+    """Issue #1985: the two documented values are "" (off) and
+    "owner/repo" (route it there) — anything that is not a string is a
+    misconfiguration and fails the load fast."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nhealth_alert_repo = 42\n',
+        encoding="utf-8",
+    )
     with pytest.raises(
-        ValueError, match="health_alert_repo must be a non-empty string",
+        ValueError, match="health_alert_repo must be a string",
     ):
         config_domain.load_config(config_path)
 

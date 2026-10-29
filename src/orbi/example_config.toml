@@ -213,7 +213,8 @@ max_concurrency = 1
 # by `orbi doctor` under unmanaged_units.
 # unit_name = "core"
 # Runner health alerts (crash_loop/stale_pickup) go here when set; absent
-# derives the Orbi repository from the deploy-home origin.
+# derives the Orbi repository from the deploy-home origin; "" turns alert
+# Issues OFF while the detection and its health_degraded journal event stay.
 # health_alert_repo = "OWNER/ORBI-REPO"
 # Repository policy may override the ready label for this delivery source.
 # dispatch_label = "ai-ready"

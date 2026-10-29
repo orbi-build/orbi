@@ -401,9 +401,16 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     # Runner-self health alert routing: the orbi repo that
     # receives the watchdog's crash_loop / stale_pickup Issues. Absent ->
     # None (the Runner derives the orbi repo from the deploy home's git
-    # origin); present -> must be a non-empty `owner/repo` string, used
-    # verbatim for fork/private deployments.
-    health_alert_repo = _optional_pi_string(data, "health_alert_repo")
+    # origin when it detects something); a string is kept verbatim — an
+    # explicit empty string turns alert FILING off while the detection and
+    # its `health_degraded` journal event stay (Issue #1985), any other
+    # value is the `owner/repo` the alert is filed in (fork/private
+    # deployments). A non-string fails the load fast.
+    health_alert_repo = data.get("health_alert_repo")
+    if health_alert_repo is not None and not isinstance(
+        health_alert_repo, str,
+    ):
+        raise ValueError("health_alert_repo must be a string")
     repo_dir = _config_path(data.get("repo_dir", "."), base)
     # Deployment home: the orbi source checkout — the editable
     # CLI install source, the systemd/ unit templates, labels.toml and the
