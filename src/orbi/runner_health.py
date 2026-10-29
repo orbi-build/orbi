@@ -627,9 +627,13 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
         # `health_alert_repo` override wins (fork/private deployments);
         # otherwise the orbi repo is derived from the deploy home's git
         # origin. Undeterminable -> log and skip (bypass: never guess a
-        # repo, never file the alert in the delivery repo).
+        # repo, never file the alert in the delivery repo). An explicit
+        # empty string (Issue #1985) turns alert FILING off: no
+        # alert-repository lookup at all, while the detection and its
+        # `health_degraded` event stay.
         alert_repo = config.health_alert_repo
-        if not alert_repo:
+        alerts_off = alert_repo == ""
+        if alert_repo is None:
             alert_repo = orbi_repo_from_deploy_home(
                 config.deploy_home, run_command,
             )
@@ -653,13 +657,7 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
                 "health_degraded", check="crash_loop", crashes=crashes,
                 window_minutes=CRASH_WINDOW_MINUTES, kind=kind,
             )
-            if not alert_repo:
-                event(
-                    "health_alert_repo_undetermined",
-                    level=logging.WARNING, check="crash_loop",
-                    crashes=crashes,
-                )
-            else:
+            if alert_repo:
                 detail = (
                     f"service crashed {crashes} times in the last "
                     f"{CRASH_WINDOW_MINUTES} minutes"
@@ -676,6 +674,12 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
                     dispatchable=(kind == "bug"),
                 )
                 alerts.append("crash_loop")
+            elif not alerts_off:
+                event(
+                    "health_alert_repo_undetermined",
+                    level=logging.WARNING, check="crash_loop",
+                    crashes=crashes,
+                )
         # 2. Repeated same-fingerprint run failures (#246 scene).
         for finding in repeated_failure_findings(state):
             key = (
@@ -748,12 +752,7 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
                         time.time() - state["last_pickup_ts"],
                     ),
                 )
-                if not alert_repo:
-                    event(
-                        "health_alert_repo_undetermined",
-                        level=logging.WARNING, check="stale_pickup",
-                    )
-                else:
+                if alert_repo:
                     create_health_issue(
                         alert_repo, "stale_pickup",
                         (
@@ -764,6 +763,11 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
                         run_command=run_command,
                     )
                     alerts.append("stale_pickup")
+                elif not alerts_off:
+                    event(
+                        "health_alert_repo_undetermined",
+                        level=logging.WARNING, check="stale_pickup",
+                    )
     finally:
         save_health_state(state_path, state)
     return alerts

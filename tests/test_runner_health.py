@@ -1151,6 +1151,52 @@ def test_health_alert_repo_override_wins(tmp_path):
     assert fake.commands("remote get-url origin") == []
 
 
+def test_empty_health_alert_repo_keeps_detection_without_filing(tmp_path, caplog):
+    """Issue #1985: `health_alert_repo = ""` turns alert FILING off — the
+    crash loop is still detected and journaled, but no alert-repository
+    lookup runs and no alert Issue is filed."""
+    write_state(tmp_path, {"runs": [], "last_pickup_ts": time.time(),
+                           "alerted": []})
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": THREE_CRASH_JOURNAL,
+        "journalctl --user -u orbi@2.service": "",
+    })
+    with caplog.at_level("INFO"):
+        alerts = runner_health.run_health_check(
+            make_config(tmp_path, health_alert_repo=""), run_command=fake,
+        )
+    assert alerts == []
+    assert "health_degraded check=crash_loop" in caplog.text
+    assert fake.commands("gh issue") == []
+    assert fake.commands("remote get-url origin") == []
+
+
+def test_stale_pickup_empty_health_alert_repo_detects_without_filing(
+    tmp_path, caplog,
+):
+    """Issue #1985: a stale pickup with `health_alert_repo = ""` is still
+    detected (the ready-queue probe on the delivery repo stays) and
+    journaled, but no alert-repository lookup and no alert Issue happen."""
+    write_state(tmp_path, {"runs": [],
+                           "last_pickup_ts": time.time() - 48 * 3600,
+                           "alerted": []})
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": "",
+        "journalctl --user -u orbi@2.service": "",
+        "--label ai-ready": json.dumps([{"number": 7}]),
+    })
+    with caplog.at_level("INFO"):
+        alerts = runner_health.run_health_check(
+            make_config(tmp_path, health_alert_repo=""), run_command=fake,
+        )
+    assert alerts == []
+    assert "health_degraded check=stale_pickup" in caplog.text
+    # The detection probe stays: the ai-ready queue on the delivery repo.
+    assert len(fake.commands("--label ai-ready")) == 1
+    assert fake.commands("gh issue create") == []
+    assert fake.commands("remote get-url origin") == []
+
+
 def test_undeterminable_alert_repo_skips_the_issue(tmp_path, caplog):
     """Issue #345: when the orbi repo cannot be determined the alert is
     skipped (bypass) — never filed in the delivery repo, never guessed."""

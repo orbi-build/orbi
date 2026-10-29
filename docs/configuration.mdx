@@ -85,7 +85,7 @@ See the [`delivery_steered`, `steering_limit_reached`, `steering_poll_failed`, a
 
 | Key | Type | Default | Allowed values | Meaning |
 |---|---|---|---|---|
-| `health_alert_repo` | string or null | unset | any non-empty `owner/repo` string | Repository receiving Runner crash-loop and stale-pickup health Issues; unset derives it from the deploy-home origin. |
+| `health_alert_repo` | string or null | unset | `owner/repo` string or `""` | Repository receiving Runner crash-loop and stale-pickup health Issues; unset derives it from the deploy-home origin, `""` turns alert filing off while the detection and its `health_degraded` journal event stay. |
 
 ## Notifications
 

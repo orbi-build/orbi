@@ -85,7 +85,7 @@ Steering 让 Runner 轮询 Issue 中的受信任修正，并带着修正重启�
 
 | Key | Type | Default | Allowed values | Meaning |
 |---|---|---|---|---|
-| `health_alert_repo` | 字符串或空 | 未设置 | 任意非空 `owner/repo` | 接收 Runner crash-loop/stale-pickup 健康 Issue；未设置时从 deploy-home origin 推导。 |
+| `health_alert_repo` | 字符串或空 | 未设置 | `owner/repo` 字符串或 `""` | 接收 Runner crash-loop/stale-pickup 健康 Issue；未设置时从 deploy-home origin 推导，`""` 关闭告警 Issue，检测与 `health_degraded` journal 行保留。 |
 
 ## 通知
 
