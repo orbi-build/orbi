@@ -10,13 +10,20 @@ Behavior (external shapes verified against the live REST API — the run
 object, the jobs object and `commits/{sha}/pulls` — and `gh api --help`,
 gh 2.97):
 
-- A monitored run concluded `failure`, `cancelled` or `timed_out` on a target
-  event: one `bug` + `p0` + `ai-ready` Issue per FAILED JOB (the Orbi ready
-  queue picks it up and delivers the fix through its normal single-Issue /
-  single-PR / review contract), with the full evidence — workflow, job,
-  event, branch/PR, commit SHA, run id, run URL, failed steps, trigger
-  time. A re-occurrence of the same fingerprint appends a comment to the
-  existing Issue instead of creating a second one.
+- A monitored run concluded `failure`, `cancelled` or `timed_out` on a
+  target event — a `push` to `main` for the CI workflow, `schedule` /
+  `workflow_dispatch` for the Groq catalog check: one `bug` + `p0` +
+  `ai-ready` Issue per FAILED JOB (the Orbi ready queue picks it up and
+  delivers the fix through its normal single-Issue / single-PR / review
+  contract), with the full evidence — workflow, job, event, branch, commit
+  SHA, run id, run URL, failed steps, trigger time — plus the two fixed
+  `Outcome:` / `Acceptance:` lines the clarification gate reads (Issue
+  #1988), so a main failure ticket is deliverable instead of stopping at
+  `ai-needs-detail`. A re-occurrence of the same fingerprint appends a
+  comment to the existing Issue instead of creating a second one.
+- A `pull_request` run is NEVER triaged (Issue #1988): a delivery PR's
+  failing CI is its own review/fix loop's business, and a ticket filed for a
+  PR branch outlives the PR (the orphaned #1951 for #1944).
 - A monitored run concluded `success`: every SUCCEEDED job's fingerprint is
   matched against the open triage Issues; a match gets the recovery run
   evidence as a comment. It is closed (`state_reason: completed`) only with
@@ -26,16 +33,9 @@ gh 2.97):
   failing test's file (the `FAILED <path>.py` lines of that failure job's
   log). A green re-run of the SAME commit — or of any unrelated commit — is
   not a fix: the comment is appended and the Issue stays open.
-- Anything else (another workflow, another event, a push off `main`, any
-  other conclusion) is a logged no-op with exit 0.
-- Delivery state (Issues #1771/#1786): the routed pull-request path
-  applies exactly the engine's label transition
-  (`orbi.delivery_labels.label_patch` with the fix-needed event) — the
-  script keeps no lifecycle label set of its own. The in-flight delivery
-  flips to `ai-fix-needed`; a terminal delivery (`ai-merged` or
-  `ai-blocked`) keeps its labels. The failure evidence is recorded on the
-  Issue and the PR in every case, so removing a terminal label later never
-  resumes an unrequested automatic fix.
+- Anything else (another workflow, another event — including any
+  `pull_request` run — a push off `main`, any other conclusion) is a
+  logged no-op with exit 0.
 
 Stable failure fingerprints include the workflow name, for example:
 `sha256("CI|<event>|<head_branch>|<job name>")`,
@@ -70,21 +70,6 @@ import os
 import re
 import subprocess
 import sys
-from pathlib import Path
-
-# Issues #1771/#1786: the delivery label transition is the engine's single
-# decision (`orbi.delivery_labels`), so the triage imports the package. The
-# workflow (`.github/workflows/ci-failure-issue.yml`) runs this file straight
-# from the checkout with no install step; the src layout is put on the path
-# here (the same layout the test suite gets from pytest's `pythonpath`).
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-
-from orbi.delivery_labels import (  # noqa: E402 - the src bootstrap above
-    EVENT_FIX_NEEDED,
-    has_delivery_state,
-    label_patch,
-)
-from orbi.gitops import is_delivery_branch  # noqa: E402 - the src bootstrap above
 
 CI_WORKFLOW_NAME = "CI"
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
@@ -95,7 +80,11 @@ TRIAGE_WORKFLOW_PATH = ".github/workflows/ci-failure-issue.yml"
 # (100 pages x 100 items). A module constant so the truncation
 # behavior is testable without a 10,000-item fixture.
 PAGING_PAGE_CEILING = 100
-TARGET_EVENTS = ("pull_request", "push")
+# Issue #1988: a CI failure only files a ticket where only Orbi can fix it
+# — a push to main. A pull_request run belongs to that PR's own review/fix
+# loop, and a ticket filed for a PR branch outlives the PR (#1951 for #1944
+# sat open after #1944 was closed, stopped by the clarification gate).
+TARGET_EVENTS = ("push",)
 GROQ_TARGET_EVENTS = ("schedule", "workflow_dispatch")
 PUSH_TARGET_BRANCH = "main"
 FAILURE_CONCLUSIONS = ("failure", "cancelled", "timed_out")
@@ -110,15 +99,6 @@ FINGERPRINT_RE = re.compile(
 CLOSING_REFERENCE_RE = re.compile(
     r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+"
     r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(\d+)"
-)
-# Issue #608: a CI failure on an EXTERNAL contributor PR (head branch not
-# the Runner's stable delivery naming `orbi/<owner>-<repo>-issue-<n>`) is
-# filed with the PR link in the body plus the hidden marker below — the
-# delivery loop parses the marker at claim time and reviews the external
-# PR FIRST instead of silently redoing the work internally.
-EXTERNAL_PR_MARKER = "orbi:external-pr:"
-EXTERNAL_PR_RE = re.compile(
-    r"<!--\s*" + re.escape(EXTERNAL_PR_MARKER) + r"(\d+)\s*-->"
 )
 # Issue #715/#718: the recovery guard's failure-evidence markers. The `- commit:`
 # line is written by `build_failure_body` (the Issue body) and by
@@ -332,40 +312,6 @@ def failed_steps_display(job: dict) -> str:
     return "(none reported by the jobs API)"
 
 
-def pr_html_url(owner: str, repo: str, number: int) -> str:
-    """The canonical PR HTML URL (GitHub's stable public format)."""
-    return f"https://github.com/{owner}/{repo}/pull/{number}"
-
-
-def is_external_head(owner: str, repo: str, head_branch: str) -> bool:
-    """True when the head branch is not this repository's delivery branch.
-
-    The one ownership decision lives beside `gitops.task_branch`
-    (Issue #1776, `orbi.gitops.is_delivery_branch`): the Runner's own PRs
-    always carry `orbi/<owner>-<repo>-issue-<n>`, while a contributor's
-    freely chosen branch name — even one starting with `orbi/` — is an
-    external contribution the delivery loop must review, not redo. This
-    script keeps no pattern of its own, so it can never disagree with the
-    merge notification.
-    """
-    return not is_delivery_branch(f"{owner}/{repo}", head_branch)
-
-
-def target_display(
-    run: dict, pr_number: int | None, pr_url: str | None = None,
-) -> str:
-    """Human-readable branch/PR target for the Issue body."""
-    if run.get("event") == "pull_request":
-        if pr_number is not None:
-            link = (
-                f"[PR #{pr_number}]({pr_url})" if pr_url
-                else f"PR #{pr_number}"
-            )
-            return f"{link} (head branch `{run.get('head_branch')}`)"
-        return f"head branch `{run.get('head_branch')}` (no PR resolved)"
-    return f"branch `{run.get('head_branch')}`"
-
-
 def workflow_metadata(run: dict) -> tuple[str, str]:
     """Return the display name and path for a triaged workflow."""
     if run.get("path") == GROQ_WORKFLOW_PATH:
@@ -373,25 +319,20 @@ def workflow_metadata(run: dict) -> tuple[str, str]:
     return CI_WORKFLOW_NAME, CI_WORKFLOW_PATH
 
 
-def issue_title(run: dict, job: dict, pr_number: int | None) -> str:
+def issue_title(run: dict, job: dict) -> str:
     workflow_name, _ = workflow_metadata(run)
-    if run.get("event") == "pull_request" and pr_number is not None:
-        target = f"PR #{pr_number}"
-    else:
-        target = f"branch {run.get('head_branch')}"
+    target = f"branch {run.get('head_branch')}"
     return f"{workflow_name} failure: {job['name']} on {target} ({run.get('event')})"
 
 
-def build_failure_body(
-    run: dict, job: dict, pr_number: int | None, fingerprint_value: str,
-    pr_url: str | None = None, external_pr: int | None = None,
-) -> str:
-    """The Issue body: full evidence, the dedup rule and the hidden marker.
+def build_failure_body(run: dict, job: dict, fingerprint_value: str) -> str:
+    """The Issue body: the outcome/acceptance the gate reads, full evidence,
+    the dedup rule and the hidden marker.
 
-    `external_pr` carries the PR number when the failure run's PR head is
-    an external contribution: the body then links the PR and embeds the
-    hidden `orbi:external-pr:` marker the delivery loop parses at claim
-    time (Issue #608).
+    Issue #1988: the two fixed lines state the observable result and the
+    acceptance condition in the shape the clarification gate (`orbi.clarify`)
+    reads, so a main failure ticket is deliverable without the model having
+    to infer anything.
     """
     workflow_name, workflow_path = workflow_metadata(run)
     lines = [
@@ -400,18 +341,13 @@ def build_failure_body(
         "Auto-created by the `CI Failure Issue` workflow "
         "(`.github/workflows/ci-failure-issue.yml`) from the failed validation run.",
         "",
+        f"Outcome: the failing job (`{job['name']}`) passes on main again.",
+        "Acceptance: the same job is green on main after the fix; the fix"
+        " touches the failing test or the code it tests.",
+        "",
         f"- workflow: `{workflow_name}` (`{workflow_path}`)",
         f"- event: `{run.get('event')}`",
-        f"- branch/PR: {target_display(run, pr_number, pr_url)}",
-    ]
-    if external_pr is not None:
-        lines.append(
-            f"- external PR: [{external_pr}]({pr_url}) — head branch "
-            f"`{run.get('head_branch')}` is outside the stable delivery "
-            "naming, so this is an external contribution: the delivery "
-            "loop reviews this PR first instead of redoing the work"
-        )
-    lines += [
+        f"- branch: `{run.get('head_branch')}`",
         f"- commit: `{run.get('head_sha')}`",
         f"- run id: `{run.get('id')}` (attempt {run.get('run_attempt')})",
         f"- run URL: {run.get('html_url')}",
@@ -434,9 +370,6 @@ def build_failure_body(
         "evidence while this Issue stays open.",
         "",
     ]
-    if external_pr is not None:
-        lines.append(f"<!-- {EXTERNAL_PR_MARKER}{external_pr} -->")
-        lines.append("")
     lines.append(f"<!-- {FINGERPRINT_MARKER}{fingerprint_value} -->")
     lines.append("")
     return "\n".join(lines)
@@ -530,64 +463,6 @@ def closing_issue_numbers(body: str, owner: str, repo: str) -> list[int]:
         if number not in numbers:
             numbers.append(number)
     return numbers
-
-
-def fetch_issue(owner: str, repo: str, number: int) -> dict | None:
-    """Fetch one source Issue, including its current state and labels."""
-    data = gh_api(f"repos/{owner}/{repo}/issues/{number}")
-    return data if isinstance(data, dict) else None
-
-
-def issue_label_names(issue: dict) -> frozenset[str]:
-    """The Issue's label names — the fact the ownership check reads."""
-    return frozenset(
-        label.get("name") for label in issue.get("labels", [])
-        if isinstance(label, dict) and isinstance(label.get("name"), str)
-    )
-
-
-def source_issue_for_pr(
-    owner: str, repo: str, pr_number: int | None,
-) -> tuple[int, int, frozenset[str]] | None:
-    """The open delivery Issue a PR closes, with its labels.
-
-    An open Issue carrying a delivery-state label (the engine's
-    `has_delivery_state`) is the delivery this PR belongs to; an Issue with
-    none is unrelated and the triage files its own ticket. A terminal
-    delivery is still this PR's source — its evidence is recorded — it is
-    only never relabelled (Issue #1786).
-    """
-    if pr_number is None:
-        return None
-    pull = fetch_pull_request(owner, repo, pr_number)
-    body = pull.get("body") if pull else None
-    if not isinstance(body, str):
-        return None
-    for number in closing_issue_numbers(body, owner, repo):
-        issue = fetch_issue(owner, repo, number)
-        if not issue or issue.get("state") != "open":
-            continue
-        labels = issue_label_names(issue)
-        if not has_delivery_state(labels):
-            continue
-        return number, pr_number, labels
-    return None
-
-
-def remove_issue_label(owner: str, repo: str, number: int, label: str) -> None:
-    """Remove one stale delivery-state label from the source Issue."""
-    gh_api(
-        f"repos/{owner}/{repo}/issues/{number}/labels/{label}",
-        method="DELETE",
-    )
-
-
-def add_issue_label(owner: str, repo: str, number: int, label: str) -> None:
-    """Add one label without replacing the source Issue's other labels."""
-    gh_api(
-        f"repos/{owner}/{repo}/issues/{number}/labels",
-        method="POST", payload={"labels": [label]},
-    )
 
 
 def fetch_jobs(owner: str, repo: str, run_id: int) -> list:
@@ -717,64 +592,10 @@ def close_issue(owner: str, repo: str, number: int) -> None:
 
 
 def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
-    """Route active PR deliveries, or create/update one bug Issue per job."""
-    pr_number = None
-    pr_url = None
-    external_pr = None
-    source = None
-    if run.get("event") == "pull_request":
-        pr_number = resolve_pr_number(owner, repo, run.get("head_sha", ""))
-        if pr_number is not None:
-            pr_url = pr_html_url(owner, repo, pr_number)
-            if is_external_head(owner, repo, run.get("head_branch", "")):
-                external_pr = pr_number
-                log(
-                    f"external_pr pr={pr_number} "
-                    f"head_branch={run.get('head_branch')!r}"
-                )
-        source = source_issue_for_pr(owner, repo, pr_number)
+    """Create/update one bug Issue per failed job of a main failure run."""
     failed = jobs_with_conclusion(jobs, FAILURE_CONCLUSIONS)
     if not failed:
         log(f"ignored reason=no_failed_jobs run_id={run.get('id')}")
-        return
-    if source is not None:
-        source_number, source_pr, source_labels = source
-        for item in failed:
-            evidence = build_reoccurrence_comment(run, item)
-            comment_issue(owner, repo, source_number, evidence)
-            comment_issue(owner, repo, source_pr, evidence)
-        if external_pr is not None:
-            # An external PR's `Fixes #N` cannot be verified against the
-            # delivery it names (any contributor can reference any open
-            # in-flight Issue): rewriting the delivery state from an
-            # untrusted source would requeue a delivery that may be
-            # alive — the #608 external-integration rule applied to the
-            # routed path (the marker already guards the create path).
-            # The evidence comments stand; a human or the Runner owns
-            # the state.
-            log(
-                f"external_head_no_label_flip source_issue={source_number} "
-                f"pr={source_pr} run_id={run.get('id')}"
-            )
-            return
-        # Issue #1786: the label transition is the one decision. The engine
-        # keeps an in-flight delivery canonical (ai-fix-needed replaces the
-        # older opened/in-flight state) and changes nothing on a terminal
-        # Issue: ai-merged is a finished success and ai-blocked is a human's
-        # decision point, so a late CI run never leaves ai-fix-needed beside
-        # either — removing the terminal label later must not resume an
-        # automatic fix nobody asked for. The failure evidence above still
-        # stands for every case.
-        to_add, to_remove = label_patch(EVENT_FIX_NEEDED, source_labels)
-        for stale_label in to_remove:
-            remove_issue_label(owner, repo, source_number, stale_label)
-        for label in to_add:
-            add_issue_label(owner, repo, source_number, label)
-        log(
-            f"routed source_issue={source_number} pr={source_pr} "
-            f"add={','.join(to_add) or '-'} "
-            f"remove={','.join(to_remove) or '-'} run_id={run.get('id')}"
-        )
         return
     index = index_open_issues(owner, repo)
     milestone = resolve_active_milestone(owner, repo)
@@ -803,10 +624,8 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
                 continue
             create_issue(
                 owner, repo,
-                issue_title(run, item, pr_number),
-                build_failure_body(
-                    run, item, pr_number, value, pr_url, external_pr,
-                ),
+                issue_title(run, item),
+                build_failure_body(run, item, value),
                 milestone,
             )
             log(f"created issue job={item['name']} run_id={run.get('id')}")
@@ -843,8 +662,8 @@ def recovery_closing_reference(
     run: dict, owner: str, repo: str, issue_number: int,
 ) -> bool:
     """True when the recovery run's head commit resolves to a PR whose body
-    references the Issue with a GitHub closing keyword (`Fixes #N`) — the
-    same contract `source_issue_for_pr` applies (Issue #715).
+    references the Issue with a GitHub closing keyword (`Fixes #N`,
+    Issue #715).
 
     `run["head_sha"]` must be a usable string; the caller guards that.
     """

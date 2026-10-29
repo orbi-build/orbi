@@ -3,7 +3,7 @@
 The workflow (`.github/workflows/ci-failure-issue.yml`) is the runtime entry
 of the CI failure triage: it reacts to the COMPLETED runs of the `CI`
 workflow (`on: workflow_run`), holds the minimal explicit permissions
-(`actions: read`, `contents: read`, `issues: write`, `pull-requests: write`)
+(`actions: read`, `contents: read`, `issues: write`, `pull-requests: read`)
 and runs the triage
 script with the workflow token. These tests fail when the workflow is
 missing, stops watching the CI workflow, gains extra permissions, or can
@@ -111,7 +111,9 @@ def test_minimal_explicit_permissions():
         "actions": "read",        # read the completed CI run's jobs
         "contents": "read",       # check out the triage script
         "issues": "write",        # create/update/close the bug Issue
-        "pull-requests": "write",  # resolve PRs and write PR comments
+        # Issue #1988: the triage writes nothing to a PR — only the recovery
+        # guard reads the recovery run's PR (commits/{sha}/pulls).
+        "pull-requests": "read",
     }
 
 
@@ -127,9 +129,8 @@ def test_single_job_runs_the_triage_script():
 
 
 def test_no_step_installs_the_package():
-    """Issue #1776 acceptance 3: the triage imports the engine's one
-    delivery-branch check straight from the checkout's `src` (the script's
-    own sys.path bootstrap), so the job installs nothing."""
+    """The job runs the triage script straight from the checkout, so it
+    installs nothing (the script imports no engine module, Issue #1988)."""
     commands = [
         str(step.get("run", "")) for step in steps_of(load_workflow())
         if step.get("run")
