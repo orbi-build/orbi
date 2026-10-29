@@ -8,9 +8,12 @@ file (the `workflow_run` object shape verified against the live API: run
 conclusion, html_url, run_started_at, run_attempt`) and a mocked `gh api`
 layer, asserting the real GitHub REST contract:
 
-- failure/cancelled/timed_out on a `pull_request` or `push` to `main` →
-  exactly one `bug` + `p0` + `ai-ready` Issue per failed job, full evidence body,
-  hidden fingerprint marker;
+- failure/cancelled/timed_out on a `push` to `main` → exactly one
+  `bug` + `p0` + `ai-ready` Issue per failed job, full evidence body, hidden
+  fingerprint marker, plus the fixed `Outcome:`/`Acceptance:` lines the
+  clarification gate reads (Issue #1988);
+- a failed `pull_request` run (a delivery PR's CI, which its own review/fix
+  loop owns) → a clean no-op: no create, update or label call;
 - the same fingerprint again → a re-occurrence comment on the existing Issue,
   never a second Issue (no storm);
 - `success` → the matching Issue gets the recovery run evidence and is closed
@@ -29,8 +32,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
-from orbi.delivery_labels import EVENT_FIX_NEEDED, label_patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "tools" / "ci_failure_triage.py"
@@ -110,14 +111,6 @@ def ep_pulls(sha=HEAD_SHA):
 
 def ep_pr(number=328):
     return f"repos/{OWNER_REPO}/pulls/{number}"
-
-
-def ep_source(number):
-    return f"repos/{OWNER_REPO}/issues/{number}"
-
-
-def ep_labels(number):
-    return f"repos/{OWNER_REPO}/issues/{number}/labels"
 
 
 def ep_issues_list():
@@ -205,7 +198,7 @@ def recorded_issue(number: int, fingerprint_value: str, failure_run: dict) -> di
     """An Issue whose body is EXACTLY what `build_failure_body` writes for
     the failure run — including the `- commit:` line the recovery guard
     parses (Issue #715)."""
-    body = mod.build_failure_body(failure_run, job(), None, fingerprint_value)
+    body = mod.build_failure_body(failure_run, job(), fingerprint_value)
     return {"number": number, "state": "open", "body": body, "title": "CI failure"}
 
 
@@ -415,6 +408,32 @@ def test_failure_run_without_failed_jobs_is_a_logged_noop(gh, monkeypatch, tmp_p
     assert gh.calls_to(ep_comment(1), "POST") == []
 
 
+def test_failed_pull_request_run_creates_and_updates_no_ticket(
+    gh, monkeypatch, tmp_path, capsys
+):
+    """Issue #1988 acceptance 1: a delivery PR's failing CI is the PR's own
+    review/fix loop's business. Triaging it produced #1951 — a ticket for the
+    PR branch of #1944 that was orphaned when that PR was closed."""
+    write_event(
+        monkeypatch, tmp_path,
+        run_event(
+            event="pull_request",
+            head_branch="orbi/orbi-run-test-repo-issue-1944",
+        ),
+    )
+    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
+    mod.main()
+    assert gh.calls_to(ep_create(), "POST") == []
+    assert [
+        call for call in gh.calls
+        if call["method"] in ("POST", "PATCH", "DELETE")
+    ] == []
+    assert (
+        "ci_triage ignored reason=not_target_event event='pull_request'"
+        in capsys.readouterr().err
+    )
+
+
 def test_recovery_without_succeeded_jobs_is_a_logged_noop(gh, monkeypatch, tmp_path):
     write_event(monkeypatch, tmp_path, run_event(conclusion="success"))
     gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job(conclusion="skipped")]}
@@ -448,7 +467,7 @@ def test_failure_creates_one_issue_with_full_evidence(gh, monkeypatch, tmp_path,
     assert "## CI failure: tests" in body
     assert f"- workflow: `CI` (`.github/workflows/ci.yml`)" in body
     assert "- event: `push`" in body
-    assert "- branch/PR: branch `main`" in body
+    assert "- branch: `main`" in body
     assert f"- commit: `{HEAD_SHA}`" in body
     assert f"- run id: `42` (attempt 1)" in body
     assert f"- run URL: {RUN_URL}" in body
@@ -461,6 +480,22 @@ def test_failure_creates_one_issue_with_full_evidence(gh, monkeypatch, tmp_path,
     # A push run must not spend the PR-resolution call.
     assert gh.calls_to(ep_pulls(), "GET") == []
     assert "ci_triage created" in capsys.readouterr().err
+
+
+def test_ticket_body_states_the_outcome_and_acceptance(gh, monkeypatch, tmp_path):
+    """Issue #1988 acceptance 2: the generated body states the observable
+    outcome and the acceptance condition as fixed lines, so the clarification
+    gate reads them every time instead of inferring them."""
+    write_event(monkeypatch, tmp_path, run_event())
+    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job(name="docker image")]}
+    gh.routes[ep_issues_list()] = []
+    mod.main()
+    body = gh.calls_to(ep_create(), "POST")[0]["payload"]["body"]
+    assert "Outcome: the failing job (`docker image`) passes on main again." in body
+    assert (
+        "Acceptance: the same job is green on main after the fix; the fix"
+        " touches the failing test or the code it tests."
+    ) in body
 
 
 def test_active_milestone_title_resolves_to_open_milestone_number(gh, monkeypatch):
@@ -519,156 +554,6 @@ def test_missing_active_milestone_logs_fallback_and_creates_without_milestone(
     payload = gh.calls_to(ep_create(), "POST")[0]["payload"]
     assert "milestone" not in payload
     assert "milestone_fallback" in capsys.readouterr().err
-
-
-def test_failure_resolves_the_pr_number_for_pull_request_runs(
-    gh, monkeypatch, tmp_path
-):
-    write_event(
-        monkeypatch, tmp_path,
-        run_event(event="pull_request", head_branch="feature"),
-    )
-    gh.routes[ep_pulls()] = [{"number": 328, "state": "open", "title": "Fix"}]
-    gh.routes[ep_pr()] = {"number": 328, "body": "Fixes #494"}
-    gh.routes[ep_source(494)] = {"number": 494, "state": "open", "labels": []}
-    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
-    gh.routes[ep_issues_list()] = []
-    mod.main()
-    assert len(gh.calls_to(ep_pulls(), "GET")) == 1
-    create = gh.calls_to(ep_create(), "POST")[0]["payload"]
-    assert create["title"] == "CI failure: tests on PR #328 (pull_request)"
-    assert create["body"].startswith("## CI failure: tests")
-    assert (
-        "- branch/PR: "
-        "[PR #328](https://github.com/orbi-run/test-repo/pull/328)"
-        " (head branch `feature`)"
-    ) in create["body"]
-
-
-def test_external_pr_failure_links_the_pr_and_embeds_the_marker(
-    gh, monkeypatch, tmp_path, capsys
-):
-    """Issue #608 acceptance (b): a CI failure on an external contributor
-    PR (head branch outside the stable delivery naming) is filed with the
-    PR link AND the hidden marker the delivery loop parses at claim time
-    — the external PR must be reviewed first, never silently redone."""
-    write_event(
-        monkeypatch, tmp_path,
-        run_event(event="pull_request", head_branch="zzuu080603-patch-1"),
-    )
-    gh.routes[ep_pulls()] = [{"number": 592, "state": "open", "title": "Fix"}]
-    gh.routes[ep_pr(592)] = {"number": 592, "body": "fix the bug"}
-    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
-    gh.routes[ep_issues_list()] = []
-    mod.main()
-    create = gh.calls_to(ep_create(), "POST")[0]["payload"]
-    assert (
-        "- external PR: [592](https://github.com/orbi-run/test-repo/pull/592)"
-        " — head branch `zzuu080603-patch-1` is outside the stable delivery "
-        "naming, so this is an external contribution: the delivery loop "
-        "reviews this PR first instead of redoing the work"
-    ) in create["body"]
-    assert "<!-- orbi:external-pr:592 -->" in create["body"]
-    assert "external_pr pr=592" in capsys.readouterr().err
-
-
-def test_stable_named_head_creates_no_external_marker(
-    gh, monkeypatch, tmp_path
-):
-    """The Runner's own PR head (`orbi/<owner>-<repo>-issue-<n>`) is the
-    stable delivery identity — its triage Issue carries no external
-    marker (the takeover scan finds the PR by branch name)."""
-    write_event(
-        monkeypatch, tmp_path,
-        run_event(
-            event="pull_request", head_branch="orbi/orbi-run-test-repo-issue-7",
-        ),
-    )
-    gh.routes[ep_pulls()] = [{"number": 330, "state": "open", "title": "Fix"}]
-    gh.routes[ep_pr(330)] = {"number": 330, "body": "Fixes #7"}
-    gh.routes[ep_source(7)] = {"number": 7, "state": "open", "labels": []}
-    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
-    gh.routes[ep_issues_list()] = []
-    mod.main()
-    create = gh.calls_to(ep_create(), "POST")[0]["payload"]
-    assert "external PR:" not in create["body"]
-    assert "orbi:external-pr" not in create["body"]
-
-
-def test_is_external_head_matches_the_stable_delivery_naming_only():
-    assert mod.is_external_head("orbi-run", "test-repo", "fix/bug") is True
-    assert mod.is_external_head("orbi-run", "test-repo", "main") is True
-    # Issue #1776: an `orbi/` prefix is NOT ownership — a self-hosted user
-    # may name their own branch `orbi/manual`.
-    assert mod.is_external_head("orbi-run", "test-repo", "orbi/manual") is True
-    assert (
-        mod.is_external_head(
-            "orbi-run", "test-repo", "orbi/orbi-run-test-repo-issue-42",
-        )
-        is False
-    )
-    assert mod.is_external_head("orbi-run", "test-repo", "") is True
-
-
-def test_orbi_prefixed_manual_branch_files_an_external_contribution(
-    gh, monkeypatch, tmp_path, capsys
-):
-    """Issue #1776 acceptance 1: `orbi/manual` is external for the triage,
-    exactly as it is for the merge notification — one decision, no copy."""
-    write_event(
-        monkeypatch, tmp_path,
-        run_event(event="pull_request", head_branch="orbi/manual"),
-    )
-    gh.routes[ep_pulls()] = [{"number": 592, "state": "open", "title": "Fix"}]
-    gh.routes[ep_pr(592)] = {"number": 592, "body": "fix the bug"}
-    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
-    gh.routes[ep_issues_list()] = []
-    mod.main()
-    body = gh.calls_to(ep_create(), "POST")[0]["payload"]["body"]
-    assert "<!-- orbi:external-pr:592 -->" in body
-    assert "external_pr pr=592" in capsys.readouterr().err
-
-
-def test_triage_and_notify_agree_on_which_heads_are_orbi_deliveries():
-    """Issue #1776: the CI-failure triage and the merge notification give
-    the SAME answer — they call the one check beside `gitops.task_branch`."""
-    from orbi import notify
-
-    owner, repo = "orbi-run", "test-repo"
-    cases = {
-        "orbi/orbi-run-test-repo-issue-12": True,
-        "orbi/manual": False,
-        "orbi/other-owner-other-repo-issue-3": False,
-        "fix/bug": False,
-    }
-    for head, is_orbi_delivery in cases.items():
-        assert mod.is_external_head(owner, repo, head) is (not is_orbi_delivery)
-        assert notify._is_orbi_pr(
-            {"headRefName": head}, f"{owner}/{repo}",
-        ) is is_orbi_delivery
-
-
-def test_external_pr_marker_regex_extracts_the_number():
-    assert mod.EXTERNAL_PR_RE.findall(
-        "text\n<!-- orbi:external-pr:592 -->\n"
-        "<!-- ci-failure-fingerprint:%s -->" % ("a" * 64)
-    ) == ["592"]
-
-
-def test_failure_without_a_resolved_pr_falls_back_to_the_head_branch(
-    gh, monkeypatch, tmp_path
-):
-    write_event(
-        monkeypatch, tmp_path,
-        run_event(event="pull_request", head_branch="feature"),
-    )
-    gh.routes[ep_pulls()] = []
-    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
-    gh.routes[ep_issues_list()] = []
-    mod.main()
-    create = gh.calls_to(ep_create(), "POST")[0]["payload"]
-    assert create["title"] == "CI failure: tests on branch feature (pull_request)"
-    assert "- branch/PR: head branch `feature` (no PR resolved)" in create["body"]
 
 
 def test_two_different_job_failures_create_two_independent_issues(
@@ -836,163 +721,10 @@ def test_malformed_job_entries_are_never_actionable(
     assert "ci_triage ignored reason=no_failed_jobs" in capsys.readouterr().err
 
 
-# ---------------------------------------------------------------------------
-# Pull-request delivery ownership
-# ---------------------------------------------------------------------------
-
-
-def setup_active_pr_failure(
-    gh, monkeypatch, tmp_path, *, body="Fixes #494", labels=None,
-    head_branch="orbi/orbi-run-test-repo-issue-494",
-):
-    """The default head branch is the Runner's stable delivery naming,
-    so the default fixtures exercise the INTERNAL routed path; pass a
-    free-form branch name for the external-contributor scenes."""
-    write_event(
-        monkeypatch, tmp_path,
-        run_event(event="pull_request", head_branch=head_branch),
-    )
-    gh.routes[ep_pulls()] = [{"number": 541, "state": "open"}]
-    gh.routes[ep_pr(541)] = {"number": 541, "body": body}
-    active_labels = labels or ["ai-pr-opened"]
-    gh.routes[ep_source(494)] = {
-        "number": 494, "state": "open",
-        "labels": [{"name": name} for name in active_labels],
-    }
-    for name in active_labels:
-        gh.routes[f"{ep_labels(494)}/{name}"] = {}
-    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
-
-
-def test_external_head_pr_failure_routes_evidence_but_never_flips_labels(
-    gh, monkeypatch, tmp_path, capsys
-):
-    """Any external PR body carrying `Fixes #<in-flight delivery>` plus
-    one failed CI run must not rewrite the delivery's state: the triage
-    cannot verify the contributor's PR actually belongs to that
-    delivery, and flipping ai-in-progress/ai-pr-opened to ai-fix-needed
-    makes the Runner requeue a delivery that may be alive (#608's
-    external-integration gap on the routed path — the marker only
-    guards the create path). Evidence comments still land on both the
-    Issue and the PR; a human or the Runner decides."""
-    setup_active_pr_failure(gh, monkeypatch, tmp_path, head_branch="feature")
-    mod.main()
-    assert gh.calls_to(ep_create(), "POST") == []
-    assert len(gh.calls_to(ep_comment(494), "POST")) == 1
-    assert len(gh.calls_to(ep_comment(541), "POST")) == 1
-    assert gh.calls_to(f"{ep_labels(494)}/ai-pr-opened", "DELETE") == []
-    assert gh.calls_to(ep_labels(494), "POST") == []
-    assert "external_head_no_label_flip" in capsys.readouterr().err
-
-
-def test_active_orbi_pr_routes_evidence_to_source_and_pr(gh, monkeypatch, tmp_path):
-    setup_active_pr_failure(gh, monkeypatch, tmp_path)
-    mod.main()
-    assert gh.calls_to(ep_create(), "POST") == []
-    assert len(gh.calls_to(ep_comment(494), "POST")) == 1
-    assert len(gh.calls_to(ep_comment(541), "POST")) == 1
-    evidence = gh.calls_to(ep_comment(494), "POST")[0]["payload"]["body"]
-    assert "workflow: `CI`" in evidence
-    assert f"job logs: {JOB_URL}" in evidence
-    assert "Run the full test suite" in evidence
-    assert RUN_URL in evidence
-    assert gh.calls_to(f"{ep_labels(494)}/ai-pr-opened", "DELETE")
-    assert gh.calls_to(ep_labels(494), "POST")[0]["payload"] == {
-        "labels": ["ai-fix-needed"]
-    }
-
-
-def test_triage_keeps_no_delivery_state_label_set():
-    """Issue #1771 acceptance 2: the delivery-active decision is the
-    engine's, so the script carries no copy of it."""
-    source = SCRIPT.read_text(encoding="utf-8")
-    assert "ACTIVE_DELIVERY_LABELS" not in source
-
-
-@pytest.mark.parametrize("labels", [
-    ["ai-pr-opened"],
-    ["ai-in-progress"],
-    ["ai-fix-needed"],
-    ["ai-ready", "ai-pr-opened"],
-    ["ai-pr-opened", "ai-awaiting-merge"],
-    ["ai-merged"],
-    ["ai-blocked", "ai-pr-opened"],
-])
-def test_fix_needed_label_change_is_the_engine_transition(
-    gh, monkeypatch, tmp_path, labels,
-):
-    """Issue #1786 acceptance 1, end to end through main(): the triage's
-    label change is exactly `label_patch(EVENT_FIX_NEEDED, ...)` for the
-    same labels. The transition is the one decision — the script adds or
-    removes nothing of its own."""
-    setup_active_pr_failure(gh, monkeypatch, tmp_path, labels=labels)
-    mod.main()
-    to_add, to_remove = label_patch(EVENT_FIX_NEEDED, labels)
-    deletes = [
-        call["endpoint"] for call in gh.calls if call["method"] == "DELETE"
-    ]
-    assert deletes == [f"{ep_labels(494)}/{label}" for label in to_remove]
-    added = [
-        label
-        for call in gh.calls_to(ep_labels(494), "POST")
-        for label in call["payload"]["labels"]
-    ]
-    assert added == to_add
-    # The Issue stays the PR's delivery: evidence lands, no duplicate ticket.
-    assert len(gh.calls_to(ep_comment(494), "POST")) == 1
-    assert len(gh.calls_to(ep_comment(541), "POST")) == 1
-    assert gh.calls_to(ep_create(), "POST") == []
-
-
-@pytest.mark.parametrize("labels", [
-    ["ai-merged"],
-    ["ai-blocked", "ai-pr-opened"],
-])
-def test_terminal_delivery_keeps_its_labels(
-    gh, monkeypatch, tmp_path, labels,
-):
-    """Issue #1786 acceptance 2: a terminal Issue (`ai-merged` or
-    `ai-blocked`) gets no label change from a CI failure. Adding
-    `ai-fix-needed` beside the terminal state would let a later removal
-    resume an automatic fix nobody asked for."""
-    setup_active_pr_failure(gh, monkeypatch, tmp_path, labels=labels)
-    mod.main()
-    assert gh.calls_to(ep_labels(494), "POST") == []
-    assert [call for call in gh.calls if call["method"] == "DELETE"] == []
-    assert len(gh.calls_to(ep_comment(494), "POST")) == 1
-    assert len(gh.calls_to(ep_comment(541), "POST")) == 1
-
-
-def test_triage_has_no_lifecycle_set_or_blocked_special_case():
-    """Issue #1786 acceptance 3: the label transition is the one decision,
-    so the script carries neither a lifecycle-set check nor a `BLOCKED`
-    special case of its own."""
-    source = SCRIPT.read_text(encoding="utf-8")
-    assert "LIFECYCLE_STATES" not in source
-    assert "blocked_delivery_no_label_flip" not in source
-    assert "DeliveryScene.BLOCKED" not in source
-
-
-def test_blocked_delivery_is_still_the_evidence_source(gh, monkeypatch, tmp_path):
-    """A blocked delivery still owns its PR: the failure evidence is
-    recorded on the Issue and the PR (only the labels stay untouched), so
-    the triage never files a duplicate bug ticket for it."""
-    setup_active_pr_failure(
-        gh, monkeypatch, tmp_path, labels=["ai-blocked", "ai-pr-opened"],
-    )
-    gh.routes[ep_issues_list()] = []
-    mod.main()
-    assert gh.calls_to(ep_create(), "POST") == []
-    assert len(gh.calls_to(ep_comment(494), "POST")) == 1
-    assert len(gh.calls_to(ep_comment(541), "POST")) == 1
-
-
-def test_script_imports_the_engine_without_an_installed_package(tmp_path):
-    """Issue #1771 acceptance 3: the workflow runs the script straight from
-    the checkout (no install step), so the script puts src/ on the path
-    itself. -S drops site-packages — the workflow's fresh-checkout state —
-    and the script must still reach orbi.delivery_labels and then fail fast
-    on the missing event instead of a ModuleNotFoundError."""
+def test_script_runs_from_a_fresh_checkout_with_no_site_packages(tmp_path):
+    """The workflow runs the script straight from the checkout with no
+    install step: -S drops site-packages (that fresh-checkout state) and the
+    script must fail fast on the missing event, never on an import error."""
     event = tmp_path / "event.json"
     event.write_text(json.dumps({}), encoding="utf-8")
     env = {name: value for name, value in os.environ.items() if name != "PYTHONPATH"}
@@ -1005,53 +737,12 @@ def test_script_imports_the_engine_without_an_installed_package(tmp_path):
     assert "ci_triage error stage=load_event" in proc.stderr, proc.stderr
 
 
-@pytest.mark.parametrize("body, labels, state", [
-    ("No closing reference", ["ai-pr-opened"], "open"),
-    ("Fixes #494", ["ai-pr-opened"], "closed"),
-    ("Fixes #494", ["bug"], "open"),
-])
-def test_unowned_or_inactive_pr_creates_independent_ticket(
-    gh, monkeypatch, tmp_path, body, labels, state
-):
-    setup_active_pr_failure(gh, monkeypatch, tmp_path, body=body, labels=labels)
-    gh.routes[ep_source(494)]["state"] = state
-    if body == "No closing reference":
-        gh.routes.pop(ep_source(494))
-    gh.routes[ep_issues_list()] = []
-    mod.main()
-    assert len(gh.calls_to(ep_create(), "POST")) == 1
-    assert gh.calls_to(ep_comment(494), "POST") == []
-    assert gh.calls_to(ep_comment(541), "POST") == []
-
-
-def test_active_pr_same_fingerprint_updates_same_source_and_pr(gh, monkeypatch, tmp_path):
-    setup_active_pr_failure(gh, monkeypatch, tmp_path)
-    mod.main()
-    setup_active_pr_failure(gh, monkeypatch, tmp_path)
-    mod.main()
-    assert len(gh.calls_to(ep_create(), "POST")) == 0
-    assert len(gh.calls_to(ep_comment(494), "POST")) == 2
-    assert len(gh.calls_to(ep_comment(541), "POST")) == 2
-
-
 def test_closing_reference_accepts_github_keywords_and_same_repo_qualification():
     assert mod.closing_issue_numbers(
         "Fixes #494; closes orbi-run/test-repo#495; resolves other/repo#496; "
         "fixes #494",
         "orbi-run", "test-repo",
     ) == [494, 495]
-
-
-def test_pr_without_a_text_body_is_not_a_delivery_source(gh):
-    gh.routes[ep_pr(541)] = []
-    assert mod.source_issue_for_pr("orbi-run", "test-repo", 541) is None
-    assert mod.source_issue_for_pr("orbi-run", "test-repo", None) is None
-
-
-def test_malformed_source_issue_response_is_not_a_delivery_source(gh):
-    gh.routes[ep_pr(541)] = {"body": "Fixes #494"}
-    gh.routes[ep_source(494)] = []
-    assert mod.source_issue_for_pr("orbi-run", "test-repo", 541) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1505,7 +1196,7 @@ def test_recorded_failures_uses_body_and_reoccurrence_comments_only():
     RE-OCCURRENCE comment in order. Recovery comments and unprefixed
     comments never count as failure evidence (Issue #715 rule)."""
     body = mod.build_failure_body(
-        run_event(head_sha=FAILURE_SHA)["workflow_run"], job(), None,
+        run_event(head_sha=FAILURE_SHA)["workflow_run"], job(),
         mod.fingerprint("push", "main", "tests"),
     )
     comments = [
@@ -1738,29 +1429,18 @@ def test_issues_response_must_be_a_list(gh, monkeypatch, tmp_path):
 
 
 def test_pulls_response_must_be_a_list(gh, monkeypatch, tmp_path):
-    write_event(
-        monkeypatch, tmp_path,
-        run_event(event="pull_request", head_branch="feature"),
-    )
-    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
-    gh.routes[ep_pulls()] = {"unexpected": "object"}
+    """The recovery guard's PR lookup fails fast on a malformed answer."""
+    recovery_setup(gh, monkeypatch, tmp_path, head_sha=FIX_SHA)
+    gh.routes[ep_pulls(FIX_SHA)] = {"unexpected": "object"}
     with pytest.raises(SystemExit) as exc:
         mod.main()
     assert exc.value.code == 1
 
 
-def test_pulls_malformed_entries_are_skipped(gh, monkeypatch, tmp_path):
-    """A commit without a resolvable PR falls back to the branch display."""
-    write_event(
-        monkeypatch, tmp_path,
-        run_event(event="pull_request", head_branch="feature"),
-    )
+def test_pulls_malformed_entries_are_skipped(gh):
+    """A commit without a resolvable PR yields no PR number."""
     gh.routes[ep_pulls()] = ["junk", {"number": "7"}]
-    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
-    gh.routes[ep_issues_list()] = []
-    mod.main()
-    create = gh.calls_to(ep_create(), "POST")[0]["payload"]
-    assert create["title"] == "CI failure: tests on branch feature (pull_request)"
+    assert mod.resolve_pr_number("orbi-run", "test-repo", HEAD_SHA) is None
 
 
 def test_failed_steps_reports_only_failure_and_timeout_steps():
