@@ -33,8 +33,6 @@ from pathlib import Path
 
 import pytest
 
-from orbi.delivery_labels import EVENT_FIX_NEEDED, label_patch
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "tools" / "ci_failure_triage.py"
 
