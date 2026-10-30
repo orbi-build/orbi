@@ -15,12 +15,10 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
-from orbi import base_ci_red, check_permission, gitops, ticket_command
-# Imported for its registration side effect: `ai-needs-detail` tickets run
-# the registered commands below, and `/orbi split` (Issue #1927) and
-# `/orbi amend` (Issue #1929, typed word renamed by #1975) must be in the
-# registry by then.
-from orbi import criteria_command, split_command  # noqa: F401
+from orbi import (
+    base_ci_red, check_permission, gitops, ticket_command,
+    ticket_command_registry,
+)
 from orbi import milestone as milestone_bookkeeping
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
@@ -798,7 +796,9 @@ def pick_next_delivery(
         # recovery scans above.
         try:
             ticket_command.process_labeled_commands(
-                repo, NEEDS_DETAIL_LABEL, dispatch_label=dispatch_label,
+                repo, NEEDS_DETAIL_LABEL,
+                commands=ticket_command_registry.ticket_commands(),
+                dispatch_label=dispatch_label,
                 language_code=repo_language,
             )
         except Exception:

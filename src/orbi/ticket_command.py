@@ -21,6 +21,12 @@ an unknown permission fails fast at import time instead of silently
 overwriting, and it registers the command's journal events: a new command
 is one spec plus one registration.
 
+The one explicit list of the registrant modules lives beside this layer
+(`orbi.ticket_command_registry.ticket_commands()`, Issue #2000): the
+comment dispatch and the CLI both read it, so a command cannot keep one
+spelling and vanish from the other, and no command depends on which
+unrelated module happened to be imported first.
+
 The shared layer owns the matching and the permission check:
 
 - a command author supplies a ``subcommand`` (plus optional legacy
@@ -562,20 +568,6 @@ def cli_caller(login: str, *, now: datetime | None = None) -> dict:
     }
 
 
-def cli_specs() -> list[CommandSpec]:
-    """The registered commands that also get a CLI subcommand.
-
-    Arity-0 only (Issue #1930): the generated entry takes `--repo` and
-    `--issue` and no argument, so a command that needs one — `/orbi
-    milestone <version>` — keeps its own explicit CLI command (`orbi
-    milestone set`). Registering a command therefore gives both spellings
-    without a hand edit; `orbi.cli_ticket_command` imports the registrants
-    before it reads this list, the same way the comment scan's call site
-    does.
-    """
-    return [spec for spec in TICKET_COMMANDS.values() if spec.arity == 0]
-
-
 def command_comment_key(comment: dict) -> str:
     for field in ("id", "url"):
         value = comment.get(field)
@@ -771,10 +763,10 @@ def process_commands(
 
 
 def process_labeled_commands(
-    repo: str, label: str, *, commands: Iterable[CommandSpec] | None = None,
+    repo: str, label: str, *, commands: Iterable[CommandSpec],
     limit: int = 200, **context: object,
 ) -> None:
-    """Run the registered commands on every open ticket carrying ``label``.
+    """Run ``commands`` on every open ticket carrying ``label``.
 
     The stopped-ticket scan (Issue #1927): the clarification gate leaves a
     ticket `ai-needs-detail` and outside every delivery label, so no claim
@@ -782,8 +774,12 @@ def process_labeled_commands(
     seen. The tick runs it once per repository, as a bypass like the other
     sweeps; a per-ticket read failure propagates to that caller, which logs
     it and leaves the ticket stopped for the next tick.
+
+    ``commands`` is required (Issue #2000): the caller passes
+    `orbi.ticket_command_registry.ticket_commands()`, the one explicit list,
+    so which commands run here never depends on what was imported.
     """
-    specs = list(TICKET_COMMANDS.values() if commands is None else commands)
+    specs = list(commands)
     for issue in list_issues(
         repo, state="open", label=label, json_fields="number", limit=limit,
     ):
