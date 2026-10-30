@@ -78,6 +78,13 @@ class MergeBlockedByIssueLabel(Exception):
 # re-read after these bounded delays (≈15 s of slot time, Issue #1736).
 MERGEABLE_UNKNOWN_RETRY_DELAYS = (2.0, 4.0, 8.0)
 
+# GitHub's pull-request object lags the ref the gate itself pushed: the
+# base-absorb push is visible to `git ls-remote` immediately, while
+# `headRefOid` can still report the pre-push commit seconds later
+# (Issue #2017). A view on the pre-absorb head is re-read after these
+# bounded delays (≈15 s of slot time) before it counts as a moved head.
+HEAD_REF_CATCHUP_DELAYS = (1.0, 2.0, 4.0, 8.0)
+
 
 # The repository's GitHub settings are the only source of the merge
 # method (Issue #1480): the first enabled flag in GitHub's own
@@ -207,6 +214,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
                 f"PR #{pr['number']} cannot absorb origin/{base_branch} "
                 f"({base_sha}); resolve the merge conflict and retry"
             ) from None
+        pre_absorb_head = pr["head_oid"]
         absorbed_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
         run_git_network_command(
             ["git", "push", "origin", f"HEAD:{pr['head_ref']}"],
@@ -232,6 +240,19 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         state = pr_view(pr["number"],
                         "state,mergeable,headRefOid,statusCheckRollup",
                         cwd=worktree)
+        # Issue #2017: the `git ls-remote` read above already proves the
+        # push landed (it is read-after-write consistent) while GitHub's PR
+        # view lags the ref. A view still on the pre-absorb head is that
+        # staleness, so it is re-read bounded; the read that finally reports
+        # the absorbed head supplies the mergeable/rollup facts. A third
+        # commit is someone else's push and fails at once.
+        for delay in HEAD_REF_CATCHUP_DELAYS:
+            if state.get("headRefOid") != pre_absorb_head:
+                break
+            time.sleep(delay)
+            state = pr_view(pr["number"],
+                            "state,mergeable,headRefOid,statusCheckRollup",
+                            cwd=worktree)
         mergeable = state.get("mergeable")
         if state.get("headRefOid") != absorbed_head:
             raise RuntimeError(
