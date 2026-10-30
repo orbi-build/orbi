@@ -101,6 +101,7 @@ from tests.fakes.bootstrap_delivery import (
     fake_verify_pr_payload,
     fake_verify_run,
     make_local_remote_pair,
+    milestone_listing,
 )
 
 
@@ -882,7 +883,7 @@ def test_release_fallback_scoped_to_active_milestone(monkeypatch):
         # passes the Milestone completeness gate; this Milestone has only
         # the release ticket itself.
         if command[1] == "api":
-            return "1"
+            return milestone_listing("v0.3.0", 1)
         searches.append(command[command.index("--search") + 1])
         if "label:ai-release" in searches[-1]:
             return json.dumps([release])
@@ -1159,27 +1160,29 @@ def test_gather_claim_facts_routes_marker_ticket_to_takeover(
 
 def test_milestone_open_issue_count_reads_github_counter(monkeypatch):
     """Issue #663: the completeness judgment is GitHub's own Milestone
-    `open_issues` counter, read with the one API call documented in the
-    Issue (title-filtered jq) — not the search index, not a label."""
+    `open_issues` counter — not the search index, not a label. Issue
+    #1994: it is read from the paginated open-Milestone listing, with
+    the title matched in Python."""
     commands = []
 
     def fake_run(command, **kwargs):
         commands.append(command)
-        return "3"
+        return milestone_listing("v0.4.2", 3)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.milestone_open_issue_count("xqliu/orbi", "v0.4.2") == 3
     assert commands == [[
-        "gh", "api", "repos/xqliu/orbi/milestones",
-        "--jq", '.[] | select(.title=="v0.4.2") | .open_issues',
-        "--include",
+        "gh", "api", "repos/xqliu/orbi/milestones?state=open&per_page=100",
+        "--paginate", "--slurp", "--include",
     ]]
 
 
 def test_milestone_open_issue_count_missing_milestone_raises(monkeypatch):
-    """Issue #663: an empty result (the Milestone is gone) is a failed
+    """Issue #663: an empty listing (the Milestone is gone) is a failed
     check, not a silent zero — the caller must never claim on it."""
-    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "")
+    monkeypatch.setattr(
+        seam, "run_command", lambda command, **kwargs: json.dumps([[]]),
+    )
     with pytest.raises(RuntimeError, match="v0.4.2"):
         runner.milestone_open_issue_count("xqliu/orbi", "v0.4.2")
 
@@ -1358,7 +1361,7 @@ def test_release_milestone_falls_back_to_active_milestone(
     def fake_run(command, **kwargs):
         if command[1] == "api":
             api_calls.append(command)
-            return "2"
+            return milestone_listing("v0.3.0", 2)
         search = command[command.index("--search") + 1]
         if "label:ai-release" in search:
             return json.dumps([release])

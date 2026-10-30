@@ -34,16 +34,27 @@ RELEASE_663 = {
 }
 
 
+def milestone_listing(title: str, open_issues: int) -> str:
+    """The `gh api .../milestones?state=open --paginate --slurp` payload
+    (`milestone_open_issue_count`, Issue #1994): one page of open
+    Milestones carrying GitHub's own `open_issues` counter."""
+    return json.dumps([[
+        {"number": 1, "title": title, "state": "open",
+         "open_issues": open_issues},
+    ]])
+
+
 def _release_scan_fake(api_result):
     """Return a `run_command` fake: empty ordinary scans, the release
-    in the fallback scan, and `api_result` (a string or an exception)
-    for the Milestone counter query."""
+    in the fallback scan, and `api_result` (the release Milestone's
+    `open_issues` counter or an exception) for the Milestone read."""
 
     def fake_run(command, **kwargs):
         if command[1] == "api":
             if isinstance(api_result, Exception):
                 raise api_result
-            return api_result
+            title = (RELEASE_663["milestone"] or {}).get("title")
+            return milestone_listing(title, int(api_result))
         search = command[command.index("--search") + 1]
         if "label:ai-release" in search:
             return json.dumps([RELEASE_663])
