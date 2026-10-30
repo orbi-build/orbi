@@ -51,7 +51,8 @@ def make_fake_pi(tmp_path: Path, *, session_records: list[tuple[float, dict]],
 
 def make_steering_restart_pi(*, ignore_sigterm: bool,
                              ready: Path | None = None,
-                             first_prompt: str = "initial context"
+                             first_prompt: str = "initial context",
+                             context_file: Path,
                              ) -> list[str]:
     """A fake Pi for the steering-restart scene (Issue #1995).
 
@@ -70,7 +71,14 @@ def make_steering_restart_pi(*, ignore_sigterm: bool,
     handling is installed and it is about to wait: a steering request
     sent before that would race the interpreter's startup and kill a
     child that had not armed itself yet.
+
+    The task context reaches Pi as a FILE (Issue #1997): the command's
+    last argument is `@<context_file>` and the fake reads that file, so
+    "this is the first session" means the file still holds
+    `first_prompt` — a steering restart rewrites the FILE, exactly as
+    production does.
     """
+    context_file.write_text(first_prompt, encoding="utf-8")
     ignore = (
         "    import signal as _sig\n"
         "    _sig.signal(_sig.SIGTERM, _sig.SIG_IGN)\n"
@@ -82,7 +90,10 @@ def make_steering_restart_pi(*, ignore_sigterm: bool,
     )
     script = (
         "import sys, time\n"
-        f"if sys.argv[1] == {first_prompt!r}:\n"
+        "target = sys.argv[1]\n"
+        "if target.startswith('@'):\n"
+        "    target = open(target[1:], encoding='utf-8').read()\n"
+        f"if target == {first_prompt!r}:\n"
         f"{ignore}"
         f"{armed}"
         "    time.sleep(5.0)\n"
@@ -91,7 +102,7 @@ def make_steering_restart_pi(*, ignore_sigterm: bool,
         "sys.stdout.write('ok')\n"
         "sys.exit(0)\n"
     )
-    return [sys.executable, "-c", script, first_prompt]
+    return [sys.executable, "-c", script, f"@{context_file}"]
 
 
 def fresh_timestamp(offset: float = 0.0) -> str:
