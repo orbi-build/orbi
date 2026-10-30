@@ -177,10 +177,15 @@ def build_pi_command(
 
     The last argument is Pi's own file form `@<path>` (`pi --help`:
     `pi [options] [--] [@files...] [messages...]`): Pi reads the file
-    itself and expands its FULL content into the initial message, so a
-    150,000-byte context no longer has to fit a single argv string — no
-    truncation, no body cap, no prompt wording change (the message Pi
-    builds is the context exactly, as before).
+    itself and expands its FULL content into the initial message
+    (`dist/cli/file-processor.js`), so a 150,000-byte context no longer
+    has to fit a single argv string — no truncation, no body cap, no
+    prompt wording change. Pi wraps the expansion in its own file
+    marker, `<file name="<absolute path>">` ... `</file>` (verified
+    against Pi 1.0.0: a real `pi ... @ctx.md` run echoes exactly that),
+    which belongs to Pi's file argument rather than to text this engine
+    adds — the context, its first and its last line included, reaches
+    the session unchanged.
 
     `log_command` is derived here from the SAME extension flags, model
     flags and session dir as `command`, so the two cannot drift. The
