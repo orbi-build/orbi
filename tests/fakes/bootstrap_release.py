@@ -19,6 +19,34 @@ from orbi import gh_response
 from seam import seam
 
 
+def check_runs_pages(pages) -> str:
+    """Answer a MULTI-page check-runs read in gh's slurped shape.
+
+    Issue #1993: the adapter reads the list with `gh api ... --paginate
+    --slurp`, so a 31-run commit arrives as two REST page objects
+    `{total_count, check_runs}` inside one array — the caller must merge
+    them, and the failing check may sit on any page.
+    """
+    return json.dumps([
+        {"total_count": sum(len(page) for page in pages),
+         "check_runs": [
+             {"name": name, "status": status, "conclusion": conclusion}
+             for name, status, conclusion in page
+         ]}
+        for page in pages
+    ])
+
+
+def check_runs_page(runs) -> str:
+    """One release-gate check-runs answer in gh's slurped page shape.
+
+    The adapter reads the list with `gh api ... --paginate --slurp`
+    (Issue #1993), so a single-page answer is an array holding one REST
+    page object `{total_count, check_runs}` — never the bare run list.
+    """
+    return check_runs_pages([runs])
+
+
 RELEASE_DECLARATION_BODY = """Ship v0.3.0 to the remote.
 
 ## Release
@@ -169,7 +197,8 @@ def make_milestone_gh(monkeypatch, *, milestones=None, items_by_milestone=None):
 
 
 def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
-                 leftover_milestones=None, check_runs_failure=None):
+                 leftover_milestones=None, check_runs_failure=None,
+                 check_run_pages=None):
     """Answer the gh calls of `check_release_gates`.
 
     `leftover_labels`: label -> [issue numbers] still open with it.
@@ -179,6 +208,9 @@ def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
     `check_runs_failure`: a `(status, ratelimit_remaining)` pair the
     check-runs read fails with, carrying the response gh reported — a
     rate-limited 403 is `(403, 0)` (Issue #1768).
+    `check_run_pages` (Issue #1993): the same read answered as several
+    pages — a list of (name, status, conclusion) pages, so a check on any
+    page past the first is only seen when the read paginates.
     `leftover_milestones`: issue number -> Milestone title (or None).
     When a leftover scan carries the documented `--milestone <title>`
     flag (Issue #671) only the Issues with that Milestone are answered —
@@ -208,14 +240,16 @@ def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
                     ratelimit_remaining=remaining,
                     stderr=f"gh: failed with HTTP {status}",
                 )
+            if check_run_pages is not None:
+                # The paginated read (Issue #1993): `--paginate --slurp`
+                # returns the pages as one array, each page the REST
+                # `{total_count, check_runs}` object.
+                return check_runs_pages(check_run_pages)
             if check_runs is None:
                 raise subprocess.CalledProcessError(
                     1, command, stderr="HTTP 500: server error",
                 )
-            return json.dumps([
-                {"name": name, "status": status, "conclusion": conclusion}
-                for name, status, conclusion in check_runs
-            ])
+            return check_runs_page(check_runs)
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "run_command", fake_run_command)
@@ -238,10 +272,7 @@ def make_registration_lag_gh(monkeypatch, api_responses):
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([])
         if command[:2] == ["gh", "api"]:
-            return json.dumps([
-                {"name": name, "status": status, "conclusion": conclusion}
-                for name, status, conclusion in api_responses.pop(0)
-            ])
+            return check_runs_page(api_responses.pop(0))
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "run_command", fake_run_command)
@@ -533,14 +564,8 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                 page = check_run_pages.pop(0)
                 if not check_run_pages:
                     check_run_pages.append(page)
-                return json.dumps([
-                    {"name": n, "status": s, "conclusion": c}
-                    for n, s, c in page
-                ])
-            return json.dumps([
-                {"name": "tests", "status": "completed",
-                 "conclusion": "success"},
-            ])
+                return check_runs_page(page)
+            return check_runs_page([("tests", "completed", "success")])
         if command[:3] == ["git", "ls-tree", "--name-only"]:
             # Issue #740: the frozen release tree the version_file check
             # probes — root entries, one per line.
