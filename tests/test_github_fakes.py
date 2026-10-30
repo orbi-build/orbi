@@ -411,13 +411,36 @@ def test_merge_gate_preflight_fails_closed_on_protection_it_cannot_read(
 
 
 def test_milestone_counter_fails_on_an_unknown_title(fake_gh):
-    # GitHub's own counter for a Milestone that does not exist yields
-    # empty output: the adapter must raise (a failed check), never
-    # return a silent 0 the release gate could ship on.
+    # A Milestone that is not on the (paginated, Issue #1994) open list
+    # makes the adapter raise — a failed check, never a silent 0 the
+    # release gate could ship on.
     fake_gh.add_milestone(1, title="v1.0")
     fake_gh.add_milestone(2, title="v2.0")
     with pytest.raises(RuntimeError, match="not found in owner/repo"):
         github.milestone_open_issue_count("owner/repo", "v9.9")
+
+
+def test_milestone_counter_reads_a_title_containing_a_quote(fake_gh):
+    # Issue #1994: the title used to be interpolated into a jq program,
+    # so a `"` made the query exit 3 and the count unreadable.
+    fake_gh.add_milestone(1, title='v1.0 "hotfix"', open_issues=2)
+    assert github.milestone_open_issue_count(
+        "owner/repo", 'v1.0 "hotfix"',
+    ) == 2
+
+
+def test_release_gate_reads_a_quoted_milestone_title(fake_gh, caplog):
+    """Issue #1994, the user path: a release ticket whose Milestone title
+    carries a `"` reaches the gate with its real counter — the release is
+    held by the open work (`release_milestone_incomplete`) instead of
+    every tick failing the read (`release_milestone_check_failed`)."""
+    fake_gh.add_issue(1, labels=(READY_LABEL, RELEASE_LABEL), milestone=1)
+    fake_gh.add_milestone(1, title='v1.0 "hotfix"', open_issues=2)
+    fake_gh.add_issue(2, milestone=1)
+    with caplog.at_level(logging.INFO):
+        assert claim.pick_issue("owner/repo") is None
+    assert "release_milestone_incomplete issue=1" in caplog.text
+    assert "release_milestone_check_failed" not in caplog.text
 
 
 def test_close_issue_marks_the_terminal_state(fake_gh):
@@ -1009,12 +1032,12 @@ def _release_only_queue(fake_gh) -> None:
 
 
 def _empty_milestone_reads(fake_gh, monkeypatch) -> None:
-    """The Milestones read answers nothing: the adapter's own failed check
-    (the Milestone is not on the results page — never a silent 0), which
+    """The Milestones read answers an empty listing: the adapter's own
+    failed check (the Milestone is not there — never a silent 0), which
     is not a non-zero exit but is still an unevaluated read."""
     def vanished(command, **kwargs):
         if command[1:2] == ["api"] and "milestones" in command[2]:
-            return ""
+            return "[[]]"
         return fake_gh(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", vanished)

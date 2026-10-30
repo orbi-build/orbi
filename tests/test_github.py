@@ -212,11 +212,62 @@ def test_list_milestones_forwards_the_callers_timeout(monkeypatch):
 
 
 def test_milestone_open_issue_count_reads_githubs_own_counter(monkeypatch):
-    monkeypatch.setattr(seam, "run_command", lambda c, **k: "2")
-    assert github.milestone_open_issue_count("o/r", "v1") == 2
+    # Issue #1994: the whole open-Milestone list is read, paginated, and
+    # the title is matched in Python — never through a jq program built
+    # from the (user-controlled) title.
+    captured = []
+    payload = json.dumps([[
+        {"number": 1, "title": "v1", "state": "open", "open_issues": 2},
+    ]])
+    monkeypatch.setattr(seam, "run_command", lambda c, **k: (
+        captured.append(c), payload)[1])
 
-    monkeypatch.setattr(seam, "run_command", lambda c, **k: "")
-    with pytest.raises(RuntimeError, match="not found"):
+    assert github.milestone_open_issue_count("o/r", "v1") == 2
+    assert captured == [[
+        "gh", "api", "repos/o/r/milestones?state=open&per_page=100",
+        "--paginate", "--slurp", "--include",
+    ]]
+    assert "--jq" not in captured[0]
+
+
+def test_milestone_open_issue_count_finds_a_milestone_beyond_the_first_page(
+    monkeypatch,
+):
+    # Issue #1994: with more open Milestones than one REST page (30 by
+    # default), the target used to read as "not found" and the release
+    # was skipped every tick. --paginate --slurp hands over every page.
+    payload = json.dumps([
+        [{"number": n, "title": f"v0.0.{n}", "state": "open",
+          "open_issues": 4} for n in range(30)],
+        [{"number": 31, "title": "v0.0.30", "state": "open",
+          "open_issues": 3}],
+    ])
+    monkeypatch.setattr(seam, "run_command", lambda c, **k: payload)
+
+    assert github.milestone_open_issue_count("o/r", "v0.0.30") == 3
+
+
+def test_milestone_open_issue_count_matches_a_title_containing_quotes(
+    monkeypatch,
+):
+    # Issue #1994: a `"` in the title broke the jq program (exit 3); the
+    # match is a Python string comparison now.
+    payload = json.dumps([[
+        {"number": 1, "title": 'v1.0 "hotfix"', "state": "open",
+         "open_issues": 6},
+    ]])
+    monkeypatch.setattr(seam, "run_command", lambda c, **k: payload)
+
+    assert github.milestone_open_issue_count("o/r", 'v1.0 "hotfix"') == 6
+
+
+def test_milestone_open_issue_count_raises_when_the_milestone_is_absent(
+    monkeypatch,
+):
+    # An empty listing (the Milestone is gone) is a failed check, never a
+    # silent 0 the release gate could ship on.
+    monkeypatch.setattr(seam, "run_command", lambda c, **k: "[[]]")
+    with pytest.raises(RuntimeError, match="'vX' not found in o/r"):
         github.milestone_open_issue_count("o/r", "vX")
 
 
