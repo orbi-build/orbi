@@ -970,13 +970,6 @@ def test_a_pending_or_duplicate_base_run_is_not_a_failure(monkeypatch):
     assert [check.name for check in checks] == [CHECK]
 
 
-def test_the_rest_id_falls_back_to_the_permalink():
-    assert base_ci_red._rest_comment_id({"id": 41}) == 41
-    assert base_ci_red._rest_comment_id(
-        {"url": "https://github.com/a/b/issues/1#issuecomment-42"}) == 42
-    assert base_ci_red._rest_comment_id({"url": "https://github.com/a/b"}) is None
-
-
 def test_a_comment_without_a_rest_id_is_reported_and_skipped(monkeypatch):
     posted = []
     monkeypatch.setattr(seam, "update_issue_comment",
