@@ -70,10 +70,17 @@ def _steering_restart(tmp_path, *, ignore_sigterm: bool):
     hide the defect.
 
     Returns `(result, child, alive_before, status_in_restart, armed)`.
+
+    `result == "ok"` is also the file-transport evidence of Issue #1997:
+    the fake answers "ok" only for a session whose context FILE no longer
+    holds the first prompt, i.e. the restart reached Pi by rewriting the
+    file, never by growing argv.
     """
     armed = tmp_path / ".pi-armed"
+    context_file = tmp_path / "task-context.md"
     command = make_steering_restart_pi(
         ignore_sigterm=ignore_sigterm, ready=armed,
+        context_file=context_file,
     )
     children: list[subprocess.Popen] = []
     # The first child was still running when the steering request was

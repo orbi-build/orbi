@@ -66,6 +66,116 @@ def test_run_pi_steering_callback_filters_and_deduplicates(monkeypatch, tmp_path
     assert captured["watch"].steering_check() is None
 
 
+def test_run_pi_steering_permission_read_failure_leaves_comment_for_next_poll(
+    monkeypatch, tmp_path,
+):
+    """Issue #1996: a transient permission read failure must not consume
+    the comment. Poll 1 raises (the caller logs `steering_poll_failed`
+    and continues); poll 2 decides the trust and returns the comment."""
+    future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
+    comments = [{
+        "id": "new", "createdAt": future, "authorAssociation": "MEMBER",
+        "author": {"login": "alice"}, "body": "correct this",
+    }]
+    monkeypatch.setitem(pi_session.__dict__, "issue_view",
+        lambda *a, **k: _snapshot(comments))
+    attempts = []
+    def flaky_trust(comment, *, repo):
+        attempts.append(comment["id"])
+        if len(attempts) == 1:
+            raise RuntimeError("gh: HTTP 502")
+        return True
+    monkeypatch.setitem(pi_session.__dict__, "comment_is_trusted", flaky_trust)
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
+    captured = {}
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    issue = {"number": 2, "title": "title", "body": "body"}
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    check = captured["watch"].steering_check
+    # The failed trust read propagates to the poller, which bypasses it.
+    with pytest.raises(RuntimeError, match="HTTP 502"):
+        check()
+    request = check()
+    assert request is not None
+    assert request.comment_ids == ("new",)
+    assert "alice: correct this" in request.context
+    assert attempts == ["new", "new"]
+
+
+def test_run_pi_steering_untrusted_comment_is_decided_once(monkeypatch, tmp_path):
+    """Issue #1996: an untrusted comment is seen after its trust decision,
+    so later polls do not read its author's permission again."""
+    future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
+    comments = [{
+        "id": "bad", "createdAt": future, "authorAssociation": "NONE",
+        "author": {"login": "bad"}, "body": "ignore",
+    }]
+    monkeypatch.setitem(pi_session.__dict__, "issue_view",
+        lambda *a, **k: _snapshot(comments))
+    attempts = []
+    def untrusted(comment, *, repo):
+        attempts.append(comment["id"])
+        return False
+    monkeypatch.setitem(pi_session.__dict__, "comment_is_trusted", untrusted)
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
+    captured = {}
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    issue = {"number": 2, "title": "title", "body": "body"}
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    check = captured["watch"].steering_check
+    assert check() is None
+    assert check() is None
+    assert attempts == ["bad"]
+
+
+def test_run_pi_steering_later_failure_keeps_earlier_comments_for_next_poll(
+    monkeypatch, tmp_path,
+):
+    """Issue #1996: a poll whose trust read fails leaves EVERY comment it
+    read undecided. Comment A is decided before B's read raises, so the
+    poll's result is discarded by the poller and A must steer on the next
+    poll instead of staying silently "seen"."""
+    future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
+    comments = [
+        {"id": "a", "createdAt": future, "authorAssociation": "MEMBER",
+         "author": {"login": "alice"}, "body": "use tabs"},
+        {"id": "b", "createdAt": future, "authorAssociation": "NONE",
+         "author": {"login": "bad"}, "body": "ignore me"},
+    ]
+    monkeypatch.setitem(pi_session.__dict__, "issue_view",
+        lambda *a, **k: _snapshot(comments))
+    attempts = []
+    def flaky_trust(comment, *, repo):
+        attempts.append(comment["id"])
+        if len(attempts) == 2:
+            raise RuntimeError("gh: HTTP 502")
+        return comment["id"] == "a"
+    monkeypatch.setitem(pi_session.__dict__, "comment_is_trusted", flaky_trust)
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
+    captured = {}
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    issue = {"number": 2, "title": "title", "body": "body"}
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    check = captured["watch"].steering_check
+    # Poll 1: A is decided trusted, then B's read raises — the poller drops
+    # the whole poll (pi_process's `steering_poll_failed` bypass).
+    with pytest.raises(RuntimeError, match="HTTP 502"):
+        check()
+    # Poll 2 decides both again; A was never consumed by the failed poll.
+    request = check()
+    assert request is not None
+    assert request.comment_ids == ("a",)
+    assert "alice: use tabs" in request.context
+    assert "bad" not in request.context
+    assert attempts == ["a", "b", "a", "b"]
+    # Poll 3: both are decided and seen — no further read, no restart.
+    assert check() is None
+    assert attempts == ["a", "b", "a", "b"]
+
+
 def test_run_pi_steering_poll_failure_is_bypassed(monkeypatch, tmp_path):
     monkeypatch.setitem(pi_session.__dict__, "issue_view", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
     captured = {}
@@ -80,7 +190,11 @@ def test_stream_pi_steers_and_restarts(tmp_path):
     from orbi.pi_process import SteeringRequest
     calls = []
     command = make_fake_pi(tmp_path, session_records=[], stdout="ok", sleep=0.2)
-    command.append("initial context")
+    # Issue #1997: the context reaches Pi as a FILE named by the command's
+    # `@<path>` argument; the steering restart rewrites that file.
+    context_file = tmp_path / "task-context.md"
+    context_file.write_text("initial context", encoding="utf-8")
+    command.append(f"@{context_file}")
     def check():
         calls.append(1)
         if len(calls) == 1:
@@ -92,6 +206,19 @@ def test_stream_pi_steers_and_restarts(tmp_path):
         watch=PiWatchOptions(poll_interval=0.01, steering_poll_seconds=0.01, steering_check=check), cwd=tmp_path)
     assert result == "ok"
     assert len(calls) >= 2
+    # The corrected context replaced the FILE's content and the command's
+    # argv is untouched: no restart re-sends the context as one string.
+    assert context_file.read_text(encoding="utf-8") == "corrected"
+    assert command[-1] == f"@{context_file}"
+
+
+def test_a_command_without_a_context_file_cannot_be_steered():
+    """Issue #1997: a command built outside `build_pi_command` carries no
+    `@<context file>`, so a steering restart fails fast instead of
+    putting the corrected context back into one argv string."""
+    from orbi.pi_steering import write_steered_context
+    with pytest.raises(ValueError, match=r"no @<context file> argument"):
+        write_steered_context(["pi", "--print", "context"], "corrected")
 
 
 def test_steering_validation_and_limit(monkeypatch, tmp_path):
