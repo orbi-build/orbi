@@ -52,6 +52,7 @@ from orbi.pi_recovery import (
     slots_idle,
     upstream_alive,
 )
+from orbi.pi_steering import write_steered_context
 from orbi.pi_stream_log import (
     _classify_startup_exit,
     _decode_chunks,
@@ -554,7 +555,7 @@ def stream_pi(
                 steering_round=steering_round,
             )
         except SteeringRequested as exc:
-            command[-1] = exc.context
+            write_steered_context(command, exc.context)
             steering_round = exc.round
             event(
                 "delivery_steered", issue=issue_ref, role=role,

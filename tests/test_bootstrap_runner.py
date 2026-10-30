@@ -43,7 +43,7 @@ import orbi.journal as journal
 from seam import resume_deps, seam
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
-from conftest import rendered_prompt
+from conftest import rendered_prompt, task_context
 
 from tests.fakes.bootstrap_delivery import (
     _git_output,
@@ -1449,9 +1449,10 @@ def test_run_pi_injects_trusted_issue_comments_into_the_prompt(
     assert "middle decision" in system_prompt
     assert "oldest decision" not in system_prompt
     assert "public drive-by" not in system_prompt
-    # The context argument keeps its exact pre-#745 shape — the comments
-    # reach the agent through the template placeholder, nowhere else.
-    assert command[-1] == (
+    # The context keeps its exact pre-#745 shape — the comments reach
+    # the agent through the template placeholder, nowhere else — and it
+    # travels as Pi's file argument (Issue #1997).
+    assert task_context(command) == (
         "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: "
         + str(tmp_path) + "\n"
         "Complete the delivery process in the system prompt."
@@ -1705,7 +1706,7 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
         "main abc123def456 run1 "
         + str(tmp_path / "checkout" / ".orbi" / "base-sync.lock")
     ) in system_prompt
-    assert command[9] == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
+    assert task_context(command) == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
     assert kwargs["cwd"] == tmp_path
     assert kwargs["timeout"] is None
     assert kwargs["ctx"].run_id == "run1"
@@ -1759,7 +1760,7 @@ def test_run_pi_keeps_the_fresh_context_without_a_resume_context(
     config = config_domain.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1")
     pi_session.run_pi({"number": 5, "title": "t", "body": "b"}, RunContext(run_id=config.run_id, issue={"number": 5, "title": "t", "body": "b"}["number"], branch="orbi/owner-repo-issue-5", worktree=tmp_path, source_repo="owner/repo"), config)
     command = calls[0]
-    assert command[-1] == (
+    assert task_context(command) == (
         "Issue #5: t\n\nIssue body:\nb\n\nWorktree: "
         + str(tmp_path) + "\n"
         "Complete the delivery process in the system prompt."
@@ -1791,11 +1792,71 @@ def test_run_pi_appends_the_resume_context_to_the_context_argument(
     )
     pi_session.run_pi({"number": 5, "title": "t", "body": "b"}, RunContext(run_id=config.run_id, issue={"number": 5, "title": "t", "body": "b"}["number"], branch="orbi/owner-repo-issue-5", worktree=tmp_path, source_repo="owner/repo"), config, resume_context=resume)
     command = calls[0]
-    context = command[-1]
+    context = task_context(command)
     assert context.startswith(
         "Issue #5: t\n\nIssue body:\nb\n\nWorktree: " + str(tmp_path),
     )
     assert context.endswith(resume)
+
+
+# A fake Pi that consumes the task context the way Pi itself does (Issue
+# #1997): the command's `@<path>` argument is read from disk and its FULL
+# content is what the session receives. It exits non-zero when the context
+# does not arrive as a file argument, so the scene cannot pass on a
+# command line that still carries the text.
+FAKE_PI_READS_THE_CONTEXT_FILE = """#!/usr/bin/env python3
+import os, sys
+argument = sys.argv[-1]
+if not argument.startswith("@"):
+    sys.stderr.write("the task context is not a file argument")
+    sys.exit(9)
+context = open(argument[1:], encoding="utf-8").read()
+with open(os.environ["ORBI_PI_CONTEXT_DUMP"], "w", encoding="utf-8") as handle:
+    handle.write(context)
+sys.stdout.write("done")
+"""
+
+
+def test_a_150k_issue_body_starts_pi_and_reaches_it_whole(tmp_path, monkeypatch):
+    """Issue #1997 at the real entry point: the shipped regression scene —
+    a short spec plus ~45,600 CJK characters of background (a
+    150,000-byte Issue body) — starts Pi like any other ticket.
+
+    Before the fix the whole context was ONE argv string and the kernel
+    refused the spawn (`OSError: [Errno 7] Argument list too long: 'pi'`),
+    which ended the run as an unclassifiable Pi start failure. Here the
+    session is spawned for real from `run_pi`'s command, the fake pi reads
+    the context the way Pi does, and the context it received holds the
+    whole body — its LAST line included (nothing is truncated).
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pi = bin_dir / "pi"
+    fake_pi.write_text(FAKE_PI_READS_THE_CONTEXT_FILE, encoding="utf-8")
+    fake_pi.chmod(0o755)
+    dump = tmp_path / "pi-context.txt"
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("ORBI_PI_CONTEXT_DUMP", str(dump))
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text("SYSTEM {{ISSUE_BODY}}", encoding="utf-8")
+    config = config_domain.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1")
+    body = "背景" * 25_000 + "\nLAST LINE OF THE BODY"
+    assert len(body.encode("utf-8")) > 150_000
+    issue = {"number": 5, "title": "t", "body": body}
+    output = pi_session.run_pi(
+        issue,
+        RunContext(run_id=config.run_id, issue=issue["number"], branch="orbi/owner-repo-issue-5", worktree=tmp_path, source_repo="owner/repo"),
+        config,
+    )
+    assert output == "done"
+    context = dump.read_text(encoding="utf-8")
+    assert body in context
+    assert "LAST LINE OF THE BODY" in context
+    # The context file lives in the session dir, outside every commit.
+    written = (tmp_path / ".pi-session" / "task-context.md").read_text(
+        encoding="utf-8",
+    )
+    assert written == context
 
 
 def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_path):

@@ -84,6 +84,10 @@ FAKE_PI_CONTINUE = """#!/usr/bin/env python3
 import os, subprocess, sys
 args = sys.argv[1:]
 context = args[-1]
+# Issue #1997: the task context is Pi's file argument `@<path>`; read the
+# file exactly as Pi does, so the resume context is what the session sees.
+if context.startswith("@"):
+    context = open(context[1:], encoding="utf-8").read()
 cwd = os.getcwd()
 with open(os.path.join(cwd, "resume-context.txt"), "w",
           encoding="utf-8") as handle:

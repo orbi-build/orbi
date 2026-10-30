@@ -35,6 +35,18 @@ def rendered_prompt(command: list[str]) -> str:
     return path.read_text(encoding="utf-8") if path.is_file() else value
 
 
+def task_context(command: list[str]) -> str:
+    """The task context Pi receives from one built argv (Issue #1997).
+
+    The context travels as a FILE — one argv string is capped at 131072
+    bytes (MAX_ARG_STRLEN) and a full Issue body passes that on its own —
+    so the last argument is Pi's file form `@<path>`. This helper mirrors
+    that contract for the tests that inspect the context CONTENT.
+    """
+    value = command[-1]
+    return Path(value.removeprefix("@")).read_text(encoding="utf-8")
+
+
 def git(repo: Path, *args: str) -> str:
     """The one fail-fast git scaffold for the smoke/e2e suites (Issue
     #908): a non-zero exit is an AssertionError carrying the rc, stdout
