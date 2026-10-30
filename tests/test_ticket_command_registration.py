@@ -68,6 +68,26 @@ def test_the_explicit_list_yields_the_four_commands():
     assert lines == ["0", COMMAND_NAMES]
 
 
+def test_each_dispatch_entry_point_alone_yields_the_four_commands():
+    """Acceptance 1, verbatim: importing the dispatch alone sees all four.
+
+    `orbi.claim` is what the tick imports to run the stopped-ticket comment
+    scan, and `orbi.milestone` what it imports to run the Milestone
+    confirmation notice — the two comment dispatch call sites
+    `process_commands(...)`/`process_labeled_commands(...)`. A fresh
+    process imports each one alone and reads the registry: neither may come
+    up short because of which unrelated import happened to run.
+    """
+    lines = _run(
+        "import orbi.claim\n"
+        "from orbi import ticket_command\n"
+        "print(','.join(sorted(ticket_command.TICKET_COMMANDS)))\n"
+        "import orbi.milestone\n"
+        "print(','.join(sorted(ticket_command.TICKET_COMMANDS)))\n"
+    )
+    assert lines == [COMMAND_NAMES, COMMAND_NAMES]
+
+
 def test_registration_does_not_depend_on_the_imports_that_used_to_do_it():
     """Acceptance 2: the imports this ticket removed cannot change the set.
 
