@@ -161,6 +161,88 @@ def test_prepare_pi_agent_dir_materializes_the_per_run_agent_dir(
         assert mode & 0o111 == 0, f"{name} must not be executable: {mode:o}"
 
 
+def _agent_dir_config(tmp_path):
+    return config_domain.RunnerConfig(
+        repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
+        base_branch="main",
+        pi_providers_data={
+            "providers": {"run-provider": {"apiKey": "sk-run"}},
+        },
+        pi_provider="run-provider", pi_model="model-1",
+    )
+
+
+def _home_with_user_auth(tmp_path, monkeypatch, *, auth=True):
+    home = tmp_path / "home"
+    user_agent = home / ".pi" / "agent"
+    user_agent.mkdir(parents=True)
+    if auth:
+        (user_agent / "auth.json").write_text(
+            json.dumps({"stored": True}), encoding="utf-8",
+        )
+    monkeypatch.setenv("HOME", str(home))
+    return user_agent
+
+
+def test_prepare_pi_agent_dir_replaces_a_regular_auth_file_from_a_previous_session(
+    tmp_path, monkeypatch,
+):
+    """Issue #2022: Pi saves auth.json with a temp-file-and-rename, so an
+    earlier session left a REGULAR file where the symlink was. The next
+    resume must re-link it instead of raising FileExistsError."""
+    user_agent = _home_with_user_auth(tmp_path, monkeypatch)
+    config = _agent_dir_config(tmp_path)
+    agent_dir = pi_session.prepare_pi_agent_dir(tmp_path, config)
+    auth_link = agent_dir / "auth.json"
+    # Pi's own save replaces the symlink with a regular file ({}).
+    auth_link.unlink()
+    auth_link.write_text("{}", encoding="utf-8")
+    assert auth_link.is_file()
+    assert not auth_link.is_symlink()
+
+    pi_session.prepare_pi_agent_dir(tmp_path, config)
+
+    assert auth_link.is_symlink()
+    assert auth_link.resolve() == (user_agent / "auth.json").resolve()
+    assert json.loads(auth_link.read_text(encoding="utf-8")) == {
+        "stored": True,
+    }
+
+
+def test_prepare_pi_agent_dir_relinks_an_existing_auth_symlink(
+    tmp_path, monkeypatch,
+):
+    """An existing symlink is still replaced, never kept (Issue #2022)."""
+    user_agent = _home_with_user_auth(tmp_path, monkeypatch)
+    config = _agent_dir_config(tmp_path)
+    agent_dir = pi_session.prepare_pi_agent_dir(tmp_path, config)
+    auth_link = agent_dir / "auth.json"
+    other_auth = tmp_path / "other-auth.json"
+    other_auth.write_text("{}", encoding="utf-8")
+    auth_link.unlink()
+    auth_link.symlink_to(other_auth)
+
+    pi_session.prepare_pi_agent_dir(tmp_path, config)
+
+    assert auth_link.is_symlink()
+    assert auth_link.resolve() == (user_agent / "auth.json").resolve()
+
+
+def test_prepare_pi_agent_dir_creates_no_auth_link_without_user_auth(
+    tmp_path, monkeypatch,
+):
+    """No user auth file -> no per-run auth.json, on a fresh and a resumed
+    run (the pre-#172 behaviour stays)."""
+    _home_with_user_auth(tmp_path, monkeypatch, auth=False)
+    config = _agent_dir_config(tmp_path)
+    agent_dir = pi_session.prepare_pi_agent_dir(tmp_path, config)
+    assert not (agent_dir / "auth.json").exists()
+
+    pi_session.prepare_pi_agent_dir(tmp_path, config)
+
+    assert not (agent_dir / "auth.json").exists()
+
+
 def test_prepare_pi_agent_dir_is_none_without_a_provider_file(tmp_path):
     """The unconfigured path keeps the exact pre-#157 shape: no per-run
     agent dir, Pi uses its own."""
