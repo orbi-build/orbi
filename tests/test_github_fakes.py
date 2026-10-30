@@ -485,9 +485,12 @@ def test_fake_fails_fast_on_unsupported_commands(fake_gh):
         ),
         "unsupported command",
     )
-    # Issue #1993: the check-runs read paginates — `--slurp` without
-    # `--paginate` would answer one page per line, not one JSON document,
-    # so the incomplete read fails fast like every other mistyped argv.
+    # Issue #1993: the check-runs read needs BOTH flags — verified against
+    # gh 2.100.0, `--paginate` without `--slurp` concatenates the page
+    # bodies into one stream that is not a JSON document (json fails with
+    # "Extra data" at page 2), and `--slurp` alone is refused by gh itself
+    # ("--paginate is required when passing --slurp"). Either mistyped
+    # argv fails fast here like every other one.
     assert_fails_with(
         lambda: fake_gh(
             ["gh", "api", "repos/owner/repo/commits/abc123/check-runs",
