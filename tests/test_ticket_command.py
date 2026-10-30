@@ -344,6 +344,14 @@ def test_identity_helpers_tolerate_unreadable_input():
     ) == "alice"
 
 
+def test_the_login_key_normalizes_every_payload_shape():
+    """One authorship rule (Issue #1992): the three shapes GitHub reports
+    for the same App account compare equal."""
+    assert ticket_command.login_key("app/orbi-build") == "orbi-build"
+    assert ticket_command.login_key("orbi-build[bot]") == "orbi-build"
+    assert ticket_command.login_key("orbi-build") == "orbi-build"
+
+
 def test_runner_comment_recognition_tolerates_unreadable_input():
     assert ticket_command.is_runner_comment(None) is False
     assert ticket_command.is_runner_comment("not-a-dict") is False

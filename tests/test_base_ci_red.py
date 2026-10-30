@@ -530,6 +530,60 @@ def test_a_success_receipt_from_before_the_prefix_still_dedupes(
     assert len(gh.issues[1825]["comments"]) == before
 
 
+def test_a_copied_success_receipt_does_not_count(monkeypatch):
+    """Acceptance 3 (Issue #1992): the receipt marker is public text, so a
+    read-only commenter can copy it. The author-blind check read that copy
+    as "this command already ran" — no triage Issue was opened and the
+    person who replied got nothing."""
+    gh = _command_fixture(monkeypatch)
+    gh.issues[1825]["comments"].clear()
+    gh.comment(1825, "/orbi fix-base", login="maintainer")
+    command_id = gh.issues[1825]["comments"][0]["id"]
+    gh.comment(
+        1825,
+        f"<!-- orbi-fix_base-command comment={command_id} -->",
+        login="stranger", association="NONE",
+    )
+    _blocks_issue(gh)
+    gh.add_check_runs(BASE_SHA, [base_run()])
+    before = len(gh.issues[1825]["comments"])
+
+    _run_command(gh)
+
+    # The command runs: one triage Issue, and the runner's own receipt
+    # beside the copied one.
+    assert [number for number in gh.issues if number != 1825] != []
+    receipts = [
+        comment for comment in gh.issues[1825]["comments"][before:]
+        if str(command_id) in comment["body"]
+    ]
+    assert [comment["author"]["login"] for comment in receipts] == [
+        gh.login,
+    ]
+
+
+def test_a_runner_authored_success_receipt_still_dedupes(monkeypatch):
+    """Acceptance 3 (Issue #1992): the runner's own receipt is still the
+    completion record — no second triage Issue and no second reply."""
+    gh = _command_fixture(monkeypatch)
+    gh.issues[1825]["comments"].clear()
+    gh.comment(1825, "/orbi fix-base", login="maintainer")
+    command_id = gh.issues[1825]["comments"][0]["id"]
+    gh.comment(
+        1825,
+        f"created #950\n\n<!-- orbi-fix_base-command comment={command_id} -->",
+        login="orbi-bot",
+    )
+    _blocks_issue(gh)
+    gh.add_check_runs(BASE_SHA, [base_run()])
+    before = len(gh.issues[1825]["comments"])
+
+    _run_command(gh)
+
+    assert [number for number in gh.issues if number != 1825] == []
+    assert len(gh.issues[1825]["comments"]) == before
+
+
 def test_fix_base_fails_the_step_instead_of_opening_a_duplicate(
         monkeypatch):
     """A lookup that cannot be read must never read as "no triage Issue":
