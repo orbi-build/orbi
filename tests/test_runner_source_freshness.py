@@ -151,6 +151,31 @@ def test_fresh_editable_checkout_passes_with_only_local_git(
     assert all(set(cmd).isdisjoint(network) for cmd in commands)
 
 
+def test_fresh_tick_decides_no_interpreter(monkeypatch, tmp_path):
+    """Issue #2001: a HEALTHY start decides no interpreter at all. The
+    gate's fix string names the editable reinstall, and building it
+    decides the compatible interpreter with a subprocess probe — so it is
+    built only on the stale path that reports it. A fresh tick must spawn
+    no probe: the probe is paid when a reinstall is actually asked for,
+    never on every Runner start."""
+    repo, old, new = build_stale_repo(tmp_path)
+    git(repo, "reset", "--hard", new)
+    point_module_file(monkeypatch, repo)
+    probes: list[list[str]] = []
+
+    def recording_probe(command, **kwargs):
+        probes.append([str(part) for part in command])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(cli_source, "run_command", recording_probe)
+    info = runner_source.check_runner_source_freshness(
+        gate_config(repo), run_command=recording_run_command([]),
+    )
+    assert info["install"] == "editable"
+    assert info["head"] == new
+    assert probes == [], f"the fresh path decided the interpreter: {probes}"
+
+
 def test_stale_editable_checkout_fails_fast(monkeypatch, tmp_path, caplog):
     """deploy checkout reset to an old commit while origin/main advanced:
     the Runner refuses to run, with the structured `runner_source_stale`
