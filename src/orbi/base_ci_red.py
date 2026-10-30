@@ -44,6 +44,7 @@ from datetime import datetime, timezone
 from orbi import comment_trust, failure, language, user_summary
 from orbi.comment_kind import (
     COMMENT_KIND_FAILURE, comment_kind, parse_versioned_block,
+    versioned_block_pattern,
 )
 from orbi.delivery_labels import (
     BLOCKED_LABEL, FIX_NEEDED_LABEL, P0_LABEL, READY_LABEL,
@@ -160,10 +161,27 @@ def _validate(record: BaseCIRed) -> None:
         )
 
 
+def _serialize(payload: dict) -> str:
+    """One block payload: compact JSON with the HTML delimiters escaped.
+
+    The block is an HTML comment and the record carries GitHub's own
+    text: a check name may hold the comment terminator (a workflow named
+    after a shell pipeline) and the base branch is a user string.
+    Unescaped, a terminator closes the comment early, the next tick's
+    `parse` reads a truncated payload as corruption, and `paused_scene`
+    abandons the recovery (Issue #1998). The JSON \\u003c / \\u003e escapes
+    decode back to the exact same value, exactly the way the progress
+    block serializes its summary (`progress_summary.serialize_summary`).
+    """
+    return json.dumps(
+        payload, separators=(",", ":"), ensure_ascii=False,
+    ).replace("<", "\\u003c").replace(">", "\\u003e")
+
+
 def render(record: BaseCIRed) -> str:
     """Render the single hidden block for one record (deterministic)."""
     _validate(record)
-    payload = json.dumps(
+    payload = _serialize(
         {
             "schema": record.schema,
             "state": record.state,
@@ -172,7 +190,6 @@ def render(record: BaseCIRed) -> str:
             "pr": record.pr,
             "failing_checks": list(record.failing_checks),
         },
-        separators=(",", ":"), ensure_ascii=False,
     )
     return BLOCK_TEMPLATE.format(payload=payload)
 
@@ -475,6 +492,12 @@ def rewrite_state(body: str, state: str, *, language_code: str) -> str:
     The state line is APPENDED above the block, so the comment keeps a
     short timeline (paused -> green again -> merged) instead of
     rewriting history; the block itself is replaced, never duplicated.
+
+    The block is located by its marker ENVELOPE, never by the exact text
+    today's `render` produces: a comment written before #1998 escaped the
+    HTML delimiters carries a raw `<`/`>` (a check name such as
+    `tests (>=3.10)`) and still parses, so a text-exact replace would
+    silently no-op and leave it `waiting` for good.
     """
     record = parse(body)
     if record is None:
@@ -501,8 +524,8 @@ def rewrite_state(body: str, state: str, *, language_code: str) -> str:
     )
     if line.strip() not in (text.strip() for text in lines[:marker_index]):
         lines[marker_index:marker_index] = [line, ""]
-    return "\n".join(lines).replace(
-        render(record), render(updated), 1,
+    return versioned_block_pattern(_MARKER).sub(
+        lambda _match: render(updated), "\n".join(lines), count=1,
     ).rstrip() + "\n"
 
 

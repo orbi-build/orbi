@@ -100,6 +100,31 @@ def test_parse_round_trips_a_rendered_block():
     assert base_ci_red.parse(base_ci_red.render(merged)) == merged
 
 
+ARROW_CHECK = "build --> deploy"
+NESTED_MARKER_CHECK = "lint <!-- see the note"
+
+
+def test_a_check_name_that_closes_an_html_comment_round_trips():
+    """The block is an HTML comment: '-->' in a field must not end it.
+
+    A check name is GitHub's own text (a workflow name may carry a shell
+    pipeline) and the base branch is a user string, so either one can
+    hold the comment terminator. Unescaped, the next tick's parse reads a
+    truncated payload, raises `BaseCIRedError ... Unterminated string`
+    and `paused_scene` abandons the recovery (Issue #1998). The payload
+    escapes '<'/'>' exactly the way the progress block does, and the
+    reader decodes the same value back.
+    """
+    escaped = record(
+        failing_checks=(ARROW_CHECK, NESTED_MARKER_CHECK),
+        base_branch="release-->7",
+    )
+    block = base_ci_red.render(escaped)
+    assert block.count("-->") == 1
+    assert block.count("<!--") == 1
+    assert base_ci_red.parse(block) == escaped
+
+
 def test_parse_returns_none_without_a_block():
     assert base_ci_red.parse("") is None
     assert base_ci_red.parse("just prose") is None
@@ -663,11 +688,11 @@ def test_fix_base_apply_without_a_block_fails_as_a_command_step(monkeypatch):
 # --------------------------------------------------------------------------
 
 def _scan_gh(monkeypatch, *, base_runs, pr_state="OPEN", comments=None,
-             labels=("ai-blocked",), base_head=BASE_SHA):
+             labels=("ai-blocked",), base_head=BASE_SHA, checks=(CHECK,)):
     gh = FakeGh(REPO)
     gh.add_issue(1825, title="t", labels=labels)
-    _blocks_issue(gh, number=1825, **({} if comments is None
-                                      else {"state": comments}))
+    _blocks_issue(gh, number=1825, checks=checks,
+                  **({} if comments is None else {"state": comments}))
     gh.add_pr(PR_NUMBER, head="orbi/x", base=BASE_BRANCH, state=pr_state)
     # The PR's recorded base snapshot: deliberately NOT the base branch's
     # head (GitHub never moves it when the base branch advances).
@@ -696,6 +721,57 @@ def test_the_scan_recovers_a_green_base_without_a_human(monkeypatch):
     labels = gh.issues[1825]["labels"]
     assert "ai-fix-needed" in labels
     assert "ai-blocked" not in labels
+    assert base_ci_red.parse(_block_comment(gh)["body"]).state == "resuming"
+
+
+def test_the_scan_recovers_a_check_name_that_closes_the_comment(
+        monkeypatch):
+    """Recovery is driven by the record read back from the block.
+
+    A check name carrying `-->` must therefore still parse: the base
+    check turns green and the paused delivery resumes, instead of the
+    scan abandoning the scene as corrupted (Issue #1998).
+    """
+    gh = _scan_gh(
+        monkeypatch, checks=(ARROW_CHECK,),
+        base_runs=[{"id": 1, "name": ARROW_CHECK, "status": "completed",
+                    "conclusion": "success", "html_url": "", "output": {}}],
+    )
+    assert base_ci_red.paused_scene(
+        gh.issues[1825]["comments"], repo=REPO) is not None
+    assert base_ci_red.recover(REPO, language_code="en") == [1825]
+    assert "ai-fix-needed" in gh.issues[1825]["labels"]
+    assert "ai-blocked" not in gh.issues[1825]["labels"]
+    assert base_ci_red.parse(_block_comment(gh)["body"]).state == "resuming"
+
+
+LEGACY_ARROW_CHECK = "tests (>=3.10)"
+
+
+def test_a_block_written_before_the_escaping_still_rewrites_its_state(
+        monkeypatch):
+    """A block already on an Issue was written unescaped (pre-#1998).
+
+    Its record parses fine (no `-->`, only `>=`), so the recovery scan
+    must still rewrite it in place: the block is replaced by its marker
+    envelope, never by the exact text today's `render` produces.
+    Otherwise the escaped reader would match nothing, the block would stay
+    `waiting` and the 7-day reminder would post again on every tick.
+    """
+    gh = _scan_gh(
+        monkeypatch, checks=(LEGACY_ARROW_CHECK,),
+        base_runs=[{"id": 1, "name": LEGACY_ARROW_CHECK,
+                    "status": "completed", "conclusion": "success",
+                    "html_url": "", "output": {}}],
+    )
+    comment = _block_comment(gh)
+    rendered = base_ci_red.render(
+        record(failing_checks=(LEGACY_ARROW_CHECK,)))
+    # The PRE-#1998 payload: raw JSON, the HTML delimiters unescaped.
+    legacy = rendered.replace("\\u003c", "<").replace("\\u003e", ">")
+    comment["body"] = comment["body"].replace(rendered, legacy)
+    assert base_ci_red.parse(comment["body"]).state == "waiting"
+    assert base_ci_red.recover(REPO, language_code="en") == [1825]
     assert base_ci_red.parse(_block_comment(gh)["body"]).state == "resuming"
 
 
