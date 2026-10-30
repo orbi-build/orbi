@@ -30,7 +30,9 @@ still scanned on the next tick and the same command continues from what is
 already on the ticket; a ticket that already carries this command's success
 receipt only gets step 4. The success receipt uses the command layer's own
 marker keyed on the command comment, so "has this command already
-succeeded?" is a marker lookup over the raw bodies, never prose.
+succeeded?" is a marker lookup over the raw bodies, never prose — and only
+a receipt THIS runner wrote counts (`runner_receipt`): the marker is public
+text, so a copied one must never stand in for the work (Issue #1992).
 
 The two steps that change what the next tick reads — the append and the
 dispatch label — are wrapped in the shared `ticket_command.run_step`, so
@@ -55,6 +57,7 @@ from orbi.ticket_command import (
     command_receipt_marker,
     register_command,
     run_step,
+    runner_receipt,
 )
 
 # The heading the conditions land under follows the message language
@@ -192,7 +195,7 @@ def _criteria_apply(
         f"<!-- {command_receipt_marker(ADD_CRITERIA_COMMAND)} "
         f"comment={command_comment_key(command_comment)} -->"
     )
-    if not any(receipt in str(other.get("body")) for other in comments):
+    if not runner_receipt(comments, receipt):
         current = issue.get("body") or ""
         if appended_marker() not in current:
             section = render_acceptance(suggestion.items, language_code)

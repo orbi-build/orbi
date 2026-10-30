@@ -60,7 +60,12 @@ from typing import TypeVar
 
 from orbi import language
 from orbi.github import (
-    WRITE_PERMISSIONS, issue_comments, list_issues, repository_permission,
+    WRITE_PERMISSIONS,
+    authenticated_github_login,
+    issue_comments,
+    list_issues,
+    repository_permission,
+    strip_bot_suffix,
 )
 from orbi.journal import JOURNAL_EVENTS, event, run_command
 
@@ -90,6 +95,55 @@ def is_runner_comment(comment: object) -> bool:
         return False
     body = comment.get("body")
     return isinstance(body, str) and RUNNER_COMMENT_MARKER in body
+
+
+# The App prefix gh puts on an author login. A real call against a ticket
+# this runner opened reads {"is_bot": true, "login": "app/orbi-build"} from
+# the issue view author field, while the SAME credential's comments and
+# auth status say "orbi-build" / "orbi-build[bot]": three shapes, one
+# account. Author comparisons normalize the shapes first (Issue #1927).
+API_LOGIN_PREFIX = "app/"
+
+
+def login_key(login: str) -> str:
+    """The comparable form of one GitHub account login."""
+    if login.startswith(API_LOGIN_PREFIX):
+        login = login[len(API_LOGIN_PREFIX):]
+    return strip_bot_suffix(login)
+
+
+def runner_login() -> str:
+    """The comparable login of the account this Runner's credential is."""
+    return login_key(authenticated_github_login())
+
+
+def author_login_key(comment: object) -> str | None:
+    """The comparable login of a comment's author, or None."""
+    login = comment_author_login(comment)
+    return login_key(login) if login else None
+
+
+def runner_receipt(comments: list[dict], receipt: str) -> bool:
+    """True when a comment THIS runner wrote carries the success receipt.
+
+    Every command's success reply is also its idempotency record: the next
+    scan looks the receipt marker up in the ticket's raw bodies instead of
+    re-running the command. The marker is public text on a public ticket,
+    so anyone who can comment can copy it — only the authenticated
+    account's own comment authenticates a completion record. A different
+    or unreadable author is never one, so a copied marker can neither skip
+    a command's work nor release its scan label (Issues #1938, #1992).
+    """
+    candidates = [
+        comment for comment in comments
+        if isinstance(comment, dict)
+        and isinstance(comment.get("body"), str)
+        and receipt in comment["body"]
+    ]
+    if not candidates:
+        return False
+    runner = run_step("identify this runner", runner_login)
+    return any(author_login_key(comment) == runner for comment in candidates)
 
 
 # The permission levels a CommandSpec may declare, level -> the repository

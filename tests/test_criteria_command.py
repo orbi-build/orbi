@@ -546,26 +546,109 @@ def test_the_command_is_registered_with_the_shared_layer():
     assert "add_criteria_command_failed" in journal.JOURNAL_EVENTS
 
 
-def test_a_ticket_that_already_carries_the_success_receipt_only_checks(
-    monkeypatch,
-):
-    """A resumed caller whose ticket already carries the success receipt and
-    lost the scan label changes nothing."""
-    gh = _gh(monkeypatch)
-    stopped_ticket(gh)
+# --------------------------------------------------------------------------
+# a copied success receipt is never a completion (Issue #1992)
+# --------------------------------------------------------------------------
+
+def receipt_text(key: object) -> str:
+    """The hidden completion record of the command comment `key`."""
     marker = ticket_command.command_receipt_marker(
         criteria_command.ADD_CRITERIA_COMMAND,
     )
+    return f"<!-- {marker} comment={key} -->"
+
+
+def receipt_comments(gh: FakeGh) -> list[dict]:
+    return [
+        comment for comment in gh.issues[TICKET]["comments"]
+        if receipt_marker("") in comment["body"]
+    ]
+
+
+def test_a_copied_success_receipt_does_not_count(monkeypatch, tmp_path):
+    """Acceptance 1 (Issue #1992): the receipt marker is public text, so a
+    read-only commenter can copy it. Reading the marker without its author
+    let that copy answer for the command — the criteria were never appended
+    and the ticket lost `ai-needs-detail` while nothing had run."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
+    reply(gh)
+    key = ticket_command.command_comment_key(
+        gh.issues[TICKET]["comments"][-1]
+    )
+    gh.comment(
+        TICKET, receipt_text(key), login="stranger", association="NONE",
+    )
+    gh.add_collaborator("stranger", "read")
+
+    assert tick(monkeypatch, tmp_path, gh) is not None
+
+    # The command runs: the section is appended, the ticket is queued and
+    # the scan label is removed only after that.
+    body = gh.issues[TICKET]["body"]
+    assert body.count(APPENDED_MARKER) == 1
+    assert "- The tag survives a reload" in body
+    assert READY_LABEL in labels(gh)
+    assert NEEDS_DETAIL_LABEL not in labels(gh)
+    # The genuine receipt is the runner's own, beside the copied one.
+    receipts = receipt_comments(gh)
+    assert [comment["author"]["login"] for comment in receipts] == [
+        "stranger", gh.login,
+    ]
+    assert "Adding a tag makes the note findable by filtering" in (
+        receipts[1]["body"]
+    )
+
+
+@pytest.mark.parametrize("author", [
+    {"login": "stranger"},   # a different account
+    {},                      # an unreadable author payload
+    None,
+])
+def test_only_the_runners_own_receipt_authenticates_the_append(
+    monkeypatch, author,
+):
+    """Acceptance 1 (Issue #1992): an unreadable or foreign author never
+    turns the public marker into proof the criteria were appended."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh, labels=())
+    comment: dict = {"body": receipt_text(1)}
+    if author is not None:
+        comment["author"] = author
+
+    criteria_command.ADD_CRITERIA_COMMAND.apply(
+        "", repo=REPO, issue_number=TICKET, command_comment={"id": 1},
+        comments=[comment],
+        issue={"number": TICKET, "body": BODY, "labels": []},
+        suggestion=TWO_CRITERIA, language_code="en",
+    )
+
+    assert gh.issues[TICKET]["body"].count(APPENDED_MARKER) == 1
+    assert len(success_receipts(gh)) == 1
+
+
+def test_a_runner_authored_receipt_short_circuits_the_append(monkeypatch):
+    """Acceptance 2 (Issue #1992): a receipt THIS runner wrote still means
+    the command already ran, so the append is skipped (no duplicate
+    section, no second receipt) and only the scan label is removed."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh)
     before = comment_bodies(gh)
     criteria_command.ADD_CRITERIA_COMMAND.apply(
         "", repo=REPO, issue_number=TICKET, command_comment={"id": 1},
-        comments=[{"body": f"<!-- {marker} comment=1 -->"}],
-        issue={"number": TICKET, "body": BODY, "labels": []},
+        comments=[{
+            "body": receipt_text(1), "author": {"login": gh.login},
+        }],
+        issue={
+            "number": TICKET, "body": BODY,
+            "labels": [{"name": NEEDS_DETAIL_LABEL}],
+        },
         suggestion=TWO_CRITERIA, language_code="en",
     )
     assert gh.issues[TICKET]["body"] == BODY
     assert comment_bodies(gh) == before
     assert success_receipts(gh) == []
+    assert NEEDS_DETAIL_LABEL not in labels(gh)
 
 
 def test_apply_refuses_a_ticket_without_a_proposal(monkeypatch):

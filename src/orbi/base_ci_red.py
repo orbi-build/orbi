@@ -59,6 +59,7 @@ from orbi.progress import fenced
 from orbi.ticket_command import (
     CommandSpec, TicketCommandError, command_comment_key,
     command_receipt_marker, process_commands, register_command,
+    runner_receipt,
 )
 
 SCHEMA_VERSION = 1
@@ -894,7 +895,10 @@ def _fix_base_apply(
     Idempotent per COMMENT: the reply carries the command layer's own
     receipt marker, so a second tick that still sees the same command
     comment does nothing (the block stays `waiting` until the base turns
-    green, so the comment is visible for several ticks).
+    green, so the comment is visible for several ticks). Only a receipt
+    THIS runner wrote counts (`runner_receipt`): the marker is public
+    text, so a copied one must never read as "the fix Issue was opened"
+    (Issue #1992).
     """
     if not isinstance(record, BaseCIRed):
         # The layer's contract: a handler that cannot run raises its own
@@ -908,7 +912,7 @@ def _fix_base_apply(
         f"<!-- {command_receipt_marker(FIX_BASE_COMMAND)} "
         f"comment={command_comment_key(command_comment)} -->"
     )
-    if any(receipt in str(other.get("body")) for other in comments):
+    if runner_receipt(comments, receipt):
         return
     checks = failing_checks(repo, list(record.failing_checks), record.base_sha)
     if not checks:
