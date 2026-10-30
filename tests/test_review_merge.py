@@ -869,6 +869,79 @@ def test_merge_gate_absorb_detects_head_moved_after_push(monkeypatch, tmp_path):
                           "main", repo_dir=tmp_path, language_code="en")
 
 
+def _recording_absorb_fake(states, views):
+    """The absorb fake plus a record of every PR-view read."""
+    fake = _absorb_merge_command_fake(states)
+
+    def recording(command, **kwargs):
+        if command[0:3] == ["gh", "pr", "view"]:
+            views.append(command)
+        return fake(command, **kwargs)
+    return recording
+
+
+def test_merge_gate_absorb_waits_for_the_pr_view_to_catch_up(
+        monkeypatch, tmp_path):
+    """Issue #2017: the `git ls-remote` read proves the absorb push landed
+    (it is read-after-write consistent) while GitHub's PR view still reports
+    the pre-absorb head for a few seconds. That is staleness, not a finding:
+    the gate re-reads it bounded and takes the mergeable/rollup facts from
+    the read that saw the absorbed head, instead of failing the round."""
+    views = []
+    monkeypatch.setattr(seam, "run_command", _recording_absorb_fake([
+        _absorb_pr_state("h1"),
+        # The stale view would fail the round if its facts were used.
+        _absorb_pr_state("h1", mergeable="DIRTY"),
+        _absorb_pr_state("h2"),
+    ], views))
+    sleeps = []
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    with pytest.raises(merge_exec.DeliveryDeferred) as deferred:
+        merge_exec.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
+                                     "head_ref": "h", "base_oid": "b1"},
+                          "main", repo_dir=tmp_path, language_code="en")
+    assert "and pushed h2" in str(deferred.value)
+    assert len(views) == 3
+    assert sleeps == [merge_exec.HEAD_REF_CATCHUP_DELAYS[0]]
+
+
+def test_merge_gate_absorb_fails_when_the_view_never_catches_up(
+        monkeypatch, tmp_path):
+    """Issue #2017: a PR view still on the pre-absorb head after the bounded
+    re-read is a real failure and keeps the existing message."""
+    views = []
+    monkeypatch.setattr(seam, "run_command", _recording_absorb_fake([
+        _absorb_pr_state("h1")
+        for _ in range(2 + len(merge_exec.HEAD_REF_CATCHUP_DELAYS))
+    ], views))
+    sleeps = []
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    with pytest.raises(RuntimeError, match="head moved after base absorb"):
+        merge_exec.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
+                                     "head_ref": "h", "base_oid": "b1"},
+                          "main", repo_dir=tmp_path, language_code="en")
+    assert len(views) == 2 + len(merge_exec.HEAD_REF_CATCHUP_DELAYS)
+    assert sleeps == list(merge_exec.HEAD_REF_CATCHUP_DELAYS)
+
+
+def test_merge_gate_absorb_fails_without_waiting_on_a_third_commit(
+        monkeypatch, tmp_path):
+    """Issue #2017: a head that is neither the absorbed nor the pre-absorb
+    head is someone else's push — fail at once with the existing message."""
+    views = []
+    monkeypatch.setattr(seam, "run_command", _recording_absorb_fake([
+        _absorb_pr_state("h1"), _absorb_pr_state("other"),
+    ], views))
+    sleeps = []
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    with pytest.raises(RuntimeError, match="head moved after base absorb"):
+        merge_exec.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
+                                     "head_ref": "h", "base_oid": "b1"},
+                          "main", repo_dir=tmp_path, language_code="en")
+    assert len(views) == 2
+    assert sleeps == []
+
+
 def test_merge_gate_absorb_rejects_newly_dirty_pr(monkeypatch, tmp_path):
     monkeypatch.setattr("orbi.runner.fetch_base_ref", lambda *args, **kwargs: None)
     monkeypatch.setattr("orbi.run_state.assess_base_freshness",
