@@ -47,11 +47,15 @@ from orbi.pi_idle import (
     IdleRecoveryTracker,
 )
 from orbi.pi_recovery import (
+    STOP_CHILD_GRACE_SECONDS,
+    shutdown_child,
     slots_idle,
     upstream_alive,
 )
 from orbi.pi_stream_log import (
     _classify_startup_exit,
+    _decode_chunks,
+    _drain_stream,
     _is_rate_limited,
     _log_activity,
     _log_heartbeat,
@@ -147,6 +151,10 @@ class PiWatchOptions:
     model_wait_dead_seconds: float = PI_MODEL_WAIT_DEAD_SECONDS
     model_wait_probe_url: str | None = None
     model_wait_probe_seconds: float = PI_MODEL_WAIT_PROBE_SECONDS
+    # The bounded wait between the TERM and the KILL when the session's
+    # exit path reaps a child that does not exit on TERM (Issue #1995):
+    # the same grace the Runner's stop handler uses.
+    child_grace_seconds: float = STOP_CHILD_GRACE_SECONDS
     # Session activity timestamps are normally compared with wall clock
     # time. Tests can provide a deterministic clock without changing the
     # watcher's production defaults.
@@ -358,35 +366,9 @@ class RateLimitExhaustedError(RuntimeError):
     must see the provider quota, not the task, as the cause."""
 
 
+# The drain window of the child's output pipes (the drain itself lives
+# in `orbi.pi_stream_log`, which owns the session's streams).
 _DRAIN_SILENCE_S = 30.0
-
-
-def _drain_stream(stream, chunks: list[bytes],
-                  silence_s: float = 30.0) -> bool:
-    """Read a pipe to EOF, appending chunks (process must be finished).
-
-    Pi's tool subprocesses inherit this pipe's write end and
-    can outlive Pi — after Pi is reaped, EOF then never arrives and an
-    unbounded blocking read would wedge the tick (and its slot) forever,
-    past every timeout mechanism. Each received chunk restarts the
-    `silence_s` window (silence, not total, time: a busy legitimate
-    writer must never be cut off mid-verdict); when the stream stays
-    silent for the whole window the tail is abandoned. Returns False
-    when the drain was abandoned, True on EOF.
-    """
-    fd = stream.fileno()
-    while True:
-        ready, _, _ = select.select([fd], [], [], silence_s)
-        if not ready:
-            return False
-        data = os.read(fd, 65536)
-        if not data:
-            return True
-        chunks.append(data)
-
-
-def _decode_chunks(chunks: list[bytes]) -> str:
-    return b"".join(chunks).decode("utf-8", "replace")
 
 
 # The 429 response's own retry hint, in the two shapes observed in the
@@ -561,6 +543,7 @@ def stream_pi(
                 model_wait_dead_seconds=watch.model_wait_dead_seconds,
                 model_wait_probe_url=watch.model_wait_probe_url,
                 model_wait_probe_seconds=watch.model_wait_probe_seconds,
+                child_grace_seconds=watch.child_grace_seconds,
                 run_id=run_id, issue_ref=issue_ref, branch=branch,
                 role=role, safe_command=safe_command, progress=progress,
                 pi_env=pi_env, session_dir=session_dir,
@@ -648,6 +631,7 @@ def _stream_pi_once(
     model_wait_dead_seconds: float,
     model_wait_probe_url: str | None,
     model_wait_probe_seconds: float,
+    child_grace_seconds: float,
     run_id: str,
     issue_ref: str,
     branch: str,
@@ -1029,6 +1013,16 @@ def _stream_pi_once(
             if process.poll() is not None:
                 break
     finally:
+        # Reap the child HERE, in the session's single exit path, before
+        # the active-process record is cleared (Issue #1995): every
+        # termination point (the steering restart's terminate, the
+        # timeout/idle/model-wait kills) falls through this block, and
+        # the next session starts in the SAME worktree — a child that
+        # survived its terminate() would work next to the new agent.
+        # The rule is the stop handler's (TERM, bounded grace, KILL,
+        # reap); the grace is the watcher's `child_grace_seconds`
+        # (same default as the stop handler).
+        shutdown_child(process, grace=child_grace_seconds)
         # The child is reaped (or dead): the stop handler must never
         # signal an already-exited process.
         set_active_pi(None)

@@ -49,6 +49,51 @@ def make_fake_pi(tmp_path: Path, *, session_records: list[tuple[float, dict]],
     return [sys.executable, "-c", script]
 
 
+def make_steering_restart_pi(*, ignore_sigterm: bool,
+                             ready: Path | None = None,
+                             first_prompt: str = "initial context"
+                             ) -> list[str]:
+    """A fake Pi for the steering-restart scene (Issue #1995).
+
+    The session spawned with `first_prompt` stays alive until someone
+    ends it — with `ignore_sigterm` it also ignores SIGTERM, so only a
+    bounded grace followed by SIGKILL ends it: the child the steering
+    restart leaves behind when the session's exit path does not reap it.
+    A session spawned with a STEERED prompt (the restart `stream_pi`
+    performs by replacing the command's last argument) completes at once
+    with `ok`, so a restart whose previous child is still alive has to
+    share the worktree with it. The first session's wait is short (5 s):
+    a broken implementation fails the caller's assertion instead of
+    hanging the suite (Issue #95).
+
+    `ready` names a file the first session creates once its own SIGTERM
+    handling is installed and it is about to wait: a steering request
+    sent before that would race the interpreter's startup and kill a
+    child that had not armed itself yet.
+    """
+    ignore = (
+        "    import signal as _sig\n"
+        "    _sig.signal(_sig.SIGTERM, _sig.SIG_IGN)\n"
+        if ignore_sigterm else ""
+    )
+    armed = (
+        f"    open({str(ready)!r}, 'w').write('ready')\n"
+        if ready is not None else ""
+    )
+    script = (
+        "import sys, time\n"
+        f"if sys.argv[1] == {first_prompt!r}:\n"
+        f"{ignore}"
+        f"{armed}"
+        "    time.sleep(5.0)\n"
+        "    sys.exit(0)\n"
+        "time.sleep(0.1)\n"
+        "sys.stdout.write('ok')\n"
+        "sys.exit(0)\n"
+    )
+    return [sys.executable, "-c", script, first_prompt]
+
+
 def fresh_timestamp(offset: float = 0.0) -> str:
     """A session timestamp at (real) now + offset.
 
