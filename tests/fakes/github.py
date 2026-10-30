@@ -35,9 +35,8 @@ from urllib.parse import unquote
 _SEARCH_TOKEN_RE = re.compile(
     r'milestone:"([^"]+)"|"([^"]+)"|(\S+)'
 )
-# The one jq program the adapter runs against the milestones endpoint
-# (`milestone_open_issue_count`): the title-select reading GitHub's own
-# open-Issue counter.
+
+
 def _with_response_headers(payload: str, status: int = 200,
                            reason: str = "OK") -> str:
     """The `gh api --include` shape: status line, headers, blank, body."""
@@ -50,9 +49,6 @@ def _with_response_headers(payload: str, status: int = 200,
     )
 
 
-_MILESTONE_JQ_RE = re.compile(
-    r'^\.\[\] \| select\(\.title=="([^"]+)"\) \| \.open_issues$'
-)
 # GitHub's answer to the branch-rules read of a private repository on a
 # plan without rulesets (Issue #1361). It is a 403 like a permission
 # failure; only this documented message tells them apart.
@@ -665,22 +661,22 @@ class FakeGh:
             return json.dumps({"permission": permission,
                                "role_name": permission})
         match = re.fullmatch(
-            r"repos/([^/]+/[^/]+)/milestones\?"
-            r"state=all&per_page=100",
+            r"repos/([^/]+/[^/]+)/milestones\?state=(all|open)&per_page=100",
             path,
         )
         if match:
-            # The milestone LIST read (`list_milestones`):
+            # The milestone LIST reads (`list_milestones` with all
+            # states, `milestone_open_issue_count` with the open ones):
             # `--paginate --slurp` wraps one page as an array of arrays,
             # insertion order (GitHub returns creation order).
             self._repo_or_fail(match.group(1))
             self._known_flags(flags, ("--paginate", "--slurp"),
                               ["gh", "api", path])
-            return json.dumps([list(self.milestones.values())])
-        match = re.fullmatch(r"repos/([^/]+/[^/]+)/milestones", path)
-        if match:
-            self._repo_or_fail(match.group(1))
-            return self._milestone_jq((flags.get("--jq") or [""])[0])
+            state = match.group(2)
+            return json.dumps([[
+                milestone for milestone in self.milestones.values()
+                if state == "all" or milestone["state"] == state
+            ]])
         match = re.fullmatch(
             r"repos/([^/]+/[^/]+)/commits/([^/]+)/check-runs", path,
         )
@@ -825,18 +821,6 @@ class FakeGh:
             "content": {"sha": fields["sha"]},
             "commit": {"sha": "0" * 40},
         })
-
-    def _milestone_jq(self, jq: str) -> str:
-        """Answer the title-select jq with GitHub's own open_issues
-        counter; an unknown title yields empty output (the adapter
-        turns that into its not-found failure, never a silent 0)."""
-        match = _MILESTONE_JQ_RE.fullmatch(jq)
-        if match is None:
-            self._unsupported(["gh", "api", "--jq", jq])
-        for milestone in self.milestones.values():
-            if milestone["title"] == match.group(1):
-                return str(milestone["open_issues"])
-        return ""
 
     # --- shared helpers -------------------------------------------------------
 

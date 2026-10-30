@@ -409,33 +409,31 @@ def list_milestones(repo: str, *, timeout: int | None = None) -> list[dict]:
 
 
 def milestone_open_issue_count(repo: str, milestone_title: str) -> int:
-    """Return the Open-Issue count of one Milestone.
+    """Return the Open-Issue count of one open Milestone, all pages.
 
-    A single `gh api` call reads GitHub's own `open_issues` counter —
-    the authority on whether the Milestone still has unfinished work.
-    Unlike the search-based ready scans it does not depend on the search
-    index and it is not affected by a delivery-state label, so an Issue
-    temporarily outside the ready queue (`ai-blocked`, `ai-pr-opened`,
-    or not yet indexed) still counts. The title-filtered `--jq` is the
-    command documented in the Issue, verified against the live API. An
-    empty result means the Milestone could not be found on the first
-    results page (the REST list the call reads is unpaginated, so a
-    target beyond the default page size reads as missing): that is a
-    failed check, never a silent 0 (the caller must not release on it).
+    GitHub's own `open_issues` counter is the authority on whether the
+    Milestone still has unfinished work. Unlike the search-based ready
+    scans it does not depend on the search index and it is not affected
+    by a delivery-state label, so an Issue temporarily outside the ready
+    queue (`ai-blocked`, `ai-pr-opened`, or not yet indexed) still
+    counts.
+
+    The open-Milestone list is read paginated and the title is matched in
+    Python (Issue #1994): a target beyond the first REST page is found,
+    and a title carrying a `"` can never break the query the way a
+    `--jq` program built from the title did. No match is a failed
+    check, never a silent 0 (the caller must not release on it).
     """
-    raw = run_gh_read_command(
-        [
-            "gh", "api", f"repos/{repo}/milestones",
-            "--jq",
-            f'.[] | select(.title=="{milestone_title}") | .open_issues',
-        ],
-        timeout=30,
+    raw = run_gh_read_command([
+        "gh", "api", f"repos/{repo}/milestones?state=open&per_page=100",
+        "--paginate", "--slurp",
+    ], timeout=30)
+    for milestone in parse_paginated_issue_array(raw):
+        if milestone.get("title") == milestone_title:
+            return int(milestone["open_issues"])
+    raise RuntimeError(
+        f"Milestone {milestone_title!r} not found in {repo}"
     )
-    if not raw:
-        raise RuntimeError(
-            f"Milestone {milestone_title!r} not found in {repo}"
-        )
-    return int(raw)
 
 
 def close_milestone(repo: str, number: int) -> None:
