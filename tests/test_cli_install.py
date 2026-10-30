@@ -500,6 +500,6 @@ def test_reinstall_argv_is_the_verified_editable_force_reinstall(tmp_path):
     command, kwargs = calls[0]
     assert command == [
         "uv", "tool", "install", "--force", "--reinstall", "--editable",
-        "--python", cli_source.PYTHON_INTERPRETER, str(tmp_path),
+        "--python", cli_source.select_python_interpreter(), str(tmp_path),
     ]
     assert kwargs["timeout"] == cli_source.UV_INSTALL_TIMEOUT_SECONDS

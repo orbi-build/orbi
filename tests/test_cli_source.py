@@ -26,6 +26,8 @@ import pytest
 from orbi import cli_source
 from orbi.journal import quote_value
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _fake_module_file(path: str) -> ModuleType:
     """A stand-in for the imported `orbi` module."""
@@ -52,9 +54,11 @@ def test_reinstall_command_is_the_editable_force_reinstall():
     command = cli_source.reinstall_command(
         Path("/home/xqianliu/Documents/orbi/orbi"),
     )
+    # The interpreter is the selection result, decided when the command
+    # is BUILT (never at import — Issue #2001).
     assert command == (
         "uv tool install --force --reinstall --editable "
-        f"--python {cli_source.PYTHON_INTERPRETER} "
+        f"--python {cli_source.select_python_interpreter()} "
         "/home/xqianliu/Documents/orbi/orbi"
     )
 
@@ -299,10 +303,117 @@ def test_selection_provisions_3_14_without_a_system_python3(monkeypatch):
     assert cli_source.select_python_interpreter() == "3.14"
 
 
-def test_python_interpreter_constant_follows_the_selection():
-    """The module constant the reinstall argv (and every fix string)
-    embeds is THE selection result — one rule, no divergent copy."""
-    assert (
-        cli_source.PYTHON_INTERPRETER
-        == cli_source.select_python_interpreter()
+# --- no interpreter probe at import (Issue #2001) ---------------------------
+#
+# The selection runs a subprocess probe. It used to run at module import
+# (`PYTHON_INTERPRETER = select_python_interpreter()`), so EVERY Runner
+# start paid it before logging was configured: a wedged interpreter hung
+# the tick for up to PROBE_TIMEOUT_SECONDS with no journal line. The
+# interpreter is decided when a reinstall is actually about to happen,
+# and the probe goes through the single subprocess seam
+# (`orbi.journal.run_command`, CONSTITUTION Article 3.4).
+
+# A fresh interpreter that makes every subprocess spawn fail, then imports
+# the modules a Runner start imports. AssertionError (not a caught OSError)
+# is deliberate: a probe that swallows spawn failures would still leave the
+# import test green with a hanging direct `subprocess.run`.
+IMPORT_SPAWN_GUARD = """
+import subprocess
+
+def _forbidden(*args, **kwargs):
+    raise AssertionError(f"subprocess spawned at import: {args!r}")
+
+
+subprocess.run = _forbidden
+subprocess.Popen = _forbidden
+
+import orbi.journal as journal
+
+journal.run_command = _forbidden
+
+import orbi.cli_source  # noqa: F401
+import orbi.cli  # noqa: F401  (the systemd ExecStart entry)
+import orbi.runner  # noqa: F401
+
+print("import_spawned_no_subprocess")
+"""
+
+
+def test_importing_the_runner_and_cli_source_spawns_no_subprocess():
+    """Acceptance 1: importing `orbi.cli_source`, `orbi.runner` (and the
+    `orbi.cli` entry the Runner starts through) spawns no subprocess.
+    Proven in a FRESH interpreter with both the seam and
+    `subprocess.run`/`Popen` stubbed to fail — the in-process suite
+    already imported these modules, so it cannot observe an import-time
+    probe."""
+    import os
+    import subprocess
+    import sys
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    result = subprocess.run(
+        [sys.executable, "-c", IMPORT_SPAWN_GUARD],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True,
+        timeout=120,
     )
+    assert result.returncode == 0, (
+        f"importing the Runner spawned a subprocess: "
+        f"rc={result.returncode} stderr={result.stderr.strip()}"
+    )
+    assert "import_spawned_no_subprocess" in result.stdout
+
+
+def test_probe_runs_through_the_subprocess_seam(monkeypatch):
+    """The probe is one `run_command` call (CONSTITUTION Article 3.4:
+    the single subprocess seam — no direct `subprocess.run`), with the
+    blocking-command timeout (Issue #95)."""
+    import subprocess
+
+    calls = []
+
+    def fake_run_command(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(cli_source, "run_command", fake_run_command)
+    assert cli_source.system_python3_compatible("/usr/bin/python3") is True
+    assert calls == [
+        (
+            ["/usr/bin/python3", "-S", "-c", cli_source.PYTHON_PROBE_CODE],
+            {"timeout": cli_source.PROBE_TIMEOUT_SECONDS, "check": False},
+        ),
+    ]
+
+
+def test_reinstall_args_embed_the_system_python3_when_compatible(
+    tmp_path, monkeypatch,
+):
+    """Acceptance 2 (compatible case): the reinstall argv is unchanged —
+    a system `python3` that satisfies the floor is passed directly."""
+    monkeypatch.setattr(
+        cli_source.shutil, "which",
+        lambda name: _fake_python3(tmp_path, "exit 0"),
+    )
+    repo = Path("/checkout")
+    assert cli_source.reinstall_args(repo) == [
+        "uv", "tool", "install", "--force", "--reinstall", "--editable",
+        "--python", "python3", str(repo),
+    ]
+
+
+def test_reinstall_args_embed_3_14_when_the_system_python3_is_old(
+    tmp_path, monkeypatch,
+):
+    """Acceptance 2 (incompatible case): the Ubuntu 24.04 scene keeps
+    `3.14` in the argv so uv provisions/selects a compatible
+    interpreter."""
+    monkeypatch.setattr(
+        cli_source.shutil, "which",
+        lambda name: _fake_python3(tmp_path, "exit 1"),
+    )
+    repo = Path("/checkout")
+    assert cli_source.reinstall_args(repo) == [
+        "uv", "tool", "install", "--force", "--reinstall", "--editable",
+        "--python", "3.14", str(repo),
+    ]

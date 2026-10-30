@@ -296,7 +296,7 @@ def test_missing_command_carries_the_install_hint_and_link(monkeypatch):
     failure = excinfo.value
     assert failure.check == "commands"
     assert "required command missing: gh" in failure.reason
-    assert setup_checks.COMMAND_INSTALL_HINTS["gh"] in failure.fix
+    assert setup_checks.install_hint("gh") in failure.fix
     assert failure.docs == "https://cli.github.com/"
 
 
@@ -305,11 +305,12 @@ def test_orbi_install_hint_uses_the_selected_interpreter():
     interpreter the CLI editable step actually passes (cli_source's
     compatible selection: system python3 when it satisfies the floor,
     uv-provisioned 3.14 otherwise) — never a hardcoded
-    /usr/bin/python3 that fails on Ubuntu 24.04."""
+    /usr/bin/python3 that fails on Ubuntu 24.04. Issue #2001: the hint
+    is built when it is reported, never at import."""
     from orbi import cli_source
 
-    hint = setup_checks.COMMAND_INSTALL_HINTS["orbi"]
-    assert f"--python {cli_source.PYTHON_INTERPRETER}" in hint
+    hint = setup_checks.install_hint("orbi")
+    assert f"--python {cli_source.select_python_interpreter()}" in hint
     assert "/usr/bin/python3" not in hint
 
 
