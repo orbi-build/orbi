@@ -24,7 +24,7 @@ import re
 import pytest
 
 import orbi.base_ci_red as base_ci_red
-from orbi import cli, ticket_command
+from orbi import cli, ticket_command, ticket_command_registry
 from orbi.cli_parser import build_parser
 from tests.fakes.github import FakeGh
 from tests.test_base_ci_red import (
@@ -263,7 +263,7 @@ def test_the_generated_subcommand_takes_the_repo_and_the_issue():
 def test_only_arity_zero_commands_are_generated():
     """`/orbi milestone <version>` keeps its own `orbi milestone set`:
     the generated entry has no argument slot, so it is arity 0 only."""
-    assert [spec.name for spec in ticket_command.cli_specs()] == [
+    assert [spec.name for spec in ticket_command_registry.cli_specs()] == [
         "fix_base", "add_criteria", "split",
     ]
     assert ticket_command.TICKET_COMMANDS["milestone"].arity == 1
