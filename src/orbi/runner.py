@@ -158,7 +158,7 @@ from orbi.scheduler import (
 from orbi.scheduler_units import MAX_RUNNER_INSTANCES
 
 
-from orbi import pi_process
+from orbi import pi_process, pi_recovery
 from orbi.pi_process import (
     PI_IDLE_RECOVERY_CYCLES,
     PI_IDLE_WARN_SECONDS,
@@ -292,7 +292,10 @@ from orbi.release import (
 # The handler TERMs the child, waits at most this long, then KILLs it so
 # it always reaps the child and exits with 128+SIGTERM before systemd's
 # own deadline — a clean signal stop, never `failed`/`timeout`.
-STOP_CHILD_GRACE_SECONDS = 15.0
+# The rule and the constant live in `pi_recovery` (Issue #1995): the
+# session's own exit path reaps a terminated child with the same grace,
+# and `pi_process` must not import this module (Article 3.3).
+STOP_CHILD_GRACE_SECONDS = pi_recovery.STOP_CHILD_GRACE_SECONDS
 
 
 # {{ISSUE_COMMENTS}} injects the Issue's trusted-comment
@@ -389,15 +392,12 @@ def _shutdown_child(child: subprocess.Popen | None,
     ``grace`` seconds, then KILLs and reaps it, so the Runner always
     exits with the ORIGINAL signal (128+signum) before systemd's own
     deadline. A child that exits on TERM (cooperative) is unaffected; a
-    child that already exited is a no-op."""
-    if child is None or child.poll() is not None:
-        return
-    child.terminate()
-    try:
-        child.wait(timeout=grace)
-    except subprocess.TimeoutExpired:
-        child.kill()
-        child.wait()
+    child that already exited is a no-op.
+
+    The rule itself lives in `pi_recovery.shutdown_child` (Issue #1995):
+    the session's exit path reaps with the same rule and the same grace,
+    and this stop path keeps its name for its callers and tests."""
+    pi_recovery.shutdown_child(child, grace)
 
 
 def _die_from_signal(signum: int) -> None:
