@@ -1,5 +1,5 @@
 {
-  "boundary_total": 1136,
+  "boundary_total": 1135,
   "command_shape_asserts": 440,
   "internal_total": 1638,
   "monkeypatch_setattr_runner": 103,
@@ -10,7 +10,7 @@
     "claim": 94,
     "cli_commands": 31,
     "cli_doctor": 4,
-    "cli_source": 9,
+    "cli_source": 8,
     "cli_status": 65,
     "config_domain": 4,
     "delivery_labels": 6,
