@@ -582,6 +582,13 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
             isinstance(current_body, str) and current_body != steering_body
         )
         fresh: list[dict] = []
+        # This poll's trust decisions, committed to `steering_seen` only
+        # once the poll completes (Issue #1996): a permission read that
+        # raises propagates to the poller, which logs
+        # `steering_poll_failed` and DISCARDS this poll's result — a
+        # comment decided earlier in the same poll would otherwise be seen
+        # without ever having steered.
+        decided: set[str] = set()
         # GitHub exposes comment timestamps only to whole seconds. Round
         # the boundary up so a comment created in the startup second is not
         # mistaken for a post-start correction.
@@ -592,13 +599,25 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
             identifier = str(comment.get("id", ""))
             if not identifier or identifier in steering_seen:
                 continue
-            steering_seen.add(identifier)
             if str(comment.get("createdAt") or "") < started_at:
+                decided.add(identifier)
                 continue
-            if comment_is_trusted(comment, repo=source_repo):
+            # The trust decision comes BEFORE the seen mark (Issue #1996):
+            # the permission read raises on a transient GitHub failure and
+            # propagates to the poller (the `steering_poll_failed` bypass).
+            # Marking the comment first would consume it for good and the
+            # maintainer would have to post it again. A decided comment —
+            # trusted or not — is seen; one whose read raised is not, so
+            # the next poll decides it.
+            trusted = comment_is_trusted(comment, repo=source_repo)
+            decided.add(identifier)
+            if trusted:
                 item = dict(comment)
                 item["issue"] = issue["number"]
                 fresh.append(item)
+        # Every comment this poll read has a decision now, so the marks are
+        # committed together — a poll that raised above marked nothing.
+        steering_seen.update(decided)
         if limit_reached:
             if (fresh or body_changed) and not steering_limit_notice_logged:
                 steering_limit_notice_logged = True
