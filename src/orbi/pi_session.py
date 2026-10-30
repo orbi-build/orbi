@@ -592,10 +592,19 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
             identifier = str(comment.get("id", ""))
             if not identifier or identifier in steering_seen:
                 continue
-            steering_seen.add(identifier)
             if str(comment.get("createdAt") or "") < started_at:
+                steering_seen.add(identifier)
                 continue
-            if comment_is_trusted(comment, repo=source_repo):
+            # The trust decision comes BEFORE the seen mark (Issue #1996):
+            # the permission read raises on a transient GitHub failure and
+            # propagates to the poller (the `steering_poll_failed` bypass).
+            # Marking the comment first would consume it for good and the
+            # maintainer would have to post it again. A decided comment —
+            # trusted or not — is seen; one whose read raised is not, so
+            # the next poll decides it.
+            trusted = comment_is_trusted(comment, repo=source_repo)
+            steering_seen.add(identifier)
+            if trusted:
                 item = dict(comment)
                 item["issue"] = issue["number"]
                 fresh.append(item)

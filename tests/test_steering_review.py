@@ -66,6 +66,70 @@ def test_run_pi_steering_callback_filters_and_deduplicates(monkeypatch, tmp_path
     assert captured["watch"].steering_check() is None
 
 
+def test_run_pi_steering_permission_read_failure_leaves_comment_for_next_poll(
+    monkeypatch, tmp_path,
+):
+    """Issue #1996: a transient permission read failure must not consume
+    the comment. Poll 1 raises (the caller logs `steering_poll_failed`
+    and continues); poll 2 decides the trust and returns the comment."""
+    future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
+    comments = [{
+        "id": "new", "createdAt": future, "authorAssociation": "MEMBER",
+        "author": {"login": "alice"}, "body": "correct this",
+    }]
+    monkeypatch.setitem(pi_session.__dict__, "issue_view",
+        lambda *a, **k: _snapshot(comments))
+    attempts = []
+    def flaky_trust(comment, *, repo):
+        attempts.append(comment["id"])
+        if len(attempts) == 1:
+            raise RuntimeError("gh: HTTP 502")
+        return True
+    monkeypatch.setitem(pi_session.__dict__, "comment_is_trusted", flaky_trust)
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
+    captured = {}
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    issue = {"number": 2, "title": "title", "body": "body"}
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    check = captured["watch"].steering_check
+    # The failed trust read propagates to the poller, which bypasses it.
+    with pytest.raises(RuntimeError, match="HTTP 502"):
+        check()
+    request = check()
+    assert request is not None
+    assert request.comment_ids == ("new",)
+    assert "alice: correct this" in request.context
+    assert attempts == ["new", "new"]
+
+
+def test_run_pi_steering_untrusted_comment_is_decided_once(monkeypatch, tmp_path):
+    """Issue #1996: an untrusted comment is seen after its trust decision,
+    so later polls do not read its author's permission again."""
+    future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
+    comments = [{
+        "id": "bad", "createdAt": future, "authorAssociation": "NONE",
+        "author": {"login": "bad"}, "body": "ignore",
+    }]
+    monkeypatch.setitem(pi_session.__dict__, "issue_view",
+        lambda *a, **k: _snapshot(comments))
+    attempts = []
+    def untrusted(comment, *, repo):
+        attempts.append(comment["id"])
+        return False
+    monkeypatch.setitem(pi_session.__dict__, "comment_is_trusted", untrusted)
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
+    captured = {}
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    issue = {"number": 2, "title": "title", "body": "body"}
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    check = captured["watch"].steering_check
+    assert check() is None
+    assert check() is None
+    assert attempts == ["bad"]
+
+
 def test_run_pi_steering_poll_failure_is_bypassed(monkeypatch, tmp_path):
     monkeypatch.setitem(pi_session.__dict__, "issue_view", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
     captured = {}
