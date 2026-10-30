@@ -47,6 +47,7 @@ from tests.fakes.bootstrap_release import (
     RELEASE_DECLARATION_BODY,
     RELEASE_MILESTONE_DECLARATION_BODY,
     _milestone,
+    check_runs_page,
     commit_file,
     git_out,
     without_include,
@@ -967,6 +968,23 @@ def test_check_release_gates_fails_on_failing_ci(monkeypatch):
         release.check_release_gates("o/r", "abc123", 99)
 
 
+def test_check_release_gates_reads_every_check_run_page(monkeypatch):
+    """Issue #1993: the release gate judged page one only.
+
+    GitHub answers 30 check runs per page, so a release commit carrying a
+    failing check #31 looked like "30 check(s) all success" and released.
+    The gate must read the whole paginated list and hold on that failure.
+    """
+    make_gate_gh(monkeypatch, check_run_pages=[
+        [(f"check-{index}", "completed", "success") for index in range(30)],
+        [("check-30", "completed", "failure")],
+    ])
+    with pytest.raises(
+        RuntimeError, match="check 'check-30' is completed/failure",
+    ):
+        release.check_release_gates("o/r", "abc123", 99)
+
+
 def test_check_release_gates_classifies_checks_through_the_shared_checker(
         monkeypatch):
     """Issue #1889: the release gate decides pending/failed/passed through
@@ -1008,10 +1026,7 @@ def test_check_release_gates_waits_for_pending_ci_then_passes(
             page = pages.pop(0)
             if not pages:
                 pages.append(page)
-            return json.dumps([
-                {"name": n, "status": s, "conclusion": c}
-                for n, s, c in page
-            ])
+            return check_runs_page(page)
         return "[]"  # the label scans and the open-PR scan
 
     monkeypatch.setattr(seam, "run_command", fake_run_command)
@@ -1049,10 +1064,7 @@ def test_check_release_gates_waits_then_fails_on_final_ci_failure(
             page = pages.pop(0)
             if not pages:
                 pages.append(page)
-            return json.dumps([
-                {"name": n, "status": s, "conclusion": c}
-                for n, s, c in page
-            ])
+            return check_runs_page(page)
         return "[]"
 
     monkeypatch.setattr(seam, "run_command", fake_run_command)
@@ -1067,10 +1079,7 @@ def test_check_release_gates_ci_wait_times_out(monkeypatch, caplog):
     explicitly distinct from a CI failure."""
     def fake_run_command(command, **kwargs):
         if command[:2] == ["gh", "api"]:
-            return json.dumps([
-                {"name": "tests", "status": "in_progress",
-                 "conclusion": None},
-            ])
+            return check_runs_page([("tests", "in_progress", None)])
         return "[]"
 
     monkeypatch.setattr(seam, "run_command", fake_run_command)

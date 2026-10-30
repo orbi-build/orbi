@@ -547,8 +547,11 @@ def _merge_gate_fake(pr_state="MERGEABLE", head_oid="h1",
                 "mergedAt": None, "mergeCommit": None,
             })
         if command[:2] == ["gh", "api"] and "check-runs" in command[2]:
-            return json.dumps([] if base_check_runs is None
-                              else base_check_runs)
+            # Issue #1993: the reader paginates, so gh answers the
+            # `--paginate --slurp` shape — one array of page objects
+            # `{total_count, check_runs}`.
+            runs = [] if base_check_runs is None else base_check_runs
+            return json.dumps([{"total_count": len(runs), "check_runs": runs}])
         return ""
     return fake_run
 
@@ -581,10 +584,10 @@ def test_merge_gate_rejects_preexisting_failed_ci_as_unrecoverable(
                 }],
             })
         if command[:2] == ["gh", "api"] and "check-runs" in command[2]:
-            return json.dumps([{
+            return json.dumps([{"total_count": 1, "check_runs": [{
                 "name": "tests", "status": "completed",
                 "conclusion": "failure",
-            }])
+            }]}])
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([{"title": "CI failure: tests on branch main (push)",
                                 "url": "https://github.com/o/r/issues/402"}])
