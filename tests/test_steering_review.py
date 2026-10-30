@@ -130,6 +130,52 @@ def test_run_pi_steering_untrusted_comment_is_decided_once(monkeypatch, tmp_path
     assert attempts == ["bad"]
 
 
+def test_run_pi_steering_later_failure_keeps_earlier_comments_for_next_poll(
+    monkeypatch, tmp_path,
+):
+    """Issue #1996: a poll whose trust read fails leaves EVERY comment it
+    read undecided. Comment A is decided before B's read raises, so the
+    poll's result is discarded by the poller and A must steer on the next
+    poll instead of staying silently "seen"."""
+    future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
+    comments = [
+        {"id": "a", "createdAt": future, "authorAssociation": "MEMBER",
+         "author": {"login": "alice"}, "body": "use tabs"},
+        {"id": "b", "createdAt": future, "authorAssociation": "NONE",
+         "author": {"login": "bad"}, "body": "ignore me"},
+    ]
+    monkeypatch.setitem(pi_session.__dict__, "issue_view",
+        lambda *a, **k: _snapshot(comments))
+    attempts = []
+    def flaky_trust(comment, *, repo):
+        attempts.append(comment["id"])
+        if len(attempts) == 2:
+            raise RuntimeError("gh: HTTP 502")
+        return comment["id"] == "a"
+    monkeypatch.setitem(pi_session.__dict__, "comment_is_trusted", flaky_trust)
+    monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+    monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
+    captured = {}
+    monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
+    issue = {"number": 2, "title": "title", "body": "body"}
+    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    check = captured["watch"].steering_check
+    # Poll 1: A is decided trusted, then B's read raises — the poller drops
+    # the whole poll (pi_process's `steering_poll_failed` bypass).
+    with pytest.raises(RuntimeError, match="HTTP 502"):
+        check()
+    # Poll 2 decides both again; A was never consumed by the failed poll.
+    request = check()
+    assert request is not None
+    assert request.comment_ids == ("a",)
+    assert "alice: use tabs" in request.context
+    assert "bad" not in request.context
+    assert attempts == ["a", "b", "a", "b"]
+    # Poll 3: both are decided and seen — no further read, no restart.
+    assert check() is None
+    assert attempts == ["a", "b", "a", "b"]
+
+
 def test_run_pi_steering_poll_failure_is_bypassed(monkeypatch, tmp_path):
     monkeypatch.setitem(pi_session.__dict__, "issue_view", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
     captured = {}
