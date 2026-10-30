@@ -31,7 +31,8 @@ still scanned on the next tick and the same command continues from what is
 already on GitHub; a ticket that already carries this command's success
 receipt only gets step 7. The success receipt uses the command layer's own
 marker keyed on the command comment AND must be a comment this runner wrote
-(`_runner_receipt`): the marker is public text, so "has this command already
+(`ticket_command.runner_receipt`, the one authorship rule every command
+reads, Issue #1992): the marker is public text, so "has this command already
 succeeded?" is a marker lookup over the raw bodies, never prose, and never a
 copy someone else pasted (Issue #1938).
 
@@ -66,22 +67,23 @@ from orbi.delivery_labels import (
     label_names,
 )
 from orbi.github import (
-    authenticated_github_login,
     comment_issue,
     edit_issue,
     issue_view,
     list_issues,
     run_gh_write_command,
-    strip_bot_suffix,
 )
 from orbi.journal import run_command
 from orbi.ticket_command import (
     CommandSpec,
     TicketCommandError,
+    author_login_key,
     command_comment_key,
     command_receipt_marker,
     register_command,
     run_step,
+    runner_login,
+    runner_receipt,
 )
 
 # The hidden marker every child carries: it names the parent ticket and the
@@ -198,54 +200,6 @@ def parse_child_body(body: object) -> SplitChild | None:
     )
 
 
-# The App prefix gh puts on an author login. A real call against a ticket
-# this runner opened reads {"is_bot": true, "login": "app/orbi-build"} from
-# the issue view author field, while the SAME credential's comments and
-# auth status say "orbi-build" / "orbi-build[bot]": three shapes, one
-# account. The author is the adoption trust signal, so every comparison
-# normalizes the shapes first (Issue #1927).
-API_LOGIN_PREFIX = "app/"
-
-
-def _login_key(login: str) -> str:
-    """The comparable form of one GitHub account login."""
-    if login.startswith(API_LOGIN_PREFIX):
-        login = login[len(API_LOGIN_PREFIX):]
-    return strip_bot_suffix(login)
-
-
-def _runner_login() -> str:
-    """The login a child must carry to be adopted by a re-run."""
-    return _login_key(authenticated_github_login())
-
-
-def _author_login(state: dict) -> str | None:
-    author = state.get("author")
-    login = author.get("login") if isinstance(author, dict) else None
-    return _login_key(login) if isinstance(login, str) and login else None
-
-
-def _runner_receipt(comments: list[dict], receipt: str) -> bool:
-    """True when a comment THIS runner wrote carries the success receipt.
-
-    The marker is public text on a public ticket, so anyone who can comment
-    can copy it. Only the authenticated account's own comment authenticates
-    a completion record — a different or unreadable author is never one, so
-    a copied marker cannot make an authorized split look done, skip its
-    children or release its scan label (Issue #1938).
-    """
-    candidates = [
-        comment for comment in comments
-        if isinstance(comment, dict)
-        and isinstance(comment.get("body"), str)
-        and receipt in comment["body"]
-    ]
-    if not candidates:
-        return False
-    runner = run_step("identify this runner", _runner_login)
-    return any(_author_login(comment) == runner for comment in candidates)
-
-
 def _parent_number(state: dict) -> int | None:
     parent = state.get("parent")
     number = parent.get("number") if isinstance(parent, dict) else None
@@ -313,10 +267,10 @@ def _find_children(
     never adopted. Two counted matches stop the command (there is no way to
     know which one the earlier run meant).
     """
-    runner = run_step("identify this runner", _runner_login)
+    runner = run_step("identify this runner", runner_login)
     claimed: dict[int, list[dict]] = {}
     for issue in _existing_candidates(repo, parent):
-        if _author_login(issue) != runner:
+        if author_login_key(issue) != runner:
             continue
         item_number = _claimed_item(issue.get("body"), parent)
         if item_number is None:
@@ -605,7 +559,7 @@ def _split_apply(
         f"<!-- {command_receipt_marker(SPLIT_COMMAND)} "
         f"comment={command_comment_key(command_comment)} -->"
     )
-    if not _runner_receipt(comments, receipt):
+    if not runner_receipt(comments, receipt):
         items = suggestion.items
         found = _find_children(
             repo, issue_number, language_code=language_code,
