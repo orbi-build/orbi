@@ -305,8 +305,11 @@ def prepare_pi_agent_dir(worktree: Path, config: config_domain.RunnerConfig,
       overrides; the merged catalog is what Pi loads via
       `PI_CODING_AGENT_DIR` (verified against real Pi 0.84.3);
     - `auth.json`: a SYMLINK to the user agent dir's file when it
-      exists, so Pi's stored auth is unchanged; `settings.json` is a
-      per-run REAL file (see below).
+      exists, so Pi's stored auth is unchanged; a regular file or
+      symlink left by an earlier Pi session (Pi's temp-file-and-rename
+      save replaces the link with a real file) is removed first, so a
+      resumed run re-links it; `settings.json` is a per-run REAL file
+      (see below).
 
     The per-run `settings.json` is a REAL file, consistent
     with the per-run catalog:
@@ -333,7 +336,10 @@ def prepare_pi_agent_dir(worktree: Path, config: config_domain.RunnerConfig,
 
     `auth.json` stays a SYMLINK to the user agent dir's file when it
     exists: stored auth for providers present in the merged catalog is
-    still valid.
+    still valid. A stale regular file or symlink from an earlier session
+    is replaced, never kept (Issue #2022: Pi's own save turns the symlink
+    into a regular file, and keeping it made every resume fail with
+    `FileExistsError`).
 
     `apiKey` env-var references (`$VAR` / `${VAR}`) are copied
     VERBATIM into the per-run catalog: Pi 1.0 interpolates them from
@@ -429,10 +435,14 @@ def prepare_pi_agent_dir(worktree: Path, config: config_domain.RunnerConfig,
         json.dumps(settings, indent=2), encoding="utf-8",
     )
     # auth.json keeps its pre-#172 shape: a symlink to the user's
-    # stored auth (valid for the merged catalog's providers).
+    # stored auth (valid for the merged catalog's providers). A stale
+    # entry from an earlier session is replaced like settings.json: Pi
+    # saves auth.json with a temp-file-and-rename, which turns the
+    # symlink into a REGULAR file, and a resumed run must re-link it
+    # instead of raising FileExistsError (Issue #2022).
     auth_source = user_agent / "auth.json"
     auth_link = agent_dir / "auth.json"
-    if auth_link.is_symlink():
+    if auth_link.is_symlink() or auth_link.is_file():
         auth_link.unlink()
     if auth_source.is_file():
         auth_link.symlink_to(auth_source)
