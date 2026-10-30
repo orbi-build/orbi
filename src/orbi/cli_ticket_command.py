@@ -5,8 +5,8 @@ A ticket command has two spellings and ONE execution path: a
 <owner/name> --issue <N>` on the host. This module is the terminal one:
 
 - `register_cli` adds one subcommand per registered arity-0 command
-  (`ticket_command.cli_specs`), so registering a command gives both
-  spellings and there is nothing to edit here. A command that needs an
+  (`ticket_command_registry.cli_specs`), so registering a command gives
+  both spellings and there is nothing to edit here. A command that needs an
   argument (`/orbi milestone <version>`) keeps its own explicit CLI command
   (`orbi milestone set`) and is never generated;
 - `command_ticket_command` runs the SAME `ticket_command.execute_command`
@@ -24,14 +24,12 @@ from __future__ import annotations
 
 import sys
 
-# The registrants, imported for their registration side effect: a command
-# is registered at import time and both the tree below and the CLI
-# dispatch table are derived from the registry (Issue #1930). A new
-# command module is added here once, exactly like the comment scan's call
-# site imports it.
-from orbi import (  # noqa: F401
-    base_ci_red, criteria_command, split_command, ticket_command,
-)
+# Both the tree below and the CLI dispatch table derive from the ONE
+# explicit list of registrants,
+# `ticket_command_registry.ticket_commands()` (Issues #1930, #2000): this
+# module names no command module, so a command can never be missing from
+# the terminal spelling because an import somewhere else changed.
+from orbi import ticket_command, ticket_command_registry
 from orbi.claim import _repo_scan_keys
 from orbi.github import authenticated_github_login
 from orbi.repo_config import merged_repo_language
@@ -39,7 +37,7 @@ from orbi.repo_config import merged_repo_language
 
 def register_cli(subparsers, common) -> None:
     """Add one subcommand per registered arity-0 ticket command."""
-    for spec in ticket_command.cli_specs():
+    for spec in ticket_command_registry.cli_specs():
         command = subparsers.add_parser(
             spec.subcommand, parents=[common],
             help=f"run the registered `{spec.canonical}` ticket command on "
@@ -58,7 +56,7 @@ def register_cli(subparsers, common) -> None:
 
 def command_ticket_command(config, args, parser) -> int:
     """Run one registered ticket command on one Issue (Issue #1930)."""
-    spec = ticket_command.TICKET_COMMANDS[args.ticket_command]
+    spec = ticket_command_registry.command_by_name(args.ticket_command)
     repo = args.repo
     milestone, dispatch_label = _repo_scan_keys(
         config, repo, config.active_milestone,

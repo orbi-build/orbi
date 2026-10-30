@@ -1156,14 +1156,15 @@ To add a command:
    (and the Chinese page): the binding tests
    `tests/test_journal_events.py` and `tests/test_ticket_command.py` read
    them and fail on drift.
-3. Make sure the command's module is imported before tickets are
-   processed: `register_command` runs at import time, and the tick's
-   registrant imports live in `orbi/claim.py` (the `ai-needs-detail` scan)
-   and `orbi/milestone.py` (the confirmation notice). Every
-   `process_commands(...)` call site passes the whole `TICKET_COMMANDS`
-   registry, so a registered command is dispatched without changing a call
-   site. The terminal
-   spelling is generated from the same registry
+3. Add the command's module to the ONE explicit list of registrants,
+   `ticket_command_registry.ticket_commands()` in
+   `src/orbi/ticket_command_registry.py` (Issue #2000): importing that
+   list registers the modules, and both the comment dispatch and the CLI
+   dispatch table read it, so one edit wires both spellings and no
+   unrelated import can silently unregister a command. Every
+   `process_commands(...)` call site passes the whole list, so a registered
+   command is dispatched without changing a call site. The terminal
+   spelling is generated from the same list
    (`orbi.cli_ticket_command.register_cli`), so an arity-0 command gets its
    `orbi <subcommand>` subcommand without a second edit.
 

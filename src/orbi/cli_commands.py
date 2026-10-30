@@ -26,7 +26,7 @@ from orbi import (
     scheduler,
     status_observe,
     suggest,
-    ticket_command,
+    ticket_command_registry,
 )
 from orbi.cli_doctor import doctor_report
 from orbi.cli_ticket_command import command_ticket_command
@@ -73,7 +73,7 @@ READ_ONLY_COMMANDS = frozenset({"status", "doctor", "session", "check"})
 # actions like the maintenance ones: no model call, so the same rule
 # applies (Issue #1930).
 _TICKET_COMMANDS = frozenset(
-    spec.subcommand for spec in ticket_command.cli_specs()
+    spec.subcommand for spec in ticket_command_registry.cli_specs()
 )
 
 # A missing provider key must never block these deployment maintenance
@@ -388,6 +388,6 @@ COMMAND_HANDLERS = {
     # of `/orbi fix-base`, so the table is derived from the registry.
     **{
         spec.subcommand: command_ticket_command
-        for spec in ticket_command.cli_specs()
+        for spec in ticket_command_registry.cli_specs()
     },
 }

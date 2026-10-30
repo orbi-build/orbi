@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 from orbi import journal, milestone_command
-from orbi import ticket_command
+from orbi import ticket_command, ticket_command_registry
 
 from tests.seam import seam
 
@@ -666,7 +666,7 @@ def test_a_cli_occurrence_is_named_in_its_receipt_and_printed(monkeypatch):
 def test_the_cli_specs_are_the_arity_zero_commands():
     """``/orbi milestone <version>`` needs an argument, so it keeps its own
     ``orbi milestone set`` instead of a generated entry."""
-    specs = ticket_command.cli_specs()
+    specs = ticket_command_registry.cli_specs()
     assert [spec.name for spec in specs] == [
         "fix_base", "add_criteria", "split",
     ]

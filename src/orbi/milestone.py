@@ -29,7 +29,8 @@ from orbi.milestone_command import (
 )
 from orbi.progress import ProgressPublisher
 from orbi.repo_config import REPO_CONFIG_PATH, RepoPolicy
-from orbi.ticket_command import TICKET_COMMANDS, process_commands
+from orbi.ticket_command import process_commands
+from orbi.ticket_command_registry import ticket_commands
 
 MILESTONE_RECONCILE_RETRY_SECONDS = 60 * 60
 _MILESTONE_FAILURE_DIR = "milestone-reconcile-failures"
@@ -711,7 +712,7 @@ def _ensure_pending_milestone_notice(
     try:
         process_commands(
             repo, issue_number,
-            commands=TICKET_COMMANDS.values(),
+            commands=ticket_commands(),
             candidate_titles=candidate_titles,
             config_path=config_path, policy=policy,
             policy_path=policy_path, base_branch=base_branch,
