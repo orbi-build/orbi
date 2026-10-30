@@ -26,17 +26,58 @@ no `/proc/stat` (`btime`), no clock conversion — so the recovery works on
 a `/proc` mounted with `subset=pid`, where no file outside the process
 directories exists (Issue #1808).
 
+It also owns the child-shutdown rule both callers of a live Pi process
+share (`shutdown_child`): the session's exit path (`stream_pi`) and the
+Runner's SIGTERM stop handler end a child with TERM -> bounded grace ->
+KILL -> reap, never with an unbounded wait and never without reaping
+(Issue #1995 — one rule, one grace constant). That rule is here because
+`pi_process` may not import `runner` (CONSTITUTION 3.3).
+
 This module never spawns anything and owns no background thread: it is
-called from the existing `stream_pi` poll loop.
+called from the existing `stream_pi` poll loop and its exit path.
 """
 from __future__ import annotations
 
 import json
 import os
 import signal
+import subprocess
 import urllib
 import urllib.request
 from pathlib import Path
+
+# Child-shutdown grace: when a live Pi child must end — a steering
+# restart, a timeout/idle/model-wait kill, the Runner's SIGTERM stop —
+# the caller must not wait forever for it. systemd gives `TimeoutStopSec`
+# (default 90s) before it SIGKILLs the whole cgroup, so an unbounded
+# `child.wait()` on a child stuck in a model/network call leaves
+# `Result=timeout` after the grace. TERM, wait at most this long, then
+# KILL and reap: the caller always gets the child back, before systemd's
+# own deadline on the stop path and before the next session's spawn on the
+# delivery path.
+STOP_CHILD_GRACE_SECONDS = 15.0
+
+
+def shutdown_child(child: subprocess.Popen | None,
+                   grace: float = STOP_CHILD_GRACE_SECONDS) -> None:
+    """Terminate and reap a live child without blocking past `grace`.
+
+    A plain ``child.wait()`` with no timeout lets a Pi child stuck in a
+    model/network call block the caller — the stop handler, or the
+    session's exit path that must reap before the next session starts in
+    the same worktree (Issue #1995). This TERMs the child, waits at most
+    ``grace`` seconds, then KILLs and reaps it. A child that exits on TERM
+    (cooperative) is unaffected; a child that already exited is a no-op.
+    """
+    if child is None or child.poll() is not None:
+        return
+    child.terminate()
+    try:
+        child.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait()
+
 
 # The real procfs; the unit tests point this at a fake directory.
 PROC = Path("/proc")

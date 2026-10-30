@@ -6,11 +6,16 @@ The lines the Pi watcher writes while a session runs (`activity`,
 `heartbeat`, the startup phases, `provider_config_loaded`,
 `startup_failed`, `run_failed`) and the classification behind them: the
 early-exit reason, the `startup_failed` reason and the provider 429 marker
-set they share. `orbi.pi_process` drives them; nothing here imports it.
+set they share, plus the child's output streams themselves (`_drain_stream`
+/`_decode_chunks`: the bounded drain that turns those pipes into the text
+the classification reads). `orbi.pi_process` drives them; nothing here
+imports it.
 """
 from __future__ import annotations
 
 import logging
+import os
+import select
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -204,6 +209,34 @@ def _startup_failed_reason(activity: dict, *, returncode: int,
     if not activity["first_request"]:
         return "no_first_request"
     return classified
+
+
+def _drain_stream(stream, chunks: list[bytes],
+                  silence_s: float = 30.0) -> bool:
+    """Read a pipe to EOF, appending chunks (process must be finished).
+
+    Pi's tool subprocesses inherit this pipe's write end and
+    can outlive Pi — after Pi is reaped, EOF then never arrives and an
+    unbounded blocking read would wedge the tick (and its slot) forever,
+    past every timeout mechanism. Each received chunk restarts the
+    `silence_s` window (silence, not total, time: a busy legitimate
+    writer must never be cut off mid-verdict); when the stream stays
+    silent for the whole window the tail is abandoned. Returns False
+    when the drain was abandoned, True on EOF.
+    """
+    fd = stream.fileno()
+    while True:
+        ready, _, _ = select.select([fd], [], [], silence_s)
+        if not ready:
+            return False
+        data = os.read(fd, 65536)
+        if not data:
+            return True
+        chunks.append(data)
+
+
+def _decode_chunks(chunks: list[bytes]) -> str:
+    return b"".join(chunks).decode("utf-8", "replace")
 
 
 def _log_run_failed(activity: dict, *, run_id: str, issue_ref: str,
