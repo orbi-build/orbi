@@ -103,6 +103,28 @@ def test_comment_kind_reads_only_the_anchored_official_prefix():
     ) == "other"
 
 
+def test_the_kind_prefix_uses_the_journal_run_id_definition():
+    """Issue #2003: the id format has one owner, `journal.validate_run_id`.
+
+    The anchored prefix interpolates `journal.RUN_ID_PATTERN` instead of
+    spelling the id out again, and it reads exactly the marker
+    `progress.run_marker` renders.
+    """
+    from orbi import journal
+
+    assert comment_kind._KIND_PREFIX_RE.pattern == (
+        r"\A<!-- orbi:run=" + journal.RUN_ID_PATTERN.pattern
+        + r" -->\r?\n<!-- orbi:comment=([a-z-]+) -->"
+    )
+    assert comment_kind.comment_kind(
+        f"{progress.run_marker(RUN_ID)}\n{KIND_STARTED}\nbody"
+    ) == "started"
+    # An id the writer refuses is not read as official metadata either.
+    assert comment_kind.comment_kind(
+        f"<!-- orbi:run=abc1234 -->\n{KIND_STARTED}\nbody"
+    ) is None
+
+
 def test_progress_and_opened_comments_carry_no_kind():
     assert comment_kind.comment_kind(_progress_body()) is None
 

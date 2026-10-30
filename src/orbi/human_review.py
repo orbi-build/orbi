@@ -28,6 +28,7 @@ import json
 
 from orbi import language, user_summary
 from orbi.delivery_labels import HUMAN_REVIEW_LABEL
+from orbi.progress import run_marker
 
 # The machine-parsable block marker (an HTML comment -- GitHub renders
 # nothing of it; a migration tool greps it). Schema 1: one JSON object
@@ -178,7 +179,7 @@ def render_checklist_comment(*, run_id: str, pr_url: str,
     # The review instruction names the repository's own test
     # suite -- no declared test command exists to quote.
     lines = [
-        f"<!-- orbi:run={run_id} -->",
+        run_marker(run_id),
         message("human_review.title"),
         # The task identity and the optional project status link follow
         # the checklist headline, before the two columns (Issue #1826).

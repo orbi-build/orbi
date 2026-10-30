@@ -33,6 +33,11 @@ import re
 from collections.abc import Callable, Sequence
 from typing import Any
 
+# The run-id format belongs to `journal.validate_run_id` (Issue #2003):
+# the anchored prefix below interpolates that pattern instead of spelling
+# the id out, so a reader can never accept an id the writer refuses.
+from orbi.journal import RUN_ID_PATTERN
+
 COMMENT_KIND_STARTED = "started"
 COMMENT_KIND_FAILURE = "failure"
 COMMENT_KIND_REVIEW_ROUND = "review-round"
@@ -49,7 +54,8 @@ COMMENT_KIND_PATTERN = re.compile(r"<!-- orbi:comment=([a-z-]+) -->")
 # the line immediately after. Anchoring means a marker-shaped string
 # quoted in prose, a raw log or a code fence is never read as metadata.
 _KIND_PREFIX_RE = re.compile(
-    r"\A<!-- orbi:run=[0-9a-f]{8} -->\r?\n<!-- orbi:comment=([a-z-]+) -->"
+    r"\A<!-- orbi:run=" + RUN_ID_PATTERN.pattern
+    + r" -->\r?\n<!-- orbi:comment=([a-z-]+) -->"
 )
 
 

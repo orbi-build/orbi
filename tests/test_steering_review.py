@@ -32,7 +32,7 @@ def _config(tmp_path: Path, **kwargs):
     return config_domain.RunnerConfig(prompt=prompt, repo_dir=tmp_path,
         source_repos=("owner/repo",), workspace_root=tmp_path,
         context_files=(), skills=(), base_branch="main", base_sha="abc123def456",
-        run_id="run1", **kwargs)
+        run_id="abc12345", **kwargs)
 
 
 def _snapshot(comments, body="body"):
@@ -59,7 +59,7 @@ def test_run_pi_steering_callback_filters_and_deduplicates(monkeypatch, tmp_path
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
-    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("abc12345", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     request = captured["watch"].steering_check()
     assert request.comment_ids == ("new",)
     assert "alice: correct this" in request.context
@@ -91,7 +91,7 @@ def test_run_pi_steering_permission_read_failure_leaves_comment_for_next_poll(
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
-    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("abc12345", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     check = captured["watch"].steering_check
     # The failed trust read propagates to the poller, which bypasses it.
     with pytest.raises(RuntimeError, match="HTTP 502"):
@@ -123,7 +123,7 @@ def test_run_pi_steering_untrusted_comment_is_decided_once(monkeypatch, tmp_path
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
-    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("abc12345", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     check = captured["watch"].steering_check
     assert check() is None
     assert check() is None
@@ -158,7 +158,7 @@ def test_run_pi_steering_later_failure_keeps_earlier_comments_for_next_poll(
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
-    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("abc12345", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     check = captured["watch"].steering_check
     # Poll 1: A is decided trusted, then B's read raises — the poller drops
     # the whole poll (pi_process's `steering_poll_failed` bypass).
@@ -181,7 +181,7 @@ def test_run_pi_steering_poll_failure_is_bypassed(monkeypatch, tmp_path):
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
-    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("abc12345", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     assert captured["watch"].steering_check() is None
 
 
@@ -233,7 +233,7 @@ def test_steering_validation_and_limit(monkeypatch, tmp_path):
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 3, "title": "t", "body": "b"}
-    pi_session.run_pi(issue, RunContext("run1", 3, "branch", tmp_path, "owner/repo"), config)
+    pi_session.run_pi(issue, RunContext("abc12345", 3, "branch", tmp_path, "owner/repo"), config)
     assert captured["watch"].steering_check() is None
     assert captured["watch"].steering_check() is None
 
@@ -250,7 +250,7 @@ def test_run_pi_steering_body_edit_restarts(monkeypatch, tmp_path):
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "original body"}
-    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("abc12345", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     request = captured["watch"].steering_check()
     assert request is not None
     assert request.comment_ids == ()
@@ -270,7 +270,7 @@ def test_run_pi_steering_unchanged_body_stays_silent(monkeypatch, tmp_path):
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
-    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("abc12345", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     assert captured["watch"].steering_check() is None
 
 
@@ -289,7 +289,7 @@ def test_run_pi_steering_body_edit_and_comment_is_one_request(monkeypatch, tmp_p
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "original body"}
-    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("abc12345", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     request = captured["watch"].steering_check()
     assert request is not None
     assert request.comment_ids == ("new",)
@@ -317,7 +317,7 @@ def test_run_pi_steering_body_edit_respects_round_limit(monkeypatch, tmp_path):
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "original body"}
     config = _config(tmp_path, steering_max_rounds=1)
-    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), config) == "done"
+    assert pi_session.run_pi(issue, RunContext("abc12345", 2, "branch", tmp_path, "owner/repo"), config) == "done"
     check = captured["watch"].steering_check
     first = check()
     assert first is not None and first.body_revision is True
@@ -353,15 +353,15 @@ def test_run_pi_steering_limit_notifies_once_for_late_comment(monkeypatch, tmp_p
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
     config = _config(tmp_path, steering_max_rounds=0)
-    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), config) == "done"
+    assert pi_session.run_pi(issue, RunContext("abc12345", 2, "branch", tmp_path, "owner/repo"), config) == "done"
     check = captured["watch"].steering_check
     assert check() is None
     assert check() is None
     assert len(comments) == 1
-    assert "<!-- orbi:run=run1 -->" in comments[0][2]
+    assert "<!-- orbi:run=abc12345 -->" in comments[0][2]
     assert "steering limit" in comments[0][2]
     assert "not applied" in comments[0][2]
-    assert "run_id=run1" in comments[0][2]
+    assert "run_id=abc12345" in comments[0][2]
 
 
 def test_run_pi_steering_limit_notice_follows_the_language(monkeypatch, tmp_path):
@@ -385,12 +385,12 @@ def test_run_pi_steering_limit_notice_follows_the_language(monkeypatch, tmp_path
         tmp_path, steering_max_rounds=0, message_language="zh",
         status_url="https://tasks.example.org/status?repo=o%2Fr",
     )
-    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), config) == "done"
+    assert pi_session.run_pi(issue, RunContext("abc12345", 2, "branch", tmp_path, "owner/repo"), config) == "done"
     assert captured["watch"].steering_check() is None
     assert len(comments) == 1
-    assert "<!-- orbi:run=run1 -->" in comments[0][2]
+    assert "<!-- orbi:run=abc12345 -->" in comments[0][2]
     assert "已达到修正次数上限，因此这条修正未被执行。" in comments[0][2]
-    assert "run_id=run1" in comments[0][2]
+    assert "run_id=abc12345" in comments[0][2]
     # Issue #1826: the notice carries the task identity and the
     # operator's fixed project status link in the bound language.
     assert "**#2 title**" in comments[0][2]
@@ -414,7 +414,7 @@ def test_run_pi_steering_limit_notice_failure_is_bypassed(monkeypatch, tmp_path)
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
     config = _config(tmp_path, steering_max_rounds=0)
-    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), config) == "done"
+    assert pi_session.run_pi(issue, RunContext("abc12345", 2, "branch", tmp_path, "owner/repo"), config) == "done"
     assert captured["watch"].steering_check() is None
     assert "steering_limit_notice_failed" in events
 
@@ -429,7 +429,7 @@ def test_run_pi_steering_snapshot_without_body_stays_inert(monkeypatch, tmp_path
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
-    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("abc12345", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     assert captured["watch"].steering_check() is None
 
 
@@ -446,7 +446,7 @@ def test_run_pi_steering_malformed_payload_is_bypassed(monkeypatch, tmp_path):
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 2, "title": "title", "body": "body"}
-    assert pi_session.run_pi(issue, RunContext("run1", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
+    assert pi_session.run_pi(issue, RunContext("abc12345", 2, "branch", tmp_path, "owner/repo"), _config(tmp_path)) == "done"
     assert captured["watch"].steering_check() is None
     assert "steering_poll_failed" in events
 

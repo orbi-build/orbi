@@ -455,7 +455,7 @@ def reconcile_release_epics(repo: str, milestone_number: int, version: str,
         comments = issue_comments(int(number), repo=repo)
         if not epic_audit_posted(comments, child_evidence, version):
             comment_issue(int(number), repo=repo,
-                         body=f"<!-- orbi:run={run_id} -->\n{audit}\nrun_id={run_id}")
+                         body=f"{run_marker(run_id)}\n{audit}\nrun_id={run_id}")
         close_issue(int(number), repo=repo)
         evidence.append(f"Epic #{number} closed after verification ({'; '.join(child_evidence)})")
     return evidence
