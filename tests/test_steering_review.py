@@ -190,7 +190,11 @@ def test_stream_pi_steers_and_restarts(tmp_path):
     from orbi.pi_process import SteeringRequest
     calls = []
     command = make_fake_pi(tmp_path, session_records=[], stdout="ok", sleep=0.2)
-    command.append("initial context")
+    # Issue #1997: the context reaches Pi as a FILE named by the command's
+    # `@<path>` argument; the steering restart rewrites that file.
+    context_file = tmp_path / "task-context.md"
+    context_file.write_text("initial context", encoding="utf-8")
+    command.append(f"@{context_file}")
     def check():
         calls.append(1)
         if len(calls) == 1:
@@ -202,6 +206,19 @@ def test_stream_pi_steers_and_restarts(tmp_path):
         watch=PiWatchOptions(poll_interval=0.01, steering_poll_seconds=0.01, steering_check=check), cwd=tmp_path)
     assert result == "ok"
     assert len(calls) >= 2
+    # The corrected context replaced the FILE's content and the command's
+    # argv is untouched: no restart re-sends the context as one string.
+    assert context_file.read_text(encoding="utf-8") == "corrected"
+    assert command[-1] == f"@{context_file}"
+
+
+def test_a_command_without_a_context_file_cannot_be_steered():
+    """Issue #1997: a command built outside `build_pi_command` carries no
+    `@<context file>`, so a steering restart fails fast instead of
+    putting the corrected context back into one argv string."""
+    from orbi.pi_steering import write_steered_context
+    with pytest.raises(ValueError, match=r"no @<context file> argument"):
+        write_steered_context(["pi", "--print", "context"], "corrected")
 
 
 def test_steering_validation_and_limit(monkeypatch, tmp_path):

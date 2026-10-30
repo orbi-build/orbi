@@ -9,11 +9,14 @@ implementer and review commands from a single call to
 redacted `log_command` together, so the journal can no longer misreport
 what was launched.
 
-Its one I/O is the system prompt file (Issue #1634): the rendered
-prompt is written into the session dir and only its PATH travels as
-argv, because Linux caps a single argv string at 131072 bytes
-(MAX_ARG_STRLEN) and the review prompt of a long-lived Issue reaches
-~148.7 KB. There is no subprocess and no import of `orbi.runner`,
+Its I/O is the two session files (Issues #1634, #1997): the rendered
+system prompt AND the task context are written into the session dir and
+only their paths travel as argv, because Linux caps a single argv string
+at 131072 bytes (MAX_ARG_STRLEN) — the review prompt of a long-lived
+Issue reaches ~148.7 KB, and a ticket body of 50,000 CJK characters is
+~150 KB in argv (the local-mode gate's regression case: Pi never started,
+`OSError: [Errno 7] Argument list too long: 'pi'`). There is no
+subprocess and no import of `orbi.runner`,
 so the module still needs no fake or patch to test. `RunnerConfig` is
 imported under `TYPE_CHECKING` only, the same annotation-only rule
 `orbi.pi_process` follows. `ROLE_IMPLEMENT` lives in `orbi.pi_process`
@@ -37,6 +40,12 @@ if TYPE_CHECKING:
 ROLE_REVIEW = "review"
 ROLE_TICKET = "ticket"
 ROLE_SUGGEST = "suggest"
+
+
+# The task context file (Issue #1997) lives in the session dir next to
+# `system-prompt.md`; `.pi-session/` is in RUNNER_RUNTIME_EXCLUDES, so
+# neither file can reach a commit.
+CONTEXT_FILE_NAME = "task-context.md"
 
 
 # Role-specific skill filtering: the review session ends with a single
@@ -141,10 +150,11 @@ def build_pi_command(
     tool boundary, the optional skill/context-file boundaries, the
     isolated extension flags, the role's `--skill` entries, the
     provider/model flags, then
-    `--print --session-dir <dir> --system-prompt <prompt-file> <context>`
-    — the prompt is written to `<session_dir>/system-prompt.md` (UTF-8,
-    the dir created when absent) and the flag carries that PATH, never
-    the text (Issue #1634).
+    `--print --session-dir <dir> --system-prompt <prompt-file> @<context-file>`
+    — the prompt is written to `<session_dir>/system-prompt.md` and the
+    context to `<session_dir>/task-context.md` (UTF-8, the dir created
+    when absent), and argv carries only their PATHS, never the text
+    (Issues #1634, #1997).
     `tools=True` leaves Pi's default tool set, `tools=False` adds
     `--no-tools`, and `tools="<a,b,c>"` adds `--tools <a,b,c>` — the
     read-only allowlist of one role (Issue #1576, `orbi suggest`).
@@ -164,6 +174,18 @@ def build_pi_command(
     `no_builtin_tools` (Issue #1955) adds Pi's `--no-builtin-tools`
     INSTEAD of the `tools` decision: built-in tools are off while
     extension/custom tools (such as `clarify_verdict`) stay callable.
+
+    The last argument is Pi's own file form `@<path>` (`pi --help`:
+    `pi [options] [--] [@files...] [messages...]`): Pi reads the file
+    itself and expands its FULL content into the initial message
+    (`dist/cli/file-processor.js`), so a 150,000-byte context no longer
+    has to fit a single argv string — no truncation, no body cap, no
+    prompt wording change. Pi wraps the expansion in its own file
+    marker, `<file name="<absolute path>">` ... `</file>` (verified
+    against Pi 1.0.0: a real `pi ... @ctx.md` run echoes exactly that),
+    which belongs to Pi's file argument rather than to text this engine
+    adds — the context, its first and its last line included, reaches
+    the session unchanged.
 
     `log_command` is derived here from the SAME extension flags, model
     flags and session dir as `command`, so the two cannot drift. The
@@ -212,14 +234,26 @@ def build_pi_command(
     # file must exist before this function returns: Pi's fallback uses
     # the string itself when the path does not exist. ".pi-session/" is
     # in RUNNER_RUNTIME_EXCLUDES, so the file never reaches a commit.
+    #
+    # Issue #1997: the task CONTEXT takes the same route. It embeds the
+    # full Issue body (plus the resume context and, on a body revision,
+    # the edited body again), so a large ticket blew the same per-string
+    # limit in the positional argument — `OSError: [Errno 7] Argument
+    # list too long: 'pi'` before Pi started, reported as an
+    # unclassifiable Pi start failure. A leading `@` is Pi's own file
+    # argument (its `processFileArguments` reads the file and expands
+    # the whole content into the initial message), so the context is
+    # written here and only the path travels.
     session_path = Path(session_dir)
     session_path.mkdir(parents=True, exist_ok=True)
     prompt_file = session_path / "system-prompt.md"
     prompt_file.write_text(system_prompt, encoding="utf-8")
+    context_file = session_path / CONTEXT_FILE_NAME
+    context_file.write_text(context, encoding="utf-8")
     command = [
         "pi", *boundary_args, *extension_args, *skill_args, *model_args,
         "--print", "--session-dir", str(session_dir),
-        "--system-prompt", str(prompt_file), context,
+        "--system-prompt", str(prompt_file), f"@{context_file}",
     ]
     log_command = [
         "pi", *extension_args, *model_args,

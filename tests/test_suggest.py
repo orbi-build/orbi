@@ -23,6 +23,7 @@ import orbi.cli_commands as cli_commands
 import orbi.config as config_domain
 import orbi.setup_checks as setup_checks
 import orbi.suggest as suggest
+from conftest import task_context
 from seam import seam
 from tests.fakes.github import FakeGh
 from tests.test_pilot_setup import (
@@ -120,6 +121,17 @@ class PiStub:
     @property
     def command(self) -> list[str]:
         return self.sessions[suggest.SUGGEST_TOOLS][0]
+
+    @property
+    def prompt(self) -> str:
+        """The prompt text Pi receives (Issue #1997): the context FILE the
+        command's `@<path>` argument names — a prompt longer than one
+        argv string still reaches the session."""
+        return task_context(self.command)
+
+    @property
+    def understanding_prompt(self) -> str:
+        return task_context(self.understanding_call[0])
 
     @property
     def kwargs(self) -> dict:
@@ -307,7 +319,7 @@ def test_orbi_suggest_json_prints_the_document(
     for forbidden in ("bash", "edit", "write"):
         assert forbidden not in rendered
     assert stub.kwargs["cwd"] == run_dirs[0]
-    assert str(run_dirs[0] / "context.json") in command[-1]
+    assert str(run_dirs[0] / "context.json") in stub.prompt
 
     after = _repo_files(world.repo)
     assert after == before
@@ -343,8 +355,8 @@ def test_suggest_runs_the_understanding_session_in_parallel(
     # otherwise hold the command far past that 60-second budget
     # (Issue #1600).
     assert kwargs["rate_limit_retries"] == 0
-    assert "at most three plain sentences" in command[-1]
-    assert str(world.repo.resolve()) in command[-1]
+    assert "at most three plain sentences" in stub.understanding_prompt
+    assert str(world.repo.resolve()) in stub.understanding_prompt
 
     run_dir = _run_dirs(world)[0]
     assert (run_dir / "understanding.md").read_text(
@@ -1332,7 +1344,7 @@ def test_suggest_locale_zh_sends_the_headings_to_the_session(
     ]) == 0
     capsys.readouterr()
     for heading in ZH_HEADINGS:
-        assert heading in stub.command[-1]
+        assert heading in stub.prompt
 
 
 def test_suggest_locale_rejects_an_unsupported_language(
@@ -1364,9 +1376,9 @@ def test_run_suggest_locale_reaches_both_prompts(
         dispatch_issue=cli_commands.dispatch_issue,
     ) == 0
     capsys.readouterr()
-    assert stub.command[-1].endswith(suggest.SUGGESTION_LOCALE_RULES["zh"])
-    assert suggest.LOCALE_SENTENCES["zh"] in stub.command[-1]
-    assert stub.understanding_call[0][-1].endswith(
+    assert stub.prompt.endswith(suggest.SUGGESTION_LOCALE_RULES["zh"])
+    assert suggest.LOCALE_SENTENCES["zh"] in stub.prompt
+    assert stub.understanding_prompt.endswith(
         suggest.LOCALE_SENTENCES["zh"],
     )
 
@@ -1385,9 +1397,9 @@ def test_suggest_locale_zh_reaches_both_pi_sessions(
         "--config", str(world.config_path),
     ]) == 0
     capsys.readouterr()
-    assert stub.command[-1].endswith(suggest.SUGGESTION_LOCALE_RULES["zh"])
-    assert suggest.LOCALE_SENTENCES["zh"] in stub.command[-1]
-    assert stub.understanding_call[0][-1].endswith(
+    assert stub.prompt.endswith(suggest.SUGGESTION_LOCALE_RULES["zh"])
+    assert suggest.LOCALE_SENTENCES["zh"] in stub.prompt
+    assert stub.understanding_prompt.endswith(
         suggest.LOCALE_SENTENCES["zh"],
     )
 
@@ -1418,8 +1430,8 @@ def test_suggest_locale_zh_summary_prompt_has_no_issue_format_instructions(
         "--config", str(world.config_path),
     ]) == 0
     capsys.readouterr()
-    suggestions = stub.command[-1]
-    summary = stub.understanding_call[0][-1]
+    suggestions = stub.prompt
+    summary = stub.understanding_prompt
     sentence = suggest.LOCALE_SENTENCES["zh"]
     for command in (suggestions, summary):
         assert sentence in command
@@ -1446,7 +1458,7 @@ def test_suggest_without_locale_sends_no_language_sentence(
         "suggest", "--json", "--config", str(world.config_path),
     ]) == 0
     capsys.readouterr()
-    for prompt in (stub.command[-1], stub.understanding_call[0][-1]):
+    for prompt in (stub.prompt, stub.understanding_prompt):
         assert "Write all of your output in" not in prompt
 
 
@@ -1502,7 +1514,7 @@ def test_suggest_count_two_asks_the_prompt_for_at_most_two(
         "suggest", "--json", "--count", "2",
         "--config", str(world.config_path),
     ]) == 0
-    prompt = stub.command[-1]
+    prompt = stub.prompt
     assert "At most two entries" in prompt
     assert "At most three entries" not in prompt
     document = json.loads(capsys.readouterr().out)
@@ -1523,7 +1535,7 @@ def test_suggest_default_count_keeps_today_behaviour(
     assert cli.main([
         "suggest", "--json", "--config", str(world.config_path),
     ]) == 0
-    assert "At most three entries" in stub.command[-1]
+    assert "At most three entries" in stub.prompt
     document = json.loads(capsys.readouterr().out)
     assert [item["title"] for item in document["suggestions"]] == [
         "Fix the existing thing", "Second thing", "Third thing",

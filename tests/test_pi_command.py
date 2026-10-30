@@ -29,6 +29,13 @@ def _prompt_path(session_dir: Path = SESSION_DIR) -> str:
     return str(Path(session_dir) / "system-prompt.md")
 
 
+def _context_arg(session_dir: Path = SESSION_DIR) -> str:
+    """The context argument of one built argv (Issue #1997): Pi's file
+    form `@<path>` naming the context file inside the session dir —
+    never the context text itself."""
+    return f"@{Path(session_dir) / 'task-context.md'}"
+
+
 def _configured() -> config_domain.RunnerConfig:
     return config_domain.RunnerConfig(
         skills=("code-review", "review-fix-loop", "tdd-dev"),
@@ -77,7 +84,7 @@ def test_ticket_command_and_log_with_everything_configured():
         "--provider", "openai", "--model", "gpt-5.6-sol",
         "--thinking", "medium",
         "--print", "--session-dir", str(SESSION_DIR),
-        "--system-prompt", _prompt_path(), CONTEXT,
+        "--system-prompt", _prompt_path(), _context_arg(),
     ]
     assert log_command == [
         "pi", *EXTENSION_ARGS,
@@ -101,7 +108,7 @@ def test_implement_command_and_log_with_everything_configured():
         "--provider", "openai", "--model", "gpt-5.6-sol",
         "--thinking", "medium",
         "--print", "--session-dir", str(SESSION_DIR),
-        "--system-prompt", _prompt_path(), CONTEXT,
+        "--system-prompt", _prompt_path(), _context_arg(),
     ]
     assert log_command == [
         "pi", *EXTENSION_ARGS,
@@ -124,7 +131,7 @@ def test_review_command_and_log_with_everything_configured():
         "pi", *EXTENSION_ARGS, *REVIEW_SKILL_ARGS,
         "--provider", "strong", "--model", "careful", "--thinking", "high",
         "--print", "--session-dir", str(SESSION_DIR),
-        "--system-prompt", _prompt_path(), CONTEXT,
+        "--system-prompt", _prompt_path(), _context_arg(),
     ]
     assert log_command == [
         "pi", *EXTENSION_ARGS,
@@ -159,7 +166,7 @@ def test_unconfigured_command_and_log(
         *(["--no-tools"] if expect_no_tools else []),
         *(["--no-extensions"] if extensions else []),
         "--print", "--session-dir", str(SESSION_DIR),
-        "--system-prompt", _prompt_path(), CONTEXT,
+        "--system-prompt", _prompt_path(), _context_arg(),
     ]
     assert log_command == [
         "pi",
@@ -238,7 +245,7 @@ SUGGEST_COMMAND_ARGS = [
     "--provider", "openai", "--model", "gpt-5.6-sol",
     "--thinking", "medium",
     "--print", "--session-dir", str(SESSION_DIR),
-    "--system-prompt", _prompt_path(), CONTEXT,
+    "--system-prompt", _prompt_path(), _context_arg(),
 ]
 
 
@@ -277,7 +284,7 @@ UNDERSTANDING_COMMAND_ARGS = [
     "--provider", "openai", "--model", "gpt-5.6-sol",
     "--thinking", "medium",
     "--print", "--session-dir", str(SESSION_DIR),
-    "--system-prompt", _prompt_path(), CONTEXT,
+    "--system-prompt", _prompt_path(), _context_arg(),
 ]
 
 
@@ -326,7 +333,7 @@ def test_extension_only_session_loads_the_one_extension_and_no_builtins():
         "--provider", "openai", "--model", "gpt-5.6-sol",
         "--thinking", "medium",
         "--print", "--session-dir", str(SESSION_DIR),
-        "--system-prompt", _prompt_path(), CONTEXT,
+        "--system-prompt", _prompt_path(), _context_arg(),
     ]
     # None of the configured extensions load, and no tool allowlist flag
     # competes with the extension's own tool.
@@ -399,3 +406,56 @@ def test_oversized_prompt_argv_really_starts_a_process(tmp_path):
     command = _oversized_command(tmp_path / ".pi-session")
     subprocess.run(["true", *command[1:]], check=True, timeout=30)
 
+
+# ---------------------------------------------------------------------------
+# Issue #1997: the task context reaches Pi as a FILE, never as argv
+# ---------------------------------------------------------------------------
+
+# The user's real scene (the local-mode gate's regression case): a short
+# spec, then ~45,600 CJK characters of background — about 150,000 UTF-8
+# bytes in ONE context string, past Linux's per-argv MAX_ARG_STRLEN.
+CONTEXT_LAST_LINE = "ACCEPTANCE: the last line of the body still reaches the agent"
+OVERSIZED_CONTEXT = (
+    "Issue #7: a long body\n\nIssue body:\n"
+    + "背景" * 25_000
+    + f"\n\n{CONTEXT_LAST_LINE}\n"
+)
+
+
+def _oversized_context_command(session_dir: Path) -> list[str]:
+    command, _log_command = pi_command.build_pi_command(
+        _unconfigured(), ROLE_IMPLEMENT,
+        pi_command.IMPLEMENT_EXCLUDED_SKILLS, session_dir,
+        SYSTEM_PROMPT, OVERSIZED_CONTEXT,
+        context_placeholder="<issue-context-redacted>",
+        tools=True, extensions=False,
+    )
+    return command
+
+
+def test_oversized_context_is_a_file_inside_the_session_dir(tmp_path):
+    """Acceptance 1/2 (Issue #1997): a 150,000-byte context keeps every
+    argv element under the kernel's per-string limit, the last argument
+    is Pi's file form `@<path>` pointing inside `session_dir`, argv
+    carries no body text, and the file holds the context exactly —
+    including its LAST line (nothing is truncated or capped)."""
+    session_dir = tmp_path / ".pi-session"
+    assert len(OVERSIZED_CONTEXT.encode("utf-8")) > 150_000
+    command = _oversized_context_command(session_dir)
+    assert max(len(item.encode("utf-8")) for item in command) < MAX_ARG_STRLEN
+    assert command[-1] == _context_arg(session_dir)
+    context_path = Path(command[-1].removeprefix("@"))
+    assert context_path.parent == session_dir
+    written = context_path.read_text(encoding="utf-8")
+    assert written == OVERSIZED_CONTEXT
+    assert written.rstrip().endswith(CONTEXT_LAST_LINE)
+    assert not any("背景" in item for item in command)
+
+
+def test_oversized_context_argv_really_starts_a_process(tmp_path):
+    """Acceptance 1 (Issue #1997): the returned argv really execs — a
+    150,000-byte context is no longer an argv string, so no
+    `OSError: [Errno 7] Argument list too long` is raised (with the
+    executable swapped for `true`)."""
+    command = _oversized_context_command(tmp_path / ".pi-session")
+    subprocess.run(["true", *command[1:]], check=True, timeout=30)
