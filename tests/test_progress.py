@@ -61,6 +61,42 @@ def test_run_marker_pattern_extracts_the_run_id():
     assert match.group(1) == "abc12345"
 
 
+def test_only_progress_renders_the_run_marker():
+    """Issue #2003: `run_marker` is the one producer of the marker.
+
+    A hand-written `f"<!-- orbi:run={run_id} -->"` in another module is a
+    second definition of the public marker: it skips the run-id
+    validation `run_marker` applies and drifts the moment the marker
+    format changes. The only literal marker left in the package is
+    `progress.RUN_MARKER_TEMPLATE`.
+    """
+    package = Path(progress.__file__).parent
+    offenders = sorted(
+        f"{path.relative_to(package)}:{number}: {line.strip()}"
+        for path in package.rglob("*.py")
+        if path.name != "progress.py"
+        for number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1,
+        )
+        if "orbi:run={" in line
+    )
+    assert offenders == []
+
+
+def test_the_run_marker_pattern_uses_the_journal_run_id_definition():
+    """Issue #2003: the id format has one owner, `journal.validate_run_id`.
+
+    `progress.RUN_MARKER_PATTERN` interpolates `journal.RUN_ID_PATTERN`
+    instead of spelling the id out again, so a reader can never accept an
+    id the writer refuses (or the reverse).
+    """
+    from orbi import journal
+
+    assert progress.RUN_MARKER_PATTERN.pattern == (
+        "<!-- orbi:run=(" + journal.RUN_ID_PATTERN.pattern + ") -->"
+    )
+
+
 def test_runner_fingerprint_uses_editable_checkout_head(monkeypatch, tmp_path):
     package = tmp_path / "checkout" / "src" / "orbi"
     package.mkdir(parents=True)

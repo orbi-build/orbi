@@ -64,7 +64,7 @@ from orbi.progress_summary import (
 # One marker per run: hidden in the rendered comment, exact for lookup.
 # The run-id pattern and its validator live in `orbi.journal` (the run
 # binding owns the contract); they are re-exported here for callers.
-RUN_MARKER_PATTERN = re.compile(r"<!-- orbi:run=([0-9a-f]{8}) -->")
+RUN_MARKER_PATTERN = re.compile(rf"<!-- orbi:run=({RUN_ID_PATTERN.pattern}) -->")
 RUN_MARKER_TEMPLATE = "<!-- orbi:run={run_id} -->"
 RUNNER_MARKER_TEMPLATE = "<!-- runner={fingerprint} -->"
 _RUNNER_MARKER_PATTERN = re.compile(r"<!-- runner=[^>]+ -->")
@@ -193,7 +193,7 @@ def format_status_comment(body: str) -> str:
     detail = re.sub(r"\s*\((?=[^)]*=)[^)]*\)", "", first).strip()
     run_id = fields.get("run_id")
     if not run_id and marker:
-        match = re.search(r"orbi:run=([0-9a-f]{8})", marker)
+        match = re.search(rf"orbi:run=({RUN_ID_PATTERN.pattern})", marker)
         run_id = match.group(1) if match else None
     fields.setdefault("detail", detail)
     if isinstance(run_id, str) and RUN_ID_PATTERN.fullmatch(run_id):
