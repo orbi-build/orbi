@@ -44,6 +44,7 @@ from datetime import datetime, timezone
 from orbi import comment_trust, failure, language, user_summary
 from orbi.comment_kind import (
     COMMENT_KIND_FAILURE, comment_kind, parse_versioned_block,
+    versioned_block_pattern,
 )
 from orbi.delivery_labels import (
     BLOCKED_LABEL, FIX_NEEDED_LABEL, P0_LABEL, READY_LABEL,
@@ -491,6 +492,12 @@ def rewrite_state(body: str, state: str, *, language_code: str) -> str:
     The state line is APPENDED above the block, so the comment keeps a
     short timeline (paused -> green again -> merged) instead of
     rewriting history; the block itself is replaced, never duplicated.
+
+    The block is located by its marker ENVELOPE, never by the exact text
+    today's `render` produces: a comment written before #1998 escaped the
+    HTML delimiters carries a raw `<`/`>` (a check name such as
+    `tests (>=3.10)`) and still parses, so a text-exact replace would
+    silently no-op and leave it `waiting` for good.
     """
     record = parse(body)
     if record is None:
@@ -517,8 +524,8 @@ def rewrite_state(body: str, state: str, *, language_code: str) -> str:
     )
     if line.strip() not in (text.strip() for text in lines[:marker_index]):
         lines[marker_index:marker_index] = [line, ""]
-    return "\n".join(lines).replace(
-        render(record), render(updated), 1,
+    return versioned_block_pattern(_MARKER).sub(
+        lambda _match: render(updated), "\n".join(lines), count=1,
     ).rstrip() + "\n"
 
 

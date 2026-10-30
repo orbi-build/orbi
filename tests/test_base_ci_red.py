@@ -745,6 +745,36 @@ def test_the_scan_recovers_a_check_name_that_closes_the_comment(
     assert base_ci_red.parse(_block_comment(gh)["body"]).state == "resuming"
 
 
+LEGACY_ARROW_CHECK = "tests (>=3.10)"
+
+
+def test_a_block_written_before_the_escaping_still_rewrites_its_state(
+        monkeypatch):
+    """A block already on an Issue was written unescaped (pre-#1998).
+
+    Its record parses fine (no `-->`, only `>=`), so the recovery scan
+    must still rewrite it in place: the block is replaced by its marker
+    envelope, never by the exact text today's `render` produces.
+    Otherwise the escaped reader would match nothing, the block would stay
+    `waiting` and the 7-day reminder would post again on every tick.
+    """
+    gh = _scan_gh(
+        monkeypatch, checks=(LEGACY_ARROW_CHECK,),
+        base_runs=[{"id": 1, "name": LEGACY_ARROW_CHECK,
+                    "status": "completed", "conclusion": "success",
+                    "html_url": "", "output": {}}],
+    )
+    comment = _block_comment(gh)
+    rendered = base_ci_red.render(
+        record(failing_checks=(LEGACY_ARROW_CHECK,)))
+    # The PRE-#1998 payload: raw JSON, the HTML delimiters unescaped.
+    legacy = rendered.replace("\\u003c", "<").replace("\\u003e", ">")
+    comment["body"] = comment["body"].replace(rendered, legacy)
+    assert base_ci_red.parse(comment["body"]).state == "waiting"
+    assert base_ci_red.recover(REPO, language_code="en") == [1825]
+    assert base_ci_red.parse(_block_comment(gh)["body"]).state == "resuming"
+
+
 def test_a_re_run_check_reads_its_newest_run(monkeypatch):
     """A re-run adds a second run under the same name, newest first: the
     current verdict is the FIRST one. Reading the older failure would keep
