@@ -24,7 +24,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote
 
-from orbi import gh_response, notify
+from orbi import checks, gh_response, notify
 from orbi.delivery_labels import (
     IN_PROGRESS_LABEL,
     P0_LABEL,
@@ -480,14 +480,16 @@ def pr_view(number: int, fields: str, *, repo: str | None = None,
 
 
 def commit_check_runs(repo: str, commit: str) -> list:
-    """Read one commit's GitHub check runs (the CI gate evidence)."""
-    checks = json.loads(run_gh_read_command([
+    """Read EVERY GitHub check run of one commit (the CI gate evidence).
+
+    GitHub serves 30 runs per page, so an unpaginated read hid check #31
+    and the release gate released while it was failing (Issue #1993).
+    """
+    raw = run_gh_read_command([
         "gh", "api", f"repos/{repo}/commits/{commit}/check-runs",
-        "--jq", ".check_runs",
-    ]))
-    if not isinstance(checks, list):
-        raise ValueError("check-runs response must be an array")
-    return checks
+        "--paginate", "--slurp",
+    ])
+    return checks.parse_paginated_check_runs(raw)
 
 
 def branch_head_sha(repo: str, branch: str) -> str:

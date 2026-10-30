@@ -12,6 +12,8 @@ stays the I/O leaf and no domain module owns a private copy.
 """
 from __future__ import annotations
 
+import json
+
 # A status a check reports once it has concluded (the rollup's CheckRun
 # `COMPLETED`, a legacy status context's `SUCCESS`/`FAILURE`/`ERROR`);
 # anything else is still running. GitHub recomputes mergeability and
@@ -19,6 +21,33 @@ from __future__ import annotations
 _FINAL_STATUSES = ("COMPLETED", "SUCCESS", "FAILURE", "ERROR")
 # The conclusions that do not fail the build.
 _PASSING_CONCLUSIONS = ("SUCCESS", "NEUTRAL", "SKIPPED")
+
+
+def parse_paginated_check_runs(raw: str) -> list:
+    """Flatten the check-run pages emitted by ``gh api --paginate --slurp``.
+
+    The list-check-runs REST response is one object per page —
+    ``{"total_count": N, "check_runs": [...]}`` — so the slurped output is
+    an array of those objects, one per page, and the caller receives every
+    run in page order (Issue #1993: GitHub serves 30 runs per page, so an
+    unpaginated read hid the 31st). Any other shape fails fast: a body that
+    cannot be read as pages must never pass for a complete — or passing —
+    check list.
+    """
+    pages = json.loads(raw)
+    if not isinstance(pages, list):
+        raise ValueError("paginated check-runs response must be an array of pages")
+    runs: list = []
+    for page in pages:
+        if not isinstance(page, dict) or not isinstance(page.get("check_runs"), list):
+            raise ValueError(
+                "paginated check-runs page must carry a check_runs array"
+            )
+        page_runs = page["check_runs"]
+        if any(not isinstance(run, dict) for run in page_runs):
+            raise ValueError("paginated check-runs page contains a non-object item")
+        runs.extend(page_runs)
+    return runs
 
 
 def render_check(entry: dict) -> str:

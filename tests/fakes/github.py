@@ -681,13 +681,20 @@ class FakeGh:
             r"repos/([^/]+/[^/]+)/commits/([^/]+)/check-runs", path,
         )
         if match:
+            # The paginated check-runs read (Issue #1993): the adapter asks
+            # for `--paginate --slurp` — gh follows the Link header and
+            # wraps the pages into one array, each page the REST resource
+            # `{total_count, check_runs}`. The fake holds one page, so the
+            # two-page merge is asserted at the seam (tests/test_github.py).
             self._repo_or_fail(match.group(1))
-            if (flags.get("--jq") or [""])[0] != ".check_runs":
+            self._known_flags(flags, ("--paginate", "--slurp"),
+                              ["gh", "api", path])
+            if not {"--paginate", "--slurp"} <= set(flags):
                 self._unsupported(["gh", "api", path])
             runs = self.check_runs.get(match.group(2))
             if runs is None:
                 self._fail(1, f"gh: HTTP 404: no commit {match.group(2)}")
-            return json.dumps(runs)
+            return json.dumps([{"total_count": len(runs), "check_runs": runs}])
         match = re.fullmatch(r"repos/([^/]+/[^/]+)", path)
         if match:
             # The repository resource: `owner.type` is what picks the

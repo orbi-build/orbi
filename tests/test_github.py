@@ -327,17 +327,62 @@ def test_pr_view_keeps_the_repo_free_form(monkeypatch):
 def test_commit_check_runs_returns_the_array(monkeypatch):
     captured = []
     monkeypatch.setattr(seam, "run_command", lambda c, **k: (
-        captured.append(c), '[{"name": "ci"}]')[1])
+        captured.append(c),
+        '[{"total_count": 1, "check_runs": [{"name": "ci"}]}]')[1])
 
     checks = github.commit_check_runs("o/r", "abc")
     assert checks == [{"name": "ci"}]
+    # Issue #1993: GitHub serves 30 check runs per page by default, so the
+    # read paginates and slurps (the repository's documented gh 2.48+
+    # contract, the same one the milestone reads use) instead of reading
+    # page one only.
     assert captured == [[
         "gh", "api", "repos/o/r/commits/abc/check-runs",
-        "--jq", ".check_runs", "--include",
+        "--paginate", "--slurp", "--include",
     ]]
 
     monkeypatch.setattr(seam, "run_command", lambda c, **k: "{}")
     with pytest.raises(ValueError, match="array"):
+        github.commit_check_runs("o/r", "abc")
+
+
+def test_commit_check_runs_merges_every_page(monkeypatch):
+    """Issue #1993: 31 runs over two pages, the failure on page two.
+
+    Reproduced scene: GitHub answers the first page with 30 green checks
+    and the 31st (failing) one on the second page. The gate saw
+    "30 check(s) all success" and released; the reader must return all 31
+    in page order so the caller sees the failing run.
+    """
+    page_one = [{"name": f"check-{index}", "status": "completed",
+                 "conclusion": "success"} for index in range(30)]
+    page_two = [{"name": "check-30", "status": "completed",
+                 "conclusion": "failure"}]
+    monkeypatch.setattr(seam, "run_command", lambda c, **k: json.dumps([
+        {"total_count": 31, "check_runs": page_one},
+        {"total_count": 31, "check_runs": page_two},
+    ]))
+
+    checks = github.commit_check_runs("o/r", "abc")
+    assert len(checks) == 31
+    assert checks[:30] == page_one
+    assert checks[-1] == {"name": "check-30", "status": "completed",
+                          "conclusion": "failure"}
+
+
+@pytest.mark.parametrize("body", [
+    '{"total_count": 1, "check_runs": []}',        # one page object, unslurped
+    '[[]]',                                         # a page that is not an object
+    '[{"total_count": 0}]',                         # a page without check_runs
+    '[{"check_runs": {}}]',                         # check_runs not an array
+    '[{"check_runs": [{"name": "ci"}, "bad"]}]',    # a non-object run
+])
+def test_commit_check_runs_rejects_a_shape_it_cannot_merge(
+        monkeypatch, body):
+    """A body that is not the documented slurped page shape fails fast —
+    a truncated or misread check list must never look like a pass."""
+    monkeypatch.setattr(seam, "run_command", lambda c, **k: body)
+    with pytest.raises(ValueError):
         github.commit_check_runs("o/r", "abc")
 
 
