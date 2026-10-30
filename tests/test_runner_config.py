@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from orbi import config as config_domain
+from orbi import source_pool
 from orbi.pilot_slots import slot_dir_for
 import orbi.runner as runner
 
@@ -216,6 +217,67 @@ def test_load_config_rejects_empty_source_repo_name(tmp_path):
     config_path.write_text('source_repos = ["owner/repo", ""]\n', encoding="utf-8")
     with pytest.raises(ValueError, match="source_repos must contain non-empty strings"):
         config_domain.load_config(config_path)
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    (
+        ('prompt = "prompt.md"\n', "source_repos must be a non-empty list"),
+        ("source_repos = []\n", "source_repos must be a non-empty list"),
+        ('source_repos = "owner/repo"\n', "source_repos must be a non-empty list"),
+        (
+            'source_repos = ["owner/repo", ""]\n',
+            "source_repos must contain non-empty strings",
+        ),
+        (
+            'source_repos = ["owner/repo", 3]\n',
+            "source_repos must contain non-empty strings",
+        ),
+    ),
+)
+def test_source_pool_rejects_source_repos_with_the_load_config_message(
+    tmp_path, body, message,
+):
+    """Issue #2002: the source pool reads only the sibling deployment's
+    TOML, but it judges ``source_repos`` with the ONE parser from
+    ``config.py`` — the same invalid shapes fail with the exact same
+    message as ``load_config`` (no second copy of the rule)."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(body, encoding="utf-8")
+    with pytest.raises(ValueError) as load_error:
+        config_domain.load_config(config_path)
+    assert str(load_error.value) == message
+    with pytest.raises(ValueError) as pool_error:
+        source_pool._discovered_source_repos(config_path)
+    assert str(pool_error.value) == message
+    assert str(pool_error.value) == str(load_error.value)
+
+
+def test_source_pool_accepts_the_source_repos_load_config_accepts(tmp_path):
+    """Issue #2002: the shared parser returns the same tuple the config
+    carries, so the pool comparison still sees the identical repositories."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["Owner/Repo", "other/repo"]\n', encoding="utf-8",
+    )
+    assert source_pool._discovered_source_repos(config_path) == (
+        config_domain.load_config(config_path).source_repos
+    )
+
+
+def test_source_repos_validation_message_lives_in_one_place():
+    """Issue #2002 acceptance 3: the ``source_repos`` rule exists once.
+
+    ``grep -n "source_repos must" src/orbi/`` matches only ``config.py``:
+    the source pool calls the shared parser instead of re-stating the
+    rule (and its message) in a second copy."""
+    src = Path(__file__).resolve().parent.parent / "src" / "orbi"
+    files = {
+        path.relative_to(src).as_posix()
+        for path in src.rglob("*.py")
+        if "source_repos must" in path.read_text(encoding="utf-8")
+    }
+    assert files == {"config.py"}
 
 
 def test_load_config_returns_the_frozen_runner_config(tmp_path):

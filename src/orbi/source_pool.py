@@ -10,12 +10,9 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
-from typing import TYPE_CHECKING
 
+from orbi import config as config_domain
 from orbi import scheduler
-
-if TYPE_CHECKING:
-    from orbi import config as config_domain
 
 
 def installed_unit_configs(
@@ -79,16 +76,13 @@ def _discovered_source_repos(path: Path) -> tuple[str, ...]:
     mutate this process and require credentials the read-only diagnostic
     does not need (Issue #1519). A plain TOML read of ``source_repos`` is
     the whole contract, so this is deliberately NOT ``load_config``.
+
+    The value itself is judged by ``config.parse_source_repos`` — the one
+    ``source_repos`` parser ``load_config`` also uses — so the rule and
+    its message exist only once (Issue #2002).
     """
     data = tomllib.loads(path.read_text(encoding="utf-8"))
-    repos = data.get("source_repos")
-    if (
-        not isinstance(repos, list)
-        or not repos
-        or not all(isinstance(repo, str) and repo for repo in repos)
-    ):
-        raise ValueError("source_repos must be a non-empty list of strings")
-    return tuple(repos)
+    return config_domain.parse_source_repos(data.get("source_repos"))
 
 
 def source_pool_lines(

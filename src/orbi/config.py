@@ -190,6 +190,20 @@ class RunnerConfig:
     repositories: tuple[dict, ...] = ()
 
 
+def parse_source_repos(value: object) -> tuple[str, ...]:
+    """Validate the task-pool declaration; the one ``source_repos`` parser.
+
+    ``load_config`` parses the whole config through it, and the source pool
+    uses it on a sibling deployment's plain TOML value (Issue #2002): the
+    rule is stated once, so the two callers can never drift apart.
+    """
+    if not isinstance(value, list) or not value:
+        raise ValueError("source_repos must be a non-empty list")
+    if not all(isinstance(repo, str) and repo for repo in value):
+        raise ValueError("source_repos must contain non-empty strings")
+    return tuple(value)
+
+
 class ConfigFileMissingError(FileNotFoundError):
     """The configured ``orbi.toml`` itself does not exist."""
 
@@ -209,11 +223,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     if not path.exists():
         raise ConfigFileMissingError(path)
     data = tomllib.loads(path.read_text(encoding="utf-8"))
-    source_repos = data.get("source_repos")
-    if not isinstance(source_repos, list) or not source_repos:
-        raise ValueError("source_repos must be a non-empty list")
-    if not all(isinstance(repo, str) and repo for repo in source_repos):
-        raise ValueError("source_repos must contain non-empty strings")
+    source_repos = parse_source_repos(data.get("source_repos"))
     unit_name = data.get("unit_name")
     if unit_name is not None and (
         not isinstance(unit_name, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", unit_name)
@@ -488,7 +498,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
             }
     return RunnerConfig(
         config_path=path.resolve(),
-        source_repos=tuple(source_repos),
+        source_repos=source_repos,
         repo_dir=repo_dir,
         deploy_home=deploy_home,
         unit_name=unit_name,
