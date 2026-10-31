@@ -58,6 +58,7 @@ from orbi.pi_process import (
     stream_pi,
 )
 from orbi.pi_stream_log import log_provider_config_loaded
+from orbi.progress import run_marker
 from orbi.repo_config import validate_context_file
 
 # Runner-owned runtime paths inside a task worktree: created
@@ -644,7 +645,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
                     comment_issue(
                         int(issue["number"]), repo=source_repo,
                         body=(
-                            f"<!-- orbi:run={config.run_id} -->\n"
+                            f"{run_marker(config.run_id)}\n"
                             f"{notice}\n"
                             f"run_id={config.run_id}"
                         ),
