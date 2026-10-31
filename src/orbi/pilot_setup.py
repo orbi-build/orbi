@@ -273,8 +273,9 @@ def check_checkout(repo_dir: Path, base_branch: str,
         except subprocess.CalledProcessError as exc:
             raise SetupError(
                 f"{repo_dir} must be a git checkout of {source_repos[0]} "
-                "with a resolvable HEAD — clone it there: "
-                f"{git_transport.clone_command(source_repos[0], repo_dir, mode=mode)}"
+                f"with a resolvable HEAD — fetch and check out "
+                f"{base_branch} there: "
+                f"{git_transport.fetch_checkout_command(repo_dir, base_branch)}"
             ) from exc
         base = run_command(
             ["git", "rev-parse", f"origin/{base_branch}"], cwd=repo_dir,

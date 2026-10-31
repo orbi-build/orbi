@@ -39,6 +39,7 @@ silent skip.
 """
 from __future__ import annotations
 
+import shlex
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -94,22 +95,62 @@ def https_url_for(repo: str) -> str:
     return f"https://{GITHUB_HOST}/{_validated_repo(repo)}.git"
 
 
+def _quoted_path(path: Path) -> str:
+    """One path as the shell reads it back (Issue #2034).
+
+    A printed repair command must run as written: `/srv/Orbi Work/repo`
+    would split into two arguments unquoted. `shlex.quote` leaves a
+    space-free path unchanged.
+    """
+    return shlex.quote(str(path))
+
+
 def clone_command(repo: str, repo_dir: Path, *, mode: str = "ssh") -> str:
     """The clone of one `owner/name` source repo into `repo_dir`.
 
     The single actionable command a setup failure reports when
-    `repo_dir` is missing or is not a git checkout (Issue #2012): the
+    `repo_dir` is missing or is an empty directory (Issue #2012): the
     URL follows the configured transport, exactly like the `origin`
     the transport check verifies, because the delivery checkout IS the
-    clone of the first configured source repo.
+    clone of the first configured source repo. The path is quoted for
+    the shell (Issue #2034).
     """
     url_for = ssh_url_for if mode == "ssh" else https_url_for
-    return f"git clone {url_for(repo)} {repo_dir}"
+    return f"git clone {url_for(repo)} {_quoted_path(repo_dir)}"
+
+
+def origin_add_command(
+    repo: str, repo_dir: Path, *, mode: str = "ssh",
+) -> str:
+    """The repair for an existing checkout without an `origin`.
+
+    `git clone` refuses a non-empty directory, so a checkout that is
+    already there is repaired in place: give it the transport's
+    `origin` URL (Issue #2034).
+    """
+    url_for = ssh_url_for if mode == "ssh" else https_url_for
+    return (
+        f"git -C {_quoted_path(repo_dir)} remote add origin "
+        f"{url_for(repo)}"
+    )
+
+
+def fetch_checkout_command(repo_dir: Path, base_branch: str) -> str:
+    """The repair for a checkout whose HEAD does not resolve.
+
+    Fetch the base branch and check it out in place — again, never a
+    clone over the existing directory (Issue #2034).
+    """
+    path = _quoted_path(repo_dir)
+    return (
+        f"git -C {path} fetch origin {base_branch} && "
+        f"git -C {path} checkout {base_branch}"
+    )
 
 
 def repo_dir_failure(
     repo_dir: Path,
-    source_repos: Sequence[str],
+    repo: str,
     *,
     mode: str = "ssh",
 ) -> str:
@@ -120,15 +161,13 @@ def repo_dir_failure(
     missing path" leaves an empty directory behind and walks straight
     into the transport check's failure, so the line names the repo, the
     path and the exact clone command for the configured transport
-    (Issue #2012). A hand-built config without `source_repos` keeps the
-    bare path (no repo to name).
+    (Issue #2012). `config.parse_source_repos` guarantees a source
+    repo, so there is no repo-less fallback (Issue #2034).
     """
-    if not source_repos:
-        return str(repo_dir)
     return (
         f"{repo_dir} is not a directory — it must be the clone of "
-        f"source_repos[0]={source_repos[0]}; clone it there: "
-        f"{clone_command(source_repos[0], repo_dir, mode=mode)}"
+        f"source_repos[0]={repo}; clone it there: "
+        f"{clone_command(repo, repo_dir, mode=mode)}"
     )
 
 
@@ -178,6 +217,36 @@ def _remote_repo_path(url: str) -> str | None:
                 path = path[: -len(".git")]
             return path or None
     return None
+
+
+def _missing_origin_failure(
+    repo_dir: Path,
+    source_repos: Sequence[str],
+    mode: str,
+    detail: str,
+) -> str:
+    """The repair line for a checkout without an `origin` (Issue #2034).
+
+    The repair fits the state: an empty/missing directory is cloned, an
+    existing checkout gains its remote in place (`git clone` refuses a
+    non-empty directory). Both paths are quoted for the shell.
+    """
+    repo = source_repos[0]
+    if (Path(repo_dir) / ".git").exists():
+        repair = (
+            "add the origin remote in place: "
+            f"{origin_add_command(repo, repo_dir, mode=mode)}"
+        )
+    else:
+        repair = (
+            "clone it there: "
+            f"{clone_command(repo, repo_dir, mode=mode)}"
+        )
+    return (
+        f"checkout has no origin remote: {repo_dir} — the delivery "
+        f"checkout must have an origin remote pointing at {repo}; "
+        f"{repair} ({detail})"
+    )
 
 
 def check_transport(
@@ -232,19 +301,11 @@ def check_transport(
         if exc.stderr:
             detail += f" stderr={exc.stderr.strip()}"
         raise TransportError(
-            f"checkout has no origin remote: {repo_dir} — the delivery "
-            f"checkout must be the clone of {source_repos[0]}; clone it "
-            f"there: "
-            f"{clone_command(source_repos[0], repo_dir, mode=mode)} "
-            f"({detail})"
+            _missing_origin_failure(repo_dir, source_repos, mode, detail)
         ) from exc
     except Exception as exc:
         raise TransportError(
-            f"checkout has no origin remote: {repo_dir} — the delivery "
-            f"checkout must be the clone of {source_repos[0]}; clone it "
-            f"there: "
-            f"{clone_command(source_repos[0], repo_dir, mode=mode)} "
-            f"({exc})"
+            _missing_origin_failure(repo_dir, source_repos, mode, str(exc))
         ) from exc
     # The repo the remote points at is verified BEFORE any protocol
     # decision or rewrite: a remote that does not point at the first
