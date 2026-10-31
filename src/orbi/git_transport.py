@@ -94,6 +94,44 @@ def https_url_for(repo: str) -> str:
     return f"https://{GITHUB_HOST}/{_validated_repo(repo)}.git"
 
 
+def clone_command(repo: str, repo_dir: Path, *, mode: str = "ssh") -> str:
+    """The clone of one `owner/name` source repo into `repo_dir`.
+
+    The single actionable command a setup failure reports when
+    `repo_dir` is missing or is not a git checkout (Issue #2012): the
+    URL follows the configured transport, exactly like the `origin`
+    the transport check verifies, because the delivery checkout IS the
+    clone of the first configured source repo.
+    """
+    url_for = ssh_url_for if mode == "ssh" else https_url_for
+    return f"git clone {url_for(repo)} {repo_dir}"
+
+
+def repo_dir_failure(
+    repo_dir: Path,
+    source_repos: Sequence[str],
+    *,
+    mode: str = "ssh",
+) -> str:
+    """The actionable line for a missing delivery checkout.
+
+    `repo_dir` is the delivery checkout, not an arbitrary directory: it
+    must be the clone of the first configured source repo. "Create the
+    missing path" leaves an empty directory behind and walks straight
+    into the transport check's failure, so the line names the repo, the
+    path and the exact clone command for the configured transport
+    (Issue #2012). A hand-built config without `source_repos` keeps the
+    bare path (no repo to name).
+    """
+    if not source_repos:
+        return str(repo_dir)
+    return (
+        f"{repo_dir} is not a directory — it must be the clone of "
+        f"source_repos[0]={source_repos[0]}; clone it there: "
+        f"{clone_command(source_repos[0], repo_dir, mode=mode)}"
+    )
+
+
 def remote_protocol(url: str) -> str:
     """The protocol family of one git remote URL.
 
@@ -194,12 +232,19 @@ def check_transport(
         if exc.stderr:
             detail += f" stderr={exc.stderr.strip()}"
         raise TransportError(
-            f"checkout has no origin remote: {repo_dir} "
+            f"checkout has no origin remote: {repo_dir} — the delivery "
+            f"checkout must be the clone of {source_repos[0]}; clone it "
+            f"there: "
+            f"{clone_command(source_repos[0], repo_dir, mode=mode)} "
             f"({detail})"
         ) from exc
     except Exception as exc:
         raise TransportError(
-            f"checkout has no origin remote: {repo_dir} ({exc})"
+            f"checkout has no origin remote: {repo_dir} — the delivery "
+            f"checkout must be the clone of {source_repos[0]}; clone it "
+            f"there: "
+            f"{clone_command(source_repos[0], repo_dir, mode=mode)} "
+            f"({exc})"
         ) from exc
     # The repo the remote points at is verified BEFORE any protocol
     # decision or rewrite: a remote that does not point at the first

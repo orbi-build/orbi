@@ -1272,6 +1272,23 @@ def test_validate_config_rejects_missing_repo_dir(tmp_path):
         runner.validate_config(config_domain.RunnerConfig(repo_dir=tmp_path / "missing-repo", deploy_home=tmp_path, prompt=tmp_path / "prompt.md", skills=(), context_files=()))
 
 
+def test_validate_config_missing_repo_dir_names_the_clone_to_run(tmp_path):
+    """Issue #2012: the delivery checkout is the clone of the first
+    source repo — the failure names that repo, the path and the clone
+    command for the configured transport."""
+    repo_dir = tmp_path / "missing-repo"
+    with pytest.raises(FileNotFoundError) as error:
+        runner.validate_config(config_domain.RunnerConfig(
+            repo_dir=repo_dir, deploy_home=tmp_path,
+            prompt=tmp_path / "prompt.md", skills=(),
+            context_files=(), source_repos=("xqliu/orbi",),
+        ))
+    message = str(error.value)
+    assert "source_repos[0]=xqliu/orbi" in message
+    assert str(repo_dir) in message
+    assert f"git clone git@github.com:xqliu/orbi.git {repo_dir}" in message
+
+
 def _git_checkout(path: Path) -> Path:
     """A real Git checkout with one commit (verified against the real
     CLI; the commit lets `git worktree add` check a branch out)."""

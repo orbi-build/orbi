@@ -254,10 +254,21 @@ Issue #330（PR #334）把 orbi 的部署 home 与交付 checkout 解耦：orbi
     worktree 从 X 冻结的 `origin/<base_branch>` 创建，PR 对 X 打开，
     slot 锁在 `<repo_dir>/.orbi/slots/`。
 
-先安装一次（上面第 2 步，从 orbi clone），然后把配置文件放进部署 home
+先安装一次（上面第 2 步，从 orbi clone），把用户仓库 X clone 到将来作为
+`repo_dir` 的路径，然后把配置文件放进部署 home
 ——已安装 systemd unit 从 `<deploy_home>/orbi.toml` 读配置
 （`{{ORBI_REPO_DIR}}` 占位符渲染的是 deploy home 路径），所以
 `orbi.toml` 和可选的 `.orbi/env` 放在 orbi checkout，而不是 X：
+
+```bash
+# 先 clone X：repo_dir 就是 X 的 checkout，走配置的传输方式
+git clone git@github.com:OWNER/USER-REPO-X.git /path/to/user-repo-x  # ssh（默认）
+git clone https://github.com/OWNER/USER-REPO-X.git /path/to/user-repo-x  # https
+```
+
+`orbi setup` 只验证这个 checkout（`origin` 必须是配置传输方式下的 X），
+从不自己 clone：`repo_dir` 不存在、或该路径不是 git checkout 时，
+`setup_failed` 行里给出的就是同一条 clone 命令。
 
 ```toml
 # <deploy_home>/orbi.toml — orbi checkout，不是用户仓库 X

@@ -638,3 +638,54 @@ def test_cli_setup_missing_deployment_path_fails_structured(
     err = captured.err
     assert re.fullmatch(r"setup_failed reason=required path missing: .+", err.strip())
     assert "Traceback" not in err
+
+
+def test_cli_setup_missing_repo_dir_names_the_clone_command(
+    tmp_path, capsys,
+):
+    """Issue #2012: a missing `repo_dir` fails with ONE actionable line
+    — the repo to clone (`source_repos[0]`), the path and the exact
+    clone command for the configured transport. "create the missing
+    path" would only leave an empty directory behind and walk into the
+    next failure."""
+    config_path = tmp_path / "orbi.toml"
+    repo_dir = tmp_path / "not-cloned-yet"
+    config_path.write_text(
+        f'source_repos = ["{REPO}"]\n'
+        f'repo_dir = "{repo_dir}"\n',
+        encoding="utf-8",
+    )
+    # No command runs: the config validation fails before any setup step,
+    # so the line is the real entry's output, not a stubbed one.
+    assert cli.main([
+        "setup", "--config", str(config_path),
+    ]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("setup_failed reason="), err
+    assert REPO in err
+    assert "source_repos[0]" in err
+    assert str(repo_dir) in err
+    assert "clone" in err
+    assert f"git clone {ORIGIN_URL} {repo_dir}" in err
+    assert "Traceback" not in err
+
+
+def test_cli_setup_missing_repo_dir_clones_over_the_configured_https(
+    tmp_path, capsys,
+):
+    """Issue #2012: the printed clone command follows `git_transport`;
+    an https deployment must never be handed the SSH URL."""
+    config_path = tmp_path / "orbi.toml"
+    repo_dir = tmp_path / "not-cloned-yet"
+    config_path.write_text(
+        f'source_repos = ["{REPO}"]\n'
+        f'repo_dir = "{repo_dir}"\n'
+        'git_transport = "https"\n',
+        encoding="utf-8",
+    )
+    assert cli.main([
+        "setup", "--config", str(config_path),
+    ]) == 1
+    err = capsys.readouterr().err
+    assert f"git clone https://github.com/{REPO}.git {repo_dir}" in err
+    assert "git@github.com" not in err

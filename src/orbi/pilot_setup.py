@@ -273,9 +273,8 @@ def check_checkout(repo_dir: Path, base_branch: str,
         except subprocess.CalledProcessError as exc:
             raise SetupError(
                 f"{repo_dir} must be a git checkout of {source_repos[0]} "
-                "with a resolvable HEAD — mount the checkout with: "
-                "docker run -v <path>:/work (or mount an empty volume so "
-                "the task pool can be cloned)"
+                "with a resolvable HEAD — clone it there: "
+                f"{git_transport.clone_command(source_repos[0], repo_dir, mode=mode)}"
             ) from exc
         base = run_command(
             ["git", "rev-parse", f"origin/{base_branch}"], cwd=repo_dir,
@@ -375,7 +374,9 @@ def run_checks(config_path: Path, *, run_command) -> list[str]:
         raise CheckError(
             "config",
             f"invalid orbi.toml: required path missing: {exc}",
-            "create the missing path or fix orbi.toml",
+            "create the missing path or fix orbi.toml (a repo_dir must "
+            "be a clone of the first source repo — the reason names the "
+            "exact git clone command)",
             DOCS_LINKS["config"],
         ) from exc
     except ValueError as exc:
