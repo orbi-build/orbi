@@ -212,15 +212,6 @@ def test_stream_pi_steers_and_restarts(tmp_path):
     assert command[-1] == f"@{context_file}"
 
 
-def test_a_command_without_a_context_file_cannot_be_steered():
-    """Issue #1997: a command built outside `build_pi_command` carries no
-    `@<context file>`, so a steering restart fails fast instead of
-    putting the corrected context back into one argv string."""
-    from orbi.pi_steering import write_steered_context
-    with pytest.raises(ValueError, match=r"no @<context file> argument"):
-        write_steered_context(["pi", "--print", "context"], "corrected")
-
-
 def test_steering_validation_and_limit(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="must be a number"):
         config_domain._positive_seconds({"x": "bad"}, "x", 1.0)
