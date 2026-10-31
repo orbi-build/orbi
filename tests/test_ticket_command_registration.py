@@ -14,6 +14,11 @@ So the set is read from ONE explicit list
 a FRESH interpreter: a command missing from the list, or a registration
 that still depends on an unrelated import, fails here. The CLI assertions
 build the real argparse tree the host runs.
+
+Issue #2033 removed the last half of the same problem: the registrant
+modules no longer call `register_command(...)` at import, so importing a
+command module for any other reason cannot add a command either. The
+registry declares its `COMMAND_SPECS` tuple and registers it itself.
 """
 from __future__ import annotations
 
@@ -142,6 +147,53 @@ def test_the_cli_exposes_the_same_four_commands():
         "['milestone', 'set', 'v9.9.9']).milestone_command)\n"
     )
     assert lines == [GENERATED_SUBCOMMANDS, "set"]
+
+
+def test_a_command_module_does_not_register_itself():
+    """Issue #2033: importing a command module adds no command.
+
+    A fresh process imports the four modules that used to call
+    `register_command(...)` at import time: the registry is still empty and
+    only the registry's own declaration fills it. Registering from a module
+    import is what made an unrelated import decide the command set
+    (Issue #2000) — now a module defines its spec and nothing else.
+    """
+    lines = _run(
+        "import orbi.amend_command, orbi.base_ci_red, "
+        "orbi.milestone_command, orbi.split_command\n"
+        "from orbi import ticket_command\n"
+        "print(len(ticket_command.TICKET_COMMANDS))\n"
+        "from orbi import ticket_command_registry\n"
+        "print(','.join(sorted(ticket_command.TICKET_COMMANDS)))\n"
+    )
+    assert lines == ["0", COMMAND_NAMES]
+
+
+def test_the_registry_declares_the_specs_it_registers():
+    """Issue #2033: ONE declared tuple is the command list and the registration.
+
+    The tuple names the very `CommandSpec` objects the modules define, in
+    registration order, so adding a command is one spec in its module plus
+    one entry here — and no command reaches the set any other way.
+    """
+    from orbi import (
+        amend_command, base_ci_red, milestone_command, split_command,
+    )
+
+    declared = ticket_command_registry.COMMAND_SPECS
+    assert declared == (
+        base_ci_red.FIX_BASE_COMMAND,
+        amend_command.AMEND_COMMAND,
+        milestone_command.MILESTONE_COMMAND,
+        split_command.SPLIT_COMMAND,
+    )
+    assert ticket_command_registry.ticket_commands() == declared
+
+
+def test_the_name_lookup_reads_the_registry_dict():
+    """The name lookup is the registry dict, not a scan of a rebuilt list."""
+    assert ticket_command_registry.command_by_name("split") is \
+        ticket_command.TICKET_COMMANDS["split"]
 
 
 def test_an_unknown_command_name_fails_fast():

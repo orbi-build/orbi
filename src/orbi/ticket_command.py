@@ -13,19 +13,19 @@ machine id (``name``) stays separate from what a user types
 (``subcommand``) because it is baked into the receipt markers and the
 journal event names of receipts already posted.
 
-Each command registers a `CommandSpec` **explicitly** — no decorators
+Each command is one `CommandSpec` declared **explicitly** — no decorators
 discovering things, no entry points, no dynamic import — the way
-`JOURNAL_EVENTS` registers the journal events. `register_command` validates
+`JOURNAL_EVENTS` declares the journal events. `register_command` validates
 the registration, so a duplicate name, a duplicate subcommand or alias, or
 an unknown permission fails fast at import time instead of silently
-overwriting, and it registers the command's journal events: a new command
-is one spec plus one registration.
+overwriting, and it registers the command's journal events.
 
-The one explicit list of the registrant modules lives beside this layer
-(`orbi.ticket_command_registry.ticket_commands()`, Issue #2000): the
-comment dispatch and the CLI both read it, so a command cannot keep one
-spelling and vanish from the other, and no command depends on which
-unrelated module happened to be imported first.
+The one explicit list lives beside this layer
+(`orbi.ticket_command_registry.COMMAND_SPECS`, Issues #2000, #2033): that
+module registers the specs it declares and both the comment dispatch and
+the CLI read the result, so a command cannot keep one spelling and vanish
+from the other, and no command module registers anything as an import side
+effect.
 
 The shared layer owns the matching and the permission check:
 
@@ -272,10 +272,11 @@ def run_step(step: str, action: Callable[[], T]) -> T:
 
 
 # The command registry: name -> CommandSpec, written out explicitly (the
-# JOURNAL_EVENTS convention). A registrant adds its spec with
-# register_command; the duplicate-name / duplicate-spelling / unknown-
-# permission checks make the registration itself the validation, so a typo
-# fails at import time instead of at the first ticket that carries it.
+# JOURNAL_EVENTS convention). `orbi.ticket_command_registry` declares the
+# specs and adds them with register_command; the duplicate-name /
+# duplicate-spelling / unknown-permission checks make the registration
+# itself the validation, so a typo fails at import time instead of at the
+# first ticket that carries it.
 TICKET_COMMANDS: dict[str, CommandSpec] = {}
 
 
@@ -320,8 +321,8 @@ def register_command(spec: CommandSpec) -> None:
         )
     TICKET_COMMANDS[spec.name] = spec
     # The command's journal events are the registry's own business: a
-    # registrant that had to add them to JOURNAL_EVENTS by hand could ship
-    # a command whose first run raises inside ``event()`` (Issue #1922).
+    # command that had to add them to JOURNAL_EVENTS by hand could ship one
+    # whose first run raises inside ``event()`` (Issue #1922).
     JOURNAL_EVENTS[f"{spec.name}_command_applied"] = (
         f"an in-ticket `{spec.canonical}` command ran"
     )
@@ -776,8 +777,9 @@ def process_labeled_commands(
     it and leaves the ticket stopped for the next tick.
 
     ``commands`` is required (Issue #2000): the caller passes
-    `orbi.ticket_command_registry.ticket_commands()`, the one explicit list,
-    so which commands run here never depends on what was imported.
+    `orbi.ticket_command_registry.ticket_commands()`, the one explicit
+    declaration, so which commands run here never depends on what was
+    imported.
     """
     specs = list(commands)
     for issue in list_issues(

@@ -976,8 +976,8 @@ tick 都会对带有该标签的开放工单运行一次已登记命令
 
 新增一个命令：
 
-1. 在命令自己的模块里定义 `CommandSpec`（`/orbi milestone` 是第一个注册
-   者）并调用 `register_command(spec)`——这一次调用就是全部接线。注册即
+1. 在命令自己的模块里定义 `CommandSpec`（`/orbi milestone` 是第一个
+   命令）；该模块只声明 spec，自己不做任何登记。注册即
    校验：名称重复、subcommand 或旧别名已被其他命令占用、arity 不是 0 或 1、
    权限级别不在 `PERMISSION_LEVELS` 中，都会在 import 时快速失败。注册同时
    登记该命令的 journal 事件类型 `<name>_command_applied` 与
@@ -985,13 +985,12 @@ tick 都会对带有该标签的开放工单运行一次已登记命令
 2. 在上面"事件参考"中补上该命令的事件行，并在本表（及英文页）补上该命令
    行：绑定测试 `tests/test_journal_events.py` 与
    `tests/test_ticket_command.py` 会读取它们，出现偏差即失败。
-3. 把命令模块加入唯一的一份显式登记清单
-   `ticket_command_registry.ticket_commands()`（
-   `src/orbi/ticket_command_registry.py`，Issue #2000）：import 这份清单就会
-   登记各模块，注释调度与 CLI 分发表都从它取命令，所以一处编辑就接上两种
-   拼写，也不会因为某个无关 import 被去掉而静默取消登记。每个
-   `process_commands(...)` 调用点都传入整份清单，已登记的命令无需改动任何
-   调用点就会被调度。主机上的拼写同样由这份清单生成
+3. 把 spec 加入唯一的一份显式声明元组 `COMMAND_SPECS`（
+   `src/orbi/ticket_command_registry.py`，Issues #2000、#2033）：该模块在
+   import 时登记自己声明的这些 spec，注释调度与 CLI 分发表都读取它们，所以
+   一处编辑就接上两种拼写，也没有任何模块 import 能静默增加或取消登记。
+   每个 `process_commands(...)` 调用点都传入整份清单，已登记的命令无需改动
+   任何调用点就会被调度。主机上的拼写同样由这份清单生成
    （`orbi.cli_ticket_command.register_cli`），所以 arity 为 0 的命令无需
    第二次编辑就得到自己的 `orbi <subcommand>` 子命令。
 

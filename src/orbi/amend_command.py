@@ -1,7 +1,7 @@
 """`/orbi amend`: put the proposed acceptance criteria on the ticket.
 
 The clarification gate stops a thin ticket and may attach a `kind=criteria`
-proposal to its stop comment (Issue #1926). This module registers the one
+proposal to its stop comment (Issue #1926). This module defines the one
 command that acts on it: a person with write permission replies
 `/orbi amend` and the proposed conditions — **as the comment reads at
 that moment**, so editing it first changes what lands — are appended to the
@@ -55,7 +55,6 @@ from orbi.ticket_command import (
     TicketCommandError,
     command_comment_key,
     command_receipt_marker,
-    register_command,
     run_step,
     runner_receipt,
 )
@@ -245,5 +244,3 @@ AMEND_COMMAND = CommandSpec(
     ),
     context=_criteria_context,
 )
-
-register_command(AMEND_COMMAND)

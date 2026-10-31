@@ -1146,23 +1146,22 @@ nothing: it is an unrelated comment, not a malformed command.
 To add a command:
 
 1. Define a `CommandSpec` in the command's own module (`/orbi milestone` is
-   the first registrant) and call `register_command(spec)`; that one call is
-   the whole wiring. Registration is the validation: a duplicate name, a
-   subcommand or legacy alias another command already owns, an arity other
-   than 0 or 1, or a permission level outside `PERMISSION_LEVELS` fails at
-   import time. Registration also registers the command's journal event kinds
+   the first command); the module declares the spec and registers nothing by
+   itself. Registration is the validation: a duplicate name, a subcommand or
+   legacy alias another command already owns, an arity other than 0 or 1, or
+   a permission level outside `PERMISSION_LEVELS` fails at import time.
+   Registration also registers the command's journal event kinds
    `<name>_command_applied` and `<name>_command_failed`, so `event()` accepts
    them without a second edit.
 2. Add the command's rows to the event reference and its row to this table
    (and the Chinese page): the binding tests
    `tests/test_journal_events.py` and `tests/test_ticket_command.py` read
    them and fail on drift.
-3. Add the command's module to the ONE explicit list of registrants,
-   `ticket_command_registry.ticket_commands()` in
-   `src/orbi/ticket_command_registry.py` (Issue #2000): importing that
-   list registers the modules, and both the comment dispatch and the CLI
-   dispatch table read it, so one edit wires both spellings and no
-   unrelated import can silently unregister a command. Every
+3. Add the spec to the ONE declared tuple, `COMMAND_SPECS` in
+   `src/orbi/ticket_command_registry.py` (Issues #2000, #2033): that module
+   registers the specs it declares at import, and both the comment dispatch
+   and the CLI dispatch table read them, so one edit wires both spellings
+   and no module import can silently add or unregister a command. Every
    `process_commands(...)` call site passes the whole list, so a registered
    command is dispatched without changing a call site. The terminal
    spelling is generated from the same list
