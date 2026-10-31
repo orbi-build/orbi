@@ -1,0 +1,42 @@
+---
+title: "v0.7.30 发布（最新）"
+description: "Orbi v0.7.30 发布说明：Inline the steering context rewrite at its one call site; remove pi_steering.py，另有 2 项改动。"
+---
+
+`v0.7.30` 于 2026-10-31T05:35:53Z 发布为 GitHub Release [v0.7.30](https://github.com/orbi-build/orbi/releases/tag/v0.7.30)（release task：Issue #2005）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.7.30` | 注解 tag `54877c1830cd6a417a341eaccd96560afd808825` | 提交 `ffc322b400b721c22ff5a2ebd3e44899138ed53e` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Inline the steering context rewrite at its one call site; remove pi_steering.py ([Issue #2032](https://github.com/orbi-build/orbi/issues/2032); [PR #2036](https://github.com/orbi-build/orbi/pull/2036))
+- ticket_command_registry declares and registers the specs itself; no import-side-effect registration ([Issue #2033](https://github.com/orbi-build/orbi/issues/2033); [PR #2037](https://github.com/orbi-build/orbi/pull/2037))
+
+### Deployment and operations
+
+- Setup repo_dir failure lines: a repair command that fits each state, quoted paths ([Issue #2034](https://github.com/orbi-build/orbi/issues/2034); [PR #2035](https://github.com/orbi-build/orbi/pull/2035))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
+
+- tag: `v0.7.30`
+- release commit: `ffc322b400b721c22ff5a2ebd3e44899138ed53e`
+- release task: Issue #2005
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit ffc322b400b721c22ff5a2ebd3e44899138ed53e (the #268 CI-wait gate; no local test execution)
+
+
+Released by [Orbi](https://orbi.build/?ref=prfoot-orbi-build)
+
+[![Download Orbi](https://a.fsdn.com/con/app/sf-download-button)](https://sourceforge.net/projects/orbi/files/v0.7.30/v0.7.30%20source%20code.zip/download)
