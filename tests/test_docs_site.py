@@ -928,6 +928,11 @@ def test_docs_getting_started_documents_the_external_single_repo_mode():
         "task worktrees must be documented as landing in the delivery "
         "checkout's .worktrees (worktree_path), never in workspace_root"
     )
+    assert "git clone git@github.com:OWNER/USER-REPO-X.git" in text, (
+        "Issue #2012: the external single-repo mode must clone X into "
+        "repo_dir before the config block — orbi setup verifies that "
+        "checkout and never clones it"
+    )
 
 
 def test_docs_getting_started_documents_the_model_provider_configuration():

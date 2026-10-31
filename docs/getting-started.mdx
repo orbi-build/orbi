@@ -301,11 +301,22 @@ against X.
     `origin/<base_branch>`, PRs open against X, and the slot locks live
     in `<repo_dir>/.orbi/slots/`.
 
-Install once (step 2 above, from the orbi clone), then put the config
-file in the deploy home — the installed systemd unit reads its config
-from `<deploy_home>/orbi.toml` (the `{{ORBI_REPO_DIR}}` placeholder
-renders the deploy home path), so `orbi.toml` and the optional
-`.orbi/env` live in the orbi checkout, not in X:
+Install once (step 2 above, from the orbi clone), clone the user repo X into
+the path that will be `repo_dir`, then put the config file in the deploy home
+— the installed systemd unit reads its config from `<deploy_home>/orbi.toml`
+(the `{{ORBI_REPO_DIR}}` placeholder renders the deploy home path), so
+`orbi.toml` and the optional `.orbi/env` live in the orbi checkout, not in X:
+
+```bash
+# clone X first: repo_dir is X's checkout, on the configured transport
+git clone git@github.com:OWNER/USER-REPO-X.git /path/to/user-repo-x  # ssh (default)
+git clone https://github.com/OWNER/USER-REPO-X.git /path/to/user-repo-x  # https
+```
+
+`orbi setup` verifies that checkout — its `origin` must be X on the
+configured transport — and never clones it: a missing `repo_dir`, or a path
+that is not a git checkout, fails with the same clone command in its
+`setup_failed` line.
 
 ```toml
 # <deploy_home>/orbi.toml — the orbi checkout, NOT the user repo X

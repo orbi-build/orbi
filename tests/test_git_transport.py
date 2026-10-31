@@ -168,14 +168,22 @@ def test_check_transport_accepts_an_ssh_url_without_the_dot_git_suffix(
 
 
 def test_check_transport_fails_fast_on_a_missing_origin(tmp_path):
+    """Issue #2012: a `repo_dir` without an origin is not a checkout of
+    the source repo — the failure names the clone that puts one there,
+    over the configured transport."""
     state = {"no_origin": True}
     fake_run, calls, _ = ok_run_factory(state)
     with pytest.raises(
         git_transport.TransportError, match="no origin remote",
-    ):
+    ) as error:
         git_transport.check_transport(
             tmp_path, ["xqliu/orbi"], run_command=fake_run,
         )
+    message = str(error.value)
+    assert "xqliu/orbi" in message
+    assert (
+        f"git clone git@github.com:xqliu/orbi.git {tmp_path}" in message
+    )
     # No probe, no migration after the missing remote.
     assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
 
@@ -324,10 +332,13 @@ def test_check_transport_fails_fast_on_a_generic_config_error(tmp_path):
 
     with pytest.raises(
         git_transport.TransportError, match="no origin remote",
-    ):
+    ) as error:
         git_transport.check_transport(
             tmp_path, ["xqliu/orbi"], run_command=fake_run,
         )
+    assert f"git clone git@github.com:xqliu/orbi.git {tmp_path}" in str(
+        error.value
+    )
 
 
 def test_check_transport_reports_a_probe_failure_without_stderr(tmp_path):

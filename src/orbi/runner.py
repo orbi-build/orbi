@@ -59,7 +59,7 @@ from orbi import config as config_domain
 from orbi.blocked_comment import post_blocked_comment
 from orbi.branch_reclaim import delete_merged_delivery_branch, reclaim_merged_delivery_branches
 from orbi.git_identity import set_bot_git_identity
-from orbi.git_transport import TransportError, check_transport
+from orbi.git_transport import TransportError, check_transport, repo_dir_failure
 from orbi.pilot_slots import (
     acquire_claim_lock, acquire_slot, mark_slot_delivery, slot_dir_for,
     slot_held_deliveries, slot_occupancy,
@@ -497,7 +497,9 @@ def validate_execution_source_repos(source_repos: Sequence[str]) -> None:
 
 def validate_config(config: config_domain.RunnerConfig) -> None:
     if not config.repo_dir.is_dir():
-        raise FileNotFoundError(config.repo_dir)
+        raise FileNotFoundError(repo_dir_failure(
+            config.repo_dir, config.source_repos,
+            mode=config.git_transport))
     # The deployment home (CLI install source, unit templates,
     # labels.toml, prompt defaults) must exist too — a missing home fails
     # the start fast, like a missing delivery checkout.
