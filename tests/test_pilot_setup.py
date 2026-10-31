@@ -236,6 +236,11 @@ def fake_run_factory(state: dict):
         # Issue #152: the editable tool install (uv tool install ...).
         if head[:2] == ["uv", "tool"]:
             return ""
+        # The compatible-interpreter selection probes the system python3
+        # through the same seam when a reinstall is actually about to
+        # happen (Issue #2001): report the probe interpreter compatible.
+        if list(command[1:3]) == ["-S", "-c"]:
+            return subprocess.CompletedProcess(command, 0, "", "")
         raise AssertionError(f"unexpected command: {command}")
 
     return fake_run, calls
