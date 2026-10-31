@@ -158,7 +158,6 @@ def check_runner_source_freshness(config: config_domain.RunnerConfig, *, run_com
     from orbi import cli_source
     module_path = cli_source.module_file()
     package_dir = module_path.parent
-    fix = cli_source.reinstall_command(deploy_home)
 
     toplevel_raw = _runner_source_git(
         ["rev-parse", "--show-toplevel"], package_dir, run_command=run_command,
@@ -303,6 +302,12 @@ def check_runner_source_freshness(config: config_domain.RunnerConfig, *, run_com
         event("runner_source", result="fresh", **facts)
         return facts
     allowed = bool(config.allow_stale_runner)
+    # The fix string names the editable reinstall, so building it decides
+    # the compatible interpreter (a subprocess probe). It is built HERE —
+    # only on the stale path that reports it — so a HEALTHY tick never
+    # spawns a probe: the interpreter is decided when a reinstall is
+    # actually asked for, never on every Runner start (Issue #2001).
+    fix = cli_source.reinstall_command(deploy_home)
     event(
         "runner_source_stale",
         **facts, allowed=str(allowed).lower(), fix=fix,
