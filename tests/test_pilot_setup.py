@@ -11,6 +11,7 @@ optional proxy never blocks the core setup.
 """
 from orbi import config as config_domain
 import json
+import shlex
 import subprocess
 import threading
 import tomllib
@@ -1142,10 +1143,12 @@ def test_check_checkout_reports_a_stale_base(tmp_path):
     assert result["base_fresh"] is False
 
 
-def test_check_checkout_missing_head_names_the_https_clone_in_https_mode(
+def test_check_checkout_missing_head_names_fetch_and_checkout_of_the_base(
     tmp_path,
 ):
-    """Issue #2012: the clone command follows the configured transport."""
+    """Issue #2034: a checkout whose HEAD does not resolve is repaired by
+    fetching and checking out the base branch — `git clone` refuses the
+    non-empty directory that is already there."""
     repo = tmp_path / "checkout"
     repo.mkdir()
 
@@ -1167,10 +1170,11 @@ def test_check_checkout_missing_head_names_the_https_clone_in_https_mode(
             repo, "main", ["xqliu/orbi"], run_command=fake_run,
             mode="https",
         )
-    assert (
-        f"git clone https://github.com/xqliu/orbi.git {repo}"
-        in str(error.value)
-    )
+    message = str(error.value)
+    assert "fetch" in message
+    assert "checkout" in message
+    assert "main" in message
+    assert "git clone" not in message
 
 
 def test_check_checkout_fails_fast_without_an_origin_remote(tmp_path):
@@ -1201,11 +1205,13 @@ def test_check_checkout_fails_fast_on_a_git_error(tmp_path):
         )
 
 
-def test_check_checkout_wraps_a_missing_head_with_clone_guidance(tmp_path):
-    """Issue #2012: a `repo_dir` that is not a checkout names the clone
-    command for the configured transport. The Docker-only mount remedy
-    stays in the Docker entrypoint — a plain machine can never act on
-    it."""
+def test_check_checkout_wraps_a_missing_head_with_fetch_and_checkout(
+    tmp_path,
+):
+    """Issue #2034: a checkout with an unresolvable HEAD names fetching
+    and checking out the base branch, never cloning over the existing
+    directory. The Docker-only mount remedy stays in the Docker
+    entrypoint — a plain machine can never act on it."""
     repo = tmp_path / "checkout"
     repo.mkdir()
 
@@ -1230,8 +1236,43 @@ def test_check_checkout_wraps_a_missing_head_with_clone_guidance(tmp_path):
     assert "must be a git checkout" in message
     assert "xqliu/orbi" in message
     assert str(repo) in message
-    assert f"git clone git@github.com:xqliu/orbi.git {repo}" in message
+    assert "fetch" in message
+    assert "checkout" in message
+    assert "main" in message
+    assert "git clone" not in message
     assert "docker run" not in message
+
+
+def test_check_checkout_missing_head_quotes_a_repo_dir_with_a_space(
+    tmp_path,
+):
+    """Issue #2034: the printed repair is runnable as written —
+    `shlex.split` yields the spaced path as one argument."""
+    repo = tmp_path / "Orbi Work" / "checkout"
+    repo.mkdir(parents=True)
+
+    def fake_run(command, **kwargs):
+        if command == ["git", "config", "remote.origin.url"]:
+            return "git@github.com:xqliu/orbi.git"
+        if command == [
+            "git", "ls-remote", "git@github.com:xqliu/orbi.git",
+        ]:
+            return "abc\\tHEAD"
+        if command == ["git", "rev-parse", "HEAD"]:
+            raise subprocess.CalledProcessError(
+                128, command, stderr="fatal: ambiguous argument 'HEAD'"
+            )
+        return ""
+
+    with pytest.raises(pilot_setup.SetupError) as error:
+        pilot_setup.check_checkout(
+            repo, "main", ["xqliu/orbi"], run_command=fake_run,
+        )
+    command = str(error.value).split("there: ", 1)[1]
+    tokens = shlex.split(command)
+    assert tokens[:3] == ["git", "-C", str(repo)]
+    assert str(repo) in tokens
+    assert tokens[3:6] == ["fetch", "origin", "main"]
 
 
 # --- git transport in the checkout check (Issue #114) -------------------------
