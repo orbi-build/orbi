@@ -49,6 +49,7 @@ from orbi.comment_kind import (
     COMMENT_KIND_FAILURE, comment_kind, comment_kind_marker,
     parse_versioned_block,
 )
+from orbi.comment_rest_id import rest_comment_id
 from orbi.delivery_labels import (
     BLOCKED_LABEL, FIX_NEEDED_LABEL, READY_LABEL,
 )
@@ -80,9 +81,6 @@ MISSING_PERMISSION = "statuses: read"
 _MARKER = "orbi:check-permission:v1"
 BLOCK_TEMPLATE = f"<!-- {_MARKER} {{payload}} -->"
 _FIELDS = ("schema", "pr", "state")
-
-# The REST id carried by a comment's permalink (see `rest_comment_id`).
-_COMMENT_URL_ID_RE = re.compile(r"#issuecomment-(\d+)$")
 
 # One bounded page per recovered scan: `ai-blocked` Issues are few, and an
 # unbounded scan would multiply the per-tick read cost.
@@ -367,23 +365,6 @@ def _waiting_block(comments: list[dict], *,
     if record is None or record.state != STATE_WAITING:
         return None
     return record, comment
-
-
-def rest_comment_id(comment: dict) -> int | None:
-    """The REST id of one Issue comment, from its id field or its permalink.
-
-    `gh issue view --json comments` reports the GraphQL node id — an
-    `"IC_kw..."` string no REST route accepts — next to the permalink, and
-    the permalink's `#issuecomment-<digits>` suffix IS the REST id the
-    in-place edit's `PATCH /repos/{repo}/issues/comments/{id}` takes (the
-    same rule `base_ci_red` and the failure reporter follow).
-    """
-    comment_id = comment.get("id")
-    if isinstance(comment_id, int) and not isinstance(comment_id, bool):
-        return comment_id
-    url = comment.get("url")
-    match = _COMMENT_URL_ID_RE.search(url) if isinstance(url, str) else None
-    return int(match.group(1)) if match else None
 
 
 def _edit_state(repo: str, issue_number: int, comment: dict,
