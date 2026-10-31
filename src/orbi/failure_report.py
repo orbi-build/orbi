@@ -34,6 +34,8 @@ from orbi.comment_kind import (
     COMMENT_KIND_FAILURE,
     comment_kind_marker,
 )
+from orbi.comment_rest_id import rest_comment_id
+from orbi.comment_trust import latest_run_marker, trusted_comments
 from orbi.delivery_labels import (
     EVENT_FIX_NEEDED, FIX_NEEDED_LABEL, IN_PROGRESS_LABEL, READY_LABEL,
 )
@@ -41,7 +43,6 @@ from orbi.failure import (
     failure_comment_body, failure_detail, failure_summary,
     redact_local_paths, terminal_action,
 )
-from orbi.comment_trust import latest_run_marker, trusted_comments
 from orbi.github import (
     pr_number, apply_label_patch, comment_issue, issue_comments,
     issue_labels, issue_priority, pr_comments, run_gh_write_command,
@@ -875,17 +876,8 @@ def report_delivery_failure(
         # The #825 dedup: `gh issue view --json comments` returns a GraphQL
         # node id, but the PATCH route requires the REST id. The comment URL
         # already carries that id, so do not make a second API request.
-        comment_id = reported_failure.get("id")
-        if isinstance(comment_id, int) and not isinstance(comment_id, bool):
-            rest_comment_id = comment_id
-        else:
-            url = reported_failure.get("url")
-            match = (
-                re.search(r"#issuecomment-(\d+)$", url)
-                if isinstance(url, str) else None
-            )
-            rest_comment_id = int(match.group(1)) if match is not None else None
-        if rest_comment_id is None:
+        comment_rest_id = rest_comment_id(reported_failure)
+        if comment_rest_id is None:
             # A malformed or missing URL is data loss in the dedup metadata,
             # not a delivery failure. Preserve the pre-#825 behavior so the
             # current failure is still recorded and the tick continues.
@@ -907,7 +899,7 @@ def report_delivery_failure(
             post_new_comment = False
             try:
                 update_issue_comment(
-                    rest_comment_id, repo=source_repo,
+                    comment_rest_id, repo=source_repo,
                     # Apply the increment to the newly assembled body, not the
                     # stale first report. This preserves scene/retry fields
                     # added by this attempt while retaining the dedup counter.

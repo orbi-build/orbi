@@ -38,7 +38,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-import re
 from datetime import datetime, timezone
 
 from orbi import comment_trust, failure, language, user_summary
@@ -46,6 +45,7 @@ from orbi.comment_kind import (
     COMMENT_KIND_FAILURE, comment_kind, parse_versioned_block,
     versioned_block_pattern,
 )
+from orbi.comment_rest_id import rest_comment_id
 from orbi.delivery_labels import (
     BLOCKED_LABEL, FIX_NEEDED_LABEL, P0_LABEL, READY_LABEL,
 )
@@ -533,19 +533,6 @@ def rewrite_state(body: str, state: str, *, language_code: str) -> str:
 # The in-place edit of the one comment
 # --------------------------------------------------------------------------
 
-_COMMENT_URL_ID_RE = re.compile(r"#issuecomment-(\d+)$")
-
-
-def _rest_comment_id(comment: dict) -> int | None:
-    """The REST id of one comment, from the id field or its permalink."""
-    comment_id = comment.get("id")
-    if isinstance(comment_id, int) and not isinstance(comment_id, bool):
-        return comment_id
-    url = comment.get("url")
-    match = _COMMENT_URL_ID_RE.search(url) if isinstance(url, str) else None
-    return int(match.group(1)) if match else None
-
-
 def _located(comments: list[dict]) -> tuple[BaseCIRed, dict] | None:
     """The newest comment carrying a valid block, and its record.
 
@@ -572,7 +559,7 @@ def _edit_state(repo: str, issue_number: int, comment: dict,
     body = comment.get("body")
     if not isinstance(body, str):
         return False
-    comment_id = _rest_comment_id(comment)
+    comment_id = rest_comment_id(comment)
     if comment_id is None:
         LOGGER.warning(
             "base CI red comment has no REST id issue=%s repo=%s",
