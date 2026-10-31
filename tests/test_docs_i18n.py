@@ -349,6 +349,14 @@ def test_chinese_getting_started_documents_the_external_single_repo_mode():
         "Chinese getting-started must document the task worktree "
         "location in the delivery checkout like the English page"
     )
+    assert "git clone git@github.com:OWNER/USER-REPO-X.git" in text, (
+        "Issue #2012: the Chinese external single-repo section must "
+        "clone X into repo_dir before the config block"
+    )
+    assert "git clone https://github.com/OWNER/USER-REPO-X.git" in text, (
+        "the clone step must name the https transport too, like the "
+        "English page"
+    )
 
 
 def test_chinese_getting_started_documents_the_model_provider_configuration():

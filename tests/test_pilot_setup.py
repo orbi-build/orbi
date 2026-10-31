@@ -1137,6 +1137,37 @@ def test_check_checkout_reports_a_stale_base(tmp_path):
     assert result["base_fresh"] is False
 
 
+def test_check_checkout_missing_head_names_the_https_clone_in_https_mode(
+    tmp_path,
+):
+    """Issue #2012: the clone command follows the configured transport."""
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+
+    def fake_run(command, **kwargs):
+        if command == ["git", "config", "remote.origin.url"]:
+            return "https://github.com/xqliu/orbi.git"
+        if command == [
+            "git", "ls-remote", "https://github.com/xqliu/orbi.git",
+        ]:
+            return "abc\\tHEAD"
+        if command == ["git", "rev-parse", "HEAD"]:
+            raise subprocess.CalledProcessError(
+                128, command, stderr="fatal: ambiguous argument 'HEAD'"
+            )
+        return ""
+
+    with pytest.raises(pilot_setup.SetupError) as error:
+        pilot_setup.check_checkout(
+            repo, "main", ["xqliu/orbi"], run_command=fake_run,
+            mode="https",
+        )
+    assert (
+        f"git clone https://github.com/xqliu/orbi.git {repo}"
+        in str(error.value)
+    )
+
+
 def test_check_checkout_fails_fast_without_an_origin_remote(tmp_path):
     repo = tmp_path / "checkout"
     repo.mkdir()
@@ -1165,7 +1196,11 @@ def test_check_checkout_fails_fast_on_a_git_error(tmp_path):
         )
 
 
-def test_check_checkout_wraps_a_missing_head_with_mount_guidance(tmp_path):
+def test_check_checkout_wraps_a_missing_head_with_clone_guidance(tmp_path):
+    """Issue #2012: a `repo_dir` that is not a checkout names the clone
+    command for the configured transport. The Docker-only mount remedy
+    stays in the Docker entrypoint — a plain machine can never act on
+    it."""
     repo = tmp_path / "checkout"
     repo.mkdir()
 
@@ -1189,7 +1224,9 @@ def test_check_checkout_wraps_a_missing_head_with_mount_guidance(tmp_path):
     message = str(error.value)
     assert "must be a git checkout" in message
     assert "xqliu/orbi" in message
-    assert "docker run -v <path>:/work" in message
+    assert str(repo) in message
+    assert f"git clone git@github.com:xqliu/orbi.git {repo}" in message
+    assert "docker run" not in message
 
 
 # --- git transport in the checkout check (Issue #114) -------------------------
