@@ -1,7 +1,7 @@
 """`/orbi split`: turn the proposed split into child tickets (Issue #1927).
 
 The clarification gate stops a thin ticket and may attach a `kind=split`
-proposal to its stop comment (Issue #1926). This module registers the one
+proposal to its stop comment (Issue #1926). This module defines the one
 command that acts on it: a person with write permission replies
 ``/orbi split`` and every item of the proposal — **as the comment reads at
 that moment**, so editing it first changes what is created — becomes a
@@ -80,7 +80,6 @@ from orbi.ticket_command import (
     author_login_key,
     command_comment_key,
     command_receipt_marker,
-    register_command,
     run_step,
     runner_login,
     runner_receipt,
@@ -634,5 +633,3 @@ SPLIT_COMMAND = CommandSpec(
     ),
     context=_split_context,
 )
-
-register_command(SPLIT_COMMAND)

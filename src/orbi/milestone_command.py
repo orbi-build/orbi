@@ -15,7 +15,7 @@ from the caller's candidate set.
 
 The generic machinery — the anchored matching, the permission gate, the
 receipts — lives in `orbi.ticket_command` (Issue #1294); this module is its
-first registrant, `MILESTONE_COMMAND`. Everything milestone-specific (the
+first command, `MILESTONE_COMMAND`. Everything milestone-specific (the
 candidate-set rule, the three idempotent steps and the active_milestone
 line rewrite) stays here: landing that value is the command's third step,
 and the idle-time auto-advance shares the same write.
@@ -38,9 +38,7 @@ from orbi.github import list_issues, list_milestones, run_gh_read_command
 from orbi.journal import run_command
 from orbi.release_git import RELEASE_VERSION_FILE_OPTIONS
 from orbi.repo_config import RepoConfigError, RepoPolicy, read_repo_config
-from orbi.ticket_command import (
-    CommandSpec, TicketCommandError, register_command,
-)
+from orbi.ticket_command import CommandSpec, TicketCommandError
 
 
 _ACTIVE_MILESTONE_LINE_RE = re.compile(
@@ -603,7 +601,7 @@ def _milestone_apply(
     )
 
 
-# `/orbi milestone` is the first registrant of the shared in-ticket command
+# `/orbi milestone` is the first command of the shared in-ticket command
 # layer (`orbi.ticket_command`). Registration validates itself: the shared
 # layer owns the prefix, the anchored matcher, the permission gate and the
 # receipts, so this module supplies only the subcommand, its one legacy
@@ -628,5 +626,3 @@ MILESTONE_COMMAND = CommandSpec(
         "base_branch", "dispatch_label", "version_file",
     ),
 )
-
-register_command(MILESTONE_COMMAND)

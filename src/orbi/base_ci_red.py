@@ -59,8 +59,7 @@ from orbi.pi_activity import parse_iso_utc
 from orbi.progress import fenced
 from orbi.ticket_command import (
     CommandSpec, TicketCommandError, command_comment_key,
-    command_receipt_marker, process_commands, register_command,
-    runner_receipt,
+    command_receipt_marker, process_commands, runner_receipt,
 )
 
 SCHEMA_VERSION = 1
@@ -981,5 +980,3 @@ FIX_BASE_COMMAND = CommandSpec(
     ),
     context=_fix_base_context,
 )
-
-register_command(FIX_BASE_COMMAND)
