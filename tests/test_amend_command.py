@@ -1,5 +1,6 @@
 """`/orbi amend`: the proposed acceptance criteria start the ticket
-(Issue #1929; renamed from `add-criteria` in Issue #1975).
+(Issue #1929; the typed word was renamed from `add-criteria` in Issue
+#1975 and the machine id followed it in Issue #2014).
 
 Every scenario here drives the REAL tick entry (`claim.pick_next_delivery`)
 over the in-memory gh fake: the stopped ticket is picked up by the
@@ -14,7 +15,7 @@ import subprocess
 
 import pytest
 
-import orbi.criteria_command as criteria_command
+import orbi.amend_command as amend_command
 from orbi import claim, clarify, cli, journal, language, ticket_command
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
@@ -29,7 +30,7 @@ TICKET = 100
 RUN_MARKER = "<!-- orbi:run=abcdef12 -->"
 STOP_MARKER = "<!-- orbi:clarify-stop:" + "0" * 64 + " -->"
 BODY = "## Outcome\nUsers keep notes.\n"
-APPENDED_MARKER = f"<!-- {criteria_command.ACCEPTANCE_MARKER} -->"
+APPENDED_MARKER = f"<!-- {amend_command.ACCEPTANCE_MARKER} -->"
 
 
 # --------------------------------------------------------------------------
@@ -128,7 +129,7 @@ def labels(gh: FakeGh, number: int = TICKET) -> list[str]:
 
 def receipt_marker(outcome: str) -> str:
     marker = ticket_command.command_receipt_marker(
-        criteria_command.ADD_CRITERIA_COMMAND,
+        amend_command.AMEND_COMMAND,
     )
     return f"<!-- {marker}{outcome} comment="
 
@@ -143,14 +144,14 @@ def success_receipts(gh: FakeGh) -> list[str]:
 def failures(gh: FakeGh) -> list[str]:
     return [
         body for body in comment_bodies(gh)
-        if "orbi-add_criteria-command-failed" in body
+        if "orbi-amend-command-failed" in body
     ]
 
 
 def rejection(gh: FakeGh) -> str:
     receipts = [
         body for body in comment_bodies(gh)
-        if "orbi-add_criteria-command-rejected" in body
+        if "orbi-amend-command-rejected" in body
     ]
     assert len(receipts) == 1, comment_bodies(gh)
     return receipts[0]
@@ -185,7 +186,7 @@ def label_remove(command: list[str]) -> bool:
 # --------------------------------------------------------------------------
 
 def test_the_appended_section_carries_the_heading_lines_and_marker():
-    assert criteria_command.render_acceptance(
+    assert amend_command.render_acceptance(
         TWO_CRITERIA.items, "en",
     ) == (
         "## Acceptance\n"
@@ -204,16 +205,16 @@ def test_the_appended_section_carries_the_heading_lines_and_marker():
     (None, "## Acceptance"),
 ])
 def test_the_section_is_appended_after_the_existing_body(body, expected):
-    section = criteria_command.render_acceptance(TWO_CRITERIA.items, "en")
-    assert criteria_command.appended_body(body, section).startswith(expected)
+    section = amend_command.render_acceptance(TWO_CRITERIA.items, "en")
+    assert amend_command.appended_body(body, section).startswith(expected)
 
 
 # Issue #1971: the heading follows the message language the repository
 # configures; the marker that makes the append idempotent does not.
 def test_the_heading_follows_the_message_language():
-    assert criteria_command.acceptance_heading("en") == "## Acceptance"
-    assert criteria_command.acceptance_heading("zh") == "## 验收"
-    zh = criteria_command.render_acceptance(TWO_CRITERIA.items, "zh")
+    assert amend_command.acceptance_heading("en") == "## Acceptance"
+    assert amend_command.acceptance_heading("zh") == "## 验收"
+    zh = amend_command.render_acceptance(TWO_CRITERIA.items, "zh")
     assert zh == (
         "## 验收\n"
         "- Adding a tag makes the note findable by filtering\n"
@@ -230,7 +231,7 @@ def test_the_heading_follows_the_message_language():
 def test_the_appended_heading_is_the_one_the_receipt_names(
     language_code, heading,
 ):
-    receipt = criteria_command._receipt(
+    receipt = amend_command._receipt(
         TWO_CRITERIA.items, dispatch_label=READY_LABEL,
         language_code=language_code,
     )
@@ -260,6 +261,9 @@ def test_the_criteria_are_appended_once_and_the_ticket_is_queued(
     assert NEEDS_DETAIL_LABEL not in labels(gh)
     receipts = success_receipts(gh)
     assert len(receipts) == 1
+    # Acceptance 1 (Issue #2014): the receipt carries the command's machine
+    # id, now `amend`, so a consumer's mapping reads one name.
+    assert "orbi-amend-command comment=" in receipts[0]
     assert "Adding a tag makes the note findable by filtering" in receipts[0]
     assert "The tag survives a reload" in receipts[0]
 
@@ -294,7 +298,7 @@ def test_a_chinese_repository_appends_under_the_chinese_heading(
     # A re-run finds the existing section by the marker and appends
     # nothing: the same conditions are not added a second time.
     before = body
-    criteria_command.ADD_CRITERIA_COMMAND.apply(
+    amend_command.AMEND_COMMAND.apply(
         "", repo=REPO, issue_number=TICKET, command_comment={"id": 999},
         comments=[],
         issue={"number": TICKET, "body": before, "labels": [READY_LABEL]},
@@ -358,6 +362,10 @@ def test_a_failed_label_step_continues_on_the_next_tick(monkeypatch, tmp_path):
 
     reported = failures(gh)
     assert len(reported) == 1
+    # Acceptance 1 (Issue #2014): the failed marker names the id AND the step.
+    assert "orbi-amend-command-failed step=add the dispatch label" in (
+        reported[0]
+    )
     assert language.text(
         "en", "command.failed_step", step="add the dispatch label",
     ) in reported[0]
@@ -530,20 +538,31 @@ def test_only_ai_needs_detail_tickets_are_scanned(monkeypatch, tmp_path):
     assert success_receipts(gh) == []
     assert [
         body for body in comment_bodies(gh)
-        if "orbi-add_criteria-command-rejected" in body
+        if "orbi-amend-command-rejected" in body
     ] == []
 
 
 def test_the_command_is_registered_with_the_shared_layer():
-    spec = ticket_command.TICKET_COMMANDS["add_criteria"]
-    assert spec is criteria_command.ADD_CRITERIA_COMMAND
+    spec = ticket_command.TICKET_COMMANDS["amend"]
+    assert spec is amend_command.AMEND_COMMAND
     assert (spec.name, spec.subcommand, spec.arity, spec.permission) == (
-        "add_criteria", "amend", 0, "write",
+        "amend", "amend", 0, "write",
     )
     assert spec.usage == "/orbi amend"
     assert spec.aliases == ()
-    assert "add_criteria_command_applied" in journal.JOURNAL_EVENTS
-    assert "add_criteria_command_failed" in journal.JOURNAL_EVENTS
+    assert "amend_command_applied" in journal.JOURNAL_EVENTS
+    assert "amend_command_failed" in journal.JOURNAL_EVENTS
+    # Acceptance 2 (Issue #2014): the catalog carries exactly the registered
+    # commands' applied/failed pairs, so the renamed id leaves no stale entry.
+    pairs = {
+        f"{registered.name}_command_{outcome}"
+        for registered in ticket_command.TICKET_COMMANDS.values()
+        for outcome in ("applied", "failed")
+    }
+    assert {
+        name for name in journal.JOURNAL_EVENTS
+        if name.endswith(("_command_applied", "_command_failed"))
+    } == pairs
 
 
 # --------------------------------------------------------------------------
@@ -553,7 +572,7 @@ def test_the_command_is_registered_with_the_shared_layer():
 def receipt_text(key: object) -> str:
     """The hidden completion record of the command comment `key`."""
     marker = ticket_command.command_receipt_marker(
-        criteria_command.ADD_CRITERIA_COMMAND,
+        amend_command.AMEND_COMMAND,
     )
     return f"<!-- {marker} comment={key} -->"
 
@@ -616,7 +635,7 @@ def test_only_the_runners_own_receipt_authenticates_the_append(
     if author is not None:
         comment["author"] = author
 
-    criteria_command.ADD_CRITERIA_COMMAND.apply(
+    amend_command.AMEND_COMMAND.apply(
         "", repo=REPO, issue_number=TICKET, command_comment={"id": 1},
         comments=[comment],
         issue={"number": TICKET, "body": BODY, "labels": []},
@@ -634,7 +653,7 @@ def test_a_runner_authored_receipt_short_circuits_the_append(monkeypatch):
     gh = _gh(monkeypatch)
     stopped_ticket(gh)
     before = comment_bodies(gh)
-    criteria_command.ADD_CRITERIA_COMMAND.apply(
+    amend_command.AMEND_COMMAND.apply(
         "", repo=REPO, issue_number=TICKET, command_comment={"id": 1},
         comments=[{
             "body": receipt_text(1), "author": {"login": gh.login},
@@ -656,7 +675,7 @@ def test_apply_refuses_a_ticket_without_a_proposal(monkeypatch):
     a caller hands it nothing to append (the CLI entry's own guard)."""
     _gh(monkeypatch)
     with pytest.raises(ticket_command.TicketCommandError) as excinfo:
-        criteria_command.ADD_CRITERIA_COMMAND.apply(
+        amend_command.AMEND_COMMAND.apply(
             "", repo=REPO, issue_number=TICKET, command_comment={"id": 1},
             comments=[], issue={"number": TICKET, "labels": []},
             suggestion=None, language_code="en",
@@ -673,7 +692,7 @@ def test_the_terminal_spelling_runs_the_same_append(monkeypatch):
     gh.add_collaborator("orbi-bot", "admin")
 
     outcome = ticket_command.execute_command(
-        REPO, TICKET, criteria_command.ADD_CRITERIA_COMMAND,
+        REPO, TICKET, amend_command.AMEND_COMMAND,
         caller=ticket_command.cli_caller("orbi-bot"),
         dispatch_label=READY_LABEL, language_code="en",
     )
@@ -727,7 +746,7 @@ def test_the_old_word_is_not_a_command(monkeypatch, tmp_path):
     assert NEEDS_DETAIL_LABEL in labels(gh)
     assert [
         body for body in comment_bodies(gh)
-        if "orbi-add_criteria-command" in body
+        if "orbi-amend-command" in body
     ] == []
 
 
@@ -737,12 +756,12 @@ def test_the_context_reads_the_ticket_and_its_proposal(monkeypatch):
     gh = _gh(monkeypatch)
     stopped_ticket(gh)
     comments = gh.issues[TICKET]["comments"]
-    context = criteria_command.ADD_CRITERIA_COMMAND.context(
+    context = amend_command.AMEND_COMMAND.context(
         repo=REPO, issue_number=TICKET, comments=comments,
     )
     assert context["issue"]["number"] == TICKET
     assert context["suggestion"] == TWO_CRITERIA
-    supplied = criteria_command.ADD_CRITERIA_COMMAND.context(
+    supplied = amend_command.AMEND_COMMAND.context(
         repo=REPO, issue_number=TICKET, comments=[],
         issue={"number": TICKET}, suggestion=TWO_CRITERIA,
     )
