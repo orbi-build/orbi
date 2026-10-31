@@ -46,7 +46,7 @@ import subprocess
 from pathlib import Path
 
 import orbi
-from orbi.journal import quote_value
+from orbi.journal import quote_value, run_command
 
 # The Python floor (Issue #861): the same floor as the PEP 621
 # `requires-python` — pinned together by tests/test_cli_packaging.py
@@ -70,20 +70,21 @@ PROBE_TIMEOUT_SECONDS = 10
 def system_python3_compatible(exe: str) -> bool:
     """Whether one concrete interpreter satisfies REQUIRED_PYTHON.
 
-    Runs the :data:`PYTHON_PROBE_CODE` probe on ``exe`` (with a
-    timeout — a blocking command never runs bare). Any failure
-    (missing executable, non-zero probe exit, timeout) is NOT
-    compatible: the selection fails safe to the uv-provisioned
-    interpreter, which uv resolves against system AND managed
-    interpreters either way.
+    Runs the :data:`PYTHON_PROBE_CODE` probe on ``exe`` through the
+    single subprocess seam (:func:`orbi.journal.run_command`,
+    CONSTITUTION Article 3.4), with a timeout — a blocking command
+    never runs bare. Any failure (missing executable, non-zero probe
+    exit, timeout) is NOT compatible: the selection fails safe to the
+    uv-provisioned interpreter, which uv resolves against system AND
+    managed interpreters either way.
     """
     if not exe:
         return False
     try:
-        probe = subprocess.run(
+        probe = run_command(
             [exe, "-S", "-c", PYTHON_PROBE_CODE],
-            capture_output=True,
             timeout=PROBE_TIMEOUT_SECONDS,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -99,16 +100,17 @@ def select_python_interpreter() -> str:
     ships 3.12.3; on a fresh uv-only host there is no system python3
     at all). ``orbi setup``, the Runner pre-start refresh and the
     systemd self-heal template all apply this one rule.
+
+    The rule runs a subprocess probe, so it is decided ONLY when a
+    reinstall (or the fix string that asks for one) is actually about
+    to happen — never at import (Issue #2001: importing the Runner
+    must not spawn a probe before logging is configured).
     """
     exe = shutil.which("python3")
     if exe is not None and system_python3_compatible(exe):
         return "python3"
     return "3.14"
 
-
-# The selection result the reinstall argv (and every fix string)
-# embeds — computed once per process.
-PYTHON_INTERPRETER = select_python_interpreter()
 
 # The runtime package directory inside a checkout (the src
 # layout): the editable install maps this WHOLE directory, so a newly
@@ -127,11 +129,12 @@ def reinstall_args(repo_dir: Path) -> list[str]:
     reinstallation") and ``--python`` carries the compatible
     interpreter selection (Issue #861: the system ``python3`` when it
     satisfies the floor, otherwise the bare ``3.14`` so uv provisions
-    or selects one).
+    or selects one) — decided HERE, when the reinstall is about to
+    happen, so importing this module never runs the probe (Issue #2001).
     """
     return [
         "uv", "tool", "install", "--force", "--reinstall", "--editable",
-        "--python", PYTHON_INTERPRETER, str(Path(repo_dir)),
+        "--python", select_python_interpreter(), str(Path(repo_dir)),
     ]
 
 

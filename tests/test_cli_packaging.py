@@ -373,7 +373,8 @@ def test_service_preflight_self_heals_the_editable_cli():
     py_args = cli_source.reinstall_args(Path("{{ORBI_REPO_DIR}}"))
     assert " ".join(py_args) == (
         "uv tool install --force --reinstall --editable "
-        f"--python {cli_source.PYTHON_INTERPRETER} {{{{ORBI_REPO_DIR}}}}"
+        f"--python {cli_source.select_python_interpreter()} "
+        f"{{{{ORBI_REPO_DIR}}}}"
     )
     # The interpreter probe IS cli_source's probe code (built from
     # REQUIRED_PYTHON — the floor pinned to pyproject's

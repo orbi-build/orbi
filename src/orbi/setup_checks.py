@@ -55,10 +55,30 @@ WRITE_PERMISSIONS = frozenset({"WRITE", "MAINTAIN", "ADMIN"})
 REQUIRED_COMMANDS = ("git", "gh", "uv", "orbi")
 
 
+def orbi_install_hint() -> str:
+    """The actionable ``orbi`` install hint.
+
+    Built when the hint is NEEDED, never at import: it names the
+    interpreter the editable reinstall will actually use
+    (:func:`orbi.cli_source.select_python_interpreter` — the SAME
+    compatible selection the CLI editable step passes, Issue #861), and
+    that selection runs a subprocess probe. Importing a module must
+    never spawn one (Issue #2001).
+    """
+    return (
+        "install the editable uv tool CLI from the deployment checkout: "
+        f"uv tool install --force --reinstall --editable --python "
+        f"{cli_source.select_python_interpreter()} <repo_dir>"
+    )
+
+
 # Actionable install guidance per required command: the
 # missing-command error must tell the user how to install the
 # prerequisite. The uv entry is the official installer command, verified
 # against https://docs.astral.sh/uv/getting-started/installation/.
+# An entry may be a callable: it is evaluated by :func:`install_hint`
+# when the hint is actually reported (the ``orbi`` one decides the
+# interpreter, a subprocess probe — never run at import, Issue #2001).
 COMMAND_INSTALL_HINTS = {
     "git": (
         "install git (e.g. `apt-get install git` / `dnf install git` / "
@@ -76,15 +96,20 @@ COMMAND_INSTALL_HINTS = {
         "install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh "
         "(https://docs.astral.sh/uv/getting-started/installation/)"
     ),
-    "orbi": (
-        "install the editable uv tool CLI from the deployment checkout: "
-        # The SAME compatible interpreter selection the CLI editable
-        # step passes (Issue #861): the system python3 when it
-        # satisfies the floor, the uv-provisioned 3.14 otherwise.
-        f"uv tool install --force --reinstall --editable --python "
-        f"{cli_source.PYTHON_INTERPRETER} <repo_dir>"
-    ),
+    "orbi": orbi_install_hint,
 }
+
+
+def install_hint(name: str) -> str:
+    """The actionable install guidance for one missing command.
+
+    A callable entry is evaluated HERE — the ``orbi`` hint names the
+    interpreter a reinstall will use, and deciding it runs the
+    interpreter probe, so it is built when a missing command is
+    actually reported, never at import (Issue #2001).
+    """
+    hint = COMMAND_INSTALL_HINTS[name]
+    return hint() if callable(hint) else hint
 
 
 # The Python floor the `orbi check` gate enforces. An alias of the
@@ -176,7 +201,7 @@ def check_commands(run_command, unit_name: str | None = None,
         if path is None:
             raise SetupError(
                 f"required command missing: {name} (not on PATH) — "
-                f"{COMMAND_INSTALL_HINTS[name]}"
+                f"{install_hint(name)}"
             )
         paths[name] = path
     try:
@@ -426,7 +451,7 @@ def run_machine_checks(*, run_command, collect_failures: bool = False) -> tuple[
             failure = CheckError(
                 "commands",
                 f"required command missing: {name} (not on PATH)",
-                COMMAND_INSTALL_HINTS[name], CHECK_COMMAND_DOCS[name],
+                install_hint(name), CHECK_COMMAND_DOCS[name],
             )
             if not collect_failures:
                 raise failure
