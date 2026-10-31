@@ -1953,7 +1953,7 @@ def test_report_failure_repeat_without_comment_url_posts_new_comment(
     assert len(captured["comments"]) == 1
     assert captured["updates"] == []
     assert "failure_comment_id_unavailable" in caplog.text
-    assert "comment URL carries no REST id" in caplog.text
+    assert "#issuecomment-<digits>" in caplog.text
 
 
 def test_report_failure_repeat_with_malformed_comment_url_posts_new_comment(

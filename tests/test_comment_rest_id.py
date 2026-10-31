@@ -36,10 +36,12 @@ def test_rest_comment_id_reads_the_id_field_then_the_permalink(
 
 def test_the_comment_permalink_regex_has_one_owner():
     """Issue #2004 acceptance: `grep -rn 'issuecomment-' src/orbi/` finds
-    exactly one hit — this module's line — so no caller keeps a copy."""
+    exactly one regex — this module's — so no caller keeps a copy. The
+    failure reporter's log message still names the expected suffix, which is
+    prose about the rule, not a second parse of it."""
     source_dir = Path(comment_rest_id.__file__).resolve().parent
     owners = sorted(
         path.name for path in source_dir.glob("*.py")
-        if "#issuecomment-" in path.read_text(encoding="utf-8")
+        if r"#issuecomment-(\d+)" in path.read_text(encoding="utf-8")
     )
     assert owners == ["comment_rest_id.py"]

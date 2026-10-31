@@ -882,7 +882,7 @@ def report_delivery_failure(
             # not a delivery failure. Preserve the pre-#825 behavior so the
             # current failure is still recorded and the tick continues.
             unavailable_reason = (
-                "comment URL carries no REST id"
+                "comment URL has no #issuecomment-<digits> suffix"
             )
             LOGGER.warning(
                 "issue=%s failure comment id unavailable: %s",
