@@ -192,7 +192,7 @@ def _criteria_apply(
             language.text(language_code, "criteria.reason_no_suggestion"),
         )
     receipt = (
-        f"<!-- {command_receipt_marker(ADD_CRITERIA_COMMAND)} "
+        f"<!-- {command_receipt_marker(AMEND_COMMAND)} "
         f"comment={command_comment_key(command_comment)} -->"
     )
     if not runner_receipt(comments, receipt):
@@ -232,8 +232,8 @@ def _criteria_apply(
         edit_issue(issue_number, repo=repo, remove=NEEDS_DETAIL_LABEL)
 
 
-ADD_CRITERIA_COMMAND = CommandSpec(
-    name="add_criteria",
+AMEND_COMMAND = CommandSpec(
+    name="amend",
     subcommand="amend",
     arity=0,
     permission="write",
@@ -246,4 +246,4 @@ ADD_CRITERIA_COMMAND = CommandSpec(
     context=_criteria_context,
 )
 
-register_command(ADD_CRITERIA_COMMAND)
+register_command(AMEND_COMMAND)

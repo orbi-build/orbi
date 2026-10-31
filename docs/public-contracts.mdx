@@ -420,8 +420,9 @@ comment it answers:
   its handler and failed at that step.
 
 `<name>` is the command's stable machine id (`fix_base`, `milestone`,
-`split`, `add_criteria`), never the word a person types, so a receipt posted before the
-`/orbi` prefix keeps matching. `<key>` is the answered comment's GitHub id, then its URL, then
+`split`, `amend`), never a translated display word, so a consumer matches a
+receipt on the marker alone — even where the `/orbi` spelling differs from
+the id (`fix_base` for `/orbi fix-base`). `<key>` is the answered comment's GitHub id, then its URL, then
 `<login>@<createdAt>` when neither is readable — the key the `/orbi fix-base`
 success receipt already uses. The prose around the marker is display text in
 the ticket language, so a consumer classifies the outcome from the marker

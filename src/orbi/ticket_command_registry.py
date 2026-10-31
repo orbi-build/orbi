@@ -2,7 +2,7 @@
 
 Before this module the set of registered commands depended on which
 unrelated module happened to be imported: `claim.py` imported
-`criteria_command` and `split_command` only for their `register_command`
+`amend_command` and `split_command` only for their `register_command`
 side effect, and `/orbi milestone` was registered by an import chain
 through `orbi.milestone`. Removing one such import silently unregistered a
 command from BOTH the comment dispatch and the CLI, with no error
@@ -30,7 +30,7 @@ from __future__ import annotations
 # the Milestone confirmation (`/orbi milestone <version>`). Imported for
 # their registration, which `register_command` performs at import time.
 from orbi import (  # noqa: F401
-    base_ci_red, criteria_command, milestone_command, split_command,
+    base_ci_red, amend_command, milestone_command, split_command,
 )
 from orbi.ticket_command import (
     TICKET_COMMANDS, CommandSpec, TicketCommandRegistryError,

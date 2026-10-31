@@ -651,8 +651,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `fix_base_command_failed` | 票内 `/orbi fix-base` 命令在某一步失败 |
 | `split_command_applied` | 票内 `/orbi split` 命令已把提案拆成子工单 |
 | `split_command_failed` | 票内 `/orbi split` 命令在某一步失败 |
-| `add_criteria_command_applied` | 票内 `/orbi amend` 命令已把提案中的验收条件加入工单并让工单进入队列 |
-| `add_criteria_command_failed` | 票内 `/orbi amend` 命令在某一步失败 |
+| `amend_command_applied` | 票内 `/orbi amend` 命令已把提案中的验收条件加入工单并让工单进入队列 |
+| `amend_command_failed` | 票内 `/orbi amend` 命令在某一步失败 |
 | `checks_permission_blocked` | check 读取因 App 权限未批准被拒绝；Issue 变为 ai-blocked 并附批准页面 |
 | `checks_permission_recovered` | check 读取恢复正常，被暂停的交付自动恢复 |
 | `base_ci_red_recovered` | 基础分支的 check 变绿，被暂停的交付自动恢复 |
@@ -912,15 +912,15 @@ orbi milestone set v0.5.7 --config orbi.toml
 `execute_command(...)`——只有它能触达 handler。
 
 注册表的键是稳定的机器 id（`fix_base`、`milestone`）：回执标记
-（`orbi-<name>-command`）与 journal 事件名都用它，因此改名之前发过的回执
-仍然可以幂等去重。
+（`orbi-<name>-command`）与 journal 事件名都用它，因此回执只按 id 去重，
+从不按 `/orbi` 拼写或周围的翻译文字去重。
 
 | Command | Usage | Permission | Description |
 | --- | --- | --- | --- |
 | `milestone` | `/orbi milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
 | `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
 | `split` | `/orbi split` | `write` | turn the split proposal on this ticket's stop comment into child tickets |
-| `add_criteria` | `/orbi amend` | `write` | append the proposed acceptance criteria to this ticket and queue it |
+| `amend` | `/orbi amend` | `write` | append the proposed acceptance criteria to this ticket and queue it |
 
 每条已登记的命令在主机上还有一个拼写（Issue #1930）：
 `orbi <subcommand> --repo <owner/name> --issue <N>`，例如

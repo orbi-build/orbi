@@ -349,7 +349,7 @@ SPLIT_MESSAGES: dict[str, tuple[str, str]] = {
 # and outside the catalog. The heading is display text too: it follows the
 # message language (Issue #1971), while the marker that makes the append
 # idempotent is the same in every language.
-ADD_CRITERIA_MESSAGES: dict[str, tuple[str, str]] = {
+AMEND_MESSAGES: dict[str, tuple[str, str]] = {
     "criteria.reason_no_suggestion": (
         "the newest stop comment carries no acceptance-criteria proposal; "
         "edit that comment into a `kind=criteria` section, then reply again",
@@ -389,7 +389,7 @@ ADD_CRITERIA_MESSAGES: dict[str, tuple[str, str]] = {
 EXTRA_MESSAGES: dict[str, tuple[str, str]] = {
     **DISPLAY_TERMS, **BASE_CI_RED_MESSAGES, **CHECK_PERMISSION_MESSAGES,
     **CLARIFY_SUGGESTION_MESSAGES, **SPLIT_MESSAGES,
-    **ADD_CRITERIA_MESSAGES,
+    **AMEND_MESSAGES,
     # The rejection a NO-ARGUMENT in-ticket command owes its author
     # (Issue #1922): the shared "write exactly one {label}" wording would
     # contradict the usage line printed beside it for an arity-0 command

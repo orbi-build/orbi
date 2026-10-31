@@ -1,7 +1,7 @@
 """The ticket commands are declared in one explicit list (Issue #2000).
 
 Before this ticket the registered set depended on which unrelated module
-happened to be imported: `claim.py` imported `criteria_command` and
+happened to be imported: `claim.py` imported `amend_command` and
 `split_command` only for their `register_command` side effect, and
 `/orbi milestone` was registered only because `claim.py` imported
 `orbi.milestone`, which imported `milestone_command`. Removing one such
@@ -29,9 +29,10 @@ from orbi import ticket_command, ticket_command_registry
 from orbi.cli_parser import build_parser
 
 REPO = "owner/repo"
-# The four in-ticket commands, by machine id: `/orbi amend` (add_criteria),
-# `/orbi fix-base`, `/orbi milestone <version>` and `/orbi split`.
-COMMAND_NAMES = "add_criteria,fix_base,milestone,split"
+# The four in-ticket commands, by machine id: `amend` (`/orbi amend`),
+# `fix_base` (`/orbi fix-base`), `milestone` (`/orbi milestone <version>`)
+# and `split` (`/orbi split`).
+COMMAND_NAMES = "amend,fix_base,milestone,split"
 # Their subcommands, minus the arity-1 one that keeps `orbi milestone set`
 # instead of a generated entry (`ticket_command_registry.cli_specs`).
 GENERATED_SUBCOMMANDS = "amend,fix-base,split"
@@ -91,7 +92,7 @@ def test_each_dispatch_entry_point_alone_yields_the_four_commands():
 def test_registration_does_not_depend_on_the_imports_that_used_to_do_it():
     """Acceptance 2: the imports this ticket removed cannot change the set.
 
-    `claim.py` no longer imports `criteria_command`/`split_command` for
+    `claim.py` no longer imports `amend_command`/`split_command` for
     registration, and `milestone.py`'s `milestone_command` import is no
     longer what registers `/orbi milestone`. The fresh process never
     imports `orbi.claim` or `orbi.milestone` and still gets the four.

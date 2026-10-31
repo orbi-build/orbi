@@ -753,8 +753,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `fix_base_command_failed` | an in-ticket `/orbi fix-base` command failed at one step |
 | `split_command_applied` | an in-ticket `/orbi split` command turned the proposal into child tickets |
 | `split_command_failed` | an in-ticket `/orbi split` command failed at one step |
-| `add_criteria_command_applied` | an in-ticket `/orbi amend` command appended the proposed criteria and queued the ticket |
-| `add_criteria_command_failed` | an in-ticket `/orbi amend` command failed at one step |
+| `amend_command_applied` | an in-ticket `/orbi amend` command appended the proposed criteria and queued the ticket |
+| `amend_command_failed` | an in-ticket `/orbi amend` command failed at one step |
 | `checks_permission_blocked` | the check read was refused for a missing App permission; the Issue goes ai-blocked with the approval page |
 | `checks_permission_recovered` | the check read works again and the paused delivery resumed automatically |
 | `base_ci_red_recovered` | the base check turned green and the paused delivery resumed automatically |
@@ -1068,15 +1068,16 @@ one execution function, `execute_command(...)` — the only path to a
 handler.
 
 The registry key is the stable machine id (`fix_base`, `milestone`): it
-names the receipt markers (`orbi-<name>-command`) and the journal events, so
-receipts posted before a rename keep deduplicating.
+names the receipt markers (`orbi-<name>-command`) and the journal events, so a
+receipt is deduplicated on the id alone, never on the `/orbi` spelling or the
+translated prose around it.
 
 | Command | Usage | Permission | Description |
 | --- | --- | --- | --- |
 | `milestone` | `/orbi milestone <version>` | `write` | advance the active Milestone from a confirmation Issue |
 | `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
 | `split` | `/orbi split` | `write` | turn the split proposal on this ticket's stop comment into child tickets |
-| `add_criteria` | `/orbi amend` | `write` | append the proposed acceptance criteria to this ticket and queue it |
+| `amend` | `/orbi amend` | `write` | append the proposed acceptance criteria to this ticket and queue it |
 
 A command on a STOPPED ticket still runs. The clarification gate leaves
 its ticket `ai-needs-detail`, so no delivery label is on it and no claim scan
