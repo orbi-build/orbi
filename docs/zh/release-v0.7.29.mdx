@@ -1,0 +1,64 @@
+---
+title: "v0.7.29 发布（最新）"
+description: "Orbi v0.7.29 发布说明：Ticket commands are registered by import side effect across unrelated modules，另有 15 项改动。"
+---
+
+`v0.7.29` 于 2026-10-31T02:57:20Z 发布为 GitHub Release [v0.7.29](https://github.com/orbi-build/orbi/releases/tag/v0.7.29)（release task：Issue #1999）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.7.29` | 注解 tag `fffbd95f52cd34bfda4fde026d4ff847178b4eb0` | 提交 `9b16964b60ca105197e7a15fd7b06397f68a646f` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Ticket commands are registered by import side effect across unrelated modules ([Issue #2000](https://github.com/orbi-build/orbi/issues/2000); [PR #2024](https://github.com/orbi-build/orbi/pull/2024))
+- cli_source probes the Python interpreter with a subprocess at import, on every Runner start ([Issue #2001](https://github.com/orbi-build/orbi/issues/2001); [PR #2025](https://github.com/orbi-build/orbi/pull/2025))
+- source_repos is validated twice: share one parser between load_config and the source pool ([Issue #2002](https://github.com/orbi-build/orbi/issues/2002); [PR #2026](https://github.com/orbi-build/orbi/pull/2026))
+- The #issuecomment REST-id rule exists three times; the failure reporter's copy is untested ([Issue #2004](https://github.com/orbi-build/orbi/issues/2004); [PR #2028](https://github.com/orbi-build/orbi/pull/2028))
+
+### Reliability and recovery
+
+- base-CI-red record with '-->' in a check name cannot be parsed back: recovery abandoned ([Issue #1998](https://github.com/orbi-build/orbi/issues/1998); [PR #2021](https://github.com/orbi-build/orbi/pull/2021))
+- Merge gate fails the round on a stale headRefOid right after its own base-absorb push ([Issue #2017](https://github.com/orbi-build/orbi/issues/2017); [PR #2019](https://github.com/orbi-build/orbi/pull/2019))
+- Resume fails with FileExistsError when Pi replaced the run's auth.json symlink with a regular file ([Issue #2022](https://github.com/orbi-build/orbi/issues/2022); [PR #2023](https://github.com/orbi-build/orbi/pull/2023))
+
+### Deployment and operations
+
+- setup: a missing or non-checkout repo_dir tells the user to clone source_repos[0] there; drop the Docker-only hint from the engine ([Issue #2012](https://github.com/orbi-build/orbi/issues/2012); [PR #2029](https://github.com/orbi-build/orbi/pull/2029))
+
+### Observability
+
+- Run marker is hand-written in four modules instead of progress.run_marker ([Issue #2003](https://github.com/orbi-build/orbi/issues/2003); [PR #2027](https://github.com/orbi-build/orbi/pull/2027))
+- Rename the /orbi amend command's internal identifiers (module, spec name, receipt marker, journal events) from add_criteria to amend ([Issue #2014](https://github.com/orbi-build/orbi/issues/2014); [PR #2030](https://github.com/orbi-build/orbi/pull/2030))
+
+### Bug fixes
+
+- Command success receipts count only when the Runner itself wrote them ([Issue #1992](https://github.com/orbi-build/orbi/issues/1992); [PR #2011](https://github.com/orbi-build/orbi/pull/2011))
+- commit_check_runs reads only the first 30 check runs: paginate ([Issue #1993](https://github.com/orbi-build/orbi/issues/1993); [PR #2013](https://github.com/orbi-build/orbi/pull/2013))
+- milestone_open_issue_count reads one unpaginated page and builds jq from the title ([Issue #1994](https://github.com/orbi-build/orbi/issues/1994); [PR #2015](https://github.com/orbi-build/orbi/pull/2015))
+- Pi child is never reaped after terminate/kill: a steering restart can run two agents in one worktree ([Issue #1995](https://github.com/orbi-build/orbi/issues/1995); [PR #2016](https://github.com/orbi-build/orbi/pull/2016))
+- A steering comment is marked seen before its trust check: a transient permission read failure drops it for good ([Issue #1996](https://github.com/orbi-build/orbi/issues/1996); [PR #2018](https://github.com/orbi-build/orbi/pull/2018))
+- Task context is passed as one argv string: a large or edited Issue body fails Pi start with E2BIG ([Issue #1997](https://github.com/orbi-build/orbi/issues/1997); [PR #2020](https://github.com/orbi-build/orbi/pull/2020))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
+
+- tag: `v0.7.29`
+- release commit: `9b16964b60ca105197e7a15fd7b06397f68a646f`
+- release task: Issue #1999
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 9b16964b60ca105197e7a15fd7b06397f68a646f (the #268 CI-wait gate; no local test execution)
+
+
+Released by [Orbi](https://orbi.build/?ref=prfoot-orbi-build)
+
+[![Download Orbi](https://a.fsdn.com/con/app/sf-download-button)](https://sourceforge.net/projects/orbi/files/v0.7.29/v0.7.29%20source%20code.zip/download)
