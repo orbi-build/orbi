@@ -8,6 +8,7 @@ move to their own modules under sub-issues.
 """
 import dataclasses
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -1269,7 +1270,7 @@ def test_validate_config_fails_before_issue_claim_when_path_missing(tmp_path):
 
 def test_validate_config_rejects_missing_repo_dir(tmp_path):
     with pytest.raises(FileNotFoundError, match="missing-repo"):
-        runner.validate_config(config_domain.RunnerConfig(repo_dir=tmp_path / "missing-repo", deploy_home=tmp_path, prompt=tmp_path / "prompt.md", skills=(), context_files=()))
+        runner.validate_config(config_domain.RunnerConfig(repo_dir=tmp_path / "missing-repo", deploy_home=tmp_path, prompt=tmp_path / "prompt.md", skills=(), context_files=(), source_repos=("xqliu/orbi",)))
 
 
 def test_validate_config_missing_repo_dir_names_the_clone_to_run(tmp_path):
@@ -1287,6 +1288,22 @@ def test_validate_config_missing_repo_dir_names_the_clone_to_run(tmp_path):
     assert "source_repos[0]=xqliu/orbi" in message
     assert str(repo_dir) in message
     assert f"git clone git@github.com:xqliu/orbi.git {repo_dir}" in message
+
+
+def test_validate_config_missing_repo_dir_quotes_a_spaced_path(tmp_path):
+    """Issue #2034: the printed repair is runnable as written —
+    `shlex.split` yields the spaced repo_dir as one argument."""
+    repo_dir = tmp_path / "Orbi Work" / "missing-repo"
+    with pytest.raises(FileNotFoundError) as error:
+        runner.validate_config(config_domain.RunnerConfig(
+            repo_dir=repo_dir, deploy_home=tmp_path,
+            prompt=tmp_path / "prompt.md", skills=(),
+            context_files=(), source_repos=("xqliu/orbi",),
+        ))
+    command = str(error.value).split("clone it there: ", 1)[1]
+    assert shlex.split(command) == [
+        "git", "clone", "git@github.com:xqliu/orbi.git", str(repo_dir),
+    ]
 
 
 def _git_checkout(path: Path) -> Path:

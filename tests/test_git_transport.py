@@ -11,6 +11,7 @@ migration command. A failed SSH probe (`git ls-remote`, verified
 against the real CLI: exit 0 = reachable + authenticated) fails fast
 with the structured reason — no HTTPS fallback, no silent skip.
 """
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -168,9 +169,10 @@ def test_check_transport_accepts_an_ssh_url_without_the_dot_git_suffix(
 
 
 def test_check_transport_fails_fast_on_a_missing_origin(tmp_path):
-    """Issue #2012: a `repo_dir` without an origin is not a checkout of
-    the source repo — the failure names the clone that puts one there,
-    over the configured transport."""
+    """Issue #2034: a checkout without an origin is repaired in place —
+    `git clone` refuses the non-empty directory, so the line names
+    `git remote add origin` over the configured transport."""
+    (tmp_path / ".git").mkdir()
     state = {"no_origin": True}
     fake_run, calls, _ = ok_run_factory(state)
     with pytest.raises(
@@ -182,10 +184,30 @@ def test_check_transport_fails_fast_on_a_missing_origin(tmp_path):
     message = str(error.value)
     assert "xqliu/orbi" in message
     assert (
-        f"git clone git@github.com:xqliu/orbi.git {tmp_path}" in message
+        f"git -C {tmp_path} remote add origin "
+        "git@github.com:xqliu/orbi.git" in message
     )
+    assert "git clone" not in message
     # No probe, no migration after the missing remote.
     assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
+
+
+def test_check_transport_suggests_a_clone_for_an_empty_repo_dir(tmp_path):
+    """Issue #2034: a directory that is not a checkout at all is the one
+    state `git clone` repairs; the printed path is shell-quoted."""
+    state = {"no_origin": True}
+    fake_run, _, _ = ok_run_factory(state)
+    with pytest.raises(
+        git_transport.TransportError, match="no origin remote",
+    ) as error:
+        git_transport.check_transport(
+            tmp_path, ["xqliu/orbi"], run_command=fake_run,
+        )
+    message = str(error.value)
+    assert (
+        f"git clone git@github.com:xqliu/orbi.git {tmp_path}" in message
+    )
+    assert "remote add origin" not in message
 
 
 def test_check_transport_diagnoses_an_https_remote_without_migrating(
@@ -327,6 +349,8 @@ def test_check_transport_fails_fast_on_a_generic_config_error(tmp_path):
     """A non-git failure reading the configured URL (e.g. a spawn
     error) still fails fast as a missing/unknown origin — never a
     guessed transport."""
+    (tmp_path / ".git").mkdir()
+
     def fake_run(command, **kwargs):
         raise OSError("spawn failed")
 
@@ -336,9 +360,38 @@ def test_check_transport_fails_fast_on_a_generic_config_error(tmp_path):
         git_transport.check_transport(
             tmp_path, ["xqliu/orbi"], run_command=fake_run,
         )
-    assert f"git clone git@github.com:xqliu/orbi.git {tmp_path}" in str(
-        error.value
+    message = str(error.value)
+    assert (
+        f"git -C {tmp_path} remote add origin "
+        "git@github.com:xqliu/orbi.git" in message
     )
+    assert "git clone" not in message
+
+
+def test_repair_commands_quote_a_repo_dir_with_a_space(tmp_path):
+    """Issue #2034: every printed repair command survives the shell —
+    `shlex.split` yields a spaced path as one argument."""
+    repo_dir = tmp_path / "Orbi Work" / "repo"
+    clone = shlex.split(
+        git_transport.clone_command("xqliu/orbi", repo_dir)
+    )
+    assert clone == [
+        "git", "clone", "git@github.com:xqliu/orbi.git", str(repo_dir),
+    ]
+    add_origin = shlex.split(
+        git_transport.origin_add_command("xqliu/orbi", repo_dir)
+    )
+    assert add_origin == [
+        "git", "-C", str(repo_dir), "remote", "add", "origin",
+        "git@github.com:xqliu/orbi.git",
+    ]
+    fetch_checkout = shlex.split(
+        git_transport.fetch_checkout_command(repo_dir, "main")
+    )
+    assert fetch_checkout == [
+        "git", "-C", str(repo_dir), "fetch", "origin", "main", "&&",
+        "git", "-C", str(repo_dir), "checkout", "main",
+    ]
 
 
 def test_check_transport_reports_a_probe_failure_without_stderr(tmp_path):

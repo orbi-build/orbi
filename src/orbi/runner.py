@@ -498,7 +498,7 @@ def validate_execution_source_repos(source_repos: Sequence[str]) -> None:
 def validate_config(config: config_domain.RunnerConfig) -> None:
     if not config.repo_dir.is_dir():
         raise FileNotFoundError(repo_dir_failure(
-            config.repo_dir, config.source_repos,
+            config.repo_dir, config.source_repos[0],
             mode=config.git_transport))
     # The deployment home (CLI install source, unit templates,
     # labels.toml, prompt defaults) must exist too — a missing home fails
