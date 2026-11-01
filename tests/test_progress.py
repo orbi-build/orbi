@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from orbi import progress, progress_summary, run_state, scene
+from orbi import language, progress, progress_summary, run_state, scene, user_summary
 from orbi.delivery_scene import RunContext
 
 from tests.fakes import runner_marker as runner_marker_fakes
@@ -40,12 +40,109 @@ def test_failure_comment_redacts_evidence_and_preserves_resume_scene():
     assert run_state.parse_pr_comment(comment).run_id == "a1b2c3d4"
 
 
-def test_format_status_comment_expands_marked_failure():
-    body = progress.format_status_comment(
-        "<!-- orbi:run=abc12345 -->\nOrbi failed: boom (run_id=abc12345)",
+def test_format_status_comment_posts_the_body_as_its_writer_rendered_it(
+    monkeypatch,
+):
+    """Issue #2054: the shared posting path only redacts and adds the
+    runner footer. It never re-renders a headline into a field block, so
+    the comment states its headline exactly once."""
+    runner_marker_fakes.fixed_fingerprint(monkeypatch)
+    body = (
+        progress.run_marker("abc12345") + "\n"
+        "Orbi failed: PR https://github.com/o/r/pull/9 was closed without a "
+        "merge; the delivery is terminally failed\n\n"
+        "**#5 Add login**"
     )
-    assert "Orbi failed: boom" in body
-    assert "- run_id=abc12345" in body
+    assert progress.format_status_comment(body) == (
+        body + "\n\n<!-- runner=8a12fb1c -->"
+    )
+
+
+_STATUS_PR_URL = "https://github.com/o/r/pull/9"
+_STATUS_RUN_ID = "abc12345"
+
+
+def _status_writer_bodies(language_code: str) -> dict[str, str]:
+    """The four affected writers' bodies, composed the way each writer
+    composes them (Issue #2054): run marker, one headline sentence, the
+    readable summary, then the writer's own persisted lines."""
+    marker = progress.run_marker(_STATUS_RUN_ID)
+    summary = {
+        "status_url": "https://orbi.build/api/?repo=o%2Fr",
+        "issue": 5, "title": "Add login", "language_code": language_code,
+    }
+    deliveries = "#7, #8"
+    return {
+        # runner.py: the PR was closed without a merge.
+        "pr_closed": user_summary.notice(
+            marker, "runner.pr_closed_comment", pr_url=_STATUS_PR_URL,
+            **summary,
+        ),
+        # review_merge.py: the delivery labels could not be repaired.
+        "label_repair_failed": user_summary.append_summary(
+            marker + "\n" + language.text(
+                language_code, "review.label_repair_failed",
+                pr_url=_STATUS_PR_URL, reason="labels unreadable",
+            ),
+            **summary,
+        ),
+        # release_run.py: the release waits for same-Milestone deliveries.
+        "release_waiting": (
+            marker + "\n"
+            + language.text(language_code, "release.waiting", detail=deliveries)
+            + "\n" + user_summary.summary_text(**summary)
+            + f"open_deliveries: {deliveries}\n"
+            "waited: 30s / 600s\n"
+            "wait_started: 1700000000.0\n"
+            f"run_id={_STATUS_RUN_ID}"
+        ),
+        # resume_scan.py: the opened-PR scene is missing.
+        "scene_missing": user_summary.notice(
+            marker, "claim.scene_missing", error="opened PR scene is missing",
+            **summary,
+        ),
+    }
+
+
+@pytest.mark.parametrize("writer", sorted(_status_writer_bodies("en")))
+def test_status_writers_are_posted_as_rendered_in_both_languages(writer):
+    """Issue #2054 acceptance: for each affected writer the English body
+    handed to `gh` states the headline once, carries no `- detail:` row
+    and has the same line structure as the Chinese body from the same
+    inputs."""
+    english = progress.format_status_comment(
+        _status_writer_bodies("en")[writer],
+    )
+    chinese = progress.format_status_comment(
+        _status_writer_bodies("zh")[writer],
+    )
+    assert "- detail:" not in english
+    assert "- detail:" not in chinese
+
+    en_lines, zh_lines = english.splitlines(), chinese.splitlines()
+    assert en_lines[0] == zh_lines[0] == progress.run_marker(_STATUS_RUN_ID)
+    # Same number of lines and the same blank-line layout: the marker, the
+    # headline, the summary and the help lines sit in the same positions.
+    assert len(en_lines) == len(zh_lines)
+    assert [bool(line) for line in en_lines] == [bool(line) for line in zh_lines]
+    # The headline is the one sentence the writer wrote, once, and the
+    # language-independent summary identity line keeps its position.
+    headline = en_lines[1]
+    assert english.count(headline) == 1
+    assert en_lines.index("**#5 Add login**") == zh_lines.index("**#5 Add login**")
+    assert en_lines[-1].startswith("<!-- runner=")
+    assert zh_lines[-1].startswith("<!-- runner=")
+
+
+def test_release_waiting_body_keeps_its_persisted_wait_fields():
+    """Issue #2054 acceptance: the English release-wait body keeps the
+    fields the next release tick reads the bounded window from."""
+    posted = progress.format_status_comment(
+        _status_writer_bodies("en")["release_waiting"],
+    )
+    for field in ("open_deliveries: #7, #8", "waited: 30s / 600s",
+                  "wait_started: 1700000000.0", f"run_id={_STATUS_RUN_ID}"):
+        assert posted.count(field) == 1
 
 
 def test_run_marker_is_hidden_html_comment_with_run_id():
