@@ -320,7 +320,7 @@ def test_terminal_outcome_body_follows_the_language():
 
 def test_classified_failure_comment_follows_the_language():
     zh = failure.failure_comment_body(
-        outcome="fix needed", action="do it", reason="boom", diagnosis="",
+        outcome="fix_needed", action="do it", reason="boom", diagnosis="",
         scene="- 分支: `b`\n- 会话: `s`", evidence="", pr_url=None,
         issue="owner/repo#7", run_id="abcdef12", language_code="zh",
     )
@@ -353,7 +353,7 @@ def test_problem_comments_end_with_the_community_help_line():
     assert not blocked.endswith(en)
     assert blocked.endswith("</details>")
     fix_needed = failure.failure_comment_body(
-        outcome="fix needed", action="a", reason="boom", diagnosis="",
+        outcome="fix_needed", action="a", reason="boom", diagnosis="",
         scene="- run: `x`", evidence="", pr_url=None,
         issue="owner/repo#7", run_id="abcdef12", language_code="zh",
     )
@@ -962,7 +962,7 @@ def test_failure_folding_ignores_the_rendered_language():
     from orbi import progress as progress_module
 
     zh = failure.failure_comment_body(
-        outcome="fix needed", action="a", reason="boom", diagnosis="",
+        outcome="fix_needed", action="a", reason="boom", diagnosis="",
         scene="", evidence="", pr_url=None, issue="owner/repo#7",
         run_id="abcdef12", language_code="zh",
     )

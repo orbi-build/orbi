@@ -15,7 +15,7 @@ three rendering modes: the implement-phase terminal template
 terminal progress scene (`finish=True`, rendered through
 `progress.finish_progress_body`). Each golden is asserted byte for byte
 against the post-move call, and the AI/human decision (`blocked` vs
-`fix needed`) with it.
+`fix_needed`) with it.
 """
 import ast
 import json
@@ -28,8 +28,8 @@ from pathlib import Path
 import pytest
 
 from orbi import (
-    failure_report, language, pi_activity, progress, runner, runner_health,
-    scene,
+    failure, failure_report, language, pi_activity, progress, runner,
+    runner_health, scene,
 )
 from tests.fakes.github import FakeGh
 from tests.fakes.progress import freeze_report_time
@@ -159,7 +159,7 @@ Need help? Join the Orbi community: https://t.me/+kJRTTpFGBRU0M2Y9""",
         "finish": None,
     },
     "evidence": {
-        "outcome": """fix needed""",
+        "outcome": """fix_needed""",
         "issue_comment": """<!-- orbi:run=abcdef12 -->
 <!-- orbi:comment=failure -->
 <!-- orbi:fail=f4037a77e6e12cdc -->
@@ -284,7 +284,7 @@ collecting ...
         "finish": None,
     },
     "finish": {
-        "outcome": """fix needed""",
+        "outcome": """fix_needed""",
         "issue_comment": """<!-- orbi:run=abcdef12 -->
 <!-- orbi:comment=failure -->
 <!-- orbi:fail=f4037a77e6e12cdc -->
@@ -649,7 +649,7 @@ def test_full_failure_is_kinded_but_the_short_milestone_is_not(
         monkeypatch, tmp_path, session=True, publisher=publisher,
         classify=True, evidence=False, finish=False,
     )
-    assert outcome == "fix needed"
+    assert outcome == "fix_needed"
     assert posted[0].splitlines()[1] == "<!-- orbi:comment=failure -->"
     assert all(
         "<!-- orbi:comment=" not in milestone
@@ -671,6 +671,26 @@ def test_finish_mode_body_is_byte_identical_to_the_pre_extraction_render(
     assert pr_comments == [GOLDEN["finish"]["pr_comment"]]
     assert publisher.milestones == GOLDEN["finish"]["milestones"]
     assert publisher.finish_bodies == [GOLDEN["finish"]["finish"]]
+
+
+@pytest.mark.parametrize(
+    "classify, expected",
+    [(True, "fix_needed"), (False, "blocked")],
+)
+def test_reported_outcome_matches_the_failure_block(
+        monkeypatch, tmp_path, classify, expected):
+    """Issue #2056: the reporter returns the SAME value the machine-readable
+    `orbi:failure:v1` block carries — one spelling for the recoverable
+    outcome, `fix_needed`, for a recoverable and a terminal failure."""
+    publisher = FakePublisher()
+    outcome, posted, _ = _report(
+        monkeypatch, tmp_path, session=False, publisher=publisher,
+        classify=classify, evidence=False, finish=False,
+    )
+    assert outcome == expected
+    parsed = failure.parse(posted[0])
+    assert parsed is not None
+    assert parsed.outcome == outcome
 
 
 def _pr_comment(pr_number, round_no, *, opened=False, run_id=RUN_ID):
@@ -713,7 +733,7 @@ def test_finish_scene_reports_the_current_pr_scene_round(
         monkeypatch, tmp_path, session=False, publisher=publisher,
         history=history, classify=True, evidence=False, finish=True,
     )
-    assert outcome == "fix needed"
+    assert outcome == "fix_needed"
     finish = publisher.finish_bodies[0]
     assert "- review/fix round: 5" not in finish
     assert "- review/fix round:" not in finish
@@ -733,7 +753,7 @@ def test_finish_scene_reports_a_single_prs_scene_round(
                  _pr_comment(42, 3)],
         classify=True, evidence=False, finish=True,
     )
-    assert outcome == "fix needed"
+    assert outcome == "fix_needed"
     assert "- review/fix round: 4" in publisher.finish_bodies[0]
 
 
@@ -845,7 +865,7 @@ def test_recoverable_failure_without_a_pr_posts_the_issue_comment_only(
         finish=False, publisher=publisher, current_labels=set(),
         language_code="en",
     )
-    assert outcome == "fix needed"
+    assert outcome == "fix_needed"
     assert len(posted) == 1
     assert language.text("en", "help.community") not in posted[0]
     assert pr_comments == []
@@ -1051,7 +1071,7 @@ def test_oversized_fix_needed_comment_shrinks_evidence_without_a_help_line(
         finish=False, action="a" * 3000,
     )
     body = _body_before_markers(posted[0])
-    assert outcome == "fix needed"
+    assert outcome == "fix_needed"
     assert len(body) <= failure_report.FAILURE_COMMENT_MAX_CHARS
     _assert_comment_structure_intact(body)
     assert language.text("en", "help.community") not in body

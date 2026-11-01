@@ -2261,7 +2261,7 @@ def _finish_progress(
     One function for both terminal scenes: `outcome` is
     the scene headline — `blocked` (the terminal failure,
     the same body the `process_issue` failure path writes) or
-    `fix needed` (the recoverable failure that keeps the
+    `fix_needed` (the recoverable failure that keeps the
     Issue in the automatic fix loop, the next timer resuming the same
     run, branch, worktree and PR). `title` is the issue's GitHub title:
     the scene shows `#<number> <title>` like every other

@@ -644,11 +644,9 @@ def test_every_reason_code_renders_a_parsable_comment(
 ):
     """Acceptance: one comment per reason_code whose block parses back to
     that code, its action_code and retry_safe."""
-    record = runner._classify_failure(
-        factory(), outcome="fix_needed" if outcome == "fix_needed" else "blocked",
-    )
+    record = runner._classify_failure(factory(), outcome=outcome)
     body = failure.failure_comment_body(
-        outcome="fix needed" if outcome == "fix_needed" else "blocked",
+        outcome=outcome,
         action="do the thing", reason="boom", diagnosis="boom",
         scene="- run: `-`", evidence="", pr_url=None,
         issue="orbi-build/orbi#1322", run_id="-", failure_record=record, language_code="en",
@@ -667,7 +665,7 @@ def test_every_reason_code_renders_a_parsable_comment(
 
 def test_failure_comment_body_renders_a_fix_needed_block():
     body = failure.failure_comment_body(
-        outcome="fix needed", action="", reason="boom", diagnosis="boom",
+        outcome="fix_needed", action="", reason="boom", diagnosis="boom",
         scene="- run: `-`", evidence="",
         pr_url=None, issue="orbi-build/orbi#7", run_id="-",
         failure_record=record_for(
@@ -790,11 +788,11 @@ def test_report_delivery_failure_recoverable_is_fix_needed(monkeypatch):
         reason="the tests failed", diagnosis="3 failed",
         evidence=False, language_code="en",
     )
-    assert outcome == "fix needed"
+    assert outcome == "fix_needed"
     parsed = failure.parse(posted[0])
     assert parsed is not None
     # Issue #1759: pytest-shaped text no longer decides the reason; the
-    # outcome still follows the exception type (recoverable -> fix needed).
+    # outcome still follows the exception type (recoverable -> fix_needed).
     assert parsed.reason_code == "unclassified"
     assert parsed.action_code == "fix_ticket"
     assert parsed.outcome == "fix_needed"
@@ -884,7 +882,7 @@ def test_report_delivery_failure_fix_needed_milestone_is_machine_readable(
         diagnosis=runner.failure_detail(error),
         evidence=False, publisher=publisher, finish=False, language_code="en",
     )
-    assert outcome == "fix needed"
+    assert outcome == "fix_needed"
     assert len(milestones) == 1
     milestone = milestones[0]
     assert "Orbi: fix needed" in milestone
