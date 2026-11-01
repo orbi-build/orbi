@@ -28,6 +28,7 @@ import orbi.resume_verification as resume_verification
 import orbi.review_merge as review_merge
 import orbi.run_state as run_state
 import orbi.pi_session as pi_session
+from orbi.run_fields import RunFields
 import orbi.milestone as milestone
 from orbi import language
 from orbi import progress
@@ -343,7 +344,11 @@ def scene_for(**overrides) -> scene_mod.Scene:
 
 def test_parse_pr_comment_returns_scene_for_multiline_opened_pr_comment():
     body = runner.opened_pr_comment_body(
-        FAKE_RUN_ID, "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4",
+        FAKE_RUN_ID,
+        RunFields(
+            run_id="a1b2c3d4", priority="normal", base_branch="main",
+            base_sha="abc123def456",
+        ),
         FAKE_PR_URL, language_code="en",
     )
     scene = run_state.parse_pr_comment(body)
@@ -363,6 +368,7 @@ def test_parse_pr_comment_returns_scene_for_multiline_opened_pr_comment():
         f"Orbi opened PR: {FAKE_PR_URL}",
         "- base_branch: main",
         f"- run_id={FAKE_RUN_ID}",
+        "- priority: normal",
         "",
         "<details><summary>Run details</summary>",
         "",
@@ -376,7 +382,11 @@ def test_parse_pr_comment_returns_scene_for_multiline_opened_pr_comment():
 
 def test_parse_pr_comment_preserves_unknown_head_counter():
     body = runner.opened_pr_comment_body(
-        FAKE_RUN_ID, "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4",
+        FAKE_RUN_ID,
+        RunFields(
+            run_id="a1b2c3d4", priority="normal", base_branch="main",
+            base_sha="abc123def456",
+        ),
         FAKE_PR_URL, language_code="en",
     )
     record = scene_mod.Scene(
@@ -400,7 +410,11 @@ def test_parse_pr_comment_returns_scene_for_legacy_opened_pr_comment():
 
 def test_parse_pr_comment_ignores_unrelated_new_format_line():
     body = runner.opened_pr_comment_body(
-        FAKE_RUN_ID, "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4",
+        FAKE_RUN_ID,
+        RunFields(
+            run_id="a1b2c3d4", priority="normal", base_branch="main",
+            base_sha="abc123def456",
+        ),
         FAKE_PR_URL, language_code="en",
     ) + "\nnot a field"
     assert run_state.parse_pr_comment(body) == scene_for()
@@ -412,7 +426,11 @@ def test_started_pi_comment_uses_multiline_field_block():
             run_id=FAKE_RUN_ID, issue=18, branch=FAKE_BRANCH,
             worktree=Path(FAKE_WORKTREE), source_repo="owner/repo",
         ),
-        "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4 priority=normal", language_code="en",
+        RunFields(
+            run_id="a1b2c3d4", priority="normal", base_branch="main",
+            base_sha="abc123def456",
+        ),
+        language_code="en",
     )
     assert body == (
         f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
@@ -1721,7 +1739,10 @@ def test_pick_resumable_delivery_resumes_from_the_v1_scene_block(
     so older comments keep resuming."""
     body = runner.opened_pr_comment_body(
         FAKE_RUN_ID,
-        "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4",
+        RunFields(
+            run_id="a1b2c3d4", priority="normal", base_branch="main",
+            base_sha="abc123def456",
+        ),
         FAKE_PR_URL, language_code="en",
     )
     monkeypatch.setattr(seam, "run_command", make_pick_fake(

@@ -275,20 +275,25 @@ def test_started_and_opened_pr_scenes_carry_the_summary():
         opened_pr_comment_body, started_pi_comment_body,
     )
     from orbi.delivery_scene import RunContext
+    from orbi.run_fields import RunFields
 
     ctx = RunContext(
         run_id="abc12345", issue=7, branch="orbi/o-r-issue-7",
         worktree=Path("/tmp/wt"), source_repo="o/r",
     )
     started = started_pi_comment_body(
-        ctx, "run_id=abc12345 priority=normal",
+        ctx, RunFields(run_id="abc12345", priority="normal"),
         language_code=language.LANGUAGE_EN, status_url=VALID_URL,
         issue_title="Start the work",
     )
     assert "**#7 Start the work**" in started
     assert _link() in started
     opened = opened_pr_comment_body(
-        "abc12345", "base_branch=main base_sha=abc run_id=abc12345",
+        "abc12345",
+        RunFields(
+            run_id="abc12345", priority="normal", base_branch="main",
+            base_sha="abc",
+        ),
         "https://github.com/o/r/pull/1", language_code=language.LANGUAGE_EN,
         status_url=VALID_URL, issue=7, issue_title="Start the work",
     )
@@ -330,6 +335,7 @@ def test_blocked_failure_body_carries_the_summary():
 
 def test_recoverable_scene_carries_the_summary_and_keeps_its_markers():
     from orbi import failure, progress
+    from orbi.run_fields import RunFields
 
     body = progress.recoverable_scene_body(
         run_id="abc12345", recoverable_name="Pi failure recovered",
@@ -337,7 +343,8 @@ def test_recoverable_scene_carries_the_summary_and_keeps_its_markers():
             reason_code="credential_missing", action_code="refresh_credentials",
             retry_safe=True, outcome="fix_needed",
         ),
-        detail="401", run_info="run=abc12345", status_url=VALID_URL,
+        detail="401", run_info=RunFields(run_id="abc12345", priority="normal"),
+        status_url=VALID_URL,
         issue=7, title="Start the work", language_code=language.LANGUAGE_EN,
     )
     lines = body.splitlines()
@@ -410,9 +417,11 @@ def test_merged_receipt_keeps_one_details_element_and_its_rows():
 
 def test_release_comments_carry_the_summary():
     from orbi import release_comments
+    from orbi.run_fields import RunFields
 
     success = release_comments.release_success_comment_body(
-        "abc12345", "run_id=abc12345", "https://x/releases/v1", "v1.0.0",
+        "abc12345", RunFields(run_id="abc12345", priority="normal"),
+        "https://x/releases/v1", "v1.0.0",
         "deadbeef", ["#1 done"], ["gates ok"], "156 passed", "v1.0.0",
         language_code=language.LANGUAGE_EN, status_url=VALID_URL,
         issue=7, title="Start the work",
@@ -420,7 +429,8 @@ def test_release_comments_carry_the_summary():
     assert "**#7 Start the work**" in success
     assert _link() in success
     failed = release_comments.release_failure_comment_body(
-        "abc12345", "run_id=abc12345", RuntimeError("boom"),
+        "abc12345", RunFields(run_id="abc12345", priority="normal"),
+        RuntimeError("boom"),
         language_code=language.LANGUAGE_EN, status_url=VALID_URL,
         issue=7, title="Start the work",
     )

@@ -20,6 +20,7 @@ import functools
 import logging
 import re
 import time
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from orbi import language, user_summary
@@ -86,6 +87,7 @@ from orbi.release_notes import (
     release_changelog_scope,
     release_range_prs,
 )
+from orbi.run_fields import RunFields
 
 if TYPE_CHECKING:
     # Annotation-only: this module imports `orbi.runner` never — the
@@ -167,7 +169,7 @@ def process_release(issue: dict, config: RunnerConfig,
     started = time.monotonic()
     # Bound before the try: the failure comment needs it even when the
     # declaration parse fails on the very first step.
-    run_info = f"run_id={run_id} priority={priority}"
+    run_info = RunFields(run_id=run_id, priority=priority)
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
         language_code=language.of(config), status_url=config.status_url,
@@ -224,8 +226,8 @@ def process_release(issue: dict, config: RunnerConfig,
         # post-gate reassignment further down adds base_sha). The journal
         # refactor deleted the assignment and both comments lost the only
         # field naming the frozen branch.
-        run_info = f"base_branch={base_branch} run_id={run_id} priority={priority}"
-        event("release_task", run_info, issue=number)
+        run_info = replace(run_info, base_branch=base_branch)
+        event("release_task", run_info.text(), issue=number)
         apply_label_patch(
             number, repo=source_repo, event=EVENT_CLAIM,
             current_labels={label.get("name") for label in issue.get(
@@ -239,7 +241,7 @@ def process_release(issue: dict, config: RunnerConfig,
         publish(
             action=lambda: publisher.milestone(
                 language.text(language.of(config), "release.started",
-                    run_info=run_info),
+                    run_info=run_info.text()),
             ),
         )
         release_commit = freeze_base(config.repo_dir, base_branch)
@@ -248,7 +250,7 @@ def process_release(issue: dict, config: RunnerConfig,
             release_commit,
         )
         base_branch = declaration["base_branch"]
-        run_info = f"base_branch={base_branch} base_sha={release_commit} run_id={run_id} priority={priority}"
+        run_info = replace(run_info, base_branch=base_branch, base_sha=release_commit)
         # The declared (or defaulted) version_file is proven
         # to exist in the frozen release tree BEFORE any gate wait — a
         # mismatch used to surface only at the version-write step, after
@@ -284,10 +286,6 @@ def process_release(issue: dict, config: RunnerConfig,
         release_waited_seconds = (
             max(0.0, time.time() - wait_started)
             if wait_started is not None else 0.0
-        )
-        run_info = (
-            f"base_branch={base_branch} base_sha={release_commit} "
-            f"run_id={run_id} priority={priority}"
         )
         # The leftover-delivery gate is scoped to the same
         # Milestone as the #663 completeness gate — the release Issue's own
