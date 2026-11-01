@@ -623,29 +623,33 @@ def run_round(
         config, repo, session_root=session_root, run_id=run_id,
         request=str(payload["message"]), issues=answer.issues,
     )
-    issues, check, warning = _apply_check(
+    issues, check, warning, reply = _apply_check(
         config, repo, session_root=session_root, payload=payload,
-        run_id=run_id, issues=issues, warning=warning,
+        run_id=run_id, issues=issues, warning=warning, reply=answer.reply,
     )
     return DraftRound(
-        reply=answer.reply, issues=issues, check=check, warning=warning,
+        reply=reply, issues=issues, check=check, warning=warning,
     )
 
 
 def _apply_check(
     config: RunnerConfig, repo: str, *, session_root: Path, payload: dict,
     run_id: str, issues: tuple[DraftIssue, ...], warning: str | None,
-) -> tuple[tuple[DraftIssue, ...], str, str | None]:
+    reply: str,
+) -> tuple[tuple[DraftIssue, ...], str, str | None, str]:
     """Judge the draft; on a failure rewrite it ONCE and judge again.
 
     Returns the issues, the check result (passed, or the failed criteria
-    as a comma-separated list) and the fidelity warning. There is no loop:
-    a rewrite that still fails goes back to the person with the checks it
-    failed, and the person may submit it.
+    as a comma-separated list), the fidelity warning and the reply. The
+    reply travels back from the rewrite too: it is the one sentence of
+    what will change that the person reads above the draft, so it must
+    describe the draft actually shown. There is no loop: a rewrite that
+    still fails goes back to the person with the checks it failed, and the
+    person may submit it.
     """
     check, failed = check_draft(config, repo, run_id=run_id, issues=issues)
     if check == "passed":
-        return issues, check, warning
+        return issues, check, warning, reply
     rewrite_payload = dict(payload)
     rewrite_payload["message"] = REWRITE_INSTRUCTION.format(
         reasons="\n".join(f"- {item}" for item in failed),
@@ -662,14 +666,14 @@ def _apply_check(
         )
         answer = read_answer(session_root / DRAFT_ANSWER_FILE)
     except DraftError as exc:
-        return issues, check, warning or f"rewrite_failed: {exc.code}"
+        return issues, check, warning or f"rewrite_failed: {exc.code}", reply
     if answer.questions or not answer.issues:
-        return issues, check, warning or "rewrite_failed: no_draft"
+        return issues, check, warning or "rewrite_failed: no_draft", reply
     rewritten = answer.issues
     check, _failed = check_draft(
         config, repo, run_id=run_id, issues=rewritten,
     )
-    return rewritten, check, warning
+    return rewritten, check, warning, answer.reply
 
 
 # --- creation ------------------------------------------------------------

@@ -269,6 +269,25 @@ def test_a_failing_draft_gets_exactly_one_rewrite(config, sessions,
     assert "single_outcome" in sessions.calls[1].context
 
 
+def test_the_reply_describes_the_rewritten_draft(config, sessions,
+                                                 monkeypatch, tmp_path):
+    """The one sentence the person reads is the rewrite's own."""
+    draft_fakes.judge_sequence(monkeypatch, [
+        (False, ("single_outcome",)),
+        (True, ()),
+        (True, ()),
+    ])
+    sessions.queue_draft(issue("One big thing"), reply="One Issue will change X.")
+    sessions.queue_draft(*TWO_ISSUES, reply="Two Issues will change X.")
+    code, out, err = run_round_cli(
+        config, {"message": "everything"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    answer = json.loads(out)
+    assert answer["issues"][0]["title"] == "Tag a note"
+    assert answer["reply"] == "Two Issues will change X."
+
+
 def test_a_draft_that_still_fails_reports_the_failed_checks(
     config, sessions, monkeypatch, tmp_path,
 ):
