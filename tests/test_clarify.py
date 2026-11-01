@@ -30,6 +30,7 @@ from tests.fakes.clarify import (
     FakeGate, fix_run_id, record_label_notifications, stop_comment_entry,
     stub_runner_login, stub_stop_history, verdict_agent,
 )
+from tests.fakes.pi import install_fake_pi
 
 from tests.test_run_id_e2e import (
     ISSUE_NUMBER,
@@ -37,7 +38,6 @@ from tests.test_run_id_e2e import (
     REPO,
     config_for,
     install_fake_gh,
-    install_fake_pi,
     worktree_for,
 )
 

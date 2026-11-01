@@ -37,6 +37,8 @@ from conftest import git
 
 import orbi.runner as runner
 
+from tests.fakes.pi import install_fake_pi
+
 REPO = "owner/repo"
 ISSUE_NUMBER = 99
 PR_URL = "https://github.com/owner/repo/pull/99"
@@ -325,18 +327,6 @@ def gh_world(tmp_path: Path, monkeypatch) -> Path:
     return state_path
 
 
-def install_fake_pi(monkeypatch, tmp_path: Path, script: str) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(exist_ok=True)
-    fake = bin_dir / "pi"
-    fake.write_text(script, encoding="utf-8")
-    fake.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv(
-        "ORBI_PI_PROMPT_DUMP", str(tmp_path / "pi-system-prompt.txt"),
-    )
-
-
 @pytest.fixture(autouse=True)
 def _reset_run_id(bind_run_id):
     bind_run_id(None)
@@ -385,6 +375,9 @@ def test_e2e_pure_ops_ticket_executes_merges_and_delivers_evidence(
     clone, gh_world, tmp_path, monkeypatch, caplog,
 ):
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_OPS)
+    monkeypatch.setenv(
+        "ORBI_PI_PROMPT_DUMP", str(tmp_path / "pi-system-prompt.txt"),
+    )
     caplog.set_level("INFO")
 
     result = runner.process_issue(ops_issue(), config_for(clone), REPO)
@@ -450,6 +443,9 @@ def test_e2e_ops_ticket_with_code_change_takes_the_pr_ceremony(
     clone, gh_world, tmp_path, monkeypatch,
 ):
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_OPS_COMMIT)
+    monkeypatch.setenv(
+        "ORBI_PI_PROMPT_DUMP", str(tmp_path / "pi-system-prompt.txt"),
+    )
 
     result = runner.process_issue(ops_issue(), config_for(clone), REPO)
 
