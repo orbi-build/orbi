@@ -7,9 +7,9 @@ file, Pi provider/model catalog materialization) and the
 `runner._preflight` startup checks (active-milestone scope, editable CLI
 install refresh, unit-drift self-heal, git transport) moved here verbatim
 with no behavior change. The shared scaffolding lives in
-`tests/fakes/bootstrap_preflight.py`; helpers that several domains use
-(`_write_prompts` and the repo-level fixtures) keep their single home in
-`test_bootstrap_runner.py` and are imported here.
+`tests/fakes/bootstrap_preflight.py`; the helper several domains use
+(`_write_prompts`) keeps its single home in
+`tests/test_bootstrap_runner_main.py` and is imported here.
 """
 import json
 import os
@@ -37,7 +37,7 @@ from tests.fakes.bootstrap_preflight import (
     _user_agent_dir,
     _user_settings,
 )
-from tests.test_bootstrap_runner import _write_prompts
+from tests.test_bootstrap_runner_main import _write_prompts
 
 
 # Hosted-macOS boundaries; the Ubuntu CI keeps every scene here
@@ -53,7 +53,7 @@ def _unbound_run_id(bind_run_id):
     `journal.set_run_id` binds one attempt in a module global so every
     later journal line carries `[run_id]`. A test that drives a real
     tick (or calls `set_run_id` directly) leaves that binding behind —
-    `test_bootstrap_runner.py` alone leaks one from 82 of its tests — so
+    the runner scene suites alone leak one from 82 of their tests — so
     the unprefixed `caplog` assertions moved here would read a stale
     prefix whenever another module ran first (Issue #1647). Clearing the
     module global is the same reset the binding tests already use; it

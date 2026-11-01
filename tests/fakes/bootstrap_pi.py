@@ -3,9 +3,9 @@
 Moved verbatim out of `tests/test_bootstrap_runner.py` when the Pi session
 start, resume and recovery tests moved to `tests/test_bootstrap_pi.py`: the
 fake Pi commands, the session-record builders and the recovery fixtures
-those tests share. Single owner: the domain suite and the remaining
-`test_bootstrap_runner.py` scenes (live progress, stop handler) import them
-from here instead of keeping a copy of each.
+those tests share. Single owner: the domain suite and the live-session scene
+(`tests/test_bootstrap_runner_session.py`: live progress, stop handler)
+import them from here instead of keeping a copy of each.
 """
 import sys
 import time

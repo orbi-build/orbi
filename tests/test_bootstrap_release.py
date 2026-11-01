@@ -8,7 +8,7 @@ change: the tests exercise `orbi.release`, `orbi.release_run`,
 through their public entry points. The shared
 scaffolding lives in `tests/fakes/bootstrap_release.py`; helpers that
 several domains use (`make_local_remote_pair`, `_git_output`) keep their
-single home in `test_bootstrap_runner.py` and are imported here.
+single home in `tests/fakes/bootstrap_delivery.py` and are imported here.
 """
 import json
 import logging

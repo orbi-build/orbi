@@ -72,8 +72,9 @@ def _repository_policy_read(monkeypatch):
 def seed_repository_policy(fake, text: str) -> None:
     """Seed one repository `.github/orbi.toml` through the shared seam.
 
-    The same global channel `tests/test_bootstrap_runner.py` uses for
-    claim-time comments: the contents API's file object, base64-encoded."""
+    The same global channel `tests/test_bootstrap_runner_reconcile.py`
+    uses for claim-time comments: the contents API's file object,
+    base64-encoded."""
     fake.routes["/contents/"] = json.dumps({
         "sha": "a" * 40,
         "content": base64.b64encode(text.encode("utf-8")).decode("ascii"),
@@ -1248,7 +1249,7 @@ def test_process_issue_pickup_record_failure_is_bypass(
     """Issue #266: a health-state write failure at claim time must never
     fail the delivery (bypass) — the claim and the run go on."""
     import orbi.runner as runner
-    from tests.test_bootstrap_runner import _gh_api
+    from tests.test_bootstrap_runner_outcome import _gh_api
     from tests.test_progress_wiring import make_fake_gh
 
     monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: None)
@@ -1300,7 +1301,7 @@ def test_process_issue_failure_record_failure_is_bypass(
     path must never change the delivery outcome (bypass) — the Issue is
     still marked ai-blocked and the tick ends cleanly."""
     import orbi.runner as runner
-    from tests.test_bootstrap_runner import _gh_api
+    from tests.test_bootstrap_runner_outcome import _gh_api
     from tests.test_progress_wiring import make_fake_gh
 
     monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: None)
