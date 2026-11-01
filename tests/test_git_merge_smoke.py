@@ -29,6 +29,7 @@ import orbi.runner as runner
 import orbi.merge_exec as merge_exec
 import orbi.review_merge as review_merge
 import orbi.run_state as run_state
+from orbi import scene as scene_mod
 from seam import seam
 
 
@@ -588,11 +589,13 @@ def run_review_round(monkeypatch, clone: Path, head_oid: str, *,
     merged = review_merge.review_and_merge_if_clean(
         clone, "orbi/owner-repo-issue-4", "main", config, "owner/repo", 4,
         title="Review task", priority="normal",
-        scene={
-            "run_id": "a1b2c3d4", "base_branch": "main", "base_sha": "b1",
-            "pr_url": pr["url"], "external": "", "review_round": 0,
-            "base_advance_round": 0, "scene_at": "2026-10-19T00:00:00Z",
-        },
+        scene=run_state.ResumeScene(
+            parsed=scene_mod.Scene(
+                run_id="a1b2c3d4", base_branch="main", base_sha="b1",
+                pr_url=pr["url"],
+            ),
+            scene_at="2026-10-19T00:00:00Z",
+        ),
     )
     return merged, landing_reads, labels, comments
 

@@ -2494,17 +2494,58 @@ def _seed_run_state(worktree: Path, **extra) -> None:
 def _scene(**overrides):
     """The recovered resume scene the round budget reads (Issue #788).
 
-    `review_round` counts the COMPLETED rounds; `scene_at` is the
-    scene comment's `createdAt` the #483 human-recovery reset compares.
+    The recovered value is the parsed `Scene` plus the comment's
+    `createdAt` beside it (Issue #2053): `review_round` counts the
+    COMPLETED rounds and `scene_at` is the scene comment's
+    `createdAt` the #483 human-recovery reset compares.
     """
-    recovered = {
+    scene_at = overrides.pop("scene_at", "2026-09-13T00:00:00Z")
+    fields = {
         "run_id": "a1b2c3d4", "base_branch": "main", "base_sha": "b1",
         "pr_url": "u", "external": "", "review_round": 0,
         "base_advance_round": 0,
-        "scene_at": "2026-09-13T00:00:00Z",
     }
-    recovered.update(overrides)
-    return recovered
+    fields.update(overrides)
+    return run_state.ResumeScene(
+        parsed=scene.Scene(**fields), scene_at=scene_at,
+    )
+
+
+def _next_tick_scene(recovered, report):
+    """The scene the NEXT tick reads back from the failure comment.
+
+    The bumped unknown-verdict-head counter is not a key on the scene, so
+    the failure comment's scene block is its only record (Issue #2053).
+    """
+    block = review_merge.failure_scene_block(recovered, _pr()["url"], report)
+    return run_state.ResumeScene(
+        parsed=scene.parse(block), scene_at=recovered.scene_at,
+    )
+
+
+def test_failure_scene_block_matches_the_pre_2053_block():
+    """Issue #2053: the failure comment's scene block is byte-identical to
+    the one before the change, so nothing a reader derives from it moves.
+
+    A failure that does NOT bump the unknown-verdict-head counter still
+    re-states the counter the recovered scene already carried: that block
+    is what ends the #825 identical-failure streak and what stamps the
+    scene comment's `createdAt` the #483 recovery reset compares. A bump
+    this tick wins over the recovered value; zero everywhere writes no
+    block at all.
+    """
+    url = _pr()["url"]
+    recovered = _scene(verdict_head_unknown_round=1)
+    assert review_merge.failure_scene_block(
+        recovered, url, review_merge.RoundReport(review_round=3),
+    ) == scene.render(dataclasses.replace(recovered.parsed, pr_url=url))
+    assert scene.parse(review_merge.failure_scene_block(
+        _scene(verdict_head_unknown_round=2), url,
+        review_merge.RoundReport(verdict_head_unknown_round=3),
+    )).verdict_head_unknown_round == 3
+    assert review_merge.failure_scene_block(
+        _scene(), url, review_merge.RoundReport(review_round=3),
+    ) is None
 
 
 @pytest.fixture()
@@ -3059,13 +3100,15 @@ def test_review_and_merge_verdict_head_mismatch_real_commit_is_recoverable(
         lambda *a, **k: subprocess.CompletedProcess(a[0], 0),
     )
     alternate_scene = _scene()
+    report = review_merge.RoundReport()
     with pytest.raises(ValueError, match="head"):
         review_merge.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4, title="Review task", priority="normal",
-            scene=alternate_scene,
+            scene=alternate_scene, report=report,
         )
-    assert alternate_scene.get("verdict_head_unknown_round", 0) == 0
+    assert alternate_scene.parsed.verdict_head_unknown_round == 0
+    assert report.verdict_head_unknown_round == 0
     assert gate.called is False
 
 
@@ -3087,27 +3130,32 @@ def test_review_and_merge_unknown_verdict_head_retries_then_is_terminal(
     )
     caplog.set_level("WARNING")
     recovered_scene = _scene()
+    report = review_merge.RoundReport()
     with pytest.raises(ValueError, match="unknown-head attempt 1/3"):
         review_merge.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4, title="Review task", priority="normal",
-            scene=recovered_scene,
+            scene=recovered_scene, report=report,
         )
-    assert recovered_scene["verdict_head_unknown_round"] == 1
+    assert report.verdict_head_unknown_round == 1
+    recovered_scene = _next_tick_scene(recovered_scene, report)
+    report = review_merge.RoundReport()
     with pytest.raises(ValueError, match="unknown-head attempt 2/3"):
         review_merge.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4, title="Review task", priority="normal",
-            scene=recovered_scene,
+            scene=recovered_scene, report=report,
         )
-    assert recovered_scene["verdict_head_unknown_round"] == 2
+    assert report.verdict_head_unknown_round == 2
+    recovered_scene = _next_tick_scene(recovered_scene, report)
+    report = review_merge.RoundReport()
     with pytest.raises(runner.UnrecoverableDeliveryError, match="unknown object"):
         review_merge.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4, title="Review task", priority="normal",
-            scene=recovered_scene,
+            scene=recovered_scene, report=report,
         )
-    assert recovered_scene["verdict_head_unknown_round"] == 3
+    assert report.verdict_head_unknown_round == 3
     assert "review_verdict_head_unknown" in caplog.text
     assert "verdict_head=unknown-object" in caplog.text
     assert gate.called is False
@@ -3141,31 +3189,37 @@ def test_unknown_verdict_head_budget_resets_after_clean_review_round(
     monkeypatch.setattr(seam, "run_command", fake_run_command)
     config = _review_merge_config(tmp_path)
     recovered_scene = _scene()
+    report = review_merge.RoundReport()
 
     with pytest.raises(ValueError, match="unknown-head attempt 1/3"):
         review_merge.review_and_merge_if_clean(
             tmp_path, "branch", "main", config, "owner/repo", 4,
             title="Review task", priority="normal", scene=recovered_scene,
+            report=report,
         )
-    assert recovered_scene["verdict_head_unknown_round"] == 1
+    assert report.verdict_head_unknown_round == 1
 
     verdict["text"] = _findings_verdict_text()
     assert review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", config, "owner/repo", 4,
-        title="Review task", priority="normal", scene=recovered_scene,
+        title="Review task", priority="normal",
+        scene=_next_tick_scene(recovered_scene, report),
     ) is False
     # The next tick reads the completed round's scene, which resets the
     # per-review-run unknown-head budget.
     next_scene = run_state.parse_pr_comment(calls[-1])
-    assert next_scene.get("verdict_head_unknown_round", 0) == 0
+    assert next_scene.verdict_head_unknown_round == 0
 
     verdict["text"] = _pass_verdict_text(head="unknown-object")
+    retry_report = review_merge.RoundReport()
     with pytest.raises(ValueError, match="unknown-head attempt 1/3"):
         review_merge.review_and_merge_if_clean(
             tmp_path, "branch", "main", config, "owner/repo", 4,
-            title="Review task", priority="normal", scene=next_scene,
+            title="Review task", priority="normal",
+            scene=run_state.ResumeScene(parsed=next_scene),
+            report=retry_report,
         )
-    assert next_scene["verdict_head_unknown_round"] == 1
+    assert retry_report.verdict_head_unknown_round == 1
 
 
 def test_review_and_merge_clean_verdict_without_head_advance_keeps_frozen_head(

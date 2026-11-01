@@ -22,6 +22,7 @@ import orbi.runner as runner
 import orbi.resume_verification as resume_verification
 import orbi.review_merge as review_merge
 import orbi.run_state as run_state
+from orbi import scene as scene_mod
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 from seam import resume_deps, seam
@@ -919,10 +920,10 @@ def test_main_applies_repo_base_branch_before_resume_verification(
     on the repository base would be rejected as a base mismatch."""
     config = _write_main_config(tmp_path)
     issue = {"number": 9, "title": "ship", "body": "", "labels": []}
-    scene = {
-        "run_id": "a1b2c3d4", "base_branch": "beta", "base_sha": "s",
-        "pr_url": "https://github.com/owner/repo/pull/98", "external": "",
-    }
+    scene = run_state.ResumeScene(parsed=scene_mod.Scene(
+        run_id="a1b2c3d4", base_branch="beta", base_sha="s",
+        pr_url="https://github.com/owner/repo/pull/98",
+    ))
     monkeypatch.setattr(
         claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None,

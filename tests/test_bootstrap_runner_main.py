@@ -20,6 +20,8 @@ from pathlib import Path
 import pytest
 
 import orbi.claim as claim
+import orbi.run_state as run_state
+from orbi import scene as scene_mod
 
 import orbi.runner as runner
 import orbi.resume_verification as resume_verification
@@ -28,6 +30,15 @@ from orbi import pi_stream_log, progress
 from tests.fakes.github import FakeGh
 from seam import seam
 from tests.fakes.bootstrap_delivery import PR_URL
+
+
+def _recovered_scene(pr_url: str) -> run_state.ResumeScene:
+    """The scene the resumable scan hands the dispatch (Issue #2053: one
+    parsed `Scene` value, plus the comment stamp beside it)."""
+    return run_state.ResumeScene(parsed=scene_mod.Scene(
+        run_id="a1b2c3d4", base_branch="main",
+        base_sha="abc123def456", pr_url=pr_url,
+    ))
 
 
 def _write_prompts(tmp_path):
@@ -686,12 +697,7 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
     config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     issue = {"number": 12, "title": "task", "body": "body"}
-    scene = {
-        "run_id": "a1b2c3d4",
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "pr_url": "https://github.com/owner/repo/pull/12",
-    }
+    scene = _recovered_scene("https://github.com/owner/repo/pull/12")
     monkeypatch.setattr(
         claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
@@ -702,7 +708,7 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
     # test proves the wait receives its verified URL.
     monkeypatch.setattr(
         resume_verification, "verify_resumed_pr",
-        lambda *args, **kwargs: scene["pr_url"],
+        lambda *args, **kwargs: scene.parsed.pr_url,
     )
     waits = []
     monkeypatch.setattr(
@@ -711,7 +717,7 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
     )
     assert runner.main(["--config", str(config)]) == 0
     # No fixer: the wait runs on the verified PR URL.
-    assert waits[0][0][:2] == (scene["pr_url"], issue)
+    assert waits[0][0][:2] == (scene.parsed.pr_url, issue)
     # The resumed review runs under the scene's run id.
     assert runner.current_run_id() == "a1b2c3d4"
 
@@ -732,12 +738,7 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
     config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     issue = {"number": 12, "title": "task", "body": "body"}
-    scene = {
-        "run_id": "a1b2c3d4",
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "pr_url": "https://github.com/owner/repo/pull/12",
-    }
+    scene = _recovered_scene("https://github.com/owner/repo/pull/12")
     monkeypatch.setattr(
         claim, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
@@ -748,7 +749,7 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
     # test proves the wait receives its verified URL.
     monkeypatch.setattr(
         resume_verification, "verify_resumed_pr",
-        lambda *args, **kwargs: scene["pr_url"],
+        lambda *args, **kwargs: scene.parsed.pr_url,
     )
     waits = []
     monkeypatch.setattr(
@@ -757,7 +758,7 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
     )
     assert runner.main(["--config", str(config)]) == 0
     # No fixer for a clean PR: the wait runs on the verified PR URL.
-    assert waits[0][0][:2] == (scene["pr_url"], issue)
+    assert waits[0][0][:2] == (scene.parsed.pr_url, issue)
     # The resumed review runs under the scene's run id.
     assert runner.current_run_id() == "a1b2c3d4"
 

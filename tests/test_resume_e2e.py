@@ -44,6 +44,7 @@ import orbi.merge_exec as merge_exec
 import orbi.review_merge as review_merge
 import orbi.run_state as run_state
 from orbi import human_review
+from orbi import scene as scene_mod
 from seam import resume_deps, seam
 
 from tests.fakes.pi import install_fake_pi
@@ -543,17 +544,18 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
     # The scene carries only what the runner cannot derive itself;
     # branch and worktree are derived from config + issue + run id.
     base_sha = re.search(r"- base_sha: ([0-9a-f]{40})", opened).group(1)
-    assert scene == {
-        "run_id": run_id,
-        "base_branch": "main",
-        "base_sha": base_sha,
-        "pr_url": PR_URL,
-        "external": "",
+    # Issue #2053: the recovered scene is the parsed `Scene` value, with
+    # the scene comment's `createdAt` beside it.
+    assert scene.parsed == scene_mod.Scene(
+        run_id=run_id,
+        base_branch="main",
+        base_sha=base_sha,
+        pr_url=PR_URL,
         # Issue #788: the scene carries the review-round counter (0 when
-        # the PR opens) and the scene comment's createdAt stamp.
-        "review_round": 0,
-        "scene_at": None,
-    }
+        # the PR opens).
+        review_round=0,
+    )
+    assert scene.scene_at is None
     assert runner.task_branch(REPO, ISSUE_NUMBER, run_id) == branch
     assert runner.worktree_path(
         config.repo_dir, REPO, ISSUE_NUMBER, run_id,
@@ -564,8 +566,8 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
     runner.set_run_id(run_id)
     review_config = dataclasses.replace(
         config,
-        base_sha=scene["base_sha"],
-        run_id=scene["run_id"],
+        base_sha=scene.parsed.base_sha,
+        run_id=scene.parsed.run_id,
     )
     def _review_once(review_record=None, body_sha=None):
         return review_merge.review_and_merge_if_clean(

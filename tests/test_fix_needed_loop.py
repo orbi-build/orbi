@@ -41,6 +41,21 @@ WORKTREE = "/srv/repo/.worktrees/orbi-owner-repo-issue-39-a1b2c3d4"
 BRANCH = "orbi/owner-repo-issue-39"
 
 
+def _recovered_scene(**overrides) -> run_state.ResumeScene:
+    """The recovered resume scene a review round reads (Issue #2053: the
+    parsed `Scene` plus the scene comment's `createdAt` beside it)."""
+    scene_at = overrides.pop("scene_at", "2026-01-01T00:00:00Z")
+    fields = {
+        "run_id": FAKE_RUN_ID, "base_branch": "main",
+        "base_sha": "abc", "pr_url": PR_URL, "external": "",
+        "review_round": 0,
+    }
+    fields.update(overrides)
+    return run_state.ResumeScene(
+        parsed=scene.Scene(**fields), scene_at=scene_at,
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_run_id(bind_run_id):
     bind_run_id(None)
@@ -1238,11 +1253,7 @@ def test_exhausted_review_enters_new_budget_after_human_recovery(
             title="task", priority="normal",
             # Five completed rounds in the scene, but the recovery
             # (2026-02-01) postdates the scene comment (2026-01-01).
-            scene={
-                "run_id": FAKE_RUN_ID, "base_branch": "main",
-                "base_sha": "abc", "pr_url": PR_URL, "external": "",
-                "review_round": 5, "scene_at": "2026-01-01T00:00:00Z",
-            },
+            scene=_recovered_scene(review_round=5),
         )
     assert freezes == [1]
 
@@ -1272,11 +1283,7 @@ def test_review_rounds_exhausted_raises_unrecoverable(monkeypatch, tmp_path):
         review_merge.review_and_merge_if_clean(
             tmp_path, "branch", "main", config, "owner/repo", 39,
             title="task", priority="normal",
-            scene={
-                "run_id": FAKE_RUN_ID, "base_branch": "main",
-                "base_sha": "abc", "pr_url": PR_URL, "external": "",
-                "review_round": 5, "scene_at": "2026-01-01T00:00:00Z",
-            },
+            scene=_recovered_scene(review_round=5),
         )
     assert freezes == []
 
@@ -1344,12 +1351,6 @@ def _external_review_env(monkeypatch, tmp_path, *, external: bool):
     config = config_domain.RunnerConfig(
         run_id=FAKE_RUN_ID, base_branch="main", repo_dir=tmp_path,
     )
-    scene = {
-        "run_id": FAKE_RUN_ID, "base_branch": "main",
-        "base_sha": "abc", "pr_url": PR_URL,
-        "external": "true" if external else "",
-        "review_round": 0, "scene_at": "2026-01-01T00:00:00Z",
-    }
     return comments, patches
 
 
@@ -1372,11 +1373,7 @@ def test_external_takeover_clean_verdict_stops_at_triage(
             status_url=TASK_STATUS_URL,
         ),
         "owner/repo", 39, title="task", priority="normal",
-        scene={
-            "run_id": FAKE_RUN_ID, "base_branch": "main",
-            "base_sha": "abc", "pr_url": PR_URL, "external": "true",
-            "review_round": 0, "scene_at": "2026-01-01T00:00:00Z",
-        },
+        scene=_recovered_scene(external="true"),
     )
     assert merged is False
     # The review conclusion is on the ISSUE (the maintainer's decision
@@ -1419,11 +1416,7 @@ def test_external_takeover_conclusion_ends_with_the_help_line(
             message_language=language_code,
         ),
         "owner/repo", 39, title="task", priority="normal",
-        scene={
-            "run_id": FAKE_RUN_ID, "base_branch": "main",
-            "base_sha": "abc", "pr_url": PR_URL, "external": "true",
-            "review_round": 0, "scene_at": "2026-01-01T00:00:00Z",
-        },
+        scene=_recovered_scene(external="true"),
     )
     assert merged is False
     assert len(comments) == 1
@@ -1458,11 +1451,7 @@ def test_internal_clean_verdict_still_merges(monkeypatch, tmp_path):
         config_domain.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main",
                             repo_dir=tmp_path),
         "owner/repo", 39, title="task", priority="normal",
-        scene={
-            "run_id": FAKE_RUN_ID, "base_branch": "main",
-            "base_sha": "abc", "pr_url": PR_URL, "external": "",
-            "review_round": 0, "scene_at": "2026-01-01T00:00:00Z",
-        },
+        scene=_recovered_scene(),
     )
     assert merged is True
     assert patches[-1]["event"] == runner.EVENT_MERGED

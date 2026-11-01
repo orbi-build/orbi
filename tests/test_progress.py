@@ -37,7 +37,7 @@ def test_failure_comment_redacts_evidence_and_preserves_resume_scene():
     ))
     comment = progress.format_status_comment(scene_body)
     from orbi import review_merge
-    assert run_state.parse_pr_comment(comment)["run_id"] == "a1b2c3d4"
+    assert run_state.parse_pr_comment(comment).run_id == "a1b2c3d4"
 
 
 def test_format_status_comment_posts_the_body_as_its_writer_rendered_it(
