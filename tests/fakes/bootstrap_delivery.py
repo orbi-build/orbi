@@ -5,7 +5,7 @@ and claim tests moved to `tests/test_bootstrap_delivery.py`: the PR
 verification/delivery fakes (`fake_verify_run`, `fake_deliver_run` and the
 payloads they answer with), the review-round environment, the blocked
 review text, and the real-git worktree/run-state fixtures. The scenes that
-still need them - the new suite and `test_bootstrap_runner.py`
+still need them - the new suite and the runner scene suites
 (`_git_output`, `make_session_jsonl`, `PR_URL`) - import them from here
 instead of keeping a copy (one owner).
 """

@@ -515,7 +515,7 @@ def clone(tmp_path: Path) -> Path:
     # input, so the pre-start refresh is a no-op and never runs a real
     # `uv tool install` against the synthetic clone (the refresh's own
     # behavior is covered by tests/test_cli_install.py and the wiring
-    # tests in tests/test_bootstrap_runner.py).
+    # tests in tests/test_bootstrap_preflight.py).
     fingerprint = hashlib.sha256(
         (clone / "pyproject.toml").read_bytes(),
     ).hexdigest()

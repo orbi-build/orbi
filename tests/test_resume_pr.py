@@ -976,7 +976,7 @@ def test_pick_resumable_delivery_scans_all_open_pr_states(
     excluded (Issue #178: a runner killed during review leaves it
     behind). A clean PR is still never sent to the Fixer: `main`
     routes an `ai-pr-opened` resume to the independent review (Issue
-    #45 round-5 contract, tested in test_bootstrap_runner)."""
+    #45 round-5 contract, tested in test_bootstrap_runner_main)."""
     calls = []
 
     def counting(command, **kwargs):
