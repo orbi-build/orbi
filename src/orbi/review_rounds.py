@@ -87,17 +87,26 @@ def round_scene_block(resumed: run_state.ResumeScene, pr_url: str,
 def failure_scene_block(
     recovered: run_state.ResumeScene | None, pr_url: str, report: RoundReport,
 ) -> str | None:
-    """The failure comment's scene block, or None when nothing advanced.
+    """The failure comment's scene block, or None when the counter is 0.
 
-    A bumped unknown-verdict-head counter must reach the next tick, and
-    the failure comment's scene block is its only record; a failure that
-    never touches the counter carries no block.
+    A non-zero unknown-verdict-head counter must reach the next tick, and
+    the failure comment's scene block is its only record — the counter
+    the tick bumped if it bumped one, else the one the recovered scene
+    already carried (the pre-#2053 block: identical input, identical
+    block). A scene whose counter is 0 writes no block, so a failure that
+    changes nothing never re-stamps the scene comment.
     """
-    if recovered is None or not report.verdict_head_unknown_round:
+    if recovered is None:
+        return None
+    unknown_round = (
+        report.verdict_head_unknown_round
+        or recovered.parsed.verdict_head_unknown_round
+    )
+    if not unknown_round:
         return None
     return round_scene_block(
         recovered, pr_url, recovered.parsed.review_round,
-        verdict_head_unknown_round=report.verdict_head_unknown_round,
+        verdict_head_unknown_round=unknown_round,
     )
 
 

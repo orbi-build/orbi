@@ -37,7 +37,7 @@ from enum import Enum
 from pathlib import Path
 
 from orbi import config as config_domain
-from orbi import failure_report, merge_exec, pi_session, run_state, scene
+from orbi import failure_report, merge_exec, pi_session, run_state
 from orbi.blocked_comment import post_blocked_comment
 from orbi.checks import test_status
 from orbi.delivery_labels import (

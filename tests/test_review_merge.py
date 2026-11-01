@@ -2523,6 +2523,31 @@ def _next_tick_scene(recovered, report):
     )
 
 
+def test_failure_scene_block_matches_the_pre_2053_block():
+    """Issue #2053: the failure comment's scene block is byte-identical to
+    the one before the change, so nothing a reader derives from it moves.
+
+    A failure that does NOT bump the unknown-verdict-head counter still
+    re-states the counter the recovered scene already carried: that block
+    is what ends the #825 identical-failure streak and what stamps the
+    scene comment's `createdAt` the #483 recovery reset compares. A bump
+    this tick wins over the recovered value; zero everywhere writes no
+    block at all.
+    """
+    url = _pr()["url"]
+    recovered = _scene(verdict_head_unknown_round=1)
+    assert review_merge.failure_scene_block(
+        recovered, url, review_merge.RoundReport(review_round=3),
+    ) == scene.render(dataclasses.replace(recovered.parsed, pr_url=url))
+    assert scene.parse(review_merge.failure_scene_block(
+        _scene(verdict_head_unknown_round=2), url,
+        review_merge.RoundReport(verdict_head_unknown_round=3),
+    )).verdict_head_unknown_round == 3
+    assert review_merge.failure_scene_block(
+        _scene(), url, review_merge.RoundReport(review_round=3),
+    ) is None
+
+
 @pytest.fixture()
 def budget_review_env(monkeypatch):
     """freeze/run_review stubs shared by the scene-budget tests (Issue
