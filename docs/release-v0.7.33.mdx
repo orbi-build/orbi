@@ -1,0 +1,49 @@
+---
+title: "v0.7.33 release (latest)"
+description: "Orbi v0.7.33 release notes: Pass run fields as fields instead of a \"k=v k=v\" string that is split back and 6 more changes."
+---
+
+`v0.7.33` was published 2026-11-01T22:50:54Z as the GitHub Release [v0.7.33](https://github.com/orbi-build/orbi/releases/tag/v0.7.33).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.7.33` | annotated tag `3bb6320a10263b5cac5b068645aab1c34bcb7bb8` | commit `a89b0b8977f5287ba0a9ec81442d04d8e0de5bb6` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Pass run fields as fields instead of a "k=v k=v" string that is split back ([Issue #2055](https://github.com/orbi-build/orbi/issues/2055); [PR #2062](https://github.com/orbi-build/orbi/pull/2062))
+- Failure comment Diagnosis shows the run correlation once ([Issue #2057](https://github.com/orbi-build/orbi/issues/2057); [PR #2064](https://github.com/orbi-build/orbi/pull/2064))
+- Document the suggest run's understanding session directory in the public contract ([Issue #2058](https://github.com/orbi-build/orbi/issues/2058); [PR #2065](https://github.com/orbi-build/orbi/pull/2065))
+
+### Reliability and recovery
+
+- Keep the resume scene as one Scene value from comment to next scene block ([Issue #2053](https://github.com/orbi-build/orbi/issues/2053); [PR #2061](https://github.com/orbi-build/orbi/pull/2061))
+- Use one spelling for the recoverable failure outcome ("fix_needed") ([Issue #2056](https://github.com/orbi-build/orbi/issues/2056); [PR #2063](https://github.com/orbi-build/orbi/pull/2063))
+
+### Bug fixes
+
+- orbi draft: the fidelity pass drops outcomes from earlier rounds because it only sees the latest message ([Issue #2050](https://github.com/orbi-build/orbi/issues/2050); [PR #2059](https://github.com/orbi-build/orbi/pull/2059))
+- English status comments repeat their headline as a "- detail:" row ([Issue #2054](https://github.com/orbi-build/orbi/issues/2054); [PR #2060](https://github.com/orbi-build/orbi/pull/2060))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
+
+- tag: `v0.7.33`
+- release commit: `a89b0b8977f5287ba0a9ec81442d04d8e0de5bb6`
+- release task: Issue #2052
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit a89b0b8977f5287ba0a9ec81442d04d8e0de5bb6 (the #268 CI-wait gate; no local test execution)
+
+
+Released by [Orbi](https://orbi.build/?ref=prfoot-orbi-build)
+
+[![Download Orbi](https://a.fsdn.com/con/app/sf-download-button)](https://sourceforge.net/projects/orbi/files/v0.7.33/v0.7.33%20source%20code.zip/download)
