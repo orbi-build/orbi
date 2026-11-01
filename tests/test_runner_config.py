@@ -101,7 +101,7 @@ def test_runner_config_keys_are_documented_and_shipped():
 # person setting notifications up reads what the chat id receives and what
 # protects the bot token. The wording must not promise more than the code:
 # `pi_process.stream_pi` strips the token from the CHILD ENVIRONMENT only
-# (`tests/test_bootstrap_runner.py::
+# (`tests/test_bootstrap_runner_prompt.py::
 # test_stream_pi_strips_the_telegram_token_from_the_child_env`) while the Pi
 # process runs as the Runner's user, and every "code merged" announcement goes
 # to the same `telegram_chat_id` (`notify._announce_merged_prs` ->

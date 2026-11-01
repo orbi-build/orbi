@@ -18,7 +18,8 @@ prepare, moved here verbatim with no behavior change.
 The scaffolding lives in `tests/fakes/bootstrap_delivery.py`. Cross-domain
 runner ticks (`process_issue`, `main`, milestone bookkeeping,
 reconciliation, failure reporting, the GitHub adapter and the tracker
-comments) stay in `test_bootstrap_runner.py`.
+comments) stay in the runner scene suites
+(`tests/test_bootstrap_runner_*.py`).
 """
 from orbi import config as config_domain
 from orbi import language

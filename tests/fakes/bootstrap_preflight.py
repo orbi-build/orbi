@@ -4,9 +4,9 @@ Moved verbatim out of `tests/test_bootstrap_runner.py` when the
 configuration loading and startup preflight tests moved to
 `tests/test_bootstrap_preflight.py`: the unit-drift deployment fixture, the
 recording preflight command, the config builders and the provider catalog
-fixtures those tests share. Single owner: the domain suite and the remaining
-`test_bootstrap_runner.py` scenes (the ticket-kind provider materialization)
-import them from here instead of keeping a copy of each.
+fixtures those tests share. Single owner: the domain suite and the ticket-kind
+scene (`tests/test_bootstrap_runner_tickets.py`: the provider
+materialization) import them from here instead of keeping a copy of each.
 """
 import dataclasses
 import json

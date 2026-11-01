@@ -11,7 +11,7 @@ body: the scene's own text first, then one blank line and the help line,
 exactly once. The other six scenes (claim scan, release, external PR, label
 repair, PR closed, ticket-only) are driven in their own test modules, where
 their environments already live: test_resume_pr.py,
-test_bootstrap_runner.py and test_fix_needed_loop.py.
+test_bootstrap_runner_failure_report.py and test_fix_needed_loop.py.
 """
 import pytest
 

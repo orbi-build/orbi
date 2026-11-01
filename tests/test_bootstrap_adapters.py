@@ -15,8 +15,8 @@ behavior change:
 The tests own no shared helper: each fakes the one `run_command` seam or
 asserts a parser directly, so there is no `tests/fakes/bootstrap_adapters.py`.
 Cross-domain runner ticks (`process_issue`, `main`, claim/milestone
-bookkeeping, reconciliation, failure reporting) stay in
-`test_bootstrap_runner.py`.
+bookkeeping, reconciliation, failure reporting) live in the runner scene
+suites (`tests/test_bootstrap_runner_*.py`).
 """
 import json
 import os
