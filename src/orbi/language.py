@@ -850,7 +850,6 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "failure.scene.last_activity": ("last activity", "最近活动"),
     "failure.scene.action": ("action", "动作"),
     "failure.scene.result": ("result", "结果"),
-    "failure.scene.legacy_correlation": ("legacy correlation", "旧版关联信息"),
     "failure.scene.local_worktree": (
         "local runner worktree", "本机 Runner 工作树",
     ),

@@ -223,9 +223,8 @@ EXPECTED_ISSUE_BODY = "\n".join([
     "- last activity: `-`",
     "- action: `-`",
     "- result: `-`",
-    f"- legacy correlation: `run={FAKE_RUN_ID} branch={FAKE_BRANCH} "
+    f"- correlation: `run={FAKE_RUN_ID} branch={FAKE_BRANCH} "
     "session=- phase=starting last_activity=-`",
-    f"- correlation: `run={FAKE_RUN_ID} branch={FAKE_BRANCH} session=-`",
     "- failure detail: `Orbi needs a fix: see the reason above`",
     "</details>",
 ])

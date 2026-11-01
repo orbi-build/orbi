@@ -335,7 +335,13 @@ def test_classified_failure_comment_follows_the_language():
     )
     assert "Orbi：需要修复" in zh
     assert "**原因：**" in zh
-    assert "run=abcdef12 branch=b session=s" in zh
+    # Issue #2057: the correlation row is rendered from the run facts, so
+    # the comment renderer no longer re-parses the localized field labels
+    # it has just written.
+    assert "run=abcdef12 branch=b session=s" not in zh
+    assert "- correlation：`run=x`" == language.text(
+        "zh", "failure.correlation_row", correlation="run=x",
+    )
 
 
 def test_problem_comments_end_with_the_community_help_line():
