@@ -1259,9 +1259,10 @@ def test_release_failure_comment_classifies_a_gate_wait_timeout_as_blocked():
     """The release comment's block is the one a status reader parses: a
     gate wait timeout must not claim `github_transient` / `requeue`."""
     from orbi import release_comments
+    from orbi.run_fields import RunFields
 
     body = release_comments.release_failure_comment_body(
-        "a1b2c3d4", "- issue: #99", 
+        "a1b2c3d4", RunFields(run_id="a1b2c3d4", priority="normal"),
         failure.ReleaseGateWaitTimeout(
             "release gate: waiting for CI on the release commit abc123 "
             "timed out after 7s",

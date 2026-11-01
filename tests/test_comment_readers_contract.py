@@ -7,6 +7,7 @@ import pytest
 from orbi import progress, scene
 from orbi.delivery_scene import RunContext
 from orbi.review_merge import merged_pr_comment_body
+from orbi.run_fields import RunFields
 from orbi.runner import (
     opened_pr_comment_body,
     started_pi_comment_body,
@@ -83,12 +84,19 @@ def _comments():
     return {
         "started": started_pi_comment_body(
             context,
-            "base_branch=main base_sha=abc123 repo_config=cfg "
-            "run_id=abc12345 priority=normal session=session-1", language_code="en",
+            RunFields(
+                run_id=RUN_ID, priority="normal", base_branch="main",
+                base_sha="abc123", repo_config="cfg",
+            ),
+            language_code="en",
         ),
         "progress": progress.progress_body(state),
         "opened": opened_pr_comment_body(
-            RUN_ID, "base_branch=main base_sha=abc123 run_id=abc12345",
+            RUN_ID,
+            RunFields(
+                run_id=RUN_ID, priority="normal", base_branch="main",
+                base_sha="abc123",
+            ),
             PR_URL, language_code="en",
         ),
         "merged milestone": _milestone(),

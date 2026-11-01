@@ -14,7 +14,8 @@ frozen module grows for the catalog text.
 from __future__ import annotations
 
 from orbi import failure, language
-from orbi.progress import field_block, run_info_fields
+from orbi.progress import field_block
+from orbi.run_fields import RunFields
 
 
 def _epic_audit(child_evidence: list[str], version: str | None,
@@ -55,7 +56,7 @@ def epic_audit_posted(comments: list[dict], child_evidence: list[str],
     )
 
 
-def release_success_comment_body(run_id: str, run_info: str,
+def release_success_comment_body(run_id: str, run_info: RunFields,
                                  release_url: str, tag: str,
                                  release_commit: str,
                                  scope_evidence: list[str],
@@ -73,9 +74,10 @@ def release_success_comment_body(run_id: str, run_info: str,
     run marker, release URL, version/tag/release commit, the
     per-item scope evidence, the gate evidence, the test evidence and
     the Milestone evidence (the Milestone whose title is the released
-    version is closed on the success path).
+    version is closed on the success path). `run_info` is the run's fields
+    as values (Issue #2055).
     """
-    info = run_info_fields(run_info)
+    info = run_info.as_fields()
     return "\n".join([
         field_block(
             run_id,
@@ -106,7 +108,7 @@ def release_success_comment_body(run_id: str, run_info: str,
     ])
 
 
-def release_failure_comment_body(run_id: str, run_info: str,
+def release_failure_comment_body(run_id: str, run_info: RunFields,
                                  error: BaseException,
                                  language_code: str,
                                  status_url: str | None = None,
@@ -124,7 +126,7 @@ def release_failure_comment_body(run_id: str, run_info: str,
     body = field_block(
         run_id,
         language.text(language_code, "release.failed_headline"),
-        {**run_info_fields(run_info), "failure": detail},
+        {**run_info.as_fields(), "failure": detail},
         language_code=language_code, status_url=status_url,
         issue=issue, title=title,
     )

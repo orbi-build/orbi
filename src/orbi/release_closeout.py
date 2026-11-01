@@ -49,6 +49,7 @@ from orbi.release_git import (
     release_view,
     run_git_write,
 )
+from orbi.run_fields import RunFields
 
 
 def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
@@ -334,7 +335,8 @@ def close_release_milestone(repo: str, version: str, *, run_id: str | None = Non
 
 
 def release_success_closeout(
-        *, repo: str, number: int, run_id: str, run_info: str, tag: str,
+        *, repo: str, number: int, run_id: str, run_info: RunFields,
+        tag: str,
         release_commit: str, release_url: str, scope_evidence: list[str],
         gate_evidence: list[str], test_evidence: str, ready_label: str,
         language_code: str, status_url: str | None, title: str,
@@ -409,7 +411,7 @@ def release_success_closeout(
 
 
 def release_failure_closeout(
-        *, repo: str, number: int, run_id: str, run_info: str,
+        *, repo: str, number: int, run_id: str, run_info: RunFields,
         error: Exception, ready_label: str, language_code: str,
         status_url: str | None, title: str,
 ) -> None:
