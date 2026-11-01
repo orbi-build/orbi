@@ -678,7 +678,7 @@ def _route_external_pr_ticket(issue: dict, repo: str, *,
 def _recover_missing_pr_scene(
     issue: dict, repo: str, repo_dir: Path, *,
     language_code: str, status_url: str | None = None,
-) -> dict | None:
+) -> run_state.ResumeScene | None:
     """Retry a lost opened-PR scene from the durable local run state.
 
     The re-posted scene comment is a runner-owned opened-PR comment, so
@@ -714,8 +714,10 @@ def _recover_missing_pr_scene(
         comment_issue(number, repo=repo, body=body)
         found = run_state.parse_pr_comment(body)
         if found is not None:
-            found["scene_at"] = None
-        return found
+            # A re-posted comment was never read back from GitHub, so it
+            # carries no `createdAt` scene stamp.
+            return run_state.ResumeScene(parsed=found, scene_at=None)
+        return None
     except Exception:
         LOGGER.warning(
             "issue=%s missing PR scene retry failed", number, exc_info=True,
@@ -2886,7 +2888,7 @@ def main(argv: list[str] | None = None) -> int:
             repo_policy = load_repo_policy(config, source_repo)
         except RepoConfigError as exc:
             run_id = (
-                scene["run_id"] if scene is not None
+                scene.parsed.run_id if scene is not None
                 else (current_run_id() or new_run_id())
             )
             event(
@@ -2920,18 +2922,18 @@ def main(argv: list[str] | None = None) -> int:
             # same session, so there is no cold-start fixer to run
             # here (a stranded `ai-pr-opened` delivery or a dead
             # runner is reviewed the same way).
-            set_run_id(scene["run_id"])
+            set_run_id(scene.parsed.run_id)
             # The resumed delivery is in flight: bind the stop scene
             # with the same derived branch/worktree the
             # delivery wait uses (never read from a comment).
             set_active_run(RunContext(
-                run_id=scene["run_id"], issue=int(issue["number"]),
+                run_id=scene.parsed.run_id, issue=int(issue["number"]),
                 branch=task_branch(
-                    source_repo, int(issue["number"]), scene["run_id"],
+                    source_repo, int(issue["number"]), scene.parsed.run_id,
                 ),
                 worktree=worktree_path(
                     config.repo_dir, source_repo,
-                    int(issue["number"]), scene["run_id"],
+                    int(issue["number"]), scene.parsed.run_id,
                 ),
                 source_repo=source_repo,
             ), issue["title"])
@@ -2952,7 +2954,7 @@ def main(argv: list[str] | None = None) -> int:
                 # scene condition, not a failed Runner tick.
                 event(
                     "resume_pr_handled", level=logging.ERROR,
-                    issue=issue["number"], scene_pr=scene["pr_url"],
+                    issue=issue["number"], scene_pr=scene.parsed.pr_url,
                     reason=exc,
                 )
                 return 0
@@ -2965,7 +2967,7 @@ def main(argv: list[str] | None = None) -> int:
                 # reporting failures must still propagate.
                 event(
                     "resume_pr_verification_failed", level=logging.ERROR,
-                    issue=issue["number"], scene_pr=scene["pr_url"],
+                    issue=issue["number"], scene_pr=scene.parsed.pr_url,
                     reason=exc,
                 )
                 return 0
@@ -2989,7 +2991,7 @@ def main(argv: list[str] | None = None) -> int:
         # `Fixes #N` for it. The resumed delivery derives the scene from
         # its trusted comment, which carries the external marker for an
         # external takeover.
-        external_takeover = bool(scene.get("external"))
+        external_takeover = bool(scene.parsed.external)
         delivery_step(
             pr_url, issue, config, source_repo,
             external_takeover=external_takeover,

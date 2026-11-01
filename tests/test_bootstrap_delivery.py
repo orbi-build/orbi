@@ -45,7 +45,7 @@ import orbi.run_state as run_state
 import orbi.gitops as gitops
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
-from orbi import progress
+from orbi import progress, scene
 from tests.fakes.gitops import remote_head_answer
 import orbi.journal as journal
 from seam import resume_deps, seam
@@ -3362,16 +3362,16 @@ def test_opened_pr_comment_round_trips_the_external_flag():
         "https://github.com/xqliu/orbi/pull/592", external=True, language_code="en",
     )
     scene = run_state.parse_pr_comment(body)
-    assert scene["pr_url"] == "https://github.com/xqliu/orbi/pull/592"
-    assert scene["run_id"] == "a1b2c3d4"
-    assert bool(scene["external"]) is True
+    assert scene.pr_url == "https://github.com/xqliu/orbi/pull/592"
+    assert scene.run_id == "a1b2c3d4"
+    assert bool(scene.external) is True
 
     own = run_state.parse_pr_comment(runner.opened_pr_comment_body(
         "a1b2c3d4",
         _run_fields(),
         "https://github.com/xqliu/orbi/pull/40", language_code="en",
     ))
-    assert bool(own["external"]) is False
+    assert bool(own.external) is False
 
 
 def test_verify_pr_queries_base_head_and_accepts_matching_pr(
@@ -3949,11 +3949,12 @@ def test_delivery_step_passes_p0_priority_to_the_review(
     # (Issue #1613: the tests field comes from CI, never a local log).
     assert review_calls == [{
         "title": "p0 task", "priority": "p0",
-        "scene": {
-            "run_id": "a1b2c3d4", "base_branch": "main",
-            "base_sha": "abc123def456", "pr_url": PR_URL,
-            "external": "", "review_round": 0, "scene_at": None,
-        },
+        "scene": run_state.ResumeScene(parsed=scene.Scene(
+            run_id="a1b2c3d4", base_branch="main",
+            base_sha="abc123def456", pr_url=PR_URL,
+        )),
+        # The round-scoped record the failure report reads (Issue #2053).
+        "report": review_merge.RoundReport(),
         "checks": [],
         "merge_only": True,
     }]

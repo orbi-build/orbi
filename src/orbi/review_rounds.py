@@ -14,6 +14,10 @@ its prose: a `failure` comment that happens to contain a scene consumes
 no round. `review_round_comment_body` writes the canonical kind, so the
 writer and the readers share one definition.
 
+The scene block a round comment carries, and the block a failure comment
+persists, are built here too: both are `dataclasses.replace` views of the
+one recovered `Scene` (Issue #2053).
+
 It also owns the ONE decision of which round a PR is effectively on
 (Issue #1779): the scene's completed count with the human-recovery
 budget reset applied. The review loop's budget and every failure report
@@ -31,6 +35,7 @@ those helpers.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import re
@@ -54,6 +59,71 @@ from orbi.progress import run_marker
 # spend before the remaining findings need a human decision. Living here
 # keeps the budget and the reported round one value (Issue #1779).
 MAX_REVIEW_ROUNDS = 5
+
+
+def round_scene_block(resumed: run_state.ResumeScene, pr_url: str,
+                      round: int, *, base_advance_round: int | None = None,
+                      verdict_head_unknown_round: int | None = None) -> str:
+    """The updated scene block a round carries to the next resume.
+
+    The round comment is the budget's write path: embedding the scene with
+    `review_round=round` makes THAT comment the latest scene, so the next
+    tick's `resume_scene` reads the advanced count — GitHub stays the only
+    state store. The recovered `Scene` is the input and `replace` starts
+    from it, so every counter it carries — zero included — reaches the
+    block unchanged (Issue #2053).
+    """
+    changes = {
+        name: value for name, value in (
+            ("base_advance_round", base_advance_round),
+            ("verdict_head_unknown_round", verdict_head_unknown_round),
+        ) if value is not None
+    }
+    return scene.render(dataclasses.replace(
+        resumed.parsed, pr_url=pr_url, review_round=round, **changes,
+    ))
+
+
+def failure_scene_block(
+    recovered: run_state.ResumeScene | None, pr_url: str, report: RoundReport,
+) -> str | None:
+    """The failure comment's scene block, or None when the counter is 0.
+
+    A non-zero unknown-verdict-head counter must reach the next tick, and
+    the failure comment's scene block is its only record — the counter
+    the tick bumped if it bumped one, else the one the recovered scene
+    already carried (the pre-#2053 block: identical input, identical
+    block). A scene whose counter is 0 writes no block, so a failure that
+    changes nothing never re-stamps the scene comment.
+    """
+    if recovered is None:
+        return None
+    unknown_round = (
+        report.verdict_head_unknown_round
+        or recovered.parsed.verdict_head_unknown_round
+    )
+    if not unknown_round:
+        return None
+    return round_scene_block(
+        recovered, pr_url, recovered.parsed.review_round,
+        verdict_head_unknown_round=unknown_round,
+    )
+
+
+@dataclasses.dataclass
+class RoundReport:
+    """The round-scoped values a failure report reads from inside a round.
+
+    `review_round` is the round in progress (None until the preflight
+    opens it) and `verdict_head_unknown_round` the refreeze's
+    unknown-verdict-head counter. Both describe what THIS round did, not
+    what the next resume must recover, so they travel as their own record
+    beside the recovered `Scene` — which stays one frozen value
+    (Issue #2053).
+    """
+
+    review_round: int | None = None
+    verdict_head_unknown_round: int = 0
 
 
 def _shorten_review_shas(text: str) -> str:
@@ -235,7 +305,7 @@ def human_review_recovery_at(number: int, repo: str) -> str | None:
     return recovery_at if isinstance(recovery_at, str) else None
 
 
-def effective_review_round(resume_scene: dict, *, number: int,
+def effective_review_round(resume: run_state.ResumeScene, *, number: int,
                            repo: str) -> int:
     """The completed review rounds this PR effectively has (Issue #1779).
 
@@ -254,11 +324,11 @@ def effective_review_round(resume_scene: dict, *, number: int,
     human can undo. `current_review_round` — the report reader — is the
     one place that tolerates the failed read.
     """
-    rounds = int(resume_scene["review_round"])
+    rounds = resume.parsed.review_round
     if rounds < MAX_REVIEW_ROUNDS:
         return rounds
     recovery_at = human_review_recovery_at(number, repo)
-    scene_at = resume_scene.get("scene_at")
+    scene_at = resume.scene_at
     if recovery_at is None:
         return rounds
     if isinstance(scene_at, str) and recovery_at <= scene_at:
@@ -289,13 +359,13 @@ def current_review_round(comments: list[dict], *, number: int,
     (`review_recovery_read_failed`) and the scene's own count stands.
     """
     try:
-        resume_scene = run_state.resume_scene(comments, repo=repo)
+        recovered = run_state.resume_scene(comments, repo=repo)
     except (scene.SceneError, scene.SceneMissingError):
         return 0
-    completed = int(resume_scene["review_round"])
+    completed = recovered.parsed.review_round
     try:
         completed = effective_review_round(
-            resume_scene, number=number, repo=repo,
+            recovered, number=number, repo=repo,
         )
     except Exception as exc:  # a report is not a second failure (Issue #79)
         event(

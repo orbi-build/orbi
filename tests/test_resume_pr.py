@@ -119,8 +119,8 @@ def test_missing_pr_scene_recovery_republishes_from_run_state(monkeypatch):
         seam, "comment_issue", lambda number, **kwargs: posted.append(kwargs["body"]),
     )
     found = runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo"), language_code="en")
-    assert found["run_id"] == FAKE_RUN_ID
-    assert found["pr_url"] == FAKE_PR_URL
+    assert found.parsed.run_id == FAKE_RUN_ID
+    assert found.parsed.pr_url == FAKE_PR_URL
     assert posted and "Orbi opened PR:" in posted[0]
     # Issue #1660: the re-posted scene is a Runner-owned opened-PR
     # comment, so its headline follows the bound message language; the
@@ -129,7 +129,7 @@ def test_missing_pr_scene_recovery_republishes_from_run_state(monkeypatch):
     found = runner._recover_missing_pr_scene(
         issue, "owner/repo", Path("/tmp/repo"), language_code="zh",
     )
-    assert found is not None and found["pr_url"] == FAKE_PR_URL
+    assert found is not None and found.parsed.pr_url == FAKE_PR_URL
     assert posted and "Orbi 已开启 PR：" in posted[0]
     parsed = scene_mod.parse(posted[0])
     assert parsed is not None and parsed.pr_url == FAKE_PR_URL
@@ -246,11 +246,14 @@ def test_missing_pr_scene_recovery_clears_scene_timestamp(monkeypatch):
         "baseRefName": "main", "baseRefOid": "a" * 40, "url": FAKE_PR_URL,
     })
     monkeypatch.setattr(seam, "comment_issue", lambda *_args, **_kwargs: None)
-    recovered = {"run_id": FAKE_RUN_ID, "scene_at": "old"}
-    monkeypatch.setitem(run_state.__dict__, "parse_pr_comment", lambda _body: recovered)
+    monkeypatch.setitem(
+        run_state.__dict__, "parse_pr_comment", lambda _body: scene_for(),
+    )
+    # The re-posted comment was never read back from GitHub, so the
+    # recovered scene carries no `createdAt` stamp.
     assert runner._recover_missing_pr_scene(
         {"number": 9}, "owner/repo", Path("/tmp/repo"), language_code="en",
-    ) == {"run_id": FAKE_RUN_ID, "scene_at": None}
+    ) == run_state.ResumeScene(parsed=scene_for(), scene_at=None)
 
 
 def test_pick_missing_pr_scene_recovers_or_defers_or_blocks(monkeypatch, tmp_path):
@@ -263,7 +266,7 @@ def test_pick_missing_pr_scene_recovers_or_defers_or_blocks(monkeypatch, tmp_pat
     monkeypatch.setattr(seam, "apply_label_patch", lambda *args, **kwargs: None)
     monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None)
     # Issue #1473: the recovered scene carries its PR URL (the real
-    # recovery projects `parse_pr_comment`, which always sets it) and
+    # recovery parses the comment's scene, which always carries it) and
     # the scan's CI read is answered with a completed/success rollup,
     # so the RESUME_REVIEW route runs its normal branch instead of the
     # read-failure fallback.
@@ -276,12 +279,12 @@ def test_pick_missing_pr_scene_recovers_or_defers_or_blocks(monkeypatch, tmp_pat
     )
     monkeypatch.setitem(
         runner.__dict__, "_recover_missing_pr_scene",
-        lambda *args, **kwargs: {"run_id": FAKE_RUN_ID, "pr_url": FAKE_PR_URL},
+        lambda *args, **kwargs: make_resume_scene(),
     )
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1, tmp_path,
         hooks=resume_deps(), language_code="en",
-    )[1]["run_id"] == FAKE_RUN_ID
+    )[1].parsed.run_id == FAKE_RUN_ID
     monkeypatch.setitem(runner.__dict__, "_recover_missing_pr_scene", lambda *args, **k: None)
     monkeypatch.setitem(runner.__dict__, "_has_recoverable_pr_scene", lambda *args: True)
     assert claim.pick_resumable_delivery(
@@ -315,24 +318,25 @@ def opened_pr_comment(run_id=FAKE_RUN_ID,
     )
 
 
-def scene_for() -> dict:
-    # The scene recovered from the trusted `Orbi opened PR:`
-    # comment. Branch and worktree are NOT part of it: the runner
-    # derives them from its own config, the Issue number and the run id.
-    # `external` is the Issue #608 external-takeover marker — empty for
-    # a Runner-owned PR, `true` for a contributor-PR takeover.
-    # `review_round` travels with the scene (Issue #788): the round
-    # budget's counter, 0 when the PR opens. (`resume_scene` additionally
-    # stamps `scene_at` — the scene comment's `createdAt` — which this
-    # parse-level projection does not carry.)
-    return {
+def scene_for(**overrides) -> scene_mod.Scene:
+    """The value `scene.parse` returns for the trusted opened-PR comment.
+
+    Branch and worktree are NOT part of it: the runner derives them from
+    its own config, the Issue number and the run id. `external` is the
+    Issue #608 external-takeover marker — empty for a Runner-owned PR,
+    `true` for a contributor-PR takeover. `review_round` travels with
+    the scene (Issue #788): the round budget's counter, 0 when the PR
+    opens. `resume_scene` wraps it in a `ResumeScene`, which adds the
+    scene comment's `createdAt` (`scene_at`) beside it.
+    """
+    fields = {
         "run_id": FAKE_RUN_ID,
         "base_branch": "main",
         "base_sha": "abc123def456",
         "pr_url": FAKE_PR_URL,
-        "external": "",
-        "review_round": 0,
     }
+    fields.update(overrides)
+    return scene_mod.Scene(**fields)
 
 
 # ---------------------------------------------------------------- parse
@@ -396,7 +400,7 @@ def test_parse_pr_comment_preserves_unknown_head_counter():
             base_sha="abc123def456", pr_url=FAKE_PR_URL,
         )), 1)[0] + scene_mod.render(record)
     )
-    assert parsed["verdict_head_unknown_round"] == 2
+    assert parsed.verdict_head_unknown_round == 2
 
 
 def test_parse_pr_comment_returns_scene_for_legacy_opened_pr_comment():
@@ -453,9 +457,9 @@ def test_parse_pr_comment_ignores_legacy_branch_and_worktree_fields():
         ")", f" branch={FAKE_BRANCH} worktree={FAKE_WORKTREE})", 1,
     )
     scene = run_state.parse_pr_comment(body)
-    assert scene["run_id"] == FAKE_RUN_ID
-    assert "branch" not in scene
-    assert "worktree" not in scene
+    # Equality with the known scene proves the legacy branch/worktree
+    # fields are not part of it.
+    assert scene == scene_for()
 
 
 def test_parse_pr_comment_returns_none_for_started_comment():
@@ -526,8 +530,8 @@ def test_resume_scene_returns_latest_trusted_opened_pr_scene():
         comment(opened_pr_comment(base_sha="newsha123456")),
     ]
     scene = run_state.resume_scene(comments, repo="owner/repo")
-    assert scene["base_sha"] == "newsha123456"
-    assert scene["run_id"] == FAKE_RUN_ID
+    assert scene.parsed.base_sha == "newsha123456"
+    assert scene.parsed.run_id == FAKE_RUN_ID
 
 
 def test_resume_scene_fails_fast_when_no_opened_pr_comment_exists():
@@ -543,7 +547,29 @@ def test_resume_scene_skips_non_dict_comments():
         "not a dict",
     ]
     scene = run_state.resume_scene(comments, repo="owner/repo")
-    assert scene["run_id"] == FAKE_RUN_ID
+    assert scene.parsed.run_id == FAKE_RUN_ID
+
+
+def test_resume_scene_is_one_parsed_scene_value_end_to_end():
+    """Issue #2053: the recovered scene IS the value `scene.parse`
+    returns — one frozen `Scene` carrying every counter, never a dict
+    projection that drops a zero one. The comment's `createdAt` (the
+    #483 budget reset's input) travels beside it, not as an extra key on
+    the scene."""
+    body = scene_mod.render(scene_mod.Scene(
+        run_id=FAKE_RUN_ID, base_branch="main", base_sha="abc123def456",
+        pr_url=FAKE_PR_URL, verdict_head_unknown_round=2,
+    ))
+    comments = [{
+        **comment(body), "createdAt": "2026-01-01T00:00:00Z",
+    }]
+    recovered = run_state.resume_scene(comments, repo="owner/repo")
+    assert isinstance(recovered, run_state.ResumeScene)
+    assert recovered.parsed == scene_mod.Scene(
+        run_id=FAKE_RUN_ID, base_branch="main", base_sha="abc123def456",
+        pr_url=FAKE_PR_URL, verdict_head_unknown_round=2,
+    )
+    assert recovered.scene_at == "2026-01-01T00:00:00Z"
 
 
 def test_authenticated_github_login_uses_active_gh_account(monkeypatch):
@@ -648,7 +674,7 @@ def test_resume_scene_accepts_the_authenticated_runner_app_bot(monkeypatch):
 
     monkeypatch.setattr(seam, "run_command", gh_status)
     scene = run_state.resume_scene(comments, repo="owner/repo")
-    assert scene["run_id"] == FAKE_RUN_ID
+    assert scene.parsed.run_id == FAKE_RUN_ID
 
 
 def test_resume_scene_rejects_another_app_bot_even_with_the_marker(monkeypatch):
@@ -709,7 +735,7 @@ def test_resume_scene_accepts_graphql_shaped_runner_app_bot(monkeypatch):
         lambda: "orbi-dev-test[bot]",
     )
     scene = run_state.resume_scene(comments, repo="owner/repo")
-    assert scene["run_id"] == FAKE_RUN_ID
+    assert scene.parsed.run_id == FAKE_RUN_ID
 
 
 @pytest.mark.parametrize("author", [
@@ -755,7 +781,7 @@ def test_resume_scene_ignores_a_non_writer_comment_even_when_newest():
                 author="drive-by"),
     ]
     scene = run_state.resume_scene(comments, repo="owner/repo")
-    assert scene["base_sha"] == "trusted123456"
+    assert scene.parsed.base_sha == "trusted123456"
 
 
 def test_resume_scene_ignores_a_comment_without_a_readable_author():
@@ -791,14 +817,14 @@ def test_resume_scene_trusts_exactly_the_write_permissions(
         return
     assert run_state.resume_scene(
         comments, repo="owner/repo",
-    )["run_id"] == FAKE_RUN_ID
+    ).parsed.run_id == FAKE_RUN_ID
 
 
 def test_resume_scene_skips_non_dict_trusted_comment():
     # A non-dict entry cannot carry an association, so it is skipped.
     comments = ["not a dict", comment(opened_pr_comment())]
     scene = run_state.resume_scene(comments, repo="owner/repo")
-    assert scene["run_id"] == FAKE_RUN_ID
+    assert scene.parsed.run_id == FAKE_RUN_ID
 
 
 def test_issue_comments_returns_comments_from_production_shape(monkeypatch):
@@ -836,7 +862,7 @@ def test_issue_comments_rejects_payload_without_comments_array(monkeypatch):
 def test_parse_pr_comment_ignores_field_part_without_key():
     body = opened_pr_comment().replace(")", " =keyless)", 1)
     scene = run_state.parse_pr_comment(body)
-    assert scene["run_id"] == FAKE_RUN_ID
+    assert scene.run_id == FAKE_RUN_ID
 
 
 # ---------------------------------------------------------------- pick
@@ -942,8 +968,8 @@ def test_pick_resumable_delivery_returns_issue_with_scene(
         hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 9
-    assert scene["run_id"] == FAKE_RUN_ID
-    assert scene["pr_url"] == FAKE_PR_URL
+    assert scene.parsed.run_id == FAKE_RUN_ID
+    assert scene.parsed.pr_url == FAKE_PR_URL
     # Oldest-first list (Issue #1734), then the full comment history of
     # that Issue.
     # Both reviewable opened-PR states are scanned (Issue #70): `label:a,b`
@@ -1043,8 +1069,8 @@ def test_pick_resumable_delivery_resumes_delivery_that_carries_in_progress_label
         hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 9
-    assert scene["run_id"] == FAKE_RUN_ID
-    assert scene["pr_url"] == FAKE_PR_URL
+    assert scene.parsed.run_id == FAKE_RUN_ID
+    assert scene.parsed.pr_url == FAKE_PR_URL
 
 
 def test_pick_resumable_delivery_returns_none_when_queue_empty(
@@ -1106,8 +1132,8 @@ def test_pick_resumable_delivery_reviews_free_pr_while_other_in_flight(
         hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 9
-    assert scene["run_id"] == FAKE_RUN_ID
-    assert scene["pr_url"] == FAKE_PR_URL
+    assert scene.parsed.run_id == FAKE_RUN_ID
+    assert scene.parsed.pr_url == FAKE_PR_URL
 
 
 def test_pick_resumable_delivery_skips_held_and_reviews_next_free(
@@ -1157,7 +1183,7 @@ def test_pick_resumable_delivery_skips_held_and_reviews_next_free(
         hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 10
-    assert scene["run_id"] == "b2c3d4e5"
+    assert scene.parsed.run_id == "b2c3d4e5"
     # Only the FREE candidate's comments were read; the held one was
     # skipped before any candidate read.
     assert views == ["10"]
@@ -1240,7 +1266,7 @@ def test_pick_resumable_delivery_takes_the_oldest_candidates_first(
     )
     assert pages == [[2527, 2542, 2543, 2551, 2555]]
     assert issue["number"] == 2527
-    assert scene["run_id"] == f"{2527:08x}"
+    assert scene.parsed.run_id == f"{2527:08x}"
     # The reviewed candidate is the only one whose comments were read.
     assert reads == [2527]
 
@@ -1259,7 +1285,7 @@ def test_pick_resumable_delivery_skips_a_ci_pending_oldest_candidate(
     )
     assert pages == [[2527, 2542, 2543, 2551, 2555]]
     assert issue["number"] == 2542
-    assert scene["run_id"] == f"{2542:08x}"
+    assert scene.parsed.run_id == f"{2542:08x}"
     assert reads == [2527, 2542]
 
 
@@ -1284,7 +1310,7 @@ def test_pick_resumable_delivery_reaches_a_free_candidate_behind_skips(
     )
     assert pages == [candidates]
     assert issue["number"] == 2603
-    assert scene["run_id"] == f"{2603:08x}"
+    assert scene.parsed.run_id == f"{2603:08x}"
     # #1 is held: its comments are never read. #2/#3 are read only to be
     # skipped (CI pending) — the free #4 is the candidate returned.
     assert reads == [2601, 2602, 2603]
@@ -1347,7 +1373,7 @@ def test_tick_reviews_a_pr_before_an_older_awaiting_merge_delivery(
     _add_delivery(fake, 2, PR_OPENED_LABEL)
     repo, issue, scene = _tick(monkeypatch, tmp_path)
     assert (repo, issue["number"]) == ("owner/repo", 2)
-    assert scene["run_id"] == f"{2:08x}"
+    assert scene.parsed.run_id == f"{2:08x}"
 
 
 def test_tick_claims_a_ready_issue_before_an_awaiting_merge_delivery(
@@ -1396,7 +1422,7 @@ def test_tick_reviews_a_pr_though_the_awaiting_merge_page_is_full(
     _add_delivery(fake, 3, PR_OPENED_LABEL)
     repo, issue, scene = _tick(monkeypatch, tmp_path)
     assert (repo, issue["number"]) == ("owner/repo", 3)
-    assert scene["run_id"] == f"{3:08x}"
+    assert scene.parsed.run_id == f"{3:08x}"
 
 
 def test_tick_rechecks_a_lone_awaiting_merge_delivery_on_an_idle_tick(
@@ -1411,8 +1437,8 @@ def test_tick_rechecks_a_lone_awaiting_merge_delivery_on_an_idle_tick(
     _add_delivery(fake, 1, AWAITING_MERGE_LABEL)
     repo, issue, scene = _tick(monkeypatch, tmp_path)
     assert (repo, issue["number"]) == ("owner/repo", 1)
-    assert scene["run_id"] == f"{1:08x}"
-    assert scene["pr_url"] == "https://github.com/owner/repo/pull/1"
+    assert scene.parsed.run_id == f"{1:08x}"
+    assert scene.parsed.pr_url == "https://github.com/owner/repo/pull/1"
 
 
 def test_tick_keeps_the_oldest_first_review_order(monkeypatch, tmp_path):
@@ -1424,7 +1450,7 @@ def test_tick_keeps_the_oldest_first_review_order(monkeypatch, tmp_path):
     _add_delivery(fake, 7, PR_OPENED_LABEL)
     repo, issue, scene = _tick(monkeypatch, tmp_path)
     assert (repo, issue["number"]) == ("owner/repo", 2)
-    assert scene["run_id"] == f"{2:08x}"
+    assert scene.parsed.run_id == f"{2:08x}"
 
 
 def test_pick_awaiting_merge_delivery_queries_only_the_waiting_state(
@@ -1475,7 +1501,7 @@ def test_pick_resumable_delivery_ignores_holds_of_other_repos(
         hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 9
-    assert scene["run_id"] == FAKE_RUN_ID
+    assert scene.parsed.run_id == FAKE_RUN_ID
 
 
 @pytest.mark.parametrize("language_code", ["en", "zh"])
@@ -1688,7 +1714,7 @@ def test_pick_resumable_delivery_routes_corrupted_marker_and_next_candidate(
     assert found is not None
     issue, scene = found
     assert issue["number"] == 10
-    assert scene["run_id"] == "c3d4e5f6"
+    assert scene.parsed.run_id == "c3d4e5f6"
     # The corrupted marker ticket was routed to the takeover queue, not
     # blocked.
     assert any(
@@ -1729,7 +1755,7 @@ def test_pick_resumable_delivery_resumes_from_the_v1_scene_block(
     assert issue["number"] == 9
     # The scan's scene carries the `scene_at` stamp (the fake comment
     # payload has no createdAt, so it is None here).
-    assert scene == {**scene_for(), "scene_at": None}
+    assert scene == make_resume_scene()
 
 
 def test_pick_resumable_delivery_blocks_on_a_corrupted_v1_block(
@@ -2215,7 +2241,7 @@ def test_pick_resumable_delivery_skips_pending_and_returns_next_candidate(
         hooks=resume_deps(), language_code="en",
     )
     assert issue["number"] == 10
-    assert scene["run_id"] == "b2c3d4e5"
+    assert scene.parsed.run_id == "b2c3d4e5"
 
 
 def test_pick_resumable_delivery_returns_completed_success_candidate(
@@ -2340,7 +2366,7 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
     the raw comment string (a comment must not steer the runner into
     the wrong PR, Issue #45)."""
     issue = {"number": 9, "title": "ship", "body": ""}
-    scene = scene_for()
+    scene = make_resume_scene()
     verified_url = "https://github.com/owner/repo/pull/98"
     processed = []
     waits = []
@@ -2378,7 +2404,7 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
     assert len(waits) == 1
     assert waits[0][0][:2] == (verified_url, issue)
     # The comment string itself never reached the wait.
-    assert waits[0][0][0] != scene["pr_url"]
+    assert waits[0][0][0] != scene.parsed.pr_url
     # The resumed review runs under the scene's run id.
     assert runner.current_run_id() == FAKE_RUN_ID
 
@@ -2568,13 +2594,14 @@ def make_resume_config(tmp_path, *, message_language: str = "en") -> dict:
     )
 
 
-def make_resume_scene(pr_url: str = FAKE_PR_URL) -> dict:
-    return {
-        "run_id": FAKE_RUN_ID,
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "pr_url": pr_url,
-    }
+def make_resume_scene(
+    pr_url: str = FAKE_PR_URL, *, scene_at: str | None = None, **overrides,
+) -> run_state.ResumeScene:
+    """The recovered scene the resume path receives (Issue #2053: one
+    `Scene` value plus the comment's `createdAt`)."""
+    return run_state.ResumeScene(
+        parsed=scene_for(pr_url=pr_url, **overrides), scene_at=scene_at,
+    )
 
 
 def make_resume_issue() -> dict:
@@ -3039,8 +3066,9 @@ def test_verify_resumed_pr_external_scene_reads_branch_from_worktree(
     monkeypatch.setattr(pr_verification, "verify_pr", fake_verify_pr)
     monkeypatch.setattr(seam, "edit_issue", fake_edit)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    scene = make_resume_scene("https://github.com/xqliu/orbi/pull/592")
-    scene["external"] = "true"
+    scene = make_resume_scene(
+        "https://github.com/xqliu/orbi/pull/592", external="true",
+    )
     url = resume_verification.verify_resumed_pr(
         scene, make_resume_issue(),
         make_resume_config(tmp_path), "owner/repo",
@@ -3215,8 +3243,7 @@ def test_verify_resumed_pr_external_scene_recreates_worktree_from_scene_pr(
         return fake_gh(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    scene = make_resume_scene(external_url)
-    scene["external"] = "true"
+    scene = make_resume_scene(external_url, external="true")
     url = resume_verification.verify_resumed_pr(
         scene, make_resume_issue(),
         make_resume_config(tmp_path), "owner/repo",
@@ -3504,11 +3531,12 @@ def _closed_scene_gh(monkeypatch, *, issue_close_fails: bool = False):
     return fake
 
 
-def _closed_scene(external: bool, pr_url: str = FAKE_PR_URL) -> dict:
-    scene = make_resume_scene(pr_url=pr_url)
-    if external:
-        scene["external"] = "true"
-    return scene
+def _closed_scene(
+    external: bool, pr_url: str = FAKE_PR_URL,
+) -> run_state.ResumeScene:
+    return make_resume_scene(
+        pr_url=pr_url, external="true" if external else "",
+    )
 
 
 def test_verify_pr_zero_open_prs_raises_typed_closed_scene_error(
@@ -3801,8 +3829,7 @@ def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
     monkeypatch.setattr(seam, "run_command", counting)
     bind_run_id(FAKE_RUN_ID)
     caplog.set_level("INFO")
-    scene = make_resume_scene()
-    scene["base_branch"] = "develop"
+    scene = make_resume_scene(base_branch="develop")
     with pytest.raises(
         runner.UnrecoverableDeliveryError, match="differs from configured",
     ):
@@ -4036,8 +4063,7 @@ def test_verify_resumed_pr_resume_under_a_new_run_id_continues(
     runner.worktree_path(
         tmp_path, "owner/repo", 9, RESUME_RUN_ID,
     ).mkdir(parents=True)
-    scene = make_resume_scene()
-    scene["run_id"] = RESUME_RUN_ID
+    scene = make_resume_scene(run_id=RESUME_RUN_ID)
     bind_run_id(RESUME_RUN_ID)
     url = resume_verification.verify_resumed_pr(
         scene, make_resume_issue(), make_resume_config(tmp_path),

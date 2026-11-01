@@ -26,7 +26,7 @@ import orbi.milestone as milestone
 import orbi.release as release
 from seam import seam
 import orbi.journal as journal
-from orbi import language, pi_process, progress, scene
+from orbi import language, pi_process, progress, run_state, scene
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
 from tests.fakes.progress import freeze_report_time, patched_comment_bodies
@@ -1838,11 +1838,10 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
         config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main", base_sha="b1", run_id="a1b2c3d4"),
         "xqliu/orbi", 18, title="Publish progress",
         priority="normal",
-        scene={
-            "run_id": "a1b2c3d4", "base_branch": "main", "base_sha": "b1",
-            "pr_url": "u", "external": "", "review_round": 0,
-            "scene_at": None,
-        },
+        scene=run_state.ResumeScene(parsed=scene.Scene(
+            run_id="a1b2c3d4", base_branch="main", base_sha="b1",
+            pr_url="u", external="", review_round=0,
+        )),
     )
     return merged, edits, calls, posted
 

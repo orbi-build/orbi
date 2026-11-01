@@ -11,6 +11,7 @@ Extracted unchanged from the review/merge module into this shared module
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -144,8 +145,25 @@ def delivery_commit_guard(worktree: Path, *, local_head: str,
         )
 
 
-def parse_pr_comment(body: str) -> dict | None:
-    """Parse one `Orbi opened PR:` comment into a resume scene.
+@dataclasses.dataclass(frozen=True)
+class ResumeScene:
+    """The scene recovered from a trusted comment, plus when it was written.
+
+    `parsed` is exactly what `scene.parse` returned: one frozen `Scene`
+    value travels through the resume, the review round and the failure
+    report, so no reader has to re-supply a default a projection dropped
+    (Issue #2053). `scene_at` is the scene comment's `createdAt`, which
+    the #483 human-recovery budget reset compares against the recovery
+    transition time — a fact of the COMMENT, never part of the scene
+    block it carries.
+    """
+
+    parsed: scene.Scene
+    scene_at: str | None = None
+
+
+def parse_pr_comment(body: str) -> scene.Scene | None:
+    """Parse one `Orbi opened PR:` comment into its scene.
 
     The v1 scene block (orbi.scene) is the machine protocol; the
     human-readable text is the legacy fallback kept for one transition
@@ -156,33 +174,10 @@ def parse_pr_comment(body: str) -> dict | None:
     derives them from its own config, the Issue number and the run id,
     so a comment can never name an arbitrary local path.
     """
-    found = scene.parse(body)
-    if found is None:
-        return None
-    return {
-        "run_id": found.run_id,
-        "base_branch": found.base_branch,
-        "base_sha": found.base_sha,
-        "pr_url": found.pr_url,
-        "external": found.external,
-        # The review-round counter travels with the scene —
-        # the round comments carry the updated scene block, so the next
-        # resume reads the advanced count instead of re-counting text.
-        "review_round": found.review_round,
-        # Keep the projection shape of pre-#902 scenes stable when the
-        # counter is still zero. A non-zero value is the persisted state
-        # needed by the next review session.
-        **({"base_advance_round": found.base_advance_round}
-           if found.base_advance_round else {}),
-        # An unknown verdict head is counted across timer ticks. Preserve
-        # the non-zero counter in the projection so the next review cannot
-        # silently restart at attempt 1.
-        **({"verdict_head_unknown_round": found.verdict_head_unknown_round}
-           if found.verdict_head_unknown_round else {}),
-    }
+    return scene.parse(body)
 
 
-def resume_scene(comments: list[dict], *, repo: str) -> dict:
+def resume_scene(comments: list[dict], *, repo: str) -> ResumeScene:
     """Return the scene of the latest trusted opened-PR comment of one Issue.
 
     Only trusted comments are considered: a comment is trusted when its
@@ -194,16 +189,15 @@ def resume_scene(comments: list[dict], *, repo: str) -> dict:
     failure shapes stay distinct for the caller:
     `scene.SceneError` when a trusted scene comment is corrupted,
     `scene.SceneMissingError` when no trusted comment carries a scene
-    at all. Neither may be guessed at. The projection adds `scene_at`
-    (the comment's `createdAt`): the #483 human-recovery budget reset
-    compares it against the recovery transition time.
+    at all. Neither may be guessed at. The recovered value adds the
+    comment's `createdAt` (`scene_at`, the #483 budget reset's input)
+    beside the parsed scene.
     """
     for comment in reversed(trusted_comments(comments, repo=repo)):
         found = parse_pr_comment(comment.get("body"))
         if found is None:
             continue
-        found["scene_at"] = comment.get("createdAt")
-        return found
+        return ResumeScene(parsed=found, scene_at=comment.get("createdAt"))
     raise scene.SceneMissingError(
         "no 'Orbi opened PR' comment from a trusted author; the "
         "Issue cannot be resumed"

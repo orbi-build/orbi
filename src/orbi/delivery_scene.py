@@ -98,9 +98,9 @@ def classify(
     - `labels`: the Issue's current labels (the scan's query snapshot,
       with the dispatch layer's direct `ai-in-progress` read merged in
       when it saw the label);
-    - `scene`: the trusted resume scene of an opened-PR comment, in
-      either of the runner's two views (`orbi.scene.Scene` or its dict
-      projection); None when no trusted comment carries one;
+    - `scene`: the trusted resume scene of an opened-PR comment
+      (`orbi.run_state.ResumeScene`); None when no trusted comment
+      carries one;
     - `pr_state`: the probed PR state for the delivery branch
       (`"OPEN"` / `"MERGED"` / `"CLOSED"`), None when no PR was probed
       or none is open;
