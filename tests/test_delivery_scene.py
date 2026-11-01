@@ -13,7 +13,7 @@ import json
 import pytest
 
 from orbi import delivery_labels, delivery_scene
-from orbi import claim, runner, scene
+from orbi import claim, runner, run_state, scene
 from orbi.delivery_scene import (
     EXTERNAL_PR_MARKER,
     DeliveryScene,
@@ -38,13 +38,12 @@ from orbi.delivery_labels import (
 from orbi.scene import Scene
 
 MARKER = {EXTERNAL_PR_MARKER}
-TRUSTED_SCENE = {
-    "run_id": "a1b2c3d4",
-    "base_branch": "main",
-    "base_sha": "0ab8d1f8",
-    "pr_url": "https://github.com/o/r/pull/9",
-    "external": "",
-}
+TRUSTED_SCENE = run_state.ResumeScene(parsed=Scene(
+    run_id="a1b2c3d4",
+    base_branch="main",
+    base_sha="0ab8d1f8",
+    pr_url="https://github.com/o/r/pull/9",
+))
 TRUSTED_SCENE_RECORD = Scene(
     run_id="a1b2c3d4",
     base_branch="main",
@@ -130,8 +129,8 @@ def _repository_permissions(monkeypatch):
             {READY_LABEL, PR_OPENED_LABEL}, TRUSTED_SCENE, None,
             frozenset(), DeliveryScene.RESUME_REVIEW,
         ),
-        # The scene record is accepted in either of the runner's two
-        # views: the `Scene` dataclass or its dict projection.
+        # Any recovered scene value resumes: the `ResumeScene` the scan
+        # hands over and the parsed `Scene` inside it.
         (
             {PR_OPENED_LABEL}, TRUSTED_SCENE_RECORD, None, frozenset(),
             DeliveryScene.RESUME_REVIEW,
@@ -561,7 +560,7 @@ def test_the_documented_repair_releases_the_blocked_issue_to_the_same_pr(
     assert found is not None
     issue, resumed = found
     assert issue["number"] == 9
-    assert resumed["pr_url"] == "https://github.com/owner/repo/pull/9"
+    assert resumed.parsed.pr_url == "https://github.com/owner/repo/pull/9"
 
 
 def test_pick_resumable_delivery_resumes_a_scene_candidate(
@@ -599,7 +598,7 @@ def test_pick_resumable_delivery_resumes_a_scene_candidate(
     assert found is not None
     issue, resumed = found
     assert issue["number"] == 9
-    assert resumed["run_id"] == "a1b2c3d4"
+    assert resumed.parsed.run_id == "a1b2c3d4"
 
 
 def test_pick_in_progress_issue_skips_candidate_relabelled_blocked(

@@ -14,7 +14,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
-from orbi import language, scene, user_summary
+from orbi import language, run_state, scene, user_summary
 from orbi.blocked_comment import post_blocked_comment
 from orbi.checks import render_check, classify_checks
 from orbi.delivery_labels import (
@@ -55,10 +55,10 @@ class ResumeHooks(NamedTuple):
     per-repository `language_code` (Issue #1687): the claim knows the
     merged repository config before the first comment is written.
     """
-    resume_scene: Callable[..., dict]
+    resume_scene: Callable[..., run_state.ResumeScene]
     route_external_pr_ticket: Callable[..., bool]
     block_scene_failure: Callable[..., None]
-    recover_missing_pr_scene: Callable[..., dict | None]
+    recover_missing_pr_scene: Callable[..., run_state.ResumeScene | None]
     has_recoverable_pr_scene: Callable[[dict, str, Path], bool]
     comment_pr: Callable[..., None]
 
@@ -340,13 +340,13 @@ def _pick_opened_pr_delivery(
         # Issue #1473: skip a CI-pending OPEN PR; MERGED/CLOSED and a
         # failed rollup read still return the candidate.
         try:
-            pr_state, rollup = pr_delivery_rollup(found["pr_url"], repo)
+            pr_state, rollup = pr_delivery_rollup(found.parsed.pr_url, repo)
         except Exception:
             return issue, found
         pending = classify_checks(rollup)[0] if pr_state == "OPEN" else []
         if pending:
             event("delivery_ci_pending", issue=int(issue["number"]),
-                  pr=found["pr_url"], pending="; ".join(map(render_check, pending)))
+                  pr=found.parsed.pr_url, pending="; ".join(map(render_check, pending)))
             continue
         return issue, found
     return None

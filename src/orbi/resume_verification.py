@@ -69,8 +69,8 @@ from orbi.pr_verification import (
 )
 
 
-def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConfig,
-                      source_repo: str) -> str:
+def verify_resumed_pr(resume: run_state.ResumeScene, issue: dict,
+                      config: config_domain.RunnerConfig, source_repo: str) -> str:
     """Verify the PR of a resumed delivery BEFORE any git/Pi mutation.
 
     #82 removed the cold-start fixer together with the
@@ -113,25 +113,25 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
     and the PR, branch and worktree stay intact.
     """
     number = int(issue["number"])
-    run_id = scene["run_id"]
+    run_id = resume.parsed.run_id
     # An external takeover scene delivers the contributor's own
     # PR — the delivery branch is the PR's head branch, read from the
     # takeover worktree (the worktree path stays derived from the trusted
     # inputs; the branch is a local git fact of that worktree).
-    external = bool(scene.get("external"))
+    external = bool(resume.parsed.external)
     branch = task_branch(source_repo, number, run_id)
     worktree = worktree_path(
         config.repo_dir, source_repo, number, run_id,
     )
     try:
-        if scene["base_branch"] != config.base_branch:
+        if resume.parsed.base_branch != config.base_branch:
             # A base-branch change is a human
             # decision: the runner must not auto-retry a PR frozen on
             # another base, so the handler below marks the Issue
             # ai-blocked with the explicit reason and both base values
             # named.
             raise UnrecoverableDeliveryError(
-                f"resume scene base_branch={scene['base_branch']} "
+                f"resume scene base_branch={resume.parsed.base_branch} "
                 f"differs from configured base_branch="
                 f"{config.base_branch}; the PR is frozen on a "
                 "different base and must not be resumed against the "
@@ -152,7 +152,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 # head branch — the worktree that carried it is gone,
                 # so the scene PR is the remaining authority.
                 head = json.loads(run_gh_read_command(
-                    ["gh", "pr", "view", str(pr_number(scene["pr_url"])),
+                    ["gh", "pr", "view", str(pr_number(resume.parsed.pr_url)),
                      "--repo", source_repo, "--json", "headRefName"],
                     cwd=config.repo_dir,
                 ))
@@ -168,8 +168,8 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 )
             create_worktree(
                 config.repo_dir, source_repo, number, run_id,
-                scene["base_sha"], existing_branch=True, branch=branch,
-                pr_number=pr_number(scene["pr_url"]) if external else None,
+                resume.parsed.base_sha, existing_branch=True, branch=branch,
+                pr_number=pr_number(resume.parsed.pr_url) if external else None,
             )
             event(
                 "worktree_recreated", issue=number, branch=branch,
@@ -186,7 +186,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
             ),
             config.base_branch, repo_dir=config.repo_dir,
             pr_repo=source_repo,
-            expected_url=scene["pr_url"], require_latest_base=False,
+            expected_url=resume.parsed.pr_url, require_latest_base=False,
             external_pr=external,
         )
         # The resumed delivery is in flight from here on —
@@ -223,10 +223,10 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
             # used to be the old wait loop's in-process branches).
             if external and exc.scene_pr_state == "MERGED":
                 event(
-                    "delivery_merged", issue=number, pr=scene["pr_url"],
+                    "delivery_merged", issue=number, pr=resume.parsed.pr_url,
                 )
                 _close_external_triage_issue(
-                    number, source_repo, scene["pr_url"],
+                    number, source_repo, resume.parsed.pr_url,
                     run_marker(run_id), run_id,
                     language_code=language.of(config),
                 )
@@ -234,10 +234,10 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
             if external:
                 event(
                     "external_takeover_closed",
-                    issue=number, pr=scene["pr_url"],
+                    issue=number, pr=resume.parsed.pr_url,
                 )
                 _requeue_closed_external_takeover(
-                    number, source_repo, scene["pr_url"],
+                    number, source_repo, resume.parsed.pr_url,
                     run_marker(run_id), run_id,
                     language_code=language.of(config), ready_label=config.dispatch_label or READY_LABEL)
                 raise
@@ -247,7 +247,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 # decided fact, so nothing is left to decide — the
                 # delivery is recorded and the tick ends handled.
                 event(
-                    "delivery_merged", issue=number, pr=scene["pr_url"],
+                    "delivery_merged", issue=number, pr=resume.parsed.pr_url,
                 )
                 # GitHub applies the `Fixes #N` keyword only to a merge
                 # made by a person or an App; a merge made with a
@@ -265,7 +265,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
                 raise
         LOGGER.exception(
             "issue=%s resume_pr_verification_failed pr=%s branch=%s",
-            number, scene["pr_url"], branch,
+            number, resume.parsed.pr_url, branch,
         )
         reported = False
         try:
@@ -279,19 +279,19 @@ def verify_resumed_pr(scene: dict, issue: dict, config: config_domain.RunnerConf
             lang = language.of(config)
             failure_report.report_delivery_failure(
                 exc, issue=issue, source_repo=source_repo,
-                run_id=current_run_id(), pr_url=scene["pr_url"],
+                run_id=current_run_id(), pr_url=resume.parsed.pr_url,
                 worktree=worktree, branch=branch, role=ROLE_REVIEW,
                 language_code=lang, status_url=config.status_url,
                 ready_label=config.dispatch_label or READY_LABEL, action=(
                     language.text(lang, "delivery.resume_missing_fixes_action",
-                                  pr_url=scene["pr_url"], number=number)
+                                  pr_url=resume.parsed.pr_url, number=number)
                     if isinstance(exc, MissingFixesError)
                     else language.text(lang, "delivery.resume_review_pr_action")
                     if isinstance(exc, UnrecoverableDeliveryError) else ""
                 ),
                 reason=language.text(
                     lang, "delivery.resume_verify_reason",
-                    pr_url=scene["pr_url"], detail=failure_detail(exc),
+                    pr_url=resume.parsed.pr_url, detail=failure_detail(exc),
                 ),
                 diagnosis=failure_detail(exc),
                 # The branch-gone scene destroyed the

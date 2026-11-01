@@ -85,7 +85,6 @@ from orbi.journal import (
     current_run_id,
     event,
     run_command,
-    validate_run_id,
 )
 from orbi.merge_exec import (
     DeliveryDeferred,
@@ -114,8 +113,11 @@ from orbi.progress import (
 )
 from orbi.review_rounds import (
     MAX_REVIEW_ROUNDS,
+    RoundReport,
     effective_review_round,
+    failure_scene_block,
     review_round_comment_body,
+    round_scene_block,
 )
 from orbi.review_verdict import parse_review_verdict, review_has_findings
 # The bounded size of the review/fix loop (review_rounds.MAX_REVIEW_ROUNDS,
@@ -202,39 +204,11 @@ def log_recovery_ci_status(pr: dict, repo: str) -> None:
     )
 
 
-def _round_scene_block(resumed: dict, pr_url: str, round: int,
-                       *, base_advance_round: int | None = None,
-                       verdict_head_unknown_round: int | None = None) -> str:
-    """The updated scene block a completed round carries to the next resume.
-
-    The round comment is the budget's write path: embedding
-    the scene with `review_round=round` makes THAT comment the latest
-    scene, so the next tick's `resume_scene` reads the advanced count —
-    GitHub stays the only state store, no second record exists.
-    """
-    return scene.render(scene.Scene(
-        run_id=validate_run_id(resumed["run_id"]),
-        base_branch=resumed["base_branch"],
-        base_sha=resumed["base_sha"],
-        pr_url=pr_url,
-        external=resumed.get("external", ""),
-        review_round=round,
-        base_advance_round=(
-            resumed.get("base_advance_round", 0)
-            if base_advance_round is None else base_advance_round
-        ),
-        verdict_head_unknown_round=(
-            resumed.get("verdict_head_unknown_round", 0)
-            if verdict_head_unknown_round is None
-            else verdict_head_unknown_round
-        ),
-    ))
-
-
 def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                               config: config_domain.RunnerConfig, source_repo: str,
                               number: int, title: str, priority: str,
-                              *, scene: dict,
+                              *, scene: run_state.ResumeScene,
+                              report: RoundReport | None = None,
                               previous_comments: list[dict] | None = None,
                               merge_only: bool = False,
                               checks: list | None = None,
@@ -255,6 +229,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         return _review_and_merge_round(
             worktree, branch, base_branch, config, source_repo, number,
             title, priority, scene=scene,
+            report=RoundReport() if report is None else report,
             previous_comments=previous_comments, merge_only=merge_only,
             checks=checks, review_record=review_record,
             issue_body_sha256=issue_body_sha256,
@@ -278,7 +253,8 @@ class _Round:
     number: int
     title: str
     priority: str
-    scene: dict
+    scene: run_state.ResumeScene
+    report: RoundReport
     previous_comments: list[dict] | None
     merge_only: bool
     checks: list | None
@@ -321,11 +297,11 @@ def _round_preflight_phase(work: _Round) -> None:
     number, source_repo = work.number, work.source_repo
     work.marker = run_marker(config.run_id)
     work.ready_label = config.dispatch_label or READY_LABEL
-    scene_round = int(scene["review_round"])
+    scene_round = scene.parsed.review_round
     rounds = effective_review_round(scene, number=number, repo=source_repo)
     recovered = rounds != scene_round
     work.base_advance_rounds = (
-        0 if recovered else int(scene.get("base_advance_round", 0))
+        0 if recovered else scene.parsed.base_advance_round
     )
     if rounds >= MAX_REVIEW_ROUNDS and not work.merge_only:
         event(
@@ -338,15 +314,17 @@ def _round_preflight_phase(work: _Round) -> None:
             "decision, so the AI cannot safely continue this PR"
         )
     work.round = rounds if work.merge_only else rounds + 1
-    scene["review_round_running"] = work.round  # the failure report's source
-    work.external_pr_url = scene["pr_url"] if scene.get("external") else None
+    work.report.review_round = work.round  # the failure report's source
+    work.external_pr_url = (
+        scene.parsed.pr_url if scene.parsed.external else None
+    )
     work.pr = pr = freeze_pr(
         worktree, branch, work.base_branch,
         external_pr_url=work.external_pr_url, source_repo=source_repo,
     )
     work.merge_only_from_record = (
         work.review_record is not None
-        and not work.merge_only and not scene.get("external")
+        and not work.merge_only and not scene.parsed.external
         and work.issue_body_sha256 == work.review_record[1]
         and pr["head_oid"] == work.review_record[0]
     )
@@ -358,7 +336,7 @@ def _round_preflight_phase(work: _Round) -> None:
             ).get("mergeable") == "CONFLICTING"
         except (subprocess.CalledProcessError, ValueError, TypeError):
             work.absorb_required = False
-    if (not scene.get("external")
+    if (not scene.parsed.external
             and read_pushed_head(worktree) != pr["head_oid"]
             and pr["head_oid"] == run_command(
                 ["git", "rev-parse", "HEAD"], cwd=worktree)):
@@ -473,9 +451,8 @@ def _round_verdict_phase(work: _Round) -> bool:
     body = review_round_comment_body(
         marker, round, pr["number"], verdict["blockers"],
         verdict["majors"], verdict["findings"],
-        _round_scene_block(
-            work.scene, pr["url"], round,
-            verdict_head_unknown_round=0,
+        round_scene_block(
+            work.scene, pr["url"], round, verdict_head_unknown_round=0,
         ),
         repo=source_repo, previous_comments=work.previous_comments,
         language_code=language.of(config), status_url=config.status_url,
@@ -536,10 +513,8 @@ def _round_refreeze_phase(work: _Round) -> bool:
             cwd=worktree, check=False, timeout=10,
         )
         if object_probe.returncode != 0:
-            unknown_round = (
-                int(scene.get("verdict_head_unknown_round", 0)) + 1
-            )
-            scene["verdict_head_unknown_round"] = unknown_round
+            unknown_round = scene.parsed.verdict_head_unknown_round + 1
+            work.report.verdict_head_unknown_round = unknown_round
             event(
                 "review_verdict_head_unknown", level=logging.WARNING,
                 pr=pr["number"], verdict_head=work.verdict["head"],
@@ -564,7 +539,7 @@ def _round_refreeze_phase(work: _Round) -> bool:
     if refrozen["head_oid"] != pr["head_oid"]:
         # The advanced head is this round's own review/fix output.
         run_state.record_pushed_head(worktree, refrozen["head_oid"])
-    if (not scene.get("external")
+    if (not scene.parsed.external
             and not work.merge_only and not work.merge_only_from_record
             and refrozen["head_oid"] != pr["head_oid"]):
         run_state.record_reviewed(
@@ -591,7 +566,7 @@ def _round_external_phase(work: _Round) -> bool:
     stops at ai-blocked: quality is the engine's judgment, but accepting
     the contribution and picking its version is the maintainer's.
     """
-    if not work.scene.get("external"):
+    if not work.scene.parsed.external:
         return False
     config, pr = work.config, work.pr
     number, source_repo = work.number, work.source_repo
@@ -687,11 +662,11 @@ def _round_gate_failure_phase(work: _Round, message: str, *,
         gate_messages.append(violation.strip())
     body = review_round_comment_body(
         marker, round, pr["number"], 0, 0, [],
-        _round_scene_block(
+        round_scene_block(
             work.scene, pr["url"],
-            round if ci_failure else int(work.scene["review_round"]),
+            round if ci_failure else work.scene.parsed.review_round,
             base_advance_round=(
-                work.scene.get("base_advance_round", 0)
+                work.scene.parsed.base_advance_round
                 if ci_failure else min(
                     next_base_advance_round, MAX_BASE_ADVANCE_ROUNDS,
                 )
@@ -910,7 +885,8 @@ def _round_closeout_phase(work: _Round, merged: dict) -> None:
 def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
                             config: config_domain.RunnerConfig, source_repo: str,
                             number: int, title: str, priority: str,
-                            *, scene: dict,
+                            *, scene: run_state.ResumeScene,
+                            report: RoundReport,
                             previous_comments: list[dict] | None = None,
                             merge_only: bool = False,
                             checks: list | None = None,
@@ -931,7 +907,8 @@ def _review_and_merge_round(worktree: Path, branch: str, base_branch: str,
     work = _Round(
         worktree=worktree, branch=branch, base_branch=base_branch,
         config=config, source_repo=source_repo, number=number, title=title,
-        priority=priority, scene=scene, previous_comments=previous_comments,
+        priority=priority, scene=scene, report=report,
+        previous_comments=previous_comments,
         merge_only=merge_only, checks=checks, review_record=review_record,
         issue_body_sha256=issue_body_sha256,
         keep_review_record=keep_review_record,
@@ -1093,6 +1070,10 @@ def _run_review_round(
     worktree = None
     branch = None
     scene = None
+    # The round-scoped values the failure report below needs from INSIDE
+    # the round: the round in progress and the refreeze's verdict-head
+    # counter. They are not part of the recovered scene (Issue #2053).
+    report = RoundReport()
     try:
         try:
             comments = issue_comments(number, repo=source_repo)
@@ -1130,9 +1111,9 @@ def _run_review_round(
         # auto-retry a PR frozen on another base, so the
         # handler below marks the Issue ai-blocked with the
         # explicit reason and both base values named.
-        if scene["base_branch"] != config.base_branch:
+        if scene.parsed.base_branch != config.base_branch:
             raise UnrecoverableDeliveryError(
-                f"resume scene base_branch={scene['base_branch']} "
+                f"resume scene base_branch={scene.parsed.base_branch} "
                 f"differs from configured base_branch="
                 f"{config.base_branch}; the PR is frozen on a "
                 "different base and must not be reviewed or "
@@ -1142,7 +1123,7 @@ def _run_review_round(
             )
         worktree = worktree_path(
             config.repo_dir, source_repo, number,
-            scene["run_id"],
+            scene.parsed.run_id,
         )
         # The worktree is derived from the
         # configured repo_dir, source repo, Issue number and run id
@@ -1158,7 +1139,7 @@ def _run_review_round(
             # derivation is the best available guess when the
             # worktree is gone.
             branch = task_branch(
-                source_repo, number, scene["run_id"],
+                source_repo, number, scene.parsed.run_id,
             )
             raise RuntimeError(f"worktree missing: {worktree}")
         # The delivery branch is a local git fact of the derived
@@ -1170,18 +1151,18 @@ def _run_review_round(
         # stays comment-independent.
         branch = run_command(
             ["git", "branch", "--show-current"], cwd=worktree,
-        ) or task_branch(source_repo, number, scene["run_id"])
+        ) or task_branch(source_repo, number, scene.parsed.run_id)
         review_config = replace(
             config,
-            base_sha=scene["base_sha"],
-            run_id=scene["run_id"],
+            base_sha=scene.parsed.base_sha,
+            run_id=scene.parsed.run_id,
         )
         review_kwargs = {}
-        if scene["review_round"] > 0:
+        if scene.parsed.review_round > 0:
             review_kwargs["previous_comments"] = comments
         if AWAITING_MERGE_LABEL in labels:
             review_kwargs["merge_only"] = True
-        elif not scene.get("external"):
+        elif not scene.parsed.external:
             # Issue #1626: a recorded pass on this head and this Issue
             # body lets this round merge without starting a session.
             review_record = run_state.read_reviewed(worktree)
@@ -1195,7 +1176,7 @@ def _run_review_round(
         merged = review_and_merge_if_clean(
             worktree, branch, config.base_branch,
             review_config, source_repo, number,
-            title=title, priority=priority, scene=scene,
+            title=title, priority=priority, scene=scene, report=report,
             checks=checks,
             **review_kwargs,
         )
@@ -1247,12 +1228,8 @@ def _run_review_round(
             action=action,
             reason=reason,
             diagnosis=detail, evidence=True,
-            review_round=(scene or {}).get("review_round_running"),
-            review_scene_block=(
-                _round_scene_block(scene, pr_url, int(scene["review_round"]))
-                if isinstance(scene, dict)
-                and scene.get("verdict_head_unknown_round", 0) else None
-            ),
+            review_round=report.review_round,
+            review_scene_block=failure_scene_block(scene, pr_url, report),
         )
         return None
     if merged:
