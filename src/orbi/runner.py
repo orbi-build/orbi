@@ -185,6 +185,10 @@ from orbi.pi_command import (
 # its own namespace (Article 3.3: `pi_session` imports no runner).
 from orbi import pi_session
 from orbi import merge_exec, review_merge
+# The ops-only branch of the implementation dispatch is its own module
+# (Issue #2006): the ops playbook and the evidence-only ops closeout live
+# in `ops_delivery`, which imports no runner (Article 3.3).
+from orbi import ops_delivery
 from orbi import run_state
 
 # The shared primitives live in the leaf modules now — the
@@ -1803,14 +1807,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             )
         config = replace(config, base_sha=base_sha, run_id=run_id)
         if ops:
-            # The ops session runs the ops playbook — the
-            # sibling of the configured dev prompt (a custom prompt
-            # deployment carries prompt_ops.md next to it). A missing
-            # file fails the run fast through the delivery failure
-            # path with the exact path in the comment.
-            config = replace(
-                config, prompt=config.prompt.with_name("prompt_ops.md"),
-            )
+            config = ops_delivery.ops_config(config)
         # One `Orbi started Pi:` comment per run; a resume PATCHes it (#1369).
         publish(
             action=lambda: publisher.started(started_pi_comment_body(
@@ -1846,70 +1843,16 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             action=lambda: milestone_bookkeeping._publish_plan_milestone(publisher, worktree),
         )
         if ops:
-            # An ops delivery without a commit is COMPLETE —
-            # the evidence the session posted on the Issue (per-step real
-            # command output / API responses, the #526 fact culture) is
-            # the deliverable. Pure ops actions take no PR ceremony; the
-            # terminal transition mirrors the content path (the claim
-            # label is removed, the Issue is closed; the worktree stays
-            # as the run's evidence). Committed code (or uncommitted
-            # leftovers) falls through to the deterministic closeout
-            # below: committed ops code takes the normal PR ceremony,
-            # leftovers fail fast there (the runner never commits
-            # uncommitted changes).
+            # An ops delivery without a commit is COMPLETE — the evidence
+            # the session posted on the Issue is the deliverable; committed
+            # code (or uncommitted leftovers) falls through to the
+            # deterministic closeout below.
             head, dirty = _agent_delivery_boundary(worktree)
-            if head == base_sha and not dirty:
-                run_command([
-                    "gh", "issue", "close", str(number),
-                    "--repo", source_repo,
-                ])
-                edit_issue(
-                    number, repo=source_repo, remove=IN_PROGRESS_LABEL,
-                )
-                publish(
-                    action=lambda: publisher.milestone(language.text(
-                        language.of(config),
-                        "runner.ops_milestone", run_info=run_info,
-                    )),
-                )
-                publish(
-                    action=lambda: publisher.finish(progress_body_with_outcome(
-                        progress_state(
-                            ctx, title=title, role=ROLE_IMPLEMENT,
-                            started=started, pr_url=None, review_round=0,
-                            priority=priority, language_code=language.of(config),
-                            status_url=config.status_url,
-                        ),
-                        outcome=language.text(
-                            language.of(config),
-                            "runner.ops_outcome",
-                        ),
-                    )),
-                )
-                event(
-                    "run_end",
-                    format_end_scene(
-                        run_id=run_id,
-                        issue=issue_context(source_repo, number),
-                        role=ROLE_IMPLEMENT, result="ops_delivered",
-                        elapsed=time.monotonic() - started,
-                        pr="-", commit=head,
-                    ),
-                )
-                # The delivered outcome breaks any failure
-                # streak of this Issue in the health history. Pure
-                # bypass: a state-write failure never changes the
-                # delivery outcome.
-                try:
-                    runner_health.record_run_attempt(
-                        runner_health.health_state_path(config.repo_dir),
-                        repo=source_repo, issue=number, run_id=run_id,
-                        outcome="ops_delivered", fingerprint="",
-                    )
-                except Exception:
-                    LOGGER.exception(
-                        "issue=%s health_success_record_failed", number,
-                    )
+            if ops_delivery.deliver_pure_ops(
+                ctx=ctx, config=config, publisher=publisher, publish=publish,
+                run_info=run_info, title=title, started=started,
+                priority=priority, base_sha=base_sha, head=head, dirty=dirty,
+            ):
                 return IssueResult("ops", None)
         # The deterministic closeout (commit boundary, base
         # freshness + absorb, plain push, PR creation, PR verification)
