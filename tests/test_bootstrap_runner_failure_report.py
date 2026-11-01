@@ -148,7 +148,7 @@ def test_failure_scene_is_structured_and_redacts_local_paths():
 
 def test_failure_comment_layout_keeps_raw_evidence_collapsed():
     body = failure.failure_comment_body(
-        outcome="fix needed", action="Repair the delivery.",
+        outcome="fix_needed", action="Repair the delivery.",
         reason="the provider rejected the request",
         diagnosis="provider rejected the request",
         scene="- run: `abcdef12`\n- phase: `review`",
@@ -168,7 +168,7 @@ def test_failure_comment_layout_keeps_raw_evidence_collapsed():
     assert body.endswith("</details>")
 
     without_diagnosis = failure.failure_comment_body(
-        outcome="fix needed", action="", reason="provider failed",
+        outcome="fix_needed", action="", reason="provider failed",
         diagnosis="", scene="- run: `abcdef12`", evidence="",
         pr_url=None, issue="o/r#1221", run_id="abcdef12", language_code="en",
     )

@@ -1057,7 +1057,7 @@ def test_finish_progress_fix_needed_without_run_id_is_noop(monkeypatch):
     assert runner._finish_progress(
         39, None, "owner/repo", None, None, PR_URL, "the failure",
         "the next tick resumes the same run", title="task",
-        outcome="fix needed", language_code="en",
+        outcome="fix_needed", language_code="en",
     ) is None
     assert api_calls == []
 

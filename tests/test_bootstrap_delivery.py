@@ -3686,7 +3686,7 @@ def test_finish_progress_renders_the_fix_needed_scene(monkeypatch):
         "the failure",
         "the next tick resumes the same run, branch, worktree and PR "
         "automatically (the Issue stays ai-fix-needed)",
-        title="Fix task", outcome="fix needed", language_code="en",
+        title="Fix task", outcome="fix_needed", language_code="en",
     )
     posts = [
         command for command in api_calls
