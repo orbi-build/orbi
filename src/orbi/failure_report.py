@@ -656,7 +656,7 @@ def report_delivery_failure(
     and the terminal progress scene as a pure bypass. The carried
     failure is named `action`, `reason`, and `diagnosis`; the milestone
     uses the reason, or the action for its own #1651 repair path. Returns
-    the outcome, `"blocked"` or `"fix needed"`.
+    the outcome, `"blocked"` or `"fix_needed"`.
 
     `classify=False` forces the terminal branch (the implement-phase
     handler: every failure reaching it is terminal by design — the
@@ -821,7 +821,7 @@ def report_delivery_failure(
         )
         if review_scene_block is not None:
             scene += f"\n{redact_local_paths(review_scene_block)}"
-        outcome = "fix needed"
+        outcome = "fix_needed"
     if isinstance(red, base_ci_red.BaseCIRed):
         body = base_ci_red.comment_body(
             red, getattr(exc, "checks", []),
@@ -829,7 +829,7 @@ def report_delivery_failure(
             issue_number=number, issue_title=title, status_url=status_url)
     else:
         body = failure_comment_body(
-            outcome="blocked" if blocked else "fix needed",
+            outcome="blocked" if blocked else "fix_needed",
             action=action, reason=reason, diagnosis=diagnosis, scene=scene,
             evidence=evidence_detail, pr_url=pr_url,
             issue=issue_context(source_repo, number), run_id=run_id or "-",
@@ -980,7 +980,7 @@ def report_delivery_failure(
             ))
             finish_failure = reason
             next_step = language.text(language_code, "failure.next_step_fix_needed")
-            finish_outcome = "fix needed"
+            finish_outcome = "fix_needed"
         if finish:
             publish(action=lambda: target.finish(finish_progress_body(
                 number=number, title=title, run_id=run_id, role=role,

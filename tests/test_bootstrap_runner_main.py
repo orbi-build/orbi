@@ -964,12 +964,14 @@ def test_finish_progress_body_defaults_orbi_action_when_fix_step_missing(caplog)
         number=39, title="Fix task", run_id="a1b2c3d4",
         role=runner.ROLE_REVIEW, branch=None, worktree=None, pr_url=None,
         review_round=0, priority="normal", detail="failure detail",
-        next_step="", outcome="fix needed", source_repo="owner/repo", language_code="en",
+        next_step="", outcome="fix_needed", source_repo="owner/repo", language_code="en",
     )
 
     assert "What you need to do: Nothing" in body
     assert "What Orbi will do next: Orbi will wait for a human" in body
     assert "progress_finish_missing_next_step" in caplog.text
+    # Issue #2056: the journal field carries the one internal spelling.
+    assert "outcome=fix_needed" in caplog.text
 
 
 def test_main_releases_slot_after_opening_the_pr(monkeypatch, tmp_path):

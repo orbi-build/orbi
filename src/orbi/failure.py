@@ -622,7 +622,7 @@ def failure_comment_body(*, outcome: str, action: str, reason: str,
     raw detail stays inside the one Diagnosis `<details>` block
     (`evidence`).
     """
-    retrying = outcome == "fix needed"
+    retrying = outcome == "fix_needed"
     if failure_record is None:
         failure_record = Failure(
             reason_code="unclassified", action_code="fix_ticket",
