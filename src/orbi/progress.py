@@ -166,50 +166,17 @@ def field_block(run_id: str, headline: str, fields: dict[str, object], *,
 
 
 def format_status_comment(body: str) -> str:
-    """Expand legacy one-line Orbi status comments into field blocks."""
+    """Prepare one comment for posting, exactly as its writer rendered it.
+
+    The two cross-cutting steps every posted or edited comment shares live
+    here: secret redaction and the runner footer. Nothing else — a body is
+    never re-rendered, so both languages keep the line structure (and the
+    single headline) their writer produced (Issue #2054: the former English
+    one-line rewrite repeated the headline as a `- detail:` row).
+    """
     if not isinstance(body, str):
         return body
-    body = redact_secrets(body)
-    marker = ""
-    if body.startswith("<!-- orbi:run=") and "\n" in body:
-        marker, _, body = body.partition("\n")
-    first, separator, remainder = body.partition("\n")
-    prefixes = (
-        "Orbi failed:", "Orbi needs a fix:", "Orbi merged PR:",
-        "Orbi release failed", "Orbi release waiting",
-    )
-    if not first.startswith(prefixes):
-        return _with_runner_marker((marker + "\n" + body) if marker else body)
-    if (
-        first.startswith("Orbi merged PR:")
-        # A pre-#1431 one-liner carries its fields in parentheses and is
-        # still expanded below; the new merged body has no such group
-        # and is already in its final, idempotent shape (Issue #1431).
-        and not re.search(r"\((?=[^)]*=)[^)]*\)", first)
-    ):
-        return _with_runner_marker((marker + "\n" + body) if marker else body)
-    fields: dict[str, object] = {}
-    for key, value in re.findall(r"([A-Za-z_][\w-]*)=([^\s)]+)", first):
-        fields[key] = value
-    detail = re.sub(r"\s*\((?=[^)]*=)[^)]*\)", "", first).strip()
-    run_id = fields.get("run_id")
-    if not run_id and marker:
-        match = re.search(rf"orbi:run=({RUN_ID_PATTERN.pattern})", marker)
-        run_id = match.group(1) if match else None
-    fields.setdefault("detail", detail)
-    if isinstance(run_id, str) and RUN_ID_PATTERN.fullmatch(run_id):
-        # A legacy one-line status comment (pre-#1659) is normalized to
-        # the field-block shape: its prose predates message_language, so
-        # the (English) legacy summary is the honest rendering here.
-        rendered = field_block(run_id, detail, fields,
-                               language_code=language.DEFAULT_LANGUAGE)
-        if remainder:
-            rendered += "\n" + remainder
-        return _with_runner_marker(
-            (marker + "\n" + rendered.split("\n", 1)[1])
-            if marker else rendered
-        )
-    return _with_runner_marker((marker + "\n" + body) if marker else body)
+    return _with_runner_marker(redact_secrets(body))
 
 
 def run_marker(run_id: object) -> str:

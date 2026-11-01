@@ -13,6 +13,8 @@ from orbi.runner import (
     started_pi_comment_body,
 )
 
+from tests.fakes import runner_marker as runner_marker_fakes
+
 RUN_ID = "abc12345"
 PR_URL = "https://github.com/owner/repo/pull/42"
 
@@ -127,9 +129,11 @@ def test_old_and_wrapped_comments_preserve_every_reader_contract(kind):
     assert rendered_status[0] == legacy_status[0]
     if kind == "merged PR":
         # The canonical kind line sits between the run marker and the
-        # headline (Issue #1659); the rest of the prefix is unchanged.
+        # headline (Issue #1659); the legacy one-liner is posted as it was
+        # written (Issue #2054), so its headline keeps its field group while
+        # the current body carries the same sentence alone.
         assert rendered_status[1] == "<!-- orbi:comment=merged -->"
-        assert rendered_status[2] == legacy_status[1]
+        assert rendered_status[2] == legacy_status[1].split(" (", 1)[0]
     else:
         assert rendered_status[:2] == legacy_status[:2]
 
@@ -206,13 +210,16 @@ def test_posted_merged_comment_review_rounds_suffix():
     )
 
 
-def test_legacy_merged_one_liner_keeps_its_expansion():
-    # Pre-#1431 callers keep the old layout; only the new body passes
-    # through unchanged.
-    rendered = progress.format_status_comment(_legacy_merged_one_liner())
-    assert "- merge_commit: deadbeef" in rendered
-    assert f"- run_id={RUN_ID}" in rendered
-    assert "- detail: Orbi merged PR:" in rendered
+def test_legacy_merged_one_liner_is_posted_as_written(monkeypatch):
+    # Issue #2054: the posting path no longer re-renders a one-line
+    # headline, so the pre-#1431 body keeps its own layout and only gains
+    # the runner footer. Its readers are unchanged.
+    runner_marker_fakes.fixed_fingerprint(monkeypatch)
+    written = _legacy_merged_one_liner()
+    rendered = progress.format_status_comment(written)
+    assert rendered == written + "\n\n<!-- runner=8a12fb1c -->"
+    assert "- detail:" not in rendered
+    assert rendered.count(f"Orbi merged PR: {PR_URL}") == 1
 
 
 def test_five_happy_path_comments_hide_debug_rows_and_progress_review_noise():
