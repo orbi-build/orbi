@@ -97,6 +97,32 @@ def test_public_contracts_page_distinguishes_invariants_from_specifications():
     assert "not a constitutional amendment" in text
 
 
+def _inventory_row(text: str, name: str) -> str:
+    row = next(
+        (line for line in text.splitlines() if line.startswith(f"| {name} |")),
+        None,
+    )
+    assert row is not None, f"docs page lost the {name} inventory row"
+    return row
+
+
+def test_suggestions_row_documents_both_session_directories():
+    """Issue #2058: an `orbi suggest` run starts TWO Pi sessions, and a
+    caller accounting the run's model usage may rely only on what this
+    page documents — so the Suggestions row names both session
+    directories, in English and Chinese."""
+    for path in (PUBLIC_CONTRACTS, ZH_PUBLIC_CONTRACTS):
+        row = _inventory_row(path.read_text(encoding="utf-8"), "Suggestions")
+        for session_dir in (
+            "<deploy_home>/.orbi/suggest/<run_id>/.pi-session/",
+            "<deploy_home>/.orbi/suggest/<run_id>/.understanding"
+            "/.pi-session/",
+        ):
+            assert session_dir in row, (
+                f"{path} Suggestions row misses {session_dir}: {row}"
+            )
+
+
 def test_status_contract_documents_scope_attribution_and_cycles():
     """Scope (--follow vs --repo/--issue), attribution (the full worktree
     naming convention, session/activity records) and the two read cycles
