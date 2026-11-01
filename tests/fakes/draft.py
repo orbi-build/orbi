@@ -93,6 +93,70 @@ class FakeSessions:
         return json.dumps({"issues": json.loads(context)["issues"]})
 
 
+def _record_fidelity(sessions, *, session_root, system_prompt, context):
+    """Record one fidelity call and return the payload the pass received."""
+    sessions.fidelity_calls.append(SimpleNamespace(
+        session_root=Path(session_root), system_prompt=system_prompt,
+        context=context,
+    ))
+    return json.loads(context)
+
+
+def fidelity_echoes_request(monkeypatch, sessions) -> None:
+    """The fidelity pass answers with the request it was given.
+
+    A test reads the request back out of the returned draft, so the
+    assertion covers the words that actually reached the pass, not only
+    the recorded context.
+    """
+
+    def echo(config, repo, *, session_root, system_prompt, context, run_id):
+        payload = _record_fidelity(
+            sessions, session_root=session_root,
+            system_prompt=system_prompt, context=context,
+        )
+        return json.dumps({"issues": [
+            {"title": "Echo", "body": payload["request"]},
+        ]})
+
+    monkeypatch.setattr(seam, "run_fidelity_session", echo)
+
+
+def _mentioned(line: str, request: str) -> bool:
+    """Whether the request names this body line, markdown aside."""
+    text = line.strip().lstrip("-* ").strip().rstrip(".").lower()
+    return bool(text) and text in request
+
+
+def fidelity_removes_unmentioned_lines(monkeypatch, sessions) -> None:
+    """The fidelity pass drops every body line the request does not name.
+
+    That is the pass's own job — remove what the person did not ask for —
+    reduced to the one deterministic rule a test can assert on: headings
+    stay, and a body line stays only when the request mentions it
+    verbatim.
+    """
+
+    def strip(config, repo, *, session_root, system_prompt, context, run_id):
+        payload = _record_fidelity(
+            sessions, session_root=session_root,
+            system_prompt=system_prompt, context=context,
+        )
+        request = payload["request"].lower()
+        issues = []
+        for entry in payload["issues"]:
+            kept = [
+                line for line in entry["body"].splitlines()
+                if line.lstrip().startswith("#")
+                or not line.strip()
+                or _mentioned(line, request)
+            ]
+            issues.append({**entry, "body": "\n".join(kept)})
+        return json.dumps({"issues": issues})
+
+    monkeypatch.setattr(seam, "run_fidelity_session", strip)
+
+
 def install_gh(monkeypatch, gh: FakeGh) -> GhRecorder:
     """Route the one subprocess seam to the in-memory GitHub."""
     route = GhRecorder(gh)
