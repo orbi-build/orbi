@@ -277,7 +277,9 @@ def test_the_reply_describes_the_rewritten_draft(config, sessions,
         (True, ()),
         (True, ()),
     ])
-    sessions.queue_draft(issue("One big thing"), reply="One Issue will change X.")
+    sessions.queue_draft(
+        issue("One big thing"), reply="One Issue will change X.",
+    )
     sessions.queue_draft(*TWO_ISSUES, reply="Two Issues will change X.")
     code, out, err = run_round_cli(
         config, {"message": "everything"}, tmp_path / "session",
