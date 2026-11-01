@@ -1,11 +1,15 @@
 """The test suite's own contract (Issue #908).
 
-Two guards keep the suite honest: no test module may bind the same
+Four guards keep the suite honest: no test module may bind the same
 function name twice at module scope (the later def silently replaces
 the earlier one and pytest collects the surviving name once — the
-shadowed body never runs), and the ONE shared fail-fast git scaffold
-in ``conftest.py`` must fail loudly on a non-zero exit (previously
-asserted by 13 per-file copies of the same test).
+shadowed body never runs), the ONE shared fail-fast git scaffold in
+``conftest.py`` must fail loudly on a non-zero exit (previously
+asserted by 13 per-file copies of the same test), the fake ``pi``
+executable has one owner under ``tests/fakes/``, and the autouse
+CLI-install preflight patches the seam once (Issue #2009: the seam
+fan-out already reaches every module that binds the name, so the second
+patch was dead code the next reader had to explain).
 """
 import ast
 from pathlib import Path
@@ -61,3 +65,48 @@ def test_git_helper_fails_fast_on_nonzero_exit(tmp_path):
     on a git error, never pass a broken setup silently."""
     with pytest.raises(AssertionError, match=r"git .* failed rc=128"):
         git(tmp_path, "rev-parse", "no-such-ref")
+
+
+def test_install_fake_pi_is_defined_once_under_fakes():
+    """The fake Pi executable has one owner (Issue #2009): every e2e suite
+    imports it from `tests/fakes/`, so a behaviour fix lands once instead of
+    in a copy per module."""
+    definitions = [
+        f"{path.relative_to(TESTS_DIR).as_posix()}:{node.lineno}"
+        for path in sorted(TESTS_DIR.rglob("*.py"))
+        for node in ast.walk(
+            ast.parse(path.read_text(encoding="utf-8"), str(path))
+        )
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "install_fake_pi"
+    ]
+    assert [definition.split(":")[0] for definition in definitions] == [
+        "fakes/pi.py",
+    ]
+
+
+def test_the_cli_install_fixture_patches_the_seam_once():
+    """`_default_cli_install_preflight` installs the `refresh_cli_install`
+    no-op exactly once (Issue #2009): the seam fan-out already reaches every
+    module that binds the name, so a second patch is dead code that the next
+    reader has to explain."""
+    tree = ast.parse(
+        (TESTS_DIR / "conftest.py").read_text(encoding="utf-8"),
+    )
+    fixture = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_default_cli_install_preflight"
+    )
+    patches = [
+        node for node in ast.walk(fixture)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "setattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "seam"
+        and isinstance(node.args[1], ast.Constant)
+        and node.args[1].value == "refresh_cli_install"
+    ]
+    assert len(patches) == 1
