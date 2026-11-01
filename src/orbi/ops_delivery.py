@@ -39,6 +39,7 @@ from orbi.progress import (
     progress_body_with_outcome,
     progress_state,
 )
+from orbi.run_fields import RunFields
 
 
 def ops_config(
@@ -61,7 +62,7 @@ def deliver_pure_ops(
     config: config_domain.RunnerConfig,
     publisher: ProgressPublisher,
     publish: Callable[..., None],
-    run_info: str,
+    run_info: RunFields,
     title: str,
     started: float,
     priority: str,
@@ -94,7 +95,7 @@ def deliver_pure_ops(
     publish(
         action=lambda: publisher.milestone(language.text(
             language.of(config),
-            "runner.ops_milestone", run_info=run_info,
+            "runner.ops_milestone", run_info=run_info.text(),
         )),
     )
     publish(
