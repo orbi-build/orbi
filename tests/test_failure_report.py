@@ -148,8 +148,7 @@ Issue: `orbi-build/orbi#42` · run_id=abcdef12
 - last activity: `-`
 - action: `-`
 - result: `-`
-- legacy correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=- phase=starting last_activity=-`
-- correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=-`
+- correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=- phase=starting last_activity=-`
 - failure detail: `provider failed`
 </details>
 
@@ -191,8 +190,7 @@ Issue: `orbi-build/orbi#42` · run_id=abcdef12
 - last activity: `2026-09-28T10:00:00Z`
 - action: `bash`
 - result: `-`
-- legacy correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=- phase=bash last_activity=2026-09-28T10:00:00Z`
-- correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=-`
+- correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=- phase=bash last_activity=2026-09-28T10:00:00Z`
 - failure detail: `provider failed`
 Failure evidence (captured before cleanup):
 exit_code=2
@@ -251,8 +249,7 @@ Issue: `orbi-build/orbi#42` · run_id=abcdef12
 - last activity: `2026-09-28T10:00:00Z`
 - action: `bash`
 - result: `-`
-- legacy correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=- phase=bash last_activity=2026-09-28T10:00:00Z`
-- correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=-`
+- correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=- phase=bash last_activity=2026-09-28T10:00:00Z`
 - failure detail: `provider failed`
 Failure evidence (captured before cleanup):
 exit_code=2
@@ -316,8 +313,7 @@ Issue: `orbi-build/orbi#42` · run_id=abcdef12
 - last activity: `2026-09-28T10:00:00Z`
 - action: `bash`
 - result: `-`
-- legacy correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=- phase=bash last_activity=2026-09-28T10:00:00Z`
-- correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=-`
+- correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=- phase=bash last_activity=2026-09-28T10:00:00Z`
 - failure detail: `provider failed`
 </details>""",
         "pr_comment": """<!-- orbi:run=abcdef12 -->
@@ -351,8 +347,7 @@ Issue: `orbi-build/orbi#42` · run_id=abcdef12
 - last activity: `2026-09-28T10:00:00Z`
 - action: `bash`
 - result: `-`
-- legacy correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=- phase=bash last_activity=2026-09-28T10:00:00Z`
-- correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=-`
+- correlation: `run=abcdef12 branch=orbi/orbi-build-orbi-issue-42 session=- phase=bash last_activity=2026-09-28T10:00:00Z`
 - failure detail: `provider failed`
 </details>""",
         "milestones": ["""fix needed: delivery failed"""],
@@ -735,6 +730,75 @@ def test_finish_scene_reports_a_single_prs_scene_round(
     )
     assert outcome == "fix needed"
     assert "- review/fix round: 4" in publisher.finish_bodies[0]
+
+
+# The run facts the Diagnosis correlation row reports (Issue #2057): ONE
+# row carrying run, branch, session, phase and last_activity, rendered
+# from the snapshot the field rows above it render — never re-parsed out
+# of the localized labels.
+SESSION_WITH_ID = "\n".join((
+    '{"type": "session", "id": "sess-1"}', SESSION_RECORD,
+))
+CORRELATION_LABEL = {"en": "- correlation: ", "zh": "- correlation："}
+
+
+def _correlation_rows(body: str) -> list[str]:
+    return [
+        line for line in body.splitlines()
+        if "run=" in line and "branch=" in line
+    ]
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_failure_comment_shows_the_run_correlation_once(
+        monkeypatch, tmp_path, language_code):
+    """Issue #2057 acceptance 1: a recoverable failure with a session
+    snapshot renders exactly ONE correlation row in the Diagnosis fold,
+    in the run's language, carrying all five run facts — no
+    `legacy correlation` / `旧版关联信息` row above it and no second row
+    re-parsed out of the localized labels."""
+    _, posted, _ = _report(
+        monkeypatch, tmp_path, session=True, publisher=FakePublisher(),
+        session_content=SESSION_WITH_ID, classify=True, evidence=False,
+        language_code=language_code,
+    )
+    body = posted[0]
+    assert _correlation_rows(body) == [
+        f"{CORRELATION_LABEL[language_code]}`run=abcdef12 branch={BRANCH} "
+        "session=sess-1 phase=bash last_activity=2026-09-28T10:00:00Z`",
+    ]
+    assert "legacy correlation" not in body
+    assert "旧版关联信息" not in body
+    # Its values equal the field rows above it.
+    values = {
+        "run": "abcdef12", "branch": BRANCH, "session": "sess-1",
+        "phase": "bash", "last_activity": "2026-09-28T10:00:00Z",
+    }
+    for key, value in values.items():
+        label = language.text(language_code, f"failure.scene.{key}")
+        assert f"- {label}: `{value}`" in body
+
+
+@pytest.mark.parametrize("language_code", ["en", "zh"])
+def test_failure_comment_correlation_row_uses_the_placeholder_facts(
+        monkeypatch, tmp_path, language_code):
+    """Issue #2057 acceptance 2: without a session snapshot the one
+    correlation row carries the same placeholder values as the field rows
+    (`session=-`, `phase=starting`, `last_activity=-`)."""
+    _, posted, _ = _report(
+        monkeypatch, tmp_path, session=False, publisher=FakePublisher(),
+        classify=True, evidence=False, language_code=language_code,
+    )
+    body = posted[0]
+    assert _correlation_rows(body) == [
+        f"{CORRELATION_LABEL[language_code]}`run=abcdef12 branch={BRANCH} "
+        "session=- phase=starting last_activity=-`",
+    ]
+
+
+def test_the_legacy_correlation_label_left_the_catalogue():
+    """Issue #2057: the row it named is gone, so the entry goes with it."""
+    assert "failure.scene.legacy_correlation" not in language.MESSAGES
 
 
 @pytest.mark.parametrize(
