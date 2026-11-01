@@ -126,11 +126,11 @@ from orbi.progress import (
     progress_body_with_outcome,
     progress_state,
     recoverable_scene_body,
-    run_info_fields,
     run_marker,
     safe_publish,
     validate_run_id,
 )
+from orbi.run_fields import RunFields
 from orbi.delivery_comment import (
     opened_pr_comment_body,
     pr_attribution_footer,
@@ -704,8 +704,10 @@ def _recover_missing_pr_scene(
                    (base_branch, base_sha, url)):
             return None
         body = opened_pr_comment_body(
-            run_id, f"base_branch={base_branch} base_sha={base_sha} "
-            f"run_id={run_id} priority=normal", url,
+            run_id, RunFields(
+                run_id=run_id, priority="normal",
+                base_branch=base_branch, base_sha=base_sha,
+            ), url,
             language_code=language_code, status_url=status_url,
             issue=number, issue_title=issue.get("title"),
         )
@@ -1009,7 +1011,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
     run_id = new_run_id()
     set_run_id(run_id)
     priority = issue_priority(issue)
-    run_info = f"run_id={run_id} priority={priority} task_type=ticket-only"
+    run_info = RunFields(run_id=run_id, priority=priority, task_type="ticket-only")
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
         language_code=language.of(config), status_url=config.status_url,
@@ -1064,7 +1066,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
         publish(
             action=lambda: publisher.milestone(language.text(
                 language.of(config), "runner.ticket_only_milestone",
-                run_info=run_info,
+                run_info=run_info.text(),
             )),
         )
         publish(
@@ -1094,7 +1096,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
                     run_marker(run_id), "runner.ticket_only_failed",
                     language_code=language.of(config), issue=number,
                     status_url=config.status_url, title=issue.get("title"),
-                    detail=detail, run_info=run_info, run_id=run_id,
+                    detail=detail, run_info=run_info.text(), run_id=run_id,
                 ),
                 current_labels={IN_PROGRESS_LABEL, ready_label},
                 language_code=language.of(config), ready_label=ready_label)
@@ -1102,7 +1104,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
                 action=lambda: publisher.milestone(language.text(
                     language.of(config),
                     "runner.ticket_only_blocked_milestone",
-                    detail=sanitize(detail), run_info=run_info,
+                    detail=sanitize(detail), run_info=run_info.text(),
                 )),
             )
         except Exception:
@@ -1680,19 +1682,18 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             # The external takeover delivers the contributor's own
             # branch — the identity the takeover PR is frozen on.
             branch = takeover_pr["headRefName"]
-        run_info = (
-            f"base_branch={base_branch} base_sha={base_sha} run_id={run_id} "
-            f"priority={priority}"
+        run_info = RunFields(
+            run_id=run_id, priority=priority,
+            base_branch=base_branch, base_sha=base_sha,
+            task_type="ops" if ops else None,
         )
-        if ops:
-            run_info += " task_type=ops"
         if facts.repo_policy is not None and facts.repo_policy.sha is not None:
             # The run comment carries the repository config sha
             # (the file blob at the default branch tip) so a policy change is
             # always visible on the run.
-            run_info += f" repo_config={facts.repo_policy.sha}"
+            run_info = replace(run_info, repo_config=facts.repo_policy.sha)
         LOGGER.info(
-            "issue=%s %s", number, run_info,
+            "issue=%s %s", number, run_info.text(),
         )
         if not in_progress and dispatch_label in claim_labels \
                 and takeover_pr is None:

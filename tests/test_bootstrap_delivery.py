@@ -3343,13 +3343,22 @@ def test_external_takeover_pr_returns_none_without_a_marker(monkeypatch,
     ) is None
 
 
+def _run_fields():
+    """The run fields of a claimed delivery (Issue #2055)."""
+    from orbi.run_fields import RunFields
+
+    return RunFields(
+        run_id="a1b2c3d4", priority="normal", base_branch="main",
+        base_sha="abc123def456",
+    )
+
+
 def test_opened_pr_comment_round_trips_the_external_flag():
     """The takeover scene comment carries `external: true` and the parser
     restores it; a Runner-owned scene parses as non-external."""
     body = runner.opened_pr_comment_body(
         "a1b2c3d4",
-        "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4 "
-        "priority=normal",
+        _run_fields(),
         "https://github.com/xqliu/orbi/pull/592", external=True, language_code="en",
     )
     scene = run_state.parse_pr_comment(body)
@@ -3359,8 +3368,7 @@ def test_opened_pr_comment_round_trips_the_external_flag():
 
     own = run_state.parse_pr_comment(runner.opened_pr_comment_body(
         "a1b2c3d4",
-        "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4 "
-        "priority=normal",
+        _run_fields(),
         "https://github.com/xqliu/orbi/pull/40", language_code="en",
     ))
     assert bool(own["external"]) is False

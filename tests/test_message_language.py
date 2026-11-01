@@ -24,6 +24,7 @@ from orbi import release_comments, review_rounds
 from orbi.config import RunnerConfig
 from orbi.delivery_scene import RunContext
 from orbi.repo_config import RepoConfigError, parse_repo_config, resolve_policy
+from orbi.run_fields import RunFields
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -215,7 +216,7 @@ def test_the_packaged_example_documents_the_commented_default():
 
 def test_the_explicit_language_renders(tmp_path):
     body = delivery_comment.started_pi_comment_body(
-        _ctx(tmp_path), "run_id=abcdef12 priority=p0",
+        _ctx(tmp_path), RunFields(run_id="abcdef12", priority="p0"),
         language_code="zh",
     )
     assert "Orbi 已启动 Pi：" in body
@@ -223,7 +224,8 @@ def test_the_explicit_language_renders(tmp_path):
 
 def test_started_scene_follows_the_bound_language(tmp_path):
     zh = delivery_comment.started_pi_comment_body(
-        _ctx(tmp_path), "run_id=abcdef12 priority=p0", language_code="zh",
+        _ctx(tmp_path), RunFields(run_id="abcdef12", priority="p0"),
+        language_code="zh",
     )
     assert "Orbi 已启动 Pi：" in zh
     assert comment_kind.comment_kind(zh) == comment_kind.COMMENT_KIND_STARTED
@@ -231,7 +233,8 @@ def test_started_scene_follows_the_bound_language(tmp_path):
         [{"body": zh}], "abcdef12",
     ) is not None
     en = delivery_comment.started_pi_comment_body(
-        _ctx(tmp_path), "run_id=abcdef12 priority=p0", language_code="en",
+        _ctx(tmp_path), RunFields(run_id="abcdef12", priority="p0"),
+        language_code="en",
     )
     assert "Orbi started Pi:" in en
 
@@ -251,8 +254,10 @@ def test_the_started_comment_never_names_the_runner_worktree_path(
                       / "orbi-owner-repo-issue-1153-abc12345"),
             source_repo="owner/repo",
         ),
-        "base_branch=main base_sha=abc123 repo_config=cfg "
-        "run_id=abc12345 priority=normal session=session-1",
+        RunFields(
+            run_id="abc12345", priority="normal", base_branch="main",
+            base_sha="abc123", repo_config="cfg",
+        ),
         language_code=language_code,
     )
     assert str(probe) not in body
@@ -260,16 +265,18 @@ def test_the_started_comment_never_names_the_runner_worktree_path(
     assert "run_id=abc12345" in body
     details = body.split("<details><summary>", 1)[1]
     branch_label = "分支" if language_code == "zh" else "branch"
-    session_label = "会话" if language_code == "zh" else "session"
     assert f"- {branch_label}: orbi/owner-repo-issue-1153" in details
-    assert f"- {session_label}: session-1" in details
 
 
 def test_opened_pr_comment_keeps_the_scene_block(tmp_path):
     from orbi import scene
 
     zh = delivery_comment.opened_pr_comment_body(
-        "abcdef12", "base_branch=main base_sha=abc run_id=abcdef12",
+        "abcdef12",
+        RunFields(
+            run_id="abcdef12", priority="normal", base_branch="main",
+            base_sha="abc",
+        ),
         "https://github.com/owner/repo/pull/1", language_code="zh",
     )
     assert "Orbi 已开启 PR：" in zh
@@ -301,7 +308,9 @@ def test_recoverable_scene_body_follows_the_language():
     )
     zh = progress.recoverable_scene_body(
         run_id="abcdef12", recoverable_name="model_wait 已恢复", record=record,
-        detail="boom", run_info="run_id=abcdef12", language_code="zh",
+        detail="boom", run_info=RunFields(
+            run_id="abcdef12", priority="normal"),
+        language_code="zh",
     )
     assert "下一个 tick 自动重试" in zh
     assert progress.RECOVERED_MARKER_PATTERN.search(zh) is not None
@@ -513,7 +522,7 @@ def test_release_comments_follow_the_language():
     from orbi.failure_report import PreExistingCIFailure
 
     zh = release_comments.release_success_comment_body(
-        "abcdef12", "run_id=abcdef12 priority=p0",
+        "abcdef12", RunFields(run_id="abcdef12", priority="p0"),
         "https://github.com/owner/repo/releases/tag/v1", "v1", "abc",
         ["scope item"], ["gate item"], "test evidence", "milestone",
         "zh",
@@ -521,7 +530,7 @@ def test_release_comments_follow_the_language():
     assert "Orbi 已发布：" in zh
     assert "## 发布范围（逐项验证）" in zh
     failure_body = release_comments.release_failure_comment_body(
-        "abcdef12", "run_id=abcdef12 priority=p0",
+        "abcdef12", RunFields(run_id="abcdef12", priority="p0"),
         PreExistingCIFailure("boom"), "zh",
     )
     assert "Orbi release 失败（ai-blocked）" in failure_body
@@ -584,7 +593,8 @@ def test_the_run_details_summary_follows_the_language():
     assert "<summary>运行详情</summary>" in zh
     assert "<summary>Run details</summary>" in en
     zh_release = release_comments.release_success_comment_body(
-        "abcdef12", "run_id=abcdef12 priority=p0 session=" + "x" * 300,
+        "abcdef12", RunFields(
+            run_id="abcdef12", priority="p0", repo_config="x" * 300),
         "https://github.com/owner/repo/releases/tag/v1", "v1", "abc",
         ["scope"], ["gate"], "tests", "milestone", "zh",
     )
@@ -623,22 +633,25 @@ def test_started_comment_translates_visible_rows_and_keeps_machine_rows(
 ):
     zh = delivery_comment.started_pi_comment_body(
         _ctx(tmp_path),
-        "base_branch=main base_sha=abc1234 repo_config=deadbeef "
-        "run_id=abcdef12 priority=normal session=session-1",
+        RunFields(
+            run_id="abcdef12", priority="normal", base_branch="main",
+            base_sha="abc1234", repo_config="deadbeef",
+        ),
         language_code="zh",
     )
     assert "Orbi 已启动 Pi： run_id=abcdef12 优先级=普通" in zh
     assert "- 基础分支: main" in zh
     assert "- 优先级: 普通" in zh
     assert "- 基础 SHA: abc1234" in zh
-    assert "- 会话: session-1" in zh
     # The public machine rows are byte-identical.
     assert "- run_id=abcdef12" in zh
     assert "- repo_config: deadbeef" in zh
     en = delivery_comment.started_pi_comment_body(
         _ctx(tmp_path),
-        "base_branch=main base_sha=abc1234 repo_config=deadbeef "
-        "run_id=abcdef12 priority=normal session=session-1",
+        RunFields(
+            run_id="abcdef12", priority="normal", base_branch="main",
+            base_sha="abc1234", repo_config="deadbeef",
+        ),
         language_code="en",
     )
     assert "Orbi started Pi: run_id=abcdef12 priority=normal" in en
@@ -656,14 +669,16 @@ def test_chinese_started_headline_carries_no_english_priority_key(tmp_path):
     and stays byte-identical. An English repository is unchanged.
     """
     zh = delivery_comment.started_pi_comment_body(
-        _ctx(tmp_path), "run_id=abcdef12 priority=p0", language_code="zh",
+        _ctx(tmp_path), RunFields(run_id="abcdef12", priority="p0"),
+        language_code="zh",
     )
     headline = zh.splitlines()[2]
     assert "priority=" not in zh
     assert "run_id=abcdef12" in headline
     assert "优先级=P0" in headline
     en = delivery_comment.started_pi_comment_body(
-        _ctx(tmp_path), "run_id=abcdef12 priority=p0", language_code="en",
+        _ctx(tmp_path), RunFields(run_id="abcdef12", priority="p0"),
+        language_code="en",
     )
     assert en.splitlines()[2] == "Orbi started Pi: run_id=abcdef12 priority=p0"
 
@@ -714,7 +729,10 @@ def test_the_workflow_docs_name_the_rows_a_chinese_run_shows():
 def test_opened_pr_comment_translates_visible_rows():
     zh = delivery_comment.opened_pr_comment_body(
         "abcdef12",
-        "base_branch=main base_sha=abc1234 run_id=abcdef12 priority=p0",
+        RunFields(
+            run_id="abcdef12", priority="p0", base_branch="main",
+            base_sha="abc1234",
+        ),
         "https://github.com/owner/repo/pull/1", language_code="zh",
     )
     assert "Orbi 已开启 PR： https://github.com/owner/repo/pull/1" in zh
@@ -806,8 +824,10 @@ def test_zh_contract_rows_are_byte_identical(tmp_path):
     """Issue #1729 AC4: the machine rows stay exactly as v0.7.2."""
     started = delivery_comment.started_pi_comment_body(
         _ctx(tmp_path),
-        "base_branch=main base_sha=abc1234 repo_config=deadbeef "
-        "run_id=abcdef12 priority=normal",
+        RunFields(
+            run_id="abcdef12", priority="normal", base_branch="main",
+            base_sha="abc1234", repo_config="deadbeef",
+        ),
         language_code="zh",
     )
     assert "- repo_config: deadbeef" in started
@@ -818,7 +838,7 @@ def test_zh_contract_rows_are_byte_identical(tmp_path):
     from orbi import release_comments
 
     failed = release_comments.release_failure_comment_body(
-        "abcdef12", "run_id=abcdef12 priority=normal",
+        "abcdef12", RunFields(run_id="abcdef12", priority="normal"),
         PreExistingCIFailure("boom"), "zh",
     )
     assert "- failure: boom" in failed
@@ -947,7 +967,8 @@ def test_mixed_history_stays_readable(tmp_path):
         "<!-- orbi:run=abcdef12 -->\n\nOrbi started Pi: run_id=abcdef12\n"
     )
     zh_started = delivery_comment.started_pi_comment_body(
-        _ctx(tmp_path), "run_id=abcdef12 priority=p0", language_code="zh",
+        _ctx(tmp_path), RunFields(run_id="abcdef12", priority="p0"),
+        language_code="zh",
     )
     assert progress.find_started_comment(
         [{"body": old_started}], "abcdef12",

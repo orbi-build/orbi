@@ -25,7 +25,6 @@ SRC_DIR = Path(__file__).resolve().parent.parent / "src" / "orbi"
 PUBLIC_HELPERS = {
     "progress": {
         "fenced",
-        "run_info_fields",
         "progress_state",
         "progress_body_with_outcome",
         "safe_publish",
@@ -37,6 +36,8 @@ PUBLIC_HELPERS = {
         "failure_summary",
         "failure_comment_body",
     },
+    # The run's fields travel as values (Issue #2055); this leaf owns them.
+    "run_fields": {"RunFields"},
     "delivery_labels": {"label_names", "label_name_set"},
     "pi_session": {"pi_extension_env"},
     "pi_command": {"skills_for"},

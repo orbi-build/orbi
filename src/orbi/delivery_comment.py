@@ -33,7 +33,6 @@ from orbi.journal import validate_run_id
 from orbi.progress import (
     STARTED_HEADER,
     field_block,
-    run_info_fields,
     run_marker,
 )
 from orbi.progress_display import (
@@ -41,31 +40,31 @@ from orbi.progress_display import (
     localized_fields,
     vocabulary,
 )
+from orbi.run_fields import RunFields
 
 
-def started_pi_comment_body(ctx: RunContext, run_info: str,
+def started_pi_comment_body(ctx: RunContext, run_info: RunFields,
                             extra_fields: dict | None = None, *,
                             language_code: str,
                             status_url: str | None = None,
                             issue_title: str | None = None) -> str:
     """The start comment doubles as the recoverable run scene.
 
-    `extra_fields` carries the repo-config audit fields;
-    their values may contain spaces, so they are rendered by the field
-    block and never spliced into the space-separated `run_info`. The
-    historical English `STARTED_HEADER` stays the reader's fallback for a
-    comment written before the kind marker existed.
+    `run_info` is the run's fields as values (Issue #2055); `extra_fields`
+    carries the repo-config audit fields, whose values may contain spaces,
+    so they stay their own comment fields and never enter the run fields.
+    The historical English `STARTED_HEADER` stays the reader's fallback for
+    a comment written before the kind marker existed.
     """
-    fields = run_info_fields(run_info)
+    fields = run_info.as_fields()
     fields["branch"] = str(ctx.branch)
     if extra_fields:
         fields.update(extra_fields)
-    info = run_info_fields(run_info)
     rendered_info = {
-        key: (vocabulary(language_code, "priority", info[key])
-              if key == "priority" else info[key])
+        key: (vocabulary(language_code, "priority", fields[key])
+              if key == "priority" else fields[key])
         for key in ("run_id", "priority")
-        if key in info
+        if key in fields
     }
     # The headline's key is the same display label the rows use
     # (Issue #1746): `run_id` has no catalogue entry and stays the
@@ -98,7 +97,7 @@ def pr_attribution_footer(issue: int, attribution_link: str, *,
     )
 
 
-def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
+def opened_pr_comment_body(run_id: str, run_info: RunFields, pr_url: str,
                            external: bool = False, *,
                            language_code: str,
                            status_url: str | None = None,
@@ -120,18 +119,27 @@ def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
 
     The machine-readable record is the single hidden `orbi:scene:v1`
     block rendered from the `Scene`; the field lines below
-    the headline stay for humans only.
+    the headline stay for humans only. The record is built from the run's
+    fields as values (Issue #2055), never from the display text.
     """
-    fields = run_info_fields(run_info)
+    fields = run_info.as_fields()
     if external:
         fields["external"] = "true"
+    # Fail fast: the scene IS the resume record; a run that reached an open
+    # PR always knows both values (the frozen base), and a scene without
+    # them could never resume.
+    if run_info.base_branch is None or run_info.base_sha is None:
+        raise ValueError(
+            "opened-PR scene needs base_branch and base_sha, got "
+            f"{run_info.as_fields()!r}"
+        )
     headline = language.text(
         language_code, "delivery.opened_pr_headline",
     ) + " " + pr_url
     scene_record = scene.Scene(
         run_id=validate_run_id(run_id),
-        base_branch=fields["base_branch"],
-        base_sha=fields["base_sha"],
+        base_branch=run_info.base_branch,
+        base_sha=run_info.base_sha,
         pr_url=pr_url,
         external="true" if external else "",
     )

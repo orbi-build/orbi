@@ -806,14 +806,17 @@ def test_pick_ready_issue_without_config_uses_host_keys(monkeypatch):
 
 def test_started_pi_comment_body_renders_repo_config_fields():
     from orbi.progress import field_block
+    from orbi.run_fields import RunFields
 
     body = runner.started_pi_comment_body(
         RunContext(
             run_id="a1b2c3d4", issue=18, branch="branch",
             worktree=Path("/tmp/wt"), source_repo="owner/repo",
         ),
-        "base_branch=beta base_sha=abc run_id=a1b2c3d4 priority=normal "
-        "repo_config=" + "a" * 40,
+        RunFields(
+            run_id="a1b2c3d4", priority="normal", base_branch="beta",
+            base_sha="abc", repo_config="a" * 40,
+        ),
         extra_fields={
             "repo_config_changed": "old..new",
             "repo_config_diff": "base_branch=main->beta",

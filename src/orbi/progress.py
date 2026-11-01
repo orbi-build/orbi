@@ -40,6 +40,7 @@ from orbi.journal import (
 )
 from orbi import language, user_summary
 from orbi.checks import test_status
+from orbi.run_fields import RunFields
 from orbi.pi_activity import activity_snapshot
 from orbi.comment_kind import (
     COMMENT_KIND_STARTED,
@@ -316,7 +317,7 @@ def bump_recovered_repeat(body: str, reason_code: str, previous: int) -> str:
 
 def recoverable_scene_body(
     *, run_id: str, recoverable_name: str, record: Failure,
-    detail: str, run_info: str,
+    detail: str, run_info: RunFields,
     language_code: str, status_url: str | None = None,
     issue: int | None = None, title: str | None = None,
 ) -> str:
@@ -331,7 +332,9 @@ def recoverable_scene_body(
     `orbi:fail=` marker: a recoverable failure never escalates, whatever
     the count, so the Issue stays `ai-in-progress` (#1455/#227).
     `failure_scene` folds the same `(run_id, reason_code)` into one
-    comment and gives a different cause its own.
+    comment and gives a different cause its own. `run_info` is the run's
+    fields; the sentence below is the ONE place that renders their
+    space-separated text (Issue #2055).
     """
     return language.text(
         language_code, "progress.recoverable_scene",
@@ -339,7 +342,7 @@ def recoverable_scene_body(
         recovered_marker=recovered_marker(record.reason_code),
         recoverable_name=recoverable_name,
         reason_code=record.reason_code,
-        run_info=run_info,
+        run_info=run_info.text(),
         action_code=record.action_code,
         retry_safe=str(record.retry_safe).lower(),
         detail=fenced(redact_local_paths(detail)),
@@ -744,14 +747,6 @@ class ProgressPublisher:
 
 # --- run-scene helpers (the progress state belongs
 # --- to the progress module) ----
-
-
-def run_info_fields(run_info: str) -> dict[str, str]:
-    """Extract the runner-owned key/value fields for comment rendering."""
-    return dict(
-        part.split("=", 1) for part in run_info.split()
-        if "=" in part
-    )
 
 
 def progress_state(ctx: RunContext, *, title: str, role: str,
