@@ -42,7 +42,7 @@ def bindings(name: str) -> list:
 @pytest.fixture(autouse=True, scope="module")
 def _seam_isolation_after_the_module():
     """The last test's teardown — the autouse `_default_cli_install_preflight`
-    fixture undoes its two `refresh_cli_install` patches with
+    fixture undoes its `refresh_cli_install` patch with
     `MonkeyPatch.undo` — leaves the real bindings (Issue #1953). A module
     fixture tears down after every function fixture of its last test."""
     yield
@@ -83,8 +83,8 @@ def test_nested_contexts_restore_the_outer_fake_then_the_original():
 
 def test_an_inner_context_leaves_the_autouse_preflight_fake_active(
         _default_cli_install_preflight):
-    """The real autouse preflight fixture is the outer patch: its fake (two
-    `refresh_cli_install` patches in one `monkeypatch` fixture) is still on
+    """The real autouse preflight fixture is the outer patch: its fake (one
+    `refresh_cli_install` patch in the `monkeypatch` fixture) is still on
     every binding module after an inner context exits (Issue #1953)."""
     fixture_fake = seam.refresh_cli_install
     assert fixture_fake is not REAL_REFRESH_CLI_INSTALL
@@ -102,9 +102,8 @@ def test_an_inner_context_leaves_the_autouse_preflight_fake_active(
 
 
 def test_repeated_patches_in_one_context_restore_the_original():
-    """Repeated patches in ONE `MonkeyPatch` instance — the autouse preflight
-    fixture patches the same name twice — leave the real bindings once the
-    instance undoes them in reverse."""
+    """Repeated patches in ONE `MonkeyPatch` instance leave the real
+    bindings once the instance undoes them in reverse."""
     original = bindings("run_command")
     first, second = object(), object()
     with pytest.MonkeyPatch.context() as patch:

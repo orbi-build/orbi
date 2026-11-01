@@ -71,16 +71,10 @@ def _default_cli_install_preflight(monkeypatch):
     tmp repo_dirs that carry no tool env, and the real `uv tool
     install` must never run in them. The refresh's own tests and the
     wiring tests stub or exercise it explicitly (a ``monkeypatch``
-    always wins over this default). The implementation lives in
-    `orbi.runner` itself (see the NOTE there), so the stub
-    patches ITS module global — the call `main()` makes."""
-    import orbi.release as release
-
-    monkeypatch.setattr(seam, "refresh_cli_install", lambda *a, **k: "unchanged",
-    )
-    # Issue #286: `process_release` now lives in `orbi.release` and reads
-    # the refresh through the release module global — stub that binding
-    # with the same default no-op.
+    always wins over this default). The seam fan-out already reaches
+    every module that binds `refresh_cli_install` (`orbi.runner`,
+    `orbi.release_run`), so one patch covers the call each makes
+    (Issue #2009)."""
     monkeypatch.setattr(seam, "refresh_cli_install", lambda *a, **k: "unchanged",
     )
 

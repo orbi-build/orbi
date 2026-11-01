@@ -41,6 +41,8 @@ from conftest import git
 import orbi.runner as runner
 from seam import seam
 
+from tests.fakes.pi import install_fake_pi
+
 REPO = "owner/repo"
 RENAME_OLD = "xqliu/orbi"
 RENAME_NEW = "orbi-build/orbi"
@@ -158,16 +160,6 @@ def clone(tmp_path: Path) -> Path:
 def _reset_run_id(bind_run_id):
     """Each test starts without a bound run id."""
     bind_run_id(None)
-
-
-def install_fake_pi(monkeypatch, tmp_path: Path, script: str) -> None:
-    """Put a fake ``pi`` executable first on PATH for the runner's Popen."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(exist_ok=True)
-    fake = bin_dir / "pi"
-    fake.write_text(script, encoding="utf-8")
-    fake.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
 def install_fake_gh(monkeypatch, comments: list[str],
