@@ -36,6 +36,8 @@ from tests.test_pilot_setup import (
 pytestmark = pytest.mark.usefixtures("systemd_scheduler")
 
 RUN_ID_RE = re.compile(r"^[0-9a-f]{8}$")
+# The Pi session file name the stub writes; a real Pi names its own.
+SESSION_FILE = "session.jsonl"
 SKILL_REL = Path(
     "integrations/claude-plugin/skills/suggest-ai-ready-issues/SKILL.md"
 )
@@ -104,6 +106,14 @@ class PiStub:
     def __call__(self, command, **kwargs):
         recorded = (list(command), kwargs)
         self.calls.append(recorded)
+        # A real Pi writes its session JSONL into the `--session-dir` it
+        # was given; the stub does the same, so a test can assert where
+        # the run's session directories are (Issue #2058).
+        session_dir = Path(command[command.index("--session-dir") + 1])
+        session_dir.mkdir(parents=True, exist_ok=True)
+        (session_dir / SESSION_FILE).write_text(
+            '{"type":"session","id":"sess-1"}' + chr(10), encoding="utf-8",
+        )
         self.sessions[_tools_of(command)] = recorded
         answer = (
             self.understanding
@@ -365,6 +375,13 @@ def test_suggest_runs_the_understanding_session_in_parallel(
     # Its session files stay under the run directory, next to the
     # suggestions session's `.pi-session`.
     assert run_dir in Path(kwargs["cwd"]).parents
+    # The PUBLIC contract (Issue #2058) names both session directories
+    # of a run: a caller accounting the run's model usage reads
+    # `<run_dir>/.pi-session/` AND `<run_dir>/.understanding/.pi-session/`.
+    # Both JSONLs are there after the command exits.
+    assert (run_dir / ".pi-session" / SESSION_FILE).is_file()
+    assert (run_dir / ".understanding" / ".pi-session"
+            / SESSION_FILE).is_file()
 
 
 def test_suggest_trims_the_understanding_to_600_characters(
@@ -1134,6 +1151,13 @@ def test_suggest_fails_fast_when_the_pi_session_fails(
         ]) == 1
     assert "suggest_failed" in capsys.readouterr().err
     assert "pi session exploded" in caplog.text
+    # Issue #2058: the failed suggestions session never drops the run
+    # directory, so the understanding session's JSONL is still where the
+    # contract documents it after the non-zero exit.
+    run_dir = _run_dirs(world)[0]
+    assert (run_dir / ".pi-session" / SESSION_FILE).is_file()
+    assert (run_dir / ".understanding" / ".pi-session"
+            / SESSION_FILE).is_file()
 
 
 def test_fake_gh_creates_an_issue_without_a_milestone(tmp_path, monkeypatch, capsys):
