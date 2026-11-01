@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
-"""Size ratchet for the Article 3 source-file limits (Issue #1229).
+"""Size ratchet for the Article 3 source-file limits (Issues #1229, #2007).
 
-The frozen baseline records the number of top-level definitions in
-``runner.py`` and the line counts of modules already over 1,000 lines.
-Those values may only shrink. A new module may not cross the 1,000-line
-cap without first being split by domain.
+The frozen baseline records three metrics:
+
+- the number of top-level definitions in ``runner.py``;
+- the line counts of modules already over 1,000 lines (Article 3.5);
+- the line counts of every function in ``src/orbi`` already over 100 lines.
+
+A function's length is measured over every ``ast.FunctionDef``/
+``ast.AsyncFunctionDef`` with ``end_lineno - lineno + 1`` (decorators are
+not counted, a nested def counts on its own and is also inside its parent)
+and is recorded under ``<module>::<qualified function name>``. The
+100-line function cap is this tool's own choice (Issue #2007), not a
+CONSTITUTION article.
+
+Every recorded value may only shrink. A new module may not cross the
+1,000-line cap and a new function may not cross the 100-line cap without
+being split first.
 
 Usage: python3 tools/size_ratchet.py [--update] [src_dir]
 """
@@ -17,10 +29,23 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = REPO_ROOT / "src" / "orbi"
 BASELINE_FILE = Path(__file__).resolve().parent / "size_ratchet_baseline.json"
 SIZE_CAP = 1000
+FUNCTION_CAP = 100
+
+
+def _functions(node: ast.AST, prefix: str = ""):
+    """Yield `(qualified name, line count)` for every function under `node`."""
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            name = f"{prefix}{child.name}"
+            if not isinstance(child, ast.ClassDef):
+                yield name, child.end_lineno - child.lineno + 1
+            yield from _functions(child, f"{name}.")
+        else:
+            yield from _functions(child, prefix)
 
 
 def counts(src_dir: Path) -> dict[str, object]:
-    """Measure runner's direct definitions and every oversized Python module."""
+    """Measure runner's direct definitions, oversized modules and functions."""
     src_dir = Path(src_dir)
     runner = src_dir / "runner.py"
     tree = ast.parse(runner.read_text(encoding="utf-8"), filename=str(runner))
@@ -33,10 +58,26 @@ def counts(src_dir: Path) -> dict[str, object]:
         for path in sorted(src_dir.glob("*.py"))
         if len(path.read_text(encoding="utf-8").splitlines()) > SIZE_CAP
     }
+    oversized_functions = {
+        f"{path.name}::{name}": lines
+        for path in sorted(src_dir.glob("*.py"))
+        for name, lines in _functions(
+            ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        )
+        if lines > FUNCTION_CAP
+    }
     return {
         "runner_top_level_defs": runner_top_level_defs,
         "oversized_modules": oversized_modules,
+        "oversized_functions": oversized_functions,
     }
+
+
+def _recorded_lines(value: object) -> bool:
+    """Whether a baseline entry is a `{name: line count}` mapping."""
+    return isinstance(value, dict) and all(
+        isinstance(name, str) and type(lines) is int for name, lines in value.items()
+    )
 
 
 def read_baseline(baseline_file: Path) -> dict[str, object] | None:
@@ -47,15 +88,11 @@ def read_baseline(baseline_file: Path) -> dict[str, object] | None:
         baseline = json.loads(baseline_file.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
-    oversized = baseline.get("oversized_modules") if isinstance(baseline, dict) else None
     if (
         not isinstance(baseline, dict)
         or type(baseline.get("runner_top_level_defs")) is not int
-        or not isinstance(oversized, dict)
-        or any(
-            not isinstance(name, str) or type(lines) is not int
-            for name, lines in oversized.items()
-        )
+        or not _recorded_lines(baseline.get("oversized_modules"))
+        or not _recorded_lines(baseline.get("oversized_functions"))
     ):
         return None
     return baseline
@@ -109,10 +146,18 @@ def main(argv: list[str], *, src_dir: Path | None = None,
         if value > ceiling:
             failures.append((name, value, ceiling))
 
+    current_functions = current["oversized_functions"]
+    baseline_functions = baseline["oversized_functions"]
+    for name, value in current_functions.items():
+        ceiling = baseline_functions.get(name, FUNCTION_CAP)
+        if value > ceiling:
+            failures.append((name, value, ceiling))
+
     print(
-        "size ratchet (Issue #1229): "
+        "size ratchet (Issues #1229, #2007): "
         f"runner_top_level_defs={current_defs}/{baseline_defs} "
         f"oversized_modules={current_modules!r} "
+        f"oversized_functions={len(current_functions)} over {FUNCTION_CAP} lines "
         "(current/baseline ceilings)"
     )
     if failures:
@@ -120,8 +165,8 @@ def main(argv: list[str], *, src_dir: Path | None = None,
         for name, value, ceiling in failures:
             print(
                 f"  {name}: current {value} > ceiling {ceiling}; "
-                "extract code into a sibling module, or, for a deliberate "
-                "reduction, run `python3 tools/size_ratchet.py --update`"
+                "split the code, or, for a deliberate reduction, run "
+                "`python3 tools/size_ratchet.py --update`"
             )
         return 1
     return 0
