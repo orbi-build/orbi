@@ -40,6 +40,13 @@ def failing_git(monkeypatch, error: BaseException | None = None) -> None:
     monkeypatch.setattr(runner_marker.subprocess, "run", _raise)
 
 
+def fixed_fingerprint(monkeypatch, fingerprint: str = "8a12fb1c") -> None:
+    """Pin the fingerprint every comment footer renders."""
+    from orbi import progress
+
+    monkeypatch.setattr(progress, "runner_fingerprint", lambda: fingerprint)
+
+
 def fake_version(monkeypatch, seen: list[str], version: str = "0.3.4") -> None:
     """Answer the distribution-metadata probe and record the name read."""
     from orbi import runner_marker
