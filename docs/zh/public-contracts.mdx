@@ -18,7 +18,7 @@ description: "使用者可以依赖什么，status 与进度文档又如何报�
 
 | 接口 | 定义 |
 |---|---|
-| CLI | `orbi`（一次 Runner tick）、`orbi add`、`orbi suggest`、`orbi status`、`orbi session`、`orbi install-units`、`orbi sync-engine-source`、`orbi doctor`、`orbi check`、`orbi setup`、`orbi fix-base`、`orbi split`、`orbi amend`（每条 arity 为 0 的已登记票内命令各一个子命令）、`orbi milestone`（`milestone set <title>`）、`orbi notify`（`notify test`） |
+| CLI | `orbi`（一次 Runner tick）、`orbi add`、`orbi suggest`、`orbi draft`、`orbi status`、`orbi session`、`orbi install-units`、`orbi sync-engine-source`、`orbi doctor`、`orbi check`、`orbi setup`、`orbi fix-base`、`orbi split`、`orbi amend`（每条 arity 为 0 的已登记票内命令各一个子命令）、`orbi milestone`（`milestone set <title>`）、`orbi notify`（`notify test`） |
 | 配置 | [Getting started](/zh/getting-started) 中记录的 `orbi.toml` 字段——包括 Telegram 通知键 `telegram_chat_id`；作为 systemd `EnvironmentFile` 加载的 `.orbi/env`（其中携带 `ORBI_TELEGRAM_BOT_TOKEN`）；`pi_providers` JSON 文件 |
 | 部署 | `systemd/orbi@.service` 与 `systemd/orbi@.timer` 模板；作为 run 产物与锁目录的 `.orbi/` |
 | Label 状态机 | `labels.toml`（名称、颜色、描述）与 `src/orbi/delivery_labels.py`（状态迁移） |
@@ -30,6 +30,7 @@ description: "使用者可以依赖什么，status 与进度文档又如何报�
 | Run 现场 | 可信的 `Orbi opened PR` 评论中的隐藏版本化块 `<!-- orbi:scene:v1 {json} -->`，由 `src/orbi/scene.py` 渲染与解析；接续已有 PR 交付的机器可读记录（旁边的可读文字仅供展示） |
 | 需求 skill | 目录 `integrations/claude-plugin/skills/write-ai-ready-issue/`——`SKILL.md`（agent 如何把一句话想法变成可交付 Issue）与 `fidelity-pass.md`（独立检查草稿是否恰好问了提问者想问的） |
 | Suggestions | `orbi suggest --json` 打印的文档——`{"repo", "base_sha", "session_dir", "suggestions": [{"kind": "existing" 或 "new", "issue": existing 为 Issue 号、new 为 null, "title", "why", "body": new 为 Issue body、existing 为 null}]}`，最多三条、按优先级排序；`session_dir` 是 `<deploy_home>/.orbi/suggest/<run_id>/.pi-session/`，存放与交付 session 文件同格式的 Pi session JSONL，命令退出后运行目录 `<deploy_home>/.orbi/suggest/<run_id>/` 在成功与失败时都保留——以及产出它的 skill 目录 `integrations/claude-plugin/skills/suggest-ai-ready-issues/` |
+| 起草 | `orbi draft` 的单轮文档（输入 `{"message","conversation","draft"}`，输出 `{"reply","questions","issues","check","warning"}`）、创建文档（输入 `{"key","issues","header","issue"}`，输出 `{"created"}`）、失败文档（stderr 上的 `{"code","step","detail"}`）、session 目录布局以及 `<!-- orbi:draft:v1:... -->` Issue 标记；见[起草命令契约](#起草命令契约) |
 | 澄清提案 | 澄清停止评论中隐藏的 `<!-- orbi:suggestion:v1 kind=split -->` / `kind=criteria` 区块、其行语法、权威停止评论规则，以及公开的回执标记（`orbi-<name>-command`、`orbi-<name>-command-rejected`、`orbi-<name>-command-failed step=...` 及其 `comment=...` 键）；见[澄清提案与命令回执](#澄清提案与命令回执) |
 
 表中没有的一切都属于内部实现，可能随时变化。
@@ -388,3 +389,60 @@ Issue 已关闭或已合并，或正在等待已确认的手动动作。该 GitH
 - 不是第二个状态存储：GitHub Issue 与 label 仍是唯一状态。
 - 不是端到端时延保证：记录级观察不是 token 流。
 - 不是机密扫描器：路径策略过滤已知边界，而不是任意文件。
+
+## 起草命令契约
+
+`orbi draft` 把一句请求变成可交付的 Issue，有三种模式：
+
+- **交互**（默认）：`orbi draft --repo OWNER/REPO "<request>"` 先提问、展示草稿、接受
+  一次手写修改，仅在确认后创建 Issue。结束后不留下任何状态。
+- **一轮起草**：`--session-dir <dir>` 从 stdin 读一个文档，向 stdout 写一个（见下）。
+  多轮复用同一个 `<dir>` 会续用同一个 session，且每轮都会重放对话与当前草稿，
+  所以 session 丢失也能继续。
+- **创建**：`--create` 读取已确认的草稿并打印创建的编号。
+
+单轮输入与输出：
+
+```json
+{"message": "one sentence", "conversation": [{"role": "person", "text": "..."}], "draft": {"issues": []}}
+{"reply": "what will change", "questions": ["..."], "issues": [{"title": "...", "body": "...", "after": 1}], "check": "passed", "warning": "..."}
+```
+
+`after` 是同一草稿中更早 Issue 的 1 起始序号，表示本条要等它，没有则省略。
+只提问的一轮 `issues` 为空；草稿轮至少包含一个 Issue。`check` 只在草稿轮出现：
+`passed`，或一次重写后仍未通过的 pre-work 检查标识，以逗号分隔
+（`observable_result`、`acceptance_condition`、`single_outcome`）。`warning`
+只在保真检查无法运行或没有返回内容时出现：草稿仍然返回。
+
+创建输入，以及 stdout 上的已创建编号：
+
+```json
+{"key": "the caller's draft id", "issues": [{"title": "...", "body": "...", "after": 1}], "header": "optional text above every body", "issue": 12}
+{"created": [41, 42, 43]}
+```
+
+新建 Issue 时不带 `issue`；带 `issue` 表示给已有 Issue 补充细节：草稿只有一个
+Issue 时，把它的正文追加一次，并把 `ai-needs-detail` 换成派发标签；草稿有多个时，
+该 Issue 成为父 Issue（原生子 Issue、`after` 用 `blockedBy`、派发标签最后、
+父 Issue 打 `ai-epic`）。用同样的输入再次 `--create` 不会再创建：每个已创建
+Issue 都带有下面的标记，且只认本 runner 自己创建的 Issue。
+
+失败时向 stderr 输出一个 JSON 对象并返回退出码 1：
+
+```json
+{"code": "timeout", "step": "run the drafting session", "detail": "TimeoutExpired: ..."}
+```
+
+`code` 为 `invalid_input`、`invalid_draft`、`no_answer`、`session_failed`、`timeout`、
+`create_failed`、`too_many_rounds`、`no_request` 或 `draft_failed`。若模型已经写出
+草稿之后才超时，该轮返回这份草稿而不是失败。
+
+Session 目录布局：`<session-dir>/.pi-session/` 存放起草 session 的 Pi JSONL 以及
+渲染后的 prompt 与 context 文件，`<session-dir>/.fidelity/.pi-session/` 存放独立的
+保真检查——调用方据此统计用量并展示进度。交互模式使用同样结构的临时目录，并在结束时删除。
+
+Issue 标记：`orbi draft` 创建的每个 Issue 末尾是
+`<!-- orbi:draft:v1:<key>:<position>:<sha256> -->`——调用方的 `key`、该 Issue 在草稿中的
+1 起始序号，以及创建时正文（不含标记行）的 sha256。pre-work 检查在领取时读取它
+（`clarify.enforce`）：本 runner 创建、正文仍与指纹一致的 Issue 不再被判定，因为起草
+时已由同一个检查判定过。正文被编辑过，或标记落在别的账号创建的 Issue 上，仍照旧判定。

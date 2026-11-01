@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The `orbi session` command helpers (Issue #1576).
+"""The `orbi session` command and its helpers (Issue #1576).
 
 The live Pi session viewer is a debug attachment (the journal and GitHub
 remain the daily entry points): it finds the newest
@@ -10,10 +10,13 @@ the Article 3 size ratchet; `cli_commands` imports them unchanged.
 """
 from __future__ import annotations
 
+import json
+import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
 
+from orbi import config as config_domain
 from orbi.pi_activity import latest_session_file
 
 
@@ -161,3 +164,43 @@ def format_session_line(record: dict) -> str:
     if len(summary) > SESSION_LINE_MAX:
         summary = summary[:SESSION_LINE_MAX].rstrip() + "..."
     return f"{timestamp} {role} {summary}"
+
+
+def command_session(config: config_domain.RunnerConfig, args, parser) -> int:
+    path = find_session_file(config.repo_dir)
+    if path is None:
+        print(
+            f"no pi session under {config.repo_dir / '.worktrees'}: "
+            "no Pi is running",
+            file=sys.stderr,
+        )
+        return 1
+    if not args.follow:
+        if args.pretty:
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(record, dict):
+                        print(format_session_line(record))
+        else:
+            print(path)
+        return 0
+    for line in follow_session_file(path):
+        if args.pretty:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict):
+                print(format_session_line(record))
+        else:
+            print(line)
+        sys.stdout.flush()
+    return 0
+

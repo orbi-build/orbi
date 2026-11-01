@@ -86,7 +86,11 @@ Before drafting, state the route in one line, then follow it:
 - **Small** — one observable behaviour in a handful of files: short form.
 - **Normal** — everything else: full form.
 - **Too big** — more than one independently mergeable result: propose the
-  vertical slices and draft only the first one.
+  vertical slices and draft EVERY slice, one Issue each, with their order
+  (`after`) recorded. A request drafted as one Issue whose acceptance list
+  covers independent deliverables is stopped by Orbi's pre-work check as
+  "more than one outcome"; several Issues with an order is the deliverable
+  shape.
 
 ## Draft first
 

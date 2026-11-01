@@ -18,7 +18,7 @@ The [Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md)
 
 | Surface | Definition |
 |---|---|
-| CLI | `orbi` (one Runner tick), `orbi add`, `orbi suggest`, `orbi status`, `orbi session`, `orbi install-units`, `orbi sync-engine-source`, `orbi doctor`, `orbi check`, `orbi setup`, `orbi fix-base`, `orbi split`, `orbi amend` (one subcommand per registered arity-0 ticket command), `orbi milestone` (`milestone set <title>`), `orbi notify` (`notify test`) |
+| CLI | `orbi` (one Runner tick), `orbi add`, `orbi suggest`, `orbi draft`, `orbi status`, `orbi session`, `orbi install-units`, `orbi sync-engine-source`, `orbi doctor`, `orbi check`, `orbi setup`, `orbi fix-base`, `orbi split`, `orbi amend` (one subcommand per registered arity-0 ticket command), `orbi milestone` (`milestone set <title>`), `orbi notify` (`notify test`) |
 | Config | `orbi.toml` fields documented in [Getting started](/getting-started) — including the Telegram notification key `telegram_chat_id`; `.orbi/env` loaded as systemd `EnvironmentFile` (it carries `ORBI_TELEGRAM_BOT_TOKEN`); the `pi_providers` JSON file |
 | Deployment | `systemd/orbi@.service` and `systemd/orbi@.timer` templates; `.orbi/` as the run-artifact and lock directory |
 | Label state machine | `labels.toml` (names, colors, descriptions) and `src/orbi/delivery_labels.py` (transitions) |
@@ -30,6 +30,7 @@ The [Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md)
 | Run scene | the hidden versioned block `<!-- orbi:scene:v1 {json} -->` in the trusted `Orbi opened PR` comment, rendered and parsed by `src/orbi/scene.py`; the machine-readable record used to resume an opened-PR delivery (the human-readable text beside it is display only) |
 | Requirements skill | the directory `integrations/claude-plugin/skills/write-ai-ready-issue/` — `SKILL.md` (how an agent turns a one-line idea into a deliverable Issue) and `fidelity-pass.md` (the independent check that the draft asks for exactly what the person asked) |
 | Suggestions | the document `orbi suggest --json` prints — `{"repo", "base_sha", "session_dir", "suggestions": [{"kind": "existing" or "new", "issue": the Issue number for existing and null for new, "title", "why", "body": the Issue body for new and null for existing}]}`, at most three entries, ordered by priority; `session_dir` is `<deploy_home>/.orbi/suggest/<run_id>/.pi-session/`, holding the run's Pi session JSONL in the same format as delivery session files, and the run directory `<deploy_home>/.orbi/suggest/<run_id>/` is kept after the command exits, on success and on failure — and the skill directory `integrations/claude-plugin/skills/suggest-ai-ready-issues/` that produces it |
+| Drafting | `orbi draft`'s round document (`{"message","conversation","draft"}` in, `{"reply","questions","issues","check","warning"}` out), its creation document (`{"key","issues","header","issue"}` in, `{"created"}` out), its failure document (`{"code","step","detail"}` on stderr), the session directory layout and the `<!-- orbi:draft:v1:... -->` Issue marker; see [The draft command contract](#the-draft-command-contract) |
 | Clarification proposal | the hidden `<!-- orbi:suggestion:v1 kind=split -->` / `kind=criteria` section of the clarification stop comment, its line grammar, the authoritative-stop rule and the public refusal/failure markers (`orbi-<name>-command`, `orbi-<name>-command-rejected`, `orbi-<name>-command-failed step=...` with their `comment=...` key); see [The clarification proposal and command receipts](#the-clarification-proposal-and-command-receipts) |
 
 Anything not in this table is internal and may change without notice.
@@ -462,3 +463,71 @@ The Issue is closed or merged, or it is waiting on a confirmed manual action. Th
 - Not a second state store: GitHub Issues and labels remain the only state.
 - Not an end-to-end latency guarantee: record-level observation is not token streaming.
 - Not a secret scanner: the path policy filters the known boundary, not arbitrary files.
+
+## The draft command contract
+
+`orbi draft` turns one request into deliverable Issues. It runs in one of three
+modes:
+
+- **interactive** (default): `orbi draft --repo OWNER/REPO "<request>"` asks its
+  questions, shows the draft, takes a typed edit and creates the Issues only
+  on confirmation. Nothing is left behind.
+- **one drafting round**: `--session-dir <dir>` reads one document from stdin and
+  writes one to stdout (below). Reusing the same `<dir>` across rounds resumes the
+  same session, and the conversation and the current draft are replayed in
+  every round, so a lost session still works.
+- **creation**: `--create` reads the confirmed draft and prints the created numbers.
+
+Round input and output:
+
+```json
+{"message": "one sentence", "conversation": [{"role": "person", "text": "..."}], "draft": {"issues": []}}
+{"reply": "what will change", "questions": ["..."], "issues": [{"title": "...", "body": "...", "after": 1}], "check": "passed", "warning": "..."}
+```
+
+`after` is the 1-based number of an EARLIER Issue in the same draft that this one
+waits for, or is absent. `issues` is empty when the round only asks questions; a
+draft round carries at least one Issue. `check` is present on a draft round only:
+`passed`, or the comma-separated identifiers of the pre-work checks
+(`observable_result`, `acceptance_condition`, `single_outcome`) the draft still failed
+after its one rewrite. `warning` is present only when the fidelity pass could not run
+or returned nothing: the draft is still returned.
+
+Creation input, and the created numbers on stdout:
+
+```json
+{"key": "the caller's draft id", "issues": [{"title": "...", "body": "...", "after": 1}], "header": "optional text above every body", "issue": 12}
+{"created": [41, 42, 43]}
+```
+
+`issue` is absent for new Issues, and set to add detail to an existing Issue: with one
+drafted Issue its body is appended once and `ai-needs-detail` becomes the dispatch
+label; with several, that Issue becomes the parent of the drafted Issues (native
+sub-issues, `blockedBy` for `after`, dispatch label last, `ai-epic` on the parent).
+Running `--create` again with the same input creates nothing new: each created Issue
+carries the marker below, and only an Issue this runner authored is adopted.
+
+Failure output is one JSON object on stderr and exit code 1:
+
+```json
+{"code": "timeout", "step": "run the drafting session", "detail": "TimeoutExpired: ..."}
+```
+
+`code` is `invalid_input`, `invalid_draft`, `no_answer`, `session_failed`, `timeout`, `create_failed`,
+`too_many_rounds`, `no_request` or `draft_failed`. A round that times out AFTER the model
+wrote its draft returns that draft instead of failing.
+
+The session directory layout: `<session-dir>/.pi-session/` holds the drafting
+session's Pi JSONL plus the rendered prompt and context files, and
+`<session-dir>/.fidelity/.pi-session/` holds the independent fidelity pass — a caller
+accounts usage and shows progress from those files. Interactive mode uses a
+temporary directory of the same shape and removes it.
+
+The Issue marker: every Issue `orbi draft` creates ends with
+`<!-- orbi:draft:v1:<key>:<position>:<sha256> -->` — the caller's `key`, the Issue's
+1-based position in that draft, and the sha256 of the body as created (the
+marker line excluded). The pre-work check reads it at claim time
+(`clarify.enforce`): an Issue this runner authored whose body still hashes to
+the marker's fingerprint is not judged again, because the same check judged it
+when it was drafted. An edited body, or a marker on an Issue another account
+authored, is judged exactly as before.

@@ -219,7 +219,7 @@ def _blocked_numbers(state: dict) -> set[int]:
     return numbers
 
 
-def _child_state(repo: str, number: int) -> dict:
+def child_state(repo: str, number: int) -> dict:
     """One child ticket as the adoption check and the steps read it."""
     return run_step(
         "find or open the child",
@@ -293,7 +293,7 @@ def _find_children(
                     marker=child_marker(parent, item_number),
                 ),
             )
-        found[item_number] = _child_state(repo, int(counted[0]["number"]))
+        found[item_number] = child_state(repo, int(counted[0]["number"]))
     return found
 
 
@@ -387,7 +387,7 @@ def _verify_existing(
             )
 
 
-def _attach_sub_issue(child: int, *, parent: int, repo: str) -> None:
+def attach_sub_issue(child: int, *, parent: int, repo: str) -> None:
     """Attach one Issue as a native sub-issue of ``parent``.
 
     The documented `gh issue edit --add-sub-issue` spelling: the edited
@@ -399,7 +399,7 @@ def _attach_sub_issue(child: int, *, parent: int, repo: str) -> None:
     ]))
 
 
-def _add_blocked_by(issue: int, blocker: int, *, repo: str) -> None:
+def add_blocked_by(issue: int, blocker: int, *, repo: str) -> None:
     """Record one native `blockedBy` edge: `issue` waits for `blocker`.
 
     GitHub clears the relation's effect when the blocker closes, so there
@@ -411,63 +411,80 @@ def _add_blocked_by(issue: int, blocker: int, *, repo: str) -> None:
     ]))
 
 
-def _create_child(
-    repo: str, item: clarify.SuggestionItem, *, parent: int, item_number: int,
-    parent_body: str, parent_labels: list[str], milestone: str | None,
+def create_ticket(
+    repo: str, *, title: str, body: str, labels: list[str] | None = None,
+    milestone: str | None = None, step: str = "create the child ticket",
 ) -> int:
-    """Open one child ticket; `gh issue create` prints its URL.
+    """Open one ticket; `gh issue create` prints its URL.
 
-    Only the two inherited labels and the Milestone are passed: the child
-    is queued by its own step below, and no other parent label is its
-    business.
+    The ONE creation leaf both the split command and `orbi draft` use, so
+    the "open it WITHOUT the dispatch label" rule has one implementation:
+    the caller queues the ticket with its own later step.
+
+    Only the labels the caller names and the Milestone are passed; the
+    dispatch label is never one of them.
     """
     command = [
         "gh", "issue", "create", "--repo", repo,
-        "--title", item.text,
-        "--body", render_child_body(
-            item, parent=parent, item_number=item_number,
-            parent_body=parent_body,
-        ),
+        "--title", title, "--body", body,
     ]
-    if P0_LABEL in parent_labels:
-        command += ["--label", P0_LABEL]
-    if BUG_LABEL in parent_labels:
-        command += ["--label", BUG_LABEL]
+    for label in labels or []:
+        command += ["--label", label]
     if milestone:
         command += ["--milestone", milestone]
     url = run_step(
-        "create the child ticket",
-        lambda: run_command(command, timeout=30).strip(),
+        step, lambda: run_command(command, timeout=30).strip(),
     )
     try:
         return int(url.rstrip("/").rsplit("/", 1)[-1])
     except ValueError:
         raise TicketCommandError(
-            "create the child ticket",
-            f"gh returned no issue URL: {url!r}",
+            step, f"gh returned no issue URL: {url!r}",
         ) from None
 
 
-def _milestone_title(issue: dict) -> str | None:
+def _create_child(
+    repo: str, item: clarify.SuggestionItem, *, parent: int, item_number: int,
+    parent_body: str, parent_labels: list[str], milestone: str | None,
+) -> int:
+    """Open one child ticket; the two inherited labels and the Milestone
+    travel with it, and the child is queued by its own step below."""
+    return create_ticket(
+        repo, title=item.text,
+        body=render_child_body(
+            item, parent=parent, item_number=item_number,
+            parent_body=parent_body,
+        ),
+        labels=[
+            label for label in (P0_LABEL, BUG_LABEL)
+            if label in parent_labels
+        ],
+        milestone=milestone,
+    )
+
+
+def milestone_title(issue: dict) -> str | None:
     milestone = issue.get("milestone")
     title = milestone.get("title") if isinstance(milestone, dict) else None
     return title if isinstance(title, str) and title else None
 
 
-def _process_child(
-    repo: str, state: dict, *, parent: int, blocker: int | None,
+def process_child(
+    repo: str, state: dict, *, parent: int | None, blocker: int | None,
     dispatch_label: str,
 ) -> None:
     """Steps 2-4 for one child: sub-issue, dependency, queue label.
 
     Each step reads the child's own state first, so a re-run after a
-    partial run only does what is still missing.
+    partial run only does what is still missing. `parent` is None for a
+    ticket that is nobody's child (`orbi draft` creates them standalone):
+    the sub-issue step is then the one step that does not apply.
     """
     number = int(state["number"])
-    if _parent_number(state) != parent:
-        _attach_sub_issue(number, parent=parent, repo=repo)
+    if parent is not None and _parent_number(state) != parent:
+        attach_sub_issue(number, parent=parent, repo=repo)
     if blocker is not None and blocker not in _blocked_numbers(state):
-        _add_blocked_by(number, blocker, repo=repo)
+        add_blocked_by(number, blocker, repo=repo)
     if not LIFECYCLE_STATES & set(label_names(state)):
         run_step(
             "add the dispatch label",
@@ -568,7 +585,7 @@ def _split_apply(
         )
         parent_labels = label_names(issue)
         parent_body = issue.get("body") or ""
-        milestone = _milestone_title(issue)
+        milestone = milestone_title(issue)
         child_numbers: dict[int, int] = {
             item_number: int(state["number"])
             for item_number, state in found.items()
@@ -582,7 +599,7 @@ def _split_apply(
                     parent_body=parent_body, parent_labels=parent_labels,
                     milestone=milestone,
                 )
-                state = _child_state(repo, number)
+                state = child_state(repo, number)
                 child_numbers[item_number] = number
             blocker = None
             if item.after is not None:
@@ -593,7 +610,7 @@ def _split_apply(
                         f"item {item_number} depends on item {item.after}, "
                         "which has no child ticket",
                     )
-            _process_child(
+            process_child(
                 repo, state, parent=issue_number, blocker=blocker,
                 dispatch_label=dispatch_label,
             )

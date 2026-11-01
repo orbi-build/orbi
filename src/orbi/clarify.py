@@ -51,7 +51,8 @@ from pathlib import Path
 from string import Formatter
 from typing import TYPE_CHECKING
 
-from orbi import language, notify, user_summary
+from orbi import draft_marker, language, notify, user_summary
+from orbi.ticket_criteria import TICKET_CHECK_CRITERIA
 from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
 from orbi.github import (
     authenticated_github_login, comment_issue, edit_issue, issue_comments,
@@ -99,27 +100,8 @@ CLARIFY_SYSTEM_PROMPT = (
     "only the Issue text, and judge what it says rather than the shape "
     "it is written in: separate template headings are optional, so a "
     "missing heading is never a missing piece.\n\n"
-    "Three checks:\n"
-    "1. observable_result — the ticket states the observable result: "
-    "what a user sees or does differently once the change ships. A "
-    "concrete runtime failure — an error, a crash, a wrong returned "
-    "value, a reproduced misbehavior named with its evidence — is such "
-    "a result together with its unambiguous implied correction (\"it "
-    "should not do this\"), even when no goal is written out "
-    "explicitly.\n"
-    "2. acceptance_condition — the ticket states an acceptance "
-    "condition: a concrete way to tell a finished delivery from an "
-    "unfinished one. Historical diagnostic evidence is not one: a run "
-    "that already happened, a count from an earlier attempt or a "
-    "symptom read from a log says what the author observed, not what "
-    "the delivery must achieve. Report this check only when no "
-    "condition is stated at all, and never invent a target, a cleanup "
-    "policy or a delivery scope for it.\n"
-    "3. single_outcome — the ticket is one runtime outcome: one fix or "
-    "one change, not several unrelated things. One failing behavior, "
-    "or several symptoms of the same behavior, is one outcome no "
-    "matter how many bullets or sentences describe it; report this "
-    "check only when the text bundles independent deliverables.\n\n"
+    + TICKET_CHECK_CRITERIA
+    + "\n\n"
     "Answer by calling the clarify_verdict tool exactly once: it is "
     "the only tool in this session, and the run ends with that call. Do "
     "not answer in prose.\n\n"
@@ -936,6 +918,15 @@ def enforce(issue: dict, config: RunnerConfig, source_repo: str,
     # ticket claimable, and the next tick would judge it again — the gate
     # would repeat instead of stopping.
     ready_label = config.dispatch_label or READY_LABEL
+    if draft_marker.own_draft_unchanged(issue):
+        # Issue #2041: `orbi draft` already judged this exact body with
+        # THIS function before the person ever saw it, and nobody has
+        # edited it since (the marker's fingerprint still matches). Orbi
+        # does not bounce its own drafts: the check would repeat a
+        # judgment it already made, and a draft that failed it after the
+        # rewrite is the person's to submit — not the gate's to stop.
+        event("clarify_draft_skipped", issue=issue["number"])
+        return True
     if already_stopped(issue, source_repo):
         # Issue #1904: the automation re-added the claim label without
         # touching the text. The stop already named the missing pieces
