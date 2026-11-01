@@ -661,28 +661,13 @@ def failure_comment_body(*, outcome: str, action: str, reason: str,
         "failure.disposition_needs_fix" if retrying
         else "failure.disposition_failed",
     )
-    # The scene's human field labels follow the same language; the
-    # correlation row reads the two values through the SAME labels, so the
-    # machine lookup shape survives translation.
-    branch_match = re.search(
-        rf"- {re.escape(message('failure.scene.branch'))}: `([^`]+)`",
-        scene,
-    )
-    session_match = re.search(
-        rf"- {re.escape(message('failure.scene.session'))}: `([^`]+)`",
-        scene,
-    )
-    correlation = (
-        f"run={run_id} branch={branch_match.group(1) if branch_match else '-'} "
-        f"session={session_match.group(1) if session_match else '-'}"
-    )
     details = [
         f"<details><summary>{message('failure.diagnosis_summary')}</summary>",
         message("failure.disposition_row", disposition=disposition),
+        # The scene closes with its ONE correlation row, rendered from the
+        # run facts (Issue #2057) — this renderer never re-parses the
+        # localized labels it has just written.
         scene,
-        # Stable correlation keys retain the old journal lookup shape while
-        # local path fields above remain reader-safe labels.
-        message("failure.correlation_row", correlation=correlation),
     ]
     if diagnosis:
         reason_summary = failure_summary(reason, language_code)

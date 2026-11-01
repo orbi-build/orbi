@@ -290,9 +290,11 @@ def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
     """Render run facts as wrapping Markdown, never as a host-path dump.
 
     The field labels are human prose and follow the run's message
-    language; `failure.failure_comment_body` reads the correlation row
-    through the SAME labels, so the stable journal lookup shape survives
-    a translation.
+    language. The ONE correlation row closes the fold with the stable
+    journal lookup shape (`run= branch= session= phase= last_activity=`),
+    built here from the SAME run facts the field rows render — no reader
+    re-parses the localized labels, and no second row repeats them
+    (Issue #2057).
     """
     def message(key: str, **fields: object) -> str:
         return language.text(language_code, key, **fields)
@@ -306,25 +308,31 @@ def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
         if snapshot.get("session_file")
         else message("failure.scene.unavailable")
     )
+    # ONE set of run facts for the field rows AND the correlation row, so
+    # a placeholder scene can never disagree with itself (#2057).
+    session_id = snapshot.get("session_id") or "-"
+    phase = snapshot.get("phase") or "-"
+    last_activity = snapshot.get("last_activity") or "-"
     rendered_fields = [
         field("run", run_id), field("issue", issue), field("role", role),
         field("branch", branch),
         field("worktree", message("failure.scene.local_worktree")),
-        field("session", snapshot.get("session_id") or "-"),
+        field("session", session_id),
         field("session_log", session_log),
-        field("phase", snapshot.get("phase") or "-"),
-        field("last_activity", snapshot.get("last_activity") or "-"),
+        field("phase", phase),
+        field("last_activity", last_activity),
         field("action", snapshot.get("action") or "-"),
         field("result", snapshot.get("result") or "-"),
     ]
     if pr_url:
         rendered_fields.insert(1, f"- PR: [{pr_url}]({pr_url})")
     rendered = "\n".join(rendered_fields)
-    return rendered + (
-        f"\n- {message('failure.scene.legacy_correlation')}: "
-        f"`run={run_id} branch={branch} session="
-        f"{snapshot.get('session_id') or '-'} phase={snapshot.get('phase') or '-'} "
-        f"last_activity={snapshot.get('last_activity') or '-'}`"
+    correlation = redact_local_paths(
+        f"run={run_id} branch={branch} session={session_id} "
+        f"phase={phase} last_activity={last_activity}",
+    )
+    return rendered + "\n" + message(
+        "failure.correlation_row", correlation=correlation,
     )
 
 
