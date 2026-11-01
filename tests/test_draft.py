@@ -114,6 +114,14 @@ def run_create(config, payload: dict):
     return code, out.getvalue(), err.getvalue()
 
 
+def test_the_answer_tools_the_allowlist_names_are_the_shipped_ones():
+    """The allowlist may only name tools the shipped extension registers."""
+    source = draft.DRAFT_EXTENSION.read_text(encoding="utf-8")
+    for name in (draft.WRITE_DRAFT_TOOL, draft.ASK_USER_TOOL):
+        assert f'"{name}"' in source
+        assert name in draft.draft_system_prompt()
+
+
 # --- 6 + 10: one criteria text, the check's prompt unchanged --------------
 
 def test_the_draft_prompt_carries_the_checks_own_criteria_text():
@@ -772,6 +780,12 @@ def test_the_drafting_session_is_read_only_and_resumable(
     assert command[0] == "pi"
     assert command[1] == "--tools"
     assert command[2] == draft.DRAFT_TOOLS
+    # Pi's --tools REPLACES the whole selection and applies to extension
+    # tools too (pi --help), so the two answer tools must be named in the
+    # allowlist: without them the session has no tool to answer with and
+    # every round fails "no_answer" on the real path.
+    assert draft.WRITE_DRAFT_TOOL in command[2].split(",")
+    assert draft.ASK_USER_TOOL in command[2].split(",")
     assert "--no-extensions" in command
     assert str(draft.DRAFT_EXTENSION) in command
     assert "--continue" in command

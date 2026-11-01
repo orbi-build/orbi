@@ -57,10 +57,24 @@ from orbi.pi_process import PiWatchOptions, stream_pi
 from orbi.pi_session import pi_extension_env, prepare_pi_agent_dir
 from orbi.ticket_command import author_login_key, runner_login
 
+# The two tools the shipped extension registers; the prompt names them and
+# the tool allowlist below must carry them (one spelling, two places).
+WRITE_DRAFT_TOOL = "write_draft"
+ASK_USER_TOOL = "ask_user"
 # The drafting session reads the checkout and writes ONLY through the two
 # shipped tools: no shell, no edit, no commit (the same read-only boundary
 # `orbi suggest` keeps).
-DRAFT_TOOLS = "read,grep,find,ls"
+#
+# Pi's `--tools` REPLACES the whole tool selection and applies to
+# extension tools too ("Applies to built-in, extension, and custom tools" —
+# `pi --help`, docs/cli.md), so the two answer tools are named here as
+# well. Without them the model has no tool to answer with: the session
+# then replies in prose, no answer file is written and every round fails
+# `no_answer` (verified against Pi 1.0.0 — the "read,grep,find,ls"-only
+# form makes the model report it cannot call write_draft/ask_user).
+DRAFT_TOOLS = ",".join((
+    "read", "grep", "find", "ls", WRITE_DRAFT_TOOL, ASK_USER_TOOL,
+))
 DRAFT_EXTENSION = Path(__file__).resolve().parent.joinpath(
     "extensions", "draft_tools.ts",
 )
@@ -352,9 +366,9 @@ def draft_system_prompt() -> str:
     return "\n\n".join((
         "You are Orbi's drafting session: read-only, no shell. Turn one "
         "request into GitHub Issues that Orbi's pre-work check accepts. "
-        "Answer only by calling exactly one tool: write_draft when you "
-        "have a draft, ask_user when you need the person to answer "
-        "something first. Never both in one turn.",
+        "Answer only by calling exactly one tool: " + WRITE_DRAFT_TOOL
+        + " when you have a draft, " + ASK_USER_TOOL + " when you need "
+        "the person to answer something first. Never both in one turn.",
         clarify.TICKET_CHECK_CRITERIA,
         SINGLE_OUTCOME_RULE,
         DRAFTING_RULES,
