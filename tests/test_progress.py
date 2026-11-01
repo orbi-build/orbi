@@ -1565,7 +1565,7 @@ CLOUD_PATH = (
 )
 
 
-@pytest.mark.parametrize("outcome", ["blocked", "fix needed"])
+@pytest.mark.parametrize("outcome", ["blocked", "fix_needed"])
 @pytest.mark.parametrize("language_code", ["en", "zh"])
 def test_failed_finish_redacts_local_paths_in_reason_and_diagnosis(
         monkeypatch, tmp_path, outcome, language_code):
