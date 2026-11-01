@@ -595,6 +595,37 @@ def fidelity_pass(
 
 # --- one drafting round --------------------------------------------------
 
+def _fidelity_request(payload: dict) -> str:
+    """The person's own words: every earlier person turn, then the message.
+
+    The fidelity pass removes what the person did not ask for, so it must
+    hear everything the person asked for. On an answer round the latest
+    message is only the answer, and an outcome stated in an earlier round
+    would be stripped out of the draft (Issue #2050). A round with no
+    earlier person turn sends exactly the message, as before. A turn
+    without a role is the person's, the way `render_context` reads it.
+    """
+    message = str(payload["message"]).strip()
+    conversation = payload.get("conversation")
+    turns: list[str] = []
+    for turn in conversation if isinstance(conversation, list) else ():
+        if not isinstance(turn, dict):
+            continue
+        if str(turn.get("role") or "person") != "person":
+            continue
+        text = str(turn.get("text") or "").strip()
+        if text:
+            turns.append(text)
+    if not turns:
+        return message
+    return "\n\n".join((
+        "The person's words in this conversation, oldest first, the "
+        "latest message last:",
+        *turns,
+        message,
+    ))
+
+
 def run_round(
     config: RunnerConfig, repo: str, *, session_dir: Path, payload: dict,
     run_id: str,
@@ -621,7 +652,7 @@ def run_round(
         return DraftRound(reply=answer.reply, questions=answer.questions)
     issues, warning = fidelity_pass(
         config, repo, session_root=session_root, run_id=run_id,
-        request=str(payload["message"]), issues=answer.issues,
+        request=_fidelity_request(payload), issues=answer.issues,
     )
     issues, check, warning, reply = _apply_check(
         config, repo, session_root=session_root, payload=payload,

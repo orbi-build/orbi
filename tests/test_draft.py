@@ -347,6 +347,114 @@ def test_a_failed_fidelity_pass_never_fails_the_round(
     assert json.loads(out)["warning"] == "fidelity_pass_failed: RuntimeError"
 
 
+# Issue #2050: the pass removes what the person did not ask for, so it
+# must hear everything the person asked for, not only the latest message.
+EARLIER_ROUND = (
+    "add one line at the end of the `summary` output with the total "
+    "record count"
+)
+ANSWER_ROUND = "1. Which records count? → payments only"
+ANSWER_CONVERSATION = [
+    {"role": "person", "text": EARLIER_ROUND},
+    {"role": "orbi", "text": "Shall I count every record, or only payments?"},
+]
+EARLIER_ROUND_ISSUE = {
+    "title": "Count the records",
+    "body": (
+        "## Outcome\n\n" + EARLIER_ROUND + "\n\n## Acceptance\n\n"
+        "- payments only\n- the existing output lines stay where they are"
+    ),
+}
+
+
+def test_the_fidelity_pass_hears_every_person_turn(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """The answer alone is not the request: the pass gets the earlier turn."""
+    draft_fakes.judge_passing(monkeypatch)
+    draft_fakes.fidelity_echoes_request(monkeypatch, sessions)
+    sessions.queue_draft(issue("Count the records"))
+    code, out, err = run_round_cli(
+        config,
+        {"message": ANSWER_ROUND, "conversation": ANSWER_CONVERSATION},
+        tmp_path / "session",
+    )
+    assert code == 0, err
+    request = json.loads(out)["issues"][0]["body"]
+    assert EARLIER_ROUND in request
+    assert "payments only" in request
+    # Orbi's own question is not the person's words.
+    assert "count every record" not in request
+
+
+def test_an_outcome_from_an_earlier_round_survives_the_fidelity_pass(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """The pass strips lines the request does not name; the earlier person
+    turn is part of the request, so its outcome stays in the draft."""
+    draft_fakes.judge_passing(monkeypatch)
+    draft_fakes.fidelity_removes_unmentioned_lines(monkeypatch, sessions)
+    sessions.queue_draft(EARLIER_ROUND_ISSUE)
+    code, out, err = run_round_cli(
+        config,
+        {"message": ANSWER_ROUND, "conversation": ANSWER_CONVERSATION},
+        tmp_path / "session",
+    )
+    assert code == 0, err
+    body = json.loads(out)["issues"][0]["body"]
+    assert EARLIER_ROUND in body
+    assert "payments only" in body
+    # What the person never asked for is still removed.
+    assert "stay where they are" not in body
+
+
+def test_a_first_round_gives_the_fidelity_pass_the_message_alone(
+    config, sessions, monkeypatch, tmp_path,
+):
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue_draft(*TWO_ISSUES)
+    run_round_cli(config, {"message": "notes"}, tmp_path / "session")
+    payload = json.loads(sessions.fidelity_calls[0].context)
+    assert payload["request"] == "notes"
+
+
+@pytest.mark.parametrize("conversation", [
+    None,
+    "junk",
+    [],
+    ["junk", {"role": "orbi", "text": "Which store?"},
+     {"role": "person", "text": "   "}],
+])
+def test_a_conversation_without_person_words_passes_the_message(
+    config, sessions, monkeypatch, tmp_path, conversation,
+):
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue_draft(*TWO_ISSUES)
+    run_round_cli(
+        config,
+        {"message": "notes", "conversation": conversation},
+        tmp_path / "session",
+    )
+    payload = json.loads(sessions.fidelity_calls[0].context)
+    assert payload["request"] == "notes"
+
+
+def test_a_person_turn_without_a_role_is_still_the_person(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """The turn shape `render_context` already treats as the person's."""
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue_draft(*TWO_ISSUES)
+    run_round_cli(
+        config,
+        {"message": "sqlite", "conversation": [{"text": "add tags"}]},
+        tmp_path / "session",
+    )
+    request = json.loads(sessions.fidelity_calls[0].context)["request"]
+    assert "add tags" in request
+    assert request.endswith("sqlite")
+
+
 def test_the_fidelity_pass_uses_the_shipped_rules(config, sessions,
                                                   monkeypatch, tmp_path):
     draft_fakes.judge_passing(monkeypatch)
