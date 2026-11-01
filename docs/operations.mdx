@@ -552,6 +552,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `clarify_stop_untrusted` | a comment carried a stop marker this runner did not write: ignored, the gate judges normally |
 | `clarify_suggestion_dropped` | the gate dropped the answer's proposal (`reason=misplaced` when `kind`/`items` sat at the top level instead of under `suggestion`, `reason=unusable` when the `suggestion` value failed validation): the stop comment carries no proposal |
 | `clarify_check_skipped` | the thin-ticket gate could not decide or could not write (fail open) |
+| `clarify_draft_skipped` | the pre-work check skipped an untouched Issue `orbi draft` created: the same check judged it when it was drafted |
+| `clarify_draft_untrusted` | a draft marker sat on an Issue this runner did not author: ignored, the gate judges normally |
 | `blocked_by` | an Issue was skipped: open blockedBy blockers |
 | `blocked_by_check_failed` | the blockedBy query failed (fail open) |
 | `capacity_full` | every slot is taken; no claim this tick |
@@ -799,6 +801,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `suggest_created` | `orbi suggest` filed or labeled an Issue |
 | `suggest_failed` | an `orbi suggest` run failed (invalid result or failed `gh` call) |
 | `suggest_understanding_failed` | the parallel understanding session of `orbi suggest` failed or timed out (bypass: no `understanding.md`) |
+| `draft_session_failed` | a drafting session failed after it wrote its draft: the draft is returned (bypass) |
+| `draft_failed` | an `orbi draft` run failed (invalid input, failed session or failed `gh` call) |
 
 The idle warning, the idle recovery and the hung-model-request kill are
 log/health thresholds — they are not the 5-minute schedule and not a

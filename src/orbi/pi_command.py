@@ -126,6 +126,102 @@ def _skill_args(skills: list[str | Path]) -> list[str]:
     ]
 
 
+def _flag_args(
+    config: RunnerConfig,
+    role: str,
+    excluded_skills: frozenset[str],
+    *,
+    tools: bool | str,
+    extensions: bool,
+    no_skills: bool,
+    no_context_files: bool,
+    skills: list[str | Path] | None,
+    no_extensions: bool,
+    only_extension: str | Path | None,
+    no_builtin_tools: bool,
+) -> tuple[list[str], list[str], list[str]]:
+    """Return one session's (boundary, extension, skill) argv groups.
+
+    tools=True leaves Pi's default tool set, tools=False adds --no-tools,
+    and tools="<a,b,c>" adds --tools <a,b,c> -- the read-only allowlist of
+    one role (Issue #1576, orbi suggest). no_skills/no_context_files add
+    Pi's --no-skills/--no-context-files; skills overrides the configured
+    skill list (the suggest role loads exactly its own skill, not
+    config.skills). extensions=False omits the extension flags;
+    no_extensions (Issue #1600) adds Pi's --no-extensions alone --
+    auto-discovery denied and NONE of the configured --extension entries
+    (the understanding session of orbi suggest); it is ignored when
+    extensions=True. only_extension (Issue #1955) adds --no-extensions
+    plus exactly that one --extension <path>: discovery is denied and no
+    configured extension loads, so the session reaches only the extension
+    the engine ships (the clarification gate's clarify_verdict tool); it
+    wins over extensions/no_extensions. no_builtin_tools (Issue #1955)
+    adds Pi's --no-builtin-tools INSTEAD of the tools decision: built-in
+    tools are off while extension/custom tools (such as clarify_verdict)
+    stay callable.
+    """
+    if only_extension is not None:
+        extension_args = [
+            "--no-extensions", "--extension", str(only_extension),
+        ]
+    elif extensions:
+        extension_args = _pi_extension_args(config)
+    elif no_extensions:
+        extension_args = ["--no-extensions"]
+    else:
+        extension_args = []
+    if skills is None:
+        skills = skills_for(config, excluded_skills)
+    if no_builtin_tools:
+        tools_args = ["--no-builtin-tools"]
+    elif isinstance(tools, str):
+        tools_args = ["--tools", tools]
+    elif tools:
+        tools_args = []
+    else:
+        tools_args = ["--no-tools"]
+    boundary_args = [
+        *tools_args,
+        *(["--no-skills"] if no_skills else []),
+        *(["--no-context-files"] if no_context_files else []),
+    ]
+    return boundary_args, extension_args, _skill_args(skills)
+
+
+def _prompt_files(
+    session_dir: str | Path, system_prompt: str, context: str,
+) -> tuple[Path, Path]:
+    """Write the prompt and context files; return their paths.
+
+    Issue #1634: NEVER pass the rendered prompt as an argv string. Linux
+    limits ONE argv string to 131072 bytes (MAX_ARG_STRLEN): the review
+    prompt of a long-lived Issue (template + Issue body + the
+    ISSUE_COMMENTS block) reaches ~148.7 KB and the launch failed with
+    "OSError: [Errno 7] Argument list too long: 'pi'" before Pi started --
+    every retry rebuilt the same argv and the run was classified as a dead
+    loop. Pi reads a path given to --system-prompt itself
+    (resolvePromptInput returns readFileSync(input) when existsSync(input)),
+    so the prompt is written into the session dir FIRST and only the path
+    travels. The file must exist before this returns: Pi's fallback uses
+    the string itself when the path does not exist. ".pi-session/" is in
+    RUNNER_RUNTIME_EXCLUDES, so the file never reaches a commit.
+
+    Issue #1997: the task CONTEXT takes the same route. It embeds the full
+    Issue body (plus the resume context and, on a body revision, the edited
+    body again), so a large ticket blew the same per-string limit in the
+    positional argument -- read by Pi's own file form @<path> (its
+    processFileArguments expands the whole content into the initial
+    message), so the context is written here and only the path travels.
+    """
+    session_path = Path(session_dir)
+    session_path.mkdir(parents=True, exist_ok=True)
+    prompt_file = session_path / "system-prompt.md"
+    prompt_file.write_text(system_prompt, encoding="utf-8")
+    context_file = session_path / CONTEXT_FILE_NAME
+    context_file.write_text(context, encoding="utf-8")
+    return prompt_file, context_file
+
+
 def build_pi_command(
     config: RunnerConfig,
     role: str,
@@ -143,120 +239,53 @@ def build_pi_command(
     no_extensions: bool = False,
     only_extension: str | Path | None = None,
     no_builtin_tools: bool = False,
+    resume: bool = False,
 ) -> tuple[list[str], list[str]]:
-    """Return one Pi session's `(command, log_command)` argv pair.
+    """Return one Pi session's (command, log_command) argv pair.
 
-    `command` is the real argv in the fixed order every role uses: the
+    command is the real argv in the fixed order every role uses: the
     tool boundary, the optional skill/context-file boundaries, the
-    isolated extension flags, the role's `--skill` entries, the
+    isolated extension flags, the role's --skill entries, the
     provider/model flags, then
-    `--print --session-dir <dir> --system-prompt <prompt-file> @<context-file>`
-    — the prompt is written to `<session_dir>/system-prompt.md` and the
-    context to `<session_dir>/task-context.md` (UTF-8, the dir created
-    when absent), and argv carries only their PATHS, never the text
-    (Issues #1634, #1997).
-    `tools=True` leaves Pi's default tool set, `tools=False` adds
-    `--no-tools`, and `tools="<a,b,c>"` adds `--tools <a,b,c>` — the
-    read-only allowlist of one role (Issue #1576, `orbi suggest`).
-    `no_skills`/`no_context_files` add Pi's `--no-skills`/
-    `--no-context-files`; `skills` overrides the configured skill list
-    (the suggest role loads exactly its own skill, not
-    `config.skills`); `extensions=False` omits the extension flags.
-    `no_extensions` (Issue #1600) adds Pi's `--no-extensions` alone —
-    auto-discovery denied and NONE of the configured `--extension`
-    entries (the understanding session of `orbi suggest`); it is
-    ignored when `extensions=True`.
-    `only_extension` (Issue #1955) adds `--no-extensions` plus exactly
-    that one `--extension <path>`: discovery is denied and no configured
-    extension loads, so the session reaches only the extension the engine
-    ships (the clarification gate's `clarify_verdict` tool). It wins over
-    `extensions`/`no_extensions`.
-    `no_builtin_tools` (Issue #1955) adds Pi's `--no-builtin-tools`
-    INSTEAD of the `tools` decision: built-in tools are off while
-    extension/custom tools (such as `clarify_verdict`) stay callable.
+    --print --session-dir <dir> --system-prompt <prompt-file> @<context-file>.
+    _flag_args owns every tool/skill/extension flag (and its prose);
+    resume (Issue #2041) adds Pi's --continue, so a caller that reuses one
+    session directory across rounds continues the session already there.
 
-    The last argument is Pi's own file form `@<path>` (`pi --help`:
-    `pi [options] [--] [@files...] [messages...]`): Pi reads the file
-    itself and expands its FULL content into the initial message
-    (`dist/cli/file-processor.js`), so a 150,000-byte context no longer
-    has to fit a single argv string — no truncation, no body cap, no
-    prompt wording change. Pi wraps the expansion in its own file
-    marker, `<file name="<absolute path>">` ... `</file>` (verified
-    against Pi 1.0.0: a real `pi ... @ctx.md` run echoes exactly that),
-    which belongs to Pi's file argument rather than to text this engine
-    adds — the context, its first and its last line included, reaches
-    the session unchanged.
+    The last argument is Pi's own file form @<path> (pi --help:
+    pi [options] [--] [@files...] [messages...]): Pi reads the file
+    itself and expands its FULL content into the initial message, and
+    _prompt_files writes both files. Pi wraps the expansion in its own
+    file marker, <file name="<absolute path>"> ... </file> (verified
+    against Pi 1.0.0), which belongs to Pi's file argument rather than to
+    text this engine adds -- the context, its first and its last line
+    included, reaches the session unchanged.
 
-    `log_command` is derived here from the SAME extension flags, model
-    flags and session dir as `command`, so the two cannot drift. The
-    system prompt and context are replaced by `<redacted>` and the
-    caller's context placeholder; skill paths and the tool/skill/context
-    boundary flags are never logged (matching the frozen pre-#1231
-    journal shape).
+    log_command is derived here from the SAME flags and session dir as
+    command, so the two cannot drift. The system prompt and context are
+    replaced by <redacted> and the caller's context placeholder; skill
+    paths and the tool/skill/context boundary flags are never logged
+    (matching the frozen pre-#1231 journal shape).
     """
-    if only_extension is not None:
-        extension_args = [
-            "--no-extensions", "--extension", str(only_extension),
-        ]
-    elif extensions:
-        extension_args = _pi_extension_args(config)
-    elif no_extensions:
-        extension_args = ["--no-extensions"]
-    else:
-        extension_args = []
-    if skills is None:
-        skills = skills_for(config, excluded_skills)
-    skill_args = _skill_args(skills)
+    boundary_args, extension_args, skill_args = _flag_args(
+        config, role, excluded_skills, tools=tools, extensions=extensions,
+        no_skills=no_skills, no_context_files=no_context_files,
+        skills=skills, no_extensions=no_extensions,
+        only_extension=only_extension, no_builtin_tools=no_builtin_tools,
+    )
     model_args = _pi_model_args(config, role)
-    if no_builtin_tools:
-        tools_args = ["--no-builtin-tools"]
-    elif isinstance(tools, str):
-        tools_args = ["--tools", tools]
-    elif tools:
-        tools_args = []
-    else:
-        tools_args = ["--no-tools"]
-    boundary_args = [
-        *tools_args,
-        *(["--no-skills"] if no_skills else []),
-        *(["--no-context-files"] if no_context_files else []),
-    ]
-    # Issue #1634: NEVER pass the rendered prompt as an argv string.
-    # Linux limits ONE argv string to 131072 bytes (MAX_ARG_STRLEN): the
-    # review prompt of a long-lived Issue (template + Issue body + the
-    # ISSUE_COMMENTS block) reaches ~148.7 KB and the launch failed with
-    # "OSError: [Errno 7] Argument list too long: 'pi'" before Pi
-    # started — every retry rebuilt the same argv and the run was
-    # classified as a dead loop. Pi reads a path given to
-    # --system-prompt itself (resolvePromptInput returns
-    # readFileSync(input) when existsSync(input)), so the prompt is
-    # written into the session dir FIRST and only the path travels. The
-    # file must exist before this function returns: Pi's fallback uses
-    # the string itself when the path does not exist. ".pi-session/" is
-    # in RUNNER_RUNTIME_EXCLUDES, so the file never reaches a commit.
-    #
-    # Issue #1997: the task CONTEXT takes the same route. It embeds the
-    # full Issue body (plus the resume context and, on a body revision,
-    # the edited body again), so a large ticket blew the same per-string
-    # limit in the positional argument — `OSError: [Errno 7] Argument
-    # list too long: 'pi'` before Pi started, reported as an
-    # unclassifiable Pi start failure. A leading `@` is Pi's own file
-    # argument (its `processFileArguments` reads the file and expands
-    # the whole content into the initial message), so the context is
-    # written here and only the path travels.
-    session_path = Path(session_dir)
-    session_path.mkdir(parents=True, exist_ok=True)
-    prompt_file = session_path / "system-prompt.md"
-    prompt_file.write_text(system_prompt, encoding="utf-8")
-    context_file = session_path / CONTEXT_FILE_NAME
-    context_file.write_text(context, encoding="utf-8")
+    resume_args = ["--continue"] if resume else []
+    prompt_file, context_file = _prompt_files(
+        session_dir, system_prompt, context,
+    )
     command = [
         "pi", *boundary_args, *extension_args, *skill_args, *model_args,
+        *resume_args,
         "--print", "--session-dir", str(session_dir),
         "--system-prompt", str(prompt_file), f"@{context_file}",
     ]
     log_command = [
-        "pi", *extension_args, *model_args,
+        "pi", *extension_args, *model_args, *resume_args,
         "--print", "--session-dir", str(session_dir),
         "--system-prompt", "<redacted>", context_placeholder,
     ]

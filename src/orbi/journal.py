@@ -222,6 +222,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "clarify_stop_untrusted": "a comment carried a stop marker this runner did not write: ignored, the gate judges normally",
     "clarify_suggestion_dropped": "the gate dropped the answer's proposal (misplaced or unusable): the stop comment carries none",
     "clarify_check_skipped": "the thin-ticket gate could not decide or could not write (fail open)",
+    "clarify_draft_skipped": "the pre-work check skipped an untouched Issue this runner drafted: it was checked when drafted (Issue #2041)",
+    "clarify_draft_untrusted": "a draft marker sat on an Issue this runner did not author: ignored, the gate judges normally",
     "blocked_by": "an Issue was skipped: open blockedBy blockers",
     "blocked_by_check_failed": "the blockedBy query failed (fail open)",
     "capacity_full": "every slot is taken; no claim this tick",
@@ -320,6 +322,9 @@ JOURNAL_EVENTS: dict[str, str] = {
     "suggest_created": "orbi suggest filed or labeled an Issue",
     "suggest_failed": "an orbi suggest run failed (invalid result or failed gh call)",
     "suggest_understanding_failed": "the parallel understanding session of orbi suggest failed or timed out (bypass: no understanding.md)",
+    # Drafting (Issue #2041, `orbi draft`).
+    "draft_session_failed": "a drafting session failed after it wrote its draft: the draft is returned (bypass)",
+    "draft_failed": "an orbi draft run failed (invalid input, failed session or failed gh call)",
     # Dead-loop guard (Issue #825).
     "failure_comment_deduplicated": "an identical failure repeat bumped the existing comment's counter; no second comment",
     "failure_comment_update_failed": "the existing failure comment could not be resolved or updated; the tick continues",

@@ -1,6 +1,6 @@
 $ orbi --help
 usage: python3 -m orbi.cli [-h] [--config CONFIG] [--version]
-                           {add,suggest,status,session,install-units,sync-engine-source,doctor,check,setup,fix-base,amend,split,milestone,notify} ...
+                           {add,suggest,draft,status,session,install-units,sync-engine-source,doctor,check,setup,fix-base,amend,split,milestone,notify} ...
 
 Orbi task dispatch and status CLI. With NO subcommand the CLI IS the Runner
 entry: it runs one tick, exactly like `python3 -m orbi.runner` — this is what
@@ -17,11 +17,14 @@ queue, or web UI. Command failures are logged and raised by the reused
 runner.run_command; there is no fallback.
 
 positional arguments:
-  {add,suggest,status,session,install-units,sync-engine-source,doctor,check,setup,fix-base,amend,split,milestone,notify}
+  {add,suggest,draft,status,session,install-units,sync-engine-source,doctor,check,setup,fix-base,amend,split,milestone,notify}
     add                 create an Issue in a source repo and add ai-ready
     suggest             read the repository and propose up to three Issues to
                         deliver (interactive; --json prints the Suggestions
                         document)
+    draft               turn one request into deliverable Issues (interactive;
+                        --session-dir runs one drafting round, --create
+                        creates the confirmed draft)
     status              show every active delivery with attributed local
                         activity, ready queue and recent result per source
                         repo
@@ -86,6 +89,26 @@ options:
                     default 3)
   --locale {zh,en}  write the suggestions and the repository summary in this
                     language (default: the repository's own language)
+$ orbi draft --help
+usage: python3 -m orbi.cli draft [-h] [--config CONFIG] [--repo REPO]
+                                 [--session-dir SESSION_DIR] [--create]
+                                 [request]
+
+positional arguments:
+  request               the request, in one sentence (interactive mode asks
+                        when it is omitted)
+
+options:
+  -h, --help            show this help message and exit
+  --config CONFIG
+  --repo REPO           source repo (default: first configured source)
+  --session-dir SESSION_DIR
+                        run ONE drafting round: stdin
+                        {"message","conversation","draft"}, stdout
+                        {"reply","questions","issues"}
+  --create              create the confirmed draft from stdin
+                        {"key","issues","header","issue"} and print the
+                        created numbers
 $ orbi status --help
 usage: python3 -m orbi.cli status [-h] [--config CONFIG] [--repo REPO]
                                   [--issue ISSUE] [--follow]

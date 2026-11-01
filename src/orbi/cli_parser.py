@@ -13,7 +13,7 @@ import argparse
 import os
 from pathlib import Path
 
-from orbi import __version__, cli_ticket_command, notify, suggest
+from orbi import __version__, cli_ticket_command, draft_cli, notify, suggest
 
 
 def build_parser(description: str) -> argparse.ArgumentParser:
@@ -24,8 +24,7 @@ def build_parser(description: str) -> argparse.ArgumentParser:
     )
     parser = argparse.ArgumentParser(description=description, parents=[common])
     parser.add_argument(
-        "--version", action="version",
-        version=f"orbi {__version__}",
+        "--version", action="version", version=f"orbi {__version__}",
     )
     # The subcommand is OPTIONAL — with no subcommand the
     # installed CLI runs one Runner tick (the systemd ExecStart is the
@@ -43,6 +42,7 @@ def build_parser(description: str) -> argparse.ArgumentParser:
         help="source repo (default: first configured source)",
     )
     suggest.register_cli(subparsers, common)
+    draft_cli.register_cli(subparsers, common)
     status_parser = subparsers.add_parser(
         "status", parents=[common],
         help="show every active delivery with attributed local activity, "

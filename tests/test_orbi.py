@@ -769,7 +769,7 @@ def test_session_follow_prints_new_lines_of_the_selected_file(
         {"type": "session", "id": "sess-1", "cwd": "/w"},
     ])
     monkeypatch.setattr(
-        cli_commands, "follow_session_file",
+        session_command, "follow_session_file",
         lambda path, poll_interval=0.5: iter([
             json.dumps({"type": "session", "id": "sess-1", "cwd": "/w"}),
             json.dumps({"type": "message", "id": "a1",
@@ -792,7 +792,7 @@ def test_session_follow_pretty_prints_summaries(tmp_path, capsys, monkeypatch):
         {"type": "session", "id": "sess-1", "cwd": "/w"},
     ])
     monkeypatch.setattr(
-        cli_commands, "follow_session_file",
+        session_command, "follow_session_file",
         lambda path, poll_interval=0.5: iter([
             json.dumps({"type": "message", "id": "a1",
                         "timestamp": "2026-08-26T00:00:00Z",
@@ -1102,7 +1102,7 @@ def test_session_follow_pretty_skips_malformed_lines(
         {"type": "session", "id": "sess-1", "cwd": "/w"},
     ])
     monkeypatch.setattr(
-        cli_commands, "follow_session_file",
+        session_command, "follow_session_file",
         lambda path, poll_interval=0.5: iter([
             json.dumps({"type": "message", "id": "a1",
                         "timestamp": "2026-08-26T00:00:00Z",

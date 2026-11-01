@@ -11,7 +11,6 @@ loading stay in the entry module, which owns the diagnostics.
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 import sys
@@ -20,6 +19,7 @@ from pathlib import Path
 from orbi import (
     cli_status,
     config as config_domain,
+    draft_cli,
     engine_source,
     notify,
     pilot_setup,
@@ -33,11 +33,7 @@ from orbi.cli_ticket_command import command_ticket_command
 from orbi.delivery_labels import READY_LABEL
 from orbi.milestone_command import MilestoneSetError, milestone_set
 from orbi.runner import freeze_base, run_command
-from orbi.session_command import (
-    find_session_file,
-    follow_session_file,
-    format_session_line,
-)
+from orbi.session_command import command_session
 
 LOGGER = logging.getLogger("orbi.cli")
 
@@ -194,51 +190,21 @@ def command_add(config: config_domain.RunnerConfig, args, parser) -> int:
     return 0
 
 
+def command_draft(config: config_domain.RunnerConfig, args, parser) -> int:
+    """Draft one request into deliverable Issues, or create the draft."""
+    return draft_cli.run_draft(
+        config, _selected_repo(config, args, parser),
+        request=args.request, session_dir=args.session_dir,
+        create=args.create,
+    )
+
+
 def command_suggest(config: config_domain.RunnerConfig, args, parser) -> int:
     repo = _selected_repo(config, args, parser)
     return suggest.run_suggest(
         config, repo, json_output=args.json, locale=args.locale,
         count=args.count, dispatch_issue=dispatch_issue,
     )
-
-
-def command_session(config: config_domain.RunnerConfig, args, parser) -> int:
-    path = find_session_file(config.repo_dir)
-    if path is None:
-        print(
-            f"no pi session under {config.repo_dir / '.worktrees'}: "
-            "no Pi is running",
-            file=sys.stderr,
-        )
-        return 1
-    if not args.follow:
-        if args.pretty:
-            with path.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        record = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(record, dict):
-                        print(format_session_line(record))
-        else:
-            print(path)
-        return 0
-    for line in follow_session_file(path):
-        if args.pretty:
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(record, dict):
-                print(format_session_line(record))
-        else:
-            print(line)
-        sys.stdout.flush()
-    return 0
 
 
 def command_install_units(config: config_domain.RunnerConfig, args,
@@ -375,6 +341,7 @@ def command_status(config: config_domain.RunnerConfig, args, parser) -> int:
 COMMAND_HANDLERS = {
     "add": command_add,
     "suggest": command_suggest,
+    "draft": command_draft,
     "status": command_status,
     "session": command_session,
     "install-units": command_install_units,

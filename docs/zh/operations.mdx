@@ -450,6 +450,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `clarify_stop_untrusted` | 某条评论带有并非本 runner 写入的中止标记：忽略，闸门照常判定 |
 | `clarify_suggestion_dropped` | 闸门丢掉了答案里的建议（`reason=misplaced`：`kind`/`items` 写在了顶层而不是 `suggestion` 之下；`reason=unusable`：`suggestion` 值未通过校验）：中止评论中不含建议 |
 | `clarify_check_skipped` | 薄 ticket 闸门无法判定或写入失败（fail open） |
+| `clarify_draft_skipped` | 前置检查跳过了 `orbi draft` 创建后未被编辑的 Issue：起草时已由同一个检查判定过 |
+| `clarify_draft_untrusted` | 某个 Issue 带有并非本 runner 创建的草稿标记：忽略，闸门照常判定 |
 | `blocked_by` | 跳过该 Issue：存在未关闭的 blockedBy 依赖 |
 | `blocked_by_check_failed` | blockedBy 查询失败（fail open） |
 | `capacity_full` | 所有 slot 均被占用；本 tick 不领取 |
@@ -697,6 +699,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `suggest_created` | `orbi suggest` 创建或标记了一个 Issue |
 | `suggest_failed` | `orbi suggest` 运行失败（结果无效或 `gh` 调用失败） |
 | `suggest_understanding_failed` | `orbi suggest` 的并行理解会话失败或超时（旁路：不写 `understanding.md`） |
+| `draft_session_failed` | 起草会话在写出草稿之后失败：仍然返回该草稿（旁路） |
+| `draft_failed` | `orbi draft` 运行失败（输入无效、会话失败或 `gh` 调用失败） |
 
 idle 告警和模型请求挂死 kill 是日志/健康阈值——它们不是每 5 分钟
 调度，也不是业务任务 timeout。
