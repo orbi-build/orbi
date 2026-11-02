@@ -156,8 +156,10 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
   branch/PR 上开启新 attempt。沿 Issue 的受信任评论找各次 attempt 的标记。
 - 只有两个 opened-PR 状态会被自动拾取：`ai-pr-opened`（等待 review）
   和 `ai-fix-needed`（等待下一个审查会话）。`ai-ready` 作为新工作被
-  领取；`ai-blocked` 通常等待人处理；v0.7.15 起的
-  [`base_ci_red` 恢复](#交付因基础分支已红而暂停base_ci_red)是明确的例外。携带回填的 `ai-in-progress` 标签的
+  领取；`ai-blocked` 通常等待人处理；v0.7.15 的
+  [`base_ci_red` 恢复](#交付因基础分支已红而暂停base_ci_red)与 v0.7.18 起的
+  [`checks_permission_missing` 恢复](#交付因-app-权限未批准而暂停checks_permission_missing)
+  是明确的例外。携带回填的 `ai-in-progress` 标签的
   交付仍会被拾取（Issue #178：review 中被杀的 Runner 会留下该标签——
   正向的 opened-PR 限定已保证 implement 阶段的 Issue 不会匹配该扫描）。
 - `ai-awaiting-merge` 是等维护者的等待态，因此永不与 Runner 能推进的工作
@@ -362,8 +364,11 @@ v0.7.15 起按需求含义判断，不要求固定模板标题。明确的运行
 换成 `ai-needs-detail`，本 tick 结束——无
 worktree、无分支、无 Pi session、无 PR，槽位留给下一个 Issue，该票与
 `ai-blocked` 一样等人。重新编辑 Issue 并加上该认领标签才获得下一次机会，
-届时判定从头再跑一遍。正文未改动时重新加认领标签不会再次判定、发评论或发通知：
-本 runner 自己写的中止评论记录了当时判定的正文，下一次领取会重新套用中止、移除
+届时判定从头再跑一遍——或者在停票评论带有建议时，由有 write 权限的人回复
+`/orbi amend`（把建议的验收条件追加到正文并重新排队）或 `/orbi split`
+（按建议建子票，本票转为 Epic）。正文未改动时重新加认领标签不会再次判定、
+发评论或发通知：本 runner 自己写的中止评论记录了当时判定的正文，下一次领取
+会重新套用中止、移除
 认领标签，队列中的其他票不受影响。不是本 runner 写入、却带有该标记的评论会被忽略。
 
 所有错误路径都是**旁路**——闸门绝不会弄丢一次交付。模型报错或超时、答案不可
@@ -615,7 +620,7 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
   同一个 tick reconcile open Milestone：title 精确匹配的已发布 Release
   （draft 不算）且当前没有 open Issue 才关闭，其余情况保持 open。最后
   同一个 tick 还会扫一遍 open PR（Issue #746）：head 为稳定交付命名
-  （`orbi/<repo>-issue-<N>`）且源票已被人工关闭的 PR，会在 PR 上收到
+  （`orbi/<owner>-<repo>-issue-<N>`）且源票已被人工关闭的 PR，会在 PR 上收到
   一条幂等的报告评论——所有 resumable 扫描都只查 `state=open` 的票，没有
   这个扫描该 PR 会永久悬空。合并/关闭由人决定：Runner 绝不自动合，
   也绝不越过人的关闭决定去自动关。
@@ -637,8 +642,10 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
 
   1. 严格解析 Issue 正文的 `## Release` 声明：`version`、
      `base_branch`、`scope`（`#N` 列表）或 `scope_from_milestone`，
-     以及可选的 `version_file`（默认 `pyproject.toml`，也可为
-     `package.json` 或 `none`）。声明不携带任何测试契约
+     以及可选的 `version_file`（默认 `pyproject.toml`；也可为
+     `package.json`、`pom.xml`、`build.gradle`、`build.gradle.kts`、
+     `gradle.properties`、`Cargo.toml`、`composer.json`、`pubspec.yaml`，
+     或 `none` 跳过版本元数据改动）。声明不携带任何测试契约
      （Issue #569）：测试验收就是 release commit 的 GitHub Actions
      CI 结果（#268 CI-wait 门）。字段缺失、重复或未知
      都 fail fast。
@@ -653,9 +660,10 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
      `ai-pr-opened` 或 `ai-fix-needed` 的 open Issue（release Issue 本身
      除外）。release 有 Milestone 时，只有同一 Milestone 内的 Issue 会阻塞
      门禁（Issue #671）；没有 Milestone 时仍按全仓扫描。只有 `ai-ready` 的
-     Issue 不会阻塞该门禁。这个有界等待使用
-     `RELEASE_DELIVERIES_WAIT_SECONDS`；超时就是 delivery wait timeout，
-     release 进入 `ai-blocked`。随后要求 release commit 的 CI 全绿
+     Issue 不会阻塞该门禁。这个有界等待由宿主 `orbi.toml` 的
+     `release_deliveries_wait_seconds` 决定（默认 1800 秒）；超时就是
+     delivery wait timeout，release 进入 `ai-blocked`。随后要求 release commit
+     的 CI 全绿
      （从未观察到 CI 的仓库可带无检查证据通过；基础分支已有 CI 时，新版本提交的空检查列表需要等检查注册；
      pending check 是中间态——门禁等待最终结论，每次轮询一条
      `release_waiting_ci` journal 行和一次进度评论更新，上限
