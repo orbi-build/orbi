@@ -291,6 +291,33 @@ def test_english_homepage_carries_a_descriptive_frontmatter_title():
     )
 
 
+# Card destinations on the Chinese home page: internal hrefs are page paths
+# (`/...`); an external `https://` destination would not start with `/` and
+# is therefore outside this check.
+CARD_HREF = re.compile(r'<Card\b[^>]*\bhref="([^"]+)"')
+
+
+def test_chinese_homepage_cards_link_the_chinese_pages():
+    """Issue #2100: the Chinese home page is the Chinese entry point, so
+    every card that stays inside the docs must land on the Chinese
+    counterpart (`/zh/...`). The operations card still pointed at the
+    English `/operations#event-reference`, sending a Chinese reader to
+    the English event-reference table; the fragment test in
+    tests/test_docs_site.py pinned the anchor's existence but not the
+    language of the page behind it. The fragment of a `/zh/` card is
+    still resolved against the Chinese page by that test."""
+    hrefs = CARD_HREF.findall(zh_page_text("index"))
+    assert hrefs, "the Chinese home page must carry its cards"
+    wrong = [
+        href for href in hrefs
+        if href.startswith("/") and not href.startswith("/zh/")
+    ]
+    assert not wrong, (
+        "Chinese home cards must link the Chinese pages (/zh/...), "
+        f"found English targets: {wrong}"
+    )
+
+
 def test_chinese_overview_names_the_task_pool_and_mvp_boundary():
     """The Chinese overview (index) must say what the project is (GitHub
     Issue task pool) and the explicit MVP boundary (no database/queue/
