@@ -149,7 +149,7 @@ cd orbi
 ## 2. 安装 CLI
 
 正式使用方式是安装后的 `orbi` console script（`pyproject.toml`
-的 PEP 621 打包把 `orbi = orbi:main` 映射为可执行文件），
+的 PEP 621 打包把 `orbi = orbi.cli:main` 映射为可执行文件），
 以 **editable** `uv tool` 安装——这是官方本地部署方式（Issue #152）。
 在 clone 目录里安装，`--python` 传一个**兼容**的解释器（Issue #861）：
 系统 Python 是 3.14 或更新（Fedora 43、当前 Arch 自带）时直接用
@@ -180,11 +180,12 @@ orbi --help
 
 **为什么必须 `--editable`**：非 editable 安装会把源码复制进 tool
 环境的 site-packages；service 的 `ExecStartPre` 每次启动前把 checkout
-快进到最新 `main`——源码被复制后 CLI 仍在执行旧副本（启动死锁：
-Issue #152）。editable 安装下 tool 环境直接从 clone 目录导入
-`orbi`，下一个 CLI 进程（下一个 timer 启动的 Runner）自动取到
-merge 后的代码：**普通 Python 源码与 systemd 模板/迁移代码变更不需要
-任何重装或升级命令**。
+同步到配置的 `engine_source_track`（用随包示例创建的配置取最新 release
+tag；键缺省或设为 "main" 时快进 `origin/main`）——源码被复制后 CLI
+仍在执行旧副本（启动死锁：Issue #152）。editable 安装下 tool 环境
+直接从 clone 目录导入 `orbi`，下一个 CLI 进程（下一个 timer 启动的
+Runner）自动取到 merge 后的代码：**普通 Python 源码与 systemd 模板/迁移
+代码变更不需要任何重装或升级命令**。
 自 src layout（Issue #168）起，editable finder 映射**整个**
 `src/orbi/` package 目录——新增 package 模块**不需要重装**
 （#158 的 stale 模块清单问题已在根上修复）。当其余**打包输入**变化
@@ -290,6 +291,13 @@ context_files = []
 `workspace_root` 是告诉实现者 agent「可修改仓库所在目录」的路径
 （`{{WORKSPACE_ROOT}}` prompt 占位符）；未设置的 `prompt` /
 `prompt_review` 相对 `deploy_home` 解析。）
+
+要给第二个 engine 实例，就在它的配置里给一个不同的 `unit_name`（例如
+`unit_name = "website"`），然后运行 `orbi setup`。它会安装并检查
+`orbi-website@1/2.service` 和 `orbi-website@1/2.timer`；既不需要手写
+systemd unit，也不需要覆盖 `ORBI_CONFIG`。setup 还会用仓库本地的 git
+exclude 让 Runner 创建的 `<repo_dir>/.worktrees/` 不进入 checkout 的
+清洁度检查。
 
 其余一切——第 4–8 步（模型 provider、`orbi setup`、手工 tick、smoke
 walkthrough、timers）——不变：`orbi setup` 从 `deploy_home` 读标签、
@@ -610,7 +618,7 @@ session、phase、last activity、具体错误），journal 显示
 
 | 症状 | 证据 | 修复 |
 |---|---|---|
-| 启动在任何 slot/claim 前失败 | journal `API key for provider ... references missing environment variable GROQ_API_KEY`（只报变量**名**） | 把 key 值放进你的 `.orbi/env`（第 4 步），并确认已安装 unit 的 `EnvironmentFile` 指向它；手工 tick 则在 shell 里 export 该变量 |
+| 启动在任何 slot/claim 前失败 | journal `API key for provider ... references environment variable GROQ_API_KEY is not set`（或 `is set but empty`；只报变量**名**） | 把 key 值放进你的 `.orbi/env`（第 4 步），并确认已安装 unit 的 `EnvironmentFile` 指向它；手工 tick 则在 shell 里 export 该变量 |
 | 启动在 provider 文件上失败 | journal `pi_providers file ... is not valid JSON` / `is missing baseUrl` / `pi_provider ... is not defined` | 修 JSON（第 4 步契约：`providers` 对象、`baseUrl`、`api`、`models[].id`），重跑 `orbi setup` |
 | Pi 起来了但模型一直不响应 | session JSONL 停在 `model_wait`；死寂窗口（`model_wait_dead_seconds`，默认 1800 秒）后 journal 出现 `model_wait_dead` 行和 `run_failed ... reason=model_wait_dead_stale_...`（字段语义：[运维](/zh/operations)） | 模型请求挂死——模型 server/proxy 挂了、连接断了，或进程还活着但请求被挂住——用一次真实 `pi --print` 调用检查 endpoint，重启后重新派活（Issue 带现场 `ai-blocked`）；仍在生成的慢本地模型会存活过窗口（只有模型确实需要超过 30 分钟完整事件静默时才调大 `model_wait_dead_seconds`） |
 | Pi 在首个模型请求前挂死（在线 provider） | Run 卡在 `session_pending`；空闲恢复上限（约 1 小时，12 个 300 秒窗口）到期后，journal 出现 `run_failed … reason=idle_recovery_stale_<时长>`、Issue `ai-blocked`；session JSONL 从未创建；pi 进程活着但 ~0% CPU，唯一 socket 在 D-Bus（`/run/user/1000/bus`） | 用户级插件 `pi-mcp-adapter` 在 systemd 上下文挂死在 Secret Service D-Bus 调用上——从 `~/.pi/agent/settings.json` `packages` 移除它；完整取证与永久修复（Issue #249）：[运维](/zh/operations) |
@@ -620,6 +628,11 @@ session、phase、last activity、具体错误），journal 显示
 | 重启后 service 起不来 | `systemctl --user status orbi@1.service`；journal `unit_drift` / `cli_install_failed` / `transport_check_failed` 行 | 按结构化行处理：重跑 `orbi install-units`（unit 漂移）、它打印的精确重装命令（editable 安装过期）、或修 SSH transport（见[运维](/zh/operations)） |
 | journal 出现 `Your local changes ... would be overwritten by merge` | service preflight 的 `deploy_home_dirty files=...` | 用 `git -C <deploy_home> stash && systemctl --user start orbi@1.service` 保留补丁，适当时再 `git -C <deploy_home> stash pop`；或用 `git -C <deploy_home> checkout -- .` 丢弃后重试。本地 tracked 编辑按设计会阻塞 self-update；`orbi doctor` 会报告 `deploy_home: DRIFT` |
 | `orbi doctor` 报告 `cli_source: DRIFT` | 结构化 `cli_source_drift` 行带精确重装命令 | 跑它打印的 `uv tool install --force --reinstall --editable ...` 命令（或 `orbi setup`） |
+
+可编辑安装的部署 home 在每次 service 启动前自更新。因此任何本地 tracked
+源码编辑都会阻塞这次自更新（fast-forward）；重试前请使用专门的本地分支，
+或先把它 stash 起来。preflight 会输出 `deploy_home_dirty`——带改动的文件
+列表和修复命令——而不是只留下原始的 Git stderr。
 
 标签生命周期、journal 字段和恢复规则见[运维](/zh/operations)；
 review/merge 契约见[工作流](/zh/workflow)。
