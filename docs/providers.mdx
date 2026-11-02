@@ -279,7 +279,7 @@ The model ID is the current FP8 variant documented in Cloudflare's [Workers AI m
 Record the Workers AI account's Neurons usage immediately before dispatching one Issue and immediately after the PR is opened (same UTC day). The measured task consumption is `after - before`; retain the dashboard/API timestamps, model, Issue and PR URL, but never retain the token. Orbi's journal proves the selected provider/model, not Neurons usage. **This repository has not run a Cloudflare-account-backed Orbi task; the request and Neurons consumption are not tested and must not be inferred.**
 
 ```text
-journal: [<run-id>] provider_config_loaded issue=OWNER/REPO#<issue> role=implement provider=cf-workers model=@cf/meta/llama-3.1-8b-instruct-fp8
+journal: [<run-id>] provider_config_loaded issue=OWNER/REPO#<issue> role=implement provider=cf-workers model=@cf/meta/llama-3.1-8b-instruct-fp8 elapsed=<duration>
 Cloudflare Workers AI usage: before=<n> neurons at <UTC>, after=<n> neurons at <UTC>, delta=<n>
 PR: https://github.com/OWNER/REPO/pull/<number>
 ```
@@ -483,18 +483,18 @@ The OAuth credential consumes the user's Codex/ChatGPT subscription allowance. I
 Run the first Issue in the user's own repository, then retain the non-secret evidence. A successful run should show all of these:
 
 ```text
-journal: [<run-id>] provider_config_loaded issue=OWNER/YOUR-REPO#<issue> role=implement provider=openai-codex model=gpt-5.6-luna
+journal: [<run-id>] provider_config_loaded issue=OWNER/YOUR-REPO#<issue> role=implement provider=openai-codex model=gpt-5.6-luna elapsed=<duration>
 PR: https://github.com/OWNER/YOUR-REPO/pull/<number>
 elapsed: <duration>
 result: PR opened (then review/merge according to the normal Orbi flow)
 ```
 
-`provider_config_loaded` is logged before Pi is spawned, so it carries the configured provider/model; the run id is the `[<run-id>]` journal prefix, not a field of its own on these startup lines. Read it back with `journalctl --user -u 'orbi@*' | grep '\[<run-id>\] provider_config_loaded'`.
+`provider_config_loaded` is logged before Pi is spawned, so it carries the configured provider/model; the run id is the `[<run-id>]` journal prefix, not a field of its own on these startup lines, and the line ends with `elapsed=<duration>`, the time since this session's setup began. Read it back with `journalctl --user -u 'orbi@*' | grep '\[<run-id>\] provider_config_loaded'`; `-u` takes a unit pattern, which `man journalctl` documents as `-u, --unit=UNIT|PATTERN`.
 
 A redacted, non-secret record from the completed Orbi run for this guide (2026-09-07) is:
 
 ```text
-journal: [f3e26f87] provider_config_loaded issue=… role=implement provider=openai-codex model=gpt-5.6-luna
+journal: [f3e26f87] provider_config_loaded issue=… role=implement provider=openai-codex model=gpt-5.6-luna elapsed=…
 PR: https://github.com/orbi-build/orbi/pull/487
 elapsed: 4m 06s (09:11:18Z–09:15:24Z)
 result: PR opened

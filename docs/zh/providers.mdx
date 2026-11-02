@@ -276,7 +276,7 @@ pi_model = "@cf/meta/llama-3.1-8b-instruct-fp8"
 派发一个 Issue 前、PR 打开后，分别记录 Workers AI 账号的 Neurons 使用量（必须是同一 UTC 日）。任务消耗为 `after - before`；保留 dashboard/API 的 UTC 时间戳、模型、Issue 和 PR URL，但不要保留 token。Orbi journal 只能证明选中了 provider/model，不能代替 Neurons 计量。**本仓库尚未使用带 Cloudflare 账号的真实 Orbi 任务；真实请求和 Neurons 消耗未实测，不得推断或编造。**
 
 ```text
-journal: [<run-id>] provider_config_loaded issue=OWNER/REPO#<issue> role=implement provider=cf-workers model=@cf/meta/llama-3.1-8b-instruct-fp8
+journal: [<run-id>] provider_config_loaded issue=OWNER/REPO#<issue> role=implement provider=cf-workers model=@cf/meta/llama-3.1-8b-instruct-fp8 elapsed=<duration>
 Cloudflare Workers AI usage: before=<n> neurons at <UTC>, after=<n> neurons at <UTC>, delta=<n>
 PR: https://github.com/OWNER/REPO/pull/<number>
 ```
@@ -480,18 +480,18 @@ OAuth 凭据消耗用户的 Codex/ChatGPT 订阅额度。它与 OpenAI API key�
 在用户自己的仓库运行第一个 Issue，并保留不含秘密的证据。成功运行至少应记录：
 
 ```text
-journal: [<run-id>] provider_config_loaded issue=OWNER/YOUR-REPO#<issue> role=implement provider=openai-codex model=gpt-5.6-luna
+journal: [<run-id>] provider_config_loaded issue=OWNER/YOUR-REPO#<issue> role=implement provider=openai-codex model=gpt-5.6-luna elapsed=<duration>
 PR: https://github.com/OWNER/YOUR-REPO/pull/<number>
 elapsed: <duration>
 result: PR opened（之后按 Orbi 正常流程审查/合并）
 ```
 
-`provider_config_loaded` 在 spawn Pi 之前记录，因此带着实际配置的 provider/model；run id 是 journal 行首的 `[<run-id>]` 前缀，启动阶段行本身没有独立字段。用 `journalctl --user -u 'orbi@*' | grep '\[<run-id>\] provider_config_loaded'` 读回这一行。
+`provider_config_loaded` 在 spawn Pi 之前记录，因此带着实际配置的 provider/model；run id 是 journal 行首的 `[<run-id>]` 前缀，启动阶段行本身没有独立字段，行尾是自本次 session 准备开始计时的 `elapsed=<duration>`。用 `journalctl --user -u 'orbi@*' | grep '\[<run-id>\] provider_config_loaded'` 读回这一行；`-u` 支持 unit 通配，`man journalctl` 写作 `-u, --unit=UNIT|PATTERN`。
 
 本指南对应的 Orbi 已完成运行（2026-09-07）留下了以下脱敏、无秘密记录：
 
 ```text
-journal: [f3e26f87] provider_config_loaded issue=… role=implement provider=openai-codex model=gpt-5.6-luna
+journal: [f3e26f87] provider_config_loaded issue=… role=implement provider=openai-codex model=gpt-5.6-luna elapsed=…
 PR: https://github.com/orbi-build/orbi/pull/487
 elapsed: 4m 06s（09:11:18Z–09:15:24Z）
 result: PR opened
