@@ -19,6 +19,10 @@ description: "Orbi v0.7.34 release notes: Drop the pre-v0.5.2 scene text grammar
 
 - Drop the pre-v0.5.2 scene text grammar ([Issue #2068](https://github.com/orbi-build/orbi/issues/2068); [PR #2071](https://github.com/orbi-build/orbi/pull/2071))
 
+### Upgrade notes
+
+- Scene comments written by releases before v0.5.2 (the plain `Orbi opened PR: <url>` text without the `orbi:scene:v1` block) are no longer read. An Issue whose only scene is in that old form is treated as having no scene: an open `ai-fix-needed` PR is reclaimed, otherwise Orbi tries to rebuild the scene from its local record and blocks the Issue only when it cannot. If it does get blocked, requeue it the usual way: `ai-fix-needed` while its PR is open, `ai-ready` otherwise.
+
 ### Deployment and operations
 
 - Stop deleting user-owned orbi.service/orbi.timer on install ([Issue #2067](https://github.com/orbi-build/orbi/issues/2067); [PR #2070](https://github.com/orbi-build/orbi/pull/2070))

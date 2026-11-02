@@ -19,6 +19,10 @@ description: "Orbi v0.7.34 发布说明：Drop the pre-v0.5.2 scene text grammar
 
 - Drop the pre-v0.5.2 scene text grammar ([Issue #2068](https://github.com/orbi-build/orbi/issues/2068); [PR #2071](https://github.com/orbi-build/orbi/pull/2071))
 
+### 升级说明
+
+- v0.5.2 之前的版本写下的 scene 评论（只有 `Orbi opened PR: <url>` 文字、没有 `orbi:scene:v1` 块）不再读取。如果某张 Issue 只有这种旧格式的 scene，会按「没有 scene」处理：PR 还开着且带 `ai-fix-needed` 的会被重新认领；否则 Orbi 先尝试用本地记录补写 scene，补不了才阻塞这张 Issue。如果被阻塞了，按常规重新排队：PR 还开着就换成 `ai-fix-needed`，否则换成 `ai-ready`。
+
 ### Deployment and operations
 
 - Stop deleting user-owned orbi.service/orbi.timer on install ([Issue #2067](https://github.com/orbi-build/orbi/issues/2067); [PR #2070](https://github.com/orbi-build/orbi/pull/2070))
