@@ -131,7 +131,7 @@ OpenRouter 官方[限流文档](https://openrouter.ai/docs/api/reference/limits)
    PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
    ```
 
-5. `orbi.toml` 只选择 provider/model，不维护注释掉的 provider 配置块。真实任务前运行 loader/runner 校验；选中的 provider、model、endpoint、API 或 key 引用不正确时会 fail fast。
+5. `orbi.toml` 只选择 provider/model，不维护注释掉的 provider 配置块。真实任务前用 `orbi check --config orbi.toml` 校验（不发真实请求）；选中的 provider、model、endpoint、API 或 key 引用不正确时会 fail fast。裸 `pi --print` **不是**这个校验：它用 Pi 自己的 agent 目录（`~/.pi/agent`，设置了 `PI_CODING_AGENT_DIR` 时用该目录），永远不读 `pi_providers`——后者只通过 Orbi 为每次 run 物化的 agent 目录交给 Pi。第一次真实请求发生在第一次 run 里；用 `orbi status --follow` 跟踪它。
 
 ### `thinkingLevelMap`
 
@@ -197,7 +197,7 @@ pi_provider = "z-ai"       # 或清单中的其他 provider
 pi_model = "glm-5.3-flash"
 ```
 
-替换 provider 文件和匹配的环境变量，再次验证精确的 provider/model/key，然后执行一次真实 `pi --print` 检查。切换必须手动完成；[#313](https://github.com/orbi-build/orbi/issues/313)规划的按 provider 自动轮换尚不是当前行为。
+替换 provider 文件和匹配的环境变量，用 `orbi check --config orbi.toml` 再次验证精确的 provider/model/key（见[接入一家新 provider](#接入一家新-provider)第 5 步），然后运行第一个 Issue——真实请求就发生在这次 run 里。切换必须手动完成；[#313](https://github.com/orbi-build/orbi/issues/313)规划的按 provider 自动轮换尚不是当前行为。
 
 ### z.ai GLM：体验/免费额度
 
@@ -250,7 +250,7 @@ pi_provider = "openrouter"
 pi_model = "google/gemma-4-31b-it:free"
 ```
 
-复制 [`openrouter.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/openrouter.json)，在 `.orbi/env` 设置 `OPENROUTER_API_KEY`，派发前执行一次真实 `pi --print` 检查。除上述有日期的证据外，OpenRouter 模型可用性和额度均**未实测也不承诺**；选择模型前请重新核对实时目录。
+复制 [`openrouter.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/openrouter.json)，在 `.orbi/env` 设置 `OPENROUTER_API_KEY`，派发前用 `orbi check --config orbi.toml` 校验选择。除上述有日期的证据外，OpenRouter 模型可用性和额度均**未实测也不承诺**；选择模型前请重新核对实时目录。
 
 ### Cloudflare Workers AI
 
@@ -276,7 +276,7 @@ pi_model = "@cf/meta/llama-3.1-8b-instruct-fp8"
 派发一个 Issue 前、PR 打开后，分别记录 Workers AI 账号的 Neurons 使用量（必须是同一 UTC 日）。任务消耗为 `after - before`；保留 dashboard/API 的 UTC 时间戳、模型、Issue 和 PR URL，但不要保留 token。Orbi journal 只能证明选中了 provider/model，不能代替 Neurons 计量。**本仓库尚未使用带 Cloudflare 账号的真实 Orbi 任务；真实请求和 Neurons 消耗未实测，不得推断或编造。**
 
 ```text
-journal: provider=cf-workers model=@cf/meta/llama-3.1-8b-instruct-fp8 run_id=<run-id>
+journal: [<run-id>] provider_config_loaded issue=OWNER/REPO#<issue> role=implement provider=cf-workers model=@cf/meta/llama-3.1-8b-instruct-fp8
 Cloudflare Workers AI usage: before=<n> neurons at <UTC>, after=<n> neurons at <UTC>, delta=<n>
 PR: https://github.com/OWNER/REPO/pull/<number>
 ```
@@ -431,7 +431,7 @@ host 身份按 OpenAI 的 [自托管 VM 指南](https://developers.openai.com/si
 
 ### 证据边界
 
-本节记录的是契约，不是已验证的运行。登录文案、`pi auth check` 的 JSON 形状、`http://127.0.0.1:1455/auth/callback`、`0600` 权限的 `~/.pi/agent/auth.json`、`agent_name_hint="Pi"` 以及 `chatgpt.tokens.use.direct` scope 均已对照 `@earendil-works/pi-coding-agent` 0.99.1 核实；模型列表 endpoint、额度规则和错误码来自 OpenAI 的 Sign in with ChatGPT 文档。登录、额度、特定账号的模型可用性以及 Orbi 实际运行结果**未实测**。登录成功后，只保留真实 Issue 运行的非秘密证据（journal 的 `provider=openai model=<slug> run_id=<id>`、PR URL、耗时），绝不保留 token 或 session JSONL。
+本节记录的是契约，不是已验证的运行。登录文案、`pi auth check` 的 JSON 形状、`http://127.0.0.1:1455/auth/callback`、`0600` 权限的 `~/.pi/agent/auth.json`、`agent_name_hint="Pi"` 以及 `chatgpt.tokens.use.direct` scope 均已对照 `@earendil-works/pi-coding-agent` 0.99.1 核实；模型列表 endpoint、额度规则和错误码来自 OpenAI 的 Sign in with ChatGPT 文档。登录、额度、特定账号的模型可用性以及 Orbi 实际运行结果**未实测**。登录成功后，只保留真实 Issue 运行的非秘密证据（journal 的 `provider_config_loaded` 行，它带着实际配置的 provider/model；再加 PR URL 和耗时），绝不保留 token 或 session JSONL。
 
 ## Codex OAuth：使用 ChatGPT/Codex 订阅额度
 
@@ -480,16 +480,18 @@ OAuth 凭据消耗用户的 Codex/ChatGPT 订阅额度。它与 OpenAI API key�
 在用户自己的仓库运行第一个 Issue，并保留不含秘密的证据。成功运行至少应记录：
 
 ```text
-journal: provider=openai-codex model=gpt-5.6-luna run_id=<run-id>
+journal: [<run-id>] provider_config_loaded issue=OWNER/YOUR-REPO#<issue> role=implement provider=openai-codex model=gpt-5.6-luna
 PR: https://github.com/OWNER/YOUR-REPO/pull/<number>
 elapsed: <duration>
 result: PR opened（之后按 Orbi 正常流程审查/合并）
 ```
 
+`provider_config_loaded` 在 spawn Pi 之前记录，因此带着实际配置的 provider/model；run id 是 journal 行首的 `[<run-id>]` 前缀，启动阶段行本身没有独立字段。用 `journalctl --user -u 'orbi@*' | grep '\[<run-id>\] provider_config_loaded'` 读回这一行。
+
 本指南对应的 Orbi 已完成运行（2026-09-07）留下了以下脱敏、无秘密记录：
 
 ```text
-journal: provider=openai-codex model=gpt-5.6-luna run_id=f3e26f87
+journal: [f3e26f87] provider_config_loaded issue=… role=implement provider=openai-codex model=gpt-5.6-luna
 PR: https://github.com/orbi-build/orbi/pull/487
 elapsed: 4m 06s（09:11:18Z–09:15:24Z）
 result: PR opened

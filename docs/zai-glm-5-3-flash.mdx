@@ -77,19 +77,29 @@ pi_provider = "z-ai"
 pi_model = "glm-5.3-flash"
 ```
 
-For a manual tick, systemd is not loading `.orbi/env`. Export it first, then
-run Orbi using the normal command from the getting-started guide:
+For a manual tick, systemd is not loading `.orbi/env`. Export it first,
+validate the configuration, then run Orbi using the normal command from the
+getting-started guide:
 
 ```bash
 set -a
 . .orbi/env
 set +a
-pi --print "reply with the single word: ok"
+orbi check --config orbi.toml
 orbi --config orbi.toml
 ```
 
-Run one real `pi --print` check before dispatching an Issue. The Runner also
-fails fast if the JSON, selected model, endpoint, or `ZAI_API_KEY` is invalid.
+`orbi check --config orbi.toml` validates the setup without sending a
+request — the prerequisite commands, `gh` auth, the provider file, the
+selected provider/model and the `ZAI_API_KEY` reference; a failure prints a
+`reason=` and a `fix=`. The first real request happens in the first run —
+follow it with `orbi status --follow`.
+
+A bare `pi --print` is **not** a check for this setup: it runs Pi with its own
+agent directory (`~/.pi/agent`, or `PI_CODING_AGENT_DIR` when set) and never
+reads `pi_providers`, which reaches Pi only through the per-run agent directory
+Orbi materializes. The Runner also fails fast at startup if the JSON, selected
+model, endpoint, or `ZAI_API_KEY` is invalid.
 
 ## The real run
 
@@ -126,11 +136,13 @@ than putting a real key into committed JSON.
 
 ### `session_pending` does not necessarily mean stuck
 
-Do not judge a run only by how long its phase has stayed unchanged. During
-`session_pending`, the model may be working intensively. Check whether the
-`.pi-session/*.jsonl` file is still growing, and use the journal's activity
-lines. A genuinely stale startup is handled by Orbi's recovery path; do not
-invent a retry loop.
+Do not judge a run only by how long its phase has stayed unchanged.
+`session_pending` means Pi has been spawned but has not created its session file
+yet, so there is no session JSONL to watch in that phase. Check the journal's
+startup lines — `process_spawned`, `session_created`, `first_request_started` —
+to see which milestone the run has reached; a session that exists but has no
+first response yet is `request_pending`. A genuinely stale startup is handled by
+Orbi's recovery path; do not invent a retry loop.
 
 ### Reasoning metadata is deliberately omitted
 
@@ -154,8 +166,9 @@ pi_provider = "openrouter"
 pi_model = "google/gemma-4-31b-it:free"
 ```
 
-Set `OPENROUTER_API_KEY`, validate the exact entry, and run one real
-`pi --print` check before dispatching. That alternative's availability and
+Set `OPENROUTER_API_KEY`, validate the exact entry with
+`orbi check --config orbi.toml`, and let the first run make the real request
+(follow it with `orbi status --follow`). That alternative's availability and
 quota are **not tested** in this article.
 
 For the complete provider catalog and current status, see the

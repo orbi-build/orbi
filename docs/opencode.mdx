@@ -124,6 +124,9 @@ selection and use that provider's existing setup:
 ```
 
 Copy the matching template from `templates/pi-providers/`, put its key in
-`.orbi/env` (local Qwen uses its documented dummy key), and run the provider
-validation plus one real `pi --print` request. Switching is manual; it does
-not repair an invalid OpenCode key or create an automatic fallback.
+`.orbi/env` (local Qwen uses its documented dummy key), and validate the
+selection with `orbi check --config orbi.toml`; the first run makes the first
+real request (follow it with `orbi status --follow`). A bare `pi --print` does
+not check this setup — it runs Pi with its own agent directory and never reads
+`pi_providers`. Switching is manual; it does not repair an invalid OpenCode key
+or create an automatic fallback.

@@ -134,7 +134,7 @@ On **2026-09-08**, two real requests using the original template and Pi 0.85.1 p
    PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
    ```
 
-5. Select only the provider/model in `orbi.toml`; do not maintain commented provider blocks there. Run the loader/runner validation before a real task. It fails fast when the selected provider, model, endpoint, API, or selected key reference is invalid.
+5. Select only the provider/model in `orbi.toml`; do not maintain commented provider blocks there. Validate before a real task with `orbi check --config orbi.toml` — it sends no request and fails fast when the selected provider, model, endpoint, API, or selected key reference is invalid. A bare `pi --print` is **not** this check: it runs Pi with its own agent directory (`~/.pi/agent`, or `PI_CODING_AGENT_DIR` when set) and never reads `pi_providers`, which reaches Pi only through the per-run agent directory Orbi materializes. The first real request happens in the first run; follow it with `orbi status --follow`.
 
 ### `thinkingLevelMap`
 
@@ -200,7 +200,7 @@ pi_provider = "z-ai"       # or another provider in the catalog
 pi_model = "glm-5.3-flash"
 ```
 
-Replace the provider file and matching environment variable, validate the exact provider/model/key again, and then run one real `pi --print` check. Switching is manual; the automatic per-provider rotation tracked in [#313](https://github.com/orbi-build/orbi/issues/313) is not current behavior.
+Replace the provider file and matching environment variable, validate the exact provider/model/key again with `orbi check --config orbi.toml` (see [Add a new provider](#add-a-new-provider) step 5), and then run the first Issue — that run makes the first real request. Switching is manual; the automatic per-provider rotation tracked in [#313](https://github.com/orbi-build/orbi/issues/313) is not current behavior.
 
 ### z.ai GLM: experience/free quota
 
@@ -253,7 +253,7 @@ pi_provider = "openrouter"
 pi_model = "google/gemma-4-31b-it:free"
 ```
 
-Copy [`openrouter.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/openrouter.json), set `OPENROUTER_API_KEY` in `.orbi/env`, and run one real `pi --print` check before dispatching. OpenRouter model availability and quota are **not tested or promised** beyond the dated evidence above; re-check the live catalog before selecting a model.
+Copy [`openrouter.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/openrouter.json), set `OPENROUTER_API_KEY` in `.orbi/env`, and validate the selection with `orbi check --config orbi.toml` before dispatching. OpenRouter model availability and quota are **not tested or promised** beyond the dated evidence above; re-check the live catalog before selecting a model.
 
 ### Cloudflare Workers AI
 
@@ -279,7 +279,7 @@ The model ID is the current FP8 variant documented in Cloudflare's [Workers AI m
 Record the Workers AI account's Neurons usage immediately before dispatching one Issue and immediately after the PR is opened (same UTC day). The measured task consumption is `after - before`; retain the dashboard/API timestamps, model, Issue and PR URL, but never retain the token. Orbi's journal proves the selected provider/model, not Neurons usage. **This repository has not run a Cloudflare-account-backed Orbi task; the request and Neurons consumption are not tested and must not be inferred.**
 
 ```text
-journal: provider=cf-workers model=@cf/meta/llama-3.1-8b-instruct-fp8 run_id=<run-id>
+journal: [<run-id>] provider_config_loaded issue=OWNER/REPO#<issue> role=implement provider=cf-workers model=@cf/meta/llama-3.1-8b-instruct-fp8
 Cloudflare Workers AI usage: before=<n> neurons at <UTC>, after=<n> neurons at <UTC>, delta=<n>
 PR: https://github.com/OWNER/REPO/pull/<number>
 ```
@@ -434,7 +434,7 @@ Never put the OAuth token or `auth.json` into the repository, an Issue, a PR bod
 
 ### Evidence boundary
 
-This section documents the contract, not a verified run. The exact login wording, the `pi auth check` JSON shape, `http://127.0.0.1:1455/auth/callback`, the `0600` `~/.pi/agent/auth.json`, `agent_name_hint="Pi"`, and the `chatgpt.tokens.use.direct` scope were verified against `@earendil-works/pi-coding-agent` 0.99.1; the model-list endpoint, quota rules, and error codes come from OpenAI's Sign in with ChatGPT documentation. The sign-in, quota, model availability for a given account, and the resulting Orbi run are **not tested** here. After you sign in, retain only non-secret evidence of a real Issue run (journal `provider=openai model=<slug> run_id=<id>`, PR URL, elapsed time), never the tokens or the session JSONL.
+This section documents the contract, not a verified run. The exact login wording, the `pi auth check` JSON shape, `http://127.0.0.1:1455/auth/callback`, the `0600` `~/.pi/agent/auth.json`, `agent_name_hint="Pi"`, and the `chatgpt.tokens.use.direct` scope were verified against `@earendil-works/pi-coding-agent` 0.99.1; the model-list endpoint, quota rules, and error codes come from OpenAI's Sign in with ChatGPT documentation. The sign-in, quota, model availability for a given account, and the resulting Orbi run are **not tested** here. After you sign in, retain only non-secret evidence of a real Issue run (the journal `provider_config_loaded` line, which carries the configured provider/model, plus the PR URL and elapsed time), never the tokens or the session JSONL.
 
 ## Codex OAuth: use a ChatGPT/Codex subscription
 
@@ -483,16 +483,18 @@ The OAuth credential consumes the user's Codex/ChatGPT subscription allowance. I
 Run the first Issue in the user's own repository, then retain the non-secret evidence. A successful run should show all of these:
 
 ```text
-journal: provider=openai-codex model=gpt-5.6-luna run_id=<run-id>
+journal: [<run-id>] provider_config_loaded issue=OWNER/YOUR-REPO#<issue> role=implement provider=openai-codex model=gpt-5.6-luna
 PR: https://github.com/OWNER/YOUR-REPO/pull/<number>
 elapsed: <duration>
 result: PR opened (then review/merge according to the normal Orbi flow)
 ```
 
+`provider_config_loaded` is logged before Pi is spawned, so it carries the configured provider/model; the run id is the `[<run-id>]` journal prefix, not a field of its own on these startup lines. Read it back with `journalctl --user -u 'orbi@*' | grep '\[<run-id>\] provider_config_loaded'`.
+
 A redacted, non-secret record from the completed Orbi run for this guide (2026-09-07) is:
 
 ```text
-journal: provider=openai-codex model=gpt-5.6-luna run_id=f3e26f87
+journal: [f3e26f87] provider_config_loaded issue=… role=implement provider=openai-codex model=gpt-5.6-luna
 PR: https://github.com/orbi-build/orbi/pull/487
 elapsed: 4m 06s (09:11:18Z–09:15:24Z)
 result: PR opened
