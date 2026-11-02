@@ -37,6 +37,8 @@ COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage run --branch -m pytes
 COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage report --show-missing
 COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/coverage_gate.py .orbi/.coverage
 COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/diff_coverage_gate.py origin/main
+python3 tools/patch_ratchet.py
+python3 tools/size_ratchet.py
 ```
 
 How a contributor runs the tests locally (a virtual environment, a
@@ -53,6 +55,35 @@ is the merged line+branch percentage and is never the gate), and
 `tools/diff_coverage_gate.py` exits non-zero when a Python line or branch
 changed since the base ref is not 100% covered.
 
+The two ratchets are the rest of the Python contract, and CI runs them
+right after the coverage gates. Neither reads the coverage data — they
+measure the test corpus and the source — so they need nothing installed
+beyond the standard library and run on the `python3` on PATH:
+
+- `tools/patch_ratchet.py` (Issues #789, #1230, #1856): the test corpus
+  may only shrink. New internal `monkeypatch.setattr` sites (adapter and
+  domain patches) and `command[:N] ==` assertions are ratcheted shut,
+  while boundary seam fakes (`run_command`, `new_run_id`, `PROC`,
+  `Path`, `shutil.which`, `HTTPServer`, ...) and the per-target counts
+  are reported, not gated; moving a patch between modules is neutral.
+  A failure says to move the test to `tests/fakes/` or remove the patch.
+- `tools/size_ratchet.py` (Issues #1229, #2007): the source-size limits
+  — Article 3's module cap and frozen `runner.py` top level, plus this
+  tool's own 100-line function cap (Issue #2007, not a constitution
+  article). A module over 1,000 lines may not grow, and every function
+  over 100 lines is recorded with its own ceiling, so a new function
+  crossing 100 lines fails. Extract code into a sibling module or
+  function instead.
+
+Both tools accept only `--update` (plus an optional directory
+positional — `tests/` and `src/orbi/` are the defaults). `--update`
+refreezes `tools/patch_ratchet_baseline.json` /
+`tools/size_ratchet_baseline.json` and belongs only to a PR that
+deliberately LOWERS a measured value:
+`python3 tools/patch_ratchet.py --update` or
+`python3 tools/size_ratchet.py --update`. Refreezing after a rise hides
+the regression instead of recording it.
+
 ## Remote CI (GitHub Actions)
 
 `.github/workflows/ci.yml` runs the same contract on every `pull_request`
@@ -63,7 +94,9 @@ version and runs the identical commands through `python3` on PATH),
 `requirements.txt` installed, then the contract commands above — the
 report, `tools/coverage_gate.py`, and `tools/diff_coverage_gate.py origin/main`
 (the changed-code tier against the PR base; a doc-only PR has no
-changed Python and passes). No lint, no matrix, no cache. The workflow
+changed Python and passes), the patch ratchet
+`tools/patch_ratchet.py`, and the size ratchet `tools/size_ratchet.py`.
+No lint, no matrix, no cache. The workflow
 declares its own environment — the CI toolchain belongs to ci.yml, not
 to the repository (Issue #569).
 

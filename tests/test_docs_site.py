@@ -1359,6 +1359,18 @@ def test_docs_document_tests_and_coverage_commands():
     assert "tools/diff_coverage_gate.py" in text, (
         "testing must show the changed-code gate command"
     )
+    assert "python3 tools/patch_ratchet.py" in text, (
+        "testing must show the patch ratchet CI runs (Issue #2098)"
+    )
+    assert "python3 tools/size_ratchet.py" in text, (
+        "testing must show the size ratchet CI runs (Issue #2098)"
+    )
+    assert "tools/patch_ratchet.py --update" in text, (
+        "testing must document the patch ratchet refreeze flag (Issue #2098)"
+    )
+    assert "tools/size_ratchet.py --update" in text, (
+        "testing must document the size ratchet refreeze flag (Issue #2098)"
+    )
     assert "95%" in text, "testing must state the 95% line/branch tiers"
     assert "100%" in text, (
         "testing must state the 100% changed-code and core-path tiers"
