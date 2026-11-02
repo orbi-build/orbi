@@ -44,7 +44,7 @@ orbi --version            # → orbi <version>
 - Linux —— systemd user session：`systemctl --user status`
 - macOS —— launchd GUI session：`launchctl print gui/$(id -u)`（尚未在真机验证，欢迎回报）
 
-按 [Getting started](docs/zh/getting-started.mdx) 选择模式：自举模式使用本 checkout 作为 `repo_dir`；[External single-repo mode](docs/zh/getting-started.mdx#external-single-repo-mode-deploy_home) 使用本 checkout 作为 `deploy_home`，外部仓库作为 `repo_dir`。
+按 [Getting started](docs/zh/getting-started.mdx) 选择模式：自举模式使用本 checkout 作为 `repo_dir`；[External single-repo mode](https://docs.orbi.build/zh/getting-started#外部单仓库模式（deploy_home）) 使用本 checkout 作为 `deploy_home`，外部仓库作为 `repo_dir`。
 
 ```bash
 cp src/orbi/example_config.toml orbi.toml
