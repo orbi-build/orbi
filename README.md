@@ -37,6 +37,7 @@ Choose the mode in [Getting started](docs/getting-started.mdx): bootstrap uses t
 
 ```bash
 cp src/orbi/example_config.toml orbi.toml
+# edit orbi.toml: set source_repos = ["OWNER/REPO"] (the repository whose Issues Orbi delivers)
 orbi setup --config orbi.toml  # 4. run one-time setup (checks prior gh auth, labels, scheduler units (systemd/launchd), and checkout; idempotent)
 PYTHONPATH=src python3 -m orbi.runner --config orbi.toml  # 5. manually run one tick (for initial verification; the timer schedules normal runs)
 orbi doctor --config orbi.toml  # 6. verify deployment health

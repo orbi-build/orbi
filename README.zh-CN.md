@@ -48,6 +48,7 @@ orbi --version            # → orbi <version>
 
 ```bash
 cp src/orbi/example_config.toml orbi.toml
+# 编辑 orbi.toml：把 source_repos 改成 ["OWNER/REPO"]（要交付其 Issue 的仓库）
 orbi setup --config orbi.toml  # 4. 一次性 setup（检查既有 gh auth、labels、调度器 units（systemd/launchd）、checkout；幂等）
 PYTHONPATH=src python3 -m orbi.runner --config orbi.toml  # 5. 手动跑一个 tick（首次验证；日常由 timer 调度）
 orbi doctor --config orbi.toml  # 6. 验证部署健康
