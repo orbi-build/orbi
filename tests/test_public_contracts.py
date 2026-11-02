@@ -22,6 +22,8 @@ PUBLIC_CONTRACTS = REPO_ROOT / "docs" / "public-contracts.mdx"
 ZH_PUBLIC_CONTRACTS = REPO_ROOT / "docs" / "zh" / "public-contracts.mdx"
 README = REPO_ROOT / "README.md"
 ZH_README = REPO_ROOT / "README.zh-CN.md"
+CONFIGURATION = REPO_ROOT / "docs" / "configuration.mdx"
+ZH_CONFIGURATION = REPO_ROOT / "docs" / "zh" / "configuration.mdx"
 
 # The five worked examples the acceptance criteria require.
 WORKED_EXAMPLES = (
@@ -121,6 +123,33 @@ def test_suggestions_row_documents_both_session_directories():
             assert session_dir in row, (
                 f"{path} Suggestions row misses {session_dir}: {row}"
             )
+
+
+def test_telegram_chat_id_links_the_page_that_documents_it():
+    """Issue #2099: the Config row's Telegram field was not a link at all,
+    and the row's surrounding link points at Getting started, which
+    documents no Telegram field in either language (grep for "telegram" on
+    both getting-started pages returns nothing). The field is documented on
+    the Configuration page, so each language's field name links there and
+    the target really carries the field."""
+    cases = (
+        (PUBLIC_CONTRACTS, "Config", "/configuration", CONFIGURATION),
+        (
+            ZH_PUBLIC_CONTRACTS,
+            "配置",
+            "/zh/configuration",
+            ZH_CONFIGURATION,
+        ),
+    )
+    for path, row_name, href, target in cases:
+        row = _inventory_row(path.read_text(encoding="utf-8"), row_name)
+        assert f"[`telegram_chat_id`]({href})" in row, (
+            f"{path} must link telegram_chat_id to {href}: {row}"
+        )
+        target_text = target.read_text(encoding="utf-8")
+        assert "`telegram_chat_id`" in target_text, (
+            f"{target} must document telegram_chat_id (the link target)"
+        )
 
 
 def test_status_contract_documents_scope_attribution_and_cycles():
