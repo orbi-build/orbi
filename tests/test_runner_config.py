@@ -17,6 +17,7 @@ import pytest
 from orbi import config as config_domain
 from orbi import source_pool
 from orbi.pilot_slots import slot_dir_for
+from orbi.scheduler_units import MAX_RUNNER_INSTANCES
 import orbi.runner as runner
 
 
@@ -204,6 +205,28 @@ def test_example_config_passes_execution_source_repos_validation():
     config = config_domain.load_config(example)
     assert len(config.source_repos) == 1
     runner.validate_execution_source_repos(config.source_repos)
+
+
+def test_example_config_max_concurrency_comment_states_the_real_range():
+    """Issue #2088 (finding R3): the example config is copied verbatim into
+    the user's orbi.toml, so its comment must state the range `load_config`
+    accepts — 1..MAX_RUNNER_INSTANCES (config.py) — instead of the stale
+    "1 or 2" claim."""
+    example = (
+        Path(__file__).resolve().parent.parent
+        / "src" / "orbi" / "example_config.toml"
+    ).read_text(encoding="utf-8")
+    comment = example.split("max_concurrency = 1", 1)[0]
+    comment = comment[comment.rindex("# Maximum concurrent"):]
+    match = re.search(
+        r"Must be 1[–-](\d+) \(MAX_RUNNER_INSTANCES\); missing means 1\.",
+        comment,
+    )
+    assert match, (
+        "the example config's max_concurrency comment must state the real "
+        f"allowed range, got:\n{comment}"
+    )
+    assert int(match.group(1)) == MAX_RUNNER_INSTANCES
 
 
 def test_load_config_requires_source_repos(tmp_path):
