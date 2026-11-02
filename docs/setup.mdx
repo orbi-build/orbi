@@ -8,7 +8,8 @@ description: "What does one-time Orbi setup change on my machine?"
 `orbi setup` is the one-time, config-driven initialization
 entry for a new machine or a new task-pool repository. It verifies or
 reinstalls the editable CLI install, verifies the local prerequisites,
-aligns the platform labels, installs the systemd user units, checks
+aligns the platform labels, installs the platform's scheduler units
+(systemd user units on Linux, launchd agents on macOS), checks
 the checkout, and reports the optional model proxy — in one command,
 with a stable machine-readable result.
 
@@ -32,14 +33,15 @@ Setup is **fail-fast**: a core prerequisite failure stops the run
 before any later mutation, with the concrete reason on stderr and a
 non-zero exit code.
 
-1. **Commands** — `git`, `gh`, `python3`, `uv` and the installed
+1. **Commands** — `git`, `gh`, `uv` and the installed
    `orbi` CLI on the PATH (you install these yourself — setup
    only checks them; a missing one fails fast with the actionable
    install guidance, e.g. `required command missing: uv (not on PATH)
    — install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh`),
-   and a reachable `systemctl --user` user bus (a container or headless
-   session without a user bus fails with the bus error). `gh` must be
-   ≥ 2.94.0 — the queue scans need `gh api --paginate --slurp` and the
+   and a reachable scheduler user session (`systemctl --user` on
+   Linux, `launchctl print gui/<uid>` on macOS — a container or
+   headless session without one fails with the session error). `gh`
+   must be ≥ 2.94.0 — the queue scans need `gh api --paginate --slurp` and the
    `blockedBy` field, so an older distribution package (Ubuntu 24.04
    ships 2.45.0) passes this check but fails every tick; [Getting
    started](/getting-started) carries the official install source and
@@ -89,16 +91,19 @@ non-zero exit code.
      business labels (`bug`, `enhancement`, ...) are never touched. In the
      external single-repo mode the labels come from the orbi checkout, never
      from the delivery checkout X.
-5. **Systemd units** — the deployment home's templates
-   (`<deploy_home>/systemd/orbi@.service`,
-   `<deploy_home>/systemd/orbi@.timer`; in bootstrap mode the orbi
-   checkout, Issue #330) are installed idempotently into the user unit
-   directory (the same
-   install `install-units` performs: copy, `daemon-reload`,
-   then enables `@1` for
-   `max_concurrency = 1` or `@1` and `@2` for `2` (and disables surplus
-   timers) — the service is never started, stopped or restarted), then each timer
-   instance's enabled/active state and next trigger time are reported.
+5. **Scheduler units** — the deployment home's templates
+   (Linux: `<deploy_home>/systemd/orbi@.service` and
+   `<deploy_home>/systemd/orbi@.timer`; macOS:
+   `<deploy_home>/launchd/org.orbi.runner.plist`; in bootstrap mode
+   the orbi checkout, Issue #330) are installed idempotently into the
+   user unit directory (the same install `install-units` performs:
+   copy and, on Linux, `daemon-reload`), then each timer instance's
+   enabled/active state and next trigger time (`-` on launchd, which
+   exposes no next-fire time) are reported. The instances converge onto
+   `max_concurrency`: instances `1`..`N` (`@1`..`@N` on systemd) are
+   enabled and started (a hand-disabled instance is re-enabled), surplus
+   instances are disabled, and the service is never started, stopped or
+   restarted.
 6. **Checkout + git transport** — check of the configured delivery
    checkout `repo_dir` (the orbi checkout in bootstrap mode, the user
    repo X in the external single-repo mode): the `origin` remote's
@@ -151,9 +156,9 @@ on the deploy home (the orbi checkout), not on X — X is only read from
 when the Runner creates task worktrees. `deploy_home` absent means bootstrap mode: everything acts on
 `repo_dir` exactly as before.
 
-One practical consequence: the installed systemd unit reads its config
-from `<deploy_home>/orbi.toml` (the `{{ORBI_REPO_DIR}}` placeholder
-renders the deploy home path), so in external mode `orbi.toml` and the
+One practical consequence: the installed unit (the systemd unit or the
+launchd agent) reads its config from `<deploy_home>/orbi.toml` (the
+`{{ORBI_REPO_DIR}}` placeholder renders the deploy home path), so in external mode `orbi.toml` and the
 optional `.orbi/env` live in the orbi checkout — run setup with
 `--config <deploy_home>/orbi.toml`.
 
@@ -163,7 +168,7 @@ optional `.orbi/env` live in the orbi checkout — run setup with
 |---|---|
 | `--config PATH` | The `orbi.toml` configuration (default: `$ORBI_CONFIG` or `orbi.toml`) |
 | `--repo OWNER/REPO` | Initialize exactly this configured source repo (default: every configured source repo) |
-| `--installed-dir PATH` | User unit directory (default: the standard `~/.config/systemd/user`) |
+| `--installed-dir PATH` | User unit directory (default: `~/.config/systemd/user` on Linux — `$XDG_CONFIG_HOME/systemd/user` when `XDG_CONFIG_HOME` is set — and `~/Library/LaunchAgents` on macOS) |
 | `--json` | Print the result as JSON instead of `key=value` lines |
 
 ## Output
@@ -174,7 +179,7 @@ containing spaces are quoted), so agents and scripts can parse it:
 ```text
 setup=ok version=4 base_branch=main
 cli=verified source=/path/to/checkout/src/orbi/__init__.py
-repo=orbi-build/orbi permission=ADMIN default_branch=main labels=12/12
+repo=orbi-build/orbi permission=ADMIN default_branch=main labels=14/14
 service=installed path=~/.config/systemd/user/orbi@.service sha256=9f2c...
 timer=orbi@1.timer enabled active=true next="Fri 2026-09-18 16:45:00 UTC"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=https://github.com/orbi-build/orbi.git protocol=https migrated=false ssh_reachable=- transport_reachable=true
@@ -185,8 +190,8 @@ model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/heal
 
 `cli=verified` means the running CLI already imports `orbi`
 from the deployment checkout (the editable install is in place);
-`cli=installed` means the force editable reinstall ran. `labels=12/12`
-means all twelve platform labels match `labels.toml`. There is one
+`cli=installed` means the force editable reinstall ran. `labels=14/14`
+means all fourteen platform labels match `labels.toml`. There is one
 `timer=` line per timer instance and its `next` is that instance's next
 trigger time (`-` when it has none). `model_provider=NOT CONFIGURED`
 is a warning: it never changes the setup exit code; the following
@@ -212,7 +217,7 @@ Success (exit code `0`):
 $ orbi setup
 setup=ok version=4 base_branch=main
 cli=verified source=/path/to/checkout/src/orbi/__init__.py
-repo=orbi-build/orbi permission=ADMIN default_branch=main labels=12/12
+repo=orbi-build/orbi permission=ADMIN default_branch=main labels=14/14
 service=installed path=~/.config/systemd/user/orbi@.service sha256=9f2c...
 timer=orbi@1.timer enabled active=true next="Fri 2026-09-18 16:45:00 UTC"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=https://github.com/orbi-build/orbi.git protocol=https migrated=false ssh_reachable=- transport_reachable=true
@@ -228,7 +233,7 @@ Failures (non-zero exit code, `setup_failed reason=...` on stderr):
 
 ```text
 setup_failed reason=required command missing: uv (not on PATH) — install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh (https://docs.astral.sh/uv/getting-started/installation/)
-setup_failed reason=systemctl --user user bus unavailable (is a systemd user session running?): ...
+setup_failed reason=systemd user session unavailable (is a systemd session running?): ...
 setup_failed reason=editable tool install failed for /path/to/checkout: ... (fix: uv tool install --force --reinstall --editable --python 3.14 /path/to/checkout)
 setup_failed reason=repo not accessible: nobody/no-such (gh repo view failed: ...)
 setup_failed reason=insufficient permission for owner/repo: viewerPermission='READ' (one of ['ADMIN', 'MAINTAIN', 'WRITE'] required to manage labels)
@@ -241,17 +246,21 @@ setup_failed reason=checkout check failed for /path/to/checkout: transport_unrea
 
 A missing prerequisite command (e.g. `uv`), a wrong repo, missing
 labels that cannot be created (permission), a dirty checkout, an
-an unreachable transport (no fallback) or a missing systemd user bus
-all stop the setup with the concrete reason — nothing is
-half-initialized without a clear signal.
+unreachable transport (no fallback) or an unavailable scheduler user
+session all stop the setup with the concrete reason — nothing is
+half-initialized without a clear signal. On macOS that session line names
+launchd instead: `setup_failed reason=launchd user session unavailable
+(is a launchd session running?): ...`.
 
 ## Idempotency
 
 Re-running setup on an already-initialized machine is a no-op for the
 external state: labels that already match are not rewritten, the unit
-templates are re-copied from the repo (drift repair), the configured timers
-retain their enabled or disabled states, and no Issues or business data are
-created or modified. The
+templates are re-copied from the repo (drift repair), and the timers
+converge onto `max_concurrency` — instances `1`..`N` are enabled and
+started (a hand-disabled instance is re-enabled), surplus instances are
+disabled, services are never started, stopped or restarted — and no
+Issues or business data are created or modified. The
 reported hashes and states are stable across runs. The transport
 migration is one-shot: after the first run the `origin` remote matches
 the configured `git_transport` and re-runs only re-verify it
