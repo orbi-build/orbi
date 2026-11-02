@@ -292,7 +292,8 @@ def test_english_homepage_carries_a_descriptive_frontmatter_title():
 
 
 # Card destinations on the Chinese home page: internal hrefs are page paths
-# (`/...`); the Cloud card is an external `https://` URL.
+# (`/...`); an external `https://` destination would not start with `/` and
+# is therefore outside this check.
 CARD_HREF = re.compile(r'<Card\b[^>]*\bhref="([^"]+)"')
 
 
