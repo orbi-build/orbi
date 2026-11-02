@@ -15,10 +15,9 @@ Platform hooks (see :class:`orbi.scheduler.Scheduler`):
   instances through the configured ``max_concurrency`` and disable
   surplus timers) that NEVER starts/stops/restarts the service: a currently running
   Runner keeps running, and the new config takes effect at the next
-  service start. The install also migrates the pre-#149
-  non-templated units away once (stop the legacy timer — a timer stop
-  never touches the service — and remove the legacy files), so the
-  old single-instance schedule cannot keep firing the old service;
+  service start. An install never deletes or ``systemctl``-touches a
+  non-templated unit file: a user's own ``orbi.service`` /
+  ``orbi.timer`` is not Orbi's state (Issue #2067);
 - a pre-start consistency check (the layer's ``check_unit_drift``
   running on this class's raw-byte content identity) that fails fast
   with a structured ``unit_drift`` line when the installed units
@@ -42,15 +41,11 @@ from orbi.scheduler_units import (
     timer_instances,
     unit_names,
 )
-from orbi.journal import event
+
 
 SERVICE_UNIT = "orbi@.service"
 TIMER_UNIT = "orbi@.timer"
 UNIT_NAMES = (SERVICE_UNIT, TIMER_UNIT)
-# The pre-#149 non-templated units: the install migrates them away
-# once (a template change is a deployment change, no human step).
-LEGACY_TIMER_UNIT = "orbi.timer"
-LEGACY_UNIT_NAMES = ("orbi.service", "orbi.timer")
 
 
 def repo_unit_dir(repo_dir: Path) -> Path:
@@ -118,7 +113,7 @@ def unmanaged_units(installed_dir: Path) -> list[dict]:
     ``orbi-<unit_name>@.service``, and their ``@`` instances):
     the layer's drift check compares exactly those names. A hand-written
     orbi unit WITHOUT the ``@`` template form (``orbi-core.service``,
-    the pre-#149 ``orbi.timer``, ...) is invisible to every
+    a user's own ``orbi.timer``, ...) is invisible to every
     ``unit_names()`` set — it never drift-checks and never self-heals.
     One entry per such file, sorted by name: the unit
     name and the ``ORBI_CONFIG`` the unit points at (``None`` when the
@@ -164,37 +159,6 @@ def timer_next_trigger(list_timers_output: str, unit_name: str) -> str:
                 return match.group(1)
             return columns[0]
     return "-"
-
-
-def migrate_legacy_units(installed_dir: Path, *, run_command) -> bool:
-    """One-time migration away from the pre-#149 non-templated units.
-
-    Returns True when a legacy timer unit file was present (and
-    migrated), False when there was nothing to migrate (a fresh
-    install or an already-migrated machine — idempotent).
-
-    The legacy ``orbi.timer`` is stopped with ``disable --now``
-    (a TIMER stop: it never starts, stops or restarts the SERVICE — a
-    currently running Runner keeps running) and the legacy
-    ``orbi.service``/``orbi.timer`` files are removed,
-    so the old single-instance schedule cannot keep firing the old
-    service (a third Runner without the ExecStartPre flock, Issue
-    #149). A failing step propagates unchanged (fail fast).
-    """
-    if not (installed_dir / LEGACY_TIMER_UNIT).is_file():
-        return False
-    run_command([
-        "systemctl", "--user", "disable", "--now", LEGACY_TIMER_UNIT,
-    ])
-    for name in LEGACY_UNIT_NAMES:
-        legacy = installed_dir / name
-        if legacy.is_file():
-            legacy.unlink()
-    event(
-        "legacy_units_migrated", installed_dir=installed_dir,
-        removed=",".join(LEGACY_UNIT_NAMES),
-    )
-    return True
 
 
 class SystemdScheduler:
@@ -377,12 +341,6 @@ class SystemdScheduler:
             run_command(["systemctl", "--user", "enable", "--now", instance])
         for instance in instances[max_concurrency:]:
             run_command(["systemctl", "--user", "disable", "--now", instance])
-
-    def pre_install(self, run_command, installed_dir: Path,
-                    unit_name: str | None = None) -> None:
-        # The pre-#149 legacy units belong to the default deployment only.
-        if unit_name is None:
-            migrate_legacy_units(installed_dir, run_command=run_command)
 
     def unmanaged_entries(self, installed_dir: Path) -> list[dict]:
         return unmanaged_units(installed_dir)

@@ -6,8 +6,9 @@ command is idempotent and must never start/stop/restart the service:
 a currently running Runner keeps running, and the new config takes
 effect at the next service start. The install enables the timer
 instances through the configured ``max_concurrency`` (Issue #827:
-names generated per count, capped by MAX_RUNNER_INSTANCES) and
-migrates the pre-#149 non-templated units away once. The pre-start
+names generated per count, capped by MAX_RUNNER_INSTANCES) and never
+touches a user's own non-templated ``orbi.service``/``orbi.timer``
+(Issue #2067). The pre-start
 check compares the installed units against the templates and fails
 fast with a structured ``unit_drift`` line when they drift.
 """
@@ -615,24 +616,20 @@ def test_install_units_enables_only_configured_timer_instances(tmp_path):
     assert not any(".service" in command[-1] for command in calls)
 
 
-def test_install_units_migrates_the_legacy_units_once(
-    monkeypatch, tmp_path, caplog,
-):
-    """Issue #149: the pre-#149 deployment (the non-templated units)
-    is migrated away by the SAME idempotent install: the legacy timer
-    is stopped (a TIMER stop — the service is never started/stopped/
-    restarted, a running Runner keeps running), the legacy files are
-    removed, and the new templates + both instances are installed."""
+def test_install_units_leaves_user_owned_units_in_place(tmp_path):
+    """Issue #2067: a user's OWN non-templated `orbi.service` /
+    `orbi.timer` files are never Orbi's to delete — Orbi never shipped
+    those names, so the install has no legacy state to migrate. The
+    install leaves both files byte-identical and issues no `systemctl`
+    call naming `orbi.timer` (before this fix it ran
+    `systemctl --user disable --now orbi.timer` and unlinked both)."""
     repo = make_repo(tmp_path)
     installed = tmp_path / "install"
     installed.mkdir()
-    # The pre-#149 installed units (the non-templated names).
-    (installed / "orbi.service").write_text(
-        "[Service]\nExecStart=old\n", encoding="utf-8",
-    )
-    (installed / "orbi.timer").write_text(
-        "[Timer]\nOnCalendar=old\n", encoding="utf-8",
-    )
+    user_service = "[Service]\nExecStart=/usr/local/bin/my-own-runner\n"
+    user_timer = "[Timer]\nOnCalendar=*-*-* 03:00:00\n"
+    (installed / "orbi.service").write_text(user_service, encoding="utf-8")
+    (installed / "orbi.timer").write_text(user_timer, encoding="utf-8")
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
@@ -641,114 +638,22 @@ def test_install_units_migrates_the_legacy_units_once(
             return "0123456789abcdef0123456789abcdef01234567"
         return ""
 
-    with caplog.at_level("INFO"):
-        scheduler.install_units(
-            repo, installed, max_concurrency=2, run_command=fake_run,
-        )
-    # The legacy timer is stopped (disable --now: a timer stop, never
-    # a service stop) and the legacy files are removed.
-    assert [
-        "systemctl", "--user", "disable", "--now", "orbi.timer",
-    ] in calls
-    assert not (installed / "orbi.service").exists()
-    assert not (installed / "orbi.timer").exists()
-    # The new templates are installed and the configured instances enabled.
+    scheduler.install_units(
+        repo, installed, max_concurrency=2, run_command=fake_run,
+    )
+    assert (installed / "orbi.service").read_text(
+        encoding="utf-8") == user_service
+    assert (installed / "orbi.timer").read_text(
+        encoding="utf-8") == user_timer
+    assert not any("orbi.timer" in command for command in calls)
+    # Still the documented install: both templates land and the
+    # configured timer instances are enabled.
     for name in systemd_deploy.UNIT_NAMES:
         assert (installed / name).is_file()
     for instance in scheduler.timer_instances(count=2):
         assert [
             "systemctl", "--user", "enable", "--now", instance,
         ] in calls
-    # The service is NEVER started/stopped/restarted (only the legacy
-    # TIMER and the surplus timer instances are disabled).
-    for command in calls:
-        if command[:2] == ["systemctl", "--user"]:
-            assert command[2] in (
-                "show", "daemon-reload", "enable", "disable",
-            )
-            if command[2] == "disable":
-                assert command[4] in (
-                    "orbi.timer", "orbi@3.timer", "orbi@4.timer",
-                    "orbi@5.timer",
-                )
-    assert "legacy_units_migrated" in caplog.text
-
-
-def test_install_units_legacy_migration_is_idempotent(
-    monkeypatch, tmp_path,
-):
-    """Issue #149: the migration runs exactly once — the first install
-    on a pre-#149 world disables the legacy timer, and every later
-    install (no legacy files left) is a no-op (no disable call, no
-    file removal)."""
-    repo = make_repo(tmp_path)
-    installed = tmp_path / "install"
-    installed.mkdir()
-    (installed / "orbi.service").write_text(
-        "[Service]\nExecStart=old\n", encoding="utf-8",
-    )
-    (installed / "orbi.timer").write_text(
-        "[Timer]\nOnCalendar=old\n", encoding="utf-8",
-    )
-    calls: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        if command[:3] == ["git", "rev-parse", "HEAD"]:
-            return "0123456789abcdef0123456789abcdef01234567"
-        return ""
-
-    scheduler.install_units(
-        repo, installed, max_concurrency=2, run_command=fake_run)
-    first_calls = list(calls)
-    calls.clear()
-    scheduler.install_units(
-        repo, installed, max_concurrency=2, run_command=fake_run)
-    assert ["systemctl", "--user", "disable", "--now",
-            "orbi.timer"] in first_calls
-    assert ["systemctl", "--user", "disable", "--now",
-            "orbi.timer"] not in calls
-
-
-def test_migrate_legacy_units_removes_only_the_files_that_exist(
-    tmp_path,
-):
-    """Issue #149: a partial legacy deployment (the legacy timer exists
-    but the legacy service file does not) is still migrated: the timer
-    is stopped and only the EXISTING legacy file is removed (no missing
-    file is fabricated or raised)."""
-    installed = tmp_path / "install"
-    installed.mkdir()
-    (installed / "orbi.timer").write_text(
-        "[Timer]\nOnCalendar=old\n", encoding="utf-8",
-    )
-    calls: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        return ""
-
-    migrated = systemd_deploy.migrate_legacy_units(
-        installed, run_command=fake_run,
-    )
-    assert migrated is True
-    assert ["systemctl", "--user", "disable", "--now",
-            "orbi.timer"] in calls
-    assert not (installed / "orbi.timer").exists()
-    assert not (installed / "orbi.service").exists()
-
-
-def test_migrate_legacy_units_returns_false_without_legacy_files(
-    tmp_path,
-):
-    installed = tmp_path / "install"
-    installed.mkdir()
-    calls: list[list[str]] = []
-    assert systemd_deploy.migrate_legacy_units(
-        installed, run_command=lambda command, **kwargs:
-        calls.append(command) or "",
-    ) is False
-    assert calls == []
 
 
 def test_install_units_is_idempotent_and_overwrites_drift(
@@ -1096,8 +1001,8 @@ def test_unmanaged_units_lists_the_hand_written_units(tmp_path):
     (installed / "orbi-core.timer").write_text(
         "[Timer]\nOnCalendar=*-*-* *:00/5\n", encoding="utf-8",
     )
-    # The pre-#149 legacy units are unmanaged too (their presence means
-    # the migration never ran on this machine).
+    # A user's own non-templated orbi.service/orbi.timer are unmanaged
+    # too: nothing in Orbi owns or deletes them (Issue #2067).
     (installed / "orbi.service").write_text("[Service]\n", encoding="utf-8")
     (installed / "orbi.timer").write_text("[Timer]\n", encoding="utf-8")
     entries = systemd_deploy.unmanaged_units(installed)
@@ -1111,7 +1016,7 @@ def test_unmanaged_units_lists_the_hand_written_units(tmp_path):
     assert entries[1]["config"] == core_cfg.resolve()
     # The quoted ORBI_CONFIG form resolves the same way.
     assert entries[0]["config"] == core_cfg.resolve()
-    # A timer/legacy service without ORBI_CONFIG carries None (doctor
+    # A timer (and a service without the env line) carries None (doctor
     # renders it as '-').
     assert entries[2]["config"] is None
     assert entries[4]["config"] is None

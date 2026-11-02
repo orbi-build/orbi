@@ -352,11 +352,11 @@ starts, stops or restarts a running Runner), re-verifies with the SAME hash chec
 continues with one structured `unit_drift result=auto_synced` line per unit
 (before and after sha256, deployed commit). There is no per-tick drift
 loop until human intervention (the #131/#140 scene: every start failed
-with `unit_drift` until a human ran the sync command). The same install
-also migrates the pre-#149 non-templated units (`orbi.service` /
-`orbi.timer`) away once: it stops the legacy timer (a timer stop
-— never the service) and removes the legacy files, so the old
-single-instance schedule cannot keep firing the old service.
+with `unit_drift` until a human ran the sync command). The install only
+ever writes the managed template units: a non-templated unit file that
+happens to be named `orbi.service` or `orbi.timer` belongs to whoever
+wrote it and is never deleted, disabled or stopped by an install or the
+self-heal (Issue #2067).
 
 `orbi install-units --config orbi.toml` stays the manual
 entry (first setup, or an immediate sync). A drift the self-heal cannot
@@ -611,7 +611,6 @@ registry — in both directions (a name only in code or only in docs fails
 | `unit_drift` | installed units vs repo templates: clean, self-healed, or drifting |
 | `unit_conflict` | an installed unit file conflicts with the deployment |
 | `units_installed` | the systemd user units were installed or refreshed |
-| `legacy_units_migrated` | pre-#149 non-templated units were removed |
 | `health_check_skipped` | the periodic health check skipped this tick |
 | `health_check_queue_empty` | the health check found a non-empty-but-stale queue claim |
 | `health_check_failed` | the periodic health check crashed (bypass; never fails the delivery) |

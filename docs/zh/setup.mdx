@@ -74,8 +74,8 @@ setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下
    `<deploy_home>/systemd/orbi@.service`、
    `<deploy_home>/systemd/orbi@.timer`；自举模式下即 orbi checkout，
    Issue #330）幂等安装到 user unit 目录（与
-   `install-units` 相同的安装：复制、一次性迁移 #149 之前的非模板
-   unit、`daemon-reload`、按 `max_concurrency` 启用 `@1`（值为 `1`）或
+   `install-units` 相同的安装：复制、`daemon-reload`、按
+   `max_concurrency` 启用 `@1`（值为 `1`）或
    `@1`/`@2`（值为 `2`），并停掉多余 timer——从不启动、停止或重启
    service），然后报告每个 timer 实例的 enabled/active 状态和
    下次触发时间。

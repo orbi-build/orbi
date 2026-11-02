@@ -328,8 +328,8 @@ def test_operations_documents_the_unit_drift_fail_fast():
     the self-heal re-verifies with the same hash check. The exact
     structured failure line's fields are the code contract
     (systemd_deploy.drift_lines). Issue #149: the templates are the
-    INSTANTIATED units and the docs document the one-time legacy
-    migration away from the pre-#149 non-templated units."""
+    INSTANTIATED units. Issue #2067: the docs state that a user's own
+    non-templated units are never touched by the install."""
     operations = docs_page("operations.mdx")
     assert "unit_drift" in operations
     # Both template units are covered.
@@ -338,9 +338,11 @@ def test_operations_documents_the_unit_drift_fail_fast():
     # The two enabled timer instances.
     assert "orbi@1.timer" in operations
     assert "orbi@2.timer" in operations
-    # The one-time legacy migration names the old units.
+    # Issue #2067: the install never deletes a user's own non-templated
+    # orbi.service/orbi.timer — the docs say so.
     assert "orbi.service" in operations
     assert "orbi.timer" in operations
+    assert "never deleted, disabled or stopped" in operations
     # No claim while drifted.
     assert "no slot, no claim" in operations
     # The exact structured failure line's fields are the code contract.
