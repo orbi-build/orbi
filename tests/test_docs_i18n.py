@@ -25,7 +25,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
 ZH_DIR = DOCS_DIR / "zh"
 README = REPO_ROOT / "README.md"
+ZH_README = REPO_ROOT / "README.zh-CN.md"
 EXAMPLE_CONFIG = REPO_ROOT / "src" / "orbi" / "example_config.toml"
+
+# The Chinese README's link to the external single-repo mode (Issue #2087).
+# `[^)]+` stops at the ASCII `)` closing the markdown destination; the
+# full-width `（` / `）` inside the fragment are ordinary characters there.
+EXTERNAL_MODE_LINK = re.compile(r"\[External single-repo mode\]\(([^)\s]+)\)")
 
 # One page per English topic page (same structure, same slugs).
 REQUIRED_ZH_PAGES = (
@@ -700,6 +706,43 @@ def test_readme_points_at_the_chinese_docs_entry():
     )
     assert "docs.orbi.build" in text, (
         "README must keep the documentation site entry (docs.orbi.build)"
+    )
+
+
+def test_chinese_readme_external_single_repo_link_lands_on_its_section():
+    """Issue #2087 (finding R1 of #2073): the Chinese README's
+    "External single-repo mode" link must land on the
+    「外部单仓库模式（deploy_home）」 section.
+
+    The Chinese heading renders two different anchor ids: the docs site
+    (Mintlify) keeps the full-width parentheses (`外部单仓库模式（deploy_home）`,
+    verified on https://docs.orbi.build/zh/getting-started) while GitHub's
+    slugger strips them (`外部单仓库模式deploy_home`). The English anchor
+    (`external-single-repo-mode-deploy_home`) matches neither, so the link
+    did not move. The link therefore targets the docs site with the id it
+    really renders."""
+    text = ZH_README.read_text(encoding="utf-8")
+    match = EXTERNAL_MODE_LINK.search(text)
+    assert match is not None, (
+        "README.zh-CN.md must link the external single-repo mode section"
+    )
+    page, _, fragment = match.group(1).partition("#")
+    assert page == "https://docs.orbi.build/zh/getting-started", (
+        "the Chinese README's external single-repo mode link must target the "
+        f"Chinese getting-started docs page, got {page!r}"
+    )
+    heading = "### 外部单仓库模式（deploy_home）"
+    zh_page = (ZH_DIR / "getting-started.mdx").read_text(encoding="utf-8")
+    assert heading in zh_page, (
+        "docs/zh/getting-started.mdx must keep the "
+        "「外部单仓库模式（deploy_home）」 heading the README links"
+    )
+    # Mintlify renders a heading's id as its text verbatim (it does not strip
+    # the full-width parentheses), which is why the fragment is the heading
+    # text and not the English anchor.
+    assert fragment == heading.removeprefix("### "), (
+        "the link fragment must be the id the docs site renders for that "
+        f"heading ({heading.removeprefix('### ')!r}), got {fragment!r}"
     )
 
 
