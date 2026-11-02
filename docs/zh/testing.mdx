@@ -34,6 +34,8 @@ COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage run --branch -m pytes
 COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage report --show-missing
 COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/coverage_gate.py .orbi/.coverage
 COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/diff_coverage_gate.py origin/main
+python3 tools/patch_ratchet.py
+python3 tools/size_ratchet.py
 ```
 
 贡献者本地怎么跑测试（虚拟环境、包装脚本、任何方式）是贡献者的私事——
@@ -46,6 +48,28 @@ COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/diff_coverage_gate.py origi
 百分比，绝不作为门禁），`tools/diff_coverage_gate.py` 在 base ref 之后变更的
 Python 行或分支未达 100% 覆盖时退出非零。
 
+另外两个 ratchet 是契约的其余部分，CI 在覆盖率门禁之后紧接着运行它们。
+它们都不读覆盖率数据——测量的是测试语料和源码——所以除标准库外无需安装
+任何东西，直接在 PATH 上的 `python3` 运行：
+
+- `tools/patch_ratchet.py`（Issue #789、#1230、#1856）：测试语料只许缩小。
+  新增的内部 `monkeypatch.setattr` 位置（adapter 与 domain 补丁）和
+  `command[:N] ==` 断言会被 ratchet 关掉，而边界 seam 的假实现
+  （`run_command`、`new_run_id`、`PROC`、`Path`、`shutil.which`、
+  `HTTPServer` 等）以及 per-target 计数只报告、不设门禁；把补丁在模块之间
+  移动是中性的。门禁失败会提示把测试移到 `tests/fakes/` 或删除补丁。
+- `tools/size_ratchet.py`（Issue #1229、#2007）：Article 3 的限制。
+  `runner.py` 的直接顶层定义数被冻结，超过 1,000 行的模块不得再长，
+  每个超过 100 行的函数都记录自己的上限，因此新函数一旦超过 100 行就失败。
+  请把代码抽取到同级模块或函数。
+
+两个工具都只接受 `--update`（外加一个可选的目录位置参数——默认是
+`tests/` 和 `src/orbi/`）。`--update` 会重新冻结
+`tools/patch_ratchet_baseline.json` / `tools/size_ratchet_baseline.json`，
+只属于确有**降低**测量值的 PR：
+`python3 tools/patch_ratchet.py --update` 或
+`python3 tools/size_ratchet.py --update`。数值上升后再冻结只会掩盖回归。
+
 ## 远端 CI（GitHub Actions）
 
 `.github/workflows/ci.yml` 在每次 `pull_request` 和每次 push 到
@@ -54,7 +78,9 @@ Python 行或分支未达 100% 覆盖时退出非零。
 固定同一 minor 版本，通过 PATH 上的 `python3` 运行相同命令），安装
 `requirements.txt`，然后运行上面的契约命令——报告、`tools/coverage_gate.py`
 和 `tools/diff_coverage_gate.py origin/main`（变更代码层级对照 PR base；纯
-文档 PR 没有变更的 Python，直接通过）。没有 lint、没有矩阵、没有缓存。
+文档 PR 没有变更的 Python，直接通过）、patch ratchet
+`tools/patch_ratchet.py` 以及 size ratchet `tools/size_ratchet.py`。
+没有 lint、没有矩阵、没有缓存。
 workflow 自含环境声明——CI 的工具链属于 ci.yml，不属于仓库（Issue #569）。
 
 还有一步契约覆盖 Python 测试无法 import 的代码：澄清闸门随引擎发布的
