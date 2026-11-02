@@ -28,6 +28,8 @@ import pytest
 
 import orbi.runner as runner
 import orbi.release_run as release_run
+import orbi.cli as cli
+from orbi.ticket_command_registry import ticket_commands
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
@@ -1248,8 +1250,35 @@ def test_docs_document_operations_commands():
     assert "ExecStartPre" in text, "operations must document the code-update preflight"
 
 
-def test_operations_public_surface_matches_cli_config_and_concurrency():
-    """The localized public-surface summaries must not repeat stale limits."""
+def _missing_subcommands(public_surface: str, names) -> list[str]:
+    """The names absent from a public-surface section, word-boundary
+    matched so `milestone` counts inside `milestone set`."""
+    missing: list[str] = []
+    for name in names:
+        if not re.search(
+            rf"(?<![\w-]){re.escape(name)}(?![\w-])", public_surface,
+        ):
+            missing.append(name)
+    return missing
+
+
+def test_operations_public_surface_matches_cli_config_and_concurrency(capsys):
+    """The localized public-surface summaries must not repeat stale limits
+    and must list the full public surface (Issue #2081): every CLI
+    subcommand `orbi --help` shows, every registered in-ticket command and
+    the `ai-awaiting-merge` label state — in both languages."""
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["--help"])
+    assert excinfo.value.code == 0
+    usage = capsys.readouterr().out
+    choices = re.search(r"\{([^}]*)\}", usage)
+    assert choices, f"no subcommand choices in --help output: {usage}"
+    subcommands = choices.group(1).split(",")
+    # The matcher itself fails on an absent name (a check that only asks
+    # "did anything fail?" must not pass on an empty result).
+    assert _missing_subcommands(
+        "`add`, `milestone set`", ["add", "milestone", "draft"],
+    ) == ["draft"]
     for slug, heading, config_link in (
         ("operations", "Public surface", "/configuration"),
         ("zh/operations", "公开表面", "/zh/configuration"),
@@ -1260,14 +1289,40 @@ def test_operations_public_surface_matches_cli_config_and_concurrency():
         )
         assert section, f"{slug} must have a {heading} section"
         public_surface = section.group()
-        for command in ("check", "sync-engine-source"):
-            assert command in public_surface, (
-                f"{slug} public surface must list {command}"
+        missing = _missing_subcommands(public_surface, subcommands)
+        assert not missing, (
+            f"{slug} public surface must list the CLI subcommands {missing}"
+        )
+        for spec in ticket_commands():
+            assert f"/orbi {spec.subcommand}" in public_surface, (
+                f"{slug} public surface must list the in-ticket command "
+                f"/orbi {spec.subcommand}"
             )
+        assert "ai-awaiting-merge" in public_surface, (
+            f"{slug} public surface must list the ai-awaiting-merge label state"
+        )
         assert f"]({config_link})" in public_surface
         assert "MAX_RUNNER_INSTANCES = 5" in public_surface
         assert "permits `1` or `2`" not in text
         assert "只允许 `1` 或 `2`" not in text
+
+
+def test_operations_zh_carries_the_idle_stall_recovery_and_doctor_facts():
+    """Issue #2081 (C3, C4): the Chinese Operations page carries the same
+    `pi_idle_term` / `pi_idle_kill` paragraph and the same `deploy_home`
+    doctor item as the English one — the ZH page used to name the two
+    events in the table only and omitted the deployment-home check."""
+    english = page_text("operations")
+    chinese = page_text("zh/operations")
+    for marker in ("subset=pid", "pid_reused"):
+        assert marker in english, f"EN operations lost the idle-recovery {marker!r}"
+        assert marker in chinese, (
+            f"ZH operations must carry the idle-recovery paragraph ({marker!r})"
+        )
+    for slug, text in (("operations", english), ("zh/operations", chinese)):
+        assert "deploy_home: clean" in text, (
+            f"{slug} doctor example must list the deploy_home cleanliness check"
+        )
 
 
 def test_docs_document_the_security_boundary():

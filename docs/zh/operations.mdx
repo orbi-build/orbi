@@ -399,6 +399,18 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
   的 deadline——自等待开始起以 `PI_IDLE_WAIT_MAX_SECONDS`（默认
   3600 秒）封顶，超过上限的声明 deadline 照常升级——而不是
   `PI_IDLE_RECOVERY_CYCLES` 个 idle 窗口；
+- `pi_idle_term` / `pi_idle_kill` — idle-stall 恢复（Issue #94）：session
+  持续 stall 时，Runner 先向 idle 窗口打开之前就已存在的 Pi 后代进程
+  （挂住的工具——ppid 链 + start ticks，即 `/proc/<pid>/stat` 的 stat
+  第 22 字段，绝不靠进程名猜测；只对 Pi 的后代进程发信号）发送 SIGTERM，
+  然后对仍然存活的进程发送 SIGKILL；每行带 run id、pid、cmdline 和结果
+  （`sent` / `already_dead` / `no_target` / `failed: ...`）。恢复过程只读
+  各进程目录，并原样比较内核自己的单位（自启动以来的 ticks）：不用
+  `/proc/stat` 的 `btime`，不做时钟换算，所以在 `/proc` 以 `subset=pid`
+  挂载、进程目录之外没有任何文件的环境里同样可用（Issue #1808）。后代
+  进程在 idle 窗口打开时记录：窗口之后才 spawn 的进程永远不会成为目标，
+  而 start ticks 变了的 pid（内核复用了它）会报告 `pid_reused`，绝不
+  发送信号；
 - `pi_retry_429` — provider 限流重试每次一次 WARNING（Issue #321）：
   Pi 非零退出且 stderr 带 429 标记（`429` / `quota` /
   `RESOURCE_EXHAUSTED` / `retry in`）——这是瞬时限流，不是任务失败。
@@ -744,7 +756,8 @@ orbi status --config orbi.toml
 orbi status --repo OWNER/REPO --config orbi.toml
 orbi status --repo OWNER/REPO --issue 42 --follow --config orbi.toml
 
-# 只读部署/健康报告：repo commit、unit drift、CLI 源码（cli_source:
+# 只读部署/健康报告：repo commit、部署目录是否干净
+# （deploy_home: clean / DRIFT）、unit drift、CLI 源码（cli_source:
 # clean / DRIFT + 结构化 cli_source_drift 行）、git transport（配置的
 # origin URL、protocol、配置的 git_transport 的期望 URL、可达性探测——传输失败报告为
 # `transport: FAILED ...`，不抛出）、timer/service 实例状态、slots、
@@ -1029,10 +1042,11 @@ Issue #856：active Milestone 已无 open Issue，却没人开它的 release 票
 [公开契约](/zh/public-contracts)；本节是简短的运维摘要。任何变更都必须在
 release notes 中声明，以便下游自动化有计划地迁移：
 
-- **CLI：**裸 `orbi` tick，以及 `add`、`suggest`、`status`、`doctor`、
-  `setup`、`install-units`、`session`、`milestone set`、`notify test`、
-  `check`、`sync-engine-source` 子命令，包括 `--config` 和 `ORBI_CONFIG`
-  环境变量。
+- **CLI：**裸 `orbi` tick，以及 `add`、`suggest`、`draft`、`status`、
+  `doctor`、`setup`、`install-units`、`session`、`milestone set`、
+  `notify test`、`check`、`sync-engine-source` 子命令，另有 `fix-base`、
+  `split`、`amend` 子命令（每条 arity 为 0 的已登记票内命令各一个，Issue
+  #1930），包括 `--config` 和 `ORBI_CONFIG` 环境变量。
 - **Suggestions：**`orbi suggest --json` 打印的文档（`repo`、`base_sha`、
   `session_dir` 与最多三条建议）、保留的运行目录
   `<deploy_home>/.orbi/suggest/<run_id>/`，以及产出它的 skill
@@ -1045,10 +1059,11 @@ release notes 中声明，以便下游自动化有计划地迁移：
   `MAX_RUNNER_INSTANCES = 5`）。
 - **票内命令：**milestone 确认 Issue 上的 `/orbi milestone <标题>` 评论
   （Issue #1290；`/milestone <标题>` 仍作为声明过的旧别名有效，Issue
-  #1922），以及 `/orbi fix-base`（Issue #1825）。
+  #1922）、`/orbi fix-base`（Issue #1825）、`/orbi split`（Issue #1927）
+  与 `/orbi amend`（Issue #1929）。
 - **标签和生命周期：**`labels.toml` 与 `src/orbi/delivery_labels.py`，
   以及 `ai-ready`、`ai-in-progress`、`ai-pr-opened`、`ai-fix-needed`、
-  `ai-merged`、`ai-blocked` 状态机。
+  `ai-awaiting-merge`、`ai-merged`、`ai-blocked` 状态机。
 - **可观测性：**journal 每行以 `[run_id]` 开头，并使用
   `run_start`、`run_end`、`activity`、`heartbeat`、`resumed`、`run_failed`
   等稳定事件名，以及[日志（journal）](#日志journal)中记录的启动/恢复事件。
