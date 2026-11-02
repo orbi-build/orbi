@@ -198,7 +198,7 @@ engine_source_track = "release"
 # positive number.
 # model_wait_probe_seconds = 60
 # Maximum concurrent Pilot tasks and enabled Runner timers on this machine.
-# Must be 1 or 2 (the fixed timer instance set); missing means 1. The local AI/GPU can only serve one stable task, so keep
+# Must be 1–5 (MAX_RUNNER_INSTANCES); missing means 1. The local AI/GPU can only serve one stable task, so keep
 # the default. A slot (flock on <repo_dir>/.orbi/slots/slot-N) is
 # taken before any claim and held for the whole delivery lifecycle
 # (implement -> review -> fix -> merge); the kernel releases it when the
