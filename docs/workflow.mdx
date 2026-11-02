@@ -188,7 +188,9 @@ Rules of the chain:
   review session). `ai-ready` is claimed as new work; `ai-blocked` is
   never auto-recovered for these unrecoverable conditions. The v0.7.15
   [`base_ci_red` recovery](#a-delivery-paused-on-a-red-base-branch-base_ci_red)
-  is an explicit exception. A delivery that carries the backfilled
+  and the v0.7.18
+  [`checks_permission_missing` recovery](#a-delivery-paused-on-an-unapproved-app-permission-checks_permission_missing)
+  are the explicit exceptions. A delivery that carries the backfilled
   `ai-in-progress` label is still picked up (Issue #178: a runner killed
   during review leaves it behind — the positive opened-PR qualifier
   already keeps implement-phase Issues out of the scan).
@@ -450,12 +452,15 @@ is replaced by `ai-needs-detail`, and the tick ends — no worktree, no branch,
 no Pi session, no PR, and the slot is released for the next Issue. The
 ticket then waits for a human exactly like `ai-blocked`: the next chance to
 be delivered comes from editing the Issue and adding that claim label
-again, which re-runs the judgment from scratch. Re-adding the claim label
-without editing the text does NOT judge, comment or notify again: the
-runner's own stop comment records the text it judged, so the next claim
-re-applies the stop, removes the claim label and leaves the rest of the
-queue untouched. A comment carrying such a marker without being written by
-the runner is ignored.
+again, which re-runs the judgment from scratch — or, when the stop comment
+carries a proposal, from a write-permission reply `/orbi amend` (appends
+the proposed acceptance conditions to the body and re-queues the ticket) or
+`/orbi split` (creates the proposed child tickets and turns this one into an
+Epic). Re-adding the claim label without editing the text does NOT judge,
+comment or notify again: the runner's own stop comment records the text it
+judged, so the next claim re-applies the stop, removes the claim label and
+leaves the rest of the queue untouched. A comment carrying such a marker
+without being written by the runner is ignored.
 
 Every error path is a **bypass** — the gate never loses a delivery. A model
 error or timeout, an unusable answer, or a failed comment/label write logs
@@ -763,12 +768,12 @@ DAG, no priority numbers, no separate queues:
   same tick then reconciles open Milestones: an exact-title published Release
   (draft excluded) plus zero open Issues closes the Milestone; all other cases
   remain open. The same tick finally sweeps open PRs (Issue #746): a
-  stable-delivery PR (`orbi/<repo>-issue-<N>` head branch) whose source Issue
-  a human closed is reported ONCE on the PR with an idempotent comment —
-  every resumable scan reads `state=open` Issues only, so without this sweep
-  the PR would dangle forever. The merge/close decision stays with the
-  human: the Runner never auto-merges and never auto-closes across a human's
-  close.
+  stable-delivery PR (`orbi/<owner>-<repo>-issue-<N>` head branch) whose
+  source Issue a human closed is reported ONCE on the PR with an idempotent
+  comment — every resumable scan reads `state=open` Issues only, so without
+  this sweep the PR would dangle forever. The merge/close decision stays with
+  the human: the Runner never auto-merges and never auto-closes across a
+  human's close.
 - **Release task**: an `ai-ready` Issue additionally marked with the
   `ai-release` label (Issue #98). It is NOT a development task. The three
   ordinary scans skip it with `release_not_claimed`; only the release fallback
@@ -791,8 +796,10 @@ DAG, no priority numbers, no separate queues:
   1. Strictly parse the `## Release` declaration from the Issue body:
      `version`, `base_branch`, and `scope` (a list of `#N` items) or
      `scope_from_milestone`, plus optional `version_file`
-     (`pyproject.toml` by default, `package.json`, or `none`). The
-     declaration carries NO test contract (Issue #569): test
+     (`pyproject.toml` by default; also `package.json`, `pom.xml`,
+     `build.gradle`, `build.gradle.kts`, `gradle.properties`, `Cargo.toml`,
+     `composer.json`, `pubspec.yaml`, or `none` to skip version metadata
+     changes). The declaration carries NO test contract (Issue #569): test
      acceptance is the GitHub Actions CI result on the release commit
      (the Issue #268 CI-wait gate). Missing, duplicated or unknown
      fields fail fast.
@@ -810,8 +817,9 @@ DAG, no priority numbers, no separate queues:
      only Issues in that Milestone hold the gate (Issue #671); without one,
      the repository-wide scan is unchanged. A bare `ai-ready` Issue does not
      hold this gate. The bounded wait uses
-     `RELEASE_DELIVERIES_WAIT_SECONDS`; exceeding it produces a delivery wait
-     timeout and moves the release to `ai-blocked`. Then require CI green on
+     `release_deliveries_wait_seconds` (host `orbi.toml`, default 1800 s);
+     exceeding it produces a delivery wait timeout and moves the release to
+     `ai-blocked`. Then require CI green on
      the release commit (a repository with no observed CI may
      pass with explicit no-checks evidence; once the base has CI, an empty
      check list on a newly pushed version commit waits for registration.
