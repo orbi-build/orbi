@@ -30,6 +30,10 @@ DOC_FILES = (
 )
 DOCS_PAGE = DOC_FILES[0]
 ZH_DOC = REPO_ROOT / "docs" / "zh" / "docker.mdx"
+SECURITY_PAGES = (
+    REPO_ROOT / "docs" / "security.mdx",
+    REPO_ROOT / "docs" / "zh" / "security.mdx",
+)
 SETUP_ENTRYPOINT = REPO_ROOT / "3rd" / "docker" / "docker-entrypoint.sh"
 HUB_README = REPO_ROOT / "3rd" / "docker" / "README.dockerhub.md"
 
@@ -219,6 +223,32 @@ def test_entrypoint_and_docs_agree_on_the_variable_surface():
         assert documented == entrypoint, (
             f"{doc.name}: docs-only {sorted(documented - entrypoint)}, "
             f"entrypoint-only {sorted(entrypoint - documented)}"
+        )
+
+
+def test_security_docs_name_the_real_github_credential():
+    """Issue #2097: the security page's credential-routing red line named
+    `ORBI_GITHUB_TOKEN`, a variable nothing reads (no hit in src/,
+    systemd/, launchd/, tools/ or the Docker entrypoint). The real
+    credential is gh's own token — `GH_TOKEN` in the Docker image, which
+    the entrypoint requires and writes into the env file. Both security
+    pages name that one."""
+    entrypoint = ENTRYPOINT.read_text(encoding="utf-8")
+    assert "GH_TOKEN is required" in entrypoint, (
+        "the entrypoint's fail-fast guard is the real contract"
+    )
+    assert "GH_TOKEN=$GH_TOKEN" in entrypoint, (
+        "the entrypoint writes GH_TOKEN into the env file gh reads"
+    )
+    for page in SECURITY_PAGES:
+        text = page.read_text(encoding="utf-8")
+        assert "ORBI_GITHUB_TOKEN" not in text, (
+            f"{page.relative_to(REPO_ROOT)} names ORBI_GITHUB_TOKEN, "
+            "which no code reads"
+        )
+        assert "GH_TOKEN" in text, (
+            f"{page.relative_to(REPO_ROOT)} must name GH_TOKEN, the Docker "
+            "image's GitHub credential"
         )
 
 
