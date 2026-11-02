@@ -7,8 +7,8 @@ description: "一次性 Orbi setup 会在我的机器上修改什么?"
 
 `orbi setup` 是新机器或新任务池仓库的一次性、配置驱动的初始化
 入口。它校验或重装 editable CLI 安装、验证本地前提、对齐平台标签、
-安装 systemd user units、检查 checkout、报告可选模型 proxy——一条
-命令，稳定的机器可读结果。
+安装平台调度器单元（Linux 上是 systemd user units，macOS 上是 launchd
+agent）、检查 checkout、报告可选模型 proxy——一条命令，稳定的机器可读结果。
 
 ```bash
 orbi setup
@@ -25,13 +25,14 @@ orbi setup
 setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下，stderr
 给出具体原因，退出码非零。
 
-1. **命令** — PATH 上有 `git`、`gh`、`python3`、`uv` 和已安装的
+1. **命令** — PATH 上有 `git`、`gh`、`uv` 和已安装的
    `orbi` CLI（这些前提由你自己安装——setup 只检查；缺失会
    fail fast 并给出可执行的安装指引，例如 `required command missing:
    uv (not on PATH) — install uv first: curl -LsSf
-   https://astral.sh/uv/install.sh | sh`），且 `systemctl --user`
-   user bus 可达（没有 user bus 的容器或 headless session 会以 bus
-   错误失败）。`gh` 必须 ≥ 2.94.0——队列扫描用到 `gh api --paginate
+   https://astral.sh/uv/install.sh | sh`），且调度器用户会话可达
+   （Linux 为 `systemctl --user`，macOS 为 `launchctl print gui/<uid>`——
+   没有用户会话的容器或 headless session 会以会话错误失败）。`gh`
+   必须 ≥ 2.94.0——队列扫描用到 `gh api --paginate
    --slurp` 和 `blockedBy` 字段，过旧的发行版包（Ubuntu 24.04 自带
    2.45.0）能通过本检查，但每个 tick 都会失败；[快速开始](/zh/getting-started)
    给出官方安装来源和修复命令。
@@ -70,15 +71,17 @@ setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下
      **声明式**对齐——标签名/颜色/描述的唯一事实源：缺的创建、漂移的更新、
      从不删除，业务标签（`bug`、`enhancement`、...）从不被碰。外部单仓库
      模式下标签来自 orbi checkout，绝不来自交付 checkout X。
-5. **Systemd units** — 部署 home 的模板（
+5. **调度器单元** — 部署 home 的模板（Linux：
    `<deploy_home>/systemd/orbi@.service`、
-   `<deploy_home>/systemd/orbi@.timer`；自举模式下即 orbi checkout，
-   Issue #330）幂等安装到 user unit 目录（与
-   `install-units` 相同的安装：复制、`daemon-reload`、按
-   `max_concurrency` 启用 `@1`（值为 `1`）或
-   `@1`/`@2`（值为 `2`），并停掉多余 timer——从不启动、停止或重启
-   service），然后报告每个 timer 实例的 enabled/active 状态和
-   下次触发时间。
+   `<deploy_home>/systemd/orbi@.timer`；macOS：
+   `<deploy_home>/launchd/org.orbi.runner.plist`；自举模式下即 orbi
+   checkout，Issue #330）幂等安装到 user unit 目录（与
+   `install-units` 相同的安装：复制，Linux 上再 `daemon-reload`），
+   然后报告每个 timer 实例的 enabled/active 状态和下次触发时间
+   （launchd 上为 `-`，launchd 不提供下次触发时间）。实例收敛到
+   `max_concurrency`：实例 `1`..`N`（systemd 上是 `@1`..`@N`）被启用
+   并启动（手动停用的实例也会被重新启用），多出的实例被停用——service
+   从不被启动、停止或重启。
 6. **Checkout + git transport** — 检查配置的交付 checkout `repo_dir`
    （自举模式下是 orbi checkout，外部单仓库模式下是用户仓库 X）：
    `origin` remote 的**传输方式**（Issue #114、#580），由 orbi.toml 的
@@ -121,7 +124,8 @@ repo 所配置的 `git_transport`，X 的 worktree 必须干净，X 的 base 新
 checkout）而不是 X——X 只在 Runner 创建任务 worktree 时被读取。
 `deploy_home` 缺省即自举模式：一切照旧作用于 `repo_dir`。
 
-一个实际后果：已安装 systemd unit 从 `<deploy_home>/orbi.toml` 读配置
+一个实际后果：已安装单元（systemd unit 或 launchd agent）从
+`<deploy_home>/orbi.toml` 读配置
 （`{{ORBI_REPO_DIR}}` 占位符渲染的是 deploy home 路径），所以外部模式
 下 `orbi.toml` 和可选的 `.orbi/env` 放在 orbi checkout——用
 `--config <deploy_home>/orbi.toml` 运行 setup。
@@ -132,7 +136,7 @@ checkout）而不是 X——X 只在 Runner 创建任务 worktree 时被读取�
 |---|---|
 | `--config PATH` | `orbi.toml` 配置（默认：`$ORBI_CONFIG` 或 `orbi.toml`） |
 | `--repo OWNER/REPO` | 只初始化这个配置的 source repo（默认：每个配置的 source repo） |
-| `--installed-dir PATH` | user unit 目录（默认：标准 `~/.config/systemd/user`） |
+| `--installed-dir PATH` | user unit 目录（默认：Linux 上是 `~/.config/systemd/user`——设置了 `XDG_CONFIG_HOME` 时为 `$XDG_CONFIG_HOME/systemd/user`——macOS 上是 `~/Library/LaunchAgents`） |
 | `--json` | 以 JSON 而不是 `key=value` 行输出结果 |
 
 ## 输出
@@ -143,7 +147,7 @@ agent 和脚本可以解析：
 ```text
 setup=ok version=4 base_branch=main
 cli=verified source=/path/to/checkout/src/orbi/__init__.py
-repo=orbi-build/orbi permission=ADMIN default_branch=main labels=12/12
+repo=orbi-build/orbi permission=ADMIN default_branch=main labels=14/14
 service=installed path=~/.config/systemd/user/orbi@.service sha256=9f2c...
 timer=orbi@1.timer enabled active=true next="Fri 2026-09-18 16:45:00 UTC"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=https://github.com/orbi-build/orbi.git protocol=https migrated=false ssh_reachable=- transport_reachable=true
@@ -154,7 +158,7 @@ model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/heal
 
 `cli=verified` 表示运行中的 CLI 已经从部署 checkout 导入 `orbi`
 （editable 安装就位）；`cli=installed` 表示 force editable 重装已执行。
-`labels=12/12` 表示十二个平台标签都与 `labels.toml` 一致；`next` 是
+`labels=14/14` 表示十四个平台标签都与 `labels.toml` 一致；`next` 是
 timer 的下次触发时间（没有时为 `-`）。`model_provider=NOT CONFIGURED`
 是 warning，从不改变 setup 退出码；下一行的 `model_provider_guide` 会
 告诉你在哪里配置。`optional_proxy` 是 `healthy`、`unhealthy` 或
@@ -178,7 +182,7 @@ orbi setup --config orbi.toml --json
 $ orbi setup
 setup=ok version=4 base_branch=main
 cli=verified source=/path/to/checkout/src/orbi/__init__.py
-repo=orbi-build/orbi permission=ADMIN default_branch=main labels=12/12
+repo=orbi-build/orbi permission=ADMIN default_branch=main labels=14/14
 service=installed path=~/.config/systemd/user/orbi@.service sha256=9f2c...
 timer=orbi@1.timer enabled active=true next="Fri 2026-09-18 16:45:00 UTC"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=https://github.com/orbi-build/orbi.git protocol=https migrated=false ssh_reachable=- transport_reachable=true
@@ -194,7 +198,7 @@ setup 仍以退出码 `0` 成功。）
 
 ```text
 setup_failed reason=required command missing: uv (not on PATH) — install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh (https://docs.astral.sh/uv/getting-started/installation/)
-setup_failed reason=systemctl --user user bus unavailable (is a systemd user session running?): ...
+setup_failed reason=systemd user session unavailable (is a systemd session running?): ...
 setup_failed reason=editable tool install failed for /path/to/checkout: ... (fix: uv tool install --force --reinstall --editable --python 3.14 /path/to/checkout)
 setup_failed reason=repo not accessible: nobody/no-such (gh repo view failed: ...)
 setup_failed reason=insufficient permission for owner/repo: viewerPermission='READ' (one of ['ADMIN', 'MAINTAIN', 'WRITE'] required to manage labels)
@@ -202,17 +206,21 @@ setup_failed reason=installation token cannot manage labels in owner/repo: ... (
 setup_failed reason=label alignment failed for owner/repo: ai-ready (gh label create failed: ...)
 setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted changes: ' M src/orbi/runner.py') — commit or stash them first: ...
 setup_failed reason=checkout check failed for /path/to/checkout: ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — fix SSH and retry
-setup_failed reason=checkout check failed for /path/to/checkout: transport_unreachable: git ls-remote https://github.com/owner/repo.git failed: ... stderr=fatal: Authentication failed — 检查 gh 凭据（`gh auth status`）后重试
+setup_failed reason=checkout check failed for /path/to/checkout: transport_unreachable: git ls-remote https://github.com/owner/repo.git failed: ... stderr=fatal: Authentication failed — check the gh credentials (`gh auth status`) and retry
 ```
 
 缺失的前提命令（例如 `uv`）、仓库错误、无法创建的缺失标签（权限）、
-脏 checkout、传输不可达（没有回退）或缺 systemd user bus 都会
-带具体原因停下——不会半初始化而没有明确信号。
+脏 checkout、传输不可达（没有回退）或调度器用户会话不可达都会
+带具体原因停下——不会半初始化而没有明确信号。macOS 上这条会话错误行
+报的是 launchd：`setup_failed reason=launchd user session unavailable
+(is a launchd session running?): ...`。
 
 ## 幂等性
 
 在已初始化的机器上重跑 setup，对外部状态是 no-op：已一致的标签不重写，
-unit 模板从仓库重新复制（漂移修复），配置的 timer 保持其 enabled 或
-disabled 状态，不创建或修改任何 Issue 或业务数据。报告的 hash 和状态跨运行稳定。传输迁移
+unit 模板从仓库重新复制（漂移修复），timer 收敛到 `max_concurrency`——
+实例 `1`..`N` 被启用并启动（手动停用的实例也会被重新启用），多出的实例被
+停用，service 从不被启动、停止或重启——不创建或修改任何 Issue 或业务数据。
+报告的 hash 和状态跨运行稳定。传输迁移
 是一次性的：第一次运行后 `origin` remote 已匹配配置的
 `git_transport`，重跑只重新验证（`migrated=false`）。
