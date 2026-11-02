@@ -172,7 +172,7 @@ cd orbi
 
 The official usage is the installed `orbi` console script (the
 PEP 621 packaging in `pyproject.toml` maps
-`orbi = orbi:main`), installed as an **editable**
+`orbi = orbi.cli:main`), installed as an **editable**
 `uv tool` install — the official local deployment (Issue #152). From
 the clone directory, pass `--python` a COMPATIBLE interpreter
 (Issue #861): the system `python3` when it is 3.14 or newer (Fedora 43
@@ -207,13 +207,15 @@ section below.
 
 **Why `--editable` matters**: a non-editable install copies the source
 into the tool environment's site-packages. The service's `ExecStartPre`
-fast-forwards the checkout to the latest `main` before every start —
-with a copied source the CLI would keep executing the stale copy
-(bootstrap deadlock: Issue #152). With the editable install the tool
-env imports `orbi` directly from the clone directory, so the
-next CLI process (the next timer-triggered Runner) picks up the merged
-code automatically: **ordinary Python source and systemd
-template/migration changes need NO reinstall and no upgrade command**.
+syncs the checkout to the configured `engine_source_track` (the newest
+release tag for a config created from the shipped example, `origin/main`
+when the key is absent or set to "main") before every start — with a
+copied source the CLI would keep executing the stale copy (bootstrap
+deadlock: Issue #152). With the editable install the tool env imports
+`orbi` directly from the clone directory, so the next CLI process (the
+next timer-triggered Runner) picks up the merged code automatically:
+**ordinary Python source and systemd template/migration changes need NO
+reinstall and no upgrade command**.
 Since the src layout (Issue #168) the editable finder maps the WHOLE
 `src/orbi/` package directory — a newly added package module
 needs NO reinstall (the #158 stale-module-list incident is fixed at the
@@ -705,7 +707,7 @@ of them fails fast — nothing is retried silently.
 
 | Symptom | Evidence | Fix |
 |---|---|---|
-| The start fails before any slot or claim | Journal `API key for provider ... references missing environment variable GROQ_API_KEY` (the variable **name** only) | Put the key value into your `.orbi/env` (step 4) and make sure the installed unit's `EnvironmentFile` points at it; for a manual tick, export the variable in the shell instead |
+| The start fails before any slot or claim | Journal `API key for provider ... references environment variable GROQ_API_KEY is not set` (or `is set but empty`; the variable **name** only) | Put the key value into your `.orbi/env` (step 4) and make sure the installed unit's `EnvironmentFile` points at it; for a manual tick, export the variable in the shell instead |
 | The start fails on the provider file | Journal `pi_providers file ... is not valid JSON` / `is missing baseUrl` / `pi_provider ... is not defined` | Fix the JSON (step 4 contract: `providers` object, `baseUrl`, `api`, `models[].id`) and re-run `orbi setup` |
 | Pi starts but the model never answers | The session JSONL stalls in `model_wait`; after the dead-silence window (`model_wait_dead_seconds`, default 1800 s) the journal shows the `model_wait_dead` line and `run_failed ... reason=model_wait_dead_stale_...` (the field semantics: [Operations](/operations)) | The model request is hung — the model server/proxy is down, its connection dropped, or the request is stuck while the process is still alive — check the endpoint with one real `pi --print` call, restart it, and re-dispatch (the Issue is `ai-blocked` with the scene); a slow local model that is still generating survives the window (raise `model_wait_dead_seconds` only if your model legitimately needs more than 30 minutes of complete-event silence) |
 | Pi hangs before the first model response (online provider) | Run stuck in `session_pending`; after the idle-recovery cap (about one hour, 12 × 300 s windows) the journal shows `run_failed … reason=idle_recovery_stale_<duration>` and the Issue is `ai-blocked`; the session JSONL was never created; the pi process is alive at ~0% CPU with its only socket on D-Bus (`/run/user/1000/bus`) | The user-level plugin `pi-mcp-adapter` hangs on a Secret Service D-Bus call in the systemd context — remove it from `~/.pi/agent/settings.json` `packages`; full diagnosis and the permanent fix (Issue #249): [Operations](/operations) |
