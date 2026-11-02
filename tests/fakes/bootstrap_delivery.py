@@ -273,13 +273,13 @@ def _review_round_env(
             return json.dumps({"comments": [{
                 "body": (
                     "<!-- orbi:run=a1b2c3d4 -->\n"
-                    + ("<!-- orbi:scene:v1 " + json.dumps({
+                    + "<!-- orbi:scene:v1 " + json.dumps({
                         "base_branch": scene_base,
                         "base_sha": "abc123def456",
                         "external": external, "pr_url": PR_URL,
                         "review_round": scene_round,
                         "run_id": "a1b2c3d4", "schema": 1,
-                    }) + " -->\n" if scene_round else "")
+                    }) + " -->\n"
                     + "Orbi opened PR: "
                     f"{PR_URL} (base_branch={scene_base} "
                     "base_sha=abc123def456 run_id=a1b2c3d4)"

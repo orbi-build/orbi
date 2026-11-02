@@ -313,9 +313,25 @@ def opened_pr_comment(run_id=FAKE_RUN_ID,
     # comment (a public comment must not be able to name a local path).
     return (
         f"<!-- orbi:run={run_id} -->\n"
-        f"Orbi opened PR: {pr_url} "
-        f"(base_branch={base_branch} base_sha={base_sha} run_id={run_id})"
+        + scene_mod.render(scene_mod.Scene(
+            run_id=run_id, base_branch=base_branch,
+            base_sha=base_sha, pr_url=pr_url,
+        ))
+        + f"\nOrbi opened PR: {pr_url}"
     )
+
+
+def corrupted_scene(*, marker_run_id: str | None = None) -> str:
+    """A trusted scene comment whose v1 block is present but corrupted
+    (a required field is missing) — the only 损坏 shape there is now
+    that the pre-v0.5.2 text grammar is gone (Issue #2068)."""
+    payload = {
+        "base_branch": "main", "base_sha": "abc123def456",
+        "external": "", "pr_url": FAKE_PR_URL,
+        "review_round": 0, "schema": 1,
+    }
+    head = f"<!-- orbi:run={marker_run_id} -->\n" if marker_run_id else ""
+    return head + f"<!-- orbi:scene:v1 {json.dumps(payload)} -->"
 
 
 def scene_for(**overrides) -> scene_mod.Scene:
@@ -403,9 +419,20 @@ def test_parse_pr_comment_preserves_unknown_head_counter():
     assert parsed.verdict_head_unknown_round == 2
 
 
-def test_parse_pr_comment_returns_scene_for_legacy_opened_pr_comment():
+def test_parse_pr_comment_returns_scene_for_the_opened_pr_comment():
     scene = run_state.parse_pr_comment(opened_pr_comment())
     assert scene == scene_for()
+
+
+def test_parse_pr_comment_returns_none_for_opened_pr_text_without_a_block():
+    """Issue #2068: the pre-v0.5.2 text grammar is gone, so a comment
+    that only carries the readable line carries no scene at all — the
+    shape a maintainer's own `Orbi opened PR: <url>` comment has."""
+    body = (
+        f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
+        f"Orbi opened PR: {FAKE_PR_URL}"
+    )
+    assert run_state.parse_pr_comment(body) is None
 
 
 def test_parse_pr_comment_ignores_unrelated_new_format_line():
@@ -450,18 +477,6 @@ def test_started_pi_comment_uses_multiline_field_block():
     )
 
 
-def test_parse_pr_comment_ignores_legacy_branch_and_worktree_fields():
-    # Comments written before the scene was trimmed still parse; the
-    # extra fields are simply not part of the recovered scene.
-    body = opened_pr_comment().replace(
-        ")", f" branch={FAKE_BRANCH} worktree={FAKE_WORKTREE})", 1,
-    )
-    scene = run_state.parse_pr_comment(body)
-    # Equality with the known scene proves the legacy branch/worktree
-    # fields are not part of it.
-    assert scene == scene_for()
-
-
 def test_parse_pr_comment_returns_none_for_started_comment():
     body = (
         f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
@@ -484,19 +499,6 @@ def test_parse_pr_comment_returns_none_for_empty_body():
     assert run_state.parse_pr_comment("") is None
 
 
-def test_parse_pr_comment_fails_fast_when_a_field_is_missing():
-    needles = {
-        "base_branch": "(base_branch=",
-        "base_sha": " base_sha=",
-        "run_id": " run_id=",
-        "pr_url": FAKE_PR_URL,
-    }
-    for field, needle in needles.items():
-        body = opened_pr_comment().replace(needle, "", 1)
-        with pytest.raises(ValueError, match=f"missing {field}"):
-            run_state.parse_pr_comment(body)
-
-
 def test_parse_pr_comment_fails_fast_on_invalid_run_id():
     body = opened_pr_comment(run_id="run1")
     with pytest.raises(ValueError, match="invalid run id"):
@@ -505,7 +507,7 @@ def test_parse_pr_comment_fails_fast_on_invalid_run_id():
 
 def test_parse_pr_comment_fails_fast_on_empty_field_value():
     body = opened_pr_comment(pr_url="")
-    with pytest.raises(ValueError, match="missing pr_url"):
+    with pytest.raises(ValueError, match="non-empty string"):
         run_state.parse_pr_comment(body)
 
 
@@ -857,12 +859,6 @@ def test_issue_comments_rejects_payload_without_comments_array(monkeypatch):
     with pytest.raises(ValueError, match="issue comments must be a JSON array"):
         runner.issue_comments(9, repo="owner/repo")
 
-
-
-def test_parse_pr_comment_ignores_field_part_without_key():
-    body = opened_pr_comment().replace(")", " =keyless)", 1)
-    scene = run_state.parse_pr_comment(body)
-    assert scene.run_id == FAKE_RUN_ID
 
 
 # ---------------------------------------------------------------- pick
@@ -1619,10 +1615,7 @@ def test_pick_resumable_delivery_blocks_issue_when_scene_is_malformed(
     comments: list[str] = []
     fake = make_pick_fake(
         issue_payload(),
-        gh_comments_payload(["Orbi opened PR: "
-                             "https://github.com/owner/repo/pull/9 "
-                             "(base_branch=main base_sha=abc123def456)"
-                             ]),
+        gh_comments_payload([corrupted_scene()]),
         edits=edits,
         comments=comments,
     )
@@ -1650,7 +1643,7 @@ def test_pick_resumable_delivery_blocks_issue_when_scene_is_malformed(
     # ...and a failure comment with the concrete reason...
     body = comments[0]
     assert "Orbi failed:" in body
-    assert "missing run_id" in body
+    assert "missing fields" in body
     # ...but no run marker: no valid run id exists, so none is guessed.
     assert "orbi:run=" not in body
     assert "issue=9 resume scene is malformed" in caplog.text
@@ -1685,10 +1678,8 @@ def test_pick_resumable_delivery_routes_corrupted_marker_and_next_candidate(
                 number = command[3]
                 if command[-1] == "comments":
                     body = (
-                        # Trusted but corrupted: no run_id in the scene.
-                        "Orbi opened PR: "
-                        "https://github.com/owner/repo/pull/9 "
-                        "(base_branch=main base_sha=abc123def456)"
+                        # Trusted but corrupted: the block lacks run_id.
+                        corrupted_scene()
                         if number == "9" else opened_pr_comment(
                             run_id="c3d4e5f6",
                         )
@@ -1735,8 +1726,7 @@ def test_pick_resumable_delivery_resumes_from_the_v1_scene_block(
 ):
     """Issue #786: a production opened-PR comment carries the hidden
     `orbi:scene:v1` block, and the scan resumes the delivery from the
-    block — the legacy text fallback stays for one transition version
-    so older comments keep resuming."""
+    block."""
     body = runner.opened_pr_comment_body(
         FAKE_RUN_ID,
         RunFields(
@@ -1756,6 +1746,38 @@ def test_pick_resumable_delivery_resumes_from_the_v1_scene_block(
     # The scan's scene carries the `scene_at` stamp (the fake comment
     # payload has no createdAt, so it is None here).
     assert scene == make_resume_scene()
+
+
+def test_pick_resumable_delivery_is_not_blocked_by_a_readable_opened_pr_line(
+    monkeypatch, tmp_path,
+):
+    """Issue #2068 acceptance: the pre-v0.5.2 text grammar is gone, so a
+    newer comment from a writer that only reads
+    `Orbi opened PR: <url>` carries no scene at all. It can no longer
+    block the Issue (`block_scene_failure` is the corrupted-scene
+    branch): the scan falls through to the delivery's real v1 scene and
+    resumes it."""
+    person_written = (
+        f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
+        "Orbi opened PR: https://github.com/o/r/pull/1"
+    )
+    edits: list[list[str]] = []
+    comments: list[str] = []
+    monkeypatch.setattr(seam, "run_command", make_pick_fake(
+        issue_payload(),
+        gh_comments_payload([opened_pr_comment(), person_written]),
+        edits=edits,
+        comments=comments,
+    ))
+    issue, scene = claim.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+        hooks=resume_deps(), language_code="en",
+    )
+    # Not blocked: no blocked label patch and no failure comment.
+    assert edits == []
+    assert comments == []
+    assert issue["number"] == 9
+    assert scene.parsed == scene_for()
 
 
 def test_pick_resumable_delivery_blocks_on_a_corrupted_v1_block(
@@ -1913,12 +1935,7 @@ def test_pick_resumable_delivery_scene_failure_carries_marker_when_present(
     comments: list[str] = []
     fake = make_pick_fake(
         issue_payload(),
-        gh_comments_payload([
-            f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
-            "Orbi opened PR: "
-            "https://github.com/owner/repo/pull/9 "
-            "(base_branch=main base_sha=abc123def456)"
-        ]),
+        gh_comments_payload([corrupted_scene(marker_run_id=FAKE_RUN_ID)]),
         comments=comments,
     )
 
@@ -1944,12 +1961,7 @@ def test_pick_resumable_delivery_scene_failure_skips_bodyless_comments(
         issue_payload(),
         json.dumps({"comments": [
             {
-                "body": (
-                    f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
-                    "Orbi opened PR: "
-                    "https://github.com/owner/repo/pull/9 "
-                    "(base_branch=main base_sha=abc123def456)"
-                ),
+                "body": corrupted_scene(marker_run_id=FAKE_RUN_ID),
                 "authorAssociation": "OWNER",
                 "author": {"login": "maintainer"},
             },

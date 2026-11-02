@@ -15,15 +15,14 @@ GitHub adapter; this module sees only comment body strings.
 
 Failure shapes are distinct: `parse` returns `None` when the body
 carries no scene at all and raises `SceneError` when a scene is present
-but corrupted. The transition keeps one version reading the legacy text
-grammar (`- key: value` and `(key=value)`) next to the v1 block; the
-next version removes the legacy path and notes it in the release notes.
+but corrupted. The pre-v0.5.2 text grammar (`- key: value` and
+`(key=value)`) is gone (Issue #2068): a comment without the block
+carries no scene, however its human-readable text reads.
 """
 from __future__ import annotations
 
 import dataclasses
 import json
-import re
 
 from orbi.comment_kind import parse_versioned_block, versioned_block_pattern
 from orbi.journal import validate_run_id
@@ -38,11 +37,6 @@ SCHEMA_VERSION = 1
 _MARKER = "orbi:scene:v1"
 SCENE_BLOCK_TEMPLATE = f"<!-- {_MARKER} {{payload}} -->"
 _SCENE_BLOCK_RE = versioned_block_pattern(_MARKER)
-
-# The legacy text grammar lives one version longer, for scenes written
-# before the block existed ("Accept both during recovery").
-OPENED_PR_PREFIX = "Orbi opened PR: "
-_FIELD_LINE_RE = re.compile(r"\s*-\s*([A-Za-z_][\w-]*)(?::\s*|=)(.*)\s*$")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -100,14 +94,12 @@ def carries_scene_block(body: object) -> bool:
 def parse(body: object) -> Scene | None:
     """Parse the scene from one comment body.
 
-    Returns `None` when the body carries no scene at all (没有现场: not
-    an opened-PR comment, or only a scene marker this reader does not
-    support). Returns the `Scene` when a valid v1 block is present —
-    the block wins over any legacy text next to it. Raises
-    `SceneError` when a scene is present but corrupted (损坏现场): an
-    unparseable or schema-violating block, or a legacy scene comment
-    with missing/invalid fields. A corrupted block is never worked
-    around through the legacy text beside it.
+    Returns `None` when the body carries no scene at all (没有现场: no
+    v1 block, however the human-readable text reads, or only a scene
+    marker this reader does not support). Returns the `Scene` when a
+    valid v1 block is present. Raises `SceneError` when a block is
+    present but corrupted (损坏现场): an unparseable or
+    schema-violating block.
     """
     if not isinstance(body, str):
         return None
@@ -115,7 +107,7 @@ def parse(body: object) -> Scene | None:
         body, _MARKER, _SCENE_FIELDS, SceneError,
         required=_SCENE_REQUIRED_FIELDS,
     )
-    return _parse_legacy(body) if data is None else _parse_block(data)
+    return None if data is None else _parse_block(data)
 
 
 _SCENE_FIELDS = tuple(
@@ -171,50 +163,4 @@ def _parse_block(data: dict) -> Scene:
         base_advance_round=data.get("base_advance_round", 0),
         verdict_head_unknown_round=data.get("verdict_head_unknown_round", 0),
         schema=data["schema"],
-    )
-
-
-def _parse_legacy(body: str) -> Scene | None:
-    """Parse the pre-block text grammar, or None when it is not a scene.
-
-    The exact pre-#786 grammar: `Orbi opened PR: <url>` followed by
-    `- key: value` lines and/or a `(key=value ...)` tail; both are
-    accepted during recovery. Errors match the historical messages.
-    """
-    if OPENED_PR_PREFIX not in body:
-        return None
-    head = body.split(OPENED_PR_PREFIX, 1)[1]
-    pr_head = head.partition(" (")[0].splitlines()
-    pr_url = pr_head[0].strip() if pr_head else ""
-    fields: dict[str, str] = {}
-    for line in head.splitlines()[1:]:
-        match = _FIELD_LINE_RE.match(line)
-        if match:
-            fields[match.group(1)] = match.group(2)
-    legacy = head.partition(" (")[2].rstrip(")")
-    for part in legacy.split():
-        key, _, value = part.partition("=")
-        if key:
-            fields[key] = value
-    values = {
-        "pr_url": pr_url.strip(),
-        "base_branch": fields.get("base_branch", ""),
-        "base_sha": fields.get("base_sha", ""),
-        "run_id": fields.get("run_id", ""),
-    }
-    for name, value in values.items():
-        if not value:
-            raise SceneError(f"opened PR comment is missing {name}")
-    try:
-        run_id = validate_run_id(values["run_id"])
-    except ValueError as exc:
-        raise SceneError(str(exc)) from exc
-    # The optional external-takeover flag is added after the required-
-    # field check: its absence is normal, never an error.
-    return Scene(
-        run_id=run_id,
-        base_branch=values["base_branch"],
-        base_sha=values["base_sha"],
-        pr_url=values["pr_url"],
-        external=fields.get("external", ""),
     )
