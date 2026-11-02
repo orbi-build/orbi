@@ -519,11 +519,12 @@ Stable `key=value` lines you will see:
   (Issue #233) and the Runner kills the Pi session fast,
   `model_wait_dead_stale_...s` when a frozen `model_wait` past the
   configured `model_wait_dead_seconds` (default 1800 s, Issue #228)
-  declares the model request hung, `idle_recovery_stale_...s` when
-  the session stayed idle for `PI_IDLE_RECOVERY_CYCLES` (default 3)
-  consecutive idle windows with no descendant inside its `timeout`
-  deadline (Issue #1089: an active wait pauses the counter) and the
-  Runner kills the Pi session itself,
+  declares the model request hung, `idle_recovery_stale_<duration>`
+  when the session stayed idle for `PI_IDLE_RECOVERY_CYCLES` (12 idle
+  windows = 3600 s / 300 s, about one hour) consecutive idle windows
+  with no descendant inside its `timeout` deadline (Issue #1089: an
+  active wait pauses the counter) and the Runner kills the Pi session
+  itself,
   or `provider_rate_limited` when a provider 429 survived every
   in-run backoff retry (Issue #321)).
 
@@ -1336,9 +1337,11 @@ worktree as the local record; GitHub carries the delivery record.
 
 **Symptom.** The Runner spawns Pi, but the session never creates its
 session file and never sends the first model request. The run sits in
-`session_pending`, the idle-stall recovery kills it after 15 minutes
-(`idle_recovery_stale_15m`), and the Issue ends `ai-blocked` — each
-failure burns 15 minutes of the slot and needs a manual re-dispatch. It
+`session_pending`, the idle-stall recovery kills it after about an
+hour (12 idle windows of 300 s; the reason reads
+`idle_recovery_stale_1h…`), and the Issue ends `ai-blocked` — each
+failure holds the slot for up to an hour and needs a manual re-dispatch.
+(When Issue #311 was filed the cap was 15 minutes.) It
 hits online providers (reproduced with z.ai and google gemini); a local
 model on 127.0.0.1 is not affected. The tell: the session JSONL path is
 empty while the pi process is alive.
