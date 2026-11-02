@@ -87,8 +87,11 @@ def _scene_comments():
         {
             "body": (
                 f"{MARKER}\n"
-                f"Orbi opened PR: {PR_URL} (base_branch=main "
-                f"base_sha=abc123def456 run_id={RUN_ID})"
+                + scene.render(scene.Scene(
+                    run_id=RUN_ID, base_branch="main",
+                    base_sha="abc123def456", pr_url=PR_URL,
+                ))
+                + f"\nOrbi opened PR: {PR_URL}"
             ),
             "authorAssociation": "OWNER",
             "author": {"login": "maintainer"},
@@ -642,8 +645,11 @@ def test_delivery_step_base_branch_mismatch_marks_blocked_with_reason(
             {
                 "body": (
                     f"{MARKER}\n"
-                    f"Orbi opened PR: {PR_URL} (base_branch=develop "
-                    f"base_sha=abc123def456 run_id={RUN_ID})"
+                    + scene.render(scene.Scene(
+                        run_id=RUN_ID, base_branch="develop",
+                        base_sha="abc123def456", pr_url=PR_URL,
+                    ))
+                    + f"\nOrbi opened PR: {PR_URL}"
                 ),
                 "authorAssociation": "OWNER",
                 "author": {"login": "maintainer"},

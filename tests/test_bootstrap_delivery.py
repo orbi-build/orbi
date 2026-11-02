@@ -3738,9 +3738,11 @@ def test_delivery_step_runs_one_review_per_tick(
                     {
                         "body": (
                             "<!-- orbi:run=a1b2c3d4 -->\n"
-                            "Orbi opened PR: "
-                            f"{PR_URL} (base_branch=main "
-                            "base_sha=abc123def456 run_id=a1b2c3d4)"
+                            + scene.render(scene.Scene(
+                                run_id="a1b2c3d4", base_branch="main",
+                                base_sha="abc123def456", pr_url=PR_URL,
+                            ))
+                            + f"\nOrbi opened PR: {PR_URL}"
                         ),
                         "authorAssociation": "OWNER",
                         "author": {"login": "maintainer"},
@@ -3850,9 +3852,11 @@ def test_delivery_step_auto_merges_on_clean_review(
                     {
                         "body": (
                             "<!-- orbi:run=a1b2c3d4 -->\n"
-                            "Orbi opened PR: "
-                            f"{PR_URL} (base_branch=main "
-                            "base_sha=abc123def456 run_id=a1b2c3d4)"
+                            + scene.render(scene.Scene(
+                                run_id="a1b2c3d4", base_branch="main",
+                                base_sha="abc123def456", pr_url=PR_URL,
+                            ))
+                            + f"\nOrbi opened PR: {PR_URL}"
                         ),
                         "authorAssociation": "OWNER",
                         "author": {"login": "maintainer"},
@@ -3907,9 +3911,11 @@ def test_delivery_step_passes_p0_priority_to_the_review(
                     {
                         "body": (
                             "<!-- orbi:run=a1b2c3d4 -->\n"
-                            "Orbi opened PR: "
-                            f"{PR_URL} (base_branch=main "
-                            "base_sha=abc123def456 run_id=a1b2c3d4)"
+                            + scene.render(scene.Scene(
+                                run_id="a1b2c3d4", base_branch="main",
+                                base_sha="abc123def456", pr_url=PR_URL,
+                            ))
+                            + f"\nOrbi opened PR: {PR_URL}"
                         ),
                         "authorAssociation": "OWNER",
                         "author": {"login": "maintainer"},
@@ -4228,9 +4234,11 @@ def test_delivery_step_blocks_when_scene_base_differs_from_config(
                 {
                     "body": (
                         "<!-- orbi:run=a1b2c3d4 -->\n"
-                        "Orbi opened PR: "
-                        f"{PR_URL} (base_branch=develop "
-                        "base_sha=abc123def456 run_id=a1b2c3d4)"
+                        + scene.render(scene.Scene(
+                            run_id="a1b2c3d4", base_branch="develop",
+                            base_sha="abc123def456", pr_url=PR_URL,
+                        ))
+                        + f"\nOrbi opened PR: {PR_URL}"
                     ),
                     "authorAssociation": "OWNER",
                     "author": {"login": "maintainer"},
@@ -4356,9 +4364,11 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
                 {
                     "body": (
                         "<!-- orbi:run=a1b2c3d4 -->\n"
-                        "Orbi opened PR: "
-                        f"{PR_URL} (base_branch=main "
-                        "base_sha=abc123def456 run_id=a1b2c3d4)"
+                        + scene.render(scene.Scene(
+                            run_id="a1b2c3d4", base_branch="main",
+                            base_sha="abc123def456", pr_url=PR_URL,
+                        ))
+                        + f"\nOrbi opened PR: {PR_URL}"
                     ),
                     "authorAssociation": "OWNER",
                     "author": {"login": "maintainer"},
@@ -4508,9 +4518,11 @@ def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
                 {
                     "body": (
                         "<!-- orbi:run=a1b2c3d4 -->\n"
-                        "Orbi opened PR: "
-                        f"{PR_URL} (base_branch=main "
-                        "base_sha=abc123def456 run_id=a1b2c3d4)"
+                        + scene.render(scene.Scene(
+                            run_id="a1b2c3d4", base_branch="main",
+                            base_sha="abc123def456", pr_url=PR_URL,
+                        ))
+                        + f"\nOrbi opened PR: {PR_URL}"
                     ),
                     "authorAssociation": "OWNER",
                     "author": {"login": "maintainer"},
@@ -4574,9 +4586,11 @@ def test_delivery_step_runs_review_when_fix_needed(
                 {
                     "body": (
                         "<!-- orbi:run=a1b2c3d4 -->\n"
-                        "Orbi opened PR: "
-                        f"{PR_URL} (base_branch=main "
-                        "base_sha=abc123def456 run_id=a1b2c3d4)"
+                        + scene.render(scene.Scene(
+                            run_id="a1b2c3d4", base_branch="main",
+                            base_sha="abc123def456", pr_url=PR_URL,
+                        ))
+                        + f"\nOrbi opened PR: {PR_URL}"
                     ),
                     "authorAssociation": "OWNER",
                     "author": {"login": "maintainer"},
@@ -4888,9 +4902,11 @@ def test_delivery_step_repairs_in_progress_label_and_logs_ci(
                 return json.dumps({"comments": [{
                     "body": (
                         "<!-- orbi:run=a1b2c3d4 -->\n"
-                        "Orbi opened PR: "
-                        f"{PR_URL} (base_branch=main "
-                        "base_sha=abc123def456 run_id=a1b2c3d4)"
+                        + scene.render(scene.Scene(
+                            run_id="a1b2c3d4", base_branch="main",
+                            base_sha="abc123def456", pr_url=PR_URL,
+                        ))
+                        + f"\nOrbi opened PR: {PR_URL}"
                     ),
                     "authorAssociation": "OWNER",
                     "author": {"login": "maintainer"},
@@ -6437,9 +6453,11 @@ def test_delivery_step_never_closes_triage_issue_after_review(
                     {
                         "body": (
                             "<!-- orbi:run=a1b2c3d4 -->\n"
-                            "Orbi opened PR: "
-                            f"{PR_URL} (base_branch=main "
-                            "base_sha=abc123def456 run_id=a1b2c3d4)"
+                            + scene.render(scene.Scene(
+                                run_id="a1b2c3d4", base_branch="main",
+                                base_sha="abc123def456", pr_url=PR_URL,
+                            ))
+                            + f"\nOrbi opened PR: {PR_URL}"
                         ),
                         "authorAssociation": "OWNER",
                         "author": {"login": "maintainer"},

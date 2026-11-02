@@ -4,9 +4,9 @@
 `gh`, deterministic render and parse. The Runner writes the single
 hidden `<!-- orbi:scene:v1 {json} -->` block into its trusted
 "Orbi opened PR" comment and the next tick's resume reads the scene
-back from that block — the human-readable text is display only. During
-the transition one version of `parse` also reads the legacy text
-grammar (`- key: value` and `(key=value)`).
+back from that block — the human-readable text is display only. The
+pre-v0.5.2 text grammar is gone (Issue #2068): a comment without the
+block carries no scene, however its text reads.
 
 `parse` distinguishes the two failure shapes the resume path must tell
 apart (Issue #786): `None` — the body carries no scene at all;
@@ -124,7 +124,7 @@ def test_parse_reads_the_block_from_a_full_production_comment():
     assert scene.parse(body) == scene_for()
 
 
-def test_parse_prefers_the_block_over_contradicting_legacy_text():
+def test_parse_prefers_the_block_over_contradicting_text():
     # The block is the machine protocol; the human text below it is
     # display only — a tampered or stale text line never wins.
     body = (
@@ -146,16 +146,6 @@ def test_parse_external_and_review_round_round_trip():
         external="true", review_round=3, base_advance_round=2,
         verdict_head_unknown_round=2,
     )
-
-
-def test_parse_legacy_scene_defaults_transition_counters():
-    body = (
-        "Orbi opened PR: https://github.com/owner/repo/pull/9\n"
-        "- base_branch: main\n- base_sha: abc123\n- run_id: a1b2c3d4"
-    )
-    parsed = scene.parse(body)
-    assert parsed.base_advance_round == 0
-    assert parsed.verdict_head_unknown_round == 0
 
 
 def test_parse_old_v1_scene_defaults_base_advance_round():
@@ -266,7 +256,7 @@ def test_parse_fails_fast_on_multiple_blocks_in_one_body():
 def test_parse_fails_fast_on_a_corrupted_block_even_when_text_is_valid():
     # The block is authoritative: a present-but-broken block is a bug
     # or tampering and must never be silently worked around through the
-    # legacy text that sits next to it.
+    # readable text that sits next to it.
     body = (
         "<!-- orbi:scene:v1 {broken -->\n"
         f"Orbi opened PR: {PR_URL} "
@@ -276,86 +266,18 @@ def test_parse_fails_fast_on_a_corrupted_block_even_when_text_is_valid():
         scene.parse(body)
 
 
-# ------------------------------------------- corrupted legacy text (SceneError)
-
-
-def legacy_comment(fields: str) -> str:
-    return f"Orbi opened PR: {PR_URL} {fields}"
-
-
-def test_legacy_multiline_syntax_parses():
-    body = (
-        f"Orbi opened PR: {PR_URL}\n"
-        "- base_branch: main\n"
-        "- base_sha: abc123def456\n"
-        f"- run_id={RUN_ID}\n"
-    )
-    assert scene.parse(body) == scene_for()
-
-
-def test_legacy_paren_syntax_parses():
-    body = legacy_comment(
-        "(base_branch=main base_sha=abc123def456 run_id=a1b2c3d4)"
-    )
-    assert scene.parse(body) == scene_for()
-
-
-def test_legacy_external_flag_parses():
-    body = legacy_comment(
-        "(base_branch=main base_sha=abc123def456 run_id=a1b2c3d4 "
-        "external=true)"
-    )
-    assert scene.parse(body) == scene_for(external="true")
-
-
-def test_legacy_ignores_unrelated_lines_and_retired_fields():
-    body = (
-        f"Orbi opened PR: {PR_URL}\n"
-        "- base_branch: main\n"
-        "- base_sha: abc123def456\n"
-        f"- run_id={RUN_ID}\n"
-        "not a field\n"
-        "- branch: orbi/owner-repo-issue-9\n"
-        "- worktree: /srv/repo/.worktrees/x\n"
-    )
-    assert scene.parse(body) == scene_for()
-
-
-@pytest.mark.parametrize("field,needle", [
-    ("base_branch", "base_branch="),
-    ("base_sha", " base_sha="),
-    ("run_id", " run_id="),
-    ("pr_url", PR_URL),
-])
-def test_legacy_fails_fast_when_a_field_is_missing(field: str, needle: str):
-    body = legacy_comment(
-        "(base_branch=main base_sha=abc123def456 run_id=a1b2c3d4)"
-    ).replace(needle, "", 1)
-    with pytest.raises(scene.SceneError, match=f"missing {field}"):
-        scene.parse(body)
-
-
-def test_legacy_fails_fast_on_an_invalid_run_id():
-    body = legacy_comment(
-        "(base_branch=main base_sha=abc123def456 run_id=run1)"
-    )
-    with pytest.raises(scene.SceneError, match="invalid run id"):
-        scene.parse(body)
-
-
-def test_legacy_ignores_a_field_part_without_key():
-    body = legacy_comment(
-        "(base_branch=main base_sha=abc123def456 run_id=a1b2c3d4 =stray)"
-    )
-    assert scene.parse(body) == scene_for()
-
-
-def test_legacy_fails_fast_when_the_head_has_no_lines():
-    with pytest.raises(scene.SceneError, match="missing pr_url"):
-        scene.parse("Orbi opened PR: ")
-
-
 # --------------------------------------------------------- no scene (None)
+
+
+def test_parse_returns_none_for_a_person_written_opened_pr_line():
+    """Issue #2068: the pre-v0.5.2 text grammar is gone, so a trusted
+    author writing `Orbi opened PR: <url>` with no other fields carries
+    no scene at all. `parse` returns None (没有现场) instead of raising
+    `SceneError` — which is the only trigger of `block_scene_failure`,
+    so such a comment can no longer block the Issue."""
+    assert scene.parse(
+        "Orbi opened PR: https://github.com/o/r/pull/1"
+    ) is None
 
 
 @pytest.mark.parametrize("body", [
