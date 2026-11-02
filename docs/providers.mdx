@@ -134,7 +134,7 @@ On **2026-09-08**, two real requests using the original template and Pi 0.85.1 p
    PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
    ```
 
-5. Select only the provider/model in `orbi.toml`; do not maintain commented provider blocks there. Validate before a real task with `orbi check --config orbi.toml` — it sends no request and fails fast when the selected provider, model, endpoint, API, or selected key reference is invalid. A bare `pi --print` is **not** this check: it runs Pi with its own agent directory (`~/.pi/agent`, or `PI_CODING_AGENT_DIR` when set) and never reads `pi_providers`, which reaches Pi only through the per-run agent directory Orbi materializes. The first real request happens in the first run; follow it with `orbi status --follow`.
+5. Select only the provider/model in `orbi.toml`; do not maintain commented provider blocks there. Validate before a real task with `orbi check --config orbi.toml` — it sends no real request and fails fast when the selected provider, model, endpoint, API, or selected key reference is invalid. A bare `pi --print` is **not** this check: it runs Pi with its own agent directory (`~/.pi/agent`, or `PI_CODING_AGENT_DIR` when set) and never reads `pi_providers`, which reaches Pi only through the per-run agent directory Orbi materializes. The first real request happens in the first run; follow it with `orbi status --follow`.
 
 ### `thinkingLevelMap`
 
