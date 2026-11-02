@@ -24,18 +24,26 @@ OpenAI-compatible endpoint 就能工作。
 
 ## 安装
 
-完整说明见上游仓库的 README；简版（它自己的 clone 路径，例如在你的
-home 目录下）：
+完整说明见上游仓库的 README。提交的 `local-llm-kv-cache.service` 把检出路径
+写死为 `WorkingDirectory=%h/server-ops/local-llm-kv-cache`、
+`ExecStart=/usr/bin/python3 %h/server-ops/local-llm-kv-cache/cache_proxy.py`
+——所以要 clone 到该路径，并从那里复制 unit：
 
 ```bash
-git clone https://github.com/xqliu/local-llm-kv-cache.git
-cd local-llm-kv-cache
+mkdir -p ~/server-ops
+git clone https://github.com/xqliu/local-llm-kv-cache.git ~/server-ops/local-llm-kv-cache
 mkdir -p ~/.config/systemd/user
-cp local-llm-kv-cache.service ~/.config/systemd/user/
+cp ~/server-ops/local-llm-kv-cache/local-llm-kv-cache.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now local-llm-kv-cache.service
 curl -fsS http://127.0.0.1:18082/health
 ```
+
+unit 的 `WorkingDirectory`/`ExecStart` 写死为该路径，clone 到别处必须同时
+改这两行指向你的路径；不改而把仓库放在别的目录，unit 根本不会启动——
+systemd 进不了不存在的 WorkingDirectory（`Changing to the requested
+working directory failed: No such file or directory`，`status=200/CHDIR`），
+`/health` 也不可达。
 
 要求：Python 3.10+ 和启用了 slot save/restore 的 llama.cpp server。
 hybrid/recurrent 模型（例如 Qwen3.8）需要带 checkpoint 持久化修复的
