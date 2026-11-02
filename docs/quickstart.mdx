@@ -41,13 +41,18 @@ Copy this one configuration block, replacing only `replace-with-your-key`
 with the key from your z.ai account:
 
 ```bash
-cd ~/.orbi/src && mkdir -p .orbi && printf '%s\n' 'ZAI_API_KEY=replace-with-your-key' > .orbi/env && chmod 600 .orbi/env && cp templates/pi-providers/z-ai.json .orbi/pi-providers.json && sed -i -e '/^pi_providers = /d' -e '/^pi_provider = /d' -e '/^pi_model = /d' orbi.toml && cat >> orbi.toml <<'EOF'
+cd ~/.orbi/src && mkdir -p .orbi && printf '%s\n' 'ZAI_API_KEY=replace-with-your-key' > .orbi/env && chmod 600 .orbi/env && cp templates/pi-providers/z-ai.json .orbi/pi-providers.json && sed -i.bak -e '/^pi_providers = /d' -e '/^pi_provider = /d' -e '/^pi_model = /d' orbi.toml && rm -f orbi.toml.bak && cat >> orbi.toml <<'EOF'
 
 pi_providers = ".orbi/pi-providers.json"
 pi_provider = "z-ai"
 pi_model = "glm-5.3-flash"
 EOF
 ```
+
+`sed -i.bak` is the portable in-place form: BSD sed (macOS) takes the
+argument right after `-i` as the backup suffix, so a bare `-i` swallows the
+following `-e` and the chain stops there. The backup the command creates is
+removed again by `rm -f orbi.toml.bak`.
 
 **Success:** the block returns to the prompt, and the file contains provider
 `z-ai`, model `glm-5.3-flash`, and `apiKey` `$ZAI_API_KEY`. If it fails, check
@@ -72,22 +77,31 @@ repository entered in step 1 is writable, then run the command again.
 
 ## 4. Start one delivery tick
 
-Start the first Runner instance:
+Start the first Runner instance. On Linux the scheduler is systemd:
 
 ```bash
 systemctl --user start orbi@1.service
 ```
 
-**Success:** the journal shows the Issue being claimed and then a Pi
-`session_pending`/activity line. `session_pending` is normal while the model
-is working—do not stop it just because it remains there for a few minutes. If
-the command fails, run `journalctl --user -u orbi@1.service -n 30 --no-pager`;
-fix the exact `setup_failed`, `transport_check_failed`, or provider error it
-names, then start the service again.
+On macOS the scheduler is launchd and the first instance is the label
+`org.orbi.runner.1`; this is the restart hint Orbi itself prints for it:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/org.orbi.runner.1
+```
+
+**Success:** the run log shows the Issue being claimed and then a Pi
+`session_pending`/activity line — the journal on Linux (`journalctl --user -u
+orbi@1.service -n 30 --no-pager`), the instance log file on macOS (`tail -n 30
+~/.orbi/src/.orbi/org.orbi.runner.1.log`). `session_pending` is normal while
+the model is working—do not stop it just because it remains there for a few
+minutes. If the command fails, read that same log; fix the exact
+`setup_failed`, `transport_check_failed`, or provider error it names, then
+start the service again.
 
 ## 5. See the pull request
 
-After the journal reports `result=pr_opened`, run this command from the same
+After the run log reports `result=pr_opened`, run this command from the same
 checkout:
 
 ```bash
@@ -96,6 +110,7 @@ cd ~/.orbi/src && gh pr list --state open --search '"Add a hello-world README li
 
 **Success:** the output contains your Issue's title and a PR URL. That is the
 visible result: your first Issue has become a pull request. If the list is
-empty, inspect the last service lines with
-`journalctl --user -u orbi@1.service -n 50 --no-pager`; `ai-blocked` means the
-run stopped with its actionable failure, not that it silently succeeded.
+empty, inspect the last run lines — `journalctl --user -u orbi@1.service -n 50
+--no-pager` on Linux, `tail -n 50 ~/.orbi/src/.orbi/org.orbi.runner.1.log` on
+macOS; `ai-blocked` means the run stopped with its actionable failure, not that
+it silently succeeded.
