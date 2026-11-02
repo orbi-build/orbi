@@ -542,7 +542,13 @@ def check_draft(
 
 
 def _parse_revised(output: str) -> tuple[DraftIssue, ...] | None:
-    """The fidelity pass answer, or None when it carries no usable draft."""
+    """The titles and bodies of the fidelity pass answer, or None.
+
+    The pass only revises titles and bodies (Issue #2085): the order is the
+    drafter's, so its `after` fields are dropped here and never judged. A
+    revision that moved `after` onto the wrong Issue is still a usable
+    revision, and judging its copy would throw the whole pass away.
+    """
     text = output.strip()
     if text.startswith("{") is False:
         start = text.find("{")
@@ -554,8 +560,14 @@ def _parse_revised(output: str) -> tuple[DraftIssue, ...] | None:
         data = json.loads(text)
     except ValueError:
         return None
+    entries = data.get("issues")
+    if not isinstance(entries, list):
+        return None
     try:
-        return parse_issues(data.get("issues"))
+        return parse_issues([
+            {**entry, "after": None} if isinstance(entry, dict) else entry
+            for entry in entries
+        ])
     except DraftError:
         return None
 
@@ -566,9 +578,13 @@ def fidelity_pass(
 ) -> tuple[tuple[DraftIssue, ...], str | None]:
     """Run the independent fidelity pass; never fails the round.
 
-    The pass is a bypass (Issue #79): a missing rules file, a failed or
-    empty session, or an unusable answer keeps the draft the drafter wrote
-    and the round reports it in the `warning` field.
+    The pass revises titles and bodies only (Issue #2085): the returned
+    Issues are the answer's wording at the drafter's positions, so the
+    number of Issues and every `after` link stay exactly as the drafter
+    wrote them. The pass is a bypass (Issue #79): a missing rules file, a
+    failed or empty session, an unusable answer or a different Issue count
+    keeps the draft the drafter wrote and the round reports it in the
+    `warning` field.
     """
     rules_path = Path(config.deploy_home) / FIDELITY_REL
     try:
@@ -588,9 +604,12 @@ def fidelity_pass(
     except Exception as exc:
         return issues, f"fidelity_pass_failed: {type(exc).__name__}"
     revised = _parse_revised(output)
-    if revised is None:
+    if revised is None or len(revised) != len(issues):
         return issues, "fidelity_pass_empty"
-    return revised, None
+    return tuple(
+        DraftIssue(title=entry.title, body=entry.body, after=drafted.after)
+        for entry, drafted in zip(revised, issues)
+    ), None
 
 
 # --- one drafting round --------------------------------------------------
