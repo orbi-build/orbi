@@ -72,19 +72,27 @@ pi_provider = "z-ai"
 pi_model = "glm-5.3-flash"
 ```
 
-手动 tick 时，systemd 不会加载 `.orbi/env`。先导出变量，再使用上手指南
-中的正常命令：
+手动 tick 时，systemd 不会加载 `.orbi/env`。先导出变量，校验配置，再使用
+上手指南中的正常命令：
 
 ```bash
 set -a
 . .orbi/env
 set +a
-pi --print "reply with the single word: ok"
+orbi check --config orbi.toml
 orbi --config orbi.toml
 ```
 
-派发 Issue 前先执行一次真实的 `pi --print` 检查。Runner 也会在启动时校验
-JSON、选中的模型、endpoint 和 `ZAI_API_KEY`，不正确就 fail fast。
+`orbi check --config orbi.toml` 只做校验、不发真实请求：前置命令、
+`gh` 认证、provider 文件、选中的 provider/model 以及 `ZAI_API_KEY` 引用；
+失败时会打印 `reason=` 和 `fix=`。第一次真实请求发生在第一次 run 里——用
+`orbi status --follow` 跟踪它。
+
+裸 `pi --print` 对这套配置**不是**检查：它用 Pi 自己的 agent 目录
+（`~/.pi/agent`，设置了 `PI_CODING_AGENT_DIR` 时用该目录），永远不读
+`pi_providers`——后者只通过 Orbi 为每次 run 物化的 agent 目录交给 Pi。
+Runner 也会在启动时校验 JSON、选中的模型、endpoint 和 `ZAI_API_KEY`，不正确
+就 fail fast。
 
 ## 真实运行
 
@@ -119,9 +127,12 @@ Orbi checkout，`$ZAI_API_KEY` 可能无法生效；先更新，不要把真实 
 
 ### `session_pending` 不等于卡住
 
-不要只按 phase 停留时长判断任务是否卡住。`session_pending` 期间模型可能仍在
-密集工作。检查 `.pi-session/*.jsonl` 是否继续增长，并查看 journal 的
-activity 行。真正停滞的启动会由 Orbi 的恢复路径处理；不要自行添加无限重试。
+不要只按 phase 停留时长判断任务是否卡住。`session_pending` 表示 Pi 已启动、
+但还没创建 session 文件，因此这个阶段没有可观察的 session JSONL。请看 journal
+里的启动行 `process_spawned` / `session_created` / `first_request_started`，
+确认 run 走到了哪个里程碑；session 已存在但还没有首个响应时是
+`request_pending`。真正停滞的启动会由 Orbi 的恢复路径处理；不要自行添加
+无限重试。
 
 ### 有意省略 reasoning 映射
 
@@ -142,8 +153,9 @@ pi_provider = "openrouter"
 pi_model = "google/gemma-4-31b-it:free"
 ```
 
-设置 `OPENROUTER_API_KEY`，校验精确条目，再执行一次真实 `pi --print` 检查。
-这个替代路径的可用性和额度在本文中**未实测**。
+设置 `OPENROUTER_API_KEY`，用 `orbi check --config orbi.toml` 校验精确
+条目，把真实请求留给第一次 run（用 `orbi status --follow` 跟踪）。这个替代
+路径的可用性和额度在本文中**未实测**。
 
 完整 provider 清单和当前状态见 [provider 指南](/zh/providers)。英文版见
 [Run Orbi with z.ai GLM 5.3 Flash](/zai-glm-5-3-flash)。
