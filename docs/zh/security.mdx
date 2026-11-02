@@ -102,10 +102,11 @@ Orbi 保留从不出机的本地状态：
   逆的策略变更**——run 评论始终记录 `repo_config: <sha>`，并在变更时
   附有效键值 diff。
 
-红线是**凭据外送**。决定 `ORBI_GITHUB_TOKEN` 与模型 API key 发往何
-处的键——`pi_provider`、`pi_model`、`pi_thinking`、`pi_providers`、
-`pi_extensions`、`model_wait_probe_url` endpoint 以及一切 endpoint/key
-字段——永久 host-only。一个部署宿主服务多个池
+红线是**凭据外送**。决定 GitHub token（gh 的凭据；Docker 镜像里是
+`GH_TOKEN`）与模型 API key 发往何处的键——`pi_provider`、
+`pi_model`、`pi_thinking`、`pi_providers`、`pi_extensions`、
+`model_wait_probe_url` endpoint 以及一切 endpoint/key 字段——永久
+host-only。一个部署宿主服务多个池
 （zcode-website / zcode-e2e / 生产），一个仓库配置失守不能把宿主全部
 凭据引向别处或在池之间横移。同理
 `source_repos`/`repo_dir`/`deploy_home`/`workspace_root`（跨池横移）与

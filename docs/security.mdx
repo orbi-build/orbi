@@ -123,20 +123,21 @@ already applies to CI workflows:
   policy change** — the run comment always records `repo_config: <sha>`
   and annotates a change with its effective diff.
 
-The red line is **credential routing**. Keys that decide where
-`ORBI_GITHUB_TOKEN` and the model API keys are sent — `pi_provider`,
-`pi_model`, `pi_thinking`, `pi_providers`, `pi_extensions`, the
-`model_wait_probe_url` endpoint and every other endpoint/key field —
-stay permanently host-only. A deployment host serves several pools
-(zcode-website / zcode-e2e / production), so one compromised repository
-config must not be able to redirect all host credentials or move work
-across pools. For the same reason `source_repos`/`repo_dir`/
-`deploy_home`/`workspace_root` (cross-pool movement) and
-`prompt`/`prompt_review`/`skills` (a persistent injection channel into
-the system context) are host-only. A repository file that declares any
-host-only key fails the claim fast and the Issue becomes `ai-blocked`
-with the offending keys named. An unrecognized key is ignored with a
-warning instead (Issue #1329); the host-only set is unchanged by that.
+The red line is **credential routing**. Keys that decide where the
+GitHub token (gh's credential; `GH_TOKEN` in the Docker image) and the
+model API keys are sent — `pi_provider`, `pi_model`, `pi_thinking`,
+`pi_providers`, `pi_extensions`, the `model_wait_probe_url` endpoint and
+every other endpoint/key field — stay permanently host-only. A deployment
+host serves several pools (zcode-website / zcode-e2e / production), so
+one compromised repository config must not be able to redirect all host
+credentials or move work across pools. For the same reason
+`source_repos`/`repo_dir`/`deploy_home`/`workspace_root` (cross-pool
+movement) and `prompt`/`prompt_review`/`skills` (a persistent injection
+channel into the system context) are host-only. A repository file that
+declares any host-only key fails the claim fast and the Issue becomes
+`ai-blocked` with the offending keys named. An unrecognized key is
+ignored with a warning instead (Issue #1329); the host-only set is
+unchanged by that.
 
 These delivery-policy keys are repository-writable:
 `base_branch`, `active_milestone`, `auto_next_milestone`, `context_files`,
