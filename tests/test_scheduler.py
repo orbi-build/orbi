@@ -89,6 +89,7 @@ class FakeScheduler:
                     encoding="utf-8",
                 )
 
+
 def recording_run_command(command, **kwargs):
     """The seam stub: the generic orchestration only runs `git
     rev-parse HEAD` itself (the hooks receive this same callable),
