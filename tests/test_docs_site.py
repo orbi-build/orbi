@@ -635,6 +635,31 @@ def test_docs_ship_the_five_step_quickstart_in_both_languages():
     assert "curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh | bash" in zh
 
 
+def test_quickstart_commands_work_on_macos():
+    """Issue #2074: every quickstart command must run as written on macOS.
+
+    `sed -i.bak` is the portable in-place form (the same one install.sh
+    uses); BSD sed reads the `-e` after a bare `-i` as the backup suffix.
+    The runner start and its log must carry the launchd commands the
+    scheduler itself emits (label `org.orbi.runner.1`, instance log under
+    `<repo_dir>/.orbi/<label>.log`), not only the systemd ones."""
+    for page in (DOCS_DIR / "quickstart.mdx", DOCS_DIR / "zh" / "quickstart.mdx"):
+        text = page.read_text(encoding="utf-8")
+        assert (
+            "sed -i.bak -e '/^pi_providers = /d' -e '/^pi_provider = /d' "
+            "-e '/^pi_model = /d' orbi.toml && rm -f orbi.toml.bak"
+        ) in text, f"{page}: provider edit must use the portable sed form"
+        assert "sed -i -e" not in text, (
+            f"{page}: a bare sed -i -e breaks BSD sed (macOS)"
+        )
+        assert (
+            "launchctl kickstart -k gui/$(id -u)/org.orbi.runner.1" in text
+        ), f"{page}: must carry the launchd start command"
+        assert "~/.orbi/src/.orbi/org.orbi.runner.1.log" in text, (
+            f"{page}: must carry the launchd instance log path"
+        )
+
+
 def test_docs_navigation_matches_the_actual_pages_exactly():
     """KISS: one group per topic per language, every page listed once, no
     orphan page outside the navigation and no navigation entry without a
