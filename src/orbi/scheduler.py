@@ -202,10 +202,6 @@ class Scheduler(Protocol):
         stays disabled.
         """
 
-    def pre_install(self, run_command, installed_dir: Path,
-                    unit_name: str | None = None) -> None:
-        """One-time migrations before the files are written."""
-
     def unmanaged_entries(self, installed_dir: Path) -> list[dict]:
         """Orbi unit files no deployment's drift check can see."""
 
@@ -406,8 +402,7 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
     Overwrites every managed installed unit with its rendered repo
     template (the repo is the single source of truth), unless the
     installed deployment belongs to a different config, which fails
-    before any migration or write. Runs the impl's one-time
-    ``pre_install`` migrations, then converges the instance schedules
+    before any write. Converges the instance schedules
     onto ``max_concurrency`` (``activate_instances`` — surplus
     instances deactivate, a live Runner is never restarted).
     ``enable=False`` is the pre-start self-heal: it re-reads the
@@ -439,7 +434,6 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
                 "templates are the single source of truth)"
             )
     installed_dir.mkdir(parents=True, exist_ok=True)
-    sched.pre_install(run_command, installed_dir, unit_name)
     for index, (template_name, name) in enumerate(pairs, start=1):
         # Render the template (substitute the deployment-specific
         # placeholders) so the installed unit points at THIS checkout

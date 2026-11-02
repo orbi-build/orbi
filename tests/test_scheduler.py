@@ -89,10 +89,6 @@ class FakeScheduler:
                     encoding="utf-8",
                 )
 
-    def pre_install(self, run_command, installed_dir, unit_name=None):
-        self.calls.append(("pre_install",))
-
-
 def recording_run_command(command, **kwargs):
     """The seam stub: the generic orchestration only runs `git
     rev-parse HEAD` itself (the hooks receive this same callable),
@@ -152,7 +148,6 @@ def test_install_units_writes_rendered_units_through_the_hooks(tmp_path):
             fake.content_sha(text)
         )
     assert result["commit"] == "cafecafe"
-    assert ("pre_install",) in fake.calls
     assert ("activate", 2, True) in fake.calls
 
 

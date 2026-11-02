@@ -286,7 +286,6 @@ JOURNAL_EVENTS: dict[str, str] = {
     "unit_drift": "installed units vs repo templates: clean, self-healed, or drifting",
     "unit_conflict": "an installed unit file conflicts with the deployment",
     "units_installed": "the systemd user units were installed or refreshed",
-    "legacy_units_migrated": "pre-#149 non-templated units were removed",
     # Self-health check.
     "health_check_skipped": "the periodic health check skipped this tick",
     "health_check_queue_empty": "the health check found a non-empty-but-stale queue claim",

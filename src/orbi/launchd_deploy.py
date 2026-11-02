@@ -327,11 +327,6 @@ class LaunchdScheduler:
             ):
                 run_command(["launchctl", "bootout", self.target(label)])
 
-    def pre_install(self, run_command, installed_dir: Path,
-                    unit_name: str | None = None) -> None:
-        # No launchd-era legacy units exist to migrate.
-        return None
-
     def unmanaged_entries(self, installed_dir: Path) -> list[dict]:
         """Orbi agent plists no deployment's drift check can see.
 

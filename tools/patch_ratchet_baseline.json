@@ -1,6 +1,6 @@
 {
   "boundary_total": 1135,
-  "command_shape_asserts": 439,
+  "command_shape_asserts": 437,
   "internal_total": 1637,
   "monkeypatch_setattr_runner": 103,
   "monkeypatch_setattr_runner_string": 3,

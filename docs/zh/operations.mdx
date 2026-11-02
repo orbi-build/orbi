@@ -296,10 +296,9 @@ unit 目录、daemon-reload、按 `max_concurrency` enable 或 disable timer
 记录一行结构化 `unit_drift result=auto_synced`（before/after sha256、部署
 commit）。不再出现“每 5 分钟重复同一个 `unit_drift` 错误直到人工
 介入”的循环（#131/#140 实例：每次启动都因 `unit_drift` 失败，直到
-人工运行同步命令）。同一个安装还会**一次性迁移** #149 之前的非模板
-unit（`orbi.service` / `orbi.timer`）：停掉旧 timer（停
-的是 timer，绝不停 service）并删除旧文件，旧单实例调度不会再拉起旧
-service。
+人工运行同步命令）。安装只写入受管的模板 unit：名为
+`orbi.service` 或 `orbi.timer` 的非模板 unit 属于写入它的人，安装与
+自愈都不会删除、disable 或停止它（Issue #2067）。
 
 `orbi install-units --config orbi.toml` 保留为手工入口
 （首次 setup、需要立即同步时）。自愈后仍漂移（安装步骤失败、模板
@@ -509,7 +508,6 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `unit_drift` | 已安装单元 vs 仓库模板：clean、已自愈或漂移 |
 | `unit_conflict` | 已安装单元文件与本次部署冲突 |
 | `units_installed` | systemd user 单元已安装或刷新 |
-| `legacy_units_migrated` | pre-#149 非模板单元已被移除 |
 | `health_check_skipped` | 本 tick 跳过周期健康检查 |
 | `health_check_queue_empty` | 健康检查确认队列实际为空 |
 | `health_check_failed` | 周期健康检查崩溃（旁路；从不使交付失败） |

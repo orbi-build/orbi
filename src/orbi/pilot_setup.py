@@ -473,7 +473,7 @@ def run_setup(config: RunnerConfig, installed_dir: Path | None, *,
     check_commands(run_command, config.unit_name)
     # The CLI source step precedes every mutating step — the
     # running CLI must import from the deployment checkout, otherwise
-    # the unit migration below (and the pre-start self-heal it
+    # the unit install below (and the pre-start self-heal it
     # repairs) could never run the new code (the #152 deadlock).
     cli = install_cli_step(
         deploy_home, cli_source.module_file(), run_command=run_command,

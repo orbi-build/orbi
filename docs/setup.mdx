@@ -94,8 +94,8 @@ non-zero exit code.
    `<deploy_home>/systemd/orbi@.timer`; in bootstrap mode the orbi
    checkout, Issue #330) are installed idempotently into the user unit
    directory (the same
-   install `install-units` performs: copy, migrate the pre-#149
-   non-templated units away once, `daemon-reload`, then enables `@1` for
+   install `install-units` performs: copy, `daemon-reload`,
+   then enables `@1` for
    `max_concurrency = 1` or `@1` and `@2` for `2` (and disables surplus
    timers) — the service is never started, stopped or restarted), then each timer
    instance's enabled/active state and next trigger time are reported.
