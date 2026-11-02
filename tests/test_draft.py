@@ -334,6 +334,47 @@ def test_an_empty_fidelity_pass_returns_the_draft_with_a_warning(
     assert len(answer["issues"]) == 2
 
 
+# Issue #2085: the pass only revises titles and bodies; the number of
+# Issues and every `after` link stay exactly as the drafter wrote them.
+def test_a_fidelity_answer_that_moves_after_still_revises_the_draft(
+    config, sessions, monkeypatch, tmp_path,
+):
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue_draft(*TWO_ISSUES)
+    sessions.fidelity.append(json.dumps({"issues": [
+        issue("Tag a note, revised", after=1),
+        issue("Filter notes, revised"),
+    ]}))
+    code, out, err = run_round_cli(
+        config, {"message": "notes"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    answer = json.loads(out)
+    assert "warning" not in answer
+    assert [entry["title"] for entry in answer["issues"]] == [
+        "Tag a note, revised", "Filter notes, revised",
+    ]
+    # The drafter's order survives the pass's copy of `after`.
+    assert [entry.get("after") for entry in answer["issues"]] == [None, 1]
+
+
+def test_a_fidelity_answer_with_another_issue_count_keeps_the_draft(
+    config, sessions, monkeypatch, tmp_path,
+):
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue_draft(*TWO_ISSUES)
+    sessions.fidelity.append(json.dumps({
+        "issues": [issue("Tag a note, revised")],
+    }))
+    code, out, err = run_round_cli(
+        config, {"message": "notes"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    answer = json.loads(out)
+    assert answer["warning"] == "fidelity_pass_empty"
+    assert answer["issues"] == TWO_ISSUES
+
+
 def test_a_failed_fidelity_pass_never_fails_the_round(
     config, sessions, monkeypatch, tmp_path,
 ):
@@ -977,6 +1018,9 @@ def test_the_fidelity_session_uses_the_configured_agent_dir(
         ("no json at all", "fidelity_pass_empty"),
         ("{broken", "fidelity_pass_empty"),
         ('{"issues": []}', "fidelity_pass_empty"),
+        ("{}", "fidelity_pass_empty"),
+        ('{"issues": "junk"}', "fidelity_pass_empty"),
+        ('{"issues": ["junk"]}', "fidelity_pass_empty"),
     ],
 )
 def test_an_unusable_fidelity_answer_keeps_the_draft(
@@ -999,7 +1043,7 @@ def test_a_fidelity_answer_may_be_wrapped_in_text(
 ):
     draft_fakes.judge_passing(monkeypatch)
     sessions.queue_draft(*TWO_ISSUES)
-    revised = json.dumps({"issues": [THREE_ISSUES[0]]})
+    revised = json.dumps({"issues": TWO_ISSUES})
     sessions.fidelity.append(f"Here is the revised draft:\n{revised}\nDone.")
     code, out, err = run_round_cli(
         config, {"message": "notes"}, tmp_path / "session",
@@ -1007,7 +1051,7 @@ def test_a_fidelity_answer_may_be_wrapped_in_text(
     assert code == 0, err
     answer = json.loads(out)
     assert "warning" not in answer
-    assert answer["issues"] == [THREE_ISSUES[0]]
+    assert answer["issues"] == TWO_ISSUES
 
 
 def test_a_missing_fidelity_file_is_only_a_warning(
