@@ -38,13 +38,17 @@ curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh | b
 key：
 
 ```bash
-cd ~/.orbi/src && mkdir -p .orbi && printf '%s\n' 'ZAI_API_KEY=replace-with-your-key' > .orbi/env && chmod 600 .orbi/env && cp templates/pi-providers/z-ai.json .orbi/pi-providers.json && sed -i -e '/^pi_providers = /d' -e '/^pi_provider = /d' -e '/^pi_model = /d' orbi.toml && cat >> orbi.toml <<'EOF'
+cd ~/.orbi/src && mkdir -p .orbi && printf '%s\n' 'ZAI_API_KEY=replace-with-your-key' > .orbi/env && chmod 600 .orbi/env && cp templates/pi-providers/z-ai.json .orbi/pi-providers.json && sed -i.bak -e '/^pi_providers = /d' -e '/^pi_provider = /d' -e '/^pi_model = /d' orbi.toml && rm -f orbi.toml.bak && cat >> orbi.toml <<'EOF'
 
 pi_providers = ".orbi/pi-providers.json"
 pi_provider = "z-ai"
 pi_model = "glm-5.3-flash"
 EOF
 ```
+
+`sed -i.bak` 是便携的原地编辑写法：BSD sed（macOS）会把紧跟在 `-i`
+后面的参数当作备份后缀，所以单独的 `-i` 会把后面的 `-e` 当成后缀，命令链
+就在那里中断；命令产生的备份随后由 `rm -f orbi.toml.bak` 删除。
 
 **成功判据：** 配置块无错误返回，文件中有 provider `z-ai`、model
 `glm-5.3-flash` 和 `apiKey` `$ZAI_API_KEY`。如果失败，确认当前目录是安装器
@@ -69,27 +73,37 @@ cd ~/.orbi/src && orbi add "Add a hello-world README line"
 
 ## 4. 启动一次交付 tick
 
-启动第一个 Runner 实例：
+启动第一个 Runner 实例。Linux 上调度器是 systemd：
 
 ```bash
 systemctl --user start orbi@1.service
 ```
 
-**成功判据：** journal 出现 Issue 被领取，随后出现 Pi 的
-`session_pending`/activity 行。模型工作几分钟时停在 `session_pending` 是正常
-现象，不要因此停止它。如果命令失败，运行
-`journalctl --user -u orbi@1.service -n 30 --no-pager`；按其中明确的
-`setup_failed`、`transport_check_failed` 或 provider 错误修复，再重新启动服务。
+macOS 上调度器是 launchd，第一个实例的 label 是 `org.orbi.runner.1`；
+下面这条就是 Orbi 自己为它输出的重启命令：
+
+```bash
+launchctl kickstart -k gui/$(id -u)/org.orbi.runner.1
+```
+
+**成功判据：** 运行日志出现 Issue 被领取，随后出现 Pi 的
+`session_pending`/activity 行——Linux 上是 journal（`journalctl --user -u
+orbi@1.service -n 30 --no-pager`），macOS 上是实例日志文件（`tail -n 30
+~/.orbi/src/.orbi/org.orbi.runner.1.log`）。模型工作几分钟时停在
+`session_pending` 是正常现象，不要因此停止它。如果命令失败，查看同一份日志；
+按其中明确的 `setup_failed`、`transport_check_failed` 或 provider 错误修复，
+再重新启动服务。
 
 ## 5. 看到 pull request
 
-等 journal 报告 `result=pr_opened` 后，在同一个 checkout 运行：
+等运行日志报告 `result=pr_opened` 后，在同一个 checkout 运行：
 
 ```bash
 cd ~/.orbi/src && gh pr list --state open --search '"Add a hello-world README line"' --limit 10 --json number,title,url
 ```
 
 **成功判据：** 输出包含刚才 Issue 的标题和 PR URL。这就是可见结果：你的第一个
-Issue 已经变成 PR。如果列表为空，查看最后的服务日志：
-`journalctl --user -u orbi@1.service -n 50 --no-pager`；`ai-blocked` 表示
+Issue 已经变成 PR。如果列表为空，查看最后的运行日志：Linux 用
+`journalctl --user -u orbi@1.service -n 50 --no-pager`，macOS 用
+`tail -n 50 ~/.orbi/src/.orbi/org.orbi.runner.1.log`；`ai-blocked` 表示
 运行带着明确故障停止，而不是静默成功。
