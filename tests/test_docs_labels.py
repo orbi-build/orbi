@@ -140,9 +140,14 @@ def test_security_documents_recovery_scene_contract():
         assert "derived" in text or "推导" in text, (
             f"docs/{slug} must say branch/worktree are derived"
         )
-    # The scene comment prefix is the real code contract (orbi.scene
-    # owns it since Issue #786).
-    assert scene_mod.OPENED_PR_PREFIX == "Orbi opened PR: "
+    # The versioned scene block beside that readable text is the real
+    # code contract (orbi.scene owns it since Issue #786; the pre-v0.5.2
+    # text grammar next to it is gone, Issue #2068).
+    assert scene_mod.render(scene_mod.Scene(
+        run_id="a1b2c3d4", base_branch="main", base_sha="abc123def456",
+        pr_url="https://github.com/o/r/pull/1",
+    )).startswith("<!-- orbi:scene:v1 {")
+    assert "orbi:scene:v1" in docs_page("security")
     # The PR body run marker is part of the documented contract.
     assert "orbi:run=" in docs_page("workflow")
 

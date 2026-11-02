@@ -166,11 +166,11 @@ def parse_pr_comment(body: str) -> scene.Scene | None:
     """Parse one `Orbi opened PR:` comment into its scene.
 
     The v1 scene block (orbi.scene) is the machine protocol; the
-    human-readable text is the legacy fallback kept for one transition
-    version. Returns None when the body is not an
-    opened-PR comment. Fails fast when the comment is malformed:
-    resuming must recover the exact run (run id, base, PR URL), never a
-    guess. Branch and worktree are not parsed: the runner
+    human-readable text beside it is display only. The pre-v0.5.2 text
+    grammar is gone (Issue #2068), so a body without the block returns
+    None however its readable text reads. Fails fast when the block is
+    malformed: resuming must recover the exact run (run id, base, PR
+    URL), never a guess. Branch and worktree are not parsed: the runner
     derives them from its own config, the Issue number and the run id,
     so a comment can never name an arbitrary local path.
     """

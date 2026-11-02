@@ -18,6 +18,7 @@ import pytest
 
 from orbi import delivery_labels as dl
 from orbi import human_review
+from orbi import scene
 
 import orbi.failure_report as failure_report
 import orbi.runner as runner
@@ -231,8 +232,11 @@ def _scene_comments():
         {
             "body": (
                 f"<!-- orbi:run={RUN_ID} -->\n"
-                f"Orbi opened PR: {PR_URL} (base_branch=main "
-                f"base_sha={BASE_SHA} run_id={RUN_ID})"
+                + scene.render(scene.Scene(
+                    run_id=RUN_ID, base_branch="main",
+                    base_sha=BASE_SHA, pr_url=PR_URL,
+                ))
+                + f"\nOrbi opened PR: {PR_URL}"
             ),
             "authorAssociation": "OWNER",
             "author": {"login": "maintainer"},
