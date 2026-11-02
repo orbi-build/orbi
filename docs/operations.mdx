@@ -1210,10 +1210,12 @@ authoritative inventory with the exact format definitions lives in
 summary. Changes to any of them must be called out in the release notes so
 downstream automation can migrate deliberately:
 
-- **CLI:** the bare `orbi` tick and the `add`, `suggest`, `status`, `doctor`,
-  `setup`, `install-units`, `session`, `milestone set`, `notify test`,
-  `check`, and `sync-engine-source` subcommands, including `--config` and
-  the `ORBI_CONFIG` environment variable.
+- **CLI:** the bare `orbi` tick and the `add`, `suggest`, `draft`, `status`,
+  `doctor`, `setup`, `install-units`, `session`, `milestone set`,
+  `notify test`, `check`, and `sync-engine-source` subcommands, plus the
+  `fix-base`, `split` and `amend` subcommands (one per registered arity-0
+  ticket command, Issue #1930), including `--config` and the `ORBI_CONFIG`
+  environment variable.
 - **Suggestions:** the document `orbi suggest --json` prints (`repo`,
   `base_sha`, `session_dir` and up to three suggestions), the kept run
   directory `<deploy_home>/.orbi/suggest/<run_id>/` and the skill
@@ -1228,10 +1230,12 @@ downstream automation can migrate deliberately:
   at most `MAX_RUNNER_INSTANCES = 5`).
 - **In-ticket commands:** the `/orbi milestone <title>` comment on a
   milestone confirmation Issue (Issue #1290; `/milestone <title>` remains a
-  declared legacy alias, Issue #1922) and `/orbi fix-base` (Issue #1825).
+  declared legacy alias, Issue #1922), `/orbi fix-base` (Issue #1825),
+  `/orbi split` (Issue #1927) and `/orbi amend` (Issue #1929).
 - **Labels and lifecycle:** `labels.toml` together with
   `src/orbi/delivery_labels.py`, and the `ai-ready`, `ai-in-progress`,
-  `ai-pr-opened`, `ai-fix-needed`, `ai-merged`, and `ai-blocked` state machine.
+  `ai-pr-opened`, `ai-fix-needed`, `ai-awaiting-merge`, `ai-merged`, and
+  `ai-blocked` state machine.
 - **Observability:** journal lines begin with `[run_id]` and use stable event
   names such as `run_start`, `run_end`, `activity`, `heartbeat`, `resumed`,
   `run_failed`, and the startup/recovery events documented in [Logs (journal)](#logs-journal).
