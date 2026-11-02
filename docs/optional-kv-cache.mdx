@@ -27,18 +27,28 @@ directly against any OpenAI-compatible endpoint without it.
 
 ## Installation
 
-Follow the upstream repository's README for the full instructions; the
-short form (its own clone path, e.g. under your home directory):
+Follow the upstream repository's README for the full instructions. The
+committed `local-llm-kv-cache.service` hard-codes the checkout path —
+`WorkingDirectory=%h/server-ops/local-llm-kv-cache` and
+`ExecStart=/usr/bin/python3 %h/server-ops/local-llm-kv-cache/cache_proxy.py`
+— so clone it there and copy the unit from that clone:
 
 ```bash
-git clone https://github.com/xqliu/local-llm-kv-cache.git
-cd local-llm-kv-cache
+mkdir -p ~/server-ops
+git clone https://github.com/xqliu/local-llm-kv-cache.git ~/server-ops/local-llm-kv-cache
 mkdir -p ~/.config/systemd/user
-cp local-llm-kv-cache.service ~/.config/systemd/user/
+cp ~/server-ops/local-llm-kv-cache/local-llm-kv-cache.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now local-llm-kv-cache.service
 curl -fsS http://127.0.0.1:18082/health
 ```
+
+Clone elsewhere only if you also edit both the unit's `WorkingDirectory`
+and `ExecStart` lines to point at your path; left as-is with a checkout
+in another directory the unit never starts — systemd cannot enter the
+missing working directory (`Changing to the requested working directory
+failed: No such file or directory`, `status=200/CHDIR`) — and `/health`
+is unreachable.
 
 Requirements: Python 3.10+ and a llama.cpp server with slot
 save/restore enabled. Hybrid/recurrent models (e.g. Qwen3.8) need a
