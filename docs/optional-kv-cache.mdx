@@ -45,9 +45,10 @@ curl -fsS http://127.0.0.1:18082/health
 
 Clone elsewhere only if you also edit both the unit's `WorkingDirectory`
 and `ExecStart` lines to point at your path; left as-is with a checkout
-in another directory the service exits immediately (`ExecStart` cannot
-find `cache_proxy.py`: `can't open file ...: [Errno 2] No such file or
-directory`, exit status 2) and `/health` is unreachable.
+in another directory the unit never starts — systemd cannot enter the
+missing working directory (`Changing to the requested working directory
+failed: No such file or directory`, `status=200/CHDIR`) — and `/health`
+is unreachable.
 
 Requirements: Python 3.10+ and a llama.cpp server with slot
 save/restore enabled. Hybrid/recurrent models (e.g. Qwen3.8) need a

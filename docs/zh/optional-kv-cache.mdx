@@ -40,9 +40,10 @@ curl -fsS http://127.0.0.1:18082/health
 ```
 
 unit 的 `WorkingDirectory`/`ExecStart` 写死为该路径，clone 到别处必须同时
-改这两行指向你的路径；不改而把仓库放在别的目录，服务会立刻退出
-（`ExecStart` 找不到 `cache_proxy.py`：`can't open file ...: [Errno 2] No
-such file or directory`，退出码 2），`/health` 也不可达。
+改这两行指向你的路径；不改而把仓库放在别的目录，unit 根本不会启动——
+systemd 进不了不存在的 WorkingDirectory（`Changing to the requested
+working directory failed: No such file or directory`，`status=200/CHDIR`），
+`/health` 也不可达。
 
 要求：Python 3.10+ 和启用了 slot save/restore 的 llama.cpp server。
 hybrid/recurrent 模型（例如 Qwen3.8）需要带 checkpoint 持久化修复的

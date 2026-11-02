@@ -1494,12 +1494,12 @@ def test_docs_kv_cache_install_commands_match_the_unit_paths():
     `ExecStart=/usr/bin/python3 %h/server-ops/local-llm-kv-cache/cache_proxy.py`
     (verified with `gh api
     repos/xqliu/local-llm-kv-cache/contents/local-llm-kv-cache.service`,
-    lines 8-9). Cloning into the caller's current directory leaves
-    ExecStart without cache_proxy.py: the service exits immediately with
-    `can't open file ...: [Errno 2] No such file or directory` (exit
-    status 2) and `/health` is unreachable. The documented block must
-    clone to the path the unit expects and copy the unit from that
-    clone."""
+    lines 8-9). Cloning into the caller's current directory leaves the
+    unit unable to start — systemd cannot enter the missing
+    `WorkingDirectory` (`Changing to the requested working directory
+    failed: No such file or directory`, `status=200/CHDIR`) — and
+    `/health` is unreachable. The documented block must clone to the path
+    the unit expects and copy the unit from that clone."""
     text = page_text("optional-kv-cache")
     assert (
         "git clone https://github.com/xqliu/local-llm-kv-cache.git "
