@@ -1465,6 +1465,69 @@ def test_docs_document_the_five_minute_timer():
         )
 
 
+def test_docs_state_the_current_idle_recovery_limit():
+    """Issue #2077: the idle-stall recovery cap is
+    `PI_IDLE_RECOVERY_CYCLES` idle windows — `PI_IDLE_WAIT_MAX_SECONDS`
+    (3600 s) / `PI_IDLE_WARN_SECONDS` (300 s) = 12, about one hour — and
+    the terminal reason is `idle_recovery_stale_<duration>`
+    (pi_process.py: `idle_recovery_stale_{format_duration(stale)}`). The
+    pages that state the limit (operations and getting-started, EN and
+    ZH) must carry the code's own numbers, not the pre-#1089 15-minute
+    value, so an operator reading `reason=idle_recovery_stale_1h5m` in the
+    journal finds the same limit in the docs."""
+    import orbi.pi_idle as pi_idle
+
+    cycles = pi_idle.PI_IDLE_RECOVERY_CYCLES
+    window = int(pi_idle.PI_IDLE_WARN_SECONDS)
+
+    def flat(text: str) -> str:
+        # Wrap-proof: the statements span lines in the sources.
+        return re.sub(r"\s+", " ", text)
+
+    en_ops = flat(page_text("operations"))
+    zh_ops = flat((DOCS_DIR / "zh" / "operations.mdx").read_text(encoding="utf-8"))
+    en_start = flat(page_text("getting-started"))
+    zh_start = flat(
+        (DOCS_DIR / "zh" / "getting-started.mdx").read_text(encoding="utf-8")
+    )
+
+    # C1: the `run_failed` reason bullet names the real window count.
+    assert f"`PI_IDLE_RECOVERY_CYCLES` ({cycles} idle windows" in en_ops, (
+        f"operations must state PI_IDLE_RECOVERY_CYCLES = {cycles} idle windows "
+        "(pi_idle.py: PI_IDLE_WAIT_MAX_SECONDS / PI_IDLE_WARN_SECONDS)"
+    )
+    assert f"（{cycles} 个 idle 窗口" in zh_ops, (
+        f"zh/operations must state PI_IDLE_RECOVERY_CYCLES = {cycles} 个 idle 窗口"
+    )
+
+    # A7: the getting-started troubleshooting row names the real cap.
+    assert f"{cycles} × {window} s windows" in en_start, (
+        f"getting-started must state the idle-recovery cap as "
+        f"{cycles} × {window} s windows (about one hour)"
+    )
+    assert f"{cycles} 个 {window} 秒窗口" in zh_start, (
+        f"zh/getting-started must state the idle-recovery cap as "
+        f"{cycles} 个 {window} 秒窗口（约 1 小时）"
+    )
+
+    # C2: the `session_pending` scene names the current stale reason.
+    for text, page in ((en_ops, "operations"), (zh_ops, "zh/operations")):
+        assert "idle_recovery_stale_1h" in text, (
+            f"{page} must name the current idle-recovery stale reason "
+            "(idle_recovery_stale_1h…, about one hour), not 15 minutes"
+        )
+
+    # No non-release page keeps the pre-#1089 15-minute claim.
+    for path in docs_files():
+        if path.stem.startswith("release-v"):
+            continue  # frozen release history (Issue #2077 scope)
+        content = path.read_text(encoding="utf-8")
+        assert "idle_recovery_stale_15m" not in content, (
+            f"{path}: states the retired 15-minute idle-recovery cap; the "
+            f"current cap is {cycles} × {window} s idle windows (about one hour)"
+        )
+
+
 def test_docs_kv_cache_page_matches_the_upstream_port_contract():
     """The upstream proxy's CODE default port is 8081
     (cache_proxy.py: os.environ.get("PI_LLAMA_CACHE_PORT", "8081"));

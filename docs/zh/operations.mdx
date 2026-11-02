@@ -420,8 +420,9 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
   空闲（Issue #233）Runner 快速杀掉 Pi，`model_wait_dead_stale_...s`
   ——冻结的 `model_wait` 超过配置的 `model_wait_dead_seconds`（默认
   1800 秒，Issue #228）判定模型请求挂死，Runner 杀掉 Pi，
-  `idle_recovery_stale_...s`——session 连续 `PI_IDLE_RECOVERY_CYCLES`
-  （默认 3）个 idle 窗口保持空闲、Runner 杀掉 Pi，或
+  `idle_recovery_stale_<时长>`——session 连续 `PI_IDLE_RECOVERY_CYCLES`
+  （12 个 idle 窗口，即 3600 秒 / 300 秒，约 1 小时）保持空闲、
+  Runner 杀掉 Pi，或
   `provider_rate_limited`——provider 429 在本轮全部退避重试后仍失败
   （Issue #321））。
 
@@ -1140,9 +1141,11 @@ run 产物（plan、test log、session JSONL）留在任务 worktree 作为本�
 ## Run 卡在 `session_pending`：首个模型请求发出前挂死（Issue #311）
 
 **症状。** Runner 拉起 Pi 后，会话始终不创建 session 文件、也不发出
-首个模型请求。Run 停在 `session_pending`，15 分钟后被 idle-stall 恢复
-杀掉（`idle_recovery_stale_15m`），Issue 落到 `ai-blocked`——每次失败
-白烧 15 分钟 slot，且需人工重新派活。在线 provider 会中招（z.ai 与
+首个模型请求。Run 停在 `session_pending`，约 1 小时后被 idle-stall
+恢复杀掉（12 个 300 秒的空闲窗口，原因形如
+`idle_recovery_stale_1h…`），Issue 落到 `ai-blocked`——每次失败最多
+白占 1 小时 slot，且需人工重新派活。（Issue #311 当时的上限是
+15 分钟。）在线 provider 会中招（z.ai 与
 google gemini 均复现）；127.0.0.1 的本地模型不受影响。特征：session
 JSONL 路径为空，而 pi 进程还活着。
 
