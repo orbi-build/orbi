@@ -114,5 +114,8 @@ run 证据，再手动修改选择项。
 ```
 
 从 `templates/pi-providers/` 复制匹配模板，把 key 放进 `.orbi/env`（local Qwen
-使用其文档中的 dummy key），再运行 provider 校验和一次真实 `pi --print`。切换
-必须手动完成；它不会修复无效的 OpenCode key，也不会创建自动 fallback。
+使用其文档中的 dummy key），再用 `orbi check --config orbi.toml` 校验选择；
+第一次真实请求发生在第一次 run 里（用 `orbi status --follow` 跟踪）。裸
+`pi --print` 校验不了这套配置——它用 Pi 自己的 agent 目录，永远不读
+`pi_providers`。切换必须手动完成；它不会修复无效的 OpenCode key，也不会
+创建自动 fallback。
