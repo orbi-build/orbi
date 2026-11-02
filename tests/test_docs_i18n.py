@@ -607,6 +607,31 @@ def test_chinese_kv_cache_page_matches_the_upstream_port_contract():
     )
 
 
+def test_chinese_kv_cache_install_commands_match_the_unit_paths():
+    """Issue #2079: same contract as the English page — the upstream unit
+    hard-codes `WorkingDirectory=%h/server-ops/local-llm-kv-cache` and
+    `ExecStart=/usr/bin/python3 %h/server-ops/local-llm-kv-cache/cache_proxy.py`
+    (verified against the upstream repo, service file lines 8-9), so the
+    Chinese install block must clone there and copy the unit from that
+    clone, and say that cloning elsewhere needs both unit lines edited."""
+    text = zh_page_text("optional-kv-cache")
+    assert (
+        "git clone https://github.com/xqliu/local-llm-kv-cache.git "
+        "~/server-ops/local-llm-kv-cache" in text
+    ), "zh: the install command must clone to the unit's WorkingDirectory path"
+    assert (
+        "cp ~/server-ops/local-llm-kv-cache/local-llm-kv-cache.service "
+        "~/.config/systemd/user/" in text
+    ), "zh: the unit must be copied from the cloned path the unit points at"
+    assert "WorkingDirectory" in text and "ExecStart" in text, (
+        "zh: the page must say the unit's WorkingDirectory/ExecStart name "
+        "this path, so cloning elsewhere needs both lines edited"
+    )
+    assert "cd local-llm-kv-cache" not in text, (
+        "zh: the old clone-into-cwd block no longer matches the unit"
+    )
+
+
 def test_chinese_docs_document_the_uv_prerequisite_boundary():
     """Issue #156: the Chinese docs carry the same initialization
     boundary as the English page — the user installs uv (official

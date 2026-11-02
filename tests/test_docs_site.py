@@ -1488,6 +1488,39 @@ def test_docs_kv_cache_page_matches_the_upstream_port_contract():
     )
 
 
+def test_docs_kv_cache_install_commands_match_the_unit_paths():
+    """Issue #2079: the upstream unit hard-codes the clone path —
+    `WorkingDirectory=%h/server-ops/local-llm-kv-cache` and
+    `ExecStart=/usr/bin/python3 %h/server-ops/local-llm-kv-cache/cache_proxy.py`
+    (verified with `gh api
+    repos/xqliu/local-llm-kv-cache/contents/local-llm-kv-cache.service`,
+    lines 8-9). Cloning into the caller's current directory leaves
+    ExecStart without cache_proxy.py: the service exits immediately with
+    `can't open file ...: [Errno 2] No such file or directory` (exit
+    status 2) and `/health` is unreachable. The documented block must
+    clone to the path the unit expects and copy the unit from that
+    clone."""
+    text = page_text("optional-kv-cache")
+    assert (
+        "git clone https://github.com/xqliu/local-llm-kv-cache.git "
+        "~/server-ops/local-llm-kv-cache" in text
+    ), (
+        "the install command must clone to the unit's WorkingDirectory path "
+        "(~/server-ops/local-llm-kv-cache)"
+    )
+    assert (
+        "cp ~/server-ops/local-llm-kv-cache/local-llm-kv-cache.service "
+        "~/.config/systemd/user/" in text
+    ), "the unit must be copied from the cloned path the unit points at"
+    assert "WorkingDirectory" in text and "ExecStart" in text, (
+        "the page must say the unit's WorkingDirectory/ExecStart name this "
+        "path, so cloning elsewhere needs both lines edited"
+    )
+    assert "cd local-llm-kv-cache" not in text, (
+        "the old clone-into-cwd block no longer matches the unit"
+    )
+
+
 def test_readme_keeps_the_docs_site_entry():
     """Issue #183 (v0.3.0 rebrand): the root README stays the GitHub
     homepage and must carry the documentation site entry — the bound
