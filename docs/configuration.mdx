@@ -3,7 +3,7 @@ title: Configuration reference
 description: "What does every orbi.toml setting do, and what is its default?"
 ---
 
-Orbi reads `orbi.toml` from the deployment home; set `ORBI_CONFIG` to select another file. Relative paths are resolved from that file. Run `orbi check` to validate it before starting a tick.
+The installed unit reads `<deploy_home>/orbi.toml` (it sets `ORBI_CONFIG`); the CLI reads `--config PATH`, else `$ORBI_CONFIG`, else `./orbi.toml` in the current directory. A read-only command (`status`, `doctor`, `session`, `check`) given neither flag nor variable, with `./orbi.toml` absent, resolves the single installed unit's config instead. Relative paths are resolved from that file. Run `orbi check` to validate it before starting a tick.
 
 ## Repositories and paths
 

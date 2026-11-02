@@ -3,7 +3,7 @@ title: 配置参考
 description: "每个 orbi.toml 设置的作用和默认值是什么?"
 ---
 
-Orbi 从部署 home 读取 `orbi.toml`；设置 `ORBI_CONFIG` 可选择其他文件。相对路径相对该文件解析。启动 tick 前运行 `orbi check` 校验配置。
+已安装 unit 读取 `<deploy_home>/orbi.toml`（它设置了 `ORBI_CONFIG`）；CLI 依次读 `--config PATH`、`$ORBI_CONFIG`、当前目录下的 `./orbi.toml`。只读命令（`status`、`doctor`、`session`、`check`）既没给 `--config` 也没设 `ORBI_CONFIG`、且 `./orbi.toml` 不存在时，改为解析唯一已安装 unit 的 config。相对路径相对该文件解析。启动 tick 前运行 `orbi check` 校验配置。
 
 ## 仓库与路径
 
