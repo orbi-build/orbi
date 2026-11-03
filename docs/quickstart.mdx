@@ -84,10 +84,13 @@ systemctl --user start orbi@1.service
 ```
 
 On macOS the scheduler is launchd and the first instance is the label
-`org.orbi.runner.1`; this is the restart hint Orbi itself prints for it:
+`org.orbi.runner.1`. Start it without `-k`: launchctl(1) makes `kickstart`
+start the job only if it is not already running, while `-k` kills a running
+instance first — and the 300-second timer may already be delivering the Issue
+from step 3:
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/org.orbi.runner.1
+launchctl kickstart gui/$(id -u)/org.orbi.runner.1
 ```
 
 **Success:** the run log shows the Issue being claimed and then a Pi
