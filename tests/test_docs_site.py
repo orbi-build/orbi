@@ -18,6 +18,7 @@ when a doc (in any language) carries a personal absolute path, an
 unimplemented feature, or the stale 15-minute timer.
 """
 from orbi import config as config_domain
+from orbi import git_transport
 import inspect
 import json
 import re
@@ -1464,6 +1465,31 @@ def test_docs_document_the_uv_prerequisite_boundary():
         "setup's uv-missing failure example must carry the actionable "
         "install guidance"
     )
+
+
+def test_setup_transport_failure_examples_match_the_printed_messages():
+    """Issue #2112: the setup page's transport failure examples must be
+    the tail `git_transport._probe_failure` really builds, so a user can
+    grep the log for the example text. The variable parts (the remote URL
+    and the probe's stderr) stay as placeholders; everything after them is
+    byte-exact, in both languages."""
+    detail = "<probe detail>"
+    expected = {
+        "ssh": git_transport._probe_failure(
+            "ssh", "git@github.com:owner/repo.git", detail,
+        ),
+        "https": git_transport._probe_failure(
+            "https", "https://github.com/owner/repo.git", detail,
+        ),
+    }
+    for slug in ("setup", "zh/setup"):
+        text = page_text(slug)
+        for mode, message in expected.items():
+            tail = message.split(detail, 1)[1]
+            assert tail in text, (
+                f"docs/{slug}.mdx's {mode} failure example must end in "
+                f"the printed tail {tail!r} (Issue #2112)"
+            )
 
 
 def test_docs_document_the_git_transport_boundary():
