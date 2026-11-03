@@ -152,6 +152,43 @@ def test_telegram_chat_id_links_the_page_that_documents_it():
         )
 
 
+def test_the_config_row_points_the_field_reference_at_configuration():
+    """Issue #2110: the Config row sent the reader to Getting started for
+    the `orbi.toml` field reference, but neither getting-started page
+    documents a single field (the field table lives on Configuration). The
+    row's field reference links Configuration in each language, no link in
+    the row points at Getting started, and the target really holds the
+    field table."""
+    cases = (
+        (
+            PUBLIC_CONTRACTS,
+            "Config",
+            "documented in [Configuration](/configuration)",
+            CONFIGURATION,
+        ),
+        (
+            ZH_PUBLIC_CONTRACTS,
+            "配置",
+            "[配置](/zh/configuration) 中记录的",
+            ZH_CONFIGURATION,
+        ),
+    )
+    for path, row_name, reference, target in cases:
+        row = _inventory_row(path.read_text(encoding="utf-8"), row_name)
+        assert reference in row, (
+            f"{path} must point the orbi.toml field reference at "
+            f"Configuration ({reference!r}): {row}"
+        )
+        assert "getting-started" not in row, (
+            f"{path} {row_name} row must not send the field reference to "
+            f"Getting started: {row}"
+        )
+        target_text = target.read_text(encoding="utf-8")
+        assert "| Key | Type | Default | Allowed values | Meaning |" in target_text, (
+            f"{target} must carry the orbi.toml field table (the link target)"
+        )
+
+
 def test_status_contract_documents_scope_attribution_and_cycles():
     """Scope (--follow vs --repo/--issue), attribution (the full worktree
     naming convention, session/activity records) and the two read cycles
