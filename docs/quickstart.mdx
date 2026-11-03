@@ -93,11 +93,15 @@ launchctl kickstart -k gui/$(id -u)/org.orbi.runner.1
 **Success:** the run log shows the Issue being claimed and then a Pi
 `session_pending`/activity line — the journal on Linux (`journalctl --user -u
 orbi@1.service -n 30 --no-pager`), the instance log file on macOS (`tail -n 30
-~/.orbi/src/.orbi/org.orbi.runner.1.log`). `session_pending` is normal while
-the model is working—do not stop it just because it remains there for a few
-minutes. If the command fails, read that same log; fix the exact
-`setup_failed`, `transport_check_failed`, or provider error it names, then
-start the service again.
+~/.orbi/src/.orbi/org.orbi.runner.1.log`). `session_pending` means Pi has
+started but has not created its session file yet — the first startup
+sub-phase, not a sign that the model is working. Follow the journal's startup
+lines `process_spawned`, `session_created` and `first_request_started` to see
+which milestone the run reached; once the session exists but its first
+response has not arrived, the phase is `request_pending`. If the command
+fails, read that same log; fix the exact `setup_failed`,
+`transport_check_failed`, or provider error it names, then start the service
+again.
 
 ## 5. See the pull request
 

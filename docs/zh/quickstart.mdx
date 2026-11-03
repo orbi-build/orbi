@@ -89,10 +89,13 @@ launchctl kickstart -k gui/$(id -u)/org.orbi.runner.1
 **成功判据：** 运行日志出现 Issue 被领取，随后出现 Pi 的
 `session_pending`/activity 行——Linux 上是 journal（`journalctl --user -u
 orbi@1.service -n 30 --no-pager`），macOS 上是实例日志文件（`tail -n 30
-~/.orbi/src/.orbi/org.orbi.runner.1.log`）。模型工作几分钟时停在
-`session_pending` 是正常现象，不要因此停止它。如果命令失败，查看同一份日志；
-按其中明确的 `setup_failed`、`transport_check_failed` 或 provider 错误修复，
-再重新启动服务。
+~/.orbi/src/.orbi/org.orbi.runner.1.log`）。`session_pending` 表示
+Pi 已启动但还没创建 session 文件，是启动的第一个子阶段，并非模型正在工作。
+请按 journal 里的启动行 `process_spawned`、`session_created` 和
+`first_request_started` 确认 run 走到了哪个里程碑；session 已存在但首个响应
+还没到达时，phase 是 `request_pending`。如果命令失败，查看同一份日志；按其中
+明确的 `setup_failed`、`transport_check_failed` 或 provider 错误修复，再重新
+启动服务。
 
 ## 5. 看到 pull request
 
