@@ -30,6 +30,7 @@ import pytest
 import orbi.runner as runner
 import orbi.release_run as release_run
 import orbi.cli as cli
+import orbi.pi_activity as pi_activity
 from orbi.ticket_command_registry import ticket_commands
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -673,6 +674,38 @@ def test_quickstart_commands_work_on_macos():
         assert "~/.orbi/src/.orbi/org.orbi.runner.1.log" in text, (
             f"{page}: must carry the launchd instance log path"
         )
+
+
+def test_quickstart_describes_session_pending_as_the_startup_sub_phase(tmp_path):
+    """Issue #2111: `session_pending` is the startup sub-phase in which Pi
+    has been spawned but has not created its session file yet — the engine
+    only reports it while `SessionWatcher` follows no session file
+    (`src/orbi/pi_activity.py`), never "the model is working". Both
+    quickstart pages must say that and point the reader at the journal
+    startup milestones the provider pages already document."""
+    # The engine contract these pages describe, asserted by one real call.
+    state = pi_activity.SessionWatcher(tmp_path).poll()
+    assert state["phase"] == "session_pending", (
+        f"the docs contract calls this phase session_pending, engine sent {state!r}"
+    )
+    assert state["session_file"] is None
+    en = (DOCS_DIR / "quickstart.mdx").read_text(encoding="utf-8")
+    zh = (DOCS_DIR / "zh" / "quickstart.mdx").read_text(encoding="utf-8")
+    # Compare on unwrapped prose: the page wraps at ~78 columns.
+    assert "Pi has started but has not created its session file yet" in " ".join(en.split()), (
+        "the EN quickstart must define session_pending the way the engine does"
+    )
+    assert "Pi 已启动但还没创建 session 文件" in zh.replace("\n", ""), (
+        "the ZH quickstart must define session_pending the way the engine does"
+    )
+    for page, text in ((DOCS_DIR / "quickstart.mdx", en), (DOCS_DIR / "zh" / "quickstart.mdx", zh)):
+        for milestone in (
+            "process_spawned", "session_created", "first_request_started", "request_pending",
+        ):
+            assert milestone in text, f"{page}: must point at the journal line {milestone}"
+    # The stale claim #2111 removes: the phase does not mean the model works.
+    assert "while the model is working" not in en
+    assert "模型工作" not in zh
 
 
 def test_docs_navigation_matches_the_actual_pages_exactly():
