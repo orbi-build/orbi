@@ -253,7 +253,7 @@ jobs:
       # Exact pin (the ci.yml mint pin rationale applies: a moving tag
       # races the registry). Upgrading is a deliberate one-line change.
       - name: Publish to PyPI (Trusted Publishing)
-        uses: pypa/gh-action-pypi-publish@v1.14.2
+        uses: pypa/gh-action-pypi-publish@v1.14.3
 
   verify-pypi:
     needs: publish
