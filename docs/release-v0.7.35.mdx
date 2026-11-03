@@ -1,0 +1,57 @@
+---
+title: "v0.7.35 release (latest)"
+description: "Orbi v0.7.35 release notes: Fidelity pass revises titles and bodies only; Issue count and after links stay the drafter's and 16 more changes."
+---
+
+`v0.7.35` was published 2026-11-03T00:08:36Z as the GitHub Release [v0.7.35](https://github.com/orbi-build/orbi/releases/tag/v0.7.35).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.7.35` | annotated tag `313500fe0140b49d97025ed079c144a84e741470` | commit `9dd487f587b36360d625dc9696f4445253f051a9` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Fidelity pass revises titles and bodies only; Issue count and after links stay the drafter's ([Issue #2085](https://github.com/orbi-build/orbi/issues/2085); [PR #2101](https://github.com/orbi-build/orbi/pull/2101))
+- public-contracts.mdx and zh/public-contracts.mdx link telegram_chat_id to the Configuration page that documents it, EN to /configuration and ZH to /zh/configuration. ([Issue #2099](https://github.com/orbi-build/orbi/issues/2099); [PR #2107](https://github.com/orbi-build/orbi/pull/2107))
+- The Chinese index operations card links the Chinese event reference (href="/zh/operations#事件参考") like every other card on the Chinese home page links to /zh/... ([Issue #2100](https://github.com/orbi-build/orbi/issues/2100); [PR #2108](https://github.com/orbi-build/orbi/pull/2108))
+
+### Reliability and recovery
+
+- The example config's max_concurrency comment states the real allowed range of 1–5 (MAX_RUNNER_INSTANCES) instead of 1 or 2. ([Issue #2088](https://github.com/orbi-build/orbi/issues/2088); [PR #2104](https://github.com/orbi-build/orbi/pull/2104))
+
+### Documentation
+
+- docs: v0.7.34 upgrade note for the dropped pre-v0.5.2 scene grammar ([PR #2072](https://github.com/orbi-build/orbi/pull/2072))
+- docs: Quickstart commands work on macOS ([Issue #2074](https://github.com/orbi-build/orbi/issues/2074); [PR #2089](https://github.com/orbi-build/orbi/pull/2089))
+- docs: Setup page matches what `orbi setup` does ([Issue #2076](https://github.com/orbi-build/orbi/issues/2076); [PR #2090](https://github.com/orbi-build/orbi/pull/2090))
+- docs: Docs state the current idle-recovery limit ([Issue #2077](https://github.com/orbi-build/orbi/issues/2077); [PR #2091](https://github.com/orbi-build/orbi/pull/2091))
+- docs: Provider pages validate the provider Orbi actually uses ([Issue #2078](https://github.com/orbi-build/orbi/issues/2078); [PR #2092](https://github.com/orbi-build/orbi/pull/2092))
+- docs: Optional KV cache install commands match the unit file ([Issue #2079](https://github.com/orbi-build/orbi/issues/2079); [PR #2093](https://github.com/orbi-build/orbi/pull/2093))
+- docs: Workflow page matches v0.7.34 behavior ([Issue #2080](https://github.com/orbi-build/orbi/issues/2080); [PR #2094](https://github.com/orbi-build/orbi/pull/2094))
+- docs: Operations reference lists the full public surface ([Issue #2081](https://github.com/orbi-build/orbi/issues/2081); [PR #2095](https://github.com/orbi-build/orbi/pull/2095))
+- docs: Getting started and Configuration match v0.7.34 ([Issue #2082](https://github.com/orbi-build/orbi/issues/2082); [PR #2096](https://github.com/orbi-build/orbi/pull/2096))
+- A user manually following the README (EN and ZH) setup edits source_repos before running orbi setup, so setup no longer validates the OWNER/PILOT-REPO placeholder and completes with a working config. ([Issue #2086](https://github.com/orbi-build/orbi/issues/2086); [PR #2102](https://github.com/orbi-build/orbi/pull/2102))
+- The Chinese README's link to external single-repo mode jumps to the correct 「外部单仓库模式（deploy_home）」 section instead of not moving. ([Issue #2087](https://github.com/orbi-build/orbi/issues/2087); [PR #2103](https://github.com/orbi-build/orbi/pull/2103))
+- Security docs name the real GitHub credential (gh's token, GH_TOKEN in the Docker image) instead of the nonexistent ORBI_GITHUB_TOKEN, in docs/security.mdx and docs/zh/security.mdx. ([Issue #2097](https://github.com/orbi-build/orbi/issues/2097); [PR #2105](https://github.com/orbi-build/orbi/pull/2105))
+- Testing docs list every check CI runs, including python3 tools/patch_ratchet.py and python3 tools/size_ratchet.py, so a local run matches CI, in docs/testing.mdx and docs/zh/testing.mdx. ([Issue #2098](https://github.com/orbi-build/orbi/issues/2098); [PR #2106](https://github.com/orbi-build/orbi/pull/2106))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
+
+- tag: `v0.7.35`
+- release commit: `9dd487f587b36360d625dc9696f4445253f051a9`
+- release task: Issue #2084
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 9dd487f587b36360d625dc9696f4445253f051a9 (the #268 CI-wait gate; no local test execution)
+
+
+Released by [Orbi](https://orbi.build/?ref=prfoot-orbi-build)
