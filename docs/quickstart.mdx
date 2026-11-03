@@ -93,9 +93,6 @@ from step 3:
 launchctl kickstart gui/$(id -u)/org.orbi.runner.1
 ```
 
-The `-k` form is the restart hint Orbi prints after a configuration change;
-use it then, never for the first start.
-
 **Success:** the run log shows the Issue being claimed and then a Pi
 `session_pending`/activity line — the journal on Linux (`journalctl --user -u
 orbi@1.service -n 30 --no-pager`), the instance log file on macOS (`tail -n 30

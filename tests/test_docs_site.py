@@ -649,8 +649,8 @@ def test_quickstart_commands_work_on_macos():
     Issue #2109: the FIRST start never passes `-k`. By step 4 the job is
     already loaded and fires every 300 s, so it may be delivering the Issue
     from step 3; launchctl(1) makes `kickstart` without `-k` start the job
-    only if it is not already running, while `-k` kills it first. The
-    `-k` form is the post-config-change restart hint, not the first start."""
+    only if it is not already running, while `-k` kills it first — so the
+    first start carries the bare form and the pages cite launchctl(1)."""
     for page in (DOCS_DIR / "quickstart.mdx", DOCS_DIR / "zh" / "quickstart.mdx"):
         text = page.read_text(encoding="utf-8")
         assert (

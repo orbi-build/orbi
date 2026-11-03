@@ -88,8 +88,6 @@ Issue 了：
 launchctl kickstart gui/$(id -u)/org.orbi.runner.1
 ```
 
-带 `-k` 的是改完配置后的重启命令，Orbi 配置变更后才会打印它；首次启动不要用它。
-
 **成功判据：** 运行日志出现 Issue 被领取，随后出现 Pi 的
 `session_pending`/activity 行——Linux 上是 journal（`journalctl --user -u
 orbi@1.service -n 30 --no-pager`），macOS 上是实例日志文件（`tail -n 30
