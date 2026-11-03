@@ -79,12 +79,16 @@ cd ~/.orbi/src && orbi add "Add a hello-world README line"
 systemctl --user start orbi@1.service
 ```
 
-macOS 上调度器是 launchd，第一个实例的 label 是 `org.orbi.runner.1`；
-下面这条就是 Orbi 自己为它输出的重启命令：
+macOS 上调度器是 launchd，第一个实例的 label 是 `org.orbi.runner.1`。
+启动时不要加 `-k`：按 launchctl(1)，`kickstart` 只在该 job 尚未运行时才启动它，
+而 `-k` 会先杀掉正在运行的实例——300 秒的定时器可能已经在交付第 3 步创建的那个
+Issue 了：
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/org.orbi.runner.1
+launchctl kickstart gui/$(id -u)/org.orbi.runner.1
 ```
+
+带 `-k` 的是改完配置后的重启命令，Orbi 配置变更后才会打印它；首次启动不要用它。
 
 **成功判据：** 运行日志出现 Issue 被领取，随后出现 Pi 的
 `session_pending`/activity 行——Linux 上是 journal（`journalctl --user -u
