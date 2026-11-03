@@ -240,8 +240,8 @@ setup_failed reason=insufficient permission for owner/repo: viewerPermission='RE
 setup_failed reason=installation token cannot manage labels in owner/repo: ... (the GitHub App needs the Issues read/write repository permission and must be installed on owner/repo)
 setup_failed reason=label alignment failed for owner/repo: ai-ready (gh label create failed: ...)
 setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted changes: ' M src/orbi/runner.py') — commit or stash them first: ...
-setup_failed reason=checkout check failed for /path/to/checkout: ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — fix SSH and retry
-setup_failed reason=checkout check failed for /path/to/checkout: transport_unreachable: git ls-remote https://github.com/owner/repo.git failed: ... stderr=fatal: Authentication failed — check the gh credentials (`gh auth status`) and retry
+setup_failed reason=checkout check failed for /path/to/checkout: ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — SSH is unavailable (check the SSH key / agent / network). No HTTPS fallback and no silent skip: fix SSH and retry.
+setup_failed reason=checkout check failed for /path/to/checkout: transport_unreachable: git ls-remote https://github.com/owner/repo.git failed: ... stderr=fatal: Authentication failed — the HTTPS transport is unavailable (check the gh credentials: `gh auth status` — the credential helper supplies them). No fallback and no silent skip: fix the credentials and retry.
 ```
 
 A missing prerequisite command (e.g. `uv`), a wrong repo, missing
