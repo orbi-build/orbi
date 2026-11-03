@@ -644,7 +644,13 @@ def test_quickstart_commands_work_on_macos():
     uses); BSD sed reads the `-e` after a bare `-i` as the backup suffix.
     The runner start and its log must carry the launchd commands the
     scheduler itself emits (label `org.orbi.runner.1`, instance log under
-    `<repo_dir>/.orbi/<label>.log`), not only the systemd ones."""
+    `<repo_dir>/.orbi/<label>.log`), not only the systemd ones.
+
+    Issue #2109: the FIRST start never passes `-k`. By step 4 the job is
+    already loaded and fires every 300 s, so it may be delivering the Issue
+    from step 3; launchctl(1) makes `kickstart` without `-k` start the job
+    only if it is not already running, while `-k` kills it first — so the
+    first start carries the bare form and the pages cite launchctl(1)."""
     for page in (DOCS_DIR / "quickstart.mdx", DOCS_DIR / "zh" / "quickstart.mdx"):
         text = page.read_text(encoding="utf-8")
         assert (
@@ -655,8 +661,14 @@ def test_quickstart_commands_work_on_macos():
             f"{page}: a bare sed -i -e breaks BSD sed (macOS)"
         )
         assert (
-            "launchctl kickstart -k gui/$(id -u)/org.orbi.runner.1" in text
+            "launchctl kickstart gui/$(id -u)/org.orbi.runner.1" in text
         ), f"{page}: must carry the launchd start command"
+        assert "launchctl kickstart -k" not in text, (
+            f"{page}: the first start must not kill a running tick (Issue #2109)"
+        )
+        assert "launchctl(1)" in text, (
+            f"{page}: must cite launchctl(1) for kickstart without -k"
+        )
         assert "~/.orbi/src/.orbi/org.orbi.runner.1.log" in text, (
             f"{page}: must carry the launchd instance log path"
         )
