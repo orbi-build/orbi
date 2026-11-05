@@ -64,8 +64,10 @@ treat it as content.
    Out of scope / Assumptions), so it passes the thin-ticket gate as filed.
    Keep it short and checkable; the delivery agent extends it.
 5. Order by value to the repository's users. `why` names the files or the
-   Issue that justify the suggestion — a concrete path or `#number`, never a
-   generic claim.
+   Issue that justify the suggestion — a concrete path inside the repository
+   checkout or `#number`, never a generic claim. The repository owner reads
+   `why` as written, so it never names Orbi's own input (the run directory or
+   its `context.json`).
 6. Give at most three. Give fewer only when the repository has fewer
    candidates that meet these rules. Never pad to reach three; an empty
    list is a valid answer.
