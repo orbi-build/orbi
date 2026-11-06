@@ -1,9 +1,9 @@
 """Milestone scene: active-milestone bookkeeping and the release arm (Issue #2008).
 
 Scene split out of the former `tests/test_bootstrap_runner.py` (now gone),
-moved verbatim with no behavior change: syncing the `active_milestone`
-config variable, rewriting the config line atomically (symlinks, killed
-mid-write), selecting/advancing the next milestone, the pending P0
+moved verbatim with no behavior change: rewriting the config line
+atomically (symlinks, killed mid-write), selecting/advancing the next
+milestone, the pending P0
 notification Issue, arming the matching release ticket, and the message
 language the milestone bookkeeping comment is posted in.
 
@@ -15,7 +15,6 @@ from orbi import config as config_domain
 import json
 import logging
 import os
-import subprocess
 
 import threading
 import time
@@ -29,150 +28,6 @@ import orbi.milestone as milestone
 from tests.fakes.github import FakeGh
 from seam import seam
 from tests.test_bootstrap_runner_main import _write_prompts
-
-
-def test_sync_active_milestone_variable_skips_matching_value():
-    calls = []
-
-    def command(args, **kwargs):
-        calls.append((args, kwargs))
-        return '{"name":"ORBI_ACTIVE_MILESTONE","value":"v1"}'
-
-    milestone.sync_active_milestone_variable("owner/repo", "v1", run_command=command)
-    assert len(calls) == 1
-    # The read may 404 by design (no variable yet): its generic
-    # command_failed line must stay at DEBUG (Issue #1085).
-    assert calls[0][1] == {"timeout": 30, "failure_log_level": logging.DEBUG}
-
-
-def test_sync_active_milestone_variable_patches_different_value():
-    calls = []
-
-    def command(args, **kwargs):
-        calls.append(args)
-        return '{"name":"ORBI_ACTIVE_MILESTONE","value":"v0"}' if len(calls) == 1 else "{}"
-
-    milestone.sync_active_milestone_variable("owner/repo", "v1", run_command=command)
-    assert calls[1][:5] == ["gh", "api", "-X", "PATCH", "repos/owner/repo/actions/variables/ORBI_ACTIVE_MILESTONE"]
-    assert "value=v1" in calls[1]
-
-
-def test_sync_active_milestone_variable_creates_missing_value(caplog, monkeypatch):
-    """Read 404 + a configured milestone: the real run_command path issues
-    the POST and the generic command_failed line from the 404 read stays
-    below INFO (Issue #1085)."""
-    calls = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append(list(cmd))
-        if len(calls) == 1:
-            raise subprocess.CalledProcessError(
-                1, cmd, output="",
-                stderr="gh: Not Found (HTTP 404)",
-            )
-        return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
-
-    monkeypatch.setattr(runner.subprocess, "run", fake_run)
-    with caplog.at_level(logging.DEBUG):
-        milestone.sync_active_milestone_variable("owner/repo", "v1")
-    assert calls[1][:4] == ["gh", "api", "-X", "POST"]
-    assert "value=v1" in calls[1]
-    failed = [
-        record for record in caplog.records
-        if "command_failed" in record.getMessage()
-    ]
-    assert failed and all(record.levelno == logging.DEBUG for record in failed)
-    assert "active_milestone_variable_created repo=owner/repo" in caplog.text
-
-
-def test_sync_active_milestone_variable_create_failure_is_bypassed(caplog):
-    calls = 0
-
-    def command(args, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise subprocess.CalledProcessError(1, args, stderr="HTTP 404")
-        raise RuntimeError("create denied")
-
-    with caplog.at_level("ERROR"):
-        milestone.sync_active_milestone_variable(
-            "owner/repo", "v1", run_command=command,
-        )
-
-    assert calls == 2
-    assert "active_milestone_variable_sync_failed repo=owner/repo" in caplog.text
-
-
-def test_sync_active_milestone_variable_removes_stale_value():
-    calls = []
-
-    def command(args, **kwargs):
-        calls.append(args)
-        return '{"name":"ORBI_ACTIVE_MILESTONE","value":"v0"}' if len(calls) == 1 else "{}"
-
-    milestone.sync_active_milestone_variable("owner/repo", None, run_command=command)
-    assert calls[1] == [
-        "gh", "api", "-X", "DELETE",
-        "repos/owner/repo/actions/variables/ORBI_ACTIVE_MILESTONE",
-    ]
-
-
-def test_sync_active_milestone_variable_absent_on_404(caplog, monkeypatch):
-    """Removing an already-absent variable is a scene, not a failure: the
-    read goes through the REAL run_command, its 404's generic
-    command_failed line stays at DEBUG, and the structured `absent` line
-    owns the outcome (Issue #1085)."""
-    calls = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append(list(cmd))
-        raise subprocess.CalledProcessError(
-            1, cmd,
-            output=('{"message":"Not Found",'
-                    '"documentation_url":"https://docs.github.com/rest/'
-                    'actions/variables#get-a-repository-variable",'
-                    '"status":"404"}'),
-            stderr="gh: Not Found (HTTP 404)",
-        )
-
-    monkeypatch.setattr(runner.subprocess, "run", fake_run)
-    with caplog.at_level(logging.DEBUG):
-        milestone.sync_active_milestone_variable("owner/repo", None)
-    assert calls == [
-        ["gh", "api", "repos/owner/repo/actions/variables/ORBI_ACTIVE_MILESTONE"],
-    ]
-    failed = [
-        record for record in caplog.records
-        if "command_failed" in record.getMessage()
-    ]
-    assert failed and all(record.levelno == logging.DEBUG for record in failed)
-    assert "active_milestone_variable_absent repo=owner/repo" in caplog.text
-
-
-def test_sync_active_milestone_variable_read_403_logs_sync_failed_at_error(caplog):
-    def command(args, **kwargs):
-        raise subprocess.CalledProcessError(1, args, stderr="HTTP 403")
-
-    with caplog.at_level("ERROR"):
-        milestone.sync_active_milestone_variable(
-            "owner/repo", None, run_command=command,
-        )
-    failed = [
-        record for record in caplog.records
-        if "active_milestone_variable_sync_failed" in record.getMessage()
-    ]
-    assert failed
-    assert all(record.levelno == logging.ERROR for record in failed)
-
-
-def test_sync_active_milestone_variable_failure_is_bypass(caplog):
-    def command(args, **kwargs):
-        raise RuntimeError("offline")
-
-    with caplog.at_level("ERROR"):
-        milestone.sync_active_milestone_variable("owner/repo", "v1", run_command=command)
-    assert "active_milestone_variable_sync_failed" in caplog.text
 
 
 def test_main_epic_only_queue_ends_idle_without_process_issue(

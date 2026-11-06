@@ -29,7 +29,6 @@ import orbi.review_merge as review_merge
 import orbi.run_state as run_state
 import orbi.pi_session as pi_session
 from orbi.run_fields import RunFields
-import orbi.milestone as milestone
 from orbi import language
 from orbi import progress
 from orbi.delivery_labels import (
@@ -2485,9 +2484,6 @@ def test_main_continues_to_ready_delivery_after_scene_failure(
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(
-        milestone, "sync_active_milestone_variable", lambda *a, **k: None,
-    )
     # The held slot is a real file: `main` names the selected delivery in
     # it right after selection (Issue #809).
     slot_file = tmp_path / "slot-1"
@@ -2561,7 +2557,6 @@ def test_main_ends_cleanly_after_reported_resume_failure(
     issue = {"number": 9, "title": "ship", "body": ""}
     released = []
 
-    monkeypatch.setattr(milestone, "sync_active_milestone_variable", lambda *a, **k: None)
     monkeypatch.setattr(seam, "refresh_cli_install", lambda *a, **k: None)
     monkeypatch.setattr(runner, "check_unit_drift", lambda *a, **k: None)
     monkeypatch.setattr(runner, "check_transport", lambda *a, **k: {})

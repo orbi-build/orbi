@@ -764,12 +764,6 @@ registry — in both directions (a name only in code or only in docs fails
 | `base_ci_red_merged` | the base-branch-red comment was updated to merged after the delivery landed |
 | `base_ci_red_triage` | a `/orbi fix-base` command created a CI triage Issue |
 | `active_milestone_advance_failed` | advancing the active Milestone failed |
-| `active_milestone_variable_removed` | the active_milestone repo variable was removed |
-| `active_milestone_variable_unchanged` | the active_milestone repo variable matches the config |
-| `active_milestone_variable_updated` | the active_milestone repo variable was updated |
-| `active_milestone_variable_absent` | the active_milestone repo variable is absent |
-| `active_milestone_variable_created` | the active_milestone repo variable was created |
-| `active_milestone_variable_sync_failed` | the active_milestone repo variable sync failed |
 | `release_not_claimed` | the release state machine did not claim the release Issue |
 | `release_task` | the release state machine advanced (step report) |
 | `release_resuming_run` | the release continues an interrupted run |
@@ -969,9 +963,7 @@ orbi milestone set v0.6.0 --config orbi.toml
 # active_milestone: v0.5.6 -> v0.6.0
 # repo: orbi-build/orbi
 # wrote: repo policy .github/orbi.toml
-# next: the Runner's next tick claims Issues from Milestone "v0.6.0" and
-# syncs the ORBI_ACTIVE_MILESTONE variable (verify: gh api
-# repos/orbi-build/orbi/actions/variables/ORBI_ACTIVE_MILESTONE --jq .value)
+# next: the Runner's next tick claims Issues from Milestone "v0.6.0"
 ```
 
 The `wrote:` line names the target: `repo policy .github/orbi.toml` (a
@@ -979,10 +971,9 @@ contents PUT on the repository's default branch) or `host config
 /path/to/orbi.toml`. The Milestone list read is not the only network
 call: the command also reads the repository policy, and when the policy
 declares the key it commits the rewritten blob and never touches the
-host config. The `ORBI_ACTIVE_MILESTONE` Actions variable is
-published by the Runner's next-tick preflight (the bypass contract), so
-the command's success is NOT the variable's success: verify with the
-printed `gh api` probe. Every failure exits non-zero with one
+host config. No Actions variable is written or advertised (Issue
+#2123): the CI-failure triage reads `active_milestone` from
+`.github/orbi.toml` itself. Every failure exits non-zero with one
 structured `milestone_set_failed reason=... fix=...` line on stderr and
 leaves the target untouched — a missing or duplicated title, a GitHub
 API or permission failure, neither source declaring the

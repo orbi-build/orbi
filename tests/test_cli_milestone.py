@@ -17,9 +17,10 @@ guessing. The value lands where the Runner actually reads it from (Issue
   unwritable config, a failed policy write) exits non-zero with one
   structured `milestone_set_failed reason=... fix=...` line on stderr
   and leaves the untouched target byte-identical;
-- the command does NOT sync the `ORBI_ACTIVE_MILESTONE` Actions
-  variable itself: the Runner's preflight syncs it on the next tick
-  (the bypass contract), and the success output says so.
+- the command neither syncs nor reports an `ORBI_ACTIVE_MILESTONE`
+  Actions variable: since Issue #2123 the engine writes no Actions
+  variable at all (the CI triage reads `.github/orbi.toml` itself), so
+  the success output names only the claim scope the next tick applies.
 
 The command writes to GitHub only when the repository policy declares
 `active_milestone` (the contents PUT); the network calls are stubbed at
@@ -160,10 +161,13 @@ def test_milestone_set_success_rewrites_only_that_line(
     assert f"repo: {REPO}" in out
     # The output names the target actually written (Issue #1306).
     assert f"wrote: host config {config_path}" in out
-    # The variable is NOT synced by this command: the next Runner tick
-    # does it (the bypass contract) and the output makes that checkable.
-    assert "ORBI_ACTIVE_MILESTONE" in out
-    assert "next tick" in out
+    # Issue #2123: no Actions variable is written or advertised — the
+    # success output names only the claim scope the next tick applies.
+    assert "ORBI_ACTIVE_MILESTONE" not in out
+    assert "actions/variables" not in out
+    assert (
+        'next: the Runner\'s next tick claims Issues from Milestone "v0.6.0"'
+    ) in out
     # No repository policy: the host config is the only place written
     # (exactly one read-only Milestone list, plus the policy probe).
     assert len(_policy_reads(calls)) == 1

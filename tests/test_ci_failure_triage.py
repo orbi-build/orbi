@@ -224,6 +224,24 @@ def gh(monkeypatch):
     return fake
 
 
+@pytest.fixture(autouse=True)
+def repo_config(monkeypatch, tmp_path):
+    """The repository policy file the triage reads (Issue #2123).
+
+    `.github/orbi.toml` on the default branch — the file the workflow's
+    checkout carries and the same file the engine reads `active_milestone`
+    from — is now the triage's milestone source; the old
+    `ORBI_ACTIVE_MILESTONE` repository variable is gone. The module points
+    at a temp copy whose default has NO `active_milestone` line (the
+    unconfigured scene every `main()` test starts from); a milestone test
+    writes its own line and returns the path.
+    """
+    path = tmp_path / "orbi.toml"
+    path.write_text("clarify_thin_tickets = true\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "REPO_CONFIG_PATH", path)
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Fingerprint (the stable dedup key)
 # ---------------------------------------------------------------------------
@@ -498,8 +516,12 @@ def test_ticket_body_states_the_outcome_and_acceptance(gh, monkeypatch, tmp_path
     ) in body
 
 
-def test_active_milestone_title_resolves_to_open_milestone_number(gh, monkeypatch):
-    monkeypatch.setenv("ORBI_ACTIVE_MILESTONE", "v0.3.1")
+def test_active_milestone_from_the_repository_config_resolves_to_milestone_number(
+    repo_config, gh,
+):
+    """Issue #2123: the title comes from `.github/orbi.toml` on the default
+    branch (the file the engine reads), not from an Actions variable."""
+    repo_config.write_text('active_milestone = "v0.3.1"\n', encoding="utf-8")
     gh.routes[ep_milestones()] = [
         {"number": 7, "title": "v0.3.1", "state": "open"},
     ]
@@ -508,22 +530,49 @@ def test_active_milestone_title_resolves_to_open_milestone_number(gh, monkeypatc
     ) == 7
 
 
-def test_milestone_lookup_failure_logs_fallback_and_returns_none(gh, monkeypatch, capsys):
-    monkeypatch.setenv("ORBI_ACTIVE_MILESTONE", "v0.3.1")
+def test_repository_config_without_active_milestone_line_is_the_no_milestone_path(
+    repo_config, gh, capsys,
+):
+    """The file exists but declares no `active_milestone`: the current
+    "no milestone" behaviour is kept — one structured fallback line and no
+    Milestone lookup at all."""
+    assert mod.resolve_active_milestone("orbi-run", "test-repo") is None
+    assert "reason=active_milestone_not_configured" in capsys.readouterr().err
+    assert gh.calls == []
+
+
+def test_missing_repository_config_logs_fallback(repo_config, gh, capsys):
+    repo_config.unlink()
+    assert mod.resolve_active_milestone("orbi-run", "test-repo") is None
+    assert "reason=repo_config_missing" in capsys.readouterr().err
+    assert gh.calls == []
+
+
+def test_unparsable_repository_config_logs_fallback(repo_config, gh, capsys):
+    repo_config.write_text("active_milestone = [\n", encoding="utf-8")
+    assert mod.resolve_active_milestone("orbi-run", "test-repo") is None
+    assert "reason=repo_config_invalid" in capsys.readouterr().err
+    assert gh.calls == []
+
+
+def test_milestone_lookup_failure_logs_fallback_and_returns_none(
+    repo_config, gh, capsys,
+):
+    repo_config.write_text('active_milestone = "v0.3.1"\n', encoding="utf-8")
     gh.error = (ep_milestones(), "HTTP 403")
     assert mod.resolve_active_milestone("orbi-run", "test-repo") is None
     assert "milestone_fallback" in capsys.readouterr().err
 
 
-def test_malformed_milestone_response_logs_fallback(gh, monkeypatch, capsys):
-    monkeypatch.setenv("ORBI_ACTIVE_MILESTONE", "v0.3.1")
+def test_malformed_milestone_response_logs_fallback(repo_config, gh, capsys):
+    repo_config.write_text('active_milestone = "v0.3.1"\n', encoding="utf-8")
     gh.routes[ep_milestones()] = {"milestones": []}
     assert mod.resolve_active_milestone("orbi-run", "test-repo") is None
     assert "reason=malformed_response" in capsys.readouterr().err
 
 
-def test_ambiguous_milestone_match_logs_fallback(gh, monkeypatch, capsys):
-    monkeypatch.setenv("ORBI_ACTIVE_MILESTONE", "v0.3.1")
+def test_ambiguous_milestone_match_logs_fallback(repo_config, gh, capsys):
+    repo_config.write_text('active_milestone = "v0.3.1"\n', encoding="utf-8")
     gh.routes[ep_milestones()] = [
         {"number": 7, "title": "v0.3.1"},
         {"number": 8, "title": "v0.3.1"},
@@ -532,8 +581,10 @@ def test_ambiguous_milestone_match_logs_fallback(gh, monkeypatch, capsys):
     assert "reason=ambiguous_or_malformed" in capsys.readouterr().err
 
 
-def test_create_issue_payload_includes_resolved_milestone(gh, monkeypatch, tmp_path):
-    monkeypatch.setenv("ORBI_ACTIVE_MILESTONE", "v0.3.1")
+def test_create_issue_payload_includes_resolved_milestone(
+    repo_config, gh, monkeypatch, tmp_path,
+):
+    repo_config.write_text('active_milestone = "v0.3.1"\n', encoding="utf-8")
     write_event(monkeypatch, tmp_path, run_event())
     gh.routes[ep_milestones()] = [{"number": 7, "title": "v0.3.1", "state": "open"}]
     gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
@@ -542,10 +593,10 @@ def test_create_issue_payload_includes_resolved_milestone(gh, monkeypatch, tmp_p
     assert gh.calls_to(ep_create(), "POST")[0]["payload"]["milestone"] == 7
 
 
-def test_missing_active_milestone_logs_fallback_and_creates_without_milestone(
-    gh, monkeypatch, tmp_path, capsys
+def test_declared_milestone_not_found_logs_fallback_and_creates_without_milestone(
+    repo_config, gh, monkeypatch, tmp_path, capsys,
 ):
-    monkeypatch.setenv("ORBI_ACTIVE_MILESTONE", "v9.9.9")
+    repo_config.write_text('active_milestone = "v9.9.9"\n', encoding="utf-8")
     write_event(monkeypatch, tmp_path, run_event())
     gh.routes[ep_milestones()] = [{"number": 7, "title": "v0.3.1", "state": "open"}]
     gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
@@ -554,6 +605,21 @@ def test_missing_active_milestone_logs_fallback_and_creates_without_milestone(
     payload = gh.calls_to(ep_create(), "POST")[0]["payload"]
     assert "milestone" not in payload
     assert "milestone_fallback" in capsys.readouterr().err
+
+
+def test_repository_config_without_active_milestone_creates_without_milestone(
+    repo_config, gh, monkeypatch, tmp_path, capsys,
+):
+    """The end-to-end no-line scene: the Issue is still filed, without a
+    milestone, and no Milestone list request is made at all."""
+    write_event(monkeypatch, tmp_path, run_event())
+    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
+    gh.routes[ep_issues_list()] = []
+    mod.main()
+    payload = gh.calls_to(ep_create(), "POST")[0]["payload"]
+    assert "milestone" not in payload
+    assert gh.calls_to(ep_milestones(), "GET") == []
+    assert "reason=active_milestone_not_configured" in capsys.readouterr().err
 
 
 def test_two_different_job_failures_create_two_independent_issues(

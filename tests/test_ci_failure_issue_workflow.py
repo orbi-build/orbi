@@ -11,6 +11,7 @@ fake success (continue-on-error / `|| true`) — the review of the previous
 attempt (closed PR #108) rejected exactly that: a triage script without its
 Action entry is no automation at all.
 """
+import importlib.util
 from pathlib import Path
 
 import yaml
@@ -154,14 +155,44 @@ def test_token_is_the_workflow_token():
     ), f"GH_TOKEN must be the workflow token, step envs: {envs!r}"
 
 
-def test_active_milestone_comes_only_from_repository_variable():
+def test_active_milestone_comes_from_the_repository_config_file():
+    """Issue #2123: the milestone is read from `.github/orbi.toml` on the
+    default branch — the file the workflow's checkout carries and the file
+    the engine itself reads — never from an `ORBI_ACTIVE_MILESTONE` Actions
+    variable (that variable no longer exists, so the App needs no "Actions
+    variables: write" permission). The checkout must be the default branch:
+    no `ref:` / `repository:` override."""
+    text = WORKFLOW_FILE.read_text(encoding="utf-8")
     envs = [
         step.get("env", {}) for step in steps_of(load_workflow())
         if isinstance(step.get("env"), dict)
     ]
-    milestone_values = [env.get("ORBI_ACTIVE_MILESTONE") for env in envs]
-    assert milestone_values == ["${{ vars.ORBI_ACTIVE_MILESTONE }}"]
-    assert "v0.3.1" not in WORKFLOW_FILE.read_text(encoding="utf-8")
+    for env in envs:
+        assert "ORBI_ACTIVE_MILESTONE" not in env, envs
+    assert "vars.ORBI_ACTIVE_MILESTONE" not in text
+    checkouts = [
+        step for step in steps_of(load_workflow())
+        if str(step.get("uses", "")).startswith("actions/checkout")
+    ]
+    assert len(checkouts) == 1, checkouts
+    checkout_with = checkouts[0].get("with") or {}
+    assert "ref" not in checkout_with, checkout_with
+    assert "repository" not in checkout_with, checkout_with
+
+
+def test_triage_script_reads_the_checked_out_repository_policy():
+    """The script's default milestone source is the repository policy file
+    the checkout provides, and the script carries no variable read at all."""
+    spec = importlib.util.spec_from_file_location("ci_failure_triage", TRIAGE_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.REPO_CONFIG_PATH == REPO_ROOT / ".github" / "orbi.toml"
+    # The variable read that used to supply the title is gone: the title is
+    # a line in the policy file, so no environment variable is consulted.
+    assert (
+        'os.environ.get("ORBI_ACTIVE_MILESTONE")'
+        not in TRIAGE_SCRIPT.read_text(encoding="utf-8")
+    )
 
 
 def test_no_step_can_fake_success():

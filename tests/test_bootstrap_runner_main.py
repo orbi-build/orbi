@@ -144,6 +144,37 @@ def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
     assert runner.main(["--config", str(config)]) == 0
 
 
+def test_tick_makes_no_actions_variables_request(monkeypatch, tmp_path):
+    """Issue #2123: one tick never requests `repos/{repo}/actions/variables`.
+
+    The engine used to create/read/patch/delete the `ORBI_ACTIVE_MILESTONE`
+    Actions variable on every tick, for a workflow only THIS repository has;
+    a delivered repository got a variable nobody read, and that write was the
+    only reason the GitHub App needed "Actions variables: write". The whole
+    path is gone, so a tick against a repository makes no such request at
+    all: every `run_command` the tick performs is recorded at the subprocess
+    seam and none of them targets the Actions-variables endpoint.
+    """
+    commands: list[list[str]] = []
+
+    def recording(command, **kwargs):
+        commands.append(list(command))
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", recording)
+    monkeypatch.setattr(claim, "pick_next_delivery", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "log_ready_outside_milestone", lambda *a, **k: False)
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    assert runner.main(["--config", str(config)]) == 0
+    variable_requests = [
+        command for command in commands
+        if "actions/variables" in " ".join(command)
+    ]
+    assert variable_requests == [], commands
+
+
 def test_main_passes_configured_active_milestone_to_the_claim_scan(
     monkeypatch, tmp_path,
 ):
@@ -332,10 +363,6 @@ def _stub_idle_milestone_path(monkeypatch, outcome):
     """Stub the idle Milestone path down to one resolved outcome."""
     monkeypatch.setitem(
         milestone.__dict__, "validate_active_milestone", lambda *args, **k: None,
-    )
-    monkeypatch.setitem(
-        milestone.__dict__, "sync_active_milestone_variable",
-        lambda *args, **kwargs: None,
     )
     monkeypatch.setitem(
         milestone.__dict__, "reconcile_milestone_on_idle",

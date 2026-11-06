@@ -2522,13 +2522,6 @@ def _preflight(config: config_domain.RunnerConfig) -> None:
     for repo in config.source_repos:
         milestone, _ = claim._repo_scan_keys(config, repo, config.active_milestone)
         milestone_bookkeeping.validate_active_milestone(repo, milestone)
-    # Publish the configured active milestone for the CI
-    # triage workflow. This is a bypass; delivery must continue when the
-    # variable API is unavailable.
-    milestone_bookkeeping.sync_active_milestone_variable(
-        config.source_repos[0], config.active_milestone,
-        run_command=run_command,
-    )
     # Editable CLI install refresh: BEFORE any slot or
     # claim the tool env's editable metadata must match the checkout's
     # packaging inputs — a merged packaging change (entry point,

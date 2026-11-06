@@ -448,12 +448,6 @@ JOURNAL_EVENTS: dict[str, str] = {
         "a finished Milestone still needs its release ticket confirmed"
     ),
     "active_milestone_advance_failed": "advancing the active Milestone failed",
-    "active_milestone_variable_removed": "the active_milestone repo variable was removed",
-    "active_milestone_variable_unchanged": "the active_milestone repo variable matches the config",
-    "active_milestone_variable_updated": "the active_milestone repo variable was updated",
-    "active_milestone_variable_absent": "the active_milestone repo variable is absent",
-    "active_milestone_variable_created": "the active_milestone repo variable was created",
-    "active_milestone_variable_sync_failed": "the active_milestone repo variable sync failed",
     # The `<name>_command_applied` / `<name>_command_failed` pair of every
     # in-ticket command is registered by `register_command`
     # (`ticket_command.py`, Issue #1922), never written out here: a new
