@@ -535,7 +535,7 @@ def index_open_issues(owner: str, repo: str) -> dict[str, dict]:
 
 
 def active_milestone_title(path: Path | None = None) -> str | None:
-    """The ``active_milestone`` declared by `.github/orbi.toml` (Issue #2123).
+    """The `active_milestone` declared by `.github/orbi.toml` (Issue #2123).
 
     Read from the repository policy file the workflow's checkout carries —
     the default branch (a `workflow_run` checkout has no `ref:` override),
@@ -567,10 +567,9 @@ def active_milestone_title(path: Path | None = None) -> str | None:
 def resolve_active_milestone(owner: str, repo: str) -> int | None:
     """Resolve the configured active milestone title to its REST number.
 
-    The title comes from the repository policy file
-    (``active_milestone_title``). Milestone lookup is deliberately a
-    bypass: an unavailable, missing, or malformed milestone cannot prevent a
-    CI failure Issue from being created.
+    The title comes from the repository policy file (`active_milestone_title`).
+    Milestone lookup is deliberately a bypass: an unavailable, missing, or
+    malformed milestone cannot prevent a CI failure Issue from being created.
     """
     title = active_milestone_title()
     if not title:
