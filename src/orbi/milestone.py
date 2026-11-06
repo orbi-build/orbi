@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
-import json
 import logging
 import os
 import re
@@ -272,62 +271,6 @@ def clear_milestone_reconcile_failure(state_dir: Path, repo: str) -> None:
                 repo, marker,
             )
 
-
-def sync_active_milestone_variable(
-    repo: str, milestone: str | None, *,
-    run_command: Callable[..., str] | None = None,
-) -> None:
-    """Keep the triage workflow's read-only milestone variable current.
-
-    This is deliberately a bypass: a GitHub variable outage must not stop
-    the Runner's issue delivery tick.  The workflow consumes this value via
-    ``vars.ORBI_ACTIVE_MILESTONE`` and the triage script resolves its title.
-    """
-    command_runner = run_command or globals()["run_command"]
-    endpoint = f"repos/{repo}/actions/variables/ORBI_ACTIVE_MILESTONE"
-    try:
-        # The read's 404 is the designed absent branch (a repo without the
-        # variable is the normal state), so its generic command_failed line
-        # stays at DEBUG — same contract as the repo_config contents read.
-        raw = command_runner(
-            ["gh", "api", endpoint], timeout=30,
-            failure_log_level=logging.DEBUG,
-        )
-        current = json.loads(raw)
-        if not isinstance(current, dict):
-            raise ValueError("variable response is not an object")
-        if milestone is None:
-            command_runner(
-                ["gh", "api", "-X", "DELETE", endpoint], timeout=30,
-            )
-            event("active_milestone_variable_removed", repo=repo)
-            return
-        if current.get("value") == milestone:
-            event("active_milestone_variable_unchanged", repo=repo)
-            return
-        command_runner(
-            ["gh", "api", "-X", "PATCH", endpoint, "-f", f"name=ORBI_ACTIVE_MILESTONE",
-             "-f", f"value={milestone}"], timeout=30,
-        )
-        event("active_milestone_variable_updated", repo=repo)
-    except subprocess.CalledProcessError as exc:
-        if exc.returncode != 1 or "404" not in (exc.stderr or ""):
-            LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
-            return
-        if milestone is None:
-            event("active_milestone_variable_absent", repo=repo)
-            return
-        try:
-            command_runner(
-                ["gh", "api", "-X", "POST", "repos/{}/actions/variables".format(repo),
-                 "-f", "name=ORBI_ACTIVE_MILESTONE", "-f", f"value={milestone}"],
-                timeout=30,
-            )
-            event("active_milestone_variable_created", repo=repo)
-        except Exception:
-            LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
-    except Exception:
-        LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
 
 def validate_active_milestone(repo: str, active_milestone: str | None) -> None:
     """Validate the configured Milestone before a tick can claim work.

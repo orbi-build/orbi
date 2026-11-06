@@ -453,10 +453,9 @@ def milestone_set(
     is to reopen the milestone or set `auto_next_milestone = false`
     first. `auto_next_milestone` is resolved per key like
     `active_milestone` (Issue #1342): a value declared in the repository
-    policy wins, the host value is the fallback. The variable sync is NOT
-    part of
-    this command: the Runner's next tick publishes
-    `ORBI_ACTIVE_MILESTONE` (the bypass contract). Returns
+    policy wins, the host value is the fallback. No Actions variable is
+    written here or by the Runner's next tick (Issue #2123): the CI triage
+    reads `active_milestone` from `.github/orbi.toml` itself. Returns
     (old, new, target); every failure raises MilestoneSetError with the
     written target untouched.
     """

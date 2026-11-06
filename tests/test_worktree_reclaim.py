@@ -24,7 +24,6 @@ import pytest
 import dataclasses
 
 from orbi import runner
-import orbi.milestone as milestone
 import orbi.journal as journal
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
@@ -460,8 +459,6 @@ def test_preflight_runs_the_reclamation(tmp_path, monkeypatch):
         runner, "reclaim_released_worktrees",
         lambda config: calls.append(config),
     )
-    monkeypatch.setattr(milestone, "sync_active_milestone_variable",
-                        lambda *a, **k: None)
     runner._preflight(config)
     assert calls == [config]
 
@@ -477,8 +474,6 @@ def test_preflight_reclaim_failure_never_fails_the_start(
         raise RuntimeError("disk gone")
 
     monkeypatch.setattr(runner, "reclaim_released_worktrees", failing_reclaim)
-    monkeypatch.setattr(milestone, "sync_active_milestone_variable",
-                        lambda *a, **k: None)
     with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
         runner._preflight(config)
     assert any(

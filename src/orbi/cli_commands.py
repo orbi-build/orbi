@@ -279,11 +279,12 @@ def command_milestone(config: config_domain.RunnerConfig, args,
     # host config, so the two targets are not interchangeable
     # (Issue #1306).
     print(f"wrote: {target}")
+    # Issue #2123: no Actions variable is written (or advertised) any
+    # more — the CI triage reads `.github/orbi.toml` itself — so the
+    # success output names only the claim scope the next tick applies.
     print(
         "next: the Runner's next tick claims Issues from Milestone "
-        f'"{new}" and syncs the ORBI_ACTIVE_MILESTONE variable '
-        f"(verify: gh api repos/{repo}/actions/variables/"
-        "ORBI_ACTIVE_MILESTONE --jq .value)"
+        f'"{new}"'
     )
     return 0
 

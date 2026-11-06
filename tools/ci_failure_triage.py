@@ -70,12 +70,22 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
+from pathlib import Path
 
 CI_WORKFLOW_NAME = "CI"
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 GROQ_WORKFLOW_NAME = "Groq docs catalog check"
 GROQ_WORKFLOW_PATH = ".github/workflows/groq-docs-check.yml"
 TRIAGE_WORKFLOW_PATH = ".github/workflows/ci-failure-issue.yml"
+# Issue #2123: the active milestone is the one declared by the repository
+# policy file the workflow's checkout carries -- `.github/orbi.toml` on the
+# default branch, the SAME file the engine reads it from. The triage used to
+# read the `ORBI_ACTIVE_MILESTONE` Actions variable, which the engine wrote
+# into every delivered repository for this workflow alone (a variable no user
+# repository reads, and the only reason the GitHub App asked for "Actions
+# variables: write"). The path is derived from this file, never from the cwd.
+REPO_CONFIG_PATH = Path(__file__).resolve().parent.parent / ".github" / "orbi.toml"
 # Defensive ceiling for paged_list: pages walked before giving up
 # (100 pages x 100 items). A module constant so the truncation
 # behavior is testable without a 10,000-item fixture.
@@ -524,18 +534,46 @@ def index_open_issues(owner: str, repo: str) -> dict[str, dict]:
     return index
 
 
+def active_milestone_title(path: Path | None = None) -> str | None:
+    """The `active_milestone` declared by `.github/orbi.toml` (Issue #2123).
+
+    Read from the repository policy file the workflow's checkout carries —
+    the default branch (a `workflow_run` checkout has no `ref:` override),
+    where the engine reads the same value from. No API call and no Actions
+    variable: the title is a plain line in a file that already lives in the
+    repository. Deliberately a bypass: a missing, unparsable or
+    milestone-less file cannot prevent a CI failure Issue from being
+    created, it only files it without a milestone.
+    """
+    source = path if path is not None else REPO_CONFIG_PATH
+    try:
+        policy = tomllib.loads(source.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        log(f"milestone_fallback reason=repo_config_missing path={source}")
+        return None
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        log(
+            f"milestone_fallback reason=repo_config_invalid"
+            f" path={source} detail={exc}"
+        )
+        return None
+    title = policy.get("active_milestone")
+    if not isinstance(title, str) or not title:
+        log("milestone_fallback reason=active_milestone_not_configured")
+        return None
+    return title
+
+
 def resolve_active_milestone(owner: str, repo: str) -> int | None:
     """Resolve the configured active milestone title to its REST number.
 
-    The workflow supplies the title from the repository variable
-    ``ORBI_ACTIVE_MILESTONE``.  Milestone lookup is deliberately a bypass:
-    an unavailable, missing, or malformed milestone cannot prevent a CI
-    failure Issue from being created.
+    The title comes from the repository policy file (`active_milestone_title`).
+    Milestone lookup is deliberately a bypass: an unavailable, missing, or
+    malformed milestone cannot prevent a CI failure Issue from being created.
     """
-    title = os.environ.get("ORBI_ACTIVE_MILESTONE")
+    title = active_milestone_title()
     if not title:
-        log("milestone_fallback reason=active_milestone_not_configured")
-        return None
+        return None  # already logged by active_milestone_title (the bypass)
     endpoint = f"repos/{owner}/{repo}/milestones?state=open&per_page=100"
     try:
         milestones = gh_api(endpoint)

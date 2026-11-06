@@ -673,12 +673,6 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `base_ci_red_merged` | 交付落地后，基础分支已红的评论被更新为 merged |
 | `base_ci_red_triage` | `/orbi fix-base` 命令创建了一张 CI triage Issue |
 | `active_milestone_advance_failed` | 推进 active Milestone 失败 |
-| `active_milestone_variable_removed` | active_milestone 仓库变量已被移除 |
-| `active_milestone_variable_unchanged` | active_milestone 仓库变量与配置一致 |
-| `active_milestone_variable_updated` | active_milestone 仓库变量已更新 |
-| `active_milestone_variable_absent` | active_milestone 仓库变量不存在 |
-| `active_milestone_variable_created` | active_milestone 仓库变量已创建 |
-| `active_milestone_variable_sync_failed` | active_milestone 仓库变量同步失败 |
 | `release_not_claimed` | 发布状态机未领取该发布 Issue |
 | `release_task` | 发布状态机推进（步骤报告） |
 | `release_resuming_run` | 发布继续被中断的 run |
@@ -843,18 +837,15 @@ orbi milestone set v0.6.0 --config orbi.toml
 # active_milestone: v0.5.6 -> v0.6.0
 # repo: orbi-build/orbi
 # wrote: repo policy .github/orbi.toml
-# next: the Runner's next tick claims Issues from Milestone "v0.6.0" and
-# syncs the ORBI_ACTIVE_MILESTONE variable (verify: gh api
-# repos/orbi-build/orbi/actions/variables/ORBI_ACTIVE_MILESTONE --jq .value)
+# next: the Runner's next tick claims Issues from Milestone "v0.6.0"
 ```
 
 `wrote:` 行指明写入目标：`repo policy .github/orbi.toml`（对仓库默认
 分支做 contents PUT）或 `host config /path/to/orbi.toml`。Milestone
 列表读取不再是唯一的网络调用：命令还会读取仓库策略，且当策略
-声明了该键时提交重写后的 blob，绝不触碰主机配置。
-`ORBI_ACTIVE_MILESTONE` Actions variable 由 Runner 下一 tick 的
-preflight 发布（bypass 契约），因此命令成功不代表 variable 已同步：
-用输出里给出的 `gh api` 探针验证。所有失败都以非零退出，在 stderr
+声明了该键时提交重写后的 blob，绝不触碰主机配置。不再写入或宣告
+任何 Actions variable（Issue #2123）：CI 失败 triage 直接从
+`.github/orbi.toml` 读取 `active_milestone`。所有失败都以非零退出，在 stderr
 输出一行结构化 `milestone_set_failed reason=... fix=...`，目标保持
 原样——目标不存在、exact title 重名、GitHub API 或权限失败、两个
 来源都没有 `active_milestone` 行（该字段从不被隐式创建）、策略 PUT
