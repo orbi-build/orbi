@@ -116,9 +116,10 @@ export const askUserTool = {
 	name: ASK_USER_TOOL,
 	label: "Ask the person",
 	description:
-		"Ask the person up to three questions. Call this exactly once when " +
-		"the repository cannot answer them, and never in the same turn as " +
-		"write_draft.",
+		"Ask the person up to three questions, one sentence each and with no " +
+		"suggested answer. Call this only when the request itself does not " +
+		"say what to build and no deliverable default can be written, and " +
+		"never in the same turn as write_draft.",
 	parameters: askParameters,
 	async execute(_toolCallId: string, args: object) {
 		return writeAnswer("questions", args);

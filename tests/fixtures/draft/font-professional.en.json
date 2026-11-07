@@ -1,0 +1,11 @@
+{
+  "reply": "All three pages will switch from Bricolage Grotesque to Inter, a neutral sans-serif that reads as a professional product site rather than a quirky display face.",
+  "questions": [],
+  "issues": [
+    {
+      "title": "Replace Bricolage Grotesque with Inter across index.html, landing.html and pricing.html",
+      "body": "## Observable result\n\nEvery page of the Aurora site currently renders its body copy and headings in Bricolage Grotesque. A visitor loading `/index.html`, `/landing.html` or `/pricing.html` should instead see all text in Inter, a neutral, widely used UI sans-serif, with no page left on the old typeface.\n\n## What to change\n\n- In `index.html`, `landing.html` and `pricing.html`, replace the `fonts.googleapis.com` stylesheet link with one requesting Inter (`display=swap`).\n- In the inline `<style>` block of each of those files, change `body{font-family:\"Bricolage Grotesque\",sans-serif;...}` so the primary family is `Inter` ahead of the existing `sans-serif` fallback.\n\n## Assumptions\n\n- Inter was chosen as the \"more professional\" typeface: it is the common neutral default for product and SaaS sites, has generous lowercase clarity at small sizes, and needs no design decisions beyond a family swap.\n- \"More professional\" was read as a change of typeface only: the existing heading weight and every other type setting stay as they are.\n- The font continues to load from Google Fonts over a `<link>` tag, matching how the current typeface is delivered, so no new hosting or build step is introduced.\n- Layout, `margin`/`padding` and all page copy stay untouched; this is a typeface change only.\n\n## Acceptance condition\n\nOpening `index.html`, `landing.html` and `pricing.html` in a browser shows body text and the `Aurora` heading rendered in Inter on all three pages; no file still references `Bricolage Grotesque`, and if the Inter stylesheet fails to load the text falls back to the generic `sans-serif` family rather than an unstyled serif."
+    }
+  ],
+  "check": "passed"
+}

@@ -107,7 +107,11 @@ def _interactive(
                     return _declined(stdout)
                 conversation.append({"role": "person", "text": message})
                 conversation.append({"role": "orbi", "text": round_.reply})
-                message = answer.strip() or "(all recommended)"
+                # A bare Enter accepts no default answer (Issue #2133): an
+                # empty line answers nothing, so nothing is drafted from it.
+                if not answer.strip():
+                    return _declined(stdout)
+                message = answer.strip()
                 continue
             print(_render_draft(round_), file=stdout)
             current = {"issues": [i.as_json() for i in round_.issues]}
