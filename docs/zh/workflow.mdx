@@ -117,6 +117,37 @@ ai-ready                任务被派发（orbi add，或人工加标签）
 
 延后合并时，已保存的通过评审可以省去一次新评审。复用要求保存的 PR head 和实际注入评审 prompt 的 Issue 正文 hash 都匹配。外部修改 head 或注入的正文时，需要重新评审；自定义 prompt 不含 `{{ISSUE_BODY}}` 时，正文改动不参与这项判断。Runner 自己吸收无冲突的 base 更新后，会更新记录里的 head、推送，并延后到后续 tick 检查这个 head 的 CI，合并门禁仍会核对当前 head 和 base。
 
+## CI 用量：一次交付会触发什么，如何减少运行次数
+
+交付本身不运行你的 CI：它推送到 GitHub，仓库里的 workflow 按这些推送
+产生的事件运行。一次交付通常带来三类运行：
+
+- **推送到 PR 分支。** PR 存在后，交付分支上的每次推送——实现推送、
+每轮评审/修复推送以及每次吸收 base——都会更新 PR 并运行它的
+`pull_request` workflow。
+- **吸收 base 分支。** 交付进行期间 base 分支前进时，Runner 会把
+`origin/<base>` 合入 task branch（打开 PR 前在 `src/orbi/runner.py`，
+合并门禁处再在 `src/orbi/merge_exec.py`），推送新的 head，并在合并前
+等待它的 CI。保留吸收是因为合并的内容必须针对当前代码验证过：否则
+两个交付可能各自在旧的 base 上通过 CI，合在一起却弄坏 base。
+- **合并本身。** 合并 PR 会在 base 分支上落地 commit，从而再次运行
+仓库的 `push` workflow。
+
+如果繁忙的队列和不断前进的 base 让运行次数超过额度，常用做法是：
+
+- 用 `concurrency` 组并设置 `cancel-in-progress: true`，同一分支的新推送
+会取消上一次运行，而不是把两次都跑完（见 GitHub 的
+[并发指南](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)）。
+- 用 `paths-ignore` 让只改文档的推送跳过昂贵的 pull request workflow。
+- 不要往 `pull_request` workflow 的 `types` 里加 `labeled`，这样 label
+变化不会启动运行。
+- 只在推送到 base 分支时运行慢的端到端套件：运行更少，代价是合并之后
+才发现失败。
+
+额度与价格取决于 GitHub 账号和套餐。本页不列价格，也不列额度数字——
+见 GitHub 的
+[Actions 计费页面](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。
+
 ## 运行中的交付修正
 
 无需取消正在进行的交付，也可以修正方向。当 Issue 处于

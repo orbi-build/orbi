@@ -137,6 +137,43 @@ Opened-PR candidates are considered oldest Issue first, across a bounded scan of
 
 A saved clean review can avoid another review session after a deferred merge. Reuse requires the stored PR head and the hash of the Issue body actually included in the review prompt to match. An outside head change or a change to that rendered body requires review again; a custom prompt that omits `{{ISSUE_BODY}}` does not use body changes for this check. When the Runner absorbs a non-conflicting base update itself, it updates the recorded head, pushes it and defers merge until a later tick checks that head’s CI. The merge gate still verifies the current head and base before merging.
 
+## CI usage: what a delivery triggers and how to keep runs down
+
+A delivery does not run your CI itself: it pushes to GitHub, and the
+workflows in your repository run on the events those pushes create. One
+delivery typically causes three kinds of run:
+
+- **Pushes to the PR branch.** Once the PR exists, every push to the
+delivery branch — the implementation push, each review/fix push and every
+base absorption — updates the PR and runs its `pull_request` workflows.
+- **Base-branch absorption.** When the base branch advanced while the
+delivery was in flight, the Runner merges `origin/<base>` into the task
+branch (`src/orbi/runner.py` before the PR opens, and
+`src/orbi/merge_exec.py` at the merge gate), pushes the new head and waits
+for CI on it before merging. Absorption is kept because what merges must
+have been tested against current code: without it, two deliveries could
+each pass CI on an older base and break the base in combination.
+- **The merge itself.** Merging the PR lands commits on the base branch,
+which runs the repository's `push` workflows again.
+
+If a busy queue and a base branch that moves on every merge turn that into
+more runs than your allowance covers, these are the usual ways to bring the
+count down:
+
+- Put CI in a `concurrency` group with `cancel-in-progress: true`, so a new
+push to the same branch cancels the previous run instead of finishing both
+(see GitHub's [concurrency guide](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)).
+- Use `paths-ignore` so a documentation-only push skips the expensive pull
+request workflows.
+- Keep `labeled` out of a `pull_request` workflow's `types` list so a label
+change does not start a run.
+- Run slow end-to-end suites only on pushes to the base branch: fewer runs,
+at the cost of finding a failure after merge.
+
+The allowance and the price depend on the GitHub account and plan. This
+page quotes no prices and no allowance numbers — see GitHub's
+[Actions billing page](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
+
 ## Steering an active delivery
 
 You can correct direction without cancelling an active delivery. While the
