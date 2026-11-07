@@ -1205,6 +1205,42 @@ def test_docs_document_the_full_issue_to_merge_workflow():
     assert "orbi:run=" in text, "workflow must document the run marker"
 
 
+def test_workflow_documents_delivery_ci_usage_and_run_reduction():
+    """Issue #2128: a self-hosted user must be able to predict how an Orbi
+    delivery triggers their CI and how to keep the run count down. The
+    Workflow page carries the events (PR-branch pushes, base absorption, the
+    merge), why absorption is kept, the four reduction options, and the two
+    GitHub references — in both languages, because the EN/ZH page structure
+    is one contract."""
+    english = page_text("workflow")
+    chinese = (DOCS_DIR / "zh" / "workflow.mdx").read_text(encoding="utf-8")
+    concurrency_url = (
+        "https://docs.github.com/en/actions/how-tos/write-workflows/"
+        "choose-when-workflows-run/control-workflow-concurrency"
+    )
+    billing_url = (
+        "https://docs.github.com/en/billing/concepts/product-billing/"
+        "github-actions"
+    )
+    for text in (english, chinese):
+        for marker in (
+            "pull_request",
+            "push",
+            "cancel-in-progress: true",
+            "paths-ignore",
+            "labeled",
+            concurrency_url,
+            billing_url,
+        ):
+            assert marker in text, (
+                f"workflow CI usage section misses {marker!r}"
+            )
+    assert "## CI usage" in english
+    assert "absorb" in english.lower()
+    assert "quotes no prices" in english
+    assert "不列价格" in chinese
+
+
 def test_release_docs_explain_ci_failure_bump_recovery():
     """Issue #564: a red release-commit CI run may leave the version bump
     on main; that state is acceptable because preparation is idempotent and
