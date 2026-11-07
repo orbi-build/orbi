@@ -1147,6 +1147,92 @@ def test_an_unexpected_error_is_reported_not_swallowed(
     assert "RuntimeError: boom" in failure["detail"]
 
 
+# --- a default answer is an assumption, not a question (Issue #2133) ----
+
+DRAFT_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "draft"
+
+
+def model_answer(name: str) -> dict:
+    """One real model answer, as the shipped extension hands it to the engine.
+
+    The fixtures are the issue author's own real model runs
+    (`tests/fixtures/draft/`); the extension adds the `kind` the engine reads,
+    and the round document's `check` field is not a tool argument.
+    """
+    fixture = json.loads((DRAFT_FIXTURES / name).read_text(encoding="utf-8"))
+    kind = "draft" if fixture["issues"] else "questions"
+    return {
+        "kind": kind,
+        "reply": fixture["reply"],
+        "questions": fixture.get("questions", []),
+        "issues": fixture["issues"],
+    }
+
+
+def assumptions_of(body: str) -> list[str]:
+    """The bullet lines of the Issue's `Assumptions` section."""
+    section = re.search(r"^## Assumptions\n(.*?)(?=^## |\Z)", body,
+                        re.MULTILINE | re.DOTALL)
+    assert section, f"the Issue body carries no Assumptions section: {body}"
+    return [
+        line.strip() for line in section.group(1).splitlines()
+        if line.strip().startswith("-")
+    ]
+
+
+def test_a_real_answer_with_a_default_choice_drafts_with_assumptions(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """The 2026-11-04 Cloud request ("make the font more professional") is
+    drafted without a question: the chosen typeface and its reason land in
+    the Issue's Assumptions section."""
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue(model_answer("font-professional.en.json"))
+    code, out, err = run_round_cli(
+        config, {"message": "Can you make the font more professional"},
+        tmp_path / "session",
+    )
+    assert code == 0, err
+    answer = json.loads(out)
+    assert answer["questions"] == []
+    assert len(answer["issues"]) == 1
+    body = answer["issues"][0]["body"]
+    lines = assumptions_of(body)
+    assert "Inter" in lines[0]
+    assert "recommended" not in body.lower()
+
+
+def test_a_real_answer_to_an_empty_request_asks_without_a_suggested_answer(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """A request that says too little is the one case that asks: three plain
+    questions, none of them carrying a suggested answer."""
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue(model_answer("empty-request.zh.json"))
+    code, out, err = run_round_cli(
+        config, {"message": "帮我改一下"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    answer = json.loads(out)
+    assert answer["issues"] == []
+    assert len(answer["questions"]) == 3
+    for question in answer["questions"]:
+        assert "recommended" not in question.lower()
+        assert "推荐" not in question
+
+
+def test_the_drafting_rules_never_offer_a_suggested_answer():
+    """The prompt must not teach the removed "➜ recommended" shape: a default
+    answer is a written assumption, and a question is the narrow
+    empty-request case."""
+    prompt = draft.draft_system_prompt()
+    assert "recommended" not in prompt.lower()
+    assert "no suggested answer" in prompt
+    assert "Assumptions" in prompt
+    cli_source = Path(draft_cli.__file__).read_text(encoding="utf-8")
+    assert "recommended" not in cli_source.lower()
+
+
 # --- the interactive loop ------------------------------------------------
 
 class Tty(io.StringIO):
@@ -1204,17 +1290,37 @@ def test_interactive_stops_when_the_confirmation_ends(config, sessions,
     assert "Nothing was created." in out.getvalue()
 
 
-def test_interactive_accepts_all_recommended(config, sessions, monkeypatch):
+def test_interactive_sends_the_typed_answers_to_the_next_round(
+    config, sessions, monkeypatch,
+):
     draft_fakes.judge_passing(monkeypatch)
     sessions.queue_questions("Which store?")
     sessions.queue_draft(*TWO_ISSUES)
     out, err = io.StringIO(), io.StringIO()
     code = draft_cli.run_draft(
-        config, REPO, request="add tags", stdin=io.StringIO("\nn\n"),
+        config, REPO, request="add tags",
+        stdin=io.StringIO("sqlite, and yes to the rest\nn\n"),
         stdout=out, stderr=err,
     )
     assert code == 0, err.getvalue()
-    assert "(all recommended)" in sessions.calls[1].context
+    assert "sqlite, and yes to the rest" in sessions.calls[1].context
+
+
+def test_interactive_creates_nothing_when_the_answers_are_empty(
+    config, sessions, monkeypatch,
+):
+    """No recommended answers exist to accept with a bare Enter (Issue #2133):
+    an empty answer is no answer, so no round is drafted from it."""
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue_questions("Which store?")
+    out, err = io.StringIO(), io.StringIO()
+    code = draft_cli.run_draft(
+        config, REPO, request="add tags", stdin=io.StringIO("\n"),
+        stdout=out, stderr=err,
+    )
+    assert code == 0
+    assert "Nothing was created." in out.getvalue()
+    assert len(sessions.calls) == 1
 
 
 def test_interactive_shows_the_check_and_the_warning(

@@ -902,16 +902,15 @@ def test_skill_checks_the_milestone_is_open():
 # --- Nearest deliverable version (Issue #1597) --------------------------------
 
 # The draft must not be a request the code cannot deliver as asked: it becomes
-# the nearest version the code can deliver, said in the first line, asked with
-# that version as the recommended answer.
+# the nearest version the code can deliver, with what changed and why in the
+# first line of the Issue's Assumptions section (Issue #2133: no question).
 NEAREST_DELIVERABLE_SENTENCE = (
     "If reading the code shows the request cannot be done as asked (the file "
     "it is about is empty or missing, or the thing it would change does not "
     "exist), draft the nearest version of the request that the code can "
-    "actually deliver, say in the draft's first line what you changed and "
-    "why, and ask about it as a question whose recommended answer is that "
-    "deliverable version. Never write a draft whose only possible delivery "
-    "changes no file."
+    "actually deliver, and make the first line of the Issue's `Assumptions` "
+    "section say what you changed and why. Never write a draft whose only "
+    "possible delivery changes no file."
 )
 DRAFT_FIRST_PARAGRAPH = "Draft the Issue before asking anything."
 
@@ -931,6 +930,52 @@ def test_skill_drafts_the_nearest_version_the_code_can_deliver():
         "the nearest-deliverable-version sentence must come before "
         f"{DRAFT_FIRST_PARAGRAPH!r}"
     )
+
+
+# --- A default answer is an assumption, not a question (Issue #2133) --------
+
+# The skill may ask only when the request itself says too little and no
+# deliverable default version can be written; every other disagreement is a
+# line under Assumptions. The "Q1 — … ➜ recommended: …" template and the
+# "All recommended" reply are gone.
+ASSUMPTION_RULE_PHRASES = (
+    "Ask the person only when",
+    "no deliverable default version can be written",
+    "no suggested answer",
+    "what you chose and why",
+)
+
+
+def check_skill_writes_a_default_answer_as_an_assumption(
+    plugin_dir: Path = PLUGIN_DIR,
+) -> None:
+    """Issue #2133: a default answer is an assumption line, and a question is
+    the narrow empty/contradictory-request case with no suggested answer."""
+    flat = " ".join(read_plugin_file(plugin_dir, SKILL_REL).split())
+    for phrase in ASSUMPTION_RULE_PHRASES:
+        assert phrase in flat, (
+            f"{SKILL_REL}: missing {phrase!r}, so a question with a default "
+            "answer can come back (Issue #2133)"
+        )
+    for removed in ("recommended", "All recommended", "➜"):
+        assert removed not in flat, (
+            f"{SKILL_REL}: the {removed!r} question form is gone "
+            "(Issue #2133)"
+        )
+
+
+def test_skill_writes_a_default_answer_as_an_assumption():
+    check_skill_writes_a_default_answer_as_an_assumption()
+
+
+def test_fixture_skill_with_a_suggested_answer_fails(tmp_path):
+    """Counter-proof: restore the removed question form and the check fails."""
+    skill_text = read_plugin_file(PLUGIN_DIR, SKILL_REL).replace(
+        "Q1 — <question>", "Q1 — <question> ➜ recommended: <answer>"
+    )
+    plugin_dir = write_skill_fixture(tmp_path, skill_text=skill_text)
+    with pytest.raises(AssertionError):
+        check_skill_writes_a_default_answer_as_an_assumption(plugin_dir)
 
 
 # --- No invented constraints from repository observations (Issue #1816) -------

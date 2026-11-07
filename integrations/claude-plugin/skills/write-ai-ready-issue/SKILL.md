@@ -12,10 +12,10 @@ Orbi; only the final hand-off step needs Orbi. The bar for a written Issue is
 the 12 factors at https://aiready.sh/.
 
 Prior art this skill borrows from: superpowers `brainstorming` (size the task
-before writing), mattpocock `grilling` (questions that carry a recommended
-answer), Spec Kit `specify` (at most three clarifications, assumptions written
-down), OpenSpec (WHEN/THEN acceptance), cc-sdd `kiro-discovery` (choose the
-route before writing).
+before writing), mattpocock `grilling` (sharpening a request with pointed
+questions), Spec Kit `specify` (at most three clarifications, assumptions
+written down), OpenSpec (WHEN/THEN acceptance), cc-sdd `kiro-discovery` (choose
+the route before writing).
 
 ## Fidelity comes first
 
@@ -33,7 +33,8 @@ route before writing).
   not a total line count the person never named. A quantity the person stated
   ("exactly 17 lines") is their requirement and stays.
 - A request with two readings does not become the bigger reading. Take the
-  smallest reading and ask one question (see *Draft first*).
+  smallest reading and record that reading under `Assumptions` (see *Draft
+  first*).
 - Behaviour that already exists is reported as existing under `Current state`.
   Never write an acceptance item for making something work that already works.
 - Never widen the scope to make the Issue look complete.
@@ -55,8 +56,9 @@ gh issue list --limit 200 --state all --search "<keywords>"
 gh pr list --limit 200 --state all --search "<keywords>"
 ```
 
-Never ask the person for a fact the code, docs or open Issues can answer. Ask
-only for intent, priority, or something that exists outside the repository.
+Never ask the person for a fact the code, docs or open Issues can answer, and
+never ask which of several reasonable options to take — that is a decision:
+take the default and record it under `Assumptions` (see *Draft first*).
 
 Name the commit the agent read at the top of the full form. With a checkout:
 
@@ -96,21 +98,28 @@ Before drafting, state the route in one line, then follow it:
 
 If reading the code shows the request cannot be done as asked (the file it is
 about is empty or missing, or the thing it would change does not exist), draft
-the nearest version of the request that the code can actually deliver, say in
-the draft's first line what you changed and why, and ask about it as a question
-whose recommended answer is that deliverable version. Never write a draft whose
-only possible delivery changes no file.
+the nearest version of the request that the code can actually deliver, and make
+the first line of the Issue's `Assumptions` section say what you changed and
+why. Never write a draft whose only possible delivery changes no file.
 
-Draft the Issue before asking anything. Then ask at most three numbered
-questions in one reply, each in this form:
+Draft the Issue before asking anything. A disagreement the agent can settle
+itself is not a question — it is a line under `Assumptions`.
+
+Every other disagreement — which library, font or place to use, what to leave
+out, how to word that deliverable version — is the same: choose the most
+reasonable default, write one line under `Assumptions` in each Issue saying
+what you chose and why, and draft.
+
+Ask the person only when, after reading the code, the request itself still does
+not say what to build — it is empty or contradicts itself — and no deliverable
+default version can be written. Then ask at most three numbered questions in
+one reply, one sentence each and carrying no suggested answer:
 
 ```
-Q1 — <question> ➜ recommended: <answer>
+Q1 — <question>
 ```
 
-"All recommended" is a valid reply: then use every recommended answer.
-Anything the agent can decide from the repository is not a question — write
-it down under `Assumptions` instead.
+A person answers them in their own words; the agent drafts from those answers.
 
 ## Full form
 
@@ -133,7 +142,8 @@ Sections, in this order:
 - `Not included (suggestions)` — everything that was not asked for, one line
   each.
 - `Out of scope` — what this Issue deliberately does not do.
-- `Assumptions` — every assumption the agent made instead of asking.
+- `Assumptions` — every assumption the agent made instead of asking, one line
+  each stating what was chosen and why.
 - `Decisions` — choices already made, with the rejected alternative.
 
 The top of the Issue names the commit the agent read. `User outcome`,
