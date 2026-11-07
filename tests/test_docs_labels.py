@@ -14,6 +14,7 @@ from pathlib import Path
 
 import orbi.runner as runner
 from orbi import scene as scene_mod
+from orbi.github import open_blocker_numbers
 from orbi.delivery_labels import NEEDS_DETAIL_LABEL
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -300,3 +301,55 @@ def test_workflow_docs_say_orbi_resumes_merge_after_maintainer_action():
     assert "otherwise-idle tick" in english
     assert "Orbi 自己合并" in chinese
     assert "队列首次无事可做" in chinese
+
+def heading_section(text: str, needle: str) -> str:
+    """Return the `## ` section whose heading contains `needle`."""
+    for section in re.split(r"(?m)^(?=## )", text):
+        heading = section.splitlines()[0] if section.strip() else ""
+        if heading.startswith("## ") and needle.lower() in heading.lower():
+            return section
+    raise AssertionError(f"no `## ` heading contains {needle!r}")
+
+
+def test_workflow_documents_blocked_by_queueing():
+    """Issue #2127: a self-hosted user learns from docs/workflow.mdx that a
+    batch of dependent Issues is queued by labeling them all `ai-ready` at
+    once and letting GitHub's native blocked by relation set the order — the
+    relation is set in the Issue sidebar (Relationships) or with
+    `gh issue edit --add-blocked-by`, a blocked Issue waits while any
+    blocker is open and is claimed on a later tick after it closes, the
+    longest-waiting ready Issue goes first (Issue #1914), and a
+    `Depends on #N` body line is not parsed. The Chinese page states the
+    same contract (docs/test_docs_i18n.py also requires the heading)."""
+    section = heading_section(docs_page("workflow"), "blocked by")
+    # The whole batch is labeled at once; the native relation sets the order.
+    assert "`ai-ready`" in section
+    assert "at once" in section
+    # How the relation is set: the Issue sidebar, or the gh CLI.
+    assert "Relationships" in section
+    assert "--add-blocked-by" in section
+    # A blocked Issue waits for EVERY open blocker, then a later tick claims it.
+    assert "still open" in section
+    assert "next tick" in section
+    # Among ready Issues, the longest-waiting one goes first (Issue #1914).
+    assert "longest-waiting" in section
+    # Body dependencies are never read.
+    assert "Depends on #N" in section
+    assert "not parsed" in section
+    # The code the section describes (src/orbi/claim.py ->
+    # open_blocker_numbers): only OPEN blockers block; a closed blocker is
+    # inert, so the next tick claims the Issue with no runner-side bookkeeping.
+    assert open_blocker_numbers(
+        {"blockedBy": {"nodes": [{"number": 11, "state": "OPEN"}]}}
+    ) == [11]
+    assert open_blocker_numbers(
+        {"blockedBy": {"nodes": [{"number": 11, "state": "CLOSED"}]}}
+    ) == []
+
+    chinese = heading_section(docs_page("zh/workflow"), "blocked by")
+    assert "`ai-ready`" in chinese
+    assert "Relationships" in chinese
+    assert "--add-blocked-by" in chinese
+    assert "排队最久" in chinese
+    assert "Depends on #N" in chinese
+    assert "不被解析" in chinese

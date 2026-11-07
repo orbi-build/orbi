@@ -925,10 +925,30 @@ DAG, no priority numbers, no separate queues:
   residue is excluded by every ready scan), so no tick re-claims it —
   no infinite retry. There is no priority number or weighted queue.
 
-Task dependencies between Issues use GitHub's native `blockedBy`
-relation (`gh issue edit N --add-blocked-by M`); the Runner reads the
-field and skips Issues with open blockers. `Depends on #N` lines in an
-Issue body are not parsed.
+## Queueing dependent Issues with GitHub's `blocked by`
+
+A batch of dependent Issues needs no scheduler of its own: label the whole
+batch `ai-ready` at once and let GitHub's native **blocked by** relation
+decide the order.
+
+- Set the relation in the Issue sidebar under **Relationships** →
+  **blocked by**, or from the CLI with
+  `gh issue edit <number> --add-blocked-by <blocker>` (the flag takes an
+  Issue number or URL; `gh` 2.94.0 or newer is the `blockedBy`
+  prerequisite, see [Getting started](/getting-started)).
+- While ANY blocker of an Issue is still open, the Runner does not claim
+  it: the claim scan records the structured `blocked_by` journal line and
+  considers the next ready Issue — no claim, no label change, no worktree,
+  no Pi session. Closing the blocker is enough: the relation stays on the
+  Issue, but a closed blocker is inert, so the next tick after the last
+  blocker closes sees the Issue ready again and claims it
+  (`src/orbi/claim.py` → `open_blocker_numbers`).
+- Among the ready Issues of one pickup scan the **longest-waiting** Issue
+  is claimed first (`sort:created-asc`, Issue #1914), so a queued batch
+  drains in the order you filed it.
+- A `Depends on #N` line in the Issue body is **not parsed**: only the
+  native relation orders the queue. The body line stays prose for humans,
+  never scheduling state.
 
 <a id="repository-level-delivery-policy-githuborbitoml"></a>
 

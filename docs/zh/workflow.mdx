@@ -740,9 +740,25 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
   `ai-blocked`（领取标签被移除；`ai-ready` 残留被所有 ready 扫描排除），
   所以没有任何 tick 重新领取——没有无限重试。没有优先级数字或加权队列。
 
-Issue 之间的任务依赖用 GitHub 原生 `blockedBy` 关系（`gh issue edit N
---add-blocked-by M`）；Runner 读该字段并跳过有未关闭 blocker 的 Issue。
-Issue body 里的 `Depends on #N` 行不被解析。
+## 用 GitHub 的 `blocked by` 排队有依赖的 Issue
+
+一批有依赖的 Issue 不需要自己的调度器：一次把整批都打上 `ai-ready`，
+顺序交给 GitHub 原生的 **blocked by** 关系决定。
+
+- 在 Issue 侧栏的 **Relationships** → **blocked by** 设置关系，或用
+  `gh issue edit <number> --add-blocked-by <blocker>` 从命令行设置
+  （该 flag 接受 Issue 编号或 URL；`gh` 2.94.0 及以上是 `blockedBy`
+  字段的前提，见[快速开始](/zh/getting-started)）。
+- 只要某个 Issue 还有任一 blocker 处于 open 状态，Runner 就不会领取它：
+  领取扫描记一条结构化的 `blocked_by` 日志行，然后看下一个 ready
+  Issue——不领取、不改标签、不建 worktree、不起 Pi session。关掉 blocker
+  就够了：关系仍留在 Issue 上，但已关闭的 blocker 是惰性的，所以最后一个
+  blocker 关闭后的某个 tick，该 Issue 重新变为 ready 并被领取
+  （`src/orbi/claim.py` → `open_blocker_numbers`）。
+- 同一次领取扫描内，**排队最久**的 Issue 先被领取
+  （`sort:created-asc`，Issue #1914），所以一批队列按你建票的顺序消化。
+- Issue 正文里的 `Depends on #N` 行**不被解析**：只有原生关系决定顺序。
+  正文里的这一行只是给人看的散文，绝不是调度状态。
 
 ## 仓库级交付策略（`.github/orbi.toml`）
 
