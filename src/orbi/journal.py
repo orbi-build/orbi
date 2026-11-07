@@ -320,6 +320,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "suggest_started": "an orbi suggest run started (first line of its run)",
     "suggest_created": "orbi suggest filed or labeled an Issue",
     "suggest_failed": "an orbi suggest run failed (invalid result or failed gh call)",
+    "suggest_size_invalid": "an orbi suggest suggestion carried a size that is not an integer; the document prints size=null",
     "suggest_understanding_failed": "the parallel understanding session of orbi suggest failed or timed out (bypass: no understanding.md)",
     # Drafting (Issue #2041, `orbi draft`).
     "draft_session_failed": "a drafting session failed after it wrote its draft: the draft is returned (bypass)",

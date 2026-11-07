@@ -90,12 +90,19 @@ SUGGESTIONS_MAX = 3
 # word so the default (3) prompt stays byte-for-byte what it was before
 # the flag existed.
 COUNT_WORDS = {1: "one", 2: "two", 3: "three"}
-# The Suggestions document keys, in one place.
-SUGGESTION_KEYS = {"kind", "issue", "title", "why", "body"}
+# The Suggestions document keys, in one place. `size` (Issue #2131) is
+# the estimated number of files the change edits; it is optional in the
+# answer so an older session answer still validates, and the document
+# always carries it — null when the session did not give an integer.
+SUGGESTION_KEYS = {"kind", "issue", "title", "why", "body", "size"}
+SUGGESTION_REQUIRED_KEYS = SUGGESTION_KEYS - {"size"}
 # The kept batch: `<run_dir>/suggestions.json`, the subset of the
 # Suggestions document the NEXT run must not propose again.
 SUGGESTIONS_FILE = "suggestions.json"
-BATCH_KEYS = ("kind", "issue", "title")
+# `size` travels with the batch (Issue #2131): the second --count pass
+# of one suggestion run reads the first pass's sizes from
+# already_suggested and must see whether a small task was already given.
+BATCH_KEYS = ("kind", "issue", "title", "size")
 # How many of the most recent kept batches `already_suggested` merges
 # (Issue #1685): three runs cover a batch split as `--count 1` +
 # `--count 2` and the `--count 1` run of the next batch after it.
@@ -320,10 +327,27 @@ def _prompt(context_path: Path, repo_dir: Path, repo: str,
         "4. Reply with ONE JSON object and nothing else:\n"
         '{"suggestions": [{"kind": "existing" or "new", '
         '"issue": <number> or null, "title": "...", "why": "...", '
-        '"body": <markdown Issue body> or null}]}\n'
+        '"body": <markdown Issue body> or null, "size": <number of files '
+        'this change edits>}]}\n'
         f"At most {COUNT_WORDS[count]} "
         f"{'entry' if count == 1 else 'entries'}, ordered by value to "
         "the repository's users.\n\n"
+        "size is the number of files the change edits, as an integer; "
+        "omit it when you cannot estimate it.\n\n"
+        # Issue #2131: the small-task rule is per ANSWER, not per batch:
+        # a caller (Orbi Cloud) splits one batch into --count 1 and
+        # --count 2 runs, so the second pass reads the first pass's
+        # sizes from already_suggested and gives the one small task only
+        # when it was not already given.
+        "Small task rule (one answer at a time): when already_suggested, "
+        "when present, holds no entry with size <= 2, and the repository "
+        "offers a small task grounded in its own files (a TODO or FIXME "
+        "in code, a test the CI never runs, or an open Issue touching at "
+        "most two files), this answer holds exactly one such task, "
+        "placed first, with a why that names the file and line. When "
+        "there is none, add none: never pad an answer to reach three. "
+        "The small task still meets the skill's rules 2 and 5: it is "
+        "more than a README edit, and its why names a concrete path.\n\n"
         # Issue #2119: the answer is read by the repository owner, not by
         # Orbi, so a why quoting the session's own input (the observed
         # 2026-11-05 answer said "in context.json the open Issues and PRs
@@ -534,6 +558,27 @@ def _parse_output(output: str) -> list:
     return entries
 
 
+def _suggestion_size(entry: dict, title: str) -> int | None:
+    """The entry's size: the integer the session gave, else None.
+
+    A missing size (an answer written before Issue #2131) or an explicit
+    null is unknown and silent. A present value that is not an integer
+    (a string, a float, a bool) degrades to None and logs ONE
+    `suggest_size_invalid` line: the Suggestions document still prints,
+    and the run never retries.
+    """
+    if "size" not in entry or entry["size"] is None:
+        return None
+    size = entry["size"]
+    if isinstance(size, bool) or not isinstance(size, int):
+        event(
+            "suggest_size_invalid", level=logging.WARNING,
+            title=title, size=size,
+        )
+        return None
+    return size
+
+
 def _validate_suggestions(entries: list, context: dict,
                           dispatch_label: str,
                           run_dir: Path) -> list[dict]:
@@ -545,9 +590,13 @@ def _validate_suggestions(entries: list, context: dict,
     open_issues = {issue["number"]: issue for issue in context["issues"]}
     suggestions: list[dict] = []
     for entry in entries:
-        if not isinstance(entry, dict) or set(entry) != SUGGESTION_KEYS:
+        if (
+            not isinstance(entry, dict)
+            or not SUGGESTION_REQUIRED_KEYS <= set(entry) <= SUGGESTION_KEYS
+        ):
             raise SuggestError(
-                "each suggestion must hold kind, issue, title, why and body"
+                "each suggestion must hold kind, issue, title, why and "
+                "body, and optionally size"
             )
         title = entry["title"]
         why = entry["why"]
@@ -555,6 +604,7 @@ def _validate_suggestions(entries: list, context: dict,
             raise SuggestError("suggestion title must be a non-empty string")
         if not isinstance(why, str) or not why.strip():
             raise SuggestError("suggestion why must be a non-empty string")
+        size = _suggestion_size(entry, title)
         # The why is shown to the repository owner as written (Issue
         # #2119): naming the session's own input — the run directory or
         # the context.json in it — is not a reason about the repository.
@@ -589,7 +639,7 @@ def _validate_suggestions(entries: list, context: dict,
                 )
             suggestions.append({
                 "kind": "existing", "issue": number, "title": title,
-                "why": why, "body": None,
+                "why": why, "body": None, "size": size,
             })
         elif entry["kind"] == "new":
             if entry["issue"] is not None:
@@ -603,7 +653,7 @@ def _validate_suggestions(entries: list, context: dict,
                 )
             suggestions.append({
                 "kind": "new", "issue": None, "title": title,
-                "why": why, "body": body,
+                "why": why, "body": body, "size": size,
             })
         else:
             raise SuggestError(

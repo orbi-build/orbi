@@ -125,6 +125,18 @@ def test_suggestions_row_documents_both_session_directories():
             )
 
 
+def test_suggestions_row_documents_size():
+    """Issue #2131: every Suggestions entry carries `size` — an integer or
+    null — so both language inventories say so."""
+    for path in (PUBLIC_CONTRACTS, ZH_PUBLIC_CONTRACTS):
+        row = _inventory_row(path.read_text(encoding="utf-8"), "Suggestions")
+        assert '"size"' in row, f"{path} Suggestions row misses size: {row}"
+        assert "null" in row, f"{path} Suggestions row misses null: {row}"
+        assert "integer" in row or "整数" in row, (
+            f"{path} Suggestions row misses the integer wording: {row}"
+        )
+
+
 def test_telegram_chat_id_links_the_page_that_documents_it():
     """Issue #2099: the Config row's Telegram field was not a link at all,
     and the row's surrounding link points at Getting started, which
