@@ -12,6 +12,8 @@ marker) is documented in docs/security.mdx / docs/workflow.mdx.
 import re
 from pathlib import Path
 
+import pytest
+
 import orbi.runner as runner
 from orbi import scene as scene_mod
 from orbi.github import open_blocker_numbers
@@ -302,6 +304,7 @@ def test_workflow_docs_say_orbi_resumes_merge_after_maintainer_action():
     assert "Orbi 自己合并" in chinese
     assert "队列首次无事可做" in chinese
 
+
 def heading_section(text: str, needle: str) -> str:
     """Return the `## ` section whose heading contains `needle`."""
     for section in re.split(r"(?m)^(?=## )", text):
@@ -320,7 +323,7 @@ def test_workflow_documents_blocked_by_queueing():
     blocker is open and is claimed on a later tick after it closes, the
     longest-waiting ready Issue goes first (Issue #1914), and a
     `Depends on #N` body line is not parsed. The Chinese page states the
-    same contract (docs/test_docs_i18n.py also requires the heading)."""
+    same contract (tests/test_docs_i18n.py also requires the heading)."""
     section = heading_section(docs_page("workflow"), "blocked by")
     # The whole batch is labeled at once; the native relation sets the order.
     assert "`ai-ready`" in section
@@ -353,3 +356,9 @@ def test_workflow_documents_blocked_by_queueing():
     assert "排队最久" in chinese
     assert "Depends on #N" in chinese
     assert "不被解析" in chinese
+
+    # The lookup guard is real: when the section heading is renamed or
+    # removed the test fails loudly instead of silently reading the whole
+    # page, and the assertions above never pass on unrelated prose.
+    with pytest.raises(AssertionError, match=r"no `## ` heading contains"):
+        heading_section(docs_page("workflow"), "no such heading")
