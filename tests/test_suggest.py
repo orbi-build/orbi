@@ -495,10 +495,6 @@ BAD_RESULTS = {
     "entry_missing_keys": json.dumps({"suggestions": [{"kind": "new"}]}),
     "empty_title": json.dumps({"suggestions": [{**NEW_TWO, "title": "  "}]}),
     "empty_why": json.dumps({"suggestions": [{**NEW_TWO, "why": ""}]}),
-    # The observed 2026-11-05 why of the first suggestion (Issue #2119).
-    "why_names_the_context_file": json.dumps({"suggestions": [
-        {**NEW_TWO, "why": "context.json 中开放 Issue 与 PR 均为空"},
-    ]}),
     "existing_issue_not_a_number": json.dumps(
         {"suggestions": [{**EXISTING, "issue": "5"}]},
     ),
@@ -584,9 +580,11 @@ def test_suggest_rejects_an_existing_issue_outside_the_open_context(
 
 # --- a why must describe the repository, not Orbi's input (Issue #2119) -----
 
-# The run directory a validation sees: `context.json` and this exact path
-# are Orbi's own input — the repository owner never sees either one.
+# The run directory a validation sees: this exact path and the context
+# file path in it are Orbi's own input — the repository owner never sees
+# either one (Issue #2143: the paths, never the bare word `context.json`).
 WHY_RUN_DIR = Path("/deploy/.orbi/suggest/1a2b3c4d")
+WHY_CONTEXT_PATH = WHY_RUN_DIR / "context.json"
 
 
 def _validate_one(entry: dict, *, run_dir: Path = WHY_RUN_DIR):
@@ -599,31 +597,94 @@ def _validate_one(entry: dict, *, run_dir: Path = WHY_RUN_DIR):
 
 
 @pytest.mark.parametrize("why", [
-    # The observed 2026-11-05 why of the first suggestion.
-    "context.json 中开放 Issue 与 PR 均为空，所以这是新开的一项工作。",
-    "Context.JSON lists no open Issues",
     str(WHY_RUN_DIR) + " holds no open Issues or PRs",
+    str(WHY_CONTEXT_PATH) + " lists no open Issues or PRs",
+    # The same paths, spelled in the other case: the match is textual.
+    str(WHY_RUN_DIR).upper() + " holds no open Issues or PRs",
 ])
 def test_validate_suggestions_rejects_a_why_naming_orbi_input(why):
-    """Acceptance (Issue #2119): a why naming Orbi's input files or the run
-    directory is rejected exactly like an empty why."""
+    """Acceptance (Issue #2143): a why naming the run directory or the
+    engine's context file — the absolute paths the prompt hands the
+    session — is rejected exactly like an empty why."""
     with pytest.raises(suggest.SuggestError) as excinfo:
         _validate_one({
             "kind": "new", "issue": None, "title": "Do X",
             "why": why, "body": "## Request\nX.",
         })
-    assert "repository" in str(excinfo.value)
+    assert str(excinfo.value) == (
+        "suggestion why must describe the repository and its Issues and "
+        "PRs, not Orbi's own input files"
+    )
 
 
-def test_validate_suggestions_accepts_a_why_naming_the_repository():
-    """The rule is Orbi's own input only: the repository's paths (and its
-    Issues) stay valid reasons."""
-    why = "src/orbi/claim.py picks an Issue; Issue #5 describes the gap"
+@pytest.mark.parametrize("why", [
+    # Acceptance (Issue #2143): a repository has files named context.json
+    # too; naming one is a reason about the repository, like any path.
+    "src/context.json:12 lists no open Issues",
+    "the repository's own context.json is stale",
+    "src/orbi/claim.py picks an Issue; Issue #5 describes the gap",
+])
+def test_validate_suggestions_accepts_a_why_naming_the_repository(why):
+    """The rule is Orbi's own input paths only (Issue #2143): the
+    repository's own paths — including its `context.json` — and its
+    Issues stay valid reasons."""
     kept = _validate_one({
         "kind": "new", "issue": None, "title": "Do X",
         "why": why, "body": "## Request\nX.",
     })
     assert kept[0]["why"] == why
+
+
+def test_suggest_json_accepts_a_why_naming_the_repository_context_json(
+    tmp_path, monkeypatch, capsys,
+):
+    """User path (Issue #2143): `orbi suggest --json` on a repository with
+    its own `context.json` prints the Suggestions document carrying that
+    why, instead of failing the whole run."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, labels=())
+    why = "src/context.json:12 lists no open Issues"
+    monkeypatch.setattr(
+        seam, "stream_pi", PiStub(_answer_json({**NEW_TWO, "why": why})),
+    )
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert document["suggestions"][0]["why"] == why
+
+
+def test_suggest_json_fails_fast_when_a_why_names_the_context_path(
+    tmp_path, monkeypatch, capsys,
+):
+    """User path (Issue #2143): naming the engine's own context file path —
+    the absolute path the prompt hands the session — still fails the run
+    with the #2119 error and prints no document; the repair is a why
+    written from the repository's own files."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, labels=())
+
+    def answer(command, **kwargs):
+        session_dir = Path(command[command.index("--session-dir") + 1])
+        session_dir.mkdir(parents=True, exist_ok=True)
+        prompt = task_context(command)
+        named = re.search(r"Read (\S+) with your read tool", prompt)
+        if named is None:  # the understanding session's prompt
+            return UNDERSTANDING_TEXT
+        return _answer_json({
+            **NEW_TWO, "why": f"{named.group(1)}:1 lists no open Issues",
+        })
+
+    monkeypatch.setattr(seam, "stream_pi", answer)
+    assert cli.main([
+        "suggest", "--json", "--config", str(world.config_path),
+    ]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert (
+        "suggestion why must describe the repository and its Issues and "
+        "PRs, not Orbi's own input files" in captured.err
+    )
 
 
 def test_suggest_interactive_requires_a_tty(tmp_path, monkeypatch, capsys):
