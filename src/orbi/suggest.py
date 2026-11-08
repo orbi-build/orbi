@@ -17,9 +17,9 @@ timeout is a bypass: it writes nothing, logs one line, and never affects
 the Suggestions document.
 
 The run directory keeps `context.json`, `understanding.md` and, once
-the answer validates, `suggestions.json` — the batch a later run avoids
-repeating (Issue #1586), handed to the session as `already_suggested`
-together with the two batches kept before it (Issue #1685).
+the answer validates, `suggestions.json` — the batch a later run of the
+same repository avoids repeating (Issue #1586), handed to the session as
+`already_suggested` with the two batches kept before it (Issue #1685).
 
 `--size <n>` (Issue #2139) is the one option that changes the answer's
 shape: it asks for a `size` (estimated files edited) on every suggestion
@@ -279,9 +279,9 @@ def _earlier_batch(config: RunnerConfig, repo: str,
     of it. Three runs cover both split shapes; the same Issue number
     (`existing`) or title (`new`) is kept once.
 
-    Only this repository's items are merged (Issue #2145): an item
-    without `repo` — a batch written before this change — is skipped, so
-    no kept item of this repository reads as no earlier batch at all.
+    Only this repository's items are merged (Issue #2145): an item of
+    another repository, or one without `repo` (a batch written before
+    this change), is skipped — it can never steer this run.
     """
     candidates = [
         path for path in _suggest_root(config).iterdir()
