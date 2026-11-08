@@ -125,15 +125,18 @@ def test_suggestions_row_documents_both_session_directories():
             )
 
 
-def test_suggestions_row_documents_size():
-    """Issue #2131: every Suggestions entry carries `size` — an integer or
-    null — so both language inventories say so."""
+def test_suggestions_row_documents_size_as_a_caller_input():
+    """Issue #2139: `--size <n>` is a caller input and `size` reaches the
+    Suggestions document only when it was requested — both language
+    inventories say so."""
     for path in (PUBLIC_CONTRACTS, ZH_PUBLIC_CONTRACTS):
         row = _inventory_row(path.read_text(encoding="utf-8"), "Suggestions")
+        assert "`--size <n>`" in row, (
+            f"{path} Suggestions row misses the --size option: {row}"
+        )
         assert '"size"' in row, f"{path} Suggestions row misses size: {row}"
-        assert "null" in row, f"{path} Suggestions row misses null: {row}"
-        assert "integer" in row or "整数" in row, (
-            f"{path} Suggestions row misses the integer wording: {row}"
+        assert "only when" in row or "仅当" in row, (
+            f"{path} Suggestions row misses the conditional wording: {row}"
         )
 
 

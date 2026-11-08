@@ -266,9 +266,7 @@ def test_orbi_suggest_json_prints_the_document(
     world = _world(tmp_path, monkeypatch)
     world.gh.add_issue(5, title="Existing", body="body", labels=())
     world.gh.add_pr(1, head="feature", body="pr body")
-    stub = PiStub(_answer_json(
-        {**EXISTING, "size": 2}, {**NEW_TWO, "size": 6}, NEW_THREE,
-    ))
+    stub = PiStub(_answer_json(EXISTING, NEW_TWO, NEW_THREE))
     monkeypatch.setattr(seam, "stream_pi", stub)
     before = _repo_files(world.repo)
     # The snapshot must actually see the checkout, not an empty set.
@@ -290,11 +288,9 @@ def test_orbi_suggest_json_prints_the_document(
     assert [item["title"] for item in document["suggestions"]] == [
         "Fix the existing thing", "Second thing", "Third thing",
     ]
-    # Issue #2131: every entry carries size — the integer the session gave,
-    # null when it gave none.
-    assert [item["size"] for item in document["suggestions"]] == [2, 6, None]
+    # Issue #2139: without `--size` the document carries no size.
     assert all(
-        set(item) == {"kind", "issue", "title", "why", "body", "size"}
+        set(item) == {"kind", "issue", "title", "why", "body"}
         for item in document["suggestions"]
     )
 
@@ -588,13 +584,16 @@ WHY_RUN_DIR = Path("/deploy/.orbi/suggest/1a2b3c4d")
 WHY_CONTEXT_PATH = WHY_RUN_DIR / "context.json"
 
 
-def _validate_one(entry: dict, *, run_dir: Path = WHY_RUN_DIR):
+def _validate_one(entry: dict, *, run_dir: Path = WHY_RUN_DIR,
+                  size: int | None = None):
     """Validate one answer entry against a context holding Issue #5."""
     context = {"issues": [{
         "number": 5, "title": "Existing", "body": "", "state": "OPEN",
         "url": "u", "labels": [],
     }]}
-    return suggest._validate_suggestions([entry], context, "ai-ready", run_dir)
+    return suggest._validate_suggestions(
+        [entry], context, "ai-ready", run_dir, size=size,
+    )
 
 
 @pytest.mark.parametrize("why", [
@@ -702,7 +701,14 @@ def test_suggest_interactive_requires_a_tty(tmp_path, monkeypatch, capsys):
     assert world.recorder.commands == []
 
 
-# --- size on every suggestion (Issue #2131) ---------------------------------
+# --- `--size <n>`: a caller input, not a rule (Issue #2139) ---------------
+#
+# Issue #2131 hard-wired the small-task rule into every call and made
+# `already_suggested` carry `size`, a caller's batching protocol inside the
+# engine. Now the rule is the CALLER's: `--size <n>` asks the session for a
+# `size` per suggestion and for at most one task grounded in the
+# repository's own files that edits at most n files; without the flag the
+# prompt, the answer shape and the document carry no size and no rule.
 
 # The three real deepseek-flash answers the ticket carries, kept exactly as
 # the model wrote them (one per ticket attachment): two for a repository
@@ -716,12 +722,13 @@ FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "suggest"
     ("demo-c3.en.json", [2, 3, 3]),
 ])
 def test_real_session_answers_carry_their_size(name, sizes):
-    """Acceptance: the real answers parse and validate, carrying the size
-    the model gave, and each one's first entry is the small task."""
+    """Acceptance: with `--size 2` the real answers of #2131 still parse and
+    validate, carrying the size the model gave, and each one's first entry
+    is the small task."""
     answer = (FIXTURE_DIR / name).read_text(encoding="utf-8")
     kept = suggest._validate_suggestions(
         suggest._parse_output(answer), {"issues": []}, "ai-ready",
-        WHY_RUN_DIR,
+        WHY_RUN_DIR, size=2,
     )
     assert [item["size"] for item in kept] == sizes
     assert kept[0]["size"] <= 2
@@ -745,12 +752,13 @@ def _sized(**overrides):
     (True, None),
 ])
 def test_a_size_that_is_not_an_integer_becomes_null(value, expected, caplog):
-    """Acceptance: an integer is kept; a missing or unusable size is null
-    and never fails the run — a present non-integer size logs exactly one
-    suggest_size_invalid line."""
+    """Acceptance: with `--size` an integer is kept; a missing or unusable
+    size is null and never fails the run — a present non-integer size logs
+    exactly one suggest_size_invalid line (the only way to reach it, Issue
+    #2139)."""
     entry = _sized(size=value)
     with caplog.at_level("WARNING", logger="orbi.bootstrap"):
-        kept = _validate_one(entry)
+        kept = _validate_one(entry, size=2)
     assert kept[0]["size"] == expected
     logged = [
         record.message for record in caplog.records
@@ -764,30 +772,74 @@ def test_a_size_that_is_not_an_integer_becomes_null(value, expected, caplog):
 
 
 def test_a_missing_size_is_null_without_a_log(caplog):
-    """Acceptance: an answer written before this Issue (no size) still
-    validates and prints size=null."""
+    """Acceptance: with `--size` an answer that gave no size for one entry
+    still validates and documents size=null."""
     with caplog.at_level("WARNING", logger="orbi.bootstrap"):
-        kept = _validate_one(_sized())
+        kept = _validate_one(_sized(), size=2)
     assert kept[0]["size"] is None
     assert "suggest_size_invalid" not in caplog.text
 
 
-def test_prompt_and_skill_publish_the_small_task_rule():
-    """Acceptance: the prompt and the skill state the same small-task rule
-    (exactly one grounded task first when no earlier size is <= 2)."""
+@pytest.mark.parametrize("value", [2, None])
+def test_without_size_an_answer_carrying_a_size_is_rejected(value):
+    """Acceptance: without `--size` the answer shape has no size — an entry
+    that carries one (a value or null) is not the requested document and
+    fails fast, exactly like any other unknown key."""
+    with pytest.raises(suggest.SuggestError) as excinfo:
+        _validate_one(_sized(size=value))
+    assert "optionally size" not in str(excinfo.value)
+
+
+def test_without_size_the_prompt_carries_no_size_and_no_rule():
+    """Acceptance: the default call asks for neither a size nor a small-task
+    rule — the prompt is the pre-#2131 one."""
+    for prompt in (
+        suggest._prompt(LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO),
+        suggest._prompt(
+            LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO, size=None,
+        ),
+    ):
+        # Step 2 names `TODO/FIXME comments` in every prompt; the rule
+        # itself, its limit and the size field are what must be absent.
+        assert "size" not in prompt
+        assert "Small task" not in prompt
+        assert "at most" not in prompt
+
+
+@pytest.mark.parametrize(("size", "limit"), [
+    (1, "1 file"), (2, "2 files"),
+])
+def test_with_size_the_prompt_carries_the_rule_with_the_caller_value(
+    size, limit,
+):
+    """Acceptance: `--size 2` puts the rule and the caller's own limit into
+    the prompt (the engine never chooses it)."""
     prompt = " ".join(suggest._prompt(
-        LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO,
+        LOCALE_CONTEXT_PATH, LOCALE_REPO_DIR, LOCALE_REPO, size=size,
     ).split())
-    skill = " ".join(
-        (Path(__file__).resolve().parent.parent / SKILL_REL)
-        .read_text(encoding="utf-8").split()
-    )
-    for text in (prompt, skill):
-        assert "size" in text
-        assert "size <= 2" in text
-        assert "TODO" in text and "FIXME" in text
-        assert "placed first" in text
-        assert "never pad" in text
+    assert '"size": <number of files this change edits>' in prompt
+    assert "size is the number of files the change edits" in prompt
+    assert "Small task rule" in prompt
+    assert f"edits at most {limit}" in prompt
+    assert "first entry is exactly one such task" in prompt
+    assert "TODO" in prompt and "FIXME" in prompt
+    assert "never pad" in prompt
+
+
+def test_the_skill_makes_the_small_task_rule_conditional():
+    """Acceptance: SKILL.md describes the size and the small-task rule as
+    conditional on the caller asking for a size, and its default output
+    format carries no size."""
+    skill = (
+        Path(__file__).resolve().parent.parent / SKILL_REL
+    ).read_text(encoding="utf-8")
+    flat = " ".join(skill.split())
+    assert "When the prompt asks for a size" in flat
+    assert "TODO" in flat and "FIXME" in flat
+    assert "never pad" in flat
+    # The default output format (the JSON example) has no size.
+    example = skill.split("## Output", 1)[1].split("```", 2)[1]
+    assert '"size"' not in example
 
 
 # --- the kept batch (Issue #1586) --------------------------------------------
@@ -814,24 +866,42 @@ def _run_context(stub) -> dict:
 def test_suggest_keeps_the_validated_batch_in_the_run_dir(
     tmp_path, monkeypatch, capsys,
 ):
+    """The user journey (Issue #2139): `orbi suggest --json --size 1`
+    documents the sizes the session gave, puts the caller's own limit into
+    the prompt, and keeps a batch of the pre-#2131 three keys — which is
+    what the next run's `already_suggested` receives, even when an earlier
+    v0.7.39 run kept an entry with a size."""
     world = _world(tmp_path, monkeypatch)
     world.gh.add_issue(5, title="Existing", labels=())
-    stub = PiStub(_answer_json(EXISTING, NEW_TWO))
+    _seed_run(world, "00000001", [
+        {"kind": "new", "issue": None, "title": "Older new thing", "size": 4},
+    ], mtime=1_000)
+    stub = PiStub(_answer_json(
+        {**EXISTING, "size": 1}, {**NEW_TWO, "size": 4},
+    ))
     monkeypatch.setattr(seam, "stream_pi", stub)
     assert cli.main([
-        "suggest", "--json", "--config", str(world.config_path),
+        "suggest", "--json", "--size", "1",
+        "--config", str(world.config_path),
     ]) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert [item["size"] for item in document["suggestions"]] == [1, 4]
+    assert all(
+        set(item) == {"kind", "issue", "title", "why", "body", "size"}
+        for item in document["suggestions"]
+    )
+    assert "edits at most 1 file" in stub.prompt
     assert json.loads(
         (Path(stub.kwargs["cwd"]) / "suggestions.json").read_text(
             encoding="utf-8",
         ),
     ) == [
-        {"kind": "existing", "issue": 5, "title": "Fix the existing thing",
-         "size": None},
-        {"kind": "new", "issue": None, "title": "Second thing",
-         "size": None},
+        {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
+        {"kind": "new", "issue": None, "title": "Second thing"},
     ]
-    assert capsys.readouterr().out.strip()  # the document still prints
+    assert _run_context(stub)["already_suggested"] == [
+        {"kind": "new", "issue": None, "title": "Older new thing"},
+    ]
 
 
 def test_suggest_context_skips_a_newer_run_without_a_batch(
@@ -922,20 +992,17 @@ def test_two_real_runs_hand_the_first_batch_to_the_second(
     the session cannot propose the same work again."""
     world = _world(tmp_path, monkeypatch)
     world.gh.add_issue(5, title="Existing", labels=())
-    first = PiStub(_answer_json(
-        {**EXISTING, "size": 1}, {**NEW_TWO, "size": 4},
-    ))
+    first = PiStub(_answer_json(EXISTING, NEW_TWO))
     monkeypatch.setattr(seam, "stream_pi", first)
     assert cli.main([
         "suggest", "--json", "--config", str(world.config_path),
     ]) == 0
     first_run = Path(first.kwargs["cwd"])
-    # Issue #2131: the kept batch carries size, so the second --count
-    # pass of one batch can see whether the small task was already given.
+    # Issue #2139: the kept batch is back to kind/issue/title — the engine
+    # carries no caller batching state.
     batch = [
-        {"kind": "existing", "issue": 5, "title": "Fix the existing thing",
-         "size": 1},
-        {"kind": "new", "issue": None, "title": "Second thing", "size": 4},
+        {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
+        {"kind": "new", "issue": None, "title": "Second thing"},
     ]
     assert json.loads(
         (first_run / "suggestions.json").read_text(encoding="utf-8"),
@@ -1447,23 +1514,12 @@ PROMPT_WITHOUT_LOCALE = (
     "4. Reply with ONE JSON object and nothing else:\n"
     '{"suggestions": [{"kind": "existing" or "new", '
     '"issue": <number> or null, "title": "...", "why": "...", '
-    '"body": <markdown Issue body> or null, "size": <number of files '
-    'this change edits>}]}\n'
+    '"body": <markdown Issue body> or null}]}\n'
     "At most three entries, ordered by value to the repository's "
     "users.\n\n"
-    "size is the number of files the change edits, as an integer; "
-    "omit it when you cannot estimate it.\n\n"
-    # Issue #2131: the small-task rule is per answer, and the kept
-    # batch carries size so the second --count pass can see it.
-    "Small task rule (one answer at a time): when already_suggested, "
-    "when present, holds no entry with size <= 2, and the repository "
-    "offers a small task grounded in its own files (a TODO or FIXME "
-    "in code, a test the CI never runs, or an open Issue touching at "
-    "most two files), this answer holds exactly one such task, "
-    "placed first, with a why that names the file and line. When "
-    "there is none, add none: never pad an answer to reach three. "
-    "The small task still meets the skill's rules 2 and 5: it is "
-    "more than a README edit, and its why names a concrete path.\n\n"
+    # Issue #2139: size and the small-task rule are the CALLER's input
+    # (`--size`), so the default prompt carries neither — this frozen
+    # copy pins the pre- and post-#2131 default back to one text.
     # Issue #2119: the answer is shown to the repository owner as
     # written, so the prompt says it and names Orbi's input as off
     # limits; this frozen copy pins that sentence too.
@@ -1752,17 +1808,13 @@ def test_suggest_count_one_keeps_only_the_first_suggestion(
         "--config", str(world.config_path),
     ]) == 0
     document = json.loads(capsys.readouterr().out)
-    assert document["suggestions"] == [{
-        "kind": "existing", "issue": 5, "title": "Fix the existing thing",
-        "why": "src/orbi/claim.py does X", "body": None, "size": None,
-    }]
+    assert document["suggestions"] == [EXISTING]
     assert json.loads(
         (Path(stub.kwargs["cwd"]) / "suggestions.json").read_text(
             encoding="utf-8",
         ),
     ) == [
-        {"kind": "existing", "issue": 5, "title": "Fix the existing thing",
-         "size": None},
+        {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
     ]
 
 
@@ -1829,13 +1881,13 @@ def test_suggest_count_one_keeps_the_first_before_validating(
         "--config", str(world.config_path),
     ]) == 0
     document = json.loads(capsys.readouterr().out)
-    assert document["suggestions"] == [{**EXISTING, "size": None}]
+    assert document["suggestions"] == [EXISTING]
     assert json.loads(
         (Path(stub.kwargs["cwd"]) / "suggestions.json").read_text(
             encoding="utf-8",
         ),
     ) == [{"kind": "existing", "issue": 5,
-           "title": "Fix the existing thing", "size": None}]
+           "title": "Fix the existing thing"}]
 
 
 def test_suggest_count_one_still_fails_when_the_first_entry_is_invalid(
@@ -1938,6 +1990,27 @@ def test_suggest_count_out_of_range_is_an_argument_error(
     assert _run_dirs(world) == []
 
 
+@pytest.mark.parametrize("value", ["0", "-1", "abc", "2.5"])
+def test_suggest_size_out_of_range_is_an_argument_error(
+    tmp_path, monkeypatch, capsys, value,
+):
+    """Acceptance (failure path): `--size` takes a positive integer; "0",
+    "-1", a float and a word exit 2 (argparse) before anything runs — the
+    real CLI errors out and no run directory is created, so no session
+    needs stubbing (the same shape as the `--locale` argument error)."""
+    world = _world(tmp_path, monkeypatch)
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main([
+            "suggest", "--json", "--size", value,
+            "--config", str(world.config_path),
+        ])
+    assert excinfo.value.code == 2
+    error = capsys.readouterr().err
+    assert "argument --size:" in error
+    assert "is not a positive integer" in error
+    assert _run_dirs(world) == []
+
+
 def test_count_one_then_count_two_hands_the_first_batch(
     tmp_path, monkeypatch, capsys,
 ):
@@ -1963,8 +2036,7 @@ def test_count_one_then_count_two_hands_the_first_batch(
         "--config", str(world.config_path),
     ]) == 0
     assert _run_context(second)["already_suggested"] == [
-        {"kind": "existing", "issue": 5, "title": "Fix the existing thing",
-         "size": None},
+        {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
     ]
     capsys.readouterr()
 
@@ -1986,7 +2058,7 @@ def _new_suggestion(title: str) -> dict:
 
 
 def _kept(title: str) -> dict:
-    return {"kind": "new", "issue": None, "title": title, "size": None}
+    return {"kind": "new", "issue": None, "title": title}
 
 
 def _one_run(world, monkeypatch, capsys, args, answer, mtime) -> PiStub:
@@ -2025,8 +2097,7 @@ def test_count_one_then_two_then_one_hands_the_whole_split_batch(
     )
     assert _run_context(third)["already_suggested"] == [
         _kept("Split A"), _kept("Split B"),
-        {"kind": "existing", "issue": 5, "title": "Fix the existing thing",
-         "size": None},
+        {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
     ]
 
 
@@ -2057,7 +2128,6 @@ def test_count_two_after_a_split_batch_hands_both_runs_of_the_batch(
     assert _run_context(fourth)["already_suggested"] == [
         _kept("B1 one"),
         _kept("A2 one"), _kept("A2 two"),
-        {"kind": "existing", "issue": 5, "title": "Fix the existing thing",
-         "size": None},
+        {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
     ]
 

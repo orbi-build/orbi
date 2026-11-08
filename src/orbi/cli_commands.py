@@ -203,7 +203,7 @@ def command_suggest(config: config_domain.RunnerConfig, args, parser) -> int:
     repo = _selected_repo(config, args, parser)
     return suggest.run_suggest(
         config, repo, json_output=args.json, locale=args.locale,
-        count=args.count, dispatch_issue=dispatch_issue,
+        count=args.count, size=args.size, dispatch_issue=dispatch_issue,
     )
 
 

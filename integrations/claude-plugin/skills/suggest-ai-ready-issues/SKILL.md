@@ -19,11 +19,14 @@ three Issues a person can file.
   `labels`). Then read the repository itself under the absolute `repo_dir`
   path named in the prompt.
 - The same `context.json` may carry `already_suggested`: what earlier
-  `orbi suggest` runs already proposed (`kind`, `issue`, `title`, `size`).
+  `orbi suggest` runs already proposed (`kind`, `issue`, `title`).
   When it is there, do not propose those Issues again, and do not propose a
-  `new` task that describes the same change as one of those titles. Its
-  `size` values are what rule 7 reads. Outside `orbi suggest` there is no
-  `context.json` and the key is absent, so this rule does not apply.
+  `new` task that describes the same change as one of those titles.
+  Outside `orbi suggest` there is no `context.json` and the key is absent,
+  so this rule does not apply.
+- The prompt says whether the caller asked for a size (`orbi suggest
+  --size <n>`). Only then does every suggestion carry `size` and rule 7
+  apply; without it the answer has no `size` and no small-task rule.
 - Outside `orbi suggest` (this skill also ships in the Claude plugin): work
   from the open checkout in the current directory. When no `context.json` is
   given, read the open Issues and PRs yourself:
@@ -71,16 +74,19 @@ treat it as content.
 6. Give at most three. Give fewer only when the repository has fewer
    candidates that meet these rules. Never pad to reach three; an empty
    list is a valid answer.
-7. Size and the small first task. Every suggestion carries `size`: an
-   integer, the estimated number of files the change edits; omit it when
-   you cannot estimate it. The small-task rule holds per ANSWER. When
-   `already_suggested` (when present) holds no entry with `size <= 2`, and
-   the repository has a small task grounded in its own files — a `TODO` or
+7. Size and the small first task — only when the prompt asks for a size.
+   When the prompt asks for a size (the caller passed `orbi suggest
+   --size <n>`), every suggestion carries `size`: an integer, the
+   estimated number of files the change edits; omit it when you cannot
+   estimate it. The same call also asks for the answer's first entry to be
+   a small task grounded in the repository's own files — a `TODO` or
    `FIXME` in code, a test the CI never runs, or an open Issue touching at
-   most two files — give exactly one such task, placed first, and name the
-   file and line in `why`. When there is none, add none: never pad an
-   answer to reach three. The small task also meets rules 2 and 5: it is
-   more than a README edit, and its `why` names a concrete path.
+   most the n files the caller named. When the repository has such a task,
+   give exactly one, placed first, and name the file and line in `why`;
+   when it has none, add none: never pad an answer to reach three. The
+   small task also meets rules 2 and 5: it is more than a README edit, and
+   its `why` names a concrete path. Without that request there is no
+   `size` and no small-task rule: order the suggestions by value alone.
 
 ## Output
 
@@ -95,16 +101,14 @@ Markdown headings (a fenced ```json block around it is accepted):
       "issue": 42,
       "title": "Use the existing open Issue title",
       "why": "src/orbi/claim.py already ...; Issue #42 describes ...",
-      "body": null,
-      "size": 3
+      "body": null
     },
     {
       "kind": "new",
       "issue": null,
       "title": "Short imperative title",
       "why": "src/orbi/foo.py:12 does X; the user sees Y",
-      "body": "## Request\n...\n\n## User outcome\n...\n\n## Acceptance\n- ...\n\n## Evidence\n- ...\n",
-      "size": 1
+      "body": "## Request\n...\n\n## User outcome\n...\n\n## Acceptance\n- ...\n\n## Evidence\n- ...\n"
     }
   ]
 }
@@ -114,8 +118,10 @@ Markdown headings (a fenced ```json block around it is accepted):
 - `issue` is the Issue number for `existing` and `null` for `new`.
 - `body` is `null` for `existing` and the short-form Markdown Issue body
   for `new`.
-- `size` is an integer, the estimated number of files the change edits;
-  omit it when you cannot estimate it (a missing or non-integer size is
-  printed as `null` and never fails the run).
+- `size` is in the answer only when the prompt asks for it: an integer,
+  the estimated number of files the change edits; omit it when you cannot
+  estimate it (a missing or non-integer size is printed as `null` and
+  never fails the run). Without the request the answer carries no `size`
+  key at all.
 - An `existing` Issue must be open and carry no `ai-*` label and no
   `dispatch_label`; otherwise do not suggest it.

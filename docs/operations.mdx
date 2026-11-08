@@ -794,7 +794,7 @@ registry — in both directions (a name only in code or only in docs fails
 | `suggest_started` | an `orbi suggest` run started (first line of its run) |
 | `suggest_created` | `orbi suggest` filed or labeled an Issue |
 | `suggest_failed` | an `orbi suggest` run failed (invalid result or failed `gh` call) |
-| `suggest_size_invalid` | an `orbi suggest` suggestion carried a `size` that is not an integer; the document prints `size=null` |
+| `suggest_size_invalid` | an `orbi suggest --size` suggestion carried a `size` that is not an integer; the document prints `size=null` (the only way to reach this line) |
 | `suggest_understanding_failed` | the parallel understanding session of `orbi suggest` failed or timed out (bypass: no `understanding.md`) |
 | `draft_session_failed` | a drafting session failed after it wrote its draft: the draft is returned (bypass) |
 | `draft_failed` | an `orbi draft` run failed (invalid input, failed session or failed `gh` call) |
@@ -905,7 +905,7 @@ orbi session --pretty --config orbi.toml   # one-line summaries
 
 ### Suggestion language and repository summary
 
-Use `--locale en` or `--locale zh` to choose the language of suggestions and the repository summary; without `--locale`, Orbi follows the repository’s own language. `--count N` accepts 1–3, default 3. This command’s locale is separate from `message_language`, which controls delivery comments and notifications.
+Use `--locale en` or `--locale zh` to choose the language of suggestions and the repository summary; without `--locale`, Orbi follows the repository’s own language. `--count N` accepts 1–3, default 3. `--size <n>` (a positive integer) asks for a `size` per suggestion and leads the answer with one task grounded in the repository's own files that edits at most n files (none when the repository has none, never padded); without `--size` neither the prompt nor the document carries a `size`, and the suggestions are ordered by value alone. This command’s locale is separate from `message_language`, which controls delivery comments and notifications.
 
 While choosing suggestions, Orbi also tries to write a short repository summary to `<deploy_home>/.orbi/suggest/<run_id>/understanding.md`. A summary failure does not fail the suggestions. The run directory and any files already produced remain available after success or failure; `suggestions.json` is written once the result is validated. Suggestions avoid items from the three most recent batches; `--json` prints the result without submitting any Issue. In interactive mode, only the suggestions you confirm are submitted.
 
