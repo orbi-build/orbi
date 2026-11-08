@@ -113,14 +113,59 @@ PROMPT_KISS_ITEMS = (
     #    wins: fewer concepts, fewer files.
     ("kiss-two-designs", "when two designs both satisfy the requirements"),
     ("kiss-fewer", "fewer concepts, fewer files"),
-    # 5. The MVP boundary is restated, not relaxed.
-    ("kiss-mvp-boundary", "no database, queue, dag, daemon, risk engine or fallback"),
 )
 
 
 def test_prompt_md_keeps_the_kiss_lean_rules():
     missing = _missing(_text(PROMPT), PROMPT_KISS_ITEMS)
     assert not missing, f"prompt.md is missing KISS/LEAN rules: {missing}"
+
+
+# --- Issue #2142: no Orbi-specific component veto in the shared prompt --------
+
+# Issues #73/#118 wrote Orbi's OWN architecture boundary (no database, queue,
+# daemon, policy engine, risk model, multi-agent DAG or fallback path; "use the
+# existing GitHub Issue task pool") into this shared prompt, which
+# src/orbi/config.py makes the DEFAULT implementer prompt for every delivered
+# repository. A user asking for a database table or a background job in their
+# own project then got an implementer told not to build one. Orbi's boundary is
+# this repository's contributor rule (AGENTS.md, docs/contributing.mdx) and does
+# not belong in the engine; the prompt keeps only the general KISS/LEAN rules.
+NO_PROJECT_BOUNDARY_ITEMS = (
+    ("no-mvp", "mvp"),
+    ("no-task-pool", "task pool"),
+    ("no-task-platform", "task platform"),
+    ("no-queue-framework", "queue framework"),
+    ("no-policy-engine", "policy engine"),
+    ("no-risk-model", "risk model"),
+    ("no-multi-agent-dag", "multi-agent dag"),
+    ("no-daemon", "daemon"),
+    ("no-state-system", "state system"),
+    ("no-database", "database"),
+)
+
+
+def test_prompt_md_carries_no_orbi_specific_component_boundary():
+    """Issue #2142: render the real implementer prompt (the template the Runner
+    hands to Pi) and assert it names no component a delivered project may not
+    have. The Issue's acceptance grep is the contract:
+    `grep -n "MVP|task pool|daemon" prompts/prompt.md` returns nothing."""
+    from orbi import pi_session
+
+    rendered = pi_session.render_prompt(
+        PROMPT.read_text(encoding="utf-8"),
+        {"RUN_ID": "744bcd80", "ISSUE_NUMBER": "2142"},
+    )
+    text = " ".join(rendered.lower().split())
+    present = [name for name, needle in NO_PROJECT_BOUNDARY_ITEMS if needle in text]
+    assert not present, (
+        f"prompt.md still carries Orbi's own component boundary (Issue #2142): "
+        f"{present}"
+    )
+    # The KISS/LEAN rules themselves stay: the boundary bullet is gone, not the
+    # minimal-implementation contract.
+    assert "minimal implementation" in text
+    assert "implement only the issue's acceptance criteria" in text
 
 
 # --- prompt_review.md (reviewer) ----------------------------------------------
