@@ -857,6 +857,16 @@ def _seed_run(world, run_id: str, entries, *, mtime: int) -> Path:
     return path
 
 
+# The repository `_world` configures. A kept batch records it on every
+# item (Issue #2145), so a seeded batch that must count is written for it.
+REPO = "o/r"
+
+
+def _for_repo(entries, repo: str = REPO) -> list[dict]:
+    """Batch items as one run of `repo` kept them."""
+    return [{**item, "repo": repo} for item in entries]
+
+
 def _run_context(stub) -> dict:
     return json.loads(
         (Path(stub.kwargs["cwd"]) / "context.json").read_text(encoding="utf-8"),
@@ -873,9 +883,9 @@ def test_suggest_keeps_the_validated_batch_in_the_run_dir(
     v0.7.39 run kept an entry with a size."""
     world = _world(tmp_path, monkeypatch)
     world.gh.add_issue(5, title="Existing", labels=())
-    _seed_run(world, "00000001", [
+    _seed_run(world, "00000001", _for_repo([
         {"kind": "new", "issue": None, "title": "Older new thing", "size": 4},
-    ], mtime=1_000)
+    ]), mtime=1_000)
     stub = PiStub(_answer_json(
         {**EXISTING, "size": 1}, {**NEW_TWO, "size": 4},
     ))
@@ -895,10 +905,10 @@ def test_suggest_keeps_the_validated_batch_in_the_run_dir(
         (Path(stub.kwargs["cwd"]) / "suggestions.json").read_text(
             encoding="utf-8",
         ),
-    ) == [
+    ) == _for_repo([
         {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
         {"kind": "new", "issue": None, "title": "Second thing"},
-    ]
+    ])
     assert _run_context(stub)["already_suggested"] == [
         {"kind": "new", "issue": None, "title": "Older new thing"},
     ]
@@ -914,7 +924,7 @@ def test_suggest_context_skips_a_newer_run_without_a_batch(
         {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
         {"kind": "new", "issue": None, "title": "Second thing"},
     ]
-    _seed_run(world, "aaaaaaaa", older, mtime=1_000)
+    _seed_run(world, "aaaaaaaa", _for_repo(older), mtime=1_000)
     _seed_run(world, "bbbbbbbb", None, mtime=2_000)
     stub = PiStub(_answer_json(NEW_THREE))
     monkeypatch.setattr(seam, "stream_pi", stub)
@@ -934,11 +944,13 @@ def test_suggest_context_orders_the_batches_by_recency_not_by_name(
     world = _world(tmp_path, monkeypatch)
     _seed_run(
         world, "zzzzzzzz",
-        [{"kind": "new", "issue": None, "title": "Older"}], mtime=1_000,
+        _for_repo([{"kind": "new", "issue": None, "title": "Older"}]),
+        mtime=1_000,
     )
     _seed_run(
         world, "aaaaaaaa",
-        [{"kind": "new", "issue": None, "title": "Most recent"}], mtime=2_000,
+        _for_repo([{"kind": "new", "issue": None, "title": "Most recent"}]),
+        mtime=2_000,
     )
     stub = PiStub(_answer_json(NEW_TWO))
     monkeypatch.setattr(seam, "stream_pi", stub)
@@ -960,18 +972,18 @@ def test_suggest_context_merges_three_batches_and_drops_duplicates(
     the three-run window."""
     world = _world(tmp_path, monkeypatch)
     existing = {"kind": "existing", "issue": 5, "title": "Fix the existing"}
-    _seed_run(world, "00000001", [
+    _seed_run(world, "00000001", _for_repo([
         {"kind": "new", "issue": None, "title": "Too old"},
-    ], mtime=500)
-    _seed_run(world, "00000002", [
+    ]), mtime=500)
+    _seed_run(world, "00000002", _for_repo([
         existing,
         {"kind": "new", "issue": None, "title": "Shared"},
-    ], mtime=1_000)
-    _seed_run(world, "00000003", [
+    ]), mtime=1_000)
+    _seed_run(world, "00000003", _for_repo([
         {"kind": "new", "issue": None, "title": "Shared"},
         {"kind": "new", "issue": None, "title": "Second"},
-    ], mtime=2_000)
-    _seed_run(world, "00000004", [existing], mtime=3_000)
+    ]), mtime=2_000)
+    _seed_run(world, "00000004", _for_repo([existing]), mtime=3_000)
     stub = PiStub(_answer_json(NEW_TWO))
     monkeypatch.setattr(seam, "stream_pi", stub)
     assert cli.main([
@@ -999,14 +1011,15 @@ def test_two_real_runs_hand_the_first_batch_to_the_second(
     ]) == 0
     first_run = Path(first.kwargs["cwd"])
     # Issue #2139: the kept batch is back to kind/issue/title — the engine
-    # carries no caller batching state.
+    # carries no caller batching state. Issue #2145: every item records the
+    # repository it was suggested for.
     batch = [
         {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
         {"kind": "new", "issue": None, "title": "Second thing"},
     ]
     assert json.loads(
         (first_run / "suggestions.json").read_text(encoding="utf-8"),
-    ) == batch
+    ) == _for_repo(batch)
     # Recency is the directory mtime: pin the first run firmly into the
     # past so the assertion never depends on the filesystem timestamp
     # resolution of the machine running the suite.
@@ -1813,9 +1826,9 @@ def test_suggest_count_one_keeps_only_the_first_suggestion(
         (Path(stub.kwargs["cwd"]) / "suggestions.json").read_text(
             encoding="utf-8",
         ),
-    ) == [
+    ) == _for_repo([
         {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
-    ]
+    ])
 
 
 def test_suggest_count_two_asks_the_prompt_for_at_most_two(
@@ -1886,8 +1899,8 @@ def test_suggest_count_one_keeps_the_first_before_validating(
         (Path(stub.kwargs["cwd"]) / "suggestions.json").read_text(
             encoding="utf-8",
         ),
-    ) == [{"kind": "existing", "issue": 5,
-           "title": "Fix the existing thing"}]
+    ) == _for_repo([{"kind": "existing", "issue": 5,
+                     "title": "Fix the existing thing"}])
 
 
 def test_suggest_count_one_still_fails_when_the_first_entry_is_invalid(
@@ -2130,4 +2143,75 @@ def test_count_two_after_a_split_batch_hands_both_runs_of_the_batch(
         _kept("A2 one"), _kept("A2 two"),
         {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
     ]
+
+
+# --- already_suggested is scoped to the repository (Issue #2145) --------------
+#
+# One host runs `orbi suggest` for several repositories. A kept batch item
+# records the repository it was suggested for, and a later run merges only
+# the items of ITS repository — repository B must not be steered away from
+# the titles repository A was given.
+
+
+def test_earlier_batch_keeps_only_the_current_repository(
+    tmp_path, monkeypatch,
+):
+    """Acceptance (Issue #2145): of two earlier runs, one for `a/x` and one
+    for `b/y`, a run for `a/x` gets only the `a/x` items, and a run for a
+    repository with no batch gets none at all."""
+    world = _world(tmp_path, monkeypatch)
+    _seed_run(world, "00000001", _for_repo([
+        {"kind": "new", "issue": None, "title": "A thing"},
+        {"kind": "existing", "issue": 5, "title": "A existing"},
+    ], "a/x"), mtime=1_000)
+    _seed_run(world, "00000002", _for_repo([
+        {"kind": "new", "issue": None, "title": "B thing"},
+    ], "b/y"), mtime=2_000)
+    config = _loaded(world)
+    assert suggest._earlier_batch(config, "a/x", "current") == [
+        {"kind": "new", "issue": None, "title": "A thing"},
+        {"kind": "existing", "issue": 5, "title": "A existing"},
+    ]
+    assert suggest._earlier_batch(config, "b/y", "current") == [
+        {"kind": "new", "issue": None, "title": "B thing"},
+    ]
+    assert suggest._earlier_batch(config, "c/z", "current") is None
+
+
+def test_earlier_batch_skips_an_item_without_a_repo(
+    tmp_path, monkeypatch,
+):
+    """Acceptance (Issue #2145): a batch written before this change carries
+    no `repo` key, so it contributes nothing — never another repository's
+    titles by accident."""
+    world = _world(tmp_path, monkeypatch)
+    _seed_run(world, "00000001", [
+        {"kind": "new", "issue": None, "title": "Untagged"},
+    ], mtime=1_000)
+    assert suggest._earlier_batch(_loaded(world), REPO, "current") is None
+
+
+def test_suggest_context_ignores_another_repositorys_batch(
+    tmp_path, monkeypatch, capsys,
+):
+    """The user journey (Issue #2145): run `orbi suggest` for o/r, then one
+    run for another repository, then o/r again. The second o/r run's context
+    carries o/r's own first batch and none of the other repository's
+    suggestions, and the batch file records the repository it was for."""
+    world = _world(tmp_path, monkeypatch)
+    world.gh.add_issue(5, title="Existing", labels=())
+    _one_run(world, monkeypatch, capsys, [], [EXISTING, NEW_TWO], 1_000)
+    _seed_run(world, "00000009", _for_repo([
+        _kept("Other repo thing"),
+    ], "other/repo"), mtime=2_000)
+    second = _one_run(world, monkeypatch, capsys, [], [NEW_THREE], 3_000)
+    assert _run_context(second)["already_suggested"] == [
+        {"kind": "existing", "issue": 5, "title": "Fix the existing thing"},
+        _kept("Second thing"),
+    ]
+    assert json.loads(
+        (Path(second.kwargs["cwd"]) / "suggestions.json").read_text(
+            encoding="utf-8",
+        ),
+    ) == _for_repo([_kept("Third thing")])
 
