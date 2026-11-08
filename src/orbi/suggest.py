@@ -302,7 +302,7 @@ def _earlier_batch(config: RunnerConfig, run_id: str) -> list[dict] | None:
             seen.add(key)
             # Only the pre-#2131 keys reach the session (Issue #2139): a
             # batch v0.7.39 kept with `size` is read without it.
-            merged.append({key: item[key] for key in BATCH_KEYS})
+            merged.append({field: item[field] for field in BATCH_KEYS})
     return merged
 
 
