@@ -1200,11 +1200,14 @@ DRAFT_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "draft"
 
 
 def model_answer(name: str) -> dict:
-    """One real model answer, as the shipped extension hands it to the engine.
+    """One model answer, as the shipped extension hands it to the engine.
 
-    The fixtures are the issue author's own real model runs
-    (`tests/fixtures/draft/`); the extension adds the `kind` the engine reads,
-    and the round document's `check` field is not a tool argument.
+    `font-professional.en.json` is the issue author's own real model run.
+    `empty-request.zh.json` keeps that run's three questions and carries the
+    option shape Issue #2136 requires, written by hand: the pre-#2136 model
+    could not emit options, and the tool's typed parameters now enforce the
+    shape on the model. The extension adds the `kind` the engine reads, and
+    the round document's `check` field is not a tool argument.
     """
     fixture = json.loads((DRAFT_FIXTURES / name).read_text(encoding="utf-8"))
     kind = "draft" if fixture["issues"] else "questions"
