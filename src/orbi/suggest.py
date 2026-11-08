@@ -679,10 +679,10 @@ def _validate_suggestions(entries: list, context: dict,
             _suggestion_size(entry, title) if size is not None else None
         )
         # The why is shown to the repository owner as written (Issue
-        # #2119): naming the session's own input — the run directory or
-        # the context.json in it — is not a reason about the repository.
-        lowered = why.lower()
-        if "context.json" in lowered or str(run_dir).lower() in lowered:
+        # #2119): naming the session's own run directory path — or the
+        # context.json in it — is not a reason about the repository
+        # (Issue #2143: the repository's own context.json still is).
+        if str(run_dir).lower() in why.lower():
             raise SuggestError(
                 "suggestion why must describe the repository and its "
                 "Issues and PRs, not Orbi's own input files"
