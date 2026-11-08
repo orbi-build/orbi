@@ -25,6 +25,7 @@ import orbi.setup_checks as setup_checks
 import orbi.suggest as suggest
 from conftest import task_context
 from seam import seam
+from tests.fakes import suggest as suggest_fakes
 from tests.fakes.github import FakeGh
 from tests.test_pilot_setup import (
     VALID_DEFS,
@@ -644,8 +645,8 @@ def test_suggest_json_accepts_a_why_naming_the_repository_context_json(
     world = _world(tmp_path, monkeypatch)
     world.gh.add_issue(5, labels=())
     why = "src/context.json:12 lists no open Issues"
-    monkeypatch.setattr(
-        seam, "stream_pi", PiStub(_answer_json({**NEW_TWO, "why": why})),
+    suggest_fakes.stub_stream_pi(
+        monkeypatch, PiStub(_answer_json({**NEW_TWO, "why": why})),
     )
     assert cli.main([
         "suggest", "--json", "--config", str(world.config_path),
@@ -675,7 +676,7 @@ def test_suggest_json_fails_fast_when_a_why_names_the_context_path(
             **NEW_TWO, "why": f"{named.group(1)}:1 lists no open Issues",
         })
 
-    monkeypatch.setattr(seam, "stream_pi", answer)
+    suggest_fakes.stub_stream_pi(monkeypatch, answer)
     assert cli.main([
         "suggest", "--json", "--config", str(world.config_path),
     ]) == 1
