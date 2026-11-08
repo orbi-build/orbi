@@ -17,9 +17,9 @@ timeout is a bypass: it writes nothing, logs one line, and never affects
 the Suggestions document.
 
 The run directory keeps `context.json`, `understanding.md` and, once
-the answer validates, `suggestions.json` — the batch a later run avoids
-repeating (Issue #1586), handed to the session as `already_suggested`
-together with the two batches kept before it (Issue #1685).
+the answer validates, `suggestions.json` — the batch a later run of the
+same repository avoids repeating (Issue #1586), handed to the session as
+`already_suggested` with the two batches kept before it (Issue #1685).
 
 `--size <n>` (Issue #2139) is the one option that changes the answer's
 shape: it asks for a `size` (estimated files edited) on every suggestion
@@ -104,11 +104,14 @@ COUNT_WORDS = {1: "one", 2: "two", 3: "three"}
 SUGGESTION_KEYS = {"kind", "issue", "title", "why", "body"}
 SUGGESTION_SIZE_KEYS = SUGGESTION_KEYS | {"size"}
 # The kept batch: `<run_dir>/suggestions.json`, the subset of the
-# Suggestions document the NEXT run must not propose again (the
-# pre-#2131 shape: whether an earlier pass gave a small task is the
-# caller's batching concern, never engine state — Issue #2139).
+# Suggestions document the next run for the SAME repository must not
+# propose again (the pre-#2131 shape: whether an earlier pass gave a
+# small task is the caller's batching concern, never engine state).
 SUGGESTIONS_FILE = "suggestions.json"
 BATCH_KEYS = ("kind", "issue", "title")
+# The repository each kept item was suggested for (Issue #2145): a run
+# avoids repeating only ITS OWN earlier batches, never another repo's.
+BATCH_REPO_KEY = "repo"
 # How many of the most recent kept batches `already_suggested` merges
 # (Issue #1685): three runs cover a batch split as `--count 1` +
 # `--count 2` and the `--count 1` run of the next batch after it.
@@ -260,7 +263,8 @@ def _run_dir(config: RunnerConfig, run_id: str) -> Path:
     return _suggest_root(config) / run_id
 
 
-def _earlier_batch(config: RunnerConfig, run_id: str) -> list[dict] | None:
+def _earlier_batch(config: RunnerConfig, repo: str,
+                    run_id: str) -> list[dict] | None:
     """The earlier runs' batches to avoid, or None when there is none.
 
     Every run directory is kept after the command exits, on failure too,
@@ -274,6 +278,10 @@ def _earlier_batch(config: RunnerConfig, run_id: str) -> list[dict] | None:
     `--count 2`), and the newest run alone would then hold only a part
     of it. Three runs cover both split shapes; the same Issue number
     (`existing`) or title (`new`) is kept once.
+
+    Only this repository's items are merged (Issue #2145): an item of
+    another repository, or one without `repo` (a batch written before
+    this change), is skipped — it can never steer this run.
     """
     candidates = [
         path for path in _suggest_root(config).iterdir()
@@ -293,6 +301,8 @@ def _earlier_batch(config: RunnerConfig, run_id: str) -> list[dict] | None:
             (path / SUGGESTIONS_FILE).read_text(encoding="utf-8"),
         )
         for item in batch:
+            if item.get(BATCH_REPO_KEY) != repo:
+                continue
             key = (
                 ("existing", item["issue"]) if item["kind"] == "existing"
                 else ("new", item["title"])
@@ -303,14 +313,18 @@ def _earlier_batch(config: RunnerConfig, run_id: str) -> list[dict] | None:
             # Only the pre-#2131 keys reach the session (Issue #2139): a
             # batch v0.7.39 kept with `size` is read without it.
             merged.append({field: item[field] for field in BATCH_KEYS})
-    return merged
+    return merged or None
 
 
-def _write_batch(run_dir: Path, suggestions: list[dict]) -> None:
-    """Keep the validated batch for the next run's `already_suggested`."""
+def _write_batch(run_dir: Path, suggestions: list[dict], repo: str) -> None:
+    """Keep the validated batch for the next run's `already_suggested`.
+
+    Every item records the repository it was suggested for (Issue #2145).
+    """
     (run_dir / SUGGESTIONS_FILE).write_text(
         json.dumps(
-            [{key: item[key] for key in BATCH_KEYS} for item in suggestions],
+            [{**{key: item[key] for key in BATCH_KEYS},
+              BATCH_REPO_KEY: repo} for item in suggestions],
             indent=2,
         ),
         encoding="utf-8",
@@ -736,7 +750,7 @@ def _build_document(config: RunnerConfig, repo: str, run_id: str,
                     ) -> tuple[dict, dict, str, str | None]:
     """Read, run the session and validate; return the document and facts."""
     context = _gather_context(repo)
-    earlier = _earlier_batch(config, run_id)
+    earlier = _earlier_batch(config, repo, run_id)
     if earlier is not None:
         context["already_suggested"] = earlier
     context_path = run_dir / "context.json"
@@ -775,7 +789,7 @@ def _build_document(config: RunnerConfig, repo: str, run_id: str,
             str(exc), command=log_command, returncode=0,
             stdout=output, stderr="",
         ) from exc
-    _write_batch(run_dir, suggestions)
+    _write_batch(run_dir, suggestions, repo)
     document = {
         "repo": repo,
         "base_sha": _base_sha(Path(config.repo_dir)),
