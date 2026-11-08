@@ -1539,8 +1539,8 @@ def test_interactive_prints_no_empty_reply(config, sessions, monkeypatch):
 def test_interactive_prints_each_option_under_its_question(
     config, sessions, monkeypatch,
 ):
-    """The person sees the choices, recommended one first, under the
-    question they answer in typed text (Issue #2136)."""
+    """The person sees the choices, in the order the question gives them,
+    under the question they answer in typed text (Issue #2136)."""
     draft_fakes.judge_passing(monkeypatch)
     sessions.queue_questions({
         "question": "What should the other person get?",
