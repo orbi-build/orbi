@@ -32,7 +32,7 @@ class GhRecorder:
 
 
 def structured_question(question: str, *, header: str = "Choice") -> dict:
-    """One question in the object shape the hosted page reads (Issue #2136)."""
+    """One question in the object shape the engine accepts (Issue #2136)."""
     return {
         "question": question,
         "header": header,

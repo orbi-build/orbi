@@ -72,11 +72,10 @@ const draftParameters = Type.Object(
 );
 
 /**
- * Issue #2136: a question is the object the hosted page renders as option
- * buttons, never a bare string. The header names the decision (the page shows
- * it as the question's chip) and the options are the person's choices; the
- * page adds the person's own answer row itself, so there is no "Other" option
- * here.
+ * Issues #2136, #2147: a question is a sentence, with an OPTIONAL header
+ * naming the decision and OPTIONAL choices. The engine accepts a bare string
+ * as a question with no header and no options, so the schema does too; there
+ * is no "Other" option, because the person always answers in their own words.
  */
 const askOption = Type.Object(
 	{
@@ -92,25 +91,36 @@ const askOption = Type.Object(
 	{ additionalProperties: false },
 );
 
-const askQuestion = Type.Object(
+const askQuestionObject = Type.Object(
 	{
 		question: Type.String({
 			minLength: 1,
 			description: "One sentence, in the person's language",
 		}),
-		header: Type.String({
-			minLength: 1,
-			description: "One to three words naming the decision, e.g. Sharing",
-		}),
-		options: Type.Array(askOption, {
-			minItems: 2,
-			maxItems: 4,
-			description:
-				"The 2 to 4 choices; when one is the reasonable default, it is FIRST and its label ends with (Recommended)",
-		}),
+		header: Type.Optional(
+			Type.String({
+				minLength: 1,
+				description:
+					"Optional: one to three words naming the decision, e.g. Sharing",
+			}),
+		),
+		options: Type.Optional(
+			Type.Array(askOption, {
+				minItems: 2,
+				maxItems: 4,
+				description:
+					"Optional, when the person has to pick: the 2 to 4 choices; a recommended one ends its label with (Recommended)",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
+
+/** A question is its sentence, or an object carrying it. */
+const askQuestion = Type.Union([
+	Type.String({ minLength: 1 }),
+	askQuestionObject,
+]);
 
 const askParameters = Type.Object(
 	{
@@ -157,13 +167,14 @@ export const askUserTool = {
 	name: ASK_USER_TOOL,
 	label: "Ask the person",
 	description:
-		"Ask the person up to three questions in one call. Each question " +
-		"carries a header of one to three words naming the decision and 2 " +
-		"to 4 options, every option a label plus one sentence of what it " +
-		"means or its trade-off. When one option is the reasonable default, " +
-		"put it FIRST and end its label with (Recommended); never add an " +
-		"Other option, because the person's own answer is always allowed. " +
-		"Never say the person chose the recommended option. Call this only " +
+		"Ask the person up to three questions in one call. A question is " +
+		"one sentence, either bare or as an object with an OPTIONAL header " +
+		"of one to three words naming the decision and OPTIONAL 2 to 4 " +
+		"options, every option a label plus one sentence of what it means " +
+		"or its trade-off. When one option is the reasonable default, its " +
+		"label ends with (Recommended). Never add an Other option, and never " +
+		"say the person chose the recommended option: the person always " +
+		"answers in their own words. Call this only " +
 		"when the request itself does not say what to build and no " +
 		"deliverable default can be written, and never in the same turn as " +
 		"write_draft.",

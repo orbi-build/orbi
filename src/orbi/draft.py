@@ -106,7 +106,8 @@ DECLINE = frozenset({"n", "no", "cancel", "q", "quit"})
 # never converges must fail fast instead of spinning forever.
 MAX_ROUNDS = 12
 
-# The marker the hosted page keys on: a question's recommended option is FIRST.
+# A recommended option's label carries this suffix (the Claude Agent SDK
+# convention); where it sits is the caller's business, never the engine's.
 RECOMMENDED_MARK = "(Recommended)"
 
 # The one rule that replaced the skill's "draft only the first slice": the
@@ -119,9 +120,7 @@ SINGLE_OUTCOME_RULE = (
     "may therefore hold one Issue or many."
 )
 
-# The fixed drafting rules the hosted caller added itself move into the
-# engine (Issue #2041). They are page-independent: the ones about a hosted
-# web page stay with the caller.
+# The drafting rules are the engine's own (Issues #2041, #2147).
 DRAFTING_RULES = (
     "Rules for every draft:\n"
     "- Write in the person's language: the Issue titles, the Issue bodies, "
@@ -136,14 +135,14 @@ DRAFTING_RULES = (
     "- Ask a question only when, after reading the repository, the request "
     "itself still does not say what to build — it is empty or contradicts "
     "itself — and no deliverable default version can be written. Then ask "
-    "at most three questions in one call, each with a header of one to "
-    "three words naming the decision and 2 to 4 options, every option a "
-    "label of one to five words plus one sentence of what it means or "
-    "its trade-off. A recommended option, when one exists, is FIRST and "
-    "its label ends with \"" + RECOMMENDED_MARK + "\". Never add a "
-    "\"Other\" option: the page adds the person's own answer row "
-    "itself, and never say the person chose the recommended option: "
-    "they answer in their own words.\n"
+    "at most three questions in one call. A question is one sentence in "
+    "the person's language, with an OPTIONAL header of one to three words "
+    "naming the decision, and OPTIONAL 2 to 4 options when the person has "
+    "to pick: every option a label of one to five words plus one sentence "
+    "of what it means or its trade-off. When one option is the reasonable "
+    "default, its label ends with \"" + RECOMMENDED_MARK + "\". Never "
+    "add an \"Other\" option and never say the person chose the "
+    "recommended option: the person always answers in their own words.\n"
     "- Every other disagreement — which library, font or place to use, "
     "what to leave out, how to word a deliverable version of a request "
     "that cannot be done as asked — is a decision: take the most "
@@ -215,19 +214,20 @@ class DraftOption:
 
 @dataclass(frozen=True)
 class DraftQuestion:
-    """One question as the hosted page reads it (Issue #2136): a header
-    naming the decision and 2–4 options, the recommended one first."""
+    """One question (Issues #2136, #2147): the question itself, an optional
+    header naming the decision and optional 2–4 options to pick from."""
 
     question: str
-    header: str
-    options: tuple[DraftOption, ...]
+    header: str | None = None
+    options: tuple[DraftOption, ...] = ()
 
     def as_json(self) -> dict:
-        return {
-            "question": self.question,
-            "header": self.header,
-            "options": [option.as_json() for option in self.options],
-        }
+        data: dict = {"question": self.question}
+        if self.header is not None:
+            data["header"] = self.header
+        if self.options:
+            data["options"] = [option.as_json() for option in self.options]
+        return data
 
 
 @dataclass(frozen=True)
@@ -336,11 +336,12 @@ def parse_issues(value: object) -> tuple[DraftIssue, ...]:
 
 
 def parse_options(value: object, position: int) -> tuple[DraftOption, ...]:
-    """Validate one question's options: 2 to 4, each a label and a sentence.
-
-    The recommended option is FIRST: that is the position the hosted page
-    preselects from, so a marker anywhere else contradicts the page.
+    """Validate one question's options WHEN it has any: 2 to 4, each a label
+    and a sentence. A question without options is valid, and where a
+    recommended option sits is the caller's business.
     """
+    if value is None:
+        return ()
     if not isinstance(value, list) or not 2 <= len(value) <= 4:
         raise _unreadable(f"question {position} needs 2 to 4 options")
     options: list[DraftOption] = []
@@ -359,32 +360,31 @@ def parse_options(value: object, position: int) -> tuple[DraftOption, ...]:
         options.append(
             DraftOption(label=label.strip(), description=description.strip())
         )
-    marked = [index for index, option in enumerate(options)
-              if option.label.endswith(RECOMMENDED_MARK)]
-    if marked and marked[0] != 0:
-        raise _unreadable(
-            f"question {position}: the recommended option must come first")
     return tuple(options)
 
 
 def parse_questions(value: object) -> tuple[DraftQuestion, ...]:
-    """Validate a round's questions: the object shape the hosted page
-    renders as option buttons — a header, 2–4 options, recommended first.
-    A bare string question carries no options, so the page cannot show it.
+    """Validate a round's questions: the shape the engine defines itself. A
+    bare string is a question with no header and no options (Issue #2147).
     """
     if not isinstance(value, list) or not value:
         raise _unreadable("the answer carries no questions")
     questions: list[DraftQuestion] = []
     for position, entry in enumerate(value, start=1):
+        if isinstance(entry, str):
+            entry = {"question": entry}
         if not isinstance(entry, dict):
             raise _unreadable(f"question {position} is not an object")
         question, header = entry.get("question"), entry.get("header")
         if not isinstance(question, str) or not question.strip():
             raise _unreadable(f"question {position} has no question")
-        if not isinstance(header, str) or not header.strip():
-            raise _unreadable(f"question {position} has no header")
+        if header is not None and (
+            not isinstance(header, str) or not header.strip()
+        ):
+            raise _unreadable(f"question {position} has an unreadable header")
         questions.append(DraftQuestion(
-            question=question.strip(), header=header.strip(),
+            question=question.strip(),
+            header=header.strip() if header is not None else None,
             options=parse_options(entry.get("options"), position),
         ))
     return tuple(questions)
