@@ -63,11 +63,7 @@ page/preview and link checks, provider/config changes use a real provider check,
 concurrency uses contention, setup uses the setup entry point, UI uses a real
 Playwright flow, and internal refactors verify the existing public caller.
 Record the applicable success and failure evidence in tests, journal, Issue/PR, or
-UI; do not invent a database, queue, daemon, or state system for this.
-
-This project is intentionally an MVP. Do not invent a task platform, database,
-queue framework, policy engine, risk model, multi-agent DAG, daemon loop, or fallback path.
-Use the existing GitHub Issue task pool and fail fast with useful logs.
+UI, and fail fast with useful logs.
 
 Minimal implementation — KISS/LEAN (Issue #118):
 
@@ -81,8 +77,6 @@ Minimal implementation — KISS/LEAN (Issue #118):
   acceptance criterion of this Issue.
 - When two designs both satisfy the requirements, choose the simpler one:
   fewer concepts, fewer files.
-- This does not relax the MVP boundary: no database, queue, DAG, daemon,
-  risk engine or fallback.
 
 Hard rules for external behavior (Issue #73):
 
