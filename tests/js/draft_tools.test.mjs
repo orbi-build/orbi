@@ -49,9 +49,26 @@ const TWO_ISSUES = {
   ],
 };
 
+// Issue #2136: a question is the object the hosted page renders as option
+// buttons, the recommended option first.
 const QUESTIONS = {
   reply: "One thing is not in the repository.",
-  questions: ["Which store should the tags live in?"],
+  questions: [
+    {
+      question: "Which store should the tags live in?",
+      header: "Tag store",
+      options: [
+        {
+          label: "A local file (Recommended)",
+          description: "Keeps the tags in the repository's own file.",
+        },
+        {
+          label: "A remote service",
+          description: "Reads and writes the tags over the network.",
+        },
+      ],
+    },
+  ],
 };
 
 /** The production validator: Pi validates tool arguments with this same
@@ -118,10 +135,68 @@ test("the schema rejects a draft the engine cannot create", () => {
 test("the schema keeps the questions a round may ask", () => {
   assert.equal(validates(askUserTool, QUESTIONS), true);
   assert.equal(validates(askUserTool, { reply: "x", questions: [] }), false);
+  const [question] = QUESTIONS.questions;
+  // A bare string question carries no options the page can render.
   assert.equal(
     validates(askUserTool, {
       reply: "x",
-      questions: ["1", "2", "3", "4"],
+      questions: ["Which store should the tags live in?"],
+    }),
+    false,
+  );
+  // No header: the page drops the whole round's questions.
+  assert.equal(
+    validates(askUserTool, {
+      reply: "x",
+      questions: [{ question: question.question, options: question.options }],
+    }),
+    false,
+  );
+  // One option is not a choice, and five is more than the page shows.
+  assert.equal(
+    validates(askUserTool, {
+      reply: "x",
+      questions: [{ ...question, options: [question.options[0]] }],
+    }),
+    false,
+  );
+  assert.equal(
+    validates(askUserTool, {
+      reply: "x",
+      questions: [{
+        ...question,
+        options: [...question.options, ...question.options,
+                  ...question.options, question.options[0]],
+      }],
+    }),
+    false,
+  );
+  // An option without its label or description is not a choice either.
+  assert.equal(
+    validates(askUserTool, {
+      reply: "x",
+      questions: [{
+        ...question,
+        options: [{ description: "no label" }, question.options[1]],
+      }],
+    }),
+    false,
+  );
+  assert.equal(
+    validates(askUserTool, {
+      reply: "x",
+      questions: [{
+        ...question,
+        options: [{ label: "no description" }, question.options[1]],
+      }],
+    }),
+    false,
+  );
+  // Four questions in one round is one too many.
+  assert.equal(
+    validates(askUserTool, {
+      reply: "x",
+      questions: [question, question, question, question],
     }),
     false,
   );

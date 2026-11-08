@@ -482,8 +482,16 @@ Round input and output:
 
 ```json
 {"message": "one sentence", "conversation": [{"role": "person", "text": "..."}], "draft": {"issues": []}}
-{"reply": "what will change", "questions": ["..."], "issues": [{"title": "...", "body": "...", "after": 1}], "check": "passed", "warning": "..."}
+{"reply": "what will change", "questions": [{"question": "What should the other person get?", "header": "Sharing", "options": [{"label": "A read-only link (Recommended)", "description": "Opens the list, cannot change it."}, {"label": "An editable link", "description": "Lets whoever holds it change the list."}]}], "issues": [{"title": "...", "body": "...", "after": 1}], "check": "passed", "warning": "..."}
 ```
+
+`questions` carries at most three questions, in one round, and each is an object:
+`question` (one sentence), `header` (one to three words naming the decision) and
+`options` (2 to 4 choices, each a `label` and a one-sentence `description` of what
+it means or its trade-off). A recommended option, when one exists, is FIRST and
+its label ends with `(Recommended)`. There is no `Other` option: the person's own
+answer is always allowed. A bare string question carries no options, so the engine
+rejects it (`no_answer`).
 
 `after` is the 1-based number of an EARLIER Issue in the same draft that this one
 waits for, or is absent. `issues` is empty when the round only asks questions; a

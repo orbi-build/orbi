@@ -31,6 +31,20 @@ class GhRecorder:
         return [c for c in self.commands if c[:2] == ["gh", "issue"]]
 
 
+def structured_question(question: str, *, header: str = "Choice") -> dict:
+    """One question in the object shape the hosted page reads (Issue #2136)."""
+    return {
+        "question": question,
+        "header": header,
+        "options": [
+            {"label": "Local store (Recommended)",
+             "description": "Keeps everything in one file."},
+            {"label": "Remote store",
+             "description": "Reads and writes through a server."},
+        ],
+    }
+
+
 class FakeSessions:
     """The drafting and fidelity sessions, answered from queues."""
 
@@ -49,11 +63,15 @@ class FakeSessions:
             {"kind": "draft", "reply": reply, "issues": list(issues)},
         )
 
-    def queue_questions(self, *questions: str) -> None:
+    def queue_questions(self, *questions: object) -> None:
         self.rounds.append({
             "kind": "questions",
             "reply": "Which store should it read?",
-            "questions": list(questions) or ["Q?"],
+            "questions": [
+                question if isinstance(question, dict)
+                else structured_question(question)
+                for question in questions
+            ] or [structured_question("Q?")],
         })
 
     def session(self, config, repo, *, session_root, system_prompt, context,

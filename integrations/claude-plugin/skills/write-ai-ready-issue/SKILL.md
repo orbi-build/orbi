@@ -112,11 +112,18 @@ what you chose and why, and draft.
 
 Ask the person only when, after reading the code, the request itself still does
 not say what to build — it is empty or contradicts itself — and no deliverable
-default version can be written. Then ask at most three numbered questions in
-one reply, one sentence each and carrying no suggested answer:
+default version can be written. Then ask at most three questions in one reply.
+Each question carries a header of one to three words naming the decision and
+2 to 4 options, every option a label of one to five words plus one sentence of
+what it means or its trade-off. When one option is the reasonable default, it
+comes first and its label ends with `(Recommended)`. Never add an "Other"
+option: the person's own answer is always allowed. Never say the person chose
+the recommended option.
 
 ```
 Q1 — <question>
+  - <label> (Recommended): <one sentence of what it means>
+  - <label>: <one sentence of what it means>
 ```
 
 A person answers them in their own words; the agent drafts from those answers.

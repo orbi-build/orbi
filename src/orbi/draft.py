@@ -106,6 +106,9 @@ DECLINE = frozenset({"n", "no", "cancel", "q", "quit"})
 # never converges must fail fast instead of spinning forever.
 MAX_ROUNDS = 12
 
+# The marker the hosted page keys on: a question's recommended option is FIRST.
+RECOMMENDED_MARK = "(Recommended)"
+
 # The one rule that replaced the skill's "draft only the first slice": the
 # check reports single_outcome for a request that bundles independent
 # deliverables, so the drafter splits it BEFORE the check ever sees it.
@@ -133,8 +136,14 @@ DRAFTING_RULES = (
     "- Ask a question only when, after reading the repository, the request "
     "itself still does not say what to build — it is empty or contradicts "
     "itself — and no deliverable default version can be written. Then ask "
-    "at most three questions, one sentence each, with no suggested "
-    "answer.\n"
+    "at most three questions in one call, each with a header of one to "
+    "three words naming the decision and 2 to 4 options, every option a "
+    "label of one to five words plus one sentence of what it means or "
+    "its trade-off. A recommended option, when one exists, is FIRST and "
+    "its label ends with \"" + RECOMMENDED_MARK + "\". Never add a "
+    "\"Other\" option: the page adds the person's own answer row "
+    "itself, and never say the person chose the recommended option: "
+    "they answer in their own words.\n"
     "- Every other disagreement — which library, font or place to use, "
     "what to leave out, how to word a deliverable version of a request "
     "that cannot be done as asked — is a decision: take the most "
@@ -194,11 +203,39 @@ class DraftIssue:
 
 
 @dataclass(frozen=True)
+class DraftOption:
+    """One choice a question offers: a short label and what it means."""
+
+    label: str
+    description: str
+
+    def as_json(self) -> dict:
+        return {"label": self.label, "description": self.description}
+
+
+@dataclass(frozen=True)
+class DraftQuestion:
+    """One question as the hosted page reads it (Issue #2136): a header
+    naming the decision and 2–4 options, the recommended one first."""
+
+    question: str
+    header: str
+    options: tuple[DraftOption, ...]
+
+    def as_json(self) -> dict:
+        return {
+            "question": self.question,
+            "header": self.header,
+            "options": [option.as_json() for option in self.options],
+        }
+
+
+@dataclass(frozen=True)
 class DraftAnswer:
     """One drafting-session answer: questions, or a draft, never both."""
 
     reply: str
-    questions: tuple[str, ...] = ()
+    questions: tuple[DraftQuestion, ...] = ()
     issues: tuple[DraftIssue, ...] = ()
 
 
@@ -207,7 +244,7 @@ class DraftRound:
     """One round as the caller reads it (the stdout contract)."""
 
     reply: str
-    questions: tuple[str, ...] = ()
+    questions: tuple[DraftQuestion, ...] = ()
     issues: tuple[DraftIssue, ...] = ()
     check: str | None = None
     warning: str | None = None
@@ -215,7 +252,7 @@ class DraftRound:
     def as_json(self) -> dict:
         data: dict = {
             "reply": self.reply,
-            "questions": list(self.questions),
+            "questions": [question.as_json() for question in self.questions],
             "issues": [issue.as_json() for issue in self.issues],
         }
         if self.check is not None:
@@ -229,6 +266,11 @@ class DraftRound:
 
 def _invalid(detail: str) -> DraftError:
     return DraftError("invalid_input", "read stdin", detail)
+
+
+def _unreadable(detail: str) -> DraftError:
+    """One answer the engine cannot read as a question (Issue #2136)."""
+    return DraftError("no_answer", "read the draft", detail)
 
 
 def read_payload(text: str) -> dict:
@@ -293,6 +335,61 @@ def parse_issues(value: object) -> tuple[DraftIssue, ...]:
     return tuple(issues)
 
 
+def parse_options(value: object, position: int) -> tuple[DraftOption, ...]:
+    """Validate one question's options: 2 to 4, each a label and a sentence.
+
+    The recommended option is FIRST: that is the position the hosted page
+    preselects from, so a marker anywhere else contradicts the page.
+    """
+    if not isinstance(value, list) or not 2 <= len(value) <= 4:
+        raise _unreadable(f"question {position} needs 2 to 4 options")
+    options: list[DraftOption] = []
+    for index, entry in enumerate(value, start=1):
+        if not isinstance(entry, dict):
+            raise _unreadable(
+                f"question {position}, option {index} is not an object")
+        label = entry.get("label")
+        description = entry.get("description")
+        if not isinstance(label, str) or not label.strip():
+            raise _unreadable(
+                f"question {position}, option {index} has no label")
+        if not isinstance(description, str) or not description.strip():
+            raise _unreadable(
+                f"question {position}, option {index} has no description")
+        options.append(
+            DraftOption(label=label.strip(), description=description.strip())
+        )
+    marked = [index for index, option in enumerate(options)
+              if option.label.endswith(RECOMMENDED_MARK)]
+    if marked and marked[0] != 0:
+        raise _unreadable(
+            f"question {position}: the recommended option must come first")
+    return tuple(options)
+
+
+def parse_questions(value: object) -> tuple[DraftQuestion, ...]:
+    """Validate a round's questions: the object shape the hosted page
+    renders as option buttons — a header, 2–4 options, recommended first.
+    A bare string question carries no options, so the page cannot show it.
+    """
+    if not isinstance(value, list) or not value:
+        raise _unreadable("the answer carries no questions")
+    questions: list[DraftQuestion] = []
+    for position, entry in enumerate(value, start=1):
+        if not isinstance(entry, dict):
+            raise _unreadable(f"question {position} is not an object")
+        question, header = entry.get("question"), entry.get("header")
+        if not isinstance(question, str) or not question.strip():
+            raise _unreadable(f"question {position} has no question")
+        if not isinstance(header, str) or not header.strip():
+            raise _unreadable(f"question {position} has no header")
+        questions.append(DraftQuestion(
+            question=question.strip(), header=header.strip(),
+            options=parse_options(entry.get("options"), position),
+        ))
+    return tuple(questions)
+
+
 def parse_answer(value: object) -> DraftAnswer:
     """Parse the extension's answer file: a questions or a draft answer."""
     if not isinstance(value, dict):
@@ -307,22 +404,10 @@ def parse_answer(value: object) -> DraftAnswer:
             "no_answer", "read the draft", "the answer carries no reply",
         )
     if kind == "questions":
-        questions = value.get("questions")
-        if not isinstance(questions, list):
-            raise DraftError(
-                "no_answer", "read the draft",
-                "the answer carries no questions",
-            )
-        kept = tuple(
-            str(question).strip() for question in questions
-            if str(question).strip()
+        return DraftAnswer(
+            reply=reply,
+            questions=parse_questions(value.get("questions")),
         )
-        if not kept:
-            raise DraftError(
-                "no_answer", "read the draft",
-                "the answer carries no questions",
-            )
-        return DraftAnswer(reply=reply, questions=kept)
     if kind == "draft":
         return DraftAnswer(reply=reply, issues=parse_issues(value.get("issues")))
     raise DraftError(
