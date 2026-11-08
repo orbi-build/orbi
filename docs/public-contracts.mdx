@@ -485,13 +485,16 @@ Round input and output:
 {"reply": "what will change", "questions": [{"question": "What should the other person get?", "header": "Sharing", "options": [{"label": "A read-only link (Recommended)", "description": "Opens the list, cannot change it."}, {"label": "An editable link", "description": "Lets whoever holds it change the list."}]}], "issues": [{"title": "...", "body": "...", "after": 1}], "check": "passed", "warning": "..."}
 ```
 
-`questions` carries at most three questions, in one round, and each is an object:
-`question` (one sentence), `header` (one to three words naming the decision) and
-`options` (2 to 4 choices, each a `label` and a one-sentence `description` of what
-it means or its trade-off). A recommended option, when one exists, is FIRST and
-its label ends with `(Recommended)`. There is no `Other` option: the person's own
-answer is always allowed. A bare string question carries no options, so the engine
-rejects it (`no_answer`).
+`questions` carries at most three questions, in one round. A question is
+`{"question", "header"?, "options"?}`: `question` is required (one sentence in the
+person's language), `header` is optional (one to three words naming the decision) and
+`options` is optional — when present, 2 to 4 choices, each a `label` and a one-sentence
+`description` of what it means or its trade-off. A bare string is a question with no
+header and no options, and a question with no options is a valid question. When one
+option is the reasonable default its label ends with `(Recommended)`; the engine does
+not check where that option sits. There is no `Other` option: the person's own answer
+is always allowed. A question is always returned in the shape it was accepted in, so a
+bare string comes back as `{"question": "..."}`.
 
 `after` is the 1-based number of an EARLIER Issue in the same draft that this one
 waits for, or is absent. `issues` is empty when the round only asks questions; a

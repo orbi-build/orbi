@@ -937,8 +937,8 @@ def test_skill_drafts_the_nearest_version_the_code_can_deliver():
 # The skill may ask only when the request itself says too little and no
 # deliverable default version can be written; every other disagreement is a
 # line under Assumptions. The "➜ recommended: …" template and the
-# "All recommended" reply are gone, while a question carries the option shape
-# the hosted page renders (Issue #2136).
+# "All recommended" reply are gone, while a question carries 2–4 options,
+# the default one marked (Issue #2136).
 ASSUMPTION_RULE_PHRASES = (
     "Ask the person only when",
     "no deliverable default version can be written",

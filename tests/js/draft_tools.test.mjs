@@ -49,8 +49,8 @@ const TWO_ISSUES = {
   ],
 };
 
-// Issue #2136: a question is the object the hosted page renders as option
-// buttons, the recommended option first.
+// Issues #2136, #2147: a question is its sentence, with an optional header
+// and optional choices; a recommended option carries the label suffix.
 const QUESTIONS = {
   reply: "One thing is not in the repository.",
   questions: [
@@ -136,23 +136,42 @@ test("the schema keeps the questions a round may ask", () => {
   assert.equal(validates(askUserTool, QUESTIONS), true);
   assert.equal(validates(askUserTool, { reply: "x", questions: [] }), false);
   const [question] = QUESTIONS.questions;
-  // A bare string question carries no options the page can render.
+  // A bare string question is a question with no header and no options, and
+  // a question object may carry neither (Issue #2147).
   assert.equal(
     validates(askUserTool, {
       reply: "x",
       questions: ["Which store should the tags live in?"],
     }),
-    false,
+    true,
   );
-  // No header: the page drops the whole round's questions.
+  assert.equal(
+    validates(askUserTool, {
+      reply: "x",
+      questions: [{ question: question.question }],
+    }),
+    true,
+  );
   assert.equal(
     validates(askUserTool, {
       reply: "x",
       questions: [{ question: question.question, options: question.options }],
     }),
-    false,
+    true,
   );
-  // One option is not a choice, and five is more than the page shows.
+  // Where the recommended option sits is the caller's business: reversed
+  // options are still a valid question.
+  assert.equal(
+    validates(askUserTool, {
+      reply: "x",
+      questions: [{
+        ...question,
+        options: [question.options[1], question.options[0]],
+      }],
+    }),
+    true,
+  );
+  // One option is not a choice, and five is more than a question offers.
   assert.equal(
     validates(askUserTool, {
       reply: "x",

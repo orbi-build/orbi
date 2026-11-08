@@ -408,11 +408,13 @@ Issue 已关闭或已合并，或正在等待已确认的手动动作。该 GitH
 {"reply": "what will change", "questions": [{"question": "What should the other person get?", "header": "Sharing", "options": [{"label": "A read-only link (Recommended)", "description": "Opens the list, cannot change it."}, {"label": "An editable link", "description": "Lets whoever holds it change the list."}]}], "issues": [{"title": "...", "body": "...", "after": 1}], "check": "passed", "warning": "..."}
 ```
 
-`questions` 一轮最多三个，每项是一个对象：`question`（一句话）、`header`
-（一到三个词，点明要做的决定）与 `options`（2 到 4 个选项，每项含 `label` 和
-一句 `description`，说明它的含义或取舍）。存在推荐选项时，它排在最前，且
-`label` 以 `(Recommended)` 结尾。没有 `Other` 选项：始终允许对方用自己的话回答。
-只有字符串的旧式问题不携带选项，引擎会拒绝（`no_answer`）。
+`questions` 一轮最多三个。一个问题形如 `{"question", "header"?, "options"?}`：
+`question` 必填（对方语言的一句话），`header` 可选（一到三个词，点明要做的决定），
+`options` 可选 —— 存在时为 2 到 4 个选项，每项含 `label` 和一句 `description`，
+说明它的含义或取舍。只有字符串的问题等于没有 header、没有 options 的问题；没有
+options 的问题同样是合法问题。存在推荐选项时其 `label` 以 `(Recommended)` 结尾，
+引擎不检查它排在第几。没有 `Other` 选项：始终允许对方用自己的话回答。问题按接受的
+形状原样返回：只有字符串的问题返回为 `{"question": "..."}`。
 
 `after` 是同一草稿中更早 Issue 的 1 起始序号，表示本条要等它，没有则省略。
 只提问的一轮 `issues` 为空；草稿轮至少包含一个 Issue。`check` 只在草稿轮出现：
