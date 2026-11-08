@@ -63,7 +63,7 @@ THREE_ISSUES = [
 FIDELITY_RULES = "Fidelity: remove what the person did not ask for."
 
 # Two options in the shape a question carries (Issue #2136), the recommended
-# one first and marked the way the hosted page keys on it.
+# one marked by its label suffix.
 TWO_OPTIONS = [
     {"label": "A local store (Recommended)",
      "description": "Keeps everything in one file."},
@@ -205,6 +205,61 @@ def test_a_round_that_only_asks_questions_returns_no_issues(
     ] == ["Which store?", "Which language?"]
     assert answer["questions"][0]["header"] == "Choice"
     assert "check" not in answer
+
+
+def test_a_bare_string_question_parses_without_header_or_options(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """A question may be only its sentence (Issue #2147): the engine
+    defines the shape, so what it accepts is what it returns."""
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue({
+        "kind": "questions", "reply": "Two things are missing.",
+        "questions": ["Which store?", "Which language?"],
+    })
+    code, out, err = run_round_cli(
+        config, {"message": "add tags"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    assert json.loads(out)["questions"] == [
+        {"question": "Which store?"}, {"question": "Which language?"},
+    ]
+
+
+def test_a_question_without_a_header_still_parses(
+    config, sessions, monkeypatch, tmp_path,
+):
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue({
+        "kind": "questions", "reply": "One thing is missing.",
+        "questions": [{"question": "Which store?", "options": TWO_OPTIONS}],
+    })
+    code, out, err = run_round_cli(
+        config, {"message": "add tags"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    assert json.loads(out)["questions"] == [
+        {"question": "Which store?", "options": TWO_OPTIONS},
+    ]
+
+
+def test_a_recommended_option_need_not_come_first(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """Where the recommended option sits is the caller's business: the
+    engine returns the options in the order it was given them."""
+    draft_fakes.judge_passing(monkeypatch)
+    options = [TWO_OPTIONS[1], TWO_OPTIONS[0]]
+    sessions.queue({
+        "kind": "questions", "reply": "One thing is missing.",
+        "questions": [{"question": "Which store?", "header": "Store",
+                       "options": options}],
+    })
+    code, out, err = run_round_cli(
+        config, {"message": "add tags"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    assert json.loads(out)["questions"][0]["options"] == options
 
 
 # --- 3: the session resumes; a replay still drafts -----------------------
@@ -880,11 +935,13 @@ def test_a_create_payload_names_its_own_bad_fields(
         ({"kind": "questions", "reply": "x", "questions": "a"}, "no questions"),
         ({"kind": "questions", "reply": "x", "questions": []},
          "no questions"),
-        ({"kind": "questions", "reply": "x", "questions": ["Which store?"]},
+        ({"kind": "questions", "reply": "x", "questions": [123]},
          "question 1 is not an object"),
+        ({"kind": "questions", "reply": "x", "questions": [" "]},
+         "question 1 has no question"),
         ({"kind": "questions", "reply": "x", "questions": [{
-            "question": "Which store?", "options": TWO_OPTIONS,
-        }]}, "question 1 has no header"),
+            "question": "Which store?", "header": 7,
+        }]}, "question 1 has an unreadable header"),
         ({"kind": "questions", "reply": "x", "questions": [{
             "question": " ", "header": "Store", "options": TWO_OPTIONS,
         }]}, "question 1 has no question"),
@@ -911,10 +968,6 @@ def test_a_create_payload_names_its_own_bad_fields(
             "question": "Which store?", "header": "Store",
             "options": [{"label": "Local"}, TWO_OPTIONS[1]],
         }]}, "option 1 has no description"),
-        ({"kind": "questions", "reply": "x", "questions": [{
-            "question": "Which store?", "header": "Store",
-            "options": [TWO_OPTIONS[1], TWO_OPTIONS[0]],
-        }]}, "recommended option must come first"),
         ({"kind": "weird", "reply": "x"}, "unknown answer kind"),
     ],
 )
@@ -1257,8 +1310,7 @@ def test_a_real_answer_to_an_empty_request_asks_with_an_option_shape(
 ):
     """A request that says too little is the one case that asks: three
     questions, each carrying a header and 2–4 options the person can pick,
-    a recommended one first — the object shape the hosted page reads
-    (Issue #2136)."""
+    the recommended one marked by its label suffix (Issue #2136)."""
     draft_fakes.judge_passing(monkeypatch)
     sessions.queue(model_answer("empty-request.zh.json"))
     code, out, err = run_round_cli(
@@ -1283,21 +1335,24 @@ def test_a_real_answer_to_an_empty_request_asks_with_an_option_shape(
             if option["label"].endswith(draft.RECOMMENDED_MARK)
         ]
         assert marked, "the fixture marks a recommended option"
-        assert marked == [0], "the recommended option comes first"
 
 
-def test_the_drafting_rules_teach_the_option_shape():
-    """The prompt teaches the shape the hosted page renders: a header,
-    2–4 options and a recommended one first. The orbi#2133 "how" (a bare
-    question with no suggested answer) is replaced; its "when" stays, with
-    every other disagreement recorded under Assumptions."""
+def test_the_drafting_rules_teach_the_question_shape():
+    """The prompt teaches the engine's own question shape: the question, an
+    optional header, optional 2–4 options and a recommended one marked by
+    its label suffix. Nothing in it exists for one caller's page
+    (Issue #2147). The orbi#2133 "how" (a bare question with no suggested
+    answer) is replaced; its "when" stays, with every other disagreement
+    recorded under Assumptions."""
     prompt = draft.draft_system_prompt()
     assert draft.RECOMMENDED_MARK in prompt
     assert "header" in prompt
     assert "2 to 4 options" in prompt
-    assert "the person's own answer" in prompt
+    assert "answers in their own words" in prompt
     assert "no suggested answer" not in prompt
     assert "Assumptions" in prompt
+    for word in ("hosted", "preselect", "the page"):
+        assert word not in prompt.lower(), word
     # The marker is data the model writes, never a string the CLI hardcodes.
     cli_source = Path(draft_cli.__file__).read_text(encoding="utf-8")
     assert "recommended" not in cli_source.lower()
@@ -1484,8 +1539,8 @@ def test_interactive_prints_no_empty_reply(config, sessions, monkeypatch):
 def test_interactive_prints_each_option_under_its_question(
     config, sessions, monkeypatch,
 ):
-    """The person sees the choices, recommended one first, under the
-    question they answer in typed text (Issue #2136)."""
+    """The person sees the choices, in the order the question gives them,
+    under the question they answer in typed text (Issue #2136)."""
     draft_fakes.judge_passing(monkeypatch)
     sessions.queue_questions({
         "question": "What should the other person get?",
