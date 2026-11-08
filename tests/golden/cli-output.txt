@@ -78,7 +78,7 @@ options:
 $ orbi suggest --help
 usage: python3 -m orbi.cli suggest [-h] [--config CONFIG] [--repo REPO]
                                    [--json] [--count {1,2,3}]
-                                   [--locale {zh,en}]
+                                   [--locale {zh,en}] [--size N]
 
 options:
   -h, --help        show this help message and exit
@@ -89,6 +89,9 @@ options:
                     default 3)
   --locale {zh,en}  write the suggestions and the repository summary in this
                     language (default: the repository's own language)
+  --size N          ask for a task grounded in the repository's own files that
+                    edits at most N files, first, and for a size (estimated
+                    files edited) on every suggestion (default: neither)
 $ orbi draft --help
 usage: python3 -m orbi.cli draft [-h] [--config CONFIG] [--repo REPO]
                                  [--session-dir SESSION_DIR] [--create]
