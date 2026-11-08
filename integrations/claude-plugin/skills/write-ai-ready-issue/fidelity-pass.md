@@ -54,7 +54,7 @@ Apply these rules in order:
    the question that would settle it belongs in the reply to the person.
 6. **Every remaining section is kept as is** — `Request`, `Current state`,
    `Preconditions`, `Evidence`, `Out of scope`, `Assumptions`,
-   `Decisions`, the named commit and the section order are not changed,
+   `Decisions` and the section order are not changed,
    except for the removals rule 3 makes.
 
 When the draft already satisfies every rule above, return it unchanged.

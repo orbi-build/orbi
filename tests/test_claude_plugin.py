@@ -1200,6 +1200,87 @@ def test_fixture_skill_without_the_citation_evidence_rule_fails(tmp_path):
         check_skill_requires_evidence_for_a_line_citation(plugin_dir)
 
 
+# --- One rule in both places: no commit line, Assumptions when a decision ---
+
+# The engine's drafting rules and this skill state the same two rules
+# (Issue #2148). The Issue body stays valid past the commit the agent read,
+# so the skill no longer names one at the top of the full form — with it goes
+# the fidelity pass's "the named commit ... is not changed". And an
+# `Assumptions` section exists only when the agent took at least one
+# decision: no decision, no section.
+COMMIT_LINE_PHRASES = (
+    "commit the agent read",
+    "rev-parse HEAD",
+    "named commit",
+)
+ASSUMPTIONS_ONLY_WITH_A_DECISION = (
+    "only when the agent took at least one decision"
+)
+
+
+def check_skill_names_no_commit(plugin_dir: Path = PLUGIN_DIR) -> None:
+    """Issue #2148: neither the skill nor its fidelity pass asks for a commit
+    line or keeps one."""
+    for name, rel in (("skill", SKILL_REL),
+                      ("fidelity pass", FIDELITY_PASS_REL)):
+        flat = " ".join(read_plugin_file(plugin_dir, rel).split())
+        for phrase in COMMIT_LINE_PHRASES:
+            assert phrase not in flat, (
+                f"{rel}: the {name} still names a commit ({phrase!r}), but "
+                "the Issue body stays valid past that commit (Issue #2148)"
+            )
+
+
+def check_skill_writes_assumptions_only_with_a_decision(
+    plugin_dir: Path = PLUGIN_DIR,
+) -> None:
+    """Issue #2148: the skill and the engine's drafting rules agree — an
+    `Assumptions` section appears only when at least one decision was taken."""
+    flat = " ".join(read_plugin_file(plugin_dir, SKILL_REL).split())
+    assert ASSUMPTIONS_ONLY_WITH_A_DECISION in flat, (
+        f"{SKILL_REL}: missing {ASSUMPTIONS_ONLY_WITH_A_DECISION!r}, so "
+        "every Issue body would carry an Assumptions section again "
+        "(Issue #2148)"
+    )
+    assert "every assumption the agent made instead of asking" not in flat, (
+        f"{SKILL_REL}: the unconditional Assumptions section is back "
+        "(Issue #2148)"
+    )
+
+
+def test_skill_names_no_commit():
+    check_skill_names_no_commit()
+
+
+def test_skill_writes_assumptions_only_when_a_decision_was_taken():
+    check_skill_writes_assumptions_only_with_a_decision()
+
+
+def test_fixture_skill_naming_a_commit_fails(tmp_path):
+    """Counter-proof: restore the commit line and the check fails."""
+    skill_text = read_plugin_file(PLUGIN_DIR, SKILL_REL) + (
+        "\nName the commit the agent read at the top of the full form: "
+        "`git rev-parse HEAD`.\n"
+    )
+    plugin_dir = write_skill_fixture(tmp_path, skill_text=skill_text)
+    with pytest.raises(AssertionError):
+        check_skill_names_no_commit(plugin_dir)
+
+
+def test_fixture_skill_with_an_unconditional_assumptions_section_fails(
+    tmp_path,
+):
+    """Counter-proof: make the Assumptions section unconditional again and the
+    check fails, so the assertion cannot become a no-op."""
+    skill_text = read_plugin_file(PLUGIN_DIR, SKILL_REL).replace(
+        ASSUMPTIONS_ONLY_WITH_A_DECISION,
+        "it carries every assumption the agent made instead of asking",
+    )
+    plugin_dir = write_skill_fixture(tmp_path, skill_text=skill_text)
+    with pytest.raises(AssertionError):
+        check_skill_writes_assumptions_only_with_a_decision(plugin_dir)
+
+
 # --- Counter-proof ------------------------------------------------------------
 
 

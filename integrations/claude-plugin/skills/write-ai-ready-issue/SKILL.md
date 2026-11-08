@@ -60,22 +60,6 @@ Never ask the person for a fact the code, docs or open Issues can answer, and
 never ask which of several reasonable options to take — that is a decision:
 take the default and record it under `Assumptions` (see *Draft first*).
 
-Name the commit the agent read at the top of the full form. With a checkout:
-
-```
-git rev-parse HEAD
-```
-
-Without one, take the default branch head:
-
-```
-gh api repos/<owner>/<repo> --jq .default_branch
-gh api repos/<owner>/<repo>/commits/<branch> --jq .sha
-```
-
-If nothing is readable (no shell, no file access), say which ref the person
-gave. Never invent a commit.
-
 ## Route first, in one line
 
 Before drafting, state the route in one line, then follow it:
@@ -149,13 +133,14 @@ Sections, in this order:
 - `Not included (suggestions)` — everything that was not asked for, one line
   each.
 - `Out of scope` — what this Issue deliberately does not do.
-- `Assumptions` — every assumption the agent made instead of asking, one line
-  each stating what was chosen and why.
+- `Assumptions` — only when the agent took at least one decision: one line
+  each stating what was chosen and why. With no decision taken, the Issue
+  body carries no `Assumptions` section.
 - `Decisions` — choices already made, with the rejected alternative.
 
-The top of the Issue names the commit the agent read. `User outcome`,
-`Preconditions`, `Acceptance` and `Evidence` are the delivery prompts' User
-Journey sections: keep them intact and in the full form.
+`User outcome`, `Preconditions`, `Acceptance` and `Evidence` are the
+delivery prompts' User Journey sections: keep them intact and in the full
+form.
 
 Short form (small route): `Request`, `User outcome`, `Acceptance`, `Evidence`,
 plus `Not included (suggestions)`, `Out of scope`, `Assumptions` or

@@ -1303,6 +1303,25 @@ def test_the_drafting_rules_teach_the_option_shape():
     assert "recommended" not in cli_source.lower()
 
 
+# --- one rule in both places: Assumptions only with a decision (Issue #2148) -
+
+# The engine's drafting rules and the write-ai-ready-issue skill state the
+# same rule: a decision taken instead of asking is one line under
+# Assumptions, and an Issue body with no decision carries no Assumptions
+# section.
+ASSUMPTIONS_ONLY_WITH_A_DECISION = (
+    "An Assumptions section appears only when you took at least one decision"
+)
+
+
+def test_the_drafting_rules_write_assumptions_only_when_a_decision_was_taken():
+    """Issue #2148: the prompt no longer asks for an Assumptions section in
+    every Issue body, matching the skill's non-empty rule."""
+    prompt = draft.draft_system_prompt()
+    assert ASSUMPTIONS_ONLY_WITH_A_DECISION in prompt
+    assert "Every Issue body carries an Assumptions section" not in prompt
+
+
 # --- the interactive loop ------------------------------------------------
 
 class Tty(io.StringIO):
