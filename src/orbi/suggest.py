@@ -21,6 +21,12 @@ the answer validates, `suggestions.json` — the batch a later run avoids
 repeating (Issue #1586), handed to the session as `already_suggested`
 together with the two batches kept before it (Issue #1685).
 
+`--size <n>` (Issue #2139) is the one option that changes the answer's
+shape: it asks for a `size` (estimated files edited) on every suggestion
+and for one small task grounded in the repository's own files to lead the
+answer. Without it the engine asks for, validates and emits no `size` —
+the small-task preference belongs to the caller, not to this command.
+
 The same module owns the `orbi setup` offer (Issue #1576): on a fresh
 repository, after setup's result, a TTY operator is asked once whether to
 run the interactive flow; a caller without a terminal only gets the hint
@@ -90,19 +96,19 @@ SUGGESTIONS_MAX = 3
 # word so the default (3) prompt stays byte-for-byte what it was before
 # the flag existed.
 COUNT_WORDS = {1: "one", 2: "two", 3: "three"}
-# The Suggestions document keys, in one place. `size` (Issue #2131) is
-# the estimated number of files the change edits; it is optional in the
-# answer so an older session answer still validates, and the document
-# always carries it — null when the session did not give an integer.
-SUGGESTION_KEYS = {"kind", "issue", "title", "why", "body", "size"}
-SUGGESTION_REQUIRED_KEYS = SUGGESTION_KEYS - {"size"}
+# The Suggestions document keys, in one place. `size` — the estimated
+# number of files the change edits — joins them only when the caller
+# passed `--size <n>` (Issue #2139): the small-task preference behind it
+# is a caller input, not an engine rule, so a call that did not ask for a
+# size gets neither the key in the answer shape nor in the document.
+SUGGESTION_KEYS = {"kind", "issue", "title", "why", "body"}
+SUGGESTION_SIZE_KEYS = SUGGESTION_KEYS | {"size"}
 # The kept batch: `<run_dir>/suggestions.json`, the subset of the
-# Suggestions document the NEXT run must not propose again.
+# Suggestions document the NEXT run must not propose again (the
+# pre-#2131 shape: whether an earlier pass gave a small task is the
+# caller's batching concern, never engine state — Issue #2139).
 SUGGESTIONS_FILE = "suggestions.json"
-# `size` travels with the batch (Issue #2131): the second --count pass
-# of one suggestion run reads the first pass's sizes from
-# already_suggested and must see whether a small task was already given.
-BATCH_KEYS = ("kind", "issue", "title", "size")
+BATCH_KEYS = ("kind", "issue", "title")
 # How many of the most recent kept batches `already_suggested` merges
 # (Issue #1685): three runs cover a batch split as `--count 1` +
 # `--count 2` and the `--count 1` run of the next batch after it.
@@ -216,6 +222,29 @@ def register_cli(subparsers, common) -> None:
         help="write the suggestions and the repository summary in this "
              "language (default: the repository's own language)",
     )
+    parser.add_argument(
+        "--size", type=_positive_int, default=None, metavar="N",
+        help="ask for a task grounded in the repository's own files that "
+             "edits at most N files, first, and for a size (estimated "
+             "files edited) on every suggestion (default: neither)",
+    )
+
+
+def _positive_int(text: str) -> int:
+    """argparse type for `--size`: a positive integer, fail fast.
+
+    A zero, a negative, a float or a word is an argument error (exit 2)
+    before a run directory or a Pi session exists (Issue #2139).
+    """
+    try:
+        value = int(text)
+    except ValueError:
+        value = None
+    if value is None or value < 1:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not a positive integer"
+        )
+    return value
 
 
 def _is_tty(stream) -> bool:
@@ -271,7 +300,9 @@ def _earlier_batch(config: RunnerConfig, run_id: str) -> list[dict] | None:
             if key in seen:
                 continue
             seen.add(key)
-            merged.append(item)
+            # Only the pre-#2131 keys reach the session (Issue #2139): a
+            # batch v0.7.39 kept with `size` is read without it.
+            merged.append({field: item[field] for field in BATCH_KEYS})
     return merged
 
 
@@ -304,9 +335,42 @@ def _suggestion_locale_suffix(locale: str | None) -> str:
     return f"{suffix} {rules}" if rules else suffix
 
 
+def _size_field(size: int | None) -> str:
+    """The answer template's `size` field, or "" without `--size`."""
+    return (
+        "" if size is None
+        else ', "size": <number of files this change edits>'
+    )
+
+
+def _size_paragraphs(size: int | None) -> str:
+    """The `--size` paragraphs: the size estimate and the small-task rule.
+
+    Absent without `--size` (Issue #2139): the prompt asks for what the
+    call requested and nothing else, so a caller that wants no small task
+    first — or no size at all — gets the plain value-ordered answer.
+    """
+    if size is None:
+        return ""
+    limit = f"{size} file" if size == 1 else f"{size} files"
+    return (
+        "size is the number of files the change edits, as an integer; "
+        "omit it when you cannot estimate it.\n\n"
+        "Small task rule: when the repository offers a task grounded in "
+        f"its own files that edits at most {limit} (a TODO or FIXME in "
+        "code, a test the CI never runs, or an open Issue touching at most "
+        f"{limit}), this answer's first entry is exactly one such task, "
+        "with a why that names the file and line. When there is none, add "
+        "none: never pad an answer to reach three. The small task still "
+        "meets the skill's rules 2 and 5: it is more than a README edit, "
+        "and its why names a concrete path.\n\n"
+    )
+
+
 def _prompt(context_path: Path, repo_dir: Path, repo: str,
             locale: str | None = None,
-            count: int = SUGGESTIONS_MAX) -> str:
+            count: int = SUGGESTIONS_MAX,
+            size: int | None = None) -> str:
     """The Pi prompt argument: absolute paths only, never a body.
 
     The context file carries the Issue/PR bodies; the prompt names it so
@@ -327,32 +391,19 @@ def _prompt(context_path: Path, repo_dir: Path, repo: str,
         "4. Reply with ONE JSON object and nothing else:\n"
         '{"suggestions": [{"kind": "existing" or "new", '
         '"issue": <number> or null, "title": "...", "why": "...", '
-        '"body": <markdown Issue body> or null, "size": <number of files '
-        'this change edits>}]}\n'
+        f'"body": <markdown Issue body> or null{_size_field(size)}}}]}}\n'
         f"At most {COUNT_WORDS[count]} "
         f"{'entry' if count == 1 else 'entries'}, ordered by value to "
         "the repository's users.\n\n"
-        "size is the number of files the change edits, as an integer; "
-        "omit it when you cannot estimate it.\n\n"
-        # Issue #2131: the small-task rule is per ANSWER, not per batch:
-        # a caller (Orbi Cloud) splits one batch into --count 1 and
-        # --count 2 runs, so the second pass reads the first pass's
-        # sizes from already_suggested and gives the one small task only
-        # when it was not already given.
-        "Small task rule (one answer at a time): when already_suggested, "
-        "when present, holds no entry with size <= 2, and the repository "
-        "offers a small task grounded in its own files (a TODO or FIXME "
-        "in code, a test the CI never runs, or an open Issue touching at "
-        "most two files), this answer holds exactly one such task, "
-        "placed first, with a why that names the file and line. When "
-        "there is none, add none: never pad an answer to reach three. "
-        "The small task still meets the skill's rules 2 and 5: it is "
-        "more than a README edit, and its why names a concrete path.\n\n"
+        # Issue #2139: size and the small-task rule are the CALLER's
+        # input (`--size <n>`); without the flag the prompt is the plain
+        # value-ordered answer and carries neither.
+        + _size_paragraphs(size)
         # Issue #2119: the answer is read by the repository owner, not by
         # Orbi, so a why quoting the session's own input (the observed
         # 2026-11-05 answer said "in context.json the open Issues and PRs
         # are both empty") must never reach them.
-        "The title, why and body are shown to the repository owner "
+        + "The title, why and body are shown to the repository owner "
         "exactly as you write them: they must describe the repository "
         "and its Issues and PRs, never Orbi's own input files "
         "(context.json, the run directory), which the owner never "
@@ -425,6 +476,7 @@ def _run_session(config: RunnerConfig, repo: str, run_id: str,
                  run_dir: Path, context_path: Path,
                  agent_dir: Path | None, locale: str | None = None,
                  count: int = SUGGESTIONS_MAX,
+                 size: int | None = None,
                  ) -> tuple[str, list[str]]:
     """Run the ONE read-only suggest Pi session; return (stdout, log argv)."""
     session_dir = run_dir / ".pi-session"
@@ -437,7 +489,7 @@ def _run_session(config: RunnerConfig, repo: str, run_id: str,
     command, log_command = build_pi_command(
         config, ROLE_SUGGEST, IMPLEMENT_EXCLUDED_SKILLS, session_dir,
         SYSTEM_PROMPT,
-        _prompt(context_path, repo_dir, repo, locale, count),
+        _prompt(context_path, repo_dir, repo, locale, count, size),
         context_placeholder="<suggest-context-redacted>",
         tools=SUGGEST_TOOLS, extensions=True,
         no_skills=True, no_context_files=True, skills=[skill],
@@ -581,22 +633,27 @@ def _suggestion_size(entry: dict, title: str) -> int | None:
 
 def _validate_suggestions(entries: list, context: dict,
                           dispatch_label: str,
-                          run_dir: Path) -> list[dict]:
+                          run_dir: Path,
+                          size: int | None = None) -> list[dict]:
     """Validate the answer against the *Suggestions* document.
 
-    Any answer that does not validate is a failure (Article 1.5): unlike
-    the thin-ticket gate there is no fail-open.
+    `size` is the caller's `--size <n>` (Issue #2139): only then does the
+    answer shape allow a `size` key and the document carry one. Any
+    answer that does not validate is a failure (Article 1.5): unlike the
+    thin-ticket gate there is no fail-open.
     """
     open_issues = {issue["number"]: issue for issue in context["issues"]}
+    allowed_keys = SUGGESTION_KEYS if size is None else SUGGESTION_SIZE_KEYS
     suggestions: list[dict] = []
     for entry in entries:
         if (
             not isinstance(entry, dict)
-            or not SUGGESTION_REQUIRED_KEYS <= set(entry) <= SUGGESTION_KEYS
+            or not SUGGESTION_KEYS <= set(entry) <= allowed_keys
         ):
             raise SuggestError(
                 "each suggestion must hold kind, issue, title, why and "
-                "body, and optionally size"
+                "body"
+                + (", and optionally size" if size is not None else "")
             )
         title = entry["title"]
         why = entry["why"]
@@ -604,7 +661,9 @@ def _validate_suggestions(entries: list, context: dict,
             raise SuggestError("suggestion title must be a non-empty string")
         if not isinstance(why, str) or not why.strip():
             raise SuggestError("suggestion why must be a non-empty string")
-        size = _suggestion_size(entry, title)
+        entry_size = (
+            _suggestion_size(entry, title) if size is not None else None
+        )
         # The why is shown to the repository owner as written (Issue
         # #2119): naming the session's own input — the run directory or
         # the context.json in it — is not a reason about the repository.
@@ -637,10 +696,10 @@ def _validate_suggestions(entries: list, context: dict,
                     f"existing suggestion #{number} already carries a "
                     "delivery label"
                 )
-            suggestions.append({
+            item = {
                 "kind": "existing", "issue": number, "title": title,
-                "why": why, "body": None, "size": size,
-            })
+                "why": why, "body": None,
+            }
         elif entry["kind"] == "new":
             if entry["issue"] is not None:
                 raise SuggestError(
@@ -651,14 +710,17 @@ def _validate_suggestions(entries: list, context: dict,
                 raise SuggestError(
                     "a new suggestion must carry a non-empty body"
                 )
-            suggestions.append({
+            item = {
                 "kind": "new", "issue": None, "title": title,
-                "why": why, "body": body, "size": size,
-            })
+                "why": why, "body": body,
+            }
         else:
             raise SuggestError(
                 f"unknown suggestion kind: {entry['kind']!r}"
             )
+        if size is not None:
+            item["size"] = entry_size
+        suggestions.append(item)
     return suggestions
 
 
@@ -669,7 +731,8 @@ def _base_sha(repo_dir: Path) -> str:
 def _build_document(config: RunnerConfig, repo: str, run_id: str,
                     run_dir: Path,
                     locale: str | None = None,
-                    count: int = SUGGESTIONS_MAX
+                    count: int = SUGGESTIONS_MAX,
+                    size: int | None = None,
                     ) -> tuple[dict, dict, str, str | None]:
     """Read, run the session and validate; return the document and facts."""
     context = _gather_context(repo)
@@ -691,7 +754,7 @@ def _build_document(config: RunnerConfig, repo: str, run_id: str,
         )
         output, log_command = _run_session(
             config, repo, run_id, run_dir, context_path, agent_dir, locale,
-            count,
+            count, size,
         )
         understanding.result()
     milestone, dispatch_label = _repo_scan_keys(
@@ -705,7 +768,7 @@ def _build_document(config: RunnerConfig, repo: str, run_id: str,
         # the run (an invalid extra one would otherwise take the kept
         # entries down with it).
         suggestions = _validate_suggestions(
-            entries[:count], context, dispatch_label, run_dir,
+            entries[:count], context, dispatch_label, run_dir, size,
         )
     except SuggestError as exc:
         raise SuggestError(
@@ -809,6 +872,7 @@ def _interactive(config: RunnerConfig, repo: str, document: dict,
 
 def run_suggest(config: RunnerConfig, repo: str, *, json_output: bool,
                 locale: str | None = None, count: int = SUGGESTIONS_MAX,
+                size: int | None = None,
                 dispatch_issue: Callable[..., str],
                 stdin=None, stdout=None,
                 ask: Callable[[str], str] | None = None) -> int:
@@ -829,7 +893,7 @@ def run_suggest(config: RunnerConfig, repo: str, *, json_output: bool,
     event("suggest_started", repo=repo, run_id=run_id)
     try:
         document, context, dispatch_label, milestone = _build_document(
-            config, repo, run_id, run_dir, locale, count,
+            config, repo, run_id, run_dir, locale, count, size,
         )
         if json_output:
             print(json.dumps(document, ensure_ascii=False), file=stdout)

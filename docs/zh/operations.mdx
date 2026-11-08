@@ -703,7 +703,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `suggest_started` | `orbi suggest` 运行开始（该 run 的第一行） |
 | `suggest_created` | `orbi suggest` 创建或标记了一个 Issue |
 | `suggest_failed` | `orbi suggest` 运行失败（结果无效或 `gh` 调用失败） |
-| `suggest_size_invalid` | `orbi suggest` 的某条建议 `size` 不是整数；文档按 `size=null` 输出 |
+| `suggest_size_invalid` | `orbi suggest --size` 的某条建议 `size` 不是整数；文档按 `size=null` 输出（只有该参数才会触达本行） |
 | `suggest_understanding_failed` | `orbi suggest` 的并行理解会话失败或超时（旁路：不写 `understanding.md`） |
 | `draft_session_failed` | 起草会话在写出草稿之后失败：仍然返回该草稿（旁路） |
 | `draft_failed` | `orbi draft` 运行失败（输入无效、会话失败或 `gh` 调用失败） |
@@ -789,7 +789,7 @@ orbi session --pretty --config orbi.toml   # 一行摘要
 
 ### 建议语言与仓库摘要
 
-用 `--locale en` 或 `--locale zh` 选择建议和仓库摘要的语言；不传 `--locale` 时跟随仓库自身的语言。`--count N` 接受 1–3，默认 3。它和控制交付评论、通知的 `message_language` 是两个设置。
+用 `--locale en` 或 `--locale zh` 选择建议和仓库摘要的语言；不传 `--locale` 时跟随仓库自身的语言。`--count N` 接受 1–3，默认 3。`--size <n>`（正整数）要求每条建议都给出 `size`，并让答案的第一条是扎根于仓库自身文件、改动不超过 n 个文件的任务（仓库没有这样的任务时就不给，绝不凑数）；不传 `--size` 时提示词与文档都不含 `size`，建议只按价值排序。它和控制交付评论、通知的 `message_language` 是两个设置。
 
 生成建议时，Orbi 还会尝试把简短仓库摘要写到 `<deploy_home>/.orbi/suggest/<run_id>/understanding.md`；摘要失败不会让建议失败。成功或失败后，运行目录及已经生成的文件都会保留；结果通过校验后才会写入 `suggestions.json`。建议会避开最近三批已提过的内容；`--json` 只打印结果，不提交 Issue。交互模式只有你确认的建议才会提交。
 
