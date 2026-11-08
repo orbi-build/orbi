@@ -71,15 +71,56 @@ const draftParameters = Type.Object(
 	{ additionalProperties: false },
 );
 
+/**
+ * Issue #2136: a question is the object the hosted page renders as option
+ * buttons, never a bare string. The header names the decision (the page shows
+ * it as the question's chip) and the options are the person's choices; the
+ * page adds the person's own answer row itself, so there is no "Other" option
+ * here.
+ */
+const askOption = Type.Object(
+	{
+		label: Type.String({
+			minLength: 1,
+			description: "One to five words: the choice the person picks",
+		}),
+		description: Type.String({
+			minLength: 1,
+			description: "One sentence: what it means or its trade-off",
+		}),
+	},
+	{ additionalProperties: false },
+);
+
+const askQuestion = Type.Object(
+	{
+		question: Type.String({
+			minLength: 1,
+			description: "One sentence, in the person's language",
+		}),
+		header: Type.String({
+			minLength: 1,
+			description: "One to three words naming the decision, e.g. Sharing",
+		}),
+		options: Type.Array(askOption, {
+			minItems: 2,
+			maxItems: 4,
+			description:
+				"The 2 to 4 choices; when one is the reasonable default, it is FIRST and its label ends with (Recommended)",
+		}),
+	},
+	{ additionalProperties: false },
+);
+
 const askParameters = Type.Object(
 	{
 		reply: Type.String({
 			description: "One plain-language sentence for the person",
 		}),
-		questions: Type.Array(Type.String({ minLength: 1 }), {
+		questions: Type.Array(askQuestion, {
 			minItems: 1,
 			maxItems: 3,
-			description: "The numbered questions to ask, in the person's language",
+			description: "The questions to ask, in the person's language",
 		}),
 	},
 	{ additionalProperties: false },
@@ -116,10 +157,16 @@ export const askUserTool = {
 	name: ASK_USER_TOOL,
 	label: "Ask the person",
 	description:
-		"Ask the person up to three questions, one sentence each and with no " +
-		"suggested answer. Call this only when the request itself does not " +
-		"say what to build and no deliverable default can be written, and " +
-		"never in the same turn as write_draft.",
+		"Ask the person up to three questions in one call. Each question " +
+		"carries a header of one to three words naming the decision and 2 " +
+		"to 4 options, every option a label plus one sentence of what it " +
+		"means or its trade-off. When one option is the reasonable default, " +
+		"put it FIRST and end its label with (Recommended); never add an " +
+		"Other option, because the person's own answer is always allowed. " +
+		"Never say the person chose the recommended option. Call this only " +
+		"when the request itself does not say what to build and no " +
+		"deliverable default can be written, and never in the same turn as " +
+		"write_draft.",
 	parameters: askParameters,
 	async execute(_toolCallId: string, args: object) {
 		return writeAnswer("questions", args);

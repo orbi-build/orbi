@@ -936,12 +936,14 @@ def test_skill_drafts_the_nearest_version_the_code_can_deliver():
 
 # The skill may ask only when the request itself says too little and no
 # deliverable default version can be written; every other disagreement is a
-# line under Assumptions. The "Q1 — … ➜ recommended: …" template and the
-# "All recommended" reply are gone.
+# line under Assumptions. The "➜ recommended: …" template and the
+# "All recommended" reply are gone, while a question carries the option shape
+# the hosted page renders (Issue #2136).
 ASSUMPTION_RULE_PHRASES = (
     "Ask the person only when",
     "no deliverable default version can be written",
-    "no suggested answer",
+    "2 to 4 options",
+    "the person's own answer",
     "what you chose and why",
 )
 
@@ -950,14 +952,15 @@ def check_skill_writes_a_default_answer_as_an_assumption(
     plugin_dir: Path = PLUGIN_DIR,
 ) -> None:
     """Issue #2133: a default answer is an assumption line, and a question is
-    the narrow empty/contradictory-request case with no suggested answer."""
+    the narrow empty/contradictory-request case. Issue #2136: that question
+    carries 2–4 options, a recommended one first."""
     flat = " ".join(read_plugin_file(plugin_dir, SKILL_REL).split())
     for phrase in ASSUMPTION_RULE_PHRASES:
         assert phrase in flat, (
             f"{SKILL_REL}: missing {phrase!r}, so a question with a default "
-            "answer can come back (Issue #2133)"
+            "answer can come back (Issue #2133, #2136)"
         )
-    for removed in ("recommended", "All recommended", "➜"):
+    for removed in ("All recommended", "➜"):
         assert removed not in flat, (
             f"{SKILL_REL}: the {removed!r} question form is gone "
             "(Issue #2133)"

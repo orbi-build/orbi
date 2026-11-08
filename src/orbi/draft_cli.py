@@ -101,7 +101,14 @@ def _interactive(
                 for position, question in enumerate(
                     round_.questions, start=1,
                 ):
-                    print(f"Q{position} — {question}", file=stdout)
+                    print(
+                        f"Q{position} — {question.question}", file=stdout,
+                    )
+                    for option in question.options:
+                        print(
+                            f"  - {option.label}: {option.description}",
+                            file=stdout,
+                        )
                 answer = _ask(stdin, stdout, "Your answers: ")
                 if answer is None:
                     return _declined(stdout)
