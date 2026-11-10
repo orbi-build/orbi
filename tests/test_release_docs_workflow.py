@@ -261,6 +261,103 @@ def test_release_docs_page_drops_html_comments_and_the_leading_heading():
     assert "orbi:run" not in page
 
 
+def test_release_docs_page_escapes_mdx_hazards_in_the_notes():
+    """Issue #2154: a changelog bullet copied from a PR title may carry
+    `<…>` or `{…}`. In MDX `<n>` opens a JSX tag and `{` opens an
+    expression, so the verbatim body broke the Mintlify build
+    (`Expected a closing tag for `<n>``). The page renders them as text.
+    """
+    script = load_script()
+    page = script.release_docs_page(
+        version=TAG, tag_object=TAG_OBJECT, release_commit=RELEASE_COMMIT,
+        published_at=PUBLISHED_AT, release_url=RELEASE_URL, issue_number=42,
+        body=(
+            f"# {TAG}\n\n## Changelog\n\n"
+            "- orbi suggest: the small-task preference is a caller input "
+            "(--size <n>), not a built-in rule; the draft returns {x} "
+            "([Issue #1](https://example.test/1))\n"
+        ),
+        language="en",
+    )
+    _, body_lines = _page_fields(page)
+    body = "\n".join(body_lines)
+    assert "(--size &lt;n>)" in body, body
+    assert "&#123;x&#125;" in body, body
+    assert "<n>" not in body, body
+    assert "{x}" not in body, body
+    # The link markdown of the bullet still renders as a link.
+    assert "[Issue #1](https://example.test/1)" in body, body
+
+
+def test_release_docs_page_keeps_code_spans_and_html_tags_verbatim():
+    """Issue #2154: only the hazard characters change. Text already in
+    backticks (inline code or a fenced block) is never rewritten, and the
+    HTML a release body legitimately carries — the balanced
+    `<a …><img … /></a>` contributor block and a balanced MDX component
+    such as `<Note>…</Note>` — still renders as markup, not as text."""
+    script = load_script()
+    page = script.release_docs_page(
+        version=TAG, tag_object=TAG_OBJECT, release_commit=RELEASE_COMMIT,
+        published_at=PUBLISHED_AT, release_url=RELEASE_URL, issue_number=42,
+        body=(
+            f"# {TAG}\n\n## Changelog\n\n"
+            "- the flag `--size <n>` keeps its spelling and `{x}` stays "
+            "code ([Issue #1](https://example.test/1))\n\n"
+            "```text\n- a fenced <n> and {x} stay verbatim\n```\n\n"
+            "## Contributors\n\n"
+            '<a href="https://github.com/orbi-build"><img '
+            'src="https://example.test/avatar.png" width="32" />'
+            "</a>\n\n"
+            "<Note>Corrected after release.</Note>\n"
+        ),
+        language="en",
+    )
+    _, body_lines = _page_fields(page)
+    body = "\n".join(body_lines)
+    assert "`--size <n>`" in body, body
+    assert "`{x}`" in body, body
+    assert "- a fenced <n> and {x} stay verbatim" in body, body
+    assert '<a href="https://github.com/orbi-build">' in body, body
+    assert 'src="https://example.test/avatar.png" width="32" />' in body, body
+    assert "</a>" in body, body
+    assert "<Note>Corrected after release.</Note>" in body, body
+
+
+def test_escape_mdx_notes_leaves_an_unmatched_closing_tag_escaped():
+    """Issue #2154: a closing tag with no opening tag is the same build
+    failure in the other direction — it is escaped, not trusted."""
+    script = load_script()
+    escaped = script.escape_mdx_notes("a </n> b <n> c <x></x>\n")
+    assert "&lt;/n>" in escaped, escaped
+    assert "&lt;n>" in escaped, escaped
+    assert "<x></x>" in escaped, escaped
+    # A tag never spans a line: the unterminated "<y" is text, not markup.
+    assert "&lt;y" in script.escape_mdx_notes("d <y\n and z>\n")
+
+
+def test_escape_mdx_notes_handles_mismatched_backtick_runs():
+    """Issue #2154: a backtick run of a different length does not close an
+    inline code span (CommonMark), so the text after it is still escaped
+    and the code content stays verbatim."""
+    script = load_script()
+    escaped = script.escape_mdx_notes("a `x``y` <n> b\n")
+    assert "`x``y`" in escaped, escaped
+    assert "&lt;n>" in escaped, escaped
+
+
+def test_release_docs_page_description_keeps_the_literal_hazard_characters():
+    """Issue #2154: the frontmatter `description` is a YAML scalar, not
+    MDX — it keeps the bullet's literal characters."""
+    script = load_script()
+    page = script.release_docs_page(
+        version=TAG, tag_object=TAG_OBJECT, release_commit=RELEASE_COMMIT,
+        published_at=PUBLISHED_AT, release_url=RELEASE_URL, issue_number=42,
+        body=f"# {TAG}\n\n## Changelog\n\n- an input (--size <n>)\n",
+        language="en",
+    )
+    assert "(--size <n>)" in _page_fields(page)[0]["description"]
+
+
 def test_release_docs_page_rejects_an_unknown_language():
     script = load_script()
     with pytest.raises(script.ReleaseDocsError, match="not supported"):

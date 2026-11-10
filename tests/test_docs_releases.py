@@ -205,6 +205,105 @@ def test_only_the_highest_version_pages_carry_latest_markers():
         assert ("（最新）" in zh_title) is is_latest
 
 
+# Issue #2154: a release body is copied into the page, and MDX parses
+# `<n>` as a JSX tag and `{` as an expression. The generator escapes
+# those characters outside code; these helpers re-derive the MDX rule the
+# build applies (never the generator's own implementation) from the page.
+INLINE_CODE_SPAN = re.compile(r"`[^`\n]*`")
+MDX_TAG = re.compile(r"<(/?)([A-Za-z][\w.:-]*)([^<>\n]*?)(/?)>")
+
+
+def mdx_prose(page: str) -> str:
+    """The MDX body of a page: frontmatter, fenced blocks and inline code
+    spans removed (MDX parses nothing inside any of them)."""
+    lines = page.splitlines()
+    assert lines and lines[0] == "---", "the page must open with frontmatter"
+    end = lines.index("---", 1) + 1
+    kept: list[str] = []
+    in_fence = False
+    for line in lines[end:]:
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        kept.append(INLINE_CODE_SPAN.sub("", line))
+    return "\n".join(kept)
+
+
+def mdx_hazards(prose: str) -> list[str]:
+    """What MDX rejects in `prose`: a bare `{`/`}` expression, and any
+    `<…>` that is neither self-closing nor part of a balanced open/close
+    pair. Issue #2154 is the second case: a changelog bullet's
+    `the caller input (--size <n>)` was copied verbatim and Mintlify
+    failed with `Expected a closing tag for `<n>``, so the deployment
+    was never updated."""
+    hazards: list[str] = []
+    open_tags: list[str] = []
+    for match in re.finditer(r"<[^<>\n]*>|[{}]", prose):
+        token = match.group(0)
+        if token in ("{", "}"):
+            hazards.append(token)
+            continue
+        tag = MDX_TAG.fullmatch(token)
+        if tag is None:
+            hazards.append(token)
+            continue
+        closing, name, _, self_closing = tag.groups()
+        if self_closing:
+            continue
+        if closing:
+            if open_tags and open_tags[-1] == name:
+                open_tags.pop()
+            else:
+                hazards.append(token)
+            continue
+        open_tags.append(name)
+    hazards.extend(f"<{name}> (unclosed)" for name in open_tags)
+    return hazards
+
+
+def test_mdx_hazard_check_detects_the_v0_7_41_failure():
+    """Issue #2154: the checker really fails on the shipped defect, so the
+    page assertion below is not vacuous. It sees the v0.7.41 bullet's
+    `(--size <n>)`, a bare `{x}`, an unmatched closing tag and a
+    non-tag `<3>`; it ignores a balanced pair, a self-closing tag, a
+    fenced block and an inline code span."""
+    page = (
+        "---\ntitle: sample\n---\n"
+        "\n"
+        "- </n> and a <b>closed</b> and a <img />\n"
+        "- a bare {x} and <3>\n"
+        "- the caller input (--size <n>)\n"
+        "```text\n"
+        "- a fenced <n> stays code\n"
+        "```\n"
+        "- `{x}` in code stays code\n"
+    )
+    assert mdx_hazards(mdx_prose(page)) == [
+        "</n>", "{", "}", "<3>", "<n> (unclosed)",
+    ]
+
+
+def test_latest_release_pages_are_mdx_safe():
+    """Issue #2154: the release pages must parse as MDX.
+
+    The newest page is the one `tools/release_docs.py` last wrote, so
+    this check follows the newest release: a hazard in the next page the
+    release workflow commits would break the Mintlify deployment the same
+    way v0.7.41 did.
+    """
+    for language_code, prefix in (("en", ""), ("zh", "zh/")):
+        slug = release_group_pages(language_code)[0].removeprefix(prefix)
+        page = (DOCS_DIR / f"{slug}.mdx").read_text(encoding="utf-8")
+        hazards = mdx_hazards(mdx_prose(page))
+        assert not hazards, (
+            f"docs/{slug}.mdx does not parse as MDX ({language_code}): "
+            f"{hazards} — the release notes must render '<', '{{' and '}}' "
+            "as text outside code (Issue #2154)"
+        )
+
+
 # Issue #910: the two pre-generator releases moved their records into
 # the GitHub Release bodies and their docs pages are gone. The tags
 # stay (a tag is never moved or deleted), so these two are the pinned

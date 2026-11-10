@@ -20,6 +20,12 @@ frontmatter (Mintlify renders the frontmatter `title` as the page's single H1)
 instead of opening with a body `# …` heading; the description is built from
 that release's own changelog.
 
+Issue #2154: the body is MDX, not Markdown. A changelog bullet copied from a
+PR title may carry `<…>` or `{…}`, which MDX parses as a JSX tag or an
+expression — a release whose notes carried `(--size <n>)` failed the Mintlify
+build ("Expected a closing tag for `<n>`") and was never published. The
+renderer escapes those characters outside code, so they render as text.
+
 Input: one tag. The script reads the published GitHub Release
 (`gh release view <tag> --json body,publishedAt,url`), the annotated tag object
 and its commit (git), and the release task Issue (the `ai-release` Issue titled
@@ -69,6 +75,20 @@ RELEASE_BODY_DROP_SECTION_HEADINGS = (
 )
 
 
+# MDX parses `<name …>` as JSX and `{…}` as an expression, so a release
+# body copied verbatim breaks the Mintlify build (Issue #2154: a changelog
+# bullet's `(--size <n>)` failed with `Expected a closing tag for `<n>``,
+# and the deployment was never updated). A character that must render as
+# text becomes a character reference: MDX decodes it back to text and never
+# reads it as markup.
+_MDX_TEXT_REFERENCES = {"<": "&lt;", "{": "&#123;", "}": "&#125;"}
+_A_FENCE_LINE = re.compile(r"\s*(`{3,}|~{3,})")
+# One single-line tag of the body's own HTML or MDX component, e.g.
+# <a href="...">, <img ... /> or <Note>. A tag never spans a line here:
+# an unmatched <x must be escaped, never paired with a later >.
+_AN_MDX_TAG = re.compile(r"<(/?)([A-Za-z][\w.:-]*)([^<>\n]*?)(/?)>")
+
+
 class ReleaseDocsError(RuntimeError):
     """A release-docs precondition failed — fail fast, never guess."""
 
@@ -90,6 +110,77 @@ def strip_release_audit_sections(notes: str) -> str:
             continue
         kept.append(line)
     return "\n".join(kept).strip()
+
+
+def _mdx_code_mask(text: str) -> list[bool]:
+    """`True` per character MDX parses as code, never as markup: a fenced
+    code block or an inline code span (a backtick run matched by a run of
+    the same length)."""
+    mask = [False] * len(text)
+    offset = 0
+    fence: str | None = None
+    for line in text.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        if fence is not None:
+            mask[offset:offset + len(line)] = [True] * len(line)
+            if body.lstrip().startswith(fence):
+                fence = None
+        else:
+            opening = _A_FENCE_LINE.match(body)
+            if opening:
+                fence = opening.group(1)
+                mask[offset:offset + len(line)] = [True] * len(line)
+            else:
+                cursor = tick = start = 0
+                while cursor < len(body):
+                    if body[cursor] != "`":
+                        cursor += 1
+                        continue
+                    end = cursor
+                    while end < len(body) and body[end] == "`":
+                        end += 1
+                    if tick == 0:
+                        tick, start = end - cursor, cursor
+                    elif end - cursor == tick:
+                        mask[offset + start:offset + end] = (
+                            [True] * (end - start)
+                        )
+                        tick = 0
+                    cursor = end
+        offset += len(line)
+    return mask
+
+
+def escape_mdx_notes(notes: str) -> str:
+    """The release notes as MDX-safe text (Issue #2154).
+
+    `<`, `{` and `}` outside code become character references, so
+    `(--size <n>)` and `{x}` render as text instead of an unclosed JSX
+    tag or an expression. Code (fenced blocks and backtick spans) is never
+    rewritten, and real markup survives: a `<…>` span is left alone only
+    when it is a self-closing tag or a balanced open/close pair — anything
+    else is prose.
+    """
+    locked = _mdx_code_mask(notes)
+    masked = "".join(
+        "_" if is_code else char
+        for char, is_code in zip(notes, locked)
+    )
+    open_tags: list[tuple[str, int]] = []
+    for tag in _AN_MDX_TAG.finditer(masked):
+        closing, name = tag.group(1), tag.group(2)
+        if tag.group(4):
+            locked[tag.start()] = True
+        elif closing:
+            if open_tags and open_tags[-1][0] == name:
+                locked[open_tags.pop()[1]] = True
+                locked[tag.start()] = True
+        else:
+            open_tags.append((name, tag.start()))
+    return "".join(
+        char if is_code else _MDX_TEXT_REFERENCES.get(char, char)
+        for char, is_code in zip(notes, locked)
+    )
 
 
 def changelog_bullets(notes: str) -> list[str]:
@@ -204,9 +295,12 @@ def release_docs_page(*, version: str, tag_object: str,
         if not line.strip().startswith("<!--")
     ]
     notes = strip_release_audit_sections("\n".join(lines))
+    # The description is a YAML scalar (not MDX) and keeps the literal
+    # characters; the body must render them as text (Issue #2154).
     description = release_docs_description(
         version=version, language=language, notes=notes,
     )
+    notes = escape_mdx_notes(notes)
     task_en = (
         f" (release task: Issue #{issue_number})"
         if issue_number is not None else ""
