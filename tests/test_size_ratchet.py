@@ -17,12 +17,12 @@ def load_tool():
     return module
 
 
-def write_baseline(path, *, defs=1, oversized=None, functions=None):
+def write_baseline(path, *, defs=1, modules=None, functions=None):
     path.write_text(
         json.dumps(
             {
                 "runner_top_level_defs": defs,
-                "oversized_modules": oversized or {},
+                "module_lines": modules or {},
                 "oversized_functions": functions or {},
             }
         ),
@@ -59,13 +59,13 @@ def test_new_runner_definition_fails_but_nested_definition_does_not(tmp_path, ca
     assert "runner_top_level_defs" in capsys.readouterr().out
 
 
-def test_baselined_file_must_not_grow_but_can_shrink(tmp_path):
+def test_baselined_file_must_not_grow_but_can_shrink(tmp_path, capsys):
     src_dir = tmp_path / "src"
     src_dir.mkdir()
     (src_dir / "runner.py").write_text("", encoding="utf-8")
     write_module(src_dir, "large.py", 1002)
     baseline = tmp_path / "baseline.json"
-    write_baseline(baseline, defs=0, oversized={"large.py": 1002})
+    write_baseline(baseline, defs=0, modules={"large.py": 1002})
 
     tool = load_tool()
     assert tool.main(["size_ratchet.py"], src_dir=src_dir, baseline_file=baseline) == 0
@@ -73,6 +73,26 @@ def test_baselined_file_must_not_grow_but_can_shrink(tmp_path):
     assert tool.main(["size_ratchet.py"], src_dir=src_dir, baseline_file=baseline) == 0
     write_module(src_dir, "large.py", 1003)
     assert tool.main(["size_ratchet.py"], src_dir=src_dir, baseline_file=baseline) == 1
+    assert "large.py: current 1003 > ceiling 1002" in capsys.readouterr().out
+
+
+def test_recorded_module_under_the_cap_is_capped_at_its_own_length(tmp_path, capsys):
+    """Issue #2167: the 1,000-line cap only applies to modules absent from the
+    baseline; a recorded module keeps its own ceiling."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "runner.py").write_text("", encoding="utf-8")
+    write_module(src_dir, "small.py", 300)
+    baseline = tmp_path / "baseline.json"
+    write_baseline(baseline, defs=0, modules={"small.py": 300})
+    tool = load_tool()
+
+    assert tool.main(["size_ratchet.py"], src_dir=src_dir, baseline_file=baseline) == 0
+    write_module(src_dir, "small.py", 299)
+    assert tool.main(["size_ratchet.py"], src_dir=src_dir, baseline_file=baseline) == 0
+    write_module(src_dir, "small.py", 301)
+    assert tool.main(["size_ratchet.py"], src_dir=src_dir, baseline_file=baseline) == 1
+    assert "small.py: current 301 > ceiling 300" in capsys.readouterr().out
 
 
 def test_new_module_crossing_cap_fails_but_boundary_passes(tmp_path):
@@ -131,16 +151,18 @@ def test_counts_records_qualified_names_for_nested_and_method_defs(tmp_path):
         encoding="utf-8",
     )
 
-    recorded = load_tool().counts(src_dir)["oversized_functions"]
+    measured = load_tool().counts(src_dir)
+    recorded = measured["oversized_functions"]
 
     assert recorded == {
         "mod.py::Box.method": 101,
         "mod.py::outer": 102,
         "mod.py::outer.inner": 101,
     }
+    assert measured["module_lines"] == {"mod.py": 205, "runner.py": 0}
 
 
-def test_update_records_current_values_and_prunes_small_files(tmp_path):
+def test_update_records_every_module_and_prunes_removed_ones(tmp_path):
     src_dir = tmp_path / "src"
     src_dir.mkdir()
     (src_dir / "runner.py").write_text("def one():\n    pass\n", encoding="utf-8")
@@ -152,7 +174,7 @@ def test_update_records_current_values_and_prunes_small_files(tmp_path):
     write_baseline(
         baseline,
         defs=99,
-        oversized={"large.py": 1001, "gone.py": 2000},
+        modules={"large.py": 1001, "gone.py": 2000},
         functions={"funcs.py::big": 150, "funcs.py::gone": 130},
     )
 
@@ -161,9 +183,38 @@ def test_update_records_current_values_and_prunes_small_files(tmp_path):
     ) == 0
     assert json.loads(baseline.read_text(encoding="utf-8")) == {
         "runner_top_level_defs": 1,
-        "oversized_modules": {"still_large.py": 1001},
+        "module_lines": {
+            "large.py": 1000,
+            "still_large.py": 1001,
+            "funcs.py": 120,
+            "small.py": 100,
+            "runner.py": 2,
+        },
         "oversized_functions": {"funcs.py::big": 120},
     }
+
+
+def test_refreezing_a_shrunk_module_records_the_lower_number(tmp_path):
+    """Issue #2167: shrinking passes, and re-freezing tightens the ceiling."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "runner.py").write_text("", encoding="utf-8")
+    write_module(src_dir, "mod.py", 500)
+    baseline = tmp_path / "baseline.json"
+    write_baseline(baseline, defs=0, modules={"mod.py": 500})
+    tool = load_tool()
+
+    write_module(src_dir, "mod.py", 400)
+    assert tool.main(["size_ratchet.py"], src_dir=src_dir, baseline_file=baseline) == 0
+    assert tool.main(
+        ["size_ratchet.py", "--update"], src_dir=src_dir, baseline_file=baseline
+    ) == 0
+    assert json.loads(baseline.read_text(encoding="utf-8"))["module_lines"] == {
+        "mod.py": 400,
+        "runner.py": 0,
+    }
+    write_module(src_dir, "mod.py", 450)
+    assert tool.main(["size_ratchet.py"], src_dir=src_dir, baseline_file=baseline) == 1
 
 
 def test_script_entrypoint_exits_successfully(monkeypatch):
@@ -186,22 +237,22 @@ def test_missing_and_malformed_baselines_fail(tmp_path):
     for value in (
         "not json",
         json.dumps({"runner_top_level_defs": 0}),
-        json.dumps({"runner_top_level_defs": 0, "oversized_modules": {"x": True}}),
-        json.dumps({"runner_top_level_defs": True, "oversized_modules": {}}),
+        json.dumps({"runner_top_level_defs": 0, "module_lines": {"x": True}}),
+        json.dumps({"runner_top_level_defs": True, "module_lines": {}}),
         json.dumps(
-            {"runner_top_level_defs": 0, "oversized_modules": {}, "oversized_functions": []}
+            {"runner_top_level_defs": 0, "module_lines": {}, "oversized_functions": []}
         ),
         json.dumps(
             {
                 "runner_top_level_defs": 0,
-                "oversized_modules": {},
+                "module_lines": {},
                 "oversized_functions": {"x": True},
             }
         ),
         json.dumps(
             {
                 "runner_top_level_defs": 0,
-                "oversized_modules": {},
+                "module_lines": {},
                 "oversized_functions": {"x": "120"},
             }
         ),

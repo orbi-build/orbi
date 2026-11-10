@@ -162,13 +162,14 @@ jobs:
       - name: Enforce the patch ratchet (contract, Issue #789)
         run: python3 tools/patch_ratchet.py
 
-      # Size ratchet (Issues #1229, #2007): Article 3 freezes runner.py's
-      # direct top-level definitions, prevents modules over 1,000 lines
-      # from growing, and records every function over 100 lines with its
-      # own ceiling (a new function crossing 100 lines fails). Extract code
-      # into a sibling module/function, or deliberately lower a measured
-      # value and run `python3 tools/size_ratchet.py --update` to refreeze
-      # tools/size_ratchet_baseline.json.
+      # Size ratchet (Issues #1229, #2007, #2167): Article 3 freezes runner.py's
+      # direct top-level definitions, records every src/orbi module's line
+      # count so an existing module may only shrink (a module absent from the
+      # baseline keeps the 1,000-line cap), and records every function over
+      # 100 lines with its own ceiling (a new function crossing 100 lines
+      # fails). Extract code into a sibling module/function, or deliberately
+      # lower a measured value and run `python3 tools/size_ratchet.py --update`
+      # to refreeze tools/size_ratchet_baseline.json.
       - name: Enforce the size ratchet (contract, Issues #1229, #2007)
         run: python3 tools/size_ratchet.py
 

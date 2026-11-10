@@ -4,8 +4,13 @@
 The frozen baseline records three metrics:
 
 - the number of top-level definitions in ``runner.py``;
-- the line counts of modules already over 1,000 lines (Article 3.5);
+- the line count of every module in ``src/orbi`` (Issue #2167);
 - the line counts of every function in ``src/orbi`` already over 100 lines.
+
+A module that exists in the baseline is checked against its recorded line
+count, so it may only shrink; the 1,000-line ``SIZE_CAP`` applies only to a
+module absent from the baseline. Recording every module (not only the ones
+over the cap) is what gives an existing module its own ceiling.
 
 A function's length is measured over every ``ast.FunctionDef``/
 ``ast.AsyncFunctionDef`` with ``end_lineno - lineno + 1`` (decorators are
@@ -45,7 +50,7 @@ def _functions(node: ast.AST, prefix: str = ""):
 
 
 def counts(src_dir: Path) -> dict[str, object]:
-    """Measure runner's direct definitions, oversized modules and functions."""
+    """Measure runner's direct definitions, module lengths and functions."""
     src_dir = Path(src_dir)
     runner = src_dir / "runner.py"
     tree = ast.parse(runner.read_text(encoding="utf-8"), filename=str(runner))
@@ -53,10 +58,9 @@ def counts(src_dir: Path) -> dict[str, object]:
         isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
         for node in tree.body
     )
-    oversized_modules = {
+    module_lines = {
         path.name: len(path.read_text(encoding="utf-8").splitlines())
         for path in sorted(src_dir.glob("*.py"))
-        if len(path.read_text(encoding="utf-8").splitlines()) > SIZE_CAP
     }
     oversized_functions = {
         f"{path.name}::{name}": lines
@@ -68,7 +72,7 @@ def counts(src_dir: Path) -> dict[str, object]:
     }
     return {
         "runner_top_level_defs": runner_top_level_defs,
-        "oversized_modules": oversized_modules,
+        "module_lines": module_lines,
         "oversized_functions": oversized_functions,
     }
 
@@ -91,7 +95,7 @@ def read_baseline(baseline_file: Path) -> dict[str, object] | None:
     if (
         not isinstance(baseline, dict)
         or type(baseline.get("runner_top_level_defs")) is not int
-        or not _recorded_lines(baseline.get("oversized_modules"))
+        or not _recorded_lines(baseline.get("module_lines"))
         or not _recorded_lines(baseline.get("oversized_functions"))
     ):
         return None
@@ -139,8 +143,8 @@ def main(argv: list[str], *, src_dir: Path | None = None,
     if current_defs > baseline_defs:
         failures.append(("runner_top_level_defs", current_defs, baseline_defs))
 
-    current_modules = current["oversized_modules"]
-    baseline_modules = baseline["oversized_modules"]
+    current_modules = current["module_lines"]
+    baseline_modules = baseline["module_lines"]
     for name, value in current_modules.items():
         ceiling = baseline_modules.get(name, SIZE_CAP)
         if value > ceiling:
@@ -153,10 +157,12 @@ def main(argv: list[str], *, src_dir: Path | None = None,
         if value > ceiling:
             failures.append((name, value, ceiling))
 
+    over_cap = [name for name, value in current_modules.items() if value > SIZE_CAP]
     print(
-        "size ratchet (Issues #1229, #2007): "
+        "size ratchet (Issues #1229, #2007, #2167): "
         f"runner_top_level_defs={current_defs}/{baseline_defs} "
-        f"oversized_modules={current_modules!r} "
+        f"module_lines={len(current_modules)} modules recorded "
+        f"over_cap={over_cap!r} "
         f"oversized_functions={len(current_functions)} over {FUNCTION_CAP} lines "
         "(current/baseline ceilings)"
     )
@@ -165,8 +171,8 @@ def main(argv: list[str], *, src_dir: Path | None = None,
         for name, value, ceiling in failures:
             print(
                 f"  {name}: current {value} > ceiling {ceiling}; "
-                "split the code, or, for a deliberate reduction, run "
-                "`python3 tools/size_ratchet.py --update`"
+                "split the code (or remove lines), or, for a deliberate "
+                "reduction, run `python3 tools/size_ratchet.py --update`"
             )
         return 1
     return 0

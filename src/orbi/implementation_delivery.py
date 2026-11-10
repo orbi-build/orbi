@@ -24,7 +24,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from orbi import config as config_domain
 from orbi import (
@@ -46,7 +46,7 @@ from orbi.delivery_labels import (
     IN_PROGRESS_LABEL,
     PR_OPENED_LABEL,
 )
-from orbi.delivery_scene import DeliveryFacts, IssueResult, RunContext
+from orbi.delivery_scene import DeliveryFacts, RunContext
 from orbi.failure import failure_detail, terminal_reason
 from orbi.failure_report import _classify_failure
 from orbi.gitops import (
@@ -86,6 +86,18 @@ from orbi.progress import (
     safe_publish,
 )
 from orbi.run_fields import RunFields
+
+
+class IssueResult(NamedTuple):
+    """The single outcome contract returned by `process_issue`.
+
+    It lives beside the dispatch that produces three of its four kinds
+    (Article 3.5: no existing module grows for the move); `runner`
+    re-exports it so `runner.IssueResult` keeps working for callers.
+    """
+
+    kind: str
+    url: str | None
 
 
 @dataclass(frozen=True)

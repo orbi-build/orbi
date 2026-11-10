@@ -102,7 +102,6 @@ from orbi.delivery_scene import (
     EXTERNAL_PR_RE,
     DeliveryFacts,
     DeliveryScene,
-    IssueResult,
     RunContext,
     body_markers,
     classify,
@@ -193,6 +192,9 @@ from orbi import ops_delivery
 # Article 3.2 split): one entry point per scene plus one shared closeout,
 # with the runner-owned seams arriving as `ImplementationHooks`.
 from orbi import implementation_delivery
+# The outcome contract is produced by the dispatch itself; it is
+# re-exported here so `runner.IssueResult` keeps working for callers.
+from orbi.implementation_delivery import IssueResult
 from orbi import run_state
 
 # The shared primitives live in the leaf modules now — the
