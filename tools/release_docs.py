@@ -26,6 +26,11 @@ expression — a release whose notes carried `(--size <n>)` failed the Mintlify
 build ("Expected a closing tag for `<n>`") and was never published. The
 renderer escapes those characters outside code, so they render as text.
 
+Issue #2156: "outside code" follows MDX's own rules across line breaks. An
+inline code span may wrap onto the next source line, and a fenced block ends
+only on a real closing fence — escaping inside either one changes the code the
+reader sees, so the mask tracks both across lines.
+
 Input: one tag. The script reads the published GitHub Release
 (`gh release view <tag> --json body,publishedAt,url`), the annotated tag object
 and its commit (git), and the release task Issue (the `ai-release` Issue titled
@@ -83,6 +88,20 @@ RELEASE_BODY_DROP_SECTION_HEADINGS = (
 # reads it as markup.
 _MDX_TEXT_REFERENCES = {"<": "&lt;", "{": "&#123;", "}": "&#125;"}
 _A_FENCE_LINE = re.compile(r"\s*(`{3,}|~{3,})")
+# A closing code fence is the fence run alone (same character, at least as
+# long as the opening one) plus trailing whitespace — nothing else. The
+# leading whitespace is unbounded because MDX disables CommonMark's indented
+# code block (micromark-extension-mdx-md: `codeIndented`), so micromark
+# accepts any indentation before a closing fence (verified against the real
+# @mdx-js/mdx 3.1.1 parser: a line indented four spaces still closes it).
+_A_CLOSING_FENCE_LINE = re.compile(r"\s*(`{3,}|~{3,})\s*")
+# A line that starts a new Markdown block: a list item, an ATX heading, a
+# thematic break or a blockquote. An inline code span never crosses one —
+# every block ends its own paragraph (CommonMark).
+_A_BLOCK_START_LINE = re.compile(
+    r" {0,3}(?:[-*+][ \t]|[0-9]{1,9}[.)][ \t]|#{1,6}(?:[ \t]|$)|>"
+    r"|(?:[-*_][ \t]*){3,}$)"
+)
 # One single-line tag of the body's own HTML or MDX component, e.g.
 # <a href="...">, <img ... /> or <Note>. A tag never spans a line here:
 # an unmatched <x must be escaped, never paired with a later >.
@@ -115,39 +134,56 @@ def strip_release_audit_sections(notes: str) -> str:
 def _mdx_code_mask(text: str) -> list[bool]:
     """`True` per character MDX parses as code, never as markup: a fenced
     code block or an inline code span (a backtick run matched by a run of
-    the same length)."""
+    the same length).
+
+    Issue #2156: the body keeps its Markdown line breaks, so both rules
+    cross lines. An inline code span opened on one line closes on a later
+    one (it never crosses a blank line or a new block: that ends the
+    paragraph), and a fenced block ends only on a real closing fence — a
+    content line such as `````not-a-closing-fence````` is code (CommonMark).
+    """
     mask = [False] * len(text)
     offset = 0
     fence: str | None = None
+    tick = start = 0
     for line in text.splitlines(keepends=True):
         body = line.rstrip("\r\n")
+        end_of_line = offset + len(line)
         if fence is not None:
-            mask[offset:offset + len(line)] = [True] * len(line)
-            if body.lstrip().startswith(fence):
+            mask[offset:end_of_line] = [True] * len(line)
+            closing = _A_CLOSING_FENCE_LINE.fullmatch(body)
+            if (closing and closing.group(1)[0] == fence[0]
+                    and len(closing.group(1)) >= len(fence)):
                 fence = None
+        elif opening := _A_FENCE_LINE.match(body):
+            # A fenced block interrupts the paragraph, so an inline span
+            # still open here never closes (CommonMark): it stays prose.
+            fence, tick = opening.group(1), 0
+            mask[offset:end_of_line] = [True] * len(line)
         else:
-            opening = _A_FENCE_LINE.match(body)
-            if opening:
-                fence = opening.group(1)
-                mask[offset:offset + len(line)] = [True] * len(line)
-            else:
-                cursor = tick = start = 0
-                while cursor < len(body):
-                    if body[cursor] != "`":
-                        cursor += 1
-                        continue
-                    end = cursor
-                    while end < len(body) and body[end] == "`":
-                        end += 1
-                    if tick == 0:
-                        tick, start = end - cursor, cursor
-                    elif end - cursor == tick:
-                        mask[offset + start:offset + end] = (
-                            [True] * (end - start)
-                        )
-                        tick = 0
-                    cursor = end
-        offset += len(line)
+            if tick and (not body.strip()
+                          or _A_BLOCK_START_LINE.match(body)):
+                # A blank line or a new block ends the paragraph, so the
+                # open backtick run can never be closed: it stays ordinary
+                # prose (and its line's hazards are still escaped, never
+                # swallowed as code).
+                tick = 0
+            cursor = 0
+            while cursor < len(body):
+                if body[cursor] != "`":
+                    cursor += 1
+                    continue
+                end = cursor
+                while end < len(body) and body[end] == "`":
+                    end += 1
+                run = end - cursor
+                if tick == 0:
+                    tick, start = run, offset + cursor
+                elif run == tick:
+                    mask[start:offset + end] = [True] * (offset + end - start)
+                    tick = 0
+                cursor = end
+        offset = end_of_line
     return mask
 
 
