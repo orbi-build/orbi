@@ -35,7 +35,6 @@
     "resume_verification.py::verify_resumed_pr": 243,
     "review_merge.py::_round_verdict_phase": 132,
     "review_merge.py::_run_review_round": 311,
-    "runner.py::_dispatch_implementation": 680,
     "runner.py::_gather_claim_facts": 147,
     "runner.py::_preflight": 143,
     "runner.py::deliver_pr": 185,
@@ -49,7 +48,7 @@
   "oversized_modules": {
     "pi_process.py": 1173,
     "review_merge.py": 1263,
-    "runner.py": 3062
+    "runner.py": 2419
   },
-  "runner_top_level_defs": 39
+  "runner_top_level_defs": 38
 }

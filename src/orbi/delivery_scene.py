@@ -21,7 +21,7 @@ import dataclasses
 import re
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL,
@@ -65,6 +65,13 @@ class DeliveryScene(Enum):
     HUMAN_REVIEW_WAIT = "human_review_wait"
     BLOCKED = "blocked"
     NOT_CLAIMABLE = "not_claimable"
+
+
+class IssueResult(NamedTuple):
+    """The single outcome contract returned by `process_issue`."""
+
+    kind: str
+    url: str | None
 
 
 # The issue-body marker vocabulary (the marker the triage workflow
