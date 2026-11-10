@@ -31,6 +31,10 @@ inline code span may wrap onto the next source line, and a fenced block ends
 only on a real closing fence — escaping inside either one changes the code the
 reader sees, so the mask tracks both across lines.
 
+Issue #2158: a Setext heading underline (`===` / `---` under a text line) ends
+the paragraph as well, so a stray backtick above it never closes over the
+heading: the heading's `<…>` is prose and is escaped.
+
 Input: one tag. The script reads the published GitHub Release
 (`gh release view <tag> --json body,publishedAt,url`), the annotated tag object
 and its commit (git), and the release task Issue (the `ai-release` Issue titled
@@ -96,11 +100,17 @@ _A_FENCE_LINE = re.compile(r"\s*(`{3,}|~{3,})")
 # @mdx-js/mdx 3.1.1 parser: a line indented four spaces still closes it).
 _A_CLOSING_FENCE_LINE = re.compile(r"\s*(`{3,}|~{3,})\s*")
 # A line that starts a new Markdown block: a list item, an ATX heading, a
-# thematic break or a blockquote. An inline code span never crosses one —
-# every block ends its own paragraph (CommonMark).
+# thematic break, a Setext heading underline or a blockquote. An inline code
+# span never crosses one — every block ends its own paragraph (CommonMark).
+# Issue #2158: the underline (`=` or `-` under a text line) is the block
+# boundary that opens a Setext heading, so a stray backtick above it can never
+# close over the heading text; the real @mdx-js/mdx 3.1.1 parser reads
+# `A \` stray <n>\n===\n` as a `setextHeading`. Its indentation is
+# unbounded for the same reason as a closing fence (no indented code block):
+# the parser reads `A\n    ===` and `A\n\t===` as a heading too.
 _A_BLOCK_START_LINE = re.compile(
     r" {0,3}(?:[-*+][ \t]|[0-9]{1,9}[.)][ \t]|#{1,6}(?:[ \t]|$)|>"
-    r"|(?:[-*_][ \t]*){3,}$)"
+    r"|(?:[-*_][ \t]*){3,}$|\s*(?:=+|-+)\s*$)"
 )
 # One single-line tag of the body's own HTML or MDX component, e.g.
 # <a href="...">, <img ... /> or <Note>. A tag never spans a line here:

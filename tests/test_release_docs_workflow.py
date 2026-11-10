@@ -435,6 +435,46 @@ def test_escape_mdx_notes_does_not_carry_a_span_over_a_new_block():
     )
 
 
+def test_escape_mdx_notes_ends_a_span_at_a_setext_heading_underline():
+    """Issue #2158: a text line followed by a `=` or `-` underline is a
+    Setext heading (CommonMark block precedence: the underline closes the
+    paragraph), so a stray backtick above it never closes over the heading.
+    The real `@mdx-js/mdx` 3.1.1 parser reads this fixture as a level-1
+    heading with the text `A ` stray <n>` plus a separate paragraph; with
+    the raw `<n>` kept it fails with "Expected a closing tag for `<n>`
+    before the end of `setextHeading`". So the heading's hazard is prose
+    and must be escaped, while the paragraph's second backtick stays an
+    unmatched run (no code node).
+    """
+    script = load_script()
+    # MDX disables CommonMark's indented code block, so the underline is
+    # accepted at any indentation (real parser: `A\n    ===` and
+    # `A\n\t===` are headings too).
+    for underline in ("===", "-", "   ===   ", "    ===", "\t==="):
+        notes = f"A ` stray <n>\n{underline}\nMore ` words\n"
+        assert script.escape_mdx_notes(notes) == (
+            f"A ` stray &lt;n>\n{underline}\nMore ` words\n"
+        ), underline
+
+
+def test_release_docs_page_escapes_a_setext_heading_hazard():
+    """Issue #2158: the same fixture through the real EN/ZH page builder —
+    the notes the page publishes carry the heading's `<n>` as an escaped
+    character reference, so the Mintlify build parses the page again."""
+    script = load_script()
+    body = "## Changelog\n\nA ` stray <n>\n===\nMore ` words\n"
+    for language in ("en", "zh"):
+        page = script.release_docs_page(
+            version=TAG, tag_object=TAG_OBJECT,
+            release_commit=RELEASE_COMMIT, published_at=PUBLISHED_AT,
+            release_url=RELEASE_URL, issue_number=42, body=body,
+            language=language,
+        )
+        notes = _release_notes_body(page)
+        assert "A ` stray &lt;n>\n===" in notes, notes
+        assert "<n>" not in notes, notes
+
+
 def test_escape_mdx_notes_closes_a_fence_indented_by_whitespace():
     """Issue #2156: MDX disables CommonMark's indented code block
     (micromark-extension-mdx-md turns `codeIndented` off), so micromark
