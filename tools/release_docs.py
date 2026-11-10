@@ -46,6 +46,11 @@ continuation: the container below it is the flow line's own, the following
 Setext underline is a real one again, and the heading's `<…>` is escaped
 prose.
 
+Issue #2170: a heading inside a list item or a block quote (`- # Heading`,
+`> # Heading`) closes its paragraph like a top-level heading, so a stray
+backtick on it never spans into the blocks below and their `<…>`/`{…}` are
+escaped prose instead of a failed MDX parse.
+
 Input: one tag. The script reads the published GitHub Release
 (`gh release view <tag> --json body,publishedAt,url`), the annotated tag object
 and its commit (git), and the release task Issue (the `ai-release` Issue titled
@@ -162,7 +167,9 @@ _A_LIST_MARKER_INTERRUPTING_A_PARAGRAPH = re.compile(
 # A line that leaves no paragraph open below it: an ATX heading, a thematic
 # break, a Setext underline or an empty list item. Every other non-blank line
 # ends inside a paragraph (a list item and a block quote open their own), which
-# is what the interruption rule above reads (Issue #2164).
+# is what the interruption rule above reads (Issue #2164). It is matched at the
+# line's own container — behind the block quote and list markers that carry it
+# (_is_no_paragraph_line, Issue #2170).
 _A_NO_PARAGRAPH_LINE = re.compile(
     r" {0,3}(?:#{1,6}(?:[ \t]|$)|(?:[-*_][ \t]*){3,}$"
     r"|(?:[-*+]|[0-9]{1,9}[.)])[ \t]*$)"
@@ -237,6 +244,32 @@ def _is_jsx_flow_line(body: str) -> bool:
     return bool(_A_JSX_FLOW_TAG_LINE.fullmatch(body[cursor:]))
 
 
+def _is_no_paragraph_line(body: str) -> bool:
+    """Whether this line opens a block that leaves no paragraph under it — an
+    ATX heading, a thematic break, a Setext underline or an empty list item —
+    at the line's own container (Issue #2170).
+
+    The heading may sit inside a block quote or a list item (`> # Heading`,
+    `- # Heading`), where the raw line carries the container's markers before
+    it: such a heading closes its own inline content too, so a stray backtick
+    on it can never span into the blocks below (real @mdx-js/mdx 3.1.1: the
+    heading is a `heading` block, the `2. <br />` under it a JSX flow block —
+    treating the heading as paragraph text let the backtick run down to it and
+    left the following `<n> {x}` unescaped).
+    """
+    cursor = 0
+    while marker := _A_QUOTE_MARKER.match(body, cursor):
+        cursor = marker.end()
+    while item := _A_LIST_MARKER.match(body, cursor):
+        cursor = item.end()
+    return bool(
+        # The raw line still answers for a marker-only line (`- `): its
+        # container strip leaves nothing behind.
+        _A_NO_PARAGRAPH_LINE.match(body)
+        or _A_NO_PARAGRAPH_LINE.match(body[cursor:])
+    )
+
+
 def _continues_the_open_paragraph(body: str, *, quote: bool, indent: int,
                                   paragraph: bool) -> bool:
     """Whether a line only continues the paragraph that is open at the current
@@ -296,6 +329,11 @@ def _mdx_code_mask(text: str) -> list[bool]:
     that paragraph's container — starts no block, so it neither ends the
     paragraph nor the backtick run open across it: the reported fixture stays
     one inline code span instead of prose.
+
+    Issue #2170: a heading inside a block quote or a list item closes its
+    paragraph like a top-level one (`_is_no_paragraph_line` strips the
+    container's markers before it tests), so the `2. <br />` below it is a JSX
+    flow block and not a lazy continuation of the heading's stray backtick.
     """
     mask = [False] * len(text)
     offset = 0
@@ -344,9 +382,13 @@ def _mdx_code_mask(text: str) -> list[bool]:
             # Issue #2164: a paragraph is still open below every line except a
             # blank one, a JSX flow block and a closed block (a heading, a
             # thematic break, a Setext underline, an empty list item) — the
-            # interruption rule of the flow line above reads it.
+            # interruption rule of the flow line above reads it. A line that
+            # only continues the open paragraph starts no block at all, so only
+            # a non-lazy line can close it; the closed block is matched inside
+            # the line's own container (Issue #2170).
             paragraph = not (
-                blank or jsx_flow or _A_NO_PARAGRAPH_LINE.match(body)
+                blank or jsx_flow
+                or (not lazy and _is_no_paragraph_line(body))
             )
             if blank:
                 quote, indent = False, 0

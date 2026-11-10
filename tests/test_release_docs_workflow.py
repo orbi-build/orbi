@@ -693,6 +693,96 @@ def test_escape_mdx_notes_ends_a_span_at_an_ordered_marker_that_starts_a_block()
         assert "<n>" not in escaped, (notes, escaped)
 
 
+def test_escape_mdx_notes_ends_a_span_at_a_heading_inside_a_container():
+    """Issue #2170: an ATX heading inside a block quote or a list item is still
+    a heading — it closes its own inline content, so the stray backtick on the
+    heading line can never span into the blocks below it. The real
+    `@mdx-js/mdx` 3.1.1 parser reads each fixture below as a heading plus a
+    JSX flow block plus a paragraph; while the heading counted as paragraph
+    text, its `2. <br />` line looked like a lazy continuation (Issue #2164's
+    rule) and the following `<n> {x}` stayed unescaped, so the generated page
+    failed the build with "Expected a closing tag for `<n>` before the end of
+    `paragraph`". The heading's backtick is prose, so the tag and the braces
+    below it must be escaped.
+    """
+    script = load_script()
+    for heading, continuation in (
+        ("> # Heading", "> 2. <br />"),
+        ("> ### Heading", "> 2. <br />"),
+        ("- # Heading", "  2. <br />"),
+        ("* ### Heading", "  2. <br />"),
+    ):
+        notes = f"{heading} ` stray\n{continuation}\n<n> {{x}}` tail\n"
+        assert script.escape_mdx_notes(notes) == (
+            f"{heading} ` stray\n{continuation}\n"
+            "&lt;n> &#123;x&#125;` tail\n"
+        ), notes
+
+
+def test_release_docs_page_escapes_a_heading_inside_a_container():
+    """Issue #2170: the same fixtures through the real EN/ZH page builder — the
+    published notes carry the literal `<n> {x}` as character references, keep
+    the `<br />` flow element, and hold no code span across the heading."""
+    script = load_script()
+    for fixture in (
+        "> # Heading ` stray\n> 2. <br />\n<n> {x}` tail\n",
+        "- # Heading ` stray\n  2. <br />\n<n> {x}` tail\n",
+    ):
+        body = "## Changelog\n\n" + fixture
+        for language in ("en", "zh"):
+            page = script.release_docs_page(
+                version=TAG, tag_object=TAG_OBJECT,
+                release_commit=RELEASE_COMMIT, published_at=PUBLISHED_AT,
+                release_url=RELEASE_URL, issue_number=42, body=body,
+                language=language,
+            )
+            notes = _release_notes_body(page)
+            assert "<n> {x}" not in notes, notes
+            assert "&lt;n> &#123;x&#125;" in notes, notes
+            # The standalone self-closing tag is markup, not prose.
+            assert "<br />" in notes, notes
+
+
+def test_escape_mdx_notes_keeps_a_span_across_an_empty_ordered_marker_line():
+    """Issue #2170: the container-aware closed-block rule may only close a
+    paragraph on a line that starts a block. An ordered marker that is not 1
+    cannot interrupt a paragraph (Issue #2164), and an empty one at that
+    (`  2. `) is that paragraph's own text, so the real `@mdx-js/mdx` 3.1.1
+    parser reads each fixture below as ONE paragraph (or one list item) with a
+    single inline code node whose value is
+    `--size\n  2. \n  3. <br />\n<n> {x}`. Reading the empty item as a
+    closed block discarded the span, and escaping its `<n>`/`{x}` writes
+    character references inside code, where they are literal text.
+    """
+    script = load_script()
+    for notes in (
+        "Flag `--size\n  2. \n  3. <br />\n<n> {x}` tail\n",
+        "- Flag `--size\n  2. \n  3. <br />\n<n> {x}` tail\n",
+    ):
+        assert script.escape_mdx_notes(notes) == notes, notes
+
+
+def test_release_docs_page_keeps_a_code_span_across_an_empty_ordered_marker():
+    """Issue #2170: the same lazy continuation line through the real EN/ZH
+    page builder — the published notes keep the code node's literal
+    characters, so the page shows `<n> {x}` inside the span instead of the
+    escaped prose copy `&lt;n> &#123;x&#125;`."""
+    script = load_script()
+    code = "`--size\n  2. \n  3. <br />\n<n> {x}`"
+    body = f"## Changelog\n\nFlag {code} tail\n"
+    for language in ("en", "zh"):
+        page = script.release_docs_page(
+            version=TAG, tag_object=TAG_OBJECT,
+            release_commit=RELEASE_COMMIT, published_at=PUBLISHED_AT,
+            release_url=RELEASE_URL, issue_number=42, body=body,
+            language=language,
+        )
+        notes = _release_notes_body(page)
+        assert code in notes, notes
+        assert "&lt;n>" not in notes, notes
+        assert "&#123;" not in notes, notes
+
+
 def test_escape_mdx_notes_closes_a_fence_indented_by_whitespace():
     """Issue #2156: MDX disables CommonMark's indented code block
     (micromark-extension-mdx-md turns `codeIndented` off), so micromark
