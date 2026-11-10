@@ -554,6 +554,69 @@ def test_escape_mdx_notes_ends_a_span_at_a_list_items_own_underline():
         assert "&lt;n>" in escaped, (underline, escaped)
 
 
+def test_escape_mdx_notes_ends_a_span_at_a_jsx_flow_block():
+    """Issue #2162: a standalone JSX flow line (`<br />` alone on its own
+    line) is a block of its own — the real `@mdx-js/mdx` 3.1.1 parser reads
+    it as an `mdxJsxFlowElement` that ends the paragraph above it. So nothing
+    below it is a lazy continuation of the list item's or block quote's
+    paragraph: the `===` there is a top-level Setext underline again, the
+    stray backtick above it never closes, and the heading's `<n>` is prose
+    that must be escaped (the raw text fails the parse with "Expected a
+    closing tag for `<n>` before the end of `setextHeading`").
+    """
+    script = load_script()
+    for notes in (
+        "- listed\n<br />\nA ` stray <n>\n===\nMore ` words\n",
+        "> quoted\n<br />\nA ` stray <n>\n===\nMore ` words\n",
+        # MDX has no indented code block, and the flow line inside the item
+        # still ends the paragraph (real parser: the item holds the jsx flow
+        # element, the next line is a new top-level paragraph).
+        "- listed\n  <br />\nA ` stray <n>\n===\nMore ` words\n",
+        # The tag carries the quote's own marker (real parser: the quote holds
+        # the flow element, the unmarked next line is a new top-level block).
+        "> quoted\n> <br />\nA ` stray <n>\n===\nMore ` words\n",
+    ):
+        escaped = script.escape_mdx_notes(notes)
+        assert escaped == notes.replace("<n>", "&lt;n>"), escaped
+    # Text after the tag on the same line is inline (real parser:
+    # `mdxJsxTextElement`), so the paragraph and its code span keep running.
+    inline = "- Flag `--size\n<br /> text <n> {x}` code\n"
+    assert script.escape_mdx_notes(inline) == inline
+    # The flow line's own container still governs what follows: inside a list
+    # item or a marked quote paragraph the code span keeps running over the
+    # underline lazily (real parser: one inline code node), so its characters
+    # stay literal.
+    for keeps_span in (
+        "- <br />\n  more ` code <n>\n===\ntail ` end\n",
+        "> <br />\n> more ` code <n>\n===\ntail ` end\n",
+    ):
+        assert script.escape_mdx_notes(keeps_span) == keeps_span, keeps_span
+
+
+def test_release_docs_page_escapes_a_heading_after_a_jsx_flow_block():
+    """Issue #2162: the same fixtures through the real EN/ZH page builder —
+    the published notes parse and compile, and the heading's text is the
+    single literal `A ` stray <n>` with no inline code node invented."""
+    script = load_script()
+    for opener in ("- listed", "> quoted"):
+        body = (
+            "## Changelog\n\n"
+            f"{opener}\n<br />\nA ` stray <n>\n===\nMore ` words\n"
+        )
+        for language in ("en", "zh"):
+            page = script.release_docs_page(
+                version=TAG, tag_object=TAG_OBJECT,
+                release_commit=RELEASE_COMMIT, published_at=PUBLISHED_AT,
+                release_url=RELEASE_URL, issue_number=42, body=body,
+                language=language,
+            )
+            notes = _release_notes_body(page)
+            assert "A ` stray &lt;n>\n===" in notes, notes
+            assert "<n>" not in notes, notes
+            # The flow block itself still renders (it is markup, not prose).
+            assert "\n<br />\n" in notes, notes
+
+
 def test_escape_mdx_notes_closes_a_fence_indented_by_whitespace():
     """Issue #2156: MDX disables CommonMark's indented code block
     (micromark-extension-mdx-md turns `codeIndented` off), so micromark
