@@ -40,6 +40,12 @@ paragraph lazily does not open a heading (CommonMark §4.3), so the code span
 above it keeps running: escaping inside it would print entity strings in the
 code.
 
+Issue #2162: a standalone JSX flow block (`<br />` alone on its line) ends the
+paragraph above it, so it also ends the list item's or block quote's paragraph
+continuation: the container below it is the flow line's own, the following
+Setext underline is a real one again, and the heading's `<…>` is escaped
+prose.
+
 Input: one tag. The script reads the published GitHub Release
 (`gh release view <tag> --json body,publishedAt,url`), the annotated tag object
 and its commit (git), and the release task Issue (the `ai-release` Issue titled
@@ -126,6 +132,17 @@ _A_BLOCK_START_LINE = re.compile(
 # be a lazy continuation line in a list item or block quote"), so the mask
 # asks _mdx_code_mask's container tracking before treating it as a boundary.
 _A_SETEXT_UNDERLINE_LINE = re.compile(r"\s*(?:=+|-{2,})\s*")
+# A standalone MDX JSX flow tag: a self-closing tag such as `<br />` alone on
+# its own line (indented too — MDX disables CommonMark's indented code block).
+# MDX parses it as a flow block of its own, so it ends the paragraph above it
+# and nothing below it is a lazy continuation of that paragraph (Issue #2162:
+# a list item's indentation or block quote flag was kept, the following `===`
+# looked like a lazy continuation and the heading's `<n>` stayed unescaped).
+# Only a tag ALONE on the line is flow: text after it (`<br /> more`) is an
+# inline jsxTextElement that keeps the paragraph running (verified against the
+# real @mdx-js/mdx 3.1.1 parser), and only a self-closing tag survives
+# escape_mdx_notes verbatim, so the mask and the escape agree on it.
+_A_JSX_FLOW_TAG_LINE = re.compile(r"\s*<[A-Za-z][\w.:-]*[^<>]*/>\s*")
 # A block quote marker at a line position, and a list item marker with the
 # whitespace that opens the item's content. Together they say how a line must
 # continue a paragraph inside such a container: with the container's own
@@ -190,6 +207,19 @@ def _line_container(body: str) -> tuple[bool, int]:
     return quote, _columns(body[:item.end()]) if item else 0
 
 
+def _is_jsx_flow_line(body: str) -> bool:
+    """Whether a line is a standalone MDX JSX flow tag — `<br />` alone on
+    the line, with or without the block quote and list markers that carry it
+    (Issue #2162). Such a line is a block of its own, never a paragraph
+    continuation line."""
+    cursor = 0
+    while marker := _A_QUOTE_MARKER.match(body, cursor):
+        cursor = marker.end()
+    if item := _A_LIST_MARKER.match(body, cursor):
+        cursor = item.end()
+    return bool(_A_JSX_FLOW_TAG_LINE.fullmatch(body[cursor:]))
+
+
 def _mdx_code_mask(text: str) -> list[bool]:
     """`True` per character MDX parses as code, never as markup: a fenced
     code block or an inline code span (a backtick run matched by a run of
@@ -206,6 +236,12 @@ def _mdx_code_mask(text: str) -> list[bool]:
     tracked line by line — a `===` line below the list item's content column,
     or without the block quote's `>`, keeps the paragraph (and its open
     backtick span) going.
+
+    Issue #2162: a standalone JSX flow block (`<br />`) is a block of its own.
+    It ends the paragraph above it, so the container state below it is the
+    flow line's own: no paragraph is open, a lazy continuation line can no
+    longer omit the block quote's marker, and the following `===` is a
+    top-level Setext underline again (the heading's `<n>` is prose).
     """
     mask = [False] * len(text)
     offset = 0
@@ -229,6 +265,7 @@ def _mdx_code_mask(text: str) -> list[bool]:
             mask[offset:end_of_line] = [True] * len(line)
         else:
             blank = not body.strip()
+            jsx_flow = _is_jsx_flow_line(body)
             starts_block = bool(_A_BLOCK_START_LINE.match(body))
             if not starts_block and _A_SETEXT_UNDERLINE_LINE.fullmatch(body):
                 # Issue #2160: a Setext underline is a block boundary unless
@@ -236,14 +273,20 @@ def _mdx_code_mask(text: str) -> list[bool]:
                 # container's content column, or without the block quote's
                 # marker (CommonMark §4.3). Then it is paragraph text.
                 starts_block = not quote and _indent_columns(body) >= indent
-            if tick and (blank or starts_block):
-                # A blank line or a new block ends the paragraph, so the
-                # open backtick run can never be closed: it stays ordinary
-                # prose (and its line's hazards are still escaped, never
-                # swallowed as code).
+            if tick and (blank or starts_block or jsx_flow):
+                # A blank line, a new block or a JSX flow element ends the
+                # paragraph, so the open backtick run can never be closed: it
+                # stays ordinary prose (and its line's hazards are still
+                # escaped, never swallowed as code).
                 tick = 0
             if blank:
                 quote, indent = False, 0
+            elif jsx_flow:
+                # Issue #2162: the flow block's own line carries the container
+                # (a list item inside a block quote keeps its item), but its
+                # paragraph is closed, so the block quote's marker can no
+                # longer be omitted by a lazy continuation line below it.
+                quote, indent = False, _line_container(body)[1]
             elif starts_block:
                 quote, indent = _line_container(body)
             cursor = 0
