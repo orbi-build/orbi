@@ -475,6 +475,85 @@ def test_release_docs_page_escapes_a_setext_heading_hazard():
         assert "<n>" not in notes, notes
 
 
+def test_escape_mdx_notes_keeps_a_span_across_a_list_continuation_line():
+    """Issue #2160: a `===` line that continues a list item's paragraph is
+    not a Setext underline — CommonMark §4.3 forbids the underline as a lazy
+    continuation line in a list item, so the real `@mdx-js/mdx` 3.1.1 parser
+    reads this fixture as ONE item with one inline code node whose value is
+    `--size\n===\n<n> {x}`. Discarding that span escaped its `<n>` and `{x}`
+    into entity strings, and a character reference inside code is literal
+    text — the reader would see `&lt;n> &#123;x&#125;` in the code.
+    """
+    script = load_script()
+    notes = "- Flag `--size\n===\n<n> {x}` remains code\n"
+    assert script.escape_mdx_notes(notes) == notes
+
+
+def test_release_docs_page_keeps_a_code_span_across_a_list_continuation_line():
+    """Issue #2160: the same fixture through the real EN/ZH page builder —
+    the code node keeps its literal characters, so the page shows the source
+    text and not the escaped prose copy."""
+    script = load_script()
+    code = "`--size\n===\n<n> {x}`"
+    body = f"## Changelog\n\n- Flag {code} remains code\n"
+    for language in ("en", "zh"):
+        page = script.release_docs_page(
+            version=TAG, tag_object=TAG_OBJECT,
+            release_commit=RELEASE_COMMIT, published_at=PUBLISHED_AT,
+            release_url=RELEASE_URL, issue_number=42, body=body,
+            language=language,
+        )
+        notes = _release_notes_body(page)
+        assert code in notes, notes
+        assert "&lt;n>" not in notes, notes
+        assert "&#123;" not in notes, notes
+
+
+def test_escape_mdx_notes_keeps_a_span_across_a_block_quote_continuation():
+    """Issue #2160: the same lazy continuation inside a block quote, where the
+    underline carries no `>` marker (CommonMark §4.3 names a block quote too).
+    The real `@mdx-js/mdx` 3.1.1 parser reports one paragraph whose inline
+    code value is `\n===\n<n> {x}` for both fixtures below."""
+    script = load_script()
+    for notes in (
+        "> foo `\n===\n<n> {x}` tail\n",
+        "> foo `\n  ===\n<n> {x}` tail\n",
+    ):
+        assert script.escape_mdx_notes(notes) == notes, notes
+
+
+def test_escape_mdx_notes_ends_a_span_at_an_empty_list_item():
+    """Issue #2160: a lone `-` (and `*`, `+`, `1.`) is an empty list item, a
+    new block at any indentation — the real parser ends the previous item's
+    paragraph there, so a stray backtick above it must not close over the next
+    block's text. A `--` run is no list marker: inside the item it is paragraph
+    text (the real parser keeps the span), at top level it is a Setext
+    underline."""
+    script = load_script()
+    for marker in ("-", "*", "+", "1."):
+        escaped = script.escape_mdx_notes(
+            f"- foo `\n{marker}\n<n> {{x}}` tail\n"
+        )
+        assert "&lt;n>" in escaped, (marker, escaped)
+    assert script.escape_mdx_notes("- foo `\n--\n<n> {x}` tail\n") == (
+        "- foo `\n--\n<n> {x}` tail\n"
+    )
+    assert "&lt;n>" in script.escape_mdx_notes("foo `\n--\n<n> {x}` tail\n")
+
+
+def test_escape_mdx_notes_ends_a_span_at_a_list_items_own_underline():
+    """Issue #2160: an underline that IS inside the list item — indented to the
+    item's content column, or with a tab — is a real Setext heading (the real
+    parser reads both as one), so #2158's rule still discards the stray
+    backtick above it and escapes the heading's `<n>` as prose."""
+    script = load_script()
+    for underline in ("  ===", "\t==="):
+        escaped = script.escape_mdx_notes(
+            f"- foo ` stray <n>\n{underline}\nmore ` text\n"
+        )
+        assert "&lt;n>" in escaped, (underline, escaped)
+
+
 def test_escape_mdx_notes_closes_a_fence_indented_by_whitespace():
     """Issue #2156: MDX disables CommonMark's indented code block
     (micromark-extension-mdx-md turns `codeIndented` off), so micromark
