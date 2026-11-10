@@ -743,6 +743,58 @@ def test_release_docs_page_escapes_a_heading_inside_a_container():
             assert "<br />" in notes, notes
 
 
+def test_escape_mdx_notes_ends_a_span_at_a_heading_behind_mixed_markers():
+    """Issue #2173: the markers that carry a heading may ALTERNATE — a list
+    item holding a block quote (`- > # Heading`) or a block quote holding a
+    list item that holds another quote (`> - > # Heading`). The heading still
+    closes its paragraph, so the stray backtick on it never spans into the
+    blocks below and their `<…>`/`{…}` are escaped prose. While only
+    consecutive quote markers followed by consecutive list markers were
+    stripped, the `>` after the list marker survived the strip, the heading
+    read as paragraph text, its `2. <br />` line as a lazy continuation
+    (Issue #2164's rule), and the generated page failed the build with
+    "Expected a closing tag for `<n>` before the end of `paragraph`".
+    """
+    script = load_script()
+    for heading, continuation in (
+        ("- > # Heading", "  2. <br />"),
+        ("> - > # Heading", ">   2. <br />"),
+        ("- > ### Heading", "  2. <br />"),
+        ("> - > ### Heading", ">   2. <br />"),
+    ):
+        notes = f"{heading} ` stray\n{continuation}\n<n> {{x}}` tail\n"
+        assert script.escape_mdx_notes(notes) == (
+            f"{heading} ` stray\n{continuation}\n"
+            "&lt;n> &#123;x&#125;` tail\n"
+        ), notes
+
+
+def test_release_docs_page_escapes_a_heading_behind_mixed_container_markers():
+    """Issue #2173: the same fixtures through the real EN/ZH page builder — the
+    published notes carry the literal `<n> {x}` as character references and
+    keep the `<br />` flow element, so @mdx-js/mdx 3.1.1 parses one level-1
+    heading (text "Heading ` stray"), a `br` flow element and no inline-code
+    node spanning the heading."""
+    script = load_script()
+    for fixture in (
+        "- > # Heading ` stray\n  2. <br />\n<n> {x}` tail\n",
+        "> - > # Heading ` stray\n>   2. <br />\n<n> {x}` tail\n",
+    ):
+        body = "## Changelog\n\n" + fixture
+        for language in ("en", "zh"):
+            page = script.release_docs_page(
+                version=TAG, tag_object=TAG_OBJECT,
+                release_commit=RELEASE_COMMIT, published_at=PUBLISHED_AT,
+                release_url=RELEASE_URL, issue_number=42, body=body,
+                language=language,
+            )
+            notes = _release_notes_body(page)
+            assert "<n> {x}" not in notes, notes
+            assert "&lt;n> &#123;x&#125;" in notes, notes
+            # The standalone self-closing tag is markup, not prose.
+            assert "<br />" in notes, notes
+
+
 def test_escape_mdx_notes_keeps_a_span_across_an_empty_ordered_marker_line():
     """Issue #2170: the container-aware closed-block rule may only close a
     paragraph on a line that starts a block. An ordered marker that is not 1

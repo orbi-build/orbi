@@ -51,6 +51,10 @@ Issue #2170: a heading inside a list item or a block quote (`- # Heading`,
 backtick on it never spans into the blocks below and their `<…>`/`{…}` are
 escaped prose instead of a failed MDX parse.
 
+Issue #2173: those container markers may alternate (`- > # Heading`,
+`> - > # Heading`), so the heading's line is matched behind any run of quote
+and list markers in either order.
+
 Input: one tag. The script reads the published GitHub Release
 (`gh release view <tag> --json body,publishedAt,url`), the annotated tag object
 and its commit (git), and the release task Issue (the `ai-release` Issue titled
@@ -256,12 +260,19 @@ def _is_no_paragraph_line(body: str) -> bool:
     heading is a `heading` block, the `2. <br />` under it a JSX flow block —
     treating the heading as paragraph text let the backtick run down to it and
     left the following `<n> {x}` unescaped).
+
+    Issue #2173: those markers may ALTERNATE — a list item holding a block
+    quote (`- > # Heading`) or a block quote holding a list item that holds
+    another quote (`> - > # Heading`). The strip therefore repeats over quote
+    and list markers in either order; stripping only consecutive quotes and
+    then consecutive lists left the `>` behind the list marker in the string
+    tested for a heading, and the same build failure came back for the mixed
+    fixtures.
     """
     cursor = 0
-    while marker := _A_QUOTE_MARKER.match(body, cursor):
+    while marker := (_A_QUOTE_MARKER.match(body, cursor)
+                     or _A_LIST_MARKER.match(body, cursor)):
         cursor = marker.end()
-    while item := _A_LIST_MARKER.match(body, cursor):
-        cursor = item.end()
     return bool(
         # The raw line still answers for a marker-only line (`- `): its
         # container strip leaves nothing behind.
