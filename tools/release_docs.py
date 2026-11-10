@@ -151,6 +151,23 @@ _A_JSX_FLOW_TAG_LINE = re.compile(r"\s*<[A-Za-z][\w.:-]*[^<>]*/>\s*")
 # never be (Issue #2160).
 _A_QUOTE_MARKER = re.compile(r" {0,3}>[ \t]?")
 _A_LIST_MARKER = re.compile(r"[ \t]*(?:[-*+]|[0-9]{1,9}[.)])[ \t]+")
+# The list markers that may start a block under an open paragraph: a bullet
+# always does, an ordered item only when it starts at 1 (CommonMark §5.2).
+# Any other number is paragraph text — the real @mdx-js/mdx 3.1.1 parser reads
+# `foo\n2. <br />` as one paragraph whose `<br />` is an inline
+# `mdxJsxTextElement` and `foo\n1. <br />` as a list holding a
+# `mdxJsxFlowElement` (Issue #2164).
+_A_LIST_MARKER_INTERRUPTING_A_PARAGRAPH = re.compile(
+    r"[ \t]*(?:[-*+]|1[.)])[ \t]+")
+# A line that leaves no paragraph open below it: an ATX heading, a thematic
+# break, a Setext underline or an empty list item. Every other non-blank line
+# ends inside a paragraph (a list item and a block quote open their own), which
+# is what the interruption rule above reads (Issue #2164).
+_A_NO_PARAGRAPH_LINE = re.compile(
+    r" {0,3}(?:#{1,6}(?:[ \t]|$)|(?:[-*_][ \t]*){3,}$"
+    r"|(?:[-*+]|[0-9]{1,9}[.)])[ \t]*$)"
+    r"|\s*(?:=+|-{2,})\s*$"
+)
 # One single-line tag of the body's own HTML or MDX component, e.g.
 # <a href="...">, <img ... /> or <Note>. A tag never spans a line here:
 # an unmatched <x must be escaped, never paired with a later >.
@@ -220,6 +237,37 @@ def _is_jsx_flow_line(body: str) -> bool:
     return bool(_A_JSX_FLOW_TAG_LINE.fullmatch(body[cursor:]))
 
 
+def _continues_the_open_paragraph(body: str, *, quote: bool, indent: int,
+                                  paragraph: bool) -> bool:
+    """Whether a line only continues the paragraph that is open at the current
+    container instead of starting a block: an ordered list marker other than
+    `1` cannot interrupt a paragraph (CommonMark §5.2), and it only continues
+    one while the line stays inside that paragraph's own container — indented
+    to its content column `indent`, and carrying the block quote's marker
+    when `quote` (Issue #2164).
+
+    The real @mdx-js/mdx 3.1.1 parser reads `foo\n2. <br />` as ONE
+    paragraph whose `<br />` is an inline `mdxJsxTextElement`, while
+    `foo\n1. <br />` (a list may interrupt a paragraph when it starts at 1),
+    `# heading\n2. <br />` (no paragraph is open) and `- listed\n2. <br />`
+    (the line leaves the item) start a block holding a `mdxJsxFlowElement`."""
+    if not paragraph:
+        return False
+    cursor, marked = 0, False
+    while marker := _A_QUOTE_MARKER.match(body, cursor):
+        cursor, marked = marker.end(), True
+    if not _A_LIST_MARKER.match(body, cursor):
+        return False
+    return (
+        # The line has to sit in the open paragraph's own container: a block
+        # quote marker starts a block quote (real parser: `foo\n> 2. bar`),
+        # so only a paragraph that is itself quoted continues across it.
+        marked == quote
+        and _columns(body[:cursor]) + _indent_columns(body[cursor:]) >= indent
+        and not _A_LIST_MARKER_INTERRUPTING_A_PARAGRAPH.match(body, cursor)
+    )
+
+
 def _mdx_code_mask(text: str) -> list[bool]:
     """`True` per character MDX parses as code, never as markup: a fenced
     code block or an inline code span (a backtick run matched by a run of
@@ -242,16 +290,24 @@ def _mdx_code_mask(text: str) -> list[bool]:
     flow line's own: no paragraph is open, a lazy continuation line can no
     longer omit the block quote's marker, and the following `===` is a
     top-level Setext underline again (the heading's `<n>` is prose).
+
+    Issue #2164: a line that only continues an open paragraph —
+    `_continues_the_open_paragraph`, an ordered marker other than `1` inside
+    that paragraph's container — starts no block, so it neither ends the
+    paragraph nor the backtick run open across it: the reported fixture stays
+    one inline code span instead of prose.
     """
     mask = [False] * len(text)
     offset = 0
     fence: str | None = None
     tick = start = 0
     quote, indent = False, 0
+    paragraph = False
     for line in text.splitlines(keepends=True):
         body = line.rstrip("\r\n")
         end_of_line = offset + len(line)
         if fence is not None:
+            paragraph = False
             mask[offset:end_of_line] = [True] * len(line)
             closing = _A_CLOSING_FENCE_LINE.fullmatch(body)
             if (closing and closing.group(1)[0] == fence[0]
@@ -260,13 +316,19 @@ def _mdx_code_mask(text: str) -> list[bool]:
         elif opening := _A_FENCE_LINE.match(body):
             # A fenced block interrupts the paragraph, so an inline span
             # still open here never closes (CommonMark): it stays prose.
-            fence, tick = opening.group(1), 0
+            fence, tick, paragraph = opening.group(1), 0, False
             quote, indent = False, 0
             mask[offset:end_of_line] = [True] * len(line)
         else:
             blank = not body.strip()
-            jsx_flow = _is_jsx_flow_line(body)
-            starts_block = bool(_A_BLOCK_START_LINE.match(body))
+            # Issue #2164: a line that only continues the open paragraph
+            # starts no block, so its tags stay inline and no boundary below
+            # it discards the paragraph's open backtick run.
+            lazy = _continues_the_open_paragraph(
+                body, quote=quote, indent=indent, paragraph=paragraph
+            )
+            jsx_flow = not lazy and _is_jsx_flow_line(body)
+            starts_block = not lazy and bool(_A_BLOCK_START_LINE.match(body))
             if not starts_block and _A_SETEXT_UNDERLINE_LINE.fullmatch(body):
                 # Issue #2160: a Setext underline is a block boundary unless
                 # it only continues the paragraph lazily — below the
@@ -279,6 +341,13 @@ def _mdx_code_mask(text: str) -> list[bool]:
                 # stays ordinary prose (and its line's hazards are still
                 # escaped, never swallowed as code).
                 tick = 0
+            # Issue #2164: a paragraph is still open below every line except a
+            # blank one, a JSX flow block and a closed block (a heading, a
+            # thematic break, a Setext underline, an empty list item) — the
+            # interruption rule of the flow line above reads it.
+            paragraph = not (
+                blank or jsx_flow or _A_NO_PARAGRAPH_LINE.match(body)
+            )
             if blank:
                 quote, indent = False, 0
             elif jsx_flow:

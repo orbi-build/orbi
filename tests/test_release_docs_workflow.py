@@ -617,6 +617,82 @@ def test_release_docs_page_escapes_a_heading_after_a_jsx_flow_block():
             assert "\n<br />\n" in notes, notes
 
 
+def test_escape_mdx_notes_keeps_a_span_across_an_indented_ordered_marker():
+    """Issue #2164: an ordered list marker whose number is not 1 cannot
+    interrupt a paragraph (CommonMark §5.2 "a list can interrupt a paragraph
+    only if it starts with 1"), so `2. <br />` indented under an open
+    paragraph is that paragraph's own text and its tag is inline, not a JSX
+    flow block. The real `@mdx-js/mdx` 3.1.1 parser reads each fixture below
+    as ONE paragraph with one inline code node. A false flow boundary reset
+    the open backtick run, and `escape_mdx_notes` rewrote the code into the
+    entity strings `&lt;n>` and `&#123;x&#125;` — inside code they are
+    literal text, so the page no longer showed the source it quoted.
+    """
+    script = load_script()
+    for notes in (
+        # The reported fixture: an indented marker under a top-level
+        # paragraph.
+        "Flag `--size\n    2. <br />\n<n> {x}` code\n",
+        # Any number other than 1, at any indentation — there is no special
+        # case for the literal `2. <br />`.
+        "Flag `--size\n  7. <br />\n<n> {x}` code\n",
+        # The same continuation inside a list item's own paragraph (real
+        # parser: one item whose inline code value is
+        # `--size\n  2. <br />\n<n> {x}`).
+        "- Flag `--size\n    2. <br />\n  <n> {x}` code\n",
+    ):
+        assert script.escape_mdx_notes(notes) == notes, notes
+
+
+def test_release_docs_page_keeps_inline_code_across_an_indented_ordered_marker():
+    """Issue #2164: the same fixture through the real EN/ZH page builder — the
+    published notes keep the code node's literal characters, so the page shows
+    the source text and not the escaped prose copy `&lt;n> &#123;x&#125;`.
+    """
+    script = load_script()
+    code = "`--size\n    2. <br />\n<n> {x}`"
+    body = f"## Changelog\n\nFlag {code} code\n"
+    for language in ("en", "zh"):
+        page = script.release_docs_page(
+            version=TAG, tag_object=TAG_OBJECT,
+            release_commit=RELEASE_COMMIT, published_at=PUBLISHED_AT,
+            release_url=RELEASE_URL, issue_number=42, body=body,
+            language=language,
+        )
+        notes = _release_notes_body(page)
+        assert code in notes, notes
+        assert "&lt;n>" not in notes, notes
+        assert "&#123;" not in notes, notes
+
+
+def test_escape_mdx_notes_ends_a_span_at_an_ordered_marker_that_starts_a_block():
+    """Issue #2164: a non-interrupting marker continues the paragraph only
+    inside that paragraph's own container. A marker starting at 1 (a list may
+    interrupt a paragraph), one below the list item's content column (the line
+    leaves the item) and one without the block quote's marker (the line leaves
+    the quote) each start a block, and the first three fixtures below hold the
+    tag in a `mdxJsxFlowElement` in the real `@mdx-js/mdx` 3.1.1 parser. So
+    #2162's boundary rule discards the stray backtick above it and the `<n>`
+    below is prose that must be escaped. The fourth fixture is the reverse
+    case: there the marker carries the quote's `>`, which opens a block quote
+    of its own (real parser: `foo\n> 2. bar` is a paragraph plus a
+    blockquote) — the paragraph above it is closed all the same.
+    """
+    script = load_script()
+    for notes in (
+        "foo ` stray\n1. <br />\n<n> {x}` tail\n",
+        "- foo ` stray\n2. <br />\n<n> {x}` tail\n",
+        "> foo ` stray\n2. <br />\n<n> {x}` tail\n",
+        # A block quote marker opens a quote even under an unquoted paragraph
+        # (real parser: `foo\n> 2. bar` is a paragraph plus a blockquote), so
+        # this line only continues the paragraph when that paragraph is quoted.
+        "foo ` stray\n> 2. <br />\n<n> {x}` tail\n",
+    ):
+        escaped = script.escape_mdx_notes(notes)
+        assert "&lt;n>" in escaped, (notes, escaped)
+        assert "<n>" not in escaped, (notes, escaped)
+
+
 def test_escape_mdx_notes_closes_a_fence_indented_by_whitespace():
     """Issue #2156: MDX disables CommonMark's indented code block
     (micromark-extension-mdx-md turns `codeIndented` off), so micromark
