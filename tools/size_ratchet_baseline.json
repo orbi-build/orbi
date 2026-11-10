@@ -36,6 +36,7 @@
     "github_feedback.py": 89,
     "gitops.py": 486,
     "human_review.py": 233,
+    "implementation_delivery.py": 962,
     "journal.py": 733,
     "language.py": 999,
     "language_terms.py": 419,
@@ -76,7 +77,7 @@
     "review_verdict.py": 168,
     "run_fields.py": 72,
     "run_state.py": 541,
-    "runner.py": 3001,
+    "runner.py": 2421,
     "runner_health.py": 773,
     "runner_marker.py": 49,
     "runner_source.py": 320,
@@ -131,7 +132,6 @@
     "resume_verification.py::verify_resumed_pr": 243,
     "review_merge.py::_round_verdict_phase": 131,
     "review_merge.py::_run_review_round": 311,
-    "runner.py::_dispatch_implementation": 618,
     "runner.py::_gather_claim_facts": 147,
     "runner.py::_preflight": 136,
     "runner.py::deliver_pr": 185,
@@ -142,5 +142,5 @@
     "runner_health.py::_run_health_check_locked": 154,
     "runner_source.py::check_runner_source_freshness": 211
   },
-  "runner_top_level_defs": 39
+  "runner_top_level_defs": 38
 }

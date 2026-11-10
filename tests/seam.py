@@ -31,6 +31,7 @@ import orbi.github as github
 import orbi.github_feedback as github_feedback
 import orbi.gitops as gitops
 import orbi.journal as journal
+import orbi.implementation_delivery as implementation_delivery
 import orbi.merge_exec as merge_exec
 import orbi.milestone as milestone
 import orbi.milestone_command as milestone_command
@@ -57,7 +58,8 @@ _MODULES = (
     ops_delivery, ticket_command,
     progress, cli_source, release, release_closeout, release_git,
     release_notes, release_run, pi_session,
-    runner, review_merge, merge_exec, review_rounds, run_state, claim,
+    runner, implementation_delivery, review_merge, merge_exec,
+    review_rounds, run_state, claim,
     resume_scan,
     pr_verification, resume_verification,
     repo_config, clarify, comment_trust,
