@@ -89,8 +89,19 @@ RELEASE_BODY_DROP_SECTION_HEADINGS = (
 _MDX_TEXT_REFERENCES = {"<": "&lt;", "{": "&#123;", "}": "&#125;"}
 _A_FENCE_LINE = re.compile(r"\s*(`{3,}|~{3,})")
 # A closing code fence is the fence run alone (same character, at least as
-# long as the opening one) plus trailing whitespace — nothing else.
+# long as the opening one) plus trailing whitespace — nothing else. The
+# leading whitespace is unbounded because MDX disables CommonMark's indented
+# code block (micromark-extension-mdx-md: `codeIndented`), so micromark
+# accepts any indentation before a closing fence (verified against the real
+# @mdx-js/mdx 3.1.1 parser: a line indented four spaces still closes it).
 _A_CLOSING_FENCE_LINE = re.compile(r"\s*(`{3,}|~{3,})\s*")
+# A line that starts a new Markdown block: a list item, an ATX heading, a
+# thematic break or a blockquote. An inline code span never crosses one —
+# every block ends its own paragraph (CommonMark).
+_A_BLOCK_START_LINE = re.compile(
+    r" {0,3}(?:[-*+][ \t]|[0-9]{1,9}[.)][ \t]|#{1,6}(?:[ \t]|$)|>"
+    r"|(?:[-*_][ \t]*){3,}$)"
+)
 # One single-line tag of the body's own HTML or MDX component, e.g.
 # <a href="...">, <img ... /> or <Note>. A tag never spans a line here:
 # an unmatched <x must be escaped, never paired with a later >.
@@ -127,9 +138,9 @@ def _mdx_code_mask(text: str) -> list[bool]:
 
     Issue #2156: the body keeps its Markdown line breaks, so both rules
     cross lines. An inline code span opened on one line closes on a later
-    one (it never crosses a blank line: that ends the paragraph), and a
-    fenced block ends only on a real closing fence — a content line such
-    as `````not-a-closing-fence````` is code (CommonMark).
+    one (it never crosses a blank line or a new block: that ends the
+    paragraph), and a fenced block ends only on a real closing fence — a
+    content line such as `````not-a-closing-fence````` is code (CommonMark).
     """
     mask = [False] * len(text)
     offset = 0
@@ -150,9 +161,12 @@ def _mdx_code_mask(text: str) -> list[bool]:
             fence, tick = opening.group(1), 0
             mask[offset:end_of_line] = [True] * len(line)
         else:
-            if tick and not body.strip():
-                # A blank line ends the paragraph, so the open backtick run
-                # can never be closed: it stays ordinary prose.
+            if tick and (not body.strip()
+                          or _A_BLOCK_START_LINE.match(body)):
+                # A blank line or a new block ends the paragraph, so the
+                # open backtick run can never be closed: it stays ordinary
+                # prose (and its line's hazards are still escaped, never
+                # swallowed as code).
                 tick = 0
             cursor = 0
             while cursor < len(body):

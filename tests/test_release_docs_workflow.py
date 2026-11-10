@@ -412,6 +412,40 @@ def test_escape_mdx_notes_does_not_carry_a_span_across_a_blank_line():
     assert "&lt;n>" in escaped, escaped
 
 
+def test_escape_mdx_notes_does_not_carry_a_span_over_a_new_block():
+    """Issue #2156: a new block (a bullet, a heading, a quote) ends the
+    paragraph just like a blank line, so the mask must not join a stray
+    backtick in one bullet to a backtick in the next one — that would
+    leave the second bullet's real hazard unescaped and break the build
+    the other way (review round 1: the output kept a raw <n>, and the real
+    @mdx-js/mdx 3.1.1 parser reported "Expected a closing tag for <n>")."""
+    script = load_script()
+    for notes in (
+        # two bullets, the first one's backtick unmatched
+        "- rename `--drop-old in the parser\n"
+        "- handle size <n> and use `id` here\n",
+        "- a ` stray <n>\n## Tests\n- more ` tail\n",
+        "- a ` stray <n>\n> quoted\n- more ` tail\n",
+    ):
+        escaped = script.escape_mdx_notes(notes)
+        assert "&lt;n>" in escaped, escaped
+    # The same body with the span inside ONE paragraph still keeps its code.
+    assert script.escape_mdx_notes("- Flag `--size\n<n> {x}` code\n") == (
+        "- Flag `--size\n<n> {x}` code\n"
+    )
+
+
+def test_escape_mdx_notes_closes_a_fence_indented_by_whitespace():
+    """Issue #2156: MDX disables CommonMark's indented code block
+    (micromark-extension-mdx-md turns `codeIndented` off), so micromark
+    accepts ANY indentation before a closing fence; the real @mdx-js/mdx
+    3.1.1 parser closes the block on `    ~~~ ` — pinning the same rule
+    keeps the mask aligned and leaves a line after it escapable as prose."""
+    script = load_script()
+    escaped = script.escape_mdx_notes("~~~text\n    ~~~\n<n> {x}\n~~~\n")
+    assert "&lt;n>" in escaped, escaped
+
+
 def test_escape_mdx_notes_lets_a_fenced_block_interrupt_an_open_span():
     """Issue #2156: a fenced block interrupts the paragraph, so a stray
     backtick above it never closes over the block (CommonMark). The real
