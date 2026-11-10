@@ -7,8 +7,10 @@ impossible. The tests below enumerate the fact combinations and assert
 the classified scene — no `gh` stub, no I/O: the module is pure.
 """
 from orbi import config as config_domain
+import ast
 import dataclasses
 import json
+import pathlib
 
 import pytest
 
@@ -644,3 +646,37 @@ def test_pick_issue_claims_a_fresh_candidate(monkeypatch):
         "blockedBy": {"nodes": [], "totalCount": 0},
         "labels": [{"name": "ai-ready"}],
     }
+
+
+def test_implementation_dispatch_is_one_function_per_scene():
+    """Issue #2168: the 680-line dispatch is one entry point per scene
+    plus one shared closeout, the public entry keeps its signature and
+    dispatches by scene, and no function there crosses 100 lines."""
+    module = pathlib.Path(runner.__file__).with_name(
+        "implementation_delivery.py")
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    functions = {
+        node.name: node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert {
+        "_dispatch_fresh_claim", "_dispatch_restart_in_flight",
+        "_dispatch_external_takeover", "_dispatch_ops",
+        "_closeout_implementation",
+    } <= set(functions)
+    oversized = {
+        name: node.end_lineno - node.lineno + 1
+        for name, node in functions.items()
+        if node.end_lineno - node.lineno + 1 > 100
+    }
+    assert oversized == {}
+    entry = ast.parse(pathlib.Path(runner.__file__).read_text(encoding="utf-8"))
+    dispatch = next(
+        node for node in entry.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_dispatch_implementation"
+    )
+    assert [argument.arg for argument in dispatch.args.args] == [
+        "issue", "source_repo", "facts",
+    ]
+    assert [argument.arg for argument in dispatch.args.kwonlyargs] == ["ops"]
