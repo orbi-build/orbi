@@ -67,13 +67,15 @@ beyond the standard library and run on the `python3` on PATH:
   `Path`, `shutil.which`, `HTTPServer`, ...) and the per-target counts
   are reported, not gated; moving a patch between modules is neutral.
   A failure says to move the test to `tests/fakes/` or remove the patch.
-- `tools/size_ratchet.py` (Issues #1229, #2007): the source-size limits
-  — Article 3's module cap and frozen `runner.py` top level, plus this
-  tool's own 100-line function cap (Issue #2007, not a constitution
-  article). A module over 1,000 lines may not grow, and every function
-  over 100 lines is recorded with its own ceiling, so a new function
-  crossing 100 lines fails. Extract code into a sibling module or
-  function instead.
+- `tools/size_ratchet.py` (Issues #1229, #2007, #2167): the source-size
+  limits — Article 3's module cap and frozen `runner.py` top level, plus
+  this tool's own 100-line function cap (Issue #2007, not a constitution
+  article). Every module in `src/orbi` is recorded with its own ceiling,
+  so an existing module may shrink but never grow, while a module absent
+  from the baseline is held to the 1,000-line cap. Every function over
+  100 lines is recorded with its own ceiling, so a new function crossing
+  100 lines fails. Extract code into a sibling module or function
+  instead.
 
 Both tools accept only `--update` (plus an optional directory
 positional — `tests/` and `src/orbi/` are the defaults). `--update`
