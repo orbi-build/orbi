@@ -61,6 +61,17 @@ def _page_fields(page: str) -> tuple[dict[str, str], list[str]]:
     return fields, lines[end + 1:]
 
 
+def _release_notes_body(page: str) -> str:
+    """The generated page's MDX body after its `## Release notes` heading —
+    the release body exactly as the page publishes it (Issue #2156: the
+    code-preservation assertions compare literal text here, never a
+    re-derivation of the generator's own masking)."""
+    body = "\n".join(_page_fields(page)[1])
+    heading = "## Release notes"
+    assert heading in body, body
+    return body.split(heading, 1)[1]
+
+
 def _changelog_body(first_bullet: str, *more_bullets: str) -> str:
     bullets = "\n".join(f"- {bullet}" for bullet in (first_bullet, *more_bullets))
     return f"# {TAG}\n\n## Changelog\n\n{bullets}\n"
@@ -333,6 +344,82 @@ def test_escape_mdx_notes_leaves_an_unmatched_closing_tag_escaped():
     assert "<x></x>" in escaped, escaped
     # A tag never spans a line: the unterminated "<y" is text, not markup.
     assert "&lt;y" in script.escape_mdx_notes("d <y\n and z>\n")
+
+
+def test_release_docs_page_keeps_a_code_span_across_a_line_break():
+    """Issue #2156: a release body keeps its Markdown line breaks, so an
+    inline code span can be wrapped across source lines. MDX parses the
+    whole span as one code node (the real `@mdx-js/mdx` 3.1.1 parser
+    reports `inlineCode.value = "--size\\n<n> {x}"`), so its contents are
+    code and must come out byte-identical; the same bullet's prose
+    `(--size <n>)` and `{x}` are still escaped as text.
+
+    The oracle is the literal code text in the page, never the
+    generator's own masking algorithm.
+    """
+    script = load_script()
+    code = "`--size\n<n> {x}`"
+    body = (
+        f"# {TAG}\n\n## Changelog\n\n"
+        f"- Flag {code} remains code, while (--size <n>) and {{x}} "
+        "are prose ([Issue #1](https://example.test/1))\n"
+    )
+    for language in ("en", "zh"):
+        page = script.release_docs_page(
+            version=TAG, tag_object=TAG_OBJECT,
+            release_commit=RELEASE_COMMIT, published_at=PUBLISHED_AT,
+            release_url=RELEASE_URL, issue_number=42, body=body,
+            language=language,
+        )
+        notes = _release_notes_body(page)
+        assert code in notes, notes
+        assert "(--size &lt;n>)" in notes, notes
+        assert "&#123;x&#125;" in notes, notes
+        # The code keeps the only literal "<n>"; the prose copy is escaped.
+        assert notes.count("<n>") == 1, notes
+
+
+def test_release_docs_page_keeps_a_fenced_code_line_that_looks_like_a_fence():
+    """Issue #2156: only a valid closing fence ends a fenced block — a
+    content line such as `````not-a-closing-fence````` is code (the real
+    `@mdx-js/mdx` 3.1.1 parser reports it inside `code.value`), so the
+    lines after it stay verbatim too."""
+    script = load_script()
+    fenced = "```text\n```not-a-closing-fence\n<n> {x}\n```"
+    body = f"# {TAG}\n\n## Changelog\n\n- a change\n\n{fenced}\n"
+    for language in ("en", "zh"):
+        page = script.release_docs_page(
+            version=TAG, tag_object=TAG_OBJECT,
+            release_commit=RELEASE_COMMIT, published_at=PUBLISHED_AT,
+            release_url=RELEASE_URL, issue_number=42, body=body,
+            language=language,
+        )
+        notes = _release_notes_body(page)
+        assert fenced in notes, notes
+        assert notes.count("<n>") == 1, notes
+        assert "&#123;" not in notes, notes
+
+
+def test_escape_mdx_notes_does_not_carry_a_span_across_a_blank_line():
+    """Issue #2156: a code span never crosses a blank line (CommonMark
+    ends the paragraph), so a stray backtick in one bullet must not make
+    the next paragraph's `<n>` look like code — that would leave a real
+    MDX hazard unescaped and break the build the other way."""
+    script = load_script()
+    escaped = script.escape_mdx_notes(
+        "- a stray ` in prose\n\n- the input (--size <n>) and another ` mark\n"
+    )
+    assert "&lt;n>" in escaped, escaped
+
+
+def test_escape_mdx_notes_lets_a_fenced_block_interrupt_an_open_span():
+    """Issue #2156: a fenced block interrupts the paragraph, so a stray
+    backtick above it never closes over the block (CommonMark). The real
+    `@mdx-js/mdx` 3.1.1 parser reports `code.value = "<n>"` for this
+    input, so the fence keeps its literal contents."""
+    script = load_script()
+    escaped = script.escape_mdx_notes("a ` stray\n```\n<n>\n```\n")
+    assert "```\n<n>\n```" in escaped, escaped
 
 
 def test_escape_mdx_notes_handles_mismatched_backtick_runs():
