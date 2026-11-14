@@ -28,6 +28,7 @@ description: "每个 orbi.toml 设置的作用和默认值是什么?"
 | `auto_next_milestone` | 布尔值 | `true` | `true \| false` | 当前 Milestone 关闭且队列为空时是否自动推进。`false` 保持 `active_milestone` 不变，记录待确认告警并创建一个不带 `ai-ready` 或 `p0`、不会被领取的确认 Issue（票内自带 `/orbi milestone <版本>` 命令，见 Issue #1290；#1922 之前的 `/milestone <版本>` 写法仍作为声明过的别名有效，Issue #1922）；人工推进后旧通知会自动关闭。**可写入仓库的 `.github/orbi.toml`**（Issue #1342）：仓库声明的值胜过本键，省略时回退到宿主值，因此托管租户也能阻止引擎改写 `active_milestone`。非法值立即失败 |
 | `version_file` | 字符串或空 | 未设置 | `pyproject.toml`、`package.json`、`pom.xml`、`build.gradle`、`build.gradle.kts`、`gradle.properties`、`Cargo.toml`、`composer.json`、`pubspec.yaml` 或 `none` | 票内 `/orbi milestone <版本>` 命令（Issue #1290，仅宿主/部署侧——仓库的 `.github/orbi.toml` 不可携带）开的 release 票里写死的版本文件。未设置 = Runner 从 base 分支的文件树探测；探测找不到受支持文件时 `/orbi milestone` 的 release 票步骤直接失败并在票上留一条指出修复方式的回执，不再猜测 `pyproject.toml`（Issue #1307）；取值不在列表内立即失败 |
 | `worktree_retain_hours` | 数字 | `72` | 有限正数 | tick 开头任务 worktree 回收的保留窗口（Issue #760，仅宿主/部署侧——仓库的 `.github/orbi.toml` 不可携带）：已关闭超过该小时数的任务 worktree 会被自动移除（OPEN 的票和有活跃 run 的现场绝不触碰）。机制与 `worktree_reclaimed` journal 行：[运维](/zh/operations)。必须是有限正数小时，否则启动 fail fast |
+| `keep_failed_worktrees` | 布尔值 | `true` | `true \| false` | 终态失败保留（Issue #2175，仅宿主/部署侧——仓库的 `.github/orbi.toml` 不可携带）：`true` 时交付以 `ai-blocked` 结束后**不删除**其 worktree——分支、未提交的候选改动、Pi 会话与 run 产物都留在磁盘上，并记录 `worktree_retained`；现场停在 detached HEAD 上，因此稳定的交付分支可供重试使用，最终由 tick 开头的回收在 Issue 已关闭且超过 `worktree_retain_hours` 后移除。停在 `ai-blocked` 且一直未关闭的 Issue 的现场永远不会被自动回收。`false` 即 #2175 之前的行为（移除 worktree）；磁盘紧张的宿主显式关掉。必须是布尔值，否则启动 fail fast |
 
 ## 模型 provider
 

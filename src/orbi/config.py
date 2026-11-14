@@ -22,9 +22,14 @@ from orbi.release_git import RELEASE_VERSION_FILE_OPTIONS
 # re-exported here for the modules that resolve it through the config.
 from orbi.repo_config import REPO_CONFIG_PATH, repository_config_path
 from orbi.scheduler_units import MAX_RUNNER_INSTANCES
+from orbi.worktree_retention import (
+    KEEP_FAILED_WORKTREES,
+    WORKTREE_RETAIN_HOURS,
+    load_keep_failed_worktrees,
+    load_worktree_retain_hours,
+)
 
 ISSUE_COMMENTS_LIMIT = 200
-WORKTREE_RETAIN_HOURS = 72
 
 def _config_path(value: str, base: Path) -> Path:
     path = Path(os.path.expandvars(os.path.expanduser(value)))
@@ -168,6 +173,7 @@ class RunnerConfig:
     model_wait_dead_seconds: float = PI_MODEL_WAIT_DEAD_SECONDS
     issue_comments_limit: int = ISSUE_COMMENTS_LIMIT
     worktree_retain_hours: float = WORKTREE_RETAIN_HOURS
+    keep_failed_worktrees: bool = KEEP_FAILED_WORKTREES
     model_wait_probe_url: str | None = None
     model_wait_probe_seconds: float = PI_MODEL_WAIT_PROBE_SECONDS
     steering_enabled: bool = True
@@ -373,9 +379,8 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     # Trusted-comment injection cap: how many of the
     # Issue's trusted comments enter the agent's task context.
     issue_comments_limit = _issue_comments_limit(data)
-    # Task-worktree reclamation: how long a closed Issue's
-    # worktree stays inspectable before the tick start removes it.
-    worktree_retain_hours = _worktree_retain_hours(data)
+    worktree_retain_hours = load_worktree_retain_hours(data)
+    keep_failed_worktrees = load_keep_failed_worktrees(data)
     # Swallowed-model-request probe: the /slots endpoint
     # (optional) and its sustained-idle grace (default 60 s). Absent URL
     # -> the probe is disabled (the exact pre-#233 behavior: the run is
@@ -551,6 +556,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         model_wait_dead_seconds=model_wait_dead_seconds,
         issue_comments_limit=issue_comments_limit,
         worktree_retain_hours=worktree_retain_hours,
+        keep_failed_worktrees=keep_failed_worktrees,
         model_wait_probe_url=model_wait_probe_url,
         model_wait_probe_seconds=model_wait_probe_seconds,
         steering_enabled=steering_enabled,
@@ -722,47 +728,6 @@ def _model_wait_probe_url(data: dict) -> str | None:
             f"(got {value!r})"
         )
     return value
-
-
-def _worktree_retain_hours(data: dict) -> float:
-    """Load and validate the optional `worktree_retain_hours` (Issue
-    #760).
-
-    Omitted -> `WORKTREE_RETAIN_HOURS` (default 72 hours): a closed
-    Issue's scene stays inspectable for three days before the tick-start
-    reclamation removes it. Present -> must be a finite positive number
-    (int or float); booleans, zero, negative, NaN/infinity and
-    non-numeric values fail fast at config load with the field name and
-    the concrete reason.
-    """
-    value = data.get("worktree_retain_hours", WORKTREE_RETAIN_HOURS)
-    if isinstance(value, bool):
-        raise ValueError(
-            "worktree_retain_hours must be a number, not a boolean "
-            f"(got {value!r})"
-        )
-    if not isinstance(value, (int, float)):
-        raise ValueError(
-            "worktree_retain_hours must be a number "
-            f"(got {type(value).__name__} {value!r})"
-        )
-    number = float(value)
-    if math.isnan(number):
-        raise ValueError(
-            "worktree_retain_hours must be a finite number of hours "
-            f"(got {value!r})"
-        )
-    if math.isinf(number):
-        raise ValueError(
-            "worktree_retain_hours must be a finite number of hours "
-            f"(got {value!r})"
-        )
-    if number <= 0:
-        raise ValueError(
-            "worktree_retain_hours must be a positive number of hours "
-            f"(got {value!r})"
-        )
-    return number
 
 
 def _issue_comments_limit(data: dict) -> int:

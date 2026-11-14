@@ -53,7 +53,7 @@ def test_process_issue_failure_without_session_still_carries_scene(
     monkeypatch.setattr(seam, "run_command", fake_run)
     # Issue #239: the failure is terminal — `process_issue` returns `None`
     # instead of re-raising; the scene assertions below are unchanged.
-    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main", keep_failed_worktrees=False), "xqliu/orbi-backlog").kind == "failed"
     failure_body = calls[-1][2]["body"]
     # No session file yet: the scene still carries the full debug entry
     # (worktree, branch) with '-' session fields.
@@ -488,7 +488,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     })
     # Issue #239: the failure is terminal — `process_issue` returns `None`
     # instead of re-raising; the scene assertions below are unchanged.
-    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main", keep_failed_worktrees=False), "xqliu/orbi-backlog").kind == "failed"
     failure_body = calls[-1][2]["body"]
     assert "Orbi: blocked" in failure_body
     assert "session log: `local session log`" in failure_body
@@ -554,7 +554,7 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
         # Issue #239: the failure is terminal — `process_issue` returns
         # `None` instead of re-raising; the scene-isolation assertions
         # below are unchanged.
-        assert runner.process_issue({"number": 9, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
+        assert runner.process_issue({"number": 9, "title": "Fail", "body": ""}, config_domain.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main", keep_failed_worktrees=False), "xqliu/orbi-backlog").kind == "failed"
     assert "activity scene failed" in caplog.text
     failure_body = calls[-1][2]["body"]
     assert "git failed" in failure_body

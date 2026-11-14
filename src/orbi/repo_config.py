@@ -114,9 +114,9 @@ HOST_ONLY_KEYS = frozenset({
     "max_concurrency",
     "unit_name",
     "git_transport",
-    # Tick-start worktree reclamation: the host owns its
-    # disk hygiene, never a repository policy.
+    # Worktree upkeep (reclamation, terminal-failure retention, #2175).
     "worktree_retain_hours",
+    "keep_failed_worktrees",
     # Engine source update channel: a deploy-home decision,
     # never a repository policy.
     "engine_source_track",
