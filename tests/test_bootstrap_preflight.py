@@ -225,6 +225,8 @@ def test_load_config_reads_pi_model_keys(tmp_path):
         ("pi_thinking", '""'),
         ("pi_thinking", "123"),
         ("pi_thinking", "true"),
+        ("pi_executable", '""'),
+        ("pi_executable", "123"),
     ],
 )
 def test_load_config_rejects_invalid_pi_model_keys(tmp_path, key, value):
@@ -235,6 +237,20 @@ def test_load_config_rejects_invalid_pi_model_keys(tmp_path, key, value):
     )
     with pytest.raises(ValueError, match=f"{key} must be a non-empty string"):
         config_domain.load_config(config_path)
+
+
+def test_load_config_pi_executable_defaults_to_pi_and_reads_an_override(
+    tmp_path,
+):
+    """Issue #2182: unset keeps `pi`; a set value is taken verbatim."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    assert config_domain.load_config(config_path).pi_executable == "pi"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\npi_executable = "pi-bolt"\n',
+        encoding="utf-8",
+    )
+    assert config_domain.load_config(config_path).pi_executable == "pi-bolt"
 
 
 def test_run_pi_passes_configured_model_args(monkeypatch, tmp_path):

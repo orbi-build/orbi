@@ -245,6 +245,9 @@ max_concurrency = 1
 # pi_provider = "openai"
 # pi_model = "gpt-5.6-sol"
 # pi_thinking = "medium"
+# Optional Pi executable (host-only): a command name on PATH or an absolute
+# path to a Pi-compatible CLI. Omit it to start the default `pi`.
+# pi_executable = "pi-bolt"
 # Optional independent review selection; each unset key falls back to its
 # corresponding pi_* value.
 # review_pi_provider = "deepseek"

@@ -55,7 +55,7 @@ LOGGER = logging.getLogger("orbi.pilot_setup")
 
 from orbi import runner, config as config_domain
 from orbi import gitops
-from orbi import cli_source
+from orbi import cli_source, pi_exec
 from orbi import git_transport
 from orbi import scheduler
 from orbi.journal import event, quote_value
@@ -349,9 +349,9 @@ def run_checks(config_path: Path, *, run_command) -> list[str]:
     ``check=<step> ok ...`` line per step plus the final
     ``prerequisites=ok checks=<n>``.
     """
-    lines, _ = run_machine_checks(run_command=run_command)
-
     config_path = Path(config_path)
+    lines, _ = run_machine_checks(run_command=run_command, pi_executable=pi_exec.configured(config_path))
+
     if not config_path.is_file():
         raise CheckError(
             "config",

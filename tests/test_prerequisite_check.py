@@ -207,6 +207,36 @@ def test_pi_check_executes_the_version_probe_and_names_the_node_floor():
     assert "22.19" in failure.fix
 
 
+def _fake_executable(tmp_path: Path, name: str = "pi-bolt") -> Path:
+    path = tmp_path / name
+    path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def test_check_gate_probes_the_configured_pi_executable(tmp_path):
+    """Issue #2182: `orbi check` reads `pi_executable` from the config
+    and reports the executable it probed."""
+    make_world(tmp_path)
+    executable = _fake_executable(tmp_path)
+    config = tmp_path / "run" / "orbi.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        + f'pi_executable = "{executable}"\n',
+        encoding="utf-8",
+    )
+    world = fake_run_factory({})
+
+    def run(command, **kwargs):
+        if command == [str(executable), "--version"]:
+            return "1.5.2"
+        return world(command, **kwargs)
+
+    lines = pilot_setup.run_checks(config, run_command=run)
+    assert f"check=pi ok executable={executable}" in lines
+    assert lines[-1] == "prerequisites=ok checks=12"
+
+
 def test_pi_check_ok_when_the_probe_succeeds():
     assert setup_checks.check_pi_command(
         lambda command, **kwargs: "0.85.1"

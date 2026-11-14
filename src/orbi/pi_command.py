@@ -279,13 +279,13 @@ def build_pi_command(
         session_dir, system_prompt, context,
     )
     command = [
-        "pi", *boundary_args, *extension_args, *skill_args, *model_args,
+        config.pi_executable, *boundary_args, *extension_args, *skill_args, *model_args,
         *resume_args,
         "--print", "--session-dir", str(session_dir),
         "--system-prompt", str(prompt_file), f"@{context_file}",
     ]
     log_command = [
-        "pi", *extension_args, *model_args, *resume_args,
+        config.pi_executable, *extension_args, *model_args, *resume_args,
         "--print", "--session-dir", str(session_dir),
         "--system-prompt", "<redacted>", context_placeholder,
     ]

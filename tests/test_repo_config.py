@@ -232,7 +232,8 @@ def test_ignored_keys_are_not_a_policy_diff():
 @pytest.mark.parametrize(
     "key",
     ["source_repos", "pi_provider", "repo_dir", "prompt", "skills",
-     "engine_source_track", "issue_comments_limit", "human_review_gate"],
+     "engine_source_track", "issue_comments_limit", "human_review_gate",
+     "pi_executable"],
 )
 def test_parse_repo_config_rejects_host_only_keys(key):
     with pytest.raises(
