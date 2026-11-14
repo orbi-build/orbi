@@ -82,6 +82,51 @@ def test_runner_main_config_failure_is_one_structured_log_line(
     ]
 
 
+@pytest.mark.parametrize("missing", ["prompt.md", "prompt_review.md"])
+@pytest.mark.parametrize("command", [[], ["setup"], ["doctor"]])
+def test_cli_reports_missing_configured_prompt_without_traceback(
+    tmp_path, monkeypatch, caplog, capsys, missing, command,
+):
+    """Issue #2179: an existing config naming a missing prompt is one
+    structured failure line on every public entry — the bare Runner
+    entry included, with the selected config and the repair — and the
+    start stops before any command runs."""
+    import orbi.cli as cli
+
+    monkeypatch.delenv("ORBI_CONFIG", raising=False)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\n'
+        'repo_dir = "."\n'
+        'prompt = "prompts/prompt.md"\n'
+        'prompt_review = "prompts/prompt_review.md"\n',
+        encoding="utf-8",
+    )
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    present = {"prompt.md", "prompt_review.md"} - {missing}
+    for name in present:
+        (prompts / name).write_text("prompt", encoding="utf-8")
+
+    commands = _fake_preflight_run(monkeypatch, tmp_path)
+    with caplog.at_level("ERROR"):
+        assert cli.main([*command, "--config", str(config)]) == 1
+    assert commands == []
+    assert not (tmp_path / ".orbi").exists()
+    assert {path.name for path in prompts.iterdir()} == present
+    [line] = (capsys.readouterr().err + "\n".join(
+        record.message for record in caplog.records)).splitlines()
+    assert f"required path missing: {prompts / missing}" in line
+    assert "Traceback" not in line and "config_not_found" not in line
+    if command == ["setup"]:
+        assert line.startswith("setup_failed reason=")
+    else:
+        assert line.startswith("config_invalid reason=")
+    if not command:
+        assert f"config={config.resolve()}" in line
+        assert "fix=" in line and "--config <path>" in line
+
+
 # --- max_concurrency config (Issue #39) --------------------------------------
 
 

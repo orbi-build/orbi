@@ -808,11 +808,16 @@ def test_main_rejects_repeated_source_repo_before_execution(
     assert seen == []
 
 
-def test_main_requires_prompt_file(monkeypatch, tmp_path):
+def test_main_requires_prompt_file(tmp_path, caplog):
     config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
-    with pytest.raises(FileNotFoundError):
-        runner.main(["--config", str(config)])
+    with caplog.at_level("ERROR"):
+        assert runner.main(["--config", str(config)]) == 1
+    [line] = [record.message for record in caplog.records]
+    assert line.startswith("config_invalid reason=")
+    assert f"required path missing: {tmp_path / 'prompts' / 'prompt.md'}" in line
+    assert f"config={config.resolve()}" in line
+    assert "fix=" in line
 
 
 # --- main() slot acquisition (Issue #39) --------------------------------------
