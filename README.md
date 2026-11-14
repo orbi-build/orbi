@@ -14,7 +14,7 @@ Orbi is an open-source **software dark factory**: a software delivery system for
 
 **Ledger:** [merged PRs](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [closed Issues](https://github.com/orbi-build/orbi/issues?q=is:closed) · [tagged releases](https://github.com/orbi-build/orbi/releases) — the repository is the record.
 
-Website <https://orbi.build> ｜ Documentation <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions) ｜ Docker [GHCR](https://ghcr.io/orbi-build/orbi) · [Docker Hub](https://hub.docker.com/r/orbibuild/orbi)
+Website [orbi.build](https://orbi.build/?ref=gh-readme-links) ｜ Documentation <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions) ｜ Docker [GHCR](https://ghcr.io/orbi-build/orbi) · [Docker Hub](https://hub.docker.com/r/orbibuild/orbi)
 
 **Prefer to run it yourself?** Follow the Quick start below. Cloud founding members get 50% off forever with the code `FOUNDING50` at checkout (6 places).
 ## Quick start
