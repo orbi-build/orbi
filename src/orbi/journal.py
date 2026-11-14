@@ -404,6 +404,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "base_checkout_sync_failed": "the base checkout sync failed",
     "base_checkout_not_fast_forwardable": "the base checkout diverged from the remote base",
     "worktree_cleaned": "a task worktree was cleaned up",
+    "worktree_retained": "a terminally failed delivery's worktree was kept for inspection (Issue #2175)",
     "worktree_cleanup_failed": "a task worktree cleanup failed",
     "worktree_recreated": "a resumed delivery's missing worktree was rebuilt from the remote branch",
     "worktree_reclaimed": "released task worktrees were reclaimed in bulk",
@@ -523,9 +524,8 @@ def event(kind: str, scene: str | None = None, /, *,
 # wording, so without this a Chinese-locale host would silently stop
 # recognising the same errors (Issue #1758). `LANGUAGE` outranks `LC_ALL` in
 # gettext, so it is cleared for the child too. This is the message locale of
-# Git only: Orbi's own comment language still follows `language.py`.
-#
-# Every Git call goes through this seam (`run_git_network_command` included).
+# Git only: Orbi's own comment language still follows `language.py`; every
+# Git call goes through this seam (`run_git_network_command` included).
 # The one deliberate exception is the best-effort
 # `progress.runner_fingerprint` probe: its output is a commit SHA, which is
 # never translated, and any failure already degrades to `unknown`.

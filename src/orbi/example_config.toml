@@ -226,6 +226,18 @@ max_concurrency = 1
 # inspectable for three days before reclamation. Must be a finite
 # positive number of hours; anything else fails the start fast.
 # worktree_retain_hours = 72
+# Terminal-failure retention (Issue #2175): a delivery that ends
+# `ai-blocked` keeps its worktree instead of removing it, so the failed
+# attempt's uncommitted candidate changes, its `.pi-session/` session,
+# its `.orbi/test.log` and its `.orbi/plan.md` stay inspectable. The
+# retained scene is left on a DETACHED HEAD so the stable delivery
+# branch is free for a retry, and it is logged as `worktree_retained`.
+# Retention never changes `ai-blocked`, never authorizes a retry and
+# never makes the attempt runnable; a scene of an Issue left open in
+# `ai-blocked` is never reclaimed, so a disk-tight host sets this false
+# (exactly the pre-#2175 behavior) or removes a scene by hand with
+# `git worktree remove --force <dir>`. Default: true.
+# keep_failed_worktrees = true
 # Optional Pi model selection for implementation. Review sessions use
 # these values unless a review_pi_* override is configured below. Omit a
 # key to keep Pi's own default for that setting; values are passed verbatim

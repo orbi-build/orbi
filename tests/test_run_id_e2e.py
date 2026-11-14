@@ -27,6 +27,8 @@ import pytest
 
 from conftest import git
 
+import dataclasses
+
 import orbi.runner as runner
 from seam import seam
 
@@ -74,9 +76,12 @@ for command in (
     subprocess.run(command, cwd=cwd, check=True, capture_output=True)
 """
 
+# Like a real failed attempt it leaves an uncommitted candidate behind
+# (Issue #2175: retention keeps it, the opt-out removes it).
 FAKE_PI_FAILING = """#!/usr/bin/env python3
 import os, sys
 os.makedirs(os.path.join(os.getcwd(), ".pi-session"), exist_ok=True)
+open("candidate.py", "w").write("work in progress\\n")
 sys.stderr.write("pi exploded")
 sys.exit(3)
 """
@@ -467,9 +472,12 @@ def test_e2e_failed_attempt_marks_blocked_with_same_run_id(
 
     # Issue #239: the failure is terminal — `process_issue` returns
     # `None` instead of re-raising; the run-id assertions below are
-    # unchanged.
-    assert runner.process_issue(issue(), config_for(clone, tmp_path),
-                                REPO).kind == "failed"
+    # unchanged. Issue #2175: the host opted OUT of terminal retention, so
+    # this is exactly the pre-#2175 scene (the worktree is removed).
+    config = dataclasses.replace(
+        config_for(clone, tmp_path), keep_failed_worktrees=False,
+    )
+    assert runner.process_issue(issue(), config, REPO).kind == "failed"
 
     # The failure report carries the same run id as the start comment
     # (progress + started Pi + failure + blocked milestone).
@@ -488,11 +496,43 @@ def test_e2e_failed_attempt_marks_blocked_with_same_run_id(
     for message in caplog.messages:
         assert message.startswith("[a1b2c3d4]"), message
 
-    # Issue #256: the attempt is terminally `ai-blocked` — the scene is
-    # never needed again (a retry gets a new run id and worktree), so
-    # the run-scoped worktree is cleaned, not preserved.
+    # Issue #256: with retention OFF the terminal scene is cleaned up.
     worktree = worktree_for(clone, "a1b2c3d4")
     assert not worktree.is_dir()
+
+
+def test_e2e_terminal_failure_retains_the_whole_scene_by_default(
+    clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #2175, on the REAL `process_issue` path (not a mocked
+    cleanup): the default-on `keep_failed_worktrees` leaves a terminally
+    failed attempt's worktree on disk with its session evidence and the
+    `worktree_retained` journal line, on a DETACHED HEAD so the stable
+    delivery branch is free for a retry — and `ai-blocked` is unchanged."""
+    comments: list[str] = []
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI_FAILING)
+    install_fake_gh(monkeypatch, comments)
+    caplog.set_level("INFO")
+
+    assert runner.process_issue(issue(), config_for(clone, tmp_path),
+                                REPO).kind == "failed"
+
+    [worktree] = list(
+        (clone / ".worktrees").glob(f"orbi-owner-repo-issue-{ISSUE_NUMBER}-*")
+    )
+    assert worktree.is_dir(), "the failed attempt's evidence must stay on disk"
+    assert (worktree / ".pi-session").is_dir()
+    # The uncommitted candidate change is still there, still uncommitted.
+    assert (worktree / "candidate.py").read_text() == "work in progress\n"
+    assert "candidate.py" in git(worktree, "status", "--porcelain")
+    # Detaching frees the stable branch: a retry can create its own
+    # worktree on `orbi/owner-repo-issue-<n>` while this scene stays.
+    assert git(worktree, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
+    retained = [m for m in caplog.messages if "worktree_retained" in m]
+    assert len(retained) == 1, caplog.text
+    assert f"worktree={worktree}" in retained[0]
+    assert "worktree_cleaned" not in caplog.text
+    assert any("Orbi: blocked" in body for body in comments)
 
 
 def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(

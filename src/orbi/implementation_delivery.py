@@ -878,17 +878,16 @@ def _handle_terminal_failure(attempt: _Attempt, exc: Exception) -> IssueResult:
     except Exception:
         LOGGER.exception("issue=%s failure reporting failed", number)
     else:
-        # The terminal evidence is recorded (journal +
-        # `Orbi failed` comment) and the Issue is genuinely
-        # `ai-blocked` — the scene is never needed again (a retry
-        # gets a new run id and worktree), so clean it up. The
-        # recoverable paths (ModelWaitDeadError, ai-fix-needed) and
-        # the simulated-kill scene (blocked transition never landed)
-        # never reach this branch — the worktree is kept for the
-        # same-run resume.
+        # The terminal evidence is recorded and the Issue is genuinely
+        # `ai-blocked`; the recoverable paths (model_wait,
+        # `ai-fix-needed`) and the simulated-kill scene never reach this
+        # branch — their worktree is kept for the same-run resume. The
+        # host-only `keep_failed_worktrees` (Issue #2175) decides whether
+        # this terminal scene is retained; it never changes the outcome.
         if attempt.worktree is not None:
             attempt.hooks.cleanup_worktree(
                 attempt.ctx, attempt.config.repo_dir,
+                keep=attempt.config.keep_failed_worktrees,
             )
     # The failure is terminal — the Issue is `ai-blocked`
     # and the `Orbi failed` comment is posted above. Returning

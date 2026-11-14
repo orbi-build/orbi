@@ -621,6 +621,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `base_checkout_sync_failed` | base checkout 同步失败 |
 | `base_checkout_not_fast_forwardable` | base checkout 与远端 base 分叉 |
 | `worktree_cleaned` | 一个任务 worktree 已被清理 |
+| `worktree_retained` | 终态失败交付的 worktree 已保留供排查（Issue #2175） |
 | `worktree_cleanup_failed` | 一个任务 worktree 清理失败 |
 | `worktree_recreated` | 恢复交付时缺失的 worktree 已从远端分支重建 |
 | `worktree_reclaimed` | 批量回收了已释放的任务 worktree |
@@ -1109,6 +1110,32 @@ worktree 过去只增不减：每次交付都会留下
 `worktree_reclaim_failed reason=...` 且一个都不删，单个移除失败记录
 `worktree_reclaim_failed path=... reason=...` 后继续，有移除的 tick
 记录结构化 `worktree_reclaimed count=N freed=<bytes>` 行。
+
+#### 保留终态失败的现场（Issue #2175）
+
+当仅宿主侧的 `keep_failed_worktrees` 打开（默认打开；写在部署 home 的
+`orbi.toml`）时，以 `ai-blocked` 结束的交付**不删除**它的 worktree。
+终态路径改为执行 `git -C <worktree> checkout --detach`——稳定的交付
+分支因此可以让给重试使用，而工作区和其中未提交的候选改动原样保留——
+并记录 `worktree_retained issue=<n> run_id=<id> worktree=<dir>
+branch=<branch> head=<sha>`。保留从不改变 `ai-blocked` 的结果、从不授权
+重试、也从不让失败的尝试变得可运行：它只是待排查的现场。
+
+完整的本地证据都在这一个目录里：
+`<repo_dir>/.worktrees/orbi-<slug>-issue-<N>-<run_id>/` 保存着候选
+工作区、`.pi-session/` 下的 Pi 会话、`.orbi/test.log` 里本次 run 的
+测试输出，以及 `.orbi/plan.md` 里的计划。因为现场停在 detached HEAD
+上，用 `git -C <dir> status` 和 `git -C <dir> log -1` 查看（在那里直接
+`git log` 看到的是被保留的 head，不是某个分支）；`orbi status --issue <N>`
+会像其他 run worktree 一样给出该现场会话活动的归属。任何东西都不会被发布：凭据和私有
+日志都不离开本机。
+
+清理仍然复用已有的回收：Issue 关闭且超过 `worktree_retain_hours` 后，
+被保留的现场和其他已关闭 Issue 的 worktree 一样被移除。若 Issue 一直
+停在 `ai-blocked` 未关闭，它的现场永远不会被自动回收，磁盘占用由运维
+自己决定——要回到 #2175 之前的行为就把 `keep_failed_worktrees` 设为
+`false`（终态路径重新删除 worktree），或在抢救之后手工删除单个现场：
+`git -C <repo_dir> worktree remove --force <dir>`。
 
 ### 远端交付分支回收（Issue #1479）
 

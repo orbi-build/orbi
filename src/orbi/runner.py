@@ -32,7 +32,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import signal
 import subprocess
 import threading
@@ -267,6 +266,7 @@ from orbi.gitops import (
     task_branch,
     worktree_path,
 )
+from orbi.worktree_retention import cleanup_task_worktree
 from orbi.journal import (
     LOGGER,
     RunIdFilter,
@@ -778,10 +778,11 @@ def worktree_resume_scene(repo_dir: Path, source_repo: str,
     source-repo slug, which changes when the repo is renamed, while
     the state file carries the issue number and the repo NAME (the
     part after the slash — stable across a rename). The newest
-    matching worktree (by mtime) wins, as before. The
-    scene's worktree path may carry the OLD slug (a rename): it is
-    the scene the run continues in, never a reason for a second
-    worktree.
+    matching worktree by its OWN `created_at` stamp wins — never the
+    directory mtime (Issue #2175): a retained terminal scene sits beside
+    the new run and its detach touched its directory last. The scene's
+    worktree path may carry the OLD slug (a rename): it is the scene the
+    run continues in, never a reason for a second worktree.
 
     A worktree that claims THIS issue number but has a MISSING or
     CORRUPT run state file cannot be verified as the same run: it
@@ -793,7 +794,7 @@ def worktree_resume_scene(repo_dir: Path, source_repo: str,
     pattern = re.compile(
         r"^orbi-.+-issue-" + str(number) + r"-[0-9a-f]{8}$",
     )
-    candidates: list[Path] = []
+    candidates: list[tuple[Path, dict]] = []
     worktrees = repo_dir / ".worktrees"
     if worktrees.is_dir():
         for path in worktrees.iterdir():
@@ -815,11 +816,18 @@ def worktree_resume_scene(repo_dir: Path, source_repo: str,
                 )
             if str(state["repo"]).rsplit("/", 1)[-1] != name:
                 continue
-            candidates.append(path)
+            candidates.append((path, state))
     if not candidates:
         return None
-    newest = max(candidates, key=lambda path: path.stat().st_mtime)
-    return str(run_state.read_run_state(newest)["run_id"]), newest
+    # Newest by the scene's own start stamp; the directory name breaks a
+    # same-second tie, so the choice is deterministic on every tick.
+    newest, state = max(
+        candidates,
+        key=lambda candidate: (
+            str(candidate[1].get("created_at", "")), candidate[0].name,
+        ),
+    )
+    return str(state["run_id"]), newest
 
 
 def resume_run_id(repo_dir: Path, source_repo: str,
@@ -1122,33 +1130,6 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
 
 
 
-
-
-def cleanup_task_worktree(ctx: RunContext, repo_dir: Path) -> None:
-    """Remove a terminally failed task's worktree and Runner state.
-
-    Called ONLY on the terminal `ai-blocked` outcome AFTER the Issue
-    evidence (journal line + `Orbi failed` comment) is recorded.
-    A retry generates a NEW run id and a NEW worktree, so the terminal
-    scene is never needed again; the recoverable `ai-fix-needed` /
-    model_wait paths keep the worktree for the same-run resume and must
-    never call this. A cleanup failure is logged as
-    `worktree_cleanup_failed` — never swallowed, never re-raised (the
-    tick already handled the delivery failure).
-    """
-    try:
-        if ctx.worktree.is_dir():
-            shutil.rmtree(ctx.worktree)
-        run_command(["git", "worktree", "prune"], cwd=repo_dir)
-        event(
-            "worktree_cleaned", issue=ctx.issue, run_id=ctx.run_id,
-            worktree=ctx.worktree,
-        )
-    except Exception as exc:
-        LOGGER.exception(
-            "worktree_cleanup_failed issue=%s run_id=%s worktree=%s: %s",
-            ctx.issue, ctx.run_id, ctx.worktree, exc,
-        )
 
 
 def _agent_delivery_boundary(worktree: Path) -> tuple[str, str]:

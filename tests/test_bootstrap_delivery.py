@@ -42,6 +42,7 @@ import orbi.pr_verification as pr_verification
 import orbi.resume_verification as resume_verification
 import orbi.review_merge as review_merge
 import orbi.run_state as run_state
+import orbi.worktree_retention as worktree_retention
 import orbi.gitops as gitops
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
@@ -2753,7 +2754,19 @@ def test_resume_run_id_matches_by_issue_and_repo_name_across_a_rename(
     ) is None
 
 
+def _stamp_run_state(worktree: Path, created_at: str) -> None:
+    """Set one scene's own start stamp in its run-state.json."""
+    path = run_state.run_state_path(worktree)
+    state = json.loads(path.read_text(encoding="utf-8"))
+    state["created_at"] = created_at
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+
 def test_resume_run_id_returns_newest_matching_worktree(tmp_path):
+    """The newest scene is chosen by its OWN `created_at` stamp, never by
+    the directory mtime (Issue #2175): a RETAINED terminal scene beside a
+    newer run was touched last (its detach and its evidence), so mtime
+    would resume the FAILED attempt instead of the in-flight one."""
     slug = "owner-repo"
     first = tmp_path / ".worktrees" / f"orbi-{slug}-issue-3-0d111111"
     second = tmp_path / ".worktrees" / f"orbi-{slug}-issue-3-2e222222"
@@ -2761,10 +2774,16 @@ def test_resume_run_id_returns_newest_matching_worktree(tmp_path):
     second.mkdir(parents=True)
     run_state.write_run_state(RunContext(run_id="0d111111", issue=3, branch="b1", worktree=first, source_repo="owner/repo"))
     run_state.write_run_state(RunContext(run_id="2e222222", issue=3, branch="b2", worktree=second, source_repo="owner/repo"))
-    os.utime(first, (300, 300))
-    os.utime(second, (100, 100))
-    assert runner.resume_run_id(tmp_path, "owner/repo", 3) == "0d111111"
-    os.utime(second, (400, 400))
+    _stamp_run_state(first, "2026-09-12T10:00:00Z")
+    _stamp_run_state(second, "2026-09-12T11:00:00Z")
+    # The NEWEST DIRECTORY is the OLDER run: mtime is the wrong key here.
+    os.utime(second, (300, 300))
+    os.utime(first, (100, 100))
+    assert runner.resume_run_id(tmp_path, "owner/repo", 3) == "2e222222"
+    # Equal stamps resolve deterministically (the directory name breaks the
+    # tie) instead of depending on iterdir order.
+    _stamp_run_state(first, "2026-09-12T12:00:00Z")
+    _stamp_run_state(second, "2026-09-12T12:00:00Z")
     assert runner.resume_run_id(tmp_path, "owner/repo", 3) == "2e222222"
 
 
@@ -6197,7 +6216,7 @@ def test_cleanup_task_worktree_removes_the_scene_and_prunes(tmp_path):
     repo, wt = _make_linked_worktree(tmp_path)
     (wt / ".orbi").mkdir(parents=True)
     (wt / ".pi-session").mkdir(parents=True)
-    runner.cleanup_task_worktree(RunContext(run_id="abc12345", issue=4, branch="orbi/issue", worktree=wt, source_repo="owner/repo"), repo)
+    runner.cleanup_task_worktree(RunContext(run_id="abc12345", issue=4, branch="orbi/issue", worktree=wt, source_repo="owner/repo"), repo, keep=False)
     assert not wt.exists()
     listing = subprocess.run(
         ["git", "-C", str(repo), "worktree", "list"],
@@ -6215,9 +6234,9 @@ def test_cleanup_task_worktree_logs_failure_and_keeps_the_scene(
     def boom(*args, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr(runner.shutil, "rmtree", boom)
+    monkeypatch.setattr(worktree_retention.shutil, "rmtree", boom)
     with caplog.at_level(logging.ERROR, logger="orbi.bootstrap"):
-        runner.cleanup_task_worktree(RunContext(run_id="abc12345", issue=4, branch="orbi/issue", worktree=wt, source_repo="owner/repo"), tmp_path)
+        runner.cleanup_task_worktree(RunContext(run_id="abc12345", issue=4, branch="orbi/issue", worktree=wt, source_repo="owner/repo"), tmp_path, keep=False)
     assert "worktree_cleanup_failed" in caplog.text
     assert wt.exists(), "a failed cleanup must never claim the scene is gone"
 
@@ -6272,7 +6291,7 @@ def test_cleanup_task_worktree_prunes_without_a_scene(tmp_path):
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     missing = tmp_path / "already-gone"
-    runner.cleanup_task_worktree(RunContext(run_id="abc12345", issue=4, branch="orbi/issue", worktree=missing, source_repo="owner/repo"), repo)
+    runner.cleanup_task_worktree(RunContext(run_id="abc12345", issue=4, branch="orbi/issue", worktree=missing, source_repo="owner/repo"), repo, keep=False)
     assert not missing.exists()
 
 

@@ -712,6 +712,7 @@ registry — in both directions (a name only in code or only in docs fails
 | `base_checkout_sync_failed` | the base checkout sync failed |
 | `base_checkout_not_fast_forwardable` | the base checkout diverged from the remote base |
 | `worktree_cleaned` | a task worktree was cleaned up |
+| `worktree_retained` | a terminally failed delivery's worktree was kept for inspection (Issue #2175) |
 | `worktree_cleanup_failed` | a task worktree cleanup failed |
 | `worktree_recreated` | a resumed delivery's missing worktree was rebuilt from the remote branch |
 | `worktree_reclaimed` | released task worktrees were reclaimed in bulk |
@@ -1291,6 +1292,38 @@ The pass is a pure bypass: a GitHub read failure logs
 removal failure logs `worktree_reclaim_failed path=... reason=...` and
 the pass continues, and a successful tick with removals logs the
 structured `worktree_reclaimed count=N freed=<bytes>` line.
+
+#### Retaining a terminally failed attempt (Issue #2175)
+
+A delivery that ends `ai-blocked` keeps its worktree when the host-only
+`keep_failed_worktrees` is on (the default; `orbi.toml` in the deploy
+home). Instead of removing the scene, the terminal path runs
+`git -C <worktree> checkout --detach` — the stable delivery branch is
+then free for a retry, while the working tree and its uncommitted
+candidate changes stay untouched — and logs `worktree_retained
+issue=<n> run_id=<id> worktree=<dir> branch=<branch> head=<sha>`. Retention never changes the `ai-blocked` outcome, never
+authorizes a retry and never makes the failed attempt runnable: it is
+inspection state.
+
+The complete local evidence is in that one directory:
+`<repo_dir>/.worktrees/orbi-<slug>-issue-<N>-<run_id>/` holds the
+candidate working tree, the Pi session under `.pi-session/`, the run's
+test output in `.orbi/test.log` and its plan in `.orbi/plan.md`.
+Because the scene sits on a detached HEAD, inspect it with
+`git -C <dir> status` and `git -C <dir> log -1` (a plain `git log` there
+shows the retained head, not a branch); `orbi status --issue <N>`
+attributes the retained scene's session activity exactly like any other
+run worktree. Nothing is published: no credentials and no private log
+leave the host.
+
+Cleanup is the existing reclaim pass: a retained scene is removed like
+any other closed-Issue worktree once its Issue is closed and
+`worktree_retain_hours` has passed. A scene whose Issue stays open in
+`ai-blocked` is never reclaimed automatically, so its disk use is the
+operator's call — set `keep_failed_worktrees = false` to keep the
+pre-#2175 behavior (the terminal path removes the worktree again), or
+remove one scene by hand with
+`git -C <repo_dir> worktree remove --force <dir>` after salvaging it.
 
 ### Remote delivery-branch reclamation (Issue #1479)
 
