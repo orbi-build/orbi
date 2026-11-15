@@ -99,27 +99,33 @@ def test_runner_config_keys_are_documented_and_shipped():
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-# --- `pi_executable` docs contract (Issue #2189) -----------------------
+# --- `pi_executable` docs contract (Issue #2189, #2194) ----------------
 #
 # The accepted scope of `pi_executable` is generic (Issue #2182): same Pi
 # flags, same session JSONL, same `PI_CODING_AGENT_DIR` isolation — only the
-# executable name changes. Orbi has not run a delivery on a third-party
-# build, so the reference and the example config describe the executable
-# instead of recommending one.
+# executable name changes. Issue #2189 kept the row from recommending a
+# third-party build; Issue #2194 records the one reported result instead:
+# Pi-Bolt, an ahead-of-time compiled Pi, has completed real deliveries with
+# the key, stated as a user report and not as a compatibility guarantee.
+# The example config still shows a pinned `pi` by absolute path (#2189).
 
 PI_EXECUTABLE_CONFIG_PAGES = (
     REPO_ROOT / "docs" / "configuration.mdx",
     REPO_ROOT / "docs" / "zh" / "configuration.mdx",
 )
-# The third-party build the docs must not endorse (Issue #2189).
+# The third-party build whose reported deliveries the row records (#2194).
 THIRD_PARTY_BUILD = "pi-bolt"
+PI_BOLT_REPOSITORY = "https://github.com/opensec-git/Pi-Bolt"
+PI_BOLT_DELIVERY_REPORT = (
+    "https://github.com/orbi-build/orbi/issues/2182#issuecomment-6889057653"
+)
 
 
 @pytest.mark.parametrize(
     "page", PI_EXECUTABLE_CONFIG_PAGES, ids=lambda p: p.parent.name
 )
 def test_pi_executable_row_states_the_generic_executable_contract(page):
-    """Issue #2189: the row keeps the contract and names no specific build."""
+    """Issue #2189/#2194: the contract, plus the reported Pi-Bolt result."""
     text = page.read_text(encoding="utf-8")
     match = re.search(r"^\| `pi_executable` \|.*$", text, re.MULTILINE)
     assert match, f"{page}: no pi_executable row"
@@ -137,7 +143,18 @@ def test_pi_executable_row_states_the_generic_executable_contract(page):
     )
     for phrase in required:
         assert phrase in row, (phrase, row)
-    assert THIRD_PARTY_BUILD not in row, row
+    # Issue #2194: the named alternative executable, its links, and the
+    # wording that keeps it a reported result rather than a guarantee.
+    assert f'`pi_executable = "{THIRD_PARTY_BUILD}"`' in row, row
+    assert f"]({PI_BOLT_REPOSITORY})" in row, row
+    assert f"]({PI_BOLT_DELIVERY_REPORT})" in row, row
+    reported = (
+        ("报告的结果", "不构成兼容性保证")
+        if page.parent.name == "zh"
+        else ("reported result", "not a compatibility guarantee")
+    )
+    for phrase in reported:
+        assert phrase in row, (phrase, row)
 
 
 def test_pi_executable_example_is_an_absolute_path_to_a_pinned_pi():
