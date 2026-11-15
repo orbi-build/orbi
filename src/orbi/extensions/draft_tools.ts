@@ -1,12 +1,13 @@
 /**
  * Issue #2041: the drafting session's structured answer.
  *
- * orbi draft runs a read-only Pi session whose ONLY output is one of two
+ * orbi draft runs a read-only Pi session whose ONLY output is one of three
  * tool calls: write_draft when the model has a draft, ask_user when it
- * needs the person to answer something first. Both write their (already
- * validated) arguments to the file the engine names in ORBI_DRAFT_OUT and
- * terminate the run, so the engine reads a JSON document instead of
- * parsing prose out of stdout.
+ * needs the person to answer something first, reply when the person asked
+ * for no code change and the answer is a reply alone (Issue #2201). Each
+ * writes its (already validated) arguments to the file the engine names in
+ * ORBI_DRAFT_OUT and terminates the run, so the engine reads a JSON
+ * document instead of parsing prose out of stdout.
  *
  * The schema is the contract:
  *
@@ -29,9 +30,10 @@ import { writeFileSync } from "node:fs";
 /** The environment variable naming the file the answer is written to. */
 export const DRAFT_OUT_ENV = "ORBI_DRAFT_OUT";
 
-/** The two tool names the drafting prompt tells the model to call. */
+/** The three tool names the drafting prompt tells the model to call. */
 export const WRITE_DRAFT_TOOL = "write_draft";
 export const ASK_USER_TOOL = "ask_user";
+export const REPLY_TOOL = "reply";
 
 /** One drafted Issue: a title, the complete body and its place in order. */
 const draftIssue = Type.Object(
@@ -136,6 +138,23 @@ const askParameters = Type.Object(
 	{ additionalProperties: false },
 );
 
+/**
+ * Issue #2201: a request that must not change any code is answered with a
+ * reply alone. Its own tool, with no Issue and no question in the schema, so
+ * the reply-only answer is deliberate and a draft round still carries at
+ * least one Issue.
+ */
+const replyParameters = Type.Object(
+	{
+		reply: Type.String({
+			minLength: 1,
+			description:
+				"The reply the person reads, in their language: one line each of what the reading found worth fixing, and that Orbi delivers by opening a pull request",
+		}),
+	},
+	{ additionalProperties: false },
+);
+
 function writeAnswer(kind: string, args: object) {
 	const out = process.env[DRAFT_OUT_ENV];
 	if (!out) {
@@ -155,7 +174,7 @@ export const writeDraftTool = {
 	label: "Write draft",
 	description:
 		"Return the drafted Issues. Call this exactly once when the draft " +
-		"is ready, and never in the same turn as ask_user.",
+		"is ready, and never in the same turn as ask_user or reply.",
 	parameters: draftParameters,
 	async execute(_toolCallId: string, args: object) {
 		return writeAnswer("draft", args);
@@ -177,14 +196,35 @@ export const askUserTool = {
 		"answers in their own words. Call this only " +
 		"when the request itself does not say what to build and no " +
 		"deliverable default can be written, and never in the same turn as " +
-		"write_draft.",
+		"write_draft or reply.",
 	parameters: askParameters,
 	async execute(_toolCallId: string, args: object) {
 		return writeAnswer("questions", args);
 	},
 };
 
+/** The tool that answers a request not to change any code. */
+export const replyTool = {
+	name: REPLY_TOOL,
+	label: "Reply",
+	description:
+		"Return a reply alone when the person explicitly asks for no code " +
+		"change (\"just review it and tell me\", \"only explain\", \"don't " +
+		"touch the code\"): that request takes the no-repository-change " +
+		"route. Write the reply in the person's language, one line for each " +
+		"thing the reading found worth fixing, and say that Orbi delivers by " +
+		"opening a pull request, so the person can name one item for Orbi to " +
+		"fix. The nearest-deliverable rule applies only to a request that " +
+		"asks for a change. Call this exactly once when the answer is that " +
+		"reply, and never in the same turn as write_draft or ask_user.",
+	parameters: replyParameters,
+	async execute(_toolCallId: string, args: object) {
+		return writeAnswer("reply", args);
+	},
+};
+
 export default function draftTools(pi: ExtensionAPI) {
 	pi.registerTool(writeDraftTool);
 	pi.registerTool(askUserTool);
+	pi.registerTool(replyTool);
 }

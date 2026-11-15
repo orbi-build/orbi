@@ -1,8 +1,8 @@
 /**
  * Issue #2041: the shipped draft tools of the drafting session.
  *
- * orbi draft's Pi session answers by calling exactly one of two tools —
- * write_draft or ask_user — and Pi validates the arguments against this
+ * orbi draft's Pi session answers by calling exactly one of three tools —
+ * write_draft, ask_user or reply — and Pi validates the arguments against this
  * TypeBox schema BEFORE execute runs (validateToolArguments ->
  * Compile(parameters).Check, the same typebox the pinned dependency here
  * provides). The engine then reads the JSON the tool wrote to
@@ -13,9 +13,10 @@
  *   - rejects an answer the engine cannot create from (no Issue, an Issue
  *     without a title or body, an unknown field, a non-integer after);
  *   - accepts the shapes the prompt asks for, including several Issues in
- *     delivery order;
- *   - proves both tools write the validated arguments plus their kind to
- *     the environment path and terminate the run.
+ *     delivery order and a reply alone for a request not to change code
+ *     (Issue #2201);
+ *   - proves every tool writes the validated arguments plus their kind to
+ *     the environment path and terminates the run.
  *
  * Run with: node --test tests/js/*.test.mjs
  */
@@ -29,8 +30,10 @@ import { Value } from "typebox/value";
 import draftTools, {
   ASK_USER_TOOL,
   DRAFT_OUT_ENV,
+  REPLY_TOOL,
   WRITE_DRAFT_TOOL,
   askUserTool,
+  replyTool,
   writeDraftTool,
 } from "../../src/orbi/extensions/draft_tools.ts";
 
@@ -82,10 +85,30 @@ function answerFile() {
   return join(directory, "answer.json");
 }
 
-test("the two tools are the names the prompt names", () => {
+test("the three tools are the names the prompt names", () => {
   assert.equal(writeDraftTool.name, WRITE_DRAFT_TOOL);
   assert.equal(askUserTool.name, ASK_USER_TOOL);
-  assert.notEqual(WRITE_DRAFT_TOOL, ASK_USER_TOOL);
+  assert.equal(replyTool.name, REPLY_TOOL);
+  assert.equal(
+    new Set([WRITE_DRAFT_TOOL, ASK_USER_TOOL, REPLY_TOOL]).size,
+    3,
+  );
+});
+
+test("the reply tool carries only a reply (Issue #2201)", () => {
+  // An explicit "do not change code" request is answered with a reply alone:
+  // no Issue and no question can travel with it.
+  assert.equal(
+    validates(replyTool, { reply: "Nothing needs changing." }),
+    true,
+  );
+  assert.equal(validates(replyTool, { reply: "x", issues: [] }), false);
+  assert.equal(
+    validates(replyTool, { reply: "x", issues: TWO_ISSUES.issues }),
+    false,
+  );
+  assert.equal(validates(replyTool, { reply: "x", questions: [] }), false);
+  assert.equal(validates(replyTool, { reply: "" }), false);
 });
 
 test("the schema accepts a draft of one or several Issues", () => {
@@ -242,6 +265,20 @@ test("ask_user writes the questions and terminates", async () => {
   assert.equal(result.terminate, true);
 });
 
+test("the reply tool writes the reply answer and terminates", async () => {
+  const out = answerFile();
+  process.env[DRAFT_OUT_ENV] = out;
+  const result = await replyTool.execute(
+    "call-4",
+    { reply: "Nothing to change." },
+  );
+  assert.deepEqual(JSON.parse(readFileSync(out, "utf8")), {
+    kind: "reply",
+    reply: "Nothing to change.",
+  });
+  assert.equal(result.terminate, true);
+});
+
 test("a tool without the output path fails instead of losing the answer", async () => {
   delete process.env[DRAFT_OUT_ENV];
   await assert.rejects(
@@ -250,8 +287,8 @@ test("a tool without the output path fails instead of losing the answer", async 
   );
 });
 
-test("the extension registers exactly the two tools", () => {
+test("the extension registers exactly the three tools", () => {
   const names = [];
   draftTools({ registerTool: (tool) => names.push(tool.name) });
-  assert.deepEqual(names, [WRITE_DRAFT_TOOL, ASK_USER_TOOL]);
+  assert.deepEqual(names, [WRITE_DRAFT_TOOL, ASK_USER_TOOL, REPLY_TOOL]);
 });

@@ -22,6 +22,7 @@ from pathlib import Path
 
 from orbi import draft, journal
 from orbi.config import RunnerConfig
+from orbi.draft_document import render_round
 from orbi.journal import event
 from orbi.ticket_command import TicketCommandError
 
@@ -42,21 +43,6 @@ def _ask(stdin, stdout, prompt: str) -> str | None:
         # prompt.
         stdout.write("\n")
     return line.rstrip("\n")
-
-
-def _render_draft(round_: draft.DraftRound) -> str:
-    lines: list[str] = []
-    for position, issue in enumerate(round_.issues, start=1):
-        lines.append(f"{position}. {issue.title}")
-        lines.append(issue.body)
-        if issue.after is not None:
-            lines.append(f"   after: {issue.after}")
-        lines.append("")
-    if round_.check is not None and round_.check != "passed":
-        lines.append(f"check: {round_.check}")
-    if round_.warning:
-        lines.append(f"warning: {round_.warning}")
-    return "\n".join(lines).rstrip()
 
 
 def _declined(stdout) -> int:
@@ -120,7 +106,12 @@ def _interactive(
                     return _declined(stdout)
                 message = answer.strip()
                 continue
-            print(_render_draft(round_), file=stdout)
+            if not round_.issues:
+                # Issue #2201: the round answered with a reply alone (a
+                # request not to change any code). The reply is the whole
+                # answer, so there is nothing to show or to create.
+                return 0
+            print(render_round(round_), file=stdout)
             current = {"issues": [i.as_json() for i in round_.issues]}
             answer = _ask(
                 stdin, stdout,

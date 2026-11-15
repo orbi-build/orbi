@@ -904,13 +904,18 @@ def test_skill_checks_the_milestone_is_open():
 # The draft must not be a request the code cannot deliver as asked: it becomes
 # the nearest version the code can deliver, with what changed and why in the
 # first line of the Issue's Assumptions section (Issue #2133: no question).
+# Issue #2201 scopes the rule to a request that asks for a change: a request
+# not to change any code ends with a reply alone and no Issue.
 NEAREST_DELIVERABLE_SENTENCE = (
     "If reading the code shows the request cannot be done as asked (the file "
     "it is about is empty or missing, or the thing it would change does not "
     "exist), draft the nearest version of the request that the code can "
     "actually deliver, and make the first line of the Issue's `Assumptions` "
-    "section say what you changed and why. Never write a draft whose only "
-    "possible delivery changes no file."
+    "section say what you changed and why. The nearest-deliverable rule "
+    "applies only to a request that asks for a change: a request not to "
+    "change any code takes the no-repository-change route above and ends with "
+    "a reply alone. Never write a draft whose only possible delivery changes "
+    "no file."
 )
 DRAFT_FIRST_PARAGRAPH = "Draft the Issue before asking anything."
 
@@ -918,7 +923,8 @@ DRAFT_FIRST_PARAGRAPH = "Draft the Issue before asking anything."
 def test_skill_drafts_the_nearest_version_the_code_can_deliver():
     """Issue #1597: when the code cannot deliver the request as asked, the
     draft is the nearest deliverable version — never a draft whose only
-    possible delivery changes no file."""
+    possible delivery changes no file. Issue #2201 scopes that rule to a
+    request that asks for a change."""
     flat = " ".join(read_plugin_file(PLUGIN_DIR, SKILL_REL).split())
     assert NEAREST_DELIVERABLE_SENTENCE in flat, (
         "SKILL.md must draft the nearest deliverable version when the code "
@@ -930,6 +936,33 @@ def test_skill_drafts_the_nearest_version_the_code_can_deliver():
         "the nearest-deliverable-version sentence must come before "
         f"{DRAFT_FIRST_PARAGRAPH!r}"
     )
+
+
+# --- An explicit "do not change code" request ends with a reply (Issue #2201)
+
+# "OK, just assess it and give it to me, don't touch the code" is the
+# no-repository-change route: the reply is the whole answer, one line each of
+# what the reading found worth fixing, and no Issue is created.
+NO_CODE_REQUEST_PHRASES = (
+    "no-repository-change route",
+    "a reply alone",
+    "Orbi delivers by opening a pull request",
+    "Create no Issue.",
+)
+
+
+def test_skill_answers_a_no_code_request_with_a_reply_alone():
+    """Issue #2201: a request not to change any code ends with the reply and
+    no Issue, so the person can name one item for Orbi to fix."""
+    flat = " ".join(read_plugin_file(PLUGIN_DIR, SKILL_REL).split())
+    assert "not to change any code" in flat, (
+        "SKILL.md must name the explicit no-code request (Issue #2201)"
+    )
+    for phrase in NO_CODE_REQUEST_PHRASES:
+        assert phrase in flat, (
+            f"SKILL.md must answer an explicit no-code request with a reply "
+            f"alone ({phrase!r}, Issue #2201)"
+        )
 
 
 # --- A default answer is an assumption, not a question (Issue #2133) --------
