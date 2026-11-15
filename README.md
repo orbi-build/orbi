@@ -60,7 +60,7 @@ Another real delivery, recorded from the live GitHub pages — including the rev
 
 - **GitHub Issues are the task pool**: the `ai-ready` label dispatches work, and the delivery record (comments, PRs, and CI) is complete by default, with no second task system;
 - **Fully automated**: a user scheduler timer (systemd on Linux, launchd on macOS) triggers a tick every 5 minutes. Normal operation needs no status command, polling, or supervision;
-- **Independent review + merge gates**: after a PR opens, an independent review session reviews it and fixes findings in the same session. Only the reviewed head can merge, and AI never merges or pushes protected branches;
+- **Independent review + merge gates**: after a PR opens, an independent review session reviews it and fixes findings in the same session. Reviewed code is what merges, and only with CI green on the latest base: if the base moved after the review, the Runner merges it into the delivery itself when there is no conflict and waits for CI on the new head before merging; conflicts or an outside push go back to review. AI never merges or pushes protected branches;
 - **Fail fast**: command errors fail immediately and leave the evidence in the logs. The Issue is marked `ai-blocked` for a human decision, with no silent fallback;
 - **Observable end to end**: every journal log and GitHub progress comment carries the same `run_id`, so the complete timeline can be reconstructed with one grep.
 

@@ -73,8 +73,10 @@ orbi doctor --config orbi.toml  # 6. 验证部署健康
   天然完整，无需第二套任务系统；
 - **全自动运行**：用户级调度 timer（Linux 为 systemd，macOS 为 launchd）每 5 分钟触发一次 tick，正常运行不需要
   status 命令、轮询或督工；
-- **独立审查 + 合并门禁**：PR 打开后由独立审查会话审查并在会话内修复，只有被
-  审查的 head 能合并，AI 从不 merge 或 push 保护分支；
+- **独立审查 + 合并门禁**：PR 打开后由独立审查会话审查并在会话内修复，合并的
+  是已审查的代码，且要求最新 base 上 CI 全绿：如果评审之后 base 前进了
+  且没有冲突，Runner 自己把 base 合进来并等新 head 的 CI 之后再合并；
+  有冲突或有外部 push 则回到评审。AI 从不 merge 或 push 保护分支；
 - **fail fast**：命令错误立即失败并在日志留下现场，Issue 标记 `ai-blocked`
   等待人工决策，不做静默回退；
 - **全程可观测**：每条 journal 日志和 GitHub 进度评论都携带同一个 `run_id`，
