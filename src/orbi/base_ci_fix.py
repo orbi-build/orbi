@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 from orbi import failure, language
 from orbi.base_ci_red import (
-    PASSING_CONCLUSIONS, REMINDER_AFTER_DAYS, REMINDER_AFTER_SECONDS,
+    PASSING_CONCLUSIONS, REMINDER_AFTER_SECONDS,
     STATE_MERGED, STATE_RESUMING, BaseCIRed, FailingCheck, comment_body,
     edit_state, failing_checks, open_triage_issue, paused_scene, remind,
     scene_receipt, triage_title,
@@ -278,11 +278,6 @@ def recover(repo: str, *, language_code: str,
         if scene is None:
             continue
         record, comment = scene
-        # The command lives beside the scene in `base_ci_fix`, which
-        # imports this module for the record; the local import is the edge
-        # that keeps that dependency one-way (Issue #2203).
-        from orbi.base_ci_fix import FIX_BASE_COMMAND
-
         process_commands(
             repo, number, [FIX_BASE_COMMAND],
             language_code=language_code, record=record,
