@@ -18,10 +18,8 @@ from orbi.github import (
     close_milestone, list_issues, list_milestones, milestone_open_issues,
     parse_paginated_issue_array, run_gh_read_command, run_gh_write_command,
 )
-from orbi.journal import (
-    LOGGER, MilestoneReconcileError, classify_milestone_error, event,
-    run_command, single_line,
-)
+from orbi.journal import LOGGER, event, run_command, single_line
+from orbi.milestone_errors import MilestoneReconcileError, classify_milestone_error
 from orbi.milestone_command import (
     MilestoneLookupError, _land_active_milestone, find_exact_milestone,
     rewrite_active_milestone_line,

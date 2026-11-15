@@ -23,31 +23,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 
-class MilestoneReconcileError(RuntimeError):
-    def __init__(self, *, status: int, operation: str, stderr: str) -> None:
-        self.status, self.operation, self.stderr = status, operation, stderr
-        super().__init__(f"{operation} failed with HTTP {status}: {stderr}")
-
-
-def classify_milestone_error(exc, operation: str) -> None:
-    status = milestone_error_status(str(exc.stderr or ""), str(exc.stdout or ""))
-    if status is not None:
-        raise MilestoneReconcileError(
-            status=status, operation=operation,
-            stderr=str(exc.stderr or exc.stdout or ""),
-        ) from exc
-    raise exc
-
-
-def milestone_error_status(stderr: str, stdout: str = "") -> int | None:
-    detail = " ".join((stderr, stdout))
-    if re.search(r"(?:http|status) ?401|bad credentials", detail, re.I):
-        return 401
-    if re.search(r"(?:http|status) ?404|not found", detail, re.I):
-        return 404
-    return None
-
-
 if TYPE_CHECKING:
     # Annotation-only: this module stays the runtime leaf (no `orbi`
     # imports at runtime); the run-identity bundle travels as a value.
@@ -224,6 +199,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "clarify_check_skipped": "the thin-ticket gate could not decide or could not write (fail open)",
     "clarify_draft_skipped": "the pre-work check skipped an untouched Issue this runner drafted: it was checked when drafted (Issue #2041)",
     "clarify_draft_untrusted": "a draft marker sat on an Issue this runner did not author: ignored, the gate judges normally",
+    "clarify_criteria_appended": "the gate appended the verdict's usable criteria proposal to the ticket and the same claim delivers (Issue #2206)",
+    "clarify_criteria_apply_failed": "the gate could not write the criteria proposal, so the ticket takes the stop instead (Issue #2206)",
     "blocked_by": "an Issue was skipped: open blockedBy blockers",
     "blocked_by_check_failed": "the blockedBy query failed (fail open)",
     "capacity_full": "every slot is taken; no claim this tick",

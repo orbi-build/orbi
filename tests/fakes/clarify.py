@@ -37,30 +37,38 @@ class FakeGate:
     makes that read raise instead, `login_error` makes the
     runner-identity read raise, and `runner_login` is the login a stop's
     author is compared with. `verdict` is the answer `judge_issue_body`
-    returns (`None` models an unavailable judgment). Comments, label
-    edits, judgments and notifications land on the public attributes so a
-    test asserts what the gate really did.
+    returns (`None` models an unavailable judgment). `body_error` makes
+    the body write raise and `comment_errors` makes that many comment
+    writes fail first (Issue #2206's fallback). Comments, body writes,
+    label edits, judgments and notifications land on the public
+    attributes so a test asserts what the gate really did.
     """
 
     def __init__(self, monkeypatch, *, history=None, verdict=None,
                  history_error: Exception | None = None,
                  edit_error: Exception | None = None,
+                 body_error: Exception | None = None,
+                 comment_errors: int = 0,
                  runner_login: str = RUNNER_LOGIN,
                  login_error: Exception | None = None):
         self.history = [] if history is None else history
         self.history_error = history_error
         self.edit_error = edit_error
+        self.body_error = body_error
+        self.comment_errors = comment_errors
         self.runner_login = runner_login
         self.login_error = login_error
         self.verdict = verdict
         self.judged: list = []
         self.comments: list = []
         self.edits: list = []
+        self.bodies: list = []
         self.notified: list = []
         monkeypatch.setattr(seam, "issue_comments", self._issue_comments)
         monkeypatch.setattr(seam, "judge_issue_body", self._judge)
         monkeypatch.setattr(seam, "comment_issue", self._comment)
         monkeypatch.setattr(seam, "edit_issue", self._edit)
+        monkeypatch.setattr(seam, "write_body", self._write_body)
         monkeypatch.setattr(
             seam, "authenticated_github_login", self._login,
         )
@@ -81,12 +89,22 @@ class FakeGate:
         return self.verdict
 
     def _comment(self, number, *, repo, body):
+        if self.comment_errors > 0:
+            # A transient GitHub write: the NEXT comment (the stop's) lands,
+            # so the fallback path is what the test observes.
+            self.comment_errors -= 1
+            raise RuntimeError("gh write failed")
         self.comments.append((number, repo, body))
 
     def _edit(self, number, *, repo, add=None, remove=None):
         if self.edit_error is not None:
             raise self.edit_error
         self.edits.append((number, repo, add, remove))
+
+    def _write_body(self, number, *, repo, body):
+        if self.body_error is not None:
+            raise self.body_error
+        self.bodies.append((number, repo, body))
 
     def _notify(self, *args, **kwargs):
         self.notified.append(args)

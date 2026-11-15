@@ -46,10 +46,15 @@ read as a second run.
 from __future__ import annotations
 
 from orbi import clarify, language
-from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL, label_names
-from orbi.github import (
-    comment_issue, edit_issue, issue_view, run_gh_write_command,
+from orbi.acceptance_section import (
+    acceptance_heading,
+    appended_body,
+    appended_marker,
+    render_acceptance,
+    write_body,
 )
+from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL, label_names
+from orbi.github import comment_issue, edit_issue, issue_view
 from orbi.ticket_command import (
     CommandSpec,
     TicketCommandError,
@@ -59,60 +64,12 @@ from orbi.ticket_command import (
     runner_receipt,
 )
 
-# The heading the conditions land under follows the message language
-# (Issue #1971), and the hidden marker that makes the append idempotent is
-# the same in every language: the second run of the command finds the marker
-# in the body and adds nothing (docs/public-contracts.mdx).
-ACCEPTANCE_HEADING_KEY = "criteria.acceptance_heading"
-ACCEPTANCE_MARKER = "orbi:acceptance:v1"
+# The appended acceptance section — its heading, its marker and the body
+# write — lives in `orbi.acceptance_section` (Issue #2206): the gate applies
+# the same section at the claim, so both writers share one implementation.
 # What this command reads from the ticket: the body it appends to, the labels
 # it moves and the number it writes to.
 ISSUE_FIELDS = "number,body,labels"
-
-
-def appended_marker() -> str:
-    """The hidden line the appended section ends with."""
-    return f"<!-- {ACCEPTANCE_MARKER} -->"
-
-
-def acceptance_heading(language_code: str) -> str:
-    """The section heading in one message language."""
-    return language.text(language_code, ACCEPTANCE_HEADING_KEY)
-
-
-def render_acceptance(
-    items: tuple[clarify.SuggestionItem, ...], language_code: str,
-) -> str:
-    """The section appended to the ticket body: the conditions, verbatim.
-
-    The heading and the list grammar are the ones a filed Issue uses, so the
-    result reads like an acceptance section a person wrote, and the hidden
-    marker after it records that Orbi appended it.
-    """
-    lines = [acceptance_heading(language_code)]
-    lines.extend(f"- {item.text}" for item in items)
-    lines.extend(["", appended_marker()])
-    return "\n".join(lines)
-
-
-def appended_body(body: object, section: str) -> str:
-    """`body` with `section` appended after one blank line.
-
-    An empty (or unreadable) body receives the section alone: the command
-    never writes a leading blank block.
-    """
-    existing = body if isinstance(body, str) else ""
-    if not existing.strip():
-        return section
-    kept = existing.rstrip("\n")
-    return f"{kept}\n\n{section}"
-
-
-def write_body(number: int, *, repo: str, body: str) -> None:
-    """Replace one Issue body: the documented `gh issue edit --body`."""
-    run_gh_write_command([
-        "gh", "issue", "edit", str(number), "--repo", repo, "--body", body,
-    ])
 
 
 def _receipt(items: tuple[clarify.SuggestionItem, ...], *,
@@ -197,7 +154,9 @@ def _criteria_apply(
     if not runner_receipt(comments, receipt):
         current = issue.get("body") or ""
         if appended_marker() not in current:
-            section = render_acceptance(suggestion.items, language_code)
+            section = render_acceptance(
+                tuple(item.text for item in suggestion.items), language_code,
+            )
             run_step(
                 "append the criteria",
                 lambda: write_body(
