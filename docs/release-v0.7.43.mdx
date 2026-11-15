@@ -1,6 +1,6 @@
 ---
 title: "v0.7.43 release (latest)"
-description: "Orbi v0.7.43 release notes: Runner prints a traceback instead of a configuration diagnostic when a prompt file is missing and 4 more changes."
+description: "Orbi v0.7.43 release notes: Runner reports a missing prompt file as a one-line config_invalid diagnostic instead of a traceback and 4 more changes."
 ---
 
 `v0.7.43` was published 2026-11-15T05:30:37Z as the GitHub Release [v0.7.43](https://github.com/orbi-build/orbi/releases/tag/v0.7.43) (release task: Issue #2186).
@@ -17,12 +17,12 @@ description: "Orbi v0.7.43 release notes: Runner prints a traceback instead of a
 
 ### Features
 
-- Runner prints a traceback instead of a configuration diagnostic when a prompt file is missing ([Issue #2179](https://github.com/orbi-build/orbi/issues/2179); [PR #2181](https://github.com/orbi-build/orbi/pull/2181))
+- Runner reports a missing prompt file as a one-line config_invalid diagnostic instead of a traceback ([Issue #2179](https://github.com/orbi-build/orbi/issues/2179); [PR #2181](https://github.com/orbi-build/orbi/pull/2181))
 - Pi prerequisite check has one probe and one validity rule for pi_executable ([Issue #2188](https://github.com/orbi-build/orbi/issues/2188); [PR #2191](https://github.com/orbi-build/orbi/pull/2191))
 
 ### Reliability and recovery
 
-- Change: select the Pi executable in orbi.toml (pi_executable), so Pi-Bolt can run deliveries ([Issue #2182](https://github.com/orbi-build/orbi/issues/2182); [PR #2183](https://github.com/orbi-build/orbi/pull/2183))
+- New host config key pi_executable selects which Pi executable Orbi starts ([Issue #2182](https://github.com/orbi-build/orbi/issues/2182); [PR #2183](https://github.com/orbi-build/orbi/pull/2183))
 
 ### Deployment and operations
 
