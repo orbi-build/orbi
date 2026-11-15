@@ -1,0 +1,50 @@
+---
+title: "v0.7.43 发布（最新）"
+description: "Orbi v0.7.43 发布说明：Runner prints a traceback instead of a configuration diagnostic when a prompt file is missing，另有 4 项改动。"
+---
+
+`v0.7.43` 于 2026-11-15T05:30:37Z 发布为 GitHub Release [v0.7.43](https://github.com/orbi-build/orbi/releases/tag/v0.7.43)（release task：Issue #2186）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.7.43` | 注解 tag `ab7464efafda949b3aa257f2817b65bf074ca600` | 提交 `cf1c3c6e9ce4675d36161792dcb79a08d82d031c` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Runner prints a traceback instead of a configuration diagnostic when a prompt file is missing ([Issue #2179](https://github.com/orbi-build/orbi/issues/2179); [PR #2181](https://github.com/orbi-build/orbi/pull/2181))
+- Pi prerequisite check has one probe and one validity rule for pi_executable ([Issue #2188](https://github.com/orbi-build/orbi/issues/2188); [PR #2191](https://github.com/orbi-build/orbi/pull/2191))
+
+### Reliability and recovery
+
+- Change: select the Pi executable in orbi.toml (pi_executable), so Pi-Bolt can run deliveries ([Issue #2182](https://github.com/orbi-build/orbi/issues/2182); [PR #2183](https://github.com/orbi-build/orbi/pull/2183))
+
+### Deployment and operations
+
+- Read-only commands list installed deployment configs when the local orbi.toml is invalid ([Issue #2190](https://github.com/orbi-build/orbi/issues/2190); [PR #2193](https://github.com/orbi-build/orbi/pull/2193))
+
+### Documentation
+
+- Docs: describe pi_executable generically instead of naming pi-bolt ([Issue #2189](https://github.com/orbi-build/orbi/issues/2189); [PR #2192](https://github.com/orbi-build/orbi/pull/2192))
+
+## Contributors
+
+<a href="https://github.com/XelHaku"><img src="https://avatars.githubusercontent.com/u/10056643?u=1536630d69f0e3a408821ca52ed26e2d5e5c9356&v=4&s=48" width="32" height="32" alt="XelHaku" /></a> <a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
+
+- tag: `v0.7.43`
+- release commit: `cf1c3c6e9ce4675d36161792dcb79a08d82d031c`
+- release task: Issue #2186
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit cf1c3c6e9ce4675d36161792dcb79a08d82d031c (the #268 CI-wait gate; no local test execution)
+
+
+Released by [Orbi](https://orbi.build/?ref=prfoot-orbi-build)
+
+[![Download Orbi](https://a.fsdn.com/con/app/sf-download-button)](https://sourceforge.net/projects/orbi/files/v0.7.43/v0.7.43%20source%20code.zip/download)
