@@ -32,12 +32,17 @@ class GhRecorder:
 
 
 def structured_question(question: str, *, header: str = "Choice") -> dict:
-    """One question in the object shape the engine accepts (Issue #2136)."""
+    """One question in the object shape the engine accepts (Issue #2136).
+
+    No option carries the recommended mark, so the question is the person's
+    to answer: a question WITH one is taken by the engine and never returned
+    (Issue #2198).
+    """
     return {
         "question": question,
         "header": header,
         "options": [
-            {"label": "Local store (Recommended)",
+            {"label": "Local store",
              "description": "Keeps everything in one file."},
             {"label": "Remote store",
              "description": "Reads and writes through a server."},

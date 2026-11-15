@@ -491,10 +491,14 @@ person's language), `header` is optional (one to three words naming the decision
 `options` is optional — when present, 2 to 4 choices, each a `label` and a one-sentence
 `description` of what it means or its trade-off. A bare string is a question with no
 header and no options, and a question with no options is a valid question. When one
-option is the reasonable default its label ends with `(Recommended)`; the engine does
-not check where that option sits. There is no `Other` option: the person's own answer
-is always allowed. A question is always returned in the shape it was accepted in, so a
-bare string comes back as `{"question": "..."}`.
+option is the reasonable default its label ends with `(Recommended)`, and the engine
+takes that option itself instead of returning the question: it does not check where
+that option sits, the same round keeps drafting with the option's words replayed into
+the session (so the Issue records it under `Assumptions`), and `reply` names every
+option taken. Only a question with no recommended option — the request is empty or
+contradicts itself — is returned to the person. There is no `Other` option: the
+person's own answer is always allowed. A question is always returned in the shape it
+was accepted in, so a bare string comes back as `{"question": "..."}`.
 
 `after` is the 1-based number of an EARLIER Issue in the same draft that this one
 waits for, or is absent. `issues` is empty when the round only asks questions; a

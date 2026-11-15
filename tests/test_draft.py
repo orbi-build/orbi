@@ -24,6 +24,7 @@ import orbi.clarify as clarify
 import orbi.cli_commands as cli_commands
 import orbi.draft as draft
 import orbi.draft_cli as draft_cli
+import orbi.draft_document as draft_document
 import orbi.draft_marker as draft_marker
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import EPIC_LABEL, NEEDS_DETAIL_LABEL, READY_LABEL
@@ -257,24 +258,31 @@ def test_a_question_without_a_header_still_parses(
     config, sessions, monkeypatch, tmp_path,
 ):
     draft_fakes.judge_passing(monkeypatch)
+    options = [
+        {"label": "A local store",
+         "description": "Keeps everything in one file."},
+        {"label": "A remote store",
+         "description": "Reads and writes through a server."},
+    ]
     sessions.queue({
         "kind": "questions", "reply": "One thing is missing.",
-        "questions": [{"question": "Which store?", "options": TWO_OPTIONS}],
+        "questions": [{"question": "Which store?", "options": options}],
     })
     code, out, err = run_round_cli(
         config, {"message": "add tags"}, tmp_path / "session",
     )
     assert code == 0, err
     assert json.loads(out)["questions"] == [
-        {"question": "Which store?", "options": TWO_OPTIONS},
+        {"question": "Which store?", "options": options},
     ]
 
 
-def test_a_recommended_option_need_not_come_first(
+def test_a_recommended_option_is_taken_wherever_it_sits(
     config, sessions, monkeypatch, tmp_path,
 ):
     """Where the recommended option sits is the caller's business: the
-    engine returns the options in the order it was given them."""
+    engine takes that one wherever it is and never returns the question
+    (Issue #2198)."""
     draft_fakes.judge_passing(monkeypatch)
     options = [TWO_OPTIONS[1], TWO_OPTIONS[0]]
     sessions.queue({
@@ -282,11 +290,15 @@ def test_a_recommended_option_need_not_come_first(
         "questions": [{"question": "Which store?", "header": "Store",
                        "options": options}],
     })
+    sessions.queue_draft(*TWO_ISSUES)
     code, out, err = run_round_cli(
         config, {"message": "add tags"}, tmp_path / "session",
     )
     assert code == 0, err
-    assert json.loads(out)["questions"][0]["options"] == options
+    assert json.loads(out)["questions"] == []
+    drafting = sessions.calls[1].context
+    assert "A local store" in drafting
+    assert "A remote store" not in drafting
 
 
 # --- 3: the session resumes; a replay still drafts -----------------------
@@ -1332,36 +1344,147 @@ def test_a_real_answer_with_a_default_choice_drafts_with_assumptions(
     assert "recommended" not in body.lower()
 
 
-def test_a_real_answer_to_an_empty_request_asks_with_an_option_shape(
+def recommended_options(fixture: dict) -> list[dict]:
+    """The options a fixture's questions mark as the reasonable default."""
+    return [
+        option
+        for question in fixture["questions"]
+        for option in question["options"]
+        if option["label"].endswith(draft.RECOMMENDED_MARK)
+    ]
+
+
+def option_text(option: dict) -> str:
+    """The option's own words, without the recommended mark."""
+    return option["label"].replace(draft.RECOMMENDED_MARK, "").strip()
+
+
+def test_a_real_answer_whose_questions_all_recommend_is_drafted(
     config, sessions, monkeypatch, tmp_path,
 ):
-    """A request that says too little is the one case that asks: three
-    questions, each carrying a header and 2–4 options the person can pick,
-    the recommended one marked by its label suffix (Issue #2136)."""
+    """The real empty-request answer asks three questions, each marking a
+    recommended option: the engine takes every one of them, so the round
+    drafts instead of returning the questions, and each taken option's own
+    text reaches the session that writes the draft (Issue #2198)."""
     draft_fakes.judge_passing(monkeypatch)
+    fixture = json.loads(
+        (DRAFT_FIXTURES / "empty-request.zh.json").read_text(encoding="utf-8"),
+    )
     sessions.queue(model_answer("empty-request.zh.json"))
+    sessions.queue_draft(issue("Improve the homepage type"))
     code, out, err = run_round_cli(
         config, {"message": "帮我改一下"}, tmp_path / "session",
     )
     assert code == 0, err
     answer = json.loads(out)
+    assert answer["questions"] == []
+    assert [entry["title"] for entry in answer["issues"]] == [
+        "Improve the homepage type",
+    ]
+    assert answer["check"] == "passed"
+    taken = recommended_options(fixture)
+    assert len(taken) == 3
+    drafting = sessions.calls[1].context
+    for option in taken:
+        assert option_text(option) in drafting
+        assert option["description"] in drafting
+        assert option_text(option) in answer["reply"]
+
+
+def test_only_a_question_with_no_recommended_option_waits_for_the_person(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """A mixed answer: the engine takes what it can answer itself and returns
+    only the question that is the person's, while the round's reply names
+    every option taken so the next round reads them as decided
+    (Issue #2198)."""
+    draft_fakes.judge_passing(monkeypatch)
+    waiting = draft_fakes.structured_question("Which store?")
+    recommended = {
+        "question": "Which font?", "header": "Font",
+        "options": [
+            {"label": "Inter (Recommended)",
+             "description": "A neutral face on every platform."},
+            {"label": "The system font",
+             "description": "Whatever the reader's machine has."},
+        ],
+    }
+    sessions.queue({
+        "kind": "questions", "reply": "Two things are missing.",
+        "questions": [waiting, recommended],
+    })
+    code, out, err = run_round_cli(
+        config, {"message": "improve the type"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    answer = json.loads(out)
     assert answer["issues"] == []
-    assert len(answer["questions"]) == 3
-    for question in answer["questions"]:
-        assert set(question) == {"question", "header", "options"}
-        assert question["question"].strip()
-        assert question["header"].strip()
-        options = question["options"]
-        assert 2 <= len(options) <= 4
-        for option in options:
-            assert set(option) == {"label", "description"}
-            assert option["label"].strip()
-            assert option["description"].strip()
-        marked = [
-            position for position, option in enumerate(options)
-            if option["label"].endswith(draft.RECOMMENDED_MARK)
-        ]
-        assert marked, "the fixture marks a recommended option"
+    assert answer["questions"] == [waiting]
+    assert "Inter" in answer["reply"]
+    assert "A neutral face on every platform." in answer["reply"]
+    # Nobody is asked what the engine already answered.
+    assert "The system font" not in answer["reply"]
+    assert len(sessions.calls) == 1
+
+
+def test_a_question_with_no_recommended_option_is_returned_unchanged(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """The one case that still asks: no option is a default, so the request
+    is the person's to complete (Issue #2198)."""
+    draft_fakes.judge_passing(monkeypatch)
+    options = [
+        {"label": "A local store",
+         "description": "Keeps everything in one file."},
+        {"label": "A remote store",
+         "description": "Reads and writes through a server."},
+    ]
+    sessions.queue({
+        "kind": "questions", "reply": "Two things are missing.",
+        "questions": [
+            {"question": "Which store?", "header": "Store", "options": options},
+            "Which language?",
+        ],
+    })
+    code, out, err = run_round_cli(
+        config, {"message": "add tags"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    answer = json.loads(out)
+    assert answer["issues"] == []
+    assert answer["questions"] == [
+        {"question": "Which store?", "header": "Store", "options": options},
+        {"question": "Which language?"},
+    ]
+    assert len(sessions.calls) == 1
+
+
+def test_a_session_that_keeps_recommending_fails_fast(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """A session that never stops asking a question it could answer itself
+    hits the fixed bound instead of spinning (Issue #95, #2198)."""
+    draft_fakes.judge_passing(monkeypatch)
+    for _ in range(draft_document.TAKEN_ROUNDS):
+        sessions.queue({
+            "kind": "questions", "reply": "One thing is missing.",
+            "questions": [{
+                "question": "Which font?", "header": "Font",
+                "options": [
+                    {"label": "Inter (Recommended)",
+                     "description": "A neutral face on every platform."},
+                    {"label": "The system font",
+                     "description": "Whatever the reader's machine has."},
+                ],
+            }],
+        })
+    code, out, err = run_round_cli(
+        config, {"message": "improve the type"}, tmp_path / "session",
+    )
+    assert code == 1
+    failure = json.loads(err)
+    assert failure["code"] == "too_many_rounds"
+    assert failure["step"] == "run the drafting round"
 
 
 def test_the_drafting_rules_teach_the_question_shape():
@@ -1373,6 +1496,10 @@ def test_the_drafting_rules_teach_the_question_shape():
     recorded under Assumptions."""
     prompt = draft.draft_system_prompt()
     assert draft.RECOMMENDED_MARK in prompt
+    # The engine reads the marker literally, so the prompt says it is never
+    # translated: a Chinese answer that wrote "(推荐)" reached the person
+    # instead of being taken (Issue #2198).
+    assert "never translated" in prompt
     assert "header" in prompt
     assert "2 to 4 options" in prompt
     assert "answers in their own words" in prompt
@@ -1640,13 +1767,15 @@ def test_interactive_prints_each_option_under_its_question(
     config, sessions, monkeypatch,
 ):
     """The person sees the choices, in the order the question gives them,
-    under the question they answer in typed text (Issue #2136)."""
+    under the question they answer in typed text (Issue #2136). No option is
+    a default, which is why this question reaches the person at all
+    (Issue #2198)."""
     draft_fakes.judge_passing(monkeypatch)
     sessions.queue_questions({
         "question": "What should the other person get?",
         "header": "Sharing",
         "options": [
-            {"label": "A read-only link (Recommended)",
+            {"label": "A read-only link",
              "description": "Opens the list, cannot change it."},
             {"label": "An editable link",
              "description": "Lets whoever holds it change the list."},
@@ -1662,12 +1791,43 @@ def test_interactive_prints_each_option_under_its_question(
     assert "Q1 — What should the other person get?" in text
     question_at = text.index("Q1 —")
     first_at = text.index(
-        "A read-only link (Recommended): Opens the list, cannot change it.",
+        "A read-only link: Opens the list, cannot change it.",
     )
     second_at = text.index(
         "An editable link: Lets whoever holds it change the list.",
     )
     assert question_at < first_at < second_at
+    assert "Nothing was created." in text
+
+
+def test_interactive_takes_a_recommended_option_without_asking(
+    config, sessions, monkeypatch,
+):
+    """The terminal follows the same rule as the round document: a question
+    carrying a recommended option is answered by the engine, so the person
+    only ever sees the draft (Issue #2198)."""
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue_questions({
+        "question": "What should the other person get?",
+        "header": "Sharing",
+        "options": [
+            {"label": "A read-only link (Recommended)",
+             "description": "Opens the list, cannot change it."},
+            {"label": "An editable link",
+             "description": "Lets whoever holds it change the list."},
+        ],
+    })
+    sessions.queue_draft(*TWO_ISSUES)
+    out, err = io.StringIO(), io.StringIO()
+    code = draft_cli.run_draft(
+        config, REPO, request="share my notes", stdin=io.StringIO(""),
+        stdout=out, stderr=err,
+    )
+    assert code == 0, err.getvalue()
+    text = out.getvalue()
+    assert "Q1 —" not in text
+    assert "1. Tag a note" in text
+    assert "A read-only link" in sessions.calls[1].context
     assert "Nothing was created." in text
 
 

@@ -45,11 +45,20 @@ from orbi.delivery_labels import (
 )
 from orbi.delivery_scene import RunContext
 from orbi.draft_document import (
+    RECOMMENDED_MARK,
+    TAKEN_ROUNDS,
     DraftAnswer,
+    DraftError,
     DraftIssue,
     DraftOption,
-    DraftQuestion,
     DraftRound,
+    invalid_input,
+    named_in_reply,
+    parse_answer,
+    parse_issues,
+    read_payload,
+    taken_message,
+    taken_options,
 )
 from orbi.github import edit_issue, issue_view, list_issues, list_milestones
 from orbi.journal import event
@@ -69,7 +78,7 @@ WRITE_DRAFT_TOOL = "write_draft"
 ASK_USER_TOOL = "ask_user"
 # Issue #2201: the answer to a request that must not change any code.
 REPLY_TOOL = "reply"
-# The drafting session reads the checkout and writes ONLY through the two
+# The drafting session reads the checkout and writes ONLY through the
 # shipped tools: no shell, no edit, no commit (the same read-only boundary
 # `orbi suggest` keeps).
 #
@@ -115,10 +124,6 @@ DECLINE = frozenset({"n", "no", "cancel", "q", "quit"})
 # never converges must fail fast instead of spinning forever.
 MAX_ROUNDS = 12
 
-# A recommended option's label carries this suffix (the Claude Agent SDK
-# convention); where it sits is the caller's business, never the engine's.
-RECOMMENDED_MARK = "(Recommended)"
-
 # The one rule that replaced the skill's "draft only the first slice": the
 # check reports single_outcome for a request that bundles independent
 # deliverables, so the drafter splits it BEFORE the check ever sees it.
@@ -148,8 +153,9 @@ DRAFTING_RULES = (
     "draft.\n"
     "- Refer to files by their repository-relative path.\n"
     "- Do not write the commit SHA.\n"
-    "- Open the reply with one plain-language sentence of what will "
-    "change.\n"
+    "- Open a draft's reply with one plain-language sentence of what "
+    "will change; an answer with no code change opens with the first thing "
+    "worth fixing.\n"
     "- An Assumptions section appears only when you took at least one "
     "decision: one line per decision you took instead of asking, saying "
     "what you chose and why. With no decision taken, the Issue body "
@@ -162,8 +168,9 @@ DRAFTING_RULES = (
     "naming the decision, and OPTIONAL 2 to 4 options when the person has "
     "to pick: every option a label of one to five words plus one sentence "
     "of what it means or its trade-off. When one option is the reasonable "
-    "default, its label ends with \"" + RECOMMENDED_MARK + "\". Never "
-    "add an \"Other\" option and never say the person chose the "
+    "default, its label ends with \"" + RECOMMENDED_MARK + "\", and that "
+    "marker is never translated: it is the engine's, not the person's. "
+    "Never add an \"Other\" option and never say the person chose the "
     "recommended option: the person always answers in their own words.\n"
     "- Every other disagreement — which library, font or place to use, "
     "what to leave out, how to word a deliverable version of a change "
@@ -196,182 +203,10 @@ REWRITE_INSTRUCTION = (
 )
 
 
-class DraftError(RuntimeError):
-    """One failed step of `orbi draft`, with the machine triple a caller
-    reads: a stable `code`, the `step` that failed and the concrete
-    `detail` (docs/public-contracts.mdx)."""
-
-    def __init__(self, code: str, step: str, detail: str) -> None:
-        super().__init__(f"{step}: {detail}")
-        self.code = code
-        self.step = step
-        self.detail = detail
-
-
-# --- parsing -------------------------------------------------------------
-
-def _invalid(detail: str) -> DraftError:
-    return DraftError("invalid_input", "read stdin", detail)
-
-
-def _unreadable(detail: str) -> DraftError:
-    """One answer the engine cannot read as a question (Issue #2136)."""
-    return DraftError("no_answer", "read the draft", detail)
-
-
-def read_payload(text: str) -> dict:
-    """Parse one stdin document; a non-object or broken JSON fails fast."""
-    try:
-        data = json.loads(text)
-    except ValueError as exc:
-        raise _invalid(f"stdin is not JSON: {exc}") from None
-    if not isinstance(data, dict):
-        raise _invalid("stdin must be a JSON object")
-    return data
-
-
-def parse_issues(value: object) -> tuple[DraftIssue, ...]:
-    """Validate one draft's Issues: titles, bodies and the `after` order.
-
-    An `after` may only name an EARLIER Issue (1-based): a draft is a
-    delivery order, so a forward or self reference is not a draft we can
-    create.
-    """
-    if not isinstance(value, list) or not value:
-        raise DraftError(
-            "invalid_draft", "read the draft",
-            "the draft carries no Issues",
-        )
-    issues: list[DraftIssue] = []
-    for position, entry in enumerate(value, start=1):
-        if not isinstance(entry, dict):
-            raise DraftError(
-                "invalid_draft", "read the draft",
-                f"Issue {position} is not an object",
-            )
-        title = entry.get("title")
-        body = entry.get("body")
-        if not isinstance(title, str) or not title.strip():
-            raise DraftError(
-                "invalid_draft", "read the draft",
-                f"Issue {position} has no title",
-            )
-        if "\n" in title.strip():
-            raise DraftError(
-                "invalid_draft", "read the draft",
-                f"Issue {position} has a multi-line title",
-            )
-        if not isinstance(body, str) or not body.strip():
-            raise DraftError(
-                "invalid_draft", "read the draft",
-                f"Issue {position} has no body",
-            )
-        after = entry.get("after")
-        if after is not None:
-            if isinstance(after, bool) or not isinstance(after, int) \
-                    or not 1 <= after < position:
-                raise DraftError(
-                    "invalid_draft", "read the draft",
-                    f"Issue {position}: after must name an EARLIER Issue "
-                    f"(1..{position - 1})",
-                )
-        issues.append(
-            DraftIssue(title=title.strip(), body=body.strip(), after=after)
-        )
-    return tuple(issues)
-
-
-def parse_options(value: object, position: int) -> tuple[DraftOption, ...]:
-    """Validate one question's options WHEN it has any: 2 to 4, each a label
-    and a sentence. A question without options is valid, and where a
-    recommended option sits is the caller's business.
-    """
-    if value is None:
-        return ()
-    if not isinstance(value, list) or not 2 <= len(value) <= 4:
-        raise _unreadable(f"question {position} needs 2 to 4 options")
-    options: list[DraftOption] = []
-    for index, entry in enumerate(value, start=1):
-        if not isinstance(entry, dict):
-            raise _unreadable(
-                f"question {position}, option {index} is not an object")
-        label = entry.get("label")
-        description = entry.get("description")
-        if not isinstance(label, str) or not label.strip():
-            raise _unreadable(
-                f"question {position}, option {index} has no label")
-        if not isinstance(description, str) or not description.strip():
-            raise _unreadable(
-                f"question {position}, option {index} has no description")
-        options.append(
-            DraftOption(label=label.strip(), description=description.strip())
-        )
-    return tuple(options)
-
-
-def parse_questions(value: object) -> tuple[DraftQuestion, ...]:
-    """Validate a round's questions: the shape the engine defines itself. A
-    bare string is a question with no header and no options (Issue #2147).
-    """
-    if not isinstance(value, list) or not value:
-        raise _unreadable("the answer carries no questions")
-    questions: list[DraftQuestion] = []
-    for position, entry in enumerate(value, start=1):
-        if isinstance(entry, str):
-            entry = {"question": entry}
-        if not isinstance(entry, dict):
-            raise _unreadable(f"question {position} is not an object")
-        question, header = entry.get("question"), entry.get("header")
-        if not isinstance(question, str) or not question.strip():
-            raise _unreadable(f"question {position} has no question")
-        if header is not None and (
-            not isinstance(header, str) or not header.strip()
-        ):
-            raise _unreadable(f"question {position} has an unreadable header")
-        questions.append(DraftQuestion(
-            question=question.strip(),
-            header=header.strip() if header is not None else None,
-            options=parse_options(entry.get("options"), position),
-        ))
-    return tuple(questions)
-
-
-def parse_answer(value: object) -> DraftAnswer:
-    """Parse the extension's answer file: a questions, a draft or a reply.
-
-    A reply-only answer (Issue #2201) is the answer to a request that must
-    not change any code: it carries no question and no Issue, so the round
-    has nothing to revise or to judge.
-    """
-    if not isinstance(value, dict):
-        raise DraftError(
-            "no_answer", "read the draft",
-            "the drafting session wrote no answer",
-        )
-    kind = value.get("kind")
-    reply = value.get("reply")
-    if not isinstance(reply, str):
-        raise DraftError(
-            "no_answer", "read the draft", "the answer carries no reply",
-        )
-    if kind == "questions":
-        return DraftAnswer(
-            reply=reply,
-            questions=parse_questions(value.get("questions")),
-        )
-    if kind == "draft":
-        return DraftAnswer(reply=reply, issues=parse_issues(value.get("issues")))
-    if kind == "reply":
-        return DraftAnswer(reply=reply)
-    raise DraftError(
-        "no_answer", "read the draft", f"unknown answer kind: {kind!r}",
-    )
-
-
 def _round_payload(payload: dict) -> dict:
     message = payload.get("message")
     if not isinstance(message, str) or not message.strip():
-        raise _invalid("message must be a non-empty string")
+        raise invalid_input("message must be a non-empty string")
     return payload
 
 
@@ -701,27 +536,29 @@ def run_round(
 ) -> DraftRound:
     """Run one drafting round: questions, a reply alone, or a checked draft.
 
-    Order: session -> fidelity pass -> the pre-work check -> at most ONE
-    rewrite with the check's own reasons -> the check again. There is no
-    loop and no second rewrite. A reply-only answer (Issue #2201) asks for
-    no code change, so neither the fidelity pass nor the check runs.
+    Order: session -> the options the engine takes itself -> fidelity pass ->
+    the pre-work check -> at most ONE rewrite with the check's own reasons ->
+    the check again. There is no loop and no second rewrite. A reply-only
+    answer (Issue #2201) asks for no code change, so neither the fidelity
+    pass nor the check runs.
     """
     payload = _round_payload(payload)
     session_root = Path(session_dir).resolve()
     session_root.mkdir(parents=True, exist_ok=True)
     out_path = session_root / DRAFT_ANSWER_FILE
-    resume = any((session_root / DRAFT_SESSION_DIR).glob("*.jsonl"))
-    repo_dir = Path(config.repo_dir)
-    _run_answer_session(
-        config, repo, session_root=session_root,
-        context=render_context(payload, repo_dir=repo_dir),
-        out_path=out_path, run_id=run_id, resume=resume,
+    payload, answer, taken = _answered_round(
+        config, repo, session_root=session_root, payload=payload,
+        out_path=out_path, run_id=run_id,
     )
-    answer = read_answer(out_path)
     if answer.questions:
-        return DraftRound(reply=answer.reply, questions=answer.questions)
+        return DraftRound(
+            reply=named_in_reply(answer.reply, taken),
+            questions=answer.questions,
+        )
     if not answer.issues:
-        return DraftRound(reply=answer.reply)
+        # Issue #2201: a reply-only answer asks for no code change, so
+        # neither the fidelity pass nor the pre-work check runs.
+        return DraftRound(reply=named_in_reply(answer.reply, taken))
     issues, warning = fidelity_pass(
         config, repo, session_root=session_root, run_id=run_id,
         request=_fidelity_request(payload), issues=answer.issues,
@@ -731,7 +568,55 @@ def run_round(
         run_id=run_id, issues=issues, warning=warning, reply=answer.reply,
     )
     return DraftRound(
-        reply=reply, issues=issues, check=check, warning=warning,
+        reply=named_in_reply(reply, taken), issues=issues,
+        check=check, warning=warning,
+    )
+
+
+def _answered_round(
+    config: RunnerConfig, repo: str, *, session_root: Path, payload: dict,
+    out_path: Path, run_id: str,
+) -> tuple[dict, DraftAnswer, tuple[DraftOption, ...]]:
+    """Run the session until it drafts or asks what only the person can answer.
+
+    A question carrying a recommended option is the engine's own answer
+    (Issue #2198): the option is taken and the round continues in the same
+    session, with those decisions replayed the way a caller replays a
+    person's answer. Returns the payload the draft was written from, the
+    answer, and the options taken on the way.
+    """
+    message = str(payload["message"]).strip()
+    turns = payload.get("conversation")
+    turns = list(turns) if isinstance(turns, list) else []
+    taken: list[DraftOption] = []
+    for _round in range(TAKEN_ROUNDS):
+        round_payload = {**payload, "message": message, "conversation": turns}
+        _run_answer_session(
+            config, repo, session_root=session_root,
+            context=render_context(
+                round_payload, repo_dir=Path(config.repo_dir),
+            ),
+            out_path=out_path, run_id=run_id,
+            resume=any((session_root / DRAFT_SESSION_DIR).glob("*.jsonl")),
+        )
+        answer = read_answer(out_path)
+        if not answer.questions:
+            return round_payload, answer, tuple(taken)
+        chosen, waiting = taken_options(answer.questions)
+        taken.extend(chosen)
+        if waiting:
+            return (
+                round_payload,
+                DraftAnswer(reply=answer.reply, questions=waiting),
+                tuple(taken),
+            )
+        turns = [*turns, {"role": "person", "text": message},
+                 {"role": "orbi", "text": answer.reply}]
+        message = taken_message(tuple(taken))
+    raise DraftError(
+        "too_many_rounds", "run the drafting round",
+        "the drafting session still asks a question it can answer itself "
+        f"after {TAKEN_ROUNDS} rounds",
     )
 
 
@@ -878,7 +763,7 @@ def create_issues(
     """
     key = payload.get("key")
     if not isinstance(key, str) or not DRAFT_KEY_RE.match(key):
-        raise _invalid("key must match [A-Za-z0-9_-]{1,64}")
+        raise invalid_input("key must match [A-Za-z0-9_-]{1,64}")
     items = parse_issues(payload.get("issues"))
     header = payload.get("header")
     header = header.strip() if isinstance(header, str) else ""
@@ -886,7 +771,7 @@ def create_issues(
     if target is not None and (
         isinstance(target, bool) or not isinstance(target, int) or target <= 0
     ):
-        raise _invalid("issue must be an Issue number")
+        raise invalid_input("issue must be an Issue number")
     dispatch_label, milestone = policy_keys(config, repo)
     if target is not None and len(items) == 1:
         return [
