@@ -31,6 +31,11 @@ from orbi.worktree_retention import (
 
 ISSUE_COMMENTS_LIMIT = 200
 
+# The Pi executable every session starts when `pi_executable` is unset
+# (Issue #2182). The ONE validity rule for the key is
+# :func:`read_pi_executable` (Issue #2188).
+PI_EXECUTABLE_DEFAULT = "pi"
+
 def _config_path(value: str, base: Path) -> Path:
     path = Path(os.path.expandvars(os.path.expanduser(value)))
     return (path if path.is_absolute() else base / path).resolve()
@@ -165,7 +170,7 @@ class RunnerConfig:
     slot_dir: Path | None = None
     # The Pi executable every session starts (Issue #2182): a command
     # name on PATH or an absolute path, e.g. `pi-bolt`. Host-only.
-    pi_executable: str = "pi"
+    pi_executable: str = PI_EXECUTABLE_DEFAULT
     pi_provider: str | None = None
     pi_model: str | None = None
     pi_thinking: str | None = None
@@ -550,7 +555,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         installation_id=installation_id,
         slot_dir=slot_dir_for(repo_dir),
         pi_provider=pi_provider,
-        pi_model=pi_model, pi_executable=_optional_pi_string(data, "pi_executable") or "pi",
+        pi_model=pi_model, pi_executable=read_pi_executable(data),
         pi_thinking=pi_thinking,
         review_pi_provider=review_pi_provider,
         review_pi_model=review_pi_model,
@@ -593,6 +598,17 @@ def _optional_positive_int(data: dict, key: str) -> int | None:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ValueError(f"{key} must be a positive integer")
     return value
+
+
+def read_pi_executable(data: dict) -> str:
+    """The `pi_executable` a config document names, else the default.
+
+    The ONE rule for the key (Issue #2188): absent -> the default `pi`;
+    present -> a non-empty string, anything else fails fast. The config
+    load and the machine-level probe that runs before validation both
+    read the key through here.
+    """
+    return _optional_pi_string(data, "pi_executable") or PI_EXECUTABLE_DEFAULT
 
 
 def _optional_pi_string(data: dict, key: str) -> str | None:

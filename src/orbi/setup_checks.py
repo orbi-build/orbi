@@ -2,9 +2,11 @@
 
 Extracted from :mod:`orbi.pilot_setup` (Issue #1861): every independent
 gate step lives here — the required commands and the scheduler user
-session, `gh auth`, the `pi` probe with its Node floor, the per-repo
-access/permission check (including the installation-token label probe),
-and the machine check sequence that `orbi check` runs first.
+session, `gh auth`, the per-repo access/permission check (including the
+installation-token label probe), and the machine check sequence that
+`orbi check` runs first. The Pi prerequisite — its ONE probe, its
+findings and the `pi_executable` read — lives in :mod:`orbi.pi_exec`
+(Issue #2188).
 
 Each step raises :class:`CheckError` (the structured finding with its
 repair action and the official documentation link) or the shared
@@ -22,6 +24,7 @@ import sys
 from uuid import uuid4
 
 from orbi import cli_source, pi_exec, scheduler
+from orbi.config import PI_EXECUTABLE_DEFAULT
 from orbi.setup_config import SetupError
 
 
@@ -359,56 +362,7 @@ def check_python_version() -> None:
         )
 
 
-# Pi's Node floor (Issue #1079): declared in Pi's `engines` but NOT
-# enforced by npm — an `npm install` on an older Node reports success
-# and every `pi` invocation then crashes with a bundle-level SyntaxError.
-
-
-# The docs state the floor; the check names it in `fix=` when the
-# version probe fails.
-PI_NODE_FLOOR = "22.19.0"
-PI_INSTALL_COMMAND = (
-    "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
-)
-
-
-def check_pi_command(run_command) -> None:
-    """The `pi` CLI (one Pi session per task) is on the PATH and executes.
-
-    Deliberately NOT part of the setup ``REQUIRED_COMMANDS`` gate: setup
-    provisions GitHub and the scheduler state, while Pi is the model-facing
-    runtime the prerequisite gate verifies. A PATH hit alone is not
-    enough (Issue #1079): npm does not enforce Pi's ``engines`` floor,
-    so the probe executes ``pi --version``; a failure names the Node
-    floor in the fix.
-    """
-    if shutil.which("pi") is None:
-        raise CheckError(
-            "pi",
-            "required command missing: pi (not on PATH) — the Runner "
-            "starts one Pi session per task",
-            f"install Node >= {PI_NODE_FLOOR}, then {PI_INSTALL_COMMAND} "
-            "and put it on the PATH (see the linked repository)",
-            DOCS_LINKS["pi"],
-        )
-    try:
-        run_command(["pi", "--version"], timeout=30)
-    except Exception as exc:
-        stderr = (getattr(exc, "stderr", None) or "").strip()
-        detail = " ".join(stderr.split()) or str(exc)
-        raise CheckError(
-            "pi",
-            f"pi --version failed: {detail}",
-            f"Pi needs Node >= {PI_NODE_FLOOR} and npm does not enforce "
-            "that floor: an install on an older Node reports success "
-            "but every pi call then crashes with a bundle SyntaxError — "
-            f"install Node >= {PI_NODE_FLOOR} and reinstall with "
-            f"{PI_INSTALL_COMMAND}",
-            DOCS_LINKS["pi"],
-        ) from exc
-
-
-def run_machine_checks(*, run_command, collect_failures: bool = False, pi_executable: str = "pi") -> tuple[list[str], list[CheckError]]:
+def run_machine_checks(*, run_command, collect_failures: bool = False, pi_executable: str = PI_EXECUTABLE_DEFAULT) -> tuple[list[str], list[CheckError]]:
     """Run the config-independent checks, optionally collecting failures.
 
     The normal gate remains fail-fast.  The missing-config CLI path uses the
@@ -484,6 +438,6 @@ def run_machine_checks(*, run_command, collect_failures: bool = False, pi_execut
 
     if record(check_gh_auth):
         lines.append("check=gh_auth ok")
-    if record(lambda: pi_exec.check(run_command, pi_executable, check_pi_command, CheckError, DOCS_LINKS["config"])):
+    if record(lambda: pi_exec.check_pi_command(run_command, pi_executable, CheckError, DOCS_LINKS)):
         lines.append(pi_exec.ok_line(pi_executable))
     return lines, failures
