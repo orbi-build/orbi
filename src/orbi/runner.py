@@ -2086,6 +2086,41 @@ def log_ready_outside_milestone(
     return bool(outside_by_repo)
 
 
+def _load_valid_config(path: Path) -> config_domain.RunnerConfig | None:
+    """Load and validate the tick's config; None after the structured
+    failure line (a missing configured path included, Issue #2179)."""
+    try:
+        config = config_domain.load_config(path)
+        validate_config(config)
+        validate_execution_source_repos(config.source_repos)
+    except config_domain.ConfigFileMissingError as exc:
+        LOGGER.error(
+            "config_not_found path=%s; reason=no Orbi config at this path "
+            "(the default is `orbi.toml` in the current directory); "
+            "fix=run from the deployment directory, or point at the config: "
+            "`ORBI_CONFIG=~/orbi-deploy/<dir>/orbi.toml orbi <command>` "
+            "(`--config <path>` also works, after the subcommand). "
+            "The source checkout is not a deployment directory and has no "
+            "orbi.toml.",
+            exc.path,
+        )
+        return None
+    except FileNotFoundError as exc:
+        event(
+            "config_invalid", level=logging.ERROR,
+            reason=f"required path missing: {exc}",
+            config=path.resolve(),
+            fix="correct that path in this config, or select the intended "
+                "deployment config with `--config <path>` or "
+                "`ORBI_CONFIG=<path>`",
+        )
+        return None
+    except ValueError as exc:
+        event("config_invalid", level=logging.ERROR, reason=exc)
+        return None
+    return config
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -2105,24 +2140,8 @@ def main(argv: list[str] | None = None) -> int:
     if threading.current_thread() is threading.main_thread():
         signal.signal(signal.SIGTERM, _handle_stop)
 
-    try:
-        config = config_domain.load_config(args.config)
-        validate_config(config)
-        validate_execution_source_repos(config.source_repos)
-    except config_domain.ConfigFileMissingError as exc:
-        LOGGER.error(
-            "config_not_found path=%s; reason=no Orbi config at this path "
-            "(the default is `orbi.toml` in the current directory); "
-            "fix=run from the deployment directory, or point at the config: "
-            "`ORBI_CONFIG=~/orbi-deploy/<dir>/orbi.toml orbi <command>` "
-            "(`--config <path>` also works, after the subcommand). "
-            "The source checkout is not a deployment directory and has no "
-            "orbi.toml.",
-            exc.path,
-        )
-        return 1
-    except ValueError as exc:
-        event("config_invalid", level=logging.ERROR, reason=exc)
+    config = _load_valid_config(args.config)
+    if config is None:
         return 1
     _preflight(config)
     # Concurrency cap: take one slot BEFORE claiming anything.
