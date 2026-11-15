@@ -1224,7 +1224,7 @@ def _run_review_round(
             run_id=run_id, pr_url=pr_url,
             worktree=worktree, branch=branch, role=ROLE_REVIEW,
             language_code=language_code, ready_label=ready_label,
-            status_url=config.status_url,
+            status_url=config.status_url, milestone=config.active_milestone,
             action=action,
             reason=reason,
             diagnosis=detail, evidence=True,

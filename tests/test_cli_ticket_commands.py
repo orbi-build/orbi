@@ -23,6 +23,7 @@ import re
 
 import pytest
 
+import orbi.base_ci_fix as base_ci_fix
 import orbi.base_ci_red as base_ci_red
 from orbi import cli, ticket_command, ticket_command_registry
 from orbi.cli_parser import build_parser
@@ -111,7 +112,7 @@ def test_the_cli_leaves_the_same_result_and_receipt_as_a_comment(
 
     commented = world(monkeypatch)
     paused(commented, comments=(("/orbi fix-base", OPERATOR),))
-    base_ci_red.recover(
+    base_ci_fix.recover(
         REPO, language_code="en", milestone=MILESTONE,
         dispatch_label="ai-ready",
     )
@@ -176,7 +177,7 @@ def test_the_cli_rejects_a_login_without_write_permission(
     commented = world(monkeypatch, permission="read")
     paused(commented, comments=(("/orbi fix-base", "stranger"),))
     commented.add_collaborator("stranger", "read")
-    base_ci_red.recover(
+    base_ci_fix.recover(
         REPO, language_code="en", milestone=MILESTONE,
         dispatch_label="ai-ready",
     )

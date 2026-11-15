@@ -925,6 +925,7 @@ def _report_terminal_failure(attempt: _Attempt, exc: Exception) -> None:
         role=ROLE_IMPLEMENT,
         language_code=language.of(config),
         status_url=config.status_url,
+        milestone=config.active_milestone,
         ready_label=facts.dispatch_label,
         action=failure_report.terminal_action(
             terminal_record, language.of(config),

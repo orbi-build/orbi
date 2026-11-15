@@ -452,8 +452,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "active_milestone_advance_failed": "advancing the active Milestone failed",
     # The `<name>_command_applied` / `<name>_command_failed` pair of every
     # in-ticket command is registered by `register_command`
-    # (`ticket_command.py`, Issue #1922), never written out here: a new
-    # command is one `CommandSpec` plus one registration.
+    # (`ticket_command.py`, Issue #1922): a new command is one `CommandSpec`.
     # Missing check-read permission scene (Issue #1918).
     "checks_permission_blocked": "the check read was refused for a missing App permission; the Issue goes ai-blocked with the approval page",
     "checks_permission_recovered": "the check read works again and the paused delivery resumed automatically",
@@ -461,7 +460,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "base_ci_red_recovered": "the base check turned green and the paused delivery resumed automatically",
     "base_ci_red_stale": "a base-branch-red delivery was still red after the reminder window and polling stopped",
     "base_ci_red_merged": "the base-branch-red comment was updated to merged after the delivery landed",
-    "base_ci_red_triage": "a `/orbi fix-base` command created or reused a CI triage Issue",
+    "base_ci_red_triage": "a `/orbi fix-base` command or the scene record created a CI triage Issue",
+    "base_ci_red_fix_issues_failed": "the scene record's own fix Issue run failed; the pause comment kept the command repair",
     # Releases.
     "release_not_claimed": "the release state machine did not claim the release Issue",
     "release_task": "the release state machine advanced (step report)",
