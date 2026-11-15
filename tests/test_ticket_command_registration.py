@@ -177,12 +177,12 @@ def test_the_registry_declares_the_specs_it_registers():
     one entry here — and no command reaches the set any other way.
     """
     from orbi import (
-        amend_command, base_ci_red, milestone_command, split_command,
+        amend_command, base_ci_fix, milestone_command, split_command,
     )
 
     declared = ticket_command_registry.COMMAND_SPECS
     assert declared == (
-        base_ci_red.FIX_BASE_COMMAND,
+        base_ci_fix.FIX_BASE_COMMAND,
         amend_command.AMEND_COMMAND,
         milestone_command.MILESTONE_COMMAND,
         split_command.SPLIT_COMMAND,

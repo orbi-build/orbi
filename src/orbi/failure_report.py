@@ -27,7 +27,7 @@ import re
 from pathlib import Path
 
 from orbi import (
-    base_ci_red, failure, language, runner_health, scene, user_summary,
+    base_ci_fix, base_ci_red, failure, language, runner_health, scene, user_summary,
 )
 from orbi.blocked_comment import post_blocked_comment
 from orbi.comment_kind import (
@@ -642,6 +642,7 @@ def report_delivery_failure(
     finish: bool = True, publisher: ProgressPublisher | None = None,
     language_code: str, ready_label: str = READY_LABEL,
     status_url: str | None = None,  # Issue #1826: the fixed project link
+    milestone: str | None = None,  # the active Milestone title (#2203)
 ) -> str:
     """Report one delivery failure through the classified-failure flow.
 
@@ -680,22 +681,17 @@ def report_delivery_failure(
     `_failure_evidence` block after the scene.
 
     Label and ordinary comment failures retain their existing caller
-    semantics. A malformed deduplicated comment URL posts a fresh failure
-    comment and emits `failure_comment_id_unavailable`; an update failure
-    is logged as `failure_comment_update_failed`. Neither escapes this
-    function, so one malformed comment cannot stop the tick.
+    semantics: a malformed deduplicated comment URL posts a fresh failure
+    comment (`failure_comment_id_unavailable`) and an update failure is
+    logged (`failure_comment_update_failed`); neither escapes here.
 
-    The #825 dead-loop guard (classified recoverable failures only):
-    the same (run_id, failure fingerprint) recurring to
-    `FAILURE_STREAK_LIMIT` consecutive failures escalates to the
-    terminal `ai-blocked` outcome with the count and the
-    unchanged-precondition verdict in the comment, and an identical
-    failure that was already reported bumps the hidden repeat counter
-    of its existing comment in place (the streak scan reads that
-    counter as the occurrence count) instead of posting a second
-    comment; the journal records the repeat. The history read fails
-    open — a read failure degrades to the plain classified report,
-    never a second failure of the reporting path.
+    The #825 dead-loop guard (classified recoverable failures only): the
+    same (run_id, failure fingerprint) recurring to `FAILURE_STREAK_LIMIT`
+    consecutive failures escalates to the terminal `ai-blocked` outcome,
+    and an identical failure already reported bumps the hidden repeat
+    counter of its existing comment (the streak scan reads that counter as
+    the occurrence count) instead of posting a second one; the history
+    read fails open, never as a second failure of the reporting path.
     """
     number = int(issue["number"])
     title = issue["title"]
@@ -823,10 +819,12 @@ def report_delivery_failure(
             scene += f"\n{redact_local_paths(review_scene_block)}"
         outcome = "fix_needed"
     if isinstance(red, base_ci_red.BaseCIRed):
-        body = base_ci_red.comment_body(
-            red, getattr(exc, "checks", []),
+        # Issue #2203: recording the scene opens its fix Issue itself.
+        body = base_ci_fix.scene_comment(
+            source_repo, issue, red, getattr(exc, "checks", []),
             failure_record=failure_record, language_code=language_code,
-            issue_number=number, issue_title=title, status_url=status_url)
+            status_url=status_url, milestone=milestone, dispatch_label=ready_label,
+        )
     else:
         body = failure_comment_body(
             outcome="blocked" if blocked else "fix_needed",

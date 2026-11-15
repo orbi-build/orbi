@@ -690,9 +690,10 @@ repair it. The delivery pauses in `ai-blocked` with `reason_code`
 `base_ci_red` — `action_code` `fix_ticket`, `retry_safe` false, because a
 plain requeue would hit the same red base — and ONE comment that says what the
 reader already has (a ready PR), why it paused, EVERY failing base check with
-its run link and first error lines, and the two repairs. The base branch is the
-configured one, never a hard-coded `main`, and a non-subprocess failure prints
-no empty evidence section.
+its run link and first error lines, the fix Issue Orbi opened for it, and the
+repair left to the reader. The base branch is the configured one, never a
+hard-coded `main`, and a non-subprocess failure prints no empty evidence
+section.
 
 The same comment carries a second hidden block beside `orbi:failure:v1`:
 
@@ -722,11 +723,28 @@ Recovery needs no relabel:
   `stale`, and polling stops. Removing `ai-blocked` and adding
   `ai-fix-needed` still resumes the delivery by hand.
 
-`/orbi fix-base` (write permission, one execution per comment) opens — or
-reuses an OPEN — `CI failure: <check> on branch <base>` Issue per failing base
-check, labelled `ai-ready` + `p0` and placed in the active Milestone, then
-replies `created #K` / `reused #K` on the paused Issue. A closed triage Issue
-is never reused.
+The fix Issue needs no comment: recording the pause opens — or reuses an
+OPEN — `CI failure: <check> on branch <base>` Issue per failing base check,
+labelled `ai-ready` + `p0` and placed in the active Milestone, through the
+same implementation the command uses. The comment names every one of them
+(`created #K` / `reused #K`) instead of asking a person to reply the command,
+and that fix Issue is an ordinary delivery: once it lands the base is green
+and the paused delivery resumes by itself (the recovery above).
+
+The run happens once per scene. A command's receipt is keyed on the command
+comment that requested it; the engine has no such comment, so its key is the
+record itself — the pause comment carries
+`<!-- orbi-base-ci-red-fix-issues scene=<digest> -->`, and only a comment
+written by the Runner's own account counts, so a copied marker opens nothing.
+A later tick that still sees the same pause opens no Issue, posts no comment
+and repeats no receipt. If the lookup or the creation fails, the failure is
+logged (`base_ci_red_fix_issues_failed`) and the delivered pause comment keeps
+the command repair, so a recorded pause is never lost to a failed side run.
+
+`/orbi fix-base` (write permission, one execution per comment) stays
+available and idempotent: it opens — or reuses an OPEN — the same Issue, so a
+reply after the automatic run reports `reused #K` on the paused Issue. A closed
+triage Issue is never reused.
 
 ### A delivery paused on an unapproved App permission: `checks_permission_missing`
 

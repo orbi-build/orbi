@@ -29,7 +29,7 @@ import graph cyclic (`tests/test_import_graph.py`).
 from __future__ import annotations
 
 from orbi.amend_command import AMEND_COMMAND
-from orbi.base_ci_red import FIX_BASE_COMMAND
+from orbi.base_ci_fix import FIX_BASE_COMMAND
 from orbi.milestone_command import MILESTONE_COMMAND
 from orbi.split_command import SPLIT_COMMAND
 from orbi.ticket_command import (

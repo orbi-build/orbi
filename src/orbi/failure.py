@@ -66,7 +66,7 @@ REASON_CODES = frozenset({
     # The delivery check that failed on the PR head is ALSO failing on the
     # configured base branch (Issue #1825): the PR cannot turn it green, so
     # the fix belongs to the base. Not `retry_safe` — a plain requeue would
-    # hit the same red base — but recoverable: `base_ci_red.recover` resumes
+    # hit the same red base — but recoverable: `base_ci_fix.recover` resumes
     # the SAME delivery once the base check turns green, no relabel.
     "base_ci_red",
     # The App installation has not approved a permission the check read

@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from orbi import (
-    base_ci_red, check_permission, gitops, ticket_command,
+    base_ci_fix, check_permission, gitops, ticket_command,
     ticket_command_registry,
 )
 from orbi import milestone as milestone_bookkeeping
@@ -783,7 +783,7 @@ def pick_next_delivery(
         except Exception:
             LOGGER.exception("check_permission_scan_failed repo=%s", repo)
         try:
-            base_ci_red.recover(
+            base_ci_fix.recover(
                 repo, language_code=repo_language, milestone=milestone,
                 dispatch_label=dispatch_label,
             )

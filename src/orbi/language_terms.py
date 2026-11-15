@@ -7,6 +7,7 @@ stored display value; `language.MESSAGES` merges this map in place, so
 machine row (run marker, `run_id=`, `repo_config:`, `failure:`, receipt
 rows) has an entry here.
 """
+from orbi.language_terms_fix import BASE_CI_FIX_MESSAGES
 
 DISPLAY_TERMS: dict[str, tuple[str, str]] = {
     # Display labels of the started / opened-PR scene field blocks. The
@@ -81,11 +82,10 @@ DISPLAY_TERMS: dict[str, tuple[str, str]] = {
     "progress.milestone_headline.merged": ("merged", "已合并"),
 }
 
-# The base-branch-red scene's own sentences (Issue #1825). They live here
-# for the same reason DISPLAY_TERMS does: the catalog owner stays under the
-# size cap, and `language.MESSAGES` merges this map in, so `language.text`
-# remains the ONE reading point. Every key is prose a human reads; the check
-# names, branches, SHAs, PR numbers and URLs inside them stay verbatim.
+# The base-branch-red scene's own sentences (Issue #1825), here for the
+# same reason DISPLAY_TERMS is: the catalog owner stays under the size cap
+# and `language.MESSAGES` merges this map in, so `language.text` stays the
+# ONE reading point. Check names, branches, SHAs, numbers and URLs verbatim.
 BASE_CI_RED_MESSAGES: dict[str, tuple[str, str]] = {
     # The base-branch-red scene (Issue #1825): a delivery PR that is ready
     # but whose failing check is also red on the base branch. The comment
@@ -112,8 +112,8 @@ BASE_CI_RED_MESSAGES: dict[str, tuple[str, str]] = {
         "- **`{name}`** —— 最初的错误行：",
     ),
     "base_ci_red.next_steps": (
-        "**Next steps** (pick one):",
-        "**下一步**（选一种）：",
+        "**Next steps**:",
+        "**下一步**：",
     ),
     "base_ci_red.next_step_fix_base": (
         "1. Fix `{base_branch}` yourself — Orbi merges this PR "
@@ -389,7 +389,7 @@ AMEND_MESSAGES: dict[str, tuple[str, str]] = {
 EXTRA_MESSAGES: dict[str, tuple[str, str]] = {
     **DISPLAY_TERMS, **BASE_CI_RED_MESSAGES, **CHECK_PERMISSION_MESSAGES,
     **CLARIFY_SUGGESTION_MESSAGES, **SPLIT_MESSAGES,
-    **AMEND_MESSAGES,
+    **AMEND_MESSAGES, **BASE_CI_FIX_MESSAGES,
     # The rejection a NO-ARGUMENT in-ticket command owes its author
     # (Issue #1922): the shared "write exactly one {label}" wording would
     # contradict the usage line printed beside it for an arity-0 command
