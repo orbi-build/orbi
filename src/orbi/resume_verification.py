@@ -281,7 +281,7 @@ def verify_resumed_pr(resume: run_state.ResumeScene, issue: dict,
                 exc, issue=issue, source_repo=source_repo,
                 run_id=current_run_id(), pr_url=resume.parsed.pr_url,
                 worktree=worktree, branch=branch, role=ROLE_REVIEW,
-                language_code=lang, status_url=config.status_url,
+                language_code=lang, status_url=config.status_url, milestone=config.active_milestone,
                 ready_label=config.dispatch_label or READY_LABEL, action=(
                     language.text(lang, "delivery.resume_missing_fixes_action",
                                   pr_url=resume.parsed.pr_url, number=number)

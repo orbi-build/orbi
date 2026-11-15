@@ -572,9 +572,9 @@ PR 已完成评审，但它失败的那个 check 在配置的基础分支上本�
 `reason_code` 为 `base_ci_red`（`action_code` 为 `fix_ticket`，
 `retry_safe` 为 false：单纯重新入队仍会撞上同样红的基础分支），并留下
 **一条**评论：先说用户已经拿到的结果（PR 已就绪），再说明为何暂停，然后
-列出**每一个**失败的 base check 及其 run 链接和最初的错误行，最后给出两种
-修法。基础分支取自配置，绝不写死 `main`；非子进程失败不会输出空的证据
-区块。
+列出**每一个**失败的 base check 及其 run 链接和最初的错误行，再列出 Orbi
+自己开出的修复 Issue，最后给出留给读者的那种修法。基础分支取自配置，绝不
+写死 `main`；非子进程失败不会输出空的证据区块。
 
 同一条评论在 `orbi:failure:v1` 旁边再携带一个隐藏块：
 
@@ -601,11 +601,25 @@ PR 已完成评审，但它失败的那个 check 在配置的基础分支上本�
 - 连续七天仍红 -> 只发一条提醒评论，块变为 `stale`，之后不再轮询。手动
   去掉 `ai-blocked`、加上 `ai-fix-needed` 仍可恢复。
 
-`/orbi fix-base`（需要 write 权限，同一条评论只执行一次）为每个失败的
-base check 创建 —— 或复用一个**仍然开着**的 ——
+修复 Issue 不需要人评论：记录这次暂停时，Orbi 就为每个失败的 base check
+创建 —— 或复用一个**仍然开着**的 ——
 `CI failure: <check> on branch <base>` Issue，打上 `ai-ready` + `p0`
-并放进当前 active Milestone，然后在被暂停的 Issue 上回复
-`created #K` / `reused #K`。已关闭的 triage Issue 绝不复用。
+并放进当前 active Milestone，走的是命令**同一份**实现。评论会直接列出这些
+Issue（`created #K` / `reused #K`），而不是要人去回复命令；这张修复 Issue
+就是一次普通的 Orbi 交付：它落地后基础分支变绿，被暂停的交付自己恢复
+（见上面的恢复一节）。
+
+这一步每个场景只跑一次。命令的回执以触发它的命令评论为键；引擎没有这样的
+评论，所以键就是记录本身 —— 暂停评论携带
+`<!-- orbi-base-ci-red-fix-issues scene=<digest> -->`，只有 Runner 自己账号
+写下的评论才算数，抄来的标记开不出任何 Issue。之后仍然看到同一个暂停的
+tick 不会再开 Issue、不会再发评论、也不会重复回执。如果查询或创建失败，
+会记下 `base_ci_red_fix_issues_failed`，已投递的暂停评论保留命令那种修法，
+一次失败的副线动作绝不会吞掉已经记录下来的暂停。
+
+`/orbi fix-base`（需要 write 权限，同一条评论只执行一次）依然可用且幂等：
+它创建 —— 或复用**仍然开着**的 —— 同一张 Issue，所以在自动运行之后再回复
+会得到 `reused #K`。已关闭的 triage Issue 绝不复用。
 
 ### 交付因 App 权限未批准而暂停：`checks_permission_missing`
 

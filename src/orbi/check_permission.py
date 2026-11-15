@@ -26,7 +26,7 @@ This module owns that one scene:
 
 No new label, no new state store, no daemon: `ai-blocked` is the terminal
 state every claim scan skips, and this bounded scan (one per tick, in the
-same bypass slot as `base_ci_red.recover`) is the only path back.
+same bypass slot as `base_ci_fix.recover`) is the only path back.
 
 The installation id is CONFIGURATION, not an API read: no App endpoint
 lets an installation token read its own installation

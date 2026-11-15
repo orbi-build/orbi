@@ -16,16 +16,19 @@ This module owns that one scene:
   commit with its run link and first error lines, from the ONE
   `check-runs` response — no annotations/logs API;
 * the ONE readable comment (`comment_body`): what the user already has,
-  why it paused, the evidence, the two repairs — and no empty evidence
-  section (this is not a subprocess failure);
-* `/orbi fix-base` (`FIX_BASE_COMMAND`), registered in the shared
-  in-ticket command layer: it opens (or reuses) ONE open `ai-ready` +
-  `p0` fix Issue per failing base check, in the active Milestone;
-* the automatic recovery (`recover`) and the terminal edits
-  (`rewrite_state`, `note_merged`): the base turns green -> the same
-  Issue goes `ai-blocked` -> `ai-fix-needed` and the existing resume
-  flow absorbs the base and merges; after `REMINDER_AFTER_DAYS` days the
-  scan posts one reminder, marks the block `stale` and stops polling.
+  why it paused, the evidence, the fix Issues Orbi opened itself and the
+  remaining repair — and no empty evidence section (this is not a
+  subprocess failure);
+* the in-place edits of that comment (`rewrite_state`, `remind`,
+  `note_merged`) and the triage-Issue lookup (`open_triage_issue`);
+* the eligibility rule the command and the scan share (`paused_scene`).
+
+The ACTION side lives beside it: `base_ci_fix` opens (or reuses) the ONE
+open `ai-ready` + `p0` fix Issue per failing base check — by itself when
+the scene is recorded (Issue #2203) and on the `/orbi fix-base` command —
+and runs the recovery scan (`recover`) that takes `ai-blocked` back to
+`ai-fix-needed` once the base turns green, then `stale` after
+`REMINDER_AFTER_DAYS` days.
 
 No new label, no new state, no new action code: the failure rides the
 existing `fix_ticket` action on `ai-blocked`, and the recovery reuses
@@ -36,9 +39,8 @@ comments.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
-import logging
-from datetime import datetime, timezone
 
 from orbi import comment_trust, failure, language, user_summary
 from orbi.comment_kind import (
@@ -46,21 +48,13 @@ from orbi.comment_kind import (
     versioned_block_pattern,
 )
 from orbi.comment_rest_id import rest_comment_id
-from orbi.delivery_labels import (
-    BLOCKED_LABEL, FIX_NEEDED_LABEL, P0_LABEL, READY_LABEL,
-)
 from orbi.failure import redact_local_paths
 from orbi.github import (
-    branch_head_sha, comment_issue, commit_check_runs, edit_issue,
-    issue_comments, list_issues, pr_view, update_issue_comment,
+    comment_issue, commit_check_runs, issue_comments, list_issues,
+    update_issue_comment,
 )
-from orbi.journal import LOGGER, event, run_command
-from orbi.pi_activity import parse_iso_utc
+from orbi.journal import LOGGER, event
 from orbi.progress import fenced
-from orbi.ticket_command import (
-    CommandSpec, TicketCommandError, command_comment_key,
-    command_receipt_marker, process_commands, runner_receipt,
-)
 
 SCHEMA_VERSION = 1
 
@@ -93,9 +87,16 @@ MAX_ERROR_LINES = 5
 REMINDER_AFTER_DAYS = 7
 REMINDER_AFTER_SECONDS = REMINDER_AFTER_DAYS * 24 * 3600
 
+# The engine-initiated run's own once-per-scene record (Issue #2203):
+# `/orbi fix-base` keys its receipt on the command comment it answers, and
+# the engine has no such comment — the SCENE is the occurrence, so the key
+# is the base-CI-red record itself (the block every scene comment carries).
+SCENE_RECEIPT = "orbi-base-ci-red-fix-issues"
+
 # GitHub's non-passing check-run conclusions (the same set the merge gate's
-# rollup classifier treats as passed).
-_PASSING_CONCLUSIONS = ("success", "neutral", "skipped")
+# rollup classifier treats as passed). Public: the base head's verdict is
+# re-read in the fix module (Issue #2203).
+PASSING_CONCLUSIONS = ("success", "neutral", "skipped")
 
 # The issue search that finds a triage Issue: one bounded page is enough
 # for a check name and branch (the title is unique per pair).
@@ -221,6 +222,18 @@ def with_state(record: BaseCIRed, state: str) -> BaseCIRed:
     return dataclasses.replace(record, state=state)
 
 
+def scene_receipt(record: BaseCIRed) -> str:
+    """The hidden once-per-scene receipt of the engine-initiated run.
+
+    Keyed on the record itself, never on a comment id: the record IS the
+    scene's identity and it is decided before the pause comment exists.
+    Only a runner-authored comment carrying it counts (`runner_receipt`),
+    so a copied marker opens nothing.
+    """
+    digest = hashlib.sha256(render(record).encode("utf-8")).hexdigest()[:16]
+    return f"<!-- {SCENE_RECEIPT} scene={digest} -->"
+
+
 # --------------------------------------------------------------------------
 # The base evidence: one check-runs read, every failed check
 # --------------------------------------------------------------------------
@@ -260,7 +273,7 @@ def failing_checks(repo: str, failed_names: list[str],
     for run in runs:
         if run.get("status") != "completed":
             continue
-        if run.get("conclusion") in _PASSING_CONCLUSIONS:
+        if run.get("conclusion") in PASSING_CONCLUSIONS:
             continue
         by_name.setdefault(str(run.get("name")), run)
     checks: list[FailingCheck] = []
@@ -357,52 +370,11 @@ def triage_url(repo: str, check_name: str, base_branch: str) -> str | None:
     return url if isinstance(url, str) and url else None
 
 
-def _triage_body(check: FailingCheck, record: BaseCIRed,
-                 language_code: str) -> str:
-    parts = [
-        language.text(language_code, "base_ci_red.triage_check",
-                      name=check.name, base_branch=record.base_branch),
-        language.text(language_code, "base_ci_red.triage_reason",
-                      base_branch=record.base_branch,
-                      base_sha=record.base_sha),
-    ]
-    if check.url:
-        parts.append(language.text(language_code, "base_ci_red.check_run",
-                                   name=check.name, url=check.url))
-    if check.errors:
-        parts.append(
-            f"{language.text(language_code, 'base_ci_red.triage_errors')}\n"
-            f"{fenced('\n'.join(check.errors))}"
-        )
-    return "\n\n".join(parts)
-
-
-def _create_triage_issue(repo: str, check: FailingCheck, record: BaseCIRed,
-                         *, milestone: str | None, dispatch_label: str,
-                         language_code: str) -> int:
-    command = [
-        "gh", "issue", "create", "--repo", repo,
-        "--title", triage_title(check.name, record.base_branch),
-        "--body", _triage_body(check, record, language_code),
-        "--label", dispatch_label,
-        "--label", P0_LABEL,
-    ]
-    if milestone:
-        command += ["--milestone", milestone]
-    url = run_command(command, timeout=30).strip()
-    try:
-        return int(url.rstrip("/").rsplit("/", 1)[-1])
-    except ValueError:
-        raise TicketCommandError(
-            "create issue", f"gh returned no issue URL: {url!r}",
-        ) from None
-
-
 # --------------------------------------------------------------------------
 # The comment: what the user reads
 # --------------------------------------------------------------------------
 
-def _state_line(record: BaseCIRed, language_code: str) -> str:
+def state_line(record: BaseCIRed, language_code: str) -> str:
     """The timeline line that marks one non-waiting state."""
     if record.state == STATE_RESUMING:
         return language.text(
@@ -426,16 +398,23 @@ def comment_body(record: BaseCIRed, checks: list[FailingCheck], *,
                  language_code: str,
                  issue_number: int | None = None,
                  issue_title: str | None = None,
-                 status_url: str | None = None) -> str:
+                 status_url: str | None = None,
+                 fix_issues: list[str] | None = None) -> str:
     """The ONE readable base-branch-red comment.
 
     Order is the user's: what they already have (a ready PR), why it
-    paused, the evidence, the two repairs. The hidden
+    paused, the evidence, the fix Issues, the remaining repairs. The hidden
     `orbi:failure:v1` block leads (the resume path reads it there) and
     the `orbi:base-ci-red:v1` block closes the body. An empty evidence
     segment is never rendered: this failure is not a subprocess exit. The
     task identity and the optional project status link every task comment
     carries (Issue #1826) sit right below the ready line.
+
+    `fix_issues` is what the engine-initiated run (Issue #2203) opened or
+    reused: those lines are shown, the second repair becomes "wait for
+    them" instead of "reply `/orbi fix-base`", and the scene receipt that
+    makes the run once per scene closes the body. `None` (the run failed,
+    or a caller carries no run) keeps the pre-#2203 comment.
     """
     parts = [
         failure.render(failure_record),
@@ -468,21 +447,41 @@ def comment_body(record: BaseCIRed, checks: list[FailingCheck], *,
             )
     if evidence:
         parts.append("\n".join(evidence))
-    parts.extend(_next_steps(record, language_code))
+    if fix_issues:
+        parts.append(
+            language.text(language_code, "base_ci_red.fix_issues")
+            + "\n" + "\n".join(f"- {line}" for line in fix_issues)
+        )
+    parts.extend(_next_steps(record, language_code,
+                             automatic=bool(fix_issues)))
     parts.append(render(record))
+    if fix_issues:
+        parts.append(scene_receipt(record))
     return "\n\n".join(parts)
 
 
-def _next_steps(record: BaseCIRed, language_code: str) -> list[str]:
-    """The two repairs offered while the delivery waits."""
-    return [
+def _next_steps(record: BaseCIRed, language_code: str, *,
+                automatic: bool = False) -> list[str]:
+    """The repairs offered while the delivery waits.
+
+    `automatic` is the #2203 variant: the engine already opened the fix
+    Issues, so the comment names them under `base_ci_red.fix_issues` and
+    offers only the manual repair — it never asks for `/orbi fix-base`,
+    which the command's own reply still answers for the scene where that
+    engine run failed.
+    """
+    steps = [
         language.text(language_code, "base_ci_red.next_steps"),
         language.text(
             language_code, "base_ci_red.next_step_fix_base",
             base_branch=record.base_branch,
         ),
-        language.text(language_code, "base_ci_red.next_step_command"),
     ]
+    if not automatic:
+        steps.append(
+            language.text(language_code, "base_ci_red.next_step_command"),
+        )
+    return steps
 
 
 def rewrite_state(body: str, state: str, *, language_code: str) -> str:
@@ -502,12 +501,19 @@ def rewrite_state(body: str, state: str, *, language_code: str) -> str:
     if record is None:
         raise BaseCIRedError("cannot rewrite a comment without the block")
     updated = with_state(record, state)
-    line = _state_line(updated, language_code)
+    line = state_line(updated, language_code)
     lines = body.splitlines()
     if state == STATE_MERGED:
         # The delivery landed: the repairs the waiting comment offered are
         # no longer next steps, so the merged comment does not repeat them.
-        offered = {text.strip() for text in _next_steps(record, language_code)}
+        # Both variants: the comment carries whichever repair the run that
+        # wrote it offered, and `record` alone cannot say which.
+        offered = {
+            text.strip()
+            for automatic in (True, False)
+            for text in _next_steps(record, language_code,
+                                    automatic=automatic)
+        }
         # The removed section leaves its separator lines behind: keep one
         # blank line, never a run of them.
         kept: list[str] = []
@@ -552,7 +558,7 @@ def _located(comments: list[dict]) -> tuple[BaseCIRed, dict] | None:
     return None
 
 
-def _edit_state(repo: str, issue_number: int, comment: dict,
+def edit_state(repo: str, issue_number: int, comment: dict,
                 state: str, *, language_code: str) -> bool:
     """Patch the ONE comment in place; returns whether it was edited."""
     body = comment.get("body")
@@ -570,90 +576,6 @@ def _edit_state(repo: str, issue_number: int, comment: dict,
         body=rewrite_state(body, state, language_code=language_code),
     )
     return True
-
-
-# --------------------------------------------------------------------------
-# The base head and the green decision
-# --------------------------------------------------------------------------
-
-def _base_head(repo: str, pr_number: int,
-               base_branch: str) -> tuple[str, str]:
-    """The paused PR's state and the base branch's LIVING head.
-
-    The branch's current head, never the PR's recorded `baseRefOid`: that
-    field is the base snapshot the PR was compared against, so the fix a
-    maintainer pushes to the base AFTER the pause would never be observed
-    and the delivery would never resume.
-    """
-    state = pr_view(pr_number, "state", repo=repo)
-    return str(state.get("state") or ""), branch_head_sha(repo, base_branch)
-
-
-def _newest_runs(runs: list[dict]) -> dict[str, dict]:
-    """One current run per check name.
-
-    A RE-RUN of a check adds a second run under the same name, and the
-    check-runs endpoint lists a commit's runs newest first (descending
-    `started_at`/`id`, verified against the live endpoint), so the FIRST
-    occurrence is the current verdict. Reading the last one would keep an
-    old failure alive after the maintainer re-ran the check to green and
-    the delivery would never resume.
-    """
-    by_name: dict[str, dict] = {}
-    for run in runs:
-        by_name.setdefault(str(run.get("name")), run)
-    return by_name
-
-
-def _base_is_green(repo: str, record: BaseCIRed,
-                    base_head: str) -> bool:
-    """True when every check in the record concluded green on the base.
-
-    A pending check is not green: the scan waits, it never guesses.
-    """
-    by_name = _newest_runs(commit_check_runs(repo, base_head))
-    for name in record.failing_checks:
-        run = by_name.get(name)
-        if run is None:
-            return False
-        if run.get("status") != "completed":
-            return False
-        if run.get("conclusion") not in _PASSING_CONCLUSIONS:
-            return False
-    return True
-
-
-# --------------------------------------------------------------------------
-# The automatic recovery scan
-# --------------------------------------------------------------------------
-
-def _aged_out(comment: dict, now: datetime) -> bool:
-    created = comment.get("createdAt")
-    stamp = parse_iso_utc(created) if isinstance(created, str) else None
-    if stamp is None:
-        return False
-    return (now - datetime.fromtimestamp(stamp, tz=timezone.utc)
-            ).total_seconds() >= REMINDER_AFTER_SECONDS
-
-
-def _remind(repo: str, issue_number: int, record: BaseCIRed,
-            comment: dict, *, language_code: str) -> None:
-    """One reminder, then the block goes `stale` and polling stops.
-
-    The order is the same as the blocked exit's: the readable comment
-    lands first, the state change second, so a boundary failure never
-    leaves a stale block with no reason on the Issue.
-    """
-    stale = with_state(record, STATE_STALE)
-    comment_issue(issue_number, repo=repo,
-                  body=_state_line(stale, language_code))
-    _edit_state(repo, issue_number, comment, STATE_STALE,
-                language_code=language_code)
-    event(
-        "base_ci_red_stale", issue=issue_number, pr=record.pr,
-        base_branch=record.base_branch,
-        days=REMINDER_AFTER_DAYS,
-    )
 
 
 def _latest_trusted_failure(
@@ -727,84 +649,6 @@ def paused_scene(
     return record, comment
 
 
-def recover(repo: str, *, language_code: str,
-            milestone: str | None = None,
-            dispatch_label: str = READY_LABEL,
-            now: datetime | None = None) -> list[int]:
-    """Advance every paused base-branch-red delivery once.
-
-    One bounded scan per tick, before the resume scan: an `ai-blocked`
-    Issue is a terminal state no claim scan picks up, so this is the only
-    path back. The base branch is the BLOCK's (the configured one the
-    delivery reported) — never a hard-coded `main`. For each Issue whose
-    LATEST TRUSTED failure is the `base_ci_red` one and whose record in
-    that SAME comment is `waiting` (an older record a newer trusted
-    failure superseded — including a newer failure that carries no record
-    or no base-CI block — and a copied record from an author without
-    write permission, are never eligible — Issue #1833):
-
-    1. run the in-ticket `/orbi fix-base` command (its own permission
-       gate and receipts);
-    2. read the CURRENT base head once and the record's checks against it:
-       all green -> `ai-blocked` becomes `ai-fix-needed` (the existing
-       resume flow absorbs the base and merges) and the comment says so;
-       a merged PR -> the comment says merged;
-    3. still red/pending past `REMINDER_AFTER_DAYS` -> one reminder and
-       `stale` (polling stops; a human relabel still recovers the Issue).
-
-    Returns the Issue numbers that were resumed.
-    """
-    stamp = now or datetime.now(timezone.utc)
-    resumed: list[int] = []
-    issues = list_issues(
-        repo, state="open", label=BLOCKED_LABEL,
-        json_fields="number,title", limit=200,
-    )
-    for issue in issues:
-        number = issue["number"]
-        scene = paused_scene(issue_comments(number, repo=repo), repo=repo)
-        if scene is None:
-            continue
-        record, comment = scene
-        process_commands(
-            repo, number, [FIX_BASE_COMMAND],
-            language_code=language_code, record=record,
-            milestone=milestone, dispatch_label=dispatch_label,
-        )
-        try:
-            pr_state, base_head = _base_head(
-                repo, record.pr, record.base_branch)
-        except Exception:
-            LOGGER.exception(
-                "base_ci_red_pr_read_failed issue=%s pr=%s repo=%s",
-                number, record.pr, repo,
-            )
-            continue
-        if pr_state == "MERGED":
-            _edit_state(repo, number, comment, STATE_MERGED,
-                        language_code=language_code)
-            event(
-                "base_ci_red_merged", issue=number, pr=record.pr,
-                base_branch=record.base_branch,
-            )
-            continue
-        if _base_is_green(repo, record, base_head):
-            edit_issue(number, repo=repo, add=FIX_NEEDED_LABEL,
-                       remove=BLOCKED_LABEL)
-            _edit_state(repo, number, comment, STATE_RESUMING,
-                        language_code=language_code)
-            event(
-                "base_ci_red_recovered", issue=number, pr=record.pr,
-                base_branch=record.base_branch, base_head=base_head,
-            )
-            resumed.append(number)
-            continue
-        if _aged_out(comment, stamp):
-            _remind(repo, number, record, comment,
-                    language_code=language_code)
-    return resumed
-
-
 def post_merged(issue_number: int, repo: str, body: str, *,
                 language_code: str) -> None:
     """Post the merged record AND note the outcome in the paused comment.
@@ -824,6 +668,26 @@ def post_merged(issue_number: int, repo: str, body: str, *,
         )
 
 
+def remind(repo: str, issue_number: int, record: BaseCIRed,
+            comment: dict, *, language_code: str) -> None:
+    """One reminder, then the block goes `stale` and polling stops.
+
+    The order is the same as the blocked exit's: the readable comment
+    lands first, the state change second, so a boundary failure never
+    leaves a stale block with no reason on the Issue.
+    """
+    stale = with_state(record, STATE_STALE)
+    comment_issue(issue_number, repo=repo,
+                  body=state_line(stale, language_code))
+    edit_state(repo, issue_number, comment, STATE_STALE,
+                language_code=language_code)
+    event(
+        "base_ci_red_stale", issue=issue_number, pr=record.pr,
+        base_branch=record.base_branch,
+        days=REMINDER_AFTER_DAYS,
+    )
+
+
 def note_merged(repo: str, issue_number: int, *, language_code: str) -> bool:
     """Mark the paused comment merged after the delivery landed.
 
@@ -838,7 +702,7 @@ def note_merged(repo: str, issue_number: int, *, language_code: str) -> bool:
     record, comment = located
     if record.state not in (STATE_WAITING, STATE_RESUMING):
         return False
-    changed = _edit_state(repo, issue_number, comment, STATE_MERGED,
+    changed = edit_state(repo, issue_number, comment, STATE_MERGED,
                           language_code=language_code)
     if changed:
         event(
@@ -846,137 +710,3 @@ def note_merged(repo: str, issue_number: int, *, language_code: str) -> bool:
             base_branch=record.base_branch,
         )
     return changed
-
-
-# --------------------------------------------------------------------------
-# /orbi fix-base
-# --------------------------------------------------------------------------
-
-def _fix_base_context(
-    *, repo: str, comments: list[dict], record: BaseCIRed | None = None,
-    **_context: object,
-) -> dict[str, object]:
-    """The command's own context: the record this ticket pauses on.
-
-    The comment scan located the record while walking the ticket and hands
-    it over; a terminal caller (`orbi fix-base`, Issue #1930) has no such
-    scan, so the command reads the SAME record from the ticket itself —
-    the CLI never passes a placeholder, and a caller that already has it
-    costs no second read.
-    """
-    if record is not None:
-        return {}
-    scene = paused_scene(comments, repo=repo)
-    return {"record": scene[0] if scene is not None else None}
-
-
-def _fix_base_validate(
-    argument: str, *, language_code: str = language.DEFAULT_LANGUAGE,
-    record: BaseCIRed | None = None, **_context: object,
-) -> str | None:
-    """The command's own business rule: a paused scene to fix.
-
-    The shared dispatcher evaluates EVERY registered command on every
-    ticket that runs commands (`process_commands` runs each one through
-    `execute_command`, Issue #1294), so "is there a block to fix at all" is
-    this command's own precondition: without one the reader gets this
-    receipt instead of a handler running against state the ticket never
-    carried. The command takes no argument (Issue #1922): the `/orbi`
-    prefix and `fix-base` are matched by the shared layer, not by this
-    rule.
-    """
-    if not isinstance(record, BaseCIRed):
-        return language.text(
-            language_code, "command.reason_fix_base_no_block",
-        )
-    return None
-
-
-def _fix_base_apply(
-    argument: str, *, repo: str, issue_number: int, command_comment: dict,
-    comments: list[dict], record: BaseCIRed | None = None,
-    milestone: str | None = None, dispatch_label: str = READY_LABEL,
-    language_code: str = language.DEFAULT_LANGUAGE,
-    **_context: object,
-) -> None:
-    """Open (or reuse) ONE open fix Issue per failing base check.
-
-    Idempotent per COMMENT: the reply carries the command layer's own
-    receipt marker, so a second tick that still sees the same command
-    comment does nothing (the block stays `waiting` until the base turns
-    green, so the comment is visible for several ticks). Only a receipt
-    THIS runner wrote counts (`runner_receipt`): the marker is public
-    text, so a copied one must never read as "the fix Issue was opened"
-    (Issue #1992).
-    """
-    if not isinstance(record, BaseCIRed):
-        # The layer's contract: a handler that cannot run raises its own
-        # step error (never a bare TypeError) so the dispatcher posts the
-        # shared failure receipt.
-        raise TicketCommandError(
-            "locate base-ci-red block",
-            language.text(language_code, "command.reason_fix_base_no_block"),
-        )
-    receipt = (
-        f"<!-- {command_receipt_marker(FIX_BASE_COMMAND)} "
-        f"comment={command_comment_key(command_comment)} -->"
-    )
-    if runner_receipt(comments, receipt):
-        return
-    checks = failing_checks(repo, list(record.failing_checks), record.base_sha)
-    if not checks:
-        comment_issue(
-            issue_number, repo=repo,
-            body=language.text(
-                language_code, "base_ci_red.triage_no_evidence",
-                base_branch=record.base_branch,
-            ) + "\n\n" + receipt,
-        )
-        return
-    lines: list[str] = []
-    for check in checks:
-        try:
-            existing = open_triage_issue(
-                repo, check.name, record.base_branch)
-        except Exception as exc:
-            # Never open a second Issue beside one this read could not
-            # see: the command fails its own step and posts the receipt.
-            raise TicketCommandError(
-                "look up the triage Issue", str(exc)) from exc
-        if existing is not None and isinstance(existing.get("number"), int):
-            number = existing["number"]
-            key = "base_ci_red.triage_reused"
-        else:
-            number = _create_triage_issue(
-                repo, check, record, milestone=milestone,
-                dispatch_label=dispatch_label, language_code=language_code,
-            )
-            key = "base_ci_red.triage_created"
-            event(
-                "base_ci_red_triage", repo=repo, issue=f"#{issue_number}",
-                created=f"#{number}", check=check.name,
-                base_branch=record.base_branch,
-            )
-        lines.append(language.text(
-            language_code, key, number=number, check=check.name,
-            base_branch=record.base_branch,
-        ))
-    comment_issue(
-        issue_number, repo=repo,
-        body="\n".join(lines) + "\n\n" + receipt,
-    )
-
-
-FIX_BASE_COMMAND = CommandSpec(
-    name="fix_base",
-    subcommand="fix-base",
-    arity=0,
-    permission="write",
-    validate=_fix_base_validate,
-    apply=_fix_base_apply,
-    usage="/orbi fix-base",
-    description=(
-        "open a fix Issue for the base checks that pause this delivery"
-    ),
-    context=_fix_base_context,
-)
