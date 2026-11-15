@@ -5,9 +5,10 @@ is the only body that executes `<executable> --version` and formats its
 stderr, and `pi_exec.configured` reads `pi_executable` through
 `config.read_pi_executable`. Real files and the real PATH lookup: a fake
 executable is a small script in `tmp_path`, addressed by its absolute
-path. The default `pi` tests pin the lookup, so they never depend on
-whether the host carries a `pi`.
+path. The default `pi` tests put a real `pi` script first on the
+PATH, so they never depend on whether the host carries one.
 """
+import os
 import subprocess
 from pathlib import Path
 
@@ -31,11 +32,14 @@ def _probe(run_command, executable: str = "pi"):
 
 
 @pytest.fixture
-def pi_on_path(monkeypatch):
-    """The default `pi` probe finds its executable only through
-    `shutil.which`, and the check must not depend on the host's PATH."""
-    monkeypatch.setattr(
-        pi_exec.shutil, "which", lambda name: f"/usr/bin/{name}",
+def pi_on_path(tmp_path, monkeypatch):
+    """A real `pi` first on the PATH: the default-executable tests go
+    through the real lookup and never depend on the host's own `pi`."""
+    path = tmp_path / "pi"
+    path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    path.chmod(0o755)
+    monkeypatch.setenv(
+        "PATH", f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
     )
 
 
