@@ -23,13 +23,13 @@ runner.run_command; there is no fallback.
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from pathlib import Path
 
 from orbi import (
     cli_commands,
     config as config_domain,
+    config_hint,
     pilot_setup,
     runner,
     setup_checks,
@@ -55,19 +55,10 @@ LOGGER.addFilter(RunIdFilter())
 # pyproject.toml, so the two cannot drift.
 
 
-def _config_was_explicit(argv: list[str] | None) -> bool:
-    values = sys.argv[1:] if argv is None else argv
-    return any(value == "--config" or value.startswith("--config=")
-               for value in values)
-
-
 def _missing_config_message(
     path: Path, candidates: tuple[tuple[Path, str], ...],
 ) -> str:
-    candidate_lines = "".join(
-        f"; candidate={candidate} units={units}"
-        for candidate, units in candidates
-    )
+    candidate_lines = config_hint.candidate_lines(candidates)
     return (
         f"config_not_found path={path.resolve()}; "
         "reason=no Orbi config at this path "
@@ -115,7 +106,7 @@ def resolve_config_path(args,
     """
     candidates: tuple[tuple[Path, str], ...] = ()
     read_only = args.command in cli_commands.READ_ONLY_COMMANDS
-    explicit = _config_was_explicit(argv) or "ORBI_CONFIG" in os.environ
+    explicit = config_hint.config_selected_explicitly(argv)
     if read_only and not explicit and not args.config.exists():
         candidates = _installed_unit_configs(
             getattr(args, "installed_dir", None),
@@ -130,7 +121,8 @@ def resolve_config_path(args,
     return candidates
 
 
-def load_command_config(args, candidates: tuple[tuple[Path, str], ...]):
+def load_command_config(args, candidates: tuple[tuple[Path, str], ...],
+                        argv: list[str] | None):
     """Load and validate the config one subcommand needs.
 
     Returns the config, or None after printing the diagnostic (the caller
@@ -164,7 +156,8 @@ def load_command_config(args, candidates: tuple[tuple[Path, str], ...]):
         if args.command == "setup":
             print(f"setup_failed reason={exc}", file=sys.stderr)
         else:
-            LOGGER.error("config_invalid reason=%s", exc)
+            LOGGER.error(config_hint.invalid_config_message(
+                args, argv, f"reason={exc}"))
         return None
     except config_domain.ConfigFileMissingError as exc:
         if not candidates:
@@ -188,7 +181,8 @@ def load_command_config(args, candidates: tuple[tuple[Path, str], ...]):
                 file=sys.stderr,
             )
         else:
-            LOGGER.error("config_invalid reason=required path missing: %s", exc)
+            LOGGER.error(config_hint.invalid_config_message(
+                args, argv, f"reason=required path missing: {exc}"))
         return None
     return config
 
@@ -214,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         return runner.main(["--config", str(args.config)])
     if args.command == "check":
         return cli_commands.command_check(args)
-    config = load_command_config(args, candidates)
+    config = load_command_config(args, candidates, argv)
     if config is None:
         return 1
     return cli_commands.COMMAND_HANDLERS[args.command](config, args, parser)

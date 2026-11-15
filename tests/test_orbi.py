@@ -1358,6 +1358,145 @@ def test_mutating_command_lists_a_unit_config_without_using_it(
     assert str(config.resolve()) in caplog.text
 
 
+# --- Issue #2190: an INVALID implicit config names the installed units -------
+
+def _install_one_unit(tmp_path, monkeypatch, unit_config):
+    """One really installed unit, found through the `$ORBI_UNIT_DIR` seam.
+
+    `unit_config` None writes a unit with no ORBI_CONFIG (the "no installed
+    deployment" fixture); a path is written as the unit's real
+    `Environment=ORBI_CONFIG=` line, which the scheduler implementation
+    parses exactly as it parses an operator's installed unit.
+    """
+    installed = tmp_path / "units"
+    installed.mkdir()
+    environment = "" if unit_config is None else (
+        f'Environment="ORBI_CONFIG={unit_config}"\n'
+    )
+    (installed / "orbi@1.service").write_text(
+        f"[Service]\n{environment}", encoding="utf-8",
+    )
+    monkeypatch.setenv("ORBI_UNIT_DIR", str(installed))
+
+
+def _invalid_local_config(tmp_path, monkeypatch, body):
+    """The #2180 scene: an invalid ./orbi.toml in the working directory."""
+    monkeypatch.delenv("ORBI_CONFIG", raising=False)
+    work = tmp_path / "checkout"
+    work.mkdir()
+    config = work / "orbi.toml"
+    config.write_text(body, encoding="utf-8")
+    monkeypatch.chdir(work)
+    return config
+
+
+# An invalid value (unit_name charset) and a named path that does not exist
+# (the reported scene: prompt paths resolved against the checkout).
+INVALID_LOCAL_CONFIGS = {
+    "invalid_value": (
+        'source_repos = ["owner/repo"]\nrepo_dir = "."\nunit_name = "not ok"\n',
+        "config_invalid reason=unit_name must contain only letters, "
+        "numbers, '-' or '_'",
+    ),
+    "missing_prompt_path": (
+        'source_repos = ["owner/repo"]\nrepo_dir = "."\n'
+        'prompt = "prompts/absent.md"\n',
+        None,
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "command", ["doctor", "status"],
+)
+@pytest.mark.parametrize("body,expected", INVALID_LOCAL_CONFIGS.values(),
+                         ids=INVALID_LOCAL_CONFIGS.keys())
+def test_read_only_command_names_the_installed_config_when_the_local_one_is_invalid(
+    tmp_path, monkeypatch, caplog, capsys, command, body, expected,
+):
+    _invalid_local_config(tmp_path, monkeypatch, body)
+    deployment = tmp_path / "deployment.toml"
+    deployment.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    _install_one_unit(tmp_path, monkeypatch, deployment)
+    with caplog.at_level(logging.ERROR, logger="orbi.cli"):
+        assert orbi.main([command]) == 1
+    # Acceptance 3: the invalid local config is never replaced by the
+    # installed one, so no report for that deployment is produced.
+    assert capsys.readouterr().out == ""
+    message = caplog.records[-1].message
+    if expected is not None:
+        assert message.startswith(expected)
+    else:
+        assert message.startswith("config_invalid reason=required path missing: ")
+    assert f"candidate={deployment.resolve()}" in message
+    assert "units=orbi@1.service" in message
+    assert "--config" in message and "ORBI_CONFIG" in message
+
+
+@pytest.mark.parametrize("command", ["doctor", "status"])
+def test_invalid_local_config_without_installed_units_keeps_todays_line(
+    tmp_path, monkeypatch, caplog, command,
+):
+    body, expected = INVALID_LOCAL_CONFIGS["invalid_value"]
+    _invalid_local_config(tmp_path, monkeypatch, body)
+    _install_one_unit(tmp_path, monkeypatch, None)
+    with caplog.at_level(logging.ERROR, logger="orbi.cli"):
+        assert orbi.main([command]) == 1
+    assert caplog.records[-1].message == expected
+
+
+@pytest.mark.parametrize("explicit", ["flag", "env"])
+def test_explicit_invalid_config_names_no_unit_candidate(
+    tmp_path, monkeypatch, caplog, explicit,
+):
+    # Acceptance 4: the user already chose a config; no candidate list.
+    body, expected = INVALID_LOCAL_CONFIGS["invalid_value"]
+    invalid = _invalid_local_config(tmp_path, monkeypatch, body)
+    if explicit == "env":
+        monkeypatch.setenv("ORBI_CONFIG", str(invalid))
+    deployment = tmp_path / "deployment.toml"
+    deployment.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    _install_one_unit(tmp_path, monkeypatch, deployment)
+    args = (
+        ["doctor", "--config", str(invalid)]
+        if explicit == "flag" else ["doctor"]
+    )
+    with caplog.at_level(logging.ERROR, logger="orbi.cli"):
+        assert orbi.main(args) == 1
+    assert caplog.records[-1].message == expected
+
+
+def test_mutating_command_keeps_the_plain_invalid_config_line(
+    tmp_path, monkeypatch, caplog,
+):
+    # Acceptance 5: a mutating command never gets the read-only hint.
+    body, expected = INVALID_LOCAL_CONFIGS["invalid_value"]
+    _invalid_local_config(tmp_path, monkeypatch, body)
+    deployment = tmp_path / "deployment.toml"
+    deployment.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    _install_one_unit(tmp_path, monkeypatch, deployment)
+    with caplog.at_level(logging.ERROR, logger="orbi.cli"):
+        assert orbi.main(["milestone", "set", "v1"]) == 1
+    assert caplog.records[-1].message == expected
+
+
+def test_bare_runner_entry_keeps_its_own_config_diagnosis(
+    tmp_path, monkeypatch, caplog,
+):
+    # Acceptance 5: the bare tick IS the Runner entry, not a read-only
+    # command — runner.main owns its diagnosis, with no unit candidate list.
+    body, _ = INVALID_LOCAL_CONFIGS["invalid_value"]
+    _invalid_local_config(tmp_path, monkeypatch, body)
+    deployment = tmp_path / "deployment.toml"
+    deployment.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    _install_one_unit(tmp_path, monkeypatch, deployment)
+    with caplog.at_level(logging.ERROR):
+        assert orbi.main([]) == 1
+    assert "config_invalid" in caplog.text
+    assert "unit_name must contain only letters" in caplog.text
+    assert "candidate=" not in caplog.text
+
+
 def test_main_preserves_required_path_missing_for_existing_config(
     tmp_path, caplog,
 ):

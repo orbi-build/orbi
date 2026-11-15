@@ -7,7 +7,7 @@ returning an exit code. The behavior — stdout, stderr, exit codes and the
 pins the help/version surface byte for byte.
 
 The handlers are the command layer only: config path resolution and
-loading stay in the entry module, which owns the diagnostics.
+loading stay in the entry module; `config_hint` renders the hint text.
 """
 from __future__ import annotations
 
