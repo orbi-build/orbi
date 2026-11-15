@@ -129,11 +129,14 @@ def fake_seam(gh: FakeGh, *, fetch_stderr: str, ls_remote=""):
             search = command[command.index("--search") + 1]
             if "in:body" in search:
                 return json.dumps([])
-        if command[0] == "gh" and command[1] == "api":
+        if command[0] == "gh" and command[1] == "api" \
+                and command[2].endswith("/comments"):
             # The progress publisher's own comment traffic (the run's
             # milestone): no tracked comment exists yet, and the write is
             # accepted. The Issue's failure comment below goes through
-            # `gh issue comment`, so the fake's Issue state holds it.
+            # `gh issue comment`, so the fake's Issue state holds it. Every
+            # other `gh api` read (the comment author's permission, Issue
+            # #1806) is the fake's own answer.
             return _progress_api(command)
         return gh(command)
 
@@ -153,9 +156,19 @@ LISTED_BRANCH = f"{'a' * 40}\trefs/heads/{MISSING_BRANCH}\n"
 
 def world(monkeypatch, tmp_path, *, language_code: str = "en",
           fetch_stderr: str = MISSING_REF_STDERR, ls_remote="",
-          base_branch: str = MISSING_BRANCH):
+          base_branch: str = MISSING_BRANCH, requeued: bool = False):
     gh = FakeGh(REPO)
     gh.add_issue(NUMBER, title="Base branch is gone", labels=("ai-ready",))
+    if requeued:
+        # Issue #2202: the Issue already used its one automatic re-queue, so
+        # an identical transient failure is terminal again. The marker is the
+        # runner's own comment, which the trust rule accepts as written by
+        # this runner.
+        gh.comment(NUMBER, (
+            "<!-- orbi:run=0badf00d -->\n"
+            "<!-- orbi:comment=requeued -->\n"
+            "Orbi re-queued this Issue automatically."
+        ), login=gh.login)
     command_runner = fake_seam(
         gh, fetch_stderr=fetch_stderr, ls_remote=ls_remote,
     )
@@ -314,13 +327,16 @@ def test_a_localized_fetch_error_is_still_base_branch_missing(
 def test_a_network_failure_with_the_branch_still_listed_is_not_missing(
         monkeypatch, tmp_path):
     """Acceptance 2: the fetch failed, but the remote still lists the
-    branch — the existing transient classification applies."""
+    branch — the existing transient classification applies. The Issue already
+    used its one automatic re-queue (Issue #2202), so the failure is terminal
+    and the record stays readable."""
     network = (
         "fatal: unable to access 'https://github.com/owner/repo.git/': "
         "Connection timed out"
     )
     gh, config, issue, command_runner = world(
         monkeypatch, tmp_path, fetch_stderr=network, ls_remote=LISTED_BRANCH,
+        requeued=True,
     )
 
     result = runner.process_issue(issue, config, REPO)
@@ -339,7 +355,8 @@ def test_a_network_failure_with_the_branch_still_listed_is_not_missing(
 def test_a_failing_probe_keeps_the_existing_classification(
         monkeypatch, tmp_path):
     """Acceptance 3: `ls-remote` itself fails, so the remote gave no
-    answer — never `base_branch_missing`; the original failure stands."""
+    answer — never `base_branch_missing`; the original failure stands. The
+    Issue already used its one automatic re-queue (Issue #2202)."""
     network = (
         "fatal: unable to access 'https://github.com/owner/repo.git/': "
         "Connection timed out"
@@ -350,7 +367,7 @@ def test_a_failing_probe_keeps_the_existing_classification(
     )
     gh, config, issue, command_runner = world(
         monkeypatch, tmp_path, fetch_stderr=network,
-        ls_remote=probe_failure,
+        ls_remote=probe_failure, requeued=True,
     )
 
     result = runner.process_issue(issue, config, REPO)
