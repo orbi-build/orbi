@@ -350,7 +350,7 @@ def run_checks(config_path: Path, *, run_command) -> list[str]:
     ``prerequisites=ok checks=<n>``.
     """
     config_path = Path(config_path)
-    lines, _ = run_machine_checks(run_command=run_command, pi_executable=pi_exec.configured(config_path))
+    lines, _ = run_machine_checks(run_command=run_command, pi_executable=pi_exec.configured(config_path, CheckError, DOCS_LINKS))
 
     if not config_path.is_file():
         raise CheckError(

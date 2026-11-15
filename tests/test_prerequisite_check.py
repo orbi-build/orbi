@@ -180,31 +180,7 @@ def test_python_version_fails_fast_with_official_link(monkeypatch):
     assert failure.docs == "https://www.python.org/downloads/"
 
 
-# --- the pi probe (Issue #1079) -------------------------------------------------
-
-
-def test_pi_check_executes_the_version_probe_and_names_the_node_floor():
-    """Pi on the PATH is not enough (Issue #1079): npm does not enforce
-    Pi's `engines` floor, so an install on a distro-default Node reports
-    success and then every `pi` invocation crashes with a bundle-level
-    SyntaxError. The check must execute `pi --version` and its fix must
-    name the Node >= 22.19 floor."""
-    calls: list[list[str]] = []
-
-    def broken(command, **kwargs):
-        calls.append(list(command))
-        raise subprocess.CalledProcessError(
-            1, command,
-            stderr="/usr/lib/node_modules/@earendil-works/pi/dist/"
-                   "bundle.js:1\nSyntaxError: Unexpected token 'export'",
-        )
-
-    with pytest.raises(pilot_setup.CheckError) as excinfo:
-        setup_checks.check_pi_command(broken)
-    assert calls == [["pi", "--version"]]
-    failure = excinfo.value
-    assert failure.check == "pi"
-    assert "22.19" in failure.fix
+# --- the pi prerequisite (Issue #1079) ---------------------------------------
 
 
 def _fake_executable(tmp_path: Path, name: str = "pi-bolt") -> Path:
@@ -237,10 +213,30 @@ def test_check_gate_probes_the_configured_pi_executable(tmp_path):
     assert lines[-1] == "prerequisites=ok checks=12"
 
 
-def test_pi_check_ok_when_the_probe_succeeds():
-    assert setup_checks.check_pi_command(
-        lambda command, **kwargs: "0.85.1"
-    ) is None
+@pytest.mark.parametrize("value", ['""', "5"])
+def test_check_gate_rejects_an_invalid_pi_executable_without_probing(
+    tmp_path, value,
+):
+    """Issue #2188: `pi_executable = ""` / `= 5` is the config finding —
+    the gate must not probe the default `pi` first."""
+    make_world(tmp_path)
+    config = tmp_path / "run" / "orbi.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8") + f"pi_executable = {value}\n",
+        encoding="utf-8",
+    )
+    calls = []
+    with pytest.raises(pilot_setup.CheckError) as excinfo:
+        pilot_setup.run_checks(
+            config,
+            run_command=lambda command, **kwargs: calls.append(list(command)),
+        )
+    failure = excinfo.value
+    assert failure.check == "config"
+    assert failure.reason == (
+        "invalid orbi.toml: pi_executable must be a non-empty string"
+    )
+    assert calls == []
 
 
 def test_gate_reports_a_broken_pi_with_the_node_floor_in_the_fix_line():
