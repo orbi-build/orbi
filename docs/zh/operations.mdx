@@ -672,7 +672,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `base_ci_red_recovered` | 基础分支的 check 变绿，被暂停的交付自动恢复 |
 | `base_ci_red_stale` | 因基础分支已红而暂停的交付在提醒窗口后仍红，停止轮询 |
 | `base_ci_red_merged` | 交付落地后，基础分支已红的评论被更新为 merged |
-| `base_ci_red_triage` | `/orbi fix-base` 命令创建了一张 CI triage Issue |
+| `base_ci_red_triage` | `/orbi fix-base` 命令或场景记录创建了一张 CI triage Issue |
+| `base_ci_red_fix_issues_failed` | 场景记录自己的修复 Issue 运行失败；暂停评论保留命令那种修法 |
 | `active_milestone_advance_failed` | 推进 active Milestone 失败 |
 | `release_not_claimed` | 发布状态机未领取该发布 Issue |
 | `release_task` | 发布状态机推进（步骤报告） |

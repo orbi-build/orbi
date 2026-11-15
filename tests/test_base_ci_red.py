@@ -17,11 +17,13 @@ outcomes:
 """
 import dataclasses
 import json
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+import orbi.base_ci_fix as base_ci_fix
 import orbi.base_ci_red as base_ci_red
 import orbi.runner as runner
 from orbi import failure, failure_report, ticket_command
@@ -206,11 +208,18 @@ def test_failing_checks_bounds_the_error_lines(monkeypatch):
 # The raise site: the record is decided at the source
 # --------------------------------------------------------------------------
 
+MILESTONE = "v0.7.15"
+
+
 def _raise_gh(monkeypatch, *, base_runs, open_issues=()):
     gh = FakeGh(REPO)
     gh.add_check_runs(BASE_SHA, list(base_runs))
     for number, title in enumerate(open_issues, start=900):
         gh.add_issue(number, title=title)
+    # The paused ticket and its active Milestone: the scene record opens
+    # its fix Issue in this Milestone (Issue #2203).
+    gh.add_issue(1825, title="be nicer")
+    gh.add_milestone(7, title=MILESTONE)
     monkeypatch.setattr(seam, "run_command", gh)
     return gh
 
@@ -302,7 +311,7 @@ def _reported_body(monkeypatch, error, *, language_code="en",
         source_repo=REPO, run_id="096197d2", pr_url=pr_url,
         worktree=None, branch="b", role=runner.ROLE_REVIEW,
         reason="whatever the caller said", diagnosis="whatever",
-        evidence=True, language_code=language_code,
+        evidence=True, language_code=language_code, milestone=MILESTONE,
     )
     assert outcome == "blocked"
     return posted[0]
@@ -340,7 +349,12 @@ def test_the_comment_reads_ready_then_paused_then_evidence_then_steps(
     assert RUN_URL in body
     assert ERROR_LINE in body
     assert "Next steps" in body
-    assert "/orbi fix-base" in body
+    # Issue #2203: the engine opened the fix Issue itself and the comment
+    # names it instead of asking the person to reply `/orbi fix-base`.
+    assert "created #" in body
+    assert "/orbi fix-base" not in body
+    # The once-per-scene receipt rides in this same comment.
+    assert base_ci_red.scene_receipt(record()) in body
     # The base_ci_red block is parseable and matches the record.
     assert base_ci_red.parse(body) == record()
     # No empty evidence noise: this is a non-subprocess failure.
@@ -431,7 +445,7 @@ def _command_fixture(monkeypatch, *, permission="write"):
 
 
 def _run_command(gh, issue_number=1825, *, milestone=None):
-    base_ci_red.recover(
+    base_ci_fix.recover(
         REPO, language_code="en", milestone=milestone,
     )
 
@@ -624,7 +638,7 @@ def test_fix_base_fails_the_step_instead_of_opening_a_duplicate(
 
     monkeypatch.setattr(seam, "list_issues", boom)
     ticket_command.process_commands(
-        REPO, 1825, [base_ci_red.FIX_BASE_COMMAND], language_code="en",
+        REPO, 1825, [base_ci_fix.FIX_BASE_COMMAND], language_code="en",
         record=record(), milestone=None, dispatch_label="ai-ready",
     )
     assert [number for number in gh.issues if number != 1825] == []
@@ -676,11 +690,157 @@ def test_fix_base_apply_without_a_block_fails_as_a_command_step(monkeypatch):
     gh.add_issue(1825, title="t")
     monkeypatch.setattr(seam, "run_command", gh)
     with pytest.raises(ticket_command.TicketCommandError):
-        base_ci_red.FIX_BASE_COMMAND.apply(
+        base_ci_fix.FIX_BASE_COMMAND.apply(
             "fix-base", repo=REPO, issue_number=1825,
             command_comment={"id": 1}, comments=[], language_code="en",
         )
     assert gh.issues[1825]["comments"] == []
+
+
+# --------------------------------------------------------------------------
+# The automatic fix Issue at the scene record (Issue #2203)
+# --------------------------------------------------------------------------
+
+def _scene_gh(monkeypatch, *, open_issues=(), milestone_title=MILESTONE):
+    """The real scene: the base runs, the paused Issue, the Milestone."""
+    gh = _raise_gh(monkeypatch, base_runs=[base_run()],
+                   open_issues=open_issues)
+    gh.add_milestone(7, title=milestone_title)
+    gh.add_collaborator("maintainer", "write")
+    return gh
+
+
+def _scene_error(monkeypatch, gh, *, checks=(CHECK,)):
+    monkeypatch.setattr(seam, "run_command", gh)
+    with pytest.raises(failure_report.PreExistingCIFailure) as caught:
+        failure_report._raise_if_preexisting_ci_failure(
+            REPO, list(checks), BASE_SHA,
+            base_branch=BASE_BRANCH, pr_number=PR_NUMBER,
+        )
+    return caught.value
+
+
+def _record_scene(error, *, run_id=None, milestone=MILESTONE):
+    """Record the scene the way the delivery does (the blocked exit)."""
+    outcome = failure_report.report_delivery_failure(
+        error, issue={"number": 1825, "title": "be nicer", "labels": []},
+        source_repo=REPO, run_id=run_id,
+        pr_url=f"https://github.com/{REPO}/pull/{PR_NUMBER}",
+        worktree=None, branch="b", role=runner.ROLE_REVIEW,
+        language_code="en", milestone=milestone,
+    )
+    assert outcome == "blocked"
+
+
+def _opened_issues(gh):
+    """Every Issue the scene opened (the paused ticket aside)."""
+    return sorted(number for number in gh.issues if number != 1825)
+
+
+def _paused_comment(gh, number=1825):
+    """The comment carrying the base_ci_red block (the scene record)."""
+    bodies = [
+        comment["body"] for comment in gh.issues[number]["comments"]
+        if "orbi:base-ci-red:v1" in comment["body"]
+    ]
+    assert len(bodies) == 1, bodies
+    return bodies[0]
+
+
+def test_recording_the_scene_opens_the_fix_issue_and_names_it(monkeypatch):
+    """Acceptance (Issue #2203): recording the scene opens ONE
+    `ai-ready` + `p0` fix Issue per failing check in the active
+    Milestone, and the pause comment names it instead of asking the
+    person to reply `/orbi fix-base`."""
+    gh = _scene_gh(monkeypatch)
+    error = _scene_error(monkeypatch, gh)
+    _record_scene(error)
+    opened = _opened_issues(gh)
+    assert len(opened) == 1, opened
+    issue = gh.issues[opened[0]]
+    assert issue["title"] == base_ci_red.triage_title(CHECK, BASE_BRANCH)
+    assert set(issue["labels"]) == {"ai-ready", "p0"}
+    assert issue["milestone"] == 7
+    assert RUN_URL in issue["body"]
+    assert ERROR_LINE in issue["body"]
+    paused = _paused_comment(gh)
+    assert f"created #{opened[0]}" in paused
+    assert "/orbi fix-base" not in paused
+    assert base_ci_red.scene_receipt(error.base_ci_red) in paused
+
+
+def test_the_scene_record_reuses_an_open_fix_issue(monkeypatch):
+    """Acceptance (Issue #2203): an open fix Issue for that check is
+    reused — no second Issue, and the comment says so."""
+    gh = _scene_gh(monkeypatch, open_issues=(
+        base_ci_red.triage_title(CHECK, BASE_BRANCH) + " (push)",
+    ))
+    error = _scene_error(monkeypatch, gh)
+    _record_scene(error)
+    assert _opened_issues(gh) == [900]
+    paused = _paused_comment(gh)
+    assert "reused #900" in paused
+    assert "/orbi fix-base" not in paused
+
+
+def test_a_later_tick_with_the_same_scene_opens_and_posts_nothing(monkeypatch):
+    """Acceptance (Issue #2203): the engine run happens once per scene.
+
+    A later tick that still sees the same pause reads the receipt the
+    pause comment carries and stops: no second fix Issue, no second
+    receipt, no comment.
+    """
+    gh = _scene_gh(monkeypatch)
+    error = _scene_error(monkeypatch, gh)
+    _record_scene(error)
+    opened = _opened_issues(gh)
+    comments = len(gh.issues[1825]["comments"])
+    assert base_ci_fix.ensure_fix_issues(
+        REPO, 1825, error.base_ci_red, milestone=MILESTONE,
+        language_code="en",
+    ) is None
+    assert _opened_issues(gh) == opened
+    assert len(gh.issues[1825]["comments"]) == comments
+
+
+def test_a_later_fix_base_reply_reports_the_reused_issue(monkeypatch):
+    """Acceptance (Issue #2203): the command keeps working and finds the
+    Issue the engine already opened."""
+    gh = _scene_gh(monkeypatch)
+    error = _scene_error(monkeypatch, gh)
+    _record_scene(error, run_id="096197d2")
+    opened = _opened_issues(gh)
+    assert len(opened) == 1
+    gh.add_pr(PR_NUMBER, head="orbi/x", base=BASE_BRANCH)
+    gh.add_branch(BASE_BRANCH, head="head")
+    gh.add_check_runs("head", [])
+    gh.comment(1825, "/orbi fix-base", login="maintainer")
+    base_ci_fix.recover(REPO, language_code="en", milestone=MILESTONE)
+    assert _opened_issues(gh) == opened
+    replies = [comment["body"] for comment in gh.issues[1825]["comments"]]
+    assert any(f"reused #{opened[0]}" in body for body in replies), replies
+
+
+def test_a_failed_fix_issue_lookup_still_records_the_pause(monkeypatch):
+    """A failed lookup is a bypass: the pause is already decided, so the
+    comment still lands with the pre-#2203 repair text and the person
+    keeps a way forward."""
+    gh = _scene_gh(monkeypatch)
+    error = _scene_error(monkeypatch, gh)
+
+    def fail_the_search(command, **kwargs):
+        if command[1] == "issue" and command[2] == "list":
+            raise subprocess.CalledProcessError(
+                1, command, output="", stderr="gh: Not Found (HTTP 404)",
+            )
+        return gh(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", fail_the_search)
+    _record_scene(error)
+    assert _opened_issues(gh) == []
+    paused = _paused_comment(gh)
+    assert "/orbi fix-base" in paused
+    assert base_ci_red.scene_receipt(error.base_ci_red) not in paused
 
 
 # --------------------------------------------------------------------------
@@ -716,7 +876,7 @@ def test_the_scan_recovers_a_green_base_without_a_human(monkeypatch):
         {"id": 1, "name": CHECK, "status": "completed",
          "conclusion": "success", "html_url": "", "output": {}},
     ])
-    recovered = base_ci_red.recover(REPO, language_code="en")
+    recovered = base_ci_fix.recover(REPO, language_code="en")
     assert recovered == [1825]
     labels = gh.issues[1825]["labels"]
     assert "ai-fix-needed" in labels
@@ -739,7 +899,7 @@ def test_the_scan_recovers_a_check_name_that_closes_the_comment(
     )
     assert base_ci_red.paused_scene(
         gh.issues[1825]["comments"], repo=REPO) is not None
-    assert base_ci_red.recover(REPO, language_code="en") == [1825]
+    assert base_ci_fix.recover(REPO, language_code="en") == [1825]
     assert "ai-fix-needed" in gh.issues[1825]["labels"]
     assert "ai-blocked" not in gh.issues[1825]["labels"]
     assert base_ci_red.parse(_block_comment(gh)["body"]).state == "resuming"
@@ -771,7 +931,7 @@ def test_a_block_written_before_the_escaping_still_rewrites_its_state(
     legacy = rendered.replace("\\u003c", "<").replace("\\u003e", ">")
     comment["body"] = comment["body"].replace(rendered, legacy)
     assert base_ci_red.parse(comment["body"]).state == "waiting"
-    assert base_ci_red.recover(REPO, language_code="en") == [1825]
+    assert base_ci_fix.recover(REPO, language_code="en") == [1825]
     assert base_ci_red.parse(_block_comment(gh)["body"]).state == "resuming"
 
 
@@ -784,13 +944,13 @@ def test_a_re_run_check_reads_its_newest_run(monkeypatch):
          "conclusion": "success", "html_url": "", "output": {}},
         base_run(),
     ])
-    assert base_ci_red.recover(REPO, language_code="en") == [1825]
+    assert base_ci_fix.recover(REPO, language_code="en") == [1825]
     assert "ai-fix-needed" in gh.issues[1825]["labels"]
 
 
 def test_the_scan_leaves_a_still_red_base_alone(monkeypatch):
     gh = _scan_gh(monkeypatch, base_runs=[base_run()])
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     assert gh.issues[1825]["labels"] == ["ai-blocked"]
     assert base_ci_red.parse(_block_comment(gh)["body"]).state == "waiting"
 
@@ -800,7 +960,7 @@ def test_the_scan_treats_a_pending_base_check_as_not_green(monkeypatch):
         {"id": 1, "name": CHECK, "status": "in_progress",
          "conclusion": None, "html_url": "", "output": {}},
     ])
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     assert gh.issues[1825]["labels"] == ["ai-blocked"]
 
 
@@ -809,7 +969,7 @@ def test_the_scan_only_picks_a_waiting_block(monkeypatch):
         {"id": 1, "name": CHECK, "status": "completed",
          "conclusion": "success", "html_url": "", "output": {}},
     ], comments="stale")
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     assert gh.issues[1825]["labels"] == ["ai-blocked"]
 
 
@@ -824,19 +984,19 @@ def test_seven_days_red_posts_one_reminder_and_stops_polling(monkeypatch):
     gh = _scan_gh(monkeypatch, base_runs=[base_run()])
     _age_comment(gh, 8)
     before = len(gh.issues[1825]["comments"])
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     comments = gh.issues[1825]["comments"]
     assert len(comments) == before + 1
     assert "still failing" in comments[-1]["body"]
     assert base_ci_red.parse(_block_comment(gh)["body"]).state == "stale"
     # ... and the scan skips it from now on.
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     assert len(gh.issues[1825]["comments"]) == before + 1
 
 
 def test_a_merged_pr_updates_the_same_comment_to_merged(monkeypatch):
     gh = _scan_gh(monkeypatch, base_runs=[base_run()], pr_state="MERGED")
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     block = _block_comment(gh)["body"]
     assert base_ci_red.parse(block).state == "merged"
     assert "Merged" in block
@@ -882,6 +1042,9 @@ def test_the_reason_code_is_documented_in_both_languages():
         text = (root / relative).read_text(encoding="utf-8")
         assert "base_ci_red" in text, relative
         assert "/orbi fix-base" in text, relative
+        # Issue #2203: the page describes the fix Issue the engine opens
+        # itself, including the receipt that makes the run once per scene.
+        assert base_ci_red.SCENE_RECEIPT in text, relative
 
 
 # --------------------------------------------------------------------------
@@ -953,7 +1116,7 @@ def test_a_missing_run_link_and_errors_are_omitted_from_both_bodies(monkeypatch)
     assert CHECK in body
     assert "failing run" not in body
     assert "first error lines" not in body
-    triage = base_ci_red._triage_body(bare, record(), "en")
+    triage = base_ci_fix._triage_body(bare, record(), "en")
     assert "failing run" not in triage
     assert "First error lines" not in triage
 
@@ -974,11 +1137,11 @@ def test_a_comment_without_a_rest_id_is_reported_and_skipped(monkeypatch):
     posted = []
     monkeypatch.setattr(seam, "update_issue_comment",
                         lambda *a, **k: posted.append(k))
-    assert base_ci_red._edit_state(
+    assert base_ci_red.edit_state(
         REPO, 1, {"body": base_ci_red.render(record())},
         "merged", language_code="en",
     ) is False
-    assert base_ci_red._edit_state(
+    assert base_ci_red.edit_state(
         REPO, 1, {"id": 7}, "merged", language_code="en",
     ) is False
     assert posted == []
@@ -1007,7 +1170,7 @@ def test_the_triage_url_omits_a_record_without_a_url(monkeypatch):
 def test_a_garbage_issue_create_answer_fails_the_command(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda *a, **k: "not-a-url")
     with pytest.raises(ticket_command.TicketCommandError):
-        base_ci_red._create_triage_issue(
+        base_ci_fix._create_triage_issue(
             REPO, base_ci_red.FailingCheck(CHECK), record(),
             milestone=None, dispatch_label="ai-ready", language_code="en",
         )
@@ -1064,7 +1227,7 @@ def test_fix_base_without_check_evidence_replies_instead_of_inventing_one(
 def test_a_branch_without_a_head_leaves_the_issue_alone(monkeypatch):
     gh = _scan_gh(monkeypatch, base_runs=[base_run()])
     gh.branches[BASE_BRANCH]["head"] = None
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     assert gh.issues[1825]["labels"] == ["ai-blocked"]
 
 
@@ -1080,7 +1243,7 @@ def test_the_scan_reads_the_live_base_head_not_the_prs_base_snapshot(
          "conclusion": "success", "html_url": "", "output": {}},
     ])
     gh.branches[BASE_BRANCH]["head"] = "live-base-head"
-    assert base_ci_red.recover(REPO, language_code="en") == [1825]
+    assert base_ci_fix.recover(REPO, language_code="en") == [1825]
     assert "ai-fix-needed" in gh.issues[1825]["labels"]
     assert base_ci_red.parse(_block_comment(gh)["body"]).state == "resuming"
 
@@ -1090,7 +1253,7 @@ def test_an_issue_without_the_block_is_left_alone(monkeypatch):
     gh.add_issue(1825, title="t", labels=("ai-blocked",))
     gh.comment(1825, "just a human comment")
     monkeypatch.setattr(seam, "run_command", gh)
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
 
 
 def test_a_comment_without_a_timestamp_never_turns_stale(monkeypatch):
@@ -1101,7 +1264,7 @@ def test_a_comment_without_a_timestamp_never_turns_stale(monkeypatch):
     ][-1]
     _block_comment["createdAt"] = "not a timestamp"
     before = len(gh.issues[1825]["comments"])
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     assert len(gh.issues[1825]["comments"]) == before
 
 
@@ -1154,7 +1317,7 @@ def test_rewriting_the_same_state_twice_keeps_one_line():
 
 def test_a_check_that_vanished_from_the_base_is_not_green(monkeypatch):
     gh = _scan_gh(monkeypatch, base_runs=[])
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     assert gh.issues[1825]["labels"] == ["ai-blocked"]
 
 
@@ -1242,7 +1405,7 @@ def test_a_read_only_copied_record_never_authorizes_a_resume(monkeypatch):
     gh = _trust_scene(monkeypatch)
     _base_ci_comment(gh, login="visitor")
     before = _snapshot(gh)
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     assert gh.issues[1825]["labels"] == ["ai-blocked"]
     assert _snapshot(gh) == before
 
@@ -1254,7 +1417,7 @@ def test_a_read_only_copy_with_no_checks_never_authorizes_a_resume(
     gh = _trust_scene(monkeypatch, base_runs=())
     _base_ci_comment(gh, login="visitor", checks=())
     before = _snapshot(gh)
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     assert gh.issues[1825]["labels"] == ["ai-blocked"]
     assert _snapshot(gh) == before
 
@@ -1267,7 +1430,7 @@ def test_a_newer_trusted_failure_supersedes_the_older_base_ci_record(
     _base_ci_comment(gh, login="orbi-bot")
     _other_failure_comment(gh, login="orbi-bot")
     before = _snapshot(gh)
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     assert gh.issues[1825]["labels"] == ["ai-blocked"]
     assert _snapshot(gh) == before
 
@@ -1279,7 +1442,7 @@ def test_a_current_trusted_record_resumes_and_a_later_copy_does_not_stop_it(
     gh = _trust_scene(monkeypatch)
     _base_ci_comment(gh, login="orbi-bot", run_id="abc12345")
     _base_ci_comment(gh, login="visitor", run_id="abc12345")
-    assert base_ci_red.recover(REPO, language_code="en") == [1825]
+    assert base_ci_fix.recover(REPO, language_code="en") == [1825]
     labels = gh.issues[1825]["labels"]
     assert "ai-fix-needed" in labels and "ai-blocked" not in labels
     trusted_body, copied_body = [
@@ -1313,7 +1476,7 @@ def test_a_kindless_milestone_repeating_the_block_is_no_failure(
         rest,
     ]), login="orbi-bot", association="NONE")
     _fresh(gh)
-    assert base_ci_red.recover(REPO, language_code="en") == [1825]
+    assert base_ci_fix.recover(REPO, language_code="en") == [1825]
     assert "ai-fix-needed" in gh.issues[1825]["labels"]
 
 
@@ -1331,7 +1494,7 @@ def test_a_corrupted_failure_block_supersedes_the_older_record(monkeypatch):
     ]), login="orbi-bot", association="NONE")
     _fresh(gh)
     before = _snapshot(gh)
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     assert gh.issues[1825]["labels"] == ["ai-blocked"]
     assert _snapshot(gh) == before
 
@@ -1351,7 +1514,7 @@ def test_a_kinded_failure_without_a_record_supersedes_the_older_record(
     ]), login="orbi-bot", association="NONE")
     _fresh(gh)
     before = _snapshot(gh)
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     assert gh.issues[1825]["labels"] == ["ai-blocked"]
     assert _snapshot(gh) == before
 
@@ -1372,7 +1535,7 @@ def test_a_corrupted_base_ci_block_in_the_selected_comment_is_skipped(
     ]), login="orbi-bot", association="NONE")
     _fresh(gh)
     before = _snapshot(gh)
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     assert gh.issues[1825]["labels"] == ["ai-blocked"]
     assert _snapshot(gh) == before
 
@@ -1391,7 +1554,7 @@ def test_a_base_ci_red_failure_without_a_record_never_recovers(monkeypatch):
     ]), login="orbi-bot", association="NONE")
     _fresh(gh)
     before = _snapshot(gh)
-    assert base_ci_red.recover(REPO, language_code="en") == []
+    assert base_ci_fix.recover(REPO, language_code="en") == []
     assert gh.issues[1825]["labels"] == ["ai-blocked"]
     assert _snapshot(gh) == before
 
@@ -1443,6 +1606,10 @@ def test_the_merged_comment_drops_the_next_steps(monkeypatch):
     merged = base_ci_red.rewrite_state(body, "merged", language_code="en")
     assert "Next steps" not in merged
     assert "/orbi fix-base" not in merged
+    # The automatic variant's step is dropped too (Issue #2203), while the
+    # fix Issue the scene opened stays as the scene's own record.
+    assert "normal Orbi deliveries" not in merged
+    assert "created #" in merged
     assert "Merged:" in merged
     assert base_ci_red.parse(merged).state == "merged"
 

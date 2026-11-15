@@ -457,7 +457,7 @@ def test_the_claim_tick_recovers_before_the_resume_scan(
     monkeypatch, tmp_path, caplog,
 ):
     """Acceptance 3 in a real tick: the recovery scan runs BEFORE the
-    resume scan (the same slot `base_ci_red.recover` uses), so a delivery
+    resume scan (the same slot `base_ci_fix.recover` uses), so a delivery
     whose read works again is already on the resumable path in THIS tick —
     `ai-fix-needed` is the state the existing review/merge flow picks up."""
     from orbi import claim
