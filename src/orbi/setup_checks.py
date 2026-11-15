@@ -21,7 +21,7 @@ import shutil
 import sys
 from uuid import uuid4
 
-from orbi import cli_source, scheduler
+from orbi import cli_source, pi_exec, scheduler
 from orbi.setup_config import SetupError
 
 
@@ -408,7 +408,7 @@ def check_pi_command(run_command) -> None:
         ) from exc
 
 
-def run_machine_checks(*, run_command, collect_failures: bool = False) -> tuple[list[str], list[CheckError]]:
+def run_machine_checks(*, run_command, collect_failures: bool = False, pi_executable: str = "pi") -> tuple[list[str], list[CheckError]]:
     """Run the config-independent checks, optionally collecting failures.
 
     The normal gate remains fail-fast.  The missing-config CLI path uses the
@@ -484,6 +484,6 @@ def run_machine_checks(*, run_command, collect_failures: bool = False) -> tuple[
 
     if record(check_gh_auth):
         lines.append("check=gh_auth ok")
-    if record(lambda: check_pi_command(run_command)):
-        lines.append("check=pi ok")
+    if record(lambda: pi_exec.check(run_command, pi_executable, check_pi_command, CheckError, DOCS_LINKS["config"])):
+        lines.append(pi_exec.ok_line(pi_executable))
     return lines, failures

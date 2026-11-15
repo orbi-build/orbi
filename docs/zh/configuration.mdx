@@ -38,6 +38,7 @@ description: "每个 orbi.toml 设置的作用和默认值是什么?"
 | `pi_provider` | 字符串或空 | 未设置 | 任意非空字符串 | 每个 run 选用的 provider id（Issue #119）——以 `--provider` 传给 Pi；设置 `pi_providers` 文件时必须已在其中定义 |
 | `pi_model` | 字符串或空 | 未设置 | 任意非空字符串 | 选中 provider 内的 model id——以 `--model` 传给 Pi；必须存在于该 provider 的 `models` 列表 |
 | `pi_thinking` | 字符串或空 | 未设置 | `off \| minimal \| low \| medium \| high \| xhigh \| max` | 以 `--thinking` 传给 Pi 的思考级别（`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`） |
+| `pi_executable` | 字符串 | `pi` | `PATH` 上的命令名或绝对路径 | 每个会话启动的 Pi 可执行文件（Issue #2182，仅主机/部署级——仓库的 `.github/orbi.toml` 永远不能携带）：实现、独立评审、工单/澄清会话、`draft`、`suggest` 以及恢复的会话。只替换可执行文件名，所有 Pi 参数照常传递，因此取值必须是与 Pi 兼容的 CLI，例如 `pi-bolt`。`orbi check` 探测 `<pi_executable> --version`，并在发现项中写出所配置的可执行文件。不会回退到 `pi`：删除该键即恢复默认。必须是非空字符串——其他取值会让启动立即失败 |
 | `pi_extensions` | 表列表 | `[]` | 锁定的 `npm:`/git 来源或已有本地路径 | 可重复的 extension 表：`source` 必须是锁定版本的 `npm:`/git 来源或配置文件相对的现有本地路径；`enabled` 默认开启，`env` 只注入当前 Pi 子进程。每次运行都传入 `--no-extensions`，不会发现全局 Pi extension。 |
 | `review_pi_provider` | 字符串或空 | 未设置 | 任意非空字符串 | 评审会话的 provider 覆盖；未设置时回落到 `pi_provider` |
 | `review_pi_model` | 字符串或空 | 未设置 | 任意非空字符串 | 评审会话的模型覆盖；未设置时回落到 `pi_model` |

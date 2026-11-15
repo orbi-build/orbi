@@ -163,6 +163,9 @@ class RunnerConfig:
     # page an account owner approves a newly requested permission on.
     installation_id: int | None = None
     slot_dir: Path | None = None
+    # The Pi executable every session starts (Issue #2182): a command
+    # name on PATH or an absolute path, e.g. `pi-bolt`. Host-only.
+    pi_executable: str = "pi"
     pi_provider: str | None = None
     pi_model: str | None = None
     pi_thinking: str | None = None
@@ -547,7 +550,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         installation_id=installation_id,
         slot_dir=slot_dir_for(repo_dir),
         pi_provider=pi_provider,
-        pi_model=pi_model,
+        pi_model=pi_model, pi_executable=_optional_pi_string(data, "pi_executable") or "pi",
         pi_thinking=pi_thinking,
         review_pi_provider=review_pi_provider,
         review_pi_model=review_pi_model,

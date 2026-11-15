@@ -8,6 +8,7 @@ neither the system prompt nor the context string may reach a log command.
 The module is pure, so every case constructs a real `RunnerConfig` and
 calls it — no fake, no monkeypatch.
 """
+import dataclasses
 import subprocess
 from pathlib import Path
 
@@ -174,6 +175,36 @@ def test_unconfigured_command_and_log(
         "--print", "--session-dir", str(SESSION_DIR),
         "--system-prompt", "<redacted>", placeholder,
     ]
+
+
+@pytest.mark.parametrize(
+    ("role", "excluded", "resume"),
+    [
+        (pi_command.ROLE_TICKET, pi_command.IMPLEMENT_EXCLUDED_SKILLS, False),
+        (ROLE_IMPLEMENT, pi_command.IMPLEMENT_EXCLUDED_SKILLS, False),
+        (ROLE_IMPLEMENT, pi_command.IMPLEMENT_EXCLUDED_SKILLS, True),
+        (pi_command.ROLE_REVIEW, pi_command.REVIEW_EXCLUDED_SKILLS, False),
+        (pi_command.ROLE_REVIEW, pi_command.REVIEW_EXCLUDED_SKILLS, True),
+    ],
+)
+def test_configured_pi_executable_replaces_only_argv0(role, excluded, resume):
+    """Issue #2182: `pi_executable` selects the binary for every session
+    role and for a resumed session; every other argument is unchanged."""
+    def build(config):
+        return pi_command.build_pi_command(
+            config, role, excluded, SESSION_DIR, SYSTEM_PROMPT, CONTEXT,
+            context_placeholder="<redacted>", tools=True, extensions=True,
+            resume=resume,
+        )
+
+    default_command, default_log = build(_configured())
+    command, log_command = build(
+        dataclasses.replace(_configured(), pi_executable="pi-bolt"),
+    )
+    assert default_command[0] == default_log[0] == "pi"
+    assert command == ["pi-bolt", *default_command[1:]]
+    assert log_command == ["pi-bolt", *default_log[1:]]
+    assert ("--continue" in command) is resume
 
 
 def test_review_model_args_fall_back_to_the_implementer_selection():
