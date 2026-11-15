@@ -16,6 +16,18 @@ ticket at the claim:
   like `ai-blocked` does;
 - no worktree, branch, Pi session dir or PR is created for the attempt.
 
+A failing verdict that carries a **usable split proposal** is not stopped
+(Issue #2207): the proposal follows from the ticket text alone and the
+author already authorized the work by adding the claim label, so the gate
+applies it in the same claim — exactly what `/orbi split` does. The child
+tickets are created, linked and queued, this ticket becomes `ai-epic` and
+loses its claim label, ONE comment lists the children, and the claim
+delivers nothing. `orbi.split_apply` owns those steps, so an apply that is
+interrupted here is finished by the next claim (no duplicate child) and an
+apply that hits a GitHub write failure falls back to the stop above — whose
+comment still carries the proposal, so `/orbi split` can finish it. A
+half-split ticket is therefore never delivered.
+
 The gate is OFF by default (`clarify_thin_tickets = false`) and may be
 turned on per repository through `.github/orbi.toml`. It fails OPEN on
 every error path: a model error, timeout or malformed answer, or a failed
@@ -48,10 +60,28 @@ import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from string import Formatter
 from typing import TYPE_CHECKING
 
-from orbi import draft_marker, language, notify, user_summary
+from orbi import draft_marker, language, notify, split_apply, user_summary
+# The proposal domain moved to its own leaf module (Issue #2207) because this
+# one sits at its recorded size ceiling; the names stay importable HERE, the
+# module every caller and test already reads them from.
+from orbi.clarify_proposal import (
+    SUGGESTION_CRITERIA,
+    SUGGESTION_END,
+    SUGGESTION_KINDS,
+    SUGGESTION_MARKER,
+    SUGGESTION_REPLY,
+    SUGGESTION_SPLIT,
+    SUGGESTION_START,
+    SUGGESTION_START_PREFIX,
+    Suggestion,
+    SuggestionItem,
+    _usable,
+    parse_suggestion,
+    render_suggestion,
+    suggestion_answer,
+)
 from orbi.ticket_criteria import TICKET_CHECK_CRITERIA
 from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
 from orbi.github import (
@@ -215,168 +245,6 @@ class ClarifyVerdict:
     suggestion_dropped: str | None = None
 
 
-# --- the editable proposal the stop comment may carry (Issue #1926) -------
-
-SUGGESTION_SPLIT = "split"
-SUGGESTION_CRITERIA = "criteria"
-SUGGESTION_KINDS = (SUGGESTION_SPLIT, SUGGESTION_CRITERIA)
-
-# The fixed markers around the proposal (docs/public-contracts.mdx). A
-# person edits the plain lines between them; the markers are machine
-# metadata and are never translated.
-SUGGESTION_MARKER = "orbi:suggestion:v1"
-SUGGESTION_START = f"<!-- {SUGGESTION_MARKER} kind="
-SUGGESTION_END = "<!-- /orbi/suggestion -->"
-SUGGESTION_START_PREFIX = f"<!-- {SUGGESTION_MARKER}"
-
-# The one command sentence each proposal kind adds below its edit sentence
-# (Issue #1927 for a split, Issue #1929 for criteria): the reader never
-# copies the lines by hand, and the command reads the SAME section.
-SUGGESTION_REPLY = {
-    SUGGESTION_SPLIT: "clarify.suggestion.split_reply",
-    SUGGESTION_CRITERIA: "clarify.suggestion.criteria_reply",
-}
-
-
-@dataclass(frozen=True)
-class SuggestionItem:
-    """One proposed line.
-
-    A "split" item is one new ticket: "text" is its result, "acceptance"
-    its acceptance line and "after" the 1-based position of the earlier
-    item it depends on — a position, never the number a person wrote in an
-    edited section, so a renumbered or reordered proposal keeps every
-    dependency on its own item (Issue #1935). A "criteria" item is one
-    condition and carries "text" only.
-    """
-
-    text: str
-    acceptance: str = ""
-    after: int | None = None
-
-
-@dataclass(frozen=True)
-class Suggestion:
-    """The proposal the gate may attach to a failing verdict."""
-
-    kind: str
-    items: tuple[SuggestionItem, ...]
-
-
-def _single_line(value: object) -> str | None:
-    """A usable proposal line: non-empty, one line, or None."""
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text or len(text.splitlines()) != 1:
-        return None
-    return text
-
-
-def _usable(suggestion: Suggestion) -> bool:
-    """Can this proposal be rendered, and is it a proposal at all?
-
-    A split needs at least two slices (splitting into one contradicts the
-    "single_outcome" diagnosis), a non-empty result and acceptance per
-    slice, and an "after" that names an earlier slice; a criteria draft
-    needs at least one condition. An unusable proposal renders nothing, so
-    the stop comment stays exactly the pre-#1926 one.
-    """
-    if suggestion.kind not in SUGGESTION_KINDS or not suggestion.items:
-        return False
-    if any(not item.text for item in suggestion.items):
-        return False
-    if suggestion.kind == SUGGESTION_CRITERIA:
-        return True
-    if len(suggestion.items) < 2:
-        return False
-    for number, item in enumerate(suggestion.items, start=1):
-        if not item.acceptance:
-            return False
-        if item.after is not None and not 1 <= item.after < number:
-            return False
-    return True
-
-
-def suggestion_answer(value: object) -> Suggestion | None:
-    """Parse the model's optional proposal; None when it is unusable.
-
-    The answer is {"kind": "split"|"criteria", "items": [...]}: a split
-    item is {"result", "acceptance", "after"?}, a criteria item one plain
-    string. Anything else -- a wrong type, an unknown kind, an empty or
-    single-slice split, a multi-line value, an "after" that does not name
-    an earlier item -- is unusable and yields None: the verdict still stops
-    the ticket with today's comment.
-    """
-    if not isinstance(value, dict):
-        return None
-    kind = value.get("kind")
-    raw_items = value.get("items")
-    if kind not in SUGGESTION_KINDS or not isinstance(raw_items, list):
-        return None
-    items: list[SuggestionItem] = []
-    for entry in raw_items:
-        if kind == SUGGESTION_CRITERIA:
-            text = _single_line(entry)
-            if text is None:
-                return None
-            items.append(SuggestionItem(text=text))
-            continue
-        if not isinstance(entry, dict):
-            return None
-        text = _single_line(entry.get("result"))
-        acceptance = _single_line(entry.get("acceptance"))
-        after = entry.get("after")
-        if text is None or acceptance is None:
-            return None
-        if after is not None and (
-            isinstance(after, bool) or not isinstance(after, int)
-        ):
-            return None
-        items.append(
-            SuggestionItem(text=text, acceptance=acceptance, after=after)
-        )
-    suggestion = Suggestion(kind=kind, items=tuple(items))
-    return suggestion if _usable(suggestion) else None
-
-
-def render_suggestion(suggestion: Suggestion, language_code: str) -> str:
-    """Render one proposal as the editable, marker-delimited section.
-
-    The markers are fixed; the numbered slice, the "(after N)" phrase, the
-    "Acceptance:" prefix and the edit sentence come from the message
-    catalog, so a Chinese ticket gets the Chinese line grammar and the
-    parser, which derives its patterns from the same templates, reads both.
-    """
-    def message(key: str, **fields: object) -> str:
-        return language.text(language_code, key, **fields)
-
-    lines = [f"{SUGGESTION_START}{suggestion.kind} -->"]
-    for number, item in enumerate(suggestion.items, start=1):
-        if suggestion.kind == SUGGESTION_CRITERIA:
-            lines.append(
-                message("clarify.suggestion.criteria_item", text=item.text)
-            )
-            continue
-        line = message(
-            "clarify.suggestion.item", number=number, result=item.text,
-        )
-        if item.after is not None:
-            line = f"{line} " + message(
-                "clarify.suggestion.after", number=item.after,
-            )
-        lines.append(line)
-        lines.append(
-            message("clarify.suggestion.acceptance", text=item.acceptance)
-        )
-    lines.extend((SUGGESTION_END, "", message("clarify.suggestion.edit")))
-    # A proposal is also an offer: the command that acts on these very
-    # lines is named here (a split creates the tickets, criteria land in
-    # the ticket body), so the reader never copies them by hand.
-    lines.append(message(SUGGESTION_REPLY[suggestion.kind]))
-    return "\n".join(lines)
-
-
 def verdict_suggestion(verdict: ClarifyVerdict, language_code: str) -> str:
     """The proposal section for one failing verdict, or "".
 
@@ -398,183 +266,6 @@ def verdict_suggestion(verdict: ClarifyVerdict, language_code: str) -> str:
     elif verdict.missing != ("acceptance_condition",):
         return ""
     return render_suggestion(suggestion, language_code)
-
-
-def _template_pattern(template: str,
-                      fields: dict[str, tuple[str, str]]) -> str:
-    """Compile one catalog template into a regex with named groups.
-
-    "fields" maps a template placeholder to (group name, sub-pattern); the
-    literal text around the placeholders is escaped. The parser's grammar is
-    therefore generated from the very catalog templates the renderer
-    formats, so the two cannot drift apart (Issue #1926).
-    """
-    pattern: list[str] = []
-    for literal, name, _spec, _conversion in Formatter().parse(template):
-        pattern.append(re.escape(literal))
-        if name is not None:
-            group, sub = fields[name]
-            pattern.append(f"(?P<{group}>{sub})")
-    return "".join(pattern)
-
-
-def _acceptance_line(line: str) -> str | None:
-    """The condition an acceptance line carries, in any catalog language."""
-    for code in language.LANGUAGES:
-        match = re.fullmatch(
-            _template_pattern(
-                language.text(code, "clarify.suggestion.acceptance"),
-                {"text": ("text", r".+")},
-            ),
-            line,
-        )
-        if match is not None:
-            return match.group("text").strip()
-    return None
-
-
-def _criteria_line(line: str) -> str | None:
-    """The condition a criteria item line carries, in any language."""
-    for code in language.LANGUAGES:
-        match = re.fullmatch(
-            _template_pattern(
-                language.text(code, "clarify.suggestion.criteria_item"),
-                {"text": ("text", r".+")},
-            ),
-            line,
-        )
-        if match is not None:
-            return match.group("text").strip()
-    return None
-
-
-def _split_item_line(line: str) -> tuple[int, str, int | None] | None:
-    """One split item line: (number, result, after) in any language.
-
-    The dependency form is tried in EVERY language before the plain form:
-    a plain item pattern would otherwise swallow the "(after N)" phrase of
-    the other catalog language into its result text.
-    """
-    patterns = []
-    for code in language.LANGUAGES:
-        patterns.append((
-            _template_pattern(
-                language.text(code, "clarify.suggestion.item"),
-                {
-                    "number": ("number", r"[0-9]+"),
-                    "result": ("result", r".+"),
-                },
-            ),
-            _template_pattern(
-                language.text(code, "clarify.suggestion.after"),
-                {"number": ("after", r"[0-9]+")},
-            ),
-        ))
-    for item, after in patterns:
-        match = re.fullmatch(f"{item} {after}", line)
-        if match is not None:
-            return (
-                int(match.group("number")),
-                match.group("result").strip(),
-                int(match.group("after")),
-            )
-    for item, _after in patterns:
-        match = re.fullmatch(item, line)
-        if match is not None:
-            return (
-                int(match.group("number")),
-                match.group("result").strip(),
-                None,
-            )
-    return None
-
-
-def parse_suggestion(body: object) -> Suggestion | int | None:
-    """The proposal one comment body carries (Issue #1926).
-
-    Returns the Suggestion when the section is valid, the 1-based line
-    number of the FIRST invalid line when it is not, and None when the body
-    carries no start marker at all: no proposal is never an error. Line
-    numbers count every line of the body from 1, markers included
-    (docs/public-contracts.mdx).
-    """
-    if not isinstance(body, str):
-        return None
-    lines = body.splitlines()
-    start = next(
-        (index for index, line in enumerate(lines)
-         if line.strip().startswith(SUGGESTION_START_PREFIX)),
-        None,
-    )
-    if start is None:
-        return None
-    header = lines[start].strip()
-    if not header.startswith(SUGGESTION_START) or not header.endswith(" -->"):
-        return start + 1
-    kind = header[len(SUGGESTION_START):-len(" -->")]
-    if kind not in SUGGESTION_KINDS:
-        return start + 1
-    end: int | None = None
-    for index in range(start + 1, len(lines)):
-        line = lines[index].strip()
-        if line == SUGGESTION_END:
-            end = index
-            break
-        if line.startswith(SUGGESTION_START_PREFIX):
-            return index + 1
-    if end is None:
-        return start + 1
-    items: list[SuggestionItem] = []
-    # The number written in the section -> the item's 1-based position in
-    # "items". A person may leave gaps (5, 9) or reorder the lines, so the
-    # written number is resolved here and never leaves the parser: the
-    # stored dependency is the target item's position, exactly what the
-    # model's answer carries and what the renderer numbers (Issue #1935).
-    positions: dict[int, int] = {}
-    index = start + 1
-    while index < end:
-        line = lines[index].strip()
-        if not line:
-            index += 1
-            continue
-        line_number = index + 1
-        if kind == SUGGESTION_CRITERIA:
-            text = _criteria_line(line)
-            if text is None:
-                return line_number
-            items.append(SuggestionItem(text=text))
-            index += 1
-            continue
-        parsed = _split_item_line(line)
-        if parsed is None:
-            return line_number
-        number, text, after = parsed
-        acceptance_index = index + 1
-        while (
-            acceptance_index < end and not lines[acceptance_index].strip()
-        ):
-            acceptance_index += 1
-        acceptance = None
-        if acceptance_index < end:
-            # The acceptance line keeps its indentation: it is part of the
-            # catalog's grammar (three spaces, then the acceptance prefix).
-            acceptance = _acceptance_line(lines[acceptance_index].rstrip())
-        if acceptance is None:
-            return line_number
-        if number in positions or (
-            after is not None and after not in positions
-        ):
-            return line_number
-        items.append(SuggestionItem(
-            text=text,
-            acceptance=acceptance,
-            after=None if after is None else positions[after],
-        ))
-        positions[number] = len(items)
-        index = acceptance_index + 1
-    if not items:
-        return end + 1
-    return Suggestion(kind=kind, items=tuple(items))
 
 
 def build_context(issue: dict) -> str:
@@ -898,19 +589,90 @@ def judge_issue_body(issue: dict, config: RunnerConfig, source_repo: str,
     return verdict
 
 
+def usable_split(verdict: ClarifyVerdict) -> Suggestion | None:
+    """The split proposal this failing verdict applies itself, or None.
+
+    The rule is the one the stop comment renders by (#1978): a split answers
+    `single_outcome`, so a proposal attached to a verdict that did not fail
+    it is rendered by nothing and applied by nothing. Usability is already
+    decided where the answer is parsed — `suggestion_answer` keeps only a
+    proposal it can render — so there is no second rule here.
+    """
+    suggestion = verdict.suggestion
+    if suggestion is None or suggestion.kind != SUGGESTION_SPLIT:
+        return None
+    return suggestion if "single_outcome" in verdict.missing else None
+
+
+def apply_split(issue: dict, config: RunnerConfig, proposal: Suggestion,
+                run_id: str, *, ready_label: str, source_repo: str) -> bool:
+    """Apply the proposal in this claim: children queued, parent `ai-epic`.
+
+    The person already authorized the work by adding the claim label, and the
+    proposal is the engine's own reading of the ticket (the same principle as
+    #2133), so the gate finishes the split instead of asking somebody to reply
+    `/orbi split`. The steps ride `split_apply.apply_proposal`, the ONE
+    implementation `/orbi split` uses, so an apply interrupted here is
+    finished by the other and no child is ever duplicated.
+
+    `True` means the parent carries `ai-epic` without its claim label and the
+    children are on GitHub: this claim delivers nothing. A GitHub write failure
+    returns `False`, and the caller falls back to today's stop — its comment
+    still carries the proposal and the ticket carries `ai-needs-detail`, so
+    `/orbi split` finishes the same child tickets from what is already there.
+    An interruption (`KeyboardInterrupt`, `SystemExit`) is NOT caught
+    (`Exception` only): the claim label is still on the ticket, so the next
+    tick judges it again and adopts the children this attempt created.
+    """
+    language_code = language.of(config)
+    try:
+        parent = split_apply.issue_view(
+            issue["number"], split_apply.PARENT_FIELDS, repo=source_repo,
+        )
+        children = split_apply.apply_proposal(
+            proposal.items, repo=source_repo, issue=parent,
+            dispatch_label=ready_label, language_code=language_code,
+        )
+        comment_issue(
+            issue["number"], repo=source_repo,
+            body=(
+                f"{run_marker(run_id)}\n"
+                f"{split_apply.split_receipt(children, language_code)}"
+                f"\n\nrun_id={run_id}"
+            ),
+        )
+    except Exception as exc:
+        event(
+            "clarify_split_failed", level=logging.WARNING,
+            issue=issue["number"], reason=type(exc).__name__,
+        )
+        return False
+    event(
+        "clarify_split_applied", issue=issue["number"],
+        children=len(children),
+    )
+    return True
+
+
 def enforce(issue: dict, config: RunnerConfig, source_repo: str,
             run_id: str) -> bool:
     """Run the gate for one fresh claim.
 
     `True` lets the delivery proceed; `False` stops it (the ticket waits
-    for a human). A failed comment or label write is a bypass: it is
-    logged as `clarify_check_skipped` and the delivery proceeds. The one
-    exception is the unchanged, already-stopped ticket (Issue #1904): its
-    stop was already written and notified, so a failed label re-write is
-    logged as `clarify_already_stopped` and the ticket is STILL stopped —
-    delivering a text the gate already rejected would be the worse
-    outcome, and the ticket keeps the claim label for the next tick to
-    stop again.
+    for a human). A failing verdict whose proposal the gate can apply itself
+    is applied instead of stopped (Issue #2207): a usable `split` creates the
+    child tickets, queues them, marks this ticket `ai-epic` and posts ONE
+    comment listing them, so this claim delivers nothing and no human command
+    is needed.
+
+    A failed comment or label write is a bypass: it is logged as
+    `clarify_check_skipped` and the delivery proceeds. Two exceptions: the
+    unchanged, already-stopped ticket (Issue #1904), whose failed label
+    re-write is logged as `clarify_already_stopped` and which is STILL
+    stopped — delivering a text the gate already rejected would be the worse
+    outcome, and the ticket keeps the claim label for the next tick to stop
+    again; and a ticket whose split apply already began, which is never
+    delivered as one ticket even when the fallback stop cannot be written.
     """
     # The stop removes the label the claim scan actually reads: the
     # repository's dispatch label (default `ai-ready`, #527). Removing a
@@ -952,6 +714,13 @@ def enforce(issue: dict, config: RunnerConfig, source_repo: str,
     verdict = judge_issue_body(issue, config, source_repo, run_id)
     if verdict is None or verdict.passed:
         return True
+    proposal = usable_split(verdict)
+    split = proposal is not None and apply_split(
+        issue, config, proposal, run_id,
+        ready_label=ready_label, source_repo=source_repo,
+    )
+    if split:
+        return False
     try:
         comment_issue(
             issue["number"], repo=source_repo,
@@ -970,7 +739,8 @@ def enforce(issue: dict, config: RunnerConfig, source_repo: str,
             "clarify_check_skipped", level=logging.WARNING,
             issue=issue["number"], reason=type(exc).__name__,
         )
-        return True
+        # A split attempt already created children (#2207): never deliver it.
+        return proposal is None
     # Tell the person outside GitHub (Issue #1673): OUTSIDE the try (a
     # notify problem must never turn the failed-write branch into "deliver
     # anyway") and every stop sends — the old `ai-needs-detail` can still

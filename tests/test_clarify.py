@@ -20,16 +20,19 @@ import pytest
 
 from conftest import git
 
-from orbi import clarify, config as config_domain
+from orbi import claim, clarify, config as config_domain
 from orbi import delivery_labels, failure, failure_report, language, progress
 
 import orbi.runner as runner
+import orbi.split_apply as split_apply
 from seam import seam
 
 from tests.fakes.clarify import (
-    FakeGate, fix_run_id, record_label_notifications, stop_comment_entry,
+    FakeGate, fail_github, fix_run_id, install_github, interrupt_github,
+    record_label_notifications, stop_comment_entry, stub_judgment,
     stub_runner_login, stub_stop_history, verdict_agent,
 )
+from tests.fakes.github import FakeGh
 from tests.fakes.pi import install_fake_pi
 
 from tests.test_run_id_e2e import (
@@ -43,6 +46,8 @@ from tests.test_run_id_e2e import (
 
 ISSUE = {"number": 7, "title": "Thin ticket", "body": "Make it better."}
 RUN_ID = "a1b2c3d4"
+# The ticket the gate applies a split proposal on (Issue #2207).
+SPLIT_PARENT = 100
 
 
 # --- Issue #1831: the six ticket texts the judgment is replayed on ---------
@@ -2378,3 +2383,194 @@ def test_an_unreadable_history_has_no_authoritative_comment(
     caplog.set_level("INFO")
     assert clarify.authoritative_stop(ISSUE, REPO) is None
     assert "clarify_check_skipped" in caplog.text
+
+
+# --- Issue #2207: the gate applies a usable split proposal itself ----------
+
+# The ticket the gate is claimed on: a thin one whose proposal is a split.
+SPLIT_PARENT_BODY = "## Outcome\nUsers keep notes.\n"
+
+
+def _github(monkeypatch):
+    """The in-memory GitHub of one gate test, with the parent ticket."""
+    gh = FakeGh(REPO)
+    gh.add_issue(
+        SPLIT_PARENT, title="Note app", body=SPLIT_PARENT_BODY,
+        labels=(delivery_labels.READY_LABEL,),
+    )
+    install_github(monkeypatch, gh)
+    return gh
+
+
+def _claim_payload(gh, number: int = SPLIT_PARENT) -> dict:
+    """The ticket as the claim scan hands it to the gate."""
+    issue = gh.issues[number]
+    return {
+        "number": number, "title": issue["title"], "body": issue["body"],
+        "labels": [{"name": name} for name in issue["labels"]],
+        "author": dict(issue["author"]),
+    }
+
+
+def _children(gh, parent: int = SPLIT_PARENT) -> list[dict]:
+    """Every Issue attached as a native sub-issue of `parent`."""
+    return [
+        issue for number, issue in sorted(gh.issues.items())
+        if number != parent and issue["parent"] == parent
+    ]
+
+
+def _comment_bodies(gh, number: int = SPLIT_PARENT) -> list[str]:
+    return [comment["body"] for comment in gh.issues[number]["comments"]]
+
+
+def _verdict(answer: dict):
+    return clarify.parse_verdict(answer)
+
+
+def test_a_usable_split_proposal_creates_and_queues_its_children(
+    monkeypatch, caplog,
+):
+    """Acceptance: split applied — children linked and queued, parent Epic.
+
+    One claim: the gate judges, applies the proposal, and delivers nothing.
+    The children are real Issues (dispatch label, native sub-issue and the
+    `after` dependency), the parent is an Epic without its claim label, and
+    ONE comment lists the children.
+    """
+    gh = _github(monkeypatch)
+    stub_judgment(monkeypatch, _verdict(SPLIT_ANSWER))
+    caplog.set_level("INFO")
+
+    assert clarify.enforce(
+        _claim_payload(gh), config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is False
+
+    children = _children(gh)
+    assert [child["title"] for child in children] == [
+        "Users can tag a note", "Users can export a note as Markdown",
+    ]
+    # Queued: every child carries the dispatch label the claim scan reads.
+    for child in children:
+        assert delivery_labels.READY_LABEL in child["labels"]
+        assert split_apply.parse_child_body(child["body"]) is not None
+    # Linked: the native sub-issue relation and the (after 1) dependency.
+    assert [node["number"] for node in children[1]["blocked_by"]] == [
+        children[0]["number"],
+    ]
+    parent = gh.issues[SPLIT_PARENT]
+    assert delivery_labels.EPIC_LABEL in parent["labels"]
+    assert delivery_labels.READY_LABEL not in parent["labels"]
+    assert delivery_labels.NEEDS_DETAIL_LABEL not in parent["labels"]
+    # ONE comment, listing the children (the receipt the command also posts).
+    bodies = _comment_bodies(gh)
+    assert len(bodies) == 1
+    assert bodies[0].startswith(f"<!-- orbi:run={RUN_ID} -->")
+    assert f"run_id={RUN_ID}" in bodies[0]
+    for child in children:
+        assert f"#{child['number']} {child['title']}" in bodies[0]
+    assert "clarify_split_applied" in caplog.text
+    # Not delivered: the next fresh claim never picks the parent again.
+    picked = claim.pick_ready_issue(REPO)
+    assert picked is not None
+    assert picked["number"] != SPLIT_PARENT
+
+
+def test_an_interrupted_split_apply_is_finished_without_a_duplicate(
+    monkeypatch, caplog,
+):
+    """Acceptance: interrupted after the first child — no duplicate on re-run.
+
+    The tick dies inside the apply (no rollback), so the claim label is still
+    on the ticket and the next claim judges it again; the child it already
+    created is ADOPTED by its marker and only the missing one is opened.
+    """
+    gh = _github(monkeypatch)
+    verdict = _verdict(SPLIT_ANSWER)
+    stub_judgment(monkeypatch, verdict)
+    creates: list = []
+
+    def second_child(command):
+        if _child_create(command):
+            creates.append(command)
+            return len(creates) == 2
+        return False
+
+    interrupt_github(monkeypatch, gh, second_child)
+    with pytest.raises(KeyboardInterrupt):
+        clarify.enforce(
+            _claim_payload(gh), config_domain.RunnerConfig(), REPO, RUN_ID,
+        )
+    assert len(creates) == 2
+    # Exactly one child exists, and the claim label was never released.
+    assert len(_children(gh)) == 1
+    assert delivery_labels.READY_LABEL in gh.issues[SPLIT_PARENT]["labels"]
+
+    # The next claim re-judges and finishes the same split.
+    install_github(monkeypatch, gh)
+    caplog.set_level("INFO")
+    assert clarify.enforce(
+        _claim_payload(gh), config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is False
+    children = _children(gh)
+    assert len(children) == 2
+    markers = [
+        split_apply.parse_child_body(child["body"]).item
+        for child in children
+    ]
+    assert markers == [1, 2]
+    assert delivery_labels.EPIC_LABEL in gh.issues[SPLIT_PARENT]["labels"]
+    assert "clarify_split_applied" in caplog.text
+
+
+def _child_create(command) -> bool:
+    """A `gh issue create`: the step that opens one child ticket."""
+    return {"gh", "issue", "create"} <= set(command)
+
+
+def _second_child(command) -> bool:
+    return _child_create(command)
+
+
+def _epic_label_write(command) -> bool:
+    """The parent's `ai-epic` label write, after every child exists."""
+    return {"gh", "issue", "edit", "ai-epic"} <= set(command)
+
+
+@pytest.mark.parametrize("refused", [_second_child, _epic_label_write])
+def test_a_failed_split_apply_falls_back_to_the_stop(
+    monkeypatch, caplog, refused,
+):
+    """Acceptance: a GitHub write failure stops the ticket, never delivers it.
+
+    The half-applied split is left on GitHub for `/orbi split` to finish
+    (its steps are idempotent); the ticket itself ends exactly as today's
+    stop: ONE comment carrying the proposal, `ai-needs-detail` on, the claim
+    label off — and the tick delivers nothing.
+    """
+    gh = _github(monkeypatch)
+    stub_judgment(monkeypatch, _verdict(SPLIT_ANSWER))
+    fail_github(monkeypatch, gh, refused)
+    caplog.set_level("INFO")
+
+    assert clarify.enforce(
+        _claim_payload(gh), config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is False
+
+    parent = gh.issues[SPLIT_PARENT]
+    assert delivery_labels.NEEDS_DETAIL_LABEL in parent["labels"]
+    assert delivery_labels.READY_LABEL not in parent["labels"]
+    assert delivery_labels.EPIC_LABEL not in parent["labels"]
+    bodies = _comment_bodies(gh)
+    assert len(bodies) == 1
+    body = bodies[0]
+    assert f"<!-- orbi:run={RUN_ID} -->" in body
+    for piece in ("single_outcome",):
+        assert clarify.missing_text(piece, language_code="en") in body
+    # The stop comment still carries the proposal, so /orbi split can finish.
+    assert clarify.parse_suggestion(body) == SPLIT_PROPOSAL
+    assert "clarify_split_failed" in caplog.text
+    # Nothing else takes this ticket's place in the claim queue.
+    picked = claim.pick_ready_issue(REPO)
+    assert picked is None or picked["number"] != SPLIT_PARENT
+

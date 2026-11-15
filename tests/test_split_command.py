@@ -13,6 +13,7 @@ import subprocess
 
 import pytest
 
+import orbi.split_apply as split_apply
 import orbi.split_command as split_command
 from orbi import claim, clarify, journal, language, ticket_command
 from orbi.config import RunnerConfig
@@ -628,10 +629,10 @@ def test_a_wrong_after_edge_between_three_items_stops(monkeypatch, tmp_path):
 def test_a_malformed_blocked_by_payload_reads_as_no_edges():
     """The native relation is fail-open like every other GitHub relation:
     a payload this engine cannot read is "no known edge", never a crash."""
-    assert split_command._blocked_numbers({"blockedBy": None}) == set()
-    assert split_command._blocked_numbers({"blockedBy": {"nodes": "no"}}) == set()
-    assert split_command._blocked_numbers({}) == set()
-    assert split_command._blocked_numbers({"blockedBy": {"nodes": [
+    assert split_apply.blocked_numbers({"blockedBy": None}) == set()
+    assert split_apply.blocked_numbers({"blockedBy": {"nodes": "no"}}) == set()
+    assert split_apply.blocked_numbers({}) == set()
+    assert split_apply.blocked_numbers({"blockedBy": {"nodes": [
         "text", {"number": "7"}, {"number": True}, {"number": 3},
     ]}}) == {3}
 
@@ -858,12 +859,12 @@ def test_a_marker_of_an_item_below_one_is_a_conflict_too(monkeypatch, tmp_path):
 
 
 def test_the_claimed_item_comes_from_the_marker_of_this_parent():
-    assert split_command._claimed_item(None, PARENT) is None
-    assert split_command._claimed_item("no marker", PARENT) is None
-    assert split_command._claimed_item(
+    assert split_apply.claimed_item(None, PARENT) is None
+    assert split_apply.claimed_item("no marker", PARENT) is None
+    assert split_apply.claimed_item(
         "<!-- orbi:split-child:999:1 -->", PARENT,
     ) is None
-    assert split_command._claimed_item(
+    assert split_apply.claimed_item(
         "<!-- orbi:split-child:100:4 -->", PARENT,
     ) == 4
 

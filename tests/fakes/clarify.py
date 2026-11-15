@@ -8,6 +8,7 @@ ratchet (Issue #789) excludes `tests/fakes/`, the adapter contract.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from orbi import clarify, notify
@@ -150,3 +151,51 @@ def record_label_notifications(monkeypatch) -> list:
         lambda *args, **kwargs: notified.append(args),
     )
     return notified
+
+
+# --- the gate over real GitHub state (Issue #2207) ------------------------
+
+def stub_judgment(monkeypatch, verdict) -> None:
+    """Answer the gate's judgment with `verdict`, no Pi session runs."""
+    monkeypatch.setattr(
+        seam, "judge_issue_body", lambda *args, **kwargs: verdict,
+    )
+
+
+def install_github(monkeypatch, gh) -> None:
+    """Answer every GitHub call with `tests.fakes.github.FakeGh`.
+
+    The gate's own apply reads and writes real Issue state — labels,
+    native relations, comments — so a recording fake cannot prove it. The
+    patch is the Article 3.4 subprocess seam, a boundary fake.
+    """
+    monkeypatch.setattr(seam, "run_command", gh)
+    monkeypatch.setattr(notify, "label_added", lambda *args, **kwargs: None)
+
+
+def fail_github(monkeypatch, gh, predicate, *,
+                reason: str = "gh: HTTP 422: Validation Failed") -> None:
+    """Let `gh` answer, except the commands `predicate` refuses.
+
+    The refusal arrives the way a real one does: a non-zero process with
+    the reason on stderr.
+    """
+    def call(command, **kwargs):
+        if predicate(command):
+            raise subprocess.CalledProcessError(1, command, stderr=reason)
+        return gh(command, **kwargs)
+    monkeypatch.setattr(seam, "run_command", call)
+
+
+def interrupt_github(monkeypatch, gh, predicate) -> None:
+    """Answer GitHub, but interrupt the process at the matching command.
+
+    `KeyboardInterrupt` is what a killed tick looks like from inside the
+    apply: the gate catches `Exception` only, so nothing is rolled back
+    and whatever already reached GitHub stays there.
+    """
+    def call(command, **kwargs):
+        if predicate(command):
+            raise KeyboardInterrupt
+        return gh(command, **kwargs)
+    monkeypatch.setattr(seam, "run_command", call)

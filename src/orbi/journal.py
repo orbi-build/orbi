@@ -200,12 +200,10 @@ def quote_value(value: str) -> str:
     return value
 
 
-# The journal event registry: every structured event name the
-# Runner journal can carry, `kind` -> one-line meaning. `event()` refuses
-# unregistered names (fail fast on a typo), the docs event tables
-# (operations.mdx EN/ZH) must carry exactly this set, and the exporter's
-# KNOWN_KINDS are a subset of it — the tests in test_journal_events.py are
-# the binding in all three directions.
+# The journal event registry: every structured event name the Runner journal
+# can carry, `kind` -> one-line meaning. `event()` refuses unregistered names
+# (fail fast on a typo); the docs event tables (operations.mdx EN/ZH), the
+# exporter's KNOWN_KINDS and test_journal_events.py bind to it.
 JOURNAL_EVENTS: dict[str, str] = {
     # Run lifecycle.
     "run_start": "a Pi run started (the full invariant scene)",
@@ -221,6 +219,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "clarify_already_stopped": "the thin-ticket gate saw an unchanged, already-stopped body: no model call, comment or notification",
     "clarify_stop_untrusted": "a comment carried a stop marker this runner did not write: ignored, the gate judges normally",
     "clarify_suggestion_dropped": "the gate dropped the answer's proposal (misplaced or unusable): the stop comment carries none",
+    "clarify_split_applied": "the gate applied the ticket's own split proposal: the children are queued and the parent is an Epic",
+    "clarify_split_failed": "the gate could not apply the split proposal (reason): it fell back to the stop with ai-needs-detail",
     "clarify_check_skipped": "the thin-ticket gate could not decide or could not write (fail open)",
     "clarify_draft_skipped": "the pre-work check skipped an untouched Issue this runner drafted: it was checked when drafted (Issue #2041)",
     "clarify_draft_untrusted": "a draft marker sat on an Issue this runner did not author: ignored, the gate judges normally",

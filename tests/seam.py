@@ -24,6 +24,7 @@ import orbi.comment_trust as comment_trust
 import orbi.draft as draft
 import orbi.draft_marker as draft_marker
 import orbi.suggest as suggest
+import orbi.split_apply as split_apply
 import orbi.split_command as split_command
 import orbi.clarify as clarify
 import orbi.claim as claim
@@ -64,7 +65,7 @@ _MODULES = (
     review_rounds, run_state, claim,
     resume_scan,
     pr_verification, resume_verification,
-    repo_config, clarify, comment_trust, requeue,
+    repo_config, clarify, comment_trust, requeue, split_apply,
     draft, draft_marker, branch_reclaim, failure_report, suggest, cli,
     blocked_comment,
     base_ci_red, base_ci_fix, cli_commands, cli_doctor, check_permission,
