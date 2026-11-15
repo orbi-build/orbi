@@ -3,7 +3,7 @@ title: "安全：自主 AI 代理的边界"
 description: "Orbi 如何防止自主 coding agent 合并不安全的改动?"
 ---
 
-Orbi 将密钥保留在本地，由 Runner 执行合并与 base 分支推送。开发改动通过已审查的 PR 合并。发版使用单独的门禁，可以把版本提交直接推送到配置的 base 分支。
+Orbi 将密钥保留在本地，由 Runner 执行合并与 base 分支推送。开发改动通过已审查的 PR 合并。发版使用单独的门禁，可以把版本提交直接推送到配置的 base 分支。[安全矩阵](/zh/safety-matrix)列出每种故障由哪一层拦住，以及证明它的测试。
 
 Orbi 在你的机器上运行一个带 GitHub token 的自主 coding agent。
 安全模型刻意简单：交付契约里的硬边界、本地密钥、没有独立状态服务。
