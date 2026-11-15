@@ -230,7 +230,11 @@ prose beside them.
 When Orbi's clarification gate — the claim-time check for an observable
 result, an acceptance condition and a single outcome — stops a ticket whose
 text already states enough to propose the fix, the stop comment carries that
-proposal between two fixed markers. It is rendered in exactly two cases:
+proposal between two fixed markers. A `kind=split` proposal the gate can apply
+itself never reaches a stop comment: the claim creates the children instead
+(Issue #2207, see *Turning a proposal into child tickets*), and the section
+appears in a stop comment only when that apply failed and fell back to the stop.
+The section is rendered in exactly two cases:
 
 - `single_outcome` failing, whether or not another piece is also missing
   (most often `acceptance_condition`): `kind=split`, one numbered item per
@@ -344,13 +348,28 @@ verdict stops with the comment and `ai-needs-detail` as before.
 
 ### Turning a proposal into child tickets
 
-`/orbi split` (issue comment or `orbi split --repo <owner/name> --issue <N>`)
-reads the newest trusted stop comment of the ticket it runs on, parses the
-section exactly as this page describes, and creates one child Issue per
-`kind=split` item — as the comment reads at that moment, so editing it first
-changes what is created. Only a `kind=split` section is valid input: a
-`kind=criteria` proposal, a missing section or an invalid line is rejected
-with a receipt naming the reason (and, for an invalid line, its number).
+The children of a `kind=split` proposal are created by two callers and one
+implementation (Issue #2207):
+
+- by the clarification gate itself, in the claim that judged the ticket, when
+  the failing verdict carries that usable proposal: no stop is posted, the
+  ticket becomes `ai-epic` instead of being delivered, and the ONE success
+  comment lists the children (it carries the run marker and the visible
+  `run_id=` field, and no command receipt marker — there was no command);
+- by `/orbi split` (issue comment or
+  `orbi split --repo <owner/name> --issue <N>`), which reads the newest trusted
+  stop comment of the ticket it runs on, parses the section exactly as this page
+  describes, and creates one child Issue per `kind=split` item — as the
+  comment reads at that moment, so editing it first changes what is created.
+  Only a `kind=split` section is valid input: a `kind=criteria` proposal, a
+  missing section or an invalid line is rejected with a receipt naming the
+  reason (and, for an invalid line, its number).
+
+Both ride the same steps over GitHub's own state, so they adopt each other's
+children: the gate's apply is finished by `/orbi split` when a GitHub write
+failed halfway (the stop comment then still carries the proposal and the ticket
+carries `ai-needs-detail`), and an interrupted apply is finished by the next
+claim of the ticket.
 
 Each child is a normal Issue whose body is a public contract too:
 

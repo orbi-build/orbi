@@ -462,6 +462,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `clarify_stop_untrusted` | 某条评论带有并非本 runner 写入的中止标记：忽略，闸门照常判定 |
 | `clarify_suggestion_dropped` | 闸门丢掉了答案里的建议（`reason=misplaced`：`kind`/`items` 写在了顶层而不是 `suggestion` 之下；`reason=unusable`：`suggestion` 值未通过校验）：中止评论中不含建议 |
 | `clarify_check_skipped` | 薄 ticket 闸门无法判定或写入失败（fail open） |
+| `clarify_split_applied` | 闸门自行应用了工单上的拆分提案：子工单已进入队列，父工单成为 Epic，父工单本身不再交付 |
+| `clarify_split_failed` | 闸门无法应用拆分提案（`reason`）：回退到 `ai-needs-detail` 的常规中止，由 `/orbi split` 继续完成 |
 | `clarify_draft_skipped` | 前置检查跳过了 `orbi draft` 创建后未被编辑的 Issue：起草时已由同一个检查判定过 |
 | `clarify_draft_untrusted` | 某个 Issue 带有并非本 runner 创建的草稿标记：忽略，闸门照常判定 |
 | `clarify_criteria_appended` | 闸门把判定附带的、可用的验收条件提案追加到工单的验收标题之下，发一条列出这些条件的评论，本次领取继续交付 |
