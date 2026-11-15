@@ -96,6 +96,61 @@ def test_runner_config_keys_are_documented_and_shipped():
     assert shipped == runner_keys
 
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+# --- `pi_executable` docs contract (Issue #2189) -----------------------
+#
+# The accepted scope of `pi_executable` is generic (Issue #2182): same Pi
+# flags, same session JSONL, same `PI_CODING_AGENT_DIR` isolation — only the
+# executable name changes. Orbi has not run a delivery on a third-party
+# build, so the reference and the example config describe the executable
+# instead of recommending one.
+
+PI_EXECUTABLE_CONFIG_PAGES = (
+    REPO_ROOT / "docs" / "configuration.mdx",
+    REPO_ROOT / "docs" / "zh" / "configuration.mdx",
+)
+# The third-party build the docs must not endorse (Issue #2189).
+THIRD_PARTY_BUILD = "pi-bolt"
+
+
+@pytest.mark.parametrize(
+    "page", PI_EXECUTABLE_CONFIG_PAGES, ids=lambda p: p.parent.name
+)
+def test_pi_executable_row_states_the_generic_executable_contract(page):
+    """Issue #2189: the row keeps the contract and names no specific build."""
+    text = page.read_text(encoding="utf-8")
+    match = re.search(r"^\| `pi_executable` \|.*$", text, re.MULTILINE)
+    assert match, f"{page}: no pi_executable row"
+    row = match.group(0)
+    assert "| `pi` |" in row, row  # the documented default
+    required = (
+        ("仅主机/部署级", "所有 Pi 参数照常传递", "不会回退到 `pi`", "删除该键即恢复默认")
+        if page.parent.name == "zh"
+        else (
+            "host/deploy-only",
+            "every Pi flag is passed unchanged",
+            "There is no fallback to `pi`",
+            "remove the key to return to the default",
+        )
+    )
+    for phrase in required:
+        assert phrase in row, (phrase, row)
+    assert THIRD_PARTY_BUILD not in row, row
+
+
+def test_pi_executable_example_is_an_absolute_path_to_a_pinned_pi():
+    """Issue #2189: the example config shows a pinned `pi` by absolute path."""
+    example = (
+        REPO_ROOT / "src" / "orbi" / "example_config.toml"
+    ).read_text(encoding="utf-8")
+    match = re.search(r'^#\s*pi_executable = "([^"]*)"$', example, re.MULTILINE)
+    assert match, "no commented pi_executable example"
+    assert match.group(1).startswith("/"), match.group(1)
+    assert THIRD_PARTY_BUILD not in example
+
+
 # --- Notifications docs contract (Issue #1697) -------------------------
 #
 # The Notifications section of the configuration page is the one place a
@@ -108,7 +163,6 @@ def test_runner_config_keys_are_documented_and_shipped():
 # to the same `telegram_chat_id` (`notify._announce_merged_prs` ->
 # `notify.send`, `tests/test_notify.py`). Both pages carry both claims.
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
 NOTIFICATION_DOC_PAGES = (
     REPO_ROOT / "docs" / "configuration.mdx",
     REPO_ROOT / "docs" / "zh" / "configuration.mdx",
