@@ -47,6 +47,7 @@ import orbi.release_notes as release_notes
 import orbi.review_merge as review_merge
 import orbi.review_rounds as review_rounds
 import orbi.pi_session as pi_session
+import orbi.requeue as requeue
 import orbi.run_state as run_state
 import orbi.pr_verification as pr_verification
 import orbi.resume_scan as resume_scan
@@ -62,7 +63,7 @@ _MODULES = (
     review_rounds, run_state, claim,
     resume_scan,
     pr_verification, resume_verification,
-    repo_config, clarify, comment_trust,
+    repo_config, clarify, comment_trust, requeue,
     draft, draft_marker, branch_reclaim, failure_report, suggest, cli,
     blocked_comment,
     base_ci_red, cli_commands, cli_doctor, check_permission, split_command,
