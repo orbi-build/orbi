@@ -5,7 +5,8 @@ is the only body that executes `<executable> --version` and formats its
 stderr, and `pi_exec.configured` reads `pi_executable` through
 `config.read_pi_executable`. Real files and the real PATH lookup: a fake
 executable is a small script in `tmp_path`, addressed by its absolute
-path.
+path. The default `pi` tests pin the lookup, so they never depend on
+whether the host carries a `pi`.
 """
 import subprocess
 from pathlib import Path
@@ -29,7 +30,18 @@ def _probe(run_command, executable: str = "pi"):
     return pi_exec.check_pi_command(run_command, executable, ERROR, DOCS)
 
 
-def test_probe_executes_the_version_and_keeps_the_node_floor_fix():
+@pytest.fixture
+def pi_on_path(monkeypatch):
+    """The default `pi` probe finds its executable only through
+    `shutil.which`, and the check must not depend on the host's PATH."""
+    monkeypatch.setattr(
+        pi_exec.shutil, "which", lambda name: f"/usr/bin/{name}",
+    )
+
+
+def test_probe_executes_the_version_and_keeps_the_node_floor_fix(
+    pi_on_path,
+):
     """Pi on the PATH is not enough (Issue #1079): npm does not enforce
     Pi's `engines` floor, so an install on a distro-default Node reports
     success and then every `pi` invocation crashes with a bundle-level
@@ -57,7 +69,7 @@ def test_probe_executes_the_version_and_keeps_the_node_floor_fix():
     assert "22.19" in failure.fix
 
 
-def test_probe_ok_when_the_version_probe_succeeds():
+def test_probe_ok_when_the_version_probe_succeeds(pi_on_path):
     calls = []
     assert _probe(lambda command, **kwargs: calls.append(command)) is None
     assert calls == [["pi", "--version"]]
