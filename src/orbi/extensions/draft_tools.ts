@@ -172,7 +172,8 @@ export const askUserTool = {
 		"of one to three words naming the decision and OPTIONAL 2 to 4 " +
 		"options, every option a label plus one sentence of what it means " +
 		"or its trade-off. When one option is the reasonable default, its " +
-		"label ends with (Recommended). Never add an Other option, and never " +
+		"label ends with (Recommended), a marker that is never translated: " +
+		"the engine reads it. Never add an Other option, and never " +
 		"say the person chose the recommended option: the person always " +
 		"answers in their own words. Call this only " +
 		"when the request itself does not say what to build and no " +
