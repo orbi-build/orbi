@@ -420,7 +420,10 @@ options 的问题同样是合法问题。存在推荐选项时其 `label` 以 `(
 的问题返回为 `{"question": "..."}`。
 
 `after` 是同一草稿中更早 Issue 的 1 起始序号，表示本条要等它，没有则省略。
-只提问的一轮 `issues` 为空；草稿轮至少包含一个 Issue。`check` 只在草稿轮出现：
+只提问的一轮 `issues` 为空；草稿轮至少包含一个 Issue。明确要求不改任何代码
+（"just review it and tell me"、"don't touch the code"）的一轮，`issues` 和
+`questions` 都为空，答案在 `reply` 里：这一轮既不运行保真检查也不运行 pre-work
+检查，因此没有 `check`，也没有 `warning`。`check` 只在草稿轮出现：
 `passed`，或一次重写后仍未通过的 pre-work 检查标识，以逗号分隔
 （`observable_result`、`acceptance_condition`、`single_outcome`）。`warning`
 只在保真检查无法运行或没有返回内容时出现：草稿仍然返回。

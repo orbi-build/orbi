@@ -2,10 +2,11 @@
 """The documents `orbi draft` reads and writes, and the answers it takes itself.
 
 One drafting round takes one stdin document and writes one round document:
-a reply plus the questions it still needs answered, or the drafted Issues
-(Issue #2041). `DraftError` is the machine triple a caller reads on failure.
-The shapes, their parsing and the errors live here, and `orbi.draft` keeps
-the sessions, the fidelity pass and the creation.
+a reply plus the questions it still needs answered, the drafted Issues, or
+a reply alone when the person explicitly asked for no code change
+(Issues #2041, #2201). `DraftError` is the machine triple a caller reads on
+failure. The shapes, their parsing and the errors live here, and
+`orbi.draft` keeps the sessions, the fidelity pass and the creation.
 
 A question may carry options and mark one as the reasonable default with the
 `(Recommended)` label suffix, and such a question is not the person's to
@@ -102,7 +103,8 @@ class DraftIssue:
 
 @dataclass(frozen=True)
 class DraftAnswer:
-    """One drafting-session answer: questions, or a draft, never both."""
+    """One drafting-session answer: questions, a draft, or a reply alone
+    (Issue #2201), never two of them."""
 
     reply: str
     questions: tuple[DraftQuestion, ...] = ()
@@ -130,6 +132,23 @@ class DraftRound:
         if self.warning is not None:
             data["warning"] = self.warning
         return data
+
+
+def render_round(round_: DraftRound) -> str:
+    """One round as the terminal text a caller prints: every Issue, the
+    check it still fails and the fidelity warning."""
+    lines: list[str] = []
+    for position, issue in enumerate(round_.issues, start=1):
+        lines.append(f"{position}. {issue.title}")
+        lines.append(issue.body)
+        if issue.after is not None:
+            lines.append(f"   after: {issue.after}")
+        lines.append("")
+    if round_.check is not None and round_.check != "passed":
+        lines.append(f"check: {round_.check}")
+    if round_.warning:
+        lines.append(f"warning: {round_.warning}")
+    return "\n".join(lines).rstrip()
 
 
 # --- parsing -------------------------------------------------------------
@@ -262,7 +281,12 @@ def parse_questions(value: object) -> tuple[DraftQuestion, ...]:
 
 
 def parse_answer(value: object) -> DraftAnswer:
-    """Parse the extension's answer file: a questions or a draft answer."""
+    """Parse the extension's answer file: a questions, a draft or a reply.
+
+    A reply-only answer (Issue #2201) is the answer to a request that must
+    not change any code: it carries no question and no Issue, so the round
+    has nothing to revise or to judge.
+    """
     if not isinstance(value, dict):
         raise DraftError(
             "no_answer", "read the draft",
@@ -281,6 +305,8 @@ def parse_answer(value: object) -> DraftAnswer:
         )
     if kind == "draft":
         return DraftAnswer(reply=reply, issues=parse_issues(value.get("issues")))
+    if kind == "reply":
+        return DraftAnswer(reply=reply)
     raise DraftError(
         "no_answer", "read the draft", f"unknown answer kind: {kind!r}",
     )

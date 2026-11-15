@@ -31,7 +31,6 @@ import json
 import logging
 import re
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 
 from orbi import clarify, draft_marker, journal, split_command
@@ -73,23 +72,26 @@ from orbi.pi_process import PiWatchOptions, stream_pi
 from orbi.pi_session import pi_extension_env, prepare_pi_agent_dir
 from orbi.ticket_command import author_login_key, runner_login
 
-# The two tools the shipped extension registers; the prompt names them and
+# The three tools the shipped extension registers; the prompt names them and
 # the tool allowlist below must carry them (one spelling, two places).
 WRITE_DRAFT_TOOL = "write_draft"
 ASK_USER_TOOL = "ask_user"
-# The drafting session reads the checkout and writes ONLY through the two
+# Issue #2201: the answer to a request that must not change any code.
+REPLY_TOOL = "reply"
+# The drafting session reads the checkout and writes ONLY through the
 # shipped tools: no shell, no edit, no commit (the same read-only boundary
 # `orbi suggest` keeps).
 #
 # Pi's `--tools` REPLACES the whole tool selection and applies to
 # extension tools too ("Applies to built-in, extension, and custom tools" —
-# `pi --help`, docs/cli.md), so the two answer tools are named here as
+# `pi --help`, docs/cli.md), so the three answer tools are named here as
 # well. Without them the model has no tool to answer with: the session
 # then replies in prose, no answer file is written and every round fails
 # `no_answer` (verified against Pi 1.0.0 — the "read,grep,find,ls"-only
 # form makes the model report it cannot call write_draft/ask_user).
 DRAFT_TOOLS = ",".join((
     "read", "grep", "find", "ls", WRITE_DRAFT_TOOL, ASK_USER_TOOL,
+    REPLY_TOOL,
 ))
 DRAFT_EXTENSION = Path(__file__).resolve().parent.joinpath(
     "extensions", "draft_tools.ts",
@@ -137,10 +139,23 @@ DRAFTING_RULES = (
     "Rules for every draft:\n"
     "- Write in the person's language: the Issue titles, the Issue bodies, "
     "your reply and your questions.\n"
+    "- A request that explicitly asks for NO code change (\"just review it "
+    "and tell me\", \"only explain\", \"don't touch the code\") takes the "
+    "no-repository-change route: call " + REPLY_TOOL + " and return a reply "
+    "alone, never a draft. In the person's language, list in one line each "
+    "what your reading found worth fixing and say that Orbi delivers by "
+    "opening a pull request, so the person can name one item for Orbi to "
+    "fix.\n"
+    "- The nearest-deliverable rule applies only to a request that asks "
+    "for a change: when the code cannot deliver such a request as asked, "
+    "draft the nearest version it can deliver and record the change under "
+    "Assumptions. A request not to change any code is never such a "
+    "draft.\n"
     "- Refer to files by their repository-relative path.\n"
     "- Do not write the commit SHA.\n"
-    "- Open the reply with one plain-language sentence of what will "
-    "change.\n"
+    "- Open a draft's reply with one plain-language sentence of what "
+    "will change; an answer with no code change opens with the first thing "
+    "worth fixing.\n"
     "- An Assumptions section appears only when you took at least one "
     "decision: one line per decision you took instead of asking, saying "
     "what you chose and why. With no decision taken, the Issue body "
@@ -158,8 +173,8 @@ DRAFTING_RULES = (
     "Never add an \"Other\" option and never say the person chose the "
     "recommended option: the person always answers in their own words.\n"
     "- Every other disagreement — which library, font or place to use, "
-    "what to leave out, how to word a deliverable version of a request "
-    "that cannot be done as asked — is a decision: take the most "
+    "what to leave out, how to word a deliverable version of a change "
+    "request that cannot be done as asked — is a decision: take the most "
     "reasonable default and record it under Assumptions instead of "
     "asking.\n"
     "- Do not repeat the draft or the questions in the reply.\n"
@@ -236,7 +251,9 @@ def draft_system_prompt() -> str:
         "request into GitHub Issues that Orbi's pre-work check accepts. "
         "Answer only by calling exactly one tool: " + WRITE_DRAFT_TOOL
         + " when you have a draft, " + ASK_USER_TOOL + " when you need "
-        "the person to answer something first. Never both in one turn.",
+        "the person to answer something first, " + REPLY_TOOL + " when "
+        "the person asked for no code change and the answer is a reply "
+        "alone. Never more than one in a turn.",
         clarify.TICKET_CHECK_CRITERIA,
         SINGLE_OUTCOME_RULE,
         DRAFTING_RULES,
@@ -517,11 +534,13 @@ def run_round(
     config: RunnerConfig, repo: str, *, session_dir: Path, payload: dict,
     run_id: str,
 ) -> DraftRound:
-    """Run one drafting round: questions, or a checked draft.
+    """Run one drafting round: questions, a reply alone, or a checked draft.
 
     Order: session -> the options the engine takes itself -> fidelity pass ->
     the pre-work check -> at most ONE rewrite with the check's own reasons ->
-    the check again. There is no loop and no second rewrite.
+    the check again. There is no loop and no second rewrite. A reply-only
+    answer (Issue #2201) asks for no code change, so neither the fidelity
+    pass nor the check runs.
     """
     payload = _round_payload(payload)
     session_root = Path(session_dir).resolve()
@@ -536,6 +555,10 @@ def run_round(
             reply=named_in_reply(answer.reply, taken),
             questions=answer.questions,
         )
+    if not answer.issues:
+        # Issue #2201: a reply-only answer asks for no code change, so
+        # neither the fidelity pass nor the pre-work check runs.
+        return DraftRound(reply=named_in_reply(answer.reply, taken))
     issues, warning = fidelity_pass(
         config, repo, session_root=session_root, run_id=run_id,
         request=_fidelity_request(payload), issues=answer.issues,

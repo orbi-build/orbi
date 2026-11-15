@@ -502,8 +502,12 @@ was accepted in, so a bare string comes back as `{"question": "..."}`.
 
 `after` is the 1-based number of an EARLIER Issue in the same draft that this one
 waits for, or is absent. `issues` is empty when the round only asks questions; a
-draft round carries at least one Issue. `check` is present on a draft round only:
-`passed`, or the comma-separated identifiers of the pre-work checks
+draft round carries at least one Issue. A request that explicitly asks for no code
+change ("just review it and tell me", "don't touch the code") ends with `issues`
+and `questions` both empty and the answer in `reply`: that reply-only round runs
+neither the fidelity pass nor the pre-work check, so it carries no `check` and no
+`warning`. `check` is present on a draft round only: `passed`, or the
+comma-separated identifiers of the pre-work checks
 (`observable_result`, `acceptance_condition`, `single_outcome`) the draft still failed
 after its one rewrite. `warning` is present only when the fidelity pass could not run
 or returned nothing: the draft is still returned.
