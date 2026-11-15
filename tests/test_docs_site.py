@@ -156,6 +156,11 @@ def test_internal_fragment_links_target_existing_heading():
     failures = []
     for source in docs_files():
         for link in INTERNAL_FRAGMENT_LINK.findall(source.read_text(encoding="utf-8")):
+            # An absolute URL's fragment addresses a heading on that site,
+            # never one of our pages (Issue #2194: a GitHub issue-comment
+            # permalink such as .../issues/2182#issuecomment-...).
+            if "://" in link:
+                continue
             page, fragment = link.split("#", 1)
             target = source if not page else DOCS_DIR / page.lstrip("/")
             if target.suffix != ".mdx":
@@ -187,6 +192,20 @@ def test_internal_fragment_links_report_missing_page_and_heading(tmp_path, monke
     message = str(exc_info.value)
     assert "/missing#gone" in message and "missing.mdx" in message
     assert "/target#gone" in message and "missing heading" in message
+
+
+def test_internal_fragment_link_check_ignores_absolute_urls(
+    tmp_path, monkeypatch
+):
+    """An external URL's fragment is not a docs heading (Issue #2194)."""
+    (tmp_path / "source.mdx").write_text(
+        "[the report](https://github.com/orbi-build/orbi/issues/2182"
+        "#issuecomment-6889057653)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(globals(), "DOCS_DIR", tmp_path)
+
+    test_internal_fragment_links_target_existing_heading()
 
 
 def test_mdx_fences_are_balanced_and_closers_are_bare():
