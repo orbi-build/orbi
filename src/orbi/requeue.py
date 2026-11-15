@@ -10,10 +10,11 @@ for a person to do a mechanical step.
 This module makes that decision, once per delivery line:
 
 - the FIRST `github_transient` terminal failure of an Issue whose trusted
-  comments carry no re-queue marker applies the `EVENT_REQUEUE` label patch
-  (the resolved dispatch label back, every delivery-state label removed) and
-  posts ONE comment of its own kind (`<!-- orbi:comment=requeued -->`) saying
-  the run hit a temporary GitHub error and was re-queued automatically. That
+  comments carry no re-queue marker posts ONE comment of its own kind
+  (`<!-- orbi:comment=requeued -->`) saying the run hit a temporary GitHub
+  error and was re-queued automatically, then applies the `EVENT_REQUEUE`
+  label patch (the resolved dispatch label back, every delivery-state label
+  removed) — the counter first, the queue label second (`report_once`). That
   comment IS the run's terminal message: there is no failure block, no
   `ai-blocked`, no milestone notification and no second terminal scene, so
   nothing shows a state a person must act on;
@@ -85,17 +86,28 @@ def report_once(record: failure.Failure, *, issue: dict, source_repo: str,
     """Re-queue the Issue once, or return None to keep the terminal report.
 
     Only a `github_transient` record can be re-queued, and only while no
-    trusted comment records an earlier re-queue. A failed history read keeps
-    the re-queue (the guard must never turn a transient failure into a
-    blocked Issue by itself): the read is the same GitHub the failure came
-    from, and the comment this path posts is the marker the next read looks
-    for.
+    trusted comment records an earlier re-queue. A failed history read —
+    the comment list AND the per-author permission read the trust rule
+    makes — keeps the re-queue: the guard must never turn a transient
+    failure into a blocked Issue by itself, and the read is the same GitHub
+    the failure came from.
+
+    The counter comment lands BEFORE the queue label. The comment IS the
+    counter, so the two writes can fail independently and the order decides
+    what a half-applied re-queue leaves behind: this way a failed comment
+    write leaves the Issue in flight (the next tick resumes the same run,
+    and the marker this path retries is what makes the next identical
+    failure terminal), never `ai-ready` with no marker — which the fresh
+    claim scan would claim again and the same transient failure would
+    re-queue again, without end.
     """
     if record.reason_code != "github_transient":
         return None
     number = int(issue["number"])
     try:
-        history = issue_comments(number, repo=source_repo)
+        already_requeued = marker_present(
+            issue_comments(number, repo=source_repo), repo=source_repo,
+        )
     except Exception:
         # The same comment-history read the failure report performs, and
         # the same fail-open rule: a read failure never turns a transient
@@ -103,8 +115,12 @@ def report_once(record: failure.Failure, *, issue: dict, source_repo: str,
         LOGGER.exception("issue=%s re-queue history read failed", number)
         event("failure_history_read_failed", issue=number, run_id=run_id)
     else:
-        if marker_present(history, repo=source_repo):
+        if already_requeued:
             return None
+    comment_issue(number, repo=source_repo, body=comment_body(
+        run_id=run_id, reason=reason, language_code=language_code,
+        status_url=status_url, issue=number, title=issue["title"],
+    ))
     labels = (
         current_labels if current_labels is not None
         else issue_labels(number, source_repo)
@@ -113,8 +129,4 @@ def report_once(record: failure.Failure, *, issue: dict, source_repo: str,
         number, repo=source_repo, event=EVENT_REQUEUE,
         current_labels=labels, ready_label=ready_label,
     )
-    comment_issue(number, repo=source_repo, body=comment_body(
-        run_id=run_id, reason=reason, language_code=language_code,
-        status_url=status_url, issue=number, title=issue["title"],
-    ))
     return OUTCOME_REQUEUED

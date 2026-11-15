@@ -876,6 +876,51 @@ def test_a_failed_history_read_still_re_queues_once(monkeypatch):
     assert len(_bot_comments(gh)) == 1
 
 
+def test_the_re_queue_comment_lands_before_the_queue_label(monkeypatch):
+    """The comment IS the counter (Issue #2202), so it is written FIRST: a
+    comment write that fails leaves the Issue in flight — the restart-resume
+    scan owns it, and the marker this path retries is what makes the next
+    identical failure terminal — never `ai-ready` with no marker, which the
+    fresh claim scan would claim and the same transient failure would
+    re-queue again, without end."""
+    gh = _requeue_github(monkeypatch)
+
+    commands: list[tuple[str, ...]] = []
+
+    def comment_write_fails(command, **kwargs):
+        commands.append(tuple(command[1:3]))
+        # A validation failure is not retried, so the write raises at once.
+        if tuple(command[1:3]) == ("issue", "comment"):
+            raise subprocess.CalledProcessError(
+                1, command, stderr="gh: Validation Failed (HTTP 422)",
+            )
+        return gh(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", comment_write_fails)
+    with pytest.raises(subprocess.CalledProcessError):
+        _report_implement_failure()
+    # The counter was attempted; no label patch ran behind the lost marker.
+    assert ("issue", "comment") in commands
+    assert ("issue", "edit") not in commands
+    labels = gh.issues[REQUEUE_ISSUE]["labels"]
+    assert "ai-in-progress" in labels
+    assert _bot_comments(gh) == []
+
+
+def test_a_failed_permission_read_still_re_queues_once(monkeypatch):
+    """The trust rule's per-author permission read is part of the same GitHub
+    the failure came from, so the SAME fail-open rule covers it: a failed read
+    keeps the re-queue instead of dropping the whole failure report (no
+    re-queue, no terminal comment, the Issue left in flight)."""
+    gh = _requeue_github(monkeypatch, ("maintainer", "an ordinary comment"))
+    gh.set_permission_failure("maintainer")
+    outcome = _report_implement_failure()
+    assert outcome == "requeued"
+    assert "ai-ready" in gh.issues[REQUEUE_ISSUE]["labels"]
+    assert "ai-blocked" not in gh.issues[REQUEUE_ISSUE]["labels"]
+    assert len(_bot_comments(gh)) == 1
+
+
 def test_provider_quota_stays_terminal_without_a_re_queue(monkeypatch):
     """Acceptance 4 (#698): every other reason is unchanged — an exhausted
     provider quota stops terminal and never re-queues."""
