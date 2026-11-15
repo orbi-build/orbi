@@ -157,8 +157,10 @@ docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi \
 - **怎么看进度** — 每次运行在 Issue 上只保留一条进度评论，每个
   里程碑原位更新；tick 日志用上面的 `journalctl` 命令实时跟踪。
 - **预期结果** — 两个 tick 内出现分支和 PR（描述带 `Fixes #N`），
-  随后独立评审会话运行（最多 5 轮），合并落在被评审的那个
-  commit 上——之后 GitHub 自动关闭 Issue。
+  随后独立评审会话运行（最多 5 轮），被评审的代码在最新 base 上
+  CI 全绿后合并。如果评审之后 base 前进了且没有冲突，Runner 自己把
+  base 合进来，等新 head 的 CI 之后再合并；有冲突或有外部 push 则
+  回到评审。之后 GitHub 自动关闭 Issue。
 - **如何发布** — 发布是独立的 Issue：打 `ai-ready` + `ai-release`
   两个 label，正文声明 `## Release` 块：`version`、`base_branch`，
   以及 `scope`（`#N` 列表）或 `scope_from_milestone`。Runner 的发布

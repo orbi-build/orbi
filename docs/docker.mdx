@@ -139,7 +139,10 @@ reference instead of duplicating it.
   through the `journalctl` command above.
 - **What to expect** — within two ticks the branch and PR exist
   (`Fixes #N` in the body), an independent review session runs (at most
-  5 rounds), and the merge lands exactly the reviewed head — GitHub
+  5 rounds), and the reviewed code merges once CI is green on the latest
+  base. If the base moved after the review, the Runner merges it into the
+  delivery itself when there is no conflict, waits for CI on the new head and
+  only then merges; conflicts or an outside push go back to review. GitHub
   then closes the Issue.
 - **Releases** — a release is its own Issue labelled `ai-ready` +
   `ai-release` whose body declares a `## Release` block: `version`,

@@ -65,9 +65,11 @@ how Orbi could take it; `/orbi:status` says the repository isn't delivered by
 Orbi.
 
 Once Orbi has the Issue, it claims it, implements it on its runner, and opens
-a pull request. An independent reviewer checks that delivery, and only the
-reviewed head is merged. After the merge, Orbi publishes a tagged GitHub
-release.
+a pull request. An independent reviewer checks that delivery; the reviewed
+code merges once CI is green on the latest base. If the base moved after the
+review, Orbi merges it in itself when there is no conflict and waits for CI
+on the new head before merging; conflicts or an outside push go back to
+review. After the merge, Orbi publishes a tagged GitHub release.
 
 ## Requirements
 
