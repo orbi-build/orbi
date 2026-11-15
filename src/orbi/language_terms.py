@@ -7,6 +7,7 @@ stored display value; `language.MESSAGES` merges this map in place, so
 machine row (run marker, `run_id=`, `repo_config:`, `failure:`, receipt
 rows) has an entry here.
 """
+from orbi.language_terms_criteria import CRITERIA_MESSAGES
 from orbi.language_terms_fix import BASE_CI_FIX_MESSAGES
 
 DISPLAY_TERMS: dict[str, tuple[str, str]] = {
@@ -343,53 +344,12 @@ SPLIT_MESSAGES: dict[str, tuple[str, str]] = {
     ),
 }
 
-# The `/orbi amend` command (Issue #1929, typed word renamed by #1975):
-# its rejections and the ONE receipt it leaves. Every entry is display
-# text; the machine contract (the markers, the labels) stays in English
-# and outside the catalog. The heading is display text too: it follows the
-# message language (Issue #1971), while the marker that makes the append
-# idempotent is the same in every language.
-AMEND_MESSAGES: dict[str, tuple[str, str]] = {
-    "criteria.reason_no_suggestion": (
-        "the newest stop comment carries no acceptance-criteria proposal; "
-        "edit that comment into a `kind=criteria` section, then reply again",
-        "最新一条停止评论里没有验收条件提案；把那条评论改成 `kind=criteria` "
-        "段落，然后再回复一次",
-    ),
-    "criteria.reason_invalid_line": (
-        "the acceptance-criteria proposal on the newest stop comment is "
-        "invalid at line {line}; fix that line and reply again",
-        "最新一条停止评论里的验收条件提案在第 {line} 行无效；修好那一行后再回复一次",
-    ),
-    "criteria.reason_not_criteria": (
-        "the newest stop comment proposes `{kind}`, not acceptance "
-        "criteria; `/orbi amend` only adds a `kind=criteria` "
-        "proposal",
-        "最新一条停止评论的提案是 `{kind}`，不是验收条件；"
-        "`/orbi amend` 只添加 `kind=criteria` 提案",
-    ),
-    "criteria.receipt_title": (
-        "**Added the proposed acceptance criteria to this ticket.**",
-        "**已把提案中的验收条件加入这张工单。**",
-    ),
-    "criteria.receipt_item": ("- {text}", "- {text}"),
-    "criteria.receipt_done": (
-        "They are under `{heading}`; the ticket is queued with "
-        "`{label}`.",
-        "它们位于 `{heading}` 之下；工单已用 `{label}` 进入队列。",
-    ),
-    # The heading the appended conditions land under (Issue #1971): a zh
-    # repository reads a Chinese section in an otherwise Chinese ticket,
-    # exactly like the rest of the stop comment's prose.
-    "criteria.acceptance_heading": ("## Acceptance", "## 验收"),
-}
-
 # The one map `language.MESSAGES` merges (the reading point stays
 # `language.py`; this module only keeps the entries).
 EXTRA_MESSAGES: dict[str, tuple[str, str]] = {
     **DISPLAY_TERMS, **BASE_CI_RED_MESSAGES, **CHECK_PERMISSION_MESSAGES,
     **CLARIFY_SUGGESTION_MESSAGES, **SPLIT_MESSAGES,
-    **AMEND_MESSAGES, **BASE_CI_FIX_MESSAGES,
+    **CRITERIA_MESSAGES, **BASE_CI_FIX_MESSAGES,
     # The rejection a NO-ARGUMENT in-ticket command owes its author
     # (Issue #1922): the shared "write exactly one {label}" wording would
     # contradict the usage line printed beside it for an arity-0 command

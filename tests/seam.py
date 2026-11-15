@@ -19,6 +19,7 @@ import orbi.cli_doctor as cli_doctor
 import orbi.cli_source as cli_source
 import orbi.branch_reclaim as branch_reclaim
 import orbi.check_permission as check_permission
+import orbi.acceptance_section as acceptance_section
 import orbi.amend_command as amend_command
 import orbi.comment_trust as comment_trust
 import orbi.draft as draft
@@ -26,6 +27,7 @@ import orbi.draft_marker as draft_marker
 import orbi.suggest as suggest
 import orbi.split_command as split_command
 import orbi.clarify as clarify
+import orbi.clarify_stop as clarify_stop
 import orbi.claim as claim
 import orbi.failure_report as failure_report
 import orbi.github as github
@@ -68,7 +70,7 @@ _MODULES = (
     draft, draft_marker, branch_reclaim, failure_report, suggest, cli,
     blocked_comment,
     base_ci_red, base_ci_fix, cli_commands, cli_doctor, check_permission,
-    split_command, amend_command,
+    split_command, amend_command, acceptance_section, clarify_stop,
 )
 
 

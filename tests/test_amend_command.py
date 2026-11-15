@@ -15,6 +15,7 @@ import subprocess
 
 import pytest
 
+import orbi.acceptance_section as acceptance_section
 import orbi.amend_command as amend_command
 from orbi import claim, clarify, cli, journal, language, ticket_command
 from orbi.config import RunnerConfig
@@ -30,7 +31,7 @@ TICKET = 100
 RUN_MARKER = "<!-- orbi:run=abcdef12 -->"
 STOP_MARKER = "<!-- orbi:clarify-stop:" + "0" * 64 + " -->"
 BODY = "## Outcome\nUsers keep notes.\n"
-APPENDED_MARKER = f"<!-- {amend_command.ACCEPTANCE_MARKER} -->"
+APPENDED_MARKER = f"<!-- {acceptance_section.ACCEPTANCE_MARKER} -->"
 
 
 # --------------------------------------------------------------------------
@@ -48,6 +49,7 @@ TWO_CRITERIA = criteria(
     "Adding a tag makes the note findable by filtering",
     "The tag survives a reload",
 )
+TWO_CRITERIA_TEXTS = tuple(item.text for item in TWO_CRITERIA.items)
 
 SPLIT = clarify.Suggestion(
     kind=clarify.SUGGESTION_SPLIT,
@@ -187,7 +189,7 @@ def label_remove(command: list[str]) -> bool:
 
 def test_the_appended_section_carries_the_heading_lines_and_marker():
     assert amend_command.render_acceptance(
-        TWO_CRITERIA.items, "en",
+        TWO_CRITERIA_TEXTS, "en",
     ) == (
         "## Acceptance\n"
         "- Adding a tag makes the note findable by filtering\n"
@@ -205,7 +207,7 @@ def test_the_appended_section_carries_the_heading_lines_and_marker():
     (None, "## Acceptance"),
 ])
 def test_the_section_is_appended_after_the_existing_body(body, expected):
-    section = amend_command.render_acceptance(TWO_CRITERIA.items, "en")
+    section = amend_command.render_acceptance(TWO_CRITERIA_TEXTS, "en")
     assert amend_command.appended_body(body, section).startswith(expected)
 
 
@@ -214,7 +216,7 @@ def test_the_section_is_appended_after_the_existing_body(body, expected):
 def test_the_heading_follows_the_message_language():
     assert amend_command.acceptance_heading("en") == "## Acceptance"
     assert amend_command.acceptance_heading("zh") == "## 验收"
-    zh = amend_command.render_acceptance(TWO_CRITERIA.items, "zh")
+    zh = amend_command.render_acceptance(TWO_CRITERIA_TEXTS, "zh")
     assert zh == (
         "## 验收\n"
         "- Adding a tag makes the note findable by filtering\n"

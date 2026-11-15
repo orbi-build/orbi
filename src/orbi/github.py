@@ -32,8 +32,8 @@ from orbi.delivery_labels import (
     label_name_set,
     label_patch,
 )
-from orbi.journal import (LOGGER, MilestoneReconcileError,
-                          classify_milestone_error, event, run_command, single_line)
+from orbi.journal import LOGGER, event, run_command, single_line
+from orbi.milestone_errors import MilestoneReconcileError, classify_milestone_error
 from orbi.merge_gate import classify_protection
 from orbi.progress import format_status_comment
 

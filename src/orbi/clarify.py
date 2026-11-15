@@ -7,8 +7,21 @@ real question. Before the claim starts any work, one Pi session with no
 built-in tools — the shipped `clarify_verdict` tool is its only answer
 path (Issue #1955) — judges the ticket body against the three pieces
 every deliverable needs — an **observable result**, an **acceptance
-condition** and a **single outcome** — and a failing verdict stops the
-ticket at the claim:
+condition** and a **single outcome** — and a failing verdict either
+applies the proposal it carries or stops the ticket at the claim.
+
+A failing verdict whose only missing piece is the acceptance condition and
+which carries a usable `kind=criteria` proposal appends those conditions to
+the ticket body — the very section `/orbi amend` writes (Issue #2206, the
+same heading and the same idempotency marker) — posts ONE comment listing
+what was added and noting that editing the ticket changes them, and lets the
+SAME claim continue into delivery: the person authorized the work with the
+claim label, and the proposal is the engine's own reading of the ticket. A
+failed write falls back to the stop below, so `/orbi amend` can finish it,
+and a ticket that already carries the appended section is never amended
+twice.
+
+Every other failing verdict stops the ticket at the claim:
 
 - ONE Issue comment names every missing piece and the repair action;
 - the repository's claim label (default `ai-ready`) is removed and
@@ -37,11 +50,11 @@ official metadata (docs/public-contracts.mdx).
 The module is the pure judgment layer: the model call is the
 `pi_session.run_ticket_agent` leaf and the GitHub writes are the
 `orbi.github` leaves, both resolved at call time so a test's seam patch
-intercepts them.
+intercepts them. The stop record it reads and writes is `orbi.clarify_stop`
+and the acceptance section it may append `orbi.acceptance_section`.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -51,16 +64,17 @@ from pathlib import Path
 from string import Formatter
 from typing import TYPE_CHECKING
 
-from orbi import draft_marker, language, notify, user_summary
+from orbi import acceptance_section, draft_marker, language, notify
+from orbi import user_summary
+from orbi.clarify_stop import (
+    already_stopped, authoritative_stop, build_context, stop_marker,
+)
 from orbi.ticket_criteria import TICKET_CHECK_CRITERIA
 from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
-from orbi.github import (
-    authenticated_github_login, comment_issue, edit_issue, issue_comments,
-    strip_bot_suffix,
-)
+from orbi.github import comment_issue, edit_issue
 from orbi.journal import event
 from orbi.pi_session import run_ticket_agent
-from orbi.progress import RUN_MARKER_PATTERN, run_marker
+from orbi.progress import run_marker
 
 if TYPE_CHECKING:
     from orbi.config import RunnerConfig
@@ -153,24 +167,6 @@ def render_system_prompt(language_code: str) -> str:
 # not hold the slot. A timeout raises out of the shared helper and the
 # caller's fail-open path lets the delivery proceed (Issue #1379).
 CLARIFY_TIMEOUT_SECONDS = 120
-
-# The stop comment carries the digest of the exact text the gate judged
-# (Issue #1904). A re-readied ticket whose text still hashes to the newest
-# stop's digest is not judged again: the comment and notification already
-# on the Issue cover it. Hidden because it is machine state, never prose.
-CLARIFY_STOP_MARKER = "orbi:clarify-stop"
-# The marker counts only in the formal prefix `render_comment()` writes
-# (Issue #1908): the optional `@author` mention line, then the comment's
-# run marker and then the stop marker. Marker-shaped text quoted deeper in
-# a comment — prose, a raw log or a code fence such as a failure comment's
-# `stdout_tail` — is not official metadata (docs/public-contracts.mdx),
-# and honoring it would stop a ticket the gate never rejected.
-_CLARIFY_STOP_RE = re.compile(
-    r"\A(?:@[^\s\n]+\n)?"
-    + RUN_MARKER_PATTERN.pattern
-    + r"\n<!-- " + re.escape(CLARIFY_STOP_MARKER)
-    + r":(?P<digest>[0-9a-f]{64}) -->"
-)
 
 
 def _author_mention(issue: dict) -> str:
@@ -577,115 +573,6 @@ def parse_suggestion(body: object) -> Suggestion | int | None:
     return Suggestion(kind=kind, items=tuple(items))
 
 
-def build_context(issue: dict) -> str:
-    """Return the judgment payload: the raw ticket text."""
-    return (
-        f"Issue #{issue['number']}: {issue['title']}\n\n"
-        f"{issue.get('body') or ''}"
-    )
-
-
-def judged_digest(issue: dict) -> str:
-    """The digest of the exact text one judgment reads (Issue #1904)."""
-    return hashlib.sha256(build_context(issue).encode("utf-8")).hexdigest()
-
-
-def stop_marker(issue: dict) -> str:
-    """The hidden marker a stop comment carries for its judged text."""
-    return f"<!-- {CLARIFY_STOP_MARKER}:{judged_digest(issue)} -->"
-
-
-def _runner_login(issue: dict) -> str | None:
-    """The login this runner posts with, or None when it cannot be read.
-
-    The stop marker steers a claim, so it is only accepted from this
-    runner's own comments: the digest is computed from public ticket text,
-    so any commenter could forge one, and a hidden marker never
-    authenticates its author (docs/public-contracts.mdx). The identity
-    read fails OPEN — an unreadable login means the gate judges the
-    ticket exactly as before Issue #1904.
-    """
-    try:
-        return strip_bot_suffix(authenticated_github_login())
-    except Exception as exc:
-        event(
-            "clarify_check_skipped", level=logging.WARNING,
-            issue=issue["number"], reason=type(exc).__name__,
-        )
-        return None
-
-
-def authoritative_stop(
-    issue: dict, source_repo: str, *, comments: list[dict] | None = None,
-) -> dict | None:
-    """The newest stop comment THIS runner wrote, or None.
-
-    The one locator of the authoritative stop (Issue #1926), so the digest
-    check and every reader of the proposal select the same comment.
-
-    Only the formal prefix counts (Issue #1908): the optional author
-    mention line, the run marker and then the stop marker. Marker text
-    quoted anywhere else — including a failure comment's fenced stdout —
-    is not stop state, so a ticket that was never stopped keeps its claim.
-
-    A marker on somebody else's comment is ignored (and journaled): it is
-    a forged or copied marker, never a stop this engine recorded. The
-    read fails open: an unreadable comment history means the gate judges
-    the ticket exactly as it did before Issue #1904, so a broken read
-    never loses a delivery.
-
-    Selection is comment creation order (oldest first), never the edit
-    time: a stop keeps its position when a person edits it. The newest
-    trusted stop wins even when it carries no proposal, and an older
-    stop's proposal is never reused.
-
-    ``comments`` lets a caller that already read the ticket's comments
-    (the command dispatcher) reuse that read instead of paying a second
-    one; the selection itself is unchanged.
-    """
-    try:
-        if comments is None:
-            comments = issue_comments(issue["number"], repo=source_repo)
-    except Exception as exc:
-        event(
-            "clarify_check_skipped", level=logging.WARNING,
-            issue=issue["number"], reason=type(exc).__name__,
-        )
-        return None
-    own: str | None = None
-    for comment in reversed(comments):
-        if not isinstance(comment, dict):
-            continue
-        body = comment.get("body")
-        if not isinstance(body, str):
-            continue
-        if _CLARIFY_STOP_RE.match(body) is None:
-            continue
-        if own is None:
-            own = _runner_login(issue)
-            if own is None:
-                return None
-        author = comment.get("author")
-        login = author.get("login") if isinstance(author, dict) else None
-        if not isinstance(login, str) or strip_bot_suffix(login) != own:
-            event(
-                "clarify_stop_untrusted", level=logging.WARNING,
-                issue=issue["number"],
-            )
-            continue
-        return comment
-    return None
-
-
-def last_judged_digest(issue: dict, source_repo: str) -> str | None:
-    """Return the digest of the newest stop by THIS runner, or None."""
-    comment = authoritative_stop(issue, source_repo)
-    if comment is None:
-        return None
-    match = _CLARIFY_STOP_RE.match(comment["body"])
-    return match.group("digest") if match is not None else None
-
-
 def stop_suggestion(
     issue: dict, source_repo: str, *, comments: list[dict] | None = None,
 ) -> Suggestion | int | None:
@@ -700,16 +587,6 @@ def stop_suggestion(
     if comment is None:
         return None
     return parse_suggestion(comment.get("body"))
-
-
-def already_stopped(issue: dict, source_repo: str) -> bool:
-    """True when the newest stop judged exactly this ticket text.
-
-    Compares against `build_context`, the text the model reads: a title
-    or body change is a new judgment, an unchanged ticket is not.
-    """
-    previous = last_judged_digest(issue, source_repo)
-    return previous is not None and previous == judged_digest(issue)
 
 
 def parse_verdict(data: object) -> ClarifyVerdict | None:
@@ -898,12 +775,81 @@ def judge_issue_body(issue: dict, config: RunnerConfig, source_repo: str,
     return verdict
 
 
+def acceptable_conditions(
+    verdict: ClarifyVerdict, language_code: str,
+) -> tuple[str, ...]:
+    """The criteria conditions the gate may append for this verdict, or ().
+
+    The proposal must answer exactly this verdict -- the same rule the stop
+    comment renders with `verdict_suggestion` -- and be a `criteria` draft:
+    a split proposal creates child tickets (`/orbi split`), never a section
+    in this ticket's body.
+    """
+    suggestion = verdict.suggestion
+    if suggestion is None or suggestion.kind != SUGGESTION_CRITERIA:
+        return ()
+    if not verdict_suggestion(verdict, language_code):
+        return ()
+    return tuple(item.text for item in suggestion.items)
+
+
+def stop(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
+         source_repo: str, ready_label: str, language_code: str,
+         status_url: str | None = None) -> bool:
+    """Stop one claim: the stop comment, the label swap, the notification.
+
+    `False` is the stop (the ticket waits for a human); `True` is the
+    fail-open bypass a failed comment or label write gives: a broken write
+    must never lose a ticket. The caller passes the repository's claim label
+    (`ai-ready` by default, #527) and the run's message language.
+    """
+    try:
+        comment_issue(
+            issue["number"], repo=source_repo,
+            body=render_comment(
+                issue, verdict, run_id, ready_label=ready_label,
+                language_code=language_code, status_url=status_url,
+            ),
+        )
+        edit_issue(
+            issue["number"], repo=source_repo,
+            add=NEEDS_DETAIL_LABEL, remove=ready_label,
+        )
+    except Exception as exc:
+        event(
+            "clarify_check_skipped", level=logging.WARNING,
+            issue=issue["number"], reason=type(exc).__name__,
+        )
+        return True
+    # Tell the person outside GitHub (Issue #1673): OUTSIDE the try (a
+    # notify problem must never turn the failed-write branch into "deliver
+    # anyway") and every stop sends — the old `ai-needs-detail` can still
+    # be on a ticket someone just re-readied.
+    notify.label_added(
+        source_repo, issue["number"], NEEDS_DETAIL_LABEL,
+        issue.get("title"),
+    )
+    event(
+        "clarify_needs_detail", issue=issue["number"],
+        missing=",".join(verdict.missing),
+    )
+    return False
+
+
 def enforce(issue: dict, config: RunnerConfig, source_repo: str,
             run_id: str) -> bool:
     """Run the gate for one fresh claim.
 
     `True` lets the delivery proceed; `False` stops it (the ticket waits
-    for a human). A failed comment or label write is a bypass: it is
+    for a human). A failing verdict that carries a usable criteria proposal
+    gets that proposal APPENDED to the ticket and the delivery proceeds in
+    this same claim (Issue #2206) — the person authorized the work with the
+    claim label, so a ticket the gate can complete from its own text needs
+    no second command. The appended text is written into `issue`'s body, so
+    the delivery session rendered from that dict reads the conditions too.
+    Every other failing verdict takes `stop`.
+
+    A failed comment or label write is a bypass: it is
     logged as `clarify_check_skipped` and the delivery proceeds. The one
     exception is the unchanged, already-stopped ticket (Issue #1904): its
     stop was already written and notified, so a failed label re-write is
@@ -952,35 +898,17 @@ def enforce(issue: dict, config: RunnerConfig, source_repo: str,
     verdict = judge_issue_body(issue, config, source_repo, run_id)
     if verdict is None or verdict.passed:
         return True
-    try:
-        comment_issue(
-            issue["number"], repo=source_repo,
-            body=render_comment(
-                issue, verdict, run_id, ready_label=ready_label,
-                language_code=language.of(config),
-                status_url=config.status_url,
-            ),
-        )
-        edit_issue(
-            issue["number"], repo=source_repo,
-            add=NEEDS_DETAIL_LABEL, remove=ready_label,
-        )
-    except Exception as exc:
-        event(
-            "clarify_check_skipped", level=logging.WARNING,
-            issue=issue["number"], reason=type(exc).__name__,
-        )
+    language_code = language.of(config)
+    conditions = acceptable_conditions(verdict, language_code)
+    if conditions and acceptance_section.apply(
+        issue, conditions, run_id, source_repo=source_repo,
+        language_code=language_code, status_url=config.status_url,
+    ):
+        # Issue #2206: the missing acceptance conditions are on the ticket
+        # now, so this claim needs no human step and delivers.
         return True
-    # Tell the person outside GitHub (Issue #1673): OUTSIDE the try (a
-    # notify problem must never turn the failed-write branch into "deliver
-    # anyway") and every stop sends — the old `ai-needs-detail` can still
-    # be on a ticket someone just re-readied.
-    notify.label_added(
-        source_repo, issue["number"], NEEDS_DETAIL_LABEL,
-        issue.get("title"),
+    return stop(
+        issue, verdict, run_id, source_repo=source_repo,
+        ready_label=ready_label, language_code=language_code,
+        status_url=config.status_url,
     )
-    event(
-        "clarify_needs_detail", issue=issue["number"],
-        missing=",".join(verdict.missing),
-    )
-    return False

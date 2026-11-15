@@ -482,7 +482,19 @@ same bypass as an unavailable model.
 
 Since v0.7.15, this judgment uses the meaning of the request rather than template headings. A concrete runtime failure with an unambiguous correction can state the result; several symptoms of the same failure can still be one outcome. A log from an earlier attempt does not by itself state an acceptance condition.
 
-A failing verdict stops the attempt before any work exists: ONE Issue
+A failing verdict whose ONLY missing piece is the acceptance condition and
+which carries a usable `criteria` proposal is completed from the ticket's
+own text instead: the proposed conditions are appended to the body under the
+acceptance heading (the very section `/orbi amend` writes, hidden
+`orbi:acceptance:v1` marker included, in the repository's
+`message_language`) and ONE comment lists what was added and says that
+editing the ticket changes them. No `ai-needs-detail` is added and the SAME
+claim goes on to deliver — the person already authorized the work with the
+claim label. A failed write falls back to the stop below, so `/orbi amend`
+can finish the append, and a body that already carries the appended section
+is never amended twice.
+
+Every other failing verdict stops the attempt before any work exists: ONE Issue
 comment lists every missing piece and the repair action, the repository's
 claim label (`ai-ready` by default — `dispatch_label` may name another)
 is replaced by `ai-needs-detail`, and the tick ends — no worktree, no branch,

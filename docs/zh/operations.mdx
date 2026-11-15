@@ -464,6 +464,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `clarify_check_skipped` | 薄 ticket 闸门无法判定或写入失败（fail open） |
 | `clarify_draft_skipped` | 前置检查跳过了 `orbi draft` 创建后未被编辑的 Issue：起草时已由同一个检查判定过 |
 | `clarify_draft_untrusted` | 某个 Issue 带有并非本 runner 创建的草稿标记：忽略，闸门照常判定 |
+| `clarify_criteria_appended` | 闸门把判定附带的、可用的验收条件提案追加到工单的验收标题之下，发一条列出这些条件的评论，本次领取继续交付 |
+| `clarify_criteria_apply_failed` | 闸门无法写入验收条件提案（`step=append` 或 `step=comment`）：工单改走中止路径，可由 `/orbi amend` 补完 |
 | `blocked_by` | 跳过该 Issue：存在未关闭的 blockedBy 依赖 |
 | `blocked_by_check_failed` | blockedBy 查询失败（fail open） |
 | `capacity_full` | 所有 slot 均被占用；本 tick 不领取 |
