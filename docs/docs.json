@@ -13,6 +13,14 @@
     {
       "source": "/zh/release-v0.1.1",
       "destination": "https://github.com/orbi-build/orbi/releases/tag/v0.1.1"
+    },
+    {
+      "source": "/release-v0.1.0",
+      "destination": "https://github.com/orbi-build/orbi/releases/tag/v0.1.0"
+    },
+    {
+      "source": "/zh/release-v0.1.0",
+      "destination": "https://github.com/orbi-build/orbi/releases/tag/v0.1.0"
     }
   ],
   "navigation": {

@@ -528,24 +528,27 @@ def test_docs_config_is_a_mintlify_config_named_orbi():
     )
 
 
-# Issue #1810: commit 0a38fef (Issue #910) moved the pre-generator v0.1.0/v0.1.1
-# records into the GitHub Release bodies and deleted their docs pages, so the two
-# public links that used to point at the v0.1.1 page return 404. Mintlify's native
-# `redirects` array is the mechanism that restores continuity (official docs
-# https://www.mintlify.com/docs/create/redirects: permanent 308 by default,
-# 307 only with `permanent: false`; schema https://www.mintlify.com/docs.json:
-# items carry string `source`/`destination` and an optional boolean `permanent`).
-RETIRED_V011_RELEASE_URL = (
-    "https://github.com/orbi-build/orbi/releases/tag/v0.1.1"
-)
-RETIRED_V011_SOURCES = ("/release-v0.1.1", "/zh/release-v0.1.1")
+# Issue #1810 / Issue #2210: commit 0a38fef (Issue #910) moved the pre-generator
+# v0.1.0/v0.1.1 records into the GitHub Release bodies and deleted their docs
+# pages, so the public links that used to point at those pages return 404.
+# Mintlify's native `redirects` array is the mechanism that restores continuity
+# (official docs https://www.mintlify.com/docs/create/redirects: permanent 308 by
+# default, 307 only with `permanent: false`; schema
+# https://www.mintlify.com/docs.json: items carry string `source`/`destination`
+# and an optional boolean `permanent`).
+RETIRED_RELEASE_REDIRECTS = {
+    "/release-v0.1.0": "https://github.com/orbi-build/orbi/releases/tag/v0.1.0",
+    "/zh/release-v0.1.0": "https://github.com/orbi-build/orbi/releases/tag/v0.1.0",
+    "/release-v0.1.1": "https://github.com/orbi-build/orbi/releases/tag/v0.1.1",
+    "/zh/release-v0.1.1": "https://github.com/orbi-build/orbi/releases/tag/v0.1.1",
+}
 
 
 def redirects_by_source(config: dict) -> dict[str, dict]:
     """The docs.json redirect rules keyed by their exact source path."""
     redirects = config.get("redirects")
     assert isinstance(redirects, list) and redirects, (
-        f"docs.json must carry the retired v0.1.1 redirects, got: {redirects!r}"
+        f"docs.json must carry the retired release redirects, got: {redirects!r}"
     )
     rules: dict[str, dict] = {}
     for rule in redirects:
@@ -559,51 +562,61 @@ def redirects_by_source(config: dict) -> dict[str, dict]:
     return rules
 
 
-def test_retired_v011_release_links_redirect_to_the_github_release():
-    """Issue #1810: the two retired v0.1.1 paths (English and Chinese) are
-    exactly the redirect sources, each with the complete external GitHub
-    Release destination and permanent semantics. No wildcard or broader rule
-    may capture unrelated paths, and the deleted pages stay absent (Issue
-    #910) — the redirect is the continuity, not a restored duplicate page."""
+@pytest.mark.parametrize(
+    ("source", "destination"), sorted(RETIRED_RELEASE_REDIRECTS.items())
+)
+def test_retired_release_links_redirect_to_the_github_release(
+    source: str, destination: str
+):
+    """Issues #1810 and #2210: the retired English and Chinese release-note
+    paths (v0.1.0 and v0.1.1) are exactly the redirect sources, each with the
+    complete external GitHub Release destination and permanent semantics. No
+    wildcard or broader rule may capture unrelated paths — a missing path
+    such as `/path/to/orbi` stays a 404 — and the deleted pages stay absent
+    (Issue #910) — the redirect is the continuity, not a restored page."""
     rules = redirects_by_source(load_docs_config())
-    assert set(rules) == set(RETIRED_V011_SOURCES), (
-        "docs.json redirects must be exactly the two retired v0.1.1 paths, "
-        f"got: {sorted(rules)}"
+    assert set(rules) == set(RETIRED_RELEASE_REDIRECTS), (
+        "docs.json redirects must be exactly the retired release paths "
+        f"{sorted(RETIRED_RELEASE_REDIRECTS)}, got: {sorted(rules)}"
     )
-    for source in RETIRED_V011_SOURCES:
-        rule = rules[source]
-        assert rule.get("destination") == RETIRED_V011_RELEASE_URL, (
-            f"{source} must redirect to the complete GitHub Release URL "
-            f"{RETIRED_V011_RELEASE_URL}, got: {rule.get('destination')!r}"
-        )
-        assert rule.get("permanent") is not False, (
-            f"{source} must keep Mintlify's permanent (308) default, "
-            f"got permanent={rule.get('permanent')!r}"
-        )
-        # A literal suffix append, never Path.with_suffix: the source carries
-        # a version dot ("release-v0.1.1"), which with_suffix would rewrite to
-        # release-v0.1.mdx and make this absence check pass vacuously.
-        path = DOCS_DIR / f"{source.lstrip('/')}.mdx"
-        assert not path.is_file(), (
-            f"{path} must not come back (Issue #910 moved the record to the "
-            "GitHub Release)"
-        )
+    rule = rules[source]
+    assert rule.get("destination") == destination, (
+        f"{source} must redirect to the complete GitHub Release URL "
+        f"{destination}, got: {rule.get('destination')!r}"
+    )
+    assert rule.get("permanent") is not False, (
+        f"{source} must keep Mintlify's permanent (308) default, "
+        f"got permanent={rule.get('permanent')!r}"
+    )
+    # A literal suffix append, never Path.with_suffix: the source carries a
+    # version dot ("release-v0.1.1"), which with_suffix would rewrite to
+    # release-v0.1.mdx and make this absence check pass vacuously.
+    path = DOCS_DIR / f"{source.lstrip('/')}.mdx"
+    assert not path.is_file(), (
+        f"{path} must not come back (Issue #910 moved the record to the "
+        "GitHub Release)"
+    )
 
 
-def test_retired_v011_redirect_check_rejects_a_broad_rule(tmp_path, monkeypatch):
+def test_retired_release_redirect_check_rejects_a_broad_rule(
+    tmp_path, monkeypatch
+):
     """A wildcard (or any other source) fails with the offending source list,
     so a broad rule cannot silently capture unrelated documentation paths."""
     config = tmp_path / "docs.json"
     config.write_text(
         json.dumps({"redirects": [{
             "source": "/release-*",
-            "destination": RETIRED_V011_RELEASE_URL,
+            "destination": "https://github.com/orbi-build/orbi/releases/tag/v0.1.0",
         }]}),
         encoding="utf-8",
     )
     monkeypatch.setitem(globals(), "DOCS_CONFIG", config)
-    with pytest.raises(AssertionError, match=r"exactly the two retired"):
-        test_retired_v011_release_links_redirect_to_the_github_release()
+    with pytest.raises(AssertionError, match=r"exactly the retired release"):
+        test_retired_release_links_redirect_to_the_github_release(
+            "/release-v0.1.0",
+            "https://github.com/orbi-build/orbi/releases/tag/v0.1.0",
+        )
 
 
 def test_docs_navigation_uses_the_verified_i18n_languages_layout():
