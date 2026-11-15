@@ -543,6 +543,24 @@ milestone 的可见摘要就是同一条有长度上限、不含本机路径的�
 或在失败带有明确修复路径时使用 Action（Actions workflow 权限拒绝，Issue
 #1651）——完整的命令 stderr 绝不会被截成第一个词。
 
+### 遇到临时 GitHub 错误后自动重新入队一次
+
+**v0.7.44 起可用。**
+
+在实现阶段（此时还没有任何 PR），`github_transient` 失败会由引擎自己重新排队，
+而且只排一次。Issue 重新拿到队列标签（`ai-ready`，或配置的 dispatch 标签），
+并留下一条自有类型的评论 `<!-- orbi:comment=requeued -->`，说明本次运行遇到了
+临时的 GitHub 错误并被自动重新排队；这里没有 failure block，也不会出现
+`ai-blocked`，因此不会显示任何需要人工处理的状态，下一个 tick 会把它作为新的
+运行重新领取。无需任何人手动重新打标签。
+
+那条评论本身就是计数器——没有按 Issue 的计数器、没有退避、没有新的状态存储。
+如果 Issue 上已经有重新排队标记（由 Runner 自己写入，或由对该仓库有写权限的账号
+写入），同样的失败就和以前一样终止：以 `ai-blocked` 加 failure block 结束，
+因此无法连通的 GitHub 永远不会形成循环。其他人评论里的相似标记会被忽略。
+`provider_quota` 和其它所有原因保持不变：provider 配额停止仍然刻意保持终止状态
+（Issue #698）。
+
 <a id="交付因基础分支已红而暂停base_ci_red"></a>
 
 ### 交付因基础分支已红而暂停：`base_ci_red`

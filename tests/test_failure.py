@@ -23,8 +23,12 @@ import pytest
 import orbi.failure_report as failure_report
 import orbi.runner as runner
 from orbi import failure, progress
+from orbi.comment_kind import (
+    COMMENT_KIND_REQUEUED, comment_kind, comment_kind_marker,
+)
 from orbi.pi_process import RateLimitExhaustedError
 from seam import seam
+from tests.fakes.github import FakeGh
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -708,24 +712,234 @@ def _capture_comment(monkeypatch):
     return posted
 
 
-def test_report_delivery_failure_classifies_a_transient_github_error(monkeypatch):
-    posted = _capture_comment(monkeypatch)
-    outcome = failure_report.report_delivery_failure(
-        github_transient_error(),
-        issue={"number": 1322, "title": "t", "labels": []},
-        source_repo="orbi-build/orbi", run_id=None, pr_url=None,
-        worktree=None, branch="b", role=runner.ROLE_IMPLEMENT,
+# --------------------------------------------------------------------------
+# Issue #2202: one automatic re-queue after a transient GitHub failure
+# --------------------------------------------------------------------------
+
+REQUEUE_ISSUE = 2202
+REQUEUE_RUN_ID = "a1b2c3d4"
+REQUEUE_REPO = "orbi-build/orbi"
+
+
+def _requeue_github(monkeypatch, *seeded_comments, number=REQUEUE_ISSUE,
+                    title="Re-queue once",
+                    labels=("ai-ready", "ai-in-progress")):
+    """The real gh adapter over the in-memory GitHub fake (one seam patch).
+
+    `seeded_comments` are `(login, body)` pairs already on the Issue;
+    `maintainer` can write to the repository, `stranger` cannot.
+    """
+    gh = FakeGh(REQUEUE_REPO)
+    gh.add_issue(number, title=title, labels=labels)
+    gh.add_collaborator("maintainer", "admin")
+    for login, body in seeded_comments:
+        gh.comment(number, body, login=login)
+    monkeypatch.setattr(seam, "run_command", gh)
+    return gh
+
+
+def _report_implement_failure(error=None, **overrides):
+    """One implement-phase terminal report (`classify=False`)."""
+    kwargs = dict(
+        issue={
+            "number": REQUEUE_ISSUE, "title": "Re-queue once",
+            "labels": [{"name": "ai-ready"}, {"name": "ai-in-progress"}],
+        },
+        source_repo=REQUEUE_REPO, run_id=REQUEUE_RUN_ID, pr_url=None,
+        worktree=None, branch="orbi/orbi-build-orbi-issue-2202",
+        role=runner.ROLE_IMPLEMENT,
         reason="the delivery command failed: pull request create failed",
         diagnosis="pull request create failed",
         classify=False, evidence=False, language_code="en",
     )
+    kwargs.update(overrides)
+    return failure_report.report_delivery_failure(
+        github_transient_error() if error is None else error, **kwargs,
+    )
+
+
+def _bot_comments(gh, number=REQUEUE_ISSUE) -> list[str]:
+    """The bodies of the comments this runner wrote on the Issue."""
+    return [
+        comment["body"] for comment in gh.issues[number]["comments"]
+        if comment["author"]["login"] == gh.login
+    ]
+
+
+def test_report_delivery_failure_classifies_a_transient_github_error(monkeypatch):
+    """Acceptance 1 (Issue #2202): the FIRST implement-phase
+    `github_transient` failure re-queues the Issue itself — the dispatch
+    label comes back, ONE comment of the `requeued` kind says what
+    happened, and neither a failure block nor `ai-blocked` appears."""
+    gh = _requeue_github(monkeypatch)
+    publisher = _RecordingPublisher()
+    outcome = _report_implement_failure(publisher=publisher, finish=True)
+    assert outcome == "requeued"
+    labels = gh.issues[REQUEUE_ISSUE]["labels"]
+    assert "ai-ready" in labels
+    assert "ai-in-progress" not in labels
+    assert "ai-blocked" not in labels
+    posted = _bot_comments(gh)
+    assert len(posted) == 1
+    body = posted[0]
+    assert comment_kind(body) == COMMENT_KIND_REQUEUED
+    assert body.startswith(f"{progress.run_marker(REQUEUE_RUN_ID)}\n")
+    assert "temporary GitHub error" in body
+    assert "orbi:failure:v1" not in body
+    assert "<details>" not in body
+    # ONE comment is the whole message: no milestone notification and no
+    # second terminal progress scene, and nothing in it reads as blocked.
+    assert publisher.milestones == []
+    assert publisher.finish_bodies == []
+    assert "blocked" not in body
+
+
+def test_a_second_transient_failure_after_the_re_queue_is_terminal(monkeypatch):
+    """Acceptance 2: a runner-authored re-queue marker on the Issue makes
+    the same failure terminal exactly as before — `ai-blocked` with the
+    failure block — so the automatic re-queue can never loop."""
+    gh = _requeue_github(monkeypatch, ("maintainer", (
+        f"{progress.run_marker('d1e2f3a4')}\n"
+        f"{comment_kind_marker(COMMENT_KIND_REQUEUED)}\n"
+        "Orbi re-queued this Issue automatically: the run hit a temporary "
+        "GitHub error before any PR existed."
+    )))
+    publisher = _RecordingPublisher()
+    outcome = _report_implement_failure(publisher=publisher, finish=True)
     assert outcome == "blocked"
+    labels = gh.issues[REQUEUE_ISSUE]["labels"]
+    assert "ai-blocked" in labels
+    assert "ai-ready" not in labels
+    assert "ai-in-progress" not in labels
+    posted = _bot_comments(gh)
+    assert len(posted) == 1
+    parsed = failure.parse(posted[0])
+    assert parsed == failure.Failure(
+        reason_code="github_transient", action_code="requeue",
+        retry_safe=True, outcome="blocked",
+    )
+    assert "<details>" in posted[0]
+    assert publisher.milestones != []
+
+
+def test_a_re_queue_marker_from_an_untrusted_comment_is_ignored(monkeypatch):
+    """Acceptance 3: the marker is trusted only from a comment whose
+    author can write to the repository (or is this runner): a stranger's
+    look-alike comment re-queues as the first occurrence."""
+    gh = _requeue_github(monkeypatch, ("stranger", (
+        f"{progress.run_marker('d1e2f3a4')}\n"
+        f"{comment_kind_marker(COMMENT_KIND_REQUEUED)}\n"
+        "Orbi re-queued this Issue automatically."
+    )))
+    outcome = _report_implement_failure()
+    assert outcome == "requeued"
+    assert "ai-ready" in gh.issues[REQUEUE_ISSUE]["labels"]
+    assert "ai-blocked" not in gh.issues[REQUEUE_ISSUE]["labels"]
+
+
+def test_the_re_queue_patch_uses_the_caller_labels(monkeypatch):
+    """The implement-phase handler pins the labels it already knows: the
+    re-queue adds the dispatch label and clears the in-flight one."""
+    gh = _requeue_github(monkeypatch)
+    labels = gh.issues[REQUEUE_ISSUE]["labels"]
+    labels[:] = ["ai-in-progress"]
+    outcome = _report_implement_failure(current_labels={"ai-in-progress"})
+    assert outcome == "requeued"
+    assert labels == ["ai-ready"]
+
+
+def test_a_failed_history_read_still_re_queues_once(monkeypatch):
+    """The counter is read through the GitHub adapter; a failed read keeps
+    the re-queue (it must never turn a transient failure into a blocked
+    Issue by itself), and the comment it posts is the next read's marker."""
+    gh = _requeue_github(monkeypatch)
+
+    reads = []
+
+    def unreadable(command, **kwargs):
+        # Only the FIRST comment-history read fails: a plain gh failure is
+        # not retried, so it raises at once, and the writes (with their own
+        # idempotency read) still go through.
+        if tuple(command[1:3]) == ("issue", "view"):
+            reads.append(command)
+            if len(reads) == 1:
+                raise subprocess.CalledProcessError(
+                    1, command, stderr="gh: could not read comments",
+                )
+        return gh(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", unreadable)
+    outcome = _report_implement_failure()
+    assert outcome == "requeued"
+    assert "ai-ready" in gh.issues[REQUEUE_ISSUE]["labels"]
+    assert "ai-blocked" not in gh.issues[REQUEUE_ISSUE]["labels"]
+    assert len(_bot_comments(gh)) == 1
+
+
+def test_the_re_queue_comment_lands_before_the_queue_label(monkeypatch):
+    """The comment IS the counter (Issue #2202), so it is written FIRST: a
+    comment write that fails leaves the Issue in flight — the restart-resume
+    scan owns it, and the marker this path retries is what makes the next
+    identical failure terminal — never `ai-ready` with no marker, which the
+    fresh claim scan would claim and the same transient failure would
+    re-queue again, without end."""
+    gh = _requeue_github(monkeypatch)
+
+    commands: list[tuple[str, ...]] = []
+
+    def comment_write_fails(command, **kwargs):
+        commands.append(tuple(command[1:3]))
+        # A validation failure is not retried, so the write raises at once.
+        if tuple(command[1:3]) == ("issue", "comment"):
+            raise subprocess.CalledProcessError(
+                1, command, stderr="gh: Validation Failed (HTTP 422)",
+            )
+        return gh(command, **kwargs)
+
+    monkeypatch.setattr(seam, "run_command", comment_write_fails)
+    with pytest.raises(subprocess.CalledProcessError):
+        _report_implement_failure()
+    # The counter was attempted; no label patch ran behind the lost marker.
+    assert ("issue", "comment") in commands
+    assert ("issue", "edit") not in commands
+    labels = gh.issues[REQUEUE_ISSUE]["labels"]
+    assert "ai-in-progress" in labels
+    assert _bot_comments(gh) == []
+
+
+def test_a_failed_permission_read_still_re_queues_once(monkeypatch):
+    """The trust rule's per-author permission read is part of the same GitHub
+    the failure came from, so the SAME fail-open rule covers it: a failed read
+    keeps the re-queue instead of dropping the whole failure report (no
+    re-queue, no terminal comment, the Issue left in flight)."""
+    gh = _requeue_github(monkeypatch, ("maintainer", "an ordinary comment"))
+    gh.set_permission_failure("maintainer")
+    outcome = _report_implement_failure()
+    assert outcome == "requeued"
+    assert "ai-ready" in gh.issues[REQUEUE_ISSUE]["labels"]
+    assert "ai-blocked" not in gh.issues[REQUEUE_ISSUE]["labels"]
+    assert len(_bot_comments(gh)) == 1
+
+
+def test_provider_quota_stays_terminal_without_a_re_queue(monkeypatch):
+    """Acceptance 4 (#698): every other reason is unchanged — an exhausted
+    provider quota stops terminal and never re-queues."""
+    gh = _requeue_github(monkeypatch)
+    publisher = _RecordingPublisher()
+    outcome = _report_implement_failure(
+        RateLimitExhaustedError("provider quota exhausted, 429"),
+        publisher=publisher, finish=True,
+    )
+    assert outcome == "blocked"
+    assert "ai-blocked" in gh.issues[REQUEUE_ISSUE]["labels"]
+    assert "ai-ready" not in gh.issues[REQUEUE_ISSUE]["labels"]
+    posted = _bot_comments(gh)
+    assert len(posted) == 1
     parsed = failure.parse(posted[0])
     assert parsed is not None
-    assert parsed.reason_code == "github_transient"
-    assert parsed.action_code == "requeue"
-    assert parsed.retry_safe is True
+    assert parsed.reason_code == "provider_quota"
     assert parsed.outcome == "blocked"
+    assert COMMENT_KIND_REQUEUED not in posted[0]
 
 
 def test_report_delivery_failure_keeps_full_bounded_stderr(monkeypatch):
@@ -804,7 +1018,9 @@ def _milestone_publisher(run_id="c517c8c7"):
 
     Milestones go through the publisher's own `_post_comment`
     (`gh api ... --method POST`), so capturing that command is the real
-    milestone rendering, not a stub.
+    milestone rendering, not a stub. Reads (the comment history the
+    implement-phase report checks before it decides on the automatic
+    re-queue, Issue #2202) are the seam's business, not the publisher's.
     """
     milestones: list[str] = []
 
@@ -826,8 +1042,14 @@ def test_report_delivery_failure_milestone_is_machine_readable(monkeypatch):
     """Acceptance: the live `Orbi: blocked` milestone (the shape
     orbi-build/orbi#1088 shows) carries the same block as the detailed
     comment, the full bounded stderr, and no truncated `stderr: pull`
-    line."""
+    line. The Issue already records one automatic re-queue, so the same
+    transient failure is terminal (Issue #2202)."""
     posted = _capture_comment(monkeypatch)
+    _requeue_github(monkeypatch, ("maintainer", (
+        f"{progress.run_marker('d1e2f3a4')}\n"
+        f"{comment_kind_marker(COMMENT_KIND_REQUEUED)}\n"
+        "Orbi re-queued this Issue automatically."
+    )), number=1322, title="t")
     publisher, milestones = _milestone_publisher()
     stderr = (
         "pull request create failed: GraphQL: Something went wrong while "

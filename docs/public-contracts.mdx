@@ -26,7 +26,7 @@ The [Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md)
 | Session files | `<worktree>/.pi-session/*.jsonl` |
 | Naming | Branch `orbi/<owner>-<repo>-issue-<N>`; worktree `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>` |
 | GitHub markers | `<!-- orbi:run=<run_id> -->` in every run-scoped comment and PR body; `Fixes #<N>` in the PR body |
-| Comment kinds | the hidden `<!-- orbi:comment=started -->`, `<!-- orbi:comment=failure -->`, `<!-- orbi:comment=review-round -->` and `<!-- orbi:comment=merged -->` markers on the line after the run marker identify the started, complete failure, completed review-round and merged comments; see [Comment kinds and machine metadata](#comment-kinds-and-machine-metadata) |
+| Comment kinds | the hidden `<!-- orbi:comment=started -->`, `<!-- orbi:comment=failure -->`, `<!-- orbi:comment=review-round -->`, `<!-- orbi:comment=merged -->` and `<!-- orbi:comment=requeued -->` markers on the line after the run marker identify the started, complete failure, completed review-round, merged and automatic re-queue comments; see [Comment kinds and machine metadata](#comment-kinds-and-machine-metadata) |
 | Run scene | the hidden versioned block `<!-- orbi:scene:v1 {json} -->` in the trusted `Orbi opened PR` comment, rendered and parsed by `src/orbi/scene.py`; the machine-readable record used to resume an opened-PR delivery (the human-readable text beside it is display only) |
 | Requirements skill | the directory `integrations/claude-plugin/skills/write-ai-ready-issue/` — `SKILL.md` (how an agent turns a one-line idea into a deliverable Issue) and `fidelity-pass.md` (the independent check that the draft asks for exactly what the person asked) |
 | Suggestions | the document `orbi suggest --json` prints — `{"repo", "base_sha", "session_dir", "suggestions": [{"kind": "existing" or "new", "issue": the Issue number for existing and null for new, "title", "why", "body": the Issue body for new and null for existing, "size": the estimated number of files the change edits (an integer, or null when unknown)}]}` — that `size` key is present only when the caller passed `--size <n>` — at most three entries, ordered by priority; `--size <n>` (a positive integer) also asks the answer's first entry to be exactly one task grounded in the repository's own files that edits at most n files (none when the repository offers none, never padded), and a value that is not a positive integer is an argument error; `session_dir` is `<deploy_home>/.orbi/suggest/<run_id>/.pi-session/`, holding the suggestions session's Pi JSONL in the same format as delivery session files; the same run directory also holds the parallel understanding session's Pi JSONL at `<deploy_home>/.orbi/suggest/<run_id>/.understanding/.pi-session/`, in the same format, so a caller accounting the run's model usage reads both directories. The run directory `<deploy_home>/.orbi/suggest/<run_id>/` is kept after the command exits, on success and on failure — and the skill directory `integrations/claude-plugin/skills/suggest-ai-ready-issues/` that produces it |
@@ -153,7 +153,7 @@ A terminal or manual GitHub fact — the Issue closed or merged, or a confirmed 
 Every run-scoped comment starts with the hidden run marker
 `<!-- orbi:run=<run_id> -->`. The marker carries the run identity; it
 does not authenticate an author, so a consumer keeps its own trusted-author
-rules. Four kinds are official, written on the line right after the run
+rules. Five kinds are official, written on the line right after the run
 marker:
 
 ```html
@@ -168,9 +168,14 @@ marker:
 - `review-round`: a COMPLETED review report; its `orbi:scene:v1` block
   supplies the round counter and the PR URL.
 - `merged`: the merge receipt.
+- `requeued`: the one automatic re-queue of a transient GitHub failure before
+  any PR exists (see [Workflow](/workflow)). Its presence in a runner-written
+  comment IS the whole counter: the same failure after it is terminal
+  (`ai-blocked` with a `failure` comment), so a re-queue never loops. The
+  comment carries no `orbi:failure:v1` block — nothing blocked happened.
 
 Official metadata occupies the contiguous prefix that begins with the run
-marker. On the four kinded comments the kind follows the run marker; progress
+marker. On the five kinded comments the kind follows the run marker; progress
 comments keep their existing run-marker-then-progress-block prefix and carry
 no kind; the existing scene and failure blocks follow as applicable. A
 marker-shaped string quoted in the human body, a raw log or a code fence is

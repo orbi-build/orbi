@@ -680,6 +680,26 @@ the reader-facing action when the failure carries a specific repair path
 (the Actions-workflow permission refusal, Issue #1651) — a full command
 stderr is never cut to its first word.
 
+### One automatic re-queue after a transient GitHub failure
+
+**Available since v0.7.44.**
+
+In the implement phase — no PR exists yet — a `github_transient` failure is
+re-queued by the engine itself, ONCE. The Issue gets its queue label back
+(`ai-ready`, or the configured dispatch label) and one comment of its own kind
+`<!-- orbi:comment=requeued -->` says the run hit a temporary GitHub error and
+was re-queued automatically; there is no failure block and no `ai-blocked`, so
+nothing shows a state a person must act on, and the next tick claims the Issue
+again as a new run. Nobody has to relabel it.
+
+That comment IS the counter — there is no per-Issue counter, no backoff and no
+new state store. A re-queue marker already on the Issue (written by the runner
+itself, or by an account that can write to the repository) makes the same
+failure terminal exactly as before: `ai-blocked` with the failure block, so an
+unreachable GitHub can never loop. A look-alike marker in anyone else's comment
+is ignored. `provider_quota` and every other reason are unchanged: a provider
+quota stop stays terminal on purpose (Issue #698).
+
 ### A delivery paused on a red base branch: `base_ci_red`
 
 **Available since v0.7.15, including `/orbi fix-base`.**
