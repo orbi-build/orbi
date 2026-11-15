@@ -28,8 +28,8 @@ from pathlib import Path
 import pytest
 
 from orbi import (
-    failure, failure_report, language, pi_activity, progress, runner,
-    runner_health, scene,
+    failure, failure_evidence, failure_report, language, pi_activity,
+    progress, runner, runner_health, scene,
 )
 from tests.fakes.github import FakeGh
 from tests.fakes.progress import freeze_report_time
@@ -89,6 +89,22 @@ MOVED = (
     "_BLOCKED_PRECONDITION_PHRASE_KEY",
     "_SGR_RE",
     "comment_pr",
+)
+# Issue #2202 moved the bounded evidence rendering one level further, into
+# `orbi.failure_evidence` (Article 3.5: `failure_report` reached the
+# 1,000-line cap the size ratchet freezes, so the next feature landing in it
+# splits it by domain first). `failure_report` re-exports those names, so a
+# caller reaching `failure_report._failure_evidence` keeps working.
+EVIDENCE_MOVED = (
+    "_SGR_RE",
+    "_tail_text",
+    "_latest_session_file",
+    "_session_summary",
+    "SESSION_SUMMARY_LIMIT",
+    "EVIDENCE_SEGMENT_CAP",
+    "_EVIDENCE_CAP_STEP",
+    "_failure_evidence",
+    "FAILURE_COMMENT_MAX_CHARS",
 )
 # `comment_pr` moved here instead of `github.py`: the frozen size ratchet
 # (github.py at 1146 lines against its 1162 ceiling) forbids the +58 lines,
@@ -427,7 +443,20 @@ def _imported_modules(tree: ast.Module) -> list[str]:
 
 
 def test_failure_report_owns_the_moved_definitions():
-    assert set(MOVED) <= _module_names("failure_report")
+    assert set(MOVED) - set(EVIDENCE_MOVED) <= _module_names("failure_report")
+
+
+def test_failure_evidence_owns_the_extracted_rendering():
+    """Issue #2202: the rendering moved verbatim; the names survive on the
+    new module, and every one `failure_report` still exposes is the SAME
+    object (a re-export, not a second copy)."""
+    assert set(EVIDENCE_MOVED) <= _module_names("failure_evidence")
+    for name in (
+        "FAILURE_COMMENT_MAX_CHARS", "SESSION_SUMMARY_LIMIT",
+        "_failure_evidence", "_latest_session_file", "_session_summary",
+        "_tail_text",
+    ):
+        assert getattr(failure_report, name) is getattr(failure_evidence, name)
 
 
 def test_runner_no_longer_defines_the_moved_definitions():

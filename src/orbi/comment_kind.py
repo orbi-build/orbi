@@ -1,13 +1,14 @@
 """Canonical, display-independent comment kinds (Issue #1659).
 
 Every run-scoped comment starts with the hidden run marker
-(`<!-- orbi:run=<run_id> -->`). The four KINDED comments carry one more
+(`<!-- orbi:run=<run_id> -->`). The five KINDED comments carry one more
 hidden marker on the line right after it:
 
     <!-- orbi:comment=started -->
     <!-- orbi:comment=failure -->
     <!-- orbi:comment=review-round -->
     <!-- orbi:comment=merged -->
+    <!-- orbi:comment=requeued -->
 
 so a consumer identifies the comment without parsing a translatable
 heading. The kind is read only from that anchored prefix; a
@@ -42,21 +43,21 @@ COMMENT_KIND_STARTED = "started"
 COMMENT_KIND_FAILURE = "failure"
 COMMENT_KIND_REVIEW_ROUND = "review-round"
 COMMENT_KIND_MERGED = "merged"
+# The kind marker IS the record that the Issue was re-queued once (#2202).
+COMMENT_KIND_REQUEUED = "requeued"
 COMMENT_KINDS = (
     COMMENT_KIND_STARTED, COMMENT_KIND_FAILURE,
-    COMMENT_KIND_REVIEW_ROUND, COMMENT_KIND_MERGED,
+    COMMENT_KIND_REVIEW_ROUND, COMMENT_KIND_MERGED, COMMENT_KIND_REQUEUED,
 )
 COMMENT_KIND_TEMPLATE = "<!-- orbi:comment={kind} -->"
-COMMENT_KIND_PATTERN = re.compile(r"<!-- orbi:comment=([a-z-]+) -->")
 
 # The official metadata prefix, anchored at the body's start: the run
-# marker on the first line and, on a kinded comment, the kind marker on
-# the line immediately after. Anchoring means a marker-shaped string
-# quoted in prose, a raw log or a code fence is never read as metadata.
+# marker on the first line and, on a kinded comment, the kind marker on the
+# line immediately after. Anchoring means a marker-shaped string quoted in
+# prose, a raw log or a code fence is never read as metadata.
 _KIND_PREFIX_RE = re.compile(
     r"\A<!-- orbi:run=" + RUN_ID_PATTERN.pattern
-    + r" -->\r?\n<!-- orbi:comment=([a-z-]+) -->"
-)
+    + r" -->\r?\n<!-- orbi:comment=([a-z-]+) -->")
 
 
 def comment_kind_marker(kind: str) -> str:
@@ -114,10 +115,8 @@ def parse_versioned_block(
     unknown = sorted(set(data) - set(fields))
     if unknown:
         raise error(f"{marker} block has unknown fields: {unknown}")
-    missing = sorted(
-        name for name in (fields if required is None else required)
-        if name not in data
-    )
+    expected = fields if required is None else required
+    missing = sorted(name for name in expected if name not in data)
     if missing:
         raise error(f"{marker} block is missing fields: {missing}")
     return data

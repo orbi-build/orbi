@@ -11,23 +11,24 @@ milestone and the terminal progress scene as a pure bypass.
 A verbatim extraction out of `orbi.runner` (Issue #1260, Constitution
 Article 3.2: an extraction never changes behaviour), so it imports
 nothing from `orbi.runner` back (Article 3.3) and the runner reaches it
-as `failure_report.<name>`. `comment_pr` moved here too: the frozen
-`orbi.github` size ceiling (github.py at 1146 lines against 1162)
-forbids the +58 lines the preferred home would need. The review-round
-accounting (`current_review_round`) lives in the `review_rounds` sibling,
-which this module imports and re-exports for its existing callers.
+as `failure_report.<name>`. The bounded evidence rendering moved one
+level further into `orbi.failure_evidence` (Issue #2202, Article 3.5)
+and is re-exported here for its existing callers. `comment_pr` moved here
+too: the frozen `orbi.github` size ceiling (github.py at 1146 lines
+against 1162) forbids the +58 lines the preferred home would need. The
+review-round accounting (`current_review_round`) lives in the
+`review_rounds` sibling, which this module imports and re-exports for its
+existing callers.
 """
 from __future__ import annotations
 
 import functools
-import json
 import logging
-import os
-import re
 from pathlib import Path
 
 from orbi import (
-    base_ci_fix, base_ci_red, failure, language, runner_health, scene, user_summary,
+    base_ci_fix, base_ci_red, failure, failure_evidence, language, requeue,
+    runner_health, scene, user_summary,
 )
 from orbi.blocked_comment import post_blocked_comment
 from orbi.comment_kind import (
@@ -43,17 +44,24 @@ from orbi.failure import (
     failure_comment_body, failure_detail, failure_summary,
     redact_local_paths, terminal_action,
 )
+# The bounded evidence rendering moved to its own module (Article 3.5,
+# Issue #2202). It is re-exported here for the existing callers and
+# tests that reach it as `failure_report.<name>`.
+from orbi.failure_evidence import (
+    FAILURE_COMMENT_MAX_CHARS, SESSION_SUMMARY_LIMIT, _failure_evidence,
+    _latest_session_file, _session_summary, _tail_text,
+)
 from orbi.github import (
     pr_number, apply_label_patch, comment_issue, issue_comments,
     issue_labels, issue_priority, pr_comments, run_gh_write_command,
     update_issue_comment,
 )
 from orbi.journal import LOGGER, event, issue_context, run_command
-from orbi.pi_activity import activity_snapshot, latest_session_file
+from orbi.pi_activity import activity_snapshot
 from orbi.pi_process import RateLimitExhaustedError
 from orbi.progress import (
     FAILURE_MARKER_PATTERN, RUN_MARKER_PATTERN, ProgressPublisher,
-    bump_failure_repeat, failure_marker, failure_repeat_count, fenced,
+    bump_failure_repeat, failure_marker, failure_repeat_count,
     finish_progress_body, format_status_comment, run_marker, safe_publish,
 )
 from orbi.review_rounds import current_review_round, review_rounds_so_far
@@ -180,110 +188,6 @@ def comment_pr(number: int, *, repo: str, body: str) -> None:
     )
 
 
-_SGR_RE = re.compile(r"(?:\x1b\[[0-9;]*m|\^\[\[[0-9;]*m)")
-
-
-def _tail_text(path: Path, *, lines: int = 20, chars: int = 4000) -> str:
-    """Read a bounded, de-coloured tail for failure evidence."""
-    try:
-        with path.open("rb") as handle:
-            handle.seek(0, os.SEEK_END)
-            size = handle.tell()
-            # UTF-8 characters are at most four bytes.  This is enough to
-            # retain the requested character tail without reading a huge
-            # test log or session file into memory.
-            window = min(size, chars * 4 + 1)
-            handle.seek(size - window)
-            content = handle.read(window).decode("utf-8", errors="replace")
-    except (OSError, UnicodeError):
-        return "<unavailable>"
-    tail = "\n".join(content.splitlines()[-lines:])
-    tail = _SGR_RE.sub("", tail)
-    return tail[-chars:] if len(tail) > chars else tail
-
-
-# The number of session records a failure comment summarizes.
-SESSION_SUMMARY_LIMIT = 20
-
-
-def _latest_session_file(worktree: Path | None) -> Path | None:
-    """The most recent pi session log in the worktree, or None.
-
-    Only the root is resolved here: the "newest `*.jsonl` by mtime" rule
-    is `pi_activity.latest_session_file`, the single implementation the
-    live activity watcher also uses, so the rule cannot drift (Issue
-    #1854).
-    """
-    if worktree is None:
-        return None
-    return latest_session_file(worktree / ".pi-session")
-
-
-def _session_summary(session_file: Path,
-                     *, limit: int = SESSION_SUMMARY_LIMIT) -> str:
-    """Structured summary of the last session records.
-
-    One line per parsed record — timestamp, type, role, tool name and
-    content-block kinds; the record text itself never enters the comment
-    (the full log path is named next to the segment). A record whose
-    text blocks repeat the previous record's is skipped: pi logs the
-    final assistant text twice (once inside the full message, once
-    standalone), which used to duplicate whole paragraphs in the
-    comment. Unparsable tail lines are skipped; an unreadable file is
-    the `<unavailable>` placeholder.
-    """
-    try:
-        with session_file.open("rb") as handle:
-            handle.seek(0, os.SEEK_END)
-            size = handle.tell()
-            window = min(size, 65536)
-            handle.seek(size - window)
-            content = handle.read(window).decode("utf-8", errors="replace")
-    except (OSError, UnicodeError):
-        return "<unavailable>"
-    summary: list[str] = []
-    previous_text: str | None = None
-    for line in reversed(content.splitlines()):
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(record, dict):
-            continue
-        message = record.get("message")
-        message = message if isinstance(message, dict) else {}
-        blocks = message.get("content")
-        blocks = blocks if isinstance(blocks, list) else []
-        text = "".join(
-            block.get("text", "") for block in blocks
-            if isinstance(block, dict) and block.get("type") == "text"
-        )
-        if text and text == previous_text:
-            continue
-        previous_text = text or None
-        parts = [str(record.get("type", "?"))]
-        if message.get("role"):
-            parts.append(f"role={message['role']}")
-        if message.get("toolName"):
-            parts.append(f"tool={message['toolName']}")
-        kinds = []
-        for block in blocks:
-            if not isinstance(block, dict):
-                continue
-            kind = str(block.get("type", "?"))
-            if kind == "toolCall" and block.get("name"):
-                kind = f"toolCall:{block['name']}"
-            kinds.append(kind)
-        if kinds:
-            parts.append(f"content={','.join(kinds)}")
-        summary.append(f"{record.get('timestamp', '-')} {' '.join(parts)}")
-        if len(summary) >= limit:
-            break
-    if not summary:
-        return "<unparsable>"
-    return "\n".join(reversed(summary))
-
-
 def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
                    branch: str, worktree: str, pr_url: str | None = None,
                    language_code: str) -> str:
@@ -336,59 +240,6 @@ def _failure_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
     )
 
 
-# One evidence segment's cap (Issue #1711, `fenced`'s default) and one
-# fitting step: an oversized comment shrinks these, never its structure.
-EVIDENCE_SEGMENT_CAP = 4000
-_EVIDENCE_CAP_STEP = 500
-
-
-def _failure_evidence(worktree: Path | None, exc: BaseException, *,
-                      language_code: str,
-                      cap: int = EVIDENCE_SEGMENT_CAP) -> str:
-    """Render the bounded evidence that survives terminal worktree cleanup.
-
-    Pi subprocess streams come from ``CalledProcessError``. The session and
-    test log are read before cleanup and only bounded, fenced segments are
-    copied into the failure comment: raw output stays literal on GitHub,
-    the session tail is a structural summary whose duplicates are removed,
-    and the full session log is named for the deep-dive. The
-    failure reason itself stays the readable head of the comment.
-
-    `cap` bounds each segment, so every fence closes (Issue #1711).
-    """
-    stderr = getattr(exc, "stderr", None)
-    stdout = getattr(exc, "output", None)
-    if isinstance(stderr, bytes):
-        stderr = stderr.decode(errors="replace")
-    if isinstance(stdout, bytes):
-        stdout = stdout.decode(errors="replace")
-    stderr = str(stderr) if stderr else "<empty>"
-    stdout = str(stdout) if stdout else "<empty>"
-    return_code = getattr(exc, "returncode", None)
-    session_file = _latest_session_file(worktree)
-    session = (
-        _session_summary(session_file) if session_file else "<unavailable>"
-    )
-    session_label = (
-        language.text(language_code, "failure.scene.local_session_log")
-        if session_file else "<unavailable>"
-    )
-    test_log = "<unavailable>"
-    if worktree is not None:
-        test_path = worktree / ".orbi" / "test.log"
-        if test_path.is_file():
-            test_log = _tail_text(test_path)
-    return (
-        f"\n\n{language.text(language_code, 'failure.evidence.heading')}\n"
-        f"exit_code={return_code if return_code is not None else '<unknown>'}\n"
-        f"\nstderr_tail:\n{fenced(redact_local_paths(stderr), cap=cap)}\n"
-        f"\nstdout_tail:\n{fenced(redact_local_paths(stdout), cap=cap)}\n"
-        f"\n{language.text(language_code, 'failure.evidence.session_last_events', limit=SESSION_SUMMARY_LIMIT, label=session_label)}\n"
-        f"{fenced(redact_local_paths(session), cap=cap)}\n"
-        f"\ntest_log_tail:\n{fenced(redact_local_paths(test_log), cap=cap)}"
-    )
-
-
 # The failure-scene snapshot placeholder — the fields a
 # failure comment shows when no session file exists yet (the Pi never
 # started or the session dir is gone). One constant for every reporter.
@@ -420,11 +271,6 @@ def _snapshot_or_placeholder(session_dir: Path, *, number: int) -> dict:
 # classified blocked branch names WHY automatic recovery is impossible,
 # the recoverable branch names the automatic next step.
 _BLOCKED_PRECONDITION_PHRASE_KEY = "failure.blocked_precondition"
-
-
-# The failure comment's size limit: the body stays under it by shrinking
-# only the evidence segments, never by cutting the comment (Issue #1711).
-FAILURE_COMMENT_MAX_CHARS = 20000
 
 
 # The dead-loop limit (Issue #825): the same (run_id, failure
@@ -630,6 +476,56 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
     )
 
 
+def _update_reported_failure(*, number: int, source_repo: str,
+                             run_id: str | None, fingerprint: str,
+                             reported_failure: dict, body: str) -> bool:
+    """Report this occurrence by updating its existing comment (Issue #825).
+
+    Returns whether a NEW comment must be posted. `gh issue view --json
+    comments` returns a GraphQL node id while the PATCH route requires the
+    REST id, and the comment URL already carries that id, so no second API
+    request is made.
+    """
+    comment_rest_id = rest_comment_id(reported_failure)
+    if comment_rest_id is None:
+        # A malformed or missing URL is data loss in the dedup metadata,
+        # not a delivery failure. Preserve the pre-#825 behavior so the
+        # current failure is still recorded and the tick continues.
+        unavailable_reason = "comment URL has no #issuecomment-<digits> suffix"
+        LOGGER.warning(
+            "issue=%s failure comment id unavailable: %s",
+            number, unavailable_reason,
+        )
+        event(
+            "failure_comment_id_unavailable", level=logging.ERROR,
+            issue=number, run_id=run_id, reason=unavailable_reason,
+        )
+        return True
+    # A resolved existing comment owns this occurrence even if its PATCH
+    # fails. Preserve the existing update-failure behavior: log the
+    # failure without attempting a second ordinary comment.
+    try:
+        update_issue_comment(
+            comment_rest_id, repo=source_repo,
+            # Apply the increment to the newly assembled body, not the
+            # stale first report. This preserves scene/retry fields added
+            # by this attempt while retaining the dedup counter.
+            body=bump_failure_repeat(body, fingerprint),
+        )
+    except Exception:
+        LOGGER.exception("issue=%s failure comment update failed", number)
+        event(
+            "failure_comment_update_failed", level=logging.ERROR,
+            issue=number, run_id=run_id,
+        )
+    else:
+        event(
+            "failure_comment_deduplicated", issue=number,
+            run_id=run_id, fingerprint=fingerprint,
+        )
+    return False
+
+
 def report_delivery_failure(
     exc: BaseException, *, issue: dict, source_repo: str,
     run_id: str | None, pr_url: str | None, worktree: Path | None,
@@ -679,6 +575,13 @@ def report_delivery_failure(
     PATCHes the tracked comment directly instead of relocating it by
     the run marker. `evidence` appends the bounded
     `_failure_evidence` block after the scene.
+
+    The implement-phase terminal report (`classify=False`) re-queues a
+    `github_transient` failure ONCE instead of blocking the Issue
+    (`orbi.requeue`, Issue #2202): the Issue gets its dispatch label back
+    and one `requeued` comment, and no failure block is written. The second
+    occurrence, `provider_quota` and every other reason end terminal exactly
+    as before.
 
     Label and ordinary comment failures retain their existing caller
     semantics: a malformed deduplicated comment URL posts a fresh failure
@@ -755,6 +658,21 @@ def report_delivery_failure(
     failure_record = _classify_failure(
         exc, outcome="blocked" if blocked else "fix_needed",
     )
+    # Issue #2202: before any PR exists, a transient GitHub failure is a
+    # condition the engine retries itself (`DISPOSITIONS` rates it
+    # `requeue`), so the implement-phase terminal report puts the Issue back
+    # in the queue ONCE instead of waiting for a person to relabel it. The
+    # re-queue comment is the whole counter: a marker already on the Issue
+    # keeps this same failure terminal as before.
+    if not classify and run_id:
+        requeued = requeue.report_once(
+            failure_record, issue=issue, source_repo=source_repo,
+            run_id=run_id, reason=reason, current_labels=current_labels,
+            ready_label=ready_label, language_code=language_code,
+            status_url=status_url,
+        )
+        if requeued is not None:
+            return requeued
 
     def scene_line() -> str | None:
         """The run scene for the body, or None when omitted.
@@ -852,14 +770,10 @@ def report_delivery_failure(
     help_suffix = (
         f"\n\n{language.text(language_code, 'help.community')}" if blocked else ""
     )
-    cap = EVIDENCE_SEGMENT_CAP
-    while (evidence_detail and cap
-           and len(body) + len(help_suffix) > FAILURE_COMMENT_MAX_CHARS):
-        cap = max(0, cap - _EVIDENCE_CAP_STEP)
-        shrunk = _failure_evidence(
-            worktree, exc, language_code=language_code, cap=cap)
-        body = body.replace(evidence_detail.lstrip(), shrunk.lstrip(), 1)
-        evidence_detail = shrunk
+    body = failure_evidence.fit_to_limit(
+        body, worktree, exc, evidence=evidence_detail, tail=help_suffix,
+        language_code=language_code,
+    )
     if run_id:
         # The hidden fingerprint marker rides under the run marker on
         # the recoverable path only: a blocked Issue is terminal, so
@@ -879,49 +793,11 @@ def report_delivery_failure(
         )
     post_new_comment = True
     if run_id and reported_failure is not None and not blocked:
-        # The #825 dedup: `gh issue view --json comments` returns a GraphQL
-        # node id, but the PATCH route requires the REST id. The comment URL
-        # already carries that id, so do not make a second API request.
-        comment_rest_id = rest_comment_id(reported_failure)
-        if comment_rest_id is None:
-            # A malformed or missing URL is data loss in the dedup metadata,
-            # not a delivery failure. Preserve the pre-#825 behavior so the
-            # current failure is still recorded and the tick continues.
-            unavailable_reason = (
-                "comment URL has no #issuecomment-<digits> suffix"
-            )
-            LOGGER.warning(
-                "issue=%s failure comment id unavailable: %s",
-                number, unavailable_reason,
-            )
-            event(
-                "failure_comment_id_unavailable", level=logging.ERROR,
-                issue=number, run_id=run_id, reason=unavailable_reason,
-            )
-        else:
-            # A resolved existing comment owns this occurrence even if its
-            # PATCH fails. Preserve the existing update-failure behavior:
-            # log the failure without attempting a second ordinary comment.
-            post_new_comment = False
-            try:
-                update_issue_comment(
-                    comment_rest_id, repo=source_repo,
-                    # Apply the increment to the newly assembled body, not the
-                    # stale first report. This preserves scene/retry fields
-                    # added by this attempt while retaining the dedup counter.
-                    body=bump_failure_repeat(body, fingerprint),
-                )
-            except Exception:
-                LOGGER.exception("issue=%s failure comment update failed", number)
-                event(
-                    "failure_comment_update_failed", level=logging.ERROR,
-                    issue=number, run_id=run_id,
-                )
-            else:
-                event(
-                    "failure_comment_deduplicated", issue=number,
-                    run_id=run_id, fingerprint=fingerprint,
-                )
+        post_new_comment = _update_reported_failure(
+            number=number, source_repo=source_repo, run_id=run_id,
+            fingerprint=fingerprint, reported_failure=reported_failure,
+            body=body,
+        )
     if post_new_comment and blocked:
         # The blocked exit owns the label patch and the help line (Issue
         # #1730): the label lands first, the comment second.
