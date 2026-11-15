@@ -208,6 +208,33 @@ def test_a_round_that_only_asks_questions_returns_no_issues(
     assert "check" not in answer
 
 
+# --- a request not to change code ends with a reply alone (Issue #2201) ---
+
+REPLY_ONLY = (
+    "Nothing here is worth changing as code; the button label reads fine."
+)
+
+
+def test_a_reply_only_round_returns_no_issues_and_runs_no_check(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """Issue #2201: an explicit "do not change code" answer carries a reply
+    alone, so the round prints it with empty issues and questions and runs
+    neither the fidelity pass nor the pre-work check."""
+    judged = draft_fakes.judge_passing(monkeypatch)
+    sessions.queue({"kind": "reply", "reply": REPLY_ONLY})
+    code, out, err = run_round_cli(
+        config, {"message": "just review it, don't touch the code"},
+        tmp_path / "session",
+    )
+    assert code == 0, err
+    assert json.loads(out) == {
+        "reply": REPLY_ONLY, "questions": [], "issues": [],
+    }
+    assert sessions.fidelity_calls == []
+    assert judged == []
+
+
 def test_a_bare_string_question_parses_without_header_or_options(
     config, sessions, monkeypatch, tmp_path,
 ):
@@ -1496,6 +1523,40 @@ ASSUMPTIONS_ONLY_WITH_A_DECISION = (
 )
 
 
+# --- the no-code route in every text the model reads (Issue #2201) ------
+
+# One rule, three places: the engine's drafting rules, the reply tool's own
+# description (the model reads it even when the prompt is compacted) and the
+# skill. The plainest wording is the assertion, so a reword is a test change.
+NO_CODE_ROUTE = "no-repository-change route"
+REPLY_ALONE = "a reply alone"
+NEAREST_ONLY_FOR_CHANGE = (
+    "The nearest-deliverable rule applies only to a request that asks for a "
+    "change"
+)
+
+
+def flattened(path: Path) -> str:
+    """One text with whitespace and TypeScript string concatenation
+    collapsed, so a sentence spanning source lines is still one sentence."""
+    text = path.read_text(encoding="utf-8")
+    return " ".join(re.sub(r'"\s*\+\s*"', "", text).split())
+
+
+def test_the_drafting_rules_carry_the_no_code_route():
+    prompt = draft.draft_system_prompt()
+    for text in (NO_CODE_ROUTE, REPLY_ALONE, NEAREST_ONLY_FOR_CHANGE):
+        assert text in prompt, text
+
+
+def test_the_reply_tool_description_carries_the_no_code_route():
+    """The tool the model calls to answer with a reply alone says when, and
+    says the nearest-deliverable rule never applies to it."""
+    source = flattened(draft.DRAFT_EXTENSION)
+    for text in (NO_CODE_ROUTE, REPLY_ALONE, NEAREST_ONLY_FOR_CHANGE):
+        assert text in source, text
+
+
 def test_the_drafting_rules_write_assumptions_only_when_a_decision_was_taken():
     """Issue #2148: the prompt no longer asks for an Assumptions section in
     every Issue body, matching the skill's non-empty rule."""
@@ -1592,6 +1653,26 @@ def test_interactive_creates_nothing_when_the_answers_are_empty(
     assert code == 0
     assert "Nothing was created." in out.getvalue()
     assert len(sessions.calls) == 1
+
+
+def test_interactive_reply_only_round_ends_without_a_create_prompt(
+    config, sessions, recorder, monkeypatch,
+):
+    """Issue #2201: the local flow prints the reply and ends; an answer with
+    no Issue never offers to create one."""
+    judged = draft_fakes.judge_passing(monkeypatch)
+    sessions.queue({"kind": "reply", "reply": REPLY_ONLY})
+    out, err = io.StringIO(), io.StringIO()
+    code = draft_cli.run_draft(
+        config, REPO, request="only explain what you would fix",
+        stdin=io.StringIO(""), stdout=out, stderr=err,
+    )
+    assert code == 0, err.getvalue()
+    text = out.getvalue()
+    assert REPLY_ONLY in text
+    assert "Press Enter to create" not in text
+    assert recorder.issues_commands() == []
+    assert judged == []
 
 
 def test_interactive_shows_the_check_and_the_warning(

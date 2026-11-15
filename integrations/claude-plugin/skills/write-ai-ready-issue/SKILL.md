@@ -68,7 +68,13 @@ Before drafting, state the route in one line, then follow it:
   and stop.
 - **No repository change needed** — the request is about how the person
   works, not the repository: say so and stop. A docs or config change is a
-  repository change, so it is not this route.
+  repository change, so it is not this route. When the person explicitly
+  asks for no code change ("just review it and tell me", "only explain",
+  "don't touch the code"), this is the route even when the reading finds
+  real defects: answer with a reply alone, in the person's language, one
+  line each of what the reading found worth fixing, and say that Orbi
+  delivers by opening a pull request, so the person can name one item for
+  Orbi to fix. Create no Issue.
 - **Small** — one observable behaviour in a handful of files: short form.
 - **Normal** — everything else: full form.
 - **Too big** — more than one independently mergeable result: propose the
@@ -84,7 +90,10 @@ If reading the code shows the request cannot be done as asked (the file it is
 about is empty or missing, or the thing it would change does not exist), draft
 the nearest version of the request that the code can actually deliver, and make
 the first line of the Issue's `Assumptions` section say what you changed and
-why. Never write a draft whose only possible delivery changes no file.
+why. The nearest-deliverable rule applies only to a request that asks for a
+change: a request not to change any code takes the no-repository-change route
+above and ends with a reply alone. Never write a draft whose only possible
+delivery changes no file.
 
 Draft the Issue before asking anything. A disagreement the agent can settle
 itself is not a question — it is a line under `Assumptions`.
