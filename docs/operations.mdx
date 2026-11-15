@@ -555,6 +555,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `clarify_check_skipped` | the thin-ticket gate could not decide or could not write (fail open) |
 | `clarify_draft_skipped` | the pre-work check skipped an untouched Issue `orbi draft` created: the same check judged it when it was drafted |
 | `clarify_draft_untrusted` | a draft marker sat on an Issue this runner did not author: ignored, the gate judges normally |
+| `clarify_criteria_appended` | the gate appended the verdict's usable criteria proposal to the ticket under the acceptance heading, posted one comment listing them, and the same claim continues into delivery |
+| `clarify_criteria_apply_failed` | the gate could not write the criteria proposal (`step=append` or `step=comment`): the ticket takes the stop, so `/orbi amend` can finish it |
 | `blocked_by` | an Issue was skipped: open blockedBy blockers |
 | `blocked_by_check_failed` | the blockedBy query failed (fail open) |
 | `capacity_full` | every slot is taken; no claim this tick |

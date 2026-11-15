@@ -34,7 +34,7 @@ import subprocess
 from pathlib import Path
 
 from orbi import clarify, draft_marker, journal, split_command
-from orbi.amend_command import appended_body, write_body
+from orbi.acceptance_section import appended_body, write_body
 from orbi.claim import _repo_scan_keys
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import (

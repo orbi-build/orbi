@@ -167,7 +167,8 @@ def _reset_run_id(bind_run_id):
 
 
 def install_fake_gh(monkeypatch, comments: list[str],
-                    labels: dict[int, list[str]] | None = None) -> None:
+                    labels: dict[int, list[str]] | None = None,
+                    bodies: dict[int, str] | None = None) -> None:
     """Answer the runner's ``gh`` calls; capture every Issue comment.
 
     ``gh pr list`` / ``gh pr create`` are stateful (Issue #186): no PR
@@ -181,6 +182,10 @@ def install_fake_gh(monkeypatch, comments: list[str],
     label edits are applied to it, and the restart-resume scan
     (``gh issue list --search label:ai-in-progress``) answers from it,
     like the real GitHub state (Issue #18).
+
+    ``bodies`` (when given) records the Issue body each
+    ``gh issue edit --body`` writes, so a test asserts the text the user
+    sees on the ticket (Issue #2206) instead of an internal value.
     """
     comment_ids: list[int] = []
     created_prs: list[dict] = []
@@ -194,6 +199,10 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     comments.append(command[-1])
                     return ""
                 if command[2] == "edit":
+                    if bodies is not None and "--body" in command:
+                        bodies[int(command[3])] = command[
+                            command.index("--body") + 1
+                        ]
                     if labels is not None:
                         number = int(command[3])
                         current = labels.setdefault(number, [])

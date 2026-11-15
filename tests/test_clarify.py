@@ -23,6 +23,7 @@ from conftest import git
 from orbi import clarify, config as config_domain
 from orbi import delivery_labels, failure, failure_report, language, progress
 
+import orbi.acceptance_section as acceptance_section
 import orbi.runner as runner
 from seam import seam
 
@@ -149,15 +150,14 @@ THIN_ISSUE = {
 # The clarify session is the isolated `clarify_verdict` tool call
 # (Issue #1955: `--no-builtin-tools --no-extensions --extension <shipped>`);
 # the delivery session is the ordinary one. The two-faced fake answers both:
-# a passing verdict through the tool's file for the gate, a real commit for
-# the implementer.
-FAKE_PI_PASSING_GATE = """#!/usr/bin/env python3
+# a verdict through the tool's file for the gate, a real commit for the
+# implementer. The gate half is a parameter, so one script plays any verdict
+# and every gate test uses the same delivery path.
+_TWO_FACED_FAKE_PI = """#!/usr/bin/env python3
 import os, re, subprocess, sys
 args = sys.argv[1:]
 if "--no-builtin-tools" in args:
-    with open(os.environ["ORBI_CLARIFY_OUT"], "w", encoding="utf-8") as out:
-        out.write('{"missing": []}')
-    sys.exit(0)
+%s    sys.exit(0)
 prompt_arg = args[args.index("--system-prompt") + 1]
 # Issue #1634: --system-prompt carries a FILE path; Pi reads the
 prompt = (open(prompt_arg, encoding="utf-8").read()
@@ -177,6 +177,19 @@ for command in (
     subprocess.run(command, cwd=cwd, check=True, capture_output=True)
 sys.stdout.write("done")
 """
+
+
+def fake_pi_with_verdict(answer: dict) -> str:
+    """The two-faced fake, its gate half writing `answer` as the verdict."""
+    gate = (
+        '    with open(os.environ["ORBI_CLARIFY_OUT"], "w", '
+        'encoding="utf-8") as out:\n'
+        f"        out.write({json.dumps(answer)!r})\n"
+    )
+    return _TWO_FACED_FAKE_PI % gate
+
+
+FAKE_PI_PASSING_GATE = fake_pi_with_verdict({"missing": []})
 
 
 # The same fake, but the gate's verdict is the thin-ticket failure. Built
@@ -1073,23 +1086,24 @@ def test_the_real_runner_proposes_the_split_for_a_bundled_ticket(
 
 
 @pytest.mark.parametrize("language_code", ["en", "zh"])
-@pytest.mark.parametrize("answer, kind", [
-    (SPLIT_ANSWER, "split"),
-    (CRITERIA_ANSWER, "criteria"),
-])
 def test_the_real_runner_posts_the_proposal_in_the_stop_comment(
-    clone, tmp_path, monkeypatch, language_code, answer, kind,
+    clone, tmp_path, monkeypatch, language_code,
 ):
     """The user path: the claim-time gate stops the ticket and the comment
-    the author reads carries the rendered section, in their language."""
+    the author reads carries the rendered section, in their language.
+
+    A split proposal is the ticket the gate cannot complete on its own — a
+    criteria proposal is applied instead (Issue #2206, proven by
+    `test_the_real_runner_appends_the_criteria_and_delivers`).
+    """
     fix_run_id(monkeypatch, RUN_ID)
-    install_fake_pi(monkeypatch, tmp_path, fake_pi_answer(answer))
+    install_fake_pi(monkeypatch, tmp_path, fake_pi_answer(SPLIT_ANSWER))
     comments: list[str] = []
     labels = {ISSUE_NUMBER: [delivery_labels.READY_LABEL]}
     install_fake_gh(monkeypatch, comments, labels)
 
     result = runner.process_issue(
-        THIN_ISSUE,
+        dict(THIN_ISSUE),
         gate_config(clone, tmp_path, message_language=language_code),
         REPO,
     )
@@ -1098,7 +1112,7 @@ def test_the_real_runner_posts_the_proposal_in_the_stop_comment(
     assert len(comments) == 1
     body = comments[0]
     # The rendered fixture IS the engine output a person may depend on.
-    assert (FIXTURES / f"{kind}.{language_code}.md").read_text() in body
+    assert (FIXTURES / f"split.{language_code}.md").read_text() in body
     assert language.text(
         language_code, "clarify.suggestion.edit",
     ) in body
@@ -1110,12 +1124,17 @@ def fake_pi_answer_dumping_prompt(answer: dict, dump: Path) -> str:
     """The gate session, recording the system prompt the engine handed it.
 
     Issue #1634: `--system-prompt` carries a FILE path, so the fake reads
-    that file — this is the exact text Pi receives.
+    that file — this is the exact text Pi receives. Only the isolated gate
+    session (`--no-builtin-tools`) dumps: since Issue #2206 the ticket is
+    delivered in the same claim, and the delivery prompt is not what this
+    test reads.
     """
     return (
         "#!/usr/bin/env python3\n"
         "import os, sys\n"
         "args = sys.argv[1:]\n"
+        "if '--no-builtin-tools' not in args:\n"
+        "    sys.exit(1)\n"
         "path = args[args.index('--system-prompt') + 1]\n"
         f"with open({str(dump)!r}, 'w', encoding='utf-8') as handle:\n"
         "    handle.write(open(path, encoding='utf-8').read())\n"
@@ -1135,7 +1154,7 @@ def test_the_real_runner_tells_the_gate_which_language_to_propose_in(
 ):
     """Issue #1971 acceptance 1, at the real entry point: the session the
     claim starts for a zh repository is told to write Chinese, so the
-    proposal inside the Chinese stop comment cannot come out English."""
+    criteria the gate appends to the ticket cannot come out English."""
     fix_run_id(monkeypatch, RUN_ID)
     dump = tmp_path / "gate-system-prompt.txt"
     install_fake_pi(
@@ -1143,18 +1162,21 @@ def test_the_real_runner_tells_the_gate_which_language_to_propose_in(
     )
     comments: list[str] = []
     labels = {ISSUE_NUMBER: [delivery_labels.READY_LABEL]}
-    install_fake_gh(monkeypatch, comments, labels)
+    bodies: dict[int, str] = {}
+    install_fake_gh(monkeypatch, comments, labels, bodies=bodies)
 
-    result = runner.process_issue(
-        THIN_ISSUE,
+    runner.process_issue(
+        dict(THIN_ISSUE),
         gate_config(clone, tmp_path, message_language=language_code),
         REPO,
     )
 
-    assert result == runner.IssueResult("needs-detail", None)
     assert sentence in dump.read_text(encoding="utf-8")
-    assert len(comments) == 1
-    assert (FIXTURES / f"criteria.{language_code}.md").read_text() in comments[0]
+    # Issue #2206: a criteria proposal is written onto the ticket, in the
+    # repository's message language.
+    assert acceptance_section.render_acceptance(
+        tuple(item.text for item in CRITERIA_PROPOSAL.items), language_code,
+    ) in bodies[ISSUE_NUMBER]
 
 
 def test_ticket_the_gate_accepts_is_delivered(clone, tmp_path, monkeypatch):
@@ -2378,3 +2400,267 @@ def test_an_unreadable_history_has_no_authoritative_comment(
     caplog.set_level("INFO")
     assert clarify.authoritative_stop(ISSUE, REPO) is None
     assert "clarify_check_skipped" in caplog.text
+
+# --- Issue #2206: a usable criteria proposal is applied at the claim ------
+#
+# The person already authorized the work by adding the claim label, so a gate
+# that can write the missing acceptance conditions from the ticket's own text
+# writes them and lets the SAME claim deliver; only a ticket the gate can make
+# no usable proposal for still stops. The append is the one `/orbi amend`
+# performs (same heading, same hidden marker), so a person who prefers the
+# command keeps it and an already-amended ticket is never amended twice.
+
+def _appended_body(body: str = ISSUE["body"], language_code: str = "en") -> str:
+    """The ticket body the gate writes when it applies the proposal."""
+    return acceptance_section.appended_body(
+        body,
+        acceptance_section.render_acceptance(
+            tuple(item.text for item in CRITERIA_PROPOSAL.items),
+            language_code,
+        ),
+    )
+
+
+def _criteria_config(language_code: str = "en"):
+    return dataclasses.replace(
+        config_domain.RunnerConfig(), message_language=language_code,
+    )
+
+
+@pytest.mark.parametrize("language_code", LANGUAGES)
+def test_a_criteria_proposal_is_appended_and_the_claim_proceeds(
+    monkeypatch, caplog, language_code,
+):
+    """Acceptance 1 (Issue #2206), at the gate: the body gains the section
+    under the language's acceptance heading, no `ai-needs-detail` is added,
+    and `enforce` lets the same claim deliver."""
+    issue = dict(ISSUE)
+    gate = FakeGate(
+        monkeypatch, history=[],
+        verdict=_failing(("acceptance_condition",), CRITERIA_PROPOSAL),
+    )
+    caplog.set_level("INFO")
+
+    proceed = clarify.enforce(
+        issue, _criteria_config(language_code), REPO, RUN_ID,
+    )
+
+    assert proceed is True
+    # The appended section is exactly what `/orbi amend` writes (heading,
+    # conditions and the idempotency marker), so both paths agree.
+    assert gate.bodies == [(
+        ISSUE["number"], REPO, _appended_body(language_code=language_code),
+    )]
+    # The body the delivery session reads carries the new conditions.
+    assert issue["body"] == _appended_body(language_code=language_code)
+    heading = acceptance_section.acceptance_heading(language_code)
+    assert heading in issue["body"]
+    # No stop: no label swap, one comment listing what was added.
+    assert gate.edits == []
+    assert gate.notified == []
+    assert len(gate.comments) == 1
+    body = gate.comments[0][2]
+    for item in CRITERIA_PROPOSAL.items:
+        assert f"- {item.text}" in body
+    assert language.text(
+        language_code, "clarify.criteria_appended", heading=heading,
+    ) in body
+    assert "clarify_criteria_appended" in caplog.text
+    assert "clarify_needs_detail" not in caplog.text
+
+
+@pytest.mark.parametrize("verdict", [
+    # No proposal at all.
+    _failing(("acceptance_condition",)),
+    # A split plan answers `single_outcome`, never an acceptance-only
+    # failure (Issue #1978).
+    _failing(("acceptance_condition",), SPLIT_PROPOSAL),
+    # A criteria draft that does not answer THIS verdict: the gate renders
+    # nothing for it, so it appends nothing either.
+    _failing(("acceptance_condition", "single_outcome"), CRITERIA_PROPOSAL),
+], ids=["no-proposal", "split-plan", "criteria-for-another-verdict"])
+def test_no_usable_criteria_proposal_keeps_todays_stop(monkeypatch, caplog,
+                                                       verdict):
+    """Acceptance 2 (Issue #2206): without a usable proposal the stop is
+    unchanged — one comment with the repair block, the label swap, no body
+    write."""
+    issue = dict(ISSUE)
+    gate = FakeGate(monkeypatch, history=[], verdict=verdict)
+    caplog.set_level("INFO")
+
+    proceed = clarify.enforce(
+        issue, config_domain.RunnerConfig(), REPO, RUN_ID,
+    )
+
+    assert proceed is False
+    assert gate.bodies == []
+    assert issue["body"] == ISSUE["body"]
+    assert len(gate.comments) == 1
+    body = gate.comments[0][2]
+    assert clarify.missing_text(
+        "acceptance_condition", language_code="en",
+    ) in body
+    assert language.text(
+        "en", "clarify.repair", ready_label=delivery_labels.READY_LABEL,
+    ) in body
+    assert gate.edits == [(
+        ISSUE["number"], REPO,
+        delivery_labels.NEEDS_DETAIL_LABEL, delivery_labels.READY_LABEL,
+    )]
+    assert "clarify_needs_detail" in caplog.text
+
+
+def test_an_already_amended_ticket_that_fails_again_stops(monkeypatch, caplog):
+    """Acceptance 3 (Issue #2206): the body already carries the appended
+    section, so the gate adds no second one — the ticket stops with
+    `ai-needs-detail` like any other failing verdict."""
+    issue = dict(ISSUE, body=_appended_body())
+    gate = FakeGate(
+        monkeypatch, history=[],
+        verdict=_failing(("acceptance_condition",), CRITERIA_PROPOSAL),
+    )
+    caplog.set_level("INFO")
+
+    proceed = clarify.enforce(
+        issue, config_domain.RunnerConfig(), REPO, RUN_ID,
+    )
+
+    assert proceed is False
+    assert gate.bodies == []
+    assert issue["body"] == _appended_body()
+    assert len(gate.comments) == 1
+    # The stop comment still offers the proposal, so `/orbi amend` can add
+    # it by hand.
+    assert clarify.SUGGESTION_START_PREFIX in gate.comments[0][2]
+    assert gate.edits == [(
+        ISSUE["number"], REPO,
+        delivery_labels.NEEDS_DETAIL_LABEL, delivery_labels.READY_LABEL,
+    )]
+    assert "clarify_needs_detail" in caplog.text
+    assert "clarify_criteria_appended" not in caplog.text
+
+
+def test_a_failed_criteria_append_falls_back_to_the_stop(monkeypatch, caplog):
+    """The apply is one step: when its body write fails, nothing was added,
+    so the ticket ends with today's stop comment (proposal included) and
+    `ai-needs-detail` — `/orbi amend` can finish it."""
+    gate = FakeGate(
+        monkeypatch, history=[],
+        verdict=_failing(("acceptance_condition",), CRITERIA_PROPOSAL),
+        body_error=RuntimeError("gh write failed"),
+    )
+    caplog.set_level("INFO")
+
+    proceed = clarify.enforce(
+        dict(ISSUE), config_domain.RunnerConfig(), REPO, RUN_ID,
+    )
+
+    assert proceed is False
+    assert gate.bodies == []
+    assert len(gate.comments) == 1
+    assert clarify.SUGGESTION_START_PREFIX in gate.comments[0][2]
+    assert gate.edits == [(
+        ISSUE["number"], REPO,
+        delivery_labels.NEEDS_DETAIL_LABEL, delivery_labels.READY_LABEL,
+    )]
+    assert "clarify_criteria_apply_failed" in caplog.text
+    assert "step=append" in caplog.text
+    assert "clarify_needs_detail" in caplog.text
+
+
+def test_a_failed_applied_comment_falls_back_to_the_stop(monkeypatch, caplog):
+    """The body landed but its comment did not: the ticket still stops, and
+    the next claim of the appended body needs no second judgment or section
+    (the marker is on it)."""
+    issue = dict(ISSUE)
+    gate = FakeGate(
+        monkeypatch, history=[],
+        verdict=_failing(("acceptance_condition",), CRITERIA_PROPOSAL),
+        comment_errors=1,
+    )
+    caplog.set_level("INFO")
+
+    proceed = clarify.enforce(
+        issue, config_domain.RunnerConfig(), REPO, RUN_ID,
+    )
+
+    assert proceed is False
+    # The section is on the ticket; only the listing comment failed.
+    assert issue["body"] == _appended_body()
+    assert gate.bodies == [(ISSUE["number"], REPO, _appended_body())]
+    assert len(gate.comments) == 1
+    # The stop records the text the ticket NOW carries, so the next claim of
+    # this body is the unchanged, already-stopped one: no second judgment
+    # and no second section.
+    assert clarify.stop_marker(issue) in gate.comments[0][2]
+    assert gate.edits == [(
+        ISSUE["number"], REPO,
+        delivery_labels.NEEDS_DETAIL_LABEL, delivery_labels.READY_LABEL,
+    )]
+    assert "step=comment" in caplog.text
+    assert "clarify_needs_detail" in caplog.text
+
+
+def test_a_ticket_without_a_body_receives_the_section_alone(monkeypatch):
+    """An Issue body the claim payload cannot read (empty) is no reason to
+    skip the append: the section lands on its own, as `/orbi amend` does."""
+    issue = dict(ISSUE, body=None)
+    gate = FakeGate(
+        monkeypatch, history=[],
+        verdict=_failing(("acceptance_condition",), CRITERIA_PROPOSAL),
+    )
+
+    assert clarify.enforce(
+        issue, config_domain.RunnerConfig(), REPO, RUN_ID,
+    ) is True
+    assert gate.bodies == [(
+        ISSUE["number"], REPO,
+        acceptance_section.render_acceptance(
+            tuple(item.text for item in CRITERIA_PROPOSAL.items), "en",
+        ),
+    )]
+
+
+def test_the_real_runner_appends_the_criteria_and_delivers(
+    clone, tmp_path, monkeypatch, caplog,
+):
+    """Acceptance 1 at the user's entry point: the claim that judged the
+    ticket thin writes the conditions onto the ticket, adds no
+    `ai-needs-detail`, and delivers in the same tick (worktree, PR)."""
+    fix_run_id(monkeypatch, RUN_ID)
+    install_fake_pi(
+        monkeypatch, tmp_path, fake_pi_with_verdict(CRITERIA_ANSWER),
+    )
+    comments: list[str] = []
+    labels = {ISSUE_NUMBER: [delivery_labels.READY_LABEL]}
+    bodies: dict[int, str] = {}
+    install_fake_gh(monkeypatch, comments, labels, bodies=bodies)
+    caplog.set_level("INFO")
+
+    result = runner.process_issue(
+        dict(THIN_ISSUE), gate_config(clone, tmp_path), REPO,
+    )
+
+    assert result.url == PR_URL
+    assert worktree_for(clone, RUN_ID).is_dir()
+    # The ticket body gained the section, exactly as record the amend path
+    # writes it.
+    assert bodies == {
+        ISSUE_NUMBER: _appended_body(THIN_ISSUE["body"]),
+    }
+    assert acceptance_section.acceptance_heading("en") in bodies[ISSUE_NUMBER]
+    # No stop: the label went to delivery, never to `ai-needs-detail`.
+    assert delivery_labels.NEEDS_DETAIL_LABEL not in labels[ISSUE_NUMBER]
+    assert delivery_labels.PR_OPENED_LABEL in labels[ISSUE_NUMBER]
+    assert all("not ready to deliver" not in body for body in comments)
+    # ONE comment lists what was added.
+    appended = [
+        body for body in comments
+        if language.text("en", "criteria.receipt_title") in body
+    ]
+    assert len(appended) == 1
+    for condition in CRITERIA_ANSWER["suggestion"]["items"]:
+        assert f"- {condition}" in appended[0]
+    assert language.text(
+        "en", "clarify.criteria_appended", heading="## Acceptance",
+    ) in appended[0]

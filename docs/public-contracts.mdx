@@ -323,6 +323,20 @@ position. The newest trusted stop is authoritative even when it carries no
 proposal: a proposal from an older stop is never reused, and a newer stop
 written by somebody else is not selected at all.
 
+### A criteria proposal the claim applies itself
+
+When the claim-time judgment fails ONLY on the acceptance condition and its
+answer carries a usable `kind=criteria` proposal, the gate applies that
+proposal itself instead of stopping (Issue #2206): it appends the same
+section `/orbi amend` writes — the acceptance heading of the message
+language, the conditions and the hidden `<!-- orbi:acceptance:v1 -->`
+marker — and posts ONE comment listing what was added and saying that
+editing the ticket changes them. No `ai-needs-detail` is added and the same
+claim continues into delivery. A body that already carries the marker is
+never amended twice (that ticket takes the stop), and a failed write falls
+back to the stop, so `/orbi amend` finishes the append. Every other failing
+verdict stops with the comment and `ai-needs-detail` as before.
+
 ### Turning a proposal into child tickets
 
 `/orbi split` (issue comment or `orbi split --repo <owner/name> --issue <N>`)
