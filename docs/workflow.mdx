@@ -178,24 +178,23 @@ page quotes no prices and no allowance numbers — see GitHub's
 
 You can correct direction without cancelling an active delivery. While the
 Issue is `ai-in-progress`, add a comment with the new decision or edit the
-Issue body. These two channels are equivalent: both are picked up by the
-Runner's next steering poll (the interval is `steering_poll_seconds`, 60
-seconds by default), and the active session restarts with the correction. The
-restarts are bounded by `steering_max_rounds` (3 by default); after the limit
+Issue body. The Runner checks for trusted corrections at the next steering
+poll (`steering_poll_seconds`, 60 seconds by default) and restarts the active
+session with the correction. The restarts are bounded by
+`steering_max_rounds` (3 by default); after the limit
 is reached, further corrections do not restart that delivery and the journal
 records `steering_limit_reached`. Let the current delivery finish, then put the
 revised scope in a follow-up delivery.
 
-Only comments whose author can write to the repository can steer a run:
-GitHub's reported permission for that login (`collaborators/{login}/permission`
-answering `admin` or `write`), never the comment's `authorAssociation` —
-that field depends on what the reading token can see, so a maintainer whose
-organization membership is private reads as `CONTRIBUTOR`, and `MEMBER` or
-`COLLABORATOR` does not imply write access. A comment from a public commenter
-is ignored by design, because allowing arbitrary commenters to steer a delivery
-would expose a prompt-injection path. The initial trusted comment timeline is capped at
-`issue_comments_limit` (200 by default): older comments are dropped and the
-injected context states how many were omitted.
+The Runner applies the same trust rule to the comment author and the last
+editor of the Issue body. A correction can steer if GitHub reports `admin`
+or `write` for that login (`collaborators/{login}/permission`) or the login
+is the runner's authenticated account. The comment's `authorAssociation`
+reflects membership and visibility to the reading token. The Runner ignores
+body edits by untrusted or unknown editors and records
+`steering_body_untrusted` in the journal. The initial trusted comment timeline
+is capped at `issue_comments_limit` (200 by default). The injected context states
+how many older comments were omitted.
 
 Dead-loop guard and comment dedup (Issue #825): recovery of an existing
 attempt keeps its run id. A fresh claim or takeover can start a new attempt

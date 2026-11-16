@@ -23,6 +23,7 @@ from pathlib import Path
 
 from orbi import config as config_domain
 from orbi import language, user_summary
+from orbi.body_steering import ignore_untrusted_body_edit, poll_body_edit
 from orbi.delivery_scene import RunContext
 from orbi.comment_trust import (
     comment_is_trusted,
@@ -548,10 +549,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
     steering_started = time.time()
     steering_limit_logged = False
     steering_limit_notice_logged = False
-    # The body this run started from (Issue #1094): the exact text the
-    # prompt above embeds. The steering poll compares the live body
-    # against it — a maintainer rewrite of the Issue body steers like a
-    # new comment.
+    # Begin with the body already in the prompt (Issue #1094).
     steering_body = issue.get("body", "")
     # `resume_context` is also the public parameter name of this function;
     # keep an unshadowed reference for the restart callback below.
@@ -569,9 +567,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
                 ), round=steering_rounds,
             )
         try:
-            # ONE request per poll (Issue #1094): the same `gh issue
-            # view` that lists the comments also returns the body, so a
-            # body rewrite needs no second call and no new poll.
+            # Read the editor only when the snapshot shows a body edit.
             snapshot = issue_view(
                 int(issue["number"]), "comments,body",
                 repo=source_repo, timeout=30,
@@ -586,12 +582,10 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
                 reason=type(exc).__name__,
             )
             return None
-        # A str-only compare: an absent body field cannot prove an edit
-        # and leaves body steering inert for the poll (the bypass shape).
-        current_body = snapshot.get("body")
-        body_changed = (
-            isinstance(current_body, str) and current_body != steering_body
+        edit = poll_body_edit(
+            snapshot, steering_body, number=int(issue["number"]), repo=source_repo,
         )
+        body_changed = edit is not None and edit.trusted
         fresh: list[dict] = []
         # This poll's trust decisions, committed to `steering_seen` only
         # once the poll completes (Issue #1996): a permission read that
@@ -626,9 +620,10 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
                 item = dict(comment)
                 item["issue"] = issue["number"]
                 fresh.append(item)
-        # Every comment this poll read has a decision now, so the marks are
-        # committed together — a poll that raised above marked nothing.
+        # Commit decisions only after every trust read in this poll succeeds.
         steering_seen.update(decided)
+        if edit is not None and not edit.trusted:
+            steering_body = ignore_untrusted_body_edit(edit, issue, source_repo)
         if limit_reached:
             if (fresh or body_changed) and not steering_limit_notice_logged:
                 steering_limit_notice_logged = True
@@ -665,13 +660,11 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
             author = comment.get("author")
             authors.append(author.get("login") if isinstance(author, dict) else "unknown")
         if body_changed:
-            # The recorded body becomes the edited one, so the SAME edit
-            # never triggers a second restart (Issue #1094).
-            steering_body = current_body
+            steering_body = edit.body
         resume = build_resume_context(
             worktree, fresh,
             body_revision=(
-                {"issue": issue["number"], "body": current_body}
+                {"issue": issue["number"], "body": edit.body}
                 if body_changed else None
             ),
         ) or ""

@@ -151,19 +151,19 @@ ai-ready                任务被派发（orbi add，或人工加标签）
 ## 运行中的交付修正
 
 无需取消正在进行的交付，也可以修正方向。当 Issue 处于
-`ai-in-progress` 时，可以评论新的决定，或直接编辑 Issue body。这两个渠道
-是等价的：Runner 会在下一次 steering 轮询时拾取它们（间隔由
-`steering_poll_seconds` 控制，默认 60 秒），并带着修正重启当前 session。
+`ai-in-progress` 时，可以评论新的决定，或直接编辑 Issue body。Runner 会在
+下一次 steering 轮询时检查可信修正（间隔由 `steering_poll_seconds` 控制，默认
+60 秒），并带着修正重启当前 session。
 重启次数由 `steering_max_rounds` 限制（默认 3 次）；达到上限后，后续修正
 不会再重启这次交付，journal 会记录 `steering_limit_reached`。让当前交付完成，
 再把修订后的范围放入后续交付。
 
-只有对该仓有 write 权限的作者评论可以 steering——以 GitHub 报告的权限
-为准（`collaborators/{login}/permission` 返回 `admin` 或 `write`），与
-评论的 `authorAssociation` 无关：该字段取决于读取 token 能看到什么，
-组织成员身份私密时维护者会被读成 `CONTRIBUTOR`，而 `MEMBER`、
-`COLLABORATOR` 也不等于 write 权限。公开评论者的评论会按设计被忽略，
-因为允许任意评论者控制交付会暴露 prompt injection 入口。初始受信任评论时间线受
+Runner 对评论作者和 Issue 正文最后一位编辑者应用同一信任规则。GitHub 报告
+该账号在仓库中拥有 `admin` 或 `write` 权限（`collaborators/{login}/permission`），
+或者该账号就是 Runner 已认证的账号时，修正才会生效。评论的
+`authorAssociation` 反映成员身份以及读取令牌可见的信息。Runner 会忽略
+不受信任或身份不明的编辑者所做的正文修改，并在 journal 中记录
+`steering_body_untrusted`。初始受信任评论时间线受
 `issue_comments_limit` 限制（默认 200 条）：更早的评论会被丢弃，注入的上下文
 会明确说明省略了多少条。
 

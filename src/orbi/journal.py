@@ -229,6 +229,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "model_wait_swallowed": "/slots probe confirmed a swallowed model request; Pi session killed",
     "delivery_steered": "an active delivery was restarted with a trusted Issue correction",
     "steering_limit_reached": "active delivery steering reached its configured round limit",
+    "steering_body_untrusted": "an Issue body edit was ignored because its editor was untrusted or unknown",
     "steering_poll_failed": "steering polling failed (pure bypass)",
     "steering_limit_notice_failed": "the post-limit correction notice could not be published (pure bypass)",
     # Provider rate limiting and quota stops.

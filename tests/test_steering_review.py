@@ -1,9 +1,14 @@
-from orbi import config as config_domain
+import json
+import logging
 import time
 from pathlib import Path
+from unittest.mock import Mock
+
 import pytest
+
 import orbi.runner as runner
 import orbi.pi_session as pi_session
+from orbi import config as config_domain
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
 from seam import seam
@@ -14,15 +19,14 @@ def _repository_permissions(monkeypatch):
     """Issue #1806: the steering authors here can write to the
     repository (`alice`/`bob`); `bad` cannot. The read is answered
     here so the steering scan never reaches real GitHub."""
-    monkeypatch.setattr(
-        seam, "repository_permission",
-        lambda login, *, repo: (
-            "none" if login == "bad" else "admin"
-        ),
+    permission = Mock(
+        side_effect=lambda login, *, repo: "none" if login == "bad" else "admin",
     )
+    monkeypatch.setattr(seam, "repository_permission", permission)
     monkeypatch.setattr(
         seam, "authenticated_github_login", lambda: "orbi-bot[bot]",
     )
+    return permission
 
 
 
@@ -42,6 +46,43 @@ def _snapshot(comments, body="body"):
     if body is not None:
         snapshot["body"] = body
     return snapshot
+
+
+@pytest.fixture
+def body_reads(monkeypatch):
+    read = Mock()
+    monkeypatch.setattr(seam, "run_gh_read_command", read)
+    return read
+
+
+def _editor_response(body, login):
+    return json.dumps({"data": {"repository": {"issue": {
+        "body": body, "editor": None if login is None else {"login": login},
+    }}}})
+
+
+@pytest.fixture
+def body_steering_check(monkeypatch, tmp_path):
+    def start(*snapshots):
+        polls = iter(snapshots)
+        monkeypatch.setitem(pi_session.__dict__, "issue_view", lambda *a, **k: next(polls))
+        monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
+        monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
+        captured = {}
+        monkeypatch.setitem(pi_session.__dict__, "stream_pi",
+            lambda command, **kw: captured.update(kw) or "done")
+        issue = {"number": 2, "title": "title", "body": "original body"}
+        ctx = RunContext("abc12345", 2, "branch", tmp_path, "owner/repo")
+        assert pi_session.run_pi(issue, ctx, _config(tmp_path)) == "done"
+        return captured["watch"].steering_check
+
+    return start
+
+
+def _new_steering_comment():
+    future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
+    return {"id": "new", "createdAt": future, "author": {"login": "alice"},
+            "body": "correct this"}
 
 
 def test_run_pi_steering_callback_filters_and_deduplicates(monkeypatch, tmp_path):
@@ -220,7 +261,7 @@ def test_steering_validation_and_limit(monkeypatch, tmp_path):
     assert config_domain._positive_seconds({}, "x", 2.0) == 2.0
     config = _config(tmp_path, steering_max_rounds=0)
     monkeypatch.setitem(pi_session.__dict__, "issue_view",
-        lambda *a, **k: _snapshot([]))
+        lambda *a, **k: _snapshot([], body="b"))
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
     issue = {"number": 3, "title": "t", "body": "b"}
@@ -229,13 +270,14 @@ def test_steering_validation_and_limit(monkeypatch, tmp_path):
     assert captured["watch"].steering_check() is None
 
 
-def test_run_pi_steering_body_edit_restarts(monkeypatch, tmp_path):
+def test_run_pi_steering_body_edit_restarts(monkeypatch, tmp_path, body_reads):
     """A body edit between claim and poll steers exactly like a new
     comment (Issue #1094): the request carries the 「正文已更新」 header and
     the edited text, and the SAME edited body on the next poll is inert —
     the recorded body became the edited one."""
     monkeypatch.setitem(pi_session.__dict__, "issue_view",
         lambda *a, **k: _snapshot([], body="edited body"))
+    body_reads.return_value = _editor_response("edited body", "alice")
     monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
     monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     captured = {}
@@ -249,6 +291,111 @@ def test_run_pi_steering_body_edit_restarts(monkeypatch, tmp_path):
     assert "正文已更新" in request.context
     assert "edited body" in request.context
     assert captured["watch"].steering_check() is None
+    assert body_reads.call_count == 1
+
+
+def test_run_pi_steering_untrusted_body_reported_once_then_trusted_edit_steers(
+    body_steering_check, body_reads, caplog,
+):
+    untrusted = _snapshot([], "untrusted direction")
+    trusted = _snapshot([], "maintainer direction")
+    check = body_steering_check(untrusted, untrusted, trusted)
+    body_reads.side_effect = [
+        _editor_response("untrusted direction", "bad"),
+        _editor_response("maintainer direction", "alice"),
+    ]
+
+    assert check() is None
+    assert check() is None
+    request = check()
+    assert request is not None and request.body_revision is True
+    assert "maintainer direction" in request.context
+    assert "untrusted direction" not in request.context
+    assert body_reads.call_count == 2
+    warnings = [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if "steering_body_untrusted" in record.getMessage()
+    ]
+    assert warnings == [
+        (logging.WARNING, "steering_body_untrusted issue=owner/repo#2 editor=bad"),
+    ]
+
+
+def test_run_pi_steering_body_without_editor_is_ignored(
+    body_steering_check, body_reads, caplog,
+):
+    check = body_steering_check(_snapshot([], "unattributed direction"))
+    body_reads.return_value = _editor_response("unattributed direction", None)
+
+    assert check() is None
+    assert "steering_body_untrusted issue=owner/repo#2 editor=-" in caplog.messages
+
+
+def test_run_pi_steering_untrusted_body_and_trusted_comment_steers_comment_only(
+    body_steering_check, body_reads,
+):
+    snapshot = _snapshot([_new_steering_comment()], "untrusted direction")
+    check = body_steering_check(snapshot, snapshot)
+    body_reads.return_value = _editor_response("untrusted direction", "bad")
+
+    request = check()
+    assert request is not None
+    assert request.comment_ids == ("new",)
+    assert request.body_revision is False
+    assert "alice: correct this" in request.context
+    assert "untrusted direction" not in request.context
+    assert check() is None
+    assert body_reads.call_count == 1
+
+
+@pytest.mark.parametrize("failure", ["editor read", "editor permission", "comment permission"])
+def test_run_pi_steering_body_read_failure_consumes_nothing(
+    failure, body_steering_check, body_reads, _repository_permissions,
+):
+    snapshot = _snapshot([_new_steering_comment()], "polled direction")
+    check = body_steering_check(
+        snapshot, snapshot, _snapshot(snapshot["comments"], "maintainer direction"),
+    )
+    response = _editor_response("maintainer direction", "bob")
+    error = RuntimeError("gh: HTTP 502")
+    body_reads.return_value = response
+    if failure == "editor read":
+        body_reads.side_effect = [error, response]
+    else:
+        failed_login = "bob" if failure == "editor permission" else "alice"
+
+        def permission(login, *, repo):
+            if login == failed_login:
+                _repository_permissions.side_effect = None
+                raise error
+            return "admin"
+
+        _repository_permissions.side_effect = permission
+        _repository_permissions.return_value = "admin"
+
+    with pytest.raises(RuntimeError, match="HTTP 502"):
+        check()
+    request = check()
+    assert request is not None and request.body_revision is True
+    assert request.comment_ids == ("new",)
+    assert "maintainer direction" in request.context
+    assert check() is None
+    assert body_reads.call_count == 2
+
+
+@pytest.mark.parametrize("body", ["verified direction", "original body"])
+def test_run_pi_steering_uses_body_returned_with_editor(body, body_steering_check, body_reads):
+    check = body_steering_check(_snapshot([], "unchecked direction"))
+    body_reads.return_value = _editor_response(body, "alice")
+
+    request = check()
+    if body == "original body":
+        assert request is None
+    else:
+        assert request is not None and request.body_revision is True
+        assert body in request.context
+        assert "unchecked direction" not in request.context
 
 
 def test_run_pi_steering_unchanged_body_stays_silent(monkeypatch, tmp_path):
@@ -265,7 +412,7 @@ def test_run_pi_steering_unchanged_body_stays_silent(monkeypatch, tmp_path):
     assert captured["watch"].steering_check() is None
 
 
-def test_run_pi_steering_body_edit_and_comment_is_one_request(monkeypatch, tmp_path):
+def test_run_pi_steering_body_edit_and_comment_is_one_request(monkeypatch, tmp_path, body_reads):
     """A body edit and a trusted new comment in the same poll produce ONE
     request carrying both — one restart, never two (Issue #1094)."""
     future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
@@ -274,6 +421,7 @@ def test_run_pi_steering_body_edit_and_comment_is_one_request(monkeypatch, tmp_p
     ]
     monkeypatch.setitem(pi_session.__dict__, "issue_view",
         lambda *a, **k: _snapshot(comments, body="edited body"))
+    body_reads.return_value = _editor_response("edited body", "alice")
     monkeypatch.setitem(pi_session.__dict__, "comment_is_trusted", lambda c, *, repo: c["id"] == "new")
     monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
     monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
@@ -291,7 +439,7 @@ def test_run_pi_steering_body_edit_and_comment_is_one_request(monkeypatch, tmp_p
     assert captured["watch"].steering_check() is None
 
 
-def test_run_pi_steering_body_edit_respects_round_limit(monkeypatch, tmp_path):
+def test_run_pi_steering_body_edit_respects_round_limit(monkeypatch, tmp_path, body_reads):
     """At `steering_max_rounds` a body edit is ignored with the existing
     `steering_limit_reached` event — no restart (Issue #1094)."""
     polls = iter([
@@ -300,6 +448,12 @@ def test_run_pi_steering_body_edit_respects_round_limit(monkeypatch, tmp_path):
         _snapshot([], body="second edit"),
     ])
     monkeypatch.setitem(pi_session.__dict__, "issue_view", lambda *a, **k: next(polls))
+    body_reads.side_effect = [
+        _editor_response("first edit", "alice"),
+        _editor_response("second edit", "alice"),
+    ]
+    notice = Mock()
+    monkeypatch.setitem(pi_session.__dict__, "comment_issue", notice)
     events = []
     monkeypatch.setitem(pi_session.__dict__, "event", lambda kind, **kw: events.append(kind))
     monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
@@ -314,6 +468,7 @@ def test_run_pi_steering_body_edit_respects_round_limit(monkeypatch, tmp_path):
     assert first is not None and first.body_revision is True
     assert check() is None
     assert "steering_limit_reached" in events
+    notice.assert_called_once()
 
 
 def test_run_pi_steering_limit_notifies_once_for_late_comment(monkeypatch, tmp_path):

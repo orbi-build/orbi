@@ -13,6 +13,7 @@ monkeypatch's teardown fans the original back.
 import orbi.base_ci_fix as base_ci_fix
 import orbi.base_ci_red as base_ci_red
 import orbi.blocked_comment as blocked_comment
+import orbi.body_steering as body_steering
 import orbi.cli as cli
 import orbi.cli_commands as cli_commands
 import orbi.cli_doctor as cli_doctor
@@ -62,7 +63,7 @@ _MODULES = (
     journal, github, github_feedback, gitops, milestone, milestone_command,
     ops_delivery, ticket_command,
     progress, cli_source, release, release_closeout, release_git,
-    release_notes, release_run, pi_session,
+    release_notes, release_run, pi_session, body_steering,
     runner, implementation_delivery, review_merge, merge_exec,
     review_rounds, run_state, claim,
     resume_scan,
