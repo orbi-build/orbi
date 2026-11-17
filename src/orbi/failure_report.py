@@ -27,8 +27,8 @@ import logging
 from pathlib import Path
 
 from orbi import (
-    base_ci_fix, base_ci_red, failure, failure_evidence, language, requeue,
-    runner_health, scene, user_summary,
+    base_ci_fix, base_ci_red, failure, failure_evidence, language, question,
+    requeue, runner_health, scene, user_summary,
 )
 from orbi.blocked_comment import post_blocked_comment
 from orbi.comment_kind import (
@@ -124,11 +124,19 @@ class ReviewRoundsExhausted(UnrecoverableDeliveryError):
 
 
 class HumanDecisionRequired(UnrecoverableDeliveryError):
-    """The reviewer found a decision that only a maintainer can make."""
+    """The reviewer found a decision that only a maintainer can make.
 
-    def __init__(self, message: str, *, action: str) -> None:
+    'question' is the stop's structured question when the reviewer wrote a
+    readable one (Issue #2220): it rides the stop report, which renders it,
+    and — when its class is not 'authority' and one option is recommended —
+    answers it once instead of blocking.
+    """
+
+    def __init__(self, message: str, *, action: str,
+                 question=None) -> None:
         super().__init__(message)
         self.action = action
+        self.question = question
 
 
 def is_unrecoverable_failure(exc: BaseException) -> bool:
@@ -617,6 +625,23 @@ def report_delivery_failure(
         blocked = True
         action = failure.workflow_permission_action(pr_url, language_code=language_code)
         reason = failure.workflow_permission_cause(language_code)
+    # Issue #2220: a stop that carries one structured question shows its
+    # one-sentence summary as the visible Reason and — when the class is not
+    # 'authority' and one recommended option is executable in place — answers
+    # it HERE, once, instead of blocking (the #2202 re-queue's place and
+    # rule: a returned outcome means nothing was posted on the blocked path).
+    stop_question = getattr(exc, "question", None)
+    if blocked and stop_question is not None:
+        reason = question.stop_reason(stop_question, reason)
+        if run_id:
+            taken = question.report_once(
+                stop_question, issue=issue, source_repo=source_repo,
+                run_id=run_id, language_code=language_code,
+                status_url=status_url, pr_url=pr_url,
+                current_labels=current_labels, ready_label=ready_label,
+            )
+            if taken is not None:
+                return taken
     # The #825 dead-loop guard, recoverable failures only (blocked is
     # already terminal; `classify=False` is the implement handler's
     # terminal template): the same (run_id, failure fingerprint)
@@ -774,6 +799,11 @@ def report_delivery_failure(
         body, worktree, exc, evidence=evidence_detail, tail=help_suffix,
         language_code=language_code,
     )
+    if blocked and stop_question is not None:
+        # The visible question and its one hidden block close the comment,
+        # after the evidence fold and before the blocked exit's help line:
+        # a person reads the options, a caller reads the block.
+        body = f"{body}\n\n{question.render_stop(stop_question, language_code)}"
     if run_id:
         # The hidden fingerprint marker rides under the run marker on
         # the recoverable path only: a blocked Issue is terminal, so

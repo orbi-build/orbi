@@ -73,7 +73,7 @@ from orbi.github import (
     pr_view,
 )
 from orbi.github_feedback import check_summaries, pr_delivery_rollup
-from orbi import base_ci_red, language, user_summary
+from orbi import base_ci_red, language, question, user_summary
 from orbi.delivery_comment import merged_pr_comment_body  # noqa: F401
 from orbi.gitops import (
     is_ancestor,
@@ -430,21 +430,11 @@ def _round_verdict_phase(work: _Round) -> bool:
     )
     verdict = work.verdict
     if verdict["verdict"] == "blocked_on_human_decision":
-        decisions = "; ".join(
-            f"note: {finding.get('note', '')}; "
-            f"fix: {finding.get('fix', '')}"
-            for finding in verdict["findings"]
-        )
-        actions = "; ".join(
-            str(finding.get("fix", "")).strip()
-            for finding in verdict["findings"]
-            if str(finding.get("fix", "")).strip()
-        )
         # No fix: the handler supplies the catalog action (Issue #1701).
-        raise HumanDecisionRequired(
-            "review requires human decision: " + decisions,
-            action=actions,
-        )
+        # The reviewer's question rides the exception into the stop report,
+        # which renders it and may answer it once (Issue #2220).
+        message, actions, stop = question.review_stop(verdict)
+        raise HumanDecisionRequired(message, action=actions, question=stop)
     if not review_has_findings(verdict):
         return False
     event("review_findings_unfixed", pr=pr["number"], round=round)
@@ -592,6 +582,13 @@ def _round_external_phase(work: _Round) -> bool:
         + "\n````\n\n</details>\n\n"
         + language.text(
             bound, "review.external_conclusion", run_id=config.run_id,
+        )
+        + "\n\n"
+        # Issue #2220: the stop carries the maintainer's own question; the
+        # engine fixes its class and options whatever the reviewer wrote.
+        + question.external_pr_stop(
+            number=number, source_repo=source_repo, pr_url=pr["url"],
+            language_code=bound,
         )
     )
     post_blocked_comment(
@@ -1206,7 +1203,7 @@ def _run_review_round(
             reason, action = (text("review.blocked_rounds_reason"),
                               text("review.blocked_rounds_action"))
         elif isinstance(exc, HumanDecisionRequired):
-            reason = text("review.blocked_human_reason")
+            reason = question.stop_reason(exc.question, text("review.blocked_human_reason"))
             if exc.action:
                 fix = exc.action.strip().rstrip(".。;")
                 action = text("review.blocked_human_action", fix=fix)

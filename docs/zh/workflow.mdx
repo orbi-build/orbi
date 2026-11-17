@@ -582,6 +582,52 @@ milestone 的可见摘要就是同一条有长度上限、不含本机路径的�
 `provider_quota` 和其它所有原因保持不变：provider 配额停止仍然刻意保持终止状态
 （Issue #698）。
 
+### 会提出一个问题的停止
+
+**v0.7.46 起可用。**
+
+需要决定的停止，在不变的 `orbi:failure:v1` 记录旁携带**一个**机器可读问题
+（`<!-- orbi:question:v1 {json} -->`，形状与动作集合见
+[Public contracts](/zh/public-contracts)）。目前有两类停止会提问：
+
+- 评审僵局（`blocked_on_human_decision`）：评审在 verdict 里写出问题 ——
+  一句话的真实原因、2 到 4 个选项，并且当它自己愿意执行其中某个选项时，
+  恰好一个选项带 `recommended` 和一行理由。停止评论中可见的 Reason 就是
+  该 `summary`，选项会列给读者。
+- 通过评审的外部 PR：问题由引擎自己固定 —— `authority`，三个选项
+  （在 GitHub 上审阅并合并、关闭外部 PR 让 Orbi 自己实现、放弃这项改动），
+  没有推荐，无论评审写了什么。
+
+`decision_class` 只有在以下情况才是 `authority`：接受外部贡献者的代码、
+涉及金钱/价格/套餐的事项、推翻维护者在本票正文或仓库 `AGENTS.md` 中明确写下
+的决定；已有的测试、门禁和检查**不算**维护者决定。其余情况是 `pick_best`
+（证据表明某个选项更好）或 `missing_info`（只有当事人知道某个事实）。
+
+分类不是 `authority`、且带有引擎能原地执行的 `recommended` 选项
+（`amend_requeue`）的评审僵局，会在写停止报告的那一刻**自行解决一次**：
+该选项的验收标准写入工单正文，工单重排标签为 `ai-fix-needed`（有打开的 PR）
+或 `ai-ready`（没有 PR），并留下**一条** `requeued` 评论，说明选了什么、
+为什么，以及 "Not right? Reply with another option." —— 它携带同一个问题块
+（因此人或调用方可以再从同样的选项里选择）和一条回答记录：
+
+```html
+<!-- orbi:answer:v1 {"q":"q1","action":"accept","value":"<label>","by":"orbi"} -->
+```
+
+这里没有 `ai-blocked` 标签、没有 failure block，也没有“卡住”通知。不同意的
+人直接编辑工单正文（评审只读当前正文），或让它再次停下。
+
+那条评论本身就是计数器：一张工单一生最多只有**一次**自动恢复，而临时 GitHub
+失败后的自动重新排队（Issue #2202，见上）也算作这次 —— 两者都写
+`requeued` 类型，所以第二次僵局会带着问题停在 `ai-blocked`。
+`base_ci_red` 与 `checks_permission_missing` 的自愈不写 `requeued` 评论，
+因此不计入。没有推荐选项、推荐选项无法原地执行、`confirm`/`text` 类型以及
+格式错误的问题都停在 `ai-blocked`；格式错误的问题不带块（解析错误会记入
+日志），finding 的 note 与 fix 仍然承载这次决定。
+
+设置了 `telegram_chat_id` 时，自动选择会发出一条消息，写明决定、原因和 Issue
+链接。停在 `ai-blocked` 的停止保留原有的单条 “needs you” 消息。
+
 <a id="交付因基础分支已红而暂停base_ci_red"></a>
 
 ### 交付因基础分支已红而暂停：`base_ci_red`

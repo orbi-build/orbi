@@ -729,6 +729,64 @@ unreachable GitHub can never loop. A look-alike marker in anyone else's comment
 is ignored. `provider_quota` and every other reason are unchanged: a provider
 quota stop stays terminal on purpose (Issue #698).
 
+### A stop that asks one question
+
+**Available since v0.7.46.**
+
+A stop that needs a decision carries one machine-readable question beside
+its unchanged `orbi:failure:v1` record (`<!-- orbi:question:v1 {json} -->`,
+shape and action set in [Public contracts](/public-contracts)). Two stops
+ask one today:
+
+- a review deadlock (`blocked_on_human_decision`): the reviewer writes the
+  question in its verdict — the real cause in one sentence, 2 to 4 options,
+  and, when it would execute one of them itself, exactly one option marked
+  `recommended` with a one-line reason. The visible Reason of the stop
+  comment is that `summary`, and the options are listed for the reader.
+- an external PR that passed review: the engine fixes the question itself —
+  `authority`, three options (link to the PR, close the external PR and let
+  Orbi build the change, drop the work) and no recommendation, whatever the
+  reviewer wrote.
+
+`decision_class` is `authority` ONLY for accepting code from outside
+contributors, anything about money, prices or plans, and overriding a
+decision the maintainer wrote explicitly in the ticket body or the repository
+`AGENTS.md`; existing tests, gates and checks are NOT recorded maintainer
+decisions. Otherwise it is `pick_best` (one option is better on the
+evidence) or `missing_info` (only the person knows a fact).
+
+A review deadlock whose class is not `authority` and that carries a
+`recommended` option the engine can execute in place (`amend_requeue`)
+resolves itself ONCE, at the moment the stop report is written: the option's
+acceptance criterion is appended to the Issue body, the Issue is relabelled
+`ai-fix-needed` (an open PR) or `ai-ready` (no PR), and ONE `requeued`
+comment says what was chosen, why, and "Not right? Reply with another
+option." — it carries the same question block (so a person or a caller can
+choose again from the same options) and one answer record:
+
+```html
+<!-- orbi:answer:v1 {"q":"q1","action":"accept","value":"<label>","by":"orbi"} -->
+```
+
+There is no `ai-blocked` label, no failure block and no "stuck"
+notification. A person who disagrees edits the Issue body (the reviewer reads
+only the current body) or asks for another stop.
+
+That comment IS the counter: an Issue gets at most ONE automatic resume over
+its life, and the one automatic re-queue of a transient GitHub failure
+(Issues #2202, above) counts as it — both write the `requeued` kind, so a
+second deadlock waits at `ai-blocked` with the question attached. The
+`base_ci_red` and `checks_permission_missing` self-recoveries write no
+`requeued` comment and are not counted. A question with no recommended
+option, a recommended option the engine cannot execute in place, a
+`confirm`/`text` question and a malformed question all stay at
+`ai-blocked`; a malformed one arrives without the block (the parse error is
+logged) and the finding's note and fix still carry the decision.
+
+With `telegram_chat_id` set, the automatic choice sends one message naming
+the decision, the reason and the Issue link. A stop that lands at
+`ai-blocked` keeps its existing single "needs you" message.
+
 ### A delivery paused on a red base branch: `base_ci_red`
 
 **Available since v0.7.15, including `/orbi fix-base`.**

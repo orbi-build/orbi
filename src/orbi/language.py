@@ -732,6 +732,70 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "things instead of one fix or one change.",
         "包含多个结果：工单要求的是若干互不相关的事情，而不是一个修复或一个改动。",
     ),
+    # The stop question (Issue #2220): what the person reads beside the
+    # hidden 'orbi:question:v1' block, and what the engine says when it
+    # answers one itself.
+    "question.visible_title": (
+        "**Orbi needs one decision:** {question}",
+        "**Orbi 需要一个决定：**{question}",
+    ),
+    "question.option_line": ("- **{label}** — {description}",
+                             "- **{label}** —— {description}"),
+    "question.recommended": (" *(Recommended: {reason})*",
+                             "（推荐：{reason}）"),
+    "question.confirm_yes": ("- **Yes** — {criterion}", "- **是** —— {criterion}"),
+    "question.confirm_no": ("- **No** — decline, and it stays with you",
+                            "- **否** —— 拒绝，留给您处理"),
+    "question.answer_hint": ("Not right? Reply with another option.",
+                             "不合适？回复另一个选项即可。"),
+    "question.auto_resume": (
+        "Orbi chose **{label}** on its own: {reason}\n\n"
+        "Its acceptance criterion is now part of this Issue, so the next "
+        "session reads the amended ticket. Not right? Reply with another "
+        "option.",
+        "Orbi 自行选择了 **{label}**：{reason}\n\n"
+        "该选项的验收标准已写入本 Issue，下一个 session 会读到修改后的工单。"
+        "不合适？回复另一个选项即可。",
+    ),
+    "question.telegram": (
+        "Orbi decided: {decision}\nWhy: {reason}\n{url}",
+        "Orbi 已决定：{decision}\n原因：{reason}\n{url}",
+    ),
+    "question.external_summary": (
+        "This contribution passed review, but the engine never merges work "
+        "from outside contributors: a maintainer decides whether to accept "
+        "it and which version it ships in.",
+        "这份贡献已通过评审，但引擎不会合并外部贡献者的代码：是否接受它、"
+        "以及它随哪个版本发布，由维护者决定。",
+    ),
+    "question.external_text": (
+        "What should happen to this contribution?",
+        "这份贡献应该怎么处理？",
+    ),
+    "question.external_link_label": (
+        "Review and merge it on GitHub",
+        "在 GitHub 上审阅并合并",
+    ),
+    "question.external_link_description": (
+        "The review conclusion is on the PR: a maintainer reviews and merges "
+        "it there, and GitHub closes this Issue when it lands.",
+        "评审结论就在 PR 上：维护者在 GitHub 上审阅并合并，合并后 GitHub "
+        "会自动关闭本 Issue。",
+    ),
+    "question.external_close_pr_label": (
+        "Don't accept it, let Orbi build it",
+        "不接受这份 PR，让 Orbi 自己实现",
+    ),
+    "question.external_close_pr_description": (
+        "Close the external PR; the existing path re-queues this triage Issue "
+        "and Orbi builds the change itself.",
+        "关闭这个外部 PR；现有流程会把这张 triage 工单重新排队，由 Orbi 自行实现该改动。",
+    ),
+    "question.external_close_all_label": ("Drop this work", "放弃这项改动"),
+    "question.external_close_all_description": (
+        "Close this Issue and its Orbi PR, and delete the Orbi branch.",
+        "关闭本 Issue 及其 Orbi PR，并删除 Orbi 分支。",
+    ),
     # The ONE community-help line a "something went wrong, a person must
     # act" message ends with (Issue #1684). It is a constant, never a
     # config key, and never a message that does not ask a person to step
