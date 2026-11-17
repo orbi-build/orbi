@@ -86,8 +86,9 @@ A `blocked_on_human_decision` verdict ALSO carries ONE question — the
 stop comment states the real cause in one sentence, lists the options and
 lets a person resolve it in one reply:
 
-- `id`: unique per Issue, so a later stop never reuses an earlier one (use a
-  `q<n>` higher than any question already on the ticket).
+- `id`: do not write one. The engine assigns it (`q<n>`, unique per
+  Issue) from the questions already on the ticket, so two stops on one
+  Issue can never share an id.
 - `kind`: `choice` (2–4 `options`), `confirm` (`action` names what "yes"
   performs, plus the `criterion` for `amend_requeue`) or `text` (free text).
 - `summary`: one plain sentence with the real cause; it becomes the visible
@@ -309,7 +310,7 @@ PR **after** your in-session fixes: `pass` only when the PR is mergeable
 with 0 Blocker and 0 Major.
 
 ```
-REVIEW_VERDICT {"verdict":"pass|findings|blocked_on_human_decision","head":"<40-hex reviewed head SHA>","blockers":<int>,"majors":<int>,"minors":<int>,"findings":[{"level":"Blocker|Major|Minor","location":"path:line","note":"...","fix":"..."}],"question":{"id":"q<n>","kind":"choice|confirm|text","summary":"...","question":"...","options":[{"label":"...","description":"...","action":"amend_requeue","recommended":true,"reason":"..."}]},"decision_class":"pick_best|missing_info|authority"}
+REVIEW_VERDICT {"verdict":"pass|findings|blocked_on_human_decision","head":"<40-hex reviewed head SHA>","blockers":<int>,"majors":<int>,"minors":<int>,"findings":[{"level":"Blocker|Major|Minor","location":"path:line","note":"...","fix":"..."}],"question":{"kind":"choice|confirm|text","summary":"...","question":"...","options":[{"label":"...","description":"...","action":"amend_requeue","recommended":true,"reason":"..."}]},"decision_class":"pick_best|missing_info|authority"}
 ```
 
 - `head` is the exact full SHA of the head this verdict covers:

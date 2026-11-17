@@ -434,7 +434,8 @@ def _round_verdict_phase(work: _Round) -> bool:
         # No fix: the handler supplies the catalog action (Issue #1701).
         # The reviewer's question rides the exception into the stop report,
         # which renders it and may answer it once (Issue #2220).
-        message, actions, stop = question.review_stop(verdict)
+        message, actions, stop = question.review_stop(
+            verdict, comments=question.question_history(number, source_repo))
         raise HumanDecisionRequired(message, action=actions, question=stop)
     if not review_has_findings(verdict):
         return False
