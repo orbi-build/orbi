@@ -430,7 +430,7 @@ def test_release_comments_carry_the_summary():
     assert _link() in success
     failed = release_comments.release_failure_comment_body(
         "abc12345", RunFields(run_id="abc12345", priority="normal"),
-        RuntimeError("boom"),
+        RuntimeError("boom"), step="publish",
         language_code=language.LANGUAGE_EN, status_url=VALID_URL,
         issue=7, title="Start the work",
     )

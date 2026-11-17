@@ -2920,6 +2920,12 @@ def test_process_release_blocks_when_version_push_rejected(monkeypatch, caplog):
     # claim kept is cleared too (Issue #1775).
     assert state["edits"][-1] == (99, {"repo": "o/r", "remove": "ai-ready"})
     assert "claim_yield" not in caplog.text
+    # Issue #2222: the rejected version push reports the version step.
+    (_, comment_kwargs), = state["comments"]
+    assert failure.parse(
+        comment_kwargs["body"],
+    ).reason_code == "release_failed"
+    assert "The release failed at the version step" in comment_kwargs["body"]
 
 
 def test_process_release_success_end_to_end(monkeypatch):
@@ -3888,6 +3894,12 @@ def test_process_release_fails_on_tag_mismatch_without_moving_it(monkeypatch):
     (comment_number, comment_kwargs), = state["comments"]
     assert "other123" in comment_kwargs["body"]
     assert "abc123" in comment_kwargs["body"]
+    # Issue #2222: the stop carries its own code and names the failed step.
+    record = failure.parse(comment_kwargs["body"])
+    assert record == failure.Failure(
+        "release_failed", *failure.DISPOSITIONS["release_failed"],
+    )
+    assert "The release failed at the tag step" in comment_kwargs["body"]
 
 
 def test_process_release_reuses_a_matching_existing_tag(monkeypatch):

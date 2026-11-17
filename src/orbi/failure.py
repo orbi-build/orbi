@@ -47,10 +47,9 @@ REASON_CODES = frozenset({
     # A transient GitHub API/server failure (5xx, secondary rate limit,
     # `GraphQL: Something went wrong`): the same operation may succeed.
     "github_transient",
-    # Legacy only (Issue #1759): nothing in production raises it any
-    # more. The runner runs no tests of its own, and a red CI check is
-    # routed by the `GateCIFailure` type. It stays in the closed set so
-    # an already-written comment still parses; `classify` never produces it.
+    # Legacy only (Issue #1759): nothing raises it any more — a red CI check
+    # is routed by the `GateCIFailure` type — so `classify` never produces it;
+    # it stays in the closed set so an already-written comment still parses.
     "tests_failed",
     # The bounded review/fix budget is spent — a human decision.
     "review_budget_exhausted",
@@ -64,16 +63,18 @@ REASON_CODES = frozenset({
     # (Issue #1749): a repository/config precondition a human repairs.
     "base_branch_missing",
     # The delivery check that failed on the PR head is ALSO failing on the
-    # configured base branch (Issue #1825): the PR cannot turn it green, so
-    # the fix belongs to the base. Not `retry_safe` — a plain requeue would
-    # hit the same red base — but recoverable: `base_ci_fix.recover` resumes
-    # the SAME delivery once the base check turns green, no relabel.
+    # base (Issue #1825): not `retry_safe` (a requeue hits the same red base),
+    # but `base_ci_fix.recover` resumes the SAME delivery once it is green.
     "base_ci_red",
-    # The App installation has not approved a permission the check read
-    # needs, so GitHub answers `Resource not accessible by integration`
-    # (Issue #1918). A human approves it on the installation page; the
-    # paused delivery then resumes by itself, no relabel.
+    # The App installation has not approved the permission the check read
+    # needs (HTTP 403, Issue #1918): a human approves it and the paused
+    # delivery resumes by itself, no relabel.
     "checks_permission_missing",
+    # Issue #2222: a failed release task, and the two empty deliveries the
+    # commit boundary refuses — each decided at the source, each a ticket.
+    "release_failed",
+    "no_commit_delivered",
+    "no_file_change",
     # Any other runner exception the classifier does not recognize.
     "unclassified",
 })
@@ -198,9 +199,7 @@ def parse(body: object) -> Failure | None:
     return None if data is None else _parse_block(data)
 
 
-_FAILURE_FIELDS = tuple(
-    field.name for field in dataclasses.fields(Failure)
-)
+_FAILURE_FIELDS = tuple(f.name for f in dataclasses.fields(Failure))
 
 
 def _parse_block(data: dict) -> Failure:
@@ -228,19 +227,16 @@ _PROVIDER_QUOTA_RE = re.compile(
     re.IGNORECASE,
 )
 # The word markers `pi_process`'s early-exit classifier
-# (`_classify_startup_exit`) matches, plus the 401/403 status codes: the
-# provider's own words stay the Pi startup classification's (Issue #1465),
-# and `failure` reads them from the one regex below.
+# (`_classify_startup_exit`) matches: the provider's own words stay the Pi
+# startup classification's (Issue #1465), read here by the one regex below.
 PROVIDER_AUTH_WORDS = ("unauthorized", "forbidden", "api key")
 
 # The text-only credential markers. GitHub failures no longer read this
-# one: they carry the response status (`gh_response`), which is exact,
-# while `forbidden` and `credential` were broad enough to match a branch
-# or check name inside the command's argv (Issue #1760). The remaining
-# markers serve the Pi / model-provider detail, which only gives text
-# (Issue #1465): its 401 shapes, its rejected-key sentences and
-# `unauthorized`; `forbidden` stays in `PROVIDER_AUTH_WORDS` for
-# `pi_process`'s own startup classifier, which is not this regex.
+# one: they carry the exact response status (`gh_response`), while
+# `forbidden` and `credential` matched a branch or check name in the
+# command's argv (Issue #1760). The remaining markers serve the Pi /
+# model-provider detail, which only gives text (Issue #1465); `forbidden`
+# stays in `PROVIDER_AUTH_WORDS` for `pi_process`'s startup classifier.
 # `api key` is the provider's own missing/rejected-key sentence ("No API
 # key found for provider …"), the marker `PROVIDER_AUTH_WORDS` still
 # lists; only `incorrect api key` survived #1762, so the plain sentence
@@ -258,12 +254,10 @@ _CREDENTIAL_MISSING_RE = re.compile(
     r"|unauthorized",
     re.IGNORECASE,
 )
-# The explicit GitHub rejection when a push creates or updates an
-# Actions workflow without the App's `workflows` permission (Issue
-# #1651). GitHub names the workflow path and the missing permission in
-# ONE sentence, so the pattern requires the whole refusal: a generic
-# 403, a non-fast-forward rejection or the bare word `workflow` never
-# matches.
+# The explicit GitHub rejection when a push creates or updates an Actions
+# workflow without the App's `workflows` permission (Issue #1651). GitHub
+# names the path and the permission in ONE sentence, so the pattern requires
+# the whole refusal: a generic 403 or the bare word `workflow` never matches.
 _WORKFLOW_PERMISSION_RE = re.compile(
     r"refusing to allow (?:a|the) GitHub App to "
     r"(?:create or update|update) workflow "
@@ -272,17 +266,15 @@ _WORKFLOW_PERMISSION_RE = re.compile(
     re.IGNORECASE,
 )
 
-# The reader-facing cause and repair path for that refusal (Issue
-# #1651). One canonical explanation feeds the detailed comment, the
-# terminal progress scene and the short milestone; only the last
-# sentence differs by whether a delivery PR already exists.
+# The reader-facing cause and repair path for that refusal (Issue #1651):
+# one canonical explanation feeds the comment, the progress scene and the
+# short milestone; only the last sentence differs by whether a PR exists.
 _WORKFLOW_PERMISSION_CAUSE_KEY = "failure.workflow_cause"
 # The remaining text-only transient markers: network-level failures and
-# GitHub's own server sentences. This set names no timeout: a timeout is
-# decided by `subprocess.TimeoutExpired` or, for a source that gives no
-# status and no type, by `_TEXT_TIMEOUT_RE` below. A GitHub request that
-# received a response reports its status and never reads that wording; a
-# status-less gh transport failure is the one exception (Issue #1768).
+# GitHub's own server sentences. This set names no timeout (that is
+# `subprocess.TimeoutExpired`, or `_TEXT_TIMEOUT_RE` for a source with no
+# status and no type); a status-less gh transport failure is the one
+# exception that reads the wording (Issue #1768).
 _GITHUB_TRANSIENT_RE = re.compile(
     r"http 5\d\d|http 429|rate limit|"
     r"something went wrong while executing your query|"
@@ -300,14 +292,12 @@ _TEXT_TIMEOUT_RE = re.compile(r"timed out|timeout", re.IGNORECASE)
 def _timeout_is_text_only(error: BaseException | None) -> bool:
     """Whether only the failure's text can say it was a timeout.
 
-    `subprocess.TimeoutExpired` IS a timeout (decided by type) and a
-    GitHub request that received a response reports its status, so
-    neither reads the wording; a non-gh subprocess (Pi, `git
-    fetch`/`git push`) has only its output. gh's own transport can fail
-    before any response exists — a TLS handshake timeout exits 1 with no
-    status and no `TimeoutExpired` (cli/cli#1761) — so a structured gh
-    failure that reports NO status keeps the wording as its only signal
-    (Issue #1768). A response status, when present, still wins.
+    `subprocess.TimeoutExpired` IS a timeout (decided by type) and a GitHub
+    request that received a response reports its status, so neither reads the
+    wording; a non-gh subprocess (Pi, `git fetch`/`git push`) has only its
+    output. gh's own transport can fail before any response exists (a TLS
+    handshake timeout, cli/cli#1761), so a structured gh failure reporting NO
+    status keeps the wording (Issue #1768); a response status still wins.
     """
     command = getattr(error, "cmd", None)
     if not isinstance(command, list):
@@ -334,6 +324,9 @@ DISPOSITIONS: dict[str, tuple[str, bool]] = {
     "base_branch_missing": ("fix_ticket", False),
     "base_ci_red": ("fix_ticket", False),
     "checks_permission_missing": ("check_credentials", False),
+    "release_failed": ("fix_ticket", False),
+    "no_commit_delivered": ("fix_ticket", False),
+    "no_file_change": ("fix_ticket", False),
     "unclassified": ("fix_ticket", False),
 }
 
@@ -348,12 +341,11 @@ class BaseBranchMissingError(RuntimeError):
     it (`LANG` / `LC_MESSAGES`), and a text match would classify the
     same failure differently on a non-English host.
 
-    `base_branch` is the CONFIGURED branch and `failure_record` is the
-    record the failure report uses as it is; the text classifier never
-    runs for this failure. `stderr` keeps the failed fetch's own output
-    as evidence: `failure_detail` reads it into the run details, so the
-    reader still sees what Git said without it deciding anything
-    (Issues #1749, #1753).
+    `base_branch` is the CONFIGURED branch and `failure_record` is the record
+    the failure report uses as it is; the text classifier never runs here.
+    `stderr` keeps the failed fetch's output as evidence: `failure_detail`
+    reads it into the run details, so the reader still sees what Git said
+    without it deciding anything (Issues #1749, #1753).
     """
 
     def __init__(self, base_branch: str, *, stderr: str | None = None):
@@ -374,6 +366,7 @@ def classify(detail: str, *, outcome: str = "blocked",
              provider_quota: bool = False, review_budget: bool = False,
              human_decision: bool = False,
              unrecoverable: bool = False,
+             release: bool = False,
              error: BaseException | None = None) -> Failure:
     """Map one delivery exception to the machine-readable failure record.
 
@@ -384,9 +377,10 @@ def classify(detail: str, *, outcome: str = "blocked",
     permission 403, a transport timeout and a bounded gate wait are read
     from the failure itself, never from words that the command's argv
     could also contain (Issue #1760). Every marker that is not recognized
-    falls through to `unclassified`, so the block is never omitted. The
-    mapping is the single source both the comment block and the
-    reader-facing Action/Reason rendering use.
+    falls through to `unclassified` — or to `release_failed` when the
+    caller marks the failure a release task's — so the block is never
+    omitted. The mapping is the single source both the comment block and
+    the reader-facing Action/Reason rendering use.
     """
     if provider_quota:
         reason_code = "provider_quota"
@@ -425,6 +419,11 @@ def classify(detail: str, *, outcome: str = "blocked",
         reason_code = "provider_quota"
     elif unrecoverable:
         reason_code = "human_decision_required"
+    elif release:
+        # Issue #2222: a release task's failure with no cause of its own is
+        # `release_failed`; a cause the classifier knows (credential, quota,
+        # spent gate wait) keeps its own repair path.
+        reason_code = "release_failed"
     else:
         reason_code = "unclassified"
     action_code, retry_safe = DISPOSITIONS[reason_code]
