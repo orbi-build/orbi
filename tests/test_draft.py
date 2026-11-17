@@ -26,6 +26,7 @@ import orbi.draft as draft
 import orbi.draft_cli as draft_cli
 import orbi.draft_document as draft_document
 import orbi.draft_marker as draft_marker
+import orbi.question as question
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import EPIC_LABEL, NEEDS_DETAIL_LABEL, READY_LABEL
 
@@ -299,6 +300,44 @@ def test_a_recommended_option_is_taken_wherever_it_sits(
     drafting = sessions.calls[1].context
     assert "A local store" in drafting
     assert "A remote store" not in drafting
+
+
+def test_a_recommended_field_is_taken_like_a_recommended_label(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """One question parser for drafting and stops (Issue #2228): an option
+    marked `"recommended": true` is the engine's answer in a drafting round
+    too, exactly like an option whose label ends in "(Recommended)"."""
+    draft_fakes.judge_passing(monkeypatch)
+    options = [
+        {"label": "A local store in the project",
+         "description": "Keeps everything in one file.",
+         "recommended": True},
+        {"label": "A remote store behind a server",
+         "description": "Reads and writes through a server."},
+    ]
+    sessions.queue({
+        "kind": "questions", "reply": "One thing is missing.",
+        "questions": [{"question": "Which store?", "header": "Store",
+                       "options": options}],
+    })
+    sessions.queue_draft(*TWO_ISSUES)
+    code, out, err = run_round_cli(
+        config, {"message": "add tags"}, tmp_path / "session",
+    )
+    assert code == 0, err
+    answer = json.loads(out)
+    assert answer["questions"] == []
+    assert [entry["title"] for entry in answer["issues"]] == [
+        "Tag a note", "Filter notes by tag",
+    ]
+    # The option's own words reach the session that writes the draft and the
+    # reply the person reads; the option not taken never does.
+    drafting = sessions.calls[1].context
+    assert "A local store in the project" in drafting
+    assert "A remote store behind a server" not in drafting
+    assert "A local store in the project" in answer["reply"]
+    assert "A remote store behind a server" not in answer["reply"]
 
 
 # --- 3: the session resumes; a replay still drafts -----------------------
@@ -977,13 +1016,13 @@ def test_a_create_payload_names_its_own_bad_fields(
         ({"kind": "questions", "reply": "x", "questions": [123]},
          "question 1 is not an object"),
         ({"kind": "questions", "reply": "x", "questions": [" "]},
-         "question 1 has no question"),
+         "question 1: question must be a non-empty string"),
         ({"kind": "questions", "reply": "x", "questions": [{
             "question": "Which store?", "header": 7,
-        }]}, "question 1 has an unreadable header"),
+        }]}, "question 1: header must be a non-empty string"),
         ({"kind": "questions", "reply": "x", "questions": [{
             "question": " ", "header": "Store", "options": TWO_OPTIONS,
-        }]}, "question 1 has no question"),
+        }]}, "question 1: question must be a non-empty string"),
         ({"kind": "questions", "reply": "x", "questions": [{
             "question": "Which store?", "header": "Store",
             "options": TWO_OPTIONS[:1],
@@ -994,19 +1033,19 @@ def test_a_create_payload_names_its_own_bad_fields(
         }]}, "needs 2 to 4 options"),
         ({"kind": "questions", "reply": "x", "questions": [{
             "question": "Which store?", "header": "Store", "options": "both",
-        }]}, "needs 2 to 4 options"),
+        }]}, "question 1: options must be a list"),
         ({"kind": "questions", "reply": "x", "questions": [{
             "question": "Which store?", "header": "Store",
             "options": ["Local", TWO_OPTIONS[1]],
-        }]}, "option 1 is not an object"),
+        }]}, "question 1: option 1 is not an object"),
         ({"kind": "questions", "reply": "x", "questions": [{
             "question": "Which store?", "header": "Store",
             "options": [{"description": "Keeps it local."}, TWO_OPTIONS[1]],
-        }]}, "option 1 has no label"),
+        }]}, "question 1: option 1 label must be a non-empty string"),
         ({"kind": "questions", "reply": "x", "questions": [{
             "question": "Which store?", "header": "Store",
             "options": [{"label": "Local"}, TWO_OPTIONS[1]],
-        }]}, "option 1 has no description"),
+        }]}, "question 1: option 1 description must be a non-empty string"),
         ({"kind": "weird", "reply": "x"}, "unknown answer kind"),
     ],
 )
@@ -1391,6 +1430,23 @@ def test_a_real_answer_whose_questions_all_recommend_is_drafted(
         assert option_text(option) in answer["reply"]
 
 
+@pytest.mark.parametrize(
+    "path", sorted(DRAFT_FIXTURES.glob("*.json")),
+    ids=lambda path: path.name,
+)
+def test_every_draft_fixture_produces_the_same_document(path):
+    """Acceptance 2 of Issue #2228: every real drafting fixture reads into
+    the SAME draft document through the shared question parser — the
+    question, an optional header and the 2-4 options, nothing added."""
+    fixture = json.loads(path.read_text(encoding="utf-8"))
+    answer = draft_document.parse_answer(model_answer(path.name))
+    document = draft_document.DraftRound(
+        reply=answer.reply, questions=answer.questions,
+    ).as_json()
+    assert document["questions"] == fixture.get("questions", [])
+    assert document["reply"] == fixture["reply"]
+
+
 def test_only_a_question_with_no_recommended_option_waits_for_the_person(
     config, sessions, monkeypatch, tmp_path,
 ):
@@ -1485,6 +1541,29 @@ def test_a_session_that_keeps_recommending_fails_fast(
     failure = json.loads(err)
     assert failure["code"] == "too_many_rounds"
     assert failure["step"] == "run the drafting round"
+
+
+def test_one_recommendation_rule_and_one_mark_in_the_source():
+    """Acceptance 3 of Issue #2228: one function decides which option of a
+    question is recommended and one constant holds the mark, so a drafting
+    question and a stop question can never read a recommendation
+    differently."""
+    package = Path(draft.__file__).parent
+    sources = sorted(package.glob("*.py"))
+    holds_the_mark = [
+        source.name for source in sources
+        if '"' + draft.RECOMMENDED_MARK + '"' in source.read_text(
+            encoding="utf-8")
+    ]
+    deciders = [
+        source.name for source in sources
+        if "def recommended_option(" in source.read_text(encoding="utf-8")
+    ]
+    assert holds_the_mark == ["question.py"]
+    assert deciders == ["question.py"]
+    # Both documents read that one constant, never a copy of the string.
+    assert draft.RECOMMENDED_MARK is question.RECOMMENDED_MARK
+    assert draft_document.RECOMMENDED_MARK is question.RECOMMENDED_MARK
 
 
 def test_the_drafting_rules_teach_the_question_shape():
