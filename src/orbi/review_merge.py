@@ -724,8 +724,8 @@ def _round_merge_phase(work: _Round) -> dict | None:
         run_state.record_reviewed(
             worktree, refrozen["head_oid"], work.reviewed_body_sha256,
         )
-    work.publish(action=lambda: work.round_update(pr["url"], round,
-                                                  step="checks"))
+    work.publish(action=lambda: work.round_update(
+        pr["url"], round, step="checks"))
     try:
         return merge_exec.merge_gate(
             worktree,

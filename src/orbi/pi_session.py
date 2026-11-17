@@ -22,8 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orbi import config as config_domain
-from orbi import language, user_summary
-from orbi import steering
+from orbi import language, steering
 from orbi.body_steering import ignore_untrusted_body_edit, poll_body_edit
 from orbi.delivery_scene import RunContext
 from orbi.comment_trust import (
@@ -31,7 +30,6 @@ from orbi.comment_trust import (
     trusted_issue_comments_block,
 )
 from orbi.github import (
-    comment_issue,
     issue_comments,
     issue_view,
     pr_comments,
@@ -60,7 +58,6 @@ from orbi.pi_process import (
     stream_pi,
 )
 from orbi.pi_stream_log import log_provider_config_loaded
-from orbi.progress import run_marker
 from orbi.repo_config import validate_context_file
 
 # Runner-owned runtime paths inside a task worktree: created

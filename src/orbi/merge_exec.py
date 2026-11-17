@@ -33,7 +33,7 @@ from orbi.branch_reclaim import delete_merged_delivery_branch
 from orbi.checks import classify_checks, render_check
 from orbi.delivery_labels import BLOCKED_LABEL
 from orbi.failure_report import GateCIFailure
-from orbi.github import comment_issue, issue_labels, pr_view
+from orbi.github import issue_labels, pr_view
 from orbi.gitops import acquire_base_sync_lock, fetch_base_ref, is_ancestor
 from orbi.journal import (
     LOGGER,
@@ -41,9 +41,14 @@ from orbi.journal import (
     run_command,
     run_git_network_command,
 )
-from orbi.merge_blocked import MergeBlockedByIssueLabel, refuse_blocked_issue
+# The refusal type stays importable from here: `orbi.review_merge` catches
+# it as `merge_exec.MergeBlockedByIssueLabel` (the exception TYPE is the
+# contract of Issue #906, never the message text).
+from orbi.merge_blocked import (  # noqa: F401 - re-exported for review_merge
+    MergeBlockedByIssueLabel,
+    refuse_blocked_issue,
+)
 from orbi.merge_handoff import MergeHandoffRequired, is_maintainer_actionable
-from orbi.progress import run_marker
 
 
 class RecoverableMergeGateError(RuntimeError):
