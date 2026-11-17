@@ -58,13 +58,19 @@ registrant's ``apply`` callback.
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TypeVar
 
 from orbi import language
+from orbi.progress import RUN_MARKER_PATTERN
+# The `/orbi` line grammar lives in its own module (Issue #2221) and is
+# re-exported here: every caller and the tests keep reading it from the
+# layer that owns the command's decision.
+from orbi.command_line import parse_commands
+from orbi.command_line import strip_fenced_code_blocks  # noqa: F401
+from orbi.comment_trust import comment_is_trusted
 from orbi.github import (
     WRITE_PERMISSIONS,
     authenticated_github_login,
@@ -210,6 +216,15 @@ class CommandSpec:
     # instead of raising inside the scan, where the exception would abort
     # the other tickets' commands too.
     required_context: tuple[str, ...] = ()
+    # A RECORD command (Issue #2221): its occurrence is a hidden record
+    # block a caller parses out of a comment body, not a `/orbi <subcommand>`
+    # line — the answer to a stop question is `<!-- orbi:answer:v1 … -->`.
+    # Such a command has no typed spelling, so it gets no CLI entry
+    # (`ticket_command_registry.cli_specs`), and its caller's trust is the
+    # one authorship rule of `orbi.comment_trust` rather than the repo
+    # permission alone: the record block itself carries an `<!-- orbi`
+    # marker, so engine output is identified by its RUN MARKER here.
+    occurrence: Callable[[object], list[str | None]] | None = None
 
     @property
     def canonical(self) -> str:
@@ -331,73 +346,6 @@ def register_command(spec: CommandSpec) -> None:
     )
 
 
-def strip_fenced_code_blocks(text: str) -> str:
-    """Blank fenced code blocks so a documented command is not a command.
-
-    The regex cannot see Markdown, so a command line inside a ``` or ~~~
-    fence (the very way the command is explained) would otherwise trigger a
-    real action. Fences are dropped line by line; the line count is
-    preserved.
-    """
-    kept: list[str] = []
-    fence: str | None = None
-    for line in text.splitlines():
-        marker = None
-        for candidate in ("```", "~~~"):
-            if line.lstrip().startswith(candidate):
-                marker = candidate
-                break
-        if fence is not None:
-            if marker == fence:
-                fence = None
-            kept.append("")
-            continue
-        if marker is not None:
-            fence = marker
-            kept.append("")
-            continue
-        kept.append(line)
-    return "\n".join(kept)
-
-
-def _command_pattern(spec: CommandSpec) -> re.Pattern[str]:
-    """The anchored matcher the shared layer compiles from a spec.
-
-    The canonical form is ``/orbi <subcommand>``; every declared legacy
-    alias keeps its old top-level spelling (Issue #1922). A command author
-    supplies spellings, never a pattern, so the anchor and the whitespace
-    shape are identical for every command.
-    """
-    # The spelling must end at whitespace or the line end: `/orbi
-    # milestone-extra` and `/milestones` are other words, not a command
-    # with an argument (Issue #1922).
-    forms = [rf"/orbi[ \t]+{re.escape(spec.subcommand)}(?=[ \t]|$)"]
-    forms.extend(
-        rf"/{re.escape(alias)}(?=[ \t]|$)" for alias in spec.aliases
-    )
-    return re.compile(rf"(?mi)^(?:{'|'.join(forms)})[ \t]*([^\r\n]*)$")
-
-
-def parse_commands(text: object, spec: CommandSpec) -> list[str | None]:
-    """Every command ``spec`` issues in a comment body, in line order.
-
-    A command line whose argument count is not the spec's ``arity`` yields
-    `None`: it is readable as a command but malformed, and the caller owes
-    its author one readable receipt instead of silence. An arity-0 command
-    yields the empty argument for a well-formed line.
-    """
-    if not isinstance(text, str) or not text:
-        return []
-    parsed: list[str | None] = []
-    for argument in _command_pattern(spec).findall(strip_fenced_code_blocks(text)):
-        fields = argument.split()
-        if len(fields) != spec.arity:
-            parsed.append(None)
-        else:
-            parsed.append(fields[0] if fields else "")
-    return parsed
-
-
 def _language_code(context: dict[str, object]) -> str:
     """The message language carried through the dispatcher's `**context`."""
     value = context.get("language_code")
@@ -458,6 +406,23 @@ def _missing_context(spec: CommandSpec, context: dict[str, object]) -> str:
     )
 
 
+def carries_run_marker(comment: object) -> bool:
+    """True when a comment body OPENS with the engine's run marker.
+
+    The official metadata prefix (`orbi.comment_kind`): a run-scoped
+    comment is the run marker on its first line. That — not any
+    ``<!-- orbi`` marker — is what identifies engine output for a record
+    command, whose own comment marker would otherwise hide a person's
+    answer (Issue #2221).
+    """
+    if not isinstance(comment, dict):
+        return False
+    body = comment.get("body")
+    return (
+        isinstance(body, str) and RUN_MARKER_PATTERN.match(body) is not None
+    )
+
+
 def _occurrences(
     comments: list[dict], spec: CommandSpec,
 ) -> list[tuple[dict, str | None]]:
@@ -466,14 +431,23 @@ def _occurrences(
     A comment carrying a hidden ``<!-- orbi`` Runner marker is skipped
     silently: the bot must never trigger itself off its own output, and a
     self-hosted maintainer whose own account is the Runner is evaluated
-    like anyone else (Issue #1460).
+    like anyone else (Issue #1460). A record command reads its own block
+    markers instead, so its engine output is the run marker
+    (`carries_run_marker`, Issue #2221).
     """
     occurrences: list[tuple[dict, str | None]] = []
     for comment in comments:
-        if not isinstance(comment, dict) or is_runner_comment(comment):
+        if not isinstance(comment, dict):
             continue
-        for argument in parse_commands(comment.get("body"), spec):
-            occurrences.append((comment, argument))
+        if spec.occurrence is None:
+            if is_runner_comment(comment):
+                continue
+            arguments = parse_commands(comment.get("body"), spec)
+        elif carries_run_marker(comment):
+            continue
+        else:
+            arguments = spec.occurrence(comment.get("body"))
+        occurrences.extend((comment, argument) for argument in arguments)
     return occurrences
 
 
@@ -503,8 +477,24 @@ def _selection(
     permissions: dict[str, str] = {}
     missing = _missing_context(spec, context)
     for comment, argument in occurrences:
-        permission = _author_permission(comment, repo=repo, cache=permissions)
-        if permission not in PERMISSION_LEVELS[spec.permission]:
+        if spec.occurrence is not None:
+            # A record command's caller is trusted by the one authorship
+            # rule (`orbi.comment_trust`: write permission OR this runner's
+            # own account), never by the repo permission alone — a
+            # self-hosted install whose Runner and maintainer share one
+            # account posts the record for the person (Issue #2221).
+            if not comment_is_trusted(
+                comment, repo=repo, permissions=permissions,
+            ):
+                target = None
+                rejections.append((comment, argument, language.text(
+                    language_code, "command.reason_not_trusted",
+                    command=spec.canonical,
+                )))
+                continue
+        elif (permission := _author_permission(
+                comment, repo=repo, cache=permissions,
+        )) not in PERMISSION_LEVELS[spec.permission]:
             target = None
             rejections.append((
                 comment, argument,

@@ -1407,7 +1407,12 @@ def test_operations_public_surface_matches_cli_config_and_concurrency(capsys):
         assert not missing, (
             f"{slug} public surface must list the CLI subcommands {missing}"
         )
+        # Only a TYPED command has a `/orbi` spelling: the record command
+        # `answer` (Issue #2221) is the hidden `orbi:answer:v1` block, and
+        # its own row in the in-ticket command table documents it.
         for spec in ticket_commands():
+            if spec.occurrence is not None:
+                continue
             assert f"/orbi {spec.subcommand}" in public_surface, (
                 f"{slug} public surface must list the in-ticket command "
                 f"/orbi {spec.subcommand}"

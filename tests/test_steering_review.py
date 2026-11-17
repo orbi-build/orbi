@@ -8,6 +8,7 @@ import pytest
 
 import orbi.runner as runner
 import orbi.pi_session as pi_session
+import orbi.steering as steering
 from orbi import config as config_domain
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
@@ -453,9 +454,12 @@ def test_run_pi_steering_body_edit_respects_round_limit(monkeypatch, tmp_path, b
         _editor_response("second edit", "alice"),
     ]
     notice = Mock()
-    monkeypatch.setitem(pi_session.__dict__, "comment_issue", notice)
+    monkeypatch.setitem(steering.__dict__, "comment_issue", notice)
     events = []
-    monkeypatch.setitem(pi_session.__dict__, "event", lambda kind, **kw: events.append(kind))
+    monkeypatch.setitem(pi_session.__dict__, "event",
+                      lambda kind, **kw: events.append(kind))
+    monkeypatch.setitem(steering.__dict__, "event",
+                      lambda kind, **kw: events.append(kind))
     monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
     monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     captured = {}
@@ -493,7 +497,7 @@ def test_run_pi_steering_limit_notifies_once_for_late_comment(monkeypatch, tmp_p
     monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
     monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     comments = []
-    monkeypatch.setitem(pi_session.__dict__, "comment_issue",
+    monkeypatch.setitem(steering.__dict__, "comment_issue",
         lambda number, *, repo, body: comments.append((number, repo, body)))
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
@@ -522,7 +526,7 @@ def test_run_pi_steering_limit_notice_follows_the_language(monkeypatch, tmp_path
     monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
     monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     comments = []
-    monkeypatch.setitem(pi_session.__dict__, "comment_issue",
+    monkeypatch.setitem(steering.__dict__, "comment_issue",
         lambda number, *, repo, body: comments.append((number, repo, body)))
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
@@ -553,8 +557,11 @@ def test_run_pi_steering_limit_notice_failure_is_bypassed(monkeypatch, tmp_path)
         "author": {"login": "alice"}, "body": "correction",
     }]))
     events = []
-    monkeypatch.setitem(pi_session.__dict__, "event", lambda kind, **kw: events.append(kind))
-    monkeypatch.setitem(pi_session.__dict__, "comment_issue",
+    monkeypatch.setitem(pi_session.__dict__, "event",
+                      lambda kind, **kw: events.append(kind))
+    monkeypatch.setitem(steering.__dict__, "event",
+                      lambda kind, **kw: events.append(kind))
+    monkeypatch.setitem(steering.__dict__, "comment_issue",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("offline")))
     captured = {}
     monkeypatch.setitem(pi_session.__dict__, "stream_pi", lambda command, **kw: captured.update(kw) or "done")
@@ -586,7 +593,10 @@ def test_run_pi_steering_malformed_payload_is_bypassed(monkeypatch, tmp_path):
     events = []
     monkeypatch.setitem(pi_session.__dict__, "issue_view",
         lambda *a, **k: {"comments": None, "body": "body"})
-    monkeypatch.setitem(pi_session.__dict__, "event", lambda kind, **kw: events.append(kind))
+    monkeypatch.setitem(pi_session.__dict__, "event",
+                      lambda kind, **kw: events.append(kind))
+    monkeypatch.setitem(steering.__dict__, "event",
+                      lambda kind, **kw: events.append(kind))
     monkeypatch.setitem(pi_session.__dict__, "changed_files", lambda *a, **k: [])
     monkeypatch.setitem(pi_session.__dict__, "activity_snapshot", lambda *a, **k: None)
     captured = {}

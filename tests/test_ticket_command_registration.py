@@ -34,10 +34,11 @@ from orbi import ticket_command, ticket_command_registry
 from orbi.cli_parser import build_parser
 
 REPO = "owner/repo"
-# The four in-ticket commands, by machine id: `amend` (`/orbi amend`),
-# `fix_base` (`/orbi fix-base`), `milestone` (`/orbi milestone <version>`)
-# and `split` (`/orbi split`).
-COMMAND_NAMES = "amend,fix_base,milestone,split"
+# The five in-ticket commands, by machine id: `amend` (`/orbi amend`),
+# `answer` (the record command, Issue #2221), `fix_base`
+# (`/orbi fix-base`), `milestone` (`/orbi milestone <version>`) and
+# `split` (`/orbi split`).
+COMMAND_NAMES = "amend,answer,fix_base,milestone,split"
 # Their subcommands, minus the arity-1 one that keeps `orbi milestone set`
 # instead of a generated entry (`ticket_command_registry.cli_specs`).
 GENERATED_SUBCOMMANDS = "amend,fix-base,split"
@@ -56,13 +57,13 @@ def _run(code: str) -> list[str]:
     return result.stdout.splitlines()
 
 
-def test_the_explicit_list_yields_the_four_commands():
+def test_the_explicit_list_yields_every_command():
     """Acceptance 1: the explicit list IS the comment dispatch's command set.
 
     The fresh process imports only the dispatch layer and the list — never
     `orbi.claim` or `orbi.cli`. The registry is empty until the list module
-    is imported (no unrelated import fills it), and the list names all four
-    commands.
+    is imported (no unrelated import fills it), and the list names every
+    declared command.
     """
     lines = _run(
         "import orbi.ticket_command as ticket_command\n"
@@ -159,7 +160,7 @@ def test_a_command_module_does_not_register_itself():
     (Issue #2000) — now a module defines its spec and nothing else.
     """
     lines = _run(
-        "import orbi.amend_command, orbi.base_ci_red, "
+        "import orbi.amend_command, orbi.answer, orbi.base_ci_red, "
         "orbi.milestone_command, orbi.split_command\n"
         "from orbi import ticket_command\n"
         "print(len(ticket_command.TICKET_COMMANDS))\n"
@@ -177,7 +178,8 @@ def test_the_registry_declares_the_specs_it_registers():
     one entry here — and no command reaches the set any other way.
     """
     from orbi import (
-        amend_command, base_ci_fix, milestone_command, split_command,
+        amend_command, answer, base_ci_fix, milestone_command,
+        split_command,
     )
 
     declared = ticket_command_registry.COMMAND_SPECS
@@ -186,6 +188,7 @@ def test_the_registry_declares_the_specs_it_registers():
         amend_command.AMEND_COMMAND,
         milestone_command.MILESTONE_COMMAND,
         split_command.SPLIT_COMMAND,
+        answer.ANSWER_COMMAND,
     )
     assert ticket_command_registry.ticket_commands() == declared
 
@@ -210,8 +213,7 @@ def test_the_cli_subcommands_are_the_registered_arity_zero_commands():
     parser = build_parser("test")
     generated = sorted(
         spec.subcommand
-        for spec in ticket_command_registry.ticket_commands()
-        if spec.arity == 0
+        for spec in ticket_command_registry.cli_specs()
     )
     assert ",".join(generated) == GENERATED_SUBCOMMANDS
     for subcommand in generated:

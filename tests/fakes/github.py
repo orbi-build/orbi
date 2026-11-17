@@ -88,6 +88,8 @@ class FakeGh:
         # login whose read fails server-side.
         self.collaborators: dict[str, str] = {}
         self.permission_failure: str | None = None
+        # The remote branches deleted through `gh api -X DELETE` (#2221).
+        self.deleted_branches: set[str] = set()
         # The App permission the check read needs (Issue #1918): while
         # set, `gh pr view --json state,statusCheckRollup` answers GitHub's
         # documented App refusal instead of the rollup — production's own
@@ -609,6 +611,20 @@ class FakeGh:
                 "body": flags["--body"][0],
             })
             return ""
+        if sub == "close":
+            # `gh pr close <number> --repo <repo>` (Issue #2221: the stop
+            # answer's close_external_pr / close_all). A PR that is already
+            # closed answers like the real CLI: exit 1 with its sentence.
+            flags = self._flags(args[2:])
+            self._known_flags(
+                flags, ("--repo", "--comment", "--delete-branch"),
+                ["gh", "pr", "close"],
+            )
+            self._repo_or_fail((flags.get("--repo") or [self.repo])[0])
+            if pr["state"].upper() == "CLOSED":
+                self._fail(1, f"gh: PR #{number} is already closed")
+            pr["state"] = "CLOSED"
+            return ""
         flags = self._flags(args[2:])
         self._known_flags(flags, ("--repo", "--json"), ["gh", "pr", "view"])
         self._repo_or_fail((flags.get("--repo") or [self.repo])[0])
@@ -630,6 +646,25 @@ class FakeGh:
     def _api(self, args: list[str]) -> str:
         if args[:2] == ["--method", "PUT"]:
             return self._api_put(args[2:])
+        if args[:2] == ["-X", "DELETE"]:
+            # `gh api -X DELETE <path>`: the remote branch delete
+            # (Issues #1478, #2221). Only the refs path is modelled, so a
+            # mistyped delete fails fast instead of silently deleting
+            # something else.
+            match = (
+                re.fullmatch(
+                    r"repos/([^/]+/[^/]+)/git/refs/heads/(.+)", args[2],
+                )
+                if len(args) > 2 else None
+            )
+            if match is None:
+                return self._unsupported(["gh", "api", *args])
+            self._repo_or_fail(match.group(1))
+            branch = match.group(2)
+            if branch in self.deleted_branches:
+                self._fail(1, "gh: Reference does not exist (HTTP 422)")
+            self.deleted_branches.add(branch)
+            return ""
         if "--method" in args and args[args.index("--method") + 1] == "PATCH":
             # gh accepts the flag on either side of the path; the adapter
             # writes `gh api <path> --method PATCH --field ...`.

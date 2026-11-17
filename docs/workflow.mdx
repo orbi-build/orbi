@@ -196,6 +196,18 @@ body edits by untrusted or unknown editors and records
 is capped at `issue_comments_limit` (200 by default). The injected context states
 how many older comments were omitted.
 
+A stop question can also be answered WHILE the session runs
+([The stop question](/public-contracts#the-stop-question)). The steering
+poll reads the answer record, writes the acceptance criterion it implies
+into the Issue body with the same append `/orbi amend` uses, and the
+restart above carries the amended ticket into the new session exactly
+once. Only the engine's own write is skipped from steering — a maintainer
+who shares the runner's account is still read as a person, and editing
+the body by hand still steers. A closing answer (`cancel` included) is
+carried out only while the ticket is `ai-blocked`; during a session it
+leaves one receipt saying so and changes nothing.
+
+
 Dead-loop guard and comment dedup (Issue #825): recovery of an existing
 attempt keeps its run id. A fresh claim or takeover can start a new attempt
 on the same delivery branch and PR. Since the PR body is written once at

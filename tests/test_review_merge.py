@@ -552,6 +552,10 @@ def _merge_gate_fake(pr_state="MERGEABLE", head_oid="h1",
             # `{total_count, check_runs}`.
             runs = [] if base_check_runs is None else base_check_runs
             return json.dumps([{"total_count": len(runs), "check_runs": runs}])
+        if command[0] == "gh" and command[1] == "issue" and "view" in command:
+            # Issue #2221: the gate also reads the ticket's answers, so the
+            # fake answers a ticket that carries none.
+            return json.dumps({"comments": [], "labels": []})
         return ""
     return fake_run
 

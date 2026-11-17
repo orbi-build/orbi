@@ -407,14 +407,8 @@ def render_answer(question_id: str, *, value: str | bool,
     return _render_block(ANSWER_MARKER, data)
 
 
-def parse_answer(body: object) -> Answer | None:
-    """The answer record a comment body carries, or None."""
-    data = parse_versioned_block(
-        body, ANSWER_MARKER, ANSWER_FIELDS, QuestionError,
-        required=ANSWER_REQUIRED,
-    )
-    if data is None:
-        return None
+def _answer_record(data: dict) -> Answer:
+    """One validated answer object — the one field set every reader shares."""
     if data["action"] not in ANSWER_ACTIONS:
         raise QuestionError(f"unknown answer action: {data['action']!r}")
     return Answer(
@@ -423,6 +417,62 @@ def parse_answer(body: object) -> Answer | None:
         by=_non_empty(data["by"], "by"),
         reason=_optional_text(data.get("reason"), "reason"),
     )
+
+
+def parse_answer(body: object) -> Answer | None:
+    """The answer record a comment body carries, or None."""
+    data = parse_versioned_block(
+        body, ANSWER_MARKER, ANSWER_FIELDS, QuestionError,
+        required=ANSWER_REQUIRED,
+    )
+    if data is None:
+        return None
+    return _answer_record(data)
+
+
+def parse_answer_payload(payload: object) -> Answer:
+    """One answer record from its JSON payload (Issue #2221).
+
+    The ticket-command scan reads a record command's occurrence as the
+    block's payload text, so this is the same shape and the same rules as
+    `parse_answer` — one answer parser, two entry points — and a
+    corrupted record raises `QuestionError` instead of being ignored.
+    """
+    if not isinstance(payload, str) or not payload.strip():
+        raise QuestionError("the answer record is empty")
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise QuestionError(
+            f"the answer record is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise QuestionError("the answer record must be a JSON object")
+    unknown = sorted(set(data) - set(ANSWER_FIELDS))
+    if unknown:
+        raise QuestionError(f"the answer record has unknown fields: {unknown}")
+    missing = sorted(name for name in ANSWER_REQUIRED if name not in data)
+    if missing:
+        raise QuestionError(f"the answer record is missing fields: {missing}")
+    return _answer_record(data)
+
+
+def latest_stop(
+    comments: Sequence[dict] | None,
+) -> tuple[dict, StopQuestion] | None:
+    """The newest comment carrying a stop question, and that question.
+
+    The ticket's OPEN question is the newest one the engine wrote, so an
+    answer is read against it (Issue #2221). A body whose block is present
+    but unreadable raises `QuestionError`: the engine wrote it, so a
+    corrupted one is reported, never silently skipped.
+    """
+    for comment in reversed(list(comments or ())):
+        if not isinstance(comment, dict):
+            continue
+        stop = parse_question_block(comment.get("body"))
+        if stop is not None:
+            return comment, stop
+    return None
 
 
 def next_id(comments: Sequence[dict] | None) -> str:

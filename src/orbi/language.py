@@ -517,6 +517,11 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "命令作者在本仓库没有 {permission} 权限"
         "（仓库权限={observed!r}）",
     ),
+    "command.reason_not_trusted": (
+        "the answer's author is neither a repository writer nor this "
+        "runner's own account, so `{command}` is not carried out",
+        "回答的作者既不是本仓库的写入者，也不是本 Runner 自己的账号，因此不会执行 `{command}`",
+    ),
     "command.reason_malformed": (
         "the command line is malformed: write exactly one "
         "{label} on its own line, \u0060{usage}\u0060",
@@ -795,6 +800,112 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "question.external_close_all_description": (
         "Close this Issue and its Orbi PR, and delete the Orbi branch.",
         "关闭本 Issue 及其 Orbi PR，并删除 Orbi 分支。",
+    ),
+    # The answer to a stop question at every stage (Issue #2221): what the
+    # engine carries out, what it refuses to carry out, and the one receipt.
+    "answer.reason_no_stage": (
+        "no stop question is open at this stage (`{stage}`); an answer is "
+        "read while the ticket is ai-blocked, ai-pr-opened, ai-fix-needed "
+        "or ai-in-progress",
+        "当前阶段（`{stage}`）没有待回答的停止问题；只有在工单处于 "
+        "ai-blocked、ai-pr-opened、ai-fix-needed 或 ai-in-progress 时才读取回答",
+    ),
+    "answer.reason_no_question": (
+        "this ticket carries no stop question to answer",
+        "这张工单没有可回答的停止问题",
+    ),
+    "answer.reason_unreadable_question": (
+        "the ticket's stop question is unreadable: {detail}",
+        "工单上的停止问题无法解析：{detail}",
+    ),
+    "answer.reason_unreadable": (
+        "the answer record is unreadable: {detail}",
+        "回答记录无法解析：{detail}",
+    ),
+    "answer.reason_two_records": (
+        "an answer comment carries exactly ONE answer record; this one "
+        "carried more, so nothing was carried out",
+        "一条回答评论只携带一个回答记录；这条携带了多个，因此未执行任何操作",
+    ),
+    "answer.reason_stale": (
+        "the answer is older than this ticket's newest stop question, so "
+        "it is not carried out",
+        "该回答早于本工单最新的停止问题，因此不会执行",
+    ),
+    "answer.reason_other_question": (
+        "the answer is for question `{answered}`, but this ticket asks "
+        "`{asked}`",
+        "该回答对应问题 `{answered}`，而本工单当前的问题是 `{asked}`",
+    ),
+    "answer.reason_no_option": (
+        "no option of question `{question}` has the value `{value}`, so "
+        "nothing was carried out",
+        "问题 `{question}` 没有任何选项的值是 `{value}`，因此未执行任何操作",
+    ),
+    "answer.reason_confirm_value": (
+        "a confirm question is answered with `true` (yes) or `false` "
+        "(no), not `{value}`",
+        "确认型问题的回答是 `true`（是）或 `false`（否），不是 `{value}`",
+    ),
+    "answer.reason_no": (
+        "the answer is no, so the engine carries out nothing; the decision "
+        "stays with the person",
+        "回答为否，引擎不执行任何操作；该决定仍留给人工处理",
+    ),
+    "answer.reason_no_text": (
+        "declining needs the person's own words: put them in `reason` "
+        "(or as a text `value`)",
+        "拒绝需要写明您的具体意见：请写在 `reason` 中（或作为文本 `value`）",
+    ),
+    "answer.reason_link": (
+        "the option `{label}` is a person's own action on GitHub ({url}); "
+        "the engine carries out nothing",
+        "选项 `{label}` 需要人工在 GitHub 上操作（{url}）；引擎不执行任何操作",
+    ),
+    "answer.reason_cancel_stage": (
+        "`cancel` closes the Issue and its pull request, so it is carried "
+        "out only while the ticket is ai-blocked (it is `{stage}` now)",
+        "`cancel` 会关闭 Issue 及其 PR，因此只在工单处于 ai-blocked 时执行"
+        "（当前是 `{stage}`）",
+    ),
+    "answer.reason_close_stage": (
+        "a close is carried out only while the ticket is ai-blocked (it is "
+        "`{stage}` now)",
+        "关闭操作只在工单处于 ai-blocked 时执行（当前是 `{stage}`）",
+    ),
+    "answer.reason_no_pr": (
+        "the question names no pull request and this Issue has no open "
+        "delivery pull request",
+        "该问题没有指明 PR，本 Issue 也没有打开的交付 PR",
+    ),
+    "answer.effect_amended": (
+        "appended this acceptance criterion to the Issue body: `{text}`",
+        "已把这条验收标准写入 Issue 正文：`{text}`",
+    ),
+    "answer.effect_requeued": (
+        "the ticket is queued for delivery again (`{label}`)",
+        "工单已重新排队等待交付（`{label}`）",
+    ),
+    "answer.effect_closed_pr": (
+        "closed the pull request {url}; this Issue is queued for the "
+        "internal delivery (`{label}`)",
+        "已关闭 PR {url}；本 Issue 已重新排队，由 Orbi 自行实现（`{label}`）",
+    ),
+    "answer.effect_closed_all": (
+        "closed this Issue and its pull request ({url})",
+        "已关闭本 Issue 及其 PR（{url}）",
+    ),
+    "answer.superseded_merge": (
+        "a trusted answer to question `{question}` (value `{value}`) was "
+        "posted after the clean review and the engine has not carried it "
+        "out yet; the pull request is not merged and the next review round "
+        "reads the amended ticket",
+        "问题 `{question}` 的受信回答（值 `{value}`）在干净评审之后发布，"
+        "引擎尚未执行；该 PR 不会被合并，下一轮评审会读取修改后的工单",
+    ),
+    "answer.fix_round": (
+        "This pull request (#{pr_number}) was not merged: {reason}",
+        "该 PR（#{pr_number}）未被合并：{reason}",
     ),
     # The ONE community-help line a "something went wrong, a person must
     # act" message ends with (Issue #1684). It is a constant, never a

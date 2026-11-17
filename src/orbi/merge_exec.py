@@ -26,13 +26,14 @@ import subprocess
 import time
 from pathlib import Path
 
+from orbi import answer as answer_domain
 from orbi import config as config_domain
 from orbi import failure_report, github, gitops, human_review, language, run_state
 from orbi.branch_reclaim import delete_merged_delivery_branch
 from orbi.checks import classify_checks, render_check
 from orbi.delivery_labels import BLOCKED_LABEL
 from orbi.failure_report import GateCIFailure
-from orbi.github import comment_issue, issue_labels, pr_view
+from orbi.github import issue_labels, pr_view
 from orbi.gitops import acquire_base_sync_lock, fetch_base_ref, is_ancestor
 from orbi.journal import (
     LOGGER,
@@ -40,8 +41,14 @@ from orbi.journal import (
     run_command,
     run_git_network_command,
 )
+# The refusal type stays importable from here: `orbi.review_merge` catches
+# it as `merge_exec.MergeBlockedByIssueLabel` (the exception TYPE is the
+# contract of Issue #906, never the message text).
+from orbi.merge_blocked import (  # noqa: F401 - re-exported for review_merge
+    MergeBlockedByIssueLabel,
+    refuse_blocked_issue,
+)
 from orbi.merge_handoff import MergeHandoffRequired, is_maintainer_actionable
-from orbi.progress import run_marker
 
 
 class RecoverableMergeGateError(RuntimeError):
@@ -61,16 +68,6 @@ class DeliveryDeferred(Exception):
     observation and returns — the next tick re-reads the state. The
     delivery labels stay untouched and the review-round budget does not
     advance, so a deferred tick costs a couple of read calls only.
-    """
-
-
-class MergeBlockedByIssueLabel(Exception):
-    """The gate refused to merge because the source Issue is `ai-blocked`.
-
-    A maintainer's terminal label wins over a fully green gate: the skip
-    comment is posted by `merge_gate`, the PR stays open and the labels
-    stay as the human set them (no `ai-merged`), so the caller only stops
-    the round.
     """
 
 
@@ -329,35 +326,21 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         # a maintainer label added while the run was in review used to be
         # merged over. It is a human decision: the PR stays open and the
         # labels stay as the human set them.
-        labels = issue_labels(issue_number, merge_repo)
-        if BLOCKED_LABEL in labels:
-            marker = run_marker(run_id)
-            event(
-                "merge_gate_issue_blocked", level=logging.ERROR,
-                issue=issue_number, pr=pr["number"], head=pr["head_oid"],
+        if BLOCKED_LABEL in issue_labels(issue_number, merge_repo):
+            refuse_blocked_issue(
+                issue_number, repo=merge_repo, pr_number=pr["number"],
+                head=pr["head_oid"], run_id=run_id,
+                language_code=language_code,
             )
-            try:
-                comment_issue(
-                    issue_number, repo=merge_repo,
-                    body=f"{marker}\n" + language.text(
-                        language_code, "review.merge_skipped_blocked",
-                        pr_number=pr["number"], label=BLOCKED_LABEL,
-                        head=pr["head_oid"], run_id=run_id,
-                    ),
-                )
-            except Exception:
-                # The skip comment is a bypass: publishing it must never
-                # turn the human's `ai-blocked` decision into a merge or a
-                # label change. The gate still refuses the merge.
-                LOGGER.exception(
-                    "merge_skip_comment_publish_failed issue=%s pr=%s "
-                    "run_id=%s", issue_number, pr["number"], run_id,
-                )
-            raise MergeBlockedByIssueLabel(
-                f"Issue #{issue_number} is labelled {BLOCKED_LABEL}; the "
-                f"reviewed head {pr['head_oid']} of PR #{pr['number']} was "
-                "not merged"
-            )
+        # Issue #2221: the same last moment reads the ticket's ANSWER. A
+        # person who answered the stop question while CI was running must
+        # not have the older decision merged over, so an answer the engine
+        # has not carried out yet stops the merge and sends the delivery to
+        # a fix round instead.
+        answer_domain.refuse_superseded_merge(
+            issue_number, repo=merge_repo, head=pr["head_oid"],
+            language_code=language_code,
+        )
     merge_method = select_merge_method(merge_repo)
     confirmation = None
     try:

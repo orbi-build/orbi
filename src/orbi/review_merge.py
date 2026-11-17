@@ -36,6 +36,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 
+from orbi import answer as answer_domain
 from orbi import config as config_domain
 from orbi import failure_report, merge_exec, pi_session, run_state
 from orbi.blocked_comment import post_blocked_comment
@@ -711,8 +712,8 @@ def _round_merge_phase(work: _Round) -> dict | None:
     The pass is recorded before the gate, so the gate's own base absorb can
     point the record at the pushed head and defer (Issue #1626). A policy
     blocker is a resumable handoff, a pending check or UNKNOWN mergeability
-    is an intermediate state that writes nothing, an ai-blocked label stops
-    the merge, and a recoverable failure hands over the next session.
+    writes nothing, an ai-blocked label or an uncarried answer (Issue #2221)
+    stops the merge, and a recoverable failure hands over the next session.
     """
     worktree = work.worktree
     config, pr = work.config, work.pr
@@ -724,8 +725,7 @@ def _round_merge_phase(work: _Round) -> dict | None:
             worktree, refrozen["head_oid"], work.reviewed_body_sha256,
         )
     work.publish(action=lambda: work.round_update(
-        pr["url"], round, step="checks",
-    ))
+        pr["url"], round, step="checks"))
     try:
         return merge_exec.merge_gate(
             worktree,
@@ -745,15 +745,19 @@ def _round_merge_phase(work: _Round) -> dict | None:
         return None
     except DeliveryDeferred as exc:
         # An intermediate state, not a failure: the next tick re-reads it.
-        event(
-            "review_merge_deferred", pr=refrozen["number"],
-            round=round, reason=str(exc),
-        )
+        event("review_merge_deferred", pr=refrozen["number"], round=round,
+              reason=str(exc))
         work.keep_review_record.append(True)
         return None
+    except answer_domain.AnswerSupersedesVerdict as exc:
+        answer_domain.stop_for_fix_round(
+            number, repo=source_repo, pr_number=refrozen["number"],
+            reason=str(exc), marker=work.marker,
+            language_code=language.of(config),
+        )
+        return None
     except MergeBlockedByIssueLabel as exc:
-        # Issue #1504: a maintainer labelled the Issue ai-blocked during
-        # review; the gate posted the skip comment and the PR stays open.
+        # Issue #1504: the gate posted its skip comment; the PR stays open.
         event(
             "review_merge_skipped_issue_blocked",
             pr=refrozen["number"], round=round, reason=str(exc),
@@ -776,12 +780,10 @@ def _round_merge_phase(work: _Round) -> dict | None:
                 head=refrozen["head_oid"], base_branch=work.base_branch,
             )
         _round_gate_failure_phase(
-            work, str(exc), ci_failure=False,
-            absorb_abandoned=absorb_abandoned,
+            work, str(exc), ci_failure=False, absorb_abandoned=absorb_abandoned,
         )
         return None
-    except GateCIFailure as exc:
-        # Issue #906: the exception TYPE decides, never the message text.
+    except GateCIFailure as exc:  # Issue #906: the TYPE decides, not text
         _round_gate_failure_phase(work, str(exc), ci_failure=True)
         return None
 

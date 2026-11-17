@@ -312,6 +312,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     # The stop question (Issue #2220).
     "question_auto_resumed": "the engine answered a stop question itself and re-queued the delivery once",
     "question_history_read_failed": "the stop-question history read failed; the stop stays terminal",
+    "answer_pr_closed": "an answer to a stop question closed its pull request",
+    "merge_gate_decision_superseded": "the merge gate found a trusted answer newer than the clean verdict; the pull request is not merged",
     # External contributor PRs.
     "external_takeover": "an external PR is taken over for review",
     "external_takeover_skipped": "the external PR is not takeover-eligible",
