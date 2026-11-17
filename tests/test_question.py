@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from orbi import question, review_verdict
+from orbi import acceptance_section, question, review_verdict
 
 FIXTURE = (
     Path(__file__).resolve().parent / "fixtures" / "question"
@@ -629,6 +629,33 @@ def test_amended_body_appends_once_and_joins_an_existing_section():
     assert question.amended_body(None, criterion, "en").startswith(
         "## Acceptance",
     )
+
+
+def test_amended_body_replaces_the_criterion_of_the_same_question():
+    """Issue #2241: a criterion carries the question that asked for it, so
+    answering THAT question again replaces it instead of appending a
+    contradictory line, while another question's criterion stays."""
+    ticket = "## Outcome\n\nUsers keep notes."
+    first = question.amended_body(
+        ticket, "A criterion", "en", question_id="q1",
+    )
+    assert f"- A criterion {acceptance_section.criterion_marker('q1')}" in first
+    # The same answer again is no write at all.
+    assert question.amended_body(
+        first, "A criterion", "en", question_id="q1",
+    ) is None
+
+    second = question.amended_body(first, "B criterion", "en", question_id="q1")
+    assert "B criterion" in second and "A criterion" not in second
+    assert second.count(acceptance_section.appended_marker()) == 1
+
+    # Another question's answer keeps its own line.
+    other = question.amended_body(second, "C criterion", "en", question_id="q2")
+    assert "- B criterion" in other and "- C criterion" in other
+
+    # No question id: the append-only rule of the criteria proposal path.
+    appended = question.amended_body(first, "D criterion", "en")
+    assert "- A criterion" in appended and "- D criterion" in appended
 
 
 @pytest.mark.parametrize("payload", [

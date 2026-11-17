@@ -895,6 +895,156 @@ def test_a_refused_last_answer_supersedes_the_earlier_one(monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# one answer per question: a changed answer replaces the earlier amendment
+# (Issue #2241)
+# --------------------------------------------------------------------------
+
+# The second question the same ticket asks after it stops again: its own
+# options and its own id, so its criterion is a different decision.
+NEXT_QUESTION = {
+    "id": "q2",
+    "kind": "choice",
+    "summary": "The note's tag outlived the note's name.",
+    "question": "Should a tag survive a rename?",
+    "options": [
+        {
+            "label": "Keep the tag on rename",
+            "description": SECOND_CRITERION,
+            "action": "amend_requeue",
+        },
+        {
+            "label": "Drop the tag on rename",
+            "description": "A renamed note loses its tag.",
+            "action": "amend_requeue",
+        },
+    ],
+}
+
+THIRD_LABEL = "Drop the tag on rename"
+THIRD_CRITERION = "A renamed note loses its tag."
+
+
+def _stop_again(gh: FakeGh, payload: dict = NEXT_QUESTION) -> None:
+    """The ticket stops a second time and asks a NEW question (new id)."""
+    gh.comment(
+        TICKET,
+        f"{RUN_MARKER}\n<!-- orbi:comment=failure -->\n\n"
+        f"The delivery stopped again.\n\n"
+        f"{question.render_stop(stop(payload), 'en')}",
+        login="orbi-bot",
+    )
+
+
+def test_a_changed_answer_replaces_the_earlier_amendment(monkeypatch):
+    """Acceptance 1 (Issue #2241): A is amended by one scan, B arrives after
+    that amendment was written, and the next scan REPLACES A's criterion --
+    the body never carries two contradictory acceptance lines."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh, TWO_WAYS, labels=(PR_OPENED_LABEL,))
+    post(gh, value="Add the assumption")
+
+    stopped_scans.run(REPO, language_code="en")
+
+    assert f"- {CRITERION}" in gh.issues[TICKET]["body"]
+
+    post(gh, value=SECOND_LABEL)
+
+    stopped_scans.run(REPO, language_code="en")
+
+    body = gh.issues[TICKET]["body"]
+    assert f"- {SECOND_CRITERION}" in body
+    assert CRITERION not in body
+    assert body.count(APPENDED_MARKER) == 1
+    assert len(successes(gh)) == 2
+
+
+def test_a_changed_answer_at_ai_blocked_replaces_the_earlier_amendment(
+    monkeypatch, tmp_path,
+):
+    """Acceptance 1 through the real tick: the first answer is carried out
+    and re-queues the ticket, then the SAME question is answered again and
+    the earlier criterion goes."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh, TWO_WAYS, labels=(BLOCKED_LABEL,), body=BODY)
+    post(gh, value="Add the assumption")
+
+    tick(monkeypatch, tmp_path, gh)
+
+    assert f"- {CRITERION}" in gh.issues[TICKET]["body"]
+
+    # The delivery stops again on the same question and the person changes
+    # their answer.
+    gh.issues[TICKET]["labels"] = [BLOCKED_LABEL]
+    post(gh, value=SECOND_LABEL)
+
+    tick(monkeypatch, tmp_path, gh)
+
+    body = gh.issues[TICKET]["body"]
+    assert f"- {SECOND_CRITERION}" in body
+    assert CRITERION not in body
+    assert len(successes(gh)) == 2
+
+
+def test_an_answer_to_another_question_keeps_both_criteria(monkeypatch):
+    """Acceptance 2: two different questions answered on the same Issue --
+    both sentences stay, because each belongs to its own question."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh, TWO_WAYS, labels=(PR_OPENED_LABEL,))
+    post(gh, value="Add the assumption")
+
+    stopped_scans.run(REPO, language_code="en")
+
+    assert f"- {CRITERION}" in gh.issues[TICKET]["body"]
+
+    _stop_again(gh)
+    post(gh, value=SECOND_LABEL, q="q2")
+
+    stopped_scans.run(REPO, language_code="en")
+
+    body = gh.issues[TICKET]["body"]
+    assert f"- {CRITERION}" in body
+    assert f"- {SECOND_CRITERION}" in body
+    assert body.count(APPENDED_MARKER) == 1
+    assert len(successes(gh)) == 2
+
+    # A third answer to that second question replaces only ITS criterion.
+    post(gh, value=THIRD_LABEL, q="q2")
+
+    stopped_scans.run(REPO, language_code="en")
+
+    body = gh.issues[TICKET]["body"]
+    assert f"- {CRITERION}" in body
+    assert f"- {THIRD_CRITERION}" in body
+    assert SECOND_CRITERION not in body
+
+
+def test_a_changed_answer_leaves_the_tickets_own_text_untouched(monkeypatch):
+    """Acceptance 3: everything outside the engine's amendment section is
+    unchanged byte for byte, before and after the answer changes."""
+    own = (
+        "## Outcome\nUsers keep notes.\n\n"
+        "## Acceptance\n- The notes list loads in under a second."
+    )
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh, TWO_WAYS, labels=(PR_OPENED_LABEL,), body=own)
+    post(gh, value="Add the assumption")
+
+    stopped_scans.run(REPO, language_code="en")
+
+    post(gh, value=SECOND_LABEL)
+
+    stopped_scans.run(REPO, language_code="en")
+
+    body = gh.issues[TICKET]["body"]
+    assert body.startswith(own)
+    # The engine's section is the ONE block after the ticket's own text and
+    # it states B alone.
+    section = body[len(own):]
+    assert f"- {SECOND_CRITERION}" in section
+    assert CRITERION not in section
+
+
+# --------------------------------------------------------------------------
 # the decision rules: what one answer asks for, and what is refused
 # --------------------------------------------------------------------------
 

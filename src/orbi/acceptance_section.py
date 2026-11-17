@@ -38,10 +38,21 @@ from orbi.progress import run_marker
 ACCEPTANCE_HEADING_KEY = "criteria.acceptance_heading"
 ACCEPTANCE_MARKER = "orbi:acceptance:v1"
 
+# The marker beside one criterion an ANSWER appended names the question that
+# asked for it (Issue #2241): answering that same question again replaces the
+# line instead of appending a contradictory one, and another question's
+# criterion is never touched.
+CRITERION_MARKER = "orbi:criterion:v1"
+
 
 def appended_marker() -> str:
     """The hidden line the appended section ends with."""
     return f"<!-- {ACCEPTANCE_MARKER} -->"
+
+
+def criterion_marker(question_id: str) -> str:
+    """The hidden attribution one answer's criterion line carries."""
+    return f"<!-- {CRITERION_MARKER} {question_id} -->"
 
 
 def acceptance_heading(language_code: str) -> str:
@@ -49,17 +60,46 @@ def acceptance_heading(language_code: str) -> str:
     return language.text(language_code, ACCEPTANCE_HEADING_KEY)
 
 
+def criterion_line(criterion: str, question_id: str | None = None) -> str:
+    """One `- <criterion>` line, attributed when an answer asked for it."""
+    line = f"- {criterion}"
+    if question_id is None:
+        return line
+    return f"{line} {criterion_marker(question_id)}"
+
+
+def _attributed(line: str, tag: str) -> str | None:
+    """The criterion of one line attributed to `tag`, or None."""
+    if not line.startswith("- ") or not line.endswith(f" {tag}"):
+        return None
+    return line[2:-(len(tag) + 1)]
+
+
+def tagged_criterion(body: object, question_id: str) -> str | None:
+    """The criterion the engine already appended for one question, or None."""
+    tag = criterion_marker(question_id)
+    for line in (body if isinstance(body, str) else "").split("\n"):
+        criterion = _attributed(line, tag)
+        if criterion is not None:
+            return criterion
+    return None
+
+
 def render_acceptance(
     conditions: Sequence[str], language_code: str,
+    *, question_id: str | None = None,
 ) -> str:
     """The section appended to the ticket body: the conditions, verbatim.
 
     The heading and the list grammar are the ones a filed Issue uses, so the
     result reads like an acceptance section a person wrote, and the hidden
-    marker after it records that Orbi appended it.
+    marker after it records that Orbi appended it. `question_id` attributes
+    the conditions to the answer that asked for them (Issue #2241).
     """
     lines = [acceptance_heading(language_code)]
-    lines.extend(f"- {condition}" for condition in conditions)
+    lines.extend(
+        criterion_line(condition, question_id) for condition in conditions
+    )
     lines.extend(["", appended_marker()])
     return "\n".join(lines)
 
