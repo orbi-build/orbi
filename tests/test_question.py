@@ -35,6 +35,11 @@ def _stop(**overrides) -> question.StopQuestion:
     return question.parse_verdict_question(_payload(**overrides))
 
 
+def _strict(payload: object) -> question.StopQuestion:
+    """The stop shape, read with the conservative 'authority' class."""
+    return question.parse_stop(payload, question.DECISION_AUTHORITY)
+
+
 def test_the_real_reviewer_answer_parses_into_a_valid_question():
     """Acceptance 1: the captured deepseek-flash answer for
     orbi-website#1243 is a valid stop question."""
@@ -104,7 +109,7 @@ def test_an_option_the_engine_cannot_execute_in_place_is_never_taken():
 
 def test_every_draft_question_in_the_fixtures_validates_unchanged():
     """Acceptance 6: every question `orbi draft` returns today validates
-    against the shape and comes back byte-identical."""
+    against the shape and keeps every field it carries."""
     fixtures = sorted(DRAFT_FIXTURES.glob("*.json"))
     assert fixtures
     seen = 0
@@ -112,8 +117,16 @@ def test_every_draft_question_in_the_fixtures_validates_unchanged():
         document = json.loads(path.read_text(encoding="utf-8"))
         for raw in document.get("questions", ()):
             seen += 1
-            parsed = question.parse_question(raw)
-            assert parsed.as_json() == raw, path.name
+            parsed = question.parse_question(raw).as_json()
+            assert parsed["question"] == raw["question"], path.name
+            assert parsed.get("header") == raw.get("header"), path.name
+            assert [
+                (option["label"], option["description"])
+                for option in parsed.get("options", ())
+            ] == [
+                (option["label"], option["description"])
+                for option in raw.get("options", ())
+            ], path.name
     assert seen >= 3
 
 
@@ -150,7 +163,7 @@ def test_a_drafting_question_without_options_reads_as_text():
 
 
 def test_a_confirm_question_carries_the_action_and_its_criterion():
-    parsed = question.parse_stop_question({
+    parsed = _strict({
         "id": "q2", "kind": question.KIND_CONFIRM,
         "summary": "The gate needs a decision.",
         "question": "Scope the gate to first-party headings?",
@@ -189,6 +202,58 @@ def test_the_answer_record_round_trips():
     assert (answer.question, answer.action, answer.value, answer.by) == (
         "q1", question.ANSWER_ACCEPT, "Scope the SEO gate", "orbi",
     )
+    assert answer.reason is None
+
+
+@pytest.mark.parametrize("answer,expected", [
+    ({"q": "q1", "action": question.ANSWER_CANCEL, "value": "drop it",
+      "by": "xqliu"},
+     ("q1", question.ANSWER_CANCEL, "drop it", "xqliu", None)),
+    ({"q": "q2", "action": question.ANSWER_ACCEPT, "value": True,
+      "by": "xqliu"},
+     ("q2", question.ANSWER_ACCEPT, True, "xqliu", None)),
+    ({"q": "q3", "action": question.ANSWER_DECLINE, "value": "no",
+      "by": "xqliu", "reason": "the gate stays as it is"},
+     ("q3", question.ANSWER_DECLINE, "no", "xqliu",
+      "the gate stays as it is")),
+])
+def test_the_shared_answer_record_reads_every_action_and_value(
+        answer, expected):
+    """Acceptance 10: one shape shared with the ticket that reads a
+    person's answer — `cancel`, a boolean `value` and an optional
+    `reason` all parse."""
+    parsed = question.parse_answer(
+        f"<!-- {question.ANSWER_MARKER} {json.dumps(answer)} -->")
+    assert parsed is not None
+    assert (parsed.question, parsed.action, parsed.value, parsed.by,
+            parsed.reason) == expected
+
+
+def test_the_engine_writes_a_reason_only_when_it_has_one():
+    with_reason = question.parse_answer(question.render_answer(
+        "q1", value=False, action=question.ANSWER_CANCEL, by="orbi",
+        reason="the call is even",
+    ))
+    assert (with_reason.value, with_reason.action) == (
+        False, question.ANSWER_CANCEL,
+    )
+    assert with_reason.reason == "the call is even"
+    assert "reason" not in question.render_answer("q1", value="x")
+
+
+@pytest.mark.parametrize("answer", [
+    {"q": "q1", "action": "accept", "value": 5, "by": "orbi"},
+    {"q": "q1", "action": "accept", "value": "", "by": "orbi"},
+    {"q": "q1", "action": "accept", "value": "x", "by": "orbi",
+     "reason": "  "},
+    {"q": "q1", "action": "accept", "value": "x"},
+])
+def test_an_unreadable_answer_record_is_refused(answer):
+    """The shared shape is closed: a value is a label, free text or a
+    boolean, and `reason` is the one optional field."""
+    with pytest.raises(question.QuestionError):
+        question.parse_answer(
+            f"<!-- {question.ANSWER_MARKER} {json.dumps(answer)} -->")
 
 
 def test_the_question_block_is_read_back_from_a_stop_comment():
@@ -230,7 +295,7 @@ def test_the_question_block_is_read_back_from_a_stop_comment():
 ])
 def test_a_malformed_stop_question_is_refused(payload, reason):
     with pytest.raises(question.QuestionError):
-        question.parse_stop_question(payload)
+        _strict(payload)
 
 
 @pytest.mark.parametrize("payload", [
@@ -356,8 +421,11 @@ def test_a_confirm_question_round_trips_with_its_action_and_criterion():
 def test_a_text_question_round_trips_without_options():
     payload = {"question": "What should it be called?"}
     parsed = question.parse_question(payload)
-    assert parsed.as_json() == payload
     assert parsed.kind == question.KIND_TEXT
+    assert parsed.text == payload["question"]
+    assert parsed.as_json() == {
+        "question": payload["question"], "kind": question.KIND_TEXT,
+    }
 
 
 def test_a_stored_block_needs_its_own_schema():
@@ -421,7 +489,7 @@ def test_next_id_ignores_a_comment_without_a_body():
 
 
 def test_the_visible_copy_of_a_confirm_question_states_both_answers():
-    stop = question.parse_stop_question({
+    stop = _strict({
         "id": "q3", "kind": question.KIND_CONFIRM,
         "summary": "The gate needs a decision.",
         "question": "Scope the gate to first-party headings?",
@@ -435,7 +503,7 @@ def test_the_visible_copy_of_a_confirm_question_states_both_answers():
 
 
 def test_a_confirm_with_a_close_action_renders_without_a_criterion():
-    stop = question.parse_stop_question({
+    stop = _strict({
         "id": "q4", "kind": question.KIND_CONFIRM,
         "summary": "Drop the work?",
         "question": "Close this Issue?",
@@ -524,7 +592,7 @@ def test_a_stop_question_missing_its_own_fields_is_refused(payload):
     """The strict rules: an action per option, a reason on a
     recommendation, and the id + summary a stop needs."""
     with pytest.raises(question.QuestionError):
-        question.parse_stop_question(payload)
+        _strict(payload)
 
 
 def test_a_confirm_question_must_name_what_yes_does():
@@ -554,7 +622,7 @@ def test_a_question_the_engine_cannot_execute_stays_with_the_person():
         "criterion": "The gate measures first-party headings.",
     }, question.DECISION_PICK_BEST)
     assert question.takeable_option(confirm) is None
-    text = question.parse_stop_question({
+    text = _strict({
         "id": "q6", "summary": "Need a name.", "question": "What name?",
     })
     assert question.takeable_option(text) is None

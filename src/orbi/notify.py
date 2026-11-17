@@ -1,35 +1,40 @@
 """Telegram "needs you" notifications (Issue #1673).
 
-A person who hands Issues to Orbi is otherwise reachable only through GitHub.
-When Orbi NEWLY adds one of the three attention labels — `ai-blocked`,
-`ai-needs-detail`, `ai-awaiting-merge` — this module sends ONE Telegram
-message (private chat or group) naming the state, the Issue and its link, in
-Chinese or English, ONE "waiting for your review" message where the
-human-review checklist is built (Issue #1691) and ONE message when the engine
-answers a stop question itself (Issue #2220). `orbi notify test` checks the
-setup; a label a person adds by hand sends nothing, and the gate's own label
-patch sends nothing. A problem message (`ai-blocked`,
-`ai-needs-detail`, the human-review wait) ends with the community help line
-from the `orbi.language` catalog; a normal handoff (`ai-awaiting-merge`, a
-merged PR, the test message) does not.
+A person who hands Issues to Orbi is otherwise reachable only through
+GitHub. When Orbi NEWLY adds one of the three attention labels —
+`ai-blocked`, `ai-needs-detail`, `ai-awaiting-merge` — this module sends
+ONE Telegram message (private chat or group) naming the state, the Issue
+and its link, in Chinese or English. It also sends ONE "waiting for your
+review" message when the human-review gate's checklist asks a person to
+confirm something, sent where that checklist is built — once per
+delivery (Issue #1691). `orbi notify test` checks the setup before a
+real event; a label a person adds by hand sends nothing, and the gate's
+own label patch sends nothing.
+
+A message that is a problem the person must resolve (`ai-blocked`,
+`ai-needs-detail`, the human-review wait) ends with the community help
+line from the `orbi.language` catalog; a normal handoff
+(`ai-awaiting-merge`, a merged PR, the test message) does not.
 
 The adapter is Telegram-only and uses the standard library `urllib` (no
-new dependency). Notifications are a PURE BYPASS, exactly like the progress
-comment: every public function catches everything internally — never a
-raise, a failed delivery, a label change or a blocked tick — and a failure
-writes one `notify_failed` journal line.
+new dependency). Notifications are a PURE BYPASS, exactly like the
+progress comment: every public function catches everything internally and
+never raises, never fails a delivery, never changes a label and never
+blocks a tick. A failure writes one `notify_failed` journal line.
 
 Configuration: `telegram_chat_id` is the one `orbi.toml` key (set =
-notifications on); the message language is the host-level
-`message_language` (#1660), never a repository override, because it goes to
-a person. The bot token is NOT a key — it lives in
-`<deploy_home>/.orbi/env` as `ORBI_TELEGRAM_BOT_TOKEN` (Article 6.1); a chat
-id without a token is reported (`notify_failed reason=not_configured`) but
-never fails a start, since `.orbi/env` and `orbi.toml` can lag each other.
+notifications on). The message language is the host-level
+`message_language` (#1660), read when the loaded host config carries it
+and `en` otherwise — never a repository override: the message goes to a
+person, not into the repository. The bot token is NOT a key — it lives in
+`<deploy_home>/.orbi/env` as `ORBI_TELEGRAM_BOT_TOKEN` (Article 6.1). A
+chat id without a token is reported (`notify_failed reason=not_configured`)
+but never fails a start: `.orbi/env` and `orbi.toml` are separate files
+that can lag each other.
 
 `github.py` imports this module, so the top-level imports stay acyclic
-(`journal`, `delivery_labels`, the `gitops` naming leaf); `RunnerConfig` is
-annotation-only.
+(`journal`, `delivery_labels`, the `gitops` naming leaf); `RunnerConfig`
+is annotation-only.
 """
 from __future__ import annotations
 

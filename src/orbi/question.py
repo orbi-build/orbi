@@ -33,6 +33,11 @@ re-queue included (the 'base_ci_red' and 'checks_permission_missing'
 self-recoveries write no 'requeued' comment and are not counted). No counter
 file, no scan of 'ai-blocked', no new state store.
 
+The answer record ('orbi:answer:v1') is one shape shared with the ticket
+that reads a person's answer: 'action' is 'accept', 'decline' or 'cancel',
+'value' is the chosen option's label, free text or a boolean (a 'confirm'
+answer), and 'reason' is optional.
+
 Every writer escapes '>' as the JSON escape '\u003e' inside the block: the
 block is one line, and no free text may close the HTML comment before its own
 '-->'.
@@ -88,11 +93,14 @@ RECOMMENDED_MARK = "(Recommended)"
 
 ANSWER_ACCEPT = "accept"
 ANSWER_DECLINE = "decline"
-ANSWER_TEXT = "text"
-ANSWER_ACTIONS = (ANSWER_ACCEPT, ANSWER_DECLINE, ANSWER_TEXT)
+ANSWER_CANCEL = "cancel"
+ANSWER_ACTIONS = (ANSWER_ACCEPT, ANSWER_DECLINE, ANSWER_CANCEL)
 
 QUESTION_FIELDS = ("schema", "decision_class", "question")
-ANSWER_FIELDS = ("q", "action", "value", "by")
+# One answer record, shared with the ticket that reads a person's answer:
+# 'reason' is the one optional field, the rest is what every record carries.
+ANSWER_FIELDS = ("q", "action", "value", "by", "reason")
+ANSWER_REQUIRED = ("q", "action", "value", "by")
 
 
 class QuestionError(ValueError):
@@ -108,7 +116,6 @@ class Option:
     action: str | None = None
     url: str | None = None
     recommended: bool = False
-    recommended_given: bool = False
     reason: str | None = None
 
     def as_json(self) -> dict:
@@ -117,8 +124,8 @@ class Option:
             data["action"] = self.action
         if self.url is not None:
             data["url"] = self.url
-        if self.recommended_given:
-            data["recommended"] = self.recommended
+        if self.recommended:
+            data["recommended"] = True
         if self.reason is not None:
             data["reason"] = self.reason
         return data
@@ -126,12 +133,7 @@ class Option:
 
 @dataclass(frozen=True)
 class Question:
-    """One question: its identity, its kind, its cause and its options.
-
-    'kind_given' and 'Option.recommended_given' record what the payload
-    actually carried, so the same JSON comes back out: the drafting round
-    document is never rewritten by being read as a question.
-    """
+    """One question: its identity, its kind, its cause and its options."""
 
     id: str | None
     kind: str
@@ -141,14 +143,12 @@ class Question:
     action: str | None = None
     criterion: str | None = None
     header: str | None = None
-    kind_given: bool = False
 
     def as_json(self) -> dict:
         data: dict = {}
         if self.id is not None:
             data["id"] = self.id
-        if self.kind_given:
-            data["kind"] = self.kind
+        data["kind"] = self.kind
         if self.summary is not None:
             data["summary"] = self.summary
         data["question"] = self.text
@@ -173,21 +173,22 @@ class StopQuestion:
 
 @dataclass(frozen=True)
 class Answer:
-    """One recorded answer: which question, who, and what was taken."""
+    """One recorded answer: which question, who, and what was taken.
+
+    'value' is the chosen option's label, free text, or a boolean (a
+    'confirm' answer); 'reason' is the one optional field.
+    """
 
     question: str
     action: str
-    value: str
+    value: str | bool
     by: str
-
-
-def _unreadable(message: str) -> QuestionError:
-    return QuestionError(message)
+    reason: str | None = None
 
 
 def _non_empty(value: object, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise _unreadable(f"{field} must be a non-empty string")
+        raise QuestionError(f"{field} must be a non-empty string")
     return value.strip()
 
 
@@ -198,41 +199,38 @@ def _optional_text(value: object, field: str) -> str | None:
 def _action(value: object, field: str) -> str:
     action = _non_empty(value, field)
     if action not in ACTIONS:
-        raise _unreadable(f"{field} must be one of {list(ACTIONS)}")
+        raise QuestionError(f"{field} must be one of {list(ACTIONS)}")
     return action
 
 
 def _option(entry: object, position: int, *, strict: bool) -> Option:
     if not isinstance(entry, dict):
-        raise _unreadable(f"option {position} is not an object")
+        raise QuestionError(f"option {position} is not an object")
     label = _non_empty(entry.get("label"), f"option {position} label")
     description = _non_empty(
         entry.get("description"), f"option {position} description")
     action = entry.get("action")
     if action is None:
         if strict:
-            raise _unreadable(f"option {position} has no action")
+            raise QuestionError(f"option {position} has no action")
     else:
         action = _action(action, f"option {position} action")
     url = _optional_text(entry.get("url"), f"option {position} url")
     if action == ACTION_LINK and url is None:
-        raise _unreadable(f"option {position} action link needs a url")
+        raise QuestionError(f"option {position} action link needs a url")
     recommended = entry.get("recommended")
     if recommended is not None and not isinstance(recommended, bool):
-        raise _unreadable(f"option {position} recommended must be a boolean")
+        raise QuestionError(f"option {position} recommended must be a boolean")
     reason = _optional_text(entry.get("reason"), f"option {position} reason")
     # The drafting mark reads as the field (Issue #2198): one shape for
     # drafting and stops.
-    if recommended is None and label.endswith(RECOMMENDED_MARK):
-        recommended, given = True, False
-    else:
-        given = recommended is not None
-        recommended = bool(recommended)
+    if recommended is None:
+        recommended = label.endswith(RECOMMENDED_MARK)
     if recommended and reason is None and strict:
-        raise _unreadable(f"option {position} recommendation needs a reason")
+        raise QuestionError(f"option {position} recommendation needs a reason")
     return Option(
         label=label, description=description, action=action, url=url,
-        recommended=recommended, recommended_given=given, reason=reason,
+        recommended=recommended, reason=reason,
     )
 
 
@@ -247,75 +245,59 @@ def parse_question(payload: object, *, strict: bool = False) -> Question:
     'amend_requeue', the acceptance 'criterion').
     """
     if not isinstance(payload, dict):
-        raise _unreadable("the question is not an object")
+        raise QuestionError("the question is not an object")
     text = _non_empty(payload.get("question"), "question")
     header = _optional_text(payload.get("header"), "header")
     raw_options = payload.get("options")
     if raw_options is None:
         raw_options = ()
     if not isinstance(raw_options, (list, tuple)):
-        raise _unreadable("options must be a list")
+        raise QuestionError("options must be a list")
     kind = payload.get("kind")
-    given = kind is not None
     if kind is None:
         kind = KIND_CHOICE if raw_options else KIND_TEXT
     if kind not in KINDS:
-        raise _unreadable(f"kind must be one of {list(KINDS)}")
+        raise QuestionError(f"kind must be one of {list(KINDS)}")
     options = tuple(
         _option(entry, position, strict=strict)
         for position, entry in enumerate(raw_options, start=1)
     )
     if kind == KIND_CHOICE and not 2 <= len(options) <= 4:
-        raise _unreadable("a choice needs 2 to 4 options")
+        raise QuestionError("a choice needs 2 to 4 options")
     if kind != KIND_CHOICE and options:
-        raise _unreadable(f"a {kind} question carries no options")
+        raise QuestionError(f"a {kind} question carries no options")
     if sum(option.recommended for option in options) > 1:
-        raise _unreadable("at most one option may be recommended")
+        raise QuestionError("at most one option may be recommended")
     action = payload.get("action")
     criterion = _optional_text(payload.get("criterion"), "criterion")
     if kind == KIND_CONFIRM:
         if action is None:
-            raise _unreadable(
+            raise QuestionError(
                 "a confirm question needs the action yes performs")
         action = _action(action, "action")
         if action == ACTION_LINK:
-            raise _unreadable("a confirm question cannot link")
+            raise QuestionError("a confirm question cannot link")
         if action == ACTION_AMEND_REQUEUE and criterion is None:
-            raise _unreadable(
+            raise QuestionError(
                 "a confirm question needs the criterion to append")
     elif action is not None or criterion is not None:
-        raise _unreadable(f"a {kind} question carries no action or criterion")
+        raise QuestionError(f"a {kind} question carries no action or criterion")
     return Question(
         id=_optional_text(payload.get("id"), "id"), kind=kind,
         summary=_optional_text(payload.get("summary"), "summary"), text=text,
         options=options, action=action, criterion=criterion, header=header,
-        kind_given=given,
     )
-
-
-def parse_stop_question(payload: object) -> StopQuestion:
-    """The stop's own shape: the question plus the identity a stop needs.
-
-    The class is the caller's (a verdict carries it beside the question), so
-    this reads the engine's conservative default and 'parse_stop' takes the
-    stored class explicitly.
-    """
-    question = parse_question(payload, strict=True)
-    if question.id is None:
-        raise _unreadable("a stop question needs an id")
-    if question.summary is None:
-        raise _unreadable("a stop question needs a summary")
-    return StopQuestion(DECISION_AUTHORITY, question)
 
 
 def parse_verdict_question(verdict: object) -> StopQuestion | None:
     """The question a REVIEW_VERDICT carries, or None.
 
     A question is optional and its readability never decides the verdict: a
-    malformed one is logged and dropped, so the delivery still stops (the
-    ticket simply carries no block). A missing or unknown 'decision_class'
-    reads as 'authority' — the conservative class the engine never answers
-    itself — and is logged too.
+    malformed one — the stop's own 'id' and 'summary' included — is logged
+    and dropped, so the delivery still stops and the ticket simply carries
+    no block. A missing or unknown 'decision_class' reads as 'authority' —
+    the conservative class the engine never answers itself — and is logged
+    too.
     """
     payload = verdict.get("question") if isinstance(verdict, dict) else None
     if payload is None:
@@ -329,9 +311,7 @@ def parse_verdict_question(verdict: object) -> StopQuestion | None:
         )
         decision_class = DECISION_AUTHORITY
     try:
-        return StopQuestion(
-            decision_class, parse_question(payload, strict=True),
-        )
+        return parse_stop(payload, decision_class)
     except QuestionError as exc:
         LOGGER.warning("unreadable stop question: %s", exc)
         return None
@@ -340,13 +320,13 @@ def parse_verdict_question(verdict: object) -> StopQuestion | None:
 def parse_stop(payload: object, decision_class: object) -> StopQuestion:
     """A stored stop block: the strict question plus its decision class."""
     if decision_class not in DECISION_CLASSES:
-        raise _unreadable(
+        raise QuestionError(
             f"decision_class must be one of {list(DECISION_CLASSES)}")
     question = parse_question(payload, strict=True)
     if question.id is None:
-        raise _unreadable("a stop question needs an id")
+        raise QuestionError("a stop question needs an id")
     if question.summary is None:
-        raise _unreadable("a stop question needs a summary")
+        raise QuestionError("a stop question needs a summary")
     return StopQuestion(decision_class, question)
 
 
@@ -403,33 +383,45 @@ def parse_question_block(body: object) -> StopQuestion | None:
     if data is None:
         return None
     if data["schema"] != SCHEMA:
-        raise _unreadable(f"unsupported question schema: {data['schema']!r}")
+        raise QuestionError(f"unsupported question schema: {data['schema']!r}")
     return parse_stop(data["question"], data["decision_class"])
 
 
-def render_answer(question_id: str, *, value: str,
-                  action: str = ANSWER_ACCEPT, by: str = "orbi") -> str:
+def _answer_value(value: object) -> str | bool:
+    """An answer's 'value': an option label, free text, or a boolean."""
+    return value if isinstance(value, bool) else _non_empty(value, "value")
+
+
+def render_answer(question_id: str, *, value: str | bool,
+                  action: str = ANSWER_ACCEPT, by: str = "orbi",
+                  reason: str | None = None) -> str:
     """One answer record: who took which option of which question."""
     if action not in ANSWER_ACTIONS:
         raise ValueError(f"unknown answer action: {action!r}")
-    return _render_block(ANSWER_MARKER, {
+    data: dict = {
         "q": _non_empty(question_id, "q"), "action": action,
-        "value": _non_empty(value, "value"), "by": _non_empty(by, "by"),
-    })
+        "value": _answer_value(value), "by": _non_empty(by, "by"),
+    }
+    if reason is not None:
+        data["reason"] = _non_empty(reason, "reason")
+    return _render_block(ANSWER_MARKER, data)
 
 
 def parse_answer(body: object) -> Answer | None:
     """The answer record a comment body carries, or None."""
     data = parse_versioned_block(
         body, ANSWER_MARKER, ANSWER_FIELDS, QuestionError,
+        required=ANSWER_REQUIRED,
     )
     if data is None:
         return None
     if data["action"] not in ANSWER_ACTIONS:
-        raise _unreadable(f"unknown answer action: {data['action']!r}")
+        raise QuestionError(f"unknown answer action: {data['action']!r}")
     return Answer(
-        question=data["q"], action=data["action"], value=data["value"],
-        by=data["by"],
+        question=_non_empty(data["q"], "q"), action=data["action"],
+        value=_answer_value(data["value"]),
+        by=_non_empty(data["by"], "by"),
+        reason=_optional_text(data.get("reason"), "reason"),
     )
 
 
@@ -484,7 +476,7 @@ def stop_reason(stop: StopQuestion | None, default: str) -> str:
     return (stop.question.summary or default) if stop is not None else default
 
 
-def review_stop(verdict: dict) -> tuple[str, str, question.StopQuestion | None]:
+def review_stop(verdict: dict) -> tuple[str, str, StopQuestion | None]:
     """The (message, action, question) of a blocked_on_human_decision verdict.
 
     The message keeps the #1701 shape the exception text has always had (the
@@ -529,7 +521,7 @@ def external_pr_question(pr_url: str, *, question_id: str,
     Orbi itself will not merge. No option is recommended.
     """
     return StopQuestion(DECISION_AUTHORITY, Question(
-        id=question_id, kind=KIND_CHOICE, kind_given=True,
+        id=question_id, kind=KIND_CHOICE,
         summary=language.text(language_code, "question.external_summary"),
         text=language.text(language_code, "question.external_text"),
         options=(

@@ -275,7 +275,12 @@ criterion to the Issue body, re-queues the delivery and posts one
 <!-- orbi:answer:v1 {"q":"q1","action":"accept","value":"<label>","by":"orbi"} -->
 ```
 
-instead of `ai-blocked`, with "Not right? Reply with another option." Every
+instead of `ai-blocked`, with "Not right? Reply with another option." The
+record is one shape shared with the ticket that reads a person's answer and
+with the hosted caller: `action` is `accept`, `decline` or `cancel`;
+`value` is the chosen option's label, free text, or a boolean (a `confirm`
+answer); `by` names who answered, and `reason` is the one optional field.
+A record carrying `cancel`, a boolean `value` or a `reason` parses. Every
 other stop stays `ai-blocked` with the question attached. An external PR
 that passed review always asks the same `authority` question with three
 fixed options (link to the PR, close the external PR, drop the work) and no

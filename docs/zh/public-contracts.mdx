@@ -258,8 +258,12 @@ GitHub Issue 与标签仍是唯一状态存储。
 <!-- orbi:answer:v1 {"q":"q1","action":"accept","value":"<label>","by":"orbi"} -->
 ```
 
-而不是 `ai-blocked`，并写明 “Not right? Reply with another option.”。其他所有
-停止仍然是 `ai-blocked`，并附上问题。通过评审的外部 PR 无论评审写了什么，
+而不是 `ai-blocked`，并写明 “Not right? Reply with another option.”。这条
+记录是与读取当事人回答的工单、以及托管调用方共用的同一个形状：`action` 为
+`accept`、`decline` 或 `cancel`；`value` 是被选选项的标签、自由文本，或
+布尔值（`confirm` 的回答）；`by` 是回答者，`reason` 是唯一的可选字段。
+带 `cancel`、布尔 `value` 或 `reason` 的记录都能解析。其他所有停止仍然是
+`ai-blocked`，并附上问题。通过评审的外部 PR 无论评审写了什么，
 总是发出同一个 `authority` 问题，带三个固定选项（在 GitHub 上审阅并合并、
 关闭外部 PR、放弃这项改动），且没有推荐。
 
