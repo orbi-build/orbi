@@ -73,6 +73,9 @@ def test_reason_and_action_codes_are_closed_sets_with_expected_members():
         "base_branch_missing",
         "base_ci_red",
         "checks_permission_missing",
+        "release_failed",
+        "no_commit_delivered",
+        "no_file_change",
         "unclassified",
     }
     assert failure.ACTION_CODES == {
@@ -611,6 +614,75 @@ def test_auth_wording_is_shared_with_the_pi_startup_classifier():
     assert pi_stream_log._classify_startup_exit(
         "Bad unauthorized: the api key was rejected", 1,
     ) == "auth_failure"
+
+
+def test_classify_a_release_failure_falls_back_to_release_failed():
+    """Issue #2222: a release failure the classifier does not otherwise
+    recognize is `release_failed` (a ticket to fix), never `unclassified`."""
+    record = failure.classify(
+        "release tag v0.3.0 already exists on the remote and points at "
+        "other123, not the release commit abc123", release=True,
+    )
+    assert record == failure.Failure(
+        reason_code="release_failed", action_code="fix_ticket",
+        retry_safe=False, outcome="blocked",
+    )
+
+
+def test_classify_keeps_a_recognized_cause_of_a_release_failure():
+    """The release fallback never overrides a cause the classifier knows:
+    a rejected credential keeps its own repair path, and a non-release
+    failure keeps `unclassified`."""
+    assert failure.classify(
+        "HTTP 401: bad credentials", release=True,
+    ).reason_code == "credential_missing"
+    assert failure.classify("boom").reason_code == "unclassified"
+
+
+def test_release_failure_comment_names_the_code_and_the_failed_step():
+    """Issue #2222 acceptance 1: a failed release's stop comment carries
+    `release_failed` / `fix_ticket`, and its visible reason says the release
+    failed and at which step, in both languages."""
+    from orbi import release_comments
+    from orbi.run_fields import RunFields
+
+    detail = RuntimeError(
+        "release tag v0.3.0 already exists on the remote and points at "
+        "other123",
+    )
+    run_info = RunFields(run_id="a1b2c3d4", priority="normal")
+    body = release_comments.release_failure_comment_body(
+        "a1b2c3d4", run_info, detail, "en", step="tag",
+    )
+    assert failure.parse(body) == failure.Failure(
+        "release_failed", *failure.DISPOSITIONS["release_failed"],
+    )
+    assert "Orbi release failed (ai-blocked)" in body
+    assert "**Reason:** The release failed at the tag step" in body
+    chinese = release_comments.release_failure_comment_body(
+        "a1b2c3d4", run_info, detail, "zh", step="tag",
+    )
+    assert "**原因：** release 在 tag 步骤失败" in chinese
+    assert failure.parse(chinese).reason_code == "release_failed"
+
+
+def test_release_failure_reason_lands_before_the_field_rows():
+    """The reason is a visible body line. A comment without field rows still
+    carries it, at the end, instead of dropping it."""
+    from orbi import terminal_stops
+
+    helper = terminal_stops.release_failure_reason_line
+    assert helper(
+        "publish", "boom", "Orbi release failed (ai-blocked)\n- run_id=x",
+        language_code="en",
+    ) == (
+        "Orbi release failed (ai-blocked)\n\n"
+        "**Reason:** The release failed at the publish step: boom\n"
+        "- run_id=x"
+    )
+    assert helper("tag", "boom", "headline", language_code="en").endswith(
+        "**Reason:** The release failed at the tag step: boom",
+    )
 
 
 def test_classify_failure_dispositions_cover_the_closed_reason_set():
@@ -1489,7 +1561,7 @@ def test_release_failure_comment_classifies_a_gate_wait_timeout_as_blocked():
             "release gate: waiting for CI on the release commit abc123 "
             "timed out after 7s",
         ),
-        "en",
+        "en", step="CI gate",
     )
     record = failure.parse(body)
     assert record is not None

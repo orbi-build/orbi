@@ -201,6 +201,12 @@ GitHub Issue 与标签仍是唯一状态存储。
 **Action**、**Reason** 与 `Diagnosis` 详情。失败记录的定义见
 [Workflow](/zh/workflow)。
 
+有三个终态原因，用来替代过去读作 `unclassified` 的停止（Issue #2222）：
+`release_failed`（release 任务失败；可见原因会写出失败的 release 步骤）、
+`no_commit_delivered`（agent session 结束时任务分支上没有任何提交）与
+`no_file_change`（交付的提交没有改动任何文件）。三者均为 `blocked`、
+`retry_safe: false`，动作 `fix_ticket`。
+
 `base_ci_red` 失败评论在该记录旁再携带一个隐藏块 ——
 `<!-- orbi:base-ci-red:v1 {json} -->`，含 `schema`、`state`、
 `base_branch`、`base_sha`、`pr` 与 `failing_checks`。自动恢复就是

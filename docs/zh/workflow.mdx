@@ -551,6 +551,9 @@ review 与 ops session），因此自定义 prompt 模板同样会收到：会�
 | `base_ci_red` | PR 失败的 check 在配置的基础分支上本来也失败 | `fix_ticket` | false |
 | `checks_permission_missing` | App 安装尚未批准 `statuses: read`，导致 PR 的 check 读取被拒绝（HTTP 403 `Resource not accessible by integration`） | `check_credentials` | false |
 | `credential_missing` | GitHub/provider 凭据缺失或被拒绝 | `check_credentials` | false |
+| `release_failed` | release 任务在状态机的某个步骤失败；可见原因会写出该步骤 | `fix_ticket` | false |
+| `no_commit_delivered` | agent session 结束时任务分支上没有任何提交（HEAD 仍在冻结的 base 上） | `fix_ticket` | false |
+| `no_file_change` | 交付的提交没有改动任何文件（head tree 与冻结的 base tree 相同） | `fix_ticket` | false |
 | `unclassified` | 其它任何 Runner 异常 | `fix_ticket` | false |
 
 动作：`requeue` 给 Issue 重新加 `ai-ready`（或点击重试）——无需修复；
