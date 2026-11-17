@@ -946,8 +946,8 @@ def filter_same_repository_prs(prs: list, branch: str) -> list:
     return [pr for pr in prs if pr not in foreign]
 
 
-def open_pr_for_branch(repo_dir: Path, branch: str) -> dict | None:
-    raw = run_gh_read_command(["gh", "pr", "list", "--state", "open", "--head", branch, "--json", "number,url,baseRefName,headRefName,headRefOid,isCrossRepository", "--limit", "20"], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
+def open_pr_for_branch(repo_dir: Path | None, branch: str, *, repo: str | None = None) -> dict | None:
+    raw = run_gh_read_command(["gh", "pr", "list", "--state", "open", "--head", branch, *(["--repo", repo] if repo is not None else []), "--json", "number,url,baseRefName,headRefName,headRefOid,isCrossRepository", "--limit", "20"], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
     prs = json.loads(raw) if raw.strip() else []
     if not isinstance(prs, list):
         raise RuntimeError("open PR query must return an array")

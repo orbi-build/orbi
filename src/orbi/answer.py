@@ -79,6 +79,7 @@ from orbi.github import (
     issue_comments,
     issue_labels,
     issue_view,
+    open_pr_for_branch,
     pr_number,
 )
 from orbi.gitops import is_delivery_branch, task_branch
@@ -562,7 +563,12 @@ def _amend(
         # label wins over `fix_needed`), so the two labels are swapped
         # directly: with an open PR the review/fix state resumes it, and a
         # fresh delivery is claimed otherwise.
-        pull = _delivery_pr(repo, issue_number)
+        pull = run_step(
+            "find the delivery pull request",
+            lambda: open_pr_for_branch(
+                None, task_branch(repo, issue_number), repo=repo,
+            ),
+        )
         target = FIX_NEEDED_LABEL if pull is not None else dispatch_label
         run_step(
             "re-queue the ticket",
@@ -608,28 +614,16 @@ def _target_pr(
     )
     if named is not None:
         return {"number": pr_number(named), "url": named}
-    return _delivery_pr(repo, number)
-
-
-def _delivery_pr(repo: str, number: int) -> dict | None:
-    """The open pull request on this Issue's stable delivery branch, or None."""
-    branch = task_branch(repo, number)
-
-    def read() -> dict | None:
-        raw = run_command([
-            "gh", "pr", "list", "--repo", repo, "--state", "open",
-            "--head", branch, "--json", "number,url,headRefName",
-            "--limit", "10",
-        ], timeout=30)
-        pull = json.loads(raw) if raw.strip() else []
-        if len(pull) > 1:
-            # The delivery identity is ONE PR: a second one on the same
-            # branch is a state this engine never creates, so it is
-            # reported (as the step's failure) instead of picking one.
-            raise ValueError(f"multiple open PRs on {branch}")
-        return pull[0] if pull else None
-
-    return run_step("find the delivery pull request", read)
+    # The one branch-to-PR query (`github.open_pr_for_branch`), including
+    # its same-repository filter: a FORK's PR that reuses the delivery
+    # branch name is never this Issue's delivery PR (Issue #2234). This
+    # module holds only the slug, so the query names the repository
+    # instead of a checkout, and the step name keeps a refusal (two open
+    # PRs on one branch) as the answer's failed receipt.
+    return run_step(
+        "find the delivery pull request",
+        lambda: open_pr_for_branch(None, task_branch(repo, number), repo=repo),
+    )
 
 
 def _close_pr(pull: dict, *, repo: str) -> None:
