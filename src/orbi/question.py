@@ -659,23 +659,47 @@ def comment_body(stop: StopQuestion, option: Option, *, issue: dict,
     ))
 
 
-def amended_body(body: object, criterion: str,
-                 language_code: str) -> str | None:
+def amended_body(body: object, criterion: str, language_code: str,
+                 *, question_id: str | None = None) -> str | None:
     """'body' with 'criterion' as an acceptance criterion, or None if there.
 
     The criterion joins an acceptance section Orbi already appended, and
     creates one (with its hidden marker) when the ticket has none, so the
     ticket keeps ONE acceptance block however the amendment arrives.
+
+    'question_id' is the question the answer replies to (Issue #2241): a
+    criterion Orbi already appended for THAT question is replaced, so a
+    person who answers A and then B gets a ticket stating B alone, while
+    another question's criterion stays. Without it (the criteria proposal
+    of /orbi amend) the append is never a replacement.
     """
     existing = body if isinstance(body, str) else ""
+    earlier = (
+        acceptance_section.tagged_criterion(existing, question_id)
+        if question_id is not None else None
+    )
+    if earlier == criterion:
+        # The same answer again: the body already states it.
+        return None
+    if earlier is not None:
+        # The line is rewritten in place, so every other byte of the body
+        # -- the ticket's own text included -- stays exactly as it is.
+        return existing.replace(
+            acceptance_section.criterion_line(earlier, question_id),
+            acceptance_section.criterion_line(criterion, question_id),
+            1,
+        )
     if criterion in existing:
         return None
     marker = acceptance_section.appended_marker()
+    item = acceptance_section.criterion_line(criterion, question_id)
     if marker in existing:
-        return existing.replace(marker, f"- {criterion}\n\n{marker}", 1)
+        return existing.replace(marker, f"{item}\n\n{marker}", 1)
     return acceptance_section.appended_body(
         existing,
-        acceptance_section.render_acceptance((criterion,), language_code),
+        acceptance_section.render_acceptance(
+            (criterion,), language_code, question_id=question_id,
+        ),
     )
 
 
@@ -709,6 +733,7 @@ def report_once(stop: StopQuestion | None, *, issue: dict, source_repo: str,
         return None
     amended = amended_body(
         issue.get("body"), option.description, language_code,
+        question_id=stop.question.id,
     )
     if amended is not None:
         acceptance_section.write_body(number, repo=source_repo, body=amended)

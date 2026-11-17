@@ -302,6 +302,21 @@ GitHub Issue 与标签仍是唯一状态存储。
 | `decline` | 当事人自己的话（`reason`，否则取文本 `value`）成为一条验收标准，交付重新排队 |
 | `cancel` | `close_all` 动作——仅限 `ai-blocked` |
 
+改变的答案在正文里也取代它覆盖的那条，而不只是决定上取代（Issue #2241）：
+回答追加的每条验收条件都带隐藏归属标记
+`<!-- orbi:criterion:v1 <question id> -->`，因此再次回答**同一个**问题会替换
+那一行，而不是追加一条互相矛盾的；另一个问题问出的条件则保持不变。工单自己的
+文字永不被改动——只重写引擎验收区块里的那一行，区块本身仍是唯一的
+`<!-- orbi:acceptance:v1 -->` 块。criteria 提案路径追加的条件不带归属标记：
+它不对应任何问题，其追加保持幂等而非替换。
+
+```text
+## Acceptance
+- GET /bye returns the text '再见'. <!-- orbi:criterion:v1 q1 -->
+
+<!-- orbi:acceptance:v1 -->
+```
+
 在 `ai-blocked` 之外，回答只改动 Issue 正文：轮次之间由下一轮评审核对修改后的
 工单，会话进行中由 steering 轮询带着修改后的工单重启一次。关闭类动作（含
 `cancel`）只在 `ai-blocked` 执行，其他阶段不执行。每条回答只留下**一条**回执

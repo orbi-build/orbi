@@ -332,6 +332,24 @@ Five rules decide what is carried out:
 | `decline` | the person's own words (`reason`, else a text `value`) become an acceptance criterion and the delivery re-queues |
 | `cancel` | the `close_all` action — at `ai-blocked` only |
 
+A changed answer replaces the answer it supersedes in the body too, not
+just in the decision (Issue #2241): every criterion an answer appends
+carries the hidden attribution `<!-- orbi:criterion:v1 <question id> -->`
+on its own line, so answering the SAME question again replaces that line
+instead of adding a contradictory one, while a criterion another question
+asked for stays. The ticket's own text is never touched — only the line of
+the engine's amendment section is rewritten, and the section itself is
+still the one `<!-- orbi:acceptance:v1 -->` block. A criterion the
+criteria proposal path appends carries no attribution: it answers no
+question, and its append stays idempotent rather than replacing.
+
+```text
+## Acceptance
+- GET /bye returns the text '再见'. <!-- orbi:criterion:v1 q1 -->
+
+<!-- orbi:acceptance:v1 -->
+```
+
 Outside `ai-blocked` an answer changes the Issue body and nothing else:
 between rounds the next review session reads the amended ticket, and
 while a session runs the steering poll restarts it once with the amended

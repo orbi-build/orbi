@@ -319,6 +319,15 @@ def test_the_clarification_proposal_contract_is_documented():
         assert marker in text, f"proposal contract misses: {marker!r}"
 
 
+def test_the_changed_answer_contract_is_documented():
+    """Issue #2241: the attribution a criterion carries is public, so a
+    consumer reads which question an amendment answers from the marker."""
+    assert "orbi:criterion:v1" in public_contracts_text()
+    assert "orbi:criterion:v1" in ZH_PUBLIC_CONTRACTS.read_text(
+        encoding="utf-8",
+    )
+
+
 def test_the_command_receipt_contract_is_documented():
     text = public_contracts_text()
     for marker in RECEIPT_CONTRACT_MARKERS:

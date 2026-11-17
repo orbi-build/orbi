@@ -538,15 +538,24 @@ def _carry_out(
     return _amend(
         issue, text, stage=stage, repo=repo, issue_number=issue_number,
         dispatch_label=dispatch_label, language_code=language_code,
+        question_id=decision.stop.question.id,
     )
 
 
 def _amend(
     issue: dict, text: str, *, stage: object, repo: str,
     issue_number: int, dispatch_label: str, language_code: str,
+    question_id: str,
 ) -> str:
-    """Append the criterion through the `/orbi amend` logic, then re-queue."""
-    amended = question.amended_body(issue.get("body"), text, language_code)
+    """Append the criterion through the `/orbi amend` logic, then re-queue.
+
+    'question_id' attributes it to the question answered, so a later answer
+    to the same question REPLACES it instead of adding a contradictory line
+    (Issue #2241).
+    """
+    amended = question.amended_body(
+        issue.get("body"), text, language_code, question_id=question_id,
+    )
     if amended is not None:
         run_step(
             "append the answer to the Issue body",
@@ -885,6 +894,7 @@ def apply_steering(
         written = question.amended_body(
             amended if amended is not None else body,
             word.decision.text or "", language_code,
+            question_id=word.decision.stop.question.id,
         )
         # An amendment the body already carries is a no-op write, not
         # an uncarried answer: the receipt below is what tells the merge
