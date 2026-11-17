@@ -655,7 +655,8 @@ person's language), `header` is optional (one to three words naming the decision
 `options` is optional — when present, 2 to 4 choices, each a `label` and a one-sentence
 `description` of what it means or its trade-off. A bare string is a question with no
 header and no options, and a question with no options is a valid question. When one
-option is the reasonable default its label ends with `(Recommended)`, and the engine
+option is the reasonable default its label ends with `(Recommended)` — or the option
+carries `"recommended": true`, the same field a stop option carries — and the engine
 takes that option itself instead of returning the question: it does not check where
 that option sits, the same round keeps drafting with the option's words replayed into
 the session (so the Issue records it under `Assumptions`), and `reply` names every

@@ -74,10 +74,13 @@ const draftParameters = Type.Object(
 );
 
 /**
- * Issues #2136, #2147: a question is a sentence, with an OPTIONAL header
- * naming the decision and OPTIONAL choices. The engine accepts a bare string
- * as a question with no header and no options, so the schema does too; there
- * is no "Other" option, because the person always answers in their own words.
+ * Issues #2136, #2147, #2228: a question is a sentence, with an OPTIONAL
+ * header naming the decision and OPTIONAL choices. The engine accepts a bare
+ * string as a question with no header and no options, so the schema does
+ * too; there is no "Other" option, because the person always answers in
+ * their own words. The recommended option carries the label suffix or the
+ * `recommended` field, the same field a stop option carries: drafting and
+ * stops are read by one parser, so the schema accepts both (Issue #2228).
  */
 const askOption = Type.Object(
 	{
@@ -89,6 +92,12 @@ const askOption = Type.Object(
 			minLength: 1,
 			description: "One sentence: what it means or its trade-off",
 		}),
+		recommended: Type.Optional(
+			Type.Boolean({
+				description:
+					"Optional: true on at most one option, the reasonable default; the engine takes that option itself, exactly as it does for a label ending in (Recommended)",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
