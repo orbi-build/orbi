@@ -40,6 +40,14 @@ def _strict(payload: object) -> question.StopQuestion:
     return question.parse_stop(payload, question.DECISION_AUTHORITY)
 
 
+def _stored(question_id: str) -> dict:
+    """One Issue comment carrying a stored stop question with this id."""
+    payload = _payload()
+    payload["question"]["id"] = question_id
+    stop = question.parse_verdict_question(payload)
+    return {"body": f"a stop\n\n{question.render_block(stop)}"}
+
+
 def test_the_real_reviewer_answer_parses_into_a_valid_question():
     """Acceptance 1: the captured deepseek-flash answer for
     orbi-website#1243 is a valid stop question."""
@@ -359,12 +367,60 @@ def test_the_visible_options_name_every_choice_and_the_recommendation():
     assert _stop().question.text in visible
 
 
-def test_next_id_counts_the_questions_already_on_the_issue():
-    """`id` is unique per Issue: a later stop never reuses an earlier id."""
-    first = question.render_block(_stop())
-    comments = [{"body": f"a stop\n\n{first}", "author": {"login": "orbi-bot"}}]
-    assert question.next_id(comments) == "q2"
+def test_next_id_is_one_past_the_highest_id_not_the_comment_count():
+    """Acceptance 1: `id` is unique per Issue. A stored `q2` with no `q1`
+    must not hand `q2` out again, so the highest id — not the number of
+    stop comments — is what the next one follows."""
+    assert question.next_id([_stored("q2")]) == "q3"
+    assert question.next_id([_stored("q1"), _stored("q3")]) == "q4"
     assert question.next_id([]) == "q1"
+
+
+def test_next_id_skips_an_unreadable_block_and_an_id_outside_the_series():
+    """The allocator never fails the stop that needs the id: a block it
+    cannot read carries no id it could reissue, and an id that is not a
+    `q<n>` can never collide with the series it writes."""
+    corrupt = {"body": "<!-- orbi:question:v1 {not json -->"}
+    assert question.next_id([corrupt, _stored("x1")]) == "q1"
+
+
+def test_a_review_stop_reusing_a_stored_id_gets_a_new_one():
+    """Acceptance 2: the reviewer's echoed id is never posted twice."""
+    payload = _payload()
+    payload["question"]["id"] = "q2"
+    stop = question.review_stop(payload, comments=[_stored("q2")])[2]
+    assert stop.question.id == "q3"
+
+
+def test_a_review_stop_needs_no_id_from_the_reviewer():
+    """Acceptance 4: the prompt no longer asks the model for an id, so the
+    engine assigns the next one itself."""
+    payload = _payload()
+    payload["question"].pop("id")
+    stop = question.review_stop(payload, comments=())[2]
+    assert stop.question.id == "q1"
+
+
+def test_the_external_stop_and_a_review_deadlock_get_different_ids():
+    """Acceptance 3: whichever stop writes second, the two ids differ."""
+    external = question.external_pr_stop(
+        number=42, source_repo="orbi-build/orbi",
+        pr_url="https://github.com/orbi-build/orbi/pull/7",
+        language_code="en", comments=(),
+    )
+    assert question.parse_question_block(external).question.id == "q1"
+    review = question.review_stop(
+        _payload(), comments=[{"body": external}])[2]
+    assert review.question.id == "q2"
+
+
+def test_a_stored_block_still_needs_the_id_the_engine_wrote():
+    """Only a reviewer's verdict question may arrive without an id: the
+    block on the Issue is the engine's own and carries it."""
+    payload = _payload()["question"]
+    payload.pop("id")
+    with pytest.raises(question.QuestionError, match="needs an id"):
+        question.parse_stop(payload, question.DECISION_AUTHORITY)
 
 
 @pytest.mark.parametrize("payload", [

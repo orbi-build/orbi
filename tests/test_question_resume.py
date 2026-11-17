@@ -356,6 +356,27 @@ def test_an_unreadable_history_keeps_the_stop_terminal(
     assert _issue(gh)["body"] == BODY
 
 
+def test_a_review_stop_continues_the_issues_one_id_series(gh):
+    """Acceptance 1+2 end to end: a stored `q2` and a reviewer that echoes
+    it leave the posted block — and the answer record the engine writes
+    beside it — on `q3`, so an answer names exactly one question."""
+    stored = _payload()
+    stored["question"]["id"] = "q2"
+    gh.comment(ISSUE_NUMBER, question.render_block(
+        question.parse_verdict_question(stored)))
+    echoed = _payload()
+    echoed["question"]["id"] = "q2"
+    stop = question.review_stop(
+        echoed, comments=question.question_history(ISSUE_NUMBER, REPO))[2]
+    assert stop.question.id == "q3"
+
+    assert _report(gh, stop) == requeue.OUTCOME_REQUEUED
+
+    body = _bodies(gh, "requeued")[0]
+    assert question.parse_question_block(body).question.id == "q3"
+    assert question.parse_answer(body).question == "q3"
+
+
 def test_a_stop_with_a_question_and_no_run_id_writes_no_resume(gh):
     """Without a run there is no comment marker, no counter and no resume."""
     outcome = _report(gh, _stop(), run_id=None)
