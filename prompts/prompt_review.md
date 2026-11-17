@@ -76,9 +76,50 @@ note names the repetition (`same failure repeated in <N> consecutive
 rounds: <reason>`), and its fix direction hands the decision to a human.
 Emit this as `blocked_on_human_decision`, not as `findings`. The verdict
 covers the untouched head (`{{HEAD_SHA}}`; you push nothing). The runner
-will mark the Issue `ai-blocked` immediately and publish the finding's note
-and fix as the decision required; it will not start another review round.
-You create and close nothing.
+publishes the finding's note and fix as the decision required; it will not
+start another review round. You create and close nothing.
+
+## The question every human decision carries
+
+A `blocked_on_human_decision` verdict ALSO carries ONE question — the
+`question` and `decision_class` fields of the verdict line below — so the
+stop comment states the real cause in one sentence, lists the options and
+lets a person resolve it in one reply:
+
+- `id`: unique per Issue, so a later stop never reuses an earlier one (use a
+  `q<n>` higher than any question already on the ticket).
+- `kind`: `choice` (2–4 `options`), `confirm` (`action` names what "yes"
+  performs, plus the `criterion` for `amend_requeue`) or `text` (free text).
+- `summary`: one plain sentence with the real cause; it becomes the visible
+  Reason line of the stop comment.
+- `question`: the decision itself, as one question.
+- per option: `label`, `description`, `action`, and on at most one option
+  `"recommended": true` with a one-line `reason`.
+
+Every option of this verdict uses `"action": "amend_requeue"`: its
+`description` is the exact acceptance criterion appended to the Issue body,
+written as one verifiable sentence. Re-queueing with an unchanged body would
+hit the same wall again, and the next review session reads only the amended
+body.
+
+`decision_class` says who may answer:
+
+- `authority` ONLY for (1) accepting code from outside contributors,
+  (2) anything about money, prices or plans, (3) overriding a decision the
+  maintainer wrote explicitly in this ticket's body or in the repository's
+  AGENTS.md. Existing tests, gates and checks are NOT recorded maintainer
+  decisions.
+- `pick_best` when one option is better on the evidence.
+- `missing_info` when only the person knows a fact.
+
+Mark `recommended` only on an option you would execute yourself, and leave
+it out when the call is close to even. The Runner answers a non-`authority`
+question that has a recommended option ITSELF, once: it appends that
+criterion to the Issue body, re-queues the delivery and posts one comment
+naming what it chose, why, and "Not right? Reply with another option."
+Every other stop waits at `ai-blocked` with your question attached. A
+question the shape cannot read costs only the block — the delivery still
+stops and the finding's note and fix still carry the decision.
 
 ## Scope
 
@@ -268,7 +309,7 @@ PR **after** your in-session fixes: `pass` only when the PR is mergeable
 with 0 Blocker and 0 Major.
 
 ```
-REVIEW_VERDICT {"verdict":"pass|findings|blocked_on_human_decision","head":"<40-hex reviewed head SHA>","blockers":<int>,"majors":<int>,"minors":<int>,"findings":[{"level":"Blocker|Major|Minor","location":"path:line","note":"...","fix":"..."}]}
+REVIEW_VERDICT {"verdict":"pass|findings|blocked_on_human_decision","head":"<40-hex reviewed head SHA>","blockers":<int>,"majors":<int>,"minors":<int>,"findings":[{"level":"Blocker|Major|Minor","location":"path:line","note":"...","fix":"..."}],"question":{"id":"q<n>","kind":"choice|confirm|text","summary":"...","question":"...","options":[{"label":"...","description":"...","action":"amend_requeue","recommended":true,"reason":"..."}]},"decision_class":"pick_best|missing_info|authority"}
 ```
 
 - `head` is the exact full SHA of the head this verdict covers:
@@ -276,6 +317,9 @@ REVIEW_VERDICT {"verdict":"pass|findings|blocked_on_human_decision","head":"<40-
   head (`git rev-parse HEAD` after your push). The Runner merges only
   when it equals the PR's current remote head — a forged or replayed
   verdict never merges (Issue #591).
+- `question` and `decision_class` are required on
+  `blocked_on_human_decision` (see "The question every human decision
+  carries" above) and absent on `pass` and `findings`.
 - `verdict` is `pass` only when `blockers == 0` and `majors == 0`.
 - `findings` lists every Blocker/Major/Minor with its `location` (after your
   fixes, this is what remains).

@@ -1,0 +1,37 @@
+{
+  "verdict": "blocked_on_human_decision",
+  "head": "d7ca0a77ed86ce0524cf5098cacb306d3f8f1db8",
+  "blockers": 0,
+  "majors": 1,
+  "minors": 0,
+  "findings": [
+    {
+      "level": "Major",
+      "location": "PR round comments",
+      "note": "Two rounds on the same head (dad90d8) fail for one structural reason: the pre-existing SEO title-keyword gate counts the five proof cards' verbatim third-party PR h3 titles in its denominator (EN 8/20, ZH 9/20, and even an H2-only scope gives EN 5/12 under the required 6), while the ticket simultaneously demands those exact titles, exact PR links, a 60-day public-repo window and the untouched no-human-review mark, so the only way to pass both is cherry-picking merges by 'ai'/'pr' substrings under HOME_MAX_PER_REPO=2 rather than taking the genuinely most recent five.",
+      "fix": "The person must choose which requirement yields — scope the gate to first-party headings, or let the cards carry first-party headlines instead of verbatim PR titles — then amend the ticket body and requeue."
+    }
+  ],
+  "question": {
+    "id": "q1",
+    "kind": "choice",
+    "summary": "The SEO gate and this ticket are mutually exclusive: the five verbatim third-party PR titles the ticket requires are counted as page titles that must contain search terms, so no selection of the most recent public merges can pass both as written.",
+    "question": "Which requirement should give way so the proof list and the SEO gate can both be satisfied honestly?",
+    "options": [
+      {
+        "label": "Scope the SEO gate",
+        "description": "The homepage title-keyword gate measures only first-party h1/h2/h3 headings outside .proof-card-title, and the five proof cards show the five most recent external merges from the last 60 days in still-public repositories, each linking to its PR, with no private repository listed, the no-human-review mark kept, Tommy Xiao's quote linked to the original tweet, and EN and ZH pages identical.",
+        "action": "amend_requeue",
+        "recommended": true,
+        "reason": "Keeps the ticket's verbatim-title intent and only changes what a gate measures, which the evidence shows is the smaller, safer change."
+      },
+      {
+        "label": "First-party card headlines",
+        "description": "Each proof card shows a first-party headline containing the page's target search term plus the repository name and a link to its PR, instead of the verbatim third-party PR title, while the five most recent external merges from the last 60 days in still-public repositories, the no-human-review mark, Tommy Xiao's tweet link, and identical EN/ZH lists are all preserved.",
+        "action": "amend_requeue",
+        "reason": "Keeps the existing gate untouched but drops the verbatim PR title the ticket currently specifies."
+      }
+    ]
+  },
+  "decision_class": "pick_best"
+}

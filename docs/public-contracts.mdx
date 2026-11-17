@@ -32,6 +32,7 @@ The [Constitution](https://github.com/orbi-build/orbi/blob/main/CONSTITUTION.md)
 | Suggestions | the document `orbi suggest --json` prints — `{"repo", "base_sha", "session_dir", "suggestions": [{"kind": "existing" or "new", "issue": the Issue number for existing and null for new, "title", "why", "body": the Issue body for new and null for existing, "size": the estimated number of files the change edits (an integer, or null when unknown)}]}` — that `size` key is present only when the caller passed `--size <n>` — at most three entries, ordered by priority; `--size <n>` (a positive integer) also asks the answer's first entry to be exactly one task grounded in the repository's own files that edits at most n files (none when the repository offers none, never padded), and a value that is not a positive integer is an argument error; `session_dir` is `<deploy_home>/.orbi/suggest/<run_id>/.pi-session/`, holding the suggestions session's Pi JSONL in the same format as delivery session files; the same run directory also holds the parallel understanding session's Pi JSONL at `<deploy_home>/.orbi/suggest/<run_id>/.understanding/.pi-session/`, in the same format, so a caller accounting the run's model usage reads both directories. The run directory `<deploy_home>/.orbi/suggest/<run_id>/` is kept after the command exits, on success and on failure — and the skill directory `integrations/claude-plugin/skills/suggest-ai-ready-issues/` that produces it |
 | Drafting | `orbi draft`'s round document (`{"message","conversation","draft"}` in, `{"reply","questions","issues","check","warning"}` out), its creation document (`{"key","issues","header","issue"}` in, `{"created"}` out), its failure document (`{"code","step","detail"}` on stderr), the session directory layout and the `<!-- orbi:draft:v1:... -->` Issue marker; see [The draft command contract](#the-draft-command-contract) |
 | Clarification proposal | the hidden `<!-- orbi:suggestion:v1 kind=split -->` / `kind=criteria` section of the clarification stop comment, its line grammar, the authoritative-stop rule and the public refusal/failure markers (`orbi-<name>-command`, `orbi-<name>-command-rejected`, `orbi-<name>-command-failed step=...` with their `comment=...` key); see [The clarification proposal and command receipts](#the-clarification-proposal-and-command-receipts) |
+| Stop question | the hidden `<!-- orbi:question:v1 {json} -->` block of a stop that needs a decision, its shape (a superset of the drafting question), the closed `action` set and the `decision_class` values, plus the `<!-- orbi:answer:v1 {json} -->` record of an answer — the automatic one the engine takes included; see [The stop question](#the-stop-question) |
 
 Anything not in this table is internal and may change without notice.
 
@@ -217,6 +218,75 @@ automatic recovery edits in place (`waiting` -> `resuming`/`stale` ->
 `merged`); the same stability rules apply: one block per comment, a present
 but invalid block is never read as "no block", and the prose beside it is
 display only.
+
+### The stop question
+
+A stop that needs a decision — a review deadlock, or an external PR that
+passed review — carries ONE hidden question beside the unchanged
+`orbi:failure:v1` record:
+
+```html
+<!-- orbi:question:v1 {"schema":1,"decision_class":"pick_best","question":{"id":"q1","kind":"choice","summary":"...","question":"...","options":[{"label":"...","description":"...","action":"amend_requeue","recommended":true,"reason":"..."}]}} -->
+```
+
+The shape is a superset of the drafting question in
+[The draft command contract](#the-draft-command-contract), so every question
+`orbi draft` returns today is valid here unchanged:
+
+- `id` — unique per Issue (a later stop never reuses an earlier one).
+- `kind` — `choice` (2 to 4 `options`), `confirm` (yes/no: the question
+  carries the `action` "yes" performs and, for `amend_requeue`, the
+  `criterion` appended on "yes"; "no" is a decline) or `text` (free text,
+  appended to the Issue body as an assumption). An absent `kind` reads as
+  `choice` when `options` is present and `text` otherwise — exactly how a
+  drafting question reads today.
+- `summary` — one plain sentence with the real cause; the visible Reason
+  line of the stop comment is the same text.
+- option — `label`, `description`, `action`, and on at most one option
+  `"recommended": true` with a one-line `reason`. For `amend_requeue` the
+  `description` is the exact acceptance criterion appended to the Issue
+  body, written as one verifiable sentence. A drafting option whose label
+  ends with `(Recommended)` reads as `recommended: true`.
+
+The action set is closed:
+
+| `action` | what it does |
+| --- | --- |
+| `amend_requeue` | append the `description` to the Issue body as an acceptance criterion, then relabel `ai-fix-needed` when a PR is open and `ai-ready` otherwise |
+| `link` | with a `url`; a person acts on GitHub |
+| `close_external_pr` | close the external PR; the existing path re-queues the triage Issue for internal delivery |
+| `close_all` | close the Issue and its Orbi PR, deleting the Orbi branch |
+
+`decision_class` says who may answer: `pick_best` (one option is better on
+the evidence), `missing_info` (only the person knows a fact) or
+`authority` — ONLY for accepting code from outside contributors, anything
+about money, prices or plans, and overriding a decision the maintainer wrote
+explicitly in the ticket body or the repository `AGENTS.md`. Existing
+tests, gates and checks are NOT recorded maintainer decisions.
+
+A review deadlock whose class is not `authority` and whose question carries
+a `recommended` `amend_requeue` option is answered by the engine ONCE, at
+the moment it writes the stop report (see
+[Workflow](/workflow#a-stop-that-asks-one-question)): it appends that
+criterion to the Issue body, re-queues the delivery and posts one
+`requeued` comment carrying the same question block plus an answer record
+
+```html
+<!-- orbi:answer:v1 {"q":"q1","action":"accept","value":"<label>","by":"orbi"} -->
+```
+
+instead of `ai-blocked`, with "Not right? Reply with another option." Every
+other stop stays `ai-blocked` with the question attached. An external PR
+that passed review always asks the same `authority` question with three
+fixed options (link to the PR, close the external PR, drop the work) and no
+recommendation, whatever the reviewer wrote.
+
+The block is one line and every `>` inside its JSON strings is written as
+`\u003e`, so no option text can close the HTML comment before the marker's
+own `-->`. A separate marker is used because the strict `orbi:failure:v1`
+parser rejects unknown fields. Technical stops (`github_transient`,
+`credential_missing`, ...) carry no question: their next step follows from
+`reason_code` alone.
 
 ## The clarification proposal and command receipts
 
