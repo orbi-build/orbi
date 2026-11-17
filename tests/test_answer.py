@@ -27,7 +27,6 @@ import orbi.answer as answer_module
 import orbi.merge_exec as merge_exec
 import orbi.pi_session as pi_session
 import orbi.review_merge as review_merge
-import orbi.steering as steering
 from orbi import (
     acceptance_section, claim, question, stopped_scans, ticket_command,
 )
