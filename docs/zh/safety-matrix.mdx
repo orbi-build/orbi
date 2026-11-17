@@ -1,0 +1,70 @@
+---
+title: "安全矩阵：哪一层拦住哪种故障"
+description: "Orbi 的每种交付故障由哪一层拦住，又由哪个测试证明?"
+---
+
+每一行写明一种故障、拦住它的那一层、Runner 的实际动作，以及证明它的测试。
+
+本页是索引，不是第二份说明。机制本身写在它该在的地方：[安全](/zh/security)、
+[工作流](/zh/workflow)和[运维](/zh/operations)。本页多出来的是最后一列：
+`tests/test_docs_safety_matrix.py` 会收集这一列写到的每个测试 id，测试被改名
+或删除时，测试套件直接失败，不会留下一条没人能核对的说法。
+
+## 如何阅读
+
+- **证明它的测试**是一个 pytest id，可以用
+  `python3 -m pytest "<id>"` 单独运行。
+- 证明的范围就是该测试断言的内容，不会更宽。多数测试用 fake 或本地 Git
+  仓库驱动 Runner，并不证明线上部署、真实的 GitHub 凭据，或你的仓库的分支规则。
+- `(no test)` 表示这个行为没有测试证明。每一个这样的行都会在
+  [已知缺口](#已知缺口)里再列一次。
+
+## 矩阵
+
+| 故障模式 | 拦住它的那一层 | Runner 的动作 | 证明它的测试 |
+| --- | --- | --- | --- |
+| Runner 执行的 engine 代码比配置的 source 通道旧（2026-09-07 事故） | 两层启动防线：服务的 `ExecStartPre` 步骤在 Runner 进程存在之前同步 engine checkout；Runner 自己的 source 新鲜度门禁检查进程实际 import 的代码 | 记录 `runner_source_stale` 并退出，不占 slot、不 claim、不改 label。仅主机可设的 `allow_stale_runner` 会把它降级为警告。 | `tests/test_runner_source_freshness.py::test_real_tick_with_a_stale_source_exits_before_any_slot`, `tests/test_systemd_timer.py::test_service_syncs_the_engine_source_channel_before_the_runner_starts` |
+| 经 Issue 正文、diff 或评审者读到的评论注入的 `REVIEW_VERDICT` 行 | Verdict 解析器：被引用或被提及的 verdict 不算 verdict 行，出现两个不同的 verdict 行时拒绝 | 以评审者自己的结论 verdict 为准；verdict 互相冲突时本轮失败，不会任选其一 | `tests/test_review_verdict.py::test_parse_review_verdict_last_line_beats_injected_marker`, `tests/test_review_verdict.py::test_parse_review_verdict_rejects_conflicting_verdicts` |
+| clean verdict 指向的 head 不是正在审查的 head | Verdict 携带被审查的 head SHA，并与它绑定 | 不调用 merge 门禁；本轮失败，交付保持可恢复 | `tests/test_review_verdict.py::test_parse_review_verdict_requires_head`, `tests/test_review_merge.py::test_review_and_merge_verdict_head_mismatch_real_commit_is_recoverable` |
+| PR head 在审查和 merge 之间发生变化 | Merge 门禁重新读取 PR；`gh pr merge --match-head-commit` 锁定被审查的 head | 以 `head moved since review` 拒绝；merge 落地的只会是被审查的 head | `tests/test_review_merge.py::test_merge_gate_rejects_head_that_moved_since_review`, `tests/test_review_merge.py::test_merge_gate_merges_reviewed_head_with_match_head_commit` |
+| clean review 之后 base 分支前进 | Merge 门禁重新 fetch base，并要求 head 包含它 | 用普通 merge 吸收无冲突的 base、推送，并把 merge 推迟到之后的 tick，先读取新 head 的 CI。这是 Runner 自己的更新，不是违规。base 有冲突时交付保持可恢复。 | `tests/test_git_merge_smoke.py::test_merge_gate_absorbs_clean_behind_base_then_defers`, `tests/test_git_merge_smoke.py::test_merge_gate_conflicted_absorb_stays_recoverable` |
+| 被审查 head 的 CI 失败或仍在运行 | Merge 门禁读取 GitHub 上该 head 的检查 | CI 失败时门禁失败；CI 未完成时把 merge 推迟到下一个 tick。两种情况都不 merge。 | `tests/test_review_merge.py::test_merge_gate_rejects_failed_github_ci`, `tests/test_review_merge.py::test_merge_gate_defers_when_ci_pending` |
+| 公开评论携带格式完整的恢复现场，试图操纵 resume | 可信评论过滤：只读取对该仓库有 `write` 或 `admin` 权限的作者，以及 Runner 自己的账号；不使用评论的 `authorAssociation` | 绝不采用该现场。没有可信现场时 Issue 变为 `ai-blocked`，tick 继续。 | `tests/test_resume_e2e.py::test_e2e_public_comment_scene_is_never_resumed`, `tests/test_github.py::test_comment_is_trusted_by_repository_permission_and_by_bot_login` |
+| 仓库的 `.github/orbi.toml` 声明了仅主机可设的 key | 仓库配置解析器：按名字拒绝 host-only key，只接受交付策略 key | 停止 claim，在 Issue 上报告违规的 key，Issue 变为 `ai-blocked`。无法识别的 key 则只是被忽略并给出警告。 | `tests/test_repo_config.py::test_parse_repo_config_rejects_host_only_keys`, `tests/test_repo_config.py::test_main_blocks_a_claim_when_the_repo_config_is_invalid`, `tests/test_blocked_comment.py::test_repo_config_blocked_ends_with_the_help_line` |
+| agent 会话自己 merge 或 push 受保护分支 | Prompt 契约要求实现者和评审者不这样做；真正执行拦截的是 GitHub branch protection 和 ruleset | 没有动作：Runner 不拦截 agent 会话内部发起的 push | (no test) |
+| 审查与修复循环永不结束 | 每次交付五轮的预算（不可信评论无法改变它），加上相同失败的防护 | 第六轮不会开始：交付离开自动循环，变为 `ai-blocked`，等待人的决定。同一个失败连续三个 tick 出现也会升级为 `ai-blocked`。人工恢复后开始新的预算。 | `tests/test_fix_needed_loop.py::test_review_rounds_exhausted_raises_unrecoverable`, `tests/test_fix_needed_loop.py::test_delivery_step_unrecoverable_failure_marks_blocked_with_reason`, `tests/test_fix_needed_loop.py::test_report_failure_three_identical_ticks_escalate_the_dead_loop`, `tests/test_comment_identity.py::test_untrusted_history_cannot_change_the_review_budget` |
+| 模型请求挂死：已被接受但一直没有回答，或从未被调度 | 会话监视：`model_wait_dead` 阈值，以及可选的 `/slots` 探测（用于模型服务吞掉的请求） | 杀掉 Pi 会话，记录 `model_wait_dead` 或 `model_wait_swallowed` 以及 `run_failed`。交付保持可恢复：Issue 保留 `ai-in-progress`，下一个 tick 恢复同一个 run。模型慢但仍在产生事件时不会被杀。 | `tests/test_bootstrap_pi.py::test_stream_pi_frozen_model_wait_at_default_kills_with_configured_threshold`, `tests/test_bootstrap_pi.py::test_stream_pi_swallowed_model_request_killed_fast`, `tests/test_bootstrap_pi.py::test_stream_pi_frozen_model_wait_just_before_default_survives`, `tests/test_bootstrap_runner_outcome.py::test_process_issue_model_wait_dead_failure_stays_in_progress` |
+
+## 已知缺口
+
+这些是维护者目前接受的限制。列在这里并不代表承诺会补上。
+
+- **Runner 不会拦住 agent 会话推送受保护分支** — `(no test)`。实现者和评审者
+  使用这台机器的 Git 凭据运行。“不 merge、不 push base 分支”是 prompt 契约；
+  真正执行拦截的是你仓库上的 GitHub branch protection 或 ruleset。没有配置时，
+  Orbi 内部没有任何机制能阻止它。
+- **发版不经过审查门禁。** 发版任务按自己的门禁把版本提交直接推送到 base 分支
+  （见[工作流](/zh/workflow#epicrelease-task-与-p0-优先级)）。上面的各行只描述
+  开发交付。
+- **需要人决定的 verdict 离不开维护者。** 评审者返回
+  `blocked_on_human_decision`，或轮次预算用尽时，Runner 停下且不 merge。需要有人
+  做出决定，然后手动 merge、把 Issue 改标为 `ai-fix-needed` 让同一个 PR 带着新的
+  轮次预算继续，或者重新派发。停下这一步由
+  `tests/test_review_merge.py::test_review_and_merge_human_decision_stops_without_fix_round`
+  证明；决定本身没有任何自动化（即 Issue #1099 和 PR #1100 背后的情形）。
+- **`/slots` 探测需要主动开启。** `model_wait_probe_url` 未设置时，被吞掉的请求
+  只能靠更长的 `model_wait_dead` 阈值发现。
+- **`allow_stale_runner` 会把新鲜度门禁变成警告。** 这是有意提供的主机侧开关，
+  设置了它的部署等于放弃了第一行。
+- **本地测试不是线上边界。** 没有任何一行证明真实的 GitHub 权限、真实的 systemd
+  或 launchd 主机，或真实的模型端点。
+
+提出本页需求时点名的两个缺口后来已经补上，保留在这里以便看清来龙去脉：
+
+- 评审者过去只在 claim 时读取一次 Issue 正文（Issue #1094）。现在每一轮审查都会
+  重新读取：
+  `tests/test_bootstrap_runner_prompt.py::test_run_review_refreshes_issue_body_each_round`。
+- resume 评论过去声称缺失的 worktree 会被重建，而代码从未重建（Issue #807）。现在
+  worktree 会从远端分支重新创建：
+  `tests/test_resume_pr.py::test_verify_resumed_pr_recreates_missing_worktree_from_remote_branch`。
+  这条一般性的提醒仍然成立：评论里报告了恢复，不等于恢复真的发生了。

@@ -3,7 +3,7 @@ title: "Security: boundaries of an autonomous AI agent"
 description: "How does Orbi keep an autonomous coding agent from merging unsafe changes?"
 ---
 
-Orbi keeps secrets local and leaves merges and base-branch pushes to the Runner. Development changes go through a reviewed PR. Releases follow separate gates and can push a version commit directly to the configured base branch.
+Orbi keeps secrets local and leaves merges and base-branch pushes to the Runner. Development changes go through a reviewed PR. Releases follow separate gates and can push a version commit directly to the configured base branch. The [safety matrix](/safety-matrix) lists which layer stops each failure and the test that proves it.
 
 Orbi runs an autonomous coding agent with a GitHub token on your
 machine. The security model is deliberately simple: hard boundaries in

@@ -1,0 +1,83 @@
+---
+title: "Safety matrix: which layer stops which failure"
+description: "Which layer stops each delivery failure in Orbi, and which test proves it?"
+---
+
+Each row names one failure, the layer that catches it, what the Runner does, and the test that proves it.
+
+This page is an index, not a second explanation. The mechanisms are
+described where they belong: [Security](/security), [Workflow](/workflow)
+and [Operations](/operations). What this page adds is the last column.
+`tests/test_docs_safety_matrix.py` collects every test id named there, so a
+renamed or deleted test fails the suite instead of leaving a claim nobody
+can check.
+
+## How to read it
+
+- **Test that proves it** is a pytest id. Run one with
+  `python3 -m pytest "<id>"`.
+- A proof is what the named test asserts, nothing wider. Most tests drive
+  the Runner against fakes or a local Git repository; they do not prove a
+  live deployment, real GitHub credentials or your repository's branch
+  rules.
+- `(no test)` means the behaviour has no test that proves it. Every such
+  row is listed again under [Known gaps](#known-gaps).
+
+## The matrix
+
+| Failure mode | Layer that catches it | What the Runner does | Test that proves it |
+| --- | --- | --- | --- |
+| The Runner executes engine code older than its configured source channel (the 2026-09-07 incident) | Two start layers: the service's `ExecStartPre` step syncs the engine checkout before the Runner process exists, and the Runner's source freshness gate checks the code the process actually imports | Logs `runner_source_stale` and exits before any slot, claim or label change. The host-only `allow_stale_runner` setting downgrades this to a warning. | `tests/test_runner_source_freshness.py::test_real_tick_with_a_stale_source_exits_before_any_slot`, `tests/test_systemd_timer.py::test_service_syncs_the_engine_source_channel_before_the_runner_starts` |
+| A `REVIEW_VERDICT` line injected through the Issue body, the diff or a comment the reviewer read | Verdict parser: a quoted or mentioned verdict is never a verdict line, and two different verdict lines are refused | The reviewer's own concluding verdict decides; conflicting verdicts fail the round instead of picking one | `tests/test_review_verdict.py::test_parse_review_verdict_last_line_beats_injected_marker`, `tests/test_review_verdict.py::test_parse_review_verdict_rejects_conflicting_verdicts` |
+| A clean verdict that names a different head than the one under review | The verdict carries the reviewed head SHA and is bound to it | Does not call the merge gate; the round fails and the delivery stays recoverable | `tests/test_review_verdict.py::test_parse_review_verdict_requires_head`, `tests/test_review_merge.py::test_review_and_merge_verdict_head_mismatch_real_commit_is_recoverable` |
+| The PR head changes between review and merge | Merge gate re-reads the PR; `gh pr merge --match-head-commit` pins the reviewed head | Refuses with `head moved since review`; a merge lands exactly the reviewed head | `tests/test_review_merge.py::test_merge_gate_rejects_head_that_moved_since_review`, `tests/test_review_merge.py::test_merge_gate_merges_reviewed_head_with_match_head_commit` |
+| The base branch advances after a clean review | Merge gate re-fetches the base and requires the head to contain it | Absorbs a non-conflicting base with a plain merge, pushes, and defers the merge to a later tick so the new head's CI is read first. This is the Runner's own update, not a violation. A conflicting base keeps the delivery recoverable. | `tests/test_git_merge_smoke.py::test_merge_gate_absorbs_clean_behind_base_then_defers`, `tests/test_git_merge_smoke.py::test_merge_gate_conflicted_absorb_stays_recoverable` |
+| CI on the reviewed head is red or still running | Merge gate reads GitHub's checks for that head | Red CI fails the gate; pending CI defers the merge to the next tick. Neither merges. | `tests/test_review_merge.py::test_merge_gate_rejects_failed_github_ci`, `tests/test_review_merge.py::test_merge_gate_defers_when_ci_pending` |
+| A public comment carries a well-formed recovery scene to steer the resume | Trusted-comment filter: only authors with `write` or `admin` permission on the repository, or the Runner's own account, are read. The comment's `authorAssociation` is not used. | Never follows the scene. With no trusted scene the Issue becomes `ai-blocked` and the tick continues. | `tests/test_resume_e2e.py::test_e2e_public_comment_scene_is_never_resumed`, `tests/test_github.py::test_comment_is_trusted_by_repository_permission_and_by_bot_login` |
+| A repository's `.github/orbi.toml` declares a host-only key | Repository config parser: host-only keys are rejected by name; only the delivery-policy keys are accepted | Stops the claim and reports the offending keys on the Issue, which becomes `ai-blocked`. An unrecognised key is ignored with a warning instead. | `tests/test_repo_config.py::test_parse_repo_config_rejects_host_only_keys`, `tests/test_repo_config.py::test_main_blocks_a_claim_when_the_repo_config_is_invalid`, `tests/test_blocked_comment.py::test_repo_config_blocked_ends_with_the_help_line` |
+| An agent session merges or pushes the protected branch itself | The prompt contract tells the implementer and reviewer not to; GitHub branch protection and rulesets are the enforcing boundary | Nothing: the Runner does not intercept a push made from inside an agent session | (no test) |
+| The review and fix loop never terminates | Round budget of five per delivery, which untrusted comments cannot change, plus the identical-failure guard | A sixth round does not start: the delivery leaves the automatic loop as `ai-blocked` for a human decision. The same failure three ticks in a row also escalates to `ai-blocked`. A human recovery starts a fresh budget. | `tests/test_fix_needed_loop.py::test_review_rounds_exhausted_raises_unrecoverable`, `tests/test_fix_needed_loop.py::test_delivery_step_unrecoverable_failure_marks_blocked_with_reason`, `tests/test_fix_needed_loop.py::test_report_failure_three_identical_ticks_escalate_the_dead_loop`, `tests/test_comment_identity.py::test_untrusted_history_cannot_change_the_review_budget` |
+| A model request hangs: accepted but never answered, or never scheduled | Session watcher: the `model_wait_dead` threshold, and the optional `/slots` probe for a request the model server swallowed | Kills the Pi session and logs `model_wait_dead` or `model_wait_swallowed` with `run_failed`. The delivery stays recoverable: the Issue keeps `ai-in-progress` and the next tick resumes the same run. A model that is slow but still producing events is not killed. | `tests/test_bootstrap_pi.py::test_stream_pi_frozen_model_wait_at_default_kills_with_configured_threshold`, `tests/test_bootstrap_pi.py::test_stream_pi_swallowed_model_request_killed_fast`, `tests/test_bootstrap_pi.py::test_stream_pi_frozen_model_wait_just_before_default_survives`, `tests/test_bootstrap_runner_outcome.py::test_process_issue_model_wait_dead_failure_stays_in_progress` |
+
+## Known gaps
+
+These are limits the maintainers live with today. Listing them here is not a
+promise to close them.
+
+- **An agent session pushing the protected branch is not stopped by the
+  Runner** — `(no test)`. The implementer and reviewer run with the
+  machine's Git credentials. The instruction not to merge or push the base
+  branch is a prompt contract; the enforcing layer is GitHub branch
+  protection or a ruleset on your repository. Without one, nothing in Orbi
+  prevents it.
+- **A release does not go through the review gate.** A release task pushes
+  its version commit directly to the base branch under its own gates (see
+  [Workflow](/workflow#epics-release-tasks-and-p0-priority)). The rows above
+  describe development deliveries only.
+- **A human-decision verdict needs a maintainer.** When the reviewer returns
+  `blocked_on_human_decision`, or the round budget is exhausted, the Runner
+  stops and does not merge. Someone has to decide, then merge by hand,
+  relabel the Issue `ai-fix-needed` to hand the same PR back with a fresh
+  round budget, or dispatch it again. The stop is proven by
+  `tests/test_review_merge.py::test_review_and_merge_human_decision_stops_without_fix_round`;
+  nothing automates the decision (the case behind Issue #1099 and PR #1100).
+- **The `/slots` probe is opt-in.** With `model_wait_probe_url` unset, a
+  swallowed request is only caught by the longer `model_wait_dead` threshold.
+- **`allow_stale_runner` turns the freshness gate into a warning.** It is a
+  deliberate host-side override, and a deployment that sets it has given up
+  the first row.
+- **Local tests are not a live boundary.** No row proves real GitHub
+  permissions, a real systemd or launchd host, or a real model endpoint.
+
+Two gaps named when this page was requested have since been closed, and are
+kept here so the history stays readable:
+
+- The reviewer used to read the Issue body once, at claim time (Issue #1094).
+  Each review round now re-reads it:
+  `tests/test_bootstrap_runner_prompt.py::test_run_review_refreshes_issue_body_each_round`.
+- A resume comment used to promise that a missing worktree would be rebuilt
+  while the code never rebuilt it (Issue #807). The worktree is now recreated
+  from the remote branch:
+  `tests/test_resume_pr.py::test_verify_resumed_pr_recreates_missing_worktree_from_remote_branch`.
+  The general point stands: a comment that reports a recovery is not proof
+  the recovery happened.
