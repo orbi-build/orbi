@@ -814,14 +814,17 @@ def apply_steering(
                 amended if amended is not None else body,
                 decision.text or "", language_code,
             )
-            if written is None:
-                continue
-            run_step(
-                "append the answer to the Issue body",
-                lambda engine_body=written: acceptance_section.write_body(
-                    int(issue["number"]), repo=repo, body=engine_body,
-                ),
-            )
+            # An amendment the body already carries is a no-op write, not
+            # an uncarried answer: the receipt below is what tells the merge
+            # gate and the stopped-ticket scan that it IS done.
+            if written is not None:
+                run_step(
+                    "append the answer to the Issue body",
+                    lambda engine_body=written: acceptance_section.write_body(
+                        int(issue["number"]), repo=repo, body=engine_body,
+                    ),
+                )
+                amended = written
             _success_receipt(
                 comment, issue_number=int(issue["number"]), repo=repo,
                 effect=language.text(
@@ -830,7 +833,6 @@ def apply_steering(
                 ),
                 run_id=run_id,
             )
-            amended = written
     return amended
 
 

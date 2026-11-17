@@ -1172,6 +1172,10 @@ def test_steering_reads_answers_and_receipts_what_it_cannot_do(
         body=f"{BODY}\n## Acceptance\n- {CRITERION}\n\n{APPENDED_MARKER}\n",
         language_code="en",
     ) is None
+    # A no-op amendment is still a carried-out answer, so it leaves its one
+    # receipt: without it the merge gate would hold a clean merge over a
+    # decision the body already carries.
+    assert len(successes(gh)) == 1
     # A comment carrying two answer blocks, and a ticket whose question is
     # gone, are refusals with a receipt -- never a silent skip.
     doubled = [{"id": "double", "author": {"login": "maintainer"},
