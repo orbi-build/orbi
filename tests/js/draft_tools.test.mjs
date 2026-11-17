@@ -194,6 +194,41 @@ test("the schema keeps the questions a round may ask", () => {
     }),
     true,
   );
+  // Issue #2228: drafting and stops read ONE question parser, so an option
+  // may mark the reasonable default with the `recommended` field instead of
+  // the label suffix — the engine takes that option exactly as before, and
+  // the field must reach it rather than be refused here.
+  assert.equal(
+    validates(askUserTool, {
+      reply: "x",
+      questions: [{
+        ...question,
+        options: [
+          {
+            ...question.options[0],
+            label: "A local file",
+            recommended: true,
+          },
+          question.options[1],
+        ],
+      }],
+    }),
+    true,
+  );
+  // The field is a boolean, like the stop option's.
+  assert.equal(
+    validates(askUserTool, {
+      reply: "x",
+      questions: [{
+        ...question,
+        options: [
+          { ...question.options[0], recommended: "yes" },
+          question.options[1],
+        ],
+      }],
+    }),
+    false,
+  );
   // One option is not a choice, and five is more than a question offers.
   assert.equal(
     validates(askUserTool, {
