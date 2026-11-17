@@ -166,8 +166,7 @@ def answer_occurrences(body: object) -> list[str | None]:
     Each occurrence is the answer BLOCK, which `validate` reads with
     `question.parse_answer`: the block's shape is validated in exactly one
     place (`comment_kind.parse_versioned_block`) and a corrupted record gets
-    one readable receipt instead of silence. The block is one line, so an
-    occurrence never splits a journal line. Two blocks in one comment are
+    one readable receipt instead of silence. Two blocks in one comment are
     one unreadable occurrence: an answer comment carries ONE answer, the
     same rule the marker parser applies. The engine's own answer is engine
     OUTPUT, which the scan skips by its run marker before reading a record
