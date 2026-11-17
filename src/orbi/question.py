@@ -433,39 +433,20 @@ def _answer_record(data: dict) -> Answer:
 
 
 def parse_answer(body: object) -> Answer | None:
-    """The answer record a comment body carries, or None."""
+    """The answer record a comment body carries, or None.
+
+    THE answer-payload validator (Issue #2235): the ticket-command scan
+    hands this the one block it found on a comment, so the record's shape
+    is validated in exactly one place — the strict marker parser
+    (`parse_versioned_block`) plus `_answer_record` — and a corrupted
+    record raises `QuestionError` instead of being ignored.
+    """
     data = parse_versioned_block(
         body, ANSWER_MARKER, ANSWER_FIELDS, QuestionError,
         required=ANSWER_REQUIRED,
     )
     if data is None:
         return None
-    return _answer_record(data)
-
-
-def parse_answer_payload(payload: object) -> Answer:
-    """One answer record from its JSON payload (Issue #2221).
-
-    The ticket-command scan reads a record command's occurrence as the
-    block's payload text, so this is the same shape and the same rules as
-    `parse_answer` — one answer parser, two entry points — and a
-    corrupted record raises `QuestionError` instead of being ignored.
-    """
-    if not isinstance(payload, str) or not payload.strip():
-        raise QuestionError("the answer record is empty")
-    try:
-        data = json.loads(payload)
-    except json.JSONDecodeError as exc:
-        raise QuestionError(
-            f"the answer record is not valid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise QuestionError("the answer record must be a JSON object")
-    unknown = sorted(set(data) - set(ANSWER_FIELDS))
-    if unknown:
-        raise QuestionError(f"the answer record has unknown fields: {unknown}")
-    missing = sorted(name for name in ANSWER_REQUIRED if name not in data)
-    if missing:
-        raise QuestionError(f"the answer record is missing fields: {missing}")
     return _answer_record(data)
 
 
