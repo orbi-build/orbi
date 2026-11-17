@@ -210,6 +210,13 @@ version, enum and meaning unchanged), the
 reader-facing **Action**, **Reason** and `Diagnosis` details. The failure
 record's definition is in [Workflow](/workflow).
 
+Three terminal reasons name a stop that used to read as `unclassified`
+(Issue #2222): `release_failed` (a release task failed; the visible reason
+names the release step that failed), `no_commit_delivered` (the agent
+session ended without a commit on the task branch) and `no_file_change`
+(the delivered commits change no file). All three are `blocked`,
+`retry_safe: false`, action `fix_ticket`.
+
 A `base_ci_red` failure comment carries one more hidden block beside that
 record — `<!-- orbi:base-ci-red:v1 {json} -->` with `schema`, `state`,
 `base_branch`, `base_sha`, `pr` and `failing_checks`. It is the record the

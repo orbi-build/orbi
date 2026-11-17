@@ -22,6 +22,7 @@ import pytest
 
 import orbi.claim as claim
 import orbi.failure_report as failure_report
+import orbi.terminal_stops as terminal_stops
 import orbi.runner as runner
 import orbi.pi_session as pi_session
 import orbi.github as github
@@ -363,7 +364,10 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: worktree,
     )
     monkeypatch.setattr(pi_session, "run_pi", lambda *args, **kwargs: "done")
-    no_commit = RuntimeError(
+    # Issue #2222: the real commit boundary raises this record-carrying
+    # type, so the blocked comment carries the code instead of
+    # `unclassified`.
+    no_commit = terminal_stops.NoCommitDelivered(
         "the agent delivered no commit on the task branch (HEAD "
         "abc123def456 is still the frozen base abc123def456)"
     )
@@ -404,13 +408,16 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
         entry[2]["body"] for entry in calls
         if isinstance(entry, tuple) and entry[0] == "comment"
     ]
-    failure = [
+    blocked_comment = [
         body for body in comment_bodies
         if "Orbi: blocked" in body
     ]
-    assert len(failure) == 1
-    assert "delivered no commit" in failure[0]
-    assert "<!-- orbi:run=a1b2c3d4 -->" in failure[0]
+    assert len(blocked_comment) == 1
+    assert "delivered no commit" in blocked_comment[0]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in blocked_comment[0]
+    assert failure.parse(
+        blocked_comment[0],
+    ).reason_code == "no_commit_delivered"
     # The blocked milestone notification carries the same scene.
     blocked = [body for body in posted if "Orbi: blocked" in body]
     assert blocked
@@ -524,6 +531,8 @@ def test_process_issue_empty_commit_marks_blocked_without_crashing(
     assert "no file change" in blocked[0]
     assert subject in blocked[0]
     assert "<!-- orbi:run=a1b2c3d4 -->" in blocked[0]
+    # Issue #2222: the empty-tree stop carries its own code.
+    assert failure.parse(blocked[0]).reason_code == "no_file_change"
     assert "delivery_no_file_change" in caplog.text
     # The stop is terminal BEFORE the push: the bare remote never saw the
     # task branch, and no PR was created.

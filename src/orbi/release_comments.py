@@ -1,19 +1,17 @@
 """The release task's terminal comments (Issue #1660).
 
-The auditable success record and the blocked failure scene of a
-release task. They live in their own sibling of `release.py` so the
-localized wording does not grow the frozen release module (Issue
-#1229); the release execution (`orbi.release_run`) and the tag/publish
-closeout (`orbi.release_closeout`) import them unchanged (Issue #1859).
+The auditable success record and the blocked failure scene of a release
+task. They live in their own sibling of `release.py` so the localized
+wording does not grow the frozen release module (Issue #1229); the release
+execution and the closeout import them unchanged (Issue #1859).
 
-It also owns the Epic reconciliation audit sentence and its
-either-language duplicate check (Issue #1705): the per-tick claim sweep
-and the release Milestone sweep share one renderer here, so neither
-frozen module grows for the catalog text.
+It also owns the Epic reconciliation audit sentence and its either-language
+duplicate check (Issue #1705): the claim sweep and the Milestone sweep share
+one renderer here, so neither frozen module grows for the catalog text.
 """
 from __future__ import annotations
 
-from orbi import failure, language
+from orbi import failure, language, terminal_stops
 from orbi.progress import field_block
 from orbi.run_fields import RunFields
 
@@ -70,12 +68,10 @@ def release_success_comment_body(run_id: str, run_info: RunFields,
                                  ) -> str:
     """The terminal success comment: the full verification evidence.
 
-     The comment is the auditable record of the release:
-    run marker, release URL, version/tag/release commit, the
-    per-item scope evidence, the gate evidence, the test evidence and
-    the Milestone evidence (the Milestone whose title is the released
-    version is closed on the success path). `run_info` is the run's fields
-    as values (Issue #2055).
+    The auditable record of the release: run marker, release URL,
+    version/tag/release commit, the per-item scope evidence, the gate
+    evidence, the test evidence and the Milestone evidence. `run_info` is
+    the run's fields as values (Issue #2055).
     """
     info = run_info.as_fields()
     return "\n".join([
@@ -111,6 +107,7 @@ def release_success_comment_body(run_id: str, run_info: RunFields,
 def release_failure_comment_body(run_id: str, run_info: RunFields,
                                  error: BaseException,
                                  language_code: str,
+                                 step: str,
                                  status_url: str | None = None,
                                  issue: int | None = None,
                                  title: str | None = None,
@@ -118,9 +115,10 @@ def release_failure_comment_body(run_id: str, run_info: RunFields,
     """The terminal failure comment: the blocked scene.
 
     A release failure is terminal (`ai-blocked` ALONE, no automatic
-    retry): the comment carries the run marker, the same
-    machine-readable `orbi:failure:v1` block the delivery path emits
-    (`failure.classify`, Issue #1323), and the concrete reason.
+    retry): the comment carries the run marker, the machine-readable
+    `orbi:failure:v1` block the delivery path emits (`failure.classify`,
+    Issue #1323; `release_failed` when no cause of its own is known), and
+    the visible reason names the release `step` that failed (Issue #2222).
     """
     detail = failure.failure_detail(error)
     body = field_block(
@@ -129,10 +127,12 @@ def release_failure_comment_body(run_id: str, run_info: RunFields,
         {**run_info.as_fields(), "failure": detail},
         language_code=language_code, status_url=status_url,
         issue=issue, title=title,
-    )
-    return body.replace(
+    ).replace(
         "\n",
-        f"\n{failure.render(failure.classify(detail, error=error))}\n",
+        f"\n{failure.render(failure.classify(detail, error=error, release=True))}\n",
         1,
+    )
+    return terminal_stops.release_failure_reason_line(
+        step, detail, body, language_code=language_code,
     )
 

@@ -412,21 +412,20 @@ def release_success_closeout(
 
 def release_failure_closeout(
         *, repo: str, number: int, run_id: str, run_info: RunFields,
-        error: Exception, ready_label: str, language_code: str,
+        error: Exception, step: str, ready_label: str, language_code: str,
         status_url: str | None, title: str,
 ) -> None:
     """Record a failed release: the `ai-blocked` terminal and its comment.
 
-    The failure comment is the human-facing record the blocked ticket
-    carries, and the label transition clears the in-flight label AND the
-    resolved queue label in one write (Issue #1775).
+    The failure comment is the human-facing record the blocked ticket carries
+    — `step` names the failed release step (Issue #2222) — and the transition
+    clears the in-flight label AND the resolved queue label (Issue #1775).
     """
     LOGGER.exception("issue=%s release_failed", number)
     post_blocked_comment(
         number, repo=repo,
         body=release_failure_comment_body(
-            run_id, run_info, error,
-            language_code=language_code,
+            run_id, run_info, error, language_code=language_code, step=step,
             status_url=status_url, issue=number, title=title,
         ),
         # A failed release is a blocked terminal: the claimed

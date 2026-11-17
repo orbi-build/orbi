@@ -100,56 +100,39 @@ def process_release(issue: dict, config: RunnerConfig,
                    source_repo: str) -> str:
     """Run the deterministic release state machine for one release Issue.
 
-     A release task NEVER enters the normal `run_pi`
-    development path: the Runner executes the state machine itself,
-    step by step, each step idempotent so a restart resumes the same
-    run (same run id, same worktree) from the top:
+    A release NEVER enters the `run_pi` path: the Runner executes the steps
+    itself, in order, each one idempotent so a restart resumes the same run
+    (same run id, same worktree) from the top. `step` below is the one that
+    failed, reported with the failure (Issue #2222):
 
-    1. Parse the optional `## Release` overrides from the Issue body.
-       Without that section, the Issue Milestone supplies version and scope,
-       while repository configuration supplies the base branch.
-    2. Freeze the configured base — the release commit is exactly
-       `origin/<base_branch>` (fetched under the base-sync lock).
-       A declared version, when present, must match the Milestone title.
-    2b. Prove the declared (or defaulted) `version_file` exists at the
-       root of the frozen release tree (`verify_release_version_file`) — before any gate wait, so a declaration/repo
-       mismatch fails fast at claim time with the supported files that
-       do exist, never as a late FileNotFoundError after the gates.
+    1. Parse the optional `## Release` overrides; without it the Milestone
+       supplies version and scope and the repository configuration the base
+       branch.
+    2. Freeze `origin/<base_branch>` — the release commit, fetched under the
+       base-sync lock — then prove the declared (or defaulted) `version_file`
+       exists in that tree BEFORE any gate wait, so a declaration/repo
+       mismatch fails fast with the supported files that do exist.
     3. Enforce the pre-release gates (`check_release_gates`).
-    4. When `scope_from_milestone` is declared, derive the scope from
-       the Milestone (`derive_release_scope_from_milestone`): closed
-       Issues + merged PRs; open items are surfaced as evidence, never
-       released. Then verify the scope item by item
-       (`verify_release_scope`).
-    Before step 5, prepare the release version in the clean worktree using
-       the declared `version_file` (`pyproject.toml` by default,
-       `package.json`, or `none`), commit and push when metadata changes.
-       The subsequent steps run against that commit.
-    5. Test acceptance is the #268 CI-wait gate on the release commit:
-       after the version bump the gates re-run against that exact
-       commit, and a red or timed-out CI takes the terminal failure
-       path: a spent wait budget is a human decision
-       (`ReleaseGateWaitTimeout`), never a transient requeue
-       (Issue #1760). No local test execution.
-    6. Tag: the remote tag must not exist or must point EXACTLY at
-       the release commit (a mismatch fails — an existing tag is
-       never moved; one exception: a tag pointing at an ancestor of
-       the frozen base resumes the release by rewinding the release
-       commit to the tag); otherwise create an annotated tag at the
-       release commit and push it with a plain push (never
-       `--force`).
-    7. Publish the GitHub Release (idempotent) with the full
-       verification evidence.
-    8. Apply `ai-merged` and close the release Issue (terminal delivery
-       transition).
-    9. Close the Milestone whose title is EXACTLY the released
-        version, then write the success comment (release
-        URL, tag, commit, evidence, Milestone evidence). Exact title
-        match only; close it only when it has 0 open Issues;
-        already-closed is idempotent. A missing Milestone or remaining
-        open Issues fails fast. Any failure is `ai-blocked` ALONE, with
-        a concrete failure comment, and the handled failure returns
-        cleanly so the tick does not crash.
+    4. When `scope_from_milestone` is declared, derive the scope from the
+       Milestone (closed Issues + merged PRs; open items become evidence,
+       never released) and verify it item by item.
+    5. Prepare the release version in the clean worktree, commit and push it,
+       then re-run the gates on THAT commit: the #268 CI-wait gate is the test
+       acceptance, and a red or timed-out CI is terminal — a spent wait budget
+       is a human decision (`ReleaseGateWaitTimeout`), never a requeue
+       (Issue #1760). There is no local test execution.
+    6. Tag: the remote tag must not exist or point EXACTLY at the release
+       commit (never moved; a tag on an ancestor of the frozen base resumes
+       the release from it), otherwise create an annotated tag and push it
+       with a plain push (never `--force`).
+    7. Publish the GitHub Release (idempotent) with the verification evidence.
+    8. Apply `ai-merged` and close the release Issue.
+    9. Close the Milestone whose title is EXACTLY the released version, then
+       write the success comment. Exact title only; close it only when it has
+       0 open Issues; already-closed is idempotent. A missing Milestone or
+       remaining open Issues fails fast. Any failure is `ai-blocked` ALONE
+       with a concrete failure comment, and the handled failure returns
+       cleanly so the tick does not crash.
     """
     number = int(issue["number"])
     title = issue["title"]
@@ -213,6 +196,9 @@ def process_release(issue: dict, config: RunnerConfig,
         )
 
     release_commit: str | None = None
+    # The step a failure is reported with (Issue #2222); each assignment
+    # below opens the phase that follows it.
+    step = "declaration"
     declaration: dict | None = None
     open_milestone_evidence: list[str] = []
     ready_label = config.dispatch_label or READY_LABEL
@@ -244,6 +230,7 @@ def process_release(issue: dict, config: RunnerConfig,
                     run_info=run_info.text()),
             ),
         )
+        step = "base"
         release_commit = freeze_base(config.repo_dir, base_branch)
         declaration = resolve_release_declaration(
             issue, declaration, config, source_repo, config.repo_dir,
@@ -293,6 +280,7 @@ def process_release(issue: dict, config: RunnerConfig,
         target_milestone = release_target_milestone(
             issue, config.active_milestone,
         )
+        step = "gates"
         gate_evidence, repo_has_ci = check_release_gates(
             source_repo, release_commit, number,
             milestone=target_milestone,
@@ -314,6 +302,7 @@ def process_release(issue: dict, config: RunnerConfig,
                 ),
             ),
         )
+        step = "scope"
         if declaration.get("scope_from_milestone") is not None:
             # The scope is derived from the Milestone, then
             # verified item by item exactly like a hand-listed scope.
@@ -355,6 +344,7 @@ def process_release(issue: dict, config: RunnerConfig,
                 ),
             ),
         )
+        step = "version"
         worktree = create_release_worktree(
             config.repo_dir, source_repo, number, run_id, release_commit,
         )
@@ -380,6 +370,7 @@ def process_release(issue: dict, config: RunnerConfig,
         # CheckRun registration lag, so gate 1's observation (checks on the
         # frozen base = this repository runs CI) forbids the empty-list
         # pass here.
+        step = "CI gate"
         gate_evidence, _ = check_release_gates(
             source_repo, release_commit, number,
             milestone=target_milestone,
@@ -422,6 +413,7 @@ def process_release(issue: dict, config: RunnerConfig,
                 ),
             ),
         )
+        step = "tag"
         tag = declaration["version"]
         existing_tag_commit = release_tag_commit(config.repo_dir, tag)
         if existing_tag_commit is not None:
@@ -474,6 +466,7 @@ def process_release(issue: dict, config: RunnerConfig,
                 "release_tag_pushed", issue=number, tag=tag,
                 commit=release_commit,
             )
+        step = "publish"
         release_url = publish_release(
             repo=source_repo, tag=tag, version=tag,
             release_commit=release_commit, changelog=changelog,
@@ -577,7 +570,7 @@ def process_release(issue: dict, config: RunnerConfig,
     except Exception as exc:
         release_failure_closeout(
             repo=source_repo, number=number, run_id=run_id,
-            run_info=run_info, error=exc, ready_label=ready_label,
+            run_info=run_info, error=exc, step=step, ready_label=ready_label,
             language_code=language.of(config),
             status_url=config.status_url, title=title,
         )

@@ -68,6 +68,14 @@ FAILURE_MESSAGES: dict[str, tuple[str, str]] = {
     # existing one where this repository was set up (the web connection or
     # the config file, so a hosted tenant has a place to go too) — and how
     # to start the Issue over. Git's raw answer stays in the run details.
+    # Issue #2222: a failed release names the STEP it failed at, so the
+    # reader knows whether a tag, the version commit or a gate went wrong.
+    # `step` is a machine value from the release state machine (tag,
+    # version, gates, ...) and stays verbatim; only the sentence moves.
+    "failure.release_failed_reason": (
+        "The release failed at the {step} step: {detail}",
+        "release 在 {step} 步骤失败：{detail}",
+    ),
     "failure.base_branch_missing_reason": (
         "This repository has no branch \u0060{base_branch}\u0060, so Orbi "
         "doesn't know which branch to start from.",

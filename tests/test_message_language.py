@@ -537,7 +537,7 @@ def test_release_comments_follow_the_language():
     assert "## 发布范围（逐项验证）" in zh
     failure_body = release_comments.release_failure_comment_body(
         "abcdef12", RunFields(run_id="abcdef12", priority="p0"),
-        PreExistingCIFailure("boom"), "zh",
+        PreExistingCIFailure("boom"), "zh", step="gates",
     )
     assert "Orbi release 失败（ai-blocked）" in failure_body
     assert failure_body.startswith("<!-- orbi:run=abcdef12 -->")
@@ -845,7 +845,7 @@ def test_zh_contract_rows_are_byte_identical(tmp_path):
 
     failed = release_comments.release_failure_comment_body(
         "abcdef12", RunFields(run_id="abcdef12", priority="normal"),
-        PreExistingCIFailure("boom"), "zh",
+        PreExistingCIFailure("boom"), "zh", step="gates",
     )
     assert "- failure: boom" in failed
     assert "<!-- orbi:failure:v1 " in failed

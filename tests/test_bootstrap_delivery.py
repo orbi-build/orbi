@@ -46,7 +46,7 @@ import orbi.worktree_retention as worktree_retention
 import orbi.gitops as gitops
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
-from orbi import progress, scene
+from orbi import failure, progress, scene
 from tests.fakes.gitops import remote_head_answer
 import orbi.journal as journal
 from seam import resume_deps, seam
@@ -5679,8 +5679,14 @@ def test_deliver_pr_rejects_delivery_without_a_commit(monkeypatch, tmp_path):
         return fake_deliver_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    with pytest.raises(RuntimeError, match="no commit"):
+    with pytest.raises(RuntimeError, match="no commit") as excinfo:
         runner.deliver_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=DELIVER_BRANCH, worktree=tmp_path, source_repo="o/r"), "main", base_sha, issue_title="t", repo_dir=tmp_path, language_code="en")
+    # Issue #2222: the stop is decided at the source, so the failure report
+    # carries the code instead of falling through to `unclassified`.
+    assert excinfo.value.failure_record == failure.Failure(
+        "no_commit_delivered",
+        *failure.DISPOSITIONS["no_commit_delivered"],
+    )
 
 
 def test_deliver_pr_rejects_an_empty_commit_as_no_file_change(
@@ -5710,12 +5716,16 @@ def test_deliver_pr_rejects_an_empty_commit_as_no_file_change(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        with pytest.raises(RuntimeError, match="no file change") as failure:
+        with pytest.raises(RuntimeError, match="no file change") as raised:
             runner.deliver_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=DELIVER_BRANCH, worktree=tmp_path, source_repo="o/r"), "main", base_sha, issue_title="t", repo_dir=tmp_path, language_code="en")
+    # Issue #2222: an empty commit has its own code at the source.
+    assert raised.value.failure_record == failure.Failure(
+        "no_file_change", *failure.DISPOSITIONS["no_file_change"],
+    )
     # The reason names both SHAs and quotes the last commit subject.
-    assert FAKE_HEAD_SHA in str(failure.value)
-    assert base_sha in str(failure.value)
-    assert subject in str(failure.value)
+    assert FAKE_HEAD_SHA in str(raised.value)
+    assert base_sha in str(raised.value)
+    assert subject in str(raised.value)
     # The event carries the branch/head/base scene.
     assert "delivery_no_file_change" in caplog.text
     assert f"head={FAKE_HEAD_SHA}" in caplog.text

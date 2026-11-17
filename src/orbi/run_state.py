@@ -19,7 +19,7 @@ import time
 from enum import Enum
 from pathlib import Path
 
-from orbi import github, scene
+from orbi import github, scene, terminal_stops
 from orbi.delivery_scene import RunContext
 from orbi.comment_trust import trusted_comments
 from orbi.github import (
@@ -109,17 +109,17 @@ def delivery_commit_guard(worktree: Path, *, local_head: str,
     advanced past the frozen base AND change at least one file. An empty
     commit (``git commit --allow-empty``) advances HEAD while its tree
     equals the base tree, and without this guard it would be pushed and
-    merged as a zero-file PR (Issue #1581). Both stops share one terminal
-    path — ``delivery_no_commit`` for a HEAD still on the base,
-    ``delivery_no_file_change`` for an equal tree — so the run ends
-    ``ai-blocked`` before anything is fetched, pushed or PR'd.
+    merged as a zero-file PR (Issue #1581). Each stop raises its own
+    record-carrying type (`orbi.terminal_stops`), so the run ends
+    ``ai-blocked`` with ``no_commit_delivered`` / ``no_file_change`` before
+    anything is fetched, pushed or PR'd.
     """
     if local_head == base_sha:
         event(
             "delivery_no_commit", level=logging.ERROR,
             branch=branch, head=local_head,
         )
-        raise RuntimeError(
+        raise terminal_stops.NoCommitDelivered(
             f"the agent delivered no commit on the task branch (HEAD "
             f"{local_head} is still the frozen base {base_sha})"
         )
@@ -137,7 +137,7 @@ def delivery_commit_guard(worktree: Path, *, local_head: str,
             "delivery_no_file_change", level=logging.ERROR,
             branch=branch, head=local_head, base=base_sha,
         )
-        raise RuntimeError(
+        raise terminal_stops.NoFileChange(
             f"the agent delivered no file change on the task branch "
             f"(HEAD {local_head} tree {head_tree} equals the frozen base "
             f"{base_sha} tree {base_tree}; last commit subject: "
