@@ -45,12 +45,10 @@ from orbi.delivery_labels import (
 )
 from orbi.delivery_scene import RunContext
 from orbi.draft_document import (
-    RECOMMENDED_MARK,
     TAKEN_ROUNDS,
     DraftAnswer,
     DraftError,
     DraftIssue,
-    DraftOption,
     DraftRound,
     invalid_input,
     named_in_reply,
@@ -70,6 +68,7 @@ from orbi.pi_command import (
 )
 from orbi.pi_process import PiWatchOptions, stream_pi
 from orbi.pi_session import pi_extension_env, prepare_pi_agent_dir
+from orbi.question import RECOMMENDED_MARK, Option
 from orbi.ticket_command import author_login_key, runner_login
 
 # The three tools the shipped extension registers; the prompt names them and
@@ -576,7 +575,7 @@ def run_round(
 def _answered_round(
     config: RunnerConfig, repo: str, *, session_root: Path, payload: dict,
     out_path: Path, run_id: str,
-) -> tuple[dict, DraftAnswer, tuple[DraftOption, ...]]:
+) -> tuple[dict, DraftAnswer, tuple[Option, ...]]:
     """Run the session until it drafts or asks what only the person can answer.
 
     A question carrying a recommended option is the engine's own answer
@@ -588,7 +587,7 @@ def _answered_round(
     message = str(payload["message"]).strip()
     turns = payload.get("conversation")
     turns = list(turns) if isinstance(turns, list) else []
-    taken: list[DraftOption] = []
+    taken: list[Option] = []
     for _round in range(TAKEN_ROUNDS):
         round_payload = {**payload, "message": message, "conversation": turns}
         _run_answer_session(

@@ -8,11 +8,14 @@ a reply alone when the person explicitly asked for no code change
 failure. The shapes, their parsing and the errors live here, and
 `orbi.draft` keeps the sessions, the fidelity pass and the creation.
 
-A question may carry options and mark one as the reasonable default with the
-`(Recommended)` label suffix, and such a question is not the person's to
+A question is read by the ONE question parser `orbi.question` — the same
+shape a stop question has (Issue #2228) — so a question means the same thing
+wherever it appears. A question may carry options and mark one as the
+reasonable default, either with the `(Recommended)` label suffix or with the
+option's `recommended` field, and such a question is not the person's to
 answer: the engine takes that option and the drafting continues in the same
-round (Issue #2198). Only a question with no recommended option — the request
-is empty or contradicts itself — is returned to the person.
+round (Issues #2198, #2228). Only a question with no recommended option — the
+request is empty or contradicts itself — is returned to the person.
 
 Split out of `orbi.draft`, whose recorded size may only shrink
 (`tools/size_ratchet.py`, Issue #2167): the documents and the rule about
@@ -23,9 +26,14 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-# A recommended option's label carries this suffix (the Claude Agent SDK
-# convention); where it sits is the caller's business, never the engine's.
-RECOMMENDED_MARK = "(Recommended)"
+from orbi.question import (
+    RECOMMENDED_MARK,
+    Option,
+    Question,
+    QuestionError,
+    parse_question,
+    recommended_option,
+)
 
 # A small fixed bound: a session that keeps asking a question it could answer
 # itself must not spin (the termination guard the interactive loop keeps too,
@@ -43,35 +51,6 @@ TAKEN_INSTRUCTION = (
     "the Assumptions section of the Issue it affects, saying what was chosen "
     "and why, and name each one in your reply."
 )
-
-
-@dataclass(frozen=True)
-class DraftOption:
-    """One choice a question offers: a short label and what it means."""
-
-    label: str
-    description: str
-
-    def as_json(self) -> dict:
-        return {"label": self.label, "description": self.description}
-
-
-@dataclass(frozen=True)
-class DraftQuestion:
-    """One question (Issues #2136, #2147): the question itself, an optional
-    header naming the decision and optional 2–4 options to pick from."""
-
-    question: str
-    header: str | None = None
-    options: tuple[DraftOption, ...] = ()
-
-    def as_json(self) -> dict:
-        data: dict = {"question": self.question}
-        if self.header is not None:
-            data["header"] = self.header
-        if self.options:
-            data["options"] = [option.as_json() for option in self.options]
-        return data
 
 
 class DraftError(RuntimeError):
@@ -107,8 +86,29 @@ class DraftAnswer:
     (Issue #2201), never two of them."""
 
     reply: str
-    questions: tuple[DraftQuestion, ...] = ()
+    questions: tuple[Question, ...] = ()
     issues: tuple[DraftIssue, ...] = ()
+
+
+def question_document(question: Question) -> dict:
+    """One question as the drafting document writes it (Issues #2136, #2147):
+    the question itself, an optional header naming the decision and the
+    optional 2–4 options to pick from.
+
+    The shape is the drafting document's, not the stop block's: a drafting
+    round adds no `kind`, `id` or `summary`, so every question `orbi draft`
+    returned before the shared parser produces the same document
+    (Issue #2228).
+    """
+    data: dict = {"question": question.text}
+    if question.header is not None:
+        data["header"] = question.header
+    if question.options:
+        data["options"] = [
+            {"label": option.label, "description": option.description}
+            for option in question.options
+        ]
+    return data
 
 
 @dataclass(frozen=True)
@@ -116,7 +116,7 @@ class DraftRound:
     """One round as the caller reads it (the stdout contract)."""
 
     reply: str
-    questions: tuple[DraftQuestion, ...] = ()
+    questions: tuple[Question, ...] = ()
     issues: tuple[DraftIssue, ...] = ()
     check: str | None = None
     warning: str | None = None
@@ -124,7 +124,9 @@ class DraftRound:
     def as_json(self) -> dict:
         data: dict = {
             "reply": self.reply,
-            "questions": [question.as_json() for question in self.questions],
+            "questions": [
+                question_document(question) for question in self.questions
+            ],
             "issues": [issue.as_json() for issue in self.issues],
         }
         if self.check is not None:
@@ -225,58 +227,27 @@ def parse_issues(value: object) -> tuple[DraftIssue, ...]:
     return tuple(issues)
 
 
-def parse_options(value: object, position: int) -> tuple[DraftOption, ...]:
-    """Validate one question's options WHEN it has any: 2 to 4, each a label
-    and a sentence. A question without options is valid, and where a
-    recommended option sits is the caller's business.
-    """
-    if value is None:
-        return ()
-    if not isinstance(value, list) or not 2 <= len(value) <= 4:
-        raise _unreadable(f"question {position} needs 2 to 4 options")
-    options: list[DraftOption] = []
-    for index, entry in enumerate(value, start=1):
-        if not isinstance(entry, dict):
-            raise _unreadable(
-                f"question {position}, option {index} is not an object")
-        label = entry.get("label")
-        description = entry.get("description")
-        if not isinstance(label, str) or not label.strip():
-            raise _unreadable(
-                f"question {position}, option {index} has no label")
-        if not isinstance(description, str) or not description.strip():
-            raise _unreadable(
-                f"question {position}, option {index} has no description")
-        options.append(
-            DraftOption(label=label.strip(), description=description.strip())
-        )
-    return tuple(options)
+def parse_questions(value: object) -> tuple[Question, ...]:
+    """Validate a round's questions with the ONE question parser.
 
-
-def parse_questions(value: object) -> tuple[DraftQuestion, ...]:
-    """Validate a round's questions: the shape the engine defines itself. A
-    bare string is a question with no header and no options (Issue #2147).
+    A bare string is a question with no header and no options
+    (Issue #2147); every other rule — 2 to 4 options, each a label and a
+    sentence, at most one recommended — is `orbi.question`'s, the same
+    shape a stop question is read with (Issue #2228). Where a recommended
+    option sits is the caller's business, never the parser's.
     """
     if not isinstance(value, list) or not value:
         raise _unreadable("the answer carries no questions")
-    questions: list[DraftQuestion] = []
+    questions: list[Question] = []
     for position, entry in enumerate(value, start=1):
         if isinstance(entry, str):
             entry = {"question": entry}
         if not isinstance(entry, dict):
             raise _unreadable(f"question {position} is not an object")
-        question, header = entry.get("question"), entry.get("header")
-        if not isinstance(question, str) or not question.strip():
-            raise _unreadable(f"question {position} has no question")
-        if header is not None and (
-            not isinstance(header, str) or not header.strip()
-        ):
-            raise _unreadable(f"question {position} has an unreadable header")
-        questions.append(DraftQuestion(
-            question=question.strip(),
-            header=header.strip() if header is not None else None,
-            options=parse_options(entry.get("options"), position),
-        ))
+        try:
+            questions.append(parse_question(entry))
+        except QuestionError as exc:
+            raise _unreadable(f"question {position}: {exc}") from None
     return tuple(questions)
 
 
@@ -312,27 +283,22 @@ def parse_answer(value: object) -> DraftAnswer:
     )
 
 
-def recommended(question: DraftQuestion) -> DraftOption | None:
-    """The option whose label carries the recommended mark, or None."""
-    return next(
-        (option for option in question.options
-         if option.label.endswith(RECOMMENDED_MARK)),
-        None,
-    )
-
-
 def taken_options(
-    questions: tuple[DraftQuestion, ...],
-) -> tuple[tuple[DraftOption, ...], tuple[DraftQuestion, ...]]:
+    questions: tuple[Question, ...],
+) -> tuple[tuple[Option, ...], tuple[Question, ...]]:
     """Split the questions of one answer (Issue #2198).
 
     Every question carrying a recommended option is answered by the engine
-    with that option; only the rest are the person's to answer.
+    with that option; only the rest are the person's to answer. Which option
+    is recommended is the ONE rule the stops read too
+    (`orbi.question.recommended_option`), so a drafting option marked
+    `"recommended": true` counts exactly like a label ending in
+    `(Recommended)` (Issue #2228).
     """
-    taken: list[DraftOption] = []
-    waiting: list[DraftQuestion] = []
+    taken: list[Option] = []
+    waiting: list[Question] = []
     for question in questions:
-        option = recommended(question)
+        option = recommended_option(question)
         if option is None:
             waiting.append(question)
         else:
@@ -340,22 +306,27 @@ def taken_options(
     return tuple(taken), tuple(waiting)
 
 
-def unmarked(option: DraftOption) -> str:
-    """The option's label without the recommended mark."""
-    return option.label[:-len(RECOMMENDED_MARK)].strip() or option.label
+def unmarked(option: Option) -> str:
+    """The option's own words: its label without the recommended mark.
+
+    The mark is removed only when the label really carries it: an option
+    recommended by its `recommended` field keeps its whole label
+    (Issue #2228).
+    """
+    return option.label.removesuffix(RECOMMENDED_MARK).strip() or option.label
 
 
-def decision_lines(taken: tuple[DraftOption, ...]) -> list[str]:
+def decision_lines(taken: tuple[Option, ...]) -> list[str]:
     """One line per option taken, in the option's own words."""
     return [f"- {unmarked(option)}: {option.description}" for option in taken]
 
 
-def taken_message(taken: tuple[DraftOption, ...]) -> str:
+def taken_message(taken: tuple[Option, ...]) -> str:
     """The message a taken round sends instead of the person's answer."""
     return TAKEN_INSTRUCTION.format(decisions="\n".join(decision_lines(taken)))
 
 
-def named_in_reply(reply: str, taken: tuple[DraftOption, ...]) -> str:
+def named_in_reply(reply: str, taken: tuple[Option, ...]) -> str:
     """The round's reply, naming every option the engine took (Issue #2198).
 
     The session is asked to name them; the engine lists them anyway, so the
