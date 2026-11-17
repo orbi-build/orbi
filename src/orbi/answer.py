@@ -45,6 +45,12 @@ What the engine does with one answer, and nothing else:
 - `cancel` closes the Issue and its pull request -- at `ai-blocked` only;
   at any other stage it is not carried out and the receipt says why.
 
+The stages never disagree about WHICH answer the ticket carries: the
+stopped-ticket scan keeps the LAST one ("the last word wins", so a person
+can change their mind by answering again), and `resolve_answers` applies
+that same rule for the merge gate and the steering poll -- answering A and
+then B carries out B at every stage, and A is superseded (Issue #2233).
+
 One answer is executed once: the success receipt carries the layer's
 marker keyed on the answer comment, and a later scan reads that receipt
 instead of running again. A rejection (an untrusted author, an answer
@@ -639,61 +645,127 @@ def _close_pr(pull: dict, *, repo: str) -> None:
 
 
 # --------------------------------------------------------------------------
+# The one answer that counts: the last word on the ticket
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Word:
+    """One answer resolved against the ticket's newest stop question.
+
+    `decision` is what the answer asks for at the stage, or `None` with the
+    readable `refusal`. Only the LAST word counts (`resolve_answers`),
+    exactly as the stopped-ticket scan reads the ticket: "the last word
+    wins, so an operator can correct a typo by commenting again"
+    (`ticket_command._selection`).
+    """
+
+    comment: dict
+    decision: Decision | None = None
+    refusal: str | None = None
+
+
+def resolve_answers(
+    occurrences: list[tuple[dict, str | None]],
+    stop: question.StopQuestion,
+    stage: str, *,
+    language_code: str = language.DEFAULT_LANGUAGE,
+) -> list[Word]:
+    """Resolve the gathered answers against the question, in ticket order.
+
+    The LAST item is the answer that counts: the stopped-ticket scan's rule,
+    so the merge gate's read and the steering poll's write never disagree
+    with the scan about which answer a ticket carries. A last word the stage
+    refuses counts as a refusal -- the person's latest word is the decision,
+    never a fallback to the answer it replaced.
+
+    `occurrences` are the `(comment, payload)` pairs the caller gathered by
+    its own rules (the gate's trust, the poll's freshness); a ticket whose
+    question cannot be read is handled by the caller, because then no answer
+    can be resolved at all.
+    """
+    resolved: list[Word] = []
+    for comment, payload in occurrences:
+        if payload is None:
+            resolved.append(Word(comment, refusal=language.text(
+                language_code, "answer.reason_two_records")))
+            continue
+        try:
+            decision = _decision(
+                payload, stop=stop, stage=stage,
+                language_code=language_code,
+            )
+        except NotExecuted as exc:
+            resolved.append(Word(comment, refusal=exc.reason))
+            continue
+        resolved.append(Word(comment, decision=decision))
+    return resolved
+
+
+# --------------------------------------------------------------------------
 # The other two readers: the merge gate and the steering poll
 # --------------------------------------------------------------------------
 
 def _pending(
     comments: list[dict], *, repo: str, stage: str, language_code: str,
 ) -> Decision | None:
-    """The oldest answer the engine has not carried out yet, or None.
+    """The answer that counts when the engine has not carried it out, or None.
 
-    "Not carried out" is read from the ticket, never from memory: the
-    engine's one receipt (success or rejection) is keyed on the answer
-    comment, so a scanned answer is not pending. The other rules are the
-    scan's: a run-marked comment is engine output, an answer older than the
-    newest stop is stale, and the author must be trusted.
+    "Counts" is the scan's rule (`resolve_answers`): the LAST trusted answer
+    to the newest stop question, so an answer a later one replaced never
+    holds a merge. "Not carried out" is read from the ticket, never from
+    memory: the engine's one receipt (success or rejection) is keyed on the
+    answer comment, so a scanned answer is not pending. The other rules are
+    the scan's too: a run-marked comment is engine output, an answer older
+    than the newest stop is stale, and the author must be trusted.
     """
     try:
         located = question.latest_stop(comments)
     except QuestionError:
-        located = None
+        return None
     if located is None:
         return None
     stop_comment, stop = located
     permissions: dict[str, str] = {}
+    occurrences: list[tuple[dict, str | None]] = []
     for comment in comments:
         if not isinstance(comment, dict) or carries_run_marker(comment):
             continue
-        for payload in answer_occurrences(comment.get("body")):
-            if payload is None or not _newer(comment, stop_comment, comments):
-                continue
-            if not comment_is_trusted(
-                comment, repo=repo, permissions=permissions,
-            ):
-                continue
-            if runner_receipt(
-                comments, f"comment={command_comment_key(comment)} -->",
-            ):
-                continue
-            try:
-                return decide(
-                    question.parse_answer_payload(payload), stop, stage,
-                    language_code=language_code,
-                )
-            except (QuestionError, NotExecuted):
-                continue
-    return None
+        if not _newer(comment, stop_comment, comments):
+            continue
+        payloads = answer_occurrences(comment.get("body"))
+        if not payloads:
+            continue
+        if not comment_is_trusted(
+            comment, repo=repo, permissions=permissions,
+        ):
+            continue
+        occurrences.extend((comment, payload) for payload in payloads)
+    resolved = resolve_answers(
+        occurrences, stop, stage, language_code=language_code,
+    )
+    if not resolved:
+        return None
+    counting = resolved[-1]
+    if counting.decision is None:
+        return None
+    if runner_receipt(
+        comments, f"comment={command_comment_key(counting.comment)} -->",
+    ):
+        return None
+    return counting.decision
 
 
 def pending_change(
     number: int, *, repo: str, head: str | None = None,
     language_code: str = language.DEFAULT_LANGUAGE,
 ) -> Decision | None:
-    """The merge gate's read: an uncarried answer to the current question.
+    """The merge gate's read: the answer that counts, while uncarried.
 
     Called by `merge_exec.merge_gate` immediately before the merge, next to
     the `ai-blocked` label re-read (Issue #1504): a person who answered
-    while CI was running must not have the older decision merged over.
+    while CI was running must not have the older decision merged over, and
+    the answer that holds the merge is the last word on the ticket -- the
+    same one the scan and the steering poll carry out (Issue #2233).
     """
     decision = _pending(
         issue_comments(number, repo=repo), repo=repo,
@@ -765,68 +837,81 @@ def apply_steering(
     body: object, language_code: str = language.DEFAULT_LANGUAGE,
     run_id: str | None = None,
 ) -> str | None:
-    """Write the body change a steering answer implies; return the new body.
+    """Write the body change the answer that counts implies.
 
     The `ai-in-progress` reader: the answer arrives as a fresh trusted
     comment while the session runs, so the engine writes the amendment the
     restarted session reads and leaves the answer's ONE receipt, so the
-    merge gate and the stopped-ticket scan read it as carried out. A
-    `cancel` or a close is not carried out here -- the stage says so in one
-    receipt, and the answer stays on the ticket for the stop scan.
+    merge gate and the stopped-ticket scan read it as carried out. It counts
+    the same last word the scan and the gate read (`resolve_answers`), so a
+    person who answers A and then B gets B written and A stays off the body.
+    A `cancel` or a close is not carried out here -- the stage says so in
+    one receipt, and the answer stays on the ticket for the stop scan.
     """
-    stop: question.StopQuestion | None = None
-    amended: str | None = None
+    occurrences: list[tuple[dict, str | None]] = []
     for comment in fresh:
         if not isinstance(comment, dict) or carries_run_marker(comment):
             continue
-        for payload in answer_occurrences(comment.get("body")):
-            if payload is None:
-                _reject(
-                    comment,
-                    language.text(language_code, "answer.reason_two_records"),
-                    repo=repo, issue=issue, comments=comments,
-                    language_code=language_code,
-                )
-                continue
-            try:
-                if stop is None:
-                    stop = _located(comments, language_code)[1]
-                decision = _decision(
-                    payload, stop=stop, stage=STAGE_SESSION,
-                    language_code=language_code,
-                )
-            except NotExecuted as exc:
-                # One receipt per answer the engine does not carry out here
-                # (an unreadable record, a closing answer, no open question):
-                # the person who answered reads why, and nothing changes.
-                _reject(
-                    comment, exc.reason, repo=repo, issue=issue,
-                    comments=comments, language_code=language_code,
-                )
-                continue
-            written = question.amended_body(
-                amended if amended is not None else body,
-                decision.text or "", language_code,
+        occurrences.extend(
+            (comment, payload)
+            for payload in answer_occurrences(comment.get("body"))
+        )
+    if not occurrences:
+        return None
+    try:
+        stop = _located(comments, language_code)[1]
+    except NotExecuted as exc:
+        # A ticket whose question cannot be read resolves no answer: each
+        # answer gets the one receipt saying so, and nothing changes.
+        for comment, _payload in occurrences:
+            _reject(
+                comment, exc.reason, repo=repo, issue=issue,
+                comments=comments, language_code=language_code,
             )
-            # An amendment the body already carries is a no-op write, not
-            # an uncarried answer: the receipt below is what tells the merge
-            # gate and the stopped-ticket scan that it IS done.
-            if written is not None:
-                run_step(
-                    "append the answer to the Issue body",
-                    lambda engine_body=written: acceptance_section.write_body(
-                        int(issue["number"]), repo=repo, body=engine_body,
-                    ),
-                )
-                amended = written
-            _success_receipt(
-                comment, issue_number=int(issue["number"]), repo=repo,
-                effect=language.text(
-                    language_code, "answer.effect_amended",
-                    text=decision.text or "",
+        return None
+    resolved = resolve_answers(
+        occurrences, stop, STAGE_SESSION, language_code=language_code,
+    )
+    amended: str | None = None
+    counting = len(resolved) - 1
+    for index, word in enumerate(resolved):
+        if word.decision is None:
+            # One receipt per answer the engine does not carry out here
+            # (an unreadable record, a closing answer, no open question):
+            # the person who answered reads why, and nothing changes.
+            _reject(
+                word.comment, word.refusal or "", repo=repo, issue=issue,
+                comments=comments, language_code=language_code,
+            )
+            continue
+        if index != counting:
+            # A superseded answer is never written: the scan and the merge
+            # gate read the same last word, so the person's earlier answer
+            # must not reach the body behind their back.
+            continue
+        written = question.amended_body(
+            amended if amended is not None else body,
+            word.decision.text or "", language_code,
+        )
+        # An amendment the body already carries is a no-op write, not
+        # an uncarried answer: the receipt below is what tells the merge
+        # gate and the stopped-ticket scan that it IS done.
+        if written is not None:
+            run_step(
+                "append the answer to the Issue body",
+                lambda engine_body=written: acceptance_section.write_body(
+                    int(issue["number"]), repo=repo, body=engine_body,
                 ),
-                run_id=run_id,
             )
+            amended = written
+        _success_receipt(
+            word.comment, issue_number=int(issue["number"]), repo=repo,
+            effect=language.text(
+                language_code, "answer.effect_amended",
+                text=word.decision.text or "",
+            ),
+            run_id=run_id,
+        )
     return amended
 
 

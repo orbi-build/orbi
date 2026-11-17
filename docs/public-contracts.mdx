@@ -306,10 +306,15 @@ An answer is read by the stage the ticket carries when the engine looks:
 the stopped-ticket scan reads `ai-blocked`, `ai-pr-opened` and
 `ai-fix-needed` once per tick, the steering poll reads `ai-in-progress`,
 and the merge gate reads the ticket again immediately before it merges.
-Four rules decide what is carried out:
+Five rules decide what is carried out:
 
 - only an answer NEWER than the ticket's newest stop question counts — an
   answer to a question the ticket has replaced is stale;
+- of the answers that count, the newest one is carried out — the last word
+  wins: answering the same question again supersedes the earlier answer, so
+  the stopped-ticket scan, the steering poll and the merge gate all act on
+  that one answer, and an answer a later one replaced is carried out by none
+  of them;
 - one answer is carried out once: its receipt (below) is the counter the
   next read finds;
 - the engine's own record (`"by": "orbi"`, the automatic answer above) is

@@ -752,6 +752,149 @@ def test_a_newer_answer_sends_the_waiting_merge_to_a_fix_round(
 
 
 # --------------------------------------------------------------------------
+# one answer counts at every stage: the last word wins (Issue #2233)
+# --------------------------------------------------------------------------
+
+SECOND_LABEL = "Keep the tag on rename"
+SECOND_CRITERION = "A tag survives renaming the note"
+
+# The same question with TWO amend options: a person answers the first,
+# changes their mind and answers the second.
+TWO_WAYS = {
+    "id": "q1",
+    "kind": "choice",
+    "summary": "The reviewer and the engine disagree about the tag model.",
+    "question": "How should this delivery go on?",
+    "options": [
+        {
+            "label": "Add the assumption",
+            "description": CRITERION,
+            "action": "amend_requeue",
+            "recommended": True,
+            "reason": "the evidence in the ticket supports it",
+        },
+        {
+            "label": SECOND_LABEL,
+            "description": SECOND_CRITERION,
+            "action": "amend_requeue",
+        },
+    ],
+}
+
+
+def test_the_last_answer_wins_at_every_stage(monkeypatch, tmp_path):
+    """Acceptance (Issue #2233): a ticket carrying answers A then B to the
+    same stop question is carried out as B by the stopped-ticket scan, the
+    merge gate's refusal text and the steering poll, and the Issue body
+    carries B's words, never A's. Before this the scan read B, the gate
+    named A and the poll wrote both."""
+    # The stopped-ticket scan: one amendment, B's.
+    scan = _gh(monkeypatch)
+    stopped_ticket(scan, TWO_WAYS)
+    post(scan, value="Add the assumption")
+    post(scan, value=SECOND_LABEL)
+
+    tick(monkeypatch, tmp_path, scan)
+
+    assert f"- {SECOND_CRITERION}" in scan.issues[TICKET]["body"]
+    assert CRITERION not in scan.issues[TICKET]["body"]
+    assert len(successes(scan)) == 1
+    assert SECOND_CRITERION in successes(scan)[0]
+
+    # The steering poll of a running session: both answers arrive while it
+    # runs, and the poll carries out B only, with ONE restart.
+    poll = _gh(monkeypatch)
+    stopped_ticket(poll, TWO_WAYS, labels=())
+    post(poll, value="Add the assumption")
+    post(poll, value=SECOND_LABEL)
+    # GitHub exposes only whole-second stamps: the answers are created while
+    # the session runs, so they are newer than the session start.
+    future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
+    for comment in poll.issues[TICKET]["comments"][-2:]:
+        comment["createdAt"] = future
+    monkeypatch.setitem(
+        pi_session.__dict__, "issue_view",
+        lambda *a, **k: {
+            "comments": poll.issues[TICKET]["comments"],
+            "body": poll.issues[TICKET]["body"],
+        },
+    )
+    monkeypatch.setitem(
+        pi_session.__dict__, "changed_files", lambda *a, **k: [],
+    )
+    monkeypatch.setitem(
+        pi_session.__dict__, "activity_snapshot", lambda *a, **k: None,
+    )
+    captured = {}
+    monkeypatch.setitem(
+        pi_session.__dict__, "stream_pi",
+        lambda command, **kw: captured.update(kw) or "done",
+    )
+    issue = {"number": TICKET, "title": "Note app", "body": BODY}
+    assert pi_session.run_pi(
+        issue, RunContext("abc12345", TICKET, "branch", tmp_path, REPO),
+        _config(tmp_path),
+    ) == "done"
+    check = captured["watch"].steering_check
+
+    request = check()
+
+    assert request is not None
+    assert request.body_revision is True
+    assert f"- {SECOND_CRITERION}" in poll.issues[TICKET]["body"]
+    assert CRITERION not in poll.issues[TICKET]["body"]
+    assert len(successes(poll)) == 1
+    assert SECOND_CRITERION in successes(poll)[0]
+    assert check() is None
+    # The answer that counts is carried out, so nothing holds a merge and
+    # the superseded A is not pending either.
+    assert answer.pending_change(
+        TICKET, repo=REPO, head="h1", language_code="en",
+    ) is None
+
+    # The merge gate's refusal names the answer that counts.
+    gate = _gh(monkeypatch)
+    stopped_ticket(gate, TWO_WAYS, labels=(PR_OPENED_LABEL,))
+    post(gate, value="Add the assumption")
+    post(gate, value=SECOND_LABEL)
+
+    with pytest.raises(answer.AnswerSupersedesVerdict) as raised:
+        answer.refuse_superseded_merge(
+            TICKET, repo=REPO, head="h1", language_code="en",
+        )
+
+    assert SECOND_LABEL in str(raised.value)
+    assert "Add the assumption" not in str(raised.value)
+
+
+def test_a_refused_last_answer_supersedes_the_earlier_one(monkeypatch):
+    """The last word decides even when the stage refuses it: a person who
+    changes their mind to a cancel between rounds is not carried out, and
+    the answer they replaced is not carried out behind their back -- the
+    gate holds no merge over either, and one receipt says why."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh, TWO_WAYS, labels=(PR_OPENED_LABEL,))
+    post(gh, value="Add the assumption")
+    post(gh, action="cancel", value="cancel")
+
+    assert answer.pending_change(
+        TICKET, repo=REPO, head="h1", language_code="en",
+    ) is None
+
+    comments = gh.issues[TICKET]["comments"]
+    issue = {"number": TICKET, "title": "Note app", "body": BODY}
+    fresh = [dict(comment, issue=TICKET) for comment in comments]
+
+    assert answer.apply_steering(
+        fresh, issue=issue, repo=REPO, comments=comments, body=BODY,
+        language_code="en", run_id="abc12345",
+    ) is None
+    assert gh.issues[TICKET]["body"] == BODY
+    assert successes(gh) == []
+    assert "ai-blocked" in rejection(gh)
+
+
+# --------------------------------------------------------------------------
 # the decision rules: what one answer asks for, and what is refused
 # --------------------------------------------------------------------------
 
