@@ -11,7 +11,10 @@ stays valid, plus what a stop needs. 'orbi draft' reads its own questions
 with this same parser and this same recommendation rule (Issue #2228), so a
 question means the same thing wherever it appears:
 
-- 'id' — unique per Issue, so a later stop never reuses an earlier id;
+- 'id' — unique per Issue, so a later stop never reuses an earlier id.
+  The engine assigns it (`next_id`) from the questions already stored on
+  the Issue: the reviewer's verdict question arrives without one, so the
+  model cannot pick an id another stop already wrote (Issue #2227);
 - 'kind' — 'choice', 'confirm' or 'text'; absent reads as 'choice' when
   'options' is present and 'text' otherwise, exactly like drafting;
 - 'summary' — one plain sentence with the real cause, which is also the
@@ -47,12 +50,14 @@ block is one line, and no free text may close the HTML comment before its own
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from orbi import acceptance_section, language, notify, requeue, user_summary
 from orbi.comment_kind import (
     COMMENT_KIND_REQUEUED, comment_kind_marker, parse_versioned_block,
+    # `answer.py` reads this pattern through this module.
     versioned_block_pattern,
 )
 from orbi.delivery_labels import EVENT_FIX_NEEDED, EVENT_REQUEUE, READY_LABEL
@@ -313,19 +318,25 @@ def parse_verdict_question(verdict: object) -> StopQuestion | None:
         )
         decision_class = DECISION_AUTHORITY
     try:
-        return parse_stop(payload, decision_class)
+        return parse_stop(payload, decision_class, require_id=False)
     except QuestionError as exc:
         LOGGER.warning("unreadable stop question: %s", exc)
         return None
 
 
-def parse_stop(payload: object, decision_class: object) -> StopQuestion:
-    """A stored stop block: the strict question plus its decision class."""
+def parse_stop(payload: object, decision_class: object, *,
+               require_id: bool = True) -> StopQuestion:
+    """A stored stop block: the strict question plus its decision class.
+
+    A block stored on the Issue always carries the id the engine wrote
+    (`require_id`); a reviewer's verdict question does not — the engine
+    allocates it (`review_stop`), so the model never chooses an id.
+    """
     if decision_class not in DECISION_CLASSES:
         raise QuestionError(
             f"decision_class must be one of {list(DECISION_CLASSES)}")
     question = parse_question(payload, strict=True)
-    if question.id is None:
+    if require_id and question.id is None:
         raise QuestionError("a stop question needs an id")
     if question.summary is None:
         raise QuestionError("a stop question needs a summary")
@@ -477,19 +488,44 @@ def latest_stop(
     return None
 
 
-def next_id(comments: Sequence[dict] | None) -> str:
-    """The id of the next question on an Issue: one past the last one.
+# The one id series: a stored id outside it is never reissued by the
+# allocator, so reading it cannot collide with what the allocator writes.
+_SERIES_ID = re.compile(r"^q(\d+)$")
 
-    Counting the stop comments already on the Issue is what keeps ids unique
-    per Issue, so a later stop never reuses an earlier id.
+
+def _stored_ids(comments: Sequence[dict] | None) -> list[str]:
+    """The question ids already stored on the Issue, read tolerantly.
+
+    An unreadable block carries no id this allocator could reissue, so it is
+    skipped: allocating the next id must never fail the stop that needs it.
     """
-    pattern = versioned_block_pattern(QUESTION_MARKER)
-    seen = sum(
-        1 for comment in comments or ()
-        if isinstance(comment.get("body"), str)
-        and pattern.search(comment["body"]) is not None
-    )
-    return f"q{seen + 1}"
+    ids: list[str] = []
+    for comment in comments or ():
+        body = comment.get("body") if isinstance(comment, dict) else None
+        try:
+            stop = parse_question_block(body)
+        except QuestionError:
+            continue
+        if stop is not None and stop.question.id is not None:
+            ids.append(stop.question.id)
+    return ids
+
+
+def next_id(comments: Sequence[dict] | None) -> str:
+    """The id of the next question on an Issue: one past the highest one.
+
+    The highest, never the number of stop comments: the stops do not write
+    ids the same way (the reviewer used to choose one, the external-PR stop
+    counts), so counting re-issued an id already taken — one stored `q2`
+    and no `q1` gave `q2` again (Issue #2227). Every stop now reads the
+    stored ids and continues their one series.
+    """
+    numbers = [
+        int(match.group(1))
+        for match in map(_SERIES_ID.match, _stored_ids(comments))
+        if match is not None
+    ]
+    return f"q{max(numbers, default=0) + 1}"
 
 
 def render_visible(stop: StopQuestion, language_code: str) -> str:
@@ -528,13 +564,16 @@ def stop_reason(stop: StopQuestion | None, default: str) -> str:
     return (stop.question.summary or default) if stop is not None else default
 
 
-def review_stop(verdict: dict) -> tuple[str, str, StopQuestion | None]:
+def review_stop(verdict: dict, *, comments: Sequence[dict] | None = None,
+               ) -> tuple[str, str, StopQuestion | None]:
     """The (message, action, question) of a blocked_on_human_decision verdict.
 
     The message keeps the #1701 shape the exception text has always had (the
     finding's note and fix), the action is the fix direction the stop report
     renders, and the question is the reviewer's own — None when it wrote none
-    or wrote one the shape cannot read.
+    or wrote one the shape cannot read. Its id is the engine's own, one past
+    the highest id already on the Issue: the model writes no id, so a stop
+    that echoes an earlier one can never reuse it (Issue #2227).
     """
     findings = verdict["findings"]
     decisions = "; ".join(
@@ -546,11 +585,13 @@ def review_stop(verdict: dict) -> tuple[str, str, StopQuestion | None]:
         for finding in findings
         if str(finding.get("fix", "")).strip()
     )
-    return (
-        "review requires human decision: " + decisions,
-        actions,
-        parse_verdict_question(verdict),
-    )
+    stop = parse_verdict_question(verdict)
+    if stop is not None:
+        stop = StopQuestion(
+            stop.decision_class,
+            replace(stop.question, id=next_id(comments)),
+        )
+    return ("review requires human decision: " + decisions, actions, stop)
 
 
 def _fixed_option(language_code: str, key: str, action: str, *,
@@ -587,18 +628,28 @@ def external_pr_question(pr_url: str, *, question_id: str,
     ))
 
 
+def question_history(number: int, source_repo: str) -> Sequence[dict]:
+    """The Issue's comments, for allocating the next question id, or ().
+
+    Unique ids are per Issue, so the allocator reads the Issue's history. A
+    failed read must never fail the stop itself: it logs and allocates from
+    an empty history, exactly as the failure report keeps a stop terminal
+    when the same read fails.
+    """
+    try:
+        return issue_comments(number, repo=source_repo)
+    except Exception:
+        LOGGER.exception("issue=%s question history read failed", number)
+        event("question_history_read_failed", issue=number)
+        return ()
+
+
 def external_pr_stop(*, number: int, source_repo: str, pr_url: str,
                      language_code: str,
                      comments: Sequence[dict] | None = None) -> str:
     """The external-PR stop's question segment (visible options + block)."""
     if comments is None:
-        try:
-            comments = issue_comments(number, repo=source_repo)
-        except Exception:
-            LOGGER.exception("issue=%s question history read failed", number)
-            event("question_history_read_failed", issue=number,
-                  step="external_pr_stop")
-            comments = ()
+        comments = question_history(number, source_repo)
     stop = external_pr_question(
         pr_url, question_id=next_id(comments), language_code=language_code,
     )
