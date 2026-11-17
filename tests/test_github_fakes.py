@@ -1112,3 +1112,33 @@ def test_status_ready_and_the_claim_agree_without_a_holder(fake_gh, tmp_path):
     assert _status_ready_line(config) == (
         f"  ready: #{selected[1]['number']} {selected[1]['title']}"
     )
+
+
+# --------------------------------------------------------------------------
+# `gh pr close` / `gh api -X DELETE` (Issue #2221)
+# --------------------------------------------------------------------------
+
+def test_the_fake_closes_a_pull_request_once(fake_gh):
+    fake_gh.add_pr(7, head="contributor/feature")
+
+    fake_gh(["gh", "pr", "close", "7", "--repo", fake_gh.repo])
+
+    assert fake_gh.prs[7]["state"] == "CLOSED"
+    with pytest.raises(subprocess.CalledProcessError):
+        fake_gh(["gh", "pr", "close", "7", "--repo", fake_gh.repo])
+
+
+def test_the_fake_deletes_a_ref_once_and_refuses_another_path(fake_gh):
+    fake_gh([
+        "gh", "api", "-X", "DELETE",
+        f"repos/{fake_gh.repo}/git/refs/heads/orbi/acme-app-issue-100",
+    ])
+    assert "orbi/acme-app-issue-100" in fake_gh.deleted_branches
+    with pytest.raises(subprocess.CalledProcessError):
+        fake_gh([
+            "gh", "api", "-X", "DELETE",
+            f"repos/{fake_gh.repo}/git/refs/heads/orbi/acme-app-issue-100",
+        ])
+    with pytest.raises(subprocess.CalledProcessError):
+        fake_gh(["gh", "api", "-X", "DELETE", "repos/acme/app/issues/1"])
+

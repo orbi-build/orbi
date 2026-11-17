@@ -29,7 +29,7 @@ import orbi.pi_session as pi_session
 import orbi.review_merge as review_merge
 import orbi.steering as steering
 from orbi import (
-    acceptance_section, claim, question, stopped_scans,
+    acceptance_section, claim, question, stopped_scans, ticket_command,
 )
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
@@ -1027,9 +1027,8 @@ def test_pending_change_skips_engine_output_stale_and_untrusted_answers(
 def test_the_gate_holds_when_the_ticket_cannot_be_read(monkeypatch, tmp_path):
     """An unreadable ticket is no evidence that the decision still holds."""
     def unreadable(command, **kwargs):
-        if _starts_with(command, ["gh", "issue", "view"]):
-            raise RuntimeError("gh: HTTP 502")
-        return ""
+        # The ticket read itself fails: no identity read is ever reached.
+        raise RuntimeError("gh: HTTP 502")
 
     monkeypatch.setattr(seam, "run_command", unreadable)
 
@@ -1114,4 +1113,45 @@ def test_steering_reads_answers_and_receipts_what_it_cannot_do(
     assert any("no stop question" in body for body in reasons), reasons
     assert any("unreadable" in body for body in reasons), reasons
 
+
+
+# --------------------------------------------------------------------------
+# the answer record parser (Issue #2221): one record, two entry points
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("payload, expected", [
+    ("", "empty"),
+    ("[]", "JSON object"),
+    ('{"q": "q1", "action": "accept", "value": "x", "by": "m", "x": 1}',
+     "unknown fields"),
+    ('{"q": "q1", "action": "accept", "value": "x"}', "missing fields"),
+    ('{"q": "q1", "action": "maybe", "value": "x", "by": "m"}',
+     "unknown answer action"),
+])
+def test_an_unreadable_answer_payload_names_what_is_wrong(payload, expected):
+    with pytest.raises(question.QuestionError, match=expected):
+        question.parse_answer_payload(payload)
+
+
+def test_latest_stop_reads_the_newest_question_and_skips_other_comments():
+    comments = [
+        {"body": "a plain comment"},
+        {"body": f"{RUN_MARKER}\n{_stop_body()}"},
+        "not a comment",
+    ]
+    located = question.latest_stop(comments)
+    assert located is not None and located[1].question.id == "q1"
+    assert question.latest_stop([{"body": "no question"}]) is None
+
+
+def test_a_run_marker_is_read_from_a_comment_body_only():
+    assert ticket_command.carries_run_marker(None) is False
+    assert ticket_command.carries_run_marker("x") is False
+    assert ticket_command.carries_run_marker({"body": None}) is False
+    assert ticket_command.carries_run_marker(
+        {"body": "not marked"},
+    ) is False
+    assert ticket_command.carries_run_marker(
+        {"body": f"{RUN_MARKER}\nbody"},
+    ) is True
 
