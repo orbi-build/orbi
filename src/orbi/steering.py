@@ -9,10 +9,11 @@ one home:
   a bypass, a failed post is journaled and never stops the poll;
 - `answer_body` carries out a person's answer to the stop question while
   the session runs (Issue #2221): the body change the answer implies is
-  written through the `/orbi amend` logic here, and the restart the poll
-  already performs is what makes the next session read it. An answer the
-  engine does not carry out at this stage (`cancel`, a close) leaves its
-  one receipt and changes nothing.
+  written through the `/orbi amend` logic here, the answer's one receipt
+  follows it (run-marked, so the poll never steers on its own output), and
+  the restart the poll already performs is what makes the next session read
+  the amendment. An answer the engine does not carry out at this stage
+  (`cancel`, a close) leaves its one receipt and changes nothing.
 """
 from __future__ import annotations
 
@@ -53,10 +54,10 @@ def limit_notice(config, issue: dict, source_repo: str) -> None:
 
 def answer_body(
     fresh: list[dict], *, issue: dict, repo: str, comments: list[dict],
-    body: object, language_code: str,
+    body: object, language_code: str, run_id: str | None = None,
 ) -> str | None:
     """The amended body one poll's answers produce, or None."""
     return answer.apply_steering(
         fresh, issue=issue, repo=repo, comments=comments, body=body,
-        language_code=language_code,
+        language_code=language_code, run_id=run_id,
     )

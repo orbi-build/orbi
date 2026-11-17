@@ -59,6 +59,7 @@ from orbi.pi_process import (
 )
 from orbi.pi_stream_log import log_provider_config_loaded
 from orbi.repo_config import validate_context_file
+from orbi.ticket_command import carries_run_marker
 
 # Runner-owned runtime paths inside a task worktree: created
 # by the parent Runner and the Pi session machinery, never by the agent's
@@ -605,6 +606,13 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
             if str(comment.get("createdAt") or "") < started_at:
                 decided.add(identifier)
                 continue
+            if carries_run_marker(comment):
+                # Engine output never steers the session it runs in (Issue
+                # #2221): the answer's own receipt is such a comment, and a
+                # maintainer sharing the runner account is still read as a
+                # person -- only the engine's marked write is skipped.
+                decided.add(identifier)
+                continue
             # The trust decision comes BEFORE the seen mark (Issue #1996):
             # the permission read raises on a transient GitHub failure and
             # propagates to the poller (the `steering_poll_failed` bypass).
@@ -629,7 +637,7 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         amended = steering.answer_body(
             fresh, issue=issue, repo=source_repo, comments=comments,
             body=edit.body if body_changed else steering_body,
-            language_code=language.of(config),
+            language_code=language.of(config), run_id=config.run_id,
         )
         if amended is not None:
             body_changed, steering_body = True, amended

@@ -750,8 +750,6 @@ def _round_merge_phase(work: _Round) -> dict | None:
         work.keep_review_record.append(True)
         return None
     except answer_domain.AnswerSupersedesVerdict as exc:
-        # Issue #2221: a trusted answer newer than the clean verdict; the
-        # next review round reads the amended ticket.
         answer_domain.stop_for_fix_round(
             number, repo=source_repo, pr_number=refrozen["number"],
             reason=str(exc), marker=work.marker,
@@ -778,7 +776,8 @@ def _round_merge_phase(work: _Round) -> dict | None:
         if absorb_abandoned:
             event(
                 "review_absorb_abandoned", level=logging.ERROR,
-                pr=pr["number"], round=round, base_branch=work.base_branch,
+                pr=pr["number"], round=round,
+                head=refrozen["head_oid"], base_branch=work.base_branch,
             )
         _round_gate_failure_phase(
             work, str(exc), ci_failure=False, absorb_abandoned=absorb_abandoned,

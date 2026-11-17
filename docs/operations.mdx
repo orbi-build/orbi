@@ -653,8 +653,8 @@ registry — in both directions (a name only in code or only in docs fails
 | `question_auto_resumed` | the engine answered a stop question itself and re-queued the delivery once |
 | `question_history_read_failed` | the stop-question history read failed; the stop stays terminal |
 | `answer_pr_closed` | an answer to a stop question closed its pull request |
-| `answer_command_applied` | an in-ticket `/orbi answer` command ran |
-| `answer_command_failed` | an in-ticket `/orbi answer` command failed at one step |
+| `answer_command_applied` | a person's answer to a stop question was carried out (the `answer` record command) |
+| `answer_command_failed` | carrying an answer out failed at one step |
 | `merge_gate_decision_superseded` | the merge gate found a trusted answer newer than the clean verdict; the pull request is not merged |
 | `external_takeover` | an external PR is taken over for review |
 | `external_takeover_skipped` | the external PR is not takeover-eligible |

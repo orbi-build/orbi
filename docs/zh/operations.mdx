@@ -562,8 +562,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `question_auto_resumed` | 引擎自行回答了停止问题并只重新排队一次 |
 | `question_history_read_failed` | 停止问题的历史读取失败；停止保持终止状态 |
 | `answer_pr_closed` | 停止问题的回答关闭了对应的 PR |
-| `answer_command_applied` | 票内 `/orbi answer` 命令已执行 |
-| `answer_command_failed` | 票内 `/orbi answer` 命令某一步失败 |
+| `answer_command_applied` | 停止问题的回答已执行（`answer` 记录型命令） |
+| `answer_command_failed` | 执行回答时某一步失败 |
 | `merge_gate_decision_superseded` | 合并门发现比干净评审更新的受信回答；该 PR 不合并 |
 | `external_takeover` | 外部 PR 被接管评审 |
 | `external_takeover_skipped` | 外部 PR 不满足接管条件 |

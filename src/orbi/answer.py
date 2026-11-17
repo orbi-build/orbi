@@ -83,6 +83,7 @@ from orbi.github import (
 )
 from orbi.gitops import is_delivery_branch, task_branch
 from orbi.journal import event, run_command
+from orbi.progress import run_marker
 from orbi.question import QuestionError
 from orbi.ticket_command import (
     CommandSpec,
@@ -464,7 +465,9 @@ def _answer_apply(
         issue_number=issue_number, dispatch_label=dispatch_label,
         language_code=language_code,
     )
-    comment_issue(issue_number, repo=repo, body=f"{effect}\n\n{receipt}")
+    _success_receipt(
+        command_comment, issue_number=issue_number, repo=repo, effect=effect,
+    )
 
 
 def _receipt_marker(comment: dict) -> str:
@@ -472,6 +475,26 @@ def _receipt_marker(comment: dict) -> str:
     return (
         f"<!-- {command_receipt_marker(ANSWER_COMMAND)} "
         f"comment={command_comment_key(comment)} -->"
+    )
+
+
+def _success_receipt(
+    comment: dict, *, issue_number: int, repo: str, effect: str,
+    run_id: str | None = None,
+) -> None:
+    """Post one answer's ONE success receipt: what was carried out.
+
+    The marker IS the counter the next read finds, so every reader that
+    carries an answer out posts it -- including the steering poll, whose
+    write would otherwise look uncarried to the merge gate and be carried
+    out a second time by the stopped-ticket scan (Issue #2221). A carrier
+    that runs inside a session prefixes the run marker, because engine
+    output never steers the session it runs in.
+    """
+    receipt = _receipt_marker(comment)
+    marker = f"{run_marker(run_id)}\n" if run_id else ""
+    comment_issue(
+        issue_number, repo=repo, body=f"{marker}{effect}\n\n{receipt}",
     )
 
 
@@ -746,14 +769,16 @@ def stop_for_fix_round(
 def apply_steering(
     fresh: list[dict], *, issue: dict, repo: str, comments: list[dict],
     body: object, language_code: str = language.DEFAULT_LANGUAGE,
+    run_id: str | None = None,
 ) -> str | None:
     """Write the body change a steering answer implies; return the new body.
 
     The `ai-in-progress` reader: the answer arrives as a fresh trusted
     comment while the session runs, so the engine writes the amendment the
-    restarted session reads and nothing else. A `cancel` or a close is not
-    carried out here -- the stage says so in one receipt, and the answer
-    stays on the ticket for the stop scan.
+    restarted session reads and leaves the answer's ONE receipt, so the
+    merge gate and the stopped-ticket scan read it as carried out. A
+    `cancel` or a close is not carried out here -- the stage says so in one
+    receipt, and the answer stays on the ticket for the stop scan.
     """
     stop: question.StopQuestion | None = None
     amended: str | None = None
@@ -796,6 +821,14 @@ def apply_steering(
                 lambda engine_body=written: acceptance_section.write_body(
                     int(issue["number"]), repo=repo, body=engine_body,
                 ),
+            )
+            _success_receipt(
+                comment, issue_number=int(issue["number"]), repo=repo,
+                effect=language.text(
+                    language_code, "answer.effect_amended",
+                    text=decision.text or "",
+                ),
+                run_id=run_id,
             )
             amended = written
     return amended

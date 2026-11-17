@@ -510,10 +510,61 @@ def test_a_steering_answer_updates_the_body_and_restarts_the_session_once(
     assert request.body_revision is True
     assert f"- {CRITERION}" in gh.issues[TICKET]["body"]
     assert f"- {CRITERION}" in request.context
+    # The answer's ONE receipt follows the body change, run-marked so the
+    # poll never steers on its own output (Issue #2221): without it the
+    # merge gate reads the answer as uncarried and a later scan carries it
+    # out a second time.
+    assert len(successes(gh)) == 1
+    assert "<!-- orbi:run=abc12345 -->" in successes(gh)[0]
+    assert CRITERION in successes(gh)[0]
     # Exactly one restart: the next poll sees no fresh correction and no
-    # body edit, because the engine recorded the body it wrote.
+    # body edit, because the engine recorded the body it wrote and skips
+    # its own marked output.
     assert check() is None
     assert gh.issues[TICKET]["body"].count(CRITERION) == 1
+
+
+def test_a_run_marked_engine_comment_does_not_restart_the_session(
+    monkeypatch, tmp_path,
+):
+    """The poll reads the person's correction, never the engine's own marked
+    output: an answer's receipt is such a comment (Issue #2221), and it is
+    created while the session runs, so without the rule it would restart the
+    session a second time."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh, labels=(), body=BODY)
+    gh.comment(
+        TICKET,
+        "<!-- orbi:run=abc12345 -->\n\nThe answer was carried out.\n",
+        login="orbi-bot",
+    )
+    future = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 10))
+    gh.issues[TICKET]["comments"][-1]["createdAt"] = future
+    monkeypatch.setitem(
+        pi_session.__dict__, "issue_view",
+        lambda *a, **k: {
+            "comments": gh.issues[TICKET]["comments"],
+            "body": gh.issues[TICKET]["body"],
+        },
+    )
+    monkeypatch.setitem(
+        pi_session.__dict__, "changed_files", lambda *a, **k: [],
+    )
+    monkeypatch.setitem(
+        pi_session.__dict__, "activity_snapshot", lambda *a, **k: None,
+    )
+    captured = {}
+    monkeypatch.setitem(
+        pi_session.__dict__, "stream_pi",
+        lambda command, **kw: captured.update(kw) or "done",
+    )
+    issue = {"number": TICKET, "title": "Note app", "body": BODY}
+    assert pi_session.run_pi(
+        issue, RunContext("abc12345", TICKET, "branch", tmp_path, REPO),
+        _config(tmp_path),
+    ) == "done"
+
+    assert captured["watch"].steering_check() is None
 
 
 # --------------------------------------------------------------------------
@@ -617,6 +668,42 @@ def test_the_merge_gate_merges_when_the_answer_is_already_carried_out(
         tmp_path, _pr(), "main", repo_dir=tmp_path,
         source_repo=REPO, issue_number=TICKET, run_id="abc12345",
         language_code="en",
+    )
+
+    assert pr["merged"] is True
+    assert len(merged) == 1
+
+
+def test_the_merge_gate_merges_after_the_poll_carried_the_answer_out(
+    monkeypatch, tmp_path,
+):
+    """Acceptance 3 and 5 together: an answer the steering poll carried out
+    (body written, session restarted) is DONE. It must not hold a later
+    merge, or a clean delivery would go to a fix round over a decision its
+    body already carries."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh, labels=(PR_OPENED_LABEL,))
+    post(gh, value="Add the assumption")
+    issue = {"number": TICKET, "title": "Note app", "body": BODY}
+    fresh = [
+        dict(comment, issue=TICKET)
+        for comment in gh.issues[TICKET]["comments"]
+    ]
+
+    amended = answer.apply_steering(
+        fresh, issue=issue, repo=REPO, comments=gh.issues[TICKET]["comments"],
+        body=BODY, language_code="en", run_id="abc12345",
+    )
+
+    assert amended is not None and f"- {CRITERION}" in amended
+    merged: list[list[str]] = []
+    monkeypatch.setattr(
+        seam, "run_command",
+        _gate_fake(merged, gh.issues[TICKET]["comments"]),
+    )
+    pr = merge_exec.merge_gate(
+        tmp_path, _pr(), "main", repo_dir=tmp_path, source_repo=REPO,
+        issue_number=TICKET, run_id="abc12345", language_code="en",
     )
 
     assert pr["merged"] is True
