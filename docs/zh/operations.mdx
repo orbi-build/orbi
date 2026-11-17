@@ -561,6 +561,10 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `failure_history_read_failed` | 死循环守卫的失败历史读取失败（fail-open） |
 | `question_auto_resumed` | 引擎自行回答了停止问题并只重新排队一次 |
 | `question_history_read_failed` | 停止问题的历史读取失败；停止保持终止状态 |
+| `answer_pr_closed` | 停止问题的回答关闭了对应的 PR |
+| `answer_command_applied` | 票内 `/orbi answer` 命令已执行 |
+| `answer_command_failed` | 票内 `/orbi answer` 命令某一步失败 |
+| `merge_gate_decision_superseded` | 合并门发现比干净评审更新的受信回答；该 PR 不合并 |
 | `external_takeover` | 外部 PR 被接管评审 |
 | `external_takeover_skipped` | 外部 PR 不满足接管条件 |
 | `external_takeover_closed` | 外部 PR 未合并被关闭；Issue 重新入队 |
@@ -938,6 +942,15 @@ orbi milestone set v0.5.7 --config orbi.toml
 | `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
 | `split` | `/orbi split` | `write` | turn the split proposal on this ticket's stop comment into child tickets |
 | `amend` | `/orbi amend` | `write` | append the proposed acceptance criteria to this ticket and queue it |
+| `answer` | `<!-- orbi:answer:v1 {json} -->` | `write` | carry out the answer to this ticket's stop question |
+
+`answer` 是唯一的**记录型**命令（Issue #2221）：它的 occurrence 是隐藏块
+`<!-- orbi:answer:v1 {json} -->`——由人（或代表其操作的 dashboard）发在停止的
+工单上，而不是手打的 `/orbi` 行，因此它没有 CLI 拼写。交付停止标签指明了读取
+位置：每个 tick 对带有 `ai-blocked`、`ai-pr-opened`、`ai-fix-needed` 的开放工单
+运行它（扫描所用的标签就是所处阶段），steering 轮询在 `ai-in-progress` 时读取，
+合并门在真正合并前再读一次。
+
 
 每条已登记的命令在主机上还有一个拼写（Issue #1930）：
 `orbi <subcommand> --repo <owner/name> --issue <N>`，例如

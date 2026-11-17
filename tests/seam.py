@@ -22,6 +22,7 @@ import orbi.branch_reclaim as branch_reclaim
 import orbi.check_permission as check_permission
 import orbi.acceptance_section as acceptance_section
 import orbi.amend_command as amend_command
+import orbi.answer as answer
 import orbi.comment_trust as comment_trust
 import orbi.draft as draft
 import orbi.draft_marker as draft_marker
@@ -37,6 +38,7 @@ import orbi.github_feedback as github_feedback
 import orbi.gitops as gitops
 import orbi.journal as journal
 import orbi.implementation_delivery as implementation_delivery
+import orbi.merge_blocked as merge_blocked
 import orbi.merge_exec as merge_exec
 import orbi.milestone as milestone
 import orbi.milestone_command as milestone_command
@@ -53,6 +55,8 @@ import orbi.review_merge as review_merge
 import orbi.review_rounds as review_rounds
 import orbi.pi_session as pi_session
 import orbi.question as question
+import orbi.steering as steering
+import orbi.stopped_scans as stopped_scans
 import orbi.requeue as requeue
 import orbi.run_state as run_state
 import orbi.pr_verification as pr_verification
@@ -74,6 +78,7 @@ _MODULES = (
     blocked_comment,
     base_ci_red, base_ci_fix, cli_commands, cli_doctor, check_permission,
     split_command, amend_command, acceptance_section, clarify_stop,
+    answer, merge_blocked, steering, stopped_scans,
 )
 
 

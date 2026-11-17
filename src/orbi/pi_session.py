@@ -23,6 +23,7 @@ from pathlib import Path
 
 from orbi import config as config_domain
 from orbi import language, user_summary
+from orbi import steering
 from orbi.body_steering import ignore_untrusted_body_edit, poll_body_edit
 from orbi.delivery_scene import RunContext
 from orbi.comment_trust import (
@@ -624,33 +625,21 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         steering_seen.update(decided)
         if edit is not None and not edit.trusted:
             steering_body = ignore_untrusted_body_edit(edit, issue, source_repo)
+        # Issue #2221: an answer to the stop question steers like a
+        # correction -- the body change it implies is written here, so the
+        # restart below is the ONE restart it causes (the engine's own write
+        # never reads back as a second, person-made correction).
+        amended = steering.answer_body(
+            fresh, issue=issue, repo=source_repo, comments=comments,
+            body=edit.body if body_changed else steering_body,
+            language_code=language.of(config),
+        )
+        if amended is not None:
+            body_changed, steering_body = True, amended
         if limit_reached:
             if (fresh or body_changed) and not steering_limit_notice_logged:
                 steering_limit_notice_logged = True
-                notice = user_summary.append_summary(
-                    language.text(
-                        language.of(config),
-                        "delivery.steering_limit_notice",
-                    ),
-                    status_url=config.status_url,
-                    issue=int(issue["number"]), title=issue.get("title"),
-                    language_code=language.of(config),
-                )
-                try:
-                    comment_issue(
-                        int(issue["number"]), repo=source_repo,
-                        body=(
-                            f"{run_marker(config.run_id)}\n"
-                            f"{notice}\n"
-                            f"run_id={config.run_id}"
-                        ),
-                    )
-                except Exception as exc:
-                    event(
-                        "steering_limit_notice_failed", level=logging.WARNING,
-                        issue=issue_context(source_repo, int(issue["number"])),
-                        reason=type(exc).__name__,
-                    )
+                steering.limit_notice(config, issue, source_repo)
             return None
         if not fresh and not body_changed:
             return None
@@ -659,12 +648,12 @@ def run_pi(issue: dict, ctx: RunContext, config: config_domain.RunnerConfig, *,
         for comment in fresh:
             author = comment.get("author")
             authors.append(author.get("login") if isinstance(author, dict) else "unknown")
-        if body_changed:
+        if edit is not None and edit.trusted and amended is None:
             steering_body = edit.body
         resume = build_resume_context(
             worktree, fresh,
             body_revision=(
-                {"issue": issue["number"], "body": edit.body}
+                {"issue": issue["number"], "body": steering_body}
                 if body_changed else None
             ),
         ) or ""

@@ -300,6 +300,45 @@ parser rejects unknown fields. Technical stops (`github_transient`,
 `credential_missing`, ...) carry no question: their next step follows from
 `reason_code` alone.
 
+### Reading an answer
+
+An answer is read by the stage the ticket carries when the engine looks:
+the stopped-ticket scan reads `ai-blocked`, `ai-pr-opened` and
+`ai-fix-needed` once per tick, the steering poll reads `ai-in-progress`,
+and the merge gate reads the ticket again immediately before it merges.
+Four rules decide what is carried out:
+
+- only an answer NEWER than the ticket's newest stop question counts — an
+  answer to a question the ticket has replaced is stale;
+- one answer is carried out once: its receipt (below) is the counter the
+  next read finds;
+- the engine's own record (`"by": "orbi"`, the automatic answer above) is
+  never carried out, and neither is an answer whose author is not a
+  repository writer or this runner's own account;
+- the record is read from its own block, never from the prose beside it,
+  and engine output is skipped by its run marker — not by the `<!-- orbi`
+  marker an answer comment itself carries.
+
+| answer | what the engine carries out |
+| --- | --- |
+| `accept` with an option's label | that option's `action`, as defined above |
+| `accept` with `true` on a `confirm` question | the question's `action` |
+| `accept` with text on a `text` question | the text becomes an acceptance criterion and the delivery re-queues |
+| `decline` | the person's own words (`reason`, else a text `value`) become an acceptance criterion and the delivery re-queues |
+| `cancel` | the `close_all` action — at `ai-blocked` only |
+
+Outside `ai-blocked` an answer changes the Issue body and nothing else:
+between rounds the next review session reads the amended ticket, and
+while a session runs the steering poll restarts it once with the amended
+ticket. A closing action (`cancel` included) is carried out only at
+`ai-blocked`; anywhere else the answer is not carried out. Every answer
+leaves exactly ONE receipt comment — what was carried out, or why nothing
+was. A clean-reviewed pull request whose merge waits for CI is not merged
+while a trusted answer the engine has not carried out yet exists: the
+delivery goes back to `ai-fix-needed` and the next review reads the
+amended ticket.
+
+
 ## The clarification proposal and command receipts
 
 Two machine surfaces of a ticket comment are public: the proposal the

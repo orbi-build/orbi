@@ -652,6 +652,10 @@ registry — in both directions (a name only in code or only in docs fails
 | `failure_history_read_failed` | the failure-history read for the dead-loop guard failed (fail-open) |
 | `question_auto_resumed` | the engine answered a stop question itself and re-queued the delivery once |
 | `question_history_read_failed` | the stop-question history read failed; the stop stays terminal |
+| `answer_pr_closed` | an answer to a stop question closed its pull request |
+| `answer_command_applied` | an in-ticket `/orbi answer` command ran |
+| `answer_command_failed` | an in-ticket `/orbi answer` command failed at one step |
+| `merge_gate_decision_superseded` | the merge gate found a trusted answer newer than the clean verdict; the pull request is not merged |
 | `external_takeover` | an external PR is taken over for review |
 | `external_takeover_skipped` | the external PR is not takeover-eligible |
 | `external_takeover_closed` | the external PR closed without merging; the Issue requeues |
@@ -1083,6 +1087,17 @@ translated prose around it.
 | `fix_base` | `/orbi fix-base` | `write` | open a fix Issue for the base checks that pause this delivery |
 | `split` | `/orbi split` | `write` | turn the split proposal on this ticket's stop comment into child tickets |
 | `amend` | `/orbi amend` | `write` | append the proposed acceptance criteria to this ticket and queue it |
+| `answer` | `<!-- orbi:answer:v1 {json} -->` | `write` | carry out the answer to this ticket's stop question |
+
+`answer` is the one RECORD command (Issue #2221): its occurrence is the
+hidden `<!-- orbi:answer:v1 {json} -->` block a person (or the dashboard
+acting for them) posts on a stopped ticket, not a typed `/orbi` line, so it
+has no CLI spelling. The delivery-stop labels name where it is read: every
+tick runs it over the open Issues labelled `ai-blocked`, `ai-pr-opened` and
+`ai-fix-needed` (the label the scan ran for IS the stage), the steering poll
+reads it on `ai-in-progress`, and the merge gate re-reads it immediately
+before the merge.
+
 
 A command on a STOPPED ticket still runs. The clarification gate leaves
 its ticket `ai-needs-detail`, so no delivery label is on it and no claim scan
