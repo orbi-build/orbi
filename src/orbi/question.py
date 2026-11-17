@@ -7,7 +7,9 @@ review — carries ONE machine-readable question in a hidden
 'orbi:failure:v1' record (Issue #2220). The shape is a superset of the
 drafting question in 'docs/public-contracts.mdx' ('question', optional
 'header' and 2-4 'options'), so every question 'orbi draft' returns today
-stays valid, plus what a stop needs:
+stays valid, plus what a stop needs. 'orbi draft' reads its own questions
+with this same parser and this same recommendation rule (Issue #2228), so a
+question means the same thing wherever it appears:
 
 - 'id' — unique per Issue, so a later stop never reuses an earlier id;
 - 'kind' — 'choice', 'confirm' or 'text'; absent reads as 'choice' when

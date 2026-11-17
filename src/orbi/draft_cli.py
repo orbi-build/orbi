@@ -88,7 +88,7 @@ def _interactive(
                     round_.questions, start=1,
                 ):
                     print(
-                        f"Q{position} — {question.question}", file=stdout,
+                        f"Q{position} — {question.text}", file=stdout,
                     )
                     for option in question.options:
                         print(
