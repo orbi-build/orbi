@@ -997,19 +997,31 @@ def test_the_timeline_comparison_falls_back_to_the_stamps():
     assert answer_module._newer(older, newer, []) is False
 
 
-def test_an_answer_block_is_read_by_its_payload_and_two_are_unreadable():
+def test_an_answer_block_is_read_as_the_block_and_two_are_unreadable():
+    """Issue #2235: the occurrence IS the block, so the one parser
+    (`question.parse_answer` over `comment_kind.parse_versioned_block`)
+    validates the record and no payload validator of its own exists."""
     record = question.render_answer("q1", value="x", by="maintainer")
-    assert answer_module.answer_occurrences(f"text\n{record}") == [
-        record[len("<!-- orbi:answer:v1 "): -len(" -->")],
-    ]
+    assert answer_module.answer_occurrences(f"text\n{record}") == [record]
+    assert question.parse_answer(record) == question.Answer(
+        question="q1", action="accept", value="x", by="maintainer",
+    )
     assert answer_module.answer_occurrences(f"{record}\n{record}") == [None]
     assert answer_module.answer_occurrences("no record here") == []
+    # A comment without a body is no record either (the ticket's own read
+    # hands over `comment.get("body")`).
+    assert answer_module.answer_occurrences(None) == []
+    # The engine's own `by: "orbi"` record is read like any other block: it
+    # is engine OUTPUT (its run marker) that keeps it from being carried out,
+    # and that rule lives in the occurrence layer, not here.
     engine = question.render_answer("q1", value="x")
-    assert answer_module.answer_occurrences(engine) == []
-    # A record whose JSON is broken is NOT engine output: it is read and
-    # rejected with a readable reason instead of being skipped.
+    assert answer_module.answer_occurrences(engine) == [engine]
+    assert ticket_command.carries_run_marker(
+        {"body": f"{RUN_MARKER}\n{engine}"},
+    )
+    # A record whose JSON is broken is a readable refusal, never a skip.
     broken = '<!-- orbi:answer:v1 {"by": } -->'
-    assert answer_module.answer_occurrences(broken) == ['{"by": }']
+    assert answer_module.answer_occurrences(broken) == [broken]
 
 
 
@@ -1118,10 +1130,8 @@ def test_a_malformed_block_does_not_hide_the_valid_answer(
 
 
 def test_validate_without_the_timeline_context_still_decides():
-    record = _answer_record()
-    payload = record[len("<!-- orbi:answer:v1 "): -len(" -->")]
     assert answer_module._answer_validate(
-        payload, stop=stop(CHOICE), answer_stage=BLOCKED_LABEL,
+        _answer_record(), stop=stop(CHOICE), answer_stage=BLOCKED_LABEL,
         language_code="en",
     ) is None
 
@@ -1370,11 +1380,17 @@ def test_steering_reads_answers_and_receipts_what_it_cannot_do(
 
 
 # --------------------------------------------------------------------------
-# the answer record parser (Issue #2221): one record, two entry points
+# the answer record parser (Issues #2221, #2235): ONE implementation
 # --------------------------------------------------------------------------
 
+def test_the_answer_record_has_one_validator():
+    """Issue #2235: the hand-rolled payload validator is gone, so a record is
+    validated by the strict marker parser alone (`parse_versioned_block`)."""
+    assert not hasattr(question, "parse_answer_payload")
+
+
 @pytest.mark.parametrize("payload, expected", [
-    ("", "empty"),
+    ("", "not valid JSON"),
     ("[]", "JSON object"),
     ('{"q": "q1", "action": "accept", "value": "x", "by": "m", "x": 1}',
      "unknown fields"),
@@ -1382,9 +1398,24 @@ def test_steering_reads_answers_and_receipts_what_it_cannot_do(
     ('{"q": "q1", "action": "maybe", "value": "x", "by": "m"}',
      "unknown answer action"),
 ])
-def test_an_unreadable_answer_payload_names_what_is_wrong(payload, expected):
-    with pytest.raises(question.QuestionError, match=expected):
-        question.parse_answer_payload(payload)
+def test_an_unreadable_answer_block_is_refused_with_its_reason(
+    payload, expected,
+):
+    """The refusal a person reads comes from the ONE parser, through the
+    command's own `validate` seam."""
+    reason = answer_module._answer_validate(
+        f"<!-- orbi:answer:v1 {payload} -->", stop=stop(CHOICE),
+        answer_stage=BLOCKED_LABEL, language_code="en",
+    )
+    assert reason is not None and expected in reason
+
+
+def test_an_occurrence_without_a_record_is_refused_readably():
+    reason = answer_module._answer_validate(
+        "a comment that only mentions orbi:answer:v1 in prose",
+        stop=stop(CHOICE), answer_stage=BLOCKED_LABEL, language_code="en",
+    )
+    assert reason is not None and "orbi:answer:v1" in reason
 
 
 def test_latest_stop_reads_the_newest_question_and_skips_other_comments():

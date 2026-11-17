@@ -112,9 +112,6 @@ STAGE_PR_OPENED = PR_OPENED_LABEL
 STAGE_FIX_NEEDED = FIX_NEEDED_LABEL
 STAGE_SESSION = IN_PROGRESS_LABEL
 STAGES = (STAGE_BLOCKED, STAGE_PR_OPENED, STAGE_FIX_NEEDED, STAGE_SESSION)
-# The answerer the engine itself writes (Issue #2220's automatic answer):
-# never executed, and never a reason to stop a merge.
-ENGINE_ANSWERER = "orbi"
 
 # The Issue fields the answer's one read needs.
 ISSUE_FIELDS = "number,body,labels"
@@ -164,42 +161,26 @@ class Decision:
 # The occurrence: the answer block of one comment
 # --------------------------------------------------------------------------
 
-def _payloads(body: object) -> list[str]:
-    """Every `orbi:answer:v1` payload in one comment body, in order."""
-    if not isinstance(body, str) or question.ANSWER_MARKER not in body:
-        return []
-    return question.versioned_block_pattern(
-        question.ANSWER_MARKER,
-    ).findall(body)
-
-
-def _engine_record(payload: str) -> bool:
-    """True when the record is the engine's own answer (never executed)."""
-    try:
-        data = json.loads(payload)
-    except json.JSONDecodeError:
-        return False
-    return isinstance(data, dict) and data.get("by") == ENGINE_ANSWERER
-
-
 def answer_occurrences(body: object) -> list[str | None]:
     """The record command's occurrences in one comment body.
 
-    Each occurrence is the answer block's raw JSON payload, which
-    `validate` parses (`question.parse_answer_payload`) so a corrupted
-    record gets one readable receipt instead of silence. Two blocks in one
-    comment are one unreadable occurrence: an answer comment carries ONE
-    answer, the same rule `question.parse_versioned_block` applies. The
-    engine's own `by: "orbi"` record yields no occurrence at all.
+    Each occurrence is the answer BLOCK, which `validate` reads with
+    `question.parse_answer`: the block's shape is validated in exactly one
+    place (`comment_kind.parse_versioned_block`) and a corrupted record gets
+    one readable receipt instead of silence. Two blocks in one comment are
+    one unreadable occurrence: an answer comment carries ONE answer, the
+    same rule the marker parser applies. The engine's own answer is engine
+    OUTPUT, which the scan skips by its run marker before reading a record
+    (`ticket_command.carries_run_marker`).
     """
-    payloads = [
-        payload for payload in _payloads(body) if not _engine_record(payload)
-    ]
-    if not payloads:
+    if not isinstance(body, str):
         return []
-    if len(payloads) > 1:
-        return [None]
-    return [payloads[0].strip() or None]
+    blocks = [
+        match.group(0) for match in question.versioned_block_pattern(
+            question.ANSWER_MARKER,
+        ).finditer(body)
+    ]
+    return [None] if len(blocks) > 1 else blocks
 
 
 # --------------------------------------------------------------------------
@@ -381,13 +362,13 @@ def _answer_context(
         return {}
     stop_comment, stop = located
     # The timeline the stale rule needs: `validate` never sees the comment
-    # an occurrence came from, so the context maps each answer payload to
-    # its position on the ticket (the list is oldest first).
+    # an occurrence came from, so the context maps each answer block to its
+    # position on the ticket (the list is oldest first).
     positions: dict[str, int] = {}
     for position, comment in enumerate(ticket):
-        for payload in answer_occurrences(comment.get("body")):
-            if isinstance(payload, str):
-                positions.setdefault(payload, position)
+        for block in answer_occurrences(comment.get("body")):
+            if isinstance(block, str):
+                positions.setdefault(block, position)
     return {
         "stop": stop, "stop_comment": stop_comment,
         "answer_positions": positions,
@@ -400,7 +381,12 @@ def _decision(
     answer_problem: object = None, stage: object = None,
     language_code: str = language.DEFAULT_LANGUAGE,
 ) -> Decision:
-    """Parse one occurrence and decide it -- the one read both callers use."""
+    """Read one occurrence -- the answer block -- and decide it.
+
+    The ONE read every caller uses (the layer's `validate`/`apply`, the
+    merge gate and the steering poll), over the ONE answer parser
+    (`question.parse_answer`).
+    """
     if answer_problem is not None:
         raise NotExecuted(language.text(
             language_code, "answer.reason_unreadable_question",
@@ -410,11 +396,18 @@ def _decision(
         raise NotExecuted(
             language.text(language_code, "answer.reason_no_question"))
     try:
-        answer = question.parse_answer_payload(argument)
+        answer = question.parse_answer(argument)
     except QuestionError as exc:
         raise NotExecuted(language.text(
             language_code, "answer.reason_unreadable", detail=str(exc),
         )) from exc
+    if answer is None:
+        # An occurrence is the block `answer_occurrences` found, so this is
+        # the caller handing `validate` text that carries no record at all.
+        raise NotExecuted(language.text(
+            language_code, "answer.reason_unreadable",
+            detail="the comment carries no `orbi:answer:v1` block",
+        ))
     return decide(
         answer, stop, stage if isinstance(stage, str) else None,
         language_code=language_code,
@@ -678,20 +671,20 @@ def resolve_answers(
     refuses counts as a refusal -- the person's latest word is the decision,
     never a fallback to the answer it replaced.
 
-    `occurrences` are the `(comment, payload)` pairs the caller gathered by
+    `occurrences` are the `(comment, block)` pairs the caller gathered by
     its own rules (the gate's trust, the poll's freshness); a ticket whose
     question cannot be read is handled by the caller, because then no answer
     can be resolved at all.
     """
     resolved: list[Word] = []
-    for comment, payload in occurrences:
-        if payload is None:
+    for comment, block in occurrences:
+        if block is None:
             resolved.append(Word(comment, refusal=language.text(
                 language_code, "answer.reason_two_records")))
             continue
         try:
             decision = _decision(
-                payload, stop=stop, stage=stage,
+                block, stop=stop, stage=stage,
                 language_code=language_code,
             )
         except NotExecuted as exc:
@@ -732,14 +725,14 @@ def _pending(
             continue
         if not _newer(comment, stop_comment, comments):
             continue
-        payloads = answer_occurrences(comment.get("body"))
-        if not payloads:
+        blocks = answer_occurrences(comment.get("body"))
+        if not blocks:
             continue
         if not comment_is_trusted(
             comment, repo=repo, permissions=permissions,
         ):
             continue
-        occurrences.extend((comment, payload) for payload in payloads)
+        occurrences.extend((comment, block) for block in blocks)
     resolved = resolve_answers(
         occurrences, stop, stage, language_code=language_code,
     )
@@ -853,8 +846,8 @@ def apply_steering(
         if not isinstance(comment, dict) or carries_run_marker(comment):
             continue
         occurrences.extend(
-            (comment, payload)
-            for payload in answer_occurrences(comment.get("body"))
+            (comment, block)
+            for block in answer_occurrences(comment.get("body"))
         )
     if not occurrences:
         return None
@@ -863,7 +856,7 @@ def apply_steering(
     except NotExecuted as exc:
         # A ticket whose question cannot be read resolves no answer: each
         # answer gets the one receipt saying so, and nothing changes.
-        for comment, _payload in occurrences:
+        for comment, _block in occurrences:
             _reject(
                 comment, exc.reason, repo=repo, issue=issue,
                 comments=comments, language_code=language_code,
