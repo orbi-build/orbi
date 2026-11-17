@@ -1153,6 +1153,27 @@ def test_a_close_all_answer_without_any_pull_request_still_closes(
     assert len(successes(gh)) == 1
 
 
+def test_a_close_all_answer_never_closes_a_cross_repository_pr(
+    monkeypatch, tmp_path,
+):
+    """Issue #2234: a fork PR on the delivery branch name is not THIS PR.
+
+    The delivery PR is found by the shared branch reader, which drops a
+    cross-repository result, so `close_all` closes the Issue and no PR.
+    """
+    gh = _gh(monkeypatch)
+    gh.add_pr(9, head="orbi/acme-app-issue-100", cross_repository=True)
+    stopped_ticket(gh, internal_choice())
+    post(gh, value="Drop the work")
+
+    tick(monkeypatch, tmp_path, gh)
+
+    assert gh.prs[9]["state"] == "OPEN"
+    assert gh.deleted_branches == set()
+    assert gh.issues[TICKET]["state"] == "closed"
+    assert len(successes(gh)) == 1
+
+
 def test_a_close_external_pr_answer_without_a_pull_request_fails_the_step(
     monkeypatch, tmp_path,
 ):

@@ -384,6 +384,22 @@ def test_open_pr_for_branch_returns_none_without_a_pr(fake_gh, tmp_path):
         is None
 
 
+def test_open_pr_for_branch_reads_the_named_repo_without_a_checkout(fake_gh):
+    """Issue #2234: a caller holding only the repo slug names it explicitly.
+
+    `issue_view`/`pr_view` already read "by repo, or in the checkout
+    `cwd`"; the branch read follows the same rule, so the answer scan
+    (which has no checkout) reads the repository it is scanning.
+    """
+    branch = "orbi/owner-repo-issue-5"
+    assert github.open_pr_for_branch(None, branch, repo="owner/repo") is None
+    command = fake_gh.commands[-1]
+    assert command[1:4] == ["pr", "list", "--state"]
+    assert command[command.index("--repo") + 1] == "owner/repo"
+    assert command[command.index("--head") + 1] == branch
+    assert "isCrossRepository" in command[command.index("--json") + 1]
+
+
 def test_commit_check_runs_reads_the_ci_evidence(fake_gh):
     runs = [{"name": "CI", "conclusion": "SUCCESS"}]
     fake_gh.add_check_runs("abc123", runs)

@@ -98,6 +98,10 @@ class FakeGh:
         # The repository owner's account type (`gh api repos/<repo>` ->
         # `owner.type`), which picks the installation approval URL form.
         self.owner_type = "Organization"
+        # Every argv the fake answered, in order: a test that must pin a
+        # flag the answer does not otherwise change (a read scoped with
+        # `--repo`, Issue #2234) reads the command line here.
+        self.commands: list[list[str]] = []
         self._clock = 0
 
     # --- state arrangement (what a test does instead of patching) -------
@@ -159,7 +163,8 @@ class FakeGh:
                url: str | None = None, checks: tuple[dict, ...] = (),
                merged_at: str | None = None, body: str = "",
                merge_commit: str | None = None,
-               title: str = "Pull request") -> None:
+               title: str = "Pull request",
+               cross_repository: bool = False) -> None:
         owner, name = self.repo.split("/", 1)
         self.prs[number] = {
             "number": number, "title": title, "state": state,
@@ -179,6 +184,9 @@ class FakeGh:
             # documented `{"oid": ...}` object for a merged PR, null for a
             # PR that never merged (Issue #1895).
             "mergeCommit": {"oid": merge_commit} if merge_commit else None,
+            # GitHub's own "this PR's head is not in this repository"
+            # (Issue #2234): a fork PR that reuses the delivery branch name.
+            "isCrossRepository": cross_repository,
             "_created": self._next_clock(),
         }
 
@@ -259,6 +267,7 @@ class FakeGh:
 
     def __call__(self, command: list[str], *, cwd=None,
                  timeout=None, **kwargs) -> str:
+        self.commands.append(list(command))
         # The adapter appends `--include` to a `gh api` command so it can
         # read the response status (Issue #1760). gh prints the status line
         # and the headers in front of the body: the fake answers that same
