@@ -121,6 +121,25 @@ def worktree_resume_scene(
     return str(state["run_id"]), newest
 
 
+def _this_deployments_run(
+    repo_dir: Path | None, repo: str, number: int,
+) -> bool:
+    """Whether THIS deployment holds the run's worktree + run state file.
+
+    A local worktree that names the Issue but carries no verifiable run
+    state (a kill between the worktree creation and the state file) is
+    still this deployment's run beyond doubt, so it answers True: the
+    dispatch reports that scene through the terminal failure path
+    (Issue #219) instead of the scan skipping a run it started.
+    """
+    if repo_dir is None:
+        return False
+    try:
+        return worktree_resume_scene(repo_dir, repo, number) is not None
+    except RuntimeError:
+        return True
+
+
 def pick_in_progress_issue(
     repo: str, slot_dir: Path, max_concurrency: int,
     dispatch_label: str = READY_LABEL, repo_dir: Path | None = None,
@@ -145,7 +164,11 @@ def pick_in_progress_issue(
     skipped (journaled, no label change, no comment) while the scan keeps
     reading, and the skip never hides this deployment's own orphan further
     down the list. Without a `repo_dir` nothing is verifiable, so nothing
-    is resumed.
+    is resumed. A local worktree that names the Issue but carries no
+    verifiable run state (a kill between the worktree creation and the
+    state file) is this deployment's run beyond doubt, so it is returned
+    for the dispatch's terminal report (Issue #219) instead of being
+    skipped.
 
     The scan runs only when no OTHER runner is live: a slot held by another
     process proves a live runner is working (on this or another Issue), so
@@ -197,9 +220,7 @@ def pick_in_progress_issue(
         # local worktree + run state file means no scene to resume —
         # another deployment's live delivery, or one whose deployment is
         # gone (a human relabels that one).
-        if repo_dir is None or worktree_resume_scene(
-            repo_dir, repo, number,
-        ) is None:
+        if not _this_deployments_run(repo_dir, repo, number):
             event(
                 "restart_scan_skipped", issue=number,
                 reason="no_local_run_state",

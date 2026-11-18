@@ -1909,6 +1909,16 @@ def test_pick_in_progress_issue_resumes_this_deployments_killed_run(
     assert runner.worktree_resume_scene(tmp_path, "xqliu/orbi", 42) == (
         "abcd0042", worktree,
     )
+    # The same worktree without its run state file (a kill between the
+    # worktree creation and the state write) still proves the run is this
+    # deployment's: the scan hands it to the dispatch, whose resume block
+    # reports the unverifiable scene through the terminal path
+    # (Issue #219), instead of raising out of the claim or skipping a run
+    # it started.
+    run_state.run_state_path(worktree).unlink()
+    assert claim.pick_in_progress_issue(
+        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+    ) == issue
 
 
 def test_pick_in_progress_issue_keeps_looking_past_another_deployments_run(
