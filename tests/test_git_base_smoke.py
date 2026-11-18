@@ -212,3 +212,187 @@ def test_create_worktree_rebuilds_a_deleted_worktree_from_the_remote_branch(clon
     rebuilt_again = rebuild()
     assert git(rebuilt_again, "branch", "--show-current") == branch
     assert git(rebuilt_again, "rev-parse", "HEAD") == origin_head
+
+
+def _pushed_from_another_clone(origin: Path, other: Path, branch: str,
+                               commit_message: str) -> str:
+    """Commit on *branch* in a second clone and push it to *origin*.
+
+    The delivery checkout never fetches it, so the commit stays outside
+    its local object store — exactly the GitHub side state after the PR
+    page's "Update branch" (or any push made outside this worktree).
+    """
+    subprocess.run(
+        ["git", "clone", str(origin), str(other)],
+        capture_output=True, text=True, check=True,
+    )
+    git(other, "config", "user.email", "button@test.local")
+    git(other, "config", "user.name", "Update branch")
+    git(other, "checkout", branch)
+    head = commit_file(other, "advance.txt", commit_message)
+    git(other, "push", "origin", branch)
+    return head
+
+
+def test_verify_pr_fast_forwards_when_the_pr_head_is_ahead_of_local(
+        clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #2261: GitHub's "Update branch" merges the base into the
+    delivery branch, so the PR head is a merge commit on top of the
+    delivery head. The resume must fast-forward the local branch to the
+    PR head and continue — including when the merge commit was never
+    fetched into this worktree (the old code crashed with exit 128 on
+    the ancestry probe)."""
+    branch = "orbi/owner-repo-issue-3"
+    git(clone, "checkout", "-b", branch)
+    delivery_head = commit_file(clone, "delivery.txt", "delivery")
+    git(clone, "push", "origin", branch)
+    # The base moves on while the delivery is open (the state that makes
+    # the PR page offer the button).
+    git(clone, "checkout", "main")
+    commit_file(clone, "base.txt", "main advanced")
+    git(clone, "push", "origin", "main")
+    git(clone, "checkout", branch)
+
+    other = tmp_path / "other"
+    subprocess.run(
+        ["git", "clone", str(tmp_path / "origin.git"), str(other)],
+        capture_output=True, text=True, check=True,
+    )
+    git(other, "config", "user.email", "button@test.local")
+    git(other, "config", "user.name", "Update branch")
+    git(other, "checkout", branch)
+    git(other, "merge", "--no-ff", "-m",
+        f"Merge branch 'main' into {branch}", "origin/main")
+    pr_head = git(other, "rev-parse", "HEAD")
+    git(other, "push", "origin", branch)
+    # The "Update branch" shape: the merge commit's first parent is the
+    # delivery's own head.
+    assert git(other, "rev-parse", f"{pr_head}^1") == delivery_head
+    # The commit is NOT in the delivery checkout before the resume.
+    assert subprocess.run(
+        ["git", "cat-file", "-e", f"{pr_head}^{{commit}}"], cwd=clone,
+        capture_output=True, text=True,
+    ).returncode != 0
+
+    install_fake_gh(
+        monkeypatch,
+        json.dumps([{
+            "url": "https://github.com/owner/repo/pull/3",
+            "baseRefName": "main",
+            "headRefOid": pr_head,
+            "headRepository": {"name": "repo"},
+            "headRepositoryOwner": {"login": "owner"},
+            "body": "<!-- orbi:run=a1b2c3d4 -->\n\nFixes #3\n\nPlan",
+        }]),
+    )
+    with caplog.at_level("INFO"):
+        # The resume's exact parameters: being behind the base is the
+        # expected state the review session absorbs, and the PR is the
+        # recovered scene's.
+        url = pr_verification.verify_pr(
+            RunContext(
+                run_id="a1b2c3d4", issue=3, branch=branch, worktree=clone,
+                source_repo="owner/repo",
+            ),
+            "main", repo_dir=clone, pr_repo="owner/repo",
+            expected_url="https://github.com/owner/repo/pull/3",
+            require_latest_base=False,
+        )
+    assert url == "https://github.com/owner/repo/pull/3"
+    assert git(clone, "rev-parse", "HEAD") == pr_head
+    assert "pr_head_fast_forwarded" in caplog.text
+
+
+def test_verify_pr_still_rejects_a_really_diverged_pr_head(
+        clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #2261 keeps the old behaviour for a REAL divergence: the
+    remote head and the local head each carry a commit the other lacks.
+    The resume stops with `pr_head_diverged`, the local head is not
+    moved and nothing is pushed (no force push, ever)."""
+    branch = "orbi/owner-repo-issue-3"
+    git(clone, "checkout", "-b", branch)
+    delivery_head = commit_file(clone, "delivery.txt", "delivery")
+    git(clone, "push", "origin", branch)
+    local_head = commit_file(clone, "local-only.txt", "local only")
+
+    other = tmp_path / "other"
+    remote_head = _pushed_from_another_clone(
+        tmp_path / "origin.git", other, branch, "remote only",
+    )
+    assert remote_head != local_head
+    assert git(other, "rev-parse", f"{remote_head}^") == delivery_head
+
+    install_fake_gh(
+        monkeypatch,
+        json.dumps([{
+            "url": "https://github.com/owner/repo/pull/3",
+            "baseRefName": "main",
+            "headRefOid": remote_head,
+            "body": "<!-- orbi:run=a1b2c3d4 -->\n\nFixes #3\n\nPlan",
+        }]),
+    )
+    with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="diverged"):
+        pr_verification.verify_pr(
+            RunContext(
+                run_id="a1b2c3d4", issue=3, branch=branch, worktree=clone,
+                source_repo="owner/repo",
+            ),
+            "main", repo_dir=clone,
+        )
+    assert "pr_head_diverged" in caplog.text
+    # Nothing moved, and the remote branch still ends at the foreign head.
+    assert git(clone, "rev-parse", "HEAD") == local_head
+    assert git(clone, "ls-remote", "--heads", "origin", branch).split()[0] == (
+        remote_head
+    )
+
+
+def test_verify_pr_stops_when_the_pr_head_was_rewritten_away(
+        clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #2261, the out-of-scope scene kept a clean stop: the PR
+    names a head the remote branch no longer carries (it was
+    force-pushed away). The fetch cannot produce the commit, so the
+    resume must say so instead of crashing on a missing object — and it
+    still never force pushes."""
+    branch = "orbi/owner-repo-issue-3"
+    git(clone, "checkout", "-b", branch)
+    delivery_head = commit_file(clone, "delivery.txt", "delivery")
+    git(clone, "push", "origin", branch)
+
+    other = tmp_path / "other"
+    rewritten_head = _pushed_from_another_clone(
+        tmp_path / "origin.git", other, branch, "later rewritten",
+    )
+    # The rewrite: the remote branch is pushed back to the delivery head,
+    # so the commit the PR still names is unreachable from origin.
+    git(other, "reset", "--hard", delivery_head)
+    git(other, "push", "--force", "origin", branch)
+    assert subprocess.run(
+        ["git", "cat-file", "-e", f"{rewritten_head}^{{commit}}"], cwd=clone,
+        capture_output=True, text=True,
+    ).returncode != 0
+
+    install_fake_gh(
+        monkeypatch,
+        json.dumps([{
+            "url": "https://github.com/owner/repo/pull/3",
+            "baseRefName": "main",
+            "headRefOid": rewritten_head,
+            "body": "<!-- orbi:run=a1b2c3d4 -->\n\nFixes #3\n\nPlan",
+        }]),
+    )
+    with caplog.at_level("ERROR"), pytest.raises(
+        RuntimeError, match="no longer carries it",
+    ):
+        pr_verification.verify_pr(
+            RunContext(
+                run_id="a1b2c3d4", issue=3, branch=branch, worktree=clone,
+                source_repo="owner/repo",
+            ),
+            "main", repo_dir=clone, require_latest_base=False,
+        )
+    assert "pr_head_unreachable" in caplog.text
+    assert git(clone, "rev-parse", "HEAD") == delivery_head

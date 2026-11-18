@@ -199,6 +199,11 @@ def fake_verify_run(command, **kwargs):
         return ""
     if command[:3] == ["git", "merge-base", "--is-ancestor"]:
         return ""
+    if command[1] == "cat-file":
+        # The PR head IS a commit of this worktree in these scenes: the
+        # object probe (Issue #2261) only decides whether a fetch is
+        # needed before the head is compared.
+        return subprocess.CompletedProcess(command, 0)
     if command[:3] == ["git", "rev-parse", "HEAD"]:
         return FAKE_HEAD_SHA
     if command[0] == "gh" and command[1] == "issue":
@@ -223,6 +228,50 @@ def _fake_takeover_view(monkeypatch, payload):
 # --- delivery lifecycle: slot held until merge or terminal failure ----------
 
 PR_URL = "https://github.com/owner/repo/pull/46"
+
+
+def install_pr_head_advanced_scene(monkeypatch, gh, *, branch: str,
+                                   local_head: str, pr_head: str,
+                                   ) -> tuple[list, list]:
+    """Install the seam fake of the "Update branch" resume scene (#2261).
+
+    The PR head is a commit this worktree does not hold until the task
+    branch is fetched, and the local HEAD is its ancestor — a plain
+    fast-forward. `gh` is the FakeGh callable that answers the GitHub
+    reads. Returns the `git fetch` and `git merge` command logs, so the
+    test asserts the exact recovery commands (the fake-coverage
+    convention: any other command is a dispatch bug and fails loudly).
+    """
+    fetched: list[list[str]] = []
+    merged: list[list[str]] = []
+
+    def run(command, **kwargs):
+        if command[0] != "git":
+            return gh(command, **kwargs)
+        kind = command[1]
+        if kind == "branch":
+            return branch
+        if kind == "rev-parse":
+            return local_head
+        if kind == "cat-file":
+            # Absent before the fetch, present after it.
+            return subprocess.CompletedProcess(command, 0 if fetched else 1)
+        if kind == "fetch":
+            fetched.append(command)
+            return ""
+        if kind == "merge-base":
+            if command[3] != "HEAD":
+                # The PR head is NOT an ancestor of the local HEAD…
+                raise subprocess.CalledProcessError(1, command)
+            # …and the local HEAD IS an ancestor of the PR head.
+            return ""
+        if kind == "merge":
+            merged.append(command)
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(seam, "run_command", run)
+    return fetched, merged
 
 
 def fake_pr_view(monkeypatch, state: str) -> tuple[list, object]:

@@ -9,8 +9,10 @@ questions of the same facts: the task branch is checked out, the
 delivery contains the latest remote base (except on the resume, where
 being behind is the expected state the review session absorbs),
 exactly one open PR exists for the branch, its base is the configured
-base, its head is the local HEAD (a local HEAD AHEAD of the PR head is
-the recoverable unpushed-commit scene; a diverged head is a failure),
+base, its head is the local HEAD (a differing head is reconciled by
+`orbi.pr_head_sync`: a local HEAD AHEAD of the PR head is the
+recoverable unpushed-commit scene, a PR head AHEAD of it is fetched and
+fast-forwarded onto — Issue #2261 — and only a real divergence fails),
 its body carries a run marker of the delivery line and the
 `Fixes #<issue>` keyword, and its URL is the one the scene recovered.
 The typed failures live here because they ARE the outcomes of that
@@ -28,6 +30,7 @@ import logging
 import re
 from pathlib import Path
 
+from orbi import pr_head_sync
 from orbi import run_state
 from orbi.comment_trust import line_run_markers
 from orbi.delivery_scene import RunContext
@@ -39,7 +42,7 @@ from orbi.github import (
     pr_view,
     run_gh_read_command,
 )
-from orbi.gitops import is_ancestor, fetch_base_ref
+from orbi.gitops import fetch_base_ref
 from orbi.journal import LOGGER, event, run_command
 from orbi.progress import run_marker
 
@@ -131,10 +134,13 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
     `require_latest_base` is False — the resume pre-validation runs
     before the base merge, when being behind is the expected state),
     exactly one open PR for the head branch, PR base, PR head vs local
-    HEAD (a local HEAD AHEAD of the PR head is the #158 unpushed-commit
-    scene: it is logged and passed through — the next review
-    session pushes the task branch on the same PR; a diverged head is a
-    failure), the run marker in the PR body, and the `Fixes #<issue>`
+    HEAD (reconciled by `pr_head_sync.reconcile_pr_head`: a local HEAD
+    AHEAD of the PR head is the #158 unpushed-commit scene, logged and
+    passed through — the next review session pushes the task branch on
+    the same PR; a PR head AHEAD of the local HEAD — GitHub's "Update
+    branch" — is fetched when absent and fast-forwarded onto; only a
+    diverged head is a failure), the run marker in the PR body, and the
+    `Fixes #<issue>`
     keyword in the PR body (GitHub closes the source Issue
     natively only when the body carries the keyword, so a PR without it
     would leave the Issue open after the merge). With `external_pr`
@@ -322,35 +328,17 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
         )
     head_oid = pr.get("headRefOid")
     if head_oid != local_head:
-        # The local HEAD may be
-        # AHEAD of the remote PR head — a commit made by a killed
-        # session (implementer or reviewer) that was never pushed. The
-        # local commit, branch, worktree and PR stay intact and the
-        # state is RECOVERABLE: failing here would re-raise on every
-        # tick and the review session — which pushes the task branch
-        # before its verdict (prompts/prompt_review.md) — could never run. Log
-        # the exact heads (the commit/push phase the journal must
-        # carry) and continue the verification: the next review round
-        # pushes the task branch on the same PR and the merge gate
-        # re-freezes the advanced head. A remote head that is NOT an
-        # ancestor of the local HEAD (diverged) is still a failure: a
-        # plain push would be rejected and only a force push or a
-        # human decision could continue it.
-        if not is_ancestor(head_oid, "HEAD", cwd=worktree):
-            event(
-                "pr_head_diverged", level=logging.ERROR,
-                pr_head=head_oid, local_head=local_head, branch=branch,
-            )
-            raise RuntimeError(
-                f"PR head {head_oid} is not local HEAD {local_head} "
-                "and is not an ancestor of it (the branch diverged); "
-                "a plain push would be rejected and a force push is "
-                "forbidden, so the resume must not continue on this "
-                "branch"
-            )
-        event(
-            "local_head_ahead_of_pr_head", pr_head=head_oid,
-            local_head=local_head, branch=branch,
+        # A head that differs from the local HEAD is RECONCILED, not
+        # rejected (Issue #2261, `orbi.pr_head_sync`): a local commit a
+        # killed session never pushed continues (the next review pushes
+        # it), and a PR head advanced on GitHub — the "Update branch"
+        # button merging the base into the branch — is fetched when this
+        # worktree lacks it and fast-forwarded onto. Only a real
+        # divergence (each side carries commits the other lacks) stops:
+        # a plain push would be rejected and a force push is forbidden.
+        pr_head_sync.reconcile_pr_head(
+            head_oid, local_head, branch=branch, worktree=worktree,
+            repo_dir=repo_dir,
         )
     marker = run_marker(run_id)
     body = pr.get("body")

@@ -793,6 +793,10 @@ def test_verify_resumed_pr_local_ahead_of_pr_head_continues_to_review(
             # The PR head IS an ancestor of the local HEAD (local is
             # ahead) — the #158 scene.
             return ""
+        if command[1] == "cat-file":
+            # The PR head commit is in the local object store (Issue
+            # #2261: the probe only decides whether a fetch is needed).
+            return subprocess.CompletedProcess(command, 0)
         if command[:3] == ["git", "rev-parse", "HEAD"]:
             return local_head
         if command[:2] == ["gh", "pr"]:
