@@ -281,6 +281,11 @@ def test_reconcile_pr_head_fetches_under_the_base_sync_lock(
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "run_command", run)
+    # The fake rejects anything else (the fake-coverage convention): the
+    # reconciliation is a fetch plus at most one fast-forward, so a push
+    # (or any other command) in this scene is a dispatch bug.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        seam.run_command(["git", "push", "origin", FAKE_BRANCH])
     pr_head_sync.reconcile_pr_head(
         head_oid, "b" * 40, branch=FAKE_BRANCH, worktree=tmp_path,
         repo_dir=tmp_path,
