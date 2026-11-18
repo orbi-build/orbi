@@ -1677,8 +1677,26 @@ def test_pick_in_progress_issue_scan_excludes_epics(monkeypatch, tmp_path):
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
-        "--json", "number,title,body,labels,milestone", "--limit", "1",
+        "--json", "number,title,body,labels,milestone", "--limit", "100",
     ]]
+
+
+def _local_run_worktree(repo_dir: Path, issue: int, run_id: str,
+                        source_repo: str = "xqliu/orbi") -> Path:
+    """Create THIS deployment's task worktree + run state for one Issue.
+
+    That pair is the trace a killed run leaves behind and the scene
+    `process_issue` resumes from (Issue #2256): the directory name carries
+    the run id, the state file the issue number and repo name.
+    """
+    slug = source_repo.replace("/", "-")
+    worktree = repo_dir / ".worktrees" / f"orbi-{slug}-issue-{issue}-{run_id}"
+    worktree.mkdir(parents=True)
+    run_state.write_run_state(RunContext(
+        run_id=run_id, issue=issue, branch=f"orbi/{slug}-issue-{issue}",
+        worktree=worktree, source_repo=source_repo,
+    ))
+    return worktree
 
 
 def test_pick_in_progress_issue_scan_fetches_labels(monkeypatch, tmp_path):
@@ -1696,9 +1714,10 @@ def test_pick_in_progress_issue_scan_fetches_labels(monkeypatch, tmp_path):
         return json.dumps([issue])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
+    _local_run_worktree(tmp_path, 18, "abcd0018")
     # No slot dir yet: every slot is free, so the scan runs.
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1,
+        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
     ) == issue
     assert calls == [[
         "gh", "issue", "list", "--repo", "xqliu/orbi",
@@ -1706,7 +1725,7 @@ def test_pick_in_progress_issue_scan_fetches_labels(monkeypatch, tmp_path):
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
-        "--json", "number,title,body,labels,milestone", "--limit", "1",
+        "--json", "number,title,body,labels,milestone", "--limit", "100",
     ]]
 
 
@@ -1728,8 +1747,9 @@ def test_pick_in_progress_issue_scan_fetches_milestone(monkeypatch, tmp_path):
         return json.dumps([issue])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
+    _local_run_worktree(tmp_path, 664, "abcd0664")
     resumed = claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1,
+        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
     )
     assert calls == [[
         "gh", "issue", "list", "--repo", "xqliu/orbi",
@@ -1737,7 +1757,7 @@ def test_pick_in_progress_issue_scan_fetches_milestone(monkeypatch, tmp_path):
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
-        "--json", "number,title,body,labels,milestone", "--limit", "1",
+        "--json", "number,title,body,labels,milestone", "--limit", "100",
     ]]
     # The resumed release's gate scope is its own Milestone, not the
     # config value.
@@ -1761,9 +1781,10 @@ def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
         return json.dumps([issue])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
+    _local_run_worktree(tmp_path, 18, "abcd0018")
     # No slot dir yet: every slot is free, so the scan runs.
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1,
+        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
     ) == issue
     assert calls == [[
         "gh", "issue", "list", "--repo", "xqliu/orbi",
@@ -1771,7 +1792,7 @@ def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
-        "--json", "number,title,body,labels,milestone", "--limit", "1",
+        "--json", "number,title,body,labels,milestone", "--limit", "100",
     ]]
 
 
@@ -1799,7 +1820,7 @@ def test_pick_in_progress_issue_uses_the_repo_dispatch_label(
         "label:repo-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
-        "--json", "number,title,body,labels,milestone", "--limit", "1",
+        "--json", "number,title,body,labels,milestone", "--limit", "100",
     ]]
 
 
@@ -1837,6 +1858,115 @@ def test_pick_in_progress_issue_skips_when_another_runner_is_live(
         "xqliu/orbi", tmp_path / "slots", 1,
     ) is None
     assert len(gh_calls) == 1
+
+
+def test_pick_in_progress_issue_skips_another_deployments_run(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #2256, acceptance 1: `ai-in-progress` alone does not prove the
+    run was THIS deployment's. Two deployments serving the same repository
+    from different machines write the same label, while the task worktree
+    and its run state file are local. With no worktree for the Issue and no
+    live local slot the tick resumes nothing: it claims nothing, changes no
+    label and posts no comment — only the scan's own read reaches GitHub."""
+    issue = {
+        "number": 41, "title": "another deployment's run", "body": "body",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-in-progress"}],
+    }
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: calls.append(command) or json.dumps([issue]),
+    )
+    with caplog.at_level("INFO"):
+        assert claim.pick_in_progress_issue(
+            "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+        ) is None
+    # One read and nothing else: no label edit, no comment, no second run.
+    assert len(calls) == 1
+    assert calls[0][:3] == ["gh", "issue", "list"]
+    assert "restart_scan_skipped" in caplog.text
+    assert "issue=41" in caplog.text
+
+
+def test_pick_in_progress_issue_resumes_this_deployments_killed_run(
+    monkeypatch, tmp_path,
+):
+    """Issue #2256, acceptance 2: the same Issue WITH this deployment's own
+    worktree and a valid run state file is the killed run this tick
+    resumes — same run id, same branch, same worktree as before."""
+    issue = {
+        "number": 42, "title": "killed run", "body": "body",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-in-progress"}],
+    }
+    worktree = _local_run_worktree(tmp_path, 42, "abcd0042")
+    monkeypatch.setattr(
+        seam, "run_command", lambda command, **kwargs: json.dumps([issue]),
+    )
+    assert claim.pick_in_progress_issue(
+        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+    ) == issue
+    assert runner.worktree_resume_scene(tmp_path, "xqliu/orbi", 42) == (
+        "abcd0042", worktree,
+    )
+    # The same worktree without its run state file (a kill between the
+    # worktree creation and the state write) still proves the run is this
+    # deployment's: the scan hands it to the dispatch, whose resume block
+    # reports the unverifiable scene through the terminal path
+    # (Issue #219), instead of raising out of the claim or skipping a run
+    # it started.
+    run_state.run_state_path(worktree).unlink()
+    assert claim.pick_in_progress_issue(
+        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+    ) == issue
+
+
+def test_pick_in_progress_issue_keeps_looking_past_another_deployments_run(
+    monkeypatch, tmp_path,
+):
+    """Issue #2256, acceptance 3: a skipped candidate must not hide this
+    deployment's own orphan further down the list — the scan reads a page,
+    not the first result, and resumes the Issue it holds the worktree for."""
+    foreign = {
+        "number": 43, "title": "another deployment's run", "body": "body",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-in-progress"}],
+    }
+    mine = {
+        "number": 44, "title": "this deployment's killed run", "body": "body",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-in-progress"}],
+    }
+    _local_run_worktree(tmp_path, 44, "abcd0044")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: (
+            calls.append(command) or json.dumps([foreign, mine])
+        ),
+    )
+    assert claim.pick_in_progress_issue(
+        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+    ) == mine
+    assert calls[0][-2:] == ["--limit", "100"]
+
+
+def test_pick_in_progress_issue_without_a_repo_dir_resumes_nothing(
+    monkeypatch, tmp_path,
+):
+    """Issue #2256, failure path: without the delivery checkout there is no
+    worktree to verify against, so no candidate is provably THIS
+    deployment's. The scan resumes nothing and journals the skip instead of
+    starting a possibly second run on someone else's delivery."""
+    issue = {
+        "number": 45, "title": "in flight", "body": "body",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-in-progress"}],
+    }
+    _local_run_worktree(tmp_path, 45, "abcd0045")
+    monkeypatch.setattr(
+        seam, "run_command", lambda command, **kwargs: json.dumps([issue]),
+    )
+    assert claim.pick_in_progress_issue(
+        "xqliu/orbi", tmp_path / "slots", 1,
+    ) is None
 
 
 def test_pick_next_delivery_recovers_in_flight_issue_before_ready(

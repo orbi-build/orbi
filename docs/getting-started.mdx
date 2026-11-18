@@ -411,11 +411,16 @@ serialize claims correctly. Raising `max_concurrency` adds concurrency
 only — it does not widen the fresh-claim scope and does not move the
 `active_milestone` boundary (step 6).
 
-The failure is concrete: an independent deployment cannot see another
-deployment's live delivery, so it may mistake that run for a lost one and
-restart it — the two deployments then fight over the same Issue. Give
-each deployment disjoint `source_repos`; when one repository needs more
-concurrency, keep one deployment and raise `max_concurrency` instead.
+The failure is concrete: the claim scans and the slots are local, so
+nothing coordinates the two deployments. Both can claim the same fresh
+`ai-ready` Issue in the same window — each labels it and starts its own run,
+and whichever pushes last overwrites the other's `orbi/...-issue-N` branch.
+The in-flight restart scan is not the gap: an `ai-in-progress` Issue is
+resumed only when the deployment holds that run's own task worktree and run
+state file, so it never restarts another deployment's live delivery (Issue
+#2256). Give each deployment disjoint `source_repos`; when one repository
+needs more concurrency, keep one deployment and raise `max_concurrency`
+instead.
 
 ## 4. Configure the model provider
 
