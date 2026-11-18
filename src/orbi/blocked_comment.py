@@ -1,17 +1,14 @@
-"""The ONE exit for a comment that blocks an Issue (Issue #1730).
+"""The ONE exit for a comment that blocks an Issue (Issue #1730, #2245).
 
 Ten scenes put an Issue into `ai-blocked` and each own their reason text,
-unblock step, hidden markers and extra fields. What they must NOT each own is
-the pointer to where a person can ask for help: it is appended here, once, so
-a blocked scene added later through this exit carries the community help line
-without anyone remembering to add it.
-
-A comment that is not a blocked scene (a retrying diagnostic, progress, a
-receipt) never goes through this exit and never gets the line.
+unblock step, hidden markers and extra fields; this exit alone adds what
+they share — the community help line, the failure kind and the terminal
+failure record — so a later blocked scene carries them automatically.
 """
 from __future__ import annotations
 
 from orbi import language
+from orbi.blocked_record import with_stop_record
 from orbi.delivery_labels import EVENT_BLOCKED, READY_LABEL
 from orbi.github import apply_label_patch, comment_issue
 
@@ -22,9 +19,9 @@ def post_blocked_comment(number: int, *, repo: str, body: str,
     """Block `number`: apply the `ai-blocked` label patch, then comment.
 
     The order is part of the contract: the label transition lands first, the
-    comment second. The body is posted exactly as the scene rendered it,
-    followed by a blank line and the `help.community` line in the run's
-    language — added here and only here, so it appears exactly once.
+    comment second. The body is posted with the scene's own text plus the
+    shared failure kind/record and the `help.community` line in the run's
+    language — added here and only here, so each appears exactly once.
     """
     apply_label_patch(
         number, repo=repo, event=EVENT_BLOCKED,
@@ -32,5 +29,8 @@ def post_blocked_comment(number: int, *, repo: str, body: str,
     )
     comment_issue(
         number, repo=repo,
-        body=f"{body}\n\n{language.text(language_code, 'help.community')}",
+        body=(
+            f"{with_stop_record(body)}\n\n"
+            f"{language.text(language_code, 'help.community')}"
+        ),
     )
