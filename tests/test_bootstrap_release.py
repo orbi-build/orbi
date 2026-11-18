@@ -34,6 +34,7 @@ import orbi.runner as runner
 from orbi import config as config_domain
 from orbi import failure
 from orbi import language
+from orbi.comment_kind import COMMENT_KIND_FAILURE, comment_kind_marker
 
 # Issue #1826: the operator's one optional project status page.
 TASK_STATUS_URL = "https://tasks.example.org/project-status?repo=example%2Fwidget"
@@ -3188,11 +3189,12 @@ def test_process_release_failure_comment_carries_failure_block(monkeypatch):
     assert failure.parse(body) == expected
     assert expected.reason_code in failure.REASON_CODES
     assert expected.action_code in failure.ACTION_CODES
-    # Exactly one block, marker first, block directly under it.
+    # Exactly one block, kind second, block directly under it (Issue #2245).
     assert body.count("<!-- orbi:failure:v1") == 1
     lines = body.splitlines()
     assert lines[0] == "<!-- orbi:run=a1b2c3d4 -->"
-    assert lines[1] == failure.render(expected)
+    assert lines[1] == comment_kind_marker(COMMENT_KIND_FAILURE)
+    assert lines[2] == failure.render(expected)
     assert "Orbi release failed (ai-blocked)" in body
 
 

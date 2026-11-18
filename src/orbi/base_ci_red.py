@@ -595,12 +595,13 @@ def _latest_trusted_failure(
     the failure itself, so reading it as one would pause every recovery.
 
     The selection STOPS at that comment, whatever its own record says: a
-    blocked failure that carries no `orbi:failure:v1` block at all
-    (`failure.scene_blocked`, the resume-blocked scene, the repo-config
-    scene) states no `base_ci_red` reason, and a corrupted block is never
-    read as "no reason" either (`failure.parse`), so neither may fall
-    back to an older record it superseded. `None` as the record is
-    therefore the newest failure's own answer: no machine-readable reason.
+    blocked failure whose record is not `base_ci_red` states no
+    `base_ci_red` reason (the scene stops carry `human_decision_required`
+    since Issue #2245), a stop written before Issue #2245 carries no block
+    at all, and a corrupted block is never read as "no reason" either
+    (`failure.parse`), so none of them may fall back to an older record it
+    superseded. A `None` record is therefore the newest failure's own
+    answer: this stop states no machine-readable reason.
     """
     for comment in reversed(
             comment_trust.trusted_comments(comments, repo=repo)):

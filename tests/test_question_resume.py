@@ -18,9 +18,10 @@ from pathlib import Path
 import pytest
 
 from orbi import (
-    acceptance_section, failure_report, notify, question, requeue,
+    acceptance_section, failure, failure_report, notify, question, requeue,
     review_merge, runner,
 )
+from orbi.comment_kind import COMMENT_KIND_FAILURE, comment_kind_marker
 from orbi.delivery_labels import BLOCKED_LABEL, FIX_NEEDED_LABEL, PR_OPENED_LABEL
 from tests.fakes.github import FakeGh
 from tests.fakes.question import (
@@ -264,6 +265,14 @@ def test_the_external_pr_stop_asks_the_maintainers_three_questions(gh, monkeypat
     assert review_merge._round_external_phase(work) is True
 
     body = posted[0]
+    # Issue #2245 acceptance 1: the posted stop carries the blocked failure
+    # record beside the unchanged question, so a reader that identifies a
+    # stop by its failure record finds it.
+    assert body.splitlines()[1] == comment_kind_marker(COMMENT_KIND_FAILURE)
+    record = failure.parse(body)
+    assert record is not None
+    assert record.outcome == "blocked"
+    assert record.reason_code in failure.REASON_CODES
     stop = question.parse_question_block(body)
     assert stop is not None
     assert stop.decision_class == question.DECISION_AUTHORITY
