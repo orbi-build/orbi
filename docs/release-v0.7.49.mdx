@@ -1,0 +1,50 @@
+---
+title: "v0.7.49 release (latest)"
+description: "Orbi v0.7.49 release notes: Resume continues when the delivery PR branch was fast-forwarded on GitHub (e.g. \"Update branch\"), instead and 4 more changes."
+---
+
+`v0.7.49` was published 2026-11-18T17:44:47Z as the GitHub Release [v0.7.49](https://github.com/orbi-build/orbi/releases/tag/v0.7.49) (release task: Issue #2263).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.7.49` | annotated tag `be0502f903b14d8d3307b6cc00b85786942b79f5` | commit `798b245ea2e082eaf84150b0129acee1fe0e959f` |
+
+## Release notes
+
+## Changelog
+
+### Reliability and recovery
+
+- Resume continues when the delivery PR branch was fast-forwarded on GitHub (e.g. "Update branch"), instead of failing as diverged ([Issue #2261](https://github.com/orbi-build/orbi/issues/2261); [PR #2262](https://github.com/orbi-build/orbi/pull/2262))
+
+### Deployment and operations
+
+- In-flight restart scan resumes only Issues this deployment started, not any ai-in-progress Issue ([Issue #2256](https://github.com/orbi-build/orbi/issues/2256); [PR #2258](https://github.com/orbi-build/orbi/pull/2258))
+
+### Documentation
+
+- Docs: clarify task-page titles and installation summaries ([Issue #2251](https://github.com/orbi-build/orbi/issues/2251); [PR #2252](https://github.com/orbi-build/orbi/pull/2252))
+
+### Bug fixes
+
+- An idle tick repeats identical GitHub reads within the same tick ([Issue #2218](https://github.com/orbi-build/orbi/issues/2218); [PR #2257](https://github.com/orbi-build/orbi/pull/2257))
+- Open one fix Issue for a red base branch, not one per failing check, so its PR can turn the base green and merge ([Issue #2259](https://github.com/orbi-build/orbi/issues/2259); [PR #2260](https://github.com/orbi-build/orbi/pull/2260))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
+
+- tag: `v0.7.49`
+- release commit: `798b245ea2e082eaf84150b0129acee1fe0e959f`
+- release task: Issue #2263
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 798b245ea2e082eaf84150b0129acee1fe0e959f (the #268 CI-wait gate; no local test execution)
+
+
+Released by [Orbi](https://orbi.build/?ref=prfoot-orbi-build)
+
+[![Download Orbi](https://a.fsdn.com/con/app/sf-download-button)](https://sourceforge.net/projects/orbi/files/v0.7.49/v0.7.49%20source%20code.zip/download)
