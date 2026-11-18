@@ -747,7 +747,15 @@ def test_pick_next_delivery_in_flight_scan_uses_the_repo_dispatch_label(
     monkeypatch.setattr(
         milestone, "reconcile_release_milestones", lambda *a, **k: None,
     )
-    config = config_domain.RunnerConfig()
+    # Issue #2256: the restart scan resumes only a run THIS
+    # deployment started, proven by its own worktree + run state file.
+    worktree = tmp_path / ".worktrees" / "orbi-owner-repo-issue-2-abcdef02"
+    worktree.mkdir(parents=True)
+    run_state.write_run_state(RunContext(
+        run_id="abcdef02", issue=2, branch="orbi/owner-repo-issue-2",
+        worktree=worktree, source_repo="owner/repo",
+    ))
+    config = config_domain.RunnerConfig(repo_dir=tmp_path)
     assert claim.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1, config=config,
         hooks=resume_deps(),

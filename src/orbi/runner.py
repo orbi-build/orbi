@@ -195,6 +195,10 @@ from orbi import implementation_delivery
 # re-exported here so `runner.IssueResult` keeps working for callers.
 from orbi.implementation_delivery import IssueResult
 from orbi import run_state
+# The in-flight restart scan and this deployment's own worktree + run
+# state proof live together (Issue #2256): the scan resumes only the run
+# it can find the scene of, and `worktree_resume_scene` is that lookup.
+from orbi import restart_scan
 
 # The shared primitives live in the leaf modules now — the
 # journal kernel (logger, run binding, subprocess seam), the GitHub
@@ -773,61 +777,12 @@ def worktree_resume_scene(repo_dir: Path, source_repo: str,
                  number: int) -> tuple[str, Path] | None:
     """Return the resume scene `(run_id, worktree)` for one Issue, or None.
 
-    The worktrees are matched by the RUN STATE FILE, not
-    by the directory name alone: the directory name carries the
-    source-repo slug, which changes when the repo is renamed, while
-    the state file carries the issue number and the repo NAME (the
-    part after the slash — stable across a rename). The newest
-    matching worktree by its OWN `created_at` stamp wins — never the
-    directory mtime (Issue #2175): a retained terminal scene sits beside
-    the new run and its detach touched its directory last. The scene's
-    worktree path may carry the OLD slug (a rename): it is the scene the
-    run continues in, never a reason for a second worktree.
-
-    A worktree that claims THIS issue number but has a MISSING or
-    CORRUPT run state file cannot be verified as the same run: it
-    fails fast with the exact reason — never a silent fresh redo.
-    A worktree of another issue without a state file
-    (a legacy completed run) is unrelated and skipped.
+    Delegates to `restart_scan.worktree_resume_scene`: the in-flight restart
+    scan uses the very same matching to prove an `ai-in-progress` Issue
+    was started by THIS deployment (Issue #2256), so there is one
+    implementation of "this deployment's worktree and run state file".
     """
-    name = source_repo.rsplit("/", 1)[-1]
-    pattern = re.compile(
-        r"^orbi-.+-issue-" + str(number) + r"-[0-9a-f]{8}$",
-    )
-    candidates: list[tuple[Path, dict]] = []
-    worktrees = repo_dir / ".worktrees"
-    if worktrees.is_dir():
-        for path in worktrees.iterdir():
-            if not path.is_dir() or not pattern.match(path.name):
-                continue
-            try:
-                state = run_state.read_run_state(path)
-            except ValueError as exc:
-                raise RuntimeError(
-                    f"worktree {path} has a corrupt run state file "
-                    f"({exc}): the same run cannot be verified "
-                    "(Issue #219)"
-                ) from exc
-            if state is None:
-                raise RuntimeError(
-                    f"worktree {path} has no run state file "
-                    f"({run_state.run_state_path(path)}): the same run cannot "
-                    "be verified (Issue #219)"
-                )
-            if str(state["repo"]).rsplit("/", 1)[-1] != name:
-                continue
-            candidates.append((path, state))
-    if not candidates:
-        return None
-    # Newest by the scene's own start stamp; the directory name breaks a
-    # same-second tie, so the choice is deterministic on every tick.
-    newest, state = max(
-        candidates,
-        key=lambda candidate: (
-            str(candidate[1].get("created_at", "")), candidate[0].name,
-        ),
-    )
-    return str(state["run_id"]), newest
+    return restart_scan.worktree_resume_scene(repo_dir, source_repo, number)
 
 
 def resume_run_id(repo_dir: Path, source_repo: str,
