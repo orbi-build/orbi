@@ -1929,6 +1929,8 @@ RENDERED_TITLE_LIMIT = 60
 # Issue #1567: the docs home page plus the pages with the most search
 # impressions must render a title that names the task, not the one-word
 # filename fallback (Setup - Orbi, Index - Orbi, ...).
+# Issue #2251 adds the task pages whose titles omitted Orbi and the task
+# (Testing, Workflow, Contributing, ...) to the same contract.
 DESCRIPTIVE_TITLE_PAGES = (
     "index",
     "getting-started",
@@ -1937,6 +1939,12 @@ DESCRIPTIVE_TITLE_PAGES = (
     "security",
     "optional-kv-cache",
     "quickstart",
+    "installation",
+    "configuration",
+    "testing",
+    "workflow",
+    "contributing",
+    "docker",
 )
 
 
@@ -1959,7 +1967,7 @@ def frontmatter_title(path: Path) -> str:
 
 
 def test_seo_pages_carry_descriptive_titles_within_the_rendered_limit():
-    """Issue #1567: the docs home and the seven high-impression pages
+    """Issue #1567: the docs home and the high-impression pages
     must render a <title> that names the task (the verified Mintlify
     suffix included), each within 60 characters and unique. The Chinese
     counterparts carry their own descriptive title. The release pages are
