@@ -442,7 +442,7 @@ worktree、无分支、无 Pi session、无 PR，槽位留给下一个 Issue，�
 | 票类型 | 标签 | Runner 做什么 |
 |---|---|---|
 | dev（默认） | `ai-ready` | 完整交付链：worktree、开发剧本、一个 PR、独立审查、合并 |
-| ops | `ai-ready` + `ai-ops-only` | 同一个完整执行会话（worktree、shell、网络——实现里不存在任何命令白名单），但用 ops 剧本替代开发剧本。交付物 = 回到票上的证据；会话若附带代码 commit，则照常走 PR 流程 |
+| ops | `ai-ready` + `ai-ops-only` | 同一个完整执行会话（worktree、shell、网络——实现里不存在任何命令白名单），但用 ops 剧本替代开发剧本。交付物 = 回到票上的证据；会话若附带代码 commit，则照常走 PR 流程。只有部署之后才算数的改动也用这一类票检查——见[验证部署后的运行时结果](#验证部署后的运行时结果) |
 | content | `ai-ready` + `ai-content-only` | 内容代理：文本进、文本出，以 Issue 评论交付——无执行、无 git；交付后关闭 Issue |
 
 ops 语义（Issue #537）：
@@ -898,6 +898,72 @@ Epic 或父 Issue 做协调，把每个阶段拆成子 Issue；每张子票各�
   （`sort:created-asc`，Issue #1914），所以一批队列按你建票的顺序消化。
 - Issue 正文里的 `Depends on #N` 行**不被解析**：只有原生关系决定顺序。
   正文里的这一行只是给人看的散文，绝不是调度状态。
+- 同一条关系也用来排队必须在交付**之后**跑的检查：被开发票（或发布票）
+  blocked 的 `ai-ops-only` 票，只在那张票关闭之后才被领取——见
+  [验证部署后的运行时结果](#验证部署后的运行时结果)。
+
+## 验证部署后的运行时结果
+
+PR merge 只证明改动进了 base 分支。当结果只有在部署或 rollout 之后才存在
+——部署好的服务、生效的配置、托管页面——「已合并」和「用户已经用上」是两件
+不同的事实，后者需要在运行中的系统上检查一次。引擎本身没有部署步骤，所以这次
+检查就是一张排在交付后面的普通 ops 票。
+
+**什么时候用。** 仅当验收条件只能在部署或 rollout 之后观察、之前根本看不到时。
+结果在已合并的代码、PR 或 CI 运行里就能看到的变化不需要 ops 票：多开一张票
+只是重复 merge 已经写明的事实。
+
+**怎么建。** 一个 `ai-ready` + `ai-ops-only` 的 Issue（上表票类型里的 ops 行），
+正文写清：
+
+- 要检查的确切对象——URL、命令或健康检查端点；
+- 什么输出算健康（期望的状态码、响应片段或指标），让检查有可观察的通过条件，
+  而不是靠判断；
+- 部署是异步的时候它等什么事件（「`<分支>` 上的 workflow `<名称>` 转绿之后」、
+  「`v<版本>` 发布之后」）。
+
+然后把 blocker 设为开发票；当部署在发布之后进行时，设为发布票：
+
+```bash
+gh issue edit <ops-issue> --add-blocked-by <dev-or-release-issue>
+```
+
+这条关系就是全部调度——上一节的规则原样适用：blocker 还开着时 ops 票不会被
+领取，blocker 关闭后的第一个 tick 就领取它。这个用法不给引擎新增任何标签、
+状态、门禁或配置键。
+
+**ops 会话拿到什么、拿不到什么。** ops 票运行与开发交付完全相同的执行会话
+——task worktree、shell、网络访问，没有任何命令白名单——票面就是它的授权
+（见上文票类型表的 ops 行）。引擎把 runner 的环境原样交给该会话
+（`src/orbi/pi_process.py` 把 `os.environ` 传给子进程，仅剔除 Telegram token），
+其中包含 deploy home 的 `.orbi/env` 文件（`src/orbi/config.py`）。会话做不到
+什么取决于凭据，而不是按票配置的开关：
+
+- API 动作受部署的 `gh` 凭据约束（`src/orbi/github.py`）：最低权限集是
+  contents、pull requests、issues 与 metadata（[安全](/zh/security)）；GitHub App
+  的 installation token 只带该安装已批准的权限，其余动作返回
+  `Resource not accessible by integration`（HTTP 403），
+  `src/orbi/check_permission.py` 就是这么报的。
+- 用该凭据做的 push 或 PR 会触发仓库自己的 workflow，所以接在 `push` 或已发布
+  Release 上的部署会自己发生（见上文 CI 用量一节）。想显式启动一次，需要该凭据
+  具备 `actions: write` 权限，它不在上面的最低权限集里。
+- 人工审批门从不代行：environment approval、Release 批准、受保护分支的绕过都
+  留给账号所有者（ops 剧本 `prompts/prompt_ops.md`）。
+- 会话从不 push、不开 PR、不合并。部署仍归仓库自己的 CI 或平台：如果仓库没有
+  会话现有凭据已经能走的部署路径，ops 票只检查运行结果，不会自造一条路径。
+
+**用户看到什么。** 三个 Issue，各承载一个事实：
+
+| Issue | 如何收尾 | 承载的事实 |
+|---|---|---|
+| 开发票 | 由它的 PR（`Fixes #N`）关闭，`ai-merged` | **已合并**——改动在 base 分支里 |
+| 发布票（使用发布流程时） | `ai-release`，打完 tag 并发布 Release 后 `ai-merged` | **已发布**——版本已发出 |
+| ops 票 | `ai-ops-only`，由 ops 运行关闭，检查输出贴在其上 | **运行时已验证**——运行中的系统按票面要求回答 |
+
+纯 ops 运行在会话贴出证据且没有提交时关闭它的 Issue
+（`src/orbi/ops_delivery.py`），所以关闭的 ops 票记录的是「检查跑过、输出在票上」：
+判定要看它最后那条证据评论。检查结果是红的那张票不负责修复——原文输出就是下一张
+开发票的复现材料，修好后由一张新的 ops 票再检查一次。
 
 ## 仓库级交付策略（`.github/orbi.toml`）
 

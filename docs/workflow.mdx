@@ -553,7 +553,7 @@ dispatch time:
 | Ticket type | Labels | What the Runner does |
 |---|---|---|
 | dev (the default) | `ai-ready` | The full delivery chain: worktree, dev playbook, one PR, independent review, merge |
-| ops | `ai-ready` + `ai-ops-only` | The SAME full execution session (worktree, shell, network — no command whitelist exists anywhere in the implementation), but the ops playbook replaces the dev one. The deliverable is the evidence posted on the Issue; when the session commits code, the delivery takes the normal PR ceremony |
+| ops | `ai-ready` + `ai-ops-only` | The SAME full execution session (worktree, shell, network — no command whitelist exists anywhere in the implementation), but the ops playbook replaces the dev one. The deliverable is the evidence posted on the Issue; when the session commits code, the delivery takes the normal PR ceremony. A change that only counts once it is deployed is checked with this type — see [Verifying a deployed change after the merge](#verifying-a-deployed-change-after-the-merge) |
 | content | `ai-ready` + `ai-content-only` | The content agent: text in, text out, delivered as an Issue comment — no execution, no git; the Issue is closed after the delivery |
 
 Ops semantics (Issue #537):
@@ -1123,6 +1123,90 @@ decide the order.
 - A `Depends on #N` line in the Issue body is **not parsed**: only the
   native relation orders the queue. The body line stays prose for humans,
   never scheduling state.
+- The same relation queues a check that has to run AFTER a delivery: an
+  `ai-ops-only` ticket blocked by the dev ticket (or by the release ticket)
+  is claimed only once that ticket closed — see
+  [Verifying a deployed change after the merge](#verifying-a-deployed-change-after-the-merge).
+
+## Verifying a deployed change after the merge
+
+A merged PR proves the change is in the base branch. When the outcome only
+exists after a deployment or a rollout — a deployed service, a rolled-out
+config, a hosted page — "merged" and "the user has it" are two different
+facts, and the second one needs a check against the running system. Orbi has
+no deployment step of its own, so that check is an ordinary ops ticket queued
+behind the delivery.
+
+**When to use it.** Only when the acceptance condition can be observed after
+the deployment or rollout and nowhere before it. A change whose outcome is
+already visible in the merged code, the PR or a CI run needs no ops ticket:
+a second ticket there would only repeat a fact the merge already carried.
+
+**How to file it.** One Issue, `ai-ready` + `ai-ops-only` (the ops row of the
+ticket-type table above), whose body states:
+
+- the exact thing to check — a URL, a command or a health endpoint;
+- what output counts as healthy (the expected status, body fragment or
+  metric), so the check has an observable pass condition instead of a
+  judgment;
+- the event it waits for when the deploy is asynchronous ("after the workflow
+  `<name>` on `<branch>` turns green", "after `v<version>` is published").
+
+Then set the blocker to the dev ticket, or to the release ticket when the
+deploy runs after a release:
+
+```bash
+gh issue edit <ops-issue> --add-blocked-by <dev-or-release-issue>
+```
+
+That relation is the whole scheduler — the section above applies unchanged:
+while the blocker is open the ops ticket is not claimed, and the first tick
+after the blocker closes claims it. No label, state, gate or config key is
+added to the engine for this pattern.
+
+**What the ops session gets, and what it does not.** The ops ticket runs the
+SAME full execution session as a dev delivery — a task worktree, a shell and
+network access, with no command whitelist — and the ticket body is its
+authorization (see the ops row of the ticket-type table above). The engine
+hands the runner's environment to that session
+(`src/orbi/pi_process.py`, which passes `os.environ` to the child and removes
+only the Telegram token), including the deploy home's `.orbi/env` file
+(`src/orbi/config.py`). What the session cannot do follows from the
+credentials, never from a per-ticket switch:
+
+- API actions are bounded by the deployment's `gh` token
+  (`src/orbi/github.py`): the minimum permission set is contents, pull
+  requests, issues and metadata ([Security](/security)), and a GitHub App
+  installation token carries only the permissions that installation approved
+  — anything else answers `Resource not accessible by integration`
+  (HTTP 403), as `src/orbi/check_permission.py` reports it.
+- A push or a PR made with that credential starts the repository's own
+  workflows, so a deploy wired to a `push` or to a published Release happens
+  by itself (the CI usage section above). Starting one explicitly with
+  `gh workflow run` needs the `actions: write`
+  permission on that credential, which is outside the minimum set above.
+- A human approval gate is never performed by the session: environment
+  approvals, Release approvals and protected-branch bypasses stay with the
+  account owner (the ops playbook, `prompts/prompt_ops.md`).
+- The session never pushes, never opens a PR and never merges. Deploying
+  stays with the repository's own CI or platform: when the repository has no
+  deploy path the session's existing credentials can already use, the ops
+  ticket checks the running result and does not invent one.
+
+**What the user sees.** Three Issues, each carrying one fact:
+
+| Issue | How it ends | The fact it carries |
+|---|---|---|
+| dev ticket | closed by its PR (`Fixes #N`), `ai-merged` | **merged** — the change is in the base branch |
+| release ticket, when one is used | `ai-release`, `ai-merged` after the tag and Release | **released** — the version is published |
+| ops ticket | `ai-ops-only`, closed by the ops run with the check output on it | **verified in runtime** — the running system answered as the ticket demanded |
+
+A pure ops run closes its Issue when the session posted its evidence and
+committed nothing (`src/orbi/ops_delivery.py`), so a closed ops ticket records
+that the check RAN and that its output is on the ticket: read its final
+evidence comment for the verdict. A check that comes back red is not repaired
+by that ticket — the quoted output is the reproduction for the next dev
+ticket, and a fresh ops ticket checks the fix after it merges.
 
 <a id="repository-level-delivery-policy-githuborbitoml"></a>
 
