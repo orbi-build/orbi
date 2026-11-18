@@ -1,23 +1,29 @@
 """Issue #1730: every blocked comment ends with the community help line.
 
-Ten scenes put an Issue into `ai-blocked` and each renders its own
-reason text, unblock step, hidden markers and extra fields. The pointer to
-where a person can ask for help is NOT one of them: the ONE blocked exit
-(`orbi.blocked_comment.post_blocked_comment`) applies the label patch and
-appends the run language's `help.community` line to the posted body.
+Eleven scenes put an Issue into `ai-blocked` and each renders its own
+reason text, unblock step, hidden markers and extra fields. What they do
+NOT each own is what every stop shares: the ONE blocked exit
+(`orbi.blocked_comment.post_blocked_comment`) applies the label patch,
+writes the `failure` kind and the terminal `orbi:failure:v1` record
+(Issue #2245), and appends the run language's `help.community` line to the
+posted body.
 
 Each scene test below stubs the exit's two writes and asserts the posted
-body: the scene's own text first, then one blank line and the help line,
-exactly once. The other six scenes (claim scan, release, external PR, label
-repair, PR closed, ticket-only) are driven in their own test modules, where
-their environments already live: test_resume_pr.py,
-test_bootstrap_runner_failure_report.py and test_fix_needed_loop.py.
+body: the scene's own text, the shared kind/record, then one blank line and
+the help line, exactly once. The scenes whose environment lives in another
+module (claim scan, release, external PR, label repair, PR closed,
+ticket-only) are driven end to end there too — the external PR stop in
+test_question_resume.py — while the table test at the bottom pins the
+failure kind and record of EVERY stop body (Issue #2245 acceptance 2).
 """
 import pytest
 
 import orbi.blocked_comment as blocked_comment
 import orbi.failure_report as failure_report
-from orbi import failure, language, question, release_comments, user_summary
+from orbi import (
+    check_permission, failure, language, question, release_comments,
+    user_summary,
+)
 from orbi.comment_kind import COMMENT_KIND_FAILURE, comment_kind_marker
 from orbi.progress import run_marker
 from orbi.run_fields import RunFields
@@ -198,13 +204,14 @@ PR_URL = "https://github.com/owner/repo/pull/7"
 
 
 def stop_scene_bodies(language_code: str) -> dict[str, str]:
-    """The body each ONE of the ten ai-blocked stop scenes hands to the exit.
+    """The body each ONE of the eleven ai-blocked stop scenes hands over.
 
     Each body is composed the way its writer composes it (run marker first,
     then the scene's own text / kind / record), so the table below covers
-    the whole set of stops that label an Issue `ai-blocked` — the failure
-    report scenes, the claim scan, the release, the external PR, the label
-    repair, the closed PR and the ticket-only stop (Issue #2245).
+    the whole set of stops that label an Issue `ai-blocked` — the four
+    failure report scenes, the permission stop, the claim scan, the release,
+    the external PR, the label repair, the closed PR and the ticket-only
+    stop (Issue #2245).
     """
     marker = run_marker(RUN_ID)
     kind = comment_kind_marker(COMMENT_KIND_FAILURE)
@@ -247,6 +254,13 @@ def stop_scene_bodies(language_code: str) -> dict[str, str]:
                 language_code=language_code, issue_number=42,
                 issue_title="task",
             )
+        ),
+        # check_permission: the App has not approved the check read.
+        "checks_permission_missing": check_permission.comment_body(
+            check_permission.CheckPermission(pr=7),
+            url="https://github.com/settings/installations/9",
+            run_id=RUN_ID, issue_number=42, issue_title="task",
+            language_code=language_code,
         ),
         # resume_scan: the opened-PR scene comment is missing.
         "claim_scene_missing": user_summary.notice(
