@@ -319,29 +319,31 @@ def repr_name(record: BaseCIRed) -> str:
 
 
 # --------------------------------------------------------------------------
-# The triage Issue: one open Issue per (check, base branch)
+# The fix Issue: ONE open Issue per base branch (Issue #2259)
 # --------------------------------------------------------------------------
 
-def triage_title(check_name: str, base_branch: str) -> str:
+def triage_title(base_branch: str) -> str:
     """The one title format shared by the lookup and the create.
 
-    It is the format the CI triage workflow already writes
-    (`CI failure: <check> on branch <branch>`), so a delivery-side fix
-    Issue and a workflow-side one are the same record, not two.
+    Keyed on the BASE BRANCH, never on a check (Issue #2259): the fix
+    Issue's PR has to turn every red check green, because a PR that
+    repairs only its own check stays red on the others and is paused as
+    "the base is already red" — so per-check Issues could never merge. The
+    CI triage workflow's per-check `CI failure: <check> on branch <branch>`
+    titles stay its own record and are not reused here.
     """
-    return f"CI failure: {check_name} on branch {base_branch}"
+    return f"CI failure on branch {base_branch}"
 
 
-def open_triage_issue(repo: str, check_name: str,
-                      base_branch: str) -> dict | None:
-    """The OPEN triage Issue for this check, or None.
+def open_triage_issue(repo: str, base_branch: str) -> dict | None:
+    """The OPEN fix Issue of this base branch, or None.
 
     `state="open"` on purpose: a CLOSED Issue is done and must never be
     reused as the tracker of a new red base. A failed read PROPAGATES: a
     lookup that silently read as "none" would make `/orbi fix-base`
     open a SECOND fix Issue beside the one it could not see.
     """
-    prefix = triage_title(check_name, base_branch)
+    prefix = triage_title(base_branch)
     issues = list_issues(
         repo, state="open", search=f'"{prefix}" in:title',
         json_fields="number,url,title", limit=_TRIAGE_SEARCH_LIMIT,
@@ -352,18 +354,18 @@ def open_triage_issue(repo: str, check_name: str,
     return None
 
 
-def triage_url(repo: str, check_name: str, base_branch: str) -> str | None:
-    """The existing OPEN triage Issue's URL (best effort, never fails).
+def triage_url(repo: str, base_branch: str) -> str | None:
+    """The existing OPEN fix Issue's URL (best effort, never fails).
 
     The failure comment is a bypass: a failed lookup drops the link, it
     never changes the delivery's own outcome.
     """
     try:
-        issue = open_triage_issue(repo, check_name, base_branch)
+        issue = open_triage_issue(repo, base_branch)
     except Exception:
         LOGGER.exception(
-            "delivery_ci_triage_lookup_failed repo=%s check=%s",
-            repo, check_name,
+            "delivery_ci_triage_lookup_failed repo=%s base_branch=%s",
+            repo, base_branch,
         )
         return None
     url = issue.get("url") if issue else None

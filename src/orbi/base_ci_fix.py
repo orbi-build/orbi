@@ -7,9 +7,10 @@ eligibility rule. This module owns the actions:
 * every path that OPENS the fix Issue — the engine's own run when the
   scene is recorded (`ensure_fix_issues`, once per scene) and the
   in-ticket `/orbi fix-base` command (`FIX_BASE_COMMAND`). Both call
-  `open_fix_issues`, the ONE lookup/create loop, so a command run and an
-  engine run can never open two Issues for one check and each reply says
-  which Issue it reused;
+  `open_fix_issues`, the ONE lookup/create path keyed on the BASE BRANCH
+  (Issue #2259: one Issue whose PR makes every red check green), so a
+  command run and an engine run can never open two Issues for one base
+  branch and each reply says which Issue it reused;
 * the pause comment that names them (`scene_comment`), so the reader never
   has to reply a command the engine already ran;
 * the bounded recovery scan (`recover`): run a pending command, read the
@@ -45,33 +46,47 @@ from orbi.ticket_command import (
 )
 
 
-def _triage_body(check: FailingCheck, record: BaseCIRed,
+def _triage_body(checks: list[FailingCheck], record: BaseCIRed,
                  language_code: str) -> str:
+    """The fix Issue's body: EVERY red base check, with its run link.
+
+    One Issue per base branch (Issue #2259), so its PR has to make every
+    check listed here green: the evidence is the same list the pause
+    comment shows, and the reason states that rule in as many words.
+    """
     parts = [
         language.text(language_code, "base_ci_red.triage_check",
-                      name=check.name, base_branch=record.base_branch),
+                      base_branch=record.base_branch),
         language.text(language_code, "base_ci_red.triage_reason",
                       base_branch=record.base_branch,
-                      base_sha=record.base_sha),
+                      base_sha=record.base_sha,
+                      checks=_check_list(checks)),
     ]
-    if check.url:
-        parts.append(language.text(language_code, "base_ci_red.check_run",
-                                   name=check.name, url=check.url))
-    if check.errors:
-        parts.append(
-            f"{language.text(language_code, 'base_ci_red.triage_errors')}\n"
-            f"{fenced('\n'.join(check.errors))}"
-        )
+    for check in checks:
+        if check.url:
+            parts.append(language.text(language_code, "base_ci_red.check_run",
+                                       name=check.name, url=check.url))
+        if check.errors:
+            parts.append(
+                language.text(language_code, "base_ci_red.check_errors",
+                              name=check.name)
+                + "\n" + fenced("\n".join(check.errors))
+            )
     return "\n\n".join(parts)
 
 
-def _create_triage_issue(repo: str, check: FailingCheck, record: BaseCIRed,
-                         *, milestone: str | None, dispatch_label: str,
-                         language_code: str) -> int:
+def _check_list(checks: list[FailingCheck]) -> str:
+    """The red base checks as the body's inline list (`ci`, `e2e`)."""
+    return ", ".join(f"`{check.name}`" for check in checks)
+
+
+def _create_triage_issue(repo: str, checks: list[FailingCheck],
+                         record: BaseCIRed, *, milestone: str | None,
+                         dispatch_label: str, language_code: str) -> int:
     command = [
         "gh", "issue", "create", "--repo", repo,
-        "--title", triage_title(check.name, record.base_branch),
-        "--body", _triage_body(check, record, language_code),
+        "--title", triage_title(record.base_branch),
+        "--body", _triage_body(checks, record, language_code),
         "--label", dispatch_label,
         "--label", P0_LABEL,
     ]
@@ -91,13 +106,18 @@ def open_fix_issues(
     milestone: str | None = None, dispatch_label: str = READY_LABEL,
     language_code: str = language.DEFAULT_LANGUAGE,
 ) -> list[str]:
-    """Open (or reuse) ONE open fix Issue per failing base check.
+    """Open (or reuse) the ONE open fix Issue of this base branch.
 
-    The ONE creation path: `/orbi fix-base` posts the returned lines as
+    Issue #2259: the Issue is keyed on the BASE BRANCH, never on a check.
+    Its PR has to turn EVERY red check green — a fix that repairs only its
+    own check stays red on the others and is paused as "the base is
+    already red", so per-check Issues could never merge.
+
+    The ONE creation path: `/orbi fix-base` posts the returned line as
     its receipt comment, and the scene record (Issue #2203) renders the
-    same lines into the pause comment — same lookup, same create, same
+    same line into the pause comment — same lookup, same create, same
     journal line, so a command run and an engine run can never open two
-    Issues for one check.
+    Issues for one base branch.
 
     Raises `TicketCommandError` when a lookup fails: opening a second
     Issue beside one the read could not see is never the smaller risk. An
@@ -110,35 +130,30 @@ def open_fix_issues(
             language_code, "base_ci_red.triage_no_evidence",
             base_branch=record.base_branch,
         )]
-    lines: list[str] = []
-    for check in checks:
-        try:
-            existing = open_triage_issue(
-                repo, check.name, record.base_branch)
-        except Exception as exc:
-            # Never open a second Issue beside one this read could not
-            # see: the caller fails its own step and reports the reason.
-            raise TicketCommandError(
-                "look up the triage Issue", str(exc)) from exc
-        if existing is not None and isinstance(existing.get("number"), int):
-            number = existing["number"]
-            key = "base_ci_red.triage_reused"
-        else:
-            number = _create_triage_issue(
-                repo, check, record, milestone=milestone,
-                dispatch_label=dispatch_label, language_code=language_code,
-            )
-            key = "base_ci_red.triage_created"
-            event(
-                "base_ci_red_triage", repo=repo, issue=f"#{issue_number}",
-                created=f"#{number}", check=check.name,
-                base_branch=record.base_branch,
-            )
-        lines.append(language.text(
-            language_code, key, number=number, check=check.name,
+    try:
+        existing = open_triage_issue(repo, record.base_branch)
+    except Exception as exc:
+        # Never open a second Issue beside one this read could not
+        # see: the caller fails its own step and reports the reason.
+        raise TicketCommandError(
+            "look up the triage Issue", str(exc)) from exc
+    if existing is not None and isinstance(existing.get("number"), int):
+        number = existing["number"]
+        key = "base_ci_red.triage_reused"
+    else:
+        number = _create_triage_issue(
+            repo, checks, record, milestone=milestone,
+            dispatch_label=dispatch_label, language_code=language_code,
+        )
+        key = "base_ci_red.triage_created"
+        event(
+            "base_ci_red_triage", repo=repo, issue=f"#{issue_number}",
+            created=f"#{number}", checks=_check_list(checks),
             base_branch=record.base_branch,
-        ))
-    return lines
+        )
+    return [language.text(
+        language_code, key, number=number, base_branch=record.base_branch,
+    )]
 
 
 def ensure_fix_issues(
@@ -397,7 +412,7 @@ def _fix_base_apply(
     language_code: str = language.DEFAULT_LANGUAGE,
     **_context: object,
 ) -> None:
-    """Open (or reuse) ONE open fix Issue per failing base check.
+    """Open (or reuse) the ONE open fix Issue of this base branch.
 
     Idempotent per COMMENT: the reply carries the command layer's own
     receipt marker, so a second tick that still sees the same command

@@ -443,7 +443,7 @@ def _raise_if_preexisting_ci_failure(
     if detected is None:
         return
     record, checks = detected
-    triage_url = base_ci_red.triage_url(repo, checks[0].name, base_branch)
+    triage_url = base_ci_red.triage_url(repo, base_branch)
     suffix = f"; triage: {triage_url}" if triage_url else ""
     raise PreExistingCIFailure(
         f"delivery gate: {base_branch} is already red on check "

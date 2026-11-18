@@ -148,30 +148,28 @@ BASE_CI_RED_MESSAGES: dict[str, tuple[str, str]] = {
         "然后去掉 `ai-blocked`、加上 `ai-fix-needed` 恢复。",
     ),
     "base_ci_red.triage_reason": (
-        "A delivery PR is paused because this check fails on the base "
-        "branch, not in the PR. Once it is green on `{base_branch}` "
-        "(commit `{base_sha}` is where it was first seen), Orbi "
-        "merges that PR automatically — no relabel needed.",
-        "有一个交付 PR 被暂停，因为失败的 check 出现在基础分支上，而不是这个 "
-        "PR 里。等 `{base_branch}` 上这个 check 变绿（首次发现时的"
-        "提交是 `{base_sha}`），Orbi 会自动合并那个 PR —— 不需要改"
-        "标签。",
+        "Delivery PRs are paused because these checks fail on the base "
+        "branch `{base_branch}`, not in them: {checks}. **This Issue's "
+        "PR must make all of them green** — once they are green on "
+        "`{base_branch}` (commit `{base_sha}` is where they were first "
+        "seen), Orbi merges every paused PR automatically — no relabel "
+        "needed.",
+        "有交付 PR 被暂停，因为这些 check 在基础分支 `{base_branch}` 上"
+        "失败，而不是在 PR 里：{checks}。**这张 Issue 的 PR 必须让它们全部"
+        "变绿** —— 等 `{base_branch}` 上它们都变绿（首次发现时的提交是 "
+        "`{base_sha}`），Orbi 会自动合并每个被暂停的 PR —— 不需要改标签。",
     ),
     "base_ci_red.triage_check": (
-        "## Failing check: {name} on {base_branch}",
-        "## 失败的 check：{base_branch} 上的 {name}",
-    ),
-    "base_ci_red.triage_errors": (
-        "First error lines:",
-        "最初的错误行：",
+        "## Failing checks on {base_branch}",
+        "## `{base_branch}` 上失败的 check",
     ),
     "base_ci_red.triage_created": (
-        "created #{number} — `{check}` on `{base_branch}`",
-        "已创建 #{number} —— `{base_branch}` 上的 `{check}`",
+        "created #{number} — all failing checks on `{base_branch}`",
+        "已创建 #{number} —— `{base_branch}` 上所有失败的 check",
     ),
     "base_ci_red.triage_reused": (
-        "reused #{number} — `{check}` on `{base_branch}`",
-        "已复用 #{number} —— `{base_branch}` 上的 `{check}`",
+        "reused #{number} — all failing checks on `{base_branch}`",
+        "已复用 #{number} —— `{base_branch}` 上所有失败的 check",
     ),
     # The command's own precondition (Issue #1825): the shared
     # dispatcher evaluates this command on every ticket that runs

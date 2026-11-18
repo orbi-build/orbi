@@ -267,7 +267,7 @@ def test_no_raise_without_a_base_commit(monkeypatch):
 
 def test_the_raise_names_an_existing_open_triage_issue(monkeypatch):
     _raise_gh(monkeypatch, base_runs=[base_run()], open_issues=(
-        f"{base_ci_red.triage_title(CHECK, BASE_BRANCH)} (push)",
+        f"{base_ci_red.triage_title(BASE_BRANCH)} (push)",
     ))
     with pytest.raises(failure_report.PreExistingCIFailure) as caught:
         failure_report._raise_if_preexisting_ci_failure(
@@ -279,18 +279,18 @@ def test_the_raise_names_an_existing_open_triage_issue(monkeypatch):
 
 def test_the_triage_lookup_never_reuses_a_closed_issue(monkeypatch):
     gh = FakeGh(REPO)
-    title = base_ci_red.triage_title(CHECK, BASE_BRANCH)
+    title = base_ci_red.triage_title(BASE_BRANCH)
     gh.add_issue(900, title=title, state="closed")
     monkeypatch.setattr(seam, "run_command", gh)
-    assert base_ci_red.triage_url(REPO, CHECK, BASE_BRANCH) is None
-    assert base_ci_red.open_triage_issue(REPO, CHECK, BASE_BRANCH) is None
+    assert base_ci_red.triage_url(REPO, BASE_BRANCH) is None
+    assert base_ci_red.open_triage_issue(REPO, BASE_BRANCH) is None
 
 
 def test_the_triage_lookup_is_best_effort(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda *a, **k: "{}")
-    assert base_ci_red.triage_url(REPO, CHECK, BASE_BRANCH) is None
+    assert base_ci_red.triage_url(REPO, BASE_BRANCH) is None
     monkeypatch.setattr(seam, "run_command", lambda *a, **k: "not json")
-    assert base_ci_red.triage_url(REPO, CHECK, BASE_BRANCH) is None
+    assert base_ci_red.triage_url(REPO, BASE_BRANCH) is None
 
 
 # --------------------------------------------------------------------------
@@ -487,7 +487,8 @@ def test_fix_base_opens_an_ai_ready_p0_issue_in_the_active_milestone(
         issue["title"]: issue
         for number, issue in gh.issues.items() if number != 1825
     }
-    created = titles[base_ci_red.triage_title(CHECK, BASE_BRANCH)]
+    assert len(titles) == 1
+    created = titles[base_ci_red.triage_title(BASE_BRANCH)]
     assert set(created["labels"]) == {"ai-ready", "p0"}
     assert created["milestone"] == 7
     assert RUN_URL in created["body"]
@@ -501,7 +502,7 @@ def test_fix_base_reuses_an_open_triage_issue_and_reports_reused(monkeypatch):
     _blocks_issue(gh)
     gh.add_check_runs(BASE_SHA, [base_run()])
     gh.add_issue(
-        950, title=base_ci_red.triage_title(CHECK, BASE_BRANCH) + " (push)",
+        950, title=base_ci_red.triage_title(BASE_BRANCH) + " (push)",
         labels=("ai-ready",),
     )
     _run_command(gh)
@@ -701,9 +702,32 @@ def test_fix_base_apply_without_a_block_fails_as_a_command_step(monkeypatch):
 # The automatic fix Issue at the scene record (Issue #2203)
 # --------------------------------------------------------------------------
 
-def _scene_gh(monkeypatch, *, open_issues=(), milestone_title=MILESTONE):
+# The production scene of Issue #2259: one base commit, three red checks.
+MULTI_CHECKS = (CHECK, "Public API contract", "e2e")
+
+
+def _multi_evidence():
+    """(check name, run link, first error line) for every red base check."""
+    return [
+        (name, f"https://github.com/acme/app/actions/runs/{index}",
+         f"{name} failed on {BASE_BRANCH}")
+        for index, name in enumerate(MULTI_CHECKS, start=1)
+    ]
+
+
+def _multi_runs():
+    """The check-runs response of a base commit red on every check."""
+    return [
+        base_run(name, url=url, errors=(error_line,))
+        for name, url, error_line in _multi_evidence()
+    ]
+
+
+def _scene_gh(monkeypatch, *, open_issues=(), milestone_title=MILESTONE,
+              base_runs=None):
     """The real scene: the base runs, the paused Issue, the Milestone."""
-    gh = _raise_gh(monkeypatch, base_runs=[base_run()],
+    gh = _raise_gh(monkeypatch,
+                   base_runs=[base_run()] if base_runs is None else base_runs,
                    open_issues=open_issues)
     gh.add_milestone(7, title=milestone_title)
     gh.add_collaborator("maintainer", "write")
@@ -720,10 +744,12 @@ def _scene_error(monkeypatch, gh, *, checks=(CHECK,)):
     return caught.value
 
 
-def _record_scene(error, *, run_id=None, milestone=MILESTONE):
+def _record_scene(error, *, run_id=None, milestone=MILESTONE,
+                  issue_number=1825):
     """Record the scene the way the delivery does (the blocked exit)."""
     outcome = failure_report.report_delivery_failure(
-        error, issue={"number": 1825, "title": "be nicer", "labels": []},
+        error, issue={"number": issue_number, "title": "be nicer",
+                      "labels": []},
         source_repo=REPO, run_id=run_id,
         pr_url=f"https://github.com/{REPO}/pull/{PR_NUMBER}",
         worktree=None, branch="b", role=runner.ROLE_REVIEW,
@@ -733,8 +759,13 @@ def _record_scene(error, *, run_id=None, milestone=MILESTONE):
 
 
 def _opened_issues(gh):
-    """Every Issue the scene opened (the paused ticket aside)."""
+    """Every Issue the scene opened or reused (the paused ticket aside)."""
     return sorted(number for number in gh.issues if number != 1825)
+
+
+def _opened_since(gh, before):
+    """Every Issue that did not exist before the step."""
+    return sorted(number for number in gh.issues if number not in before)
 
 
 def _paused_comment(gh, number=1825):
@@ -748,32 +779,121 @@ def _paused_comment(gh, number=1825):
 
 
 def test_recording_the_scene_opens_the_fix_issue_and_names_it(monkeypatch):
-    """Acceptance (Issue #2203): recording the scene opens ONE
-    `ai-ready` + `p0` fix Issue per failing check in the active
-    Milestone, and the pause comment names it instead of asking the
-    person to reply `/orbi fix-base`."""
+    """Acceptance (Issue #2259, acceptance 3): a base branch that fails ONE
+    check opens ONE `ai-ready` + `p0` fix Issue in the active Milestone,
+    in the same branch-keyed format, and the pause comment links it instead
+    of asking the person to reply `/orbi fix-base`."""
     gh = _scene_gh(monkeypatch)
     error = _scene_error(monkeypatch, gh)
     _record_scene(error)
     opened = _opened_issues(gh)
     assert len(opened) == 1, opened
     issue = gh.issues[opened[0]]
-    assert issue["title"] == base_ci_red.triage_title(CHECK, BASE_BRANCH)
+    assert issue["title"] == base_ci_red.triage_title(BASE_BRANCH)
     assert set(issue["labels"]) == {"ai-ready", "p0"}
     assert issue["milestone"] == 7
+    assert f"`{CHECK}`" in issue["body"]
     assert RUN_URL in issue["body"]
     assert ERROR_LINE in issue["body"]
     paused = _paused_comment(gh)
     assert f"created #{opened[0]}" in paused
+    assert f"#{opened[0]}" in paused
     assert "/orbi fix-base" not in paused
     assert base_ci_red.scene_receipt(error.base_ci_red) in paused
 
 
+def test_three_failing_base_checks_open_exactly_one_fix_issue(monkeypatch):
+    """Acceptance 1 (Issue #2259): the base commit fails A, B and C and a
+    delivery is paused on it. ONE open fix Issue exists for that base
+    branch, its body names every check with its run link and error lines,
+    and the pause comment links that Issue.
+
+    One fix Issue per failing check is what made every fix PR stay red on
+    the others and paused as "base is already red": with two or more red
+    checks no fix PR could ever merge.
+    """
+    gh = _scene_gh(monkeypatch, base_runs=_multi_runs())
+    error = _scene_error(monkeypatch, gh, checks=MULTI_CHECKS)
+    before = set(gh.issues)
+    _record_scene(error)
+    opened = _opened_since(gh, before)
+    assert len(opened) == 1, opened
+    issue = gh.issues[opened[0]]
+    assert issue["title"] == base_ci_red.triage_title(BASE_BRANCH)
+    assert set(issue["labels"]) == {"ai-ready", "p0"}
+    for name, url, error_line in _multi_evidence():
+        assert f"`{name}`" in issue["body"], name
+        assert url in issue["body"], name
+        assert error_line in issue["body"], name
+    # The Issue's own PR has to make ALL of them green: that is what turns
+    # the base green and lets the paused deliveries merge by themselves.
+    assert "make all of them green" in issue["body"]
+    paused = _paused_comment(gh)
+    assert f"created #{opened[0]}" in paused
+    assert f"#{opened[0]}" in paused
+
+
+def test_a_second_paused_delivery_reuses_the_one_fix_issue(monkeypatch):
+    """Acceptance 2 (Issue #2259): a second delivery paused on the same red
+    base opens no new Issue, and both receipts point at the first one."""
+    gh = _scene_gh(monkeypatch, base_runs=_multi_runs())
+    gh.add_issue(1826, title="another delivery", labels=("ai-blocked",))
+    error = _scene_error(monkeypatch, gh, checks=MULTI_CHECKS)
+    before = set(gh.issues)
+    _record_scene(error)
+    first = _opened_since(gh, before)
+    assert len(first) == 1, first
+
+    before_second = set(gh.issues)
+    _record_scene(error, issue_number=1826)
+
+    assert _opened_since(gh, before_second) == []
+    assert f"created #{first[0]}" in _paused_comment(gh)
+    assert f"reused #{first[0]}" in _paused_comment(gh, 1826)
+
+
+def test_fix_base_on_the_same_red_base_opens_no_second_fix_issue(monkeypatch):
+    """Acceptance 2 (Issue #2259): `/orbi fix-base` on a delivery paused on
+    the same red base reuses the Issue the scene opened and opens nothing."""
+    gh = _scene_gh(monkeypatch, base_runs=_multi_runs())
+    error = _scene_error(monkeypatch, gh, checks=MULTI_CHECKS)
+    before = set(gh.issues)
+    _record_scene(error, run_id="096197d2")
+    first = _opened_since(gh, before)
+    assert len(first) == 1, first
+    gh.add_pr(PR_NUMBER, head="orbi/x", base=BASE_BRANCH)
+    gh.add_branch(BASE_BRANCH, head="head")
+    gh.add_check_runs("head", [])
+    gh.comment(1825, "/orbi fix-base", login="maintainer")
+
+    base_ci_fix.recover(REPO, language_code="en", milestone=MILESTONE)
+
+    assert _opened_since(gh, before) == first
+    replies = [comment["body"] for comment in gh.issues[1825]["comments"]]
+    assert any(f"reused #{first[0]}" in body for body in replies), replies
+
+
+def test_a_closed_fix_issue_is_never_reused_for_a_new_red_base(monkeypatch):
+    """Acceptance 4 (Issue #2259): the earlier fix Issue for the branch is
+    closed and the base turns red again — a NEW Issue is opened, the closed
+    one is not reused."""
+    gh = _scene_gh(monkeypatch)
+    gh.add_issue(900, title=base_ci_red.triage_title(BASE_BRANCH),
+                 state="closed")
+    error = _scene_error(monkeypatch, gh)
+    before = set(gh.issues)
+    _record_scene(error)
+    opened = _opened_since(gh, before)
+    assert len(opened) == 1, opened
+    assert 900 not in opened
+    assert f"created #{opened[0]}" in _paused_comment(gh)
+
+
 def test_the_scene_record_reuses_an_open_fix_issue(monkeypatch):
-    """Acceptance (Issue #2203): an open fix Issue for that check is
+    """Acceptance (Issue #2203): an open fix Issue for that base branch is
     reused — no second Issue, and the comment says so."""
     gh = _scene_gh(monkeypatch, open_issues=(
-        base_ci_red.triage_title(CHECK, BASE_BRANCH) + " (push)",
+        base_ci_red.triage_title(BASE_BRANCH) + " (push)",
     ))
     error = _scene_error(monkeypatch, gh)
     _record_scene(error)
@@ -1116,7 +1236,7 @@ def test_a_missing_run_link_and_errors_are_omitted_from_both_bodies(monkeypatch)
     assert CHECK in body
     assert "failing run" not in body
     assert "first error lines" not in body
-    triage = base_ci_fix._triage_body(bare, record(), "en")
+    triage = base_ci_fix._triage_body([bare], record(), "en")
     assert "failing run" not in triage
     assert "First error lines" not in triage
 
@@ -1160,7 +1280,7 @@ def test_a_corrupted_block_in_an_older_comment_is_skipped(monkeypatch):
 
 def test_the_triage_url_omits_a_record_without_a_url(monkeypatch):
     monkeypatch.setattr(seam, "list_issues", lambda *a, **k: [])
-    assert base_ci_red.triage_url(REPO, CHECK, BASE_BRANCH) is None
+    assert base_ci_red.triage_url(REPO, BASE_BRANCH) is None
     monkeypatch.setattr(
         seam, "run_command",
         lambda *a, **k: json.dumps([{"number": 5, "title": "x"}]),
@@ -1171,7 +1291,7 @@ def test_a_garbage_issue_create_answer_fails_the_command(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda *a, **k: "not-a-url")
     with pytest.raises(ticket_command.TicketCommandError):
         base_ci_fix._create_triage_issue(
-            REPO, base_ci_red.FailingCheck(CHECK), record(),
+            REPO, [base_ci_red.FailingCheck(CHECK)], record(),
             milestone=None, dispatch_label="ai-ready", language_code="en",
         )
 
@@ -1298,12 +1418,12 @@ def test_level_triage_lookup_skips_a_non_matching_search_hit(monkeypatch):
         seam, "list_issues",
         lambda *a, **k: [
             {"number": 1, "title": "some other issue", "url": "u1"},
-            {"number": 2, "title": base_ci_red.triage_title(CHECK, BASE_BRANCH),
+            {"number": 2, "title": base_ci_red.triage_title(BASE_BRANCH),
              "url": "u2"},
         ],
     )
-    assert base_ci_red.open_triage_issue(REPO, CHECK, BASE_BRANCH) == {
-        "number": 2, "title": base_ci_red.triage_title(CHECK, BASE_BRANCH),
+    assert base_ci_red.open_triage_issue(REPO, BASE_BRANCH) == {
+        "number": 2, "title": base_ci_red.triage_title(BASE_BRANCH),
         "url": "u2",
     }
 
