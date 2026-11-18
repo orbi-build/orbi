@@ -833,6 +833,29 @@ def test_three_failing_base_checks_open_exactly_one_fix_issue(monkeypatch):
     assert f"#{opened[0]}" in paused
 
 
+def test_the_body_names_every_check_red_on_the_base_not_only_the_pr(
+        monkeypatch):
+    """Acceptance 1 (Issue #2259), the production scene: the base commit
+    fails A, B and C while the paused delivery itself fails only A — the
+    other two are red on the base, not in that PR (the #100/#101 evidence
+    of the ticket). The ONE fix Issue names EVERY one of them with its run
+    link and error lines: a check the PR happened to keep green is still
+    red on the base, so a fix PR that leaves it out cannot turn the base
+    green, and the paused deliveries would stay paused."""
+    gh = _scene_gh(monkeypatch, base_runs=_multi_runs())
+    error = _scene_error(monkeypatch, gh, checks=(MULTI_CHECKS[0],))
+    before = set(gh.issues)
+    _record_scene(error)
+    opened = _opened_since(gh, before)
+    assert len(opened) == 1, opened
+    issue = gh.issues[opened[0]]
+    assert issue["title"] == base_ci_red.triage_title(BASE_BRANCH)
+    for name, url, error_line in _multi_evidence():
+        assert f"`{name}`" in issue["body"], name
+        assert url in issue["body"], name
+        assert error_line in issue["body"], name
+
+
 def test_a_second_paused_delivery_reuses_the_one_fix_issue(monkeypatch):
     """Acceptance 2 (Issue #2259): a second delivery paused on the same red
     base opens no new Issue, and both receipts point at the first one."""

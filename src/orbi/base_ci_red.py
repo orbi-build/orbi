@@ -16,7 +16,7 @@ This module owns that one scene:
   commit with its run link and first error lines, from the ONE
   `check-runs` response — no annotations/logs API;
 * the ONE readable comment (`comment_body`): what the user already has,
-  why it paused, the evidence, the fix Issues Orbi opened itself and the
+  why it paused, the evidence, the fix Issue Orbi opened itself and the
   remaining repair — and no empty evidence section (this is not a
   subprocess failure);
 * the in-place edits of that comment (`rewrite_state`, `remind`,
@@ -24,7 +24,7 @@ This module owns that one scene:
 * the eligibility rule the command and the scan share (`paused_scene`).
 
 The ACTION side lives beside it: `base_ci_fix` opens (or reuses) the ONE
-open `ai-ready` + `p0` fix Issue per failing base check — by itself when
+open `ai-ready` + `p0` fix Issue of the base branch — by itself when
 the scene is recorded (Issue #2203) and on the `/orbi fix-base` command —
 and runs the recovery scan (`recover`) that takes `ai-blocked` back to
 `ai-fix-needed` once the base turns green, then `stale` after
@@ -98,8 +98,8 @@ SCENE_RECEIPT = "orbi-base-ci-red-fix-issues"
 # re-read in the fix module (Issue #2203).
 PASSING_CONCLUSIONS = ("success", "neutral", "skipped")
 
-# The issue search that finds a triage Issue: one bounded page is enough
-# for a check name and branch (the title is unique per pair).
+# The issue search that finds a fix Issue: one bounded page is enough
+# for one title (the title is unique per base branch).
 _TRIAGE_SEARCH_LIMIT = 20
 
 
@@ -405,7 +405,7 @@ def comment_body(record: BaseCIRed, checks: list[FailingCheck], *,
     """The ONE readable base-branch-red comment.
 
     Order is the user's: what they already have (a ready PR), why it
-    paused, the evidence, the fix Issues, the remaining repairs. The hidden
+    paused, the evidence, the fix Issue, the remaining repairs. The hidden
     `orbi:failure:v1` block leads (the resume path reads it there) and
     the `orbi:base-ci-red:v1` block closes the body. An empty evidence
     segment is never rendered: this failure is not a subprocess exit. The

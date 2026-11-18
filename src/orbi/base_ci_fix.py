@@ -51,8 +51,9 @@ def _triage_body(checks: list[FailingCheck], record: BaseCIRed,
     """The fix Issue's body: EVERY red base check, with its run link.
 
     One Issue per base branch (Issue #2259), so its PR has to make every
-    check listed here green: the evidence is the same list the pause
-    comment shows, and the reason states that rule in as many words.
+    check listed here green: the list is every check red on the base
+    commit (`_base_red_checks`, a superset of the pause comment's
+    own evidence), and the reason states that rule in as many words.
     """
     parts = [
         language.text(language_code, "base_ci_red.triage_check",
@@ -78,6 +79,24 @@ def _triage_body(checks: list[FailingCheck], record: BaseCIRed,
 def _check_list(checks: list[FailingCheck]) -> str:
     """The red base checks as the body's inline list (`ci`, `e2e`)."""
     return ", ".join(f"`{check.name}`" for check in checks)
+
+
+def _base_red_checks(repo: str, record: BaseCIRed) -> list[FailingCheck]:
+    """EVERY check failing on the base commit of the pause (Issue #2259).
+
+    `record.failing_checks` holds only the names the PAUSED PR itself
+    failed, and the fix Issue must name every check red on the base
+    branch: a check the PR happened to keep green is still red on the
+    base, so a fix PR that leaves it out cannot turn the base green. The
+    record's names stay first (the merge gate's order, the order the
+    pause comment shows), then the rest of the base's red checks.
+    """
+    names = list(record.failing_checks)
+    names += [
+        name for name in _newest_runs(commit_check_runs(repo, record.base_sha))
+        if name not in names
+    ]
+    return failing_checks(repo, names, record.base_sha)
 
 
 def _create_triage_issue(repo: str, checks: list[FailingCheck],
@@ -124,7 +143,7 @@ def open_fix_issues(
     empty evidence read returns the one "no evidence" sentence — no Issue
     is invented for a check GitHub no longer reports.
     """
-    checks = failing_checks(repo, list(record.failing_checks), record.base_sha)
+    checks = _base_red_checks(repo, record)
     if not checks:
         return [language.text(
             language_code, "base_ci_red.triage_no_evidence",
@@ -161,7 +180,7 @@ def ensure_fix_issues(
     milestone: str | None = None, dispatch_label: str = READY_LABEL,
     language_code: str = language.DEFAULT_LANGUAGE,
 ) -> list[str] | None:
-    """The engine-initiated run: the fix Issue(s), ONCE per scene.
+    """The engine-initiated run: the fix Issue, ONCE per scene.
 
     Returns the reader-facing lines the pause comment renders, or
     `None` when this scene already ran — the pause comment it already
@@ -335,7 +354,7 @@ def recover(repo: str, *, language_code: str,
 
 
 # --------------------------------------------------------------------------
-# The pause comment: naming the fix Issues the engine already opened
+# The pause comment: naming the fix Issue the engine already opened
 # --------------------------------------------------------------------------
 
 def scene_comment(
@@ -344,9 +363,9 @@ def scene_comment(
     status_url: str | None = None, milestone: str | None = None,
     dispatch_label: str = READY_LABEL,
 ) -> str:
-    """The base-branch-red comment, with the fix Issues Orbi opened itself.
+    """The base-branch-red comment, with the fix Issue Orbi opened itself.
 
-    Recording the scene and opening its fix Issues are ONE step (Issue
+    Recording the scene and opening its fix Issue are ONE step (Issue
     #2203): the comment names what `ensure_fix_issues` opened or reused,
     and that run is once per scene — its receipt rides in this same
     comment. A failed run is a bypass (it is logged inside
@@ -422,7 +441,7 @@ def _fix_base_apply(
     text, so a copied one must never read as "the fix Issue was opened"
     (Issue #1992).
 
-    The lookup/create loop is `open_fix_issues`, the SAME code the scene
+    The lookup/create path is `open_fix_issues`, the SAME code the scene
     record runs by itself (Issue #2203): a fix Issue the engine opened is
     therefore reused here, and the reply says so.
     """
