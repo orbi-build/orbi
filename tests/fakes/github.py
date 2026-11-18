@@ -939,6 +939,19 @@ class FakeGh:
         )
 
 
+def install_run_command(monkeypatch, fake) -> None:
+    """Answer every `gh` call with `fake` at the ONE subprocess seam.
+
+    A test that only needs a scripted answer installs it here instead of
+    writing a new `monkeypatch.setattr` site in `tests/` (patch ratchet,
+    Issue #789): the seam fan-out replaces `run_command` in every module
+    that binds it, so the answer is the same one the `gh` CLI would give.
+    """
+    from seam import seam
+
+    monkeypatch.setattr(seam, "run_command", fake)
+
+
 def no_current_issue(monkeypatch) -> None:
     """Fake the `gh issue list` boundary: no current Issue is observed.
 

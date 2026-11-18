@@ -43,7 +43,9 @@ import json
 import re
 import subprocess
 
-from orbi import comment_trust, failure, gh_response, language, user_summary
+from orbi import (
+    blocked_scan, comment_trust, failure, gh_response, language, user_summary,
+)
 from orbi.blocked_comment import post_blocked_comment
 from orbi.comment_kind import (
     COMMENT_KIND_FAILURE, comment_kind, comment_kind_marker,
@@ -54,8 +56,8 @@ from orbi.delivery_labels import (
     BLOCKED_LABEL, FIX_NEEDED_LABEL, READY_LABEL,
 )
 from orbi.github import (
-    edit_issue, issue_comments, issue_labels, list_issues, pr_number,
-    run_gh_read_command, update_issue_comment,
+    edit_issue, issue_labels, pr_number, run_gh_read_command,
+    update_issue_comment,
 )
 from orbi.github_feedback import pr_delivery_rollup
 from orbi.journal import LOGGER, event
@@ -81,10 +83,6 @@ MISSING_PERMISSION = "statuses: read"
 _MARKER = "orbi:check-permission:v1"
 BLOCK_TEMPLATE = f"<!-- {_MARKER} {{payload}} -->"
 _FIELDS = ("schema", "pr", "state")
-
-# One bounded page per recovered scan: `ai-blocked` Issues are few, and an
-# unbounded scan would multiply the per-tick read cost.
-_SCAN_LIMIT = 200
 
 # GitHub's own sentence for an App permission refusal. `gh pr view` is a
 # GraphQL subcommand and prints NO response status line, so this sentence
@@ -390,6 +388,8 @@ def recover(repo: str) -> list[int]:
 
     One bounded scan per tick, before the resume scan: an `ai-blocked`
     Issue is skipped by every claim scan, so this is the only path back.
+    The state it walks is the tick's ONE read (`orbi.blocked_scan`, Issue
+    #2218): the other scans over the same label answer from it.
     For each Issue whose trusted record is still `waiting`:
 
     - the read succeeds -> `ai-blocked` becomes `ai-fix-needed` (the
@@ -400,13 +400,11 @@ def recover(repo: str) -> list[int]:
 
     Returns the Issue numbers that were resumed.
     """
+    reads = blocked_scan.blocked_reads(repo)
     resumed: list[int] = []
-    for issue in list_issues(
-        repo, state="open", label=BLOCKED_LABEL,
-        json_fields="number,title", limit=_SCAN_LIMIT,
-    ):
+    for issue in reads.blocked_issues():
         number = issue["number"]
-        located = _waiting_block(issue_comments(number, repo=repo), repo=repo)
+        located = _waiting_block(reads.comments(number), repo=repo)
         if located is None:
             continue
         record, comment = located
@@ -428,5 +426,6 @@ def recover(repo: str) -> list[int]:
             "checks_permission_recovered", issue=number, pr=record.pr,
             permission=MISSING_PERMISSION,
         )
+        reads.retire(number)
         resumed.append(number)
     return resumed
