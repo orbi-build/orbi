@@ -329,7 +329,7 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 | 标签 | 含义 |
 |---|---|
 | `ai-ready` | 明确派发给 Orbi；可以被领取 |
-| `ai-in-progress` | 已领取、正在执行。resume opened-PR 交付时 Runner 先幂等回填该标签再继续（Issue #178）；被杀后的残留由下一 tick 接回 |
+| `ai-in-progress` | 已领取、正在执行。resume opened-PR 交付时 Runner 先幂等回填该标签再继续（Issue #178）；被杀后的残留由下一 tick 接回（前提是本部署仍持有该任务 worktree 与 run state 文件；不是本部署启动的 Issue 属于另一个部署，会被跳过，Issue #2256） |
 | `ai-pr-opened` | PR 已创建并验收；等待独立审查 |
 | `ai-fix-needed` | PR head 尚不可合并，或已有 run/PR 的可恢复失败（Issue #50）；下一 tick 在同一 run、branch、worktree、PR 上继续 |
 | `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支。合并同时清除 `ai-ready`，因此合并后的 Issue 只剩 `ai-merged`（Issue #1526；不回溯已合并的 Issue） |

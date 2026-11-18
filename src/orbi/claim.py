@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -24,7 +23,7 @@ from orbi.delivery_labels import (
     P0_LABEL, PR_OPENED_LABEL, READY_LABEL, RELEASE_LABEL, label_name_set,
 )
 from orbi.delivery_scene import (
-    EXTERNAL_PR_MARKER, DeliveryScene, body_markers, classify,
+    EXTERNAL_PR_MARKER, body_markers, classify,
 )
 from orbi.github import (
     verify_epic_complete, close_issue,
@@ -34,7 +33,10 @@ from orbi.github import (
     run_gh_read_command,
 )
 from orbi.journal import LOGGER, current_run_id, event, new_run_id, set_run_id
-from orbi.pilot_slots import slot_held_deliveries, slot_occupancy
+from orbi.pilot_slots import slot_held_deliveries
+from orbi.restart_scan import (
+    SCAN_CLAIMABLE_SCENES, pick_in_progress_issue,
+)
 from orbi.resume_scan import (
     ResumeHooks, pick_awaiting_merge_delivery, pick_resumable_delivery,
 )
@@ -307,25 +309,6 @@ def reconcile_orphan_prs(
     return evidence
 
 
-# The scenes the ready scans claim: the fresh-claim family of the
-# delivery-scene classification. A release candidate is
-# claimable only through the release fallback scan's `allow_release`
-# gate above; the classification still names its scene. A candidate
-# that classifies elsewhere is skipped — a terminal state the query's
-# index lagged behind, or an in-flight/opened-PR state another scan
-# owns — and a candidate carrying NO readable labels fails open (the
-# is_epic/is_release convention): the query is the claim authority.
-_FRESH_CLAIM_SCENES = frozenset({
-    DeliveryScene.FRESH_CLAIM,
-    DeliveryScene.RELEASE,
-    DeliveryScene.CONTENT_ONLY,
-    DeliveryScene.OPS,
-})
-_SCAN_CLAIMABLE_SCENES = _FRESH_CLAIM_SCENES | {
-    DeliveryScene.RESTART_IN_FLIGHT,
-}
-
-
 def _pick_from_scan(
     issues: list[dict], repo: str, allow_release: bool = False,
     active_milestone: str | None = None,
@@ -434,7 +417,7 @@ def _pick_from_scan(
                 body_markers=body_markers(issue.get("body")),
                 ready_label=ready_label,
             )
-            if scene_value not in _SCAN_CLAIMABLE_SCENES:
+            if scene_value not in SCAN_CLAIMABLE_SCENES:
                 event(
                     "claim_yield", issue=issue.get("number"),
                     reason=f"scene_{scene_value.value}",
@@ -590,85 +573,6 @@ def pick_issue(repo: str, active_milestone: str | None = None,
     )
 
 
-def pick_in_progress_issue(
-    repo: str, slot_dir: Path, max_concurrency: int,
-    dispatch_label: str = READY_LABEL,
-) -> dict | None:
-    """Return one in-flight Issue a killed runner left behind.
-
-    `dispatch_label` is the repository's claim label: a
-    repository policy may replace `ai-ready` with its own label, and the
-    in-flight scan must find the SAME queue entry the ready scan used —
-    otherwise a killed (or model-wait-recovered) run would be stranded
-    forever in a repository with a custom dispatch label.
-
-    A SIGKILLed runner leaves the task worktree and the `ai-in-progress`
-    claim label behind (the failure path never ran); the Issue keeps
-    `ai-ready` too (a claim never removes it). The ready scan excludes
-    `ai-in-progress`, so without this scan the run is never resumed and
-    the Issue is stuck forever — the "restart finds
-    the same progress comment by run marker" would be unreachable in the
-    production flow. `process_issue`'s resume block (newest worktree's
-    run id) then reuses the run instead of starting a second one. Every
-    other delivery state is excluded: those Issues are owned by the
-    resumable-PR scan (`ai-fix-needed`) or are terminal. `ai-epic` is
-    excluded too: a legacy Epic left behind with
-    `ai-in-progress` (the #80 scene, before the Epic mechanism existed)
-    must never be resumed into a run — an Epic is coordination, not an
-    executable task.
-
-    The scan runs only when no OTHER runner is live: a slot held by
-    another process proves a live runner is working (on this or another
-    Issue), so the `ai-in-progress` label is in flight, not orphaned —
-    resuming it here would start a second Pi for a run that is alive.
-    This runner's own slot is excluded: `main` took it before the claim
-    scan and holds it for the whole delivery.
-    """
-    mine = os.getpid()
-    for _, holder in slot_occupancy(slot_dir, max_concurrency):
-        if holder is not None and holder != mine:
-            return None
-    label = dispatch_label or READY_LABEL
-    # `labels`: a P0 a killed runner left behind
-    # keeps its priority in the progress comment on resume.
-    # `milestone`: a release run killed mid-release is
-    # resumed with THIS dict, and `process_release` scopes its
-    # leftover-delivery gate to the release's own Milestone — the
-    # Issue is the authority (never `active_milestone`: a resume is
-    # not gated by a Milestone change).
-    issues = list_issues(
-        repo, state="open",
-        search=(
-            f"label:{label} label:{IN_PROGRESS_LABEL} "
-            f"-label:{PR_OPENED_LABEL} -label:{FIX_NEEDED_LABEL} "
-            f"-label:{MERGED_LABEL} -label:{BLOCKED_LABEL} "
-            f"-label:{EPIC_LABEL}"
-        ),
-        json_fields="number,title,body,labels,milestone", limit=1,
-    )
-    candidate = issues[0] if issues else None
-    if candidate is not None:
-        # The same pure classification the dispatch runs.
-        # This scan hands the candidate to `process_issue`, whose full
-        # fact set decides the handler, so the scan skips only a
-        # candidate that left EVERY claimable state (a relabel inside
-        # the query's staleness window); a candidate with no readable
-        # labels fails open (the is_epic/is_release convention).
-        current_labels = label_name_set(candidate)
-        if current_labels:
-            scene_value = classify(
-                labels=current_labels, scene=None, pr_state=None,
-                body_markers=body_markers(candidate.get("body")),
-            )
-            if scene_value not in _SCAN_CLAIMABLE_SCENES:
-                event(
-                    "claim_yield", issue=int(candidate["number"]),
-                    reason=f"scene_{scene_value.value}",
-                )
-                return None
-    return candidate
-
-
 def pick_next_issue(
     repos: list[str], active_milestone: str | None = None,
 ) -> tuple[str, dict] | None:
@@ -812,6 +716,7 @@ def pick_next_delivery(
         issue = pick_in_progress_issue(
             repo, slot_dir, max_concurrency,
             dispatch_label=dispatch_label,
+            repo_dir=config.repo_dir if config is not None else None,
         )
         if issue is not None:
             return repo, issue, None

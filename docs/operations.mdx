@@ -548,6 +548,7 @@ registry — in both directions (a name only in code or only in docs fails
 | `fresh_claim_route` | which ready-claim scan produced the pickup |
 | `foreign_pr_ignored` | a cross-repository PR was ignored in a branch lookup |
 | `claim_yield` | the claim was yielded to a concurrent claimant |
+| `restart_scan_skipped` | an in-flight `ai-in-progress` Issue was skipped: this deployment holds no worktree + run state file for it (another deployment started the run, Issue #2256) |
 | `clarify_needs_detail` | the thin-ticket gate stopped the claim: the missing pieces are on the Issue |
 | `clarify_already_stopped` | the thin-ticket gate saw an unchanged, already-stopped body: no model call, comment or notification |
 | `clarify_stop_untrusted` | a comment carried a stop marker this runner did not write: ignored, the gate judges normally |
@@ -1380,7 +1381,7 @@ continues, and a successful tick with deletions logs
 |---|---|---|
 | `ai-blocked` | Only an external precondition the AI cannot safely judge or fix (Issue #50: unrecoverable scene, base-branch config change, review rounds exhausted, PR closed without merge, delivery branch deleted from the remote) — the comment states WHY automatic recovery is impossible | Read the Issue comment (scene + reason) and the journal. Fix the environment or the task, then either relabel the same PR path as `ai-fix-needed` (same run continues) or remove the labels and re-dispatch as a fresh `ai-ready` (new run). It normally requires a person. Since v0.7.15, `base_ci_red` is a narrow automatic-recovery exception; see [Workflow](/workflow#a-delivery-paused-on-a-red-base-branch-base_ci_red). |
 | `ai-fix-needed` | The PR head is not mergeable yet (review finding, base conflict) or an AI-recoverable failure of the run/PR (Issue #50: Pi execution failure, verification failure, unpushed local commit) | Nothing — the next tick resumes the same run_id, branch, worktree and PR and starts the next review session, which absorbs the latest base in-session. A missing worktree is not a failure: the resume rebuilds it from the remote delivery branch (Issue #807). |
-| Leftover `ai-in-progress` after a kill | The Runner was SIGKILLed mid-task | The next tick's resume scan picks it up (only when no other Runner is alive): same run id, same worktree, same progress comment — no new run. |
+| Leftover `ai-in-progress` after a kill | The Runner was SIGKILLed mid-task | The next tick's resume scan picks it up (when no other Runner is alive on this host, and this deployment still holds the task worktree with its run state file): same run id, same worktree, same progress comment — no new run. An `ai-in-progress` Issue this deployment has no worktree for is skipped with `restart_scan_skipped`: another deployment started that run, so it is never restarted here — if that deployment is gone, a human relabels the Issue (Issue #2256). |
 
 The run artifacts (plan, test log, session JSONL) stay in the task
 worktree as the local record; GitHub carries the delivery record.
