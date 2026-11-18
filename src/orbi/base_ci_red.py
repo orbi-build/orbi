@@ -16,7 +16,7 @@ This module owns that one scene:
   commit with its run link and first error lines, from the ONE
   `check-runs` response — no annotations/logs API;
 * the ONE readable comment (`comment_body`): what the user already has,
-  why it paused, the evidence, the fix Issues Orbi opened itself and the
+  why it paused, the evidence, the fix Issue Orbi opened itself and the
   remaining repair — and no empty evidence section (this is not a
   subprocess failure);
 * the in-place edits of that comment (`rewrite_state`, `remind`,
@@ -24,7 +24,7 @@ This module owns that one scene:
 * the eligibility rule the command and the scan share (`paused_scene`).
 
 The ACTION side lives beside it: `base_ci_fix` opens (or reuses) the ONE
-open `ai-ready` + `p0` fix Issue per failing base check — by itself when
+open `ai-ready` + `p0` fix Issue of the base branch — by itself when
 the scene is recorded (Issue #2203) and on the `/orbi fix-base` command —
 and runs the recovery scan (`recover`) that takes `ai-blocked` back to
 `ai-fix-needed` once the base turns green, then `stale` after
@@ -98,8 +98,8 @@ SCENE_RECEIPT = "orbi-base-ci-red-fix-issues"
 # re-read in the fix module (Issue #2203).
 PASSING_CONCLUSIONS = ("success", "neutral", "skipped")
 
-# The issue search that finds a triage Issue: one bounded page is enough
-# for a check name and branch (the title is unique per pair).
+# The issue search that finds a fix Issue: one bounded page is enough
+# for one title (the title is unique per base branch).
 _TRIAGE_SEARCH_LIMIT = 20
 
 
@@ -319,29 +319,31 @@ def repr_name(record: BaseCIRed) -> str:
 
 
 # --------------------------------------------------------------------------
-# The triage Issue: one open Issue per (check, base branch)
+# The fix Issue: ONE open Issue per base branch (Issue #2259)
 # --------------------------------------------------------------------------
 
-def triage_title(check_name: str, base_branch: str) -> str:
+def triage_title(base_branch: str) -> str:
     """The one title format shared by the lookup and the create.
 
-    It is the format the CI triage workflow already writes
-    (`CI failure: <check> on branch <branch>`), so a delivery-side fix
-    Issue and a workflow-side one are the same record, not two.
+    Keyed on the BASE BRANCH, never on a check (Issue #2259): the fix
+    Issue's PR has to turn every red check green, because a PR that
+    repairs only its own check stays red on the others and is paused as
+    "the base is already red" — so per-check Issues could never merge. The
+    CI triage workflow's per-check `CI failure: <check> on branch <branch>`
+    titles stay its own record and are not reused here.
     """
-    return f"CI failure: {check_name} on branch {base_branch}"
+    return f"CI failure on branch {base_branch}"
 
 
-def open_triage_issue(repo: str, check_name: str,
-                      base_branch: str) -> dict | None:
-    """The OPEN triage Issue for this check, or None.
+def open_triage_issue(repo: str, base_branch: str) -> dict | None:
+    """The OPEN fix Issue of this base branch, or None.
 
     `state="open"` on purpose: a CLOSED Issue is done and must never be
     reused as the tracker of a new red base. A failed read PROPAGATES: a
     lookup that silently read as "none" would make `/orbi fix-base`
     open a SECOND fix Issue beside the one it could not see.
     """
-    prefix = triage_title(check_name, base_branch)
+    prefix = triage_title(base_branch)
     issues = list_issues(
         repo, state="open", search=f'"{prefix}" in:title',
         json_fields="number,url,title", limit=_TRIAGE_SEARCH_LIMIT,
@@ -352,18 +354,18 @@ def open_triage_issue(repo: str, check_name: str,
     return None
 
 
-def triage_url(repo: str, check_name: str, base_branch: str) -> str | None:
-    """The existing OPEN triage Issue's URL (best effort, never fails).
+def triage_url(repo: str, base_branch: str) -> str | None:
+    """The existing OPEN fix Issue's URL (best effort, never fails).
 
     The failure comment is a bypass: a failed lookup drops the link, it
     never changes the delivery's own outcome.
     """
     try:
-        issue = open_triage_issue(repo, check_name, base_branch)
+        issue = open_triage_issue(repo, base_branch)
     except Exception:
         LOGGER.exception(
-            "delivery_ci_triage_lookup_failed repo=%s check=%s",
-            repo, check_name,
+            "delivery_ci_triage_lookup_failed repo=%s base_branch=%s",
+            repo, base_branch,
         )
         return None
     url = issue.get("url") if issue else None
@@ -403,7 +405,7 @@ def comment_body(record: BaseCIRed, checks: list[FailingCheck], *,
     """The ONE readable base-branch-red comment.
 
     Order is the user's: what they already have (a ready PR), why it
-    paused, the evidence, the fix Issues, the remaining repairs. The hidden
+    paused, the evidence, the fix Issue, the remaining repairs. The hidden
     `orbi:failure:v1` block leads (the resume path reads it there) and
     the `orbi:base-ci-red:v1` block closes the body. An empty evidence
     segment is never rendered: this failure is not a subprocess exit. The

@@ -133,7 +133,7 @@ def test_the_cli_leaves_the_same_result_and_receipt_as_a_comment(
     comment_created = next(iter(triage_issues(commented).values()))
     cli_created = next(iter(triage_issues(terminal).values()))
     assert cli_created["title"] == comment_created["title"] == (
-        base_ci_red.triage_title(CHECK, "release/7")
+        base_ci_red.triage_title("release/7")
     )
     assert cli_created["body"] == comment_created["body"]
     assert cli_created["labels"] == comment_created["labels"]
