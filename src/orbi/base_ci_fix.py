@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from orbi import failure, language
+from orbi import blocked_scan, failure, language
 from orbi.base_ci_red import (
     PASSING_CONCLUSIONS, REMINDER_AFTER_SECONDS,
     STATE_MERGED, STATE_RESUMING, BaseCIRed, FailingCheck, comment_body,
@@ -33,14 +33,14 @@ from orbi.delivery_labels import (
 )
 from orbi.github import (
     branch_head_sha, comment_issue, commit_check_runs, edit_issue,
-    issue_comments, list_issues, pr_view,
+    issue_comments, pr_view,
 )
 from orbi.journal import LOGGER, event, run_command
 from orbi.pi_activity import parse_iso_utc
 from orbi.progress import fenced
 from orbi.ticket_command import (
     CommandSpec, TicketCommandError, command_comment_key,
-    command_receipt_marker, failure_reason, process_commands,
+    command_receipt_marker, execute_command, failure_reason,
     runner_receipt,
 )
 
@@ -247,13 +247,14 @@ def recover(repo: str, *, language_code: str,
 
     One bounded scan per tick, before the resume scan: an `ai-blocked`
     Issue is a terminal state no claim scan picks up, so this is the only
-    path back. The base branch is the BLOCK's (the configured one the
-    delivery reported) — never a hard-coded `main`. For each Issue whose
-    LATEST TRUSTED failure is the `base_ci_red` one and whose record in
-    that SAME comment is `waiting` (an older record a newer trusted
-    failure superseded — including a newer failure that carries no record
-    or no base-CI block — and a copied record from an author without
-    write permission, are never eligible — Issue #1833):
+    path back. The state it walks is the tick's ONE read
+    (`orbi.blocked_scan`, Issue #2218). The base branch is the BLOCK's (the
+    configured one the delivery reported) — never a hard-coded `main`.
+    For each Issue whose LATEST TRUSTED failure is the `base_ci_red` one
+    and whose record in that SAME comment is `waiting` (an older record a
+    newer trusted failure superseded — including a newer failure that
+    carries no record or no base-CI block — and a copied record from an
+    author without write permission, are never eligible — Issue #1833):
 
     1. run the in-ticket `/orbi fix-base` command (its own permission
        gate and receipts);
@@ -267,19 +268,19 @@ def recover(repo: str, *, language_code: str,
     Returns the Issue numbers that were resumed.
     """
     stamp = now or datetime.now(timezone.utc)
+    reads = blocked_scan.blocked_reads(repo)
     resumed: list[int] = []
-    issues = list_issues(
-        repo, state="open", label=BLOCKED_LABEL,
-        json_fields="number,title", limit=200,
-    )
-    for issue in issues:
+    for issue in reads.blocked_issues():
         number = issue["number"]
-        scene = paused_scene(issue_comments(number, repo=repo), repo=repo)
+        comments = reads.comments(number)
+        scene = paused_scene(
+            comments, repo=repo, trusted=reads.trusted(number),
+        )
         if scene is None:
             continue
         record, comment = scene
-        process_commands(
-            repo, number, [FIX_BASE_COMMAND],
+        execute_command(
+            repo, number, FIX_BASE_COMMAND, comments=comments,
             language_code=language_code, record=record,
             milestone=milestone, dispatch_label=dispatch_label,
         )
@@ -309,6 +310,7 @@ def recover(repo: str, *, language_code: str,
                 "base_ci_red_recovered", issue=number, pr=record.pr,
                 base_branch=record.base_branch, base_head=base_head,
             )
+            reads.retire(number)
             resumed.append(number)
             continue
         if _aged_out(comment, stamp):

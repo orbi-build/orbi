@@ -15,7 +15,7 @@ LABEL it carries at that moment IS the stage the answer is read at
 """
 from __future__ import annotations
 
-from orbi import ticket_command, ticket_command_registry
+from orbi import blocked_scan, ticket_command, ticket_command_registry
 from orbi.answer import ANSWER_COMMAND
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
@@ -41,9 +41,23 @@ def run(
         limit=limit,
     )
     for label in ANSWER_LABELS:
-        ticket_command.process_labeled_commands(
-            repo, label, commands=(ANSWER_COMMAND,),
-            answer_stage=label, dispatch_label=dispatch_label,
-            language_code=language_code, limit=limit,
-        )
+        if label != BLOCKED_LABEL:
+            ticket_command.process_labeled_commands(
+                repo, label, commands=(ANSWER_COMMAND,),
+                answer_stage=label, dispatch_label=dispatch_label,
+                language_code=language_code, limit=limit,
+            )
+            continue
+        # `ai-blocked` is the tick's ONE read (Issue #2218): the permission
+        # and base-branch-red scans already read this label and every
+        # blocked Issue's comments, so the answer scan walks that same state
+        # instead of listing the label and reading the comments again.
+        reads = blocked_scan.blocked_reads(repo)
+        for issue in reads.blocked_issues():
+            ticket_command.execute_command(
+                repo, int(issue["number"]), ANSWER_COMMAND,
+                comments=reads.comments(int(issue["number"])),
+                answer_stage=label, dispatch_label=dispatch_label,
+                language_code=language_code,
+            )
 
