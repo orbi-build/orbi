@@ -17,7 +17,7 @@ import orbi.milestone as milestone
 import orbi.runner as runner
 from orbi import (
     base_ci_fix, blocked_scan, config as config_domain, pilot_slots,
-    tick_reads,
+    stopped_scans, tick_reads,
 )
 from orbi.delivery_labels import BLOCKED_LABEL, FIX_NEEDED_LABEL
 from seam import resume_deps
@@ -79,6 +79,14 @@ def _comments_reads(gh):
     return [
         command for command in _commands(gh, ["gh", "issue", "view"])
         if "comments" in command
+    ]
+
+
+def _permission_reads(gh):
+    """Every collaborator trust read of the tick, by the user it asked for."""
+    return [
+        command for command in _commands(gh, ["gh", "api"])
+        if "collaborators" in command[2]
     ]
 
 
@@ -197,6 +205,45 @@ def test_a_retired_issue_is_never_walked_again(monkeypatch):
         11, 12,
     ]
     assert len(_blocked_lists(gh)) == 2, gh.commands
+
+
+def test_the_tick_reads_each_blocked_issues_trust_once(monkeypatch):
+    """The trust read follows the ONE comments read: one permission read
+    per blocked Issue per tick, not one per scan walking it (Issue #2218).
+
+    The permission check itself is unchanged — still one read for each
+    read of a blocked Issue's comments — and it is still read again on the
+    next tick (it is never cached across ticks): only the repeated read of
+    the SAME comments inside one tick is shared.
+    """
+    gh = FakeGh(REPO)
+    for number, author in ((11, "one"), (12, "two"), (13, "three")):
+        gh.add_issue(number, title=f"blocked {number}",
+                     labels=(BLOCKED_LABEL,))
+        gh.add_pr(number + 100, head=f"orbi/issue-{number}", oid="0" * 40)
+        gh.comment(number, _permission_stop_body(number, number + 100),
+                   login=author, association="NONE")
+        gh.add_collaborator(author, "read")
+    install_run_command(monkeypatch, gh)
+
+    tick_reads.begin()
+    check_permission.recover(REPO)
+    base_ci_fix.recover(REPO, language_code="en")
+    stopped_scans.run(REPO, language_code="en")
+
+    assert sorted(command[2] for command in _permission_reads(gh)) == [
+        f"repos/{REPO}/collaborators/one/permission",
+        f"repos/{REPO}/collaborators/three/permission",
+        f"repos/{REPO}/collaborators/two/permission",
+    ], gh.commands
+    assert len(_comments_reads(gh)) == 3, gh.commands
+
+    # The trust read belongs to the tick, not to the process: the next
+    # tick reads it again (a revoked permission is never served stale).
+    tick_reads.end()
+    tick_reads.begin()
+    base_ci_fix.recover(REPO, language_code="en")
+    assert len(_permission_reads(gh)) == 6, gh.commands
 
 
 def test_the_second_scan_answers_from_the_same_tick_read(monkeypatch):

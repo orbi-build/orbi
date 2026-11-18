@@ -580,6 +580,7 @@ def edit_state(repo: str, issue_number: int, comment: dict,
 
 def _latest_trusted_failure(
     comments: list[dict], *, repo: str,
+    trusted: list[dict] | None = None,
 ) -> tuple[failure.Failure | None, dict] | None:
     """The Issue's LATEST trusted failure comment, and its record.
 
@@ -602,9 +603,15 @@ def _latest_trusted_failure(
     (`failure.parse`), so none of them may fall back to an older record it
     superseded. A `None` record is therefore the newest failure's own
     answer: this stop states no machine-readable reason.
+
+    `trusted` is the caller's already-trusted comment list
+    (`orbi.blocked_scan.BlockedReads.trusted`): a scan that shares a tick's
+    one comments read passes it, so that read pays one trust read instead
+    of one per scan (Issue #2218). Without it the list is trusted here.
     """
-    for comment in reversed(
-            comment_trust.trusted_comments(comments, repo=repo)):
+    if trusted is None:
+        trusted = comment_trust.trusted_comments(comments, repo=repo)
+    for comment in reversed(trusted):
         body = comment.get("body")
         if comment_kind(body) != COMMENT_KIND_FAILURE:
             continue
@@ -621,6 +628,7 @@ def _latest_trusted_failure(
 
 def paused_scene(
     comments: list[dict], *, repo: str,
+    trusted: list[dict] | None = None,
 ) -> tuple[BaseCIRed, dict] | None:
     """The `waiting` base-CI-red record this Issue pauses on, and its comment.
 
@@ -630,8 +638,13 @@ def paused_scene(
     `/orbi fix-base` command's own context both read it from here — the
     terminal spelling acts on exactly the scene the scan would (Issue
     #1930).
+
+    `trusted` is passed straight through to `_latest_trusted_failure`:
+    the tick's readiness scan hands over the trust read it already paid.
     """
-    located = _latest_trusted_failure(comments, repo=repo)
+    located = _latest_trusted_failure(
+        comments, repo=repo, trusted=trusted,
+    )
     if located is None:
         return None
     failure_record, comment = located

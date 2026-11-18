@@ -16,13 +16,15 @@ exactly ONE reason, so at most one scan acts on an Issue; the others skip
 it on the reason they read from the same, still-valid comments. A scan
 that DOES act calls `retire`, so a later scan never acts on the label its
 predecessor just removed. The trust read (the collaborator permission)
-stays inside `orbi.comment_trust` — one read per comments read, unchanged.
+stays inside `orbi.comment_trust`, and the tick pays it once too: `trusted`
+keeps the tick's one trust read of an Issue, so the permission check is one
+read for the tick's one comments read — unchanged in what it decides.
 """
 from __future__ import annotations
 
 import dataclasses
 
-from orbi import tick_reads
+from orbi import comment_trust, tick_reads
 from orbi.delivery_labels import BLOCKED_LABEL
 from orbi.github import issue_comments, list_issues
 
@@ -38,6 +40,7 @@ class BlockedReads:
     repo: str
     _issues: list[dict] | None = None
     _comments: dict[int, list[dict]] = dataclasses.field(default_factory=dict)
+    _trusted: dict[int, list[dict]] = dataclasses.field(default_factory=dict)
 
     def blocked_issues(self) -> list[dict]:
         """Every open `ai-blocked` Issue, read once for the tick."""
@@ -54,8 +57,24 @@ class BlockedReads:
             self._comments[number] = issue_comments(number, repo=self.repo)
         return self._comments[number]
 
+    def trusted(self, number: int) -> list[dict]:
+        """One blocked Issue's trusted comments, read once for the tick.
+
+        Trust is the existing comment rule (`orbi.comment_trust`): one
+        permission read per author. Reading it here, once per tick and
+        per Issue, keeps the permission check as it was — one read for the
+        tick's one read of that Issue's comments — instead of one read per
+        scan walking the same list (Issue #2218).
+        """
+        if number not in self._trusted:
+            self._trusted[number] = comment_trust.trusted_comments(
+                self.comments(number), repo=self.repo,
+            )
+        return self._trusted[number]
+
     def retire(self, number: int) -> None:
         """Drop an Issue a scan just acted on (its label changed)."""
+        self._trusted.pop(number, None)
         self._comments.pop(number, None)
         if self._issues is not None:
             self._issues = [

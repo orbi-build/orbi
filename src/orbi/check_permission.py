@@ -44,7 +44,7 @@ import re
 import subprocess
 
 from orbi import (
-    blocked_scan, comment_trust, failure, gh_response, language, user_summary,
+    blocked_scan, failure, gh_response, language, user_summary,
 )
 from orbi.blocked_comment import post_blocked_comment
 from orbi.comment_kind import (
@@ -307,7 +307,7 @@ def read_rollup(pr_url: str, repo: str, issue: dict, config,
 # --------------------------------------------------------------------------
 
 def _latest_trusted_failure(
-    comments: list[dict], *, repo: str,
+    trusted: list[dict],
 ) -> tuple[failure.Failure | None, dict] | None:
     """The Issue's NEWEST trusted failure comment, and its record.
 
@@ -321,9 +321,11 @@ def _latest_trusted_failure(
     The failure comment is the canonical `failure` kind marker, never the
     mere presence of an `orbi:failure:v1` block: the short milestone
     comment repeats that block (Issue #1322) and is not a failure.
+
+    `trusted` is `orbi.blocked_scan.BlockedReads.trusted`, the tick's one
+    trust read of this Issue's comments (Issue #2218).
     """
-    for comment in reversed(
-            comment_trust.trusted_comments(comments, repo=repo)):
+    for comment in reversed(trusted):
         body = comment.get("body")
         if comment_kind(body) != COMMENT_KIND_FAILURE:
             continue
@@ -337,8 +339,7 @@ def _latest_trusted_failure(
     return None
 
 
-def _waiting_block(comments: list[dict], *,
-                   repo: str) -> tuple[CheckPermission, dict] | None:
+def _waiting_block(trusted: list[dict]) -> tuple[CheckPermission, dict] | None:
     """The `waiting` record of the Issue's OWN permission stop, and its
     comment.
 
@@ -347,7 +348,7 @@ def _waiting_block(comments: list[dict], *,
     commenter authorizes nothing. The record is read only from the Issue's
     newest trusted failure, and only while that failure is this refusal.
     """
-    located = _latest_trusted_failure(comments, repo=repo)
+    located = _latest_trusted_failure(trusted)
     if located is None:
         return None
     refusal, comment = located
@@ -404,7 +405,7 @@ def recover(repo: str) -> list[int]:
     resumed: list[int] = []
     for issue in reads.blocked_issues():
         number = issue["number"]
-        located = _waiting_block(reads.comments(number), repo=repo)
+        located = _waiting_block(reads.trusted(number))
         if located is None:
             continue
         record, comment = located

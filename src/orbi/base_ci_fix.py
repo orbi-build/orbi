@@ -273,7 +273,9 @@ def recover(repo: str, *, language_code: str,
     for issue in reads.blocked_issues():
         number = issue["number"]
         comments = reads.comments(number)
-        scene = paused_scene(comments, repo=repo)
+        scene = paused_scene(
+            comments, repo=repo, trusted=reads.trusted(number),
+        )
         if scene is None:
             continue
         record, comment = scene
