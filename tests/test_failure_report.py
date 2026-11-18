@@ -1030,12 +1030,20 @@ def test_resume_blocked_comment_is_redacted_and_ends_with_help_line(
         run_id=RUN_ID,
     )
     help_line = language.text(language_code, "help.community")
+    # Issue #2245: the blocked stop now also states the terminal failure
+    # record, so a reader that identifies a stop by its record finds this
+    # one too.
+    record = failure.render(failure.Failure(
+        reason_code="human_decision_required", action_code="decide",
+        retry_safe=False, outcome="blocked",
+    ))
     # The comment layer appends the hidden runner marker; everything before
     # it is this function's body, asserted byte for byte.
     assert re.fullmatch(
         re.escape(
             f"<!-- orbi:run={RUN_ID} -->\n"
             f"<!-- orbi:comment=failure -->\n"
+            f"{record}\n"
             f"{sentence}\n"
             f"\n"
             f"{help_line}"

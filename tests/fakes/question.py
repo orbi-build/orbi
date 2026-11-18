@@ -28,13 +28,19 @@ def bind_repository(monkeypatch, fake, repo_dir) -> None:
 
 
 def bind_external_stop(monkeypatch, *, rollup, posted, labels) -> None:
-    """Bind what the external-takeover stop reads and posts through."""
+    """Bind what the external-takeover stop reads and posts through.
+
+    The stop goes through the REAL blocked exit: only its two writes are
+    replaced, so `posted` holds the comment GitHub would receive (the
+    exit adds the failure kind/record and the community help line).
+    """
     monkeypatch.setattr(
         review_merge, "pr_delivery_rollup", lambda *a, **k: rollup,
     )
+    monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
     monkeypatch.setattr(
-        review_merge, "post_blocked_comment",
-        lambda number, *, repo, body, **kwargs: posted.append(body),
+        seam, "comment_issue",
+        lambda number, *, repo, body: posted.append(body),
     )
     monkeypatch.setattr(
         review_merge, "issue_labels", lambda *a, **k: labels,
