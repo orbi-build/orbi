@@ -26,8 +26,10 @@ from orbi import scene as scene_mod
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 from seam import resume_deps, seam
+from orbi import tick_reads
 from orbi.delivery_scene import RunContext
 from conftest import rendered_prompt
+from tests.fakes.github import install_run_command
 
 
 def _b64(text: str) -> str:
@@ -461,6 +463,117 @@ def test_read_repo_config_read_failure_fails_open(caplog):
         "owner/repo", run_command=broken,
     ) is None
     assert "repo_config_read_failed" in caplog.text
+
+
+# --- one policy read per tick (Issue #2218) ---------------------------------
+
+def _counting_read(policy_text: str):
+    """The `gh api` answer for `policy_text`, counting its own reads."""
+    reads: list[list[str]] = []
+    answer = _record(policy_text)
+
+    def fake_run(command, **kwargs):
+        reads.append(command)
+        return answer(command, **kwargs)
+
+    return reads, fake_run
+
+
+def test_load_repo_policy_reads_a_repository_once_per_tick(monkeypatch):
+    """The claim loops resolve one repository's scan keys and language in
+    every loop; that tick reads its policy file once (Issue #2218)."""
+    reads, fake_run = _counting_read('dispatch_label = "repo-ready"\n')
+    install_run_command(monkeypatch, fake_run)
+    config = config_domain.RunnerConfig()
+
+    tick_reads.begin()
+    first = repo_config.load_repo_policy(config, "owner/repo")
+    second = repo_config.load_repo_policy(config, "owner/repo")
+
+    assert first == second == repo_config.RepoPolicy(
+        dispatch_label="repo-ready", sha="a" * 40,
+    )
+    assert len(reads) == 1, reads
+
+
+def test_the_next_tick_reads_the_policy_again(monkeypatch):
+    """The scope is the tick: the next tick reads the file again, so a
+    policy change between ticks is never served stale."""
+    reads, fake_run = _counting_read('dispatch_label = "repo-ready"\n')
+    install_run_command(monkeypatch, fake_run)
+    config = config_domain.RunnerConfig()
+
+    tick_reads.begin()
+    repo_config.load_repo_policy(config, "owner/repo")
+    tick_reads.end()
+    tick_reads.begin()
+    repo_config.load_repo_policy(config, "owner/repo")
+
+    assert len(reads) == 2, reads
+
+
+def test_an_absent_policy_file_is_read_once_per_tick(monkeypatch):
+    """The designed 404 no-op answers every caller of the tick from the
+    same read: the repository simply has no policy file."""
+    reads: list[list[str]] = []
+
+    def not_found(command, **kwargs):
+        reads.append(command)
+        raise subprocess.CalledProcessError(
+            1, command,
+            output='{"message":"Not Found","status":"404"}',
+            stderr="gh: Not Found (HTTP 404)",
+        )
+
+    install_run_command(monkeypatch, not_found)
+    config = config_domain.RunnerConfig()
+
+    tick_reads.begin()
+    assert repo_config.load_repo_policy(config, "owner/repo") is None
+    assert repo_config.load_repo_policy(config, "owner/repo") is None
+    assert len(reads) == 1, reads
+
+
+def test_a_malformed_policy_file_blocks_every_caller_from_one_read(
+    monkeypatch,
+):
+    """A malformed file still blocks the claim with the same reason — and
+    the tick paid one read to know it."""
+    reads, fake_run = _counting_read('source_repos = ["other/repo"]\n')
+    install_run_command(monkeypatch, fake_run)
+    config = config_domain.RunnerConfig()
+
+    tick_reads.begin()
+    for _ in range(2):
+        with pytest.raises(repo_config.RepoConfigError, match="host-only"):
+            repo_config.load_repo_policy(config, "owner/repo")
+
+    assert len(reads) == 1, reads
+
+
+def test_a_failed_policy_read_logs_once_and_falls_back_for_the_tick(
+    monkeypatch, caplog,
+):
+    """The failure path is unchanged: the same `repo_config_read_failed`
+    line and the same fallback to the host config — read once."""
+    reads: list[list[str]] = []
+
+    def broken(command, **kwargs):
+        reads.append(command)
+        raise subprocess.CalledProcessError(
+            1, command, stderr="gh: Server Error (HTTP 500)",
+        )
+
+    install_run_command(monkeypatch, broken)
+    config = config_domain.RunnerConfig()
+
+    tick_reads.begin()
+    with caplog.at_level(logging.ERROR):
+        assert repo_config.load_repo_policy(config, "owner/repo") is None
+        assert repo_config.load_repo_policy(config, "owner/repo") is None
+
+    assert len(reads) == 1, reads
+    assert caplog.text.count("repo_config_read_failed") == 1
 
 
 def test_read_repo_config_missing_file_logs_no_journal_error(

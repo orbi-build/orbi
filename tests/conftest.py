@@ -127,6 +127,25 @@ def _default_health_check_preflight(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_open_tick_reads():
+    """Default: a test starts OUTSIDE a tick's shared-read scope.
+
+    `tick_reads.begin` makes one tick answer every caller from one read of
+    a repository's `.github/orbi.toml` and of its `ai-blocked` state
+    (Issue #2218), and the scope is a module global. A test process runs
+    many ticks, so a test that opened it — or called `runner.main`,
+    through `_preflight` — must not decide what the next test reads.
+    `tick_reads.end` is the scope's own boundary, so no test writes the
+    module's internals.
+    """
+    from orbi import tick_reads
+
+    tick_reads.end()
+    yield
+    tick_reads.end()
+
+
+@pytest.fixture(autouse=True)
 def _reset_notify_binding(monkeypatch, tmp_path):
     """Default: unbind Telegram notification state between tests.
 

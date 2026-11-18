@@ -43,7 +43,9 @@ import json
 import re
 import subprocess
 
-from orbi import comment_trust, failure, gh_response, language, user_summary
+from orbi import (
+    blocked_scan, failure, gh_response, language, user_summary,
+)
 from orbi.blocked_comment import post_blocked_comment
 from orbi.comment_kind import (
     COMMENT_KIND_FAILURE, comment_kind, comment_kind_marker,
@@ -54,8 +56,8 @@ from orbi.delivery_labels import (
     BLOCKED_LABEL, FIX_NEEDED_LABEL, READY_LABEL,
 )
 from orbi.github import (
-    edit_issue, issue_comments, issue_labels, list_issues, pr_number,
-    run_gh_read_command, update_issue_comment,
+    edit_issue, issue_labels, pr_number, run_gh_read_command,
+    update_issue_comment,
 )
 from orbi.github_feedback import pr_delivery_rollup
 from orbi.journal import LOGGER, event
@@ -81,10 +83,6 @@ MISSING_PERMISSION = "statuses: read"
 _MARKER = "orbi:check-permission:v1"
 BLOCK_TEMPLATE = f"<!-- {_MARKER} {{payload}} -->"
 _FIELDS = ("schema", "pr", "state")
-
-# One bounded page per recovered scan: `ai-blocked` Issues are few, and an
-# unbounded scan would multiply the per-tick read cost.
-_SCAN_LIMIT = 200
 
 # GitHub's own sentence for an App permission refusal. `gh pr view` is a
 # GraphQL subcommand and prints NO response status line, so this sentence
@@ -309,7 +307,7 @@ def read_rollup(pr_url: str, repo: str, issue: dict, config,
 # --------------------------------------------------------------------------
 
 def _latest_trusted_failure(
-    comments: list[dict], *, repo: str,
+    trusted: list[dict],
 ) -> tuple[failure.Failure | None, dict] | None:
     """The Issue's NEWEST trusted failure comment, and its record.
 
@@ -323,9 +321,11 @@ def _latest_trusted_failure(
     The failure comment is the canonical `failure` kind marker, never the
     mere presence of an `orbi:failure:v1` block: the short milestone
     comment repeats that block (Issue #1322) and is not a failure.
+
+    `trusted` is `orbi.blocked_scan.BlockedReads.trusted`, the tick's one
+    trust read of this Issue's comments (Issue #2218).
     """
-    for comment in reversed(
-            comment_trust.trusted_comments(comments, repo=repo)):
+    for comment in reversed(trusted):
         body = comment.get("body")
         if comment_kind(body) != COMMENT_KIND_FAILURE:
             continue
@@ -339,8 +339,7 @@ def _latest_trusted_failure(
     return None
 
 
-def _waiting_block(comments: list[dict], *,
-                   repo: str) -> tuple[CheckPermission, dict] | None:
+def _waiting_block(trusted: list[dict]) -> tuple[CheckPermission, dict] | None:
     """The `waiting` record of the Issue's OWN permission stop, and its
     comment.
 
@@ -349,7 +348,7 @@ def _waiting_block(comments: list[dict], *,
     commenter authorizes nothing. The record is read only from the Issue's
     newest trusted failure, and only while that failure is this refusal.
     """
-    located = _latest_trusted_failure(comments, repo=repo)
+    located = _latest_trusted_failure(trusted)
     if located is None:
         return None
     refusal, comment = located
@@ -390,6 +389,8 @@ def recover(repo: str) -> list[int]:
 
     One bounded scan per tick, before the resume scan: an `ai-blocked`
     Issue is skipped by every claim scan, so this is the only path back.
+    The state it walks is the tick's ONE read (`orbi.blocked_scan`, Issue
+    #2218): the other scans over the same label answer from it.
     For each Issue whose trusted record is still `waiting`:
 
     - the read succeeds -> `ai-blocked` becomes `ai-fix-needed` (the
@@ -400,13 +401,11 @@ def recover(repo: str) -> list[int]:
 
     Returns the Issue numbers that were resumed.
     """
+    reads = blocked_scan.blocked_reads(repo)
     resumed: list[int] = []
-    for issue in list_issues(
-        repo, state="open", label=BLOCKED_LABEL,
-        json_fields="number,title", limit=_SCAN_LIMIT,
-    ):
+    for issue in reads.blocked_issues():
         number = issue["number"]
-        located = _waiting_block(issue_comments(number, repo=repo), repo=repo)
+        located = _waiting_block(reads.trusted(number))
         if located is None:
             continue
         record, comment = located
@@ -428,5 +427,6 @@ def recover(repo: str) -> list[int]:
             "checks_permission_recovered", issue=number, pr=record.pr,
             permission=MISSING_PERMISSION,
         )
+        reads.retire(number)
         resumed.append(number)
     return resumed

@@ -52,7 +52,7 @@ from pathlib import Path
 # preflight stubs keep patching the module global below.
 from orbi import language
 from orbi import milestone as milestone_bookkeeping
-from orbi import claim, notify, user_summary
+from orbi import claim, notify, tick_reads, user_summary
 from orbi import config as config_domain
 from orbi.blocked_comment import post_blocked_comment
 from orbi.branch_reclaim import delete_merged_delivery_branch, reclaim_merged_delivery_branches
@@ -1871,6 +1871,7 @@ def _preflight(config: config_domain.RunnerConfig) -> None:
     source-freshness gate precede the unit-drift and transport checks,
     and all of them precede any slot or claim.
     """
+    tick_reads.begin()
     # Resolve every effective per-repository title before taking a slot. A
     # repository policy may override the host value, so validating only the
     # host value (or only the first source repository) can still leave a fresh
@@ -1902,18 +1903,17 @@ def _preflight(config: config_domain.RunnerConfig) -> None:
     refresh_cli_install(
         config.deploy_home, run_command=run_command,
     )
-    # Startup source freshness: BEFORE any slot or claim,
-    # prove that the code THIS process executes is the fetched
-    # origin/main head (the import source's checkout HEAD for
-    # an editable install, the installed version vs the latest release
-    # tag for a non-editable one — all local git reads). The 09-07
-    # incident: the editable install resolved into an old issue
-    # worktree, so the preflight synced a checkout the process never
-    # executed and the stale engine failed deliveries invisibly. A stale
-    # or unverifiable source logs the structured `runner_source_stale`
-    # line (facts + fix) and fails the start: no slot, no claim, no
-    # label change. `allow_stale_runner: true` downgrades the same line
-    # to a warning (explicit offline escape hatch, never silent).
+    # Startup source freshness: BEFORE any slot or claim, prove that the
+    # code THIS process executes is the fetched origin/main head (the
+    # import source's checkout HEAD for an editable install, the installed
+    # version vs the latest release tag for a non-editable one — all local
+    # git reads). The 09-07 incident: an editable install into an old issue
+    # worktree made the preflight sync a checkout the process never
+    # executed, so the stale engine failed deliveries invisibly. A stale or
+    # unverifiable source logs the structured `runner_source_stale` line
+    # (facts + fix) and fails the start: no slot, no claim, no label
+    # change. `allow_stale_runner: true` downgrades it to a warning
+    # (explicit offline escape hatch, never silent).
     runner_source.check_runner_source_freshness(config, run_command=run_command)
     # Deployment consistency: BEFORE any slot or
     # claim the installed scheduler units must match the repo templates
@@ -2099,11 +2099,10 @@ def main(argv: list[str] | None = None) -> int:
     if config is None:
         return 1
     _preflight(config)
-    # Concurrency cap: take one slot BEFORE claiming anything.
-    # The slot is held for the whole delivery lifecycle (implement ->
-    # review -> fix -> merge) and released only after the delivery is
-    # merged or terminally failed — or when this process exits for any
-    # reason, which the kernel handles (flock on an open descriptor).
+    # Concurrency cap: take one slot BEFORE claiming anything. The slot is
+    # held for the whole delivery lifecycle (implement -> review -> fix ->
+    # merge) and released only after the delivery is merged or terminally
+    # failed — or when this process exits (flock on an open descriptor).
     slot = acquire_slot(
         config.slot_dir, config.max_concurrency, os.getpid(),
     )

@@ -35,7 +35,7 @@ import tomllib
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Callable, cast
 
-from orbi import __version__, language
+from orbi import __version__, language, tick_reads
 from orbi.delivery_labels import LIFECYCLE_STATES, READY_LABEL
 from orbi.journal import event, run_command
 
@@ -643,10 +643,10 @@ def load_repo_policy(config: RunnerConfig,
     Returns the validated :class:`RepoPolicy` with the file's blob sha
     bound, or `None` when the repository has no policy file. A
     malformed/forbidden file raises :class:`RepoConfigError` — the caller
-    fails the claim fast.
+    fails the claim fast. A tick reads the file once
+    (:func:`orbi.tick_reads.once`, Issue #2218).
     """
-    return read_repo_config(
-        source_repo,
-        path=repository_config_path(config, source_repo),
-        run_command=run_command,
-    )
+    key = (source_repo, repository_config_path(config, source_repo))
+    return tick_reads.once(key, lambda: read_repo_config(
+        source_repo, path=key[1], run_command=run_command,
+    ))
