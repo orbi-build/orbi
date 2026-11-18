@@ -843,12 +843,16 @@ Recovery needs no relabel:
   `ai-fix-needed` still resumes the delivery by hand.
 
 The fix Issue needs no comment: recording the pause opens — or reuses an
-OPEN — `CI failure: <check> on branch <base>` Issue per failing base check,
-labelled `ai-ready` + `p0` and placed in the active Milestone, through the
-same implementation the command uses. The comment names every one of them
-(`created #K` / `reused #K`) instead of asking a person to reply the command,
-and that fix Issue is an ordinary delivery: once it lands the base is green
-and the paused delivery resumes by itself (the recovery above).
+OPEN — ONE `CI failure on branch <base>` Issue for the base branch, labelled
+`ai-ready` + `p0` and placed in the active Milestone, through the same
+implementation the command uses. Its body names EVERY failing base check with
+its run link and first error lines and states that the Issue's own PR has to
+make all of them green — one Issue per failing check could never merge, because
+a PR that repairs only its own check stays red on the others and is paused as
+"the base is already red". The comment names the Issue (`created #K` /
+`reused #K`) instead of asking a person to reply the command, and that fix
+Issue is an ordinary delivery: once it lands the base is green and every paused
+delivery resumes by itself (the recovery above).
 
 The run happens once per scene. A command's receipt is keyed on the command
 comment that requested it; the engine has no such comment, so its key is the
@@ -862,8 +866,9 @@ the command repair, so a recorded pause is never lost to a failed side run.
 
 `/orbi fix-base` (write permission, one execution per comment) stays
 available and idempotent: it opens — or reuses an OPEN — the same Issue, so a
-reply after the automatic run reports `reused #K` on the paused Issue. A closed
-triage Issue is never reused.
+reply after the automatic run, or a second delivery paused on the same red base,
+reports `reused #K`. A closed fix Issue is never reused: a base that turns red
+again gets a new one.
 
 ### A delivery paused on an unapproved App permission: `checks_permission_missing`
 

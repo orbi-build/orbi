@@ -11,10 +11,10 @@ that owns them instead of growing those two.
 BASE_CI_FIX_MESSAGES: dict[str, tuple[str, str]] = {
     # The section the pause comment shows instead of asking the person to
     # reply `/orbi fix-base`: the engine already opened (or reused) the
-    # fix Issue per failing base check, and each one is an ordinary
-    # delivery, so the reader has nothing to type.
+    # fix Issue of this base branch (one per branch, Issue #2259), and it
+    # is an ordinary delivery, so the reader has nothing to type.
     "base_ci_red.fix_issues": (
-        "🧰 **Fix Issue(s) for the red base** — opened or reused by Orbi "
+        "🧰 **Fix Issue for the red base** — opened or reused by Orbi "
         "and delivered like any other Issue; no comment needed:",
         "🧰 **基础分支失败的修复 Issue** —— 已由 Orbi 自动开出或复用，"
         "并会像普通 Issue 一样交付；不需要评论：",

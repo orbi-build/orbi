@@ -593,7 +593,7 @@ def test_merge_gate_rejects_preexisting_failed_ci_as_unrecoverable(
                 "conclusion": "failure",
             }]}])
         if command[:3] == ["gh", "issue", "list"]:
-            return json.dumps([{"title": "CI failure: tests on branch main (push)",
+            return json.dumps([{"title": "CI failure on branch main",
                                 "url": "https://github.com/o/r/issues/402"}])
         return ""
 
