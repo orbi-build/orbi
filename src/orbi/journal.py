@@ -328,6 +328,8 @@ JOURNAL_EVENTS: dict[str, str] = {
     "pr_created": "the delivery PR was opened",
     "pr_base_mismatch": "the PR base branch does not match the configured base",
     "pr_head_diverged": "the PR head is not the reviewed head",
+    "pr_head_fast_forwarded": "the local branch was fast-forwarded to the PR head advanced on GitHub",
+    "pr_head_unreachable": "the PR head is missing from origin after the fetch (the branch was rewritten)",
     "pr_repo_mismatch": "the PR belongs to a different repository",
     "pr_fixes_missing": "the PR body is missing the Fixes #N keyword",
     "pr_run_marker_missing": "the PR body is missing the orbi run marker",

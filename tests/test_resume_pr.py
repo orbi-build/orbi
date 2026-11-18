@@ -4024,6 +4024,11 @@ def _resume_line_gh(monkeypatch, *, issue_comments, pr_body):
                 return "head"
             if command[1] == "merge-base":
                 return ""
+            if command[1] == "cat-file":
+                # The PR head is in the local object store (Issue #2261:
+                # the probe only decides whether a fetch precedes the
+                # head comparison).
+                return subprocess.CompletedProcess(command, 0)
             raise AssertionError(command)
         return fake(command, **kwargs)
 
@@ -4103,6 +4108,11 @@ def test_verify_resumed_pr_resume_under_a_new_run_id_continues(
                 return "head"
             if command[1] == "merge-base":
                 return ""
+            if command[1] == "cat-file":
+                # The PR head is in the local object store (Issue #2261:
+                # the probe only decides whether a fetch precedes the
+                # head comparison).
+                return subprocess.CompletedProcess(command, 0)
             raise AssertionError(command)
         return fake(command, **kwargs)
 

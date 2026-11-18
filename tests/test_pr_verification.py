@@ -23,15 +23,21 @@ objects (no re-exported name), so a stale patch aimed at `runner` fails
 loudly instead of staying green while testing nothing.
 """
 import ast
+import subprocess
 from pathlib import Path
 
 import pytest
 
 import orbi.journal as journal
+import orbi.pr_head_sync as pr_head_sync
 import orbi.pr_verification as pr_verification
 import orbi.resume_verification as resume_verification
 import orbi.runner as runner
 from seam import seam
+from tests.fakes.bootstrap_delivery import (
+    _probe_lock_free,
+    install_pr_head_advanced_scene,
+)
 from tests.fakes.github import FakeGh
 from tests.test_resume_pr import (
     FAKE_BRANCH,
@@ -127,6 +133,11 @@ def _scene_run(fake_gh: FakeGh, *, local_head: str):
     def run(command, **kwargs):
         if command[0] != "git":
             return fake_gh(command, **kwargs)
+        if command[1] == "cat-file":
+            # The PR head IS in the local object store here: the probe
+            # only decides whether a fetch precedes the head comparison
+            # (Issue #2261).
+            return subprocess.CompletedProcess(command, 0)
         return reads[command[1]]
 
     return run
@@ -176,6 +187,111 @@ def test_resume_decision_and_journal_line_are_golden(
     # The in-flight label is backfilled before the work continues.
     assert "ai-in-progress" in fake.issues[9]["labels"]
     assert "ai-pr-opened" in fake.issues[9]["labels"]
+
+
+# ---------------------------------------------------------------------------
+# golden 1b: a PR head advanced on GitHub is fast-forwarded (Issue #2261)
+# ---------------------------------------------------------------------------
+
+
+def test_resume_fast_forwards_a_pr_head_advanced_on_github(
+    monkeypatch, tmp_path, caplog, bind_run_id,
+):
+    """Issue #2261: the delivery PR branch was advanced on GitHub (the
+    "Update branch" button merges the base into it), so the PR head is a
+    commit this worktree does not even hold yet. The real resume
+    verification fetches the task branch, fast-forwards the local branch
+    to the PR head and CONTINUES on the same PR — no divergence failure,
+    no force push."""
+    fake = FakeGh("owner/repo")
+    fake.add_issue(9, title="ship", labels=("ai-pr-opened",))
+    fake.add_pr(
+        9, head=FAKE_BRANCH, base="main", oid=REMOTE_HEAD, url=FAKE_PR_URL,
+        body=f"<!-- orbi:run={FAKE_RUN_ID} -->\n\nFixes #9\n\nPlan",
+    )
+    fetched, merged = install_pr_head_advanced_scene(
+        monkeypatch, fake, branch=FAKE_BRANCH, local_head=LOCAL_HEAD,
+        pr_head=REMOTE_HEAD,
+    )
+    # The fake rejects anything else (the fake-coverage convention): the
+    # resume must not run another git command in this scene (no push, no
+    # reset, no force).
+    with pytest.raises(AssertionError, match="unexpected command"):
+        seam.run_command(["git", "push", "origin", FAKE_BRANCH])
+    expected_resume_worktree(tmp_path).mkdir(parents=True)
+    bind_run_id(FAKE_RUN_ID)
+    caplog.set_level("INFO")
+
+    url = resume_verification.verify_resumed_pr(
+        make_resume_scene(), make_resume_issue(),
+        make_resume_config(tmp_path), "owner/repo",
+    )
+
+    # The resume continues on the same, verified PR.
+    assert url == FAKE_PR_URL
+    # The commit the worktree lacked is fetched from the task branch.
+    assert fetched == [[
+        "git", "fetch", "origin",
+        f"+refs/heads/{FAKE_BRANCH}:refs/remotes/origin/{FAKE_BRANCH}",
+    ]]
+    # The local branch is fast-forwarded — never reset, never forced.
+    assert merged == [["git", "merge", "--ff-only", REMOTE_HEAD]]
+    # The decision is the journal's record, golden text and run-prefixed.
+    assert [
+        record.getMessage() for record in caplog.records
+        if record.name == JOURNAL_LOGGER
+    ] == [
+        f"[{FAKE_RUN_ID}] pr_head_fast_forwarded pr_head={REMOTE_HEAD} "
+        f"previous_head={LOCAL_HEAD} branch={FAKE_BRANCH}",
+    ]
+    # The in-flight label is backfilled before the work continues.
+    assert "ai-in-progress" in fake.issues[9]["labels"]
+
+
+def test_reconcile_pr_head_fetches_under_the_base_sync_lock(
+    monkeypatch, tmp_path,
+):
+    """Issue #171: the reconciliation fetch writes the SHARED
+    remote-tracking ref, so it holds the same base-sync lock every other
+    fetch takes — and releases it afterwards, so the next fetch is not
+    wedged behind this one."""
+    head_oid = "a" * 40
+    held = []
+    # The state dir the lock file lives in: the probe only inspects the
+    # lock, never creates its directory (the real fetch takes the lock
+    # through acquire_base_sync_lock, which does).
+    (tmp_path / ".orbi").mkdir()
+
+    def run(command, **kwargs):
+        kind = command[1]
+        if kind == "cat-file":
+            # Absent until the fetch brings the PR head in.
+            return subprocess.CompletedProcess(command, 0 if held else 1)
+        if kind == "fetch":
+            held.append(not _probe_lock_free(tmp_path))
+            return ""
+        if kind == "merge-base":
+            if command[3] == "HEAD":
+                # The local HEAD IS an ancestor of the PR head.
+                return ""
+            # …and the PR head is not an ancestor of the local HEAD.
+            raise subprocess.CalledProcessError(1, command)
+        if kind == "merge":
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(seam, "run_command", run)
+    # The fake rejects anything else (the fake-coverage convention): the
+    # reconciliation is a fetch plus at most one fast-forward, so a push
+    # (or any other command) in this scene is a dispatch bug.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        seam.run_command(["git", "push", "origin", FAKE_BRANCH])
+    pr_head_sync.reconcile_pr_head(
+        head_oid, "b" * 40, branch=FAKE_BRANCH, worktree=tmp_path,
+        repo_dir=tmp_path,
+    )
+    assert held == [True]
+    assert _probe_lock_free(tmp_path) is True
 
 
 # ---------------------------------------------------------------------------

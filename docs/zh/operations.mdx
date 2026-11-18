@@ -577,6 +577,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `pr_created` | 交付 PR 已创建 |
 | `pr_base_mismatch` | PR base 分支与配置的 base 不一致 |
 | `pr_head_diverged` | PR head 与被评审 head 分叉 |
+| `pr_head_fast_forwarded` | 本地分支已快进到 GitHub 上推进后的 PR head |
+| `pr_head_unreachable` | 拉取后 PR head 仍不在 origin 上（分支被重写） |
 | `pr_repo_mismatch` | PR 属于另一个仓库 |
 | `pr_fixes_missing` | PR body 缺少 Fixes #N 关键字 |
 | `pr_run_marker_missing` | PR body 缺少 orbi run 标记 |

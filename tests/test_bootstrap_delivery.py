@@ -3189,7 +3189,11 @@ def test_verify_pr_rejects_diverged_remote_pr_head(monkeypatch, tmp_path,
     continue on this branch."""
     def fake_run(command, **kwargs):
         if command[:3] == ["git", "merge-base", "--is-ancestor"]:
-            if command[3] == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef":
+            if command[3] in (
+                "HEAD", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            ):
+                # Neither head is an ancestor of the other: a real
+                # divergence (Issue #2261 keeps this a failure).
                 raise subprocess.CalledProcessError(
                     1, command, stderr="not an ancestor",
                 )
