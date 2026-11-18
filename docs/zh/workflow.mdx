@@ -949,8 +949,10 @@ gh issue edit <ops-issue> --add-blocked-by <dev-or-release-issue>
   具备 `actions: write` 权限，它不在上面的最低权限集里。
 - 人工审批门从不代行：environment approval、Release 批准、受保护分支的绕过都
   留给账号所有者（ops 剧本 `prompts/prompt_ops.md`）。
-- 会话从不 push、不开 PR、不合并。部署仍归仓库自己的 CI 或平台：如果仓库没有
-  会话现有凭据已经能走的部署路径，ops 票只检查运行结果，不会自造一条路径。
+- 需要改代码时仍是 Runner 的流程：会话只在 task 分支上提交然后停下——不 push、
+  不开 PR、也不合并，由 Runner 把该分支走完审查与合并（见上文 ops 语义）。部署仍
+  归仓库自己的 CI 或平台：如果仓库没有会话现有凭据已经能走的部署路径，ops 票只
+  检查运行结果，不会自造一条路径。
 
 **用户看到什么。** 三个 Issue，各承载一个事实：
 

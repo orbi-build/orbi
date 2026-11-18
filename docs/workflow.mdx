@@ -1188,10 +1188,13 @@ credentials, never from a per-ticket switch:
 - A human approval gate is never performed by the session: environment
   approvals, Release approvals and protected-branch bypasses stay with the
   account owner (the ops playbook, `prompts/prompt_ops.md`).
-- The session never pushes, never opens a PR and never merges. Deploying
-  stays with the repository's own CI or platform: when the repository has no
-  deploy path the session's existing credentials can already use, the ops
-  ticket checks the running result and does not invent one.
+- A code change is still the Runner's ceremony: the session commits on
+  the task branch and stops — it pushes nothing, opens no PR and merges
+  nothing, and the Runner takes that branch through review and merge (the
+  ops semantics above). Deploying stays with the repository's own CI or
+  platform: when the repository has no deploy path the session's existing
+  credentials can already use, the ops ticket checks the running result and
+  does not invent one.
 
 **What the user sees.** Three Issues, each carrying one fact:
 
