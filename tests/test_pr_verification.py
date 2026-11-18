@@ -29,11 +29,15 @@ from pathlib import Path
 import pytest
 
 import orbi.journal as journal
+import orbi.pr_head_sync as pr_head_sync
 import orbi.pr_verification as pr_verification
 import orbi.resume_verification as resume_verification
 import orbi.runner as runner
 from seam import seam
-from tests.fakes.bootstrap_delivery import install_pr_head_advanced_scene
+from tests.fakes.bootstrap_delivery import (
+    _probe_lock_free,
+    install_pr_head_advanced_scene,
+)
 from tests.fakes.github import FakeGh
 from tests.test_resume_pr import (
     FAKE_BRANCH,
@@ -242,6 +246,47 @@ def test_resume_fast_forwards_a_pr_head_advanced_on_github(
     ]
     # The in-flight label is backfilled before the work continues.
     assert "ai-in-progress" in fake.issues[9]["labels"]
+
+
+def test_reconcile_pr_head_fetches_under_the_base_sync_lock(
+    monkeypatch, tmp_path,
+):
+    """Issue #171: the reconciliation fetch writes the SHARED
+    remote-tracking ref, so it holds the same base-sync lock every other
+    fetch takes — and releases it afterwards, so the next fetch is not
+    wedged behind this one."""
+    head_oid = "a" * 40
+    held = []
+    # The state dir the lock file lives in: the probe only inspects the
+    # lock, never creates its directory (the real fetch takes the lock
+    # through acquire_base_sync_lock, which does).
+    (tmp_path / ".orbi").mkdir()
+
+    def run(command, **kwargs):
+        kind = command[1]
+        if kind == "cat-file":
+            # Absent until the fetch brings the PR head in.
+            return subprocess.CompletedProcess(command, 0 if held else 1)
+        if kind == "fetch":
+            held.append(not _probe_lock_free(tmp_path))
+            return ""
+        if kind == "merge-base":
+            if command[3] == "HEAD":
+                # The local HEAD IS an ancestor of the PR head.
+                return ""
+            # …and the PR head is not an ancestor of the local HEAD.
+            raise subprocess.CalledProcessError(1, command)
+        if kind == "merge":
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(seam, "run_command", run)
+    pr_head_sync.reconcile_pr_head(
+        head_oid, "b" * 40, branch=FAKE_BRANCH, worktree=tmp_path,
+        repo_dir=tmp_path,
+    )
+    assert held == [True]
+    assert _probe_lock_free(tmp_path) is True
 
 
 # ---------------------------------------------------------------------------
