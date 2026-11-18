@@ -352,10 +352,14 @@ unmanaged_units: 2
 串行化领取。调高 `max_concurrency` 只增加并发——它不会扩大 fresh-claim
 范围，也不会改变 `active_milestone` 边界（第 6 步）。
 
-失败场景是具体的：一个独立部署看不到另一个部署正在进行的交付，可能
-把那次运行误判为丢失并重启它——两个部署随后争抢同一个 Issue。让每个
-部署使用互不相交的 `source_repos`；当同一个仓库需要更高并发时，保持
-单个部署并调高 `max_concurrency`。
+失败场景是具体的：领取扫描和 slot 都是本地的，两个部署之间没有任何
+协调。它们可能在同一时间窗口里领取同一个新的 `ai-ready` Issue——各自打上
+标签、各自开始一次运行，最后推送的那个会覆盖对方的 `orbi/...-issue-N`
+分支。在途重启扫描已经不是这个缺口：只有本部署持有该 run 自己的任务
+worktree 与 run state 文件时，才会接续一个 `ai-in-progress` Issue，因此
+不会重启另一个部署正在进行的交付（Issue #2256）。让每个部署使用互不
+相交的 `source_repos`；当同一个仓库需要更高并发时，保持单个部署并调高
+`max_concurrency`。
 
 ## 4. 配置模型 provider
 

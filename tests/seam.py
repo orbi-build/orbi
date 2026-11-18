@@ -61,6 +61,7 @@ import orbi.requeue as requeue
 import orbi.run_state as run_state
 import orbi.pr_head_sync as pr_head_sync
 import orbi.pr_verification as pr_verification
+import orbi.restart_scan as restart_scan
 import orbi.resume_scan as resume_scan
 import orbi.resume_verification as resume_verification
 import orbi.runner as runner
@@ -72,7 +73,7 @@ _MODULES = (
     release_notes, release_run, pi_session, body_steering,
     runner, implementation_delivery, review_merge, merge_exec,
     review_rounds, run_state, claim,
-    resume_scan,
+    resume_scan, restart_scan,
     pr_head_sync, pr_verification, resume_verification,
     repo_config, clarify, comment_trust, requeue, question, split_apply,
     draft, draft_marker, branch_reclaim, failure_report, suggest, cli,

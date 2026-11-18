@@ -190,6 +190,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "fresh_claim_route": "which ready-claim scan produced the pickup",
     "foreign_pr_ignored": "a cross-repository PR was ignored in a branch lookup",
     "claim_yield": "the claim was yielded to a concurrent claimant",
+    "restart_scan_skipped": "an in-flight Issue was skipped: this deployment holds no worktree for it (Issue #2256)",
     "clarify_needs_detail": "the thin-ticket gate stopped the claim: the missing pieces are on the Issue",
     "clarify_already_stopped": "the thin-ticket gate saw an unchanged, already-stopped body: no model call, comment or notification",
     "clarify_stop_untrusted": "a comment carried a stop marker this runner did not write: ignored, the gate judges normally",

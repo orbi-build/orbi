@@ -1348,11 +1348,30 @@ def _add_delivery(fake, number, label):
     )
 
 
-def _tick(monkeypatch, tmp_path, *, max_concurrency=1):
+def _tick(monkeypatch, tmp_path, *, max_concurrency=1,
+          config=None):
     return claim.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", max_concurrency,
-        hooks=resume_deps(),
+        config=config, hooks=resume_deps(),
     )
+
+
+def _killed_run_worktree(repo_dir, number, run_id="abcdef02"):
+    """THIS deployment's worktree + run state for a killed run.
+
+    Since Issue #2256 the in-flight restart scan resumes an
+    `ai-in-progress` Issue only when the deployment holds its worktree
+    with a run state file — the label alone is shared with every other
+    deployment serving the repository.
+    """
+    worktree = (repo_dir / ".worktrees"
+                / f"orbi-owner-repo-issue-{number}-{run_id}")
+    worktree.mkdir(parents=True)
+    run_state.write_run_state(RunContext(
+        run_id=run_id, issue=number, branch=f"orbi/owner-repo-issue-{number}",
+        worktree=worktree, source_repo="owner/repo",
+    ))
+    return worktree
 
 
 def test_tick_reviews_a_pr_before_an_older_awaiting_merge_delivery(
@@ -1397,9 +1416,38 @@ def test_tick_resumes_an_orphaned_in_progress_issue_before_awaiting_merge(
     fake.add_issue(
         2, title="killed run", labels=(READY_LABEL, IN_PROGRESS_LABEL),
     )
-    repo, issue, scene = _tick(monkeypatch, tmp_path)
+    _killed_run_worktree(tmp_path, 2)
+    repo, issue, scene = _tick(
+        monkeypatch, tmp_path,
+        config=config_domain.RunnerConfig(repo_dir=tmp_path),
+    )
     assert (repo, issue["number"]) == ("owner/repo", 2)
     assert scene is None
+
+
+def test_tick_skips_an_in_progress_issue_another_deployment_started(
+    monkeypatch, tmp_path,
+):
+    """Issue #2256 acceptance 1, on the real tick path: an `ai-in-progress`
+    Issue this deployment holds no worktree for belongs to another
+    deployment's live delivery. The tick resumes nothing, changes no label
+    and posts no comment on it — the GitHub ledger stays exactly as it was,
+    so the two deployments never fight over the same Issue and branch."""
+    fake = _tick_queue(monkeypatch)
+    fake.add_issue(
+        2, title="another deployment's run",
+        labels=(READY_LABEL, IN_PROGRESS_LABEL),
+    )
+    config = config_domain.RunnerConfig(repo_dir=tmp_path)
+    assert _tick(monkeypatch, tmp_path, config=config) is None
+    issue = fake.issues[2]
+    assert issue["labels"] == [READY_LABEL, IN_PROGRESS_LABEL]
+    assert issue["comments"] == []
+    writes = [
+        command for command in fake.commands
+        if command[:3] in (["gh", "issue", "edit"], ["gh", "issue", "comment"])
+    ]
+    assert writes == []
 
 
 def test_tick_reviews_a_pr_though_the_awaiting_merge_page_is_full(

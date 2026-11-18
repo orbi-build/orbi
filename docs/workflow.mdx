@@ -401,7 +401,7 @@ commits — initialize them per repository (see
 | Label | Meaning |
 |---|---|
 | `ai-ready` | Explicitly dispatched to Orbi; may be claimed |
-| `ai-in-progress` | Claimed and running. The Runner idempotently backfills it before continuing a resumed opened-PR delivery (Issue #178); a leftover after a kill is resumed by the next tick |
+| `ai-in-progress` | Claimed and running. The Runner idempotently backfills it before continuing a resumed opened-PR delivery (Issue #178); a leftover after a kill is resumed by the next tick when this deployment still holds its task worktree and run state file (an Issue it did not start belongs to another deployment and is skipped, Issue #2256) |
 | `ai-pr-opened` | PR created and verified; awaiting the independent review |
 | `ai-fix-needed` | The PR head is not mergeable yet, or an AI-recoverable failure of the run/PR (Issue #50); the next tick resumes the same run, branch, worktree and PR |
 | `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch. The merge also clears `ai-ready`, so a merged Issue is `ai-merged` alone (Issue #1526; existing merged Issues are not backfilled) |
