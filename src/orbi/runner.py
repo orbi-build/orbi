@@ -182,6 +182,7 @@ from orbi.pi_command import (
 # calls them through the module and never imports a launcher name into
 # its own namespace (Article 3.3: `pi_session` imports no runner).
 from orbi import pi_session
+from orbi import delivery_push
 from orbi import review_merge
 # The ops-only branch of the implementation dispatch is its own module
 # (Issue #2006): the ops playbook and the evidence-only ops closeout live
@@ -1133,8 +1134,11 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
        commit boundary) and the PR opens on the Agent's head — the
        existing review loop absorbs the base in-session, the state
        machine is unchanged;
-    3. push: a plain push of the task branch (never a force push),
-       verified against the remote head;
+    3. push: the commits the delivery branch already carries are
+       absorbed first (`orbi.delivery_push`, Issue #2273 — a
+       restarted session's pushed commits must not be a rejected push),
+       then a plain push of the task branch (never a force push), verified
+       against the remote head;
     4. PR: exactly one open PR of the branch — created by the Runner
        with the run marker and `Fixes #<issue>` in the body when absent,
        verified by `verify_pr` with `require_latest_base=False` (this
@@ -1180,37 +1184,17 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     run_state.delivery_commit_guard(
         worktree, local_head=local_head, base_sha=base_sha, branch=branch,
     )
-    # Base freshness: the fetch updates the shared
-    # remote-tracking ref, so it runs under the base-sync lock with the
-    # deployment checkout as the lock location. A lock timeout or a
-    # fetch error fails fast — no retry, no lock bypass.
-    fetch_base_ref(repo_dir, base_branch, cwd=worktree)
-    freshness = run_state.assess_base_freshness(
-        worktree, base_branch, head="HEAD",
+    # The delivery branch may already carry pushed commits this worktree
+    # does not hold — a restarted (steered) session, a branch advanced on
+    # GitHub, an earlier run of the Issue. Absorb them BEFORE the push, so
+    # the plain push below is a fast-forward instead of a rejection that
+    # left the Issue ai-blocked (Issue #2273).
+    delivery_push.absorb_pushed_commits(
+        worktree, branch, repo_dir=repo_dir,
     )
-    if freshness is not run_state.BaseFreshness.FRESH:
-        # The base advanced while the agent worked: absorb it with a
-        # plain merge (the same base update the old agent prompt
-        # required). A conflict is rolled back: the worktree returns
-        # to the agent's exact commit boundary, the PR opens on the
-        # agent's head, and the existing review loop (ai-fix-needed ->
-        # the review session absorbs the base in-session) handles the
-        # rest — the state machine is unchanged.
-        try:
-            run_command(
-                ["git", "merge", f"origin/{base_branch}"], cwd=worktree,
-            )
-            event(
-                "base_absorbed", base_branch=base_branch, branch=branch,
-            )
-        except subprocess.CalledProcessError as exc:
-            run_command(["git", "merge", "--abort"], cwd=worktree)
-            event(
-                "base_merge_conflict", level=logging.ERROR,
-                base_branch=base_branch, branch=branch,
-                returncode=exc.returncode,
-                stderr=(exc.stderr or "").strip(),
-            )
+    delivery_push.absorb_advanced_base(
+        worktree, base_branch, branch, repo_dir=repo_dir,
+    )
     # Plain push of the task branch (never a force push), then verify
     # the remote head: the PR must be created from exactly this head.
     # The head is re-read after the absorb step: a successful base
@@ -1220,9 +1204,9 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     # refspec does not cover it, e.g. a `--single-branch` clone
     # (Issue #898).
     local_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
-    run_git_network_command(
-        ["git", "push", "origin", f"HEAD:{branch}"], cwd=worktree,
-    )
+    # A rejection here means the branch moved outside this run; the leaf's
+    # typed failure names that in plain words (Issue #2273).
+    delivery_push.push_delivery_branch(worktree, branch)
     remote_head = gitops.remote_branch_head(branch, cwd=worktree)
     if remote_head != local_head:
         event(

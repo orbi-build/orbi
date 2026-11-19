@@ -667,7 +667,7 @@ registry — in both directions (a name only in code or only in docs fails
 | `external_pr_state_probe_failed` | the external PR state probe failed |
 | `pr_created` | the delivery PR was opened |
 | `pr_base_mismatch` | the PR base branch does not match the configured base |
-| `pr_head_diverged` | the PR head is not the reviewed head |
+| `pr_head_diverged` | the PR head and the local delivery head diverged; the PR head is merged in (both sides kept) |
 | `pr_head_fast_forwarded` | the local branch was fast-forwarded to the PR head advanced on GitHub |
 | `pr_head_unreachable` | the PR head is missing from origin after the fetch (the branch was rewritten) |
 | `pr_repo_mismatch` | the PR belongs to a different repository |
@@ -733,6 +733,9 @@ registry — in both directions (a name only in code or only in docs fails
 | `worktree_reclaim_failed` | a worktree reclamation step failed (bypass; the pass continues) |
 | `branches_reclaimed` | merged-PR remote delivery branches were deleted in bulk |
 | `branch_reclaim_failed` | a remote-branch reclamation step failed (bypass; the pass continues) |
+| `delivery_branch_synced` | the local delivery branch absorbed commits the remote branch already carried (Issue #2273) |
+| `delivery_branch_merge_conflict` | the pushed delivery branch's changes conflict with this session's work; the merge was rolled back (Issue #2273) |
+| `delivery_branch_push_rejected` | the delivery branch push was rejected because the branch changed outside this run (Issue #2273) |
 | `delivery_branch_deleted` | a merged delivery's remote head branch was deleted |
 | `delivery_branch_delete_failed` | a merged delivery's remote head branch could not be deleted (bypass; the merge already landed) |
 | `worktrees_exclude_added` | a worktrees path was added to the local git exclude |
@@ -1284,8 +1287,10 @@ PR is the Runner's deterministic closeout (Issue #186, `deliver_pr`):
 the Runner re-fetches `origin/<base_branch>` under the base-sync lock,
 absorbs an advanced base with a plain `git merge` (a conflict is aborted
 and the PR opens on the agent's head — the existing review session
-absorbs the base in-session), then pushes the task branch and creates the
-PR. Before creating the PR the Runner reads the source Issue's state
+absorbs the base in-session), absorbs the commits the delivery branch
+already carries on the remote the same way (a restarted session's push, a
+branch advanced on GitHub — never a force push, Issue #2273), then pushes
+the task branch and creates the PR. Before creating the PR the Runner reads the source Issue's state
 directly: an Issue a human closed while the delivery was in flight stops
 the closeout — the pushed branch keeps the work, the closed Issue gets
 one explanatory comment, and no PR is opened (Issue #746). The per-tick

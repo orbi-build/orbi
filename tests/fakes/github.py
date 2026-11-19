@@ -964,3 +964,73 @@ def no_current_issue(monkeypatch) -> None:
     from orbi import github
 
     monkeypatch.setattr(github, "run_gh_read_command", lambda *a, **k: "[]")
+
+
+def live_pr_gh(real_run, *, pr_url: str, branch: str, run_id: str,
+               head_of, issue_number: int = 3):
+    """A `gh` responder for a REAL-git scene whose PR head moves.
+
+    The delivery branch absorb (Issue #2273) moves the worktree's HEAD
+    before the closeout push, so a fixed `headRefOid` would misreport the
+    PR: `head_of()` reads it at call time. Everything that is not one of
+    the two reads the closeout makes is delegated to `real_run` (git), so
+    the scene keeps the real repository.
+    """
+    def run(command, **kwargs):
+        if command[0] != "gh":
+            return real_run(command, **kwargs)
+        if command[1] == "issue" and command[2] == "view":
+            return json.dumps({"state": "OPEN"})
+        if command[1] == "pr" and command[2] == "list":
+            return json.dumps([{
+                "url": pr_url,
+                "baseRefName": "main",
+                "headRefName": branch,
+                "headRefOid": head_of(),
+                "body": (
+                    f"<!-- orbi:run={run_id} -->\n\n"
+                    f"Fixes #{issue_number}\n\nPlan"
+                ),
+            }])
+        raise AssertionError(f"unexpected gh command: {command}")
+    return run
+
+
+
+def install_live_pr_gh(monkeypatch, *, real_run, pr_url: str, branch: str,
+                       run_id: str, head_of, issue_number: int = 3) -> None:
+    """Install the live-PR `gh` responder on the one subprocess seam.
+
+    The patch lives here, not in the test: `tests/fakes/` is outside the
+    patch ratchet (Issue #789), so a real-git scene answers GitHub without
+    adding an internal patch site.
+    """
+    from seam import seam
+
+    monkeypatch.setattr(
+        seam, "run_command",
+        live_pr_gh(
+            real_run, pr_url=pr_url, branch=branch, run_id=run_id,
+            head_of=head_of, issue_number=issue_number,
+        ),
+    )
+
+
+def install_rejected_push(monkeypatch, *, stderr: str,
+                          returncode: int = 1) -> None:
+    """Install a rejected `git push` for the closeout's push leaf (#2273)."""
+    from seam import seam
+
+    def run(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            returncode, command, stderr=stderr,
+        )
+
+    monkeypatch.setattr(seam, "run_git_network_command", run)
+
+
+def install_broken_push(monkeypatch, *, stderr: str,
+                        returncode: int = 128) -> None:
+    """Install a push failure that is NOT an advanced-remote rejection."""
+    install_rejected_push(monkeypatch, stderr=stderr, returncode=returncode)
+

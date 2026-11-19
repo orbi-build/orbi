@@ -59,6 +59,7 @@ from orbi.github import (
 from orbi.journal import LOGGER, event, issue_context, run_command
 from orbi.pi_activity import activity_snapshot
 from orbi.pi_process import RateLimitExhaustedError
+from orbi.pr_head_sync import DeliveryBranchChangedError
 from orbi.progress import (
     FAILURE_MARKER_PATTERN, RUN_MARKER_PATTERN, ProgressPublisher,
     bump_failure_repeat, failure_marker, failure_repeat_count,
@@ -534,6 +535,41 @@ def _update_reported_failure(*, number: int, source_repo: str,
     return False
 
 
+def _typed_failure_wording(
+    exc: BaseException, *, pr_url: str | None, branch: str | None,
+    language_code: str,
+) -> tuple[bool, tuple[str, str] | None]:
+    """The reader-facing Action/Reason of a typed failure (#1651, #2273).
+
+    Two failures answer the reader themselves instead of with the generic
+    wording: the GitHub App Actions-workflow refusal (an authorization only
+    a human can grant, so the repair path names the permission) and the
+    delivery branch changed outside this run (Git answers with a "Note
+    about fast-forwards" hint that names neither the cause nor the next
+    step). Returns `(milestone_shows_the_action, (action, reason))`, or
+    `(False, None)` for a failure that keeps the generic wording.
+    """
+    if failure.workflow_permission_refused(failure_detail(exc)):
+        return True, (
+            failure.workflow_permission_action(
+                pr_url, language_code=language_code),
+            failure.workflow_permission_cause(language_code),
+        )
+    if isinstance(exc, DeliveryBranchChangedError):
+        cause = language.text(
+            language_code, "failure.delivery_branch_changed_cause",
+            branch=branch or "-",
+        )
+        return False, (
+            language.text(
+                language_code, "failure.delivery_branch_changed_action",
+                cause=cause,
+            ),
+            cause,
+        )
+    return False, None
+
+
 def report_delivery_failure(
     exc: BaseException, *, issue: dict, source_repo: str,
     run_id: str | None, pr_url: str | None, worktree: Path | None,
@@ -607,24 +643,20 @@ def report_delivery_failure(
     number = int(issue["number"])
     title = issue["title"]
     priority = issue_priority(issue)
-    # Keep `cause` as a compatibility input for callers outside the three
-    # production paths; new callers provide the three named parts.
+    # `cause` stays a compatibility input; new callers name the parts.
     if reason is None:
         reason = cause or failure_detail(exc)
     if diagnosis is None:
         diagnosis = cause or failure_detail(exc)
     blocked = not classify or is_unrecoverable_failure(exc)
-    # The GitHub App Actions-workflow refusal is an authorization only a
-    # human can grant: it is terminal (`ai-blocked`) whichever path
-    # caught it, and its reader-facing cause and repair differ from the
-    # generic credential wording. One canonical explanation below feeds
-    # the detailed comment, the terminal progress scene and the short
-    # milestone so the three surfaces cannot disagree (Issue #1651).
-    workflow_refusal = failure.workflow_permission_refused(failure_detail(exc))
-    if workflow_refusal:
+    # A typed failure carries its own cause and repair, and it is terminal
+    # (`ai-blocked`) whichever path caught it (Issues #1651, #2273).
+    workflow_refusal, wording = _typed_failure_wording(
+        exc, pr_url=pr_url, branch=branch, language_code=language_code,
+    )
+    if wording is not None:
         blocked = True
-        action = failure.workflow_permission_action(pr_url, language_code=language_code)
-        reason = failure.workflow_permission_cause(language_code)
+        action, reason = wording
     # Issue #2220: a stop that carries one structured question shows its
     # one-sentence summary as the visible Reason and — when the class is not
     # 'authority' and one recommended option is executable in place — answers

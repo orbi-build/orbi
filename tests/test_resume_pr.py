@@ -3192,11 +3192,15 @@ def test_verify_resumed_pr_recreates_missing_worktree_from_remote_branch(
     assert "ai-pr-opened" not in fake_gh.issues[9]["labels"]
 
 
-def test_verify_resumed_pr_preserves_diverged_local_branch_with_evidence(
+def test_verify_resumed_pr_continues_from_a_diverged_local_branch(
     monkeypatch, tmp_path,
 ):
-    """A reclaimed diverged branch fails before checkout and identifies
-    the local cache precisely, so a maintainer can preserve or resolve it."""
+    """Issue #2273: a rejected push left the local delivery branch carrying
+    a commit the pushed head lacks, while the pushed head carries one the
+    local branch lacks. The resume rebuilds the worktree from that leftover
+    branch and merges the PR head in — both sides kept, nothing reset,
+    nothing force-pushed — instead of blocking every later run of the Issue
+    on the leftover branch. The delivery returns to the review loop."""
     fake_git = FakeGit(tmp_path, base_branch="main")
     fake_gh = FakeGh("owner/repo")
     fake_gh.add_issue(9, title="ship", labels=("ai-pr-opened",))
@@ -3215,21 +3219,23 @@ def test_verify_resumed_pr_preserves_diverged_local_branch_with_evidence(
         return fake_gh(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    monkeypatch.setattr(gitops.socket, "gethostname", lambda: "runner-box")
-    with pytest.raises(RuntimeError) as excinfo:
-        resume_verification.verify_resumed_pr(
-            make_resume_scene(), make_resume_issue(),
-            make_resume_config(tmp_path), "owner/repo",
-        )
+    url = resume_verification.verify_resumed_pr(
+        make_resume_scene(), make_resume_issue(),
+        make_resume_config(tmp_path), "owner/repo",
+    )
 
-    message = str(excinfo.value)
-    assert FAKE_BRANCH in message
-    assert f"local={local_head}" in message
-    assert f"remote={remote_head}" in message
-    assert f"checkout {tmp_path}" in message
-    assert "host runner-box" in message
-    assert fake_git.local[FAKE_BRANCH] == local_head
-    assert not expected_resume_worktree(tmp_path).exists()
+    assert url == FAKE_PR_URL
+    # The worktree was rebuilt from the LEFTOVER branch (not reset to the
+    # pushed head), and the pushed head was merged into it.
+    worktree = expected_resume_worktree(tmp_path)
+    assert worktree.is_dir()
+    assert fake_git.worktrees[str(worktree)]["branch"] == FAKE_BRANCH
+    merged = fake_git.worktrees[str(worktree)]["head"]
+    assert fake_git.parents[merged] == [local_head, remote_head]
+    assert fake_git.local[FAKE_BRANCH] == merged
+    # The resumed delivery is in flight again (no ai-blocked, no failure
+    # comment for the maintainer to act on).
+    assert "ai-in-progress" in fake_gh.issues[9]["labels"]
 
 
 def test_verify_resumed_pr_branch_gone_from_origin_is_terminal(

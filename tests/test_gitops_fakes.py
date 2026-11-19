@@ -36,6 +36,25 @@ def test_stable_branch_exists_reads_the_remote_head(fake_git):
     ) is True
 
 
+def test_fake_git_fails_loudly_on_unsupported_shapes(fake_git):
+    """The fake's own contract (Issue #789): a command shape it does not
+    model fails instead of answering a wrong result — the merged head, the
+    object probe and `HEAD` outside a registered worktree (Issue #2273)."""
+    with pytest.raises(subprocess.CalledProcessError) as merge:
+        fake_git(["git", "merge", "c0001", "c0002"])
+    assert "unsupported command" in merge.value.stderr
+    with pytest.raises(subprocess.CalledProcessError) as probe:
+        fake_git(["git", "cat-file", "-p", "c0001"])
+    assert "unsupported command" in probe.value.stderr
+    with pytest.raises(subprocess.CalledProcessError) as head:
+        fake_git(
+            ["git", "merge-base", "--is-ancestor", "HEAD", "c0001"],
+            cwd=fake_git.repo_dir,
+        )
+    assert head.value.returncode == 128
+    assert "not a git repository" in head.value.stderr
+
+
 def test_fake_git_rejects_invalid_pull_fetches(fake_git):
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
         fake_git([
@@ -212,36 +231,46 @@ def test_create_worktree_fast_forwards_a_local_branch_behind_remote(fake_git):
     assert ["git", "branch", "--force", branch, f"origin/{branch}"] in fake_git.calls
 
 
-def test_create_worktree_rejects_local_branch_ahead_without_discarding_it(fake_git):
+def test_create_worktree_continues_from_a_local_branch_ahead_of_remote(fake_git):
+    """Issue #2273 follow-up: the rejected push's local commits are this
+    Issue's own delivery work. The next run starts from them (nothing is
+    reset, nothing is discarded), and the closeout absorbs the pushed
+    commits instead of blocking on the leftover branch."""
     branch = "orbi/owner-repo-issue-7"
     local = fake_git.commit([fake_git.base_sha])
     remote = fake_git.base_sha
     fake_git.branch(branch, local)
     fake_git.origin[branch] = remote
 
-    with pytest.raises(RuntimeError, match=rf"{branch}.*{local}.*{remote}") as excinfo:
-        gitops.create_worktree(
-            fake_git.repo_dir, "owner/repo", 7, "338f3484", fake_git.base_sha,
-            existing_branch=True,
-        )
+    path = gitops.create_worktree(
+        fake_git.repo_dir, "owner/repo", 7, "338f3484", fake_git.base_sha,
+        existing_branch=True,
+    )
 
+    assert fake_git.worktrees[str(path)]["head"] == local
     assert fake_git.local[branch] == local
-    assert str(fake_git.repo_dir) in str(excinfo.value)
+    assert not any("reset" in command for command in fake_git.calls)
 
 
-def test_create_worktree_rejects_diverged_local_branch(fake_git):
+def test_create_worktree_continues_from_a_diverged_local_branch(fake_git):
+    """Issue #2273 follow-up: after a rejected push the local branch is
+    diverged from the delivered branch (both sides carry Orbi's commits).
+    The next run reuses it — never a raise that blocks every later run,
+    never a reset that discards the unpushed work."""
     branch = "orbi/owner-repo-issue-7"
     local = fake_git.commit([fake_git.base_sha])
     remote = fake_git.commit([fake_git.base_sha])
     fake_git.branch(branch, local)
     fake_git.origin[branch] = remote
 
-    with pytest.raises(RuntimeError, match=rf"{branch}.*{local}.*{remote}"):
-        gitops.create_worktree(
-            fake_git.repo_dir, "owner/repo", 7, "338f3484", fake_git.base_sha,
-            existing_branch=True,
-        )
+    path = gitops.create_worktree(
+        fake_git.repo_dir, "owner/repo", 7, "338f3484", fake_git.base_sha,
+        existing_branch=True,
+    )
+
+    assert fake_git.worktrees[str(path)]["head"] == local
     assert fake_git.local[branch] == local
+    assert not any("reset" in command for command in fake_git.calls)
 
 
 def test_create_worktree_reuses_a_local_external_branch(fake_git):

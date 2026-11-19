@@ -327,7 +327,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     # PR verification (fresh delivery and resume).
     "pr_created": "the delivery PR was opened",
     "pr_base_mismatch": "the PR base branch does not match the configured base",
-    "pr_head_diverged": "the PR head is not the reviewed head",
+    "pr_head_diverged": "the PR head and the local delivery head diverged; the PR head is merged in (both sides kept)",
     "pr_head_fast_forwarded": "the local branch was fast-forwarded to the PR head advanced on GitHub",
     "pr_head_unreachable": "the PR head is missing from origin after the fetch (the branch was rewritten)",
     "pr_repo_mismatch": "the PR belongs to a different repository",
@@ -397,6 +397,9 @@ JOURNAL_EVENTS: dict[str, str] = {
     "worktree_reclaim_failed": "a worktree reclamation step failed (bypass; the pass continues)",
     "branches_reclaimed": "merged-PR remote delivery branches were deleted in bulk",
     "branch_reclaim_failed": "a remote-branch reclamation step failed (bypass; the pass continues)",
+    "delivery_branch_synced": "the local delivery branch absorbed commits the remote branch already carried",
+    "delivery_branch_merge_conflict": "the pushed delivery branch's changes conflict with this session's work; the merge was rolled back",
+    "delivery_branch_push_rejected": "the delivery branch push was rejected because the branch changed outside this run",
     "delivery_branch_deleted": "a merged delivery's remote head branch was deleted",
     "delivery_branch_delete_failed": "a merged delivery's remote head branch could not be deleted (bypass; the merge already landed)",
     "worktrees_exclude_added": "a worktrees path was added to the local git exclude",
