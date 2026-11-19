@@ -46,7 +46,7 @@ import orbi.worktree_retention as worktree_retention
 import orbi.gitops as gitops
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
-from orbi import failure, progress, scene
+from orbi import failure, progress, provider_balance, scene
 from tests.fakes.gitops import remote_head_answer
 import orbi.journal as journal
 from seam import resume_deps, seam
@@ -5267,6 +5267,48 @@ def test_run_review_round_returns_true_when_review_merges(
     assert number == 39
     assert edits == []
     assert comments == []
+
+
+def test_run_review_round_reports_a_provider_balance_stop_as_its_own_reason(
+        monkeypatch, tmp_path,
+):
+    """Issue #2278 acceptance on the real review-round path: a Pi session the
+    provider stopped for a missing balance. The comment says in plain words
+    that the account has no balance and what to repair, its record is the
+    account repair (never `unclassified`) and the provider's raw payload is
+    not the reason — while the round stays recoverable (`ai-fix-needed`),
+    because making the stop terminal on its first occurrence is parked."""
+    edits, comments, reviews, _ = _review_round_env(
+        monkeypatch, tmp_path,
+        review_raises=runner.RecoverablePiProcessError(
+            1, ["pi", "--print"], output="",
+            stderr=provider_balance.DETAIL,
+        ),
+    )
+    outcome = review_merge._run_review_round(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        config_domain.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
+        "owner/repo",
+    )
+
+    assert outcome is None
+    assert len(reviews) == 1
+    body = comments[0][1]["body"]
+    assert failure.parse(body) == failure.Failure(
+        reason_code="credential_missing", action_code="check_credentials",
+        retry_safe=False, outcome="fix_needed",
+    )
+    reason_line = next(
+        line for line in body.splitlines()
+        if line.startswith("**Reason:**")
+    )
+    assert "no balance" in reason_line
+    assert "insufficient_balance_error" not in body
+    assert "dead loop" not in body
+    assert "**Action:** Top up" in body
+    assert "`ai-ready`" in body
+    # The stop is recoverable: the same PR continues.
+    assert edits[-1][1]["add"] == "ai-fix-needed"
 
 
 def test_run_review_round_returns_false_on_findings(

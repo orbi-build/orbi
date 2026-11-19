@@ -143,6 +143,25 @@ FAILURE_MESSAGES: dict[str, tuple[str, str]] = {
         "然后去掉 \u0060ai-blocked\u0060、重新加上 \u0060ai-ready\u0060，"
         "下一轮会从分支当前的状态继续。整个过程没有强推，也没有覆盖任何提交。",
     ),
+    # Issue #2278: the model provider refused a request because the
+    # account has no balance (HTTP 402, `insufficient_balance_error`).
+    # The cause is the provider account, not the code, and the repair is a
+    # human's: top up or switch the key, then relabel — a plain re-queue
+    # meets the same empty account. The provider's raw payload never
+    # reaches these lines (it is not a reason a person can act on).
+    "failure.provider_balance_cause": (
+        "The model provider refused the request because the account has no "
+        "balance left (HTTP 402).",
+        "模型服务商拒绝了这次请求：账户余额不足（HTTP 402）。",
+    ),
+    "failure.provider_balance_action": (
+        "Top up the model provider account or switch to an API key that has "
+        "balance, then remove `ai-blocked` and add `ai-ready` to run this "
+        "Issue again; nothing in the code needs to change.",
+        "请给模型服务商账户充值，或换用一个有余额的 API key，然后去掉 "
+        "`ai-blocked`、重新加上 `ai-ready`，以便重新运行这个 Issue；"
+        "代码本身不需要改动。",
+    ),
     "failure.blocked_precondition": (
         "this is an external precondition the AI cannot safely judge or "
         "fix, so it cannot be recovered automatically (the Issue stays "

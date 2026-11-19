@@ -26,7 +26,7 @@ import json
 import re
 import subprocess
 
-from orbi import gh_response, language, user_summary
+from orbi import gh_response, language, provider_balance, user_summary
 from orbi.comment_kind import parse_versioned_block
 
 SCHEMA_VERSION = 1
@@ -178,9 +178,7 @@ def _validate(record: Failure) -> None:
     if record.action_code not in ACTION_CODES:
         raise FailureError(f"unknown action_code: {record.action_code!r}")
     if type(record.retry_safe) is not bool:
-        raise FailureError(
-            f"retry_safe must be a boolean, got {record.retry_safe!r}"
-        )
+        raise FailureError(f"retry_safe must be a boolean, got {record.retry_safe!r}")
 
 
 def parse(body: object) -> Failure | None:
@@ -409,7 +407,9 @@ def classify(detail: str, *, outcome: str = "blocked",
         # cannot grant: the existing `credential_missing` /
         # `check_credentials` category, a repair required before retry.
         reason_code = "credential_missing"
-    elif _CREDENTIAL_MISSING_RE.search(detail):
+    elif provider_balance.is_stop(detail) or _CREDENTIAL_MISSING_RE.search(detail):
+        # A model-provider ACCOUNT with no balance (a 402 refusal, #2278)
+        # repairs like a credential: a human fixes it, then retries.
         reason_code = "credential_missing"
     elif _timeout_is_text_only(error) and _TEXT_TIMEOUT_RE.search(detail):
         reason_code = "github_transient"

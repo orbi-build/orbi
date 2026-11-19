@@ -22,7 +22,7 @@ import pytest
 
 import orbi.failure_report as failure_report
 import orbi.runner as runner
-from orbi import failure, progress
+from orbi import failure, progress, provider_balance
 from orbi.comment_kind import (
     COMMENT_KIND_REQUEUED, comment_kind, comment_kind_marker,
 )
@@ -1296,6 +1296,109 @@ def test_report_delivery_failure_workflow_refusal_with_pr_keeps_the_pr(
     assert "`ai-fix-needed`" in body
     assert "`ai-ready`" not in body
     assert "No PR has been created." not in body
+
+
+def test_a_429_stop_is_still_the_provider_quota_stop():
+    """Issue #2278 criterion 3: the balance stop's own reason changes nothing
+    about the 429 stop (still throttling/quota) or about the Codex usage-limit
+    annotation — only the provider's missing-balance refusal moves."""
+    assert failure.classify(
+        "Error: 429 RESOURCE_EXHAUSTED. Please retry in 36.5s",
+    ).reason_code == "provider_quota"
+    assert failure.classify(
+        "the delivery command failed stderr="
+        "Codex error: The usage limit has been reached",
+    ).reason_code == "provider_quota"
+    # The balance sentence is neither a rate limit nor a transient error.
+    assert failure.classify(provider_balance.DETAIL).reason_code == (
+        provider_balance.REASON_CODE
+    )
+
+
+def test_report_delivery_failure_names_the_provider_balance_stop(monkeypatch):
+    """Issue #2278 acceptance: a provider 402 `insufficient_balance_error`
+    stop is reported as its own reason. The blocked comment says in plain
+    words that the account has no balance and what to do next (top up the
+    account or switch the key, then relabel), the provider's raw JSON never
+    reaches the Reason line, and the visible reason is not the #825 "dead
+    loop" sentence."""
+    posted = _capture_comment(monkeypatch)
+    error = subprocess.CalledProcessError(
+        402, ["pi", "--session", "/home/runner/session"],
+        output="", stderr=provider_balance.DETAIL,
+    )
+    outcome = failure_report.report_delivery_failure(
+        error,
+        issue={"number": 2278, "title": "t", "labels": []},
+        source_repo="orbi-build/orbi", run_id="b688ac4a", pr_url=None,
+        worktree=None, branch="b", role=runner.ROLE_IMPLEMENT,
+        action="Fix the failure described below and re-run this Issue.",
+        reason=(
+            "The delivery stopped before it could be completed: "
+            f"{runner.failure_detail(error)}"
+        ),
+        diagnosis=runner.failure_detail(error),
+        classify=False, evidence=False, language_code="en",
+    )
+
+    assert outcome == "blocked"
+    body = posted[0]
+    assert failure.parse(body) == failure.Failure(
+        reason_code="credential_missing", action_code="check_credentials",
+        retry_safe=False, outcome="blocked",
+    )
+    reason_line = next(
+        line for line in body.splitlines()
+        if line.startswith("**Reason:**")
+    )
+    assert "no balance" in reason_line
+    assert "insufficient_balance_error" not in body
+    assert "Insufficient Balance" not in body
+    assert "dead loop" not in body
+    # The next step is a human's: repair the provider account, then relabel.
+    assert "**Action:** Top up" in body
+    assert "`ai-ready`" in body
+    assert "/home/" not in body
+
+
+def test_report_delivery_failure_balance_stop_keeps_the_review_fix_loop(
+    monkeypatch,
+):
+    """Issue #2278: the balance stop is NOT made terminal here (that is
+    parked): the review phase still routes it to the recoverable
+    `ai-fix-needed` path, and its comment carries the plain cause and the
+    account repair instead of the provider payload."""
+    posted = _capture_comment(monkeypatch)
+    url = "https://github.com/orbi-build/orbi/pull/9"
+    error = subprocess.CalledProcessError(
+        402, ["pi"], output="", stderr=provider_balance.DETAIL,
+    )
+    outcome = failure_report.report_delivery_failure(
+        error,
+        issue={"number": 2278, "title": "t", "labels": []},
+        source_repo="orbi-build/orbi", run_id=None, pr_url=url,
+        worktree=None, branch="b", role=runner.ROLE_REVIEW,
+        reason=(
+            f"the independent review of PR {url} failed: "
+            f"{runner.failure_detail(error)}"
+        ),
+        diagnosis=runner.failure_detail(error),
+        evidence=False, language_code="en",
+    )
+
+    assert outcome == "fix_needed"
+    body = posted[0]
+    assert failure.parse(body) == failure.Failure(
+        reason_code="credential_missing", action_code="check_credentials",
+        retry_safe=False, outcome="fix_needed",
+    )
+    reason_line = next(
+        line for line in body.splitlines()
+        if line.startswith("**Reason:**")
+    )
+    assert "no balance" in reason_line
+    assert "insufficient_balance_error" not in body
+    assert "**Action:** Top up" in body
 
 
 @pytest.mark.parametrize(

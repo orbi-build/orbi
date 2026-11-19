@@ -716,8 +716,10 @@ Failure output is one JSON object on stderr and exit code 1:
 ```
 
 `code` is `invalid_input`, `invalid_draft`, `no_answer`, `session_failed`, `timeout`, `create_failed`,
-`too_many_rounds`, `no_request` or `draft_failed`. A round that times out AFTER the model
-wrote its draft returns that draft instead of failing.
+`too_many_rounds`, `no_request`, `provider_insufficient_balance` or `draft_failed`. A round that times out
+AFTER the model wrote its draft returns that draft instead of failing. A session the model provider
+stopped because its account has no balance is `provider_insufficient_balance` with the plain sentence
+(what to repair, and the HTTP 402) as its `detail` — never the provider's raw payload.
 
 The session directory layout: `<session-dir>/.pi-session/` holds the drafting
 session's Pi JSONL plus the rendered prompt and context files, and

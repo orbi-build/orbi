@@ -24,6 +24,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn
 
+from orbi import provider_balance
 from orbi.delivery_scene import RunContext
 from orbi.journal import (
     RunIdFilter,
@@ -475,11 +476,11 @@ def stream_pi(
     dir, so it keeps rising across runner restarts and the limit
     actually bites) — with the `run_failed` scene marked
     `reason=provider_rate_limited`. Long-term quota exhaustion stays out
-    of scope (#313) — no wait window is added. The one annotated non-429
-    exception is a usage-limit stop carried in the session journal's
-    newest `errorMessage`: it logs one `provider_quota` WARNING and rides
-    into the raised failure's detail (Issue #1374); every other non-429
-    exit is untouched.
+    of scope (#313) — no wait window is added. Two non-429 exits are
+    annotated: a usage-limit stop carried in the session journal's newest
+    `errorMessage` logs one `provider_quota` WARNING and rides into the
+    raised failure's detail (Issue #1374), and a provider 402 balance
+    refusal carries one plain sentence instead of its payload (#2278).
 
     `progress` is invoked on EVERY poll — an activity change
     or a heartbeat — with the current activity state, while the Pi
@@ -1122,21 +1123,21 @@ def _stream_pi_once(
             ),
         )
     if process.returncode != 0:
-        # A provider 429 exit is TRANSIENT throttling, not a
-        # task failure — the `stream_pi` retry loop backs off and
-        # re-spawns this session. The refreshed activity rides on the
-        # exception so the retry logs and the exhausted-retries terminal
-        # failure carry the exit scene.
-        if _is_rate_limited(stderr):
+        # A missing-balance refusal is its own stop and never throttling;
+        # its payload becomes the one plain sentence (Issue #2278).
+        balance_stop = provider_balance.is_stop(stderr)
+        if balance_stop:
+            stderr = provider_balance.DETAIL
+        # A provider 429 exit is TRANSIENT throttling: `stream_pi` backs
+        # off and re-spawns this session.
+        if not balance_stop and _is_rate_limited(stderr):
             raise ProviderRateLimitedError(
                 returncode=process.returncode,
                 stdout=stdout, stderr=stderr, activity=activity,
             )
-        # A provider quota stop is carried only in the session journal's
-        # newest `errorMessage` (stderr stays empty), so without this the
-        # journal reads `returned non-zero exit status 1` and a quota stop
-        # looks like a crash. Log it, put the message into the exception
-        # detail, and keep the existing recoverable raise (Issue #1374).
+        # A Codex quota stop lives only in the journal's newest
+        # `errorMessage` (stderr stays empty): log it and put the message
+        # into the exception detail so it is not read as a crash (#1374).
         quota_message = activity.get("error_message")
         if (quota_message is not None
                 and _PROVIDER_QUOTA_MESSAGE in quota_message.lower()):
@@ -1146,17 +1147,15 @@ def _stream_pi_once(
             )
             stderr = f"{stderr}\n{quota_message}".strip()
         # A Pi exit after it created a session is an interrupted run: its
-        # work is resumable, including exits after idle recovery.  A
-        # pre-session startup failure remains terminal unless it reaches
-        # one of the explicit recovery classifications above.
+        # work is resumable, including exits after idle recovery.
         error_type = (
             # A session file alone only proves that Pi initialized its
             # journal; an exit before the first request is still a startup
             # failure (for example provider initialization) and must keep
-            # the existing terminal failure behavior.  Only an interrupted
-            # session after a request has actually started is resumable —
-            # and that is judged from the journal on disk,
-            # never from a live poll that can predate it.
+            # the existing terminal failure behavior. Only an interrupted
+            # session after a request actually started is resumable —
+            # judged from the journal on disk, never from a live poll that
+            # can predate it.
             RecoverablePiProcessError
             if activity["first_request"]
             else subprocess.CalledProcessError

@@ -27,6 +27,7 @@ import orbi.draft_cli as draft_cli
 import orbi.draft_document as draft_document
 import orbi.draft_marker as draft_marker
 import orbi.question as question
+from orbi import provider_balance
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import EPIC_LABEL, NEEDS_DETAIL_LABEL, READY_LABEL
 
@@ -1061,6 +1062,33 @@ def test_an_unusable_session_answer_is_reported(
     failure = json.loads(err)
     assert failure["code"] == "no_answer"
     assert fragment in failure["detail"]
+
+
+def test_a_provider_balance_stop_is_its_own_draft_failure(
+    config, sessions, monkeypatch, tmp_path,
+):
+    """Issue #2278 acceptance: a drafting session stopped because the model
+    provider account has no balance fails with its OWN code carrying the plain
+    sentence — never `session_failed`, and never the Python exception text
+    (which is where the provider's raw `insufficient_balance_error` payload
+    lives)."""
+    draft_fakes.judge_passing(monkeypatch)
+    sessions.queue((None, subprocess.CalledProcessError(
+        402, ["pi"], output="", stderr=provider_balance.DETAIL,
+    )))
+
+    code, out, err = run_round_cli(
+        config, {"message": "notes"}, tmp_path / "session",
+    )
+
+    assert code == 1
+    failure_document = json.loads(err)
+    assert failure_document["code"] == provider_balance.DRAFT_CODE
+    assert failure_document["code"] != "session_failed"
+    assert failure_document["step"] == "run the drafting session"
+    assert failure_document["detail"] == provider_balance.DETAIL
+    assert "CalledProcessError" not in failure_document["detail"]
+    assert "insufficient_balance_error" not in err
 
 
 def test_a_broken_answer_file_is_a_failed_round(tmp_path):
