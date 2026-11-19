@@ -21,10 +21,12 @@ import pytest
 from conftest import git
 from tests.fakes.github import (
     install_broken_push, install_live_pr_gh, install_rejected_push,
+    live_pr_gh,
 )
 
 import orbi.runner as runner
 import orbi.delivery_push as delivery_push
+import orbi.pr_head_sync as pr_head_sync
 import orbi.pr_verification as pr_verification
 from seam import seam
 from orbi.delivery_scene import RunContext
@@ -308,13 +310,9 @@ def test_verify_pr_fast_forwards_when_the_pr_head_is_ahead_of_local(
     assert "pr_head_fast_forwarded" in caplog.text
 
 
-def test_verify_pr_still_rejects_a_really_diverged_pr_head(
-        clone, tmp_path, monkeypatch, caplog,
-):
-    """Issue #2261 keeps the old behaviour for a REAL divergence: the
-    remote head and the local head each carry a commit the other lacks.
-    The resume stops with `pr_head_diverged`, the local head is not
-    moved and nothing is pushed (no force push, ever)."""
+def _diverged_resume_scene(clone, tmp_path, monkeypatch):
+    """The rejected-push leftover: the local branch carries an unpushed
+    commit, the pushed head carries another. Returns both heads."""
     branch = "orbi/owner-repo-issue-3"
     git(clone, "checkout", "-b", branch)
     delivery_head = commit_file(clone, "delivery.txt", "delivery")
@@ -337,7 +335,87 @@ def test_verify_pr_still_rejects_a_really_diverged_pr_head(
             "body": "<!-- orbi:run=a1b2c3d4 -->\n\nFixes #3\n\nPlan",
         }]),
     )
-    with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="diverged"):
+    return branch, local_head, remote_head
+
+
+def test_verify_pr_absorbs_a_really_diverged_pr_head(
+        clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #2273: the rejected push's leftover local commit and the
+    pushed head each carry a commit the other lacks. The resume merges the
+    pushed head in — both sides kept, nothing reset, nothing force-pushed
+    — and continues instead of blocking every later run of the Issue on
+    the leftover branch."""
+    branch, local_head, remote_head = _diverged_resume_scene(
+        clone, tmp_path, monkeypatch,
+    )
+    with caplog.at_level("INFO"):
+        url = pr_verification.verify_pr(
+            RunContext(
+                run_id="a1b2c3d4", issue=3, branch=branch, worktree=clone,
+                source_repo="owner/repo",
+            ),
+            "main", repo_dir=clone,
+        )
+    assert url == "https://github.com/owner/repo/pull/3"
+    assert "pr_head_diverged" in caplog.text
+    # A plain merge commit: both heads are its parents, so neither side's
+    # work is lost and the closeout's push is a fast-forward again.
+    merged = git(clone, "rev-parse", "HEAD")
+    assert git(clone, "rev-parse", f"{merged}^1") == local_head
+    assert git(clone, "rev-parse", f"{merged}^2") == remote_head
+    # Nothing was pushed: the remote branch still ends at the pushed head.
+    assert git(clone, "ls-remote", "--heads", "origin", branch).split()[0] == (
+        remote_head
+    )
+
+
+def test_verify_pr_rolls_a_diverged_merge_conflict_back(
+        clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #2273 failure path: the pushed head changes the same lines as
+    the leftover commit. The merge is aborted (the local head is exactly
+    the run's commit again) and the typed outside-change failure stops the
+    run with its plain-words cause and next step."""
+    branch = "orbi/owner-repo-issue-3"
+    git(clone, "checkout", "-b", branch)
+    shared = clone / "shared.txt"
+    shared.write_text("base\n", encoding="utf-8")
+    git(clone, "add", ".")
+    git(clone, "commit", "-m", "base file")
+    git(clone, "push", "origin", branch)
+
+    other = tmp_path / "other"
+    subprocess.run(
+        ["git", "clone", str(tmp_path / "origin.git"), str(other)],
+        capture_output=True, text=True, check=True,
+    )
+    git(other, "config", "user.email", "other@test.local")
+    git(other, "config", "user.name", "Other")
+    git(other, "checkout", branch)
+    (other / "shared.txt").write_text("from GitHub\n", encoding="utf-8")
+    git(other, "add", ".")
+    git(other, "commit", "-m", "remote only")
+    git(other, "push", "origin", branch)
+    remote_head = git(other, "rev-parse", "HEAD")
+
+    shared.write_text("from this run\n", encoding="utf-8")
+    git(clone, "add", ".")
+    git(clone, "commit", "-m", "local only")
+    local_head = git(clone, "rev-parse", "HEAD")
+    install_fake_gh(
+        monkeypatch,
+        json.dumps([{
+            "url": "https://github.com/owner/repo/pull/3",
+            "baseRefName": "main",
+            "headRefOid": remote_head,
+            "body": "<!-- orbi:run=a1b2c3d4 -->\n\nFixes #3\n\nPlan",
+        }]),
+    )
+
+    with caplog.at_level("ERROR"), pytest.raises(
+        pr_head_sync.DeliveryBranchChangedError, match="conflict",
+    ) as caught:
         pr_verification.verify_pr(
             RunContext(
                 run_id="a1b2c3d4", issue=3, branch=branch, worktree=clone,
@@ -345,12 +423,13 @@ def test_verify_pr_still_rejects_a_really_diverged_pr_head(
             ),
             "main", repo_dir=clone,
         )
-    assert "pr_head_diverged" in caplog.text
-    # Nothing moved, and the remote branch still ends at the foreign head.
-    assert git(clone, "rev-parse", "HEAD") == local_head
-    assert git(clone, "ls-remote", "--heads", "origin", branch).split()[0] == (
-        remote_head
+    assert caught.value.failure_record.reason_code == (
+        "human_decision_required"
     )
+    # The worktree is exactly the run's commit again, nothing half-merged.
+    assert git(clone, "rev-parse", "HEAD") == local_head
+    assert git(clone, "status", "--porcelain", "--untracked-files=no") == ""
+    assert "delivery_branch_merge_conflict" in caplog.text
 
 
 def test_verify_pr_stops_when_the_pr_head_was_rewritten_away(
@@ -621,6 +700,67 @@ def test_a_rejected_push_stops_with_the_typed_outside_change(
     assert "delivery_branch_push_rejected" in caplog.text
 
 
+def test_the_next_run_continues_from_the_branch_a_rejected_push_left(
+        clone, tmp_path,
+):
+    """Issue #2273 (follow-up): a rejected push leaves the local delivery
+    branch diverged from origin with the run's unpushed commits. The next
+    run of the same Issue must NOT block on that leftover branch (the
+    production scene: "cannot recreate worktree from remote HEAD: local
+    branch ... is ahead of or diverged"): its worktree is created from the
+    leftover branch, the closeout absorbs the already-pushed commits and the
+    push lands."""
+    branch = "orbi/owner-repo-issue-3"
+    base_sha = git(clone, "rev-parse", "origin/main")
+    # The branch exists on origin at the base; a later push moved it.
+    git(clone, "push", "origin", f"{base_sha}:refs/heads/{branch}")
+    other = tmp_path / "other"
+    pushed = _pushed_from_another_clone(
+        tmp_path / "origin.git", other, branch, "fix: pushed session",
+    )
+
+    # The rejected run: a worktree that never held the pushed commit, whose
+    # own commit the rejected push left on the local branch. Its worktree
+    # stays behind (the sandbox keeps it), so the next run creates a second
+    # worktree for the same branch.
+    leftover_worktree = runner.create_worktree(
+        clone, "owner/repo", 3, "0c2a716c", base_sha,
+    )
+    leftover = commit_file(
+        leftover_worktree, "unpushed.txt", "fix: rejected session",
+    )
+    rejected = subprocess.run(
+        ["git", "push", "origin", f"HEAD:{branch}"],
+        cwd=leftover_worktree, capture_output=True, text=True, timeout=30,
+    )
+    assert rejected.returncode != 0, rejected
+    assert "[rejected]" in rejected.stderr
+    assert git(clone, "rev-parse", branch) == leftover
+
+    # The next run of the same Issue: the leftover branch is reused instead
+    # of blocking worktree creation, and the run continues on its commits.
+    worktree = runner.create_worktree(
+        clone, "owner/repo", 3, "a04e4cad", base_sha, existing_branch=True,
+    )
+    assert git(worktree, "branch", "--show-current") == branch
+    assert git(worktree, "rev-parse", "HEAD") == leftover
+    # Nothing was rewritten: the unpushed commit is still on the branch.
+    assert git(clone, "rev-parse", branch) == leftover
+
+    # The new session's work, then the closeout: absorb what the branch
+    # already pushed, and push — on top of the earlier commits, not a
+    # rejection.
+    session = commit_file(worktree, "session.txt", "fix: next run")
+    delivery_push.absorb_pushed_commits(worktree, branch, repo_dir=clone)
+    delivery_push.push_delivery_branch(worktree, branch)
+
+    landed = _remote_head(clone, branch)
+    assert landed == git(worktree, "rev-parse", "HEAD")
+    git(clone, "merge-base", "--is-ancestor", pushed, landed)
+    git(clone, "merge-base", "--is-ancestor", leftover, landed)
+    git(clone, "merge-base", "--is-ancestor", session, landed)
+
+
 def test_a_push_failure_that_is_not_a_rejection_is_re_raised(
         clone, monkeypatch,
 ):
@@ -634,4 +774,20 @@ def test_a_push_failure_that_is_not_a_rejection_is_re_raised(
     )
     with pytest.raises(subprocess.CalledProcessError):
         delivery_push.push_delivery_branch(clone, branch)
+
+
+def test_the_live_pr_fake_answers_only_the_closeout_reads():
+    """The real-git scene's `gh` responder delegates git and fails fast on
+    any other GitHub read, so a scene that needs one more call is a fix,
+    never a silent empty answer (the fakes' one contract)."""
+    run = live_pr_gh(
+        lambda command, **kwargs: "git-answer", pr_url=PR_URL_3,
+        branch="orbi/owner-repo-issue-3", run_id="a1b2c3d4",
+        head_of=lambda: "deadbeef",
+    )
+    assert run(["git", "rev-parse", "HEAD"]) == "git-answer"
+    payload = json.loads(run(["gh", "pr", "list", "--state", "open"]))
+    assert payload[0]["headRefOid"] == "deadbeef"
+    with pytest.raises(AssertionError, match="unexpected gh command"):
+        run(["gh", "api", "/repos/owner/repo"])
 

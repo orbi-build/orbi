@@ -16,6 +16,9 @@ Real git semantics the fake preserves:
   an unknown object — the exact distinction `is_ancestor` relies on;
 - ``git worktree add -b`` on an existing branch exits 255 (the
   Issue #662 orphan-branch reuse contract);
+- ``git cat-file -e`` answers the object-existence probe with a status
+  (exit 128 for a commit outside the DAG), and ``git merge <commit>``
+  grows a merge commit carrying both heads (Issue #2273);
 - ``git ls-remote`` prints ``<sha>\\trefs/heads/<name>`` only for
   branches that exist on origin;
 - every dispatched command is recorded in ``calls`` so a test can
@@ -78,7 +81,7 @@ class FakeGit:
     # --- the git process seam ------------------------------------------------
 
     def __call__(self, command: list[str], *, cwd=None,
-                 timeout=None) -> str:
+                 timeout=None, **_kwargs):
         self.calls.append(list(command))
         if command[:1] != ["git"] or len(command) < 2:
             self._unsupported(command)
@@ -89,6 +92,8 @@ class FakeGit:
             "fetch": self._fetch,
             "rev-parse": self._rev_parse,
             "merge-base": self._merge_base,
+            "cat-file": self._cat_file,
+            "merge": self._merge,
             "worktree": self._worktree,
             "reset": self._reset,
         }.get(verb)
@@ -201,6 +206,15 @@ class FakeGit:
             return self.local[ref]
         self._fail(128, f"fatal: ambiguous argument '{ref}'")
 
+    def _resolve_ref(self, ref: str, cwd) -> str:
+        """Resolve `HEAD` to the head of the worktree the command runs in."""
+        if ref != "HEAD":
+            return ref
+        state = self.worktrees.get(_key(cwd) if cwd else "")
+        if state is None:
+            self._fail(128, f"fatal: not a git repository: {_key(cwd)}")
+        return state["head"]
+
     def _worktree_state(self, cwd) -> dict:
         key = _key(cwd) if cwd is not None else "<no cwd>"
         state = self.worktrees.get(key)
@@ -208,10 +222,35 @@ class FakeGit:
             self._fail(128, f"fatal: not a git repository: {key}")
         return state
 
+    def _cat_file(self, args: list[str], cwd) -> subprocess.CompletedProcess:
+        # `git cat-file -e <sha>^{commit}` — the object-existence probe of
+        # the PR-head reconciliation (Issue #2261). It answers a STATUS (the
+        # caller passes `check=False`), so a missing object is exit 128.
+        if args[:1] != ["-e"] or len(args) != 2:
+            self._unsupported(["git", "cat-file", *args])
+        sha = args[1].removesuffix("^{commit}")
+        return subprocess.CompletedProcess(
+            ["git", "cat-file", *args],
+            0 if sha in self.parents else 128, stdout="", stderr="",
+        )
+
+    def _merge(self, args: list[str], cwd) -> str:
+        # `git merge <commit>` — the divergent-head absorb (Issue #2273):
+        # a merge commit with both heads as parents, both sides kept.
+        if len(args) != 1 or args[0] not in self.parents:
+            self._unsupported(["git", "merge", *args])
+        state = self._worktree_state(cwd)
+        merged = self.commit([state["head"], args[0]])
+        state["head"] = merged
+        self.local[state["branch"]] = merged
+        return ""
+
     def _merge_base(self, args: list[str], cwd) -> str:
         if args[:1] != ["--is-ancestor"] or len(args) != 3:
             self._unsupported(["git", "merge-base", *args])
-        ancestor, descendant = args[1], args[2]
+        ancestor, descendant = (
+            self._resolve_ref(ref, cwd) for ref in args[1:3]
+        )
         if ancestor not in self.parents or descendant not in self.parents:
             self._fail(
                 128, f"fatal: unknown object: {ancestor} or {descendant}"

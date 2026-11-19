@@ -40,7 +40,6 @@ from orbi.comment_trust import latest_run_marker, trusted_comments
 from orbi.delivery_labels import (
     EVENT_FIX_NEEDED, FIX_NEEDED_LABEL, IN_PROGRESS_LABEL, READY_LABEL,
 )
-from orbi.delivery_push import DeliveryBranchChangedError
 from orbi.failure import (
     failure_comment_body, failure_detail, failure_summary,
     redact_local_paths, terminal_action,
@@ -60,6 +59,7 @@ from orbi.github import (
 from orbi.journal import LOGGER, event, issue_context, run_command
 from orbi.pi_activity import activity_snapshot
 from orbi.pi_process import RateLimitExhaustedError
+from orbi.pr_head_sync import DeliveryBranchChangedError
 from orbi.progress import (
     FAILURE_MARKER_PATTERN, RUN_MARKER_PATTERN, ProgressPublisher,
     bump_failure_repeat, failure_marker, failure_repeat_count,

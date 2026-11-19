@@ -139,7 +139,8 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
     passed through — the next review session pushes the task branch on
     the same PR; a PR head AHEAD of the local HEAD — GitHub's "Update
     branch" — is fetched when absent and fast-forwarded onto; only a
-    diverged head is a failure), the run marker in the PR body, and the
+    diverged head is merged in, both sides kept, Issue #2273), the run
+    marker in the PR body, and the
     `Fixes #<issue>`
     keyword in the PR body (GitHub closes the source Issue
     natively only when the body carries the keyword, so a PR without it
@@ -334,8 +335,10 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
         # it), and a PR head advanced on GitHub — the "Update branch"
         # button merging the base into the branch — is fetched when this
         # worktree lacks it and fast-forwarded onto. Only a real
-        # divergence (each side carries commits the other lacks) stops:
-        # a plain push would be rejected and a force push is forbidden.
+        # divergence (each side carries commits the other lacks) is
+        # ABSORBED by a plain merge (both sides kept, Issue #2273): a
+        # rejected push's leftover commits continue instead of blocking
+        # every later run, and a force push is never used.
         pr_head_sync.reconcile_pr_head(
             head_oid, local_head, branch=branch, worktree=worktree,
             repo_dir=repo_dir,

@@ -576,7 +576,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `external_pr_state_probe_failed` | 外部 PR 状态探测失败 |
 | `pr_created` | 交付 PR 已创建 |
 | `pr_base_mismatch` | PR base 分支与配置的 base 不一致 |
-| `pr_head_diverged` | PR head 与被评审 head 分叉 |
+| `pr_head_diverged` | PR head 与本地交付 head 分叉；把 PR head 合并进来（两侧都保留） |
 | `pr_head_fast_forwarded` | 本地分支已快进到 GitHub 上推进后的 PR head |
 | `pr_head_unreachable` | 拉取后 PR head 仍不在 origin 上（分支被重写） |
 | `pr_repo_mismatch` | PR 属于另一个仓库 |

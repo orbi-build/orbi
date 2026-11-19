@@ -128,10 +128,10 @@ FAILURE_MESSAGES: dict[str, tuple[str, str]] = {
     # the repair: both are here, and the branch is named.
     "failure.delivery_branch_changed_cause": (
         "The delivery branch \u0060{branch}\u0060 changed on GitHub outside "
-        "this run, so the final push was rejected: the branch carries "
-        "commits this worktree does not have.",
-        "这个交付分支 \u0060{branch}\u0060 在本轮之外被改动过，最后推送因此"
-        "被拒绝：分支上有这个工作区没有的提交。",
+        "this run: it carries commits this worktree does not have, and this "
+        "run could not combine them with its own work.",
+        "这个交付分支 \u0060{branch}\u0060 在本轮之外被改动过：分支上有这个"
+        "工作区没有的提交，本轮无法把它们与本轮的改动合并。",
     ),
     "failure.delivery_branch_changed_action": (
         "{cause} Review the branch's history on GitHub and decide what it "

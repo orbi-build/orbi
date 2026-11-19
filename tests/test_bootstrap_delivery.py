@@ -3181,22 +3181,28 @@ def test_verify_pr_rejects_pr_based_on_wrong_branch(monkeypatch, tmp_path):
         pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
 
 
-def test_verify_pr_rejects_diverged_remote_pr_head(monkeypatch, tmp_path,
-                                                   caplog):
-    """Issue #50: a remote PR head that is NOT an ancestor of the local
-    HEAD (the branch diverged) is still a failure: a plain push would
-    be rejected and a force push is forbidden, so the resume must not
-    continue on this branch."""
+def test_verify_pr_absorbs_a_diverged_remote_pr_head(monkeypatch, tmp_path,
+                                                     caplog):
+    """Issue #2273: a remote PR head that is NOT an ancestor of the local
+    HEAD and does not contain it (each side carries commits the other
+    lacks — a rejected push's leftover commits against the pushed head)
+    is merged in, both sides kept, and the verification continues. It is
+    never a stop that blocks every later run, and never a force push."""
+    merged = []
+
     def fake_run(command, **kwargs):
         if command[:3] == ["git", "merge-base", "--is-ancestor"]:
             if command[3] in (
                 "HEAD", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
             ):
                 # Neither head is an ancestor of the other: a real
-                # divergence (Issue #2261 keeps this a failure).
+                # divergence, absorbed by a plain merge (Issue #2273).
                 raise subprocess.CalledProcessError(
                     1, command, stderr="not an ancestor",
                 )
+            return ""
+        if command[1] == "merge":
+            merged.append(command)
             return ""
         if command[:2] == ["gh", "pr"]:
             return fake_verify_pr_payload(
@@ -3205,11 +3211,12 @@ def test_verify_pr_rejects_diverged_remote_pr_head(monkeypatch, tmp_path,
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    with caplog.at_level("ERROR"), pytest.raises(
-        RuntimeError,
-        match="PR head deadbeef.* is not local HEAD 01234567.*diverged",
-    ):
-        pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+    with caplog.at_level("INFO"):
+        url = pr_verification.verify_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=f"orbi/issue-4-{FAKE_RUN_ID}", worktree=tmp_path, source_repo="owner/repo"), "main", repo_dir=tmp_path)
+    assert url == FAKE_PR_URL
+    assert merged == [[
+        "git", "merge", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+    ]]
     assert "pr_head_diverged" in caplog.text
 
 

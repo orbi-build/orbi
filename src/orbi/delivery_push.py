@@ -36,10 +36,9 @@ import subprocess
 from pathlib import Path
 
 from orbi import gitops, run_state
-from orbi.failure import Failure
 from orbi.gitops import fetch_base_ref
 from orbi.journal import event, run_command, run_git_network_command
-from orbi.pr_head_sync import fetch_delivery_branch
+from orbi.pr_head_sync import DeliveryBranchChangedError, fetch_delivery_branch
 
 # Markers Git prints when a push is rejected because the remote ref moved
 # (`! [rejected] ... (fetch first)`, `non-fast-forward`). They only tell that
@@ -48,35 +47,6 @@ from orbi.pr_head_sync import fetch_delivery_branch
 _PUSH_REJECTED_MARKERS = (
     "[rejected]", "fetch first", "non-fast-forward", "updates were rejected",
 )
-
-
-class DeliveryBranchChangedError(RuntimeError):
-    """The delivery branch carries work this worktree could not absorb.
-
-    Two scenes reach it: the pushed commits conflict with this session's
-    changes (the merge was rolled back), and the plain push is still
-    rejected after the absorb — the branch moved again between the fetch and
-    the push, or a repository rule refused it. Both mean the branch changed
-    outside this run, so a person decides; the failure report owns the
-    reader-facing cause and next step (Issue #2273 acceptance 2).
-    """
-
-    def __init__(self, message: str, *, branch: str,
-                 stderr: str | None = None):
-        super().__init__(message)
-        self.branch = branch
-        # Git's own output is evidence for the run details, never the
-        # reader-facing reason.
-        self.stderr = stderr
-        # Decided at the source (#1756): the branch changed outside Orbi,
-        # so the repair is a human decision, never an automatic re-queue
-        # that would hit the same branch state again.
-        self.failure_record = Failure(
-            reason_code="human_decision_required",
-            action_code="decide",
-            retry_safe=False,
-            outcome="blocked",
-        )
 
 
 def absorb_advanced_base(worktree: Path, base_branch: str, branch: str,

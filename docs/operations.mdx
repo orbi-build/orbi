@@ -667,7 +667,7 @@ registry — in both directions (a name only in code or only in docs fails
 | `external_pr_state_probe_failed` | the external PR state probe failed |
 | `pr_created` | the delivery PR was opened |
 | `pr_base_mismatch` | the PR base branch does not match the configured base |
-| `pr_head_diverged` | the PR head is not the reviewed head |
+| `pr_head_diverged` | the PR head and the local delivery head diverged; the PR head is merged in (both sides kept) |
 | `pr_head_fast_forwarded` | the local branch was fast-forwarded to the PR head advanced on GitHub |
 | `pr_head_unreachable` | the PR head is missing from origin after the fetch (the branch was rewritten) |
 | `pr_repo_mismatch` | the PR belongs to a different repository |
