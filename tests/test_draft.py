@@ -92,9 +92,13 @@ def sessions(monkeypatch):
 
 
 @pytest.fixture
-def config(tmp_path, recorder) -> RunnerConfig:
+def config(tmp_path, recorder, monkeypatch) -> RunnerConfig:
     checkout = tmp_path / "checkout"
     checkout.mkdir()
+    # The fixture checkout stands in for the fetched origin/<base> view a
+    # round reads; the view itself is covered over real git repositories in
+    # tests/test_draft_repo_view.py.
+    draft_fakes.stop_repo_view(monkeypatch)
     deploy = tmp_path / "deploy"
     rules = deploy / draft.FIDELITY_REL
     rules.parent.mkdir(parents=True)
@@ -1236,6 +1240,7 @@ def test_a_missing_fidelity_file_is_only_a_warning(
     tmp_path, recorder, sessions, monkeypatch,
 ):
     draft_fakes.judge_passing(monkeypatch)
+    draft_fakes.stop_repo_view(monkeypatch)
     config = RunnerConfig(
         repo_dir=tmp_path / "checkout", deploy_home=tmp_path / "deploy",
         workspace_root=tmp_path, source_repos=(REPO,),

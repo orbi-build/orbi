@@ -31,9 +31,10 @@ import json
 import logging
 import re
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 
-from orbi import clarify, draft_marker, journal, split_command
+from orbi import clarify, draft_marker, gitops, journal, split_command
 from orbi.acceptance_section import appended_body, write_body
 from orbi.claim import _repo_scan_keys
 from orbi.config import RunnerConfig
@@ -58,8 +59,9 @@ from orbi.draft_document import (
     taken_message,
     taken_options,
 )
+from orbi.failure import failure_detail
 from orbi.github import edit_issue, issue_view, list_issues, list_milestones
-from orbi.journal import event
+from orbi.journal import LOGGER, event, run_command
 from orbi.pi_command import (
     IMPLEMENT_EXCLUDED_SKILLS,
     ROLE_SUGGEST,
@@ -207,6 +209,90 @@ def _round_payload(payload: dict) -> dict:
     if not isinstance(message, str) or not message.strip():
         raise invalid_input("message must be a non-empty string")
     return payload
+
+
+DRAFT_VIEW_DIRNAME = "draft-view"
+
+
+def draft_view_path(repo_dir: Path, run_id: str) -> Path:
+    """Where one draft's view of `origin/<base>` lives.
+
+    Inside the checkout's gitignored `.orbi/` run dirs, so the deployment
+    checkout's working tree is never moved (Issue #2276) and no delivery
+    worktree ever sees a file it would call dirty.
+    """
+    return Path(repo_dir) / ".orbi" / DRAFT_VIEW_DIRNAME / run_id
+
+
+def add_draft_view(repo_dir: Path, base_branch: str, run_id: str) -> Path:
+    """Fetch `origin/<base>` under the base-sync lock, then check it out.
+
+    The detached worktree of the fetched commit IS the drafting session's
+    repository view: a delivery never advances the checkout, so its working
+    tree can be arbitrarily old. `--detach` keeps the view off every branch,
+    so a draft can neither move the checkout nor touch a delivery's
+    worktree, and only the fetch writes shared state (the one remote-tracking
+    ref the lock guards). `--force` re-creates over the `prunable` entry a
+    killed draft left at the same path.
+    """
+    gitops.fetch_base_ref(repo_dir, base_branch)
+    path = draft_view_path(repo_dir, run_id)
+    run_command(
+        ["git", "worktree", "add", "--detach", "--force", str(path),
+         f"origin/{base_branch}"],
+        cwd=repo_dir,
+    )
+    return path
+
+
+def remove_draft_view(repo_dir: Path, path: Path) -> None:
+    """Remove a draft's view; a view already gone is nothing to remove.
+
+    No `git worktree prune` here: the next view is created with
+    `--force`, which re-creates over the `prunable` registration a killed
+    draft left behind, while a prune would touch the one `worktrees/`
+    registry a delivery running at the same time is writing to.
+    """
+    if not Path(path).is_dir():
+        return
+    run_command(
+        ["git", "worktree", "remove", "--force", str(path)], cwd=repo_dir,
+    )
+
+
+@contextmanager
+def draft_repo_view(config: RunnerConfig, *, run_id: str):
+    """The repository state ONE draft reads (Issue #2276).
+
+    Yields a detached worktree of `origin/<base_branch>`, fetched at the
+    moment the draft starts. The deployment checkout is never advanced —
+    deliveries build their worktrees from the remote — so its working tree
+    can predate the base by weeks, and a draft that reads it reports
+    existing files as missing and cites names the base renamed.
+
+    A failed fetch FAILS the draft (`draft_failed`): a failed draft is
+    recoverable, a stale read is the defect this replaces, so there is no
+    fallback to the checkout. The view is removed when the draft ends; the
+    checkout and every delivery worktree are never touched.
+    """
+    repo_dir = Path(config.repo_dir)
+    base_branch = config.base_branch
+    try:
+        view = add_draft_view(repo_dir, base_branch, run_id)
+    except (RuntimeError, subprocess.SubprocessError) as exc:
+        raise DraftError(
+            "draft_failed", f"read the repository at origin/{base_branch}",
+            failure_detail(exc),
+        ) from exc
+    try:
+        yield view
+    finally:
+        try:
+            remove_draft_view(repo_dir, view)
+        except subprocess.SubprocessError as exc:
+            LOGGER.warning(
+                "draft view %s could not be removed: %s", view, exc,
+            )
 
 
 def render_context(payload: dict, *, repo_dir: Path) -> str:
@@ -545,36 +631,38 @@ def run_round(
     session_root = Path(session_dir).resolve()
     session_root.mkdir(parents=True, exist_ok=True)
     out_path = session_root / DRAFT_ANSWER_FILE
-    payload, answer, taken = _answered_round(
-        config, repo, session_root=session_root, payload=payload,
-        out_path=out_path, run_id=run_id,
-    )
-    if answer.questions:
-        return DraftRound(
-            reply=named_in_reply(answer.reply, taken),
-            questions=answer.questions,
+    with draft_repo_view(config, run_id=run_id) as repo_view:
+        payload, answer, taken = _answered_round(
+            config, repo, session_root=session_root, payload=payload,
+            out_path=out_path, run_id=run_id, repo_view=repo_view,
         )
-    if not answer.issues:
-        # Issue #2201: a reply-only answer asks for no code change, so
-        # neither the fidelity pass nor the pre-work check runs.
-        return DraftRound(reply=named_in_reply(answer.reply, taken))
-    issues, warning = fidelity_pass(
-        config, repo, session_root=session_root, run_id=run_id,
-        request=_fidelity_request(payload), issues=answer.issues,
-    )
-    issues, check, warning, reply = _apply_check(
-        config, repo, session_root=session_root, payload=payload,
-        run_id=run_id, issues=issues, warning=warning, reply=answer.reply,
-    )
-    return DraftRound(
-        reply=named_in_reply(reply, taken), issues=issues,
-        check=check, warning=warning,
-    )
+        if answer.questions:
+            return DraftRound(
+                reply=named_in_reply(answer.reply, taken),
+                questions=answer.questions,
+            )
+        if not answer.issues:
+            # Issue #2201: a reply-only answer asks for no code change, so
+            # neither the fidelity pass nor the pre-work check runs.
+            return DraftRound(reply=named_in_reply(answer.reply, taken))
+        issues, warning = fidelity_pass(
+            config, repo, session_root=session_root, run_id=run_id,
+            request=_fidelity_request(payload), issues=answer.issues,
+        )
+        issues, check, warning, reply = _apply_check(
+            config, repo, session_root=session_root, payload=payload,
+            run_id=run_id, issues=issues, warning=warning, reply=answer.reply,
+            repo_view=repo_view,
+        )
+        return DraftRound(
+            reply=named_in_reply(reply, taken), issues=issues,
+            check=check, warning=warning,
+        )
 
 
 def _answered_round(
     config: RunnerConfig, repo: str, *, session_root: Path, payload: dict,
-    out_path: Path, run_id: str,
+    out_path: Path, run_id: str, repo_view: Path,
 ) -> tuple[dict, DraftAnswer, tuple[Option, ...]]:
     """Run the session until it drafts or asks what only the person can answer.
 
@@ -592,9 +680,7 @@ def _answered_round(
         round_payload = {**payload, "message": message, "conversation": turns}
         _run_answer_session(
             config, repo, session_root=session_root,
-            context=render_context(
-                round_payload, repo_dir=Path(config.repo_dir),
-            ),
+            context=render_context(round_payload, repo_dir=repo_view),
             out_path=out_path, run_id=run_id,
             resume=any((session_root / DRAFT_SESSION_DIR).glob("*.jsonl")),
         )
@@ -622,7 +708,7 @@ def _answered_round(
 def _apply_check(
     config: RunnerConfig, repo: str, *, session_root: Path, payload: dict,
     run_id: str, issues: tuple[DraftIssue, ...], warning: str | None,
-    reply: str,
+    reply: str, repo_view: Path,
 ) -> tuple[tuple[DraftIssue, ...], str, str | None, str]:
     """Judge the draft; on a failure rewrite it ONCE and judge again.
 
@@ -645,9 +731,7 @@ def _apply_check(
     try:
         _run_answer_session(
             config, repo, session_root=session_root,
-            context=render_context(rewrite_payload, repo_dir=Path(
-                config.repo_dir,
-            )),
+            context=render_context(rewrite_payload, repo_dir=repo_view),
             out_path=session_root / DRAFT_ANSWER_FILE, run_id=run_id,
             resume=True,
         )
