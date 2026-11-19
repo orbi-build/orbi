@@ -21,10 +21,14 @@ Nothing else about the stop changes (Issue #2278): no backoff retry is
 added, no reason string in the journal is renamed and the exit keeps the
 recoverable/terminal split it had before this module existed.
 
-The stop's record reuses the closed `credential_missing` /
-`check_credentials` category — the provider ACCOUNT is what a human
-repairs — with `retry_safe` false: a plain re-queue meets the same empty
-account, so a relabel only helps after the repair.
+The stop's record is its OWN member of the closed sets
+(`provider_balance` / `top_up_balance`, Issue #2283) with
+`retry_safe` false: an empty provider account is not a missing
+credential, and a consumer that renders by `reason_code` must show the
+top-up repair rather than the credential repair. A plain re-queue meets
+the same empty account, so a relabel only helps after the repair. The
+codes live here and are read by `failure` (the closed sets stay its
+own).
 
 This lives in its own module because a module recorded by the size
 ratchet may only shrink and `failure`/`pi_process` are at their ceilings
@@ -38,7 +42,8 @@ from orbi import language
 
 # The record the stop maps to: the provider refused the ACCOUNT, and a
 # human repairs it (top up or switch the key) before retrying.
-REASON_CODE = "credential_missing"
+REASON_CODE = "provider_balance"
+ACTION_CODE = "top_up_balance"
 
 # `orbi draft`'s own code for the same stop (its codes are its own closed
 # set in docs/public-contracts.mdx, not the failure record's).

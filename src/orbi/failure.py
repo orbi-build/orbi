@@ -57,6 +57,8 @@ REASON_CODES = frozenset({
     "human_decision_required",
     # The GitHub/provider credential is missing or rejected.
     "credential_missing",
+    # The model provider ACCOUNT has no balance (#2283).
+    provider_balance.REASON_CODE,
     # The model provider quota is exhausted (429/RESOURCE_EXHAUSTED).
     "provider_quota",
     # The configured base branch does not exist in the repository
@@ -87,6 +89,8 @@ ACTION_CODES = frozenset({
     "decide",
     # Verify and repair the credential, then retry.
     "check_credentials",
+    # Top up the provider account (or switch the key), then retry.
+    provider_balance.ACTION_CODE,
     # Retry after the provider quota window resets.
     "wait_quota",
 })
@@ -216,30 +220,24 @@ def _parse_block(data: dict) -> Failure:
 # The classifier: exception detail -> closed reason/action codes
 # --------------------------------------------------------------------------
 
-# Failure-reason markers. The classifier reads only the bounded
-# exception detail; the caller (the runner, which owns the exception
-# classes) passes the type-derived flags that win over these patterns, so
-# a code is never derived from a guess.
+# Failure-reason markers. The classifier reads only the bounded exception
+# detail; the caller (the runner, which owns the exception classes) passes
+# the type-derived flags that win over these patterns, so no code is guessed.
 _PROVIDER_QUOTA_RE = re.compile(
     r"\b429\b|quota|resource_exhausted|retry in|usage limit has been reached",
     re.IGNORECASE,
 )
 # The word markers `pi_process`'s early-exit classifier
-# (`_classify_startup_exit`) matches: the provider's own words stay the Pi
-# startup classification's (Issue #1465), read here by the one regex below.
+# (`_classify_startup_exit`) matches, read here by the one regex below
+# (Issue #1465).
 PROVIDER_AUTH_WORDS = ("unauthorized", "forbidden", "api key")
 
-# The text-only credential markers. GitHub failures no longer read this
-# one: they carry the exact response status (`gh_response`), while
-# `forbidden` and `credential` matched a branch or check name in the
-# command's argv (Issue #1760). The remaining markers serve the Pi /
-# model-provider detail, which only gives text (Issue #1465); `forbidden`
-# stays in `PROVIDER_AUTH_WORDS` for `pi_process`'s startup classifier.
-# `api key` is the provider's own missing/rejected-key sentence ("No API
-# key found for provider …"), the marker `PROVIDER_AUTH_WORDS` still
-# lists; only `incorrect api key` survived #1762, so the plain sentence
-# regressed to `unclassified` (Issue #1768). An argv word cannot carry
-# it — the space keeps it out of a branch, label or check name.
+# The text-only credential markers. GitHub failures no longer read this one:
+# they carry the exact response status (`gh_response`), while `forbidden`
+# and `credential` matched a branch or check name in the command's argv
+# (Issue #1760). The remaining markers serve the Pi / model-provider detail,
+# which only gives text (Issue #1465). `api key` is the provider's own
+# missing-key sentence, which no argv word can carry across the space (#1768).
 _CREDENTIAL_MISSING_RE = re.compile(
     r"bad credentials"
     r"|(?:http|status)\s+401\b"
@@ -318,6 +316,7 @@ DISPOSITIONS: dict[str, tuple[str, bool]] = {
     "review_budget_exhausted": ("decide", False),
     "human_decision_required": ("decide", False),
     "credential_missing": ("check_credentials", False),
+    "provider_balance": (provider_balance.ACTION_CODE, False),
     "provider_quota": ("wait_quota", True),
     "base_branch_missing": ("fix_ticket", False),
     "base_ci_red": ("fix_ticket", False),
@@ -407,10 +406,12 @@ def classify(detail: str, *, outcome: str = "blocked",
         # cannot grant: the existing `credential_missing` /
         # `check_credentials` category, a repair required before retry.
         reason_code = "credential_missing"
-    elif provider_balance.is_stop(detail) or _CREDENTIAL_MISSING_RE.search(detail):
-        # A model-provider ACCOUNT with no balance (a 402 refusal, #2278)
-        # repairs like a credential: a human fixes it, then retries.
+    elif provider_balance.is_stop(detail):
+        # The provider ACCOUNT has no balance (a 402 refusal, #2283): its
+        # own stop, repaired by a top-up, not a credential re-check.
         reason_code = provider_balance.REASON_CODE
+    elif _CREDENTIAL_MISSING_RE.search(detail):
+        reason_code = "credential_missing"
     elif _timeout_is_text_only(error) and _TEXT_TIMEOUT_RE.search(detail):
         reason_code = "github_transient"
     elif _GITHUB_TRANSIENT_RE.search(detail):

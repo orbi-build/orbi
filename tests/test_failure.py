@@ -69,6 +69,7 @@ def test_reason_and_action_codes_are_closed_sets_with_expected_members():
         "review_budget_exhausted",
         "human_decision_required",
         "credential_missing",
+        "provider_balance",
         "provider_quota",
         "base_branch_missing",
         "base_ci_red",
@@ -83,6 +84,7 @@ def test_reason_and_action_codes_are_closed_sets_with_expected_members():
         "fix_ticket",
         "decide",
         "check_credentials",
+        "top_up_balance",
         "wait_quota",
     }
 
@@ -1316,13 +1318,32 @@ def test_a_429_stop_is_still_the_provider_quota_stop():
     )
 
 
+def test_a_raw_provider_402_payload_is_the_provider_balance_stop():
+    """Issue #2283 acceptance 1: the provider's own refusal payload — the
+    shape a path that never passed through `pi_process` still carries — is
+    the `provider_balance` stop with its top-up action, not `unclassified`
+    and not the credential repair."""
+    raw = (
+        '{"type":"insufficient_balance_error",'
+        '"message":"Insufficient Balance"}'
+    )
+    record = failure.classify(
+        f"Command '['pi']' returned non-zero exit status 146. stderr={raw}",
+    )
+    assert record == failure.Failure(
+        reason_code="provider_balance", action_code="top_up_balance",
+        retry_safe=False,
+    )
+
+
 def test_report_delivery_failure_names_the_provider_balance_stop(monkeypatch):
     """Issue #2278 acceptance: a provider 402 `insufficient_balance_error`
     stop is reported as its own reason. The blocked comment says in plain
     words that the account has no balance and what to do next (top up the
     account or switch the key, then relabel), the provider's raw JSON never
     reaches the Reason line, and the visible reason is not the #825 "dead
-    loop" sentence."""
+    loop" sentence. Its record is its own `provider_balance` /
+    `top_up_balance` code (Issue #2283)."""
     posted = _capture_comment(monkeypatch)
     error = subprocess.CalledProcessError(
         402, ["pi", "--session", "/home/runner/session"],
@@ -1345,7 +1366,7 @@ def test_report_delivery_failure_names_the_provider_balance_stop(monkeypatch):
     assert outcome == "blocked"
     body = posted[0]
     assert failure.parse(body) == failure.Failure(
-        reason_code="credential_missing", action_code="check_credentials",
+        reason_code="provider_balance", action_code="top_up_balance",
         retry_safe=False, outcome="blocked",
     )
     reason_line = next(
@@ -1360,6 +1381,37 @@ def test_report_delivery_failure_names_the_provider_balance_stop(monkeypatch):
     assert "**Action:** Top up" in body
     assert "`ai-ready`" in body
     assert "/home/" not in body
+
+
+def test_a_genuinely_missing_credential_keeps_its_own_record(monkeypatch):
+    """Issue #2283 acceptance 2: the provider's balance stop gets its own
+    code, and the genuine credential repair is not swallowed by it — a
+    missing/rejected key still writes `credential_missing` /
+    `check_credentials`."""
+    posted = _capture_comment(monkeypatch)
+    error = subprocess.CalledProcessError(
+        1, ["pi"], output="",
+        stderr="Error: No API key found for provider deepseek",
+    )
+    outcome = failure_report.report_delivery_failure(
+        error,
+        issue={"number": 2283, "title": "t", "labels": []},
+        source_repo="orbi-build/orbi", run_id="c4bc52b3", pr_url=None,
+        worktree=None, branch="b", role=runner.ROLE_IMPLEMENT,
+        action="Verify the provider credential and re-run this Issue.",
+        reason=(
+            "The delivery stopped before it could be completed: "
+            f"{runner.failure_detail(error)}"
+        ),
+        diagnosis=runner.failure_detail(error),
+        classify=False, evidence=False, language_code="en",
+    )
+
+    assert outcome == "blocked"
+    assert failure.parse(posted[0]) == failure.Failure(
+        reason_code="credential_missing", action_code="check_credentials",
+        retry_safe=False, outcome="blocked",
+    )
 
 
 def test_report_delivery_failure_balance_stop_keeps_the_review_fix_loop(
@@ -1390,7 +1442,7 @@ def test_report_delivery_failure_balance_stop_keeps_the_review_fix_loop(
     assert outcome == "fix_needed"
     body = posted[0]
     assert failure.parse(body) == failure.Failure(
-        reason_code="credential_missing", action_code="check_credentials",
+        reason_code="provider_balance", action_code="top_up_balance",
         retry_safe=False, outcome="fix_needed",
     )
     reason_line = next(
@@ -1494,6 +1546,20 @@ def test_docs_document_the_failure_block_and_the_closed_code_sets():
             assert code in text, f"{relative} missing reason_code {code}"
         for code in failure.ACTION_CODES:
             assert code in text, f"{relative} missing action_code {code}"
+
+
+def test_public_contracts_name_the_provider_balance_stop_apart():
+    """Issue #2283 acceptance 3: a consumer that renders by `reason_code`
+    reads the public contract — `provider_balance` is its own stop, told
+    apart from the missing-credential repair, in both languages."""
+    for relative in (
+        "docs/public-contracts.mdx", "docs/zh/public-contracts.mdx",
+    ):
+        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert "orbi:failure:v1" in text, relative
+        assert "provider_balance" in text, relative
+        assert "top_up_balance" in text, relative
+        assert "credential_missing" in text, relative
 
 
 # --------------------------------------------------------------------------

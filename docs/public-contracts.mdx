@@ -218,6 +218,13 @@ session ended without a commit on the task branch) and `no_file_change`
 (the delivered commits change no file). All three are `blocked`,
 `retry_safe: false`, action `fix_ticket`.
 
+The model-provider balance stop carries its own `provider_balance` record
+with action `top_up_balance` and `retry_safe: false` (Issue #2283): the
+provider account has no balance (HTTP 402 `insufficient_balance_error`),
+so it is a different stop from `credential_missing` /
+`check_credentials`, and a consumer that renders by `reason_code` shows
+the top-up repair instead of a credential re-check.
+
 A `base_ci_red` failure comment carries one more hidden block beside that
 record — `<!-- orbi:base-ci-red:v1 {json} -->` with `schema`, `state`,
 `base_branch`, `base_sha`, `pr` and `failing_checks`. It is the record the

@@ -705,6 +705,7 @@ at all — readers ignore it (`parse` returns `None`).
 | `base_ci_red` | the check the PR fails is also failing on the configured base branch | `fix_ticket` | false |
 | `checks_permission_missing` | the App installation has not approved `statuses: read`, so the PR's check read is refused (HTTP 403 `Resource not accessible by integration`) | `check_credentials` | false |
 | `credential_missing` | the GitHub/provider credential is missing or rejected | `check_credentials` | false |
+| `provider_balance` | the model provider account has no balance (HTTP 402 `insufficient_balance_error`), so the request was refused — the repair is a top-up, not a credential re-check | `top_up_balance` | false |
 | `release_failed` | a release task failed at one of the state machine's steps; the visible reason names that step | `fix_ticket` | false |
 | `no_commit_delivered` | the agent session ended without a commit on the task branch (HEAD is still the frozen base) | `fix_ticket` | false |
 | `no_file_change` | the delivered commits change no file (the head tree equals the frozen base tree) | `fix_ticket` | false |
@@ -713,13 +714,15 @@ at all — readers ignore it (`parse` returns `None`).
 Actions: `requeue` relabels the Issue `ai-ready` (or presses retry) —
 nothing to fix; `fix_ticket` fixes the failure and re-runs the Issue;
 `decide` is a human decision; `check_credentials` verifies and repairs
-the credential, then retries; `wait_quota` retries after the quota window
-resets. The readable headline, `**Reason:**` and `**Action:**` lines stay
-beside the block for a human reader, and the milestone's visible summary
-is the same bounded, host-path free reader explanation — the reason, or
-the reader-facing action when the failure carries a specific repair path
-(the Actions-workflow permission refusal, Issue #1651) — a full command
-stderr is never cut to its first word.
+the credential, then retries; `top_up_balance` tops up the model provider
+account (or switches to a key with balance), then retries; `wait_quota`
+retries after the quota window resets. The readable headline,
+`**Reason:**` and `**Action:**` lines stay beside the block for a human
+reader, and the milestone's visible summary is the same bounded, host-path
+free reader explanation — the reason, or the reader-facing action when the
+failure carries a specific repair path (the Actions-workflow permission
+refusal, Issue #1651) — a full command stderr is never cut to its first
+word.
 
 ### One automatic re-queue after a transient GitHub failure
 

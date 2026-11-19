@@ -5295,7 +5295,7 @@ def test_run_review_round_reports_a_provider_balance_stop_as_its_own_reason(
     assert len(reviews) == 1
     body = comments[0][1]["body"]
     assert failure.parse(body) == failure.Failure(
-        reason_code="credential_missing", action_code="check_credentials",
+        reason_code="provider_balance", action_code="top_up_balance",
         retry_safe=False, outcome="fix_needed",
     )
     reason_line = next(
