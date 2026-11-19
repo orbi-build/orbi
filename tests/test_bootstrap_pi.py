@@ -25,7 +25,10 @@ import pytest
 
 import orbi.release as release
 import orbi.runner as runner
-from orbi import failure, pi_activity, pi_idle, pi_process, pi_session, progress
+from orbi import (
+    failure, pi_activity, pi_idle, pi_process, pi_session, progress,
+    provider_balance,
+)
 from orbi.delivery_scene import RunContext
 from orbi.pi_process import PiWatchOptions
 from tests.fakes.bootstrap_pi import (
@@ -682,6 +685,56 @@ def test_stream_pi_logs_the_codex_usage_limit_as_provider_quota(
     assert "SECRET ISSUE BODY" not in caplog.text
 
 
+def test_stream_pi_reports_a_provider_402_balance_stop_as_its_own_reason(
+        tmp_path, caplog,
+):
+    """Issue #2278 acceptance: a provider that refuses a request because the
+    account has no balance answers HTTP 402 with an
+    `insufficient_balance_error` payload, which is what Pi exits on. The stop
+    is its own reason — never `unclassified`, never throttling: the raised
+    failure carries the ONE plain sentence instead of the provider's raw
+    payload, and the shared classifier maps it to the account repair with
+    `retry_safe` false."""
+    raw = ('402: {"message":"Insufficient Balance","type":'
+           '"insufficient_balance_error"}')
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.1, {"type": "message", "id": "u1",
+               "timestamp": fresh_timestamp(),
+               "message": {"role": "user", "content": [
+                   {"type": "text", "text": "SECRET ISSUE BODY"}]}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, exit_code=1, stderr=raw,
+    )
+
+    with caplog.at_level("INFO"):
+        with pytest.raises(runner.RecoverablePiProcessError) as excinfo:
+            pi_session.stream_pi(
+                command,
+                ctx=RunContext(
+                    run_id="deadbeef", issue=2278, branch="b",
+                    worktree=tmp_path, source_repo="xqliu/orbi",
+                ),
+                watch=PiWatchOptions(poll_interval=0.1), cwd=tmp_path,
+            )
+    detail = runner.failure_detail(excinfo.value)
+    assert provider_balance.DETAIL in detail
+    assert "insufficient_balance_error" not in detail
+    assert "Insufficient Balance" not in detail
+    assert runner._classify_failure(
+        excinfo.value, outcome="blocked",
+    ) == failure.Failure(
+        reason_code="credential_missing", action_code="check_credentials",
+        retry_safe=False, outcome="blocked",
+    )
+    # The stop is not throttling: no 429 backoff, and the prompt never
+    # reaches the journal.
+    assert "pi_retry_429" not in caplog.text
+    assert "SECRET ISSUE BODY" not in caplog.text
+
+
 def test_stream_pi_startup_failed_early_exit_after_first_request(
         tmp_path, caplog,
 ):
@@ -742,6 +795,32 @@ def test_startup_failed_reason_maps_hung_first_request_to_timeout():
         timed_out=False, model_wait_dead=False,
         model_wait_swallowed=False, idle_recovery_failed=True,
     ) == "idle_recovery_stale"
+
+
+def test_balance_stop_markers():
+    """Issue #2278: the provider's balance refusal is recognized by its OWN
+    words (the exit status cannot carry 402: a POSIX status is 8 bits, so
+    the provider's status reaches the runner as 146) — and an unrelated
+    `402` in ordinary text is not this stop."""
+    assert provider_balance.is_stop(provider_balance.DETAIL)
+    assert provider_balance.is_stop(
+        '{"message":"Insufficient Balance","type":'
+        '"insufficient_balance_error"}'
+    )
+    assert provider_balance.is_stop("Insufficient balance. Please top up.")
+    assert provider_balance.is_stop("HTTP 402: Payment Required")
+    assert provider_balance.is_stop(
+        '{"error":{"message":"top up","status": 402}}'
+    )
+    assert not provider_balance.is_stop("Error 429: too many requests")
+    assert not provider_balance.is_stop("test_402_handling FAILED")
+    # A 429 stop keeps its own detail untouched.
+    assert provider_balance.stop_detail("Error 429: retry in 2s") == (
+        "Error 429: retry in 2s"
+    )
+    assert provider_balance.stop_detail("402: insufficient_balance") == (
+        provider_balance.DETAIL
+    )
 
 
 def test_rate_limit_marker_classification():

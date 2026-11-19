@@ -34,7 +34,10 @@ import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 
-from orbi import clarify, draft_marker, gitops, journal, split_command
+from orbi import (
+    clarify, draft_marker, failure, gitops, journal, provider_balance,
+    split_command,
+)
 from orbi.acceptance_section import appended_body, write_body
 from orbi.claim import _repo_scan_keys
 from orbi.config import RunnerConfig
@@ -443,7 +446,10 @@ def _run_answer_session(
     The answer file is removed first, so an answer found after a failure is
     the one THIS round wrote: a round that timed out after the model wrote
     its draft still returns that draft, and a round that wrote nothing
-    fails.
+    fails. A model-provider balance refusal is its own code with the plain
+    sentence as its detail — never `session_failed` and never the Python
+    exception text, which is where the provider's raw payload lives
+    (Issue #2278).
     """
     out_path.unlink(missing_ok=True)
     try:
@@ -454,6 +460,11 @@ def _run_answer_session(
         )
     except Exception as exc:
         if not out_path.is_file():
+            if provider_balance.is_stop(failure.failure_detail(exc)):
+                raise DraftError(
+                    provider_balance.DRAFT_CODE, "run the drafting session",
+                    provider_balance.DETAIL,
+                ) from exc
             code = (
                 "timeout"
                 if isinstance(exc, subprocess.TimeoutExpired)

@@ -27,8 +27,8 @@ import logging
 from pathlib import Path
 
 from orbi import (
-    base_ci_fix, base_ci_red, failure, failure_evidence, language, question,
-    requeue, runner_health, scene, user_summary,
+    base_ci_fix, base_ci_red, failure, failure_evidence, language,
+    provider_balance, question, requeue, runner_health, scene, user_summary,
 )
 from orbi.blocked_comment import post_blocked_comment
 from orbi.comment_kind import (
@@ -538,19 +538,24 @@ def _update_reported_failure(*, number: int, source_repo: str,
 def _typed_failure_wording(
     exc: BaseException, *, pr_url: str | None, branch: str | None,
     language_code: str,
-) -> tuple[bool, tuple[str, str] | None]:
+) -> tuple[bool, bool, tuple[str, str] | None]:
     """The reader-facing Action/Reason of a typed failure (#1651, #2273).
 
-    Two failures answer the reader themselves instead of with the generic
+    Three failures answer the reader themselves instead of with the generic
     wording: the GitHub App Actions-workflow refusal (an authorization only
-    a human can grant, so the repair path names the permission) and the
+    a human can grant, so the repair path names the permission), the
     delivery branch changed outside this run (Git answers with a "Note
     about fast-forwards" hint that names neither the cause nor the next
-    step). Returns `(milestone_shows_the_action, (action, reason))`, or
-    `(False, None)` for a failure that keeps the generic wording.
+    step) and the model provider's balance refusal (its exit's stderr is the
+    provider's `insufficient_balance_error` payload, not a reason a person
+    can act on, Issue #2278). Returns
+    `(terminal, milestone_shows_the_action, (action, reason))`, or
+    `(False, False, None)` for a failure that keeps the generic wording.
+    Only the two external authorizations are terminal; the balance stop
+    keeps the recovery its exit already had.
     """
     if failure.workflow_permission_refused(failure_detail(exc)):
-        return True, (
+        return True, True, (
             failure.workflow_permission_action(
                 pr_url, language_code=language_code),
             failure.workflow_permission_cause(language_code),
@@ -560,14 +565,19 @@ def _typed_failure_wording(
             language_code, "failure.delivery_branch_changed_cause",
             branch=branch or "-",
         )
-        return False, (
+        return True, False, (
             language.text(
                 language_code, "failure.delivery_branch_changed_action",
                 cause=cause,
             ),
             cause,
         )
-    return False, None
+    if provider_balance.is_stop(failure_detail(exc)):
+        return False, False, (
+            provider_balance.action(language_code),
+            provider_balance.cause(language_code),
+        )
+    return False, False, None
 
 
 def report_delivery_failure(
@@ -649,13 +659,15 @@ def report_delivery_failure(
     if diagnosis is None:
         diagnosis = cause or failure_detail(exc)
     blocked = not classify or is_unrecoverable_failure(exc)
-    # A typed failure carries its own cause and repair, and it is terminal
-    # (`ai-blocked`) whichever path caught it (Issues #1651, #2273).
-    workflow_refusal, wording = _typed_failure_wording(
+    # A typed failure carries its own cause and repair; the two external
+    # authorizations are terminal (`ai-blocked`) whichever path caught them
+    # (Issues #1651, #2273).
+    typed_terminal, milestone_shows_action, wording = _typed_failure_wording(
         exc, pr_url=pr_url, branch=branch, language_code=language_code,
     )
-    if wording is not None:
+    if typed_terminal:
         blocked = True
+    if wording is not None:
         action, reason = wording
     # Issue #2220: a stop that carries one structured question shows its
     # one-sentence summary as the visible Reason and — when the class is not
@@ -696,12 +708,14 @@ def report_delivery_failure(
             streak = _failure_streak(history, run_id, fingerprint, repo=source_repo)
             if streak + 1 >= FAILURE_STREAK_LIMIT:
                 blocked = True
-                reason += language.text(
-                    language_code,
-                    "delivery.failure_streak_escalation",
-                    count=streak + 1, run_id=run_id,
-                    fingerprint=fingerprint,
-                )
+                # A typed failure already answered the reader (#2278).
+                if wording is None:
+                    reason += language.text(
+                        language_code,
+                        "delivery.failure_streak_escalation",
+                        count=streak + 1, run_id=run_id,
+                        fingerprint=fingerprint,
+                    )
                 event(
                     "failure_streak_escalated", level=logging.ERROR,
                     issue=number, run_id=run_id, streak=streak + 1,
@@ -777,7 +791,7 @@ def report_delivery_failure(
     # the bare cause. Computed here, after the #825 guard may have
     # extended `reason`.
     milestone_summary = (
-        action if workflow_refusal and action
+        action if milestone_shows_action and action
         else failure_summary(reason, language_code)
     )
     scene = scene_line() or "- run: `-`"

@@ -30,7 +30,7 @@ import orbi.review_rounds as review_rounds
 import orbi.run_state as run_state
 import orbi.pi_session as pi_session
 import orbi.runner_health as runner_health
-from orbi import language, progress, scene
+from orbi import failure, language, progress, provider_balance, scene
 from orbi.delivery_labels import EVENT_BLOCKED
 from seam import seam
 
@@ -1713,6 +1713,38 @@ def test_report_failure_third_identical_failure_blocks_the_dead_loop(
     # Terminal: Issue only — the PR thread gets no comment.
     assert captured["pr_comments"] == []
     assert "failure_streak_escalated" in caplog.text
+
+
+def test_report_failure_balance_stop_keeps_its_own_reason_when_escalated(
+        monkeypatch, tmp_path):
+    """Issue #2278: the #825 guard still escalates the repeated balance stop
+    (making the stop terminal on its first occurrence is parked), but the
+    blocked comment keeps the stop's OWN answer — the provider-account cause
+    and the repair, never the provider's raw payload and never the generic
+    "dead loop" sentence that would replace it."""
+    exc = runner.RecoverablePiProcessError(
+        1, ["pi"], output="", stderr=provider_balance.DETAIL,
+    )
+    fp = runner_health.failure_fingerprint(exc)
+    captured = make_report_fake(
+        monkeypatch, history=_failure_history(2, fp),
+    )
+    _report(exc)
+
+    assert captured["edits"] == [("ai-blocked", "ai-fix-needed")]
+    body = captured["comments"][0]
+    assert failure.parse(body) == failure.Failure(
+        reason_code="credential_missing", action_code="check_credentials",
+        retry_safe=False, outcome="blocked",
+    )
+    reason_line = next(
+        line for line in body.splitlines()
+        if line.startswith("**Reason:**")
+    )
+    assert "no balance" in reason_line
+    assert "dead loop" not in body
+    assert "insufficient_balance_error" not in body
+    assert "**Action:** Top up" in body
 
 
 def test_report_failure_streak_escalation_follows_the_language(
