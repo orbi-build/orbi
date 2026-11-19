@@ -54,7 +54,7 @@ def reconcile_pr_head(head_oid: str, local_head: str, *, branch: str,
     commands run in.
     """
     if not _commit_present(head_oid, cwd=worktree):
-        _fetch_delivery_branch(repo_dir, branch, cwd=worktree)
+        fetch_delivery_branch(repo_dir, branch, cwd=worktree)
         if not _commit_present(head_oid, cwd=worktree):
             event(
                 "pr_head_unreachable", level=logging.ERROR,
@@ -113,14 +113,16 @@ def _commit_present(commit: str, *, cwd: Path) -> bool:
     return probe.returncode == 0
 
 
-def _fetch_delivery_branch(repo_dir: Path, branch: str, *, cwd: Path) -> None:
+def fetch_delivery_branch(repo_dir: Path, branch: str, *, cwd: Path) -> None:
     """Fetch ``refs/heads/<branch>`` into its remote-tracking ref.
 
     The fetch updates a SHARED remote-tracking ref, so it runs under the
     base-sync lock like every other fetch. The destination is explicit: a
     bare ``git fetch origin <branch>`` writes FETCH_HEAD only and creates
     no ``refs/remotes/origin/<branch>`` when the clone's fetch refspec
-    does not cover that branch (Issue #898).
+    does not cover that branch (Issue #898). The closeout's delivery-branch
+    absorb (`orbi.delivery_push`, Issue #2273) reads the same ref,
+    so it shares this one fetch instead of a second copy.
     """
     with _base_sync_lock(repo_dir):
         run_git_network_command(

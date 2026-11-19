@@ -28,8 +28,8 @@ from pathlib import Path
 import pytest
 
 from orbi import (
-    failure, failure_evidence, failure_report, language, pi_activity,
-    progress, runner, runner_health, scene,
+    delivery_push, failure, failure_evidence, failure_report,
+    language, pi_activity, progress, runner, runner_health, scene,
 )
 from tests.fakes.github import FakeGh
 from tests.fakes.progress import freeze_report_time
@@ -1273,3 +1273,60 @@ def test_block_repo_config_failure_never_raises_a_reporting_failure(
             42, "orbi-build/orbi", ValueError("bad key"), RUN_ID, language_code="en",
         )
     assert "repo_config_failure_report_failed" in caplog.text
+
+
+# --- Issue #2273: a delivery branch that changed outside the run ----------
+
+# The captured production rejection: Git's readable line is only a hint.
+DELIVERY_BRANCH_REJECTED_STDERR = (
+    " ! [rejected]        HEAD -> orbi/orbi-build-orbi-issue-42 "
+    "(fetch first)\n"
+    "error: failed to push some refs to "
+    "'https://github.com/orbi-build/orbi.git'\n"
+    "hint: Updates were rejected because the remote contains work that you "
+    "do not\n"
+    "hint: See the 'Note about fast-forwards' in 'git push --help' for "
+    "details."
+)
+
+
+def _labelled_line(body: str, label: str) -> str:
+    """The comment line the reader sees under one rendered field label."""
+    return next(line for line in body.splitlines() if line.startswith(label))
+
+
+def test_a_delivery_branch_changed_failure_names_cause_and_next_step(
+        monkeypatch, tmp_path):
+    """Issue #2273 acceptance 2: when the push is rejected because the
+    delivery branch changed on GitHub, the blocked comment names that
+    cause and the next step in plain words. Git's "Note about
+    fast-forwards" hint stays in the collapsed diagnosis, never the
+    Reason."""
+    publisher = FakePublisher()
+    exc = delivery_push.DeliveryBranchChangedError(
+        "the delivery branch changed on GitHub while this session ran, so "
+        "the plain push was rejected",
+        branch=BRANCH,
+        stderr=DELIVERY_BRANCH_REJECTED_STDERR,
+    )
+    outcome, posted, _ = _report(
+        monkeypatch, tmp_path, session=False, publisher=publisher,
+        exc=exc, classify=False, evidence=False, finish=False, pr_url=None,
+        # The implement-phase terminal reporter hands the exception's own
+        # bounded detail in as the reason and the diagnosis: without the
+        # override the reader gets Git's "Note about fast-forwards" hint.
+        reason=failure.failure_detail(exc),
+        diagnosis=failure.failure_detail(exc),
+    )
+    assert outcome == "blocked"
+    body = posted[0]
+    reason = _labelled_line(body, "**Reason:**")
+    action = _labelled_line(body, "**Action:**")
+    assert BRANCH in reason
+    assert "changed on GitHub outside this run" in reason
+    assert "remove `ai-blocked`" in action
+    assert "`ai-ready`" in action
+    # The cause is the reason; Git's hint is only evidence.
+    assert "Note about fast-forwards" not in reason
+    assert "Note about fast-forwards" in body
+

@@ -24,6 +24,7 @@ import orbi.acceptance_section as acceptance_section
 import orbi.amend_command as amend_command
 import orbi.answer as answer
 import orbi.comment_trust as comment_trust
+import orbi.delivery_push as delivery_push
 import orbi.draft as draft
 import orbi.draft_marker as draft_marker
 import orbi.suggest as suggest
@@ -75,6 +76,7 @@ _MODULES = (
     review_rounds, run_state, claim,
     resume_scan, restart_scan,
     pr_head_sync, pr_verification, resume_verification,
+    delivery_push,
     repo_config, clarify, comment_trust, requeue, question, split_apply,
     draft, draft_marker, branch_reclaim, failure_report, suggest, cli,
     blocked_comment,

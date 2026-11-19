@@ -642,6 +642,9 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `worktree_reclaim_failed` | worktree 回收的一步失败（旁路；扫描继续） |
 | `branches_reclaimed` | 批量删除了已合并 PR 的远端交付分支 |
 | `branch_reclaim_failed` | 远端分支回收的一步失败（旁路；扫描继续） |
+| `delivery_branch_synced` | 本地交付分支已吸收远端分支已有的提交（Issue #2273） |
+| `delivery_branch_merge_conflict` | 远端已有的交付分支改动与本轮工作冲突，合并已回滚（Issue #2273） |
+| `delivery_branch_push_rejected` | 交付分支在本轮之外被改动，推送被拒绝（Issue #2273） |
 | `delivery_branch_deleted` | 已合并交付的远端 head 分支已删除 |
 | `delivery_branch_delete_failed` | 已合并交付的远端 head 分支删除失败（旁路；合并已经落地） |
 | `worktrees_exclude_added` | 一个 worktrees 路径已加入本地 git exclude |
@@ -1107,7 +1110,9 @@ agent 在提交的交付处停止；PR 前的 base 新鲜度是 Runner 的确定
 （Issue #186，`deliver_pr`）：Runner 在 base-sync 锁下重新 fetch
 `origin/<base_branch>`，用普通 `git merge` 吸收前进的 base（冲突时
 中止，PR 在 agent 的 head 上打开——已有的审查会话在会话内吸收
-base），然后推送 task branch 并创建 PR。创建 PR 之前 Runner 会直读
+base），同样用普通 merge 吸收交付分支在远端已有的提交（重启会话的推送、
+GitHub 上被推进的分支——绝不强推，Issue #2273），然后推送 task branch
+并创建 PR。创建 PR 之前 Runner 会直读
 源票的 state：交付期间被人工关闭的票在此收口——已推送的分支保留工作
 产物，关掉的票上留一条说明评论，不开 PR（Issue #746）。「PR 开出后票
 才被关」的相反时序由每 tick 的孤儿 PR 扫描兜底（见[工作流](/zh/workflow)），

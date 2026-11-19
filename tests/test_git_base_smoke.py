@@ -19,8 +19,12 @@ from pathlib import Path
 import pytest
 
 from conftest import git
+from tests.fakes.github import (
+    install_broken_push, install_live_pr_gh, install_rejected_push,
+)
 
 import orbi.runner as runner
+import orbi.delivery_push as delivery_push
 import orbi.pr_verification as pr_verification
 from seam import seam
 from orbi.delivery_scene import RunContext
@@ -396,3 +400,238 @@ def test_verify_pr_stops_when_the_pr_head_was_rewritten_away(
         )
     assert "pr_head_unreachable" in caplog.text
     assert git(clone, "rev-parse", "HEAD") == delivery_head
+
+
+# --- Issue #2273: the closeout continues from the pushed commits -----------
+
+
+PR_URL_3 = "https://github.com/owner/repo/pull/3"
+
+
+def install_live_pr(monkeypatch, clone: Path, branch: str) -> None:
+    """Answer `gh` with the branch's open PR, its head read at call time.
+
+    The delivery branch absorb moves the local HEAD before the push, so the
+    PR's `headRefOid` must be the head of the moment (the production scene:
+    the earlier session's PR is open while the restarted session finishes).
+    Every git command runs for real (`tests.fakes.github`).
+    """
+    install_live_pr_gh(
+        monkeypatch, real_run=runner.run_command, pr_url=PR_URL_3,
+        branch=branch, run_id="a1b2c3d4",
+        head_of=lambda: git(clone, "rev-parse", "HEAD"),
+    )
+
+
+def _remote_head(clone: Path, branch: str) -> str:
+    return git(clone, "ls-remote", "--heads", "origin", branch).split()[0]
+
+
+def test_deliver_pr_continues_on_the_commits_a_restarted_session_pushed(
+        clone, monkeypatch, caplog,
+):
+    """Issue #2273 acceptance 1: the earlier session pushed its commit and
+    the steering restart's worktree does not hold it. The closeout absorbs
+    the pushed commit and pushes the restarted session's work on top of it
+    instead of failing `! [rejected] ... (fetch first)`."""
+    branch = "orbi/owner-repo-issue-3"
+    base_sha = git(clone, "rev-parse", "origin/main")
+    # Session 1: its delivery commit is on the branch.
+    git(clone, "checkout", "-b", branch, base_sha)
+    first_session = commit_file(clone, "session-one.txt", "fix: first session")
+    git(clone, "push", "origin", branch)
+    # The restarted session works from the frozen base, so its worktree
+    # lacks the commit the branch already carries — the rejection scene.
+    git(clone, "reset", "--hard", base_sha)
+    restarted = commit_file(
+        clone, "session-two.txt", "fix: restarted session",
+    )
+    install_live_pr(monkeypatch, clone, branch)
+
+    with caplog.at_level("INFO"):
+        url = runner.deliver_pr(
+            RunContext(
+                run_id="a1b2c3d4", issue=3, branch=branch, worktree=clone,
+                source_repo="owner/repo",
+            ),
+            "main", base_sha, issue_title="task", repo_dir=clone,
+            language_code="en",
+        )
+
+    assert url == "https://github.com/owner/repo/pull/3"
+    pushed = _remote_head(clone, branch)
+    assert pushed == git(clone, "rev-parse", "HEAD")
+    # Both sessions' work is on the delivery branch: the absorbed commit is
+    # an ancestor of the pushed head, and so is the restarted session's.
+    git(clone, "merge-base", "--is-ancestor", first_session, pushed)
+    git(clone, "merge-base", "--is-ancestor", restarted, pushed)
+    assert "delivery_branch_synced" in caplog.text
+
+
+def test_deliver_pr_fast_forwards_a_delivery_branch_advanced_on_github(
+        clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #2273: the branch moved on GitHub after this worktree pushed
+    (the PR page's "Update branch" merges the base in). The closeout
+    fast-forwards onto the pushed head and finishes instead of rejecting
+    its own push."""
+    branch = "orbi/owner-repo-issue-3"
+    base_sha = git(clone, "rev-parse", "origin/main")
+    git(clone, "checkout", "-b", branch, base_sha)
+    commit_file(clone, "delivery.txt", "fix: delivery")
+    git(clone, "push", "origin", branch)
+
+    other = tmp_path / "other"
+    advanced = _pushed_from_another_clone(
+        tmp_path / "origin.git", other, branch, "Merge branch 'main'",
+    )
+    assert subprocess.run(
+        ["git", "cat-file", "-e", f"{advanced}^{{commit}}"], cwd=clone,
+        capture_output=True, text=True,
+    ).returncode != 0
+    install_live_pr(monkeypatch, clone, branch)
+
+    with caplog.at_level("INFO"):
+        url = runner.deliver_pr(
+            RunContext(
+                run_id="a1b2c3d4", issue=3, branch=branch, worktree=clone,
+                source_repo="owner/repo",
+            ),
+            "main", base_sha, issue_title="task", repo_dir=clone,
+            language_code="en",
+        )
+
+    assert url == "https://github.com/owner/repo/pull/3"
+    # A fast-forward, not a merge commit: the local head IS the pushed head.
+    assert git(clone, "rev-parse", "HEAD") == advanced
+    assert _remote_head(clone, branch) == advanced
+    assert "delivery_branch_synced" in caplog.text
+
+
+def test_absorb_leaves_a_never_pushed_delivery_branch_alone(clone, caplog):
+    """Issue #2273: the first push of a delivery reads no remote branch and
+    merges nothing — the ordinary closeout stays exactly as it was."""
+    branch = "orbi/owner-repo-issue-3"
+    git(clone, "checkout", "-b", branch)
+    head = commit_file(clone, "delivery.txt", "fix: delivery")
+    delivery_push.absorb_pushed_commits(clone, branch, repo_dir=clone)
+    assert git(clone, "rev-parse", "HEAD") == head
+    assert "delivery_branch_synced" not in caplog.text
+
+
+def test_absorb_keeps_an_unpushed_local_commit_on_top(clone, caplog):
+    """Issue #2273: a local commit the branch does not carry yet (a killed
+    session's work, the #158 scene) is the ahead side — nothing is merged
+    back and the closeout pushes it as usual."""
+    branch = "orbi/owner-repo-issue-3"
+    git(clone, "checkout", "-b", branch)
+    commit_file(clone, "delivery.txt", "fix: delivery")
+    git(clone, "push", "origin", branch)
+    # The pushed head IS the local head: no merge either.
+    delivery_push.absorb_pushed_commits(clone, branch, repo_dir=clone)
+    local_only = commit_file(clone, "later.txt", "fix: local only")
+    delivery_push.absorb_pushed_commits(clone, branch, repo_dir=clone)
+    assert git(clone, "rev-parse", "HEAD") == local_only
+    assert "delivery_branch_synced" not in caplog.text
+
+
+def test_absorb_rolls_a_conflicting_merge_back_and_stops(
+        clone, tmp_path, caplog,
+):
+    """Issue #2273 failure path: the pushed commits change the same lines as
+    this session's work. The merge is aborted (the worktree returns to the
+    session's exact commit), and the typed failure names the outside
+    change."""
+    branch = "orbi/owner-repo-issue-3"
+    base_sha = git(clone, "rev-parse", "origin/main")
+    git(clone, "checkout", "-b", branch, base_sha)
+    shared = clone / "shared.txt"
+    shared.write_text("base\n", encoding="utf-8")
+    git(clone, "add", ".")
+    git(clone, "commit", "-m", "base file")
+    git(clone, "push", "origin", branch)
+
+    other = tmp_path / "other"
+    subprocess.run(
+        ["git", "clone", str(tmp_path / "origin.git"), str(other)],
+        capture_output=True, text=True, check=True,
+    )
+    git(other, "config", "user.email", "other@test.local")
+    git(other, "config", "user.name", "Other")
+    git(other, "checkout", branch)
+    (other / "shared.txt").write_text("from GitHub\n", encoding="utf-8")
+    git(other, "add", ".")
+    git(other, "commit", "-m", "remote only")
+    git(other, "push", "origin", branch)
+
+    shared.write_text("from this session\n", encoding="utf-8")
+    git(clone, "add", ".")
+    git(clone, "commit", "-m", "local only")
+    local_head = git(clone, "rev-parse", "HEAD")
+
+    with caplog.at_level("ERROR"), pytest.raises(
+        delivery_push.DeliveryBranchChangedError,
+        match="conflict",
+    ):
+        delivery_push.absorb_pushed_commits(
+            clone, branch, repo_dir=clone,
+        )
+    # The worktree is back at the session's commit with nothing half-merged.
+    assert git(clone, "rev-parse", "HEAD") == local_head
+    assert git(clone, "status", "--porcelain", "--untracked-files=no") == ""
+    assert "delivery_branch_merge_conflict" in caplog.text
+
+
+# The captured production rejection the customer saw (Issue #2273): Git's
+# only readable line is a hint, never a cause.
+PUSH_REJECTED_STDERR = (
+    " ! [rejected]        HEAD -> orbi/owner-repo-issue-3 (fetch first)\n"
+    "error: failed to push some refs to "
+    "'https://github.com/owner/repo.git'\n"
+    "hint: Updates were rejected because the remote contains work that you "
+    "do not\n"
+    "hint: have locally. This is usually caused by another repository "
+    "pushing\n"
+    "hint: See the 'Note about fast-forwards' in 'git push --help' for "
+    "details."
+)
+
+
+def test_a_rejected_push_stops_with_the_typed_outside_change(
+        clone, monkeypatch, caplog,
+):
+    """Issue #2273 acceptance 2: a push the absorb could not prevent (the
+    branch moved again in the seconds before the push) is a typed failure
+    with a human-decision record — the failure report owns the plain-words
+    cause and next step."""
+    branch = "orbi/owner-repo-issue-3"
+
+    install_rejected_push(monkeypatch, stderr=PUSH_REJECTED_STDERR)
+    with caplog.at_level("ERROR"), pytest.raises(
+        delivery_push.DeliveryBranchChangedError,
+        match="changed on GitHub while this session ran",
+    ) as caught:
+        delivery_push.push_delivery_branch(clone, branch)
+    assert caught.value.branch == branch
+    assert caught.value.stderr == PUSH_REJECTED_STDERR
+    assert caught.value.failure_record.reason_code == (
+        "human_decision_required"
+    )
+    assert caught.value.failure_record.outcome == "blocked"
+    assert "delivery_branch_push_rejected" in caplog.text
+
+
+def test_a_push_failure_that_is_not_a_rejection_is_re_raised(
+        clone, monkeypatch,
+):
+    """Issue #2273: only the advanced-remote rejection has a cause to name;
+    every other push failure (a credential, a network drop) keeps its own
+    classification and its own evidence."""
+    branch = "orbi/owner-repo-issue-3"
+
+    install_broken_push(
+        monkeypatch, stderr="fatal: could not read from remote",
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        delivery_push.push_delivery_branch(clone, branch)
+

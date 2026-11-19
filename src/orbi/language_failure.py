@@ -121,6 +121,28 @@ FAILURE_MESSAGES: dict[str, tuple[str, str]] = {
         "以便重新运行这个 Issue。如果无法更新权限或同样的错误仍然出现，"
         "请联系 App 的运维者。本次没有创建 PR。",
     ),
+    # Issue #2273: the delivery branch already carried commits this run
+    # could not absorb (a restarted session's push, a branch advanced on
+    # GitHub), or it moved again before the closeout push. Git answers
+    # with "Note about fast-forwards", which names neither the cause nor
+    # the repair: both are here, and the branch is named.
+    "failure.delivery_branch_changed_cause": (
+        "The delivery branch \u0060{branch}\u0060 changed on GitHub outside "
+        "this run, so the final push was rejected: the branch carries "
+        "commits this worktree does not have.",
+        "这个交付分支 \u0060{branch}\u0060 在本轮之外被改动过，最后推送因此"
+        "被拒绝：分支上有这个工作区没有的提交。",
+    ),
+    "failure.delivery_branch_changed_action": (
+        "{cause} Review the branch's history on GitHub and decide what it "
+        "should contain. Then remove \u0060ai-blocked\u0060 and add "
+        "\u0060ai-ready\u0060 again, and the next run continues from the "
+        "branch as it is now. Nothing was force-pushed and no commit was "
+        "overwritten.",
+        "{cause} 请在 GitHub 上查看该分支的提交历史，确定它应该包含什么。"
+        "然后去掉 \u0060ai-blocked\u0060、重新加上 \u0060ai-ready\u0060，"
+        "下一轮会从分支当前的状态继续。整个过程没有强推，也没有覆盖任何提交。",
+    ),
     "failure.blocked_precondition": (
         "this is an external precondition the AI cannot safely judge or "
         "fix, so it cannot be recovered automatically (the Issue stays "
