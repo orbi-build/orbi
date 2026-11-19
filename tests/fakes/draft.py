@@ -6,7 +6,9 @@ the pre-work judgment, and those patches are contract, not coupling.
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -50,12 +52,57 @@ def structured_question(question: str, *, header: str = "Choice") -> dict:
     }
 
 
+REPOSITORY_VIEW_PREFIX = "Repository checkout: "
+
+
+def repo_view(context: str) -> Path:
+    """The repository view the engine's context hands the session (Issue
+    #2276): the path after `Repository checkout: `, with its aside
+    stripped. The line is contract — a context without exactly one fails
+    the test that reads it instead of hiding a missing view."""
+    line, = [
+        line for line in context.splitlines()
+        if line.startswith(REPOSITORY_VIEW_PREFIX)
+    ]
+    return Path(line.removeprefix(REPOSITORY_VIEW_PREFIX).split(" (")[0])
+
+
+@contextlib.contextmanager
+def local_repository_view(config, *, run_id):
+    """The engine's fetched view, stood in by the fixture checkout.
+
+    A round that runs without a real remote reads the checkout the test
+    built, exactly like the pre-#2276 engine did; the view's own behavior is
+    covered by `tests/test_draft_repo_view.py` over real git repositories.
+    """
+    yield Path(config.repo_dir)
+
+
+def stop_repo_view(monkeypatch) -> None:
+    """Every round reads the fixture checkout instead of fetching origin."""
+    monkeypatch.setattr(draft, "draft_repo_view", local_repository_view)
+
+
+def fail_view_cleanup(monkeypatch) -> None:
+    """The draft's view cannot be removed once the round is done."""
+    real = draft.remove_draft_view
+
+    def fail(repo_dir, path):
+        real(repo_dir, path)
+        raise subprocess.CalledProcessError(1, ["git", "worktree", "remove"])
+
+    monkeypatch.setattr(draft, "remove_draft_view", fail)
+
+
 class FakeSessions:
     """The drafting and fidelity sessions, answered from queues."""
 
     def __init__(self) -> None:
         self.rounds: list[object] = []
         self.calls: list[SimpleNamespace] = []
+        # What each session SAW of the repository it was pointed at: the
+        # view path and every file in it, read while the round is live.
+        self.views: list[SimpleNamespace] = []
         self.fidelity: list[object] = []
         self.fidelity_calls: list[SimpleNamespace] = []
 
@@ -84,6 +131,17 @@ class FakeSessions:
         self.calls.append(SimpleNamespace(
             session_root=Path(session_root), system_prompt=system_prompt,
             context=context, resume=resume, out_path=Path(out_path),
+        ))
+        view = repo_view(context)
+        self.views.append(SimpleNamespace(
+            path=view,
+            files=sorted(
+                path.relative_to(view).as_posix()
+                for path in view.rglob("*")
+                if path.is_file() and ".git" not in path.relative_to(
+                    view,
+                ).parts
+            ),
         ))
         (Path(session_root) / draft.DRAFT_SESSION_DIR).mkdir(
             parents=True, exist_ok=True,
