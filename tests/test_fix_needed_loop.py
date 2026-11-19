@@ -1734,7 +1734,7 @@ def test_report_failure_balance_stop_keeps_its_own_reason_when_escalated(
     assert captured["edits"] == [("ai-blocked", "ai-fix-needed")]
     body = captured["comments"][0]
     assert failure.parse(body) == failure.Failure(
-        reason_code="credential_missing", action_code="check_credentials",
+        reason_code="provider_balance", action_code="top_up_balance",
         retry_safe=False, outcome="blocked",
     )
     reason_line = next(

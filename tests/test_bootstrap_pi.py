@@ -726,7 +726,7 @@ def test_stream_pi_reports_a_provider_402_balance_stop_as_its_own_reason(
     assert runner._classify_failure(
         excinfo.value, outcome="blocked",
     ) == failure.Failure(
-        reason_code="credential_missing", action_code="check_credentials",
+        reason_code="provider_balance", action_code="top_up_balance",
         retry_safe=False, outcome="blocked",
     )
     # The stop is not throttling: no 429 backoff, and the prompt never
