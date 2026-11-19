@@ -1,0 +1,46 @@
+---
+title: "v0.7.52 release (latest)"
+description: "Orbi v0.7.52 release notes: Report a model-provider 402 insufficient-balance stop as its own failure reason and 3 more changes."
+---
+
+`v0.7.52` was published 2026-11-19T11:50:07Z as the GitHub Release [v0.7.52](https://github.com/orbi-build/orbi/releases/tag/v0.7.52) (release task: Issue #2279).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.7.52` | annotated tag `35aee78b3d0436d5f9a786b66b4dc15a9f2d1e68` | commit `080590b392160fc956b978882bda3937b23f261b` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Report a model-provider 402 insufficient-balance stop as its own failure reason ([Issue #2278](https://github.com/orbi-build/orbi/issues/2278); [PR #2281](https://github.com/orbi-build/orbi/pull/2281))
+
+### Deployment and operations
+
+- Draft sessions read the repository at origin/&lt;base> at draft start, not the stale deployment checkout ([Issue #2276](https://github.com/orbi-build/orbi/issues/2276); [PR #2280](https://github.com/orbi-build/orbi/pull/2280))
+- orbi suggest reads a fresh origin/&lt;base> view instead of the stale deployment checkout ([Issue #2277](https://github.com/orbi-build/orbi/issues/2277); [PR #2282](https://github.com/orbi-build/orbi/pull/2282))
+
+### Bug fixes
+
+- Give the model-provider balance stop its own failure-record reason_code instead of credential_missing ([Issue #2283](https://github.com/orbi-build/orbi/issues/2283); [PR #2284](https://github.com/orbi-build/orbi/pull/2284))
+
+## Contributors
+
+<a href="https://github.com/orbi-build"><img src="https://avatars.githubusercontent.com/in/4897724?v=4&s=48" width="32" height="32" alt="orbi-build" /></a>
+
+- tag: `v0.7.52`
+- release commit: `080590b392160fc956b978882bda3937b23f261b`
+- release task: Issue #2279
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 080590b392160fc956b978882bda3937b23f261b (the #268 CI-wait gate; no local test execution)
+
+
+Released by [Orbi](https://orbi.build/?ref=prfoot-orbi-build)
+
+[![Download Orbi](https://a.fsdn.com/con/app/sf-download-button)](https://sourceforge.net/projects/orbi/files/v0.7.52/v0.7.52%20source%20code.zip/download)
