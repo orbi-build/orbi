@@ -437,9 +437,10 @@ def test_prompt_review_md_keeps_the_test_exit_code_rule():
 # --- Issue #180: the review test ladder (CI failures first) ---------------------
 
 # The review session used to re-run the full suite repeatedly instead of
-# converging on the CI failures. The ladder is: CI failure logs first,
-# then the failing cases, then the related tests, then EXACTLY ONE full
-# suite + coverage run before the verdict.
+# converging on the CI failures. The ladder is: the CI failure logs first,
+# then the failing cases reproduced locally (Issue #1613 dropped the local
+# full-suite evidence run; Issue #2264 dropped the related-tests step, so a
+# green current-head check leaves no local run at all).
 TEST_LADDER_ITEMS = (
     ("ladder-section", "test ladder"),
     # Step 1: the CI failure logs are read BEFORE any local test run.
@@ -449,10 +450,13 @@ TEST_LADDER_ITEMS = (
     ("ladder-log-failed-flag", "--log-failed"),
     # Step 2: the failing cases are reproduced locally.
     ("ladder-failing-cases", "failing cases"),
-    # Step 3: after the fix, the related tests run.
-    ("ladder-related-tests", "related tests"),
-    # Step 4: the PR's GitHub Actions checks are the test authority
-    # (Issue #1613) — no local full-suite evidence production.
+    # Step 3: the PR's GitHub Actions checks are the test authority
+    # (Issue #1613) — no local full-suite evidence production. And when the
+    # current-head checks have passed (Issue #2264) the reviewer runs no
+    # local tests at all: the checks are the test evidence.
+    ("ladder-green-no-local",
+     "when the current-head checks have passed, run no local tests"),
+    ("ladder-green-evidence", "the checks are the test evidence"),
     ("ladder-ci-authority",
      "the pr's github actions checks are the test authority"),
     ("ladder-read-checks", "read them with `gh pr checks {{pr_number}}`"),
@@ -770,8 +774,8 @@ def test_prompt_md_step_5_takes_the_test_status_from_ci():
 
 
 # The review ladder is section-scoped: `gh pr checks` already appears in step 1
-# (CI failure logs first), so only a section assertion proves step 4 itself
-# carries the test-authority rule rather than inheriting step 1's needle.
+# (CI failure logs first), so only a section assertion proves the test-authority
+# step itself carries the rule rather than inheriting step 1's needle.
 REVIEW_TEST_AUTHORITY_ITEMS = (
     ("review-ladder-ci-authority",
      "the pr's github actions checks are the test authority"),
@@ -789,16 +793,16 @@ def test_prompt_review_md_test_ladder_takes_the_test_status_from_ci():
     text = _text(PROMPT_REVIEW)
     ladder = text.split("## test ladder", 1)
     assert len(ladder) == 2, "prompt_review.md is missing the test ladder"
-    step4 = ladder[1].split("## fix in this session", 1)[0]
-    missing = _missing(step4, REVIEW_TEST_AUTHORITY_ITEMS)
+    authority_step = ladder[1].split("## fix in this session", 1)[0]
+    missing = _missing(authority_step, REVIEW_TEST_AUTHORITY_ITEMS)
     assert not missing, (
-        f"prompt_review.md Test ladder step 4 is missing the CI "
+        f"prompt_review.md Test ladder test-authority step is missing the CI "
         f"test-authority rule (Issue #1613): {missing}"
     )
     # The dropped v0.6.x local-test-log wording, scoped to the ladder.
-    assert "tiered coverage gate" not in step4
-    assert "git rev-parse head^{tree}" not in step4
-    assert "append (`>>`, never `>`)" not in step4
+    assert "tiered coverage gate" not in authority_step
+    assert "git rev-parse head^{tree}" not in authority_step
+    assert "append (`>>`, never `>`)" not in authority_step
 
 
 # Issue #1613: a fix committed in the review session takes the CI test
@@ -1032,3 +1036,95 @@ def test_prompt_review_md_flags_a_deleted_or_weakened_existing_test():
         f"(Issue #1980): {missing}"
     )
     assert "77e7f0ea54d8e9748f2debfd5a8f49739dd89b66" in text
+
+
+# --- Issue #2264: a green PR is the review's test evidence -------------------
+
+# Reviews of PRs whose current-head checks had already passed spent most of
+# their wall time re-running the same suites locally (41 sessions, median
+# 13 min, 76% of the wall time in commands). The PR's checks are the test
+# authority (Issue #1613), so the prompt must not ask for a second local run:
+# no sentence tells the reviewer to run the related tests of the changed code
+# or to re-run the build/test commands as evidence. A local run stays allowed
+# only for the two cases that need it — reproducing a failing check, and
+# verifying a fix this session commits.
+REVIEW_GREEN_CHECKS_ITEMS = (
+    ("green-current-head", "when the current-head checks have passed"),
+    ("green-no-local", "run no local tests"),
+    ("green-evidence", "the checks are the test evidence"),
+    ("green-checklist",
+     "verify the test evidence from the pr's current-head checks"),
+    ("green-no-rerun", "do not re-run the test/build commands"),
+)
+
+# The sentences that asked for a local run regardless of the checks.
+REMOVED_LOCAL_TEST_INSTRUCTIONS = (
+    "run the related tests of the changed code",
+    "verify the run evidence",
+    "the real test/build commands were run and pass",
+)
+
+REVIEW_PROMPT_VALUES = {
+    "SOURCE_REPO": "orbi-build/orbi",
+    "PR_NUMBER": "2264",
+    "PR_URL": "https://github.com/orbi-build/orbi/pull/2264",
+    "BASE_BRANCH": "main",
+    "BASE_SHA": "870949524ef4f353df55fa34b6784610b19307a9",
+    "HEAD_SHA": "b39f8bd2b39f8bd2b39f8bd2b39f8bd2b39f8bd2",
+    "HEAD_REF": "orbi/orbi-build-orbi-issue-2264",
+    "ROUND": "1",
+    "BASE_SYNC_LOCK": "/tmp/base-sync.lock",
+    "ISSUE_BODY": "Issue #2264 body",
+    "ISSUE_COMMENTS": "trusted comments",
+}
+
+
+def _rendered_review_prompt() -> str:
+    from orbi import pi_session
+
+    return " ".join(
+        pi_session.render_prompt(
+            PROMPT_REVIEW.read_text(encoding="utf-8"), dict(REVIEW_PROMPT_VALUES),
+        ).lower().split(),
+    )
+
+
+def test_prompt_review_md_runs_no_local_tests_when_the_checks_are_green():
+    """Issue #2264 acceptance 1: the rendered review prompt takes a green
+    current-head check as the test evidence and asks for no local test run
+    (only reproducing a failing check or verifying an in-session fix), and no
+    sentence asks for the changed code's tests or a build/test re-run."""
+    text = _rendered_review_prompt()
+    missing = _missing(text, REVIEW_GREEN_CHECKS_ITEMS)
+    assert not missing, (
+        f"prompt_review.md does not take the green checks as the test "
+        f"evidence (Issue #2264): {missing}"
+    )
+    present = [needle for needle in REMOVED_LOCAL_TEST_INSTRUCTIONS
+               if needle in text]
+    assert not present, (
+        f"prompt_review.md still asks for a local test/build run on a green "
+        f"PR (Issue #2264): {present}"
+    )
+    # The rule lives in the test ladder, where the reviewer looks for it.
+    ladder = text.split("## test ladder", 1)
+    assert len(ladder) == 2, "prompt_review.md is missing the test ladder"
+    ladder_text = ladder[1].split("## fix in this session", 1)[0]
+    assert "run no local tests" in ladder_text
+    assert "related tests" not in ladder_text, (
+        "the test ladder must not tell the reviewer to run the related tests "
+        "(Issue #2264)"
+    )
+
+
+def test_prompt_review_md_still_runs_the_tests_of_its_own_fix():
+    """Issue #2264 acceptance 2: the in-session fix path still tells the
+    reviewer to run the tests related to its own fix (CI on the new head stays
+    the authority)."""
+    text = _rendered_review_prompt()
+    section = text.split("## fix in this session", 1)
+    assert len(section) == 2, "prompt_review.md is missing 'Fix in this session'"
+    first_bullet = section[1].split("push only the task branch", 1)[0]
+    assert "rerun the tests related to the fix" in first_bullet
+    assert "ci on the new head is the test authority" in first_bullet
+
