@@ -437,9 +437,10 @@ def test_prompt_review_md_keeps_the_test_exit_code_rule():
 # --- Issue #180: the review test ladder (CI failures first) ---------------------
 
 # The review session used to re-run the full suite repeatedly instead of
-# converging on the CI failures. The ladder is: CI failure logs first,
-# then the failing cases, then the related tests, then EXACTLY ONE full
-# suite + coverage run before the verdict.
+# converging on the CI failures. The ladder is: the CI failure logs first,
+# then the failing cases reproduced locally (Issue #1613 dropped the local
+# full-suite evidence run; Issue #2264 dropped the related-tests step, so a
+# green current-head check leaves no local run at all).
 TEST_LADDER_ITEMS = (
     ("ladder-section", "test ladder"),
     # Step 1: the CI failure logs are read BEFORE any local test run.
