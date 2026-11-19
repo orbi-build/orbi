@@ -781,6 +781,9 @@ def _capture_comment(monkeypatch):
     monkeypatch.setattr(
         seam, "comment_issue", lambda number, *, repo, body: posted.append(body),
     )
+    # A recoverable failure with a PR is written to the PR as well; the
+    # write is never this suite's business.
+    monkeypatch.setattr(seam, "comment_pr", lambda *a, **k: None)
     return posted
 
 
@@ -1063,7 +1066,6 @@ def test_report_delivery_failure_unknown_exception_is_unclassified(monkeypatch):
 
 def test_report_delivery_failure_recoverable_is_fix_needed(monkeypatch):
     posted = _capture_comment(monkeypatch)
-    monkeypatch.setattr(seam, "comment_pr", lambda *a, **k: None)
     error = subprocess.CalledProcessError(1, ["pytest"], stderr="3 failed")
     outcome = failure_report.report_delivery_failure(
         error,
@@ -1160,7 +1162,6 @@ def test_report_delivery_failure_fix_needed_milestone_is_machine_readable(
 ):
     posted = _capture_comment(monkeypatch)
     publisher, milestones = _milestone_publisher()
-    monkeypatch.setattr(seam, "comment_pr", lambda *a, **k: None)
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     error = subprocess.CalledProcessError(1, ["pytest"], stderr="3 failed")
     outcome = failure_report.report_delivery_failure(

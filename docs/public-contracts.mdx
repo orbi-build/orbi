@@ -727,6 +727,17 @@ session's Pi JSONL plus the rendered prompt and context files, and
 accounts usage and shows progress from those files. Interactive mode uses a
 temporary directory of the same shape and removes it.
 
+The repository a draft reads is `origin/<base_branch>` fetched when the round
+starts, never the deployment checkout's working tree: deliveries always build
+their worktrees from the remote, so the checkout itself can predate the base by
+weeks, and a draft that reads it reports existing files as missing and cites
+names the base branch already renamed. The round materializes a detached
+worktree of the fetched commit under the checkout's `.orbi/` run dir, hands its
+path to the drafting session, and removes it when the round ends; the checkout
+and every delivery worktree stay exactly where they were. A fetch that fails
+fails the round — `{"code": "draft_failed", "step": "read the repository at
+origin/<base_branch>", ...}` — with no fallback to the stale checkout.
+
 The Issue marker: every Issue `orbi draft` creates ends with
 `<!-- orbi:draft:v1:<key>:<position>:<sha256> -->` — the caller's `key`, the Issue's
 1-based position in that draft, and the sha256 of the body as created (the

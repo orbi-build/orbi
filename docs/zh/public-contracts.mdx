@@ -599,6 +599,14 @@ Session 目录布局：`<session-dir>/.pi-session/` 存放起草 session 的 Pi 
 渲染后的 prompt 与 context 文件，`<session-dir>/.fidelity/.pi-session/` 存放独立的
 保真检查——调用方据此统计用量并展示进度。交互模式使用同样结构的临时目录，并在结束时删除。
 
+起草读到的仓库是这一轮开始时抓取的 `origin/<base_branch>`，绝不是部署 checkout 的
+工作树：交付始终从远端构建自己的 worktree，所以 checkout 本身可能落后 base 好几周，
+读它的草稿会把已存在的文件说成不存在，也会引用 base 分支早已改掉的名字。每一轮把该
+提交的 detached worktree 建到 checkout 的 `.orbi/` 运行目录下，把它的路径交给起草
+session，并在这一轮结束时删除；checkout 与任何交付 worktree 都保持原样。抓取失败则这
+一轮失败——`{"code": "draft_failed", "step": "read the repository at
+origin/<base_branch>", ...}`——绝不回退到过期的 checkout。
+
 Issue 标记：`orbi draft` 创建的每个 Issue 末尾是
 `<!-- orbi:draft:v1:<key>:<position>:<sha256> -->`——调用方的 `key`、该 Issue 在草稿中的
 1 起始序号，以及创建时正文（不含标记行）的 sha256。pre-work 检查在领取时读取它

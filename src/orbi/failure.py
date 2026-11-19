@@ -410,7 +410,7 @@ def classify(detail: str, *, outcome: str = "blocked",
     elif provider_balance.is_stop(detail) or _CREDENTIAL_MISSING_RE.search(detail):
         # A model-provider ACCOUNT with no balance (a 402 refusal, #2278)
         # repairs like a credential: a human fixes it, then retries.
-        reason_code = "credential_missing"
+        reason_code = provider_balance.REASON_CODE
     elif _timeout_is_text_only(error) and _TEXT_TIMEOUT_RE.search(detail):
         reason_code = "github_transient"
     elif _GITHUB_TRANSIENT_RE.search(detail):

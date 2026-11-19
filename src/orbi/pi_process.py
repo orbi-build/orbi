@@ -1126,8 +1126,7 @@ def _stream_pi_once(
         # A missing-balance refusal is its own stop and never throttling;
         # its payload becomes the one plain sentence (Issue #2278).
         balance_stop = provider_balance.is_stop(stderr)
-        if balance_stop:
-            stderr = provider_balance.DETAIL
+        stderr = provider_balance.stop_detail(stderr)
         # A provider 429 exit is TRANSIENT throttling: `stream_pi` backs
         # off and re-spawns this session.
         if not balance_stop and _is_rate_limited(stderr):
