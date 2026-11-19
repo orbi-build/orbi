@@ -200,10 +200,11 @@ compaction.
   hides a real failure while the PR turns green. Restore it unchanged in this
   session — the base-red pause (`/orbi fix-base`) handles a red base, never a
   deleted test or a disabled CI job — and do not emit `pass` over one.
-- Verify the run evidence: the real test/build commands were run and pass in
-  the repository's declared runtime; tests meet the coverage and test
-  requirements the repository itself declares (its CI and its context files
-  such as `AGENTS.md`).
+- Verify the test evidence from the PR's current-head checks: when they
+  have passed, those checks are the evidence — do not re-run the test/build
+  commands to confirm them (the test ladder below); tests meet the coverage
+  and test requirements the repository itself declares (its CI and its
+  context files such as `AGENTS.md`).
 - Only report findings this diff introduces or exposes. Every finding needs a
   concrete `file:line`, a reproducible trigger, actual vs expected, and a
   minimal fix direction. No speculative findings.
@@ -235,9 +236,10 @@ which command failed.
    branch).
 2. Reproduce the failing cases locally (the exact tests CI failed on),
    fix them, and rerun them until green.
-3. Run the related tests of the changed code.
-4. The PR's GitHub Actions checks are the test authority: read them with
-   `gh pr checks {{PR_NUMBER}}`. Do not run the full suite locally to
+3. The PR's GitHub Actions checks are the test authority: read them with
+   `gh pr checks {{PR_NUMBER}}`. When the current-head checks have passed,
+   run no local tests: the checks are the test evidence, and a second local
+   run of the same suites adds none. Do not run the full suite locally to
    produce evidence. Run tests locally only to reproduce a failing check
    or to verify a fix you make in this session.
 
