@@ -55,6 +55,7 @@ from orbi.delivery_labels import (
     label_names,
 )
 from orbi.delivery_scene import RunContext
+from orbi.draft import draft_repo_view
 from orbi.github import list_issues, list_milestones
 from orbi.journal import event, run_command
 from orbi.pi_command import (
@@ -487,7 +488,7 @@ def _gather_context(repo: str) -> dict:
 
 
 def _run_session(config: RunnerConfig, repo: str, run_id: str,
-                 run_dir: Path, context_path: Path,
+                 run_dir: Path, context_path: Path, repo_dir: Path,
                  agent_dir: Path | None, locale: str | None = None,
                  count: int = SUGGESTIONS_MAX,
                  size: int | None = None,
@@ -499,7 +500,6 @@ def _run_session(config: RunnerConfig, repo: str, run_id: str,
     # before Pi writes its first JSONL record.
     session_dir.mkdir(parents=True, exist_ok=True)
     skill = Path(config.deploy_home) / SUGGEST_SKILL_REL
-    repo_dir = Path(config.repo_dir).resolve()
     command, log_command = build_pi_command(
         config, ROLE_SUGGEST, IMPLEMENT_EXCLUDED_SKILLS, session_dir,
         SYSTEM_PROMPT,
@@ -542,8 +542,8 @@ def _write_understanding(run_dir: Path, output: str) -> None:
 
 
 def _run_understanding(config: RunnerConfig, repo: str, run_id: str,
-                       run_dir: Path, agent_dir: Path | None,
-                       locale: str | None = None) -> None:
+                       run_dir: Path, repo_dir: Path,
+                       agent_dir: Path | None, locale: str | None = None) -> None:
     """Run the short understanding session; write `understanding.md`.
 
     Best-effort bypass (Issue #79): a non-zero exit, a spawn failure,
@@ -558,7 +558,6 @@ def _run_understanding(config: RunnerConfig, repo: str, run_id: str,
         session_cwd = run_dir / UNDERSTANDING_DIR
         session_dir = session_cwd / ".pi-session"
         session_dir.mkdir(parents=True, exist_ok=True)
-        repo_dir = Path(config.repo_dir).resolve()
         command, log_command = build_pi_command(
             config, ROLE_SUGGEST, IMPLEMENT_EXCLUDED_SKILLS, session_dir,
             UNDERSTANDING_SYSTEM_PROMPT,
@@ -738,10 +737,6 @@ def _validate_suggestions(entries: list, context: dict,
     return suggestions
 
 
-def _base_sha(repo_dir: Path) -> str:
-    return run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
-
-
 def _build_document(config: RunnerConfig, repo: str, run_id: str,
                     run_dir: Path,
                     locale: str | None = None,
@@ -749,54 +744,56 @@ def _build_document(config: RunnerConfig, repo: str, run_id: str,
                     size: int | None = None,
                     ) -> tuple[dict, dict, str, str | None]:
     """Read, run the session and validate; return the document and facts."""
-    context = _gather_context(repo)
-    earlier = _earlier_batch(config, repo, run_id)
-    if earlier is not None:
-        context["already_suggested"] = earlier
-    context_path = run_dir / "context.json"
-    context_path.write_text(
-        json.dumps(context, indent=2), encoding="utf-8",
-    )
-    agent_dir = prepare_pi_agent_dir(run_dir, config)
-    # The understanding session runs IN PARALLEL (Issue #1600): its
-    # `understanding.md` is available while the suggestions session is
-    # still choosing, so a caller can show it long before the document.
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        understanding = pool.submit(
-            _run_understanding, config, repo, run_id, run_dir, agent_dir,
-            locale,
+    with draft_repo_view(config, run_id=run_id) as view:
+        repo_view = Path(view).resolve()
+        context = _gather_context(repo)
+        earlier = _earlier_batch(config, repo, run_id)
+        if earlier is not None:
+            context["already_suggested"] = earlier
+        context_path = run_dir / "context.json"
+        context_path.write_text(
+            json.dumps(context, indent=2), encoding="utf-8",
         )
-        output, log_command = _run_session(
-            config, repo, run_id, run_dir, context_path, agent_dir, locale,
-            count, size,
+        agent_dir = prepare_pi_agent_dir(run_dir, config)
+        # The understanding session runs IN PARALLEL (Issue #1600): its
+        # `understanding.md` is available while the suggestions session is
+        # still choosing, so a caller can show it long before the document.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            understanding = pool.submit(
+                _run_understanding, config, repo, run_id, run_dir,
+                repo_view, agent_dir, locale,
+            )
+            output, log_command = _run_session(
+                config, repo, run_id, run_dir, context_path, repo_view,
+                agent_dir, locale, count, size,
+            )
+            understanding.result()
+        milestone, dispatch_label = _repo_scan_keys(
+            config, repo, config.active_milestone,
         )
-        understanding.result()
-    milestone, dispatch_label = _repo_scan_keys(
-        config, repo, config.active_milestone,
-    )
-    try:
-        entries = _parse_output(output)
-        # Keep the first N BEFORE validating (Issue #1688): the answer may
-        # hold up to SUGGESTIONS_MAX entries while the caller asked for
-        # fewer, and an entry the caller asked us to drop must not fail
-        # the run (an invalid extra one would otherwise take the kept
-        # entries down with it).
-        suggestions = _validate_suggestions(
-            entries[:count], context, dispatch_label, run_dir, size,
-        )
-    except SuggestError as exc:
-        raise SuggestError(
-            str(exc), command=log_command, returncode=0,
-            stdout=output, stderr="",
-        ) from exc
-    _write_batch(run_dir, suggestions, repo)
-    document = {
-        "repo": repo,
-        "base_sha": _base_sha(Path(config.repo_dir)),
-        "session_dir": str(run_dir / ".pi-session"),
-        "suggestions": suggestions,
-    }
-    return document, context, dispatch_label, milestone
+        try:
+            entries = _parse_output(output)
+            # Keep the first N BEFORE validating (Issue #1688): the answer
+            # may hold up to SUGGESTIONS_MAX entries while the caller asked
+            # for fewer, and an entry the caller asked us to drop must not
+            # fail the run (an invalid extra one would otherwise take the
+            # kept entries down with it).
+            suggestions = _validate_suggestions(
+                entries[:count], context, dispatch_label, run_dir, size,
+            )
+        except SuggestError as exc:
+            raise SuggestError(
+                str(exc), command=log_command, returncode=0,
+                stdout=output, stderr="",
+            ) from exc
+        _write_batch(run_dir, suggestions, repo)
+        document = {
+            "repo": repo,
+            "base_sha": run_command(["git", "rev-parse", "HEAD"], cwd=repo_view),
+            "session_dir": str(run_dir / ".pi-session"),
+            "suggestions": suggestions,
+        }
+        return document, context, dispatch_label, milestone
 
 
 def _open_milestone_arg(repo: str, milestone: str | None) -> str | None:

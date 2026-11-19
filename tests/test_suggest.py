@@ -212,6 +212,9 @@ def _world(tmp_path: Path, monkeypatch, *, provider: bool = False):
     gh = FakeGh("o/r")
     recorder = GhRecorder(gh)
     monkeypatch.setattr(seam, "run_command", recorder)
+    # This suite reads the fixture checkout; the fetched base view is
+    # covered by tests/test_suggest_repo_view.py (Issue #2277).
+    suggest_fakes.stop_repo_view(monkeypatch)
     return SimpleNamespace(
         tmp_path=tmp_path, deploy=deploy, repo=repo,
         config_path=config_path, gh=gh, recorder=recorder,
