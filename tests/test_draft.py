@@ -2060,7 +2060,8 @@ def test_an_issue_without_a_marker_is_checked(config, monkeypatch):
     ) is True
     assert len(judged) == 1
 
-def test_a_claimed_ticket_is_never_requeued_by_the_amend_retry(gh, recorder):
+
+def test_a_claimed_ticket_is_never_requeued_by_the_draft_retry(gh, recorder):
     """Issue #2309: the claim REMOVES the dispatch label, so its absence no
     longer means "not yet dispatched". The retry finishes the body but adds
     no queue label to a ticket that already carries a stage label, while a
