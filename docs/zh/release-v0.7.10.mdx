@@ -1,9 +1,18 @@
 ---
 title: "v0.7.10 发布"
-description: "Orbi v0.7.10 发布说明：A merge that landed while GitHub never marked the PR merged also closes the Issue，另有 1 项改动。"
+description: "Orbi v0.7.10 自托管核心发布说明：代码已合并但 PR 状态未更新时关闭 Issue，后续读取失败不会推翻已完成的交付。"
 ---
 
 `v0.7.10` 于 2026-10-19T17:41:25Z 发布为 GitHub Release [v0.7.10](https://github.com/orbi-build/orbi/releases/tag/v0.7.10)（release task：Issue #1803）。
+
+以下变化属于自托管核心的历史版本；Orbi Cloud 的实际可用情况以其部署版本为准。
+
+## 代码合并后的交付状态
+
+- 已评审的代码合并后，即使 GitHub 仍显示 PR 未合并，Orbi 也会自行关闭来源 Issue，避免已交付任务因此阻止里程碑发版。见 [PR #1805](https://github.com/orbi-build/orbi/pull/1805)。
+- Orbi 已确认合并完成后，即使后续读取 GitHub 失败，也不会再把这次交付判为失败。见 [PR #1804](https://github.com/orbi-build/orbi/pull/1804)。
+
+合并结果、Issue 状态与发版门禁见[当前工作流说明](/zh/workflow)；交付需要处理时，可按[运维指南](/zh/operations)检查自托管 runner。
 
 ## Tag 状态（对 origin 验证）
 
