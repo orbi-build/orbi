@@ -201,8 +201,8 @@ GitHub Issue 与标签仍是唯一状态存储。
 `<!-- orbi:fail=<fingerprint>[:count] -->` 去重标记，以及面向读者的
 **Action**、**Reason** 与 `Diagnosis` 详情。失败记录的定义见
 [Workflow](/zh/workflow)。可恢复的 Pi/model 失败的恢复评论同样带有
-`orbi:fail` 标记但不带失败记录；同一指纹连续 3 轮后由阻塞评论取代
-（Issue #2292）。
+`orbi:fail` 标记但不带失败记录；同一指纹连续 3 轮后，该运行由一条阻塞
+评论终止，折叠的恢复评论仍然保留（Issue #2292）。
 
 有三个终态原因，用来替代过去读作 `unclassified` 的停止（Issue #2222）：
 `release_failed`（release 任务失败；可见原因会写出失败的 release 步骤）、
