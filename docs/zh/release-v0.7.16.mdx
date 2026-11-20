@@ -1,9 +1,18 @@
 ---
 title: "v0.7.16 发布"
-description: "Orbi v0.7.16 发布说明：Extract release declaration parsing from the release state machine，另有 32 项改动。"
+description: "Orbi v0.7.16 自托管核心发布说明：修复 PR 已合并而 Issue 未关闭时队列停滞的问题，并避免重复发布澄清评论。"
 ---
 
 `v0.7.16` 于 2026-10-24T12:23:24Z 发布为 GitHub Release [v0.7.16](https://github.com/orbi-build/orbi/releases/tag/v0.7.16)（release task：Issue #1892）。
+
+以下变化属于自托管核心的历史版本；Orbi Cloud 的实际可用情况以其部署版本为准。
+
+## 队列恢复与澄清评论
+
+- GitHub 已报告交付 PR 合并、但 Issue 仍未关闭时，Orbi 会关闭 Issue 并记录合并结果，让队列继续处理后续任务。见 [PR #1897](https://github.com/orbi-build/orbi/pull/1897)。
+- 任务内容没有变化时，重新添加用于启动交付的 `ai-ready` 标签后，Orbi 不会因同一个待澄清问题再次暂停任务、重复发评论。见 [PR #1905](https://github.com/orbi-build/orbi/pull/1905)。
+
+当前交付状态与恢复行为见[工作流说明](/zh/workflow)。首次自托管 Orbi，可从[快速上手](/zh/quickstart)开始。
 
 ## Tag 状态（对 origin 验证）
 
