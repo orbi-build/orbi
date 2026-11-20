@@ -21,6 +21,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from docs_labels import unknown_labels
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "tools" / "release_docs.py"
 WORKFLOW_FILE = REPO_ROOT / ".github" / "workflows" / "release-docs.yml"
@@ -151,6 +153,34 @@ def test_release_docs_page_description_truncates_at_a_word_boundary():
         assert len(description) <= 155
         assert "alpha" in description
         assert description.split()[-1] == "alpha"
+
+
+def test_generated_release_page_passes_the_docs_label_contract():
+    """Issue #2313: the release flow copies a merged PR's title verbatim
+    into the EN and ZH pages (PR #2310: "Resume: yield instead of
+    ai-blocking when another executor's run is live"), so a title carrying
+    an `ai-…` word that is not a label must not fail the docs label
+    contract: the word is prose, and the generated page references only
+    labels the runner has."""
+    script = load_script()
+    body = _changelog_body(
+        "Resume: yield instead of ai-blocking when another executor's run "
+        "is live ([Issue #2299](https://example.test/2299); "
+        "[PR #2310](https://example.test/2310))",
+    )
+    for language in ("en", "zh"):
+        page = script.release_docs_page(
+            version=TAG, tag_object=TAG_OBJECT, release_commit=RELEASE_COMMIT,
+            published_at=PUBLISHED_AT, release_url=RELEASE_URL,
+            issue_number=42, body=body, language=language,
+        )
+        # The title is published as written: the fix is the docs
+        # contract's definition of a label reference, never a rewrite of
+        # the release notes.
+        assert "ai-blocking" in page
+        assert unknown_labels(page) == set(), (
+            f"the generated {language} page fails the docs label contract"
+        )
 
 
 def test_truncate_at_word_boundary_keeps_a_space_less_text_whole():

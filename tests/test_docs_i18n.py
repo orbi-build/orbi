@@ -13,13 +13,12 @@ references a label or config field the implementation does not have, or
 when the README stops pointing at the Chinese docs entry.
 """
 from orbi import config as config_domain
-from orbi.delivery_labels import NEEDS_DETAIL_LABEL
 import re
 from pathlib import Path
 
 import pytest
 
-import orbi.runner as runner
+from docs_labels import unknown_labels
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
@@ -46,27 +45,10 @@ REQUIRED_ZH_PAGES = (
     "optional-kv-cache",
 )
 
-# Every `ai-*` label the Chinese docs may mention must exist in the
-# runner's label set (same contract as the English pages).
-KNOWN_LABELS = frozenset({
-    "ai-ready",
-    "ai-epic",
-    runner.RELEASE_LABEL,
-    runner.CONTENT_ONLY_LABEL,
-    runner.OPS_LABEL,
-    runner.IN_PROGRESS_LABEL,
-    runner.PR_OPENED_LABEL,
-    runner.FIX_NEEDED_LABEL,
-    runner.MERGED_LABEL,
-    runner.BLOCKED_LABEL,
-    runner.AWAITING_MERGE_LABEL,
-    # Issue #763: the human acceptance gate (a human-only label).
-    runner.HUMAN_REVIEW_LABEL,
-    # Issue #1088: the thin-ticket clarification gate's waiting label.
-    NEEDS_DETAIL_LABEL,
-})
-
-LABEL_PATTERN = re.compile(r"(?<![\w-])ai-[a-z][a-z-]*\b")
+# Every `ai-*` label the Chinese docs reference must exist in the
+# runner's label set; how a reference is recognized lives in
+# `tests/docs_labels.py` (one definition for all three docs contracts,
+# Issue #2313).
 
 # Config fields the implementation understands (bootstrap_config_domain.load_config
 # plus the committed example) — the Chinese field table may document
@@ -493,8 +475,7 @@ def test_chinese_workflow_documents_the_full_issue_to_merge_chain():
     assert "SSH" in text, "workflow must document the SSH git transport"
     # The Chinese docs only reference labels that exist in the runner's
     # label set.
-    mentioned = set(LABEL_PATTERN.findall(text))
-    unknown = mentioned - KNOWN_LABELS
+    unknown = unknown_labels(text)
     assert not unknown, f"Chinese workflow references unknown labels: {sorted(unknown)}"
 
 
@@ -726,8 +707,7 @@ def zh_docs_files() -> list[Path]:
 def test_chinese_docs_only_reference_existing_labels_everywhere():
     for path in zh_docs_files():
         content = path.read_text(encoding="utf-8")
-        mentioned = set(LABEL_PATTERN.findall(content))
-        unknown = mentioned - KNOWN_LABELS
+        unknown = unknown_labels(content)
         assert not unknown, (
             f"{path.name} references unknown labels: {sorted(unknown)}"
         )
