@@ -209,6 +209,13 @@ def install_fake_gh(monkeypatch, comments: list[str],
     (e.g. public comments) instead of the captured one.
     """
     comment_ids: list[int] = []
+    # Issue #2299: the author of each comment this fake recorded. The
+    # engine's own comments are authored by the runner account the identity
+    # below pins (`orbi-bot`); anything a test pre-seeds is the maintainer's.
+    # The opened-PR scan pairs a live run by ACCOUNT, so a fake that named
+    # the engine's own started comment after somebody else would report
+    # "another executor is live" on every scene.
+    engine_comment_ids: set[int] = set()
     if pr is None:
         pr = {"state": "OPEN", "merged": False}
     if labels is None:
@@ -220,6 +227,7 @@ def install_fake_gh(monkeypatch, comments: list[str],
             if command[1] == "issue":
                 if command[2] == "comment":
                     comment_ids.append(len(comments) + 1)
+                    engine_comment_ids.add(len(comments) + 1)
                     comments.append(command[-1])
                     return ""
                 if command[2] == "edit":
@@ -256,9 +264,14 @@ def install_fake_gh(monkeypatch, comments: list[str],
                              "authorAssociation": "OWNER",
                              # Issue #1806: the trust decision reads the
                              # author's repository permission, so the
-                             # runner's own comments name a writer (the
-                             # endpoint below answers).
-                             "author": {"login": "maintainer"}}
+                             # maintainer's comments name a writer (the
+                             # endpoint below answers); the engine's own
+                             # carry the runner account (Issue #2299).
+                             "author": {"login": (
+                                 "orbi-bot"
+                                 if comment_id in engine_comment_ids
+                                 else "maintainer"
+                             )}}
                             for comment_id, body in zip(
                                 comment_ids, comments,
                             )
@@ -308,6 +321,7 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     if method == "POST":
                         comment_id = len(comments) + 1
                         comment_ids.append(comment_id)
+                        engine_comment_ids.add(comment_id)
                         comments.append(body)
                         return json.dumps(
                             {"id": comment_id, "body": body},
@@ -326,6 +340,7 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     # Issue #50: the failure comment is written to the
                     # PR too (the same body as the Issue comment).
                     comment_ids.append(len(comments) + 1)
+                    engine_comment_ids.add(len(comments) + 1)
                     comments.append(command[-1])
                     return ""
                 if command[2] == "view":
@@ -724,8 +739,14 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
                         {"id": i + 1, "body": body,
                          "authorAssociation": "OWNER",
                          # Issue #1806: the trust decision reads the
-                         # author's repository permission.
-                         "author": {"login": "maintainer"}}
+                         # author's repository permission. Every comment
+                         # here was written by the engine, so they carry
+                         # the runner account the fake pins below: the
+                         # opened-PR scan pairs a live run by ACCOUNT
+                         # (Issue #2299), and naming the engine's own
+                         # started comment after somebody else would read
+                         # as another executor's live run.
+                         "author": {"login": "orbi-bot"}}
                         for i, body in enumerate(comments)
                     ],
                 })

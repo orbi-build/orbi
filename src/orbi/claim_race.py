@@ -68,17 +68,25 @@ def _with_comment_author(comment: dict) -> dict:
     return {**comment, "author": comment["user"]}
 
 
-def _comment_account(comment: dict) -> str:
-    """The account that wrote the trusted comment, [bot] suffix normalized.
+def _author_login(comment: dict) -> str | None:
+    """The author login of one comment, or None when it carries none."""
+    author = comment.get("author")
+    login = author.get("login") if isinstance(author, dict) else None
+    return login if isinstance(login, str) else None
 
-    Every comment reaching this point passed comment_is_trusted, which
-    refuses a comment without an author login: the account is always there.
+
+def _comment_account(comment: dict) -> str:
+    """The account that wrote the comment, [bot] suffix normalized.
+
+    Both readers hand this only comments carrying an author login: the
+    trusted mode refuses one without it (comment_is_trusted) and the
+    untrusted mode filters on `_author_login`.
     """
     return strip_bot_suffix(comment["author"]["login"])
 
 
 def other_executor_live_started(
-    comments: list[dict], *, repo: str,
+    comments: list[dict], *, repo: str, require_trust: bool = True,
 ) -> dict | None:
     """Another executor's started comment that is still live, or None.
 
@@ -94,10 +102,15 @@ def other_executor_live_started(
     - a started comment posted while ANOTHER account already had a live
       started comment is the yielding side of the race and is never live,
       so a yielded start can never block a later claim by either side;
-    - the author must pass the trusted-author rule every comment reader
-      uses (comment_trust.trusted_comments): the run marker does not
+    - with `require_trust` (the fresh claim, orbi#2298) the author must
+      pass the trusted-author rule every comment reader uses
+      (comment_trust.trusted_comments): the run marker does not
       authenticate an author, so a copied marker from a drive-by account
-      can never stall deliveries.
+      can never stall a CLAIM. The resume guard (orbi#2299) turns the rule
+      off because it must yield to a run whose author this deployment does
+      not trust at all — an Orbi Cloud bot has no repository write
+      permission here, which is exactly why its scene lookup fails — and a
+      yield never blocks the Issue: the next tick re-reads.
 
     The surviving live start of an account other than the local one (the
     active gh credential's login) is returned; None means no other
@@ -110,9 +123,14 @@ def other_executor_live_started(
 
     A pure scan over an already-fetched comment list (either GitHub shape).
     """
+    normalized = [_with_comment_author(comment) for comment in comments]
+    accounts = (
+        trusted_comments(normalized, repo=repo) if require_trust
+        else [comment for comment in normalized
+              if _author_login(comment) is not None]
+    )
     live: dict[str, dict] = {}
-    for comment in trusted_comments(
-            [_with_comment_author(comment) for comment in comments], repo=repo):
+    for comment in accounts:
         kind = comment_kind(comment.get("body"))
         if kind != COMMENT_KIND_STARTED and kind not in _RUN_END_KINDS:
             continue
@@ -168,6 +186,34 @@ def claim_window_yield(
             issue, config, source_repo, run_id):
         return "needs-detail"
     return None
+
+
+def resume_yields_to_another_executor(
+    *, issue: int, source_repo: str, comments: list[dict],
+) -> bool:
+    """Yield this round when another executor's run owns the opened PR.
+
+    The opened-PR scan (orbi#2299) reads this BEFORE `resume_scene` and
+    before the external-PR route: the scene of a delivery another
+    deployment is running is not this executor's to recover. Without the
+    check a self-hosted engine that does not trust the Cloud bot's
+    comments found no trusted scene at all and wrote the
+    `failure.scene_blocked` stop onto a live Cloud delivery — and Cloud,
+    which trusts the owner, would resume the self-hosted PR. Both sides now
+    yield to the live run the comment list names.
+
+    The trust rule is OFF (see `other_executor_live_started`): the other
+    executor's account need not be one this repository trusts, and that
+    is the observed pair. A yield is not a failure — no label write, no
+    comment, nothing pushed, and no worktree of the other run is touched
+    (this executor never opened one for it); the caller moves on to the
+    next candidate.
+    """
+    if other_executor_live_started(
+            comments, repo=source_repo, require_trust=False) is None:
+        return False
+    event("claim_yield", issue=issue, reason="other_executor_live")
+    return True
 
 
 def yield_to_another_executor(
