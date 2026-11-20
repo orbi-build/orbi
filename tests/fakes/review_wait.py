@@ -8,8 +8,21 @@ count stays flat (tests/fakes/ is the adapter contract, not coupling).
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from orbi import claim, review_wait
 from seam import seam
+
+
+class Scene:
+    """The recovered scene a skip reads: its PR URL and its run (Issue #2304).
+
+    A run id is what the waiting line publishes through, so a scene built
+    without one keeps Issue #2304's publisher out of a unit scenario.
+    """
+
+    def __init__(self, pr_url: str, run_id: str | None = None):
+        self.parsed = SimpleNamespace(pr_url=pr_url, run_id=run_id)
 
 
 def bind_claim_tick(monkeypatch) -> None:

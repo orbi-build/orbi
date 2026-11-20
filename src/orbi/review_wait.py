@@ -15,16 +15,16 @@ bounded exception to Issue #1473).
 
 The module imports `orbi.run_state` for the state file it lives in and
 never the other way round (no cycle); `orbi.resume_scan` (the opened-PR
-scan that observes a waiting candidate) and `orbi.claim` (the fresh-claim
-hold) read it.
+scan, whose CI-pending skip and Issue #2304 waiting line ride the same one
+head + rollup read) and `orbi.claim` (the fresh-claim hold) read it.
 """
 from __future__ import annotations
 
 import time
 from pathlib import Path
 
-from orbi import restart_scan, run_state
-from orbi.checks import classify_checks, render_check
+from orbi import restart_scan, run_state, waiting_checks
+from orbi.checks import classify_checks
 from orbi.github import pr_number, pr_view
 from orbi.journal import LOGGER, event
 from orbi.pilot_slots import slot_occupancy
@@ -232,19 +232,24 @@ def review_wait_age(
     return age
 
 
-def note_pending_candidate(
+def skip_pending_candidate(
     review_waiting: list[dict] | None, repo_dir: Path | None,
-    source_repo: str, number: int, pr_url: str,
+    source_repo: str, issue: dict, scene_value, language_code: str,
+    status_url: str | None = None,
 ) -> bool:
     """Whether the opened-PR scan must skip this candidate as CI-pending.
 
-    Issue #1473's skip and Issue #2305's observation through the ONE head
-    + rollup read: a pending check journals `delivery_ci_pending` and — when
+    Issue #1473's skip, Issue #2305's observation and Issue #2304's waiting
+    line ride the ONE head + rollup read: a pending check on an OPEN PR is
+    what the scan skips and what the Issue says Orbi waits for, and — when
     no check failed and this deployment's review record waits on that same
-    head — the wait artifact joins `review_waiting` (the claim then decides
-    whether the last free slot is held for it). A failed read returns False,
-    so the candidate still reaches the runner's own gate.
+    head — the wait artifact joins `review_waiting`, so the claim decides
+    whether the last free slot is held for it. A terminal PR, a completed
+    rollup or a failed read returns False, so the candidate still reaches
+    the runner's own gate.
     """
+    number = int(issue["number"])
+    pr_url = scene_value.parsed.pr_url
     try:
         pr_state, head, rollup = pr_delivery_head_rollup(pr_url, source_repo)
     except Exception:
@@ -254,15 +259,16 @@ def note_pending_candidate(
     pending, failed, _passed = classify_checks(rollup)
     if not pending:
         return False
-    event("delivery_ci_pending", issue=number, pr=pr_url,
-          pending="; ".join(map(render_check, pending)))
-    if failed or review_waiting is None:
-        return True
-    age = review_wait_age(repo_dir, source_repo, number, head)
-    if age is not None:
-        review_waiting.append({
-            "issue": number, "pr": pr_url, "head": head, "age": int(age),
-        })
+    waiting_checks.defer_skipped(
+        scene_value, pending, issue, source_repo, language_code, status_url,
+        head=head,
+    )
+    if not failed and review_waiting is not None:
+        age = review_wait_age(repo_dir, source_repo, number, head)
+        if age is not None:
+            review_waiting.append({
+                "issue": number, "pr": pr_url, "head": head, "age": int(age),
+            })
     return True
 
 

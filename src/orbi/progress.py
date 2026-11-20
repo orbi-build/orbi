@@ -570,6 +570,25 @@ class ProgressPublisher:
             raise RuntimeError("no progress comment to update")
         self._patch_comment(self.comment_id, body)
 
+    def patch_existing(self, update: Callable[[str], str]) -> None:
+        """PATCH the run's EXISTING progress comment with `update(body)`.
+
+        Issue #2304: a status line that updates the record as it stands (the
+        waiting-for-checks line) edits the run's progress comment instead of
+        re-rendering it, so display fields the writer does not own — the
+        step a Runner action published, the fold, the runner marker — stay
+        exactly as they were. A run without a progress comment publishes
+        nothing: `ensure` is the only creator, so no second comment kind
+        appears.
+        """
+        existing = find_progress_comment(self.list_comments(), self.run_id)
+        if existing is None:
+            return
+        self.comment_id = int(existing["id"])
+        self._patch_comment(
+            self.comment_id, update(str(existing.get("body") or "")),
+        )
+
     def milestone(self, text: str, *, block: str | None = None) -> None:
         """Post a short standalone milestone comment (mobile notification).
 

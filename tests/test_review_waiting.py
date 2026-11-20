@@ -23,7 +23,7 @@ from orbi.delivery_labels import PR_OPENED_LABEL
 from orbi.delivery_scene import RunContext
 from seam import resume_deps
 from tests.fakes.review_wait import (
-    bind_awaiting_merge, bind_claim_tick, bind_gh, bind_pr_read,
+    Scene, bind_awaiting_merge, bind_claim_tick, bind_gh, bind_pr_read,
     bind_pr_read_failure,
 )
 from tests.test_resume_pr import (
@@ -270,16 +270,27 @@ def _pending_scan(monkeypatch, state="OPEN", rollup=None, head=REVIEW_HEAD):
     return reads
 
 
+def _skip(waiting, tmp_path):
+    """Run the scan's one skip decision for issue 9 of the fake PR."""
+    return review_wait.skip_pending_candidate(
+        waiting, tmp_path, "owner/repo", {"number": 9},
+        Scene(FAKE_PR_URL), "en",
+    )
+
+
 def test_a_pending_candidate_with_a_failed_check_is_skipped_not_waited(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, caplog,
 ):
+    """Acceptance: a failed check is no wait — the candidate is still
+    skipped for this tick (Issue #1473) but never holds the last free slot,
+    and the skip still journals the pending state (Issue #2304)."""
     _delivery(tmp_path)
     _pending_scan(monkeypatch, rollup=[PENDING, FAILED])
     waiting: list = []
-    assert review_wait.note_pending_candidate(
-        waiting, tmp_path, "owner/repo", 9, FAKE_PR_URL,
-    ) is True
+    caplog.set_level("INFO")
+    assert _skip(waiting, tmp_path) is True
     assert waiting == []
+    assert "delivery_ci_pending" in caplog.text
 
 
 def test_a_pending_candidate_without_a_wait_list_is_just_skipped(
@@ -288,27 +299,41 @@ def test_a_pending_candidate_without_a_wait_list_is_just_skipped(
     """The awaiting-merge scan shares the read and reports no wait."""
     _delivery(tmp_path)
     _pending_scan(monkeypatch)
-    assert review_wait.note_pending_candidate(
-        None, tmp_path, "owner/repo", 9, FAKE_PR_URL,
-    ) is True
+    assert _skip(None, tmp_path) is True
 
 
 def test_a_terminal_pr_is_never_skipped(monkeypatch, tmp_path):
     _delivery(tmp_path)
     _pending_scan(monkeypatch, state="MERGED")
     waiting: list = []
-    assert review_wait.note_pending_candidate(
-        waiting, tmp_path, "owner/repo", 9, FAKE_PR_URL,
-    ) is False
+    assert _skip(waiting, tmp_path) is False
     assert waiting == []
 
 
 def test_a_failed_pr_read_returns_the_candidate(monkeypatch, tmp_path):
     _delivery(tmp_path)
     bind_pr_read_failure(monkeypatch)
-    assert review_wait.note_pending_candidate(
-        [], tmp_path, "owner/repo", 9, FAKE_PR_URL,
-    ) is False
+    assert _skip([], tmp_path) is False
+
+
+def test_a_pending_candidate_this_deployment_cannot_time_is_no_wait(
+    monkeypatch, tmp_path,
+):
+    """Another deployment's pending delivery is still skipped (Issue #1473)
+    but holds no slot: with no local worktree its wait is unproven."""
+    _pending_scan(monkeypatch)
+    waiting: list = []
+    assert _skip(waiting, tmp_path) is True
+    assert waiting == []
+
+
+def test_the_read_without_a_head_carries_none(monkeypatch):
+    """A rollup with no `headRefOid` authors no wait: the record can never
+    match a head the read did not report."""
+    bind_pr_read(monkeypatch, {"state": "OPEN", "statusCheckRollup": [PENDING]})
+    assert review_wait.pr_delivery_head_rollup(
+        FAKE_PR_URL, "owner/repo",
+    ) == ("OPEN", None, [PENDING])
 
 
 def test_an_empty_wait_list_holds_nothing(tmp_path):

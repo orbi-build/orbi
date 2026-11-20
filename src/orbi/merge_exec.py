@@ -71,7 +71,17 @@ class DeliveryDeferred(Exception):
     observation and returns — the next tick re-reads the state. The
     delivery labels stay untouched and the review-round budget does not
     advance, so a deferred tick costs a couple of read calls only.
+
+    `head` is the commit whose checks the deferral waits for when the wait
+    IS a CI wait — the head's rollup is still running, or this gate pushed
+    an absorbed head whose CI it never reads (Issue #2304). The caller
+    publishes that fact on the Issue. A deferral for another reason
+    (UNKNOWN mergeability) names no head: its wait is not the checks.
     """
+
+    def __init__(self, message: str, *, head: str | None = None) -> None:
+        super().__init__(message)
+        self.head = head
 
 
 # GitHub computes mergeability asynchronously; a CI-concluded UNKNOWN read is
@@ -276,7 +286,8 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         raise DeliveryDeferred(
             f"PR #{pr['number']} absorbed origin/{base_branch} ({base_sha}) "
             f"and pushed {absorbed_head}; the merge is deferred until that "
-            "head's CI concludes"
+            "head's CI concludes",
+            head=absorbed_head,
         )
     if freshness is run_state.BaseFreshness.CONFLICTED:
         event(
@@ -308,7 +319,8 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         )
         raise DeliveryDeferred(
             f"PR #{pr['number']} CI is still running ({detail}); "
-            "the merge is deferred to the next tick"
+            "the merge is deferred to the next tick",
+            head=pr["head_oid"],
         )
     mergeable = state.get("mergeable")
     if mergeable == "UNKNOWN":

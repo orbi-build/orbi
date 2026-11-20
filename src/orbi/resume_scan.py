@@ -14,7 +14,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
-from orbi import claim_race, language, run_state, scene, user_summary
+from orbi import claim_race, language, run_state, scene, user_summary, waiting_checks
+from orbi import review_wait
 from orbi.blocked_comment import post_blocked_comment
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL, BLOCKED_LABEL, FIX_NEEDED_LABEL, MERGED_LABEL,
@@ -27,7 +28,6 @@ from orbi.comment_trust import latest_run_marker
 from orbi.github import (
     issue_comments, list_issues, open_pr_for_branch,
 )
-from orbi.review_wait import note_pending_candidate
 from orbi.gitops import task_branch
 from orbi.journal import LOGGER, event
 from orbi.pilot_slots import slot_held_deliveries
@@ -106,8 +106,7 @@ def pick_resumable_delivery(
     The candidate rules (held deliveries, the page size, oldest first,
     CI-pending skip) are the shared opened-PR ones documented on
     `_pick_opened_pr_delivery`; `review_waiting` is the Issue #2305
-    out-list those skipped candidates which only wait for their checks are
-    reported through.
+    out-list for the skipped candidates that only wait for their checks.
     """
     return _pick_opened_pr_delivery(
         repo, slot_dir, max_concurrency, repo_dir,
@@ -196,9 +195,8 @@ def _pick_opened_pr_delivery(
     occupies a slot too, and a free candidate behind those was never read
     (#2641 waited while the three older candidates were skipped). Held
     candidates are still skipped before any candidate read, so an in-flight
-    delivery is never touched. `review_waiting` (Issue #2305) receives a
-    CANNOT-move candidate that passed review and only waits for its checks
-    (see `orbi.review_wait`).
+    delivery is never touched. `review_waiting` (Issue #2305) receives the
+    candidates that passed review and only wait for their checks.
     """
     held = slot_held_deliveries(slot_dir, max_concurrency)
     # `label:a,b` is GitHub's OR within one label qualifier (verified live:
@@ -342,11 +340,12 @@ def _pick_opened_pr_delivery(
                     reason=f"scene_{found_scene.value}",
                 )
                 continue
-        # Issue #1473's CI-pending skip (a failure still returns it) and
-        # Issue #2305's wait report through ONE head + rollup read.
-        if note_pending_candidate(
-                review_waiting, repo_dir, repo, int(issue["number"]),
-                found.parsed.pr_url):
+        # Issue #1473's CI-pending skip (a failure still returns it),
+        # Issue #2305's wait report and Issue #2304's note in one call.
+        if review_wait.skip_pending_candidate(
+                review_waiting, repo_dir, repo, issue, found, language_code,
+                status_url,
+        ):
             continue
         return issue, found
     return None
