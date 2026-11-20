@@ -338,6 +338,31 @@ def session_ends_with_no_answer(monkeypatch) -> None:
     monkeypatch.setattr(draft, "run_draft_session", session)
 
 
+def session_returns_after_a_rejection(monkeypatch, reason: str) -> None:
+    """The tools refused the answer and Pi ended the session normally.
+
+    A model that stops answering instead of calling the tool again leaves Pi
+    exiting cleanly with no answer file, the third way a rejected answer ends
+    a session (Issue #2303), next to the timeout and the Pi failure.
+    """
+
+    def session(_config, _repo, *, out_path, **_kwargs):
+        draft.rejection_path(Path(out_path)).write_text(
+            reason, encoding="utf-8",
+        )
+
+    monkeypatch.setattr(draft, "run_draft_session", session)
+
+
+def session_returns_with_no_answer(monkeypatch) -> None:
+    """The session ends cleanly having written nothing and refused nothing."""
+
+    def session(_config, _repo, **_kwargs):
+        return None
+
+    monkeypatch.setattr(draft, "run_draft_session", session)
+
+
 def stub_stream_pi(monkeypatch, output: str = "") -> list[dict]:
     """Replace the Pi process: record one session call, answer output."""
     calls: list[dict] = []

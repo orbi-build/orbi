@@ -463,8 +463,9 @@ def _run_answer_session(
     the one THIS round wrote: a round that timed out after the model wrote
     its draft still returns that draft, and a round that wrote nothing
     fails. A session that ends without an answer after the tools refused one
-    fails with that last rejection reason (Issue #2303), so the person reads
-    why the draft failed instead of a bare timeout. A model-provider balance
+    fails with that last rejection reason (Issue #2303) — whether Pi failed or
+    ended the turn cleanly — so the person reads why the draft failed instead
+    of a bare `timeout` or `no_answer`. A model-provider balance
     refusal is its own code with the plain sentence as its detail — never
     `session_failed` and never the Python exception text, which is where the
     provider's raw payload lives (Issue #2278).
@@ -486,11 +487,7 @@ def _run_answer_session(
                     provider_balance.DRAFT_CODE, "run the drafting session",
                     provider_balance.DETAIL,
                 ) from exc
-            rejected = last_rejection(out_path)
-            if rejected is not None:
-                raise DraftError(
-                    "invalid_draft", "run the drafting session", rejected,
-                ) from exc
+            raise_if_rejected(out_path)
             code = (
                 "timeout"
                 if isinstance(exc, subprocess.TimeoutExpired)
@@ -504,6 +501,18 @@ def _run_answer_session(
             "draft_session_failed", level=logging.WARNING,
             repo=repo, reason=type(exc).__name__,
         )
+        return
+    if not out_path.is_file():
+        # Pi ended the turn cleanly and left no answer: the model stopped
+        # answering after a rejected one, which fails like the timeout path.
+        raise_if_rejected(out_path)
+
+
+def raise_if_rejected(out_path: Path) -> None:
+    """Fail `invalid_draft` with the tool's last reason, when it refused one."""
+    rejected = last_rejection(out_path)
+    if rejected is not None:
+        raise DraftError("invalid_draft", "run the drafting session", rejected)
 
 
 def rejection_path(out_path: Path) -> Path:
