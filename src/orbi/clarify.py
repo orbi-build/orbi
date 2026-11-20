@@ -496,12 +496,12 @@ def stop(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
     (`ai-ready` by default, #527) and the run's message language.
     """
     try:
-        comment_issue(
-            issue["number"], repo=source_repo,
-            body=render_comment(
-                issue, verdict, run_id, ready_label=ready_label,
-                language_code=language_code, status_url=status_url,
-            ),
+        body = render_comment(
+            issue, verdict, run_id, ready_label=ready_label,
+            language_code=language_code, status_url=status_url,
+        )
+        comment_url = comment_issue(
+            issue["number"], repo=source_repo, body=body,
         )
         edit_issue(
             issue["number"], repo=source_repo,
@@ -516,10 +516,11 @@ def stop(issue: dict, verdict: ClarifyVerdict, run_id: str, *,
     # Tell the person outside GitHub (Issue #1673): OUTSIDE the try (a
     # notify problem must never turn the failed-write branch into "deliver
     # anyway") and every stop sends — the old `ai-needs-detail` can still
-    # be on a ticket someone just re-readied.
-    notify.label_added(
-        source_repo, issue["number"], NEEDS_DETAIL_LABEL,
-        issue.get("title"),
+    # be on a ticket someone just re-readied. The alert quotes the comment
+    # this call posted and links it (Issue #2287).
+    notify.needs_detail_stop(
+        source_repo, issue["number"], issue.get("title"), comment_url=comment_url,
+        ready_label=ready_label, language_code=language_code,
     )
     event(
         "clarify_needs_detail", issue=issue["number"],

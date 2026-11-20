@@ -711,12 +711,10 @@ def apply_label_patch(number: int, *, repo: str, event: str,
     same current labels and event always produce the same idempotent
     patch. `ready_label` is the repository's resolved claim label (Issue
     #1775), passed through to that one decision. The patch is applied
-    through `edit_issue`: one call for the add plus the first remove,
-    then one call per extra remove (the exact
-    same `edit_issue` kwargs the pre-#175 code emitted). A no-op patch
-    (nothing to add or remove) applies nothing. After the last write,
-    `notify.patch_applied` (Issue #1673) owns the one notification the
-    patch warrants — a newly added attention label, never the wait.
+    through `edit_issue`: one call for the add plus the first remove, then
+    one call per extra remove (the pre-#175 kwargs). A no-op patch applies
+    nothing; after the last write `notify.patch_applied` (Issues #1673,
+    #2287) sends an ordinary handoff's message, never a stop's.
     """
     to_add, to_remove = label_patch(event, current_labels, ready_label)
     if not to_add and not to_remove:
@@ -737,23 +735,25 @@ def apply_label_patch(number: int, *, repo: str, event: str,
     notify.patch_applied(
         event, to_add, current_labels,
         repo=repo, number=number,
-        read_title=lambda: _issue_title(number, repo=repo),
+        read_title=lambda: issue_title(number, repo=repo),
     )
 
 
-def _issue_title(number: int, *, repo: str) -> str | None:
-    """Read one Issue title for a notification; None when unreadable.
-
-    Never fails the delivery: notifications are a pure bypass (Issue
-    #1673).
-    """
+def issue_title(number: int, *, repo: str) -> str | None:
+    """One Issue title for a notification; None when unreadable (#1673)."""
     try:
         return issue_view(number, "title", repo=repo, timeout=30).get("title")
     except Exception:
         return None
 
 
-def comment_issue(number: int, *, repo: str, body: str) -> None:
+def comment_issue(number: int, *, repo: str, body: str) -> str:
+    """Post one comment; return the permalink `gh issue comment` printed.
+
+    gh 2.100.0 prints the created comment's URL on stdout
+    (`prShared.createComment`, the deploy host's version); the idempotency
+    retry prints nothing, so "" means "posted, permalink unknown" (#2287).
+    """
     rendered = format_status_comment(body)
     command = ["gh", "issue", "comment", str(number), "--repo", repo,
                "--body", rendered]
@@ -764,7 +764,7 @@ def comment_issue(number: int, *, repo: str, body: str) -> None:
             for comment in issue_comments(number, repo=repo)
         )
 
-    run_gh_write_command(command, already_applied=already_posted)
+    return run_gh_write_command(command, already_applied=already_posted).strip()
 
 
 def issue_comment_rest_id(
