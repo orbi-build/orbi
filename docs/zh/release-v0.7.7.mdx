@@ -1,9 +1,17 @@
 ---
 title: "v0.7.7 发布"
-description: "Orbi v0.7.7 发布说明：Missing provider key, rate-limited release gate reads and gh network timeouts keep their pre-#1762 classification"
+description: "Orbi v0.7.7 发布说明：区分模型凭据缺失与 GitHub 临时故障，包括发布检查限流和 GitHub CLI 网络超时。"
 ---
 
 `v0.7.7` 于 2026-10-18T13:45:47Z 发布为 GitHub Release [v0.7.7](https://github.com/orbi-build/orbi/releases/tag/v0.7.7)（release task：Issue #1769）。
+
+以下变化属于自托管核心的历史版本。Orbi Cloud 是否包含这些改动，取决于它部署的版本。
+
+## 模型凭据与 GitHub 故障
+
+本版修复了几类故障的归类偏差。模型 API 密钥缺失时，Orbi 报告凭据问题；发布检查遇到 GitHub 限流，或 GitHub CLI 请求超时时，Orbi 报告 GitHub 临时故障。改动见 [PR #1770](https://github.com/orbi-build/orbi/pull/1770)。
+
+当前故障原因与处理办法见[工作流说明](/zh/workflow)；模型凭据与配置见[上手指南](/zh/getting-started)。
 
 ## Tag 状态（对 origin 验证）
 

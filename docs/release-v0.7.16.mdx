@@ -1,9 +1,18 @@
 ---
 title: "v0.7.16 release"
-description: "Orbi v0.7.16 release notes: Extract release declaration parsing from the release state machine and 32 more changes."
+description: "Orbi v0.7.16 closes Issues left open after a PR merges, so delivery can continue. It also fixes repeated clarification pauses and comments."
 ---
 
 `v0.7.16` was published 2026-10-24T12:23:24Z as the GitHub Release [v0.7.16](https://github.com/orbi-build/orbi/releases/tag/v0.7.16) (release task: Issue #1892).
+
+This release is for the self-hosted core. Orbi Cloud follows a separate deployment schedule.
+
+## Queue recovery and clarification
+
+- If GitHub reports a delivery PR as merged but leaves its Issue open, Orbi closes the Issue and records the merged result so the queue can continue. See [PR #1897](https://github.com/orbi-build/orbi/pull/1897).
+- Re-adding the `ai-ready` delivery label to a ticket whose contents have not changed no longer pauses the ticket a second time or repeats the clarification comment. See [PR #1905](https://github.com/orbi-build/orbi/pull/1905).
+
+For the current delivery states and recovery behavior, read the [workflow guide](/workflow). The [quickstart](/quickstart) covers self-hosting setup.
 
 ## Tag state (verified against origin)
 
