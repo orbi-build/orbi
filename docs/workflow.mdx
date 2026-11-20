@@ -475,8 +475,9 @@ merge failure, remains `ai-blocked`.
   own task worktree and run state file (Issue #2309). Remove
   `ai-in-progress`, or close the Issue, and it is not resumed.
 - **Claimed before the upgrade to this rule:** the ticket may still carry the
-  queue label as well. Remove both labels, or close the Issue; otherwise the
-  ready scan claims it again.
+  queue label as well. Remove both labels, or close the Issue: removing only
+  `ai-in-progress` leaves the queue label, and the ready scan claims the ticket
+  again as new work.
 - **Upgrading across this change:** a delivery you stopped under the old rule
   by removing only `ai-ready` still carries `ai-in-progress`. The upgraded
   engine finds interrupted runs by that label alone and would resume it, so

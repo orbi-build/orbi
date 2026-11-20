@@ -386,8 +386,8 @@ in-flight 和 ready 三个扫描本 tick 都无结果后才会被重试：等待
 - **被中断**（Runner 被杀，下一个 tick 会接回）：实现阶段的运行靠 `ai-in-progress`
   加上本部署自己的任务 worktree 与 run state 文件被找到（Issue #2309）。摘掉
   `ai-in-progress` 或关掉 Issue，就不会被接回。
-- **升级到本规则之前领取的票**：可能还带着队列标签。两个标签都摘掉，或关掉 Issue；
-  否则 ready 扫描会再领一次。
+- **升级到本规则之前领取的票**：可能还带着队列标签。两个标签都摘掉，或关掉 Issue：
+  只摘 `ai-in-progress` 会留下队列标签，ready 扫描会把它当新工作再领一次。
 - **跨过这次变更升级**：按旧规则只摘 `ai-ready` 停掉的交付还带着
   `ai-in-progress`。升级后的引擎只凭这个标签找被中断的运行，会把它接回，所以升级前
   把 `ai-in-progress` 也摘掉（或关掉 Issue）。
