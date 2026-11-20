@@ -310,3 +310,72 @@ def test_yield_to_another_executor_runs_with_no_other_executor(
     assert yielded is False
     assert retired == []
     assert "claim_yield" not in caplog.text
+
+# --- the resume guard's untrusted mode (Issue #2299) ----------------------
+
+
+def test_the_resume_scan_sees_an_untrusted_executor_the_claim_scan_ignores(
+    github_state,
+):
+    """The two guards read one scan in two modes. The fresh claim keeps the
+    trusted-author rule (a drive-by marker can never stall a claim); the
+    resume guard must see a live run whose author this repository does not
+    trust — an Orbi Cloud bot with no write permission, the observed pair."""
+    github_state.comment(5, _started_body("aaaa1111"), login="cloud-bot")
+    github_state.login = "selfhosted"
+    assert _scan(github_state) is None
+    comments = _comments(github_state)
+    assert claim_race.other_executor_live_started(
+        comments, repo=REPO, require_trust=False,
+    )["author"]["login"] == "cloud-bot"
+
+
+def test_untrusted_mode_ignores_a_comment_without_an_author(github_state):
+    """GitHub reports a null author for a deleted account: no account, no
+    run — the untrusted mode pairs liveness by account, so it skips it."""
+    comments = [
+        {"body": _started_body("aaaa1111")},
+        {"body": _started_body("bbbb2222"), "author": None},
+        {"body": _started_body("cccc3333"), "author": {"login": None}},
+    ]
+    github_state.login = "selfhosted"
+    assert claim_race.other_executor_live_started(
+        comments, repo=REPO, require_trust=False,
+    ) is None
+
+
+def test_resume_yield_logs_other_executor_live_and_writes_nothing(
+    github_state, caplog,
+):
+    """The yield the opened-PR scan runs: one `claim_yield` line naming the
+    reason, no label write, no comment — the other run is left untouched."""
+    github_state.comment(5, _started_body("aaaa1111"), login="cloud-bot")
+    github_state.login = "selfhosted"
+    comments = _comments(github_state)
+    reads = len(github_state.commands)
+    with caplog.at_level("INFO"):
+        yielded = claim_race.resume_yields_to_another_executor(
+            issue=5, source_repo=REPO, comments=comments,
+        )
+    assert yielded is True
+    assert "claim_yield" in caplog.text
+    assert "reason=other_executor_live" in caplog.text
+    # Only the comment read and the identity read: no label edit, no comment.
+    writes = [
+        command for command in github_state.commands[reads:]
+        if command[1] in ("edit", "comment", "close")
+        or (command[1] == "api" and "--include" not in command)
+    ]
+    assert writes == []
+
+
+def test_resume_does_not_yield_without_another_live_run(github_state, caplog):
+    """This deployment's own live run (a restart) is not another executor:
+    the scan keeps its delivery and no yield line is written."""
+    github_state.comment(5, _started_body("bbbb2222"), login="selfhosted")
+    github_state.login = "selfhosted"
+    with caplog.at_level("INFO"):
+        assert claim_race.resume_yields_to_another_executor(
+            issue=5, source_repo=REPO, comments=_comments(github_state),
+        ) is False
+    assert "claim_yield" not in caplog.text

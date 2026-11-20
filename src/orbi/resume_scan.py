@@ -14,7 +14,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
-from orbi import language, run_state, scene, user_summary
+from orbi import claim_race, language, run_state, scene, user_summary
 from orbi.blocked_comment import post_blocked_comment
 from orbi.checks import render_check, classify_checks
 from orbi.delivery_labels import (
@@ -174,42 +174,38 @@ def _pick_opened_pr_delivery(
     second review Pi never starts in the same worktree/branch/run and a
     second `gh pr merge --match-head-commit` never hits the merged PR.
     The pre-#809 guard abandoned the WHOLE scan whenever any slot in the
-    (often shared, multi-repo) slot dir was held: with any concurrency
-    the review never ran while fresh claims kept opening PRs — the
-    reported starvation (nine MERGEABLE PRs, the oldest 90 minutes,
-    zero review ticks). A free delivery is now resumed even while other
-    deliveries are in flight, and the review backlog drains at the
-    concurrency rate instead of only growing. This runner's own slot is
-    excluded: `main` took it before the claim scan and holds it for the
-    whole delivery.
+    (often shared, multi-repo) slot dir was held: with any concurrency the
+    review never ran while fresh claims kept opening PRs — the reported
+    starvation (nine MERGEABLE PRs, the oldest 90 minutes, zero review
+    ticks). A free delivery is now resumed even while other deliveries are
+    in flight, and the review backlog drains at the concurrency rate
+    instead of only growing. This runner's own slot is excluded: `main`
+    took it before the claim scan and holds it for the whole delivery.
 
-    The query is ONE full GitHub result page
-    (`OPENED_PR_SCAN_LIMIT` = 100, the search API maximum), ordered OLDEST
-    Issue first (`sort:created-asc`, Issue #1734), and the scan reads the
-    candidates in that order until it finds the oldest FREE one or they
-    run out (Issue #1792). The page is deliberately NOT
-    `max_concurrency + 1`: that size followed from "at most
-    `max_concurrency` candidates are held by live co-runners", but being
-    held is not the only skip reason — a candidate whose OPEN PR still
-    waits for CI (Issue #1473) or whose scene routes elsewhere occupies a
-    slot too, and a free candidate behind those was never read (#2641
-    waited while the three older candidates were skipped). Held candidates
-    are still skipped before any candidate read, so an in-flight delivery
-    is never touched.
+    The query is ONE full GitHub result page (`OPENED_PR_SCAN_LIMIT` = 100,
+    the search API maximum), ordered OLDEST Issue first (`sort:created-asc`,
+    Issue #1734), and the scan reads the candidates in that order until it
+    finds the oldest FREE one or they run out (Issue #1792). The page is
+    deliberately NOT `max_concurrency + 1`: that size followed from "at
+    most `max_concurrency` candidates are held by live co-runners", but
+    being held is not the only skip reason — a candidate whose OPEN PR
+    still waits for CI (Issue #1473) or whose scene routes elsewhere
+    occupies a slot too, and a free candidate behind those was never read
+    (#2641 waited while the three older candidates were skipped). Held
+    candidates are still skipped before any candidate read, so an in-flight
+    delivery is never touched.
     """
     held = slot_held_deliveries(slot_dir, max_concurrency)
-    # `label:a,b` is GitHub's OR within one label qualifier
-    # (verified live: repeating the qualifier matches only the
-    # first label). `ai-in-progress` is intentionally NOT excluded:
-    # a killed review runner leaves the backfilled
-    # in-flight label behind, and the positive qualifier above
-    # already keeps implement-phase Issues out.
-    # `labels`: a resumed P0 delivery keeps its
-    # priority in the progress comment through review/merge.
-    # `body`: the scene classification reads the
-    # delivery markers — without it the #726 external routing of a
-    # marker ticket with no trusted scene comment is unreachable in
-    # production (the probe read a body the query never fetched).
+    # `label:a,b` is GitHub's OR within one label qualifier (verified live:
+    # repeating the qualifier matches only the first label).
+    # `ai-in-progress` is intentionally NOT excluded: a killed review runner
+    # leaves the backfilled in-flight label behind, and the positive
+    # qualifier above already keeps implement-phase Issues out. `labels`: a
+    # resumed P0 delivery keeps its priority in the progress comment through
+    # review/merge. `body`: the scene classification reads the delivery
+    # markers — without it the #726 external routing of a marker ticket with
+    # no trusted scene comment is unreachable in production (the probe read a
+    # body the query never fetched).
     issues = list_issues(
         repo, state="open",
         search=(
@@ -221,21 +217,25 @@ def _pick_opened_pr_delivery(
     )
     for issue in issues:
         if issue.get("state") != "OPEN":
-            # Left the opened-PR state between the query and this read
-            # (a close/merge race): this candidate is gone, not the scan.
+            # Left the opened-PR state after the query (a close/merge
+            # race): this candidate is gone, not the scan.
             continue
         if (repo, int(issue["number"])) in held:
-            # In flight in another live runner: never a
-            # second review Pi for it — and no candidate read either.
+            # In flight in another live runner: never a second review Pi
+            # for it — and no candidate read either.
             continue
         comments = issue_comments(int(issue["number"]), repo=repo)
+        # Issue #2299: another executor's live run owns this delivery.
+        if claim_race.resume_yields_to_another_executor(
+                issue=int(issue["number"]), source_repo=repo,
+                comments=comments):
+            continue
         try:
             found = hooks.resume_scene(comments, repo=repo)
         except scene.SceneError as exc:
-            # A trusted scene comment exists but is corrupted:
-            # probe the #726 external route first; otherwise this is the
-            # ONLY trigger of `block_scene_failure` — a present-but-broken
-            # scene is a writer bug or tampering and needs a human.
+            # A trusted scene comment is corrupted: probe the #726 external
+            # route first; otherwise `block_scene_failure` fires — a
+            # present-but-broken scene is a writer bug or tampering.
             if hooks.route_external_pr_ticket(
                     issue, repo, language_code=language_code,
                     ready_label=ready_label):
@@ -246,8 +246,8 @@ def _pick_opened_pr_delivery(
             continue
         except scene.SceneMissingError as exc:
             # No trusted comment carries a scene at all — a distinct branch
-            # from corruption. The original #726 incident was
-            # exactly this shape, so the external route is probed first.
+            # from corruption. The original #726 incident was exactly this
+            # shape, so the external route is probed first.
             if hooks.route_external_pr_ticket(
                     issue, repo, language_code=language_code,
                     ready_label=ready_label):
