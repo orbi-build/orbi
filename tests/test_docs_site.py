@@ -27,11 +27,12 @@ from pathlib import Path
 
 import pytest
 
-import orbi.runner as runner
 import orbi.release_run as release_run
 import orbi.cli as cli
 import orbi.pi_activity as pi_activity
 from orbi.ticket_command_registry import ticket_commands
+
+from docs_labels import unknown_labels
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
@@ -51,27 +52,9 @@ REQUIRED_PAGES = (
     "optional-kv-cache",
 )
 
-# Every `ai-*` label the docs may mention must exist in the runner's label
-# set (same contract as tests/test_docs_labels.py for README/AGENTS).
-KNOWN_LABELS = frozenset({
-    "ai-ready",
-    "ai-epic",
-    runner.RELEASE_LABEL,
-    runner.CONTENT_ONLY_LABEL,
-    runner.OPS_LABEL,
-    runner.IN_PROGRESS_LABEL,
-    runner.PR_OPENED_LABEL,
-    runner.FIX_NEEDED_LABEL,
-    runner.MERGED_LABEL,
-    runner.BLOCKED_LABEL,
-    runner.AWAITING_MERGE_LABEL,
-    # Issue #763: the human acceptance gate (a human-only label).
-    runner.HUMAN_REVIEW_LABEL,
-    # Issue #1088: the thin-ticket clarification gate's waiting label.
-    "ai-needs-detail",
-})
-
-LABEL_PATTERN = re.compile(r"(?<![\w-])ai-[a-z][a-z-]*\b")
+# Every `ai-*` label the docs reference must exist in the runner's label
+# set; how a reference is recognized lives in `tests/docs_labels.py` (one
+# definition for all three docs contracts, Issue #2313).
 
 # Config fields the implementation understands (bootstrap_config_domain.load_config
 # plus the committed example). A docs field table may document exactly this
@@ -1334,8 +1317,7 @@ def test_docs_document_labels_run_marker_epic_release_task_and_p0():
     assert "`ai-ready`+`p0`" in text, "P0 explanation must show the order"
     assert "bug" in text.lower(), "P0 explanation must name the bug label"
     # The docs only reference labels that exist in the runner's label set.
-    mentioned = set(LABEL_PATTERN.findall(text))
-    unknown = mentioned - KNOWN_LABELS
+    unknown = unknown_labels(text)
     assert not unknown, f"workflow references unknown labels: {sorted(unknown)}"
 
 
@@ -1840,8 +1822,7 @@ def test_docs_getting_started_clones_the_orbi_build_org_repo():
 def test_docs_only_reference_existing_labels_everywhere():
     for path in docs_files():
         content = path.read_text(encoding="utf-8")
-        mentioned = set(LABEL_PATTERN.findall(content))
-        unknown = mentioned - KNOWN_LABELS
+        unknown = unknown_labels(content)
         assert not unknown, (
             f"{path.name} references unknown labels: {sorted(unknown)}"
         )

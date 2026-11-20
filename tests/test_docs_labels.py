@@ -14,10 +14,9 @@ from pathlib import Path
 
 import pytest
 
-import orbi.runner as runner
 from orbi import scene as scene_mod
 from orbi.github import open_blocker_numbers
-from orbi.delivery_labels import NEEDS_DETAIL_LABEL
+from docs_labels import label_references, unknown_labels
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 README = REPO_ROOT / "README.md"
@@ -30,36 +29,65 @@ def docs_page(slug: str) -> str:
     assert path.is_file(), f"missing docs page: {path}"
     return path.read_text(encoding="utf-8")
 
-# The runner's delivery-state labels plus the claim label (`ai-ready`
-# is a literal in the scans, not a runner constant) and the Epic marker
-# (Issue #93: the claim scan skips `ai-epic` Issues).
-KNOWN_LABELS = frozenset({
-    "ai-ready",
-    runner.IN_PROGRESS_LABEL,
-    runner.PR_OPENED_LABEL,
-    runner.FIX_NEEDED_LABEL,
-    runner.MERGED_LABEL,
-    runner.BLOCKED_LABEL,
-    runner.EPIC_LABEL,
-    runner.RELEASE_LABEL,
-    runner.CONTENT_ONLY_LABEL,
-    runner.OPS_LABEL,
-    runner.HUMAN_REVIEW_LABEL,
-    # Issue #1088: the thin-ticket clarification gate's waiting label.
-    NEEDS_DETAIL_LABEL,
-})
 
-LABEL_PATTERN = re.compile(r"(?<![\w-])ai-[a-z][a-z-]*\b")
+def test_label_references_are_the_names_a_document_writes_as_labels():
+    """Issue #2313: a label reference is the literal name in a code span
+    or a fenced code block — the way the docs write a label. Prose is
+    never scanned, so an ordinary word that merely starts with `ai-`
+    (a merged PR's title, copied verbatim into a release page: "yield
+    instead of ai-blocking") is not a label name."""
+    text = (
+        "---\n"
+        "title: `v0.7.53` release\n"
+        "---\n"
+        "\n"
+        "- Resume: yield instead of ai-blocking when another executor's run is live\n"
+        "\n"
+        "The Issue carries `ai-fix-needed` while the review runs.\n"
+        "\n"
+        "```\n"
+        "gh issue edit 3 --add-label ai-ready\n"
+        "```\n"
+    )
+    assert label_references(text) == {"ai-fix-needed", "ai-ready"}
 
 
-def test_label_pattern_ignores_hyphenated_names_containing_ai():
+def test_label_references_close_a_fenced_block_only_on_its_own_fence():
+    """A longer fence quotes a shorter one (a Markdown code example). Only
+    the same fence character at least as long closes the block
+    (CommonMark), so the example stays inside the block and the prose
+    after it stays prose — a quoted fence must never flip the file's code
+    state, or the very false positive of Issue #2313 comes back."""
+    text = (
+        "````md\n"
+        "```bash\n"
+        "gh issue edit 3 --add-label ai-ready\n"
+        "```\n"
+        "````\n"
+        "\n"
+        "- Resume: yield instead of ai-blocking when another executor's run is live\n"
+    )
+    assert label_references(text) == {"ai-ready"}
+
+
+def test_label_references_ignore_hyphenated_names_containing_ai():
     """Issue #1552: a hyphenated skill name like `write-ai-ready-issue`
     contains the substring `ai-ready-issue`, which is not a label. Only a
     standalone `ai-*` token preceded by a non-word/non-hyphen boundary
     counts."""
-    assert LABEL_PATTERN.findall("the write-ai-ready-issue skill and ai-ready") == [
-        "ai-ready"
-    ]
+    assert label_references(
+        "the `write-ai-ready-issue` skill and `ai-ready`"
+    ) == {"ai-ready"}
+
+
+def test_unknown_labels_still_flag_a_nonexistent_label_written_as_a_label():
+    """Issue #2313: the failure the contract exists for still fails — a
+    hand-written page that references a label the runner does not have
+    (a typo'd or removed label), written the way labels are written."""
+    assert unknown_labels("the Issue goes `ai-fixt-needed` after review") == {
+        "ai-fixt-needed"
+    }
+    assert unknown_labels("`ai-ready` is a label the runner has") == set()
 
 
 def test_docs_only_reference_existing_labels():
@@ -67,9 +95,7 @@ def test_docs_only_reference_existing_labels():
     the runner's label set — a typo'd or removed label would break the
     documented workflow silently."""
     for path in (README, AGENTS):
-        text = path.read_text(encoding="utf-8")
-        mentioned = set(LABEL_PATTERN.findall(text))
-        unknown = mentioned - KNOWN_LABELS
+        unknown = unknown_labels(path.read_text(encoding="utf-8"))
         assert not unknown, (
             f"{path.name} references unknown labels: {sorted(unknown)}"
         )
