@@ -46,6 +46,14 @@ class _Silent:
         setattr(self, name, lambda *a, **k: None)
 
 
+def bind_awaiting_merge(monkeypatch, delivery) -> None:
+    """Answer the awaiting-merge re-check with `delivery` (Issue #2305: the
+    bounded hold never reaches it)."""
+    monkeypatch.setitem(
+        claim.__dict__, "pick_awaiting_merge_delivery", lambda *a, **k: delivery,
+    )
+
+
 def bind_gh(monkeypatch, fake) -> None:
     """Serve one fake `gh` behind the subprocess seam.
 

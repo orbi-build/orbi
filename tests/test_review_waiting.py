@@ -23,7 +23,8 @@ from orbi.delivery_labels import PR_OPENED_LABEL
 from orbi.delivery_scene import RunContext
 from seam import resume_deps
 from tests.fakes.review_wait import (
-    bind_claim_tick, bind_gh, bind_pr_read, bind_pr_read_failure,
+    bind_awaiting_merge, bind_claim_tick, bind_gh, bind_pr_read,
+    bind_pr_read_failure,
 )
 from tests.test_resume_pr import (
     FAKE_PR_URL, gh_comments_payload, issue_payload, make_pick_fake,
@@ -352,6 +353,24 @@ def test_the_last_free_slot_is_held_for_a_waiting_delivery(
     assert _tick(tmp_path, config, monkeypatch) is None
     assert ready == []
     assert f"review_waiting_delivery issue=9 pr={FAKE_PR_URL}" in caplog.text
+
+
+def test_an_awaiting_merge_delivery_still_merges_while_the_claim_is_held(
+    monkeypatch, tmp_path,
+):
+    """Issue #2305 holds the FRESH claim only: a delivery a maintainer
+    already answered (`ai-awaiting-merge`) is re-checked on this very
+    tick instead of waiting the hold out."""
+    _delivery(tmp_path)
+    _opened_pr_reads(monkeypatch)
+    bind_claim_tick(monkeypatch)
+    answered = ({"number": 5, "title": "answered"}, {"merge_only": True})
+    bind_awaiting_merge(monkeypatch, answered)
+    ready = _stub_ready(monkeypatch)
+    assert _tick(tmp_path, _config(tmp_path), monkeypatch) == (
+        "owner/repo", answered[0], answered[1],
+    )
+    assert ready == []
 
 
 def test_past_the_bound_the_ready_issue_is_claimed(monkeypatch, tmp_path):

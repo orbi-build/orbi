@@ -600,8 +600,9 @@ def _run_preclaim_sweeps(
     Epic and Milestone reconciliation, the orphan-PR sweep and the three
     automatic-recovery/stopped-ticket scans. Each is a pure bypass: a
     broken GitHub query is journaled and never prevents the ordinary
-    delivery scans. Extracted from `pick_next_delivery` unchanged
-    (Issue #2305: the Article 3.5 function ceiling is 157 lines).
+    delivery scans. Extracted from `pick_next_delivery` unchanged,
+    because the size ratchet (`tools/size_ratchet.py`) keeps that
+    function within its recorded ceiling (`claim.py::pick_next_delivery`).
     """
     # Epic reconciliation is a per-tick bypass: a broken GitHub query or
     # mutation must never prevent the ordinary delivery scans.
@@ -747,14 +748,16 @@ def pick_next_delivery(
             return repo, issue, None
     # Issue #2305: the bounded exception to Issue #1473 — a delivery that
     # passed review and only waits for its checks keeps the last free slot.
-    if review_wait.hold_fresh_claim(
+    # ONLY the fresh claim is held: the restart resume above and the
+    # awaiting-merge re-check below move as they always did, so an idle
+    # tick still merges a delivery a maintainer already answered.
+    if not review_wait.hold_fresh_claim(
             review_waiting, slot_dir, max_concurrency):
-        return None
-    for repo in repos:
-        held = slot_held_deliveries(slot_dir, max_concurrency)
-        issue = pick_ready_issue(repo, active_milestone, config, held)
-        if issue is not None:
-            return repo, issue, None
+        for repo in repos:
+            held = slot_held_deliveries(slot_dir, max_concurrency)
+            issue = pick_ready_issue(repo, active_milestone, config, held)
+            if issue is not None:
+                return repo, issue, None
     # Issue #1745: a delivery waiting for a maintainer is re-checked LAST —
     # only on a tick where nothing above could move. Everything it needs
     # (the merge gate, the de-duplicated #1422 handoff) already exists; it

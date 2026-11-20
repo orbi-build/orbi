@@ -282,12 +282,13 @@ Rules of the chain:
   that already PASSED review and only waits for the checks on its latest head
   (the #1626 review record's head equals the PR head, at least one check in
   progress, none failed, at most 15 minutes since it was recorded) holds the
-  FRESH claim while no free slot is left — the tick ends, the slot stays free
-  for the merge, and the `review_waiting_delivery` journal line says so. Past
-  the 15-minute bound the claim proceeds as above; an empty check list, a
-  failed check, another free slot and the in-flight restart scan are never
-  held. The cost with one slot is at most about 20 minutes of idling (the
-  bound plus the 5-minute timer). Releases have a separate in-process CI wait:
+  FRESH claim while no free slot is left — only that claim is skipped, the slot
+  stays free for the merge, and the `review_waiting_delivery` journal line says
+  so. Nothing else is held: past the 15-minute bound the claim proceeds as
+  above, and an empty check list, a failed check, another free slot, the
+  in-flight restart scan and the `ai-awaiting-merge` re-check still move. The
+  cost with one slot is at most about 20 minutes of idling (the bound plus the
+  5-minute timer). Releases have a separate in-process CI wait:
   they keep a slot while polling, bounded by `release_ci_wait_seconds`
   (default 1800 seconds per CI gate, not a total release timeout).
   One bounded exception is GitHub's asynchronously computed mergeability
