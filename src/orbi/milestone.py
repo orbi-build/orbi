@@ -24,7 +24,6 @@ from orbi.milestone_command import (
     MilestoneLookupError, _land_active_milestone, find_exact_milestone,
     rewrite_active_milestone_line,
 )
-from orbi.progress import ProgressPublisher
 from orbi.repo_config import REPO_CONFIG_PATH, RepoPolicy
 from orbi.ticket_command import process_commands
 from orbi.ticket_command_registry import ticket_commands
@@ -804,12 +803,3 @@ def advance_active_milestone_on_idle(
         closed=active_milestone, repo=repo,
     )
     return "closed", new_value
-
-def _publish_plan_milestone(publisher: ProgressPublisher, worktree: Path) -> None:
-    """Post the `plan ready` milestone once the worktree has the plan
-    artifact."""
-    if (worktree / ".orbi" / "plan.md").is_file():
-        publisher.milestone(language.text(
-            publisher.language_code,
-            "milestone.plan_ready",
-        ))
