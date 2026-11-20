@@ -56,6 +56,7 @@ from orbi.delivery_labels import (
     needs_human_intervention,
 )
 from orbi.delivery_scene import RunContext
+from orbi.review_ci_status import log_recovery_ci_status  # noqa: F401
 from orbi.failure import failure_detail
 from orbi.failure_report import (
     GateCIFailure,
@@ -67,14 +68,13 @@ from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
     apply_label_patch,
     comment_issue,
-    commit_check_runs,
     issue_comments,
     issue_labels,
     issue_priority,
     pr_view,
 )
 from orbi.github_feedback import check_summaries, pr_delivery_rollup
-from orbi import base_ci_red, language, question, user_summary
+from orbi import base_ci_red, language, question, user_summary, waiting_checks
 from orbi.delivery_comment import merged_pr_comment_body  # noqa: F401
 from orbi.gitops import (
     is_ancestor,
@@ -180,29 +180,25 @@ def freeze_pr(
     }
 
 
-def log_recovery_ci_status(pr: dict, repo: str) -> None:
-    """Record the recovered PR's current check status without check output.
+def _wait_for_checks(work: _Round, head: str | None) -> None:
+    """Say on the Issue which commit's checks this deferred merge waits for.
 
-    This is observability only: a GitHub status lookup must never decide
-    whether the recovered review runs.
+    Issue #2304: a delivery that passed review but was not merged because
+    its checks are still running says so on its existing progress comment —
+    the head commit Orbi waits for and that the merge follows automatically
+    once they pass. The journal already carries the deferral itself; this is
+    the reader-facing line, so it is a pure bypass (Issue #79) and a
+    deferral for another reason (UNKNOWN mergeability) names no head and
+    publishes nothing.
     """
-    try:
-        checks = commit_check_runs(repo, pr["head_oid"])
-        summary = [
-            f"{check.get('name', '?')}={check.get('status', '?')}/"
-            f"{check.get('conclusion', '?')}"
-            for check in checks if isinstance(check, dict)
-        ]
-    except Exception as exc:
-        event(
-            "review_recovery_ci_status_failed", level=logging.WARNING,
-            pr=pr.get("number", "?"), error=str(exc),
-        )
+    if not head:
         return
-    event(
-        "review_recovery_ci_status", pr=pr["number"],
-        checks=",".join(summary) or "none",
-    )
+    config = work.config
+    work.publish(action=lambda: waiting_checks.publish(
+        issue=work.number, source_repo=work.source_repo,
+        run_id=config.run_id, language_code=language.of(config),
+        head=head, status_url=config.status_url,
+    ))
 
 
 def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
@@ -545,6 +541,7 @@ def _round_refreeze_phase(work: _Round) -> bool:
                 "its CI is not read in this tick"
             ),
         )
+        _wait_for_checks(work, refrozen["head_oid"])
         return True
     return False
 
@@ -749,6 +746,7 @@ def _round_merge_phase(work: _Round) -> dict | None:
         event("review_merge_deferred", pr=refrozen["number"], round=round,
               reason=str(exc))
         work.keep_review_record.append(True)
+        _wait_for_checks(work, exc.head)
         return None
     except answer_domain.AnswerSupersedesVerdict as exc:
         answer_domain.stop_for_fix_round(

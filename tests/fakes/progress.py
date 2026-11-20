@@ -46,3 +46,25 @@ def patched_comment_bodies(api_calls: list[list[str]]) -> list[str]:
         for command in api_calls
         if "--method" in command and "PATCH" in command
     ]
+
+
+def progress_comment_body(run_id: str, *, step: str = "checks") -> str:
+    """The run's progress comment as the writer renders its prefix.
+
+    The prefix is exactly what `progress.find_progress_comment` selects
+    by: the run marker followed immediately by the versioned block
+    (Issue #2304's waiting line is an edit of this body).
+    """
+    return "\n".join([
+        f"<!-- orbi:run={run_id} -->",
+        '<!-- orbi:progress:v1 {"step":"' + step + '","reported_at":'
+        '"2026-11-20T06:12:00Z","activity":null} -->',
+        "",
+        "**Orbi progress**",
+        "",
+        f"- step: {step}",
+        "",
+        "<details><summary>Run details</summary>",
+        "",
+        "</details>",
+    ])

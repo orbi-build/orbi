@@ -48,6 +48,8 @@ import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 from orbi import failure, progress, provider_balance, scene
 from tests.fakes.gitops import remote_head_answer
+from tests.fakes.progress import patched_comment_bodies
+from tests.fakes.waiting_checks import PENDING_HEAD, bind_pending_delivery
 import orbi.journal as journal
 from seam import resume_deps, seam
 from orbi.delivery_labels import EVENT_BLOCKED
@@ -3944,6 +3946,36 @@ def test_delivery_step_runs_one_review_per_tick(
     # The fake rejects anything that is not a pr/issue view.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "pr", "list"])
+
+
+def test_delivery_step_pending_names_the_commit_it_waits_for(
+        monkeypatch, tmp_path, caplog, bind_run_id,
+):
+    """Issue #2304: a delivery deferred for pending CI says so on its
+    Issue. The run's existing progress comment names the PR head commit
+    whose checks Orbi waits for and states that the merge follows
+    automatically once they pass — the person sees what is happening for
+    as long as the wait lasts instead of a comment stuck at the review
+    step."""
+    bind_run_id("a1b2c3d4")
+    api_calls = bind_pending_delivery(monkeypatch, run_id="a1b2c3d4")
+    config = config_domain.RunnerConfig(
+        repo_dir=tmp_path, base_branch="main", run_id="a1b2c3d4",
+    )
+    caplog.set_level("INFO")
+    runner.delivery_step(
+        PR_URL, {"number": 39, "title": "task", "body": ""}, config,
+        "owner/repo",
+    )
+    assert "delivery_ci_pending" in caplog.text
+    bodies = patched_comment_bodies(api_calls)
+    assert len(bodies) == 1
+    assert PENDING_HEAD[:12] in bodies[0]
+    assert "automatically once they pass" in bodies[0]
+    # ...and the merge is never promised for a time or a next tick.
+    assert "next tick" not in bodies[0]
+    assert bodies[0].startswith("<!-- orbi:run=a1b2c3d4 -->")
+    assert "- step: checks" in bodies[0]
 
 
 def test_delivery_step_defers_when_ci_pending(
