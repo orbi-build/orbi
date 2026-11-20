@@ -15,6 +15,7 @@ import io
 import json
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -1095,6 +1096,87 @@ def test_a_provider_balance_stop_is_its_own_draft_failure(
     assert "insufficient_balance_error" not in err
 
 
+def test_a_session_that_ends_after_a_rejection_fails_with_its_reason(
+    config, monkeypatch, tmp_path,
+):
+    """Issue #2303: the tool rejected the model's answer and the session ended
+    without writing one (the model never corrected it). The round fails
+    `invalid_draft` carrying that last reason, so the person reads WHY the draft
+    failed — not a bare `timeout` after waiting."""
+    reason = "Issue 1: after must name an EARLIER Issue (1..0)"
+    draft_fakes.session_ends_after_a_rejection(monkeypatch, reason)
+
+    code, _out, err = run_round_cli(
+        config, {"message": "notes"}, tmp_path / "session",
+    )
+
+    assert code == 1
+    failure = json.loads(err)
+    assert failure["code"] == "invalid_draft"
+    assert failure["step"] == "run the drafting session"
+    assert failure["detail"] == reason
+
+
+def test_a_new_session_does_not_inherit_an_earlier_rejection(
+    config, monkeypatch, tmp_path,
+):
+    """Issue #2303: the rejection record belongs to ONE session. A round that
+    rejects nothing and produces nothing fails `timeout` as before, even when
+    the session directory still holds a previous round's rejection."""
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    draft.rejection_path(session_dir / draft.DRAFT_ANSWER_FILE).write_text(
+        "Issue 1: after must name an EARLIER Issue (1..0)", encoding="utf-8",
+    )
+
+    draft_fakes.session_ends_with_no_answer(monkeypatch)
+
+    code, _out, err = run_round_cli(
+        config, {"message": "notes"}, session_dir,
+    )
+
+    assert code == 1
+    assert json.loads(err)["code"] == "timeout"
+
+
+def test_a_session_that_ends_cleanly_after_a_rejection_fails_with_it(
+    config, monkeypatch, tmp_path,
+):
+    """Issue #2303: Pi also ends a session NORMALLY after a rejected answer —
+    the model stops answering instead of calling the tool again, so no answer
+    file appears and no exception is raised. The round must still fail with the
+    rejection reason, not with `no_answer`'s "the session wrote no answer"."""
+    reason = "Issue 1: after must name an EARLIER Issue (1..0)"
+    draft_fakes.session_returns_after_a_rejection(monkeypatch, reason)
+
+    code, _out, err = run_round_cli(
+        config, {"message": "notes"}, tmp_path / "session",
+    )
+
+    assert code == 1
+    failure = json.loads(err)
+    assert failure["code"] == "invalid_draft"
+    assert failure["step"] == "run the drafting session"
+    assert failure["detail"] == reason
+
+
+def test_a_session_that_ends_cleanly_without_an_answer_still_says_so(
+    config, monkeypatch, tmp_path,
+):
+    """A session that ends cleanly, wrote nothing and refused nothing keeps the
+    `no_answer` failure: there is no rejection reason to report."""
+    draft_fakes.session_returns_with_no_answer(monkeypatch)
+
+    code, _out, err = run_round_cli(
+        config, {"message": "notes"}, tmp_path / "session",
+    )
+
+    assert code == 1
+    failure = json.loads(err)
+    assert failure["code"] == "no_answer"
+    assert "wrote no answer" in failure["detail"]
+
+
 def test_a_broken_answer_file_is_a_failed_round(tmp_path):
     path = tmp_path / "answer.json"
     with pytest.raises(draft.DraftError) as excinfo:
@@ -1170,6 +1252,14 @@ def test_the_drafting_session_is_read_only_and_resumable(
     assert str(draft.DRAFT_EXTENSION) in command
     assert "--continue" in command
     assert calls[0]["pi_env"][draft.DRAFT_OUT_ENV] == str(out_path)
+    # Issue #2303: the extension validates an answer with the ENGINE's own
+    # parser, so the session is handed the command to run it — this process's
+    # interpreter plus the module, the same way ORBI_DRAFT_OUT is handed over.
+    # One JSON argv array, so an interpreter path carrying whitespace (a home
+    # directory with a space) needs no splitting in the extension.
+    assert calls[0]["pi_env"][draft.DRAFT_VALIDATE_ENV] == json.dumps(
+        [sys.executable, "-m", draft.DRAFT_VALIDATE_MODULE]
+    )
     assert (root / draft.DRAFT_SESSION_DIR / "system-prompt.md").is_file()
     # A first round does not resume anything.
     draft.run_draft_session(

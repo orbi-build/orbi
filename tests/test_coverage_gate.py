@@ -768,13 +768,17 @@ def test_diff_gate_main_passes_when_every_changed_line_is_covered_in_process(
 # --- the pragma rule (Issue #234 requirement 6) -----------------------------
 
 # The only allowed `# pragma: no cover` sites: the `__main__` entry
-# guards (never executed by the test suite by definition) and the one
-# defensive `except Exception` guard in the CLI install test. Every
-# other pragma would hide a branch from the report and is a contract
-# violation.
+# guards (the report never executes them in-process, whatever an e2e test
+# runs out of process) and the one defensive `except Exception` guard in the
+# CLI install test. Every other pragma would hide a branch from the report and
+# is a contract violation.
 ALLOWED_PRAGMA_FILES = (
     "src/orbi/runner.py",
     "src/orbi/cli.py",
+    # Issue #2303: the drafting tools run this module as
+    # "python -m orbi.draft_validate"; the guard IS the entry, so the
+    # in-process report never executes it.
+    "src/orbi/draft_validate.py",
     "3rd/monitoring/prometheus/orbi-exporter.py",
     "tools/coverage_gate.py",
     "tools/diff_coverage_gate.py",

@@ -31,6 +31,7 @@ import json
 import logging
 import re
 import subprocess
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -103,7 +104,20 @@ DRAFT_EXTENSION = Path(__file__).resolve().parent.joinpath(
 # The extension writes its one answer here; the engine reads the file after
 # the session, so a broken stdout never loses a draft the model did write.
 DRAFT_OUT_ENV = "ORBI_DRAFT_OUT"
+# Issue #2303: the extension validates an answer with the ENGINE's own parser
+# before recording it, so a cross-field rule (an 'after' naming no earlier
+# Issue) comes back to the model as an error tool result and the model corrects
+# it in the same session. The session is handed the command that runs it — this
+# interpreter plus the module, as one JSON argv array so a path carrying
+# whitespace needs no splitting — never a TypeScript copy of the rule.
+DRAFT_VALIDATE_ENV = "ORBI_DRAFT_VALIDATE"
+DRAFT_VALIDATE_MODULE = "orbi.draft_validate"
 DRAFT_ANSWER_FILE = "answer.json"
+# The tools' last rejection reason, kept NEXT TO the answer
+# ('answer.json.rejected'): a session that ends without an answer fails with
+# that reason instead of a bare timeout. The extension derives the same path
+# from DRAFT_OUT_ENV.
+DRAFT_REJECTION_SUFFIX = ".rejected"
 # The session layout a caller may depend on (docs/public-contracts.mdx):
 # the drafting session and the fidelity pass each keep their Pi session
 # files under the caller's directory.
@@ -377,6 +391,9 @@ def run_draft_session(
     if agent_dir is not None:
         pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
     pi_env[DRAFT_OUT_ENV] = str(out_path)
+    pi_env[DRAFT_VALIDATE_ENV] = json.dumps(
+        [sys.executable, "-m", DRAFT_VALIDATE_MODULE]
+    )
     stream_pi(
         command, cwd=session_root,
         ctx=RunContext(
@@ -446,12 +463,18 @@ def _run_answer_session(
     The answer file is removed first, so an answer found after a failure is
     the one THIS round wrote: a round that timed out after the model wrote
     its draft still returns that draft, and a round that wrote nothing
-    fails. A model-provider balance refusal is its own code with the plain
-    sentence as its detail — never `session_failed` and never the Python
-    exception text, which is where the provider's raw payload lives
-    (Issue #2278).
+    fails. A session that ends without an answer after the tools refused one
+    fails with that last rejection reason (Issue #2303) — whether Pi failed or
+    ended the turn cleanly — so the person reads why the draft failed instead
+    of a bare `timeout` or `no_answer`. A model-provider balance
+    refusal is its own code with the plain sentence as its detail — never
+    `session_failed` and never the Python exception text, which is where the
+    provider's raw payload lives (Issue #2278).
     """
     out_path.unlink(missing_ok=True)
+    # The reason belongs to ONE session: a previous round's rejection must
+    # never explain this round's failure.
+    rejection_path(out_path).unlink(missing_ok=True)
     try:
         run_draft_session(
             config, repo, session_root=session_root,
@@ -465,6 +488,7 @@ def _run_answer_session(
                     provider_balance.DRAFT_CODE, "run the drafting session",
                     provider_balance.DETAIL,
                 ) from exc
+            raise_if_rejected(out_path)
             code = (
                 "timeout"
                 if isinstance(exc, subprocess.TimeoutExpired)
@@ -478,6 +502,40 @@ def _run_answer_session(
             "draft_session_failed", level=logging.WARNING,
             repo=repo, reason=type(exc).__name__,
         )
+        return
+    if not out_path.is_file():
+        # Pi ended the turn cleanly and left no answer: the model stopped
+        # answering after a rejected one, which fails like the timeout path.
+        raise_if_rejected(out_path)
+
+
+def raise_if_rejected(out_path: Path) -> None:
+    """Fail `invalid_draft` with the tool's last reason, when it refused one."""
+    rejected = last_rejection(out_path)
+    if rejected is not None:
+        raise DraftError("invalid_draft", "run the drafting session", rejected)
+
+
+def rejection_path(out_path: Path) -> Path:
+    """Where the draft tools record their last rejection (Issue #2303).
+
+    Derived from the answer file's own path, so the extension and the engine
+    agree on one place without a second environment variable.
+    """
+    return Path(f"{out_path}{DRAFT_REJECTION_SUFFIX}")
+
+
+def last_rejection(out_path: Path) -> str | None:
+    """The reason the tools last refused an answer in THIS session, if any.
+
+    The tools write it before answering the model with the same reason, so a
+    session that ends there fails with the reason the person can act on.
+    """
+    try:
+        reason = rejection_path(out_path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return reason or None
 
 
 def read_answer(path: Path) -> DraftAnswer:
