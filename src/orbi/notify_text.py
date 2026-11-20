@@ -61,8 +61,12 @@ TEST_ZH = (
 MERGED_HEADLINE_EN = "Orbi · Code merged: "
 MERGED_HEADLINE_ZH = "Orbi · 代码已合并："
 
-# The one catalog key the problem messages end with (`orbi.language`).
+# The full community sentence a GitHub body and the `orbi notify test`
+# terminal output end with (`orbi.language`, Issue #1684).
 HELP_KEY = "help.community"
+# The compact one-line entry a PHONE alert ends with (Issue #2289): the task
+# lines stay first and the help line fits one phone line.
+HELP_ALERT_KEY = "help.community_short"
 
 # The stop alert's own labels (Issue #2287): the reason and the next action
 # are quoted from the stop comment, these two words are the alert's.
@@ -245,7 +249,8 @@ def _needs_you_message(status: str, repo: str, number: int,
                        title: str | None, *, help_line: bool,
                        language_code: str,
                        extra: list[str] | None = None) -> str:
-    """One "needs you" message; a problem message ends with the help line."""
+    """One "needs you" message; a problem message ends with the compact
+    one-line help entry (Issue #2289)."""
     headline = HEADLINE_ZH if language_code == "zh" else HEADLINE_EN
     body = "\n".join([
         f"{headline}{status}",
@@ -255,7 +260,7 @@ def _needs_you_message(status: str, repo: str, number: int,
     ])
     if not help_line:
         return body
-    return f"{body}\n{language.text(language_code, HELP_KEY)}"
+    return f"{body}\n{language.text(language_code, HELP_ALERT_KEY)}"
 
 
 def _issue_line(repo: str, number: int, title: str | None) -> str:

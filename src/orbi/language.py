@@ -916,6 +916,9 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "https://t.me/+kJRTTpFGBRU0M2Y9",
         "需要帮助？加入 Orbi 用户群：https://t.me/+kJRTTpFGBRU0M2Y9",
     ),
+    # The same community link as ONE line for a phone alert (Issue #2289).
+    "help.community_short": ("Help: https://t.me/+kJRTTpFGBRU0M2Y9",
+                             "帮助：https://t.me/+kJRTTpFGBRU0M2Y9"),
 }
 
 # The display vocabulary (Issue #1729), the base-branch-red messages

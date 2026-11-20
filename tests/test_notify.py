@@ -92,12 +92,16 @@ def bind(monkeypatch, *, config=None, token=TOKEN) -> None:
     )
 
 
-# The one community-help line a problem message ends with (Issue
-# #1684), from the `orbi.language` catalog.
+# The full community-help sentence a GitHub body and the `orbi notify test`
+# terminal output end with (Issue #1684), from the `orbi.language` catalog.
 HELP_EN = (
     "Need help? Join the Orbi community: https://t.me/+kJRTTpFGBRU0M2Y9"
 )
 HELP_ZH = "需要帮助？加入 Orbi 用户群：https://t.me/+kJRTTpFGBRU0M2Y9"
+# The compact one-line community entry a PHONE alert ends with (Issue
+# #2289): the task lines stay first and the help line fits one line.
+ALERT_HELP_EN = "Help: https://t.me/+kJRTTpFGBRU0M2Y9"
+ALERT_HELP_ZH = "帮助：https://t.me/+kJRTTpFGBRU0M2Y9"
 
 
 # The stop comment every blocked scene hands to the ONE exit (Issue
@@ -340,7 +344,7 @@ def test_the_stop_alert_is_the_fixed_text(monkeypatch):
             "Reason: the delivery command failed\n"
             "Next action: check the credentials, then re-run\n"
             f"{handoff_en()}\n"
-            f"{HELP_EN}"
+            f"{ALERT_HELP_EN}"
         ]
 
 
@@ -369,7 +373,7 @@ def test_the_stop_alert_quotes_the_comment_under_a_zh_host(monkeypatch):
             "原因：交付命令执行失败\n"
             "下一步：请修复凭据后重新运行\n"
             f"{handoff_zh()}\n"
-            f"{HELP_ZH}"
+            f"{ALERT_HELP_ZH}"
         ]
 
 
@@ -398,7 +402,7 @@ def test_the_stop_alert_says_when_orbi_resumes_by_itself(monkeypatch):
             "Reason: main is already red on check 'unit'\n"
             "Next action: fix main; the delivery resumes once it is green\n"
             "Orbi resumes by itself — no relabel is needed.\n"
-            f"{HELP_EN}"
+            f"{ALERT_HELP_EN}"
         ]
 
 
@@ -434,7 +438,7 @@ def test_a_stop_without_a_recorded_reason_says_it_is_unknown(
             f"https://github.com/{REPO}/issues/{ISSUE}\n"
             "Reason: the reason is unknown\n"
             f"{handoff_en()}\n"
-            f"{HELP_EN}"
+            f"{ALERT_HELP_EN}"
         ]
 
 
@@ -467,7 +471,7 @@ def test_a_missing_or_corrupt_record_keeps_the_handoff_sentence(
             "Reason: the delivery command failed\n"
             "Next action: check the credentials, then re-run\n"
             f"{handoff_en()}\n"
-            f"{HELP_EN}"
+            f"{ALERT_HELP_EN}"
         ]
 
 
@@ -487,7 +491,7 @@ def test_message_language_defaults_to_english_without_the_key(monkeypatch):
         f"https://github.com/{REPO}/issues/{ISSUE}\n"
         "Reason: "
     )
-    assert text.endswith(f"{HELP_EN}")
+    assert text.endswith(f"{ALERT_HELP_EN}")
 
 
 def test_notify_test_uses_the_host_message_language(monkeypatch, capsys):
@@ -599,7 +603,7 @@ def test_a_blocked_stop_alert_quotes_and_links_the_comment_it_posted(
             "Reason: the delivery command failed\n"
             "Next action: check the credentials, then re-run\n"
             f"{handoff_en()}\n"
-            f"{HELP_EN}"
+            f"{ALERT_HELP_EN}"
         ]
     # The quoted lines are the posted comment's own text, not a re-render.
     assert "**Reason:** the delivery command failed" in posted["body"]
@@ -664,7 +668,7 @@ def test_human_review_waiting_sends_the_wait_message(monkeypatch):
             "Orbi · Needs your attention: Waiting for your review\n"
             "o/r#7 Review me\n"
             "https://github.com/o/r/issues/7\n"
-            f"{HELP_EN}"
+            f"{ALERT_HELP_EN}"
         ]
 
 
@@ -677,7 +681,7 @@ def test_human_review_waiting_message_follows_the_language(monkeypatch):
             "Orbi · 需要您处理：等您人工验收\n"
             "o/r#7 复核我\n"
             "https://github.com/o/r/issues/7\n"
-            f"{HELP_ZH}"
+            f"{ALERT_HELP_ZH}"
         ]
 
 
@@ -828,7 +832,7 @@ def test_clarify_stop_sends_one_needs_detail_message(monkeypatch):
             "`ai-ready` label again:\n"
             "Orbi does not resume by itself — after you edit the ticket, add "
             "`ai-ready` back to resume.\n"
-            f"{HELP_EN}"
+            f"{ALERT_HELP_EN}"
         ]
     # The quoted lines are the comment's own text.
     body = comments[0][2]
@@ -860,7 +864,7 @@ def test_the_needs_detail_alert_follows_the_host_language(monkeypatch):
             "下一步：Edit the Issue body into this shape, then add the "
             "`ai-ready` label again:\n"
             "Orbi 不会自行恢复 —— 补好工单后重新添加 `ai-ready` 即可继续。\n"
-            f"{HELP_ZH}"
+            f"{ALERT_HELP_ZH}"
         ]
     assert "The pre-flight check says" in comments[0][2]
 
@@ -991,7 +995,7 @@ def test_the_tick_binds_the_notifier_at_preflight(monkeypatch, tmp_path):
             "Reason: the delivery command failed\n"
             "Next action: check the credentials, then re-run\n"
             f"{handoff_en()}\n"
-            f"{HELP_EN}"
+            f"{ALERT_HELP_EN}"
         ]
 
 

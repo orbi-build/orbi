@@ -95,7 +95,7 @@ Orbi 可以把等待人的任务在 GitHub 之外告知队列负责人：当它�
 
 两条**问题**消息——`ai-blocked` 和 `ai-needs-detail`——写得更细，让人只看 Telegram 就知道为什么停下、接下来做什么：状态、`owner/repo#N <title>`、Issue 链接，然后是一行的原因、下一步动作、一句“Orbi 会自行恢复还是需要显式交接”（`base_ci_red` 与缺少检查读取权限这两种会自行恢复同一份交付；其它停止需要重新打标签，例如 `ai-blocked` → `ai-fix-needed`），以及这条消息所引用的停止评论的永久链接。两者都原样引用该停止评论里的原因与动作，消息与评论因此不会各说一套；评论没有记录原因时，这一行写“原因未知”，不会空着或凭空编造。它们在该停止评论写完之后才发送，因为只有那一刻原因和永久链接才都存在。
 
-需要人处理的问题消息——`ai-blocked`、`ai-needs-detail` 以及人工验收等待——结尾都带社区求助行 `需要帮助？加入 Orbi 用户群：https://t.me/+kJRTTpFGBRU0M2Y9`；普通交接（`ai-awaiting-merge`、合并通知、`orbi notify test`）不带。Orbi 的 GitHub 评论遵循同一规则：澄清评论、栏二非空的人工复核清单、以及 blocked 失败诊断，结尾都带这一行——绝不出现在没有要求人介入的评论里。
+需要人处理的问题消息——`ai-blocked`、`ai-needs-detail` 以及人工验收等待——结尾只带一行社区链接 `帮助：https://t.me/+kJRTTpFGBRU0M2Y9`（英文消息为 `Help: https://t.me/+kJRTTpFGBRU0M2Y9`），任务信息在上、这一行正好一行；普通交接（`ai-awaiting-merge`、合并通知、`orbi notify test`）不带。Orbi 的 GitHub 评论用完整的一句 `需要帮助？加入 Orbi 用户群：https://t.me/+kJRTTpFGBRU0M2Y9`：澄清评论、栏二非空的人工复核清单、以及 blocked 失败诊断，结尾都带这一句——绝不出现在没有要求人介入的评论里。
 
 | Key | Type | Default | Allowed values | Meaning |
 |---|---|---|---|---|
