@@ -23,6 +23,7 @@ import orbi.merge_exec as merge_exec
 import orbi.review_merge as review_merge
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
+import orbi.plan_milestone as plan_milestone
 import orbi.release as release
 from seam import seam
 import orbi.journal as journal
@@ -264,15 +265,61 @@ def test_progress_body_outcome_ignores_a_report_time_tick(monkeypatch):
         == _without_report_time(plain, second)
 
 
-def test_publish_plan_milestone_posts_only_when_plan_exists(tmp_path):
-    posted = []
-    publisher = Mock()
-    publisher.milestone = Mock(side_effect=lambda text: posted.append(text))
-    milestone._publish_plan_milestone(publisher, tmp_path)
-    assert posted == []
+def test_plan_ready_milestone_posts_once_per_run(tmp_path):
+    """Issue #2293: a resumed round of the same run re-reaches the plan
+    milestone with `.orbi/plan.md` in its worktree, and the run already
+    announced it — kit#128 collected 294 identical plan-ready comments
+    from one run (`f75b7c1d`). One run id keeps exactly one plan-ready
+    comment; a later run of the same Issue posts its own, and a failure
+    milestone still posts per outcome.
+    """
+    comments, posted = [], []
+
+    def fake_run_command(command, **kwargs):
+        if "--method" not in command:
+            # The dedup reads the Issue's comments (what was posted so far).
+            return json.dumps(comments)
+        body = command[command.index("--field") + 1].removeprefix("body=")
+        posted.append(body)
+        comments.append({"id": len(comments) + 1, "body": body})
+        return json.dumps({"id": len(comments)})
+
+    def publish(run_id):
+        plan_milestone.publish(
+            progress.ProgressPublisher(
+                18, "xqliu/orbi", run_id, run_command=fake_run_command,
+                language_code="en",
+            ),
+            tmp_path,
+        )
+
+    publish("a1b2c3d4")
+    assert posted == []  # no plan artifact yet: no milestone at all
     (tmp_path / ".orbi" / "plan.md").write_text("# Plan\n", encoding="utf-8")
-    milestone._publish_plan_milestone(publisher, tmp_path)
-    assert posted == ["plan ready"]
+    publish("a1b2c3d4")
+    publish("a1b2c3d4")  # the resumed round: same run, same plan artifact
+    plan_ready = [body for body in posted if "plan ready" in body]
+    assert len(plan_ready) == 1
+    # The hidden marker rides on the line right under the run marker, so a
+    # restarted runner instance folds on the same anchored prefix.
+    assert plan_ready[0].startswith(
+        "<!-- orbi:run=a1b2c3d4 -->\n<!-- orbi:milestone=plan-ready -->\n"
+    )
+    publish("0123abcd")  # a later run of the same Issue posts its own
+    plan_ready = [body for body in posted if "plan ready" in body]
+    assert len(plan_ready) == 2
+    assert plan_ready[1].startswith(
+        "<!-- orbi:run=0123abcd -->\n<!-- orbi:milestone=plan-ready -->\n"
+    )
+    # Only the plan-ready milestone is once per run: every failure
+    # milestone reports a different outcome and keeps posting.
+    failure = progress.ProgressPublisher(
+        18, "xqliu/orbi", "a1b2c3d4", run_command=fake_run_command,
+        language_code="en",
+    )
+    failure.milestone("blocked: boom")
+    failure.milestone("blocked: boom")
+    assert len([body for body in posted if "blocked" in body]) == 2
 
 
 # --- process_issue wiring -----------------------------------------------------
@@ -2909,6 +2956,9 @@ def test_process_issue_notifications_carry_the_configured_status_link(
     milestone_posts = []
 
     def fake_milestone_gh(command, **kwargs):
+        if "--method" not in command:
+            # The plan-ready dedup reads the comment list before posting.
+            return json.dumps([])
         milestone_posts.append(command[command.index("--field") + 1][5:])
         return json.dumps({"id": 88})
 
@@ -2916,14 +2966,14 @@ def test_process_issue_notifications_carry_the_configured_status_link(
         18, "xqliu/orbi", "a1b2c3d4", run_command=fake_milestone_gh,
         language_code="en", status_url=STATUS_URL,
     )
-    milestone._publish_plan_milestone(milestone_publisher, derived_wt(tmp_path))
+    plan_milestone.publish(milestone_publisher, derived_wt(tmp_path))
     milestone_publisher.milestone(
         "merged: https://github.com/xqliu/orbi/pull/40 "
         "(merge_commit=m1 review_rounds=1 external_commits=0 commits=1)"
     )
     (derived_wt(tmp_path) / ".orbi").mkdir(parents=True, exist_ok=True)
     (derived_wt(tmp_path) / ".orbi" / "plan.md").write_text("# Plan\n")
-    milestone._publish_plan_milestone(milestone_publisher, derived_wt(tmp_path))
+    plan_milestone.publish(milestone_publisher, derived_wt(tmp_path))
     assert len(milestone_posts) == 2
     assert all(link in body for body in milestone_posts)
     # The plan-ready milestone keeps its own event text (the publisher's

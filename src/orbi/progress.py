@@ -530,7 +530,7 @@ class ProgressPublisher:
         # the list/create endpoint is not a GitHub REST route and 404s.
         return f"repos/{self.repo}/issues/comments/{comment_id}"
 
-    def _list_comments(self) -> list[dict]:
+    def list_comments(self) -> list[dict]:
         raw = self._run_command([
             "gh", "api", self._endpoint(), "--paginate",
         ])
@@ -576,7 +576,7 @@ class ProgressPublisher:
         resumes update that new one.
         """
         existing = find_started_comment(
-            self._list_comments(), self.run_id,
+            self.list_comments(), self.run_id,
         )
         if existing is not None:
             comment_id = int(existing["id"])
@@ -592,7 +592,7 @@ class ProgressPublisher:
         carries the progress header is resumed.
         """
         existing = find_progress_comment(
-            self._list_comments(), self.run_id,
+            self.list_comments(), self.run_id,
         )
         if existing is not None:
             comment_id = int(existing["id"])
@@ -676,7 +676,7 @@ class ProgressPublisher:
             self._post_comment(rendered)
             return
         reason_code = match.group(1)
-        for comment in self._list_comments():
+        for comment in self.list_comments():
             existing = comment.get("body")
             if not isinstance(existing, str):
                 continue
