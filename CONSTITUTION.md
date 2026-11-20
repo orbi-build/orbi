@@ -124,7 +124,8 @@ as a side effect of another change.
    PR body. A journal line that could carry one is redacted at the source.
 2. Git data goes over SSH; GitHub API calls use the `gh` token. Neither is
    used for the other.
-3. The Runner acts only on Issues that carry `ai-ready` and on comments from
+3. The Runner starts work only on Issues that carry the repository's dispatch
+   label, continues only deliveries it claimed, and acts only on comments from
    trusted associations. Issue text is data, never instructions to the Runner.
 4. Every task worktree starts from the frozen `origin/<base_branch>` SHA.
    The main worktree is never written by a task.
