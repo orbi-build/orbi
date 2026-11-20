@@ -835,7 +835,23 @@ def _stateful_comments(monkeypatch):
             target["body"] = body
             return json.dumps(target)
         if (command[0] == "gh" and command[1] == "issue"
+                and command[2] == "comment"):
+            body = command[command.index("--body") + 1]
+            comment = {"id": next(next_id), "body": body}
+            comments.append(comment)
+            posts.append(comment)
+            return ""
+        if (command[0] == "gh" and command[1] == "issue"
                 and command[2] == "view"):
+            if "comments" in command:
+                # The #825/#2292 streak scan reads the trusted history;
+                # the runner's own comments are trusted by the identity
+                # stub of `_repository_permissions`.
+                return json.dumps({"comments": [
+                    {"body": comment["body"],
+                     "author": {"login": "orbi-bot[bot]"}}
+                    for comment in comments
+                ]})
             return json.dumps({"labels": [{"name": "ai-ready"}]})
         return ""
 
@@ -855,13 +871,17 @@ def _pi_401(stderr: str):
 
 
 def test_recoverable_401_posts_one_classified_comment(monkeypatch, tmp_path):
-    """Issue #1465 acceptance: a recoverable provider 401 posts ONE
-    comment whose headline names the credential rejection and the retry,
-    carries no `orbi:failure:v1` block and no `orbi:fail=` marker, and
-    leaves the Issue `ai-in-progress`."""
+    """Issue #1465 acceptance, refined by #2292: a recoverable provider
+    401 posts ONE comment whose headline names the credential rejection
+    and the retry, carries the `orbi:fail` fingerprint marker the
+    dead-loop guard reads, and no `orbi:failure:v1` block, and leaves
+    the Issue `ai-in-progress`."""
+    from orbi import runner_health
+
     comments, _, _ = _stateful_comments(monkeypatch)
+    error = _pi_401(PROVIDER_401_A)
     patch_process_deps(
-        monkeypatch, tmp_path, run_pi_side_effect=_pi_401(PROVIDER_401_A),
+        monkeypatch, tmp_path, run_pi_side_effect=error,
     )
     assert runner.process_issue(
         make_issue(), make_config(tmp_path), "xqliu/orbi",
@@ -872,8 +892,11 @@ def test_recoverable_401_posts_one_classified_comment(monkeypatch, tmp_path):
     assert "credential_missing" in body
     assert "retrying on the next tick" in body
     assert "<!-- orbi:recovered=credential_missing -->" in body
+    assert (
+        f"<!-- orbi:fail="
+        f"{runner_health.failure_fingerprint(error)} -->"
+    ) in body
     assert "<!-- orbi:failure:v1" not in body
-    assert "<!-- orbi:fail=" not in body
     # The Issue stays ai-in-progress: the only label edit is the claim.
     edits = [call.kwargs for call in runner.edit_issue.call_args_list]
     assert edits == [{"repo": "xqliu/orbi", "add": "ai-in-progress"}]
@@ -909,22 +932,47 @@ def test_recoverable_401_next_tick_patches_the_same_comment(
     assert "<!-- orbi:recovered=credential_missing:2 -->" in updated
 
 
-def test_recoverable_401_five_ticks_never_block(monkeypatch, tmp_path):
-    """Issue #1465 acceptance: the same 401 on five consecutive ticks
-    never makes the Issue `ai-blocked` (Issue #1455 stays in force)."""
+def test_recoverable_401_stops_after_three_identical_ticks(monkeypatch, tmp_path):
+    """Issues #1465/#2292: two occurrences keep the Issue `ai-in-progress`
+    and patch the same recovery comment, but the same fingerprint on the
+    third consecutive round is a dead loop — the Issue ends `ai-blocked`
+    with ONE blocker comment, never a fifth, sixth ... resume."""
     comments, _, _ = _stateful_comments(monkeypatch)
     patch_process_deps(
-        monkeypatch, tmp_path, run_pi_side_effect=[_pi_401(PROVIDER_401_A)] * 5,
+        monkeypatch, tmp_path, run_pi_side_effect=[_pi_401(PROVIDER_401_A)] * 4,
     )
-    for _ in range(5):
+    for _ in range(2):
         assert runner.process_issue(
             make_issue(), make_config(tmp_path), "xqliu/orbi",
         ).kind == "failed"
-    assert len(_recoverable_scenes(comments)) == 1
     assert all(
         "ai-blocked" not in str(call.kwargs)
         for call in runner.edit_issue.call_args_list
     )
+    assert len(_recoverable_scenes(comments)) == 1
+
+    assert runner.process_issue(
+        make_issue(), make_config(tmp_path), "xqliu/orbi",
+    ).kind == "failed"
+    blocked_edits = [
+        call.kwargs for call in runner.edit_issue.call_args_list
+        if "ai-blocked" in str(call.kwargs)
+    ]
+    assert len(blocked_edits) == 1, runner.edit_issue.call_args_list
+    blockers = [
+        body for body in (comment["body"] for comment in comments)
+        if "Orbi failed:" in body
+    ]
+    assert len(blockers) == 1, comments
+    assert any(
+        edit.get("add") == "ai-blocked" for edit in blocked_edits
+    ), blocked_edits
+    assert any(
+        edit.get("remove") == "ai-in-progress" for edit in blocked_edits
+    ), blocked_edits
+    # The recovery comment keeps the two prior occurrences.
+    assert len(_recoverable_scenes(comments)) == 1
+    assert "<!-- orbi:fail=" in _recoverable_scenes(comments)[0]["body"]
 
 
 def test_recoverable_timeout_posts_its_own_comment(monkeypatch, tmp_path):

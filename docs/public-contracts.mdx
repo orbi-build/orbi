@@ -209,7 +209,11 @@ public surface: the hidden `<!-- orbi:failure:v1 {json} -->` block (its
 version, enum and meaning unchanged), the
 `<!-- orbi:fail=<fingerprint>[:count] -->` dedup marker, and the
 reader-facing **Action**, **Reason** and `Diagnosis` details. The failure
-record's definition is in [Workflow](/workflow).
+record's definition is in [Workflow](/workflow). A resumable Pi/model
+failure's recovery comment carries the same `orbi:fail` marker without a
+failure record; the same fingerprint on 3 consecutive rounds ends the run
+with a blocker comment placed beside that folded recovery record
+(Issue #2292).
 
 Three terminal reasons name a stop that used to read as `unclassified`
 (Issue #2222): `release_failed` (a release task failed; the visible reason
@@ -329,7 +333,9 @@ Five rules decide what is carried out:
   repository writer or this runner's own account;
 - the record is read from its own block, never from the prose beside it,
   and engine output is skipped by its run marker — not by the `<!-- orbi`
-  marker an answer comment itself carries.
+  marker an answer comment itself carries; so is the engine's own command
+  receipt (below), read from its trailing marker, because it quotes the
+  answer it answers.
 
 | answer | what the engine carries out |
 | --- | --- |

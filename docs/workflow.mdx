@@ -225,6 +225,16 @@ means the line advanced and resets the streak) is classified as a dead
 loop, not a transient error: it escalates to `ai-blocked` with the count
 and the unchanged-precondition verdict in the comment.
 
+A resumable Pi/model failure follows the same bound (Issue #2292): its
+recovery comment carries the `<!-- orbi:fail=... -->` marker too, so one
+occurrence still keeps the Issue `ai-in-progress` and the next tick
+resumes the same run, while the same fingerprint on 3 consecutive rounds
+stops the loop `ai-blocked`. That stop is one blocker comment naming the
+reason and the human decision (answer the agent's question or amend the
+ticket, then relabel); after it lands, the failed worktree is retained
+under `keep_failed_worktrees` (default on), so the agent's uncommitted
+changes stay inspectable — the runner never commits them.
+
 Rules of the chain:
 
 - A development delivery keeps the same branch and PR through review/fix.
