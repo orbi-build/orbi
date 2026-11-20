@@ -40,7 +40,7 @@ from orbi.restart_scan import (
 from orbi.resume_scan import (
     ResumeHooks, pick_awaiting_merge_delivery, pick_resumable_delivery,
 )
-from orbi import language, user_summary
+from orbi import language, review_wait, user_summary
 from orbi.progress import run_marker
 from orbi.release import release_target_milestone
 from orbi.release_comments import _epic_audit, epic_audit_posted
@@ -590,6 +590,89 @@ def pick_next_issue(
     return None
 
 
+def _run_preclaim_sweeps(
+    repo: str, *, tick_run_id: str, repo_language: str,
+    milestone: str | None, dispatch_label: str, slot_dir: Path,
+    config: RunnerConfig | None, hooks: ResumeHooks,
+) -> None:
+    """The per-tick sweeps that run before the claim scans (bypasses).
+
+    Epic and Milestone reconciliation, the orphan-PR sweep and the three
+    automatic-recovery/stopped-ticket scans. Each is a pure bypass: a
+    broken GitHub query is journaled and never prevents the ordinary
+    delivery scans. Extracted from `pick_next_delivery` unchanged,
+    because the size ratchet (`tools/size_ratchet.py`) keeps that
+    function within its recorded ceiling (`claim.py::pick_next_delivery`).
+    """
+    # Epic reconciliation is a per-tick bypass: a broken GitHub query or
+    # mutation must never prevent the ordinary delivery scans.
+    try:
+        reconcile_open_epics(repo, tick_run_id, repo_language)
+    except Exception:
+        LOGGER.exception("epic_reconcile_failed repo=%s", repo)
+    # Milestone reconciliation intentionally follows the Epic sweep so a
+    # just-closed final Epic can make its Milestone eligible this tick.
+    # A classified 401/404 leaves a cross-process retry marker: systemd
+    # starts a fresh Runner for every timer tick, so process-local
+    # suppression would still issue and log the same failure every time.
+    milestone_state_dir = slot_dir.parent
+    if milestone_bookkeeping.milestone_reconcile_due(
+        milestone_state_dir, repo,
+    ):
+        try:
+            milestone_bookkeeping.reconcile_release_milestones(
+                repo, tick_run_id,
+            )
+            milestone_bookkeeping.clear_milestone_reconcile_failure(
+                milestone_state_dir, repo,
+            )
+        except milestone_bookkeeping.MilestoneReconcileError as exc:
+            milestone_bookkeeping.record_milestone_reconcile_failure(
+                milestone_state_dir, repo, exc,
+            )
+        except Exception:
+            LOGGER.exception("milestone_reconcile_failed repo=%s", repo)
+    # Orphan-PR reconciliation follows the same bypass
+    # pattern: a broken GitHub query must never prevent the ordinary
+    # delivery scans.
+    try:
+        reconcile_orphan_prs(
+            repo, tick_run_id, hooks=hooks,
+            language_code=repo_language,
+            status_url=config.status_url if config is not None else None,
+        )
+    except Exception:
+        LOGGER.exception("orphan_pr_reconcile_failed repo=%s", repo)
+    # The two automatic-recovery scans run BEFORE the resume scan: an
+    # `ai-blocked` Issue is terminal for every claim scan, and a
+    # recovered precondition must put it back on the resumable path in
+    # THIS tick — the missing check-read permission (Issue #1918), then
+    # the base-branch-red scan (Issue #1825). Bypasses like the sweeps
+    # above: a failed scan never prevents the ordinary delivery scans.
+    try:
+        check_permission.recover(repo)
+    except Exception:
+        LOGGER.exception("check_permission_scan_failed repo=%s", repo)
+    try:
+        base_ci_fix.recover(
+            repo, language_code=repo_language, milestone=milestone,
+            dispatch_label=dispatch_label,
+        )
+    except Exception:
+        LOGGER.exception("base_ci_red_scan_failed repo=%s", repo)
+    # The stopped-ticket scans: `ai-needs-detail` carries the typed
+    # in-ticket commands (`/orbi split`, Issue #1927) and the three
+    # delivery stops carry the stop answer (Issue #2221). A bypass like
+    # the two recovery scans above.
+    try:
+        stopped_scans.run(
+            repo, dispatch_label=dispatch_label,
+            language_code=repo_language,
+        )
+    except Exception:
+        LOGGER.exception("ticket_command_scan_failed repo=%s", repo)
+
+
 def pick_next_delivery(
     repos: Sequence[str], slot_dir: Path, max_concurrency: int,
     active_milestone: str | None = None, config: RunnerConfig | None = None,
@@ -621,6 +704,10 @@ def pick_next_delivery(
     resume states, and running an in-flight or opened-PR delivery to
     completion is never gated by a Milestone change.
     """
+    # Issue #2305: the deliveries this tick's opened-PR scan found waiting
+    # only for their own checks (an out-parameter of that scan, no second
+    # query). They are the bounded reason to hold the fresh claim below.
+    review_waiting: list[dict] = []
     # The sweep runs before a delivery is selected, so a fresh tick has no
     # task attempt yet.  Give its auditable comments one tick-scoped marker;
     # a selected delivery will replace this binding with its own attempt id.
@@ -634,79 +721,18 @@ def pick_next_delivery(
         milestone, dispatch_label = _repo_scan_keys(
             config, repo, active_milestone,
         )
-        # Epic reconciliation is a per-tick bypass: a broken GitHub query or
-        # mutation must never prevent the ordinary delivery scans.
-        try:
-            reconcile_open_epics(repo, tick_run_id, repo_language)
-        except Exception:
-            LOGGER.exception("epic_reconcile_failed repo=%s", repo)
-        # Milestone reconciliation intentionally follows the Epic sweep so a
-        # just-closed final Epic can make its Milestone eligible this tick.
-        # A classified 401/404 leaves a cross-process retry marker: systemd
-        # starts a fresh Runner for every timer tick, so process-local
-        # suppression would still issue and log the same failure every time.
-        milestone_state_dir = slot_dir.parent
-        if milestone_bookkeeping.milestone_reconcile_due(
-            milestone_state_dir, repo,
-        ):
-            try:
-                milestone_bookkeeping.reconcile_release_milestones(
-                    repo, tick_run_id,
-                )
-                milestone_bookkeeping.clear_milestone_reconcile_failure(
-                    milestone_state_dir, repo,
-                )
-            except milestone_bookkeeping.MilestoneReconcileError as exc:
-                milestone_bookkeeping.record_milestone_reconcile_failure(
-                    milestone_state_dir, repo, exc,
-                )
-            except Exception:
-                LOGGER.exception("milestone_reconcile_failed repo=%s", repo)
-        # Orphan-PR reconciliation follows the same bypass
-        # pattern: a broken GitHub query must never prevent the ordinary
-        # delivery scans.
-        try:
-            reconcile_orphan_prs(
-                repo, tick_run_id, hooks=hooks,
-                language_code=repo_language,
-                status_url=config.status_url if config is not None else None,
-            )
-        except Exception:
-            LOGGER.exception("orphan_pr_reconcile_failed repo=%s", repo)
-        # The two automatic-recovery scans run BEFORE the resume scan: an
-        # `ai-blocked` Issue is terminal for every claim scan, and a
-        # recovered precondition must put it back on the resumable path in
-        # THIS tick — the missing check-read permission (Issue #1918), then
-        # the base-branch-red scan (Issue #1825). Bypasses like the sweeps
-        # above: a failed scan never prevents the ordinary delivery scans.
-        try:
-            check_permission.recover(repo)
-        except Exception:
-            LOGGER.exception("check_permission_scan_failed repo=%s", repo)
-        try:
-            base_ci_fix.recover(
-                repo, language_code=repo_language, milestone=milestone,
-                dispatch_label=dispatch_label,
-            )
-        except Exception:
-            LOGGER.exception("base_ci_red_scan_failed repo=%s", repo)
-        # The stopped-ticket scans: `ai-needs-detail` carries the typed
-        # in-ticket commands (`/orbi split`, Issue #1927) and the three
-        # delivery stops carry the stop answer (Issue #2221). A bypass like
-        # the two recovery scans above.
-        try:
-            stopped_scans.run(
-                repo, dispatch_label=dispatch_label,
-                language_code=repo_language,
-            )
-        except Exception:
-            LOGGER.exception("ticket_command_scan_failed repo=%s", repo)
+        _run_preclaim_sweeps(
+            repo, tick_run_id=tick_run_id, repo_language=repo_language,
+            milestone=milestone, dispatch_label=dispatch_label,
+            slot_dir=slot_dir, config=config, hooks=hooks,
+        )
         selected = pick_resumable_delivery(
             repo, slot_dir, max_concurrency,
             repo_dir=config.repo_dir if config is not None else None,
             hooks=hooks, language_code=repo_language,
             ready_label=dispatch_label,
             status_url=config.status_url if config is not None else None,
+            review_waiting=review_waiting,
         )
         if selected is not None:
             issue, scene = selected
@@ -720,11 +746,18 @@ def pick_next_delivery(
         )
         if issue is not None:
             return repo, issue, None
-    for repo in repos:
-        held = slot_held_deliveries(slot_dir, max_concurrency)
-        issue = pick_ready_issue(repo, active_milestone, config, held)
-        if issue is not None:
-            return repo, issue, None
+    # Issue #2305: the bounded exception to Issue #1473 — a delivery that
+    # passed review and only waits for its checks keeps the last free slot.
+    # ONLY the fresh claim is held: the restart resume above and the
+    # awaiting-merge re-check below move as they always did, so an idle
+    # tick still merges a delivery a maintainer already answered.
+    if not review_wait.hold_fresh_claim(
+            review_waiting, slot_dir, max_concurrency):
+        for repo in repos:
+            held = slot_held_deliveries(slot_dir, max_concurrency)
+            issue = pick_ready_issue(repo, active_milestone, config, held)
+            if issue is not None:
+                return repo, issue, None
     # Issue #1745: a delivery waiting for a maintainer is re-checked LAST —
     # only on a tick where nothing above could move. Everything it needs
     # (the merge gate, the de-duplicated #1422 handoff) already exists; it

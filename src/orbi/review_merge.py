@@ -38,7 +38,7 @@ from pathlib import Path
 
 from orbi import answer as answer_domain
 from orbi import config as config_domain
-from orbi import failure_report, merge_exec, pi_session, run_state
+from orbi import failure_report, merge_exec, pi_session, review_wait, run_state
 from orbi.blocked_comment import post_blocked_comment
 from orbi.checks import test_status
 from orbi.delivery_labels import (
@@ -234,7 +234,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         )
     finally:
         if not keep_review_record:
-            run_state.clear_reviewed(worktree)
+            review_wait.clear_reviewed(worktree)
 
 
 @dataclass
@@ -398,7 +398,7 @@ def _round_verdict_phase(work: _Round) -> bool:
         work.reviewed_body_sha256 = None
         return False
     # The record must never outlive the session that replaces it (#1626).
-    run_state.clear_reviewed(worktree)
+    review_wait.clear_reviewed(worktree)
     result = pi_session.run_review(
         ctx, pr, config, round,
         progress=LiveProgressThrottle(
@@ -407,7 +407,7 @@ def _round_verdict_phase(work: _Round) -> bool:
             priority=work.priority, checks=work.checks,
         ),
     )
-    run_state.clear_reviewed(worktree)
+    review_wait.clear_reviewed(worktree)
     work.session_output = result.output
     work.reviewed_body_sha256 = result.issue_body_sha256
     work.verdict = parse_review_verdict(work.session_output)
@@ -530,7 +530,7 @@ def _round_refreeze_phase(work: _Round) -> bool:
     if (not scene.parsed.external
             and not work.merge_only and not work.merge_only_from_record
             and refrozen["head_oid"] != pr["head_oid"]):
-        run_state.record_reviewed(
+        review_wait.record_reviewed(
             worktree, refrozen["head_oid"], work.reviewed_body_sha256,
         )
         work.keep_review_record.append(True)
@@ -719,7 +719,7 @@ def _round_merge_phase(work: _Round) -> dict | None:
     round = work.round
     refrozen = work.refrozen
     if not work.merge_only and not work.merge_only_from_record:
-        run_state.record_reviewed(
+        review_wait.record_reviewed(
             worktree, refrozen["head_oid"], work.reviewed_body_sha256,
         )
     work.publish(action=lambda: work.round_update(
@@ -1163,7 +1163,7 @@ def _run_review_round(
         elif not scene.parsed.external:
             # Issue #1626: a recorded pass on this head and this Issue
             # body lets this round merge without starting a session.
-            review_record = run_state.read_reviewed(worktree)
+            review_record = review_wait.read_reviewed(worktree)
             if review_record is not None:
                 review_kwargs["review_record"] = review_record
                 review_kwargs["issue_body_sha256"] = (

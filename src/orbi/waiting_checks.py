@@ -119,7 +119,8 @@ def publish(*, issue: int, source_repo: str, run_id: str,
 
 def defer_pending(pr_url: str, pending: list, issue: dict, repo: str,
                   run_id: str | None, language_code: str,
-                  status_url: str | None = None) -> None:
+                  status_url: str | None = None, *,
+                  head: str | None = None) -> None:
     """Journal the pending rollup and say on the Issue what it waits for.
 
     The one deferral both CI-pending paths share: `runner.delivery_step`
@@ -128,6 +129,10 @@ def defer_pending(pr_url: str, pending: list, issue: dict, repo: str,
     line is the existing `delivery_ci_pending`; the Issue line names the
     PR's head commit beyond it. A tick with no bound run id has no progress
     comment to update, so only the journal line is written.
+
+    `head` is the commit whose checks are pending when the caller already
+    read it (Issue #2305's resume scan reads it together with the rollup);
+    without it the line's own `headRefOid` read answers.
     """
     number = int(issue["number"])
     event(
@@ -141,20 +146,22 @@ def defer_pending(pr_url: str, pending: list, issue: dict, repo: str,
         action=lambda: publish(
             issue=number, source_repo=repo, run_id=run_id,
             language_code=language_code,
-            head=pr_head(pr_url, repo), status_url=status_url,
+            head=head or pr_head(pr_url, repo), status_url=status_url,
         ),
     )
 
 
 def defer_skipped(scene_value, pending: list, issue: dict, repo: str,
-                  language_code: str, status_url: str | None = None) -> None:
+                  language_code: str, status_url: str | None = None, *,
+                  head: str | None = None) -> None:
     """The resume scan skipped this CI-pending delivery for this tick.
 
     The scan holds the recovered scene, so it names the PR and the run the
     line belongs to from there and the deferral itself is the one
-    `defer_pending` performs.
+    `defer_pending` performs; `head` is the commit it already read
+    (Issue #2305).
     """
     defer_pending(
         scene_value.parsed.pr_url, pending, issue, repo,
-        scene_value.parsed.run_id, language_code, status_url,
+        scene_value.parsed.run_id, language_code, status_url, head=head,
     )

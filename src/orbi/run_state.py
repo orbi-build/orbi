@@ -8,6 +8,12 @@ delivery machine (`runner.py`) and the review/merge domain
 
 Extracted unchanged from the review/merge module into this shared module
 (Issue #1263); no behaviour change.
+
+The #1626 review record that used to live here moved to
+`orbi.review_wait` with the clock and the bounded claim hold Issue #2305
+added to it: the module that grows owns the state it grows with (Article
+3.5). This module keeps the state FILE the record lives in, and preserves
+the record's fields on a refresh.
 """
 from __future__ import annotations
 
@@ -251,10 +257,17 @@ def write_run_state(ctx: RunContext) -> None:
             )
             if isinstance(existing.get(key), str) and existing[key]
         })
-    _write_run_state_file(ctx.worktree, state)
+        # The review record's clock (Issue #2305) is a number, not a
+        # string: it travels with the record it times, so a resumed run
+        # keeps the remaining wait budget instead of an untimed pass.
+        reviewed_at = existing.get("reviewed_at")
+        if (isinstance(reviewed_at, (int, float))
+                and not isinstance(reviewed_at, bool)):
+            state["reviewed_at"] = reviewed_at
+    write_run_state_file(ctx.worktree, state)
 
 
-def _write_run_state_file(worktree: Path, state: dict) -> None:
+def write_run_state_file(worktree: Path, state: dict) -> None:
     path = run_state_path(worktree)
     path.parent.mkdir(parents=True, exist_ok=True)
     # Atomic (Issue #1851): truncating the target left a half-written
@@ -287,7 +300,7 @@ def record_pushed_head(worktree: Path, head: str) -> None:
     if state is None:
         return
     state["pushed_head"] = head
-    _write_run_state_file(worktree, state)
+    write_run_state_file(worktree, state)
 
 
 def record_pushed_base(worktree: Path, base: str) -> None:
@@ -307,7 +320,7 @@ def record_pushed_base(worktree: Path, base: str) -> None:
     if isinstance(state.get("pushed_base"), str) and state["pushed_base"]:
         return
     state["pushed_base"] = base
-    _write_run_state_file(worktree, state)
+    write_run_state_file(worktree, state)
 
 
 def _recordable_state(worktree: Path) -> dict | None:
@@ -331,90 +344,6 @@ def _recordable_state(worktree: Path) -> dict | None:
             state_path=str(run_state_path(worktree)), error=error,
         )
     return state
-
-
-def _review_record_state(worktree: Path) -> dict | None:
-    """The run state carrying the review record, or None when unreadable.
-
-    Issue #1626: a missing file means no record exists and a corrupt one is
-    already a delivery failure on the resume readers, so neither may fail
-    the record's own lifecycle (the safe direction is always "no record":
-    the next tick runs a full review).
-    """
-    try:
-        return read_run_state(worktree)
-    except ValueError:
-        return None
-
-
-def record_reviewed(worktree: Path, head: str,
-                    issue_body_sha256: str) -> None:
-    """Record the reviewed head a deferred merge may resume against.
-
-    Issue #1626: written ONCE per clean verdict, before the merge gate.
-    A later tick with a green CI, the same PR head and the same rendered
-    Issue body merges without another review session. A missing run state
-    (a recreated worktree) records nothing, and the next tick reviews.
-    """
-    state = _review_record_state(worktree)
-    if state is None:
-        return
-    state["reviewed_head"] = head
-    state["reviewed_issue_body_sha256"] = issue_body_sha256
-    _write_run_state_file(worktree, state)
-
-
-def clear_reviewed(worktree: Path) -> None:
-    """Delete the review record from the run state.
-
-    Issue #1626: called before every review session and on every
-    review_and_merge_if_clean exit except a DeliveryDeferred, so a stale
-    pass (or one a session wrote) can never authorize a later merge.
-    """
-    state = _review_record_state(worktree)
-    if state is None:
-        return
-    if ("reviewed_head" not in state
-            and "reviewed_issue_body_sha256" not in state):
-        return
-    state.pop("reviewed_head", None)
-    state.pop("reviewed_issue_body_sha256", None)
-    _write_run_state_file(worktree, state)
-
-
-def update_reviewed_head(worktree: Path, head: str) -> None:
-    """Point an EXISTING review record at the merge gate's absorbed head.
-
-    Issue #1626: the gate's own conflict-free base absorb pushes a new head.
-    Only a record that already exists (a reviewed pass, not the
-    ai-awaiting-merge path) is updated; with no record this is a no-op.
-    """
-    state = _review_record_state(worktree)
-    if state is None:
-        return
-    if not _has_reviewed(state):
-        return
-    state["reviewed_head"] = head
-    _write_run_state_file(worktree, state)
-
-
-def read_reviewed(worktree: Path) -> tuple[str, str] | None:
-    """The recorded reviewed head and rendered-Issue-body hash, or None.
-
-    Issue #1626: both fields must be present and non-empty; a partial or
-    corrupt record authorizes nothing and the next tick reviews.
-    """
-    state = _review_record_state(worktree)
-    if state is None or not _has_reviewed(state):
-        return None
-    return state["reviewed_head"], state["reviewed_issue_body_sha256"]
-
-
-def _has_reviewed(state: dict) -> bool:
-    head = state.get("reviewed_head")
-    body_sha = state.get("reviewed_issue_body_sha256")
-    return (isinstance(head, str) and bool(head)
-            and isinstance(body_sha, str) and bool(body_sha))
 
 
 def read_run_state(worktree: Path) -> dict | None:
