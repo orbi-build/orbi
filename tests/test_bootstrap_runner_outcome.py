@@ -325,12 +325,16 @@ def test_claim_then_blocked_ends_ai_blocked_alone(
     # 1. The claim scan looks for the repository's queue label.
     issue = claim.pick_ready_issue("owner/repo", None, config=fused)
     assert issue["number"] == 8
-    # 2. The claim transition keeps it: the delivery is in flight.
+    # 2. The claim transition removes it (the delivery is in flight); the
+    # resolved label is the one the production claim passes.
     github.apply_label_patch(
         8, repo="owner/repo", event=runner.EVENT_CLAIM,
         current_labels=github.issue_labels(8, repo="owner/repo"),
+        ready_label=queue_label,
     )
-    assert fake.issues[8]["labels"] == [queue_label, "ai-in-progress"]
+    # Issue #2309: the claim removes the queue label — the delivery is in
+    # flight, so nothing queued remains.
+    assert fake.issues[8]["labels"] == ["ai-in-progress"]
     # 3. The delivery's PR closed without a merge: the blocked terminal.
     runner.delivery_step(
         fake.prs[41]["url"], issue, fused, "owner/repo",

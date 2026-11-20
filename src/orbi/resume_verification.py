@@ -41,6 +41,7 @@ from orbi.delivery_labels import (
     EVENT_REQUEUE,
     PR_OPENED_LABEL,
     READY_LABEL,
+    label_name_set,
 )
 from orbi.delivery_scene import RunContext
 from orbi.failure import failure_detail
@@ -200,16 +201,12 @@ def verify_resumed_pr(resume: run_state.ResumeScene, issue: dict,
         # is a recoverable resume failure (ai-fix-needed, failure
         # comment, tick stops) with the command evidence in the
         # journal.
-        labels = {
-            label.get("name") for label in issue.get("labels", [])
-            if isinstance(label, dict) and isinstance(label.get("name"), str)
-        }
-        # Resume scans include labels; preserve compatibility with callers
-        # that provide a minimal issue object representing the normal
-        # ai-pr-opened state.
+        # Resume scans include labels; a caller that provides a minimal
+        # issue object represents the normal ai-pr-opened state.
         apply_label_patch(
             number, repo=source_repo, event=EVENT_CLAIM,
-            current_labels=labels or {PR_OPENED_LABEL},
+            current_labels=label_name_set(issue) or {PR_OPENED_LABEL},
+            ready_label=config.dispatch_label or READY_LABEL,
         )
         return verified_url
     except Exception as exc:

@@ -53,7 +53,9 @@ from orbi.acceptance_section import (
     render_acceptance,
     write_body,
 )
-from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL, label_names
+from orbi.delivery_labels import (
+    NEEDS_DETAIL_LABEL, READY_LABEL, has_delivery_state, label_names,
+)
 from orbi.github import comment_issue, edit_issue, issue_view
 from orbi.ticket_command import (
     CommandSpec,
@@ -164,7 +166,12 @@ def _criteria_apply(
                     body=appended_body(current, section),
                 ),
             )
-        if dispatch_label not in label_names(issue):
+        # The retry queues the ticket ONLY while nothing has started
+        # (Issue #2309): the claim removes the dispatch label, so its
+        # absence no longer means "not yet dispatched".
+        current_labels = label_names(issue)
+        if dispatch_label not in current_labels and not has_delivery_state(
+                current_labels):
             run_step(
                 "add the dispatch label",
                 lambda: edit_issue(

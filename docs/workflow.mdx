@@ -32,7 +32,7 @@ flowchart LR
   release["Release task (ai-ready + ai-release)<br/>— Runner release state machine, never run_pi"]
   release -.claims like.-> ready
   ready["ai-ready<br/>(pickup order: P0-labeled first, then bug-labeled, then plain)"]
-  ready -->|claim: label + worktree + Pi| progress["ai-in-progress"]
+  ready -->|claim: queue label removed, worktree + Pi| progress["ai-in-progress"]
   progress -->|PR verified: base fresh, run marker, Fixes #N| opened["ai-pr-opened"]
   opened -->|independent review session, fixes in-session| verdict{REVIEW_VERDICT}
   verdict -->|clean verdict + merge gate| merged["ai-merged (terminal)"]
@@ -46,9 +46,10 @@ flowchart LR
 ```
 
 ```text
-ai-ready                a task is dispatched (orbi add, or a human
-                        adds the label)
-  -> ai-in-progress     the Runner claims it: label added, worktree created
+ai-ready                a task is queued (orbi add, or a human adds
+                        the label); it means "not started yet"
+  -> ai-in-progress     the Runner claims it: the queue label is removed,
+                        `ai-in-progress` is added, the worktree is created
                         from the frozen origin/<base> SHA, Pi session starts
                         (the prompt carries the Issue body plus the
                         trusted-comment timeline {{ISSUE_COMMENTS}},
@@ -424,15 +425,36 @@ commits — initialize them per repository (see
 
 | Label | Meaning |
 |---|---|
-| `ai-ready` | Explicitly dispatched to Orbi; may be claimed |
-| `ai-in-progress` | Claimed and running. The Runner idempotently backfills it before continuing a resumed opened-PR delivery (Issue #178); a leftover after a kill is resumed by the next tick when this deployment still holds its task worktree and run state file (an Issue it did not start belongs to another deployment and is skipped, Issue #2256) |
+| `ai-ready` | The queue: explicitly dispatched to Orbi and NOT started. The claim removes it in the same write that adds `ai-in-progress`, and every later non-terminal stage event removes it too (Issue #2309), so `is:open label:ai-ready` lists only work that has not begun |
+| `ai-in-progress` | Claimed and running. The Runner idempotently backfills it before continuing a resumed opened-PR delivery (Issue #178); a leftover after a kill is resumed by the next tick when this deployment still holds its task worktree and run state file (an Issue it did not start belongs to another deployment and is skipped, Issue #2256). An implement-phase run is found by this label ALONE (Issue #2309) |
 | `ai-pr-opened` | PR created and verified; awaiting the independent review |
 | `ai-fix-needed` | The PR head is not mergeable yet, or an AI-recoverable failure of the run/PR (Issue #50); the next tick resumes the same run, branch, worktree and PR |
-| `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch. The merge also clears `ai-ready`, so a merged Issue is `ai-merged` alone (Issue #1526; existing merged Issues are not backfilled) |
+| `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch. The merge also clears an `ai-ready` residue, so a merged Issue is `ai-merged` alone (Issue #1526; existing merged Issues are not backfilled) |
 | `ai-awaiting-merge` | Review and checks passed, but a known repository policy blocker remains; the comment names the maintainer action. Re-checked only on a tick whose queue is otherwise empty (Issue #1745), then Orbi merges the named PR head |
 | `ai-blocked` | Only an external precondition the AI cannot safely judge or fix (Issue #50); the blocked comment states why automatic recovery is impossible; a human must decide the next step |
 | `ai-human-review` | The human acceptance gate (Issue #763): a person confirmed the delivery's acceptance checklist. Only a human applies or removes it — the Runner never touches it |
 | `ai-needs-detail` | The thin-ticket clarification gate (Issue #1088): the ticket states too little to deliver, so Orbi stopped BEFORE any work. The Runner swaps `ai-ready` for it and posts ONE comment naming the missing pieces; a human adds them and re-adds `ai-ready` |
+
+Queued means not started (Issue #2309). `is:open label:ai-ready` — or the
+repository's `dispatch_label` — is the queue. The claim removes that label in
+the same write that adds `ai-in-progress`, and every later non-terminal stage
+event removes it too, so a ticket claimed under the older rule converges on its
+next stage event. Only a ticket that is put back in the queue adds it again: a
+requeue, a person re-adding it after `ai-needs-detail`, the amend/draft/split
+re-dispatch paths, an idle release arming, and a release that waits for open
+deliveries. `dispatch_label` may name any ordinary label, never one of the
+lifecycle, type, priority or control labels — the repository config load
+rejects that with the conflicting label named.
+
+Stopping an interrupted delivery (Issue #2309). An implement-phase run is found
+by `ai-in-progress` plus this deployment's own task worktree and run state
+file. To stop it from being resumed, remove `ai-in-progress`, or close the
+Issue. A ticket claimed before the upgrade may still carry the queue label as
+well — stopping it means removing both labels, or closing the Issue, or the
+ready scan claims it again. Upgrading across this change is the same rule in
+reverse: if you stopped a delivery by removing `ai-ready`, also remove
+`ai-in-progress` before upgrading, or the old engine cannot tell it from a
+live run.
 
 A repository policy may block the merge even after Orbi's review and checks
 pass. Orbi stops at `ai-awaiting-merge`; the Issue comment names the exact head
@@ -472,9 +494,10 @@ when its PR opens, split in two columns:
   diff cannot be read.
 
 While column 2 is non-empty, it is a GATE: the review round
-short-circuits before any Pi session — the ticket returns to
-`ai-ready` (the opened-PR label stays as the resume anchor), the slot
-is released, and every later tick costs one label read. The wait does
+short-circuits before any Pi session — `ai-in-progress` and the queue label
+are cleared, NOTHING is added (a waiting ticket is not queued, Issue #2309),
+the opened-PR label stays as the resume anchor, the slot is released, and
+every later tick costs one label read while it writes no label at all. The wait does
 NOT consume the review-round budget and never touches
 `ai-fix-needed`. A person who confirms the checklist applies
 `ai-human-review`, and the next tick reviews and merges the delivery
@@ -1265,7 +1288,7 @@ Only delivery-policy keys are allowed:
 | `auto_next_milestone` | boolean | The idle auto-advance switch for this repository (Issue #1342): when `false`, a closed active Milestone with a pending higher one is not rewritten — the confirmation Issue carrying the in-ticket `/orbi milestone <version>` command is posted instead. Absent falls back to the host value (default `true`). |
 | `message_language` | string | `en` or `zh` for Orbi’s comments and attribution footer in this repository; an explicit value overrides the host. It does not translate user content or override the host’s Telegram language. See [Comment language](#comment-language). |
 | `context_files` | string[] | Repository-relative context files; existence and a size cap are checked before injection. |
-| `dispatch_label` | string | The claim label for this repository (default `ai-ready`); the delivery lifecycle labels stay host constants. |
+| `dispatch_label` | string | The claim label for this repository (default `ai-ready`) — the queue entry the claim REMOVES (Issue #2309). The delivery lifecycle labels stay host constants, and a type, priority or control label (`p0`, `bug`, `ai-release`, `ai-ops-only`, `ai-human-review`, ...) is rejected with the conflict named. |
 | `steering_enabled` | boolean | Enables trusted correction polling for this repository; absent falls back to the host value. |
 | `steering_poll_seconds` | number | Poll interval for this repository; absent falls back to the host value and must be positive and finite. |
 | `steering_max_rounds` | integer | Maximum steering restarts for this repository; absent falls back to the host value. |

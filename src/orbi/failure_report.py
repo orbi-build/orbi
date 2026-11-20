@@ -802,7 +802,7 @@ def report_delivery_failure(
         # the blocked exit owns its own patch (Issue #1730).
         apply_label_patch(
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
-            current_labels=labels,
+            current_labels=labels, ready_label=ready_label,
         )
         if review_scene_block is not None:
             scene += f"\n{redact_local_paths(review_scene_block)}"

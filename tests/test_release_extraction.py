@@ -203,9 +203,11 @@ def test_release_success_path_golden_comment_and_side_effects(monkeypatch):
                        "--method", "PATCH", "-f", "state=closed"]
     assert commands.index(close_milestone) > commands.index(
         ["gh", "issue", "close", "99", "--repo", "o/r"])
-    # Labels: claimed, then ai-merged alone (ai-ready cleared, #1526).
+    # Labels: claimed (the queue entry goes with it, #2309), then
+    # ai-merged alone (ai-ready cleared, #1526).
     assert state["edits"] == [
-        (99, {"repo": "o/r", "add": "ai-in-progress"}),
+        (99, {"repo": "o/r", "add": "ai-in-progress",
+              "remove": "ai-ready"}),
         (99, {"repo": "o/r", "add": "ai-merged",
               "remove": "ai-in-progress"}),
         (99, {"repo": "o/r", "remove": "ai-ready"}),

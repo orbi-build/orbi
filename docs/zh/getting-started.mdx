@@ -528,8 +528,9 @@ orbi setup
 
 对于 Orbi 从未交付过的仓库，setup 还会提供 `orbi suggest`。只有在
 终端上——并且模型 provider 为 `ok`、仓库没有任何带交付标签的 Issue
-（`ai-ready`、`ai-in-progress`、`ai-pr-opened`、`ai-merged` 或仓库
-自己的 `dispatch_label`）时——它才会问一次：
+（`ai-ready`、`ai-in-progress`、`ai-pr-opened`、`ai-fix-needed`、`ai-merged`、
+`ai-blocked`、`ai-awaiting-merge` 或仓库自己的 `dispatch_label`；领取会移除
+队列标签，所以每个阶段标签都要算上——Issue #2309）时——它才会问一次：
 
 `Scan OWNER/REPO and suggest three Issues to deliver? [Y/n]`
 

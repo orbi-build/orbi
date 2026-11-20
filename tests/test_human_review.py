@@ -323,41 +323,51 @@ def test_gate_off_runs_the_review_exactly_like_today(gate_env, tmp_path):
 
 def test_gate_on_with_column2_holds_without_any_session(gate_env, tmp_path):
     """The core acceptance: the gate fires before the scene, the
-    worktree or any review session; the waiting patch returns the
-    ticket to `ai-ready` and the round ends (the slot is released by
-    the caller)."""
+    worktree or any review session. Issue #2309: a waiting ticket is NOT
+    queued — the wait adds no label, so the ticket keeps only its
+    opened-PR anchor and this tick writes nothing."""
     outcome = _round(_gate_config(tmp_path))
     assert outcome is None
     assert gate_env["reviews"] == []
     assert gate_env["calls"]["comments"] == 0  # no scene, no review budget
-    assert gate_env["calls"]["edit"] == [{"repo": REPO, "add": "ai-ready"}]
+    assert gate_env["calls"]["edit"] == []
 
 
-def test_gate_on_second_tick_does_not_rewrite_the_waiting_patch(
-    gate_env, tmp_path, monkeypatch,
+@pytest.mark.parametrize(("waiting_labels", "expected_edits"), [
+    # The steady wait: the anchor alone is the waiting state, so the tick
+    # writes nothing at all (Issue #2309).
+    (["ai-pr-opened"], []),
+    # A ticket claimed before the upgrade still carries the queue label:
+    # the wait removes it once and adds nothing.
+    (["ai-ready", "ai-pr-opened"], [{"repo": REPO, "remove": "ai-ready"}]),
+])
+def test_gate_on_waiting_tick_writes_only_a_label_change(
+    gate_env, tmp_path, monkeypatch, waiting_labels, expected_edits,
 ):
+    """Issue #2309: a waiting ticket keeps its opened-PR anchor and is NOT
+    queued — the wait patch fires only when a label would change, so a
+    second tick ends with the same label set and no write."""
     monkeypatch.setattr(seam, "issue_labels",
-        lambda *a, **k: ["ai-ready", "ai-pr-opened"],
+        lambda *a, **k: waiting_labels,
     )
     outcome = _round(_gate_config(tmp_path))
     assert outcome is None
-    assert gate_env["calls"]["edit"] == []
+    assert gate_env["calls"]["edit"] == expected_edits
     assert gate_env["reviews"] == []
 
 
-def test_gate_on_second_tick_does_not_rewrite_the_waiting_patch_for_a_custom_queue_label(
+def test_gate_on_clears_the_resolved_queue_label_of_a_custom_dispatch(
     gate_env, tmp_path, monkeypatch,
 ):
-    """Issue #1775: the waiting guard asks for the repository's RESOLVED
-    claim label, not the host default — a repository whose
-    `dispatch_label` is `ship` already carries the label while it waits,
-    so the next tick must not rewrite the waiting patch every time."""
+    """Issue #1775/#2309: the guard reads the repository's RESOLVED claim
+    label, so a `ship` repository's pre-upgrade residue is the label the
+    wait clears — never the host default."""
     monkeypatch.setattr(seam, "issue_labels",
         lambda *a, **k: ["ship", "ai-pr-opened"],
     )
     outcome = _round(_gate_config(tmp_path, dispatch_label="ship"))
     assert outcome is None
-    assert gate_env["calls"]["edit"] == []
+    assert gate_env["calls"]["edit"] == [{"repo": REPO, "remove": "ship"}]
     assert gate_env["reviews"] == []
 
 
@@ -406,7 +416,7 @@ def test_gate_on_without_checks_holds_on_the_missing_evidence(
     )
     assert outcome is None
     assert gate_env["reviews"] == []
-    assert gate_env["calls"]["edit"] == [{"repo": REPO, "add": "ai-ready"}]
+    assert gate_env["calls"]["edit"] == []
 
 
 def test_gate_on_with_missing_worktree_falls_through_to_recovery(

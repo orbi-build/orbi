@@ -49,10 +49,8 @@ from orbi import journal
 from orbi.claim import _repo_scan_keys
 from orbi.config import RunnerConfig
 from orbi.delivery_labels import (
-    IN_PROGRESS_LABEL,
-    MERGED_LABEL,
-    PR_OPENED_LABEL,
-    label_names,
+    AWAITING_MERGE_LABEL, BLOCKED_LABEL, FIX_NEEDED_LABEL,
+    IN_PROGRESS_LABEL, MERGED_LABEL, PR_OPENED_LABEL, label_names,
 )
 from orbi.delivery_scene import RunContext
 from orbi.draft import draft_repo_view
@@ -941,12 +939,17 @@ def _setup_repo(config: RunnerConfig, result: object) -> str:
 
 
 def _has_delivery_label(config: RunnerConfig, repo: str) -> bool:
-    """One gh search: any Issue, open or closed, carrying a delivery label."""
+    """One gh search: any Issue, open or closed, carrying a delivery label.
+
+    Every stage label counts, not just the queue entry the claim removes
+    (Issue #2309): `ai-fix-needed`/`ai-blocked` tickets are deliveries too.
+    """
     _milestone, dispatch_label = _repo_scan_keys(
         config, repo, config.active_milestone,
     )
     labels = list(dict.fromkeys([
         dispatch_label, IN_PROGRESS_LABEL, PR_OPENED_LABEL, MERGED_LABEL,
+        FIX_NEEDED_LABEL, BLOCKED_LABEL, AWAITING_MERGE_LABEL,
     ]))
     rows = list_issues(
         repo, state="all", search=f"label:{','.join(labels)}",

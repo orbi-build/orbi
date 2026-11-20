@@ -30,7 +30,9 @@ import orbi.draft_marker as draft_marker
 import orbi.question as question
 from orbi import provider_balance
 from orbi.config import RunnerConfig
-from orbi.delivery_labels import EPIC_LABEL, NEEDS_DETAIL_LABEL, READY_LABEL
+from orbi.delivery_labels import (
+    EPIC_LABEL, IN_PROGRESS_LABEL, NEEDS_DETAIL_LABEL, READY_LABEL,
+)
 
 from tests.fakes import draft as draft_fakes
 from tests.fakes.github import FakeGh
@@ -2057,3 +2059,24 @@ def test_an_issue_without_a_marker_is_checked(config, monkeypatch):
         _draft_issue("## Outcome\n\nno marker here"), config, REPO, RUN_ID,
     ) is True
     assert len(judged) == 1
+
+
+def test_a_claimed_ticket_is_never_requeued_by_the_draft_retry(gh, recorder):
+    """Issue #2309: the claim REMOVES the dispatch label, so its absence no
+    longer means "not yet dispatched". The retry finishes the body but adds
+    no queue label to a ticket that already carries a stage label, while a
+    ticket with no stage label is queued exactly as before."""
+    gh.add_issue(7, title="Note app", body="", labels=(IN_PROGRESS_LABEL,))
+    gh.add_issue(8, title="Other note", body="")
+    item = draft.DraftIssue(title="Tag a note", body=OUTCOME)
+    for number in (7, 8):
+        draft._append_to_issue(
+            REPO, target=number, item=item, header="", key=KEY,
+            dispatch_label=READY_LABEL,
+        )
+
+    claimed, queued = gh.issues[7], gh.issues[8]
+    assert OUTCOME in claimed["body"]
+    assert claimed["labels"] == [IN_PROGRESS_LABEL]
+    assert OUTCOME in queued["body"]
+    assert queued["labels"] == [READY_LABEL]

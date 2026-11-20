@@ -19,7 +19,9 @@ import orbi.acceptance_section as acceptance_section
 import orbi.amend_command as amend_command
 from orbi import claim, clarify, cli, journal, language, ticket_command
 from orbi.config import RunnerConfig
-from orbi.delivery_labels import NEEDS_DETAIL_LABEL, READY_LABEL
+from orbi.delivery_labels import (
+    IN_PROGRESS_LABEL, NEEDS_DETAIL_LABEL, READY_LABEL,
+)
 from orbi.resume_scan import ResumeHooks
 from seam import seam
 
@@ -770,3 +772,22 @@ def test_the_context_reads_the_ticket_and_its_proposal(monkeypatch):
     assert supplied == {
         "issue": {"number": TICKET}, "suggestion": TWO_CRITERIA,
     }
+
+
+def test_a_claimed_ticket_is_never_requeued_by_the_amend_retry(
+    monkeypatch, tmp_path,
+):
+    """Issue #2309: the claim REMOVES the dispatch label, so its absence no
+    longer means "not yet dispatched". The retry finishes the criteria and
+    the receipt but adds no queue label to a ticket that already carries a
+    stage label."""
+    gh = _gh(monkeypatch)
+    stopped_ticket(gh, labels=(IN_PROGRESS_LABEL, NEEDS_DETAIL_LABEL))
+    reply(gh)
+
+    tick(monkeypatch, tmp_path, gh)
+
+    assert gh.issues[TICKET]["body"].count(APPENDED_MARKER) == 1
+    assert IN_PROGRESS_LABEL in labels(gh)
+    assert READY_LABEL not in labels(gh)
+    assert len(success_receipts(gh)) == 1

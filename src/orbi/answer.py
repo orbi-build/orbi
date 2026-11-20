@@ -820,7 +820,7 @@ def refuse_superseded_merge(
 
 def stop_for_fix_round(
     number: int, *, repo: str, pr_number: int, reason: str, marker: str,
-    language_code: str,
+    language_code: str, ready_label: str = READY_LABEL,
 ) -> None:
     """Send the delivery to a fix round: the Issue comment, then the label.
 
@@ -836,7 +836,7 @@ def stop_for_fix_round(
     )
     apply_label_patch(
         number, repo=repo, event=EVENT_FIX_NEEDED,
-        current_labels=issue_labels(number, repo),
+        current_labels=issue_labels(number, repo), ready_label=ready_label,
     )
 
 

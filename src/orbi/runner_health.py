@@ -2,32 +2,25 @@
 
 The two 2026-09-04 incidents (#246: three identical delivery failures on one
 Issue, #262: the service crash loop) were both found by humans reading the
-journal in real time. This module gives the Runner a lightweight, active
-self-check that runs at every tick start (a pure bypass — a check failure
-never fails the delivery):
+journal in real time. This module gives the Runner a lightweight self-check
+at every tick start (a pure bypass — a check failure never fails a delivery):
 
-- crash loop: the service unit crashed >= CRASH_THRESHOLD times within the
-  last CRASH_WINDOW_MINUTES (counted from the systemd journal — each crash
-  loop iteration, including the unit self-heal death loop, exits the service
-  non-zero and lands a `Main process exited` / `Failed with result` line);
+- crash loop: the unit crashed >= CRASH_THRESHOLD times within the last
+  CRASH_WINDOW_MINUTES (counted from the systemd journal);
 - repeated same-fingerprint run failures: the same Issue failed >=
-  REPEAT_FAILURE_THRESHOLD consecutive runs with a highly similar failure
-  fingerprint (exception class + first line of the message, volatile tokens
-  stripped; exact match required — normal multi-round review/fix cycles fail
-  differently and never match);
-- stale pickup: the last successful ticket pickup is older than
-  STALE_PICKUP_SECONDS while at least one `ai-ready` Issue exists (system
-  stuck). An empty ready queue is idle, not a failure — no alarm.
+  REPEAT_FAILURE_THRESHOLD consecutive runs with a highly similar fingerprint
+  (exception class + first line, volatile tokens stripped; exact match, so
+  ordinary multi-round review/fix cycles never match);
+- stale pickup: the last successful pickup is older than
+  STALE_PICKUP_SECONDS while the repository's queue label still has an open
+  Issue (system stuck). An empty queue is idle, not a failure — no alarm.
 
-Actions are tiered: a structured `health_degraded` journal line on every
-degraded tick (the repeated-failure check emits it once per streak — its
-dedup guard skips the line too); a
-comment on the affected Issue for repeated failures (deduped via the state
-file — never one comment per tick); one deduplicated bug Issue for crash
-loops and stale pickups, `ai-ready` attached only for bug-kind crash loops
-(the #106 body-marker mechanism).
+Actions are tiered: a `health_degraded` journal line on every degraded tick,
+a comment on the affected Issue for repeated failures, and one deduplicated
+bug Issue for crash loops and stale pickups (`ai-ready` attached only for
+bug-kind crash loops, the #106 body-marker mechanism).
 
-State lives in ONE lightweight JSON file in the existing state dir
+State lives in ONE JSON file in the existing state dir
 (`repo_dir/.orbi/health.json`) — no daemon, no database, no new dependency.
 """
 from __future__ import annotations
@@ -44,7 +37,9 @@ from typing import TYPE_CHECKING
 
 from orbi.delivery_labels import READY_LABEL
 from orbi import language
-from orbi.repo_config import merged_repo_language
+from orbi.repo_config import (
+    RepoConfigError, load_repo_policy, merged_repo_language,
+)
 from orbi import scheduler
 from orbi.journal import RunIdFilter, event
 from orbi.progress import format_status_comment, run_marker
@@ -245,12 +240,10 @@ def _acquire_health_lock(state_path: Path, *,
 def save_health_state(path: Path, state: dict) -> None:
     """Write the health state atomically (tmp file + rename).
 
-    The tmp name is pid-scoped. The previous shared
-    `health.tmp` meant two instances saving concurrently wrote the same
-    tmp inode — interleaved truncate/write produced torn JSON that the
-    read side then treated as fresh state (a silent reset of every
-    alert/counter). Unique tmp names make each writer's rename
-    all-or-nothing regardless of interleaving.
+    The tmp name is pid-scoped: a shared `health.tmp` let two instances
+    interleave truncate/write into torn JSON that the read side took as
+    fresh state (a silent reset of every alert/counter). A unique tmp
+    makes each writer's rename all-or-nothing.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
@@ -312,10 +305,9 @@ def record_run_attempt(
 def record_pickup(repo_dir: Path) -> None:
     """Record a successful ticket pickup (resets the stale-pickup clock).
 
-    Locked like :func:`record_run_attempt` — an unlocked RMW
-    here is exactly the mechanism behind the false `stale_pickup` alarm
-    (one instance's check saves back an old pickup timestamp over the
-    other instance's fresh one).
+    Locked like :func:`record_run_attempt`: an unlocked RMW here is the
+    false `stale_pickup` mechanism (one instance's check saves an old
+    pickup timestamp over another's fresh one).
     """
     path = health_state_path(repo_dir)
     lock_fd = _acquire_health_lock(path, blocking=True)
@@ -336,13 +328,11 @@ def crash_journal_lines(
     window.
 
     Delegates to the scheduler layer (Issue #849): systemd queries the
-    journal per service instance of THIS deployment through the
-    configured `max_concurrency` (Issue #827 — the instance set follows
-    the capacity, not a hardcoded count; a `unit_name` deployment
-    installs `orbi-<name>@N.service`, so the query must follow the same
-    naming — `None` keeps the default `orbi@N.service`). On launchd the
-    lines are the tails of the per-instance log files the agent plist
-    renders. The lines are the raw scene the crash-loop alert needs.
+    journal per service instance of THIS deployment through the configured
+    `max_concurrency` (#827: the instance set follows the capacity, and a
+    `unit_name` deployment installs `orbi-<name>@N.service`, so the query
+    follows the same naming). On launchd the lines are the tails of the
+    per-instance log files. They are the raw scene the alert needs.
     NOTE: the crash line patterns below are systemd journal shapes, so
     on macOS the crash-loop check stays inert by design.
     """
@@ -593,14 +583,30 @@ def repeat_failure_comment(finding: dict, *, language_code: str) -> str:
     ])
 
 
+def queue_label(config: RunnerConfig, repo: str) -> str:
+    """The repository's RESOLVED claim label — the queue entry (Issue #2309).
+
+    The stale-pickup check counts QUEUED work, so it must read the label the
+    claim scans read, not the host default. Fail-open like the claim scans: a
+    malformed policy file falls back to the host value (the claim blocks the
+    Issue with the readable reason).
+    """
+    try:
+        policy = load_repo_policy(config, repo)
+    except RepoConfigError:
+        policy = None
+    if policy is not None and policy.dispatch_label:
+        return policy.dispatch_label
+    return config.dispatch_label or READY_LABEL
+
+
 def run_health_check(config: RunnerConfig, *, run_command) -> list[str]:
     """Run the tick-start self-health check. Returns the fired check names.
 
-    The state read-modify-write is serialized across
-    instances with the leaf health lock, acquired non-blocking with a
-    bounded wait — the check is a documented pure bypass, so a lock
-    that stays busy skips this tick's check with the same semantics as
-    a check failure (callers log it and never fail the delivery).
+    The state read-modify-write is serialized across instances with the
+    leaf health lock, acquired non-blocking with a bounded wait — the
+    check is a documented pure bypass, so a lock that stays busy skips
+    this tick's check with the same semantics as a check failure.
 
     Pure bypass: callers wrap this in try/except — a check failure logs and
     never fails the delivery. The state file is saved even when a check
@@ -622,15 +628,12 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
     state_path = health_state_path(config.repo_dir)
     state = load_health_state(state_path)
     try:
-        # Routing: Runner-self health alerts belong in the orbi
-        # repo, never the delivery repo by default. The configured
-        # `health_alert_repo` override wins (fork/private deployments);
-        # otherwise the orbi repo is derived from the deploy home's git
-        # origin. Undeterminable -> log and skip (bypass: never guess a
-        # repo, never file the alert in the delivery repo). An explicit
-        # empty string (Issue #1985) turns alert FILING off: no
-        # alert-repository lookup at all, while the detection and its
-        # `health_degraded` event stay.
+        # Routing: Runner-self health alerts belong in the orbi repo, never
+        # the delivery repo by default. `health_alert_repo` wins, otherwise
+        # the orbi repo is derived from the deploy home's origin;
+        # undeterminable -> log and skip (never guess). An explicit empty
+        # string (Issue #1985) turns filing off: no lookup, while the
+        # detection and its `health_degraded` event stay.
         alert_repo = config.health_alert_repo
         alerts_off = alert_repo == ""
         if alert_repo is None:
@@ -713,13 +716,10 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
                 ],
                 timeout=GH_TIMEOUT_SECONDS,
             )
-            # Ship-then-record: the comment is the load-bearing channel.
-            # Recording the dedup key before the ship would let one
-            # failed call (network blip, 5xx) burn the key — the finally
-            # below saves the state unconditionally and the escalation
-            # comment would never be re-sent. The `health_degraded`
-            # journal event stays pre-ship on purpose: a retry repeats
-            # it, preserving the failure scene.
+            # Ship-then-record: recording the dedup key before the ship
+            # would let one failed call burn it, so the escalation comment
+            # would never be re-sent. The `health_degraded` event stays
+            # pre-ship: a retry repeats it, preserving the scene.
             state["alerted"].append(key)
             alerts.append(f"repeated_failure:{finding['repo']}#{finding['issue']}")
         # 3. Stale pickup: system stuck vs queue idle.
@@ -728,8 +728,8 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
                 [
                     "gh", "issue", "list",
                     "--repo", config.source_repos[0], "--state", "open",
-                    "--label", READY_LABEL, "--json", "number",
-                    "--limit", "1",
+                    "--label", queue_label(config, config.source_repos[0]),
+                    "--json", "number", "--limit", "1",
                 ],
                 timeout=GH_TIMEOUT_SECONDS,
             )

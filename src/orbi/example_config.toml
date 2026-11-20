@@ -83,9 +83,10 @@ engine_source_track = "release"
 # covered layer); column 2 = the machine-unverifiable minimum derived
 # from the changed paths (business intent, UI visuals and copy, external
 # environment, missing-evidence items). While column 2 is non-empty the
-# review round short-circuits BEFORE any Pi session: the ticket returns
-# to `ai-ready`, the slot is released and each later tick costs one label
-# read — the wait never burns the review-round budget. A person confirms
+# review round short-circuits BEFORE any Pi session: `ai-in-progress` and
+# the queue label are cleared, NOTHING is added (a waiting ticket is not
+# queued, Issue #2309), the slot is released and each later tick costs one
+# label read — the wait never burns the review-round budget. A person confirms
 # the checklist with the human-only `ai-human-review` label and the next
 # tick reviews/merges exactly as before. An empty column 2 is the target
 # state: the checklist says no human intervention is needed and the
@@ -216,7 +217,14 @@ max_concurrency = 1
 # derives the Orbi repository from the deploy-home origin; "" turns alert
 # Issues OFF while the detection and its health_degraded journal event stay.
 # health_alert_repo = "OWNER/ORBI-REPO"
-# Repository policy may override the ready label for this delivery source.
+# Repository policy may override the queue label for this delivery source.
+# The claim REMOVES it (Issue #2309), so it must name an ordinary label and
+# never a lifecycle, type, priority or control one (ai-in-progress, p0, bug,
+# ai-release, ai-ops-only, ai-human-review, ...) — that is rejected at load.
+# Rolling back across the queue-label change: an older engine finds an
+# interrupted run by ai-in-progress PLUS this label, so query the open Issues
+# carrying ai-in-progress and no queue label before downgrading, and decide
+# each hit by hand.
 # dispatch_label = "ai-ready"
 # Task-worktree reclamation: at every tick start the Runner
 # removes the registered task worktrees whose Issue is CLOSED and has

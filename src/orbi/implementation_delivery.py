@@ -377,6 +377,7 @@ def _claim_issue(attempt: _Attempt) -> None:
     apply_label_patch(
         number, repo=attempt.source_repo, event=EVENT_CLAIM,
         current_labels=attempt.facts.claim_labels,
+        ready_label=attempt.facts.dispatch_label,
     )
     # The successful pickup resets the stale-pickup clock in
     # the health state file (bypass — a state-write failure never fails
@@ -600,9 +601,13 @@ def _closeout_implementation(attempt: _Attempt) -> IssueResult:
         return _closeout_issue_closed(attempt, commit)
     # The implementer always commits the delivery on top of the
     # frozen base, so the head always advanced.
+    # The REAL label set, not a synthetic one (Issue #2309): the patch
+    # must remove a pre-upgrade claim's dispatch residue too.
     apply_label_patch(
         int(attempt.issue["number"]), repo=attempt.source_repo,
-        event=EVENT_PR_OPENED, current_labels={IN_PROGRESS_LABEL},
+        event=EVENT_PR_OPENED,
+        current_labels=facts.claim_labels | {IN_PROGRESS_LABEL},
+        ready_label=facts.dispatch_label,
     )
     # The label transition has landed and must remain the state
     # reported if the following notification write exhausts.

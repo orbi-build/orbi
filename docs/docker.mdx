@@ -132,8 +132,11 @@ reference instead of duplicating it.
   `ai-fix-needed` (the next review round fixes the finding); `ai-blocked`
   (terminal) needs a human decision. `ai-epic` marks a coordination-only
   Issue the runner never claims, and `ai-release` marks a release task
-  (below). The runner manages the delivery states; `ai-ready`, `ai-epic`,
-  `ai-release`, `p0` and `bug` are yours to add and remove.
+  (below). The runner manages the delivery states; `ai-epic`,
+  `ai-release`, `p0` and `bug` are yours to add and remove. The claim
+  REMOVES `ai-ready` in the same write that adds `ai-in-progress`, so
+  `ai-ready` lists only work that has not started (Issue #2309); to stop an
+  interrupted delivery, remove `ai-in-progress` or close the Issue.
 - **Watching** — the run keeps exactly one progress comment on the
   Issue, updated in place at every milestone, and the tick log streams
   through the `journalctl` command above.

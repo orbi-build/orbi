@@ -1046,10 +1046,11 @@ def test_e2e_human_review_gate_posts_the_checklist_once_and_holds(
     assert "Intent judgment" in checklists[0]
     assert f"run_id={run_id}" in checklists[0]
 
-    # The delivery wait holds at the gate: one label read, the waiting
-    # patch, no review session, the slot released.
+    # The delivery wait holds at the gate: one label read, no label write
+    # (the claim already removed the queue entry, #2309), no review
+    # session, the slot released.
     runner.delivery_step(result.url, issue(), config, REPO)
-    assert set(labels) == {"ai-pr-opened", "ai-ready"}
+    assert set(labels) == {"ai-pr-opened"}
     assert "ai-fix-needed" not in labels
     assert pr["merged"] is False
     worktree = worktree_for(clone, run_id)
@@ -1067,10 +1068,12 @@ def test_e2e_human_review_gate_posts_the_checklist_once_and_holds(
 
 
 @pytest.mark.parametrize("seed", [
-    # The normal delivery reaches the gate with ai-ready still on it (a
-    # claim never removes it, EVENT_PR_OPENED only removes ai-in-progress).
+    # A ticket claimed before the upgrade still carries the queue label: the
+    # REAL PR-opened transition of `process_issue` removes it here (Issue
+    # #2309), and the waiting ticks that follow write nothing.
     ["ai-ready", "ai-pr-opened"],
-    # An ai-blocked recovery path: the gate's label patch fires again.
+    # The normal case: the claim removed it, so a waiting tick writes
+    # nothing at all.
     ["ai-pr-opened"],
 ])
 def test_e2e_human_review_wait_sends_one_needs_you_message(
@@ -1112,10 +1115,15 @@ def test_e2e_human_review_wait_sends_one_needs_you_message(
             f"https://github.com/{REPO}/issues/{ISSUE_NUMBER}\n"
             "Help: https://t.me/+kJRTTpFGBRU0M2Y9"
         ]
-        # Two gate ticks hold the delivery; no message is sent again.
-        for _ in range(2):
+        # Two gate ticks hold the delivery; no message is sent again. The
+        # first may clear a pre-upgrade queue label, the second writes
+        # nothing at all (Issue #2309).
+        for tick in range(2):
+            edits_before = len(edits)
             runner.delivery_step(result.url, issue(), config, REPO)
-            assert set(labels) == {"ai-pr-opened", "ai-ready"}
+            assert set(labels) == {"ai-pr-opened"}
+            if tick:
+                assert len(edits) == edits_before
             assert pr["merged"] is False
         assert len(endpoint.texts()) == 1
 

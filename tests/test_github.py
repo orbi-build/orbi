@@ -434,25 +434,28 @@ def test_apply_label_patch_applies_the_idempotent_patch(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda c, **k: (
         captured.append(c), "")[1])
 
-    # ai-ready + claim -> ai-in-progress added; the ai-ready residue
-    # is kept by contract (delivery_labels.label_patch).
+    # ai-ready + claim -> ai-in-progress added and the queue label
+    # removed in the SAME edit call (Issue #2309).
     github.apply_label_patch(
         4, repo="o/r", event="claim",
         current_labels={"ai-ready"},
     )
     assert captured == [
         ["gh", "issue", "edit", "4", "--repo", "o/r",
-         "--add-label", "ai-in-progress"],
+         "--add-label", "ai-in-progress", "--remove-label", "ai-ready"],
     ]
 
-    # A stale fix-needed residue is removed in the SAME edit call.
+    # A stale fix-needed residue is removed in the SAME edit call, and the
+    # second remove (the queue label) is its own call.
     github.apply_label_patch(
         4, repo="o/r", event="claim",
         current_labels={"ai-ready", "ai-fix-needed"},
     )
-    assert captured[-1] == [
-        "gh", "issue", "edit", "4", "--repo", "o/r",
-        "--add-label", "ai-in-progress", "--remove-label", "ai-fix-needed",
+    assert captured[-2:] == [
+        ["gh", "issue", "edit", "4", "--repo", "o/r",
+         "--add-label", "ai-in-progress", "--remove-label", "ai-fix-needed"],
+        ["gh", "issue", "edit", "4", "--repo", "o/r",
+         "--remove-label", "ai-ready"],
     ]
 
     # A no-op patch (no add, no remove) applies nothing. No real event

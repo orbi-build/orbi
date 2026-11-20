@@ -397,10 +397,10 @@ def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
     # unchanged.
     assert runner.process_issue(issue, make_config(tmp_path),
                                 "xqliu/orbi").kind == "failed"
-    # Claim first, then the terminal state: `ai-blocked` added,
-    # `ai-in-progress` removed.
+    # Claim first (Issue #2309: the queue entry goes with it), then the
+    # terminal state: `ai-blocked` added, `ai-in-progress` removed.
     assert edit.call_args_list[0] == mock_call(
-        18, repo="xqliu/orbi", add="ai-in-progress",
+        18, repo="xqliu/orbi", add="ai-in-progress", remove="ai-ready",
     )
     assert edit.call_args_list[1] == mock_call(
         18, repo="xqliu/orbi", add="ai-blocked",
@@ -1371,6 +1371,32 @@ def _delivery_record_of(command) -> bool:
             return "Orbi: PR opened" in command[-1]
         return _progress_patch_of(command)
     return False
+
+
+def test_pr_opened_transition_removes_a_pre_upgrade_queue_label(
+    monkeypatch, tmp_path,
+):
+    """Issue #2309: a ticket whose scan snapshot still carries the queue
+    label (a claim made under the older rule) loses it at the REAL PR-opened
+    entry of `implementation_delivery` — not only inside `label_patch`.
+    The claim drops it first, and the PR-opened patch reads the real snapshot
+    so its own patch removes the residue too."""
+    make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path)
+    edit = seam.edit_issue  # the mock `patch_process_deps` installed
+    issue = make_issue()
+    issue["labels"] = [{"name": "ai-ready"}]
+
+    result = runner.process_issue(issue, make_config(tmp_path), "xqliu/orbi")
+
+    assert result.url == "https://github.com/xqliu/orbi/pull/40"
+    assert [call.kwargs for call in edit.call_args_list] == [
+        {"repo": "xqliu/orbi", "add": "ai-in-progress",
+         "remove": "ai-ready"},
+        {"repo": "xqliu/orbi", "add": "ai-pr-opened",
+         "remove": "ai-in-progress"},
+        {"repo": "xqliu/orbi", "remove": "ai-ready"},
+    ]
 
 
 def test_process_issue_delivered_patch_failure_does_not_fail_delivery(

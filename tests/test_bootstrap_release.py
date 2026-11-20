@@ -2938,9 +2938,11 @@ def test_process_release_success_end_to_end(monkeypatch):
         issue, config_domain.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
-    # Claim first, terminal ai-merged at the end (ai-in-progress removed).
+    # Claim first (Issue #2309: the queue label goes with the in-flight
+    # one), terminal ai-merged at the end (ai-in-progress removed).
     assert state["edits"][0] == (99, {"repo": "o/r",
-                                      "add": "ai-in-progress"})
+                                      "add": "ai-in-progress",
+                                      "remove": "ai-ready"})
     assert state["edits"][-2] == (99, {"repo": "o/r", "add": "ai-merged",
                                        "remove": "ai-in-progress"})
     # Issue #1526: the release merge also clears the ready queue entry.

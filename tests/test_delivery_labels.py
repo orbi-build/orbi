@@ -21,10 +21,13 @@ MODULE = REPO_ROOT / "src" / "orbi" / "delivery_labels.py"
 
 # --- label_patch: normal transitions ---------------------------------
 
-def test_label_patch_claim_adds_in_progress_only():
+def test_label_patch_claim_removes_the_queue_label():
+    """Issue #2309: the dispatch label means "queued, work has not
+    started", so the claim removes it — `is:open label:ai-ready` lists
+    only work that has not begun."""
     to_add, to_remove = dl.label_patch(dl.EVENT_CLAIM, {"ai-ready"})
     assert to_add == ["ai-in-progress"]
-    assert to_remove == []
+    assert to_remove == ["ai-ready"]
 
 
 def test_label_patch_claim_clears_fix_needed_from_fix_round():
@@ -32,7 +35,7 @@ def test_label_patch_claim_clears_fix_needed_from_fix_round():
         dl.EVENT_CLAIM, {"ai-ready", "ai-fix-needed"},
     )
     assert to_add == ["ai-in-progress"]
-    assert to_remove == ["ai-fix-needed"]
+    assert to_remove == ["ai-fix-needed", "ai-ready"]
 
 
 def test_label_patch_claim_clears_needs_detail_after_a_repair():
@@ -46,7 +49,7 @@ def test_label_patch_claim_clears_needs_detail_after_a_repair():
         dl.EVENT_CLAIM, {"ai-ready", "ai-needs-detail"},
     )
     assert to_add == ["ai-in-progress"]
-    assert to_remove == ["ai-needs-detail"]
+    assert to_remove == ["ai-needs-detail", "ai-ready"]
 
 
 def test_label_patch_release_waiting_returns_release_to_ready_queue():
@@ -57,27 +60,23 @@ def test_label_patch_release_waiting_returns_release_to_ready_queue():
     assert to_remove == ["ai-in-progress"]
 
 
-def test_label_patch_human_review_waiting_keeps_the_opened_pr_anchor():
-    """Issue #763: the human-review waiting patch follows the release
-    waiting shape — the ticket returns to `ai-ready` and a stale
-    in-flight label is cleared — while the opened-PR state anchor
-    STAYS: the resume scan finds waiting deliveries through
+def test_label_patch_human_review_waiting_clears_queue_and_keeps_anchor():
+    """Issue #2309: a waiting ticket is NOT queued — the wait clears the
+    in-flight and queue labels and adds NOTHING — while the opened-PR
+    state anchor STAYS: the resume scan finds waiting deliveries through
     `ai-pr-opened`/`ai-fix-needed`, so removing the anchor would drop
     the delivery into the fresh-claim queue for a full re-implement."""
-    to_add, to_remove = dl.label_patch(
+    assert dl.label_patch(
         dl.EVENT_HUMAN_REVIEW_WAITING, {"ai-pr-opened"},
-    )
-    assert to_add == ["ai-ready"]
-    assert to_remove == []
-    # A stale in-flight residue is still cleared (the release-waiting
-    # shape), and a fix-round ticket keeps its own anchor.
+    ) == ([], [])
     assert dl.label_patch(
         dl.EVENT_HUMAN_REVIEW_WAITING,
         {"ai-pr-opened", "ai-in-progress"},
-    ) == (["ai-ready"], ["ai-in-progress"])
+    ) == ([], ["ai-in-progress"])
+    # A pre-upgrade ticket still carrying the queue label loses it.
     assert dl.label_patch(
-        dl.EVENT_HUMAN_REVIEW_WAITING, {"ai-fix-needed"},
-    ) == (["ai-ready"], [])
+        dl.EVENT_HUMAN_REVIEW_WAITING, {"ai-fix-needed", "ai-ready"},
+    ) == ([], ["ai-ready"])
 
 
 def test_label_patch_never_adds_or_removes_the_human_review_label():
@@ -124,11 +123,13 @@ def test_label_patch_requeue_returns_external_takeover_to_ready_queue():
 
 
 def test_label_patch_pr_opened_swaps_in_progress_for_pr_opened():
+    # A pre-upgrade claim still carries the queue label: the next
+    # non-terminal stage event removes it (Issue #2309).
     to_add, to_remove = dl.label_patch(
         dl.EVENT_PR_OPENED, {"ai-ready", "ai-in-progress"},
     )
     assert to_add == ["ai-pr-opened"]
-    assert to_remove == ["ai-in-progress"]
+    assert to_remove == ["ai-in-progress", "ai-ready"]
 
 
 def test_label_patch_fix_needed_swaps_pr_opened_for_fix_needed():
@@ -136,7 +137,7 @@ def test_label_patch_fix_needed_swaps_pr_opened_for_fix_needed():
         dl.EVENT_FIX_NEEDED, {"ai-ready", "ai-pr-opened"},
     )
     assert to_add == ["ai-fix-needed"]
-    assert to_remove == ["ai-pr-opened"]
+    assert to_remove == ["ai-pr-opened", "ai-ready"]
 
 
 def test_label_patch_fix_needed_clears_stale_in_progress_too():
@@ -145,7 +146,7 @@ def test_label_patch_fix_needed_clears_stale_in_progress_too():
         {"ai-ready", "ai-pr-opened", "ai-in-progress"},
     )
     assert to_add == ["ai-fix-needed"]
-    assert to_remove == ["ai-in-progress", "ai-pr-opened"]
+    assert to_remove == ["ai-in-progress", "ai-pr-opened", "ai-ready"]
 
 
 @pytest.mark.parametrize("labels", [
@@ -265,9 +266,18 @@ def test_label_patch_uses_the_resolved_queue_label():
     assert dl.label_patch(
         dl.EVENT_RELEASE_WAITING, {"ai-in-progress"}, ready_label="ship",
     ) == (["ship"], ["ai-in-progress"])
+    # Issue #2309: the wait clears the resolved queue label and adds
+    # nothing; a steady waiting ticket (anchor only) is a no-op.
+    assert dl.label_patch(
+        dl.EVENT_HUMAN_REVIEW_WAITING, {"ai-pr-opened", "ship"},
+        ready_label="ship",
+    ) == ([], ["ship"])
     assert dl.label_patch(
         dl.EVENT_HUMAN_REVIEW_WAITING, {"ai-pr-opened"}, ready_label="ship",
-    ) == (["ship"], [])
+    ) == ([], [])
+    assert dl.label_patch(
+        dl.EVENT_CLAIM, {"ship"}, ready_label="ship",
+    ) == (["ai-in-progress"], ["ship"])
 
 
 # --- label_patch: idempotency ----------------------------------------

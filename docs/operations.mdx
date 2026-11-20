@@ -154,7 +154,14 @@ host-only key):
   of a running Runner.
 - **Rollback** is editing the track back to the previous `tag:`/`sha:`
   value (or `release`/`main`) — git state is the only store, nothing
-  else to clean up.
+  else to clean up. Rolling back across the queue-label change (Issue
+  #2309) has one precondition: an engine before that change finds an
+  interrupted run by `ai-in-progress` PLUS the queue label, so a new-rule
+  interrupted run (which no longer carries the queue label) would never be
+  resumed, and re-adding the queue label to every `ai-in-progress` Issue
+  could revive one a person stopped. Before rolling back, run the same
+  read-only query the upgrade used — open Issues with `ai-in-progress` and
+  no queue label — and decide each hit by hand.
 - **Fail closed** (the service does not start, each line carries a
   `fix=`):
   - `deploy_home_dirty files=... fix=...` — tracked local edits would
