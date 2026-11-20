@@ -289,9 +289,12 @@ def fake_pr_view(monkeypatch, state: str) -> tuple[list, object]:
             assert command[3] == "46"
             assert command[4:] == [
                 "--repo", "owner/repo", "--json",
-                "state,statusCheckRollup",
+                "state,headRefOid,statusCheckRollup",
             ]
-            return json.dumps({"state": state, "statusCheckRollup": []})
+            return json.dumps({
+                "state": state, "headRefOid": "a" * 40,
+                "statusCheckRollup": [],
+            })
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "run_command", fake_run)

@@ -28,12 +28,16 @@ import orbi.journal as journal
 import orbi.runner as runner
 import orbi.merge_exec as merge_exec
 import orbi.review_merge as review_merge
+import orbi.review_wait as review_wait
 import orbi.run_state as run_state
 import orbi.gitops as gitops
 import orbi.pi_session as pi_session
 from orbi import progress, scene
 from tests.fakes.gitops import remote_head_answer
 from tests.test_progress_wiring import make_fake_gh
+from tests.fakes.progress import (
+    patched_comment_bodies, progress_comment_body,
+)
 from tests.test_git_merge_smoke import git
 from seam import seam
 from orbi.delivery_scene import RunContext
@@ -1284,13 +1288,18 @@ def test_merge_gate_defers_when_ci_pending(monkeypatch, tmp_path, caplog):
     monkeypatch.setattr(seam, "run_command", _merge_gate_fake(check_runs=[{
         "name": "tests", "status": "QUEUED", "conclusion": None,
     }]))
-    with caplog.at_level("INFO"), pytest.raises(merge_exec.DeliveryDeferred):
+    with caplog.at_level("INFO"), pytest.raises(
+        merge_exec.DeliveryDeferred,
+    ) as deferred:
         merge_exec.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path, language_code="en",
         )
     assert "merge_gate_ci_pending" in caplog.text
+    # Issue #2304: the deferral names the commit the checks belong to, so
+    # the Issue can say which one Orbi waits for.
+    assert deferred.value.head == "h1"
 
 
 _GREEN_CHECK = {"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}
@@ -1356,7 +1365,9 @@ def test_merge_gate_reread_uses_the_whole_last_state_for_a_stale_head(
     )
     sleeps = []
     monkeypatch.setattr("time.sleep", sleeps.append)
-    with caplog.at_level("INFO"), pytest.raises(merge_exec.DeliveryDeferred):
+    with caplog.at_level("INFO"), pytest.raises(
+        merge_exec.DeliveryDeferred,
+    ) as deferred:
         merge_exec.merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1", "head_ref": "h",
                        "base_oid": "b1"},
@@ -1364,6 +1375,8 @@ def test_merge_gate_reread_uses_the_whole_last_state_for_a_stale_head(
         )
     assert "base_absorbed_deferred" in caplog.text
     assert len(sleeps) == 1
+    # Issue #2304: the wait is for the head THIS gate pushed.
+    assert deferred.value.head == "h2"
 
 
 def test_merge_gate_defers_when_mergeable_unknown(monkeypatch, tmp_path, caplog):
@@ -1388,6 +1401,14 @@ def test_merge_gate_defers_when_mergeable_unknown(monkeypatch, tmp_path, caplog)
     assert len(views) == 1 + len(merge_exec.MERGEABLE_UNKNOWN_RETRY_DELAYS)
     assert sleeps == list(merge_exec.MERGEABLE_UNKNOWN_RETRY_DELAYS)
     assert "merge_gate_mergeable_unknown" in caplog.text
+
+
+def test_delivery_deferred_keeps_its_head_optional():
+    """Issue #2304: only a CI wait carries a head. A deferral for another
+    reason (UNKNOWN mergeability) names none, so no waiting line promises
+    a merge the gate did not defer to the checks."""
+    assert merge_exec.DeliveryDeferred("wait").head is None
+    assert merge_exec.DeliveryDeferred("wait", head="h1").head == "h1"
 
 
 def test_merge_gate_does_not_reread_while_ci_is_pending(
@@ -3055,7 +3076,11 @@ def test_review_and_merge_defers_a_head_pushed_in_the_same_tick(
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     caplog.set_level("INFO")
-    make_fake_gh(monkeypatch)
+    # Issue #2304: the run's progress comment exists, so the deferral can
+    # say which commit's checks it waits for.
+    api_calls = make_fake_gh(monkeypatch, comments=[{
+        "id": 7, "body": progress_comment_body("a1b2c3d4"),
+    }])[0]
     config = _review_merge_config(tmp_path)
     deferred = review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", config, "owner/repo", 4,
@@ -3065,7 +3090,15 @@ def test_review_and_merge_defers_a_head_pushed_in_the_same_tick(
     # A head pushed in this tick is never merged in this tick: the gate
     # did not run and the pass is recorded for a later merge-only tick.
     assert calls == []
-    assert run_state.read_reviewed(tmp_path) == ("h2", _REVIEW_BODY_SHA)
+    # The pushed head — whose CI has not even registered yet — is what the
+    # Issue says Orbi waits for.
+    waiting = [body for body in patched_comment_bodies(api_calls)
+               if "waiting-checks" in body]
+    assert len(waiting) == 1
+    assert "Waiting for checks on commit h2:" in waiting[0]
+    assert "automatically once they pass" in waiting[0]
+    assert "next tick" not in waiting[0].lower()
+    assert review_wait.read_reviewed(tmp_path) == ("h2", _REVIEW_BODY_SHA)
     # ...and the head advance is logged for the journal.
     assert "review_head_advanced" in caplog.text
     assert "frozen=h1" in caplog.text
@@ -3079,7 +3112,7 @@ def test_review_and_merge_defers_a_head_pushed_in_the_same_tick(
     merged = review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", config, "owner/repo", 4,
         title="Review task", priority="normal", scene=_scene(),
-        review_record=run_state.read_reviewed(tmp_path),
+        review_record=review_wait.read_reviewed(tmp_path),
         issue_body_sha256=_REVIEW_BODY_SHA,
     )
     assert merged is True
@@ -3842,20 +3875,23 @@ def test_review_and_merge_preexisting_ci_failure_is_not_swallowed(
     assert calls == []
 
 
-def test_review_and_merge_deferred_gate_writes_nothing(
+def test_review_and_merge_deferred_gate_writes_no_comment_and_no_label(
         budget_review_env, monkeypatch, tmp_path):
     """Issue #788: an intermediate gate state (pending CI / UNKNOWN
     mergeability) defers the delivery — no comment, no label change,
-    no round consumed. The next tick re-reads the state."""
+    no round consumed. The next tick re-reads the state.
+
+    Issue #2304: a CI deferral ALSO says on the Issue which commit's
+    checks it waits for (an edit of the run's existing progress comment,
+    never a new comment), while a deferral that is not a checks wait
+    (UNKNOWN mergeability) names no head and publishes nothing."""
     calls = []
+    deferred = {"exception": merge_exec.DeliveryDeferred(
+        "PR #4 CI is still running; the merge is deferred")}
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(
         merge_exec, "merge_gate",
-        lambda *a, **k: (_ for _ in ()).throw(
-            merge_exec.DeliveryDeferred(
-                "PR #4 CI is still running; the merge is deferred",
-            ),
-        ),
+        lambda *a, **k: (_ for _ in ()).throw(deferred["exception"]),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("issue", k.get("body"))),
@@ -3863,13 +3899,33 @@ def test_review_and_merge_deferred_gate_writes_nothing(
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
     )
-    make_fake_gh(monkeypatch)
+    api_calls = make_fake_gh(monkeypatch, comments=[{
+        "id": 7, "body": progress_comment_body("a1b2c3d4"),
+    }])[0]
     assert review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4, title="Review task", priority="normal",
         scene=_scene(),
     ) is False
     assert calls == []
+    # The UNKNOWN-mergeability shape: no head, so no waiting line.
+    assert [body for body in patched_comment_bodies(api_calls)
+            if "waiting-checks" in body] == []
+
+    # The CI shape names the head whose checks the gate waits for.
+    deferred["exception"] = merge_exec.DeliveryDeferred(
+        "PR #4 CI is still running; the merge is deferred", head="h1")
+    assert review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+        scene=_scene(),
+    ) is False
+    assert calls == []
+    waiting = [body for body in patched_comment_bodies(api_calls)
+               if "waiting-checks" in body]
+    assert len(waiting) == 1
+    assert "h1" in waiting[0]
+    assert "automatically once they pass" in waiting[0]
 
 def test_review_record_records_the_reviewed_head_and_body_hash_on_deferral(
         monkeypatch, tmp_path):
@@ -3896,7 +3952,7 @@ def test_review_record_records_the_reviewed_head_and_body_hash_on_deferral(
         "owner/repo", 4, title="Review task", priority="normal",
         scene=_scene(),
     ) is False
-    assert run_state.read_reviewed(tmp_path) == ("h1", body_sha)
+    assert review_wait.read_reviewed(tmp_path) == ("h1", body_sha)
 
 
 def test_review_record_is_dropped_on_findings_even_if_the_session_wrote_one(
@@ -3908,7 +3964,7 @@ def test_review_record_is_dropped_on_findings_even_if_the_session_wrote_one(
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
 
     def forged_session(*a, **k):
-        run_state.record_reviewed(tmp_path, "h1", "f" * 64)
+        review_wait.record_reviewed(tmp_path, "h1", "f" * 64)
         return _review_session(_findings_verdict_text())
 
     monkeypatch.setattr(pi_session, "run_review", forged_session)
@@ -3921,7 +3977,7 @@ def test_review_record_is_dropped_on_findings_even_if_the_session_wrote_one(
         "owner/repo", 4, title="Review task", priority="normal",
         scene=_scene(),
     ) is False
-    assert run_state.read_reviewed(tmp_path) is None
+    assert review_wait.read_reviewed(tmp_path) is None
 
 
 def test_review_record_is_dropped_on_a_malformed_verdict(
@@ -3933,7 +3989,7 @@ def test_review_record_is_dropped_on_a_malformed_verdict(
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
 
     def forged_session(*a, **k):
-        run_state.record_reviewed(tmp_path, "h1", "f" * 64)
+        review_wait.record_reviewed(tmp_path, "h1", "f" * 64)
         return _review_session("review without a verdict")
 
     monkeypatch.setattr(pi_session, "run_review", forged_session)
@@ -3944,7 +4000,7 @@ def test_review_record_is_dropped_on_a_malformed_verdict(
             "owner/repo", 4, title="Review task", priority="normal",
             scene=_scene(),
         )
-    assert run_state.read_reviewed(tmp_path) is None
+    assert review_wait.read_reviewed(tmp_path) is None
 
 
 def test_review_record_is_dropped_when_the_gate_skips_ai_blocked(
@@ -3970,7 +4026,7 @@ def test_review_record_is_dropped_when_the_gate_skips_ai_blocked(
         "owner/repo", 4, title="Review task", priority="normal",
         scene=_scene(),
     ) is False
-    assert run_state.read_reviewed(tmp_path) is None
+    assert review_wait.read_reviewed(tmp_path) is None
 
 
 def test_merge_only_resume_merges_without_a_session_and_new_summary(
@@ -3978,7 +4034,7 @@ def test_merge_only_resume_merges_without_a_session_and_new_summary(
     """Issue #1626: green CI on the recorded head with the same Issue body
     merges without a review session and reports the deferred pass round."""
     _seed_run_state(tmp_path)
-    run_state.record_reviewed(tmp_path, "h1", _REVIEW_BODY_SHA)
+    review_wait.record_reviewed(tmp_path, "h1", _REVIEW_BODY_SHA)
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
 
@@ -4007,7 +4063,7 @@ def test_merge_only_resume_merges_without_a_session_and_new_summary(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4, title="Review task", priority="normal",
         scene=_scene(),
-        review_record=run_state.read_reviewed(tmp_path),
+        review_record=review_wait.read_reviewed(tmp_path),
         issue_body_sha256=_REVIEW_BODY_SHA,
     )
     assert merged is True
@@ -4016,7 +4072,7 @@ def test_merge_only_resume_merges_without_a_session_and_new_summary(
     # Issue #1626: the merge record reports the deferred pass round
     # (rounds + 1), not the previous count.
     assert "review_rounds=1" in comment["body"]
-    assert run_state.read_reviewed(tmp_path) is None
+    assert review_wait.read_reviewed(tmp_path) is None
 
 
 def test_merge_only_from_record_requires_the_recorded_head(
@@ -4057,7 +4113,7 @@ def test_merge_only_from_record_requires_the_rendered_issue_body(
     """Issue #1626: an edited Issue body is a new review input; the record
     no longer authorizes a merge-only resume."""
     _seed_run_state(tmp_path)
-    run_state.record_reviewed(tmp_path, "h1", "b" * 64)
+    review_wait.record_reviewed(tmp_path, "h1", "b" * 64)
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     sessions = []
@@ -4081,7 +4137,7 @@ def test_merge_only_from_record_requires_the_rendered_issue_body(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4, title="Review task", priority="normal",
         scene=_scene(),
-        review_record=run_state.read_reviewed(tmp_path),
+        review_record=review_wait.read_reviewed(tmp_path),
         issue_body_sha256="c" * 64,
     ) is True
     assert sessions == [1]
@@ -4092,7 +4148,7 @@ def test_external_takeover_never_uses_a_record_for_merge_only(
     """Issue #1626: an external takeover is never merge-only; the session
     runs and the triage stop is reached, never the merge gate."""
     _seed_run_state(tmp_path)
-    run_state.record_reviewed(tmp_path, "def", _REVIEW_BODY_SHA)
+    review_wait.record_reviewed(tmp_path, "def", _REVIEW_BODY_SHA)
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: {
         "number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
@@ -4119,7 +4175,7 @@ def test_external_takeover_never_uses_a_record_for_merge_only(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4, title="Review task", priority="normal",
         scene=_scene(external="true", pr_url="u"),
-        review_record=run_state.read_reviewed(tmp_path),
+        review_record=review_wait.read_reviewed(tmp_path),
         issue_body_sha256=_REVIEW_BODY_SHA,
     ) is False
     assert sessions == [1]
@@ -4131,7 +4187,7 @@ def test_merge_only_gate_failure_clears_the_record_for_the_next_review(
     ai-fix-needed and clears the record, so the next round reviews rather
     than merge-only retrying forever."""
     _seed_run_state(tmp_path)
-    run_state.record_reviewed(tmp_path, "h1", _REVIEW_BODY_SHA)
+    review_wait.record_reviewed(tmp_path, "h1", _REVIEW_BODY_SHA)
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(review_merge, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(
@@ -4155,12 +4211,12 @@ def test_merge_only_gate_failure_clears_the_record_for_the_next_review(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4, title="Review task", priority="normal",
         scene=_scene(),
-        review_record=run_state.read_reviewed(tmp_path),
+        review_record=review_wait.read_reviewed(tmp_path),
         issue_body_sha256=_REVIEW_BODY_SHA,
     ) is False
     assert {"repo": "owner/repo", "add": "ai-fix-needed",
             "remove": "ai-pr-opened"} in edits
-    assert run_state.read_reviewed(tmp_path) is None
+    assert review_wait.read_reviewed(tmp_path) is None
 
 
 @pytest.mark.parametrize(
@@ -4209,7 +4265,7 @@ def test_merge_gate_absorb_records_the_absorbed_head_and_defers(
     """Issue #1626: the gate's own base absorb updates an existing record
     to the absorbed head and defers instead of reading the new CI."""
     _seed_run_state(tmp_path)
-    run_state.record_reviewed(tmp_path, "h1", _REVIEW_BODY_SHA)
+    review_wait.record_reviewed(tmp_path, "h1", _REVIEW_BODY_SHA)
     monkeypatch.setattr(seam, "fetch_base_ref", lambda *a, **k: None)
     monkeypatch.setattr(
         "orbi.run_state.assess_base_freshness",
@@ -4230,7 +4286,7 @@ def test_merge_gate_absorb_records_the_absorbed_head_and_defers(
                        "head_ref": "h", "base_oid": "b1"},
             "main", repo_dir=tmp_path, language_code="en",
         )
-    assert run_state.read_reviewed(tmp_path) == ("h2", _REVIEW_BODY_SHA)
+    assert review_wait.read_reviewed(tmp_path) == ("h2", _REVIEW_BODY_SHA)
 
 
 def test_pending_ci_tick_leaves_the_review_record_untouched(
@@ -4238,7 +4294,7 @@ def test_pending_ci_tick_leaves_the_review_record_untouched(
     """Issue #1626: the pre-review CI gate's pending early return never
     reaches the review round, so the record survives for the merge tick."""
     _seed_run_state(tmp_path)
-    run_state.record_reviewed(tmp_path, "h2", _REVIEW_BODY_SHA)
+    review_wait.record_reviewed(tmp_path, "h2", _REVIEW_BODY_SHA)
     monkeypatch.setattr(
         seam, "pr_delivery_rollup",
         lambda *a, **k: ("OPEN", [{
@@ -4255,7 +4311,7 @@ def test_pending_ci_tick_leaves_the_review_record_untouched(
         _review_merge_config(tmp_path), "owner/repo",
     )
     assert rounds == []
-    assert run_state.read_reviewed(tmp_path) == ("h2", _REVIEW_BODY_SHA)
+    assert review_wait.read_reviewed(tmp_path) == ("h2", _REVIEW_BODY_SHA)
 
 
 def test_review_budget_reads_the_scene_round(
@@ -4683,7 +4739,7 @@ def _run_merge_round(monkeypatch, clone: Path, *, session=None,
             external="true" if external else "",
             pr_url=PR_URL if external else "u",
         ),
-        review_record=run_state.read_reviewed(clone),
+        review_record=review_wait.read_reviewed(clone),
         issue_body_sha256=pi_session.issue_body_sha256(""),
     )
     if not merged:
@@ -4808,7 +4864,7 @@ def test_merge_record_two_engine_fix_rounds_stay_external_zero(
         monkeypatch, merge_clone, session=fix_session,
         scene_review_round=1,
     ) is None
-    assert run_state.read_reviewed(merge_clone) == (
+    assert review_wait.read_reviewed(merge_clone) == (
         _remote_head(merge_clone), pi_session.issue_body_sha256(""),
     )
 
@@ -5064,57 +5120,57 @@ def test_run_state_review_record_lifecycle(tmp_path):
     readable when both fields are non-empty and a corrupt or missing file
     authorizes nothing."""
     # No state file: nothing to record, clear, update or read.
-    run_state.record_reviewed(tmp_path, "h1", "b" * 64)
-    run_state.clear_reviewed(tmp_path)
-    run_state.update_reviewed_head(tmp_path, "h2")
-    assert run_state.read_reviewed(tmp_path) is None
+    review_wait.record_reviewed(tmp_path, "h1", "b" * 64)
+    review_wait.clear_reviewed(tmp_path)
+    review_wait.update_reviewed_head(tmp_path, "h2")
+    assert review_wait.read_reviewed(tmp_path) is None
 
     # A valid state with no record: clear/update are no-ops.
     _seed_run_state(tmp_path)
-    run_state.clear_reviewed(tmp_path)
-    run_state.update_reviewed_head(tmp_path, "h2")
-    assert run_state.read_reviewed(tmp_path) is None
+    review_wait.clear_reviewed(tmp_path)
+    review_wait.update_reviewed_head(tmp_path, "h2")
+    assert review_wait.read_reviewed(tmp_path) is None
 
     # A record with both fields reads back and updates.
-    run_state.record_reviewed(tmp_path, "h1", "b" * 64)
-    assert run_state.read_reviewed(tmp_path) == ("h1", "b" * 64)
-    run_state.update_reviewed_head(tmp_path, "h2")
-    assert run_state.read_reviewed(tmp_path) == ("h2", "b" * 64)
+    review_wait.record_reviewed(tmp_path, "h1", "b" * 64)
+    assert review_wait.read_reviewed(tmp_path) == ("h1", "b" * 64)
+    review_wait.update_reviewed_head(tmp_path, "h2")
+    assert review_wait.read_reviewed(tmp_path) == ("h2", "b" * 64)
 
     # A partial record authorizes nothing (and update is a no-op).
     state_path = tmp_path / ".orbi" / "run-state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state.pop("reviewed_issue_body_sha256")
     state_path.write_text(json.dumps(state), encoding="utf-8")
-    assert run_state.read_reviewed(tmp_path) is None
-    run_state.update_reviewed_head(tmp_path, "h3")
-    assert run_state.read_reviewed(tmp_path) is None
+    assert review_wait.read_reviewed(tmp_path) is None
+    review_wait.update_reviewed_head(tmp_path, "h3")
+    assert review_wait.read_reviewed(tmp_path) is None
 
     # clear_reviewed removes both fields.
-    run_state.record_reviewed(tmp_path, "h1", "b" * 64)
-    run_state.clear_reviewed(tmp_path)
-    assert run_state.read_reviewed(tmp_path) is None
+    review_wait.record_reviewed(tmp_path, "h1", "b" * 64)
+    review_wait.clear_reviewed(tmp_path)
+    assert review_wait.read_reviewed(tmp_path) is None
 
     # A corrupt state file authorizes nothing and never fails the record
     # lifecycle (the resume readers fail the run separately).
     state_path.write_text("{bad", encoding="utf-8")
-    assert run_state.read_reviewed(tmp_path) is None
-    run_state.clear_reviewed(tmp_path)
-    run_state.record_reviewed(tmp_path, "h1", "x")
-    run_state.update_reviewed_head(tmp_path, "h2")
-    assert run_state.read_reviewed(tmp_path) is None
+    assert review_wait.read_reviewed(tmp_path) is None
+    review_wait.clear_reviewed(tmp_path)
+    review_wait.record_reviewed(tmp_path, "h1", "x")
+    review_wait.update_reviewed_head(tmp_path, "h2")
+    assert review_wait.read_reviewed(tmp_path) is None
 
 
 def test_write_run_state_preserves_the_review_record(tmp_path):
     """Issue #1626: a run-state refresh keeps the recorded pass and body
     hash, like the push history."""
     _seed_run_state(tmp_path)
-    run_state.record_reviewed(tmp_path, "h1", "b" * 64)
+    review_wait.record_reviewed(tmp_path, "h1", "b" * 64)
     run_state.write_run_state(RunContext(
         run_id="99fe00db", issue=4, branch="branch",
         worktree=tmp_path, source_repo="owner/repo",
     ))
-    assert run_state.read_reviewed(tmp_path) == ("h1", "b" * 64)
+    assert review_wait.read_reviewed(tmp_path) == ("h1", "b" * 64)
 
 
 # ---------------------------------------------------------------------------

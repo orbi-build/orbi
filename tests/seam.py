@@ -54,7 +54,9 @@ import orbi.release_closeout as release_closeout
 import orbi.release_git as release_git
 import orbi.release_run as release_run
 import orbi.release_notes as release_notes
+import orbi.review_ci_status as review_ci_status
 import orbi.review_merge as review_merge
+import orbi.waiting_checks as waiting_checks
 import orbi.review_rounds as review_rounds
 import orbi.pi_session as pi_session
 import orbi.question as question
@@ -66,6 +68,7 @@ import orbi.pr_head_sync as pr_head_sync
 import orbi.pr_verification as pr_verification
 import orbi.restart_scan as restart_scan
 import orbi.resume_scan as resume_scan
+import orbi.review_wait as review_wait
 import orbi.resume_verification as resume_verification
 import orbi.runner as runner
 
@@ -74,9 +77,10 @@ _MODULES = (
     ops_delivery, ticket_command,
     progress, cli_source, release, release_closeout, release_git,
     release_notes, release_run, pi_session, body_steering,
-    runner, implementation_delivery, review_merge, merge_exec,
+    runner, implementation_delivery, review_merge, review_ci_status,
+    merge_exec, waiting_checks,
     review_rounds, run_state, claim,
-    resume_scan, restart_scan,
+    resume_scan, restart_scan, review_wait,
     pr_head_sync, pr_verification, resume_verification,
     delivery_push,
     repo_config, clarify, claim_race, comment_trust, requeue, question,

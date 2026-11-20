@@ -39,6 +39,7 @@ import pytest
 from conftest import git
 
 import orbi.claim as claim
+import orbi.review_wait as review_wait
 import orbi.runner as runner
 import orbi.merge_exec as merge_exec
 import orbi.review_merge as review_merge
@@ -600,7 +601,7 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
     # tick defers and records the reviewed head; the next tick merges the
     # record without another review session.
     assert _review_once() is False
-    record = run_state.read_reviewed(worktree)
+    record = review_wait.read_reviewed(worktree)
     assert record is not None
     assert record[0] == git(worktree, "rev-parse", "HEAD")
     merged = _review_once(review_record=record, body_sha=record[1])

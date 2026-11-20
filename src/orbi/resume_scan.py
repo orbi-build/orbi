@@ -14,9 +14,9 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
-from orbi import claim_race, language, run_state, scene, user_summary
+from orbi import claim_race, language, run_state, scene, user_summary, waiting_checks
+from orbi import review_wait
 from orbi.blocked_comment import post_blocked_comment
-from orbi.checks import render_check, classify_checks
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL, BLOCKED_LABEL, FIX_NEEDED_LABEL, MERGED_LABEL,
     PR_OPENED_LABEL, READY_LABEL, label_name_set,
@@ -28,7 +28,6 @@ from orbi.comment_trust import latest_run_marker
 from orbi.github import (
     issue_comments, list_issues, open_pr_for_branch,
 )
-from orbi.github_feedback import pr_delivery_rollup
 from orbi.gitops import task_branch
 from orbi.journal import LOGGER, event
 from orbi.pilot_slots import slot_held_deliveries
@@ -68,6 +67,7 @@ def pick_resumable_delivery(
     repo_dir: Path | None = None, *, hooks: ResumeHooks,
     language_code: str, ready_label: str = READY_LABEL,
     status_url: str | None = None,
+    review_waiting: list[dict] | None = None,
 ) -> tuple[dict, dict] | None:
     """Return the oldest FREE reviewable opened-PR delivery and its scene.
 
@@ -105,13 +105,14 @@ def pick_resumable_delivery(
 
     The candidate rules (held deliveries, the page size, oldest first,
     CI-pending skip) are the shared opened-PR ones documented on
-    `_pick_opened_pr_delivery`.
+    `_pick_opened_pr_delivery`; `review_waiting` is the Issue #2305
+    out-list for the skipped candidates that only wait for their checks.
     """
     return _pick_opened_pr_delivery(
         repo, slot_dir, max_concurrency, repo_dir,
         search_labels=(FIX_NEEDED_LABEL, PR_OPENED_LABEL),
         hooks=hooks, language_code=language_code, ready_label=ready_label,
-        status_url=status_url,
+        status_url=status_url, review_waiting=review_waiting,
     )
 
 
@@ -157,6 +158,7 @@ def _pick_opened_pr_delivery(
     repo_dir: Path | None, *, search_labels: Sequence[str],
     hooks: ResumeHooks, language_code: str,
     ready_label: str = READY_LABEL, status_url: str | None = None,
+    review_waiting: list[dict] | None = None,
 ) -> tuple[dict, dict] | None:
     """Scan ONE opened-PR label set for the oldest FREE resumable delivery.
 
@@ -193,7 +195,8 @@ def _pick_opened_pr_delivery(
     occupies a slot too, and a free candidate behind those was never read
     (#2641 waited while the three older candidates were skipped). Held
     candidates are still skipped before any candidate read, so an in-flight
-    delivery is never touched.
+    delivery is never touched. `review_waiting` (Issue #2305) receives the
+    candidates that passed review and only wait for their checks.
     """
     held = slot_held_deliveries(slot_dir, max_concurrency)
     # `label:a,b` is GitHub's OR within one label qualifier (verified live:
@@ -337,16 +340,12 @@ def _pick_opened_pr_delivery(
                     reason=f"scene_{found_scene.value}",
                 )
                 continue
-        # Issue #1473: skip a CI-pending OPEN PR; MERGED/CLOSED and a
-        # failed rollup read still return the candidate.
-        try:
-            pr_state, rollup = pr_delivery_rollup(found.parsed.pr_url, repo)
-        except Exception:
-            return issue, found
-        pending = classify_checks(rollup)[0] if pr_state == "OPEN" else []
-        if pending:
-            event("delivery_ci_pending", issue=int(issue["number"]),
-                  pr=found.parsed.pr_url, pending="; ".join(map(render_check, pending)))
+        # Issue #1473's CI-pending skip (a failure still returns it),
+        # Issue #2305's wait report and Issue #2304's note in one call.
+        if review_wait.skip_pending_candidate(
+                review_waiting, repo_dir, repo, issue, found, language_code,
+                status_url,
+        ):
             continue
         return issue, found
     return None
