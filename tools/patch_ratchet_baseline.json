@@ -1,5 +1,5 @@
 {
-  "boundary_total": 1155,
+  "boundary_total": 1156,
   "command_shape_asserts": 437,
   "internal_total": 1634,
   "monkeypatch_setattr_runner": 104,
@@ -54,7 +54,7 @@
     "shutil": 24,
     "signal": 1,
     "subprocess": 27,
-    "sys": 3,
+    "sys": 4,
     "time": 60
   }
 }
