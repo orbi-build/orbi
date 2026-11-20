@@ -446,16 +446,6 @@ deliveries. `dispatch_label` may name any ordinary label, never one of the
 lifecycle, type, priority or control labels — the repository config load
 rejects that with the conflicting label named.
 
-Stopping an interrupted delivery (Issue #2309). An implement-phase run is found
-by `ai-in-progress` plus this deployment's own task worktree and run state
-file. To stop it from being resumed, remove `ai-in-progress`, or close the
-Issue. A ticket claimed before the upgrade may still carry the queue label as
-well — stopping it means removing both labels, or closing the Issue, or the
-ready scan claims it again. Upgrading across this change is the same rule in
-reverse: if you stopped a delivery by removing `ai-ready`, also remove
-`ai-in-progress` before upgrading, or the old engine cannot tell it from a
-live run.
-
 A repository policy may block the merge even after Orbi's review and checks
 pass. Orbi stops at `ai-awaiting-merge`; the Issue comment names the exact head
 and the one maintainer action (including the settings URL when applicable).
@@ -468,6 +458,29 @@ the rule is that this is the first tick with an empty queue, not the very next
 tick, and the queue is the runner's whole queue: while another repository served
 by the same runner still has work, the merge waits for it as well. A policy rejection without a known FAILED preflight action, or any other
 merge failure, remains `ai-blocked`.
+
+### Stopping a delivery
+
+- **Not claimed yet:** remove the queue label.
+- **Running now:** close the Issue. The running session is not interrupted;
+  when it finishes, Orbi pushes the work to the task branch, opens no PR and
+  comments on the Issue that the delivery stopped. If the PR is already open,
+  later ticks no longer pick the delivery up, so Orbi does not review or merge
+  it again and comments on the PR: merge it to keep the work, or close it. A
+  review round that is already running is not interrupted and can still
+  merge; to hold that merge, add `ai-blocked`, which the merge gate reads
+  right before merging. Removing a label does not stop a running session.
+- **Interrupted** (the Runner was killed and the next tick would resume it):
+  an implement-phase run is found by `ai-in-progress` plus this deployment's
+  own task worktree and run state file (Issue #2309). Remove
+  `ai-in-progress`, or close the Issue, and it is not resumed.
+- **Claimed before the upgrade to this rule:** the ticket may still carry the
+  queue label as well. Remove both labels, or close the Issue; otherwise the
+  ready scan claims it again.
+- **Upgrading across this change:** a delivery you stopped under the old rule
+  by removing only `ai-ready` still carries `ai-in-progress`. The upgraded
+  engine finds interrupted runs by that label alone and would resume it, so
+  remove `ai-in-progress` too (or close the Issue) before upgrading.
 
 ## Human acceptance gate (ai-human-review)
 
@@ -1150,8 +1163,8 @@ DAG, no priority numbers, no separate queues:
   every existing exclusion rule and the single-slot constraint: a
   blocked P0 is skipped (falling back to the bug/plain scans) and an
   in-flight P0 is resumed by the restart scan. A failed P0 run enters
-  `ai-blocked` ALONE (the claim label is removed; the `ai-ready`
-  residue is excluded by every ready scan), so no tick re-claims it —
+  `ai-blocked` ALONE (the claim already removed the queue label, and the
+  blocked event removes any leftover), so no tick re-claims it —
   no infinite retry. There is no priority number or weighted queue.
 
 ## Queueing dependent Issues with GitHub's `blocked by`

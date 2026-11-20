@@ -32,10 +32,12 @@ contradiction in place for the next delivery to rediscover.
   change, and the delivery ends `ai-blocked` on `the agent delivered no commit
   on the task branch` — the ticket looks failed when the work was in fact done
   by the wrong actor (orbi-website#231, 2026-09-19). Want it done by hand
-  instead? Remove `ai-ready` before it is claimed; for an already claimed
-  Issue, remove `ai-in-progress` or close the Issue so no run continues
-  against it (Issue #2309: the claim removes the queue label, so `ai-ready` is
-  no longer what marks a live run).
+  instead? Remove `ai-ready` before it is claimed. For an already claimed
+  Issue, close it: the running session is not interrupted, but Orbi opens no
+  PR for it (Issue #2309: the claim removes the queue label,
+  so `ai-ready` no longer marks a live run). Removing `ai-in-progress` does
+  not stop a running session; it only keeps an interrupted run from being
+  resumed. See "Stopping a delivery" in `docs/workflow.mdx`.
 
   What the maintainer does do by hand: deployment and secrets (`wrangler
   secret put`, environment approval), production verification that needs real
