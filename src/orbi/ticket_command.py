@@ -68,7 +68,7 @@ from orbi.progress import RUN_MARKER_PATTERN
 # The `/orbi` line grammar lives in its own module (Issue #2221) and is
 # re-exported here: every caller and the tests keep reading it from the
 # layer that owns the command's decision.
-from orbi.command_line import parse_commands
+from orbi.command_line import carries_command_receipt, parse_commands
 from orbi.command_line import strip_fenced_code_blocks  # noqa: F401
 from orbi.comment_trust import comment_is_trusted
 from orbi.github import (
@@ -433,7 +433,8 @@ def _occurrences(
     self-hosted maintainer whose own account is the Runner is evaluated
     like anyone else (Issue #1460). A record command reads its own block
     markers instead, so its engine output is the run marker
-    (`carries_run_marker`, Issue #2221).
+    (`carries_run_marker`, Issue #2221) or its own receipt
+    (`carries_command_receipt`, Issue #2295).
     """
     occurrences: list[tuple[dict, str | None]] = []
     for comment in comments:
@@ -443,7 +444,8 @@ def _occurrences(
             if is_runner_comment(comment):
                 continue
             arguments = parse_commands(comment.get("body"), spec)
-        elif carries_run_marker(comment):
+        elif carries_run_marker(comment) or carries_command_receipt(
+                comment, command_receipt_marker(spec)):
             continue
         else:
             arguments = spec.occurrence(comment.get("body"))
