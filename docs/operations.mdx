@@ -159,9 +159,9 @@ host-only key):
   interrupted run by `ai-in-progress` PLUS the queue label, so a new-rule
   interrupted run (which no longer carries the queue label) would never be
   resumed, and re-adding the queue label to every `ai-in-progress` Issue
-  could revive one a person stopped. Before rolling back, run the same
-  read-only query the upgrade used — open Issues with `ai-in-progress` and
-  no queue label — and decide each hit by hand.
+  could revive one a person stopped. Before rolling back, list the open
+  Issues that carry `ai-in-progress` and no queue label, and decide each hit
+  by hand.
 - **Fail closed** (the service does not start, each line carries a
   `fix=`):
   - `deploy_home_dirty files=... fix=...` — tracked local edits would
