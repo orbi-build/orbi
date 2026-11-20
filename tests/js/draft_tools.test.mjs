@@ -132,10 +132,12 @@ function stubValidator() {
 		].join("\n"),
 		"utf8",
 	);
-	process.env[DRAFT_VALIDATE_ENV] = `${process.execPath} ${script}`;
+	// The engine hands the command over as a JSON argv array (Issue #2303).
+	process.env[DRAFT_VALIDATE_ENV] = JSON.stringify([process.execPath, script]);
 	process.env.STUB_RECORD = record;
 	const stub = {
 		command: process.env[DRAFT_VALIDATE_ENV],
+		script,
 		record,
 		/** The stub accepts (the default) and forgets any reason. */
 		accept() {
@@ -545,6 +547,30 @@ test("a tool without the validation command fails instead of recording it", asyn
   process.env[DRAFT_VALIDATE_ENV] = VALIDATOR.command;
 });
 
+test("a validation command whose path carries a space still validates", async () => {
+  // Issue #2303: the command travels as a JSON argv array, so an interpreter
+  // or script path containing whitespace (a home directory with a space) is
+  // not mis-split into a nonexistent executable.
+  const out = answerFile();
+  process.env[DRAFT_OUT_ENV] = out;
+  const spaced = join(
+    mkdtempSync(join(tmpdir(), "orbi draft space-")),
+    "validate.mjs",
+  );
+  writeFileSync(spaced, readFileSync(VALIDATOR.script, "utf8"), "utf8");
+  process.env[DRAFT_VALIDATE_ENV] = JSON.stringify([process.execPath, spaced]);
+  VALIDATOR.accept();
+
+  const result = await writeDraftTool.execute("call-13", TWO_ISSUES);
+
+  assert.equal(result.terminate, true);
+  assert.deepEqual(
+    JSON.parse(readFileSync(out, "utf8")).issues,
+    TWO_ISSUES.issues,
+  );
+  process.env[DRAFT_VALIDATE_ENV] = VALIDATOR.command;
+});
+
 test("a validation command that cannot run fails the tool", async () => {
   const out = answerFile();
   process.env[DRAFT_OUT_ENV] = out;
@@ -554,10 +580,26 @@ test("a validation command that cannot run fails the tool", async () => {
     mkdtempSync(join(tmpdir(), "orbi-draft-missing-")),
     "validate.mjs",
   );
-  process.env[DRAFT_VALIDATE_ENV] = missing;
+  process.env[DRAFT_VALIDATE_ENV] = JSON.stringify([missing]);
 
   await assert.rejects(
     () => writeDraftTool.execute("call-12", TWO_ISSUES),
+    new RegExp(DRAFT_VALIDATE_ENV),
+  );
+  assert.equal(existsSync(out), false);
+
+  process.env[DRAFT_VALIDATE_ENV] = VALIDATOR.command;
+});
+
+test("a validation command that is not a JSON argv fails the tool", async () => {
+  const out = answerFile();
+  process.env[DRAFT_OUT_ENV] = out;
+  // The engine hands the command over as a JSON argv array; anything else
+  // names the variable so the breakage is readable, never a silent pass.
+  process.env[DRAFT_VALIDATE_ENV] = "python3 -m orbi.draft_validate";
+
+  await assert.rejects(
+    () => writeDraftTool.execute("call-14", TWO_ISSUES),
     new RegExp(DRAFT_VALIDATE_ENV),
   );
   assert.equal(existsSync(out), false);

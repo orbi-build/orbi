@@ -39,8 +39,8 @@ export const DRAFT_OUT_ENV = "ORBI_DRAFT_OUT";
 
 /**
  * The environment variable naming the engine's validation command
- * (Issue #2303): the engine's own interpreter plus `-m orbi.draft_validate`,
- * handed over the same way ORBI_DRAFT_OUT is.
+ * (Issue #2303): a JSON argv array of the engine's own interpreter plus
+ * `-m orbi.draft_validate`, handed over the same way ORBI_DRAFT_OUT is.
  */
 export const DRAFT_VALIDATE_ENV = "ORBI_DRAFT_VALIDATE";
 
@@ -220,9 +220,18 @@ function rejectionReason(answer: object): string | null {
 	if (!command) {
 		throw new Error(`${DRAFT_VALIDATE_ENV} is not set`);
 	}
-	// The engine hands over an absolute interpreter plus its arguments; no
-	// part of that command carries whitespace.
-	const [executable, ...args] = command.split(" ");
+	// The engine hands the command over as a JSON argv array — its own
+	// interpreter plus the arguments — so a path carrying whitespace (a home
+	// directory with a space) needs no guessing about where the executable
+	// ends. A value that is not such an array fails here, exactly like a
+	// missing one: an unchecked answer must never be recorded.
+	let argv: string[];
+	try {
+		argv = JSON.parse(command) as string[];
+	} catch {
+		throw new Error(`${DRAFT_VALIDATE_ENV} is not a JSON argv: ${command}`);
+	}
+	const [executable, ...args] = argv;
 	const result = spawnSync(executable, args, {
 		input: JSON.stringify(answer),
 		encoding: "utf8",

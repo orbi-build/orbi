@@ -107,8 +107,9 @@ DRAFT_OUT_ENV = "ORBI_DRAFT_OUT"
 # Issue #2303: the extension validates an answer with the ENGINE's own parser
 # before recording it, so a cross-field rule (an 'after' naming no earlier
 # Issue) comes back to the model as an error tool result and the model corrects
-# it in the same session. The session is handed the command that runs it: this
-# interpreter plus the module — never a TypeScript copy of the rule.
+# it in the same session. The session is handed the command that runs it — this
+# interpreter plus the module, as one JSON argv array so a path carrying
+# whitespace needs no splitting — never a TypeScript copy of the rule.
 DRAFT_VALIDATE_ENV = "ORBI_DRAFT_VALIDATE"
 DRAFT_VALIDATE_MODULE = "orbi.draft_validate"
 DRAFT_ANSWER_FILE = "answer.json"
@@ -390,8 +391,8 @@ def run_draft_session(
     if agent_dir is not None:
         pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
     pi_env[DRAFT_OUT_ENV] = str(out_path)
-    pi_env[DRAFT_VALIDATE_ENV] = (
-        f"{sys.executable} -m {DRAFT_VALIDATE_MODULE}"
+    pi_env[DRAFT_VALIDATE_ENV] = json.dumps(
+        [sys.executable, "-m", DRAFT_VALIDATE_MODULE]
     )
     stream_pi(
         command, cwd=session_root,

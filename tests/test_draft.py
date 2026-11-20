@@ -1255,8 +1255,10 @@ def test_the_drafting_session_is_read_only_and_resumable(
     # Issue #2303: the extension validates an answer with the ENGINE's own
     # parser, so the session is handed the command to run it — this process's
     # interpreter plus the module, the same way ORBI_DRAFT_OUT is handed over.
-    assert calls[0]["pi_env"][draft.DRAFT_VALIDATE_ENV] == (
-        f"{sys.executable} -m {draft.DRAFT_VALIDATE_MODULE}"
+    # One JSON argv array, so an interpreter path carrying whitespace (a home
+    # directory with a space) needs no splitting in the extension.
+    assert calls[0]["pi_env"][draft.DRAFT_VALIDATE_ENV] == json.dumps(
+        [sys.executable, "-m", draft.DRAFT_VALIDATE_MODULE]
     )
     assert (root / draft.DRAFT_SESSION_DIR / "system-prompt.md").is_file()
     # A first round does not resume anything.
