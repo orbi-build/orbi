@@ -391,7 +391,7 @@ MESSAGES: dict[str, tuple[str, str]] = {
     "progress.recoverable_pi_failure": ("Pi failure recovered", "Pi 失败已恢复"),
     "milestone.plan_ready": ("plan ready", "计划已就绪"),
     "progress.recoverable_scene": (
-        "{run_marker}\n{recovered_marker}\n"
+        "{run_marker}\n{recovered_marker}\n{failure_marker}\n"
         "Orbi {recoverable_name}: {reason_code}; retrying on the next "
         "tick\n{summary}\n"
         "The Issue stays ai-in-progress and the next tick resumes the "
@@ -402,7 +402,7 @@ MESSAGES: dict[str, tuple[str, str]] = {
         "- retry_safe: {retry_safe}\n\n"
         "{detail}\n\n"
         "</details>",
-        "{run_marker}\n{recovered_marker}\n"
+        "{run_marker}\n{recovered_marker}\n{failure_marker}\n"
         "Orbi {recoverable_name}：{reason_code}；下一个 tick 自动重试\n{summary}\n"
         "Issue 保持 ai-in-progress，下一个 tick 会继续同一个运行（{run_info}）。\n\n"
         "<details><summary>{diagnosis}</summary>\n\n"

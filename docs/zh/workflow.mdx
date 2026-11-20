@@ -189,6 +189,13 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
 连击）即判定死循环而非抖动，升级为 `ai-blocked` 并在评论里写明连续
 次数与「前置条件未变化」。
 
+可恢复的 Pi/model 失败受同一上限约束（Issue #2292）：它的恢复评论也带
+`<!-- orbi:fail=... -->` 标记，因此单次发生仍保持 `ai-in-progress` 并由
+下一个 tick 接续同一运行；同一指纹连续 3 轮则停止循环、进入 `ai-blocked`。
+该停止只有一条阻塞评论，写明原因和需要人做的决定（回答 agent 的问题或
+修改工单，然后重新打标签）；停止后失败工作树按 `keep_failed_worktrees`
+（默认开启）保留，agent 未提交的改动仍可检查——runner 从不提交它们。
+
 链路规则：
 
 - 开发交付在 review/fix 期间保留同一 branch 和 PR。每个 attempt 有一个

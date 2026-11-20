@@ -1194,10 +1194,16 @@ def test_publisher_finish_resumes_existing_comment_without_tracked_one():
     ), "a resumed finish must not post a duplicate comment"
 
 
-def _recovered_body(reason_code: str, detail: str = "boom") -> str:
+FP = "0123456789abcdef"
+OTHER_FP = "fedcba9876543210"
+
+
+def _recovered_body(reason_code: str, detail: str = "boom",
+                    fingerprint: str = FP) -> str:
     return (
         "<!-- orbi:run=abc12345 -->\n"
         f"<!-- orbi:recovered={reason_code} -->\n"
+        f"<!-- orbi:fail={fingerprint} -->\n"
         f"Orbi Pi failure recovered: {reason_code}; retrying on the next "
         "tick\n\n"
         "<details><summary>Diagnosis</summary>\n\n"
@@ -1205,10 +1211,10 @@ def _recovered_body(reason_code: str, detail: str = "boom") -> str:
     )
 
 
-def test_publisher_failure_scene_updates_the_same_cause_comment():
-    """Issue #1465: the same run's repeated SAME cause (the hidden
-    `orbi:recovered` key) is PATCHed in place — the repeat count rises,
-    the body carries the newest occurrence, and no second comment is
+def test_publisher_failure_scene_updates_the_same_fingerprint_comment():
+    """Issue #2292: the same run's repeated SAME fingerprint (the hidden
+    `orbi:fail` key) is PATCHed in place — both repeat counts rise, the
+    body carries the newest occurrence, and no second comment is
     appended."""
     body = _recovered_body("credential_missing")
     publisher, calls = make_publisher(comments=[
@@ -1216,23 +1222,25 @@ def test_publisher_failure_scene_updates_the_same_cause_comment():
     ])
     publisher.failure_scene(body)
     rendered = progress.format_status_comment(body)
-    expected = progress.bump_recovered_repeat(
-        rendered, "credential_missing", 1,
+    expected = progress.bump_failure_repeat(
+        progress.bump_recovered_repeat(rendered, "credential_missing", 1),
+        FP,
     )
     assert calls[-1] == [
         "gh", "api", "repos/xqliu/orbi/issues/comments/5",
         "--method", "PATCH", "--field", f"body={expected}",
     ]
     assert "<!-- orbi:recovered=credential_missing:2 -->" in expected
+    assert f"<!-- orbi:fail={FP}:2 -->" in expected
 
 
 def test_publisher_failure_scene_posts_a_different_cause():
-    """Issue #1465: a DIFFERENT reason_code is a different cause: it
+    """Issue #1465: a DIFFERENT fingerprint is a different failure: it
     posts its own comment, so the previous cause's evidence is never
     rewritten or lost. A comment without a body is skipped, never
     matched."""
     existing = progress.format_status_comment(
-        _recovered_body("provider_quota", "429 quota"),
+        _recovered_body("provider_quota", "429 quota", OTHER_FP),
     )
     publisher, calls = make_publisher(comments=[
         {"id": 5, "body": existing},
@@ -1247,9 +1255,65 @@ def test_publisher_failure_scene_posts_a_different_cause():
     ]
 
 
+def test_publisher_failure_scene_folds_by_fingerprint_not_reason_code():
+    """Issue #2292: two different failures can share one reason code
+    (`unclassified`); the fingerprint keeps their occurrence counters
+    apart, so the second cause gets its own comment and the first
+    comment's count is not rewritten."""
+    existing = progress.format_status_comment(
+        _recovered_body("unclassified", "first", OTHER_FP),
+    )
+    publisher, calls = make_publisher(comments=[{"id": 5, "body": existing}])
+    new_body = _recovered_body("unclassified", "second", FP)
+    publisher.failure_scene(new_body)
+    assert calls[-1] == [
+        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "--method", "POST", "--field",
+        f"body={progress.format_status_comment(new_body)}",
+    ]
+
+
+def test_publisher_failure_scene_folds_a_fingerprint_only_body():
+    """A body that carries the fingerprint but no reason marker (a legacy
+    recovery comment shape) is still deduplicated by fingerprint."""
+    body = (
+        "<!-- orbi:run=abc12345 -->\n"
+        f"<!-- orbi:fail={FP} -->\n"
+        "Orbi Pi failure recovered; retrying on the next tick"
+    )
+    publisher, calls = make_publisher(comments=[
+        {"id": 5, "body": progress.format_status_comment(body)},
+    ])
+    publisher.failure_scene(body)
+    rendered = progress.format_status_comment(body)
+    assert calls[-1] == [
+        "gh", "api", "repos/xqliu/orbi/issues/comments/5",
+        "--method", "PATCH", "--field",
+        f"body={progress.bump_failure_repeat(rendered, FP)}",
+    ]
+
+
+def test_publisher_failure_scene_does_not_fold_into_a_reasonless_comment():
+    """An existing fingerprint comment with no reason marker cannot be
+    proven the same cause, so the classified body posts its own comment."""
+    legacy = progress.format_status_comment(
+        "<!-- orbi:run=abc12345 -->\n"
+        f"<!-- orbi:fail={FP} -->\n"
+        "Orbi Pi failure recovered; retrying on the next tick",
+    )
+    publisher, calls = make_publisher(comments=[{"id": 5, "body": legacy}])
+    new_body = _recovered_body("unclassified")
+    publisher.failure_scene(new_body)
+    assert calls[-1] == [
+        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "--method", "POST", "--field",
+        f"body={progress.format_status_comment(new_body)}",
+    ]
+
+
 def test_publisher_failure_scene_posts_a_body_without_a_cause_marker():
-    """Issue #1465: a body that carries no `orbi:recovered` cause marker
-    always posts — a failure comment is never lost."""
+    """Issue #1465: a body that carries no fingerprint marker always
+    posts — a failure comment is never lost."""
     publisher, calls = make_publisher(comments=[{"id": 5, "body": "x"}])
     body = "<!-- orbi:run=abc12345 -->\nOrbi something: legible"
     publisher.failure_scene(body)
@@ -1262,10 +1326,11 @@ def test_publisher_failure_scene_posts_a_body_without_a_cause_marker():
 
 def test_publisher_failure_scene_never_touches_another_run():
     """The fold is scoped by the run marker too: another run's comment
-    with the same cause is never hijacked (Issue #1465)."""
+    with the same fingerprint is never hijacked (Issue #1465)."""
     other_run = progress.format_status_comment(
         "<!-- orbi:run=deadbeef -->\n"
         "<!-- orbi:recovered=credential_missing -->\n"
+        f"<!-- orbi:fail={FP} -->\n"
         "Orbi Pi failure recovered: credential_missing; retrying on the "
         "next tick",
     )

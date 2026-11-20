@@ -9,6 +9,10 @@ scene (`_dispatch_fresh_claim`, `_dispatch_restart_in_flight`,
 closeout (`_closeout_implementation`). Moving code only: no logic, message
 or label change.
 
+The recoverable Pi/model failure handler lives in
+`orbi.recoverable_failure` (Issue #2292; the module-size ratchet keeps
+this module at its ceiling), reached through the same dispatch.
+
 This module imports no `runner` (Article 3.3): the seams the runner owns —
 `deliver_pr`, the commit-boundary probe, the worktree cleanup, the progress
 publisher class, the end-scene formatter, the health module and the live
@@ -36,6 +40,7 @@ from orbi import (
     notify,
     ops_delivery,
     pi_session,
+    recoverable_failure,
     run_state,
 )
 from orbi.checks import test_status
@@ -82,7 +87,6 @@ from orbi.progress import (
     ProgressPublisher,
     progress_body_with_outcome,
     progress_state,
-    recoverable_scene_body,
     safe_publish,
 )
 from orbi.run_fields import RunFields
@@ -291,7 +295,10 @@ def _start_implementation(issue: dict, source_repo: str,
             return delivered
         return _closeout_implementation(attempt)
     except (ModelWaitDeadError, RecoverablePiFailure) as exc:
-        return _handle_recoverable_failure(attempt, exc)
+        recoverable_failure.handle(
+            attempt, exc, record_failed=_record_failed_attempt,
+        )
+        return IssueResult("failed", None)
     except Exception as exc:
         return _handle_terminal_failure(attempt, exc)
 
@@ -779,89 +786,6 @@ def _record_failed_attempt(attempt: _Attempt, exc: Exception) -> None:
         )
     except Exception:
         LOGGER.exception("issue=%s health_failure_record_failed", number)
-
-
-def _handle_recoverable_failure(attempt: _Attempt,
-                               exc: Exception) -> IssueResult:
-    """The recoverable Pi/model failure: keep the run resumable, never block."""
-    number = int(attempt.issue["number"])
-    title = attempt.issue["title"]
-    config = attempt.config
-    publisher = attempt.publisher
-    publish = attempt.publish
-    run_id = attempt.run_id
-    # Classified Pi/model infrastructure failures are
-    # recoverable. Keep the claim, worktree and run-state file so the
-    # next in-flight scan resumes this same run.
-    recoverable_name = (
-        language.text(
-            language.of(config), "progress.recoverable_model_wait")
-        if isinstance(exc, ModelWaitDeadError)
-        else language.text(
-            language.of(config), "progress.recoverable_pi_failure")
-    )
-    # The hung-model-request recovery is a CLASSIFIED,
-    # AI-recoverable failure — NOT the terminal `ai-blocked`. The
-    # worktree keeps the interrupted work and the run state file is
-    # intact, so the Issue keeps `ai-in-progress`: the next tick's
-    # in-flight restart scan (`pick_in_progress_issue`) resumes the
-    # SAME run (same run id, branch, worktree, progress comment).
-    # The recovery stays fail-fast (Pi was killed, the tick ends
-    # cleanly below, the slot is released by `main`'s `finally`);
-    # only the label outcome changes — never `ai-blocked`.
-    LOGGER.exception("issue=%s %s", number, recoverable_name)
-    # The recoverable path classifies its cause exactly like the
-    # terminal one (Issue #1465), but the classification never
-    # decides whether the run blocks: the recovery stays
-    # `ai-in-progress` (#1455/#227).
-    record = _classify_failure(exc, outcome="blocked")
-    detail = failure_detail(exc)
-    body = recoverable_scene_body(
-        run_id=run_id, recoverable_name=recoverable_name, record=record,
-        detail=detail, run_info=attempt.run_info,
-        language_code=language.of(config),
-        status_url=config.status_url, issue=number, title=title,
-    )
-    # The recovery comment is the delivery record, but the resume
-    # does not parse it (the run state file, the worktree and the
-    # `ai-in-progress` label carry the resume —
-    # `worktree_resume_scene`): a failure here must only log.
-    # Falling through to the generic handler below would mark the
-    # Issue `ai-blocked` — exactly the unrecoverable state Issue
-    # #227 forbids for this recovery.
-    # An identical repeated failure of this run updates
-    # the existing scene comment in place (the progress patch path)
-    # instead of appending a duplicate on every retry tick.
-    try:
-        publisher.failure_scene(body)
-    except Exception:
-        LOGGER.exception(
-            "issue=%s model_wait_recovered_comment_failed", number,
-        )
-    publish(
-        action=lambda: publisher.finish(progress_body_with_outcome(
-            progress_state(
-                attempt.ctx, title=title, role=ROLE_IMPLEMENT,
-                started=attempt.started, pr_url=None, review_round=0,
-                priority=attempt.priority, language_code=language.of(config),
-                status_url=config.status_url,
-            ), outcome=(
-                language.text(
-                    language.of(config), "delivery.recoverable_outcome",
-                    recoverable_name=recoverable_name,
-                    reason_code=record.reason_code,
-                    action_code=record.action_code,
-                )
-            ))),
-    )
-    # The recoverable failure reaches the health history
-    # exactly like the terminal one — the resume loop retries the
-    # same dead end, which IS the repeating-dead-end scene the
-    # self-health check exists to catch (#246). Without this record
-    # the #227 recovery path is invisible to it. Pure bypass: a
-    # state-write failure never changes the delivery outcome.
-    _record_failed_attempt(attempt, exc)
-    return IssueResult("failed", None)
 
 
 def _handle_terminal_failure(attempt: _Attempt, exc: Exception) -> IssueResult:

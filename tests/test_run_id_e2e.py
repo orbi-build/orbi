@@ -86,6 +86,17 @@ sys.stderr.write("pi exploded")
 sys.exit(3)
 """
 
+# The reported `TrebuchetDynamics/kit#128` scene (Issue #2292): the agent
+# stops to ask a question a person must answer and leaves its candidate
+# change uncommitted. `deliver_pr`'s commit boundary rejects it with
+# `RecoverablePiFailure`; the same dirty scene repeats every resume.
+FAKE_PI_UNCOMMITTED = """#!/usr/bin/env python3
+import os, sys
+os.makedirs(os.path.join(os.getcwd(), ".pi-session"), exist_ok=True)
+open("candidate.py", "w").write("work in progress\\n")
+sys.stdout.write("waiting for a human answer")
+"""
+
 # The startup-scene fake pi (Issue #176): like FAKE_PI it plans and
 # commits, but it ALSO writes a full session JSONL (session, the model
 # Pi selected, the first request, the first response) with fresh
@@ -168,7 +179,8 @@ def _reset_run_id(bind_run_id):
 
 def install_fake_gh(monkeypatch, comments: list[str],
                     labels: dict[int, list[str]] | None = None,
-                    bodies: dict[int, str] | None = None) -> None:
+                    bodies: dict[int, str] | None = None,
+                    fail_blocked_edit: bool = False) -> None:
     """Answer the runner's ``gh`` calls; capture every Issue comment.
 
     ``gh pr list`` / ``gh pr create`` are stateful (Issue #186): no PR
@@ -199,6 +211,13 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     comments.append(command[-1])
                     return ""
                 if command[2] == "edit":
+                    if (fail_blocked_edit and "--add-label" in command
+                            and command[
+                                command.index("--add-label") + 1
+                            ] == "ai-blocked"):
+                        # A failed terminal label write: the stop could not
+                        # land, so the Issue must stay resumable.
+                        raise subprocess.CalledProcessError(1, command)
                     if bodies is not None and "--body" in command:
                         bodies[int(command[3])] = command[
                             command.index("--body") + 1
@@ -258,6 +277,10 @@ def install_fake_gh(monkeypatch, comments: list[str],
                 # update (PATCH). Comments are tracked by id like the
                 # real API, so a PATCH updates the exact comment;
                 # `comments` stays the chronological body history.
+                if command[2].endswith("/permission"):
+                    # The #1806 trust read: the runner's own comments are
+                    # written by a repository writer.
+                    return json.dumps({"permission": "admin"})
                 if "--method" in command:
                     method = command[command.index("--method") + 1]
                     body = command[command.index("--field") + 1][
@@ -542,6 +565,149 @@ def test_e2e_terminal_failure_retains_the_whole_scene_by_default(
     assert f"worktree={worktree}" in retained[0]
     assert "worktree_cleaned" not in caplog.text
     assert any("Orbi: blocked" in body for body in comments)
+
+
+def test_e2e_repeated_recoverable_failure_stops_and_keeps_the_work(
+    clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #2292 acceptance: the same recoverable failure (the commit
+    boundary rejecting the agent's uncommitted change) on 3 consecutive
+    rounds ends the Issue `ai-blocked` with exactly ONE blocker comment
+    naming the reason and the human decision — and the agent's change is
+    still in the retained failed worktree, uncommitted."""
+    comments: list[str] = []
+    labels: dict[int, list[str]] = {ISSUE_NUMBER: ["ai-ready"]}
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI_UNCOMMITTED)
+    install_fake_gh(monkeypatch, comments, labels)
+    caplog.set_level("INFO")
+    config = config_for(clone, tmp_path)
+
+    for _ in range(3):
+        assert runner.process_issue(issue(), config, REPO).kind == "failed"
+
+    run_id = runner.current_run_id()
+    assert re.fullmatch(r"[0-9a-f]{8}", run_id)
+    worktree = worktree_for(clone, run_id)
+    assert "ai-blocked" in labels[ISSUE_NUMBER]
+    assert "ai-in-progress" not in labels[ISSUE_NUMBER]
+
+    blockers = [body for body in comments if "Orbi failed:" in body]
+    assert len(blockers) == 1, comments
+    blocker = blockers[0]
+    assert f"<!-- orbi:run={run_id} -->" in blocker
+    assert f"run_id={run_id}" in blocker
+    # The reason: the agent's uncommitted change stopped the closeout.
+    assert "uncommitted changes" in blocker
+    # The decision a person must make ...
+    assert "Answer the agent's question or amend the ticket" in blocker
+    # ... and the guarantee that the work was not lost.
+    assert "were not lost" in blocker
+    assert "retained failed worktree" in blocker
+    # The classified dead-loop record comes from the shared blocked path.
+    assert "3 consecutive times" in blocker
+    assert "<!-- orbi:failure:v1" in blocker
+    # The recovery scene comment stays the one folded record of the two
+    # earlier occurrences; the third ends as the blocker.
+    recovered = [
+        body for body in comments if "Pi failure recovered:" in body
+    ]
+    assert len(recovered) == 1, comments
+    assert "<!-- orbi:fail=" in recovered[0]
+
+    # The uncommitted candidate is still there, still uncommitted, in the
+    # worktree retained on a detached HEAD (frees the delivery branch).
+    assert worktree.is_dir(), "the failed worktree must be retained"
+    assert (worktree / "candidate.py").read_text(encoding="utf-8") == (
+        "work in progress\n"
+    )
+    assert "candidate.py" in git(worktree, "status", "--porcelain")
+    assert git(worktree, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
+    retained = [m for m in caplog.messages if "worktree_retained" in m]
+    assert len(retained) == 1, caplog.text
+
+
+def test_e2e_repeated_recoverable_failure_with_retention_off_says_so(
+    clone, tmp_path, monkeypatch,
+):
+    """Issue #2292: the same stop under `keep_failed_worktrees = false`
+    says the work was NOT retained and removes the failed worktree — the
+    comment never claims a preserved scene that no longer exists."""
+    comments: list[str] = []
+    labels: dict[int, list[str]] = {ISSUE_NUMBER: ["ai-ready"]}
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI_UNCOMMITTED)
+    install_fake_gh(monkeypatch, comments, labels)
+    config = dataclasses.replace(
+        config_for(clone, tmp_path), keep_failed_worktrees=False,
+    )
+
+    for _ in range(3):
+        assert runner.process_issue(issue(), config, REPO).kind == "failed"
+
+    blockers = [body for body in comments if "Orbi failed:" in body]
+    assert len(blockers) == 1, comments
+    assert "were not retained" in blockers[0]
+    assert "keep_failed_worktrees = false" in blockers[0]
+    assert not worktree_for(clone, runner.current_run_id()).exists()
+
+
+def test_e2e_blocked_report_failure_keeps_the_run_resumable(
+    clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #2292: the escalated stop is not allowed to crash the tick.
+    When its label/comment write fails, the Issue keeps `ai-in-progress`,
+    the worktree is left for the same-run resume and the next tick can
+    retry the stop."""
+    comments: list[str] = []
+    labels: dict[int, list[str]] = {ISSUE_NUMBER: ["ai-ready"]}
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI_UNCOMMITTED)
+    install_fake_gh(
+        monkeypatch, comments, labels, fail_blocked_edit=True,
+    )
+    caplog.set_level("INFO")
+    config = config_for(clone, tmp_path)
+
+    for _ in range(3):
+        assert runner.process_issue(issue(), config, REPO).kind == "failed"
+
+    run_id = runner.current_run_id()
+    assert "ai-in-progress" in labels[ISSUE_NUMBER]
+    assert "ai-blocked" not in labels[ISSUE_NUMBER]
+    assert not any("Orbi failed:" in body for body in comments)
+    worktree = worktree_for(clone, run_id)
+    assert worktree.is_dir(), "a failed stop keeps the scene resumable"
+    assert (worktree / "candidate.py").is_file()
+    assert "failure reporting failed" in caplog.text
+    assert "worktree_retained" not in caplog.text
+
+
+def test_e2e_single_recoverable_failure_stays_in_progress_and_resumes(
+    clone, tmp_path, monkeypatch,
+):
+    """Issue #2292 acceptance: ONE recoverable failure is not a dead
+    loop — the Issue keeps `ai-in-progress`, no blocker comment is
+    posted, and the next tick resumes the same run and worktree."""
+    comments: list[str] = []
+    labels: dict[int, list[str]] = {ISSUE_NUMBER: ["ai-ready"]}
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI_UNCOMMITTED)
+    install_fake_gh(monkeypatch, comments, labels)
+    config = config_for(clone, tmp_path)
+
+    assert runner.process_issue(issue(), config, REPO).kind == "failed"
+    run_id = runner.current_run_id()
+    worktree = worktree_for(clone, run_id)
+    assert "ai-in-progress" in labels[ISSUE_NUMBER]
+    assert "ai-blocked" not in labels[ISSUE_NUMBER]
+    assert not any("Orbi failed:" in body for body in comments)
+    assert worktree.is_dir()
+
+    # The next tick resumes the SAME run; the healthy agent delivers.
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
+    result = runner.process_issue(issue(), config, REPO)
+
+    assert result.kind == "pr"
+    assert runner.current_run_id() == run_id
+    assert "ai-pr-opened" in labels[ISSUE_NUMBER]
+    assert "ai-blocked" not in labels[ISSUE_NUMBER]
 
 
 def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
