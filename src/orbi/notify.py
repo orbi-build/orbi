@@ -13,6 +13,15 @@ patch sends nothing. A problem message (`ai-blocked`,
 from the `orbi.language` catalog; a normal handoff (`ai-awaiting-merge`, a
 merged PR, the test message) does not.
 
+The two problem messages are sent by the stop EXIT that posts the comment,
+after that comment exists (Issue #2287), so the alert quotes the comment's own
+reason and next action, says whether Orbi resumes by itself, and links the
+comment: `blocked_comment.post_blocked_comment` calls `stop_alert`, and
+`clarify.stop` calls `needs_detail_stop`. The label patch therefore only
+sends the ordinary `ai-awaiting-merge` handoff — it lands BEFORE a stop
+comment, when neither the reason nor the permalink is knowable. The sentences
+and the renderers live in `orbi.notify_text`.
+
 The adapter is Telegram-only and uses the standard library `urllib` (no
 new dependency). Notifications are a PURE BYPASS, exactly like the progress
 comment: every public function catches everything internally — never a
@@ -28,8 +37,9 @@ id without a token is reported (`notify_failed reason=not_configured`) but
 never fails a start, since `.orbi/env` and `orbi.toml` can lag each other.
 
 `github.py` imports this module, so the top-level imports stay acyclic
-(`journal`, `delivery_labels`, the `gitops` naming leaf); `RunnerConfig` is
-annotation-only.
+(`journal`, `delivery_labels`, the `gitops` naming leaf, the `notify_text`
+sentences); no module that builds a `gh` command is imported here, and
+`RunnerConfig` is annotation-only.
 """
 from __future__ import annotations
 
@@ -41,7 +51,7 @@ import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from orbi import language
+from orbi import language, notify_text
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL,
     BLOCKED_LABEL,
@@ -61,48 +71,11 @@ TELEGRAM_API_BASE = "https://api.telegram.org"
 SEND_TIMEOUT_SECONDS = 10
 TOKEN_ENV = "ORBI_TELEGRAM_BOT_TOKEN"
 
-# The three labels that mean "a person must act".
-ATTENTION_LABELS = frozenset({
-    BLOCKED_LABEL, NEEDS_DETAIL_LABEL, AWAITING_MERGE_LABEL,
-})
-
-# The attention labels whose message is a problem the person must
-# resolve, so it ends with the community help line (Issue #1684).
-# `ai-awaiting-merge` is an ordinary handoff and does not.
+# The attention labels whose message is a problem the person must resolve,
+# so it ends with the community help line (Issue #1684) and names the stop
+# comment (Issue #2287). `ai-awaiting-merge` is an ordinary handoff and
+# sends the plain message instead.
 HELP_LABELS = frozenset({BLOCKED_LABEL, NEEDS_DETAIL_LABEL})
-# The one catalog key of that line (`orbi.language`).
-HELP_KEY = "help.community"
-
-# The fixed message texts. The `Orbi · ` prefix is part of the contract.
-_HEADLINE_EN = "Orbi · Needs your attention: "
-_HEADLINE_ZH = "Orbi · 需要您处理："
-_STATUS_EN = {
-    BLOCKED_LABEL: "Orbi is stuck and needs you",
-    NEEDS_DETAIL_LABEL: "Orbi needs more detail",
-    AWAITING_MERGE_LABEL: "Waiting for you to approve the merge",
-}
-_STATUS_ZH = {
-    BLOCKED_LABEL: "Orbi 卡住了，需要您处理",
-    NEEDS_DETAIL_LABEL: "需要您补充信息",
-    AWAITING_MERGE_LABEL: "等您批准合并",
-}
-# The human-review wait status (Issue #1684): the gate holds the
-# delivery until a person confirms the acceptance checklist.
-HUMAN_REVIEW_STATUS_EN = "Waiting for your review"
-HUMAN_REVIEW_STATUS_ZH = "等您人工验收"
-TEST_EN = (
-    "Orbi test notification\n"
-    "Your notification target works. Future alerts look like this."
-)
-TEST_ZH = (
-    "Orbi 测试通知\n"
-    "这条消息确认您的接收配置可用，之后的通知会是这个样子。"
-)
-
-# The fixed code-merged texts (Issue #1674): the same `Orbi · ` prefix
-# and the `owner/repo#N <title>` line, followed by the PR link.
-_MERGED_HEADLINE_EN = "Orbi · Code merged: "
-_MERGED_HEADLINE_ZH = "Orbi · 代码已合并："
 
 # The one watermark the merged-PR check keeps (one source repo, Issue
 # #1674): the last handled GitHub `mergedAt`, stored beside the
@@ -223,18 +196,62 @@ def send_if_enabled(text: str) -> bool:
     return _enabled() and send(text)
 
 
-def label_added(repo: str, number: int, label: str,
-                title: str | None = None) -> None:
-    """Send one "needs you" message for a label that was just added.
+def stop_alert(number: int, *, repo: str, label: str, body: str,
+               comment_url: str | None, comment_language: str,
+               read_title) -> None:
+    """Send the ONE alert of a stop, AFTER its stop comment landed.
 
-    A no-op for a label that does not wait for a person, for a notifier
-    that is off or half-configured (`tick_start` already reported the
-    gap) and for every failure. NEVER raises (pure bypass).
+    `body` is that comment exactly as posted: its own `**Reason:**` /
+    `**Action:**` lines are what the alert quotes (in `comment_language`, the
+    run's language, which a repository may set apart from the host's), and
+    its `orbi:failure:v1` record decides whether the engine resumes by
+    itself. `comment_url` is the permalink the write returned, "" when `gh`
+    printed none. The host `message_language` dresses only the alert's own
+    labels.
+
+    A no-op for a label that is not a stop that needs a person, for a
+    notifier that is off or half-configured (`tick_start` already reported
+    the gap — and then no title is read either) and for every failure.
+    NEVER raises (pure bypass).
     """
     try:
-        if label not in ATTENTION_LABELS or not _enabled():
+        if label not in HELP_LABELS or not _enabled():
             return
-        send(_attention_message(label, repo, number, title))
+        send(notify_text.stop_message(
+            label, repo, number, read_title(),
+            detail=notify_text.stop_detail(body, language_code=comment_language),
+            comment_url=comment_url, language_code=_language(),
+        ))
+    except Exception:
+        return
+
+
+def needs_detail_stop(repo: str, number: int, title: str | None, *,
+                      comment_url: str | None, ready_label: str,
+                      language_code: str) -> None:
+    """Send the ONE alert of an `ai-needs-detail` stop (Issues #1673, #2287).
+
+    Sent by the clarification gate right AFTER its stop comment and label
+    swap, so the message names the reason the comment records, the repair
+    instruction it asks for and the comment itself, with the same headline,
+    status, issue line, Issue link and help line as before. `ready_label` is
+    the repository's claim label that instruction names, and `language_code`
+    is the run's language — the alert's own labels follow the host
+    `message_language` instead.
+
+    A no-op for a notifier that is off or half-configured and for every
+    failure. NEVER raises (pure bypass).
+    """
+    try:
+        if not _enabled():
+            return
+        send(notify_text.stop_message(
+            NEEDS_DETAIL_LABEL, repo, number, title,
+            detail=notify_text.needs_detail_detail(
+                ready_label=ready_label, language_code=language_code),
+            comment_url=comment_url, ready_label=ready_label,
+            language_code=_language(),
+        ))
     except Exception:
         return
 
@@ -254,7 +271,8 @@ def human_review_waiting(repo: str, number: int,
     try:
         if not _enabled():
             return
-        send(_human_review_message(repo, number, title))
+        send(notify_text.human_review_message(
+            repo, number, title, language_code=_language()))
     except Exception:
         return
 
@@ -264,13 +282,16 @@ def patch_applied(event: str, added_labels, current_labels, *,
     """Send the ONE notification a just-applied label patch warrants.
 
     The decision moved out of `github.apply_label_patch` (Issue #1673)
-    so the oversized `github.py` gains no branch: only a NEWLY added
-    attention label (`ai-blocked`, `ai-needs-detail`,
-    `ai-awaiting-merge`) sends the ordinary "needs you" message; the two
-    problem labels end with the help line. The human-review wait is NOT
-    triggered here (Issue #1691): a normal delivery already carries
-    `ai-ready`, so this patch usually does not even run, and the message
-    belongs to the checklist block that decides it.
+    so the oversized `github.py` gains no branch: a NEWLY added
+    `ai-awaiting-merge` — an ordinary handoff — sends the "needs you"
+    message, and nothing else does. The two problem labels (`ai-blocked`,
+    `ai-needs-detail`) send from their stop exit instead (Issue #2287):
+    this patch lands BEFORE their stop comment, so at this moment neither
+    the reason the comment records nor its permalink exists. The
+    human-review wait is NOT triggered here either (Issue #1691): a normal
+    delivery already carries `ai-ready`, so this patch usually does not
+    even run, and the message belongs to the checklist block that decides
+    it.
 
     `read_title` is a callable, so the Issue title is read AT MOST once
     and only when a message is actually sent -- never when notifications
@@ -284,8 +305,9 @@ def patch_applied(event: str, added_labels, current_labels, *,
         # The caller only reaches this point with an applied patch, and
         # every event's patch carries exactly one added label.
         label = added_labels[0]
-        if label in ATTENTION_LABELS and label not in current:
-            send(_attention_message(label, repo, number, read_title()))
+        if label == AWAITING_MERGE_LABEL and label not in current:
+            send(notify_text.attention_message(
+                label, repo, number, read_title(), language_code=_language()))
     except Exception:
         return
 
@@ -332,7 +354,7 @@ def test_command(config: RunnerConfig) -> int:
                 f"missing={_missing_setting()}"
             ))
             return 1
-        if send(_test_message()):
+        if send(notify_text.test_message(_language())):
             print("ok")
             return 0
         print(_problem_output(_failure_line()))
@@ -376,7 +398,7 @@ def _problem_output(line: str) -> str:
     The same `help.community` line every problem message ends with, in
     the host `message_language` (Issue #1686).
     """
-    return f"{line}\n{language.text(_language(), HELP_KEY)}"
+    return f"{line}\n{language.text(_language(), notify_text.HELP_KEY)}"
 
 
 def _payload(body: bytes) -> dict | None:
@@ -440,55 +462,6 @@ def _token_state(token: str | None) -> str:
     return "is set but empty" if token == "" else "is not set"
 
 
-def _attention_message(label: str, repo: str, number: int,
-                       title: str | None) -> str:
-    """The fixed "needs you" text for one attention label."""
-    language_code = _language()
-    status = (_STATUS_ZH if language_code == "zh" else _STATUS_EN)[label]
-    return _needs_you_message(
-        status, repo, number, title, help_line=label in HELP_LABELS,
-    )
-
-
-def _human_review_message(repo: str, number: int,
-                          title: str | None) -> str:
-    """The fixed "waiting for your review" text (Issue #1684)."""
-    language_code = _language()
-    status = (
-        HUMAN_REVIEW_STATUS_ZH if language_code == "zh"
-        else HUMAN_REVIEW_STATUS_EN
-    )
-    return _needs_you_message(
-        status, repo, number, title, help_line=True,
-    )
-
-
-def _needs_you_message(status: str, repo: str, number: int,
-                       title: str | None, *, help_line: bool) -> str:
-    """One "needs you" message; a problem message ends with the help line."""
-    language_code = _language()
-    headline = _HEADLINE_ZH if language_code == "zh" else _HEADLINE_EN
-    body = (
-        f"{headline}{status}\n"
-        f"{_issue_line(repo, number, title)}\n"
-        f"https://github.com/{repo}/issues/{number}"
-    )
-    if not help_line:
-        return body
-    return f"{body}\n{language.text(language_code, HELP_KEY)}"
-
-
-def _issue_line(repo: str, number: int, title: str | None) -> str:
-    """`owner/repo#N [title]` — the title is omitted when it is unknown."""
-    line = f"{repo}#{number}"
-    return f"{line} {title}" if title else line
-
-
-def _test_message() -> str:
-    """The fixed test-notification text in the configured language."""
-    return TEST_ZH if _language() == "zh" else TEST_EN
-
-
 def _announce_merged_prs() -> None:
     """Send one message per newly merged Orbi delivery PR (Issue #1674).
 
@@ -532,7 +505,8 @@ def _announce_merged_prs() -> None:
             return
         _write_watermark(path, newest)
         for pr in fresh:
-            send(_merged_message(source_repo, pr))
+            send(notify_text.merged_message(
+                source_repo, pr, language_code=_language()))
     finally:
         os.close(lock_fd)
 
@@ -593,11 +567,3 @@ def _merged_at(pr: dict) -> str:
     """The PR's GitHub `mergedAt`, or "" when it is absent/malformed."""
     value = pr.get("mergedAt")
     return value if isinstance(value, str) else ""
-
-
-def _merged_message(repo: str, pr: dict) -> str:
-    """The fixed "code merged" text for one merged PR."""
-    headline = (
-        _MERGED_HEADLINE_ZH if _language() == "zh" else _MERGED_HEADLINE_EN
-    )
-    return f"{headline}{repo}#{pr['number']} {pr['title']}\n{pr['url']}"

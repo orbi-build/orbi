@@ -72,7 +72,7 @@ class FakeGate:
         monkeypatch.setattr(
             seam, "authenticated_github_login", self._login,
         )
-        monkeypatch.setattr(notify, "label_added", self._notify)
+        monkeypatch.setattr(notify, "needs_detail_stop", self._notify)
 
     def _issue_comments(self, number, *, repo):
         if self.history_error is not None:
@@ -161,11 +161,11 @@ def stub_stop_history(monkeypatch, comments) -> None:
     )
 
 
-def record_label_notifications(monkeypatch) -> list:
-    """Record `notify.label_added` calls and return the list."""
+def record_stop_notifications(monkeypatch) -> list:
+    """Record the thin-ticket stop's alert calls and return the list."""
     notified: list = []
     monkeypatch.setattr(
-        notify, "label_added",
+        notify, "needs_detail_stop",
         lambda *args, **kwargs: notified.append(args),
     )
     return notified
@@ -188,7 +188,7 @@ def install_github(monkeypatch, gh) -> None:
     patch is the Article 3.4 subprocess seam, a boundary fake.
     """
     monkeypatch.setattr(seam, "run_command", gh)
-    monkeypatch.setattr(notify, "label_added", lambda *args, **kwargs: None)
+    monkeypatch.setattr(notify, "needs_detail_stop", lambda *a, **k: None)
 
 
 def fail_github(monkeypatch, gh, predicate, *,

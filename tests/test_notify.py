@@ -1,10 +1,13 @@
-"""Telegram "needs you" notifications (Issue #1673).
+"""Telegram "needs you" notifications (Issues #1673, #2287).
 
 The user outcome: a person who hands Issues to Orbi receives ONE Telegram
 message when Orbi NEWLY puts a task into a state that waits for them
 (ai-blocked, ai-needs-detail, ai-awaiting-merge), naming the state,
-owner/repo#N <title> and the Issue link. "orbi notify test" checks the
-setup. A label a person adds by hand sends nothing.
+owner/repo#N <title> and the Issue link. The two PROBLEM stops
+(ai-blocked, ai-needs-detail) also say, from their stop comment, why Orbi
+stopped, what to do next, whether Orbi resumes by itself and where that
+comment is (Issue #2287). "orbi notify test" checks the setup. A label a
+person adds by hand sends nothing.
 
 Evidence is the WIRE: every test points the adapter at a REAL local
 http.server (tests/fakes/telegram.py) and asserts the requests it
@@ -25,11 +28,15 @@ from pathlib import Path
 import pytest
 
 from orbi import (
+    blocked_comment,
     clarify,
     config as config_domain,
+    failure,
     github,
     journal,
+    language,
     notify,
+    notify_text,
     runner_health,
 )
 from orbi.delivery_labels import (
@@ -43,6 +50,8 @@ from orbi.delivery_labels import (
 )
 from seam import seam
 
+from tests.fakes.clarify import stub_judgment
+from tests.fakes.github import FakeGh
 from tests.fakes.telegram import (
     TelegramEndpoint,
     bind_notify,
@@ -91,13 +100,57 @@ HELP_EN = (
 HELP_ZH = "需要帮助？加入 Orbi 用户群：https://t.me/+kJRTTpFGBRU0M2Y9"
 
 
-def blocked_text(title: str = "Fix the thing", *,
-                 repo: str = "o/r", number: int = 7) -> str:
+# The stop comment every blocked scene hands to the ONE exit (Issue
+# #1730): its own readable text plus the failure record the exit writes.
+REPO = "o/r"
+ISSUE = 7
+
+
+def stop_body(*, reason: str | None = "the delivery command failed",
+              action: str | None = "check the credentials, then re-run",
+              reason_code: str = "credential_missing",
+              language_code: str = "en") -> str:
+    """One scene body: a failure record and the reason/action lines.
+
+    `reason_code` picks the record the exit keeps: `credential_missing` (a
+    reason only a person repairs) or `base_ci_red` (one the engine resumes by
+    itself). `reason`/`action` set to None drop that line, the shape whose
+    comment records no such sentence (Issue #2287 acceptance 5).
+    """
+    action_code, retry_safe = failure.DISPOSITIONS[reason_code]
+    lines = [
+        failure.render(failure.Failure(
+            reason_code=reason_code, action_code=action_code,
+            retry_safe=retry_safe,
+        )),
+        "**Orbi: blocked — waiting on a human decision**",
+    ]
+    if reason is not None:
+        lines.append(
+            f"{language.text(language_code, 'failure.reason_label')} {reason}"
+        )
+    if action is not None:
+        lines.append(
+            f"{language.text(language_code, 'failure.action_label')} {action}"
+        )
+    return "\n".join(lines)
+
+
+def handoff_en() -> str:
+    """The blocked stop's explicit-handoff sentence (catalog unblock step)."""
     return (
-        "Orbi · Needs your attention: Orbi is stuck and needs you\n"
-        f"{repo}#{number} {title}\n"
-        f"https://github.com/{repo}/issues/{number}\n"
-        f"{HELP_EN}"
+        "Orbi does not resume by itself — an explicit handoff is needed: "
+        + language.text("en", "blocked.unblock_step")
+        + "."
+    )
+
+
+def handoff_zh() -> str:
+    """The same sentence in the host's Chinese."""
+    return (
+        "Orbi 不会自行恢复 —— 需要您显式交接："
+        + language.text("zh", "blocked.unblock_step")
+        + "。"
     )
 
 
@@ -235,9 +288,12 @@ def test_public_functions_swallow_a_broken_config(monkeypatch, capsys):
     assert out.rstrip().endswith(HELP_EN)
 
 
-def test_label_added_swallows_a_message_build_failure(monkeypatch):
+def test_stop_alert_swallows_a_message_build_failure(monkeypatch):
     bind(monkeypatch)
-    notify.label_added(BoomText(), 7, BLOCKED_LABEL, "t")
+    notify.stop_alert(
+        ISSUE, repo=BoomText(), label=BLOCKED_LABEL, body=stop_body(),
+        comment_url=None, comment_language="en", read_title=lambda: "t",
+    )
 
 
 def test_patch_applied_swallows_a_message_build_failure(monkeypatch):
@@ -245,7 +301,7 @@ def test_patch_applied_swallows_a_message_build_failure(monkeypatch):
     while building the message never escapes (Issue #1684)."""
     bind(monkeypatch)
     notify.patch_applied(
-        EVENT_BLOCKED, [BLOCKED_LABEL], {"ai-ready"},
+        EVENT_AWAITING_MERGE, [AWAITING_MERGE_LABEL], {"ai-pr-opened"},
         repo=BoomText(), number=7, read_title=lambda: "t",
     )
 
@@ -263,40 +319,142 @@ def test_send_is_not_configured_reports_the_missing_setting(
 # --- fixed message text ----------------------------------------------------
 
 
-@pytest.mark.parametrize("label,status_en,status_zh,help_line", [
-    (BLOCKED_LABEL, "Orbi is stuck and needs you", "Orbi 卡住了，需要您处理",
-     True),
-    (NEEDS_DETAIL_LABEL, "Orbi needs more detail", "需要您补充信息", True),
-    (AWAITING_MERGE_LABEL, "Waiting for you to approve the merge",
-     "等您批准合并", False),
-])
-@pytest.mark.parametrize("language", ["en", "zh"])
-def test_needs_you_message_is_the_fixed_text(
-    monkeypatch, label, status_en, status_zh, help_line, language,
-):
-    if language == "zh":
-        expected = (
-            f"Orbi · 需要您处理：{status_zh}\n"
-            "o/r#7 Fix the thing\n"
-            "https://github.com/o/r/issues/7"
-        )
-        if help_line:
-            expected += f"\n{HELP_ZH}"
-    else:
-        expected = (
-            f"Orbi · Needs your attention: {status_en}\n"
-            "o/r#7 Fix the thing\n"
-            "https://github.com/o/r/issues/7"
-        )
-        if help_line:
-            expected += f"\n{HELP_EN}"
+def test_the_stop_alert_is_the_fixed_text(monkeypatch):
+    """Acceptance 1: the reason in one line, the next action, the
+    resume-or-handoff sentence and the stop comment's permalink, beside the
+    existing headline, status, issue line, Issue link and help line."""
+    permalink = f"https://github.com/{REPO}/issues/{ISSUE}#issuecomment-1"
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
-        bind(monkeypatch, config=HostLanguageConfig(
-            message_language=language,
-        ))
-        notify.label_added("o/r", 7, label, "Fix the thing")
-        assert endpoint.texts() == [expected]
+        bind(monkeypatch)
+        notify.stop_alert(
+            ISSUE, repo=REPO, label=BLOCKED_LABEL, body=stop_body(),
+            comment_url=permalink, comment_language="en",
+            read_title=lambda: "Fix the thing",
+        )
+        assert endpoint.texts() == [
+            "Orbi · Needs your attention: Orbi is stuck and needs you\n"
+            f"{REPO}#{ISSUE} Fix the thing\n"
+            f"https://github.com/{REPO}/issues/{ISSUE}\n"
+            f"Stop comment: {permalink}\n"
+            "Reason: the delivery command failed\n"
+            "Next action: check the credentials, then re-run\n"
+            f"{handoff_en()}\n"
+            f"{HELP_EN}"
+        ]
+
+
+def test_the_stop_alert_quotes_the_comment_under_a_zh_host(monkeypatch):
+    """Acceptance 2: the alert's own labels and sentences render in the
+    host's `zh`, and the quoted reason/action stay the stop comment's text
+    (here the run wrote that comment in Chinese)."""
+    permalink = f"https://github.com/{REPO}/issues/{ISSUE}#issuecomment-2"
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch, config=HostLanguageConfig(message_language="zh"))
+        notify.stop_alert(
+            ISSUE, repo=REPO, label=BLOCKED_LABEL,
+            body=stop_body(
+                reason="交付命令执行失败", action="请修复凭据后重新运行",
+                language_code="zh",
+            ),
+            comment_url=permalink, comment_language="zh",
+            read_title=lambda: "修复这个问题",
+        )
+        assert endpoint.texts() == [
+            "Orbi · 需要您处理：Orbi 卡住了，需要您处理\n"
+            f"{REPO}#{ISSUE} 修复这个问题\n"
+            f"https://github.com/{REPO}/issues/{ISSUE}\n"
+            f"停止评论：{permalink}\n"
+            "原因：交付命令执行失败\n"
+            "下一步：请修复凭据后重新运行\n"
+            f"{handoff_zh()}\n"
+            f"{HELP_ZH}"
+        ]
+
+
+def test_the_stop_alert_says_when_orbi_resumes_by_itself(monkeypatch):
+    """Acceptance 3: a reason whose stop the engine resumes on its own
+    (`base_ci_red`, Issue #1825) says so; every other reason says an
+    explicit handoff is needed (the test above). No permalink means no link
+    line — never a guessed URL."""
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        notify.stop_alert(
+            ISSUE, repo=REPO, label=BLOCKED_LABEL,
+            body=stop_body(
+                reason_code="base_ci_red",
+                reason="main is already red on check 'unit'",
+                action="fix main; the delivery resumes once it is green",
+            ),
+            comment_url=None, comment_language="en",
+            read_title=lambda: "Fix the thing",
+        )
+        assert endpoint.texts() == [
+            "Orbi · Needs your attention: Orbi is stuck and needs you\n"
+            f"{REPO}#{ISSUE} Fix the thing\n"
+            f"https://github.com/{REPO}/issues/{ISSUE}\n"
+            "Reason: main is already red on check 'unit'\n"
+            "Next action: fix main; the delivery resumes once it is green\n"
+            "Orbi resumes by itself — no relabel is needed.\n"
+            f"{HELP_EN}"
+        ]
+
+
+def test_a_stop_without_a_recorded_reason_says_it_is_unknown(monkeypatch):
+    """Acceptance 5: a comment that records no reason says so in one line
+    and still sends the rest of the message."""
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        notify.stop_alert(
+            ISSUE, repo=REPO, label=BLOCKED_LABEL,
+            body=stop_body(reason=None, action=None),
+            comment_url=None, comment_language="en",
+            read_title=lambda: "Fix the thing",
+        )
+        assert endpoint.texts() == [
+            "Orbi · Needs your attention: Orbi is stuck and needs you\n"
+            f"{REPO}#{ISSUE} Fix the thing\n"
+            f"https://github.com/{REPO}/issues/{ISSUE}\n"
+            "Reason: the reason is unknown\n"
+            f"{handoff_en()}\n"
+            f"{HELP_EN}"
+        ]
+
+
+SECOND_RECORD = failure.render(failure.Failure(
+    reason_code="human_decision_required", action_code="decide",
+    retry_safe=False,
+))
+
+
+@pytest.mark.parametrize("extra", ["", f"\n{SECOND_RECORD}"])
+def test_a_missing_or_corrupt_record_keeps_the_handoff_sentence(
+    monkeypatch, extra,
+):
+    """A record that says nothing — absent, or two blocks that cannot be
+    read as one — decides nothing: the alert still goes out, and it says a
+    handoff is needed rather than promising a resume."""
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        notify.stop_alert(
+            ISSUE, repo=REPO, label=BLOCKED_LABEL,
+            body=stop_body() + extra,
+            comment_url=None, comment_language="en",
+            read_title=lambda: "Fix the thing",
+        )
+        assert endpoint.texts() == [
+            "Orbi · Needs your attention: Orbi is stuck and needs you\n"
+            f"{REPO}#{ISSUE} Fix the thing\n"
+            f"https://github.com/{REPO}/issues/{ISSUE}\n"
+            "Reason: the delivery command failed\n"
+            "Next action: check the credentials, then re-run\n"
+            f"{handoff_en()}\n"
+            f"{HELP_EN}"
+        ]
 
 
 def test_message_language_defaults_to_english_without_the_key(monkeypatch):
@@ -304,8 +462,18 @@ def test_message_language_defaults_to_english_without_the_key(monkeypatch):
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch, config=config_for())
-        notify.label_added("o/r", 7, BLOCKED_LABEL, "Fix the thing")
-        assert endpoint.texts() == [blocked_text()]
+        notify.needs_detail_stop(
+            REPO, ISSUE, "Fix the thing", comment_url=None,
+            ready_label="ai-ready", language_code="en",
+        )
+        text = endpoint.texts()[0]
+    assert text.startswith(
+        "Orbi · Needs your attention: Orbi needs more detail\n"
+        f"{REPO}#{ISSUE} Fix the thing\n"
+        f"https://github.com/{REPO}/issues/{ISSUE}\n"
+        "Reason: "
+    )
+    assert text.endswith(f"{HELP_EN}")
 
 
 def test_notify_test_uses_the_host_message_language(monkeypatch, capsys):
@@ -320,45 +488,108 @@ def test_notify_test_uses_the_host_message_language(monkeypatch, capsys):
         ]
 
 
-def test_label_added_is_silent_for_a_non_attention_label(monkeypatch):
+def test_a_stop_alert_is_silent_for_an_ordinary_handoff_label(monkeypatch):
+    """Only a stop that needs a person sends: `ai-awaiting-merge` is an
+    ordinary handoff and its message comes from the label patch."""
+    reads = []
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch)
-        notify.label_added("o/r", 7, "ai-in-progress", "t")
+        notify.stop_alert(
+            ISSUE, repo=REPO, label=AWAITING_MERGE_LABEL, body=stop_body(),
+            comment_url=None, comment_language="en",
+            read_title=lambda: reads.append(ISSUE) or "t",
+        )
         assert endpoint.requests == []
+        assert reads == []
 
 
-def test_label_added_is_silent_when_notifications_are_off(monkeypatch):
+def test_the_needs_detail_alert_is_silent_when_notifications_are_off(
+    monkeypatch,
+):
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch, config=config_for(chat_id=None), token=None)
-        notify.label_added("o/r", 7, BLOCKED_LABEL, "t")
+        notify.needs_detail_stop(
+            REPO, ISSUE, "t", comment_url=None,
+            ready_label="ai-ready", language_code="en",
+        )
         assert endpoint.requests == []
+
+
+def test_a_stop_alert_is_silent_when_notifications_are_off(monkeypatch):
+    """Notifications off: nothing is sent AND no title is read — the gate
+    runs before the read, exactly as the label patch's did (Issue #1673)."""
+    reads = []
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch, config=config_for(chat_id=None), token=None)
+        notify.stop_alert(
+            ISSUE, repo=REPO, label=BLOCKED_LABEL, body=stop_body(),
+            comment_url=None, comment_language="en",
+            read_title=lambda: reads.append(ISSUE) or "t",
+        )
+        assert endpoint.requests == []
+        assert reads == []
 
 
 # --- github.apply_label_patch hook -----------------------------------------
 
 
-def test_apply_label_patch_sends_once_for_a_new_attention_label(monkeypatch):
+def test_the_label_patch_never_sends_the_blocked_alert(monkeypatch):
+    """Issue #2287: the blocked alert moved to the stop exit.
+
+    The patch lands BEFORE the stop comment exists, so at this moment
+    neither the reason that comment records nor its permalink is knowable:
+    the patch sends nothing and reads no title, and the exit's own alert is
+    tested end to end below."""
+    reads = []
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch)
         monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
         monkeypatch.setattr(
-            seam, "issue_view", lambda *a, **k: {"title": "Fix the thing"},
+            seam, "issue_view",
+            lambda *a, **k: reads.append(a) or {"title": "Fix the thing"},
         )
         github.apply_label_patch(
             7, repo="o/r", event=EVENT_BLOCKED,
             current_labels={"ai-ready"},
         )
-        assert endpoint.texts() == [blocked_text()]
-        # Applying the same patch while ai-blocked is already present is
-        # silent: label_patch still returns the add label.
-        github.apply_label_patch(
-            7, repo="o/r", event=EVENT_BLOCKED,
-            current_labels={"ai-blocked"},
+        assert endpoint.requests == []
+        assert reads == []
+
+
+def test_a_blocked_stop_alert_quotes_and_links_the_comment_it_posted(
+    monkeypatch,
+):
+    """Acceptance 1, end to end over the REAL gh adapter: the exit writes
+    the label, posts the stop comment through gh, and the alert it sends
+    names that comment's own reason and action and links it."""
+    gh = FakeGh(REPO)
+    gh.add_issue(ISSUE, title="Fix the thing", labels=("ai-ready",))
+    monkeypatch.setattr(seam, "run_command", gh)
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch)
+        blocked_comment.post_blocked_comment(
+            ISSUE, repo=REPO, body=stop_body(),
+            current_labels={"ai-ready"}, language_code="en",
         )
-        assert endpoint.texts() == [blocked_text()]
+        posted = gh.issues[ISSUE]["comments"][-1]
+        assert endpoint.texts() == [
+            "Orbi · Needs your attention: Orbi is stuck and needs you\n"
+            f"{REPO}#{ISSUE} Fix the thing\n"
+            f"https://github.com/{REPO}/issues/{ISSUE}\n"
+            f"Stop comment: {posted['url']}\n"
+            "Reason: the delivery command failed\n"
+            "Next action: check the credentials, then re-run\n"
+            f"{handoff_en()}\n"
+            f"{HELP_EN}"
+        ]
+    # The quoted lines are the posted comment's own text, not a re-render.
+    assert "**Reason:** the delivery command failed" in posted["body"]
+    assert "**Action:** check the credentials, then re-run" in posted["body"]
 
 
 def test_apply_label_patch_notifies_awaiting_merge(monkeypatch):
@@ -481,8 +712,8 @@ def test_apply_label_patch_sends_nothing_when_the_label_write_fails(
         monkeypatch.setattr(seam, "edit_issue", boom)
         with pytest.raises(RuntimeError, match="gh write failed"):
             github.apply_label_patch(
-                7, repo="o/r", event=EVENT_BLOCKED,
-                current_labels={"ai-ready"},
+                7, repo="o/r", event=EVENT_AWAITING_MERGE,
+                current_labels={"ai-ready", "ai-pr-opened"},
             )
         assert endpoint.requests == []
 
@@ -500,14 +731,14 @@ def test_apply_label_patch_sends_without_a_title_when_the_read_fails(
 
         monkeypatch.setattr(seam, "issue_view", boom)
         github.apply_label_patch(
-            7, repo="o/r", event=EVENT_BLOCKED,
-            current_labels={"ai-ready"},
+            7, repo="o/r", event=EVENT_AWAITING_MERGE,
+            current_labels={"ai-ready", "ai-pr-opened"},
         )
         assert endpoint.texts() == [
-            "Orbi · Needs your attention: Orbi is stuck and needs you\n"
+            "Orbi · Needs your attention: "
+            "Waiting for you to approve the merge\n"
             "o/r#7\n"
-            "https://github.com/o/r/issues/7\n"
-            f"{HELP_EN}"
+            "https://github.com/o/r/issues/7"
         ]
 
 
@@ -524,8 +755,8 @@ def test_apply_label_patch_makes_no_github_read_when_notifications_are_off(
             lambda *a, **k: reads.append(a) or {"title": "t"},
         )
         github.apply_label_patch(
-            7, repo="o/r", event=EVENT_BLOCKED,
-            current_labels={"ai-ready"},
+            7, repo="o/r", event=EVENT_AWAITING_MERGE,
+            current_labels={"ai-ready", "ai-pr-opened"},
         )
         assert reads == []
         assert endpoint.requests == []
@@ -543,10 +774,14 @@ def _thin_verdict() -> clarify.ClarifyVerdict:
 def _record_writes(monkeypatch):
     comments: list = []
     edits: list = []
-    monkeypatch.setattr(
-        seam, "comment_issue",
-        lambda number, *, repo, body: comments.append((number, repo, body)),
-    )
+
+    def comment(number, *, repo, body):
+        # The write prints the created comment's permalink, which the stop
+        # alert links (Issue #2287).
+        comments.append((number, repo, body))
+        return f"https://github.com/{repo}/issues/{number}#issuecomment-1"
+
+    monkeypatch.setattr(seam, "comment_issue", comment)
     monkeypatch.setattr(
         seam, "edit_issue",
         lambda number, *, repo, add=None, remove=None: edits.append(
@@ -556,12 +791,12 @@ def _record_writes(monkeypatch):
 
 
 def test_clarify_stop_sends_one_needs_detail_message(monkeypatch):
+    """Acceptance 4: the thin-ticket stop sends its recorded reason and next
+    action and links the stop comment it just posted."""
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch)
-        monkeypatch.setattr(
-            seam, "judge_issue_body", lambda *a, **k: _thin_verdict(),
-        )
+        stub_judgment(monkeypatch, _thin_verdict())
         comments, edits = _record_writes(monkeypatch)
         assert clarify.enforce(
             {"number": 7, "title": "Thin ticket"}, config_for(),
@@ -572,8 +807,48 @@ def test_clarify_stop_sends_one_needs_detail_message(monkeypatch):
             "Orbi · Needs your attention: Orbi needs more detail\n"
             "o/r#7 Thin ticket\n"
             "https://github.com/o/r/issues/7\n"
+            "Stop comment: https://github.com/o/r/issues/7#issuecomment-1\n"
+            "Reason: The pre-flight check says the Issue does not state "
+            "pieces a delivery needs:\n"
+            "Next action: Edit the Issue body into this shape, then add the "
+            "`ai-ready` label again:\n"
+            "Orbi does not resume by itself — after you edit the ticket, add "
+            "`ai-ready` back to resume.\n"
             f"{HELP_EN}"
         ]
+    # The quoted lines are the comment's own text.
+    body = comments[0][2]
+    assert language.text("en", "clarify.intro") in body
+    assert language.text(
+        "en", "clarify.repair", ready_label="ai-ready") in body
+
+
+def test_the_needs_detail_alert_follows_the_host_language(monkeypatch):
+    """Acceptance 2: a `zh` host renders the alert's own labels and
+    sentences in Chinese, while the quoted reason and action stay exactly
+    as the (English) stop comment wrote them."""
+    with TelegramEndpoint() as endpoint:
+        endpoint.point(monkeypatch)
+        bind(monkeypatch, config=HostLanguageConfig(message_language="zh"))
+        stub_judgment(monkeypatch, _thin_verdict())
+        comments, _ = _record_writes(monkeypatch)
+        assert clarify.enforce(
+            {"number": 7, "title": "Thin ticket"}, config_for(),
+            "o/r", RUN_ID,
+        ) is False
+        assert endpoint.texts() == [
+            "Orbi · 需要您处理：需要您补充信息\n"
+            "o/r#7 Thin ticket\n"
+            "https://github.com/o/r/issues/7\n"
+            "停止评论：https://github.com/o/r/issues/7#issuecomment-1\n"
+            "原因：The pre-flight check says the Issue does not state pieces "
+            "a delivery needs:\n"
+            "下一步：Edit the Issue body into this shape, then add the "
+            "`ai-ready` label again:\n"
+            "Orbi 不会自行恢复 —— 补好工单后重新添加 `ai-ready` 即可继续。\n"
+            f"{HELP_ZH}"
+        ]
+    assert "The pre-flight check says" in comments[0][2]
 
 
 def test_clarify_stop_still_stops_when_the_endpoint_is_down(
@@ -647,20 +922,23 @@ def test_tick_start_without_a_chat_id_is_silent(monkeypatch, caplog):
     assert "notify_failed" not in caplog.text
 
 
-def test_tick_start_binds_the_token_for_the_label_hook(monkeypatch):
+def test_tick_start_binds_the_token_for_the_stop_alert(monkeypatch):
     monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         notify.tick_start(config_for())
-        notify.label_added("o/r", 7, BLOCKED_LABEL, "t")
+        notify.needs_detail_stop(
+            REPO, ISSUE, "t", comment_url=None,
+            ready_label="ai-ready", language_code="en",
+        )
         assert len(endpoint.texts()) == 1
 
 
 def test_the_tick_binds_the_notifier_at_preflight(monkeypatch, tmp_path):
     """The real tick wires the notifier: runner.main -> _preflight.
 
-    Without notify.tick_start(config) in the tick's preflight the label
-    hook never sees a chat id, so no message is ever sent: the user
+    Without notify.tick_start(config) in the tick's preflight the stop
+    alert never sees a chat id, so no message is ever sent: the user
     outcome ("Orbi blocks Issue N: the endpoint gets one message")
     depends on this one call site.
     """
@@ -686,9 +964,21 @@ def test_the_tick_binds_the_notifier_at_preflight(monkeypatch, tmp_path):
         endpoint.point(monkeypatch)
         assert runner.main(["--config", str(config_path)]) == 0
         # Bound by the tick's own preflight, never by this test: the
-        # label hook sends with no argument of its own.
-        notify.label_added("o/r", 7, BLOCKED_LABEL, "t")
-        assert endpoint.texts() == [blocked_text("t", repo="o/r", number=7)]
+        # stop alert reads its chat id and language from that binding.
+        notify.stop_alert(
+            ISSUE, repo=REPO, label=BLOCKED_LABEL, body=stop_body(),
+            comment_url=None, comment_language="en",
+            read_title=lambda: "t",
+        )
+        assert endpoint.texts() == [
+            "Orbi · Needs your attention: Orbi is stuck and needs you\n"
+            f"{REPO}#{ISSUE} t\n"
+            f"https://github.com/{REPO}/issues/{ISSUE}\n"
+            "Reason: the delivery command failed\n"
+            "Next action: check the credentials, then re-run\n"
+            f"{handoff_en()}\n"
+            f"{HELP_EN}"
+        ]
 
 
 # --- doctor and "orbi notify test" -----------------------------------------
@@ -847,7 +1137,7 @@ def test_orbi_notify_test_cli_shows_telegrams_reason_and_the_help_line(
         assert "Bad Request: chat not found" in out
         assert out.rstrip().endswith(HELP_ZH)
         assert endpoint.messages() == [
-            {"chat_id": "-42", "text": notify.TEST_ZH},
+            {"chat_id": "-42", "text": notify_text.TEST_ZH},
         ]
 
 

@@ -30,7 +30,7 @@ from seam import seam
 
 from tests.fakes.clarify import (
     FakeGate, fail_github, fix_run_id, install_github, interrupt_github,
-    record_label_notifications, stop_comment_entry, stub_judgment,
+    record_stop_notifications, stop_comment_entry, stub_judgment,
     stub_runner_login, stub_stop_history, verdict_agent,
 )
 from tests.fakes.github import FakeGh
@@ -1265,7 +1265,7 @@ def test_unchanged_ticket_re_labelled_ready_is_not_judged_again(
     comments: list[str] = []
     labels = {ISSUE_NUMBER: [delivery_labels.READY_LABEL]}
     install_fake_gh(monkeypatch, comments, labels)
-    notified = record_label_notifications(monkeypatch)
+    notified = record_stop_notifications(monkeypatch)
     config = gate_config(clone, tmp_path)
     caplog.set_level("INFO")
 
@@ -1958,7 +1958,7 @@ def test_enforce_stops_todays_way_around_a_misplaced_proposal(
     is dropped exactly as it was in production — the drop is now visible.
     """
     stub_stop_history(monkeypatch, [])
-    notified = record_label_notifications(monkeypatch)
+    notified = record_stop_notifications(monkeypatch)
     verdict_agent(monkeypatch, MISPLACED_ANSWER)
     comments, edits = _record_writes(monkeypatch)
     caplog.set_level("INFO")

@@ -340,11 +340,14 @@ class FakeGh:
             self._issue_edit(issue, flags)
             return ""
         if sub == "comment":
-            self._append_comment(
+            comment = self._append_comment(
                 issue, flags["--body"][0], login=self.login,
                 association="NONE",
             )
-            return ""
+            # gh 2.100.0 prints the created comment's permalink on stdout
+            # (prShared.createComment); the adapter returns it so a caller
+            # can link that comment (Issue #2287).
+            return comment["url"]
         # `close` — the last verb `_ISSUE_FLAGS` admits above.
         issue["state"] = "closed"
         return ""
