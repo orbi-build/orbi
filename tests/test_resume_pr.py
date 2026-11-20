@@ -897,19 +897,23 @@ def make_pick_fake(list_payload: str, view_payload=None,
                    edits: list[list[str]] | None = None,
                    comments: list[str] | None = None,
                    api_comments: list[dict] | None = None,
-                   api_calls: list[list[str]] | None = None):
+                   api_calls: list[list[str]] | None = None, *,
+                   pr_head: str | None = None,
+                   pr_rollup: list | None = None):
     """Fake `gh` for the resumable scan; guard rejects anything else.
 
     `edits`/`comments` (when given) capture the label edits and comments
     posted by the scene-failure blocked transition. `view_payload` may be
     a callable of the Issue number when each candidate needs its own
     `gh issue view` answer (Issue #1473's two-candidate scan). Since
-    Issue #1473 the scan reads `gh pr view --json state,statusCheckRollup`
-    for a RESUME_REVIEW candidate, so a default completed/success rollup
-    is answered here — the fakes exercise the normal branch, never the
-    read-failure fallback. A `--json headRefOid` read answers a head SHA
-    and the `gh api` comment routes answer `api_comments`, recording their
-    commands in `api_calls` (Issue #2304's waiting line).
+    Issue #1473 the scan reads `gh pr view --json
+    state,headRefOid,statusCheckRollup` for a RESUME_REVIEW candidate
+    (Issue #2305 added the head to the same request), so a default
+    completed/success rollup on a fixed head is answered here — the fakes
+    exercise the normal branch, never the read-failure fallback. A
+    `--json headRefOid` read answers the same head and the `gh api` comment
+    routes answer `api_comments`, recording their commands in `api_calls`
+    (Issue #2304's waiting line).
     """
     def fake_run(command, **kwargs):
         if command[1] == "issue":
@@ -932,7 +936,8 @@ def make_pick_fake(list_payload: str, view_payload=None,
                 return json.dumps({"headRefOid": PENDING_HEAD})
             return json.dumps({
                 "state": "OPEN",
-                "statusCheckRollup": [
+                "headRefOid": PENDING_HEAD if pr_head is None else pr_head,
+                "statusCheckRollup": pr_rollup if pr_rollup is not None else [
                     {"name": "tests", "status": "COMPLETED",
                      "conclusion": "SUCCESS"},
                 ],
@@ -2246,18 +2251,19 @@ def test_pick_next_delivery_returns_none_when_nothing_to_do(
 # ---------------------- CI-pending candidates are skipped (Issue #1473)
 
 
-# The head commit the CI-pending fakes report (Issue #2304).
+# The head commit the CI-pending fakes report: Issue #2304's waiting line
+# names it, and Issue #2305's single head + rollup read carries it.
 PENDING_HEAD = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"
 
 
 def _pending_rollup(pr_url, repo):
-    return ("OPEN", [
+    return ("OPEN", PENDING_HEAD, [
         {"name": "tests", "status": "IN_PROGRESS", "conclusion": None},
     ])
 
 
 def _success_rollup(pr_url, repo):
-    return ("OPEN", [
+    return ("OPEN", PENDING_HEAD, [
         {"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
     ])
 
@@ -2281,7 +2287,7 @@ def test_pick_resumable_delivery_skips_ci_pending_candidate(
         }],
         api_calls=api_calls,
     ))
-    monkeypatch.setattr(seam, "pr_delivery_rollup", _pending_rollup)
+    monkeypatch.setattr(seam, "pr_delivery_head_rollup", _pending_rollup)
     caplog.set_level("INFO")
     assert claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
@@ -2324,7 +2330,7 @@ def test_pick_resumable_delivery_skips_pending_and_returns_next_candidate(
         json.dumps(issues), view_for,
     ))
     monkeypatch.setattr(
-        seam, "pr_delivery_rollup",
+        seam, "pr_delivery_head_rollup",
         lambda pr_url, repo: (
             _pending_rollup(pr_url, repo)
             if pr_url.endswith("/pull/9")
@@ -2347,7 +2353,7 @@ def test_pick_resumable_delivery_returns_completed_success_candidate(
     monkeypatch.setattr(seam, "run_command", make_pick_fake(
         issue_payload(), gh_comments_payload([opened_pr_comment()]),
     ))
-    monkeypatch.setattr(seam, "pr_delivery_rollup", _success_rollup)
+    monkeypatch.setattr(seam, "pr_delivery_head_rollup", _success_rollup)
     issue, _scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
         hooks=resume_deps(), language_code="en",
@@ -2366,8 +2372,8 @@ def test_pick_resumable_delivery_never_skips_terminal_pr(
         issue_payload(), gh_comments_payload([opened_pr_comment()]),
     ))
     monkeypatch.setattr(
-        seam, "pr_delivery_rollup",
-        lambda pr_url, repo: (state, [
+        seam, "pr_delivery_head_rollup",
+        lambda pr_url, repo: (state, PENDING_HEAD, [
             {"name": "tests", "status": "IN_PROGRESS", "conclusion": None},
         ]),
     )
@@ -2390,7 +2396,7 @@ def test_pick_resumable_delivery_returns_candidate_when_rollup_read_raises(
     def boom(pr_url, repo):
         raise RuntimeError("gh down")
 
-    monkeypatch.setattr(seam, "pr_delivery_rollup", boom)
+    monkeypatch.setattr(seam, "pr_delivery_head_rollup", boom)
     issue, _scene = claim.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 1,
         hooks=resume_deps(), language_code="en",
@@ -2409,7 +2415,7 @@ def test_pick_next_delivery_falls_through_when_resumable_ci_pending(
         issue_payload(labels=["ai-pr-opened"]),
         gh_comments_payload([opened_pr_comment()]),
     ))
-    monkeypatch.setattr(seam, "pr_delivery_rollup", _pending_rollup)
+    monkeypatch.setattr(seam, "pr_delivery_head_rollup", _pending_rollup)
     monkeypatch.setitem(claim.__dict__, "reconcile_open_epics", lambda *a, **k: [])
     monkeypatch.setitem(
         claim.milestone_bookkeeping.__dict__, "milestone_reconcile_due",
