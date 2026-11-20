@@ -783,7 +783,6 @@ ALLOWED_PRAGMA_FILES = (
     "tools/coverage_gate.py",
     "tools/diff_coverage_gate.py",
     "tools/patch_ratchet.py",
-    "tools/ci_failure_triage.py",
     "tests/test_cli_install.py",
 )
 
