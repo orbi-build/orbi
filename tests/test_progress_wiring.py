@@ -3098,3 +3098,83 @@ def test_invalid_status_url_warns_and_the_same_delivery_continues(
     assert not any("Project status" in body for body in posted)
     assert not any("项目状态" in body for body in posted)
     assert not any(raw in body for body in posted)
+
+
+# --- the cross-deployment fresh-claim race (Issue #2298) -------------------
+
+
+def _started_scene(login: str, run_id: str) -> dict:
+    """One executor's started comment, as GitHub reports it."""
+    return {
+        "author": {"login": login},
+        "body": (
+            f"<!-- orbi:run={run_id} -->\n"
+            "<!-- orbi:comment=started -->\n"
+            "**Orbi started Pi:** run details"
+        ),
+    }
+
+
+def test_fresh_claim_yields_when_another_executor_already_started(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #2298 acceptance: the later fresh claim stops its round.
+
+    Another account (cloud) already started the Issue, so the comment list
+    this executor re-reads carries that live start; it posted its own
+    started comment into the same list and yields: no Pi session, no
+    progress comment, no label change and only its OWN worktree removed.
+    The winner's labels and branch stay untouched."""
+    other = _started_scene("cloud", "bbbb1111")
+    calls, posted = make_fake_gh(monkeypatch, comments=[other])
+    patch_process_deps(monkeypatch, tmp_path)
+    edit_issue = seam.edit_issue
+
+    with caplog.at_level("INFO"):
+        result = runner.process_issue(
+            make_issue(), make_config(tmp_path), "xqliu/orbi",
+        )
+
+    assert result == runner.IssueResult("claim-yielded", None)
+    # This executor kept its own started comment (the loser's record)...
+    assert any("Orbi started Pi:" in body for body in posted)
+    # ...and never reached the progress comment or Pi.
+    assert not any("**Orbi progress**" in body for body in posted)
+    assert not pi_session.run_pi.called
+    # No label change after the claim: nothing removed, nothing blocked.
+    assert [
+        command for command in calls
+        if command[0] == "gh" and command[1] == "issue"
+        and command[2] == "edit"
+    ] == []
+    # The claim write itself landed before the yield; nothing removed it.
+    assert [edit.kwargs.get("add") for edit in edit_issue.call_args_list] \
+        == ["ai-in-progress"]
+    assert not [
+        edit for edit in edit_issue.call_args_list
+        if edit.kwargs.get("add") == "ai-blocked"
+        or "remove" in edit.kwargs
+    ]
+    # Only its own local worktree is removed.
+    assert not derived_wt(tmp_path).exists()
+    assert "claim_yield" in caplog.text
+    assert "reason=other_executor_started" in caplog.text
+
+
+def test_fresh_claim_runs_when_no_other_executor_started(
+    monkeypatch, tmp_path, caplog,
+):
+    """The winning side: no other live start in the comment list, so the
+    round continues into Pi and the delivery."""
+    calls, posted = make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path)
+
+    with caplog.at_level("INFO"):
+        result = runner.process_issue(
+            make_issue(), make_config(tmp_path), "xqliu/orbi",
+        )
+
+    assert result.kind == "pr"
+    assert pi_session.run_pi.called
+    assert any("Orbi started Pi:" in body for body in posted)
+    assert "claim_yield" not in caplog.text
