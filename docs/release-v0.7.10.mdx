@@ -1,9 +1,18 @@
 ---
 title: "v0.7.10 release"
-description: "Orbi v0.7.10 release notes: A merge that landed while GitHub never marked the PR merged also closes the Issue and 1 more change."
+description: "Orbi v0.7.10 closes delivered Issues despite stale PR status and keeps a delivery marked complete if a later GitHub read fails."
 ---
 
 `v0.7.10` was published 2026-10-19T17:41:25Z as the GitHub Release [v0.7.10](https://github.com/orbi-build/orbi/releases/tag/v0.7.10) (release task: Issue #1803).
+
+This release is for the self-hosted core. Orbi Cloud follows a separate deployment schedule.
+
+## After code has merged
+
+- When the reviewed code has merged but GitHub still reports the PR as open, Orbi closes the source Issue itself. An already delivered task no longer holds the milestone open. See [PR #1805](https://github.com/orbi-build/orbi/pull/1805).
+- Once Orbi confirms that the merge landed, a later failed GitHub read no longer turns that completed delivery into a failure. See [PR #1804](https://github.com/orbi-build/orbi/pull/1804).
+
+Read the [current workflow guide](/workflow) for merge results, Issue states and release gates. The [operations guide](/operations) explains how to inspect a self-hosted runner when a delivery stalls or fails.
 
 ## Tag state (verified against origin)
 

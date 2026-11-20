@@ -1,9 +1,17 @@
 ---
 title: "v0.7.7 release"
-description: "Orbi v0.7.7 release notes: Missing provider key, rate-limited release gate reads and gh network timeouts keep their pre-#1762 classification"
+description: "Orbi v0.7.7 fixes error reporting for missing model keys, GitHub rate limits and network timeouts in self-hosted deliveries."
 ---
 
 `v0.7.7` was published 2026-10-18T13:45:47Z as the GitHub Release [v0.7.7](https://github.com/orbi-build/orbi/releases/tag/v0.7.7) (release task: Issue #1769).
+
+These notes describe a historical self-hosted core release. Availability in Orbi Cloud depends on its deployed version.
+
+## Credential and GitHub failures
+
+This release restores the error classification used before v0.7.6. Orbi reports a missing model API key as a credential problem. It classifies GitHub rate limits during release checks and GitHub CLI network timeouts as transient GitHub failures. The changes are in [PR #1770](https://github.com/orbi-build/orbi/pull/1770).
+
+For current failure reasons and recovery actions, read the [workflow guide](/workflow). For model credentials and configuration, use the [getting-started guide](/getting-started).
 
 ## Tag state (verified against origin)
 
