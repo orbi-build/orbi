@@ -613,27 +613,36 @@ def test_the_run_details_summary_follows_the_language():
 
 
 def test_milestone_plan_ready_follows_the_publisher_language(tmp_path):
+    """Issue #2293: the once-per-run plan-ready milestone keeps rendering
+    the publisher's message language (its hidden marker is language
+    independent, so the fold reads the same prefix in `zh`)."""
     published = []
 
-    class Publisher:
-        language_code = "zh"
+    def fake_run_command(command, **kwargs):
+        if "--method" not in command:
+            return json.dumps([])
+        body = command[command.index("--field") + 1].removeprefix("body=")
+        published.append(body)
+        return json.dumps({"id": 51})
 
-        def milestone(self, text, **kwargs):
-            published.append(text)
-
-    from orbi import milestone as milestone_module
+    from orbi import plan_milestone
 
     (tmp_path / ".orbi").mkdir()
     (tmp_path / ".orbi" / "plan.md").write_text("plan", encoding="utf-8")
-    milestone_module._publish_plan_milestone(Publisher(), tmp_path)
-    assert published == ["计划已就绪"]
 
-    class EnglishPublisher(Publisher):
-        language_code = "en"
+    def publisher(language_code):
+        return progress.ProgressPublisher(
+            18, "xqliu/orbi", "abcdef12", run_command=fake_run_command,
+            language_code=language_code,
+        )
+
+    plan_milestone.publish(publisher("zh"), tmp_path)
+    assert "计划已就绪" in published[-1]
+    assert "<!-- orbi:milestone=plan-ready -->" in published[-1]
 
     published.clear()
-    milestone_module._publish_plan_milestone(EnglishPublisher(), tmp_path)
-    assert published == ["plan ready"]
+    plan_milestone.publish(publisher("en"), tmp_path)
+    assert "plan ready" in published[-1]
 
 
 # ---------------------------------------------- display text (Issue #1729)

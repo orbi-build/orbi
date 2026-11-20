@@ -36,10 +36,10 @@ from orbi import (
     failure_report,
     language,
     merge_exec,
-    milestone as milestone_bookkeeping,
     notify,
     ops_delivery,
     pi_session,
+    plan_milestone,
     recoverable_failure,
     run_state,
 )
@@ -555,7 +555,7 @@ def _run_session(attempt: _Attempt) -> IssueResult | None:
             ),
         )
     publish(
-        action=lambda: milestone_bookkeeping._publish_plan_milestone(
+        action=lambda: plan_milestone.publish(
             publisher, attempt.worktree),
     )
     if attempt.ops:
