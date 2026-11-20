@@ -34,6 +34,7 @@ import orbi.split_command as split_command
 import orbi.clarify as clarify
 import orbi.clarify_stop as clarify_stop
 import orbi.claim as claim
+import orbi.claim_race as claim_race
 import orbi.failure_report as failure_report
 import orbi.github as github
 import orbi.github_feedback as github_feedback
@@ -78,7 +79,8 @@ _MODULES = (
     resume_scan, restart_scan,
     pr_head_sync, pr_verification, resume_verification,
     delivery_push,
-    repo_config, clarify, comment_trust, requeue, question, split_apply,
+    repo_config, clarify, claim_race, comment_trust, requeue, question,
+    split_apply,
     draft, draft_marker, branch_reclaim, failure_report, suggest, cli,
     blocked_comment, stop_comment,
     base_ci_red, base_ci_fix, cli_commands, cli_doctor, check_permission,
