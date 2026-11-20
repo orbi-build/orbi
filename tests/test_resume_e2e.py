@@ -1056,7 +1056,8 @@ def test_e2e_human_review_wait_sends_one_needs_you_message(
 ):
     """Issue #1691: with the gate on and a non-empty column 2, the PR-open
     tick sends ONE "waiting for your review" message (status, Issue line,
-    link, help line) next to the checklist; two more gate ticks add
+    link, compact help line — Issue #2289) next to the checklist; two
+    more gate ticks add
     nothing. The label patch is not the trigger, so the message arrives
     whatever labels the delivery carries. The wire is the local recording
     endpoint from #1673."""
@@ -1087,8 +1088,7 @@ def test_e2e_human_review_wait_sends_one_needs_you_message(
             "Orbi · Needs your attention: Waiting for your review\n"
             f"{REPO}#{ISSUE_NUMBER} Continue fixing the same PR\n"
             f"https://github.com/{REPO}/issues/{ISSUE_NUMBER}\n"
-            "Need help? Join the Orbi community: "
-            "https://t.me/+kJRTTpFGBRU0M2Y9"
+            "Help: https://t.me/+kJRTTpFGBRU0M2Y9"
         ]
         # Two gate ticks hold the delivery; no message is sent again.
         for _ in range(2):

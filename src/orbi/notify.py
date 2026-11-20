@@ -8,10 +8,9 @@ Chinese or English, ONE "waiting for your review" message where the
 human-review checklist is built (Issue #1691) and ONE message when the engine
 answers a stop question itself (Issue #2220). `orbi notify test` checks the
 setup; a label a person adds by hand sends nothing, and the gate's own label
-patch sends nothing. A problem message (`ai-blocked`,
-`ai-needs-detail`, the human-review wait) ends with the community help line
-from the `orbi.language` catalog; a normal handoff (`ai-awaiting-merge`, a
-merged PR, the test message) does not.
+patch sends nothing. A problem message (`ai-blocked`, `ai-needs-detail`,
+the human-review wait) ends with the compact `Help: <link>` line (#2289);
+a normal handoff (`ai-awaiting-merge`, a merged PR, the test) does not.
 
 The adapter is Telegram-only and uses the standard library `urllib` (no
 new dependency). Notifications are a PURE BYPASS, exactly like the progress
@@ -66,12 +65,12 @@ ATTENTION_LABELS = frozenset({
     BLOCKED_LABEL, NEEDS_DETAIL_LABEL, AWAITING_MERGE_LABEL,
 })
 
-# The attention labels whose message is a problem the person must
-# resolve, so it ends with the community help line (Issue #1684).
-# `ai-awaiting-merge` is an ordinary handoff and does not.
+# The attention labels whose message ends with the compact community line
+# (Issues #1684, #2289); `ai-awaiting-merge` is a handoff and does not.
 HELP_LABELS = frozenset({BLOCKED_LABEL, NEEDS_DETAIL_LABEL})
 # The one catalog key of that line (`orbi.language`).
 HELP_KEY = "help.community"
+HELP_ALERT_KEY = "help.community_short"  # compact phone-alert line (#2289)
 
 # The fixed message texts. The `Orbi · ` prefix is part of the contract.
 _HEADLINE_EN = "Orbi · Needs your attention: "
@@ -465,7 +464,8 @@ def _human_review_message(repo: str, number: int,
 
 def _needs_you_message(status: str, repo: str, number: int,
                        title: str | None, *, help_line: bool) -> str:
-    """One "needs you" message; a problem message ends with the help line."""
+    """One "needs you" message; a problem message ends with the compact help
+    line (#2289)."""
     language_code = _language()
     headline = _HEADLINE_ZH if language_code == "zh" else _HEADLINE_EN
     body = (
@@ -475,7 +475,7 @@ def _needs_you_message(status: str, repo: str, number: int,
     )
     if not help_line:
         return body
-    return f"{body}\n{language.text(language_code, HELP_KEY)}"
+    return f"{body}\n{language.text(language_code, HELP_ALERT_KEY)}"
 
 
 def _issue_line(repo: str, number: int, title: str | None) -> str:

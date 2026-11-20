@@ -83,12 +83,16 @@ def bind(monkeypatch, *, config=None, token=TOKEN) -> None:
     )
 
 
-# The one community-help line a problem message ends with (Issue
-# #1684), from the `orbi.language` catalog.
+# The full community-help sentence a GitHub body and the `orbi notify test`
+# terminal output end with (Issue #1684), from the `orbi.language` catalog.
 HELP_EN = (
     "Need help? Join the Orbi community: https://t.me/+kJRTTpFGBRU0M2Y9"
 )
 HELP_ZH = "需要帮助？加入 Orbi 用户群：https://t.me/+kJRTTpFGBRU0M2Y9"
+# The compact one-line community entry a PHONE alert ends with (Issue
+# #2289): the task lines stay first and the help line fits one line.
+ALERT_HELP_EN = "Help: https://t.me/+kJRTTpFGBRU0M2Y9"
+ALERT_HELP_ZH = "帮助：https://t.me/+kJRTTpFGBRU0M2Y9"
 
 
 def blocked_text(title: str = "Fix the thing", *,
@@ -97,7 +101,7 @@ def blocked_text(title: str = "Fix the thing", *,
         "Orbi · Needs your attention: Orbi is stuck and needs you\n"
         f"{repo}#{number} {title}\n"
         f"https://github.com/{repo}/issues/{number}\n"
-        f"{HELP_EN}"
+        f"{ALERT_HELP_EN}"
     )
 
 
@@ -281,7 +285,7 @@ def test_needs_you_message_is_the_fixed_text(
             "https://github.com/o/r/issues/7"
         )
         if help_line:
-            expected += f"\n{HELP_ZH}"
+            expected += f"\n{ALERT_HELP_ZH}"
     else:
         expected = (
             f"Orbi · Needs your attention: {status_en}\n"
@@ -289,7 +293,7 @@ def test_needs_you_message_is_the_fixed_text(
             "https://github.com/o/r/issues/7"
         )
         if help_line:
-            expected += f"\n{HELP_EN}"
+            expected += f"\n{ALERT_HELP_EN}"
     with TelegramEndpoint() as endpoint:
         endpoint.point(monkeypatch)
         bind(monkeypatch, config=HostLanguageConfig(
@@ -419,7 +423,7 @@ def test_human_review_waiting_sends_the_wait_message(monkeypatch):
             "Orbi · Needs your attention: Waiting for your review\n"
             "o/r#7 Review me\n"
             "https://github.com/o/r/issues/7\n"
-            f"{HELP_EN}"
+            f"{ALERT_HELP_EN}"
         ]
 
 
@@ -432,7 +436,7 @@ def test_human_review_waiting_message_follows_the_language(monkeypatch):
             "Orbi · 需要您处理：等您人工验收\n"
             "o/r#7 复核我\n"
             "https://github.com/o/r/issues/7\n"
-            f"{HELP_ZH}"
+            f"{ALERT_HELP_ZH}"
         ]
 
 
@@ -507,7 +511,7 @@ def test_apply_label_patch_sends_without_a_title_when_the_read_fails(
             "Orbi · Needs your attention: Orbi is stuck and needs you\n"
             "o/r#7\n"
             "https://github.com/o/r/issues/7\n"
-            f"{HELP_EN}"
+            f"{ALERT_HELP_EN}"
         ]
 
 
@@ -572,7 +576,7 @@ def test_clarify_stop_sends_one_needs_detail_message(monkeypatch):
             "Orbi · Needs your attention: Orbi needs more detail\n"
             "o/r#7 Thin ticket\n"
             "https://github.com/o/r/issues/7\n"
-            f"{HELP_EN}"
+            f"{ALERT_HELP_EN}"
         ]
 
 
