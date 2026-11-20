@@ -26,9 +26,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from orbi import claim_race
 from orbi import config as config_domain
 from orbi import (
-    clarify,
     failure_report,
     language,
     merge_exec,
@@ -52,14 +52,12 @@ from orbi.failure_report import _classify_failure
 from orbi.gitops import (
     create_worktree,
     freeze_base,
-    stable_branch_exists,
     task_branch,
     worktree_path,
 )
 from orbi.github import (
     apply_label_patch,
     comment_issue,
-    has_in_progress_label,
     issue_priority,
 )
 from orbi.github_feedback import pr_delivery_rollup
@@ -243,6 +241,7 @@ def _dispatch_fresh_claim(issue: dict, source_repo: str,
     """The normal dev delivery: a queue-label Issue with no open PR."""
     return _start_implementation(
         issue, source_repo, facts, ops=False, run_id=run_id, hooks=hooks,
+        fresh_claim=True,
     )
 
 
@@ -275,7 +274,8 @@ def _dispatch_ops(issue: dict, source_repo: str,
 
 def _start_implementation(issue: dict, source_repo: str,
                           facts: DeliveryFacts, *, ops: bool, run_id: str,
-                          hooks: ImplementationHooks) -> IssueResult:
+                          hooks: ImplementationHooks,
+                          fresh_claim: bool = False) -> IssueResult:
     """Claim, run and close one implementation delivery (all four scenes)."""
     attempt = _Attempt(
         issue=issue, source_repo=source_repo, facts=facts, hooks=hooks,
@@ -286,7 +286,7 @@ def _start_implementation(issue: dict, source_repo: str,
         yielded = _claim_and_open(attempt)
         if yielded is not None:
             return yielded
-        delivered = _run_session(attempt)
+        delivered = _run_session(attempt, fresh_claim=fresh_claim)
         if delivered is not None:
             return delivered
         return _closeout_implementation(attempt)
@@ -305,9 +305,12 @@ def _claim_and_open(attempt: _Attempt) -> IssueResult | None:
     )
     attempt.branch = _delivery_branch(attempt)
     attempt.run_info = _run_fields(attempt)
-    yielded = _claim_window_yield(attempt)
-    if yielded is not None:
-        return yielded
+    kind = claim_race.claim_window_yield(
+        attempt.issue, attempt.facts, attempt.config,
+        source_repo=attempt.source_repo, run_id=attempt.run_id,
+    )
+    if kind is not None:
+        return IssueResult(kind, None)
     _claim_issue(attempt)
     _open_worktree(attempt)
     attempt.resume_ctx = _resume_context(attempt)
@@ -359,38 +362,6 @@ def _run_fields(attempt: _Attempt) -> RunFields:
         "issue=%s %s", int(attempt.issue["number"]), run_info.text(),
     )
     return run_info
-
-
-def _claim_window_yield(attempt: _Attempt) -> IssueResult | None:
-    """Yield when another instance claimed the Issue inside the prepare window."""
-    number = int(attempt.issue["number"])
-    facts = attempt.facts
-    config = attempt.config
-    if (facts.in_progress or facts.dispatch_label not in facts.claim_labels
-            or facts.takeover_pr is not None):
-        return None
-    # The pickup scan and the in-progress recheck above
-    # both predate freeze_base (a seconds-long network round trip).
-    # A label — or the stable branch — appearing inside that window
-    # means another instance claimed this Issue while we were
-    # preparing: yield. No label writes, no comments, nothing that
-    # could interrupt the winner's in-flight delivery; the next
-    # tick's scan picks work up again on its own. The
-    # predicate keys on the repository's dispatch label (#527), not
-    # the default constant — a custom-label repository's tickets
-    # never carry `ai-ready`, and the guard must guard them too.
-    if has_in_progress_label(number, attempt.source_repo):
-        event("claim_yield", issue=number, reason="in_progress_label")
-        return IssueResult("claim-yielded", None)
-    if not facts.stable_branch_present and stable_branch_exists(
-            config.repo_dir, facts.stable_branch,
-    ):
-        event("claim_yield", issue=number, reason="stable_branch_appeared")
-        return IssueResult("claim-yielded", None)
-    if config.clarify_thin_tickets and not clarify.enforce(
-            attempt.issue, config, attempt.source_repo, attempt.run_id):
-        return IssueResult("needs-detail", None)
-    return None
 
 
 def _claim_issue(attempt: _Attempt) -> None:
@@ -508,7 +479,30 @@ def _resume_context(attempt: _Attempt) -> str | None:
     return resume_ctx
 
 
-def _run_session(attempt: _Attempt) -> IssueResult | None:
+def _yield_to_other_executor(attempt: _Attempt) -> bool:
+    """Yield when another executor already started this Issue (Issue #2298).
+
+    Read after OUR own started comment exists, so the list carries both
+    sides' starts: the first live one wins (claim_race). This is the same
+    GitHub read the started publish makes, so a failure here is a bypass
+    failure (Issue #79): log it and run, never decide the delivery.
+    """
+    number = int(attempt.issue["number"])
+    try:
+        return claim_race.yield_to_another_executor(
+            issue=number, source_repo=attempt.source_repo,
+            comments=attempt.publisher.list_comments(),
+            retire=functools.partial(
+                attempt.hooks.cleanup_worktree, attempt.ctx,
+                attempt.config.repo_dir),
+        )
+    except Exception as exc:
+        LOGGER.exception("issue=%s claim_yield_check_failed: %s", number, exc)
+        return False
+
+
+def _run_session(attempt: _Attempt, *,
+                 fresh_claim: bool = False) -> IssueResult | None:
     """Publish the start, run the Pi session and publish the plan milestone."""
     title = attempt.issue["title"]
     config = attempt.config
@@ -524,6 +518,11 @@ def _run_session(attempt: _Attempt) -> IssueResult | None:
             status_url=config.status_url, issue_title=title,
         )),
     )
+    # The cross-deployment claim race is decided only by a FRESH claim
+    # (Issue #2298): a restart resumes this deployment's own run and a
+    # takeover follows its own PR. The loser stops here, before Pi.
+    if fresh_claim and _yield_to_other_executor(attempt):
+        return IssueResult("claim-yielded", None)
     # The whole ProgressPublisher path is a bypass — a
     # failure here (404, rate limit) is logged and never skips
     # `run_pi` or fails the delivery.
