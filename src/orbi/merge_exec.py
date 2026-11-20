@@ -28,7 +28,10 @@ from pathlib import Path
 
 from orbi import answer as answer_domain
 from orbi import config as config_domain
-from orbi import failure_report, github, gitops, human_review, language, run_state
+from orbi import (
+    failure_report, github, gitops, human_review, language, review_wait,
+    run_state,
+)
 from orbi.branch_reclaim import delete_merged_delivery_branch
 from orbi.checks import classify_checks, render_check
 from orbi.delivery_labels import BLOCKED_LABEL
@@ -265,7 +268,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
                 f"PR #{pr['number']} is not mergeable (mergeable={mergeable}); "
                 "resolve conflicts and retry"
             )
-        run_state.update_reviewed_head(worktree, absorbed_head)
+        review_wait.update_reviewed_head(worktree, absorbed_head)
         event(
             "base_absorbed_deferred", pr=pr["number"],
             base_branch=base_branch, base_sha=base_sha, head=absorbed_head,

@@ -5,15 +5,17 @@ Split out of `orbi.github` once that leaf crossed the 1,000-line cap. The
 `authenticated_github_login`, `strip_bot_suffix`) stay in `orbi.github`;
 this module imports them one way. `orbi.github` never imports this module
 back, so the adapter stays a leaf and the runtime import graph stays acyclic.
+The ONE delivery rollup read moved to `orbi.review_wait` (Issue #2305: it
+carries the PR head for the claim scan's wait check); `pr_delivery_rollup`
+here stays the two-value view of that same request.
 """
 from __future__ import annotations
 
 from orbi.github import (
     authenticated_github_login,
-    pr_number,
     strip_bot_suffix,
-    pr_view,
 )
+from orbi.review_wait import pr_delivery_head_rollup
 
 
 def _normalize_pr_feedback_item(item: dict) -> dict:
@@ -69,17 +71,12 @@ def pr_delivery_rollup(pr_url: str, source_repo: str) -> tuple[str, list]:
 
     The delivery step classifies this rollup once per tick: pending
     checks defer the delivery to the next tick instead of sleeping.
+    Issue #2305 gave the ONE read a second consumer: it lives in
+    `orbi.review_wait` and also carries the PR's current head, so the
+    claim scan can tell a delivery that only waits for its checks from
+    one whose head moved, without a second request.
     """
-    number = pr_number(pr_url)
-    data = pr_view(number, "state,statusCheckRollup", repo=source_repo)
-    state = data.get("state")
-    if state not in ("OPEN", "MERGED", "CLOSED"):
-        raise ValueError(f"unexpected PR state: {state!r}")
-    rollup = data.get("statusCheckRollup")
-    if rollup is None:
-        rollup = []
-    if not isinstance(rollup, list):
-        raise ValueError("pr statusCheckRollup must be a JSON array")
+    state, _head, rollup = pr_delivery_head_rollup(pr_url, source_repo)
     return state, rollup
 
 

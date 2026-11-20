@@ -229,7 +229,14 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
 - 普通开发交付把 CI 等待留到后续 tick（Issue #788）：记录状态、返回、
   释放 slot，下一个 tick 重读（`delivery_ci_pending`、
   `merge_gate_ci_pending`、`merge_gate_mergeable_unknown`）。评审扫描跳过
-  CI 待完成的候选，让其他工作继续。发版另用进程内的 CI 轮询，等待期间
+  CI 待完成的候选，让其他工作继续。一个有界例外（Issue #2305）：已通过
+  评审、只等最新 head 的 checks 的交付（#1626 评审记录的 head 等于 PR
+  head、至少一个 check 在跑、没有失败、距记录时间不超过 15 分钟），在机器
+  上没有空闲 slot 时会暂缓 FRESH claim——该 tick 直接结束，slot 留给这次
+  merge，并记一行 `review_waiting_delivery`。超过 15 分钟就按上面的方式照常
+  claim；空 check 列表、有失败的 check、仍有其他空闲 slot、以及 in-flight
+  restart 扫描都不会被暂缓。单 slot 时最多空转约 20 分钟（上限加上 5 分钟
+  的 timer）。发版另用进程内的 CI 轮询，等待期间
   持有一个 slot，上限由 `release_ci_wait_seconds` 决定，每次 CI 门禁默认 1800 秒，不是整个发布总时限。
   开发交付还有一个短等待：GitHub 异步计算的 mergeability（Issue #1736）：merge
   gate 首次读到 `UNKNOWN` 且该 head 的 CI 已得出结论时，会在 2 s、4 s、
