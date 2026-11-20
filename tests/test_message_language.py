@@ -19,7 +19,9 @@ from pathlib import Path
 import pytest
 
 from orbi import clarify, comment_kind, delivery_comment, failure, scene
-from orbi import human_review, language, merge_handoff, progress
+from orbi import (
+    human_review, language, merge_handoff, progress, recoverable_failure,
+)
 from orbi import release_comments, review_rounds
 from orbi.config import RunnerConfig
 from orbi.delivery_scene import RunContext
@@ -306,14 +308,16 @@ def test_recoverable_scene_body_follows_the_language():
         reason_code="unclassified", action_code="fix_ticket",
         retry_safe=False, outcome="blocked",
     )
-    zh = progress.recoverable_scene_body(
+    zh = recoverable_failure.recoverable_scene_body(
         run_id="abcdef12", recoverable_name="model_wait 已恢复", record=record,
+        fingerprint="0123456789abcdef",
         detail="boom", run_info=RunFields(
             run_id="abcdef12", priority="normal"),
         language_code="zh",
     )
     assert "下一个 tick 自动重试" in zh
     assert progress.RECOVERED_MARKER_PATTERN.search(zh) is not None
+    assert progress.FAILURE_MARKER_PATTERN.search(zh) is not None
 
 
 def test_terminal_outcome_body_follows_the_language():

@@ -374,4 +374,28 @@ EXTRA_MESSAGES: dict[str, tuple[str, str]] = {
         "the `orbi` CLI on the host (login @{login})",
         "主机上的 `orbi` CLI（登录 @{login}）",
     ),
+    # Issue #2292: a recoverable Pi/model failure that keeps repeating is
+    # the same dead loop as a classified failure (same FAILURE_STREAK_LIMIT).
+    # The stop names the human decision and states what happened to the
+    # agent's uncommitted work.
+    "delivery.recoverable_streak_action": (
+        "Answer the agent's question or amend the ticket, then remove "
+        "`ai-blocked` and add the dispatch label (`{ready_label}`) to "
+        "start a fresh delivery.",
+        "回答 agent 的问题或修改工单，然后移除 `ai-blocked` 并添加领取标签"
+        "（`{ready_label}`）以开始新的交付。",
+    ),
+    "delivery.recoverable_streak_retained": (
+        " The agent's uncommitted changes were not lost: they remain in "
+        "the retained failed worktree (the runner never commits them).",
+        " agent 未提交的改动没有丢失：它们仍在保留的失败工作树中（runner "
+        "从不提交它们）。",
+    ),
+    "delivery.recoverable_streak_removed": (
+        " The agent's uncommitted changes were not retained: this host "
+        "sets `keep_failed_worktrees = false`, so the failed worktree "
+        "was removed.",
+        " agent 未提交的改动没有被保留：本机设置了 `keep_failed_worktrees = false`，"
+        "失败的工作树已被删除。",
+    ),
 }

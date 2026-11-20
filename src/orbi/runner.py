@@ -123,7 +123,6 @@ from orbi.progress import (
     progress_body,
     progress_body_with_outcome,
     progress_state,
-    recoverable_scene_body,
     run_marker,
     safe_publish,
     validate_run_id,

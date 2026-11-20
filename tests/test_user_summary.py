@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from orbi import config as config_domain
-from orbi import language, user_summary
+from orbi import language, recoverable_failure, user_summary
 
 VALID_URL = "https://tasks.example.org/project-status?repo=example%2Fwidget"
 
@@ -337,12 +337,13 @@ def test_recoverable_scene_carries_the_summary_and_keeps_its_markers():
     from orbi import failure, progress
     from orbi.run_fields import RunFields
 
-    body = progress.recoverable_scene_body(
+    body = recoverable_failure.recoverable_scene_body(
         run_id="abc12345", recoverable_name="Pi failure recovered",
         record=failure.Failure(
             reason_code="credential_missing", action_code="refresh_credentials",
             retry_safe=True, outcome="fix_needed",
         ),
+        fingerprint="0123456789abcdef",
         detail="401", run_info=RunFields(run_id="abc12345", priority="normal"),
         status_url=VALID_URL,
         issue=7, title="Start the work", language_code=language.LANGUAGE_EN,
@@ -350,6 +351,7 @@ def test_recoverable_scene_carries_the_summary_and_keeps_its_markers():
     lines = body.splitlines()
     assert lines[0] == "<!-- orbi:run=abc12345 -->"
     assert lines[1] == "<!-- orbi:recovered=credential_missing -->"
+    assert lines[2] == "<!-- orbi:fail=0123456789abcdef -->"
     assert body.index("retrying on the next tick") < body.index("**#7 Start")
     assert _link() in body
 
