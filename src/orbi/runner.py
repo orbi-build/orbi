@@ -52,7 +52,7 @@ from pathlib import Path
 # preflight stubs keep patching the module global below.
 from orbi import language
 from orbi import milestone as milestone_bookkeeping
-from orbi import claim, notify, tick_reads, user_summary
+from orbi import claim, notify, tick_reads, user_summary, waiting_checks
 from orbi import config as config_domain
 from orbi.blocked_comment import post_blocked_comment
 from orbi.branch_reclaim import delete_merged_delivery_branch, reclaim_merged_delivery_branches
@@ -258,7 +258,7 @@ from orbi.github import (
 )
 from orbi.github_feedback import check_summaries, pr_delivery_status
 from orbi import check_permission
-from orbi.checks import render_check, classify_checks
+from orbi.checks import classify_checks
 from orbi.gitops import (
     acquire_base_sync_lock,
     create_release_worktree,
@@ -1813,18 +1813,17 @@ def delivery_step(pr_url: str, issue: dict, config: config_domain.RunnerConfig,
                 ),
             )
         return
-    # The pre-review CI gate. Pending checks defer the whole
-    # delivery to the next tick — the review never starts against a head
-    # whose CI has not concluded, so no Pi session is spent on a state
-    # that a later read replaces. A failed check still runs the review:
-    # the review session is the fixer, and the merge gate
-    # re-reads the CI of the verdict's head one-shot.
+    # The pre-review CI gate. Pending checks defer the whole delivery — the
+    # review never starts against a head whose CI has not concluded, so no Pi
+    # session is spent on a state a later read replaces, and the Issue says
+    # which commit Orbi waits for (Issue #2304). A failed check still runs the
+    # review: the review session is the fixer, and the merge gate re-reads
+    # the CI of the verdict's head one-shot.
     pending, _failed, _passed = classify_checks(rollup)
     if pending:
-        event(
-            "delivery_ci_pending", issue=number, pr=pr_url,
-            pending="; ".join(render_check(entry) for entry in pending),
-        )
+        waiting_checks.defer_pending(
+            pr_url, pending, issue, source_repo, run_id,
+            language.of(config), config.status_url)
         return
     # One OPEN round — the label read/repair, the
     # resumable gate, one independent review of the frozen PR and

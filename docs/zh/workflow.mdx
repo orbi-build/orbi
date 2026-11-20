@@ -228,9 +228,12 @@ branch、base、head、精确 URL 校验全部保留，#45/#89 的防串 PR 语�
   同一堵墙最多撞两轮。
 - 普通开发交付把 CI 等待留到后续 tick（Issue #788）：记录状态、返回、
   释放 slot，下一个 tick 重读（`delivery_ci_pending`、
-  `merge_gate_ci_pending`、`merge_gate_mergeable_unknown`）。评审扫描跳过
-  CI 待完成的候选，让其他工作继续。发版另用进程内的 CI 轮询，等待期间
-  持有一个 slot，上限由 `release_ci_wait_seconds` 决定，每次 CI 门禁默认 1800 秒，不是整个发布总时限。
+  `merge_gate_ci_pending`、`merge_gate_mergeable_unknown`）。等待期间该
+  Issue 的进度评论用一行说明：在等哪个 commit 的检查，以及检查通过后
+  Orbi 会自动合并——不承诺时间，也不承诺下一个 tick（Issue #2304）。
+  评审扫描跳过 CI 待完成的候选，让其他工作继续。
+  发版另用进程内的 CI 轮询，等待期间持有一个 slot，上限由 `release_ci_wait_seconds`
+  决定，每次 CI 门禁默认 1800 秒，不是整个发布总时限。
   开发交付还有一个短等待：GitHub 异步计算的 mergeability（Issue #1736）：merge
   gate 首次读到 `UNKNOWN` 且该 head 的 CI 已得出结论时，会在 2 s、4 s、
   8 s 后重读整个 PR 状态（`MERGEABLE_UNKNOWN_RETRY_DELAYS`），GitHub 一

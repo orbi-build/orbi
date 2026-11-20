@@ -277,9 +277,12 @@ Rules of the chain:
 - Ordinary development deliveries defer pending CI to a later tick (Issue #788):
   they record the wait, return and release the slot. The next tick re-reads
   the state (`delivery_ci_pending`, `merge_gate_ci_pending`,
-  `merge_gate_mergeable_unknown`). The review scan skips CI-pending candidates,
-  so other work can proceed. Releases have a separate in-process CI wait:
-  they keep a slot while polling, bounded by `release_ci_wait_seconds`
+  `merge_gate_mergeable_unknown`). While that wait lasts the Issue's progress
+  comment says so in one line: the head commit whose checks Orbi waits for
+  and that the merge follows automatically once they pass, with no time and
+  no next-tick promise (Issue #2304). The review scan skips CI-pending
+  candidates, so other work can proceed. Releases have a separate in-process
+  CI wait: they keep a slot while polling, bounded by `release_ci_wait_seconds`
   (default 1800 seconds per CI gate, not a total release timeout).
   One bounded exception is GitHub's asynchronously computed mergeability
   (Issue #1736): when the merge gate's first read says `UNKNOWN` and the
