@@ -58,29 +58,45 @@ _LABEL_TOKEN = re.compile(r"(?<![\w-])ai-[a-z][a-z-]*\b")
 # One code span: a run of backticks, its content, the same run again.
 _CODE_SPAN = re.compile(r"(`+)(.+?)\1")
 
-# A fenced code block boundary (``` or ~~~, at least three).
+# A fenced code block boundary: a run of three or more backticks or
+# tildes. Only the same character, at least as long, closes the block
+# (CommonMark — the rule `docs_structure` in the i18n contract already
+# applies), so a longer fence can quote a shorter one.
 _FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+
+
+def _closes_block(fence: tuple[str, int], marker) -> bool:
+    """True when `marker` is the open block's own closing fence: the
+    same character, at least as long as the run that opened it."""
+    if marker is None:
+        return False
+    return marker.group(1)[0] == fence[0] and len(marker.group(1)) >= fence[1]
 
 
 def label_references(text: str) -> set[str]:
     """The label names ONE document really references as labels.
 
     Code spans and fenced code blocks are scanned; prose is not, because
-    a word there (`ai-blocking`) is not a label reference at all. A
-    fence-looking line toggles the block state; mistaking a longer
-    fence's inner run for a boundary can only end the block early and
-    MISS a reference, never invent one.
+    a word there (`ai-blocking`) is not a label reference at all. A block
+    stays code until its own closing fence, so a page quoting a shorter
+    fence keeps its whole example inside the block and the prose after it
+    stays prose — no fence line can flip the file's code state.
     """
     found: set[str] = set()
-    in_fence = False
+    fence: tuple[str, int] | None = None
     for line in text.splitlines():
-        if _FENCE.match(line):
-            in_fence = not in_fence
-            continue
-        code = line if in_fence else " ".join(
-            span.group(2) for span in _CODE_SPAN.finditer(line)
-        )
-        found.update(_LABEL_TOKEN.findall(code))
+        marker = _FENCE.match(line)
+        if fence is not None:
+            if _closes_block(fence, marker):
+                fence = None
+            else:
+                found.update(_LABEL_TOKEN.findall(line))
+        elif marker:
+            fence = (marker.group(1)[0], len(marker.group(1)))
+        else:
+            found.update(_LABEL_TOKEN.findall(" ".join(
+                span.group(2) for span in _CODE_SPAN.finditer(line)
+            )))
     return found
 
 

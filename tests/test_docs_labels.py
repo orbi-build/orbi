@@ -52,6 +52,24 @@ def test_label_references_are_the_names_a_document_writes_as_labels():
     assert label_references(text) == {"ai-fix-needed", "ai-ready"}
 
 
+def test_label_references_close_a_fenced_block_only_on_its_own_fence():
+    """A longer fence quotes a shorter one (a Markdown code example). Only
+    the same fence character at least as long closes the block
+    (CommonMark), so the example stays inside the block and the prose
+    after it stays prose — a quoted fence must never flip the file's code
+    state, or the very false positive of Issue #2313 comes back."""
+    text = (
+        "````md\n"
+        "```bash\n"
+        "gh issue edit 3 --add-label ai-ready\n"
+        "```\n"
+        "````\n"
+        "\n"
+        "- Resume: yield instead of ai-blocking when another executor's run is live\n"
+    )
+    assert label_references(text) == {"ai-ready"}
+
+
 def test_label_references_ignore_hyphenated_names_containing_ai():
     """Issue #1552: a hyphenated skill name like `write-ai-ready-issue`
     contains the substring `ai-ready-issue`, which is not a label. Only a
