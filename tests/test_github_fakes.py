@@ -286,12 +286,14 @@ def test_pickup_release_scoped_to_the_active_milestone(fake_gh):
 
 
 def test_claim_label_patch_is_idempotent_on_the_fake(fake_gh):
+    """Issue #2309: the claim adds `ai-in-progress` and removes the
+    queue entry, so the ready scan no longer sees a started ticket."""
     fake_gh.add_issue(5, labels=(READY_LABEL,))
     current = github.issue_labels(5, "owner/repo")
     github.apply_label_patch(5, repo="owner/repo", event="claim",
                              current_labels=current)
     labels = github.issue_labels(5, "owner/repo")
-    assert labels == [READY_LABEL, IN_PROGRESS_LABEL]
+    assert labels == [IN_PROGRESS_LABEL]
     assert github.has_in_progress_label(5, "owner/repo") is True
     # Idempotent: re-applying the same event changes nothing.
     github.apply_label_patch(5, repo="owner/repo", event="claim",
@@ -301,7 +303,7 @@ def test_claim_label_patch_is_idempotent_on_the_fake(fake_gh):
                       remove=IN_PROGRESS_LABEL)
     github.edit_issue(5, repo="owner/repo",
                       remove=IN_PROGRESS_LABEL)
-    assert github.issue_labels(5, "owner/repo") == [READY_LABEL]
+    assert github.issue_labels(5, "owner/repo") == []
 
 
 def test_comments_append_in_order_and_read_back_oldest_first(fake_gh):

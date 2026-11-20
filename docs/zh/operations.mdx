@@ -132,7 +132,12 @@ host/deploy-only 配置键 `engine_source_track` 位于 deploy home 的
   通道值在下一次 service 启动时生效（ExecStartPre 同步施加它）；没有
   守护进程，也不会重启正在运行的 Runner。
 - **回滚**就是把 track 改回旧的 `tag:`/`sha:` 值（或
-  `release`/`main`）——git 状态是唯一的存储，没有别的状态要清理。
+  `release`/`main`）——git 状态是唯一的存储，没有别的状态要清理。跨过队列
+  标签变更（Issue #2309）回滚还有一个前提：旧引擎靠 `ai-in-progress` **加上**
+  队列标签找被中断的运行，新规则下的中断运行（已不带队列标签）永远不会被接回，
+  而给每个 `ai-in-progress` Issue 重加队列标签又可能复活一个人已经停掉的运行。
+  回滚前先跑升级时用的同一条只读查询——open 且带 `ai-in-progress`、没有队列
+  标签的 Issue——并逐条人工决定。
 - **fail closed**（service 不启动，每行都带 `fix=`）：
   - `deploy_home_dirty files=... fix=...`——tracked 本地编辑会阻塞
     同步；用 `git -C <deploy_home> stash && systemctl --user start

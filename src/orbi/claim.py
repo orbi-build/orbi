@@ -454,9 +454,9 @@ def pick_issue(repo: str, active_milestone: str | None = None,
                held: frozenset = frozenset(),
                timeout: int | None = None,
                raise_on_read_failure: bool = False) -> dict | None:
-    # A merged delivery keeps `ai-ready` + `ai-merged` on the (still
-    # open) Issue; `ai-merged` is the success terminal state, so it is
-    # excluded from the ready scan like every other delivery state.
+    # A merged delivery keeps `ai-merged` on the (still open) Issue;
+    # `ai-merged` is the success terminal state, so it is excluded from
+    # the ready scan like every other delivery state.
     # The scan fetches the ready queue (not just the first Issue) and
     # reads the native GitHub dependency per Issue: an
     # Issue with open blockers is skipped — no claim, no label change,
@@ -737,11 +737,11 @@ def pick_next_delivery(
         if selected is not None:
             issue, scene = selected
             return repo, issue, scene
+    # The restart scan keys on ai-in-progress alone (Issue #2309: the claim
+    # removes the dispatch label), so it needs no repository policy read.
     for repo in repos:
-        _, dispatch_label = _repo_scan_keys(config, repo, active_milestone)
         issue = pick_in_progress_issue(
             repo, slot_dir, max_concurrency,
-            dispatch_label=dispatch_label,
             repo_dir=config.repo_dir if config is not None else None,
         )
         if issue is not None:

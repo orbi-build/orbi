@@ -25,7 +25,7 @@ from pathlib import Path
 from orbi import run_state
 from orbi.delivery_labels import (
     BLOCKED_LABEL, EPIC_LABEL, FIX_NEEDED_LABEL, IN_PROGRESS_LABEL,
-    MERGED_LABEL, PR_OPENED_LABEL, READY_LABEL, label_name_set,
+    MERGED_LABEL, PR_OPENED_LABEL, label_name_set,
 )
 from orbi.delivery_scene import DeliveryScene, body_markers, classify
 from orbi.github import list_issues
@@ -142,18 +142,18 @@ def _this_deployments_run(
 
 def pick_in_progress_issue(
     repo: str, slot_dir: Path, max_concurrency: int,
-    dispatch_label: str = READY_LABEL, repo_dir: Path | None = None,
+    repo_dir: Path | None = None,
 ) -> dict | None:
     """Return one in-flight Issue THIS deployment started and must resume.
 
     A killed runner leaves the task worktree, the run state file and the
-    `ai-in-progress` label behind (the failure path never ran); the Issue
-    keeps `ai-ready` too (a claim never removes it). The ready scan excludes
-    `ai-in-progress`, so without this scan such a run is never resumed and
-    the Issue is stuck forever; `process_issue`'s resume block then reuses
-    the run instead of starting a second one. `dispatch_label` is the
-    repository's claim label (a policy may replace `ai-ready`): the scan
-    must find the SAME queue entry the ready scan used.
+    `ai-in-progress` label behind (the failure path never ran). The ready
+    scan excludes `ai-in-progress`, so without this scan such a run is
+    never resumed and the Issue is stuck forever; `process_issue`'s resume
+    block then reuses the run instead of starting a second one. The query
+    keys on `ai-in-progress` alone (Issue #2309): the claim REMOVES the
+    dispatch label, so the queue entry can never name an interrupted run,
+    and a custom `dispatch_label` changes nothing here.
 
     Only a run THIS deployment started is resumed (Issue #2256). The label
     is shared on GitHub by every deployment serving the repository, while
@@ -179,7 +179,6 @@ def pick_in_progress_issue(
     for _, holder in slot_occupancy(slot_dir, max_concurrency):
         if holder is not None and holder != mine:
             return None
-    label = dispatch_label or READY_LABEL
     # `labels`: a P0 a killed runner left behind keeps its priority in the
     # progress comment on resume. `milestone`: a release run killed
     # mid-release is resumed with THIS dict, and `process_release` scopes its
@@ -189,7 +188,7 @@ def pick_in_progress_issue(
     issues = list_issues(
         repo, state="open",
         search=(
-            f"label:{label} label:{IN_PROGRESS_LABEL} "
+            f"label:{IN_PROGRESS_LABEL} "
             f"-label:{PR_OPENED_LABEL} -label:{FIX_NEEDED_LABEL} "
             f"-label:{MERGED_LABEL} -label:{BLOCKED_LABEL} "
             f"-label:{EPIC_LABEL}"

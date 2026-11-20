@@ -46,6 +46,7 @@ from orbi.delivery_labels import (
     EPIC_LABEL,
     NEEDS_DETAIL_LABEL,
     READY_LABEL,
+    has_delivery_state,
     label_names,
 )
 from orbi.delivery_scene import RunContext
@@ -973,9 +974,14 @@ def _append_to_issue(
         write_body(
             target, repo=repo, body=appended_body(current, section),
         )
-    if dispatch_label not in _labels(issue):
+    # The retry finishes an interrupted draft (body, label, detail stop)
+    # and queues the ticket ONLY while nothing has started (Issue #2309):
+    # the claim removes the dispatch label, so its absence no longer means
+    # "not yet dispatched" — a stage label means the ticket is in flight.
+    labels = _labels(issue)
+    if dispatch_label not in labels and not has_delivery_state(labels):
         edit_issue(target, repo=repo, add=dispatch_label)
-    if NEEDS_DETAIL_LABEL in _labels(issue):
+    if NEEDS_DETAIL_LABEL in labels:
         edit_issue(target, repo=repo, remove=NEEDS_DETAIL_LABEL)
     return target
 

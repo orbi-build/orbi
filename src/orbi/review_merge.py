@@ -467,6 +467,7 @@ def _round_verdict_phase(work: _Round) -> bool:
     apply_label_patch(
         number, repo=source_repo, event=EVENT_FIX_NEEDED,
         current_labels=issue_labels(number, source_repo),
+        ready_label=work.ready_label,
     )
     return True
 
@@ -610,9 +611,8 @@ def _round_gate_failure_phase(work: _Round, message: str, *,
     The counted round comment names the failure — the CI block for a red
     check, the base-advance block for a behind/conflicting head — the Issue
     moves to ai-fix-needed, and the base-advance budget is spent one round
-    at a time (a base-advance retry reuses the SAME scene, Issue #1659). An
-    absorb violation rides the same comment (Issue #877), and an exhausted
-    budget is a human decision that fails fast. CI evidence is best-effort.
+    at a time (a retry reuses the SAME scene, Issue #1659). An absorb
+    violation rides the comment (#877); an exhausted budget fails fast.
     """
     config, pr, marker = work.config, work.pr, work.marker
     number, source_repo = work.number, work.source_repo
@@ -690,6 +690,7 @@ def _round_gate_failure_phase(work: _Round, message: str, *,
     apply_label_patch(
         number, repo=source_repo, event=EVENT_FIX_NEEDED,
         current_labels=issue_labels(number, source_repo),
+        ready_label=work.ready_label,
     )
     if not base_advance_exhausted:
         return
@@ -752,7 +753,7 @@ def _round_merge_phase(work: _Round) -> dict | None:
         answer_domain.stop_for_fix_round(
             number, repo=source_repo, pr_number=refrozen["number"],
             reason=str(exc), marker=work.marker,
-            language_code=language.of(config),
+            language_code=language.of(config), ready_label=work.ready_label,
         )
         return None
     except MergeBlockedByIssueLabel as exc:
@@ -983,7 +984,7 @@ def _run_review_round(
         try:
             apply_label_patch(
                 number, repo=source_repo, event=EVENT_PR_OPENED,
-                current_labels=labels,
+                current_labels=labels, ready_label=ready_label,
             )
         except Exception as exc:
             LOGGER.exception(
@@ -992,7 +993,9 @@ def _run_review_round(
             )
             block_label_inconsistency(labels, str(exc))
             return None
-        labels = [label for label in labels if label != IN_PROGRESS_LABEL]
+        # The repair also removed a pre-upgrade queue residue (#2309).
+        labels = [label for label in labels
+                  if label not in (IN_PROGRESS_LABEL, ready_label)]
         labels.append(PR_OPENED_LABEL)
         event(
             "delivery_label_repaired", issue=number, pr=pr_url,
@@ -1010,9 +1013,9 @@ def _run_review_round(
     # the worktree or any review session. One label read decides; the
     # column-2 re-derivation is local evidence reads only. With the
     # gate on and no `ai-human-review` label, a non-empty column 2
-    # holds the delivery: the waiting primitive returns the ticket to
-    # `ai-ready` (the opened-PR anchor stays, so the resume scan keeps
-    # finding it), the round ends here, the caller releases the slot
+    # holds the delivery: the wait clears the in-flight and queue labels
+    # (the opened-PR anchor stays, so the resume scan keeps finding it),
+    # the round ends here, the caller releases the slot
     # and every next tick costs one label read — never a review
     # session, never an `ai-fix-needed` round (the review-round budget
     # is not consumed by waiting). An empty column 2 needs no human and
@@ -1025,12 +1028,10 @@ def _run_review_round(
         if gate_worktree.is_dir() and merge_exec._delivery_checklist(
             gate_worktree, config, test_status=test_status(checks),
         )["column2"]:
-            # The waiting guard asks for the repository RESOLVED claim
-            # label, never the host default (Issue #1775): in a repository
-            # whose dispatch_label is a custom queue label the ticket
-            # already carries it, so a second tick must not rewrite the
-            # waiting patch.
-            if ready_label not in labels:
+            # The wait writes ONLY when it changes a label (Issue
+            # #2309): a stale in-flight or queue label is cleared and
+            # nothing is added, so a steady waiting tick writes no label.
+            if IN_PROGRESS_LABEL in labels or ready_label in labels:
                 apply_label_patch(
                     number, repo=source_repo,
                     event=EVENT_HUMAN_REVIEW_WAITING,

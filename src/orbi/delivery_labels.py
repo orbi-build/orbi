@@ -26,21 +26,13 @@ LIFECYCLE_STATES = frozenset({
 })
 
 # --- Scheduling metadata (NOT delivery lifecycle states) ---
-# `p0` and `bug` only order the ready pickup; `ai-epic` marks a
-# coordination Issue the claim scan never touches; `ai-release` routes
-# to the deterministic release state machine; `ai-ops-only` routes to
-# the full-execution ops session (shell/gh/network like a
-# dev ticket, the ops playbook instead of the dev one, the deliverable
-# is evidence posted to the Issue); `ai-content-only` marks a pure
-# content task (the content agent, no execution, the deliverable is
-# posted to the Issue); `ai-human-review` is the human acceptance gate
-# — the Runner never adds or removes it (the `ai-release`
-# shape: no event's patch names it in either direction);
-# `ai-needs-detail` is the thin-ticket clarification gate's terminal
-# state (Issue #1088) — the delivery is stopped and the Issue waits for
-# a human to add the missing pieces, exactly like `ai-blocked`. None of
-# them is a delivery state, and `blockedBy` (a GitHub relation, not a
-# label) is handled by the dependency scan.
+# `p0`/`bug` order the ready pickup; `ai-epic` is a coordination
+# Issue the claim never touches; `ai-release` routes to the release
+# state machine; `ai-ops-only`/`ai-content-only` route the ops and
+# content playbooks; `ai-human-review` is the human acceptance gate the
+# Runner never adds or removes; `ai-needs-detail` is the thin-ticket
+# gate's stop (Issue #1088). None of them is a delivery state, and
+# `blockedBy` (a GitHub relation, not a label) is the dependency scan's.
 P0_LABEL = "p0"
 BUG_LABEL = "bug"
 EPIC_LABEL = "ai-epic"
@@ -49,6 +41,15 @@ CONTENT_ONLY_LABEL = "ai-content-only"
 OPS_LABEL = "ai-ops-only"
 HUMAN_REVIEW_LABEL = "ai-human-review"
 NEEDS_DETAIL_LABEL = "ai-needs-detail"
+
+# Every non-lifecycle marker above. A repository's `dispatch_label` may
+# be none of them either (Issue #2309): the claim REMOVES the queue
+# label, so a marker that named one would be removed and re-added by the
+# engine's own transitions.
+NON_LIFECYCLE_LABELS = frozenset({
+    P0_LABEL, BUG_LABEL, EPIC_LABEL, RELEASE_LABEL, CONTENT_ONLY_LABEL,
+    OPS_LABEL, HUMAN_REVIEW_LABEL, NEEDS_DETAIL_LABEL,
+})
 
 # --- Reading an Issue's label names ---
 
@@ -99,64 +100,59 @@ def label_patch(event: str, current_labels,
                 ready_label: str = READY_LABEL) -> tuple[list[str], list[str]]:
     """Return the (to_add, to_remove) label patch for one event.
 
-    A pure function of the event and the current labels: the same
-    inputs always produce the same deterministic, idempotent patch.
-    `ready_label` is the repository's RESOLVED queue entry — the same
-    label the claim scanned (`dispatch_label`, default `ai-ready`) —
-    so a custom-label repository's blocked/merged/waiting terminal never
-    keeps a queue-label residue (Issue #1775).
+    A pure function of the event and the current labels (the same inputs
+    always produce the same deterministic, idempotent patch).
 
-    - claim: add `ai-in-progress`, remove a stale `ai-fix-needed` from
-      a resumed fix round and a stale `ai-needs-detail` left by the
-      thin-ticket gate once the author re-readied the ticket (the
-      `ai-ready` residue is kept).
-    - pr_opened: add `ai-pr-opened`, remove `ai-in-progress`.
-    - fix_needed: add `ai-fix-needed`, remove any stale opened-PR or
-      in-flight label. A TERMINAL Issue (`ai-merged` or `ai-blocked`
-      present) changes nothing: the delivery is over or waiting for a
-      human, and a fix-needed label beside it would let a later terminal
-      label removal resume an automatic fix nobody asked for (Issue
-      #1786). The engine never sends this event to a terminal Issue; the
-      CI triage does, from a late run on an already-merged PR.
-    - merged: add `ai-merged`, remove the current delivery-state label
-      (the one present in `current_labels`): `ai-pr-opened` for the
-      normal PR delivery, `ai-in-progress` for the release state
-      machine (which never enters the PR states). The resolved queue
-      label (`ready_label`, default `ai-ready`) is cleared too: it is
-      the queue entry, not a delivery state, so a merged Issue must not
-      keep showing it (Issue #1526) — the terminal state is
-      `ai-merged` ALONE.
-    - blocked: add `ai-blocked`, remove every delivery-state label that
-      is present AND the resolved queue label (`ready_label`), so the
-      terminal state is `ai-blocked` ALONE — even in a repository
-      whose claim label is a custom `dispatch_label` (Issue #1775).
-    - awaiting_merge: add `ai-awaiting-merge`, remove every delivery-state
-      label and the resolved queue label (a maintainer action is
-      required before Orbi retries).
+    `ready_label` is the repository's RESOLVED queue entry (`dispatch_label`,
+    default `ai-ready`). It means "queued, work has not started" (Issue
+    #2309): the claim REMOVES it and adds `ai-in-progress`, and every
+    non-terminal stage event after it removes it too, so a ticket claimed
+    under the old rule converges without migration.
 
-    An unknown event raises `ValueError` (fail fast — never a guessed
-    patch).
+    - claim: add `ai-in-progress`; remove the queue label and a stale
+      `ai-fix-needed` / `ai-needs-detail` (a resumed fix round, the
+      thin-ticket gate once the author re-readied the ticket).
+    - pr_opened / fix_needed: add the opened-PR state, remove
+      `ai-in-progress` and the queue label. A TERMINAL Issue
+      (`ai-merged` / `ai-blocked`) changes nothing on fix_needed: the
+      delivery is over or waiting for a human, and a fix-needed label
+      beside it would let a later terminal label removal resume an
+      automatic fix nobody asked for (Issue #1786).
+    - human_review_waiting: add NOTHING, clear `ai-in-progress` and the
+      queue label; the opened-PR anchor stays (the resume scan needs it).
+    - requeue / release_waiting: add the queue label back (the ticket is
+      queued again) and clear the in-flight/opened-PR labels.
+    - merged / blocked / awaiting_merge: the terminals — the resolved
+      queue label and every delivery state go, so `ai-merged` and
+      `ai-blocked` end ALONE (Issues #1526, #1775).
+
+    An unknown event raises `ValueError` (fail fast — never a guessed patch).
     """
     current = set(current_labels)
     if event == EVENT_CLAIM:
         # The thin-ticket gate's `ai-needs-detail` is not a lifecycle
-        # state: a ticket the author edited and re-readied is claimed
-        # normally, so the stop label must go with the claim or the
-        # ticket is delivered while every status surface still says a
-        # human must supply detail (Issue #1379).
+        # state: a re-readied ticket is claimed normally, so the stop
+        # label goes with the claim or the ticket is delivered while every
+        # status surface still says a human must supply detail (#1379).
         to_remove = [
-            label for label in (FIX_NEEDED_LABEL, NEEDS_DETAIL_LABEL)
+            label for label in (
+                FIX_NEEDED_LABEL, NEEDS_DETAIL_LABEL, ready_label,
+            )
             if label in current
         ]
         return ([IN_PROGRESS_LABEL], to_remove)
     if event == EVENT_PR_OPENED:
-        return ([PR_OPENED_LABEL], [IN_PROGRESS_LABEL])
+        return ([PR_OPENED_LABEL], [
+            label for label in (IN_PROGRESS_LABEL, ready_label)
+            if label in current
+        ])
     if event == EVENT_FIX_NEEDED:
         if MERGED_LABEL in current or BLOCKED_LABEL in current:
             return ([], [])
         to_remove = [
             label for label in (
                 IN_PROGRESS_LABEL, PR_OPENED_LABEL, AWAITING_MERGE_LABEL,
+                ready_label,
             )
             if label in current
         ]
@@ -164,19 +160,20 @@ def label_patch(event: str, current_labels,
     if event == EVENT_RELEASE_WAITING:
         return ([ready_label], [IN_PROGRESS_LABEL])
     if event == EVENT_HUMAN_REVIEW_WAITING:
-        # The human acceptance gate holds the delivery — the
-        # same clean, recoverable tick as the release waiting: the
-        # ticket returns to `ai-ready` and a stale in-flight label is
-        # cleared. The opened-PR state anchor (`ai-pr-opened` /
-        # `ai-fix-needed`) STAYS: the resume scan finds waiting
-        # deliveries through it, so each next tick costs one label read
-        # and no Pi session; removing the anchor would drop the Issue
-        # into the fresh-claim queue for a full re-implement. Never
-        # EVENT_FIX_NEEDED (that would burn the review-round budget).
-        to_remove = (
-            [IN_PROGRESS_LABEL] if IN_PROGRESS_LABEL in current else []
-        )
-        return ([ready_label], to_remove)
+        # The human acceptance gate holds the delivery: the stale
+        # in-flight label and the queue label are cleared and NOTHING is
+        # added (Issue #2309) — a waiting ticket is not queued, so the
+        # ready scan must not see it. The opened-PR state anchor
+        # (`ai-pr-opened` / `ai-fix-needed`) STAYS: the resume scan
+        # finds waiting deliveries through it, so each next tick costs
+        # one label read and no Pi session; removing the anchor would
+        # drop the Issue into the fresh-claim queue for a full
+        # re-implement. Never EVENT_FIX_NEEDED (that would burn the
+        # review-round budget).
+        return ([], [
+            label for label in (IN_PROGRESS_LABEL, ready_label)
+            if label in current
+        ])
     if event == EVENT_REQUEUE:
         # The external takeover delivery ended without a merge
         # (the contributor withdrew the PR, or a maintainer closed it) —
@@ -232,27 +229,17 @@ def label_patch(event: str, current_labels,
 def has_delivery_state(current_labels,
                        ready_label: str = READY_LABEL) -> bool:
     """True when the labels carry a delivery state, not just the queue
-    entry.
-
-    The one answer to "is this Issue a delivery?" — any lifecycle state
-    other than the `ready_label` queue entry counts, terminal states
-    included. The CI triage uses it to own the open Issue a PR's
-    `Fixes #N` names, so the script carries no lifecycle label set of its
-    own (Issue #1786).
+    entry: any lifecycle state other than `ready_label`, terminals
+    included. The CI triage's `Fixes #N` ownership lookup (Issue #1786).
     """
     return bool(set(current_labels) & (LIFECYCLE_STATES - {ready_label}))
 
 
 def is_pickup_eligible(current_labels) -> bool:
-    """True when the Issue is fresh-ready: `ai-ready` and not yet in any
-    OTHER delivery state (the ready scan's code-layer guard, Issue
-    #93/#101).
-
-    `ai-ready` itself is the queue entry, not a delivery state — it is
-    excluded from the check. `p0`/`bug` are scheduling metadata, not
-    lifecycle states — they never affect eligibility (they only order the
-    pickup). The "other delivery state" check is `has_delivery_state`'s
-    single decision (Issue #1795), never a second set expression here.
+    """True when the Issue is fresh-ready: `ai-ready` and in no OTHER
+    delivery state (the ready scan's code-layer guard, Issue #93/#101).
+    The "other delivery state" answer is `has_delivery_state`'s single
+    decision (Issue #1795), never a second set expression here.
     """
     current = set(current_labels)
     if READY_LABEL not in current:
@@ -262,11 +249,9 @@ def is_pickup_eligible(current_labels) -> bool:
 
 def is_resumable(current_labels) -> bool:
     """True when the Issue is in an opened-PR state awaiting review or the
-    next review session (`ai-pr-opened` or `ai-fix-needed`).
-
-    `ai-in-progress` alone is NOT resumable here: an implement-phase Issue
-    has neither opened-PR label, so it never matches (the in-flight restart
-    scan handles it separately).
+    next review session. `ai-in-progress` alone is NOT resumable: an
+    implement-phase Issue has neither opened-PR label (the in-flight
+    restart scan handles it separately).
     """
     current = set(current_labels)
     return (

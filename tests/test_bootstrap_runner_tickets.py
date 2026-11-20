@@ -226,7 +226,8 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
 
     assert result == runner.IssueResult("ticket-only", None)
     assert edits == [
-        (99, {"repo": "o/r", "add": "ai-in-progress"}),
+        (99, {"repo": "o/r", "add": "ai-in-progress",
+              "remove": "ai-ready"}),
         (99, {"repo": "o/r", "remove": "ai-in-progress"}),
     ]
     assert comments and "\u53ef\u4ee5\u76f4\u63a5\u53d1\u5e03\u7684\u5e16\u5b50" in comments[0][1]["body"]
@@ -618,6 +619,7 @@ def test_process_issue_ops_with_uncommitted_leftovers_fails_fast(
     runner.cleanup_task_worktree = original_cleanup
     runner.edit_issue.assert_called_once_with(
         99, repo="o/r", add=runner.IN_PROGRESS_LABEL,
+        remove=runner.READY_LABEL,
     )
 
 

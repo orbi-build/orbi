@@ -609,8 +609,10 @@ success and failure examples.
 On a repository Orbi has never delivered, setup also offers
 `orbi suggest`. On a terminal — and only when the model provider is
 `ok` and the repository has no Issue carrying a delivery label
-(`ai-ready`, `ai-in-progress`, `ai-pr-opened`, `ai-merged` or the
-repository's own `dispatch_label`) — it asks once:
+(`ai-ready`, `ai-in-progress`, `ai-pr-opened`, `ai-fix-needed`, `ai-merged`,
+`ai-blocked`, `ai-awaiting-merge` or the repository's own `dispatch_label`;
+the claim removes the queue label, so every stage label counts — Issue #2309)
+— it asks once:
 
 `Scan OWNER/REPO and suggest three Issues to deliver? [Y/n]`
 

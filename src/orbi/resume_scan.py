@@ -92,8 +92,8 @@ def pick_resumable_delivery(
     opened-PR delivery, and the same scan must pick it back up — the
     positive `label:ai-fix-needed,ai-pr-opened` qualifier already
     restricts the scan to opened-PR Issues (an implement-phase Issue
-    has `ai-ready`+`ai-in-progress` but neither opened-PR label, so it
-    never matches). A missing scene on `ai-fix-needed` with exactly one
+    carries `ai-in-progress` and neither opened-PR label, so it never
+    matches). A missing scene on `ai-fix-needed` with exactly one
     open PR on the stable internal branch is a fresh-claim takeover: the PR
     supplies the continuation anchor and the claim writes a new trusted
     scene. Other scenes that cannot be recovered are SINGLE-Issue failures:

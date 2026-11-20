@@ -288,10 +288,9 @@ def patch_applied(event: str, added_labels, current_labels, *,
     `ai-needs-detail`) send from their stop exit instead (Issue #2287):
     this patch lands BEFORE their stop comment, so at this moment neither
     the reason the comment records nor its permalink exists. The
-    human-review wait is NOT triggered here either (Issue #1691): a normal
-    delivery already carries `ai-ready`, so this patch usually does not
-    even run, and the message belongs to the checklist block that decides
-    it.
+    human-review wait is NOT triggered here either (Issue #1691): its patch
+    adds no label at all (Issue #2309), and the message belongs to the
+    checklist block that decides it.
 
     `read_title` is a callable, so the Issue title is read AT MOST once
     and only when a message is actually sent -- never when notifications

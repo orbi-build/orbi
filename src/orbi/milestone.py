@@ -12,7 +12,19 @@ from collections.abc import Callable
 from pathlib import Path
 
 from orbi import language
-from orbi.delivery_labels import READY_LABEL, RELEASE_LABEL
+from orbi.delivery_labels import (
+    AWAITING_MERGE_LABEL, BLOCKED_LABEL, FIX_NEEDED_LABEL,
+    IN_PROGRESS_LABEL, MERGED_LABEL, PR_OPENED_LABEL, READY_LABEL,
+    RELEASE_LABEL,
+)
+
+# Every stage label an ARMED (already claimed) release carries. The claim
+# removes the queue label (Issue #2309), so arming must recognize a
+# started release by its stage, never by the queue entry alone.
+RELEASE_STAGE_LABELS = (
+    IN_PROGRESS_LABEL, PR_OPENED_LABEL, FIX_NEEDED_LABEL,
+    MERGED_LABEL, BLOCKED_LABEL, AWAITING_MERGE_LABEL,
+)
 from orbi.gitops import acquire_base_sync_lock
 from orbi.github import (
     close_milestone, list_issues, list_milestones, milestone_open_issues,
@@ -33,9 +45,9 @@ _MILESTONE_FAILURE_DIR = "milestone-reconcile-failures"
 _MILESTONE_FAILURE_STATUSES = (401, 404)
 
 # The waiting states one active Milestone can be in on the idle path
-# (Issue #856). `in_progress` and `nothing_to_do` need no human reply;
-# the two `awaiting_*` states each own one decision notice the maintainer
-# answers with `/orbi milestone <version>`.
+# (#856). `in_progress`/`nothing_to_do` need no human reply; each
+# `awaiting_*` state owns one decision notice answered with
+# `/orbi milestone <version>`.
 MILESTONE_IN_PROGRESS = "in_progress"
 MILESTONE_AWAITING_RELEASE = "awaiting_release"
 MILESTONE_AWAITING_NEXT = "awaiting_next"
@@ -44,9 +56,8 @@ MILESTONE_NOTHING_TO_DO = "nothing_to_do"
 # exists — there is no scope, so the tick's claim scan runs unscoped.
 MILESTONE_CLOSED_UNSCOPED = "closed_unscoped"
 
-# The waiting state an existing decision notice was opened for. Only
-# `next` matches the pre-#856 notice; `release` is the release-ticket
-# confirmation.
+# The waiting state an existing decision notice was opened for:
+# `next` matches the pre-#856 notice, `release` the release ticket.
 _WAITING_NEXT = "next"
 _WAITING_RELEASE = "release"
 
@@ -62,8 +73,8 @@ def classify_milestone_waiting(
 ) -> str:
     """Classify the active Milestone's idle waiting state (Issue #856).
 
-    Pure table over the already-resolved facts, so the Runner's idle path
-    reads GitHub once and this function owns the decision:
+    Pure table over the already-resolved facts (the idle path reads GitHub
+    once and this function owns the decision):
 
     - an OPEN Milestone still carrying Issues is `in_progress`;
     - an OPEN Milestone with no open Issue and `release_confirmation` on
@@ -86,11 +97,8 @@ def classify_milestone_waiting(
 
 
 def _release_ticket_exists(repo: str, version: str) -> bool:
-    """Whether an `ai-release` Issue already exists in ``version``.
-
-    The same search `_ensure_command_release_ticket` uses to stay
-    idempotent: `gh issue list` over one Milestone's release label.
-    """
+    """Whether an `ai-release` Issue already exists in ``version``
+    (`gh issue list` over one Milestone's release label)."""
     issues = list_issues(
         repo, state="all",
         search=f'label:{RELEASE_LABEL} milestone:"{version}"',
@@ -107,17 +115,19 @@ def arm_release_ticket(
 
     The ticket is armed with the repo's dispatch label — the same label
     `release_fallback_search` requires before the ticket can be claimed —
-    so callers must resolve it from the repository policy, not assume the
-    host default. The search exclusion uses the same label: an armed
-    ticket carries it, and a ticket polluted by a stale arm (labelled
-    `ai-ready` under a custom-dispatch-label repo) no longer matches the
-    exclusion, so the next idle tick re-arms and heals it.
+    so callers resolve it from the repository policy, never the host
+    default. The search excludes that label AND every stage label (Issue
+    #2309): the claim removes the queue label, so a claimed release would
+    otherwise look unqueued and be re-armed. A stale arm (an `ai-ready`
+    ticket under a custom-dispatch-label repo) no longer matches, so the
+    next idle tick re-arms and heals it.
 
-    This is an idle-path bypass: callers deliberately catch failures so a
-    GitHub label operation cannot change the outcome of the main tick.
+    An idle-path bypass: callers catch failures, so a label write can
+    never change the outcome of the main tick.
     """
+    stage = " ".join(f"-label:{label}" for label in RELEASE_STAGE_LABELS)
     search = (
-        f"label:{RELEASE_LABEL} -label:{dispatch_label} "
+        f"label:{RELEASE_LABEL} -label:{dispatch_label} {stage} "
         f'milestone:"{active_milestone}"'
     )
     issues = list_issues(
@@ -269,7 +279,10 @@ def clear_milestone_reconcile_failure(state_dir: Path, repo: str) -> None:
             )
 
 
-def validate_active_milestone(repo: str, active_milestone: str | None) -> None:
+def validate_active_milestone(
+    repo: str, active_milestone: str | None,
+    dispatch_label: str = READY_LABEL,
+) -> None:
     """Validate the configured Milestone before a tick can claim work.
 
     A missing title is an unambiguous configuration error and fails fast.
@@ -311,8 +324,10 @@ def validate_active_milestone(repo: str, active_milestone: str | None) -> None:
     if milestone.get("state") != "closed":
         return
 
+    # The count is QUEUED work, so it reads the repository's resolved
+    # claim label (Issue #2309), never the host default.
     ready_issues = list_issues(
-        repo, state="open", label=READY_LABEL,
+        repo, state="open", label=dispatch_label,
         milestone=active_milestone, json_fields="number", limit=1000,
         timeout=30,
     )
@@ -734,13 +749,10 @@ def advance_active_milestone_on_idle(
         )
         return state, None
     # The closed path always sweeps obsolete decision notices: an advance
-    # notice old= differs from the current active Milestone, and the Issue
-    # #856 release notice (old= == its only candidate) is closed once its
-    # Milestone closes — the release shipped, or the decision went another
-    # way. Running the sweep unconditionally (Issue #1475) also clears
-    # duplicate notices for the same old Milestone and keeps an unopted
-    # repository from accumulating stale notices that only an idle open
-    # Milestone tick would ever close.
+    # notice old= differs from the active Milestone, and the #856 release
+    # notice (old= == its only candidate) is closed once its Milestone
+    # closes. Running the sweep unconditionally (#1475) also clears
+    # duplicate notices and keeps stale ones from accumulating.
     _close_stale_milestone_issues_safely(
         repo, active_milestone, keep_release_notice=False,
         language_code=language_code,

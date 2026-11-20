@@ -32,7 +32,7 @@ flowchart LR
   release["Release task（ai-ready + ai-release）<br/>— Runner release 状态机，从不进 run_pi"]
   release -.像普通任务领取.-> ready
   ready["ai-ready<br/>（领取顺序：P0 标签最先，然后 bug 标签，最后普通）"]
-  ready -->|领取：加标签 + 建 worktree + 启动 Pi| progress["ai-in-progress"]
+  ready -->|领取：移除队列标签 + 建 worktree + 启动 Pi| progress["ai-in-progress"]
   progress -->|PR 验收：base 新鲜、run marker、Fixes #N| opened["ai-pr-opened"]
   opened -->|独立审查会话（会话内修复）| verdict{"REVIEW_VERDICT"}
   verdict -->|clean verdict + merge 门禁| merged["ai-merged（终态）"]
@@ -46,9 +46,10 @@ flowchart LR
 ```
 
 ```text
-ai-ready                任务被派发（orbi add，或人工加标签）
-  -> ai-in-progress     Runner 领取：加标签，从冻结的 origin/<base> SHA
-                        创建 worktree，启动 Pi session（prompt 携带
+ai-ready                任务排队（orbi add，或人工加标签）；含义是
+                        「还没开始」
+  -> ai-in-progress     Runner 领取：移除队列标签、加上本标签，从冻结的
+                        origin/<base> SHA 创建 worktree，启动 Pi session（prompt 携带
                         Issue body 加受信任评论时间线 {{ISSUE_COMMENTS}}，
                         Issue #745/#1806：只收对该仓有 write 权限的作者
                         的评论，按 issue_comments_limit 截断并显式标明
@@ -345,15 +346,31 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 
 | 标签 | 含义 |
 |---|---|
-| `ai-ready` | 明确派发给 Orbi；可以被领取 |
-| `ai-in-progress` | 已领取、正在执行。resume opened-PR 交付时 Runner 先幂等回填该标签再继续（Issue #178）；被杀后的残留由下一 tick 接回（前提是本部署仍持有该任务 worktree 与 run state 文件；不是本部署启动的 Issue 属于另一个部署，会被跳过，Issue #2256） |
+| `ai-ready` | 队列：已派发给 Orbi 且**尚未开始**。领取时在同一次写入里移除它并加上 `ai-in-progress`，此后每个非终态阶段事件也会移除它（Issue #2309），所以 `is:open label:ai-ready` 只列出还没开始的工作 |
+| `ai-in-progress` | 已领取、正在执行。resume opened-PR 交付时 Runner 先幂等回填该标签再继续（Issue #178）；被杀后的残留由下一 tick 接回（前提是本部署仍持有该任务 worktree 与 run state 文件；不是本部署启动的 Issue 属于另一个部署，会被跳过，Issue #2256）。实现阶段的运行只靠这个标签被找到（Issue #2309） |
 | `ai-pr-opened` | PR 已创建并验收；等待独立审查 |
 | `ai-fix-needed` | PR head 尚不可合并，或已有 run/PR 的可恢复失败（Issue #50）；下一 tick 在同一 run、branch、worktree、PR 上继续 |
-| `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支。合并同时清除 `ai-ready`，因此合并后的 Issue 只剩 `ai-merged`（Issue #1526；不回溯已合并的 Issue） |
+| `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支。合并同时清除 `ai-ready` 残留，因此合并后的 Issue 只剩 `ai-merged`（Issue #1526；不回溯已合并的 Issue） |
 | `ai-awaiting-merge` | 评审和检查已通过，但已知仓库策略仍阻塞合并；评论写明维护者动作。只在队列无事可做的 tick 重试（Issue #1745），随后由 Orbi 合并指定 PR head |
 | `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50）；blocked comment 写明为什么不能自动恢复；人工必须决定下一步 |
 | `ai-human-review` | 人工验收门禁（Issue #763）：人已确认该交付的验收清单。只有人能打或摘——Runner 永不增删 |
 | `ai-needs-detail` | 薄 ticket 闸门（Issue #1088）：ticket 说得太少无法交付，Orbi 在开工前停住。Runner 把 `ai-ready` 换成它，并只发一条列出缺失项的评论；人补齐后重新加 `ai-ready` |
+
+「排队」意味着尚未开始（Issue #2309）。`is:open label:ai-ready`——或该仓库的
+`dispatch_label`——就是队列。领取在同一次写入里移除该标签并加上
+`ai-in-progress`，此后每个非终态阶段事件也会移除它，所以旧规则下领取的票
+在下一次阶段事件时自然收敛。只有被放回队列的票才会重新加上它：requeue、
+人在 `ai-needs-detail` 之后手动重加、amend/draft/split 的重派发路径、空闲
+时的 release 武装，以及因有未完成交付而等待的 release。`dispatch_label` 可
+以是任何普通标签，但绝不能是生命周期、类型、优先级或控制标签——仓库配置
+加载会拒绝并点名冲突的标签。
+
+停止一个被中断的交付（Issue #2309）。实现阶段的运行靠 `ai-in-progress` 加上
+本部署自己的任务 worktree 与 run state 文件被找到。要让它不再被接回：移除
+`ai-in-progress`，或关闭该 Issue。升级前领取的票可能还带着队列标签——停止它
+要么把两个标签都移除，要么关闭 Issue，否则 ready 扫描会再次领取它。跨过这次
+变更升级就是同一条规则的反向：如果你曾用移除 `ai-ready` 的方式停掉一个交付，
+升级前请把 `ai-in-progress` 也移除，否则旧引擎无法把它和正在运行的运行区分开。
 
 仓库策略可能在 Orbi 的评审和检查都通过后仍阻塞合并。Orbi 交付 PR 后停止
 在 `ai-awaiting-merge`；Issue 评论写出精确 head 和维护者要做的一件事（适用时
@@ -382,9 +399,11 @@ host 配置打开门禁（`orbi.toml` 里 `human_review_gate = true`——这是
   不证明测试与意图一致）、UI 视觉与文案、外部环境验证，以及 head 的检查
   未通过或 diff 不可读时的证据缺失条目。
 
-栏二非空时它就是门禁：评审轮次在任何 Pi session 之前短路——票回
-`ai-ready`（opened-PR 标签保留作 resume 锚），槽位释放，此后每个 tick
-只花一次 label 读。等待**不消耗**评审轮次预算，也**不碰** `ai-fix-needed`。
+栏二非空时它就是门禁：评审轮次在任何 Pi session 之前短路——清除
+`ai-in-progress` 与队列标签，**什么都不加**（等待中的票不在队列里，
+Issue #2309），opened-PR 标签保留作 resume 锚，槽位释放，此后每个 tick
+只花一次 label 读且一个标签都不写。等待**不消耗**评审轮次预算，也**不碰**
+`ai-fix-needed`。
 人确认清单后打 `ai-human-review`，下一 tick 照常评审与合并（verdict 绑定
 与 `--match-head-commit` 零改动）。
 
@@ -1007,7 +1026,7 @@ contents API 读取仓库**默认分支 tip** 上的 `.github/orbi.toml`——
 | `auto_next_milestone` | boolean | 该仓库的空闲自动推进开关（Issue #1342）：为 `false` 时，已关闭的 active Milestone 即使有更高的待发布候选也不会被改写——改为发一条确认 Issue，携带票内 `/orbi milestone <版本>` 命令。缺席时回退宿主值（默认 `true`）。 |
 | `message_language` | string | Orbi 在该仓库的评论和署名页脚语言，接受 `en` 或 `zh`；显式值覆盖宿主值，不翻译用户内容，也不覆盖宿主的 Telegram 语言。见[评论语言](#评论语言)。 |
 | `context_files` | string[] | 仓库内相对路径的上下文文件；注入前校验存在性与大小上限。 |
-| `dispatch_label` | string | 该仓库的认领标签（默认 `ai-ready`）；交付生命周期标签恒为宿主常量。 |
+| `dispatch_label` | string | 该仓库的认领标签（默认 `ai-ready`）——它是领取时被**移除**的队列入口（Issue #2309）。交付生命周期标签恒为宿主常量；类型、优先级或控制标签（`p0`、`bug`、`ai-release`、`ai-ops-only`、`ai-human-review` 等）会被拒绝并点名冲突。 |
 | `steering_enabled` | boolean | 为该仓库启用受信任修正轮询；缺席时回退到宿主值。 |
 | `steering_poll_seconds` | number | 该仓库的轮询间隔；缺席时回退到宿主值，且必须为有限正数。 |
 | `steering_max_rounds` | integer | 该仓库最多重启 Steering 的次数；缺席时回退到宿主值。 |

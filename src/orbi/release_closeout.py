@@ -350,12 +350,11 @@ def release_success_closeout(
     evidence states explicitly in its failure sentence).
     """
     try:
-        # A release ticket is claimed through `label:ai-ready` and the
-        # claim keeps the ready queue entry, so the real labels at
-        # this point are `{ai-ready, ai-in-progress}`. The merged
-        # event clears both, so the released Issue ends
-        # `ai-merged` ALONE — never `ai-merged` plus a stale
-        # `ai-ready` that reads as "still queued" (Issue #1526).
+        # The claim removes the queue entry (Issue #2309), so the labels at
+        # this point are `{ai-in-progress}` (plus a pre-upgrade queue
+        # residue). The merged event clears both, so the released Issue
+        # ends `ai-merged` ALONE — never plus a stale queue label that
+        # reads as "still queued" (Issue #1526).
         apply_label_patch(
             number, repo=repo, event=EVENT_MERGED,
             current_labels={ready_label, IN_PROGRESS_LABEL},

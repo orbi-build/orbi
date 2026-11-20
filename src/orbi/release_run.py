@@ -31,6 +31,7 @@ from orbi.delivery_labels import (
     EVENT_RELEASE_WAITING,
     IN_PROGRESS_LABEL,
     READY_LABEL,
+    label_name_set,
 )
 from orbi.delivery_scene import RunContext
 from orbi.github import (
@@ -216,9 +217,7 @@ def process_release(issue: dict, config: RunnerConfig,
         event("release_task", run_info.text(), issue=number)
         apply_label_patch(
             number, repo=source_repo, event=EVENT_CLAIM,
-            current_labels={label.get("name") for label in issue.get(
-                "labels", []) if isinstance(label, dict)
-                and isinstance(label.get("name"), str)},
+            current_labels=label_name_set(issue), ready_label=ready_label,
         )
         set_active_run(ctx, title)
         publish(

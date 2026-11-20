@@ -1203,11 +1203,15 @@ def test_setup_offer_asks_on_a_fresh_repository(tmp_path, monkeypatch):
     assert stub.calls == []
 
 
+# Issue #2309: the claim removes the queue label, so the offer's "already
+# has deliveries" search must count every stage label — a repository whose
+# only ticket is `ai-fix-needed` has deliveries too.
+@pytest.mark.parametrize("existing_label", ["ai-merged", "ai-fix-needed"])
 def test_setup_offer_is_silent_when_a_delivery_issue_exists(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, existing_label,
 ):
     world = _world(tmp_path, monkeypatch, provider=True)
-    world.gh.add_issue(9, title="Merged work", labels=("ai-merged",))
+    world.gh.add_issue(9, title="Existing work", labels=(existing_label,))
     stub = PiStub(_answer_json())
     monkeypatch.setattr(seam, "stream_pi", stub)
     code, asked, out = _offer(world, _loaded(world), tty=True, answers=[])

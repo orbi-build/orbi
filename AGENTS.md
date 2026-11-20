@@ -26,13 +26,16 @@ contradiction in place for the next delivery to rediscover.
 - **Reviewer Pi**: after the PR exists, a new `pi --print` with `prompts/prompt_review.md` and a new JSONL on the same worktree.
 - **Runner**: labels, observability, review/fix, and merge.
 - **Maintainer**: opens the Issue, decides, verifies what the sandbox cannot,
-  merges. **Never writes the delivery's code.** An Issue carrying `ai-ready`
-  belongs to the Implementer from that moment: pushing the fix yourself while a
-  run is live hands the agent a base with nothing left to change, and the
-  delivery ends `ai-blocked` on `the agent delivered no commit on the task
-  branch` — the ticket looks failed when the work was in fact done by the wrong
-  actor (orbi-website#231, 2026-09-19). Want it done by hand instead? Remove
-  `ai-ready` first, so no run is claimed against it.
+  merges. **Never writes the delivery's code.** An Issue belongs to the
+  Implementer from the moment it is CLAIMED (`ai-in-progress`): pushing the fix
+  yourself while a run is live hands the agent a base with nothing left to
+  change, and the delivery ends `ai-blocked` on `the agent delivered no commit
+  on the task branch` — the ticket looks failed when the work was in fact done
+  by the wrong actor (orbi-website#231, 2026-09-19). Want it done by hand
+  instead? Remove `ai-ready` before it is claimed; for an already claimed
+  Issue, remove `ai-in-progress` or close the Issue so no run continues
+  against it (Issue #2309: the claim removes the queue label, so `ai-ready` is
+  no longer what marks a live run).
 
   What the maintainer does do by hand: deployment and secrets (`wrangler
   secret put`, environment approval), production verification that needs real
@@ -235,8 +238,8 @@ output, the root cause down to a file and line, a reproduction someone else can
 run. That saves the delivery agent from establishing it again and gives the
 acceptance criteria something to check against.
 
-**Once it is filed, stop.** After `ai-ready` goes on, that ticket belongs to the
-delivery agent. Pushing your own fix leaves it with a base that has nothing left
+**Once it is filed, stop.** Once the ticket is claimed (`ai-in-progress`), it
+belongs to the delivery agent. Pushing your own fix leaves it with a base that has nothing left
 to change, and the delivery ends with
 `the agent delivered no commit on the task branch` — the ticket reads as failed
 when the work was simply done by the wrong party.

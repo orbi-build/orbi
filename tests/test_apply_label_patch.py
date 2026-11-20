@@ -75,20 +75,20 @@ def test_apply_label_patch_add_only_patch(fake_gh):
     assert labels(fake_gh) == {IN_PROGRESS_LABEL}
 
 
-def test_apply_label_patch_claim_keeps_the_ready_label(fake_gh):
-    """`ai-ready` is the queue entry, not a delivery state: a claim adds
-    `ai-in-progress` beside it and clears the stale `ai-fix-needed`."""
+def test_apply_label_patch_claim_removes_the_ready_label(fake_gh):
+    """Issue #2309: the queue entry means "not started", so the claim
+    removes it — the Issue ends `ai-in-progress` alone (the stale
+    `ai-fix-needed` goes too)."""
     fake_gh.add_issue(NUMBER, labels=(READY_LABEL, FIX_NEEDED_LABEL))
     apply(fake_gh, EVENT_CLAIM)
-    assert labels(fake_gh) == {READY_LABEL, IN_PROGRESS_LABEL}
+    assert labels(fake_gh) == {IN_PROGRESS_LABEL}
 
 
 def test_apply_label_patch_remove_only_patch_removes_without_adding(
         fake_gh, monkeypatch,
 ):
-    """No event produces a remove-only patch today — every transition adds
-    its own state — so the "nothing to add" guard is reached by handing
-    `apply_label_patch` the patch the pure transition would return: the
+    """The human-review wait is a real remove-only patch (Issue #2309);
+    the guard is pinned by handing `apply_label_patch` one directly: the
     Issue loses the label and gains nothing."""
     fake_gh.add_issue(NUMBER, labels=(IN_PROGRESS_LABEL,))
     monkeypatch.setattr(

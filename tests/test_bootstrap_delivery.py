@@ -47,6 +47,7 @@ import orbi.gitops as gitops
 import orbi.pi_session as pi_session
 import orbi.milestone as milestone
 from orbi import failure, progress, provider_balance, scene
+from tests.fakes.github import FakeGh
 from tests.fakes.gitops import remote_head_answer
 from tests.fakes.progress import patched_comment_bodies
 from tests.fakes.waiting_checks import PENDING_HEAD, bind_pending_delivery
@@ -369,9 +370,15 @@ def test_validate_active_milestone_missing_fails_with_repair_facts(monkeypatch, 
     assert "open_milestones=v1" in caplog.text
 
 
-@pytest.mark.parametrize("ready_issues", [[], [{"number": 7}]])
+# Issue #2309: the count is QUEUED work, so the third case reads a
+# repository's custom claim label instead of the host default.
+@pytest.mark.parametrize(("ready_issues", "dispatch_label"), [
+    ([], "ai-ready"),
+    ([{"number": 7}], "ai-ready"),
+    ([], "ship"),
+])
 def test_validate_active_milestone_closed_is_informational(
-    monkeypatch, caplog, ready_issues,
+    monkeypatch, caplog, ready_issues, dispatch_label,
 ):
     monkeypatch.setitem(milestone.__dict__, "list_milestones", lambda *args, **kwargs: [
         {"title": "v1", "state": "closed"},
@@ -385,11 +392,13 @@ def test_validate_active_milestone_closed_is_informational(
 
     monkeypatch.setitem(milestone.__dict__, "list_issues", fake_list_issues)
     with caplog.at_level(logging.INFO):
-        milestone.validate_active_milestone("owner/repo", "v1")
+        milestone.validate_active_milestone(
+            "owner/repo", "v1", dispatch_label=dispatch_label,
+        )
     assert "active_milestone_closed" in caplog.text
     assert f"ai_ready_count={len(ready_issues)}" in caplog.text
     assert seen == {
-        "repo": "owner/repo", "state": "open", "label": "ai-ready",
+        "repo": "owner/repo", "state": "open", "label": dispatch_label,
         "milestone": "v1", "json_fields": "number", "limit": 1000,
         "timeout": 30,
     }
@@ -1676,7 +1685,7 @@ def test_pick_in_progress_issue_scan_excludes_epics(monkeypatch, tmp_path):
     assert calls == [[
         "gh", "issue", "list", "--repo", "xqliu/orbi",
         "--state", "open", "--search",
-        "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
+        "label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
         "--json", "number,title,body,labels,milestone", "--limit", "100",
@@ -1724,7 +1733,7 @@ def test_pick_in_progress_issue_scan_fetches_labels(monkeypatch, tmp_path):
     assert calls == [[
         "gh", "issue", "list", "--repo", "xqliu/orbi",
         "--state", "open", "--search",
-        "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
+        "label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
         "--json", "number,title,body,labels,milestone", "--limit", "100",
@@ -1756,7 +1765,7 @@ def test_pick_in_progress_issue_scan_fetches_milestone(monkeypatch, tmp_path):
     assert calls == [[
         "gh", "issue", "list", "--repo", "xqliu/orbi",
         "--state", "open", "--search",
-        "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
+        "label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
         "--json", "number,title,body,labels,milestone", "--limit", "100",
@@ -1791,37 +1800,40 @@ def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
     assert calls == [[
         "gh", "issue", "list", "--repo", "xqliu/orbi",
         "--state", "open", "--search",
-        "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
+        "label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
         "--json", "number,title,body,labels,milestone", "--limit", "100",
     ]]
 
 
-def test_pick_in_progress_issue_uses_the_repo_dispatch_label(
+def test_pick_in_progress_issue_ignores_a_custom_dispatch_label(
     monkeypatch, tmp_path,
 ):
-    """Issue #527: a repository that replaced `ai-ready` with its own
-    claim label keeps the restart-resume path — the in-flight scan must
-    search the SAME queue entry the ready scan used, otherwise a killed
-    (or model-wait-recovered) run is stranded forever."""
+    """Issue #2309: the claim REMOVES the dispatch label, so a killed run
+    carries `ai-in-progress` alone — the in-flight scan keys on it and a
+    repository's custom label (an `ai-ready` replacement, Issue #527) can
+    never strand the run."""
+    issue = {
+        "number": 18, "title": "task", "body": "body",
+        "labels": [{"name": "repo-ready"}, {"name": "ai-in-progress"}],
+    }
     calls = []
 
     def fake_run(command, **kwargs):
         calls.append(command)
-        return json.dumps([])
+        return json.dumps([issue])
 
     monkeypatch.setattr(seam, "run_command", fake_run)
+    _local_run_worktree(tmp_path, 18, "abcd0018")
     assert claim.pick_in_progress_issue(
-        "xqliu/orbi", tmp_path / "slots", 1,
-        dispatch_label="repo-ready",
-    ) is None
+        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+    ) == issue
     assert calls == [[
         "gh", "issue", "list", "--repo", "xqliu/orbi",
         "--state", "open", "--search",
-        "label:repo-ready label:ai-in-progress -label:ai-pr-opened "
-        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
-        "-label:ai-epic",
+        "label:ai-in-progress -label:ai-pr-opened -label:ai-fix-needed "
+        "-label:ai-merged -label:ai-blocked -label:ai-epic",
         "--json", "number,title,body,labels,milestone", "--limit", "100",
     ]]
 
@@ -6943,3 +6955,22 @@ def test_external_triage_comments_follow_the_config_language(monkeypatch):
         "a1b2c3d4", language_code="zh",
     )
     assert "Orbi 已合并外部 PR" in comments[-1]
+
+
+def test_a_stopped_run_is_neither_resumed_nor_reclaimed(monkeypatch, tmp_path):
+    """Issue #2309: an interrupted delivery is stopped by removing
+    `ai-in-progress` (or closing the Issue). A ticket claimed before the
+    upgrade carries the queue label too, so stopping it removes both — and
+    with neither label left, neither the in-flight scan nor the ready scan
+    can see it again, whatever the repository's dispatch label is."""
+    fake = FakeGh("xqliu/orbi")
+    fake.add_issue(18, title="task", body="", labels=())
+    monkeypatch.setattr(seam, "run_command", fake)
+    # A local worktree alone no longer proves the run should continue.
+    _local_run_worktree(tmp_path, 18, "abcd0018")
+
+    assert claim.pick_in_progress_issue(
+        "xqliu/orbi", tmp_path / "slots", 1, repo_dir=tmp_path,
+    ) is None
+    assert claim.pick_issue("xqliu/orbi") is None
+    assert claim.pick_issue("xqliu/orbi", dispatch_label="ship") is None

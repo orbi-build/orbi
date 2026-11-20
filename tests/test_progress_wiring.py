@@ -397,10 +397,10 @@ def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
     # unchanged.
     assert runner.process_issue(issue, make_config(tmp_path),
                                 "xqliu/orbi").kind == "failed"
-    # Claim first, then the terminal state: `ai-blocked` added,
-    # `ai-in-progress` removed.
+    # Claim first (Issue #2309: the queue entry goes with it), then the
+    # terminal state: `ai-blocked` added, `ai-in-progress` removed.
     assert edit.call_args_list[0] == mock_call(
-        18, repo="xqliu/orbi", add="ai-in-progress",
+        18, repo="xqliu/orbi", add="ai-in-progress", remove="ai-ready",
     )
     assert edit.call_args_list[1] == mock_call(
         18, repo="xqliu/orbi", add="ai-blocked",

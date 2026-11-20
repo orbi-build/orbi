@@ -289,11 +289,33 @@ def test_parse_repo_config_rejects_a_lifecycle_dispatch_label(label):
         repo_config.parse_repo_config(f'dispatch_label = "{label}"\n')
 
 
-def test_parse_repo_config_accepts_ai_ready_as_the_dispatch_label():
+@pytest.mark.parametrize(
+    "label", ["p0", "bug", "ai-release", "ai-ops-only", "ai-human-review",
+              "ai-epic", "ai-content-only", "ai-needs-detail"],
+)
+def test_parse_repo_config_rejects_a_type_or_control_dispatch_label(label):
+    """Issue #2309: the claim REMOVES the dispatch label, so a type,
+    priority or control label may never name the queue — the error names
+    the conflict."""
+    with pytest.raises(
+        repo_config.RepoConfigError,
+        match="type, priority or control label",
+    ) as excinfo:
+        repo_config.parse_repo_config(f'dispatch_label = "{label}"\n')
+    assert repr(label) in str(excinfo.value)
+
+
+def test_parse_repo_config_accepts_a_custom_dispatch_label():
+    """An ordinary custom queue label still loads (default and custom)."""
     assert repo_config.parse_repo_config(
         'dispatch_label = "ai-ready"\n',
     ) == repo_config.RepoPolicy(
         dispatch_label="ai-ready",
+    )
+    assert repo_config.parse_repo_config(
+        'dispatch_label = "ship"\n',
+    ) == repo_config.RepoPolicy(
+        dispatch_label="ship",
     )
 
 
@@ -725,15 +747,18 @@ def test_validate_context_file_too_large_fails_fast(tmp_path):
 
 # --- runner wiring ----------------------------------------------------------
 
-def test_pick_next_delivery_in_flight_scan_uses_the_repo_dispatch_label(
+def test_pick_next_delivery_in_flight_scan_ignores_the_dispatch_label(
     monkeypatch, tmp_path,
 ):
-    """Issue #527: the in-flight restart scan resolves the SAME repository
-    policy as the ready scan. A repository whose `.github/orbi.toml`
-    replaces `ai-ready` must still recover a killed run (the Issue #18
-    acceptance "a dead run is resumed, never skipped") instead of
-    stranding it forever in `ai-in-progress`."""
-    in_flight = {"number": 2, "title": "in flight", "body": ""}
+    """Issue #2309: the claim REMOVES the dispatch label, so the in-flight
+    restart scan keys on `ai-in-progress` alone. A repository whose
+    `.github/orbi.toml` replaces `ai-ready` must still recover a killed
+    run (the Issue #18 acceptance "a dead run is resumed, never skipped")
+    instead of stranding it forever in `ai-in-progress`."""
+    in_flight = {
+        "number": 2, "title": "in flight", "body": "",
+        "labels": [{"name": "repo-ready"}, {"name": "ai-in-progress"}],
+    }
     searches = []
 
     def fake_run(command, **kwargs):
@@ -760,11 +785,13 @@ def test_pick_next_delivery_in_flight_scan_uses_the_repo_dispatch_label(
         ["owner/repo"], tmp_path / "slots", 1, config=config,
         hooks=resume_deps(),
     ) == ("owner/repo", in_flight, None)
-    # The resumable-PR scan ran first, then the in-flight scan with the
-    # repository's own claim label; the ready scan was never reached.
+    # The resumable-PR scan ran first, then the in-flight scan; the ready
+    # scan was never reached. The in-flight query carries no queue label at
+    # all — the same query serves every repository.
     assert len(searches) == 2
-    assert "label:repo-ready label:ai-in-progress" in searches[-1]
-    assert "label:ai-ready" not in searches[-1]
+    assert searches[-1].startswith("label:ai-in-progress ")
+    assert "ai-ready" not in searches[-1]
+    assert "repo-ready" not in searches[-1]
 
 
 def test_pick_next_delivery_in_flight_scan_falls_back_on_a_malformed_file(
@@ -772,7 +799,7 @@ def test_pick_next_delivery_in_flight_scan_falls_back_on_a_malformed_file(
 ):
     """A malformed repository file must not break the scans (the read is
     fail-open; `process_issue` blocks the claim with the reason): the
-    in-flight scan keeps the host claim label."""
+    in-flight scan still runs on `ai-in-progress` alone."""
     searches = []
 
     def fake_run(command, **kwargs):
@@ -792,8 +819,7 @@ def test_pick_next_delivery_in_flight_scan_falls_back_on_a_malformed_file(
         hooks=resume_deps(),
     ) is None
     assert any(
-        search.startswith("label:ai-ready label:ai-in-progress")
-        for search in searches
+        search.startswith("label:ai-in-progress ") for search in searches
     )
 
 

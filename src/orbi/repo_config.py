@@ -2,12 +2,12 @@
 """Repository-level config-as-code.
 
 A repository may carry a delivery-policy file at ``.github/orbi.toml`` on its
-**default branch**. At claim time the Runner reads that file through the
-GitHub contents API (never the task branch, never the local worktree) and
-applies its whitelisted policy keys **per key** over the host ``orbi.toml``
+**default branch**. At claim time the Runner reads it through the GitHub
+contents API (never the task branch, never the local worktree) and applies
+its whitelisted policy keys **per key** over the host ``orbi.toml``
 (delivery decision D3): the repository file wins for the keys it declares,
-the host config is the fallback for every key it omits, and there is no
-whole-file override.
+the host config fills in every key it omits, and there is no whole-file
+override.
 
 Only delivery-policy keys are allowed (decision D2). Identity and security
 keys — everything that routes credentials or crosses repositories — are
@@ -19,10 +19,9 @@ older engine to ignore. This module owns the strict schema, the
 pure per-key merge/diff helpers and the `gh api` read; the decision to block
 a claim lives in the claim loop in ``runner.main``.
 
-The read is deliberately fail-open: a repository with no such file (the
-contents API 404) behaves exactly as before #527, and an API/network failure
-also degrades to the host config — the safe direction, because host-only
-keys can never be reached through the repository file.
+The read is deliberately fail-open: a repository with no such file (404)
+and an API/network failure both degrade to the host config — the safe
+direction, because host-only keys can never be reached through it.
 """
 from __future__ import annotations
 
@@ -36,7 +35,8 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Callable, cast
 
 from orbi import __version__, language, tick_reads
-from orbi.delivery_labels import LIFECYCLE_STATES, READY_LABEL
+from orbi.delivery_labels import (
+    LIFECYCLE_STATES, NON_LIFECYCLE_LABELS, READY_LABEL)
 from orbi.journal import event, run_command
 
 if TYPE_CHECKING:
@@ -248,9 +248,8 @@ def _validate_value(key: str, value: object, *, source: str) -> object:
             raise RepoConfigError(f"{source}: steering_enabled must be a boolean")
         return value
     if key == "auto_next_milestone":
-        # Issue #1342: the idle auto-advance switch is delivery policy, so
-        # the repository that owns the Milestone decides it. A boolean so a
-        # mistyped string never silently freezes or resumes the advance.
+        # Issue #1342: the idle auto-advance switch is delivery policy; a
+        # boolean so a mistyped string never silently freezes the advance.
         if not isinstance(value, bool):
             raise RepoConfigError(
                 f"{source}: auto_next_milestone must be a boolean"
@@ -332,14 +331,15 @@ def _validate_value(key: str, value: object, *, source: str) -> object:
         raise RepoConfigError(
             f"{source}: {key} must be a non-empty string"
         )
-    if key == "dispatch_label" and value in LIFECYCLE_STATES - {READY_LABEL}:
-        # Decision D2: the delivery lifecycle labels stay host constants.
-        # A claim label that IS one of them would make the ready scan
-        # self-contradictory (`label:ai-merged ... -label:ai-merged`) and
-        # silently stop claiming — reject it with the concrete reason.
+    if key == "dispatch_label" and value in (
+            (LIFECYCLE_STATES | NON_LIFECYCLE_LABELS) - {READY_LABEL}):
+        # Decision D2 + #2309: the lifecycle labels stay host constants
+        # and the type/priority/control labels keep their routing; the
+        # claim REMOVES the dispatch label now, so a reserved name would
+        # be removed and re-added by the engine's own transitions.
         raise RepoConfigError(
-            f"{source}: dispatch_label must not be a delivery lifecycle "
-            f"label ({value!r})"
+            f"{source}: dispatch_label must not be a delivery lifecycle, "
+            f"type, priority or control label ({value!r})"
         )
     return value
 

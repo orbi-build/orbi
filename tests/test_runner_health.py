@@ -1616,3 +1616,47 @@ def test_orbi_repo_from_deploy_home_passes_timeout_via_run_command(tmp_path):
     for call, kwargs in fake.kwargs_for("git"):
         assert call[0] != "timeout"
         assert kwargs.get("timeout") == 30
+
+
+# Issue #2309: the stale-pickup check counts QUEUED work, so it reads the
+# repository's RESOLVED claim label — and a malformed policy file fails open
+# to the host value, exactly like the claim scans.
+@pytest.mark.parametrize(("policy_text", "queue_label"), [
+    ('dispatch_label = "ship"\n', "ship"),
+    # A rejected policy (Issue #2309: a reserved label) fails open to the
+    # host value; the claim then blocks the Issue with the readable reason.
+    ('dispatch_label = "p0"\n', "ai-ready"),
+])
+def test_stale_pickup_counts_the_repositorys_resolved_queue_label(
+    tmp_path, monkeypatch, policy_text, queue_label,
+):
+    """Issue #2309: the stale-pickup check counts QUEUED work, so it reads
+    the repository's resolved claim label — a custom `dispatch_label`
+    repository is judged against its own queue, never the host default."""
+    write_state(tmp_path, {"runs": [],
+                           "last_pickup_ts": time.time() - 48 * 3600,
+                           "alerted": []})
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": "",
+        "journalctl --user -u orbi@2.service": "",
+        **origin_route(),
+        "contents/.github/orbi.toml": json.dumps({
+            "sha": "x" * 40,
+            "content": base64.b64encode(policy_text.encode()).decode(),
+        }),
+        f"--label {queue_label}": json.dumps([{"number": 7}]),
+        'in:body "orbi-health-fingerprint=': "[]",
+    })
+    # The policy read goes through the same subprocess seam the health
+    # check's `run_command` is (repo_config's own module import).
+    monkeypatch.setattr(seam, "run_command", fake)
+    alerts = runner_health.run_health_check(
+        make_config(tmp_path), run_command=fake,
+    )
+    assert alerts == ["stale_pickup"]
+    queue_reads = [
+        call for call in fake.calls
+        if call[:3] == ["gh", "issue", "list"] and "--label" in call
+    ]
+    assert len(queue_reads) == 1
+    assert queue_reads[0][queue_reads[0].index("--label") + 1] == queue_label

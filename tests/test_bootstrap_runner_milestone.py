@@ -624,6 +624,13 @@ def test_advance_active_milestone_rejects_duplicate_title(monkeypatch, tmp_path)
         _advance_active_milestone_on_idle("owner/repo", "v0.3.0", config)
 
 
+ARM_SEARCH = (
+    'label:ai-release -label:ai-ready -label:ai-in-progress '
+    "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
+    '-label:ai-blocked -label:ai-awaiting-merge milestone:"v0.4.0"'
+)
+
+
 def test_arm_release_ticket_adds_ready_to_matching_open_issue(
     monkeypatch, caplog,
 ):
@@ -642,8 +649,7 @@ def test_arm_release_ticket_adds_ready_to_matching_open_issue(
     assert calls == [
         [
             "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
-            "--search",
-            'label:ai-release -label:ai-ready milestone:"v0.4.0"',
+            "--search", ARM_SEARCH,
             "--json", "number", "--limit", "200",
         ],
         [
@@ -701,8 +707,7 @@ def test_arm_release_ticket_uses_custom_dispatch_label(monkeypatch, caplog):
     assert calls == [
         [
             "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
-            "--search",
-            'label:ai-release -label:dev-queue milestone:"v0.4.0"',
+            "--search", ARM_SEARCH.replace("-label:ai-ready", "-label:dev-queue"),
             "--json", "number", "--limit", "200",
         ],
         [
@@ -711,6 +716,36 @@ def test_arm_release_ticket_uses_custom_dispatch_label(monkeypatch, caplog):
         ],
     ]
     assert "release_ticket_armed issue=#385 milestone=v0.4.0" in caplog.text
+
+
+def test_arm_release_ticket_never_rearms_a_claimed_release(monkeypatch):
+    """Issue #2309: the claim REMOVES the dispatch label and adds
+    `ai-in-progress`, so the arm search must exclude every stage label —
+    otherwise a started release is queued again by the next idle tick."""
+    searches = []
+
+    def fake_run(command, **kwargs):
+        searches.append(command[command.index("--search") + 1])
+        # A fake that honours the -label: exclusions, like GitHub: the
+        # search finds nothing, so no arm write follows.
+        claimed = {"ai-in-progress"}
+        excluded = {
+            part.removeprefix("-label:")
+            for part in searches[-1].split()
+            if part.startswith("-label:")
+        }
+        # The query must exclude the stage the claimed release carries,
+        # or GitHub would hand it back and the arm would re-queue it.
+        assert claimed & excluded, searches[-1]
+        return "[]"
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    milestone.arm_release_ticket("owner/repo", "v0.4.0")
+    assert searches == [
+        'label:ai-release -label:ai-ready '
+        + " ".join(f"-label:{label}" for label in milestone.RELEASE_STAGE_LABELS)
+        + ' milestone:"v0.4.0"',
+    ]
 
 
 def test_main_idle_release_arm_uses_repo_dispatch_label(

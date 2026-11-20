@@ -995,6 +995,7 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
     apply_label_patch(
         number, repo=source_repo, event=EVENT_CLAIM,
         current_labels=label_name_set(issue),
+        ready_label=config.dispatch_label or READY_LABEL,
     )
     ticket_ctx = RunContext(
         run_id=run_id, issue=number, branch="-", worktree=Path("-"),
@@ -1030,9 +1031,8 @@ def process_ticket_only(issue: dict, config: config_domain.RunnerConfig, source_
             ) + f"\n\n{output}"),
         )
         close_issue(int(number), repo=source_repo)
-        # The ticket-only delivery never enters the PR/review states: it
-        # clears the claim label directly (no `ai-merged` terminal state —
-        # the Issue is closed, not merged).
+        # It never enters the PR/review states: the claim label is cleared
+        # directly (no `ai-merged` terminal — the Issue is closed).
         edit_issue(number, repo=source_repo, remove=IN_PROGRESS_LABEL)
         publish(
             action=lambda: publisher.milestone(language.text(
@@ -1504,11 +1504,13 @@ def _dispatch_implementation(issue: dict, source_repo: str,
     """
     number = int(issue["number"])
     # The scene-less #1216 takeover was selected only because the scan saw
-    # an open stable-branch PR. Recheck it in the dispatch gather: if the PR
-    # closed in that window, yield without claiming or re-implementing the
+    # an open stable-branch PR. Recheck it in the dispatch gather: the
+    # decision reads the scene and the re-probed PR (never the dispatch
+    # label's absence, which the claim produces — Issue #2309), so a PR
+    # that closed in the window yields instead of re-implementing the
     # branch. A later human re-open/requeue supplies a new claimable fact.
     if (FIX_NEEDED_LABEL in facts.claim_labels
-            and facts.dispatch_label not in facts.claim_labels
+            and not facts.in_progress
             and facts.takeover_pr is None):
         event(
             "claim_yield", issue=number,
@@ -1859,8 +1861,8 @@ def _preflight(config: config_domain.RunnerConfig) -> None:
     # host value (or only the first source repository) can still leave a fresh
     # claim silently scoped to a title that does not exist.
     for repo in config.source_repos:
-        milestone, _ = claim._repo_scan_keys(config, repo, config.active_milestone)
-        milestone_bookkeeping.validate_active_milestone(repo, milestone)
+        milestone, label = claim._repo_scan_keys(config, repo, config.active_milestone)
+        milestone_bookkeeping.validate_active_milestone(repo, milestone, label)
     # Editable CLI install refresh: BEFORE any slot or
     # claim the tool env's editable metadata must match the checkout's
     # packaging inputs — a merged packaging change (entry point,
@@ -1971,7 +1973,7 @@ def _preflight(config: config_domain.RunnerConfig) -> None:
     # actively looks for the incident patterns of 2026-09-04 — a service
     # crash loop (>= 3 crashes in 60 min, the #262 scene), repeated
     # same-fingerprint run failures on one Issue (>= 3, the #246 scene) and
-    # a stale pickup while the ai-ready queue is non-empty. It is a pure
+    # a stale pickup while the repository's queue label is non-empty. It is a pure
     # bypass: a check failure logs `health_check_failed` and
     # never fails the delivery, takes no slot and changes no label.
     try:
