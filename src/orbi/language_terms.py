@@ -398,4 +398,13 @@ EXTRA_MESSAGES: dict[str, tuple[str, str]] = {
         " agent 未提交的改动没有被保留：本机设置了 `keep_failed_worktrees = false`，"
         "失败的工作树已被删除。",
     ),
+    # Issue #2304: a delivery deferred because its checks are still running
+    # says on its Issue which commit's checks it waits for. It promises no
+    # time and no next tick: on a single-slot runner the next tick can be
+    # far away, and the merge needs nothing but the checks.
+    "progress.waiting_checks": (
+        "**Waiting for checks on commit {head}: Orbi merges this PR "
+        "automatically once they pass.**",
+        "**正在等待提交 {head} 的检查结果：检查通过后 Orbi 会自动合并这个 PR。**",
+    ),
 }

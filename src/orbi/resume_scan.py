@@ -14,9 +14,9 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
-from orbi import claim_race, language, run_state, scene, user_summary
+from orbi import claim_race, language, run_state, scene, user_summary, waiting_checks
 from orbi.blocked_comment import post_blocked_comment
-from orbi.checks import render_check, classify_checks
+from orbi.checks import classify_checks
 from orbi.delivery_labels import (
     AWAITING_MERGE_LABEL, BLOCKED_LABEL, FIX_NEEDED_LABEL, MERGED_LABEL,
     PR_OPENED_LABEL, READY_LABEL, label_name_set,
@@ -337,16 +337,16 @@ def _pick_opened_pr_delivery(
                     reason=f"scene_{found_scene.value}",
                 )
                 continue
-        # Issue #1473: skip a CI-pending OPEN PR; MERGED/CLOSED and a
-        # failed rollup read still return the candidate.
+        # Issue #1473: skip a CI-pending OPEN PR — MERGED/CLOSED and a
+        # failed rollup read still return it; #2304 names its commit.
         try:
             pr_state, rollup = pr_delivery_rollup(found.parsed.pr_url, repo)
         except Exception:
             return issue, found
         pending = classify_checks(rollup)[0] if pr_state == "OPEN" else []
         if pending:
-            event("delivery_ci_pending", issue=int(issue["number"]),
-                  pr=found.parsed.pr_url, pending="; ".join(map(render_check, pending)))
+            waiting_checks.defer_skipped(
+                found, pending, issue, repo, language_code, status_url)
             continue
         return issue, found
     return None

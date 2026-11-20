@@ -34,6 +34,9 @@ import orbi.pi_session as pi_session
 from orbi import progress, scene
 from tests.fakes.gitops import remote_head_answer
 from tests.test_progress_wiring import make_fake_gh
+from tests.fakes.progress import (
+    patched_comment_bodies, progress_comment_body,
+)
 from tests.test_git_merge_smoke import git
 from seam import seam
 from orbi.delivery_scene import RunContext
@@ -1284,13 +1287,18 @@ def test_merge_gate_defers_when_ci_pending(monkeypatch, tmp_path, caplog):
     monkeypatch.setattr(seam, "run_command", _merge_gate_fake(check_runs=[{
         "name": "tests", "status": "QUEUED", "conclusion": None,
     }]))
-    with caplog.at_level("INFO"), pytest.raises(merge_exec.DeliveryDeferred):
+    with caplog.at_level("INFO"), pytest.raises(
+        merge_exec.DeliveryDeferred,
+    ) as deferred:
         merge_exec.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path, language_code="en",
         )
     assert "merge_gate_ci_pending" in caplog.text
+    # Issue #2304: the deferral names the commit the checks belong to, so
+    # the Issue can say which one Orbi waits for.
+    assert deferred.value.head == "h1"
 
 
 _GREEN_CHECK = {"name": "tests", "status": "COMPLETED", "conclusion": "SUCCESS"}
@@ -1356,7 +1364,9 @@ def test_merge_gate_reread_uses_the_whole_last_state_for_a_stale_head(
     )
     sleeps = []
     monkeypatch.setattr("time.sleep", sleeps.append)
-    with caplog.at_level("INFO"), pytest.raises(merge_exec.DeliveryDeferred):
+    with caplog.at_level("INFO"), pytest.raises(
+        merge_exec.DeliveryDeferred,
+    ) as deferred:
         merge_exec.merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1", "head_ref": "h",
                        "base_oid": "b1"},
@@ -1364,6 +1374,8 @@ def test_merge_gate_reread_uses_the_whole_last_state_for_a_stale_head(
         )
     assert "base_absorbed_deferred" in caplog.text
     assert len(sleeps) == 1
+    # Issue #2304: the wait is for the head THIS gate pushed.
+    assert deferred.value.head == "h2"
 
 
 def test_merge_gate_defers_when_mergeable_unknown(monkeypatch, tmp_path, caplog):
@@ -1388,6 +1400,14 @@ def test_merge_gate_defers_when_mergeable_unknown(monkeypatch, tmp_path, caplog)
     assert len(views) == 1 + len(merge_exec.MERGEABLE_UNKNOWN_RETRY_DELAYS)
     assert sleeps == list(merge_exec.MERGEABLE_UNKNOWN_RETRY_DELAYS)
     assert "merge_gate_mergeable_unknown" in caplog.text
+
+
+def test_delivery_deferred_keeps_its_head_optional():
+    """Issue #2304: only a CI wait carries a head. A deferral for another
+    reason (UNKNOWN mergeability) names none, so no waiting line promises
+    a merge the gate did not defer to the checks."""
+    assert merge_exec.DeliveryDeferred("wait").head is None
+    assert merge_exec.DeliveryDeferred("wait", head="h1").head == "h1"
 
 
 def test_merge_gate_does_not_reread_while_ci_is_pending(
@@ -3055,7 +3075,11 @@ def test_review_and_merge_defers_a_head_pushed_in_the_same_tick(
     monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
     monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     caplog.set_level("INFO")
-    make_fake_gh(monkeypatch)
+    # Issue #2304: the run's progress comment exists, so the deferral can
+    # say which commit's checks it waits for.
+    api_calls = make_fake_gh(monkeypatch, comments=[{
+        "id": 7, "body": progress_comment_body("a1b2c3d4"),
+    }])[0]
     config = _review_merge_config(tmp_path)
     deferred = review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", config, "owner/repo", 4,
@@ -3065,6 +3089,14 @@ def test_review_and_merge_defers_a_head_pushed_in_the_same_tick(
     # A head pushed in this tick is never merged in this tick: the gate
     # did not run and the pass is recorded for a later merge-only tick.
     assert calls == []
+    # The pushed head — whose CI has not even registered yet — is what the
+    # Issue says Orbi waits for.
+    waiting = [body for body in patched_comment_bodies(api_calls)
+               if "waiting-checks" in body]
+    assert len(waiting) == 1
+    assert "Waiting for checks on commit h2:" in waiting[0]
+    assert "automatically once they pass" in waiting[0]
+    assert "next tick" not in waiting[0].lower()
     assert run_state.read_reviewed(tmp_path) == ("h2", _REVIEW_BODY_SHA)
     # ...and the head advance is logged for the journal.
     assert "review_head_advanced" in caplog.text
@@ -3842,20 +3874,23 @@ def test_review_and_merge_preexisting_ci_failure_is_not_swallowed(
     assert calls == []
 
 
-def test_review_and_merge_deferred_gate_writes_nothing(
+def test_review_and_merge_deferred_gate_writes_no_comment_and_no_label(
         budget_review_env, monkeypatch, tmp_path):
     """Issue #788: an intermediate gate state (pending CI / UNKNOWN
     mergeability) defers the delivery — no comment, no label change,
-    no round consumed. The next tick re-reads the state."""
+    no round consumed. The next tick re-reads the state.
+
+    Issue #2304: a CI deferral ALSO says on the Issue which commit's
+    checks it waits for (an edit of the run's existing progress comment,
+    never a new comment), while a deferral that is not a checks wait
+    (UNKNOWN mergeability) names no head and publishes nothing."""
     calls = []
+    deferred = {"exception": merge_exec.DeliveryDeferred(
+        "PR #4 CI is still running; the merge is deferred")}
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(
         merge_exec, "merge_gate",
-        lambda *a, **k: (_ for _ in ()).throw(
-            merge_exec.DeliveryDeferred(
-                "PR #4 CI is still running; the merge is deferred",
-            ),
-        ),
+        lambda *a, **k: (_ for _ in ()).throw(deferred["exception"]),
     )
     monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("issue", k.get("body"))),
@@ -3863,13 +3898,33 @@ def test_review_and_merge_deferred_gate_writes_nothing(
     monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
     )
-    make_fake_gh(monkeypatch)
+    api_calls = make_fake_gh(monkeypatch, comments=[{
+        "id": 7, "body": progress_comment_body("a1b2c3d4"),
+    }])[0]
     assert review_merge.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4, title="Review task", priority="normal",
         scene=_scene(),
     ) is False
     assert calls == []
+    # The UNKNOWN-mergeability shape: no head, so no waiting line.
+    assert [body for body in patched_comment_bodies(api_calls)
+            if "waiting-checks" in body] == []
+
+    # The CI shape names the head whose checks the gate waits for.
+    deferred["exception"] = merge_exec.DeliveryDeferred(
+        "PR #4 CI is still running; the merge is deferred", head="h1")
+    assert review_merge.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+        scene=_scene(),
+    ) is False
+    assert calls == []
+    waiting = [body for body in patched_comment_bodies(api_calls)
+               if "waiting-checks" in body]
+    assert len(waiting) == 1
+    assert "h1" in waiting[0]
+    assert "automatically once they pass" in waiting[0]
 
 def test_review_record_records_the_reviewed_head_and_body_hash_on_deferral(
         monkeypatch, tmp_path):
