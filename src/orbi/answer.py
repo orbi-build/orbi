@@ -25,9 +25,10 @@ The answer is a RECORD command of the ticket-command layer
 hidden block, not a `/orbi` line, so it has no typed spelling and no CLI
 entry, and the layer's one receipt writer and idempotency rule are the ones
 it uses (`_post_command_receipt`, `runner_receipt`). Engine output is told
-apart by its RUN MARKER prefix (`ticket_command.carries_run_marker`), never
-by the `<!-- orbi` marker the record itself carries -- otherwise the answer
-would be skipped exactly like engine output and never read at all.
+apart by its RUN MARKER prefix (`ticket_command.carries_run_marker`) or its
+own command receipt (`ticket_command.carries_command_receipt`), never by the
+`<!-- orbi` marker the record itself carries -- otherwise the answer would
+be skipped exactly like engine output and never read at all.
 
 What the engine does with one answer, and nothing else:
 
@@ -96,6 +97,7 @@ from orbi.ticket_command import (
     CommandSpec,
     TicketCommandError,
     _post_command_receipt,
+    carries_command_receipt,
     carries_run_marker,
     command_comment_key,
     command_receipt_marker,
@@ -717,8 +719,9 @@ def _pending(
     holds a merge. "Not carried out" is read from the ticket, never from
     memory: the engine's one receipt (success or rejection) is keyed on the
     answer comment, so a scanned answer is not pending. The other rules are
-    the scan's too: a run-marked comment is engine output, an answer older
-    than the newest stop is stale, and the author must be trusted.
+    the scan's too: a run-marked comment or one of the engine's own command
+    receipts is engine output, an answer older than the newest stop is
+    stale, and the author must be trusted.
     """
     try:
         located = question.latest_stop(comments)
@@ -731,6 +734,9 @@ def _pending(
     occurrences: list[tuple[dict, str | None]] = []
     for comment in comments:
         if not isinstance(comment, dict) or carries_run_marker(comment):
+            continue
+        if carries_command_receipt(
+                comment, command_receipt_marker(ANSWER_COMMAND)):
             continue
         if not _newer(comment, stop_comment, comments):
             continue
@@ -853,6 +859,9 @@ def apply_steering(
     occurrences: list[tuple[dict, str | None]] = []
     for comment in fresh:
         if not isinstance(comment, dict) or carries_run_marker(comment):
+            continue
+        if carries_command_receipt(
+                comment, command_receipt_marker(ANSWER_COMMAND)):
             continue
         occurrences.extend(
             (comment, block)

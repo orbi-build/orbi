@@ -406,6 +406,60 @@ def test_an_answer_older_than_the_newest_stop_is_not_carried_out(
     assert successes(gh) == []
 
 
+def _stale_answer_ticket(gh: FakeGh) -> None:
+    """An applied-looking answer, then a stop on a newer question."""
+    stopped_ticket(gh)
+    post(gh, value="Add the assumption")
+    newer = dict(CHOICE, id="q2")
+    gh.comment(
+        TICKET,
+        f"{RUN_MARKER}\n<!-- orbi:comment=failure -->\n\n"
+        f"The delivery stopped again.\n\n{question.render_stop(stop(newer), 'en')}",
+        login="orbi-bot",
+    )
+
+
+def test_a_rejection_receipt_is_not_read_back_as_a_new_answer(
+    monkeypatch, tmp_path,
+):
+    """Issue #2295: the receipt quotes the stale answer, so every tick read
+    it as a new answer and posted an identical receipt, forever."""
+    gh = _gh(monkeypatch)
+    _stale_answer_ticket(gh)
+
+    for _ in range(3):
+        stopped_scans.run(REPO, language_code="en")
+
+    assert "older" in rejection(gh)
+    assert gh.issues[TICKET]["body"] == BODY
+    assert labels(gh) == [BLOCKED_LABEL]
+    assert successes(gh) == []
+
+
+def test_a_real_answer_after_a_rejection_receipt_is_still_applied(
+    monkeypatch, tmp_path,
+):
+    """Issue #2295: skipping the receipt must not swallow the answer a
+    person posts to the latest question afterwards."""
+    gh = _gh(monkeypatch)
+    _stale_answer_ticket(gh)
+    for _ in range(3):
+        stopped_scans.run(REPO, language_code="en")
+    assert "older" in rejection(gh)
+
+    post(gh, value="Add the assumption", q="q2")
+    stopped_scans.run(REPO, language_code="en")
+
+    assert f"- {CRITERION}" in gh.issues[TICKET]["body"]
+    assert READY_LABEL in labels(gh)
+    assert BLOCKED_LABEL not in labels(gh)
+    assert len(successes(gh)) == 1
+    # The one stale answer still has its one rejection receipt.
+    assert len([
+        body for body in bodies(gh) if "orbi-answer-command-rejected" in body
+    ]) == 1
+
+
 def test_the_engines_own_record_is_never_carried_out(monkeypatch, tmp_path):
     """Issue #2220's automatic answer is engine output: its comment carries
     the run marker AND answers as the engine, so it is not a person's
@@ -1432,6 +1486,21 @@ def test_pending_change_skips_engine_output_stale_and_untrusted_answers(
     assert answer_module._pending(
         broken, repo=REPO, stage=PR_OPENED_LABEL, language_code="en",
     ) is None
+    # The engine's own receipt quotes the answer it rejected: that quoted
+    # block is not an uncarried answer (Issue #2295).
+    receipt = {
+        "id": "receipt", "createdAt": "2026-11-17T00:00:03Z",
+        "author": {"login": "maintainer"},
+        "body": (
+            "**not applied**\n\n"
+            f"- argument: `{_answer_record()}`\n\n"
+            "<!-- orbi-answer-command-rejected comment=answer -->"
+        ),
+    }
+    assert answer_module._pending(
+        [comments[0], receipt], repo=REPO, stage=PR_OPENED_LABEL,
+        language_code="en",
+    ) is None
 
 
 def test_the_gate_holds_when_the_ticket_cannot_be_read(monkeypatch, tmp_path):
@@ -1487,6 +1556,23 @@ def test_steering_reads_answers_and_receipts_what_it_cannot_do(
     assert len(rejected) == 2
     assert any("unreadable" in body for body in rejected)
     assert any("ai-blocked" in body for body in rejected)
+
+    # The engine's own receipt quotes the answer it rejected: the poll does
+    # not read that quoted block as a new answer (Issue #2295).
+    receipt = {
+        "id": "receipt", "author": {"login": "orbi-bot"},
+        "body": (
+            "**not applied**\n\n"
+            f"- argument: `{_answer_record()}`\n\n"
+            "<!-- orbi-answer-command-rejected comment=cancel -->"
+        ),
+    }
+    before = bodies(gh)
+    assert answer.apply_steering(
+        [receipt], issue=issue, repo=REPO, comments=comments + [receipt],
+        body=BODY, language_code="en",
+    ) is None
+    assert bodies(gh) == before
 
     # The same acceptance criterion a second time is not written again.
     accepted = [{"id": "accepted", "author": {"login": "maintainer"},
@@ -1589,4 +1675,40 @@ def test_a_run_marker_is_read_from_a_comment_body_only():
     assert ticket_command.carries_run_marker(
         {"body": f"{RUN_MARKER}\nbody"},
     ) is True
+
+
+def test_a_command_receipt_is_recognized_by_its_trailing_marker():
+    """Issue #2295: the receipt is engine output, whatever it quotes."""
+    marker = ticket_command.command_receipt_marker(answer.ANSWER_COMMAND)
+    receipt = (
+        "**`/orbi answer` command not applied**\n\n"
+        "- argument: `<!-- orbi:answer:v1 {} -->`\n\n"
+        "<!-- orbi-answer-command-rejected comment=123 -->"
+    )
+    assert ticket_command.carries_command_receipt(
+        {"body": receipt}, marker,
+    ) is True
+    assert ticket_command.carries_command_receipt(
+        {"body": "<!-- orbi-answer-command comment=123 -->"}, marker,
+    ) is True
+    assert ticket_command.carries_command_receipt(
+        {"body": "<!-- orbi-answer-command-failed step=read comment=123 -->"},
+        marker,
+    ) is True
+    # A person's longer comment quoting a receipt is still a person's.
+    assert ticket_command.carries_command_receipt(
+        {"body": f"See this:\n{receipt}\n\nwhy?"}, marker,
+    ) is False
+    # Another command's receipt is not this command's output.
+    assert ticket_command.carries_command_receipt(
+        {"body": "<!-- orbi-fix_base-command comment=123 -->"}, marker,
+    ) is False
+    # A marker-shaped last line with no closing delimiter is not a receipt.
+    assert ticket_command.carries_command_receipt(
+        {"body": "<!-- orbi-answer-command comment=123"}, marker,
+    ) is False
+    assert ticket_command.carries_command_receipt(None, marker) is False
+    assert ticket_command.carries_command_receipt(
+        {"body": None}, marker,
+    ) is False
 

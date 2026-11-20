@@ -4,8 +4,9 @@ Split out of `orbi.ticket_command` (Issue #2221) so the layer could take the
 record command's occurrence (`CommandSpec.occurrence`) and stay inside its
 recorded size ceiling (`tools/size_ratchet.py`). What lives here is exactly
 the spelling side of a command — the anchored matcher the layer compiles from
-a spec, the fenced-code filter, and the per-comment parse — never a decision:
-`ticket_command` still owns which command wins and what it does.
+a spec, the fenced-code filter, the receipt-line reader, and the per-comment
+parse — never a decision: `ticket_command` still owns which command wins and
+what it does.
 
 A command author supplies `subcommand` (`/orbi <subcommand>`) plus optional
 legacy `aliases` (`/milestone`), never a regex, so the anchor and the
@@ -50,6 +51,28 @@ def strip_fenced_code_blocks(text: str) -> str:
             continue
         kept.append(line)
     return "\n".join(kept)
+
+
+def carries_command_receipt(comment: object, marker: str) -> bool:
+    """True when a comment body ends with one command receipt's marker.
+
+    `_post_command_receipt` writes the hidden marker as the receipt's last
+    line, and the receipt quotes the occurrence it answers -- for the answer
+    record that is the answer block itself. Reading it back would make the
+    engine answer its own receipt on every tick (Issue #2295). Only that
+    official trailing line counts, so a person's longer comment quoting a
+    receipt is still a person's comment.
+    """
+    if not isinstance(comment, dict):
+        return False
+    body = comment.get("body")
+    if not isinstance(body, str):
+        return False
+    last_line = body.rstrip().rsplit("\n", 1)[-1].strip()
+    return (
+        last_line.startswith(f"<!-- {marker}")
+        and last_line.endswith("-->")
+    )
 
 
 def _command_pattern(spec: "CommandSpec") -> re.Pattern[str]:
