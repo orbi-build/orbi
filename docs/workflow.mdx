@@ -38,11 +38,11 @@ flowchart LR
   verdict -->|clean verdict + merge gate| merged["ai-merged (terminal)"]
   verdict -->|clean verdict + known repository policy blocker remains; maintainer action required| awaiting["ai-awaiting-merge"]
   awaiting -->|maintainer action done: Orbi merges the named head on the first tick whose queue is otherwise empty| merged
-  verdict -->|rounds exhausted (human decision)| blocked["ai-blocked (terminal, human decides)"]
-  opened -->|finding / base conflict / recoverable failure (Issue #50)| fixneeded["ai-fix-needed"]
+  verdict -->|"rounds exhausted (human decision)"| blocked["ai-blocked (terminal, human decides)"]
+  opened -->|"finding / base conflict / recoverable failure (Issue #50)"| fixneeded["ai-fix-needed"]
   fixneeded -->|next tick: next review session on the SAME run, branch, worktree, PR| opened
-  fixneeded -->|unrecoverable precondition (Issue #50)| blocked
-  progress -->|fail fast (no PR yet)| blocked
+  fixneeded -->|"unrecoverable precondition (Issue #50)"| blocked
+  progress -->|"fail fast (no PR yet)"| blocked
 ```
 
 ```text
