@@ -47,13 +47,17 @@ STATUS_ZH = {
 # delivery until a person confirms the acceptance checklist.
 HUMAN_REVIEW_STATUS_EN = "Waiting for your review"
 HUMAN_REVIEW_STATUS_ZH = "等您人工验收"
+# The test text also says replies are not read (Issue #2288): a person who
+# answers the bot gets silence, so the message itself must say so.
 TEST_EN = (
     "Orbi test notification\n"
-    "Your notification target works. Future alerts look like this."
+    "Your notification target works. Future alerts look like this.\n"
+    "This bot only sends Orbi alerts; replies to it are not read."
 )
 TEST_ZH = (
     "Orbi 测试通知\n"
-    "这条消息确认您的接收配置可用，之后的通知会是这个样子。"
+    "这条消息确认您的接收配置可用，之后的通知会是这个样子。\n"
+    "这个机器人只发送 Orbi 提醒，它不会读取您的回复。"
 )
 
 # The fixed code-merged texts (Issue #1674): the same `Orbi · ` prefix

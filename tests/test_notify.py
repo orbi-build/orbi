@@ -494,6 +494,18 @@ def test_message_language_defaults_to_english_without_the_key(monkeypatch):
     assert text.endswith(f"{ALERT_HELP_EN}")
 
 
+@pytest.mark.parametrize("language_code,sentence", [
+    ("en", "This bot only sends Orbi alerts; replies to it are not read."),
+    ("zh", "这个机器人只发送 Orbi 提醒，它不会读取您的回复。"),
+])
+def test_the_test_notification_says_replies_are_not_read(
+    language_code, sentence,
+):
+    """Acceptance #2288: a person who answers the bot is told the reply
+    is not read, in the host language."""
+    assert notify_text.test_message(language_code).endswith(sentence)
+
+
 def test_notify_test_uses_the_host_message_language(monkeypatch, capsys):
     monkeypatch.setenv(notify.TOKEN_ENV, TOKEN)
     with TelegramEndpoint() as endpoint:
@@ -502,7 +514,8 @@ def test_notify_test_uses_the_host_message_language(monkeypatch, capsys):
         assert capsys.readouterr().out.strip() == "ok"
         assert endpoint.texts() == [
             "Orbi 测试通知\n"
-            "这条消息确认您的接收配置可用，之后的通知会是这个样子。"
+            "这条消息确认您的接收配置可用，之后的通知会是这个样子。\n"
+            "这个机器人只发送 Orbi 提醒，它不会读取您的回复。"
         ]
 
 
@@ -1030,7 +1043,8 @@ def test_notify_test_command_prints_ok_and_exits_zero(monkeypatch, capsys):
         assert capsys.readouterr().out.strip() == "ok"
         assert endpoint.texts() == [
             "Orbi test notification\n"
-            "Your notification target works. Future alerts look like this."
+            "Your notification target works. Future alerts look like this.\n"
+            "This bot only sends Orbi alerts; replies to it are not read."
         ]
 
 
