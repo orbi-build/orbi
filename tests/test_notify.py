@@ -402,7 +402,19 @@ def test_the_stop_alert_says_when_orbi_resumes_by_itself(monkeypatch):
         ]
 
 
-def test_a_stop_without_a_recorded_reason_says_it_is_unknown(monkeypatch):
+EMPTY_LABELS = (
+    f"{language.text('en', 'failure.reason_label')}\n"
+    f"{language.text('en', 'failure.action_label')}"
+)
+
+
+@pytest.mark.parametrize("extra", [
+    "",             # the scene rendered no reason/action line at all
+    EMPTY_LABELS,   # the labels are there with nothing after them
+])
+def test_a_stop_without_a_recorded_reason_says_it_is_unknown(
+    monkeypatch, extra,
+):
     """Acceptance 5: a comment that records no reason says so in one line
     and still sends the rest of the message."""
     with TelegramEndpoint() as endpoint:
@@ -410,7 +422,9 @@ def test_a_stop_without_a_recorded_reason_says_it_is_unknown(monkeypatch):
         bind(monkeypatch)
         notify.stop_alert(
             ISSUE, repo=REPO, label=BLOCKED_LABEL,
-            body=stop_body(reason=None, action=None),
+            body=stop_body(reason=None, action=None) + (
+                f"\n{extra}" if extra else ""
+            ),
             comment_url=None, comment_language="en",
             read_title=lambda: "Fix the thing",
         )

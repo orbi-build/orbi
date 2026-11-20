@@ -269,15 +269,14 @@ def _labelled(body: str, label: str) -> str | None:
 
     The first match wins: the comment writes its reason and action above
     the details fold, so a later copy quoted inside raw evidence can never
-    replace them. The quoted text is redacted exactly as the posted comment
-    is (`format_status_comment`), so the alert can never echo a credential
-    the comment keeps out of GitHub.
+    replace them. A label with nothing after it records nothing, exactly like
+    a comment that carries no such line. The quoted text is redacted exactly
+    as the posted comment is (`format_status_comment`), so the alert can
+    never echo a credential the comment keeps out of GitHub.
     """
     for line in body.splitlines():
         if line.startswith(label):
-            text = redact_secrets(line[len(label):].strip())
-            if text:
-                return text
+            return redact_secrets(line[len(label):].strip()) or None
     return None
 
 
