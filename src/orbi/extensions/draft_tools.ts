@@ -5,30 +5,51 @@
  * tool calls: write_draft when the model has a draft, ask_user when it
  * needs the person to answer something first, reply when the person asked
  * for no code change and the answer is a reply alone (Issue #2201). Each
- * writes its (already validated) arguments to the file the engine names in
- * ORBI_DRAFT_OUT and terminates the run, so the engine reads a JSON
- * document instead of parsing prose out of stdout.
+ * writes its arguments to the file the engine names in ORBI_DRAFT_OUT and
+ * terminates the run, so the engine reads a JSON document instead of parsing
+ * prose out of stdout.
  *
- * The schema is the contract:
+ * The schema is the first gate:
  *
  * - parameters is a TypeBox schema Pi validates BEFORE execute runs
  *   (validateToolArguments -> Compile(parameters).Check), so a draft with
  *   no Issue, an Issue with no title or body, an unknown answer kind or a
  *   stray field never reaches the file;
  * - one model turn answers exactly one question: the tools are separate,
- *   so a single call cannot carry questions AND a draft;
- * - after is the 1-based number of an EARLIER Issue (the engine rejects
- *   forward references too, which a schema cannot express).
+ *   so a single call cannot carry questions AND a draft.
+ *
+ * The schema cannot express a cross-field rule — an `after` must name an
+ * EARLIER Issue, a question carries at most one recommended option — and
+ * those rules are the engine's own. So write_draft and ask_user run the
+ * engine's validation command over the answer BEFORE recording it
+ * (Issue #2303): a rejected answer comes back as this tool's error result,
+ * the model corrects it in the same session, and the answer file is never
+ * written. The reply tool carries no cross-field rule and is unchanged.
  *
  * Pi aliases typebox to its own pinned copy when it loads an extension, so
  * this file needs no package.json of its own.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 
 /** The environment variable naming the file the answer is written to. */
 export const DRAFT_OUT_ENV = "ORBI_DRAFT_OUT";
+
+/**
+ * The environment variable naming the engine's validation command
+ * (Issue #2303): the engine's own interpreter plus `-m orbi.draft_validate`,
+ * handed over the same way ORBI_DRAFT_OUT is.
+ */
+export const DRAFT_VALIDATE_ENV = "ORBI_DRAFT_VALIDATE";
+
+/**
+ * Where the last rejection reason is kept, next to the answer it refused to
+ * write: a session that ends without an answer fails with that reason instead
+ * of a bare timeout. The engine derives the same path from ORBI_DRAFT_OUT.
+ */
+export const DRAFT_REJECTION_SUFFIX = ".rejected";
 
 /** The three tool names the drafting prompt tells the model to call. */
 export const WRITE_DRAFT_TOOL = "write_draft";
@@ -164,16 +185,92 @@ const replyParameters = Type.Object(
 	{ additionalProperties: false },
 );
 
-function writeAnswer(kind: string, args: object) {
+/** The path the answer goes to, or the engine's own hard failure. */
+function answerPath(): string {
 	const out = process.env[DRAFT_OUT_ENV];
 	if (!out) {
 		throw new Error(`${DRAFT_OUT_ENV} is not set`);
 	}
+	return out;
+}
+
+/** Write the answer and end the turn: the engine reads the document. */
+function recordAnswer(out: string, kind: string, args: object) {
 	writeFileSync(out, JSON.stringify({ kind, ...args }), "utf8");
 	return {
 		content: [{ type: "text" as const, text: "Answer recorded." }],
 		details: undefined,
 		terminate: true,
+	};
+}
+
+/**
+ * The engine's reason for refusing this answer, or null when it accepts it
+ * (Issue #2303).
+ *
+ * The answer document is exactly what the engine would read from the file,
+ * so its own parser (`parse_answer`, reached through
+ * `python -m orbi.draft_validate`) judges it here, not a copy of the rules.
+ * A rejected answer prints the reason on stdout with a non-zero exit. A
+ * command that cannot run fails the tool: an unchecked answer must never be
+ * recorded, and a silent pass would hide a broken engine.
+ */
+function rejectionReason(answer: object): string | null {
+	const command = process.env[DRAFT_VALIDATE_ENV];
+	if (!command) {
+		throw new Error(`${DRAFT_VALIDATE_ENV} is not set`);
+	}
+	// The engine hands over an absolute interpreter plus its arguments; no
+	// part of that command carries whitespace.
+	const [executable, ...args] = command.split(" ");
+	const result = spawnSync(executable, args, {
+		input: JSON.stringify(answer),
+		encoding: "utf8",
+		timeout: 60_000,
+	});
+	if (result.error) {
+		throw new Error(
+			`${DRAFT_VALIDATE_ENV} could not run: ${result.error.message}`,
+		);
+	}
+	if (result.status === 0) {
+		return null;
+	}
+	const reason = (result.stdout ?? "").trim();
+	if (!reason) {
+		throw new Error(
+			`${DRAFT_VALIDATE_ENV} answered ${result.status}: ` +
+				(result.stderr ?? "").trim(),
+		);
+	}
+	return reason;
+}
+
+/**
+ * Issue #2303: record one answer the engine's rules accept, or return the
+ * reason as an error tool result WITHOUT writing the file and WITHOUT
+ * terminating, so the model fixes the answer and calls the tool again in this
+ * same session. The reason is also kept next to the answer path, so a session
+ * that ends here fails with it.
+ */
+function writeAnswer(tool: string, kind: string, args: object) {
+	const out = answerPath();
+	const reason = rejectionReason({ kind, ...args });
+	if (reason === null) {
+		return recordAnswer(out, kind, args);
+	}
+	writeFileSync(`${out}${DRAFT_REJECTION_SUFFIX}`, reason, "utf8");
+	return {
+		content: [
+			{
+				type: "text" as const,
+				text:
+					`The engine rejected this answer and recorded nothing: ` +
+					`${reason}\nFix that and call ${tool} again.`,
+			},
+		],
+		details: undefined,
+		isError: true,
 	};
 }
 
@@ -186,7 +283,7 @@ export const writeDraftTool = {
 		"is ready, and never in the same turn as ask_user or reply.",
 	parameters: draftParameters,
 	async execute(_toolCallId: string, args: object) {
-		return writeAnswer("draft", args);
+		return writeAnswer(WRITE_DRAFT_TOOL, "draft", args);
 	},
 };
 
@@ -209,7 +306,7 @@ export const askUserTool = {
 		"write_draft or reply.",
 	parameters: askParameters,
 	async execute(_toolCallId: string, args: object) {
-		return writeAnswer("questions", args);
+		return writeAnswer(ASK_USER_TOOL, "questions", args);
 	},
 };
 
@@ -229,7 +326,7 @@ export const replyTool = {
 		"reply, and never in the same turn as write_draft or ask_user.",
 	parameters: replyParameters,
 	async execute(_toolCallId: string, args: object) {
-		return writeAnswer("reply", args);
+		return recordAnswer(answerPath(), "reply", args);
 	},
 };
 

@@ -16,13 +16,29 @@
  *     delivery order and a reply alone for a request not to change code
  *     (Issue #2201);
  *   - proves every tool writes the validated arguments plus their kind to
- *     the environment path and terminates the run.
+ *     the environment path and terminates the run;
+ *   - Issue #2303: proves the two answer tools run the ENGINE's validation
+ *     command before recording, so a rule the schema cannot express comes back
+ *     as an error result the model corrects in the same session (no answer
+ *     file, no terminate), and the rejection reason is kept next to the answer.
+ *
+ * The validation command is stubbed here: the real entry is the engine's own
+ * `python -m orbi.draft_validate` over `parse_answer`, which its Python test
+ * (`tests/test_draft_validate.py`) drives directly. This test owns the tool
+ * side of the contract — run the command with the answer, then either record
+ * it or hand the reason back.
  *
  * Run with: node --test tests/js/*.test.mjs
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Value } from "typebox/value";
@@ -30,6 +46,8 @@ import { Value } from "typebox/value";
 import draftTools, {
   ASK_USER_TOOL,
   DRAFT_OUT_ENV,
+  DRAFT_REJECTION_SUFFIX,
+  DRAFT_VALIDATE_ENV,
   REPLY_TOOL,
   WRITE_DRAFT_TOOL,
   askUserTool,
@@ -84,6 +102,64 @@ function answerFile() {
   const directory = mkdtempSync(join(tmpdir(), "orbi-draft-js-"));
   return join(directory, "answer.json");
 }
+
+/**
+ * Issue #2303: the stub of the engine's validation command.
+ *
+ * The tools run `<command from the environment>` with the answer on stdin and
+ * take the exit code as the verdict. This stub records the document it read and
+ * answers with the exit code and reason the current test set, so the test never
+ * restates an engine rule — the engine's own rules are proven by its Python
+ * test.
+ */
+function stubValidator() {
+	const directory = mkdtempSync(join(tmpdir(), "orbi-draft-validate-"));
+	const script = join(directory, "validate.mjs");
+	const record = join(directory, "seen.json");
+	writeFileSync(
+		script,
+		[
+			'import { writeFileSync } from "node:fs";',
+			'let input = "";',
+			'process.stdin.setEncoding("utf8");',
+			'process.stdin.on("data", (chunk) => { input += chunk; });',
+			'process.stdin.on("end", () => {',
+			"  writeFileSync(process.env.STUB_RECORD, input);",
+			'  process.stdout.write(process.env.STUB_REASON ?? "");',
+			'  process.exit(Number(process.env.STUB_EXIT ?? "0"));',
+			"});",
+			"",
+		].join("\n"),
+		"utf8",
+	);
+	process.env[DRAFT_VALIDATE_ENV] = `${process.execPath} ${script}`;
+	process.env.STUB_RECORD = record;
+	const stub = {
+		command: process.env[DRAFT_VALIDATE_ENV],
+		record,
+		/** The stub accepts (the default) and forgets any reason. */
+		accept() {
+			process.env.STUB_EXIT = "0";
+			delete process.env.STUB_REASON;
+		},
+		/** The stub rejects every answer with this reason. */
+		reject(reason) {
+			process.env.STUB_EXIT = "1";
+			process.env.STUB_REASON = reason;
+		},
+		/** The answer document the tools last handed the validator. */
+		seen() {
+			return JSON.parse(readFileSync(record, "utf8"));
+		},
+	};
+	stub.accept();
+	return stub;
+}
+
+const VALIDATOR = stubValidator();
+// The stub rejects an answer with this reason, the engine's own words for a
+// self-referenced `after` on a one-Issue draft.
+const SELF_REFERENCE = "Issue 1: after must name an EARLIER Issue (1..0)";
 
 test("the three tools are the names the prompt names", () => {
   assert.equal(writeDraftTool.name, WRITE_DRAFT_TOOL);
@@ -326,4 +402,165 @@ test("the extension registers exactly the three tools", () => {
   const names = [];
   draftTools({ registerTool: (tool) => names.push(tool.name) });
   assert.deepEqual(names, [WRITE_DRAFT_TOOL, ASK_USER_TOOL, REPLY_TOOL]);
+});
+
+// --- Issue #2303: a rule violation returns to the model in the session ----
+
+// The engine's own words for two recommended options (question.py).
+const TWO_RECOMMENDED = "question 1: at most one option may be recommended";
+
+const SELF_REFERENCED_DRAFT = {
+  reply: "One Issue.",
+  issues: [
+    {
+      title: "Tag a note",
+      body: "## Outcome\n\nA user can tag a note.",
+      after: 1,
+    },
+  ],
+};
+
+const TWO_RECOMMENDED_QUESTIONS = {
+  reply: "Which store?",
+  questions: [
+    {
+      question: "Which store should the tags live in?",
+      options: [
+        {
+          label: "A local file (Recommended)",
+          description: "Keeps the tags in the repository's own file.",
+        },
+        {
+          label: "A remote service (Recommended)",
+          description: "Reads and writes the tags over the network.",
+        },
+      ],
+    },
+  ],
+};
+
+test("an invalid draft returns the reason instead of recording it", async () => {
+  const out = answerFile();
+  process.env[DRAFT_OUT_ENV] = out;
+  VALIDATOR.reject(SELF_REFERENCE);
+
+  const rejected = await writeDraftTool.execute(
+    "call-5",
+    SELF_REFERENCED_DRAFT,
+  );
+
+  // The reason the engine would have raised only after the session now
+  // reaches the model as the tool's own answer...
+  assert.equal(rejected.isError, true);
+  assert.ok(rejected.content[0].text.includes(SELF_REFERENCE));
+  // ...the turn does NOT end and nothing is recorded...
+  assert.notEqual(rejected.terminate, true);
+  assert.equal(existsSync(out), false);
+  // ...and what the validator judged is the answer document the engine reads.
+  assert.equal(VALIDATOR.seen().kind, "draft");
+  assert.deepEqual(VALIDATOR.seen().issues, SELF_REFERENCED_DRAFT.issues);
+  // The reason is kept next to the answer file, so a session that ends here
+  // fails with it instead of a bare timeout.
+  assert.equal(
+    readFileSync(`${out}${DRAFT_REJECTION_SUFFIX}`, "utf8"),
+    SELF_REFERENCE,
+  );
+
+  // The model corrects it and calls the tool again in the same session.
+  VALIDATOR.accept();
+  const accepted = await writeDraftTool.execute("call-6", TWO_ISSUES);
+  assert.equal(accepted.isError, undefined);
+  assert.equal(accepted.terminate, true);
+  assert.deepEqual(
+    JSON.parse(readFileSync(out, "utf8")).issues,
+    TWO_ISSUES.issues,
+  );
+});
+
+test("an invalid question answer returns the reason too", async () => {
+  const out = answerFile();
+  process.env[DRAFT_OUT_ENV] = out;
+  VALIDATOR.reject(TWO_RECOMMENDED);
+
+  const rejected = await askUserTool.execute(
+    "call-7",
+    TWO_RECOMMENDED_QUESTIONS,
+  );
+
+  assert.equal(rejected.isError, true);
+  assert.ok(rejected.content[0].text.includes(TWO_RECOMMENDED));
+  assert.notEqual(rejected.terminate, true);
+  assert.equal(existsSync(out), false);
+  assert.equal(VALIDATOR.seen().kind, "questions");
+
+  VALIDATOR.accept();
+  const accepted = await askUserTool.execute("call-8", QUESTIONS);
+  assert.equal(accepted.terminate, true);
+  assert.deepEqual(
+    JSON.parse(readFileSync(out, "utf8")).questions,
+    QUESTIONS.questions,
+  );
+});
+
+test("a valid answer is written and leaves no rejection record", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "orbi-draft-js-"));
+  const out = join(directory, "answer.json");
+  process.env[DRAFT_OUT_ENV] = out;
+  VALIDATOR.accept();
+
+  const result = await writeDraftTool.execute("call-9", TWO_ISSUES);
+
+  assert.equal(result.terminate, true);
+  assert.equal(existsSync(`${out}${DRAFT_REJECTION_SUFFIX}`), false);
+});
+
+test("the reply tool has no cross-field rule and is not validated", async () => {
+  const out = answerFile();
+  process.env[DRAFT_OUT_ENV] = out;
+  VALIDATOR.reject(SELF_REFERENCE);
+  rmSync(VALIDATOR.record, { force: true });
+
+  const result = await replyTool.execute(
+    "call-10",
+    { reply: "Nothing to change." },
+  );
+
+  assert.equal(result.terminate, true);
+  assert.equal(JSON.parse(readFileSync(out, "utf8")).kind, "reply");
+  // The validator never ran: a reply carries no cross-field rule.
+  assert.equal(existsSync(VALIDATOR.record), false);
+});
+
+test("a tool without the validation command fails instead of recording it", async () => {
+  const out = answerFile();
+  process.env[DRAFT_OUT_ENV] = out;
+  delete process.env[DRAFT_VALIDATE_ENV];
+
+  await assert.rejects(
+    () => writeDraftTool.execute("call-11", TWO_ISSUES),
+    new RegExp(DRAFT_VALIDATE_ENV),
+  );
+  assert.equal(existsSync(out), false);
+
+  process.env[DRAFT_VALIDATE_ENV] = VALIDATOR.command;
+});
+
+test("a validation command that cannot run fails the tool", async () => {
+  const out = answerFile();
+  process.env[DRAFT_OUT_ENV] = out;
+  // A command that exists nowhere: an answer must never be recorded
+  // unchecked, so this fails the tool instead of passing it.
+  const missing = join(
+    mkdtempSync(join(tmpdir(), "orbi-draft-missing-")),
+    "validate.mjs",
+  );
+  process.env[DRAFT_VALIDATE_ENV] = missing;
+
+  await assert.rejects(
+    () => writeDraftTool.execute("call-12", TWO_ISSUES),
+    new RegExp(DRAFT_VALIDATE_ENV),
+  );
+  assert.equal(existsSync(out), false);
+
+  process.env[DRAFT_VALIDATE_ENV] = VALIDATOR.command;
 });

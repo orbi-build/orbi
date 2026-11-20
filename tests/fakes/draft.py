@@ -313,6 +313,31 @@ def stub_login_error(monkeypatch) -> None:
     monkeypatch.setattr(seam, "authenticated_github_login", boom)
 
 
+def session_ends_after_a_rejection(monkeypatch, reason: str) -> None:
+    """The tools refused the model's answer and the session ended (Issue #2303).
+
+    The reason is recorded where the extension writes it, next to the answer
+    file it refused to write, and the session itself times out.
+    """
+
+    def session(_config, _repo, *, out_path, **_kwargs):
+        draft.rejection_path(Path(out_path)).write_text(
+            reason, encoding="utf-8",
+        )
+        raise subprocess.TimeoutExpired("pi", draft.DRAFT_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(draft, "run_draft_session", session)
+
+
+def session_ends_with_no_answer(monkeypatch) -> None:
+    """The session ends having written nothing at all (no rejection either)."""
+
+    def session(_config, _repo, **_kwargs):
+        raise subprocess.TimeoutExpired("pi", draft.DRAFT_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(draft, "run_draft_session", session)
+
+
 def stub_stream_pi(monkeypatch, output: str = "") -> list[dict]:
     """Replace the Pi process: record one session call, answer output."""
     calls: list[dict] = []
