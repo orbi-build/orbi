@@ -43,6 +43,12 @@ flowchart LR
   fixneeded -->|next tick: next review session on the SAME run, branch, worktree, PR| opened
   fixneeded -->|"unrecoverable precondition (Issue #50)"| blocked
   progress -->|"fail fast (no PR yet)"| blocked
+  ready -->|"thin-ticket gate, before any work (clarify_thin_tickets)"| needsdetail["ai-needs-detail"]
+  needsdetail -.->|a person adds the detail and re-adds the queue label| ready
+  progress -->|"first transient GitHub failure before a PR: re-queued once (Issue #2202)"| ready
+  progress -->|"release task waits for open deliveries: queue label back, slot released"| ready
+  progress -.->|"a person closes the Issue, or removes ai-in-progress after a Runner kill"| stopped["stopped by a person<br/>(see Stopping a delivery)"]
+  opened -.->|a person closes the Issue| stopped
 ```
 
 ```text
