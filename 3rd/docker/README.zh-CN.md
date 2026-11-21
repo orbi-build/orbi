@@ -152,8 +152,10 @@ docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi \
   里的 `Fixes #N` 会自动关闭 Issue）或 `ai-fix-needed`（下一轮评审
   修复发现的问题）；`ai-blocked`（终态）需要人来决策。`ai-epic` 标记
   纯协调 Issue，runner 永不认领；`ai-release` 标记发布任务（见下）。
-  交付状态由 runner 管理；`ai-ready`、`ai-epic`、`ai-release`、
-  `p0`、`bug` 由你来打和摘。
+  交付状态由 runner 管理；`ai-epic`、`ai-release`、`p0`、`bug`
+  由你来打和摘。`ai-ready` 由你打上表示排队；领取会在加上 `ai-in-progress`
+  的同一次写入里**移除**它，所以 `ai-ready` 只列出尚未开始的工作（Issue #2309）。
+  怎么停下交付，见[交付流程](https://docs.orbi.build/zh/workflow)「停下交付」一节。
 - **怎么看进度** — 每次运行在 Issue 上只保留一条进度评论，每个
   里程碑原位更新；tick 日志用上面的 `journalctl` 命令实时跟踪。
 - **预期结果** — 两个 tick 内出现分支和 PR（描述带 `Fixes #N`），
