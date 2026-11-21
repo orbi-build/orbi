@@ -138,7 +138,7 @@ GOLDEN = {
 <!-- orbi:comment=failure -->
 <!-- orbi:failure:v1 {"schema":1,"outcome":"blocked","reason_code":"unclassified","action_code":"fix_ticket","retry_safe":false} -->
 
-Orbi: blocked — this Issue needs a change before Orbi can deliver it
+Orbi: blocked — the cause of the failure could not be determined
 
 **#42 Fix the thing**
 

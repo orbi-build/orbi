@@ -23,13 +23,21 @@ from orbi import language, provider_balance
 if TYPE_CHECKING:  # the record's home imports this module's names back
     from orbi.failure import Failure
 
-# reason_code -> the action sentence that reason already words better than
-# its action family can: the undetermined cause (which must not blame the
-# Issue text, Issue #1651) and the branch a human must create or pick
-# (Issue #1749). They are read before the action family, never instead of it.
-_REASON_ACTIONS = {
-    "unclassified": "failure.terminal_unclassified",
-    "base_branch_missing": "failure.terminal_base_branch_missing",
+# reason_code -> (action key, disposition key): the two reasons that own a
+# better sentence than their action family can give: the undetermined cause
+# (which must not blame the Issue text, Issue #1651) and the branch a human
+# must create or pick (Issue #1749). ONE table feeds BOTH strings, so a
+# headline can never tell the reader to change the Issue while the action
+# beside it names a repository or evidence repair. They are read before the
+# action family, never instead of it.
+_REASON_WORDING = {
+    "unclassified": (
+        "failure.terminal_unclassified", "failure.disposition_unknown_cause",
+    ),
+    "base_branch_missing": (
+        "failure.terminal_base_branch_missing",
+        "failure.disposition_base_branch",
+    ),
 }
 
 # action_code -> the headline disposition that action really asks for
@@ -56,12 +64,18 @@ def _disposition_key(record: "Failure") -> str:
 
     A `retry_safe` stop needs no repair (a plain re-queue can succeed), so it
     never claims a decision; the no-commit stop names what happened instead,
-    because "the ticket needs a change" is not what its reader would guess.
+    because "the ticket needs a change" is not what its reader would guess;
+    and a reason with its own action sentence above keeps the opposite
+    disposition, so the headline never asks for a ticket edit the action
+    does not ask for (Issue #2351).
     """
     if record.retry_safe:
         return "failure.disposition_retry"
     if record.reason_code == "no_commit_delivered":
         return "failure.disposition_no_commit"
+    reason_wording = _REASON_WORDING.get(record.reason_code)
+    if reason_wording is not None:
+        return reason_wording[1]
     return _ACTION_DISPOSITIONS.get(
         record.action_code, "failure.disposition_ticket_change",
     )
@@ -75,13 +89,14 @@ def terminal_action(record: "Failure", language_code: str, *,
     repair); every other stop names its own step, so the action text and the
     headline always describe the same action.
     """
-    reason_key = _REASON_ACTIONS.get(record.reason_code)
-    if reason_key == "failure.terminal_base_branch_missing":
-        return language.text(
-            language_code, reason_key, base_branch=base_branch or "-",
-        )
-    if reason_key is not None:
-        return language.text(language_code, reason_key)
+    reason_wording = _REASON_WORDING.get(record.reason_code)
+    if reason_wording is not None:
+        action_key = reason_wording[0]
+        if action_key == "failure.terminal_base_branch_missing":
+            return language.text(
+                language_code, action_key, base_branch=base_branch or "-",
+            )
+        return language.text(language_code, action_key)
     if record.action_code == provider_balance.ACTION_CODE:
         return provider_balance.action(language_code)
     if record.retry_safe:

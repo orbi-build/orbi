@@ -556,6 +556,31 @@ def test_a_no_commit_stop_says_the_run_produced_no_commit():
     assert "`ai-blocked`" in action and "`ai-ready`" in action
 
 
+@pytest.mark.parametrize(
+    "reason_code, headline_fragment, action_fragment",
+    [
+        # Issue #1651: an undetermined cause never sends the reader to edit
+        # the Issue body — its action says the cause is unknown.
+        ("unclassified", "could not be determined", "could not be determined"),
+        # Issue #1749: the missing base branch is a repository repair.
+        ("base_branch_missing", "base branch", "create `develop`"),
+    ],
+)
+def test_a_reason_with_its_own_repair_keeps_a_headline_that_agrees(
+    reason_code, headline_fragment, action_fragment,
+):
+    """Issue #2351: the two reasons that own an action sentence keep the
+    matching headline, so the headline never asks for a ticket change the
+    action does not ask for."""
+    headline, action = failure.stop_wording(
+        record_of(reason_code), "en", base_branch="develop",
+    )
+    assert headline_fragment in headline
+    assert action_fragment in action
+    for other in ("disposition_ticket_change", "disposition_decide"):
+        assert language.text("en", f"failure.{other}") not in headline
+
+
 def test_a_credential_stop_asks_for_the_credential_repair():
     headline, action = failure.stop_wording(record_of("credential_missing"), "en")
     assert "credential" in headline

@@ -429,10 +429,11 @@ def test_report_delivery_failure_caps_comment_and_names_session_log(
     # hierarchy (the run marker is prepended by `report_delivery_failure`
     # when a run_id is bound; this call has none).
     assert body.startswith("<!-- orbi:failure:v1 ")
-    # Issue #2351: an unclassified stop is a `fix_ticket` stop — it says the
-    # ticket needs a change, never that it waits on a human decision.
-    assert "\n\nOrbi: blocked — this Issue needs a change before Orbi can " \
-        "deliver it" in body
+    # Issue #2351: an unclassified stop names the undetermined cause it
+    # carries — it never claims a human decision, and it never blames the
+    # Issue text either (Issue #1651).
+    assert "\n\nOrbi: blocked — the cause of the failure could not be " \
+        "determined" in body
     assert "**Reason:** " + "x" * 500 in body
     assert len(body) < failure_report.FAILURE_COMMENT_MAX_CHARS
     assert "full log: local session log" in body

@@ -49,6 +49,17 @@ FAILURE_MESSAGES: dict[str, tuple[str, str]] = {
         "the failure was temporary, so this Issue can be run again",
         "这是临时失败，重新运行这个 Issue 即可",
     ),
+    # The two dispositions whose reason owns its own action sentence
+    # (Issue #2351 with #1651/#1749): the headline names what is actually
+    # wrong, so it never asks for a ticket edit the action does not ask for.
+    "failure.disposition_unknown_cause": (
+        "the cause of the failure could not be determined",
+        "无法确定这次失败的原因",
+    ),
+    "failure.disposition_base_branch": (
+        "the configured base branch does not exist in this repository",
+        "这个仓库里没有配置的基础分支",
+    ),
     "failure.pr_line": ("PR: [{pr_url}]({pr_url})", "PR：[{pr_url}]({pr_url})"),
     "failure.issue_line": (
         "Issue: `{issue}` · run_id={run_id}",

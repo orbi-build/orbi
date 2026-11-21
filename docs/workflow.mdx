@@ -797,7 +797,9 @@ beside the block for a human reader: ONE function of the record
 (`orbi.failure_stop.stop_wording`) decides the headline and the action
 together, so only a `decide` stop says "waiting on a human decision" — a
 no-commit stop says the run produced no commit and the ticket needs a
-change — and the terminal progress comment repeats that same sentence. The
+change, an undetermined cause names itself instead of blaming the Issue
+text (Issue #1651), and a missing base branch names the branch — and the
+terminal progress comment repeats that same sentence. The
 session's own final explanation is quoted in its own bounded segment of
 the failure evidence (up to 4000 characters, redacted like every comment
 sentence), so a person reads what the session wrote before it stopped. The

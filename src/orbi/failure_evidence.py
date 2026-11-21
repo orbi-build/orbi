@@ -71,8 +71,10 @@ def _session_summary(session_file: Path,
     """Structured summary of the last session records.
 
     One line per parsed record — timestamp, type, role, tool name and
-    content-block kinds; the record text itself never enters the comment
-    (the full log path is named next to the segment). A record whose
+    content-block kinds; THIS summary never carries the record text (the
+    session's own final explanation is quoted in its own segment,
+    `session_explanation`, Issue #2351, and the full log path is named next
+    to the segment). A record whose
     text blocks repeat the previous record's is skipped: pi logs the
     final assistant text twice (once inside the full message, once
     standalone), which used to duplicate whole paragraphs in the
